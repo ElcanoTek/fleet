@@ -58,6 +58,16 @@ publishes a major newer than `.nvmrc`.
 - dnf does not patch this install, so every full `fleet doctor` run (not
   `--check`) re-runs the signed install, which is a no-op when the newest
   `v<major>.x` is already present, and restarts the tier if it moved.
+- The installer never moves backwards. An older release is still validly
+  signed, so a replayed or stale manifest offering a lower patch than the
+  installed `node-<major>` is refused instead of relinked.
+- `doctor --node` installs `gnupg2` (for `gpgv`) before trying the fallback.
+  A box provisioned before this change may not have it, and without it
+  `fleet update` would still be stranded.
+- `scripts/update-node-release-keys.sh` refuses a keyring whose primary keys
+  are not exactly `keys.list`, and `TestVendoredNodeReleaseKeysMatchTheirList`
+  pins the committed pair. `gpgv` trusts every primary in the file, so an
+  unlisted one would be a signer no reviewer saw.
 - Any verification failure installs nothing and reports why. The box then
   stays exactly where the dnf-only path would have left it.
 

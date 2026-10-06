@@ -443,8 +443,10 @@ Record: [ADR-0078](adr/0078-track-the-latest-node-major.md).
   signed by a throwaway key. It covers the happy path, an idempotent re-run
   with the tarball gone, and a refresh to a newer patch. It also covers three
   refusals that install nothing: a tampered tarball, a signature from a key
-  outside the keyring, and a checksum line smuggled in front of the signed
-  block.
+  outside the keyring, a checksum line smuggled in front of the signed
+  block, and an older signed release offered over a newer installed one
+  (downgrade). `TestVendoredNodeReleaseKeysMatchTheirList` pins the vendored
+  keyring's primary keys to `node-release-keys.list` exactly.
 - The real path was run against nodejs.org from a dev container: v26.10.0
   verified (signed by `5BE8A3F6…D356`), unpacked and linked, and
   `npm-26 -v` reported 11.19.1.

@@ -19,13 +19,19 @@ while read -r fp; do
   echo >>"$tmp/keys.asc" # a key file without a trailing newline would glue its END line to the next BEGIN
 done <"$tmp/keys.list"
 
-# Every listed fingerprint must actually be in the keyring we are about to ship.
+# The keyring's PRIMARY keys must be exactly keys.list — no listed key
+# missing, and no extra primary riding in inside some keys/<fp>.asc. gpgv
+# trusts every primary in the file, so an unlisted one would be a signer no
+# reviewer saw in the .list diff and the weekly drift check never compares.
+# Subkeys are fine: an `fpr` record counts only right after a `pub` record.
 GNUPGHOME="$tmp" gpg --batch --show-keys --with-colons <"$tmp/keys.asc" 2>/dev/null \
-  | awk -F: '$1 == "fpr" {print $10}' >"$tmp/have"
-while read -r fp; do
-  [[ -n "$fp" ]] || continue
-  grep -qx "$fp" "$tmp/have" || { echo "keys/${fp}.asc did not contain key ${fp}" >&2; exit 1; }
-done <"$tmp/keys.list"
+  | awk -F: '$1 == "pub" {want = 1; next} $1 == "fpr" && want {print $10; want = 0}' \
+  | sort >"$tmp/have"
+grep -v '^$' "$tmp/keys.list" | sort >"$tmp/want"
+if ! diff -u "$tmp/want" "$tmp/have" >&2; then
+  echo "primary keys in the assembled keyring do not match keys.list exactly (diff above: - listed, + in keyring)" >&2
+  exit 1
+fi
 
 mv "$tmp/keys.list" "$LIB/node-release-keys.list"
 mv "$tmp/keys.asc" "$LIB/node-release-keys.asc"

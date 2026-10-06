@@ -367,10 +367,15 @@ else
     if [[ -n "$node_bin" ]]; then
       fixed "installed node $("$node_bin" -v) at ${node_bin}"
       restart_needed=1
-    elif fleet_node_tarball_install "$NODE_FLOOR" >/dev/null; then
+    elif { command -v gpgv >/dev/null 2>&1 || "${DNF[@]}" install -y --quiet gnupg2 >/dev/null 2>&1; } \
+        && fleet_node_tarball_install "$NODE_FLOOR" >/dev/null; then
       # The distro has no nodejs${NODE_FLOOR} stream yet (node 26 on F44): fetch
       # the signed upstream release instead — see fleet_node_tarball_install
       # and ADR-0078. Its npm comes in the same tarball as npm-${NODE_FLOOR}.
+      # gnupg2 is installed first when missing: the fallback verifies node's
+      # signature with gpgv, and a box provisioned before this path existed
+      # may not have it (bootstrap only started asking for it with the
+      # fallback), which would otherwise strand `fleet update` here.
       hash -r
       node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
       if [[ -n "$node_bin" ]]; then

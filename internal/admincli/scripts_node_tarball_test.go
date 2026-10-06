@@ -330,3 +330,92 @@ func TestNodeTarballInstallReadsOnlyTheSignedText(t *testing.T) {
 		t.Fatalf("node-26 is %q — the unsigned line steered the install; want the signed v26.1.0", got)
 	}
 }
+
+// An older release is still validly signed, so a replayed or stale dist must
+// not walk an installed newer patch back: the links stay where they are.
+func TestNodeTarballInstallRefusesADowngrade(t *testing.T) {
+	arch := nodeDistArch(t)
+	g := newTestGPG(t, "node release (test) <release@example.invalid>")
+	d := newNodeDist(t)
+	file, sum := fakeNodeRelease(t, d.latest, "26.2.0", arch)
+	d.publish(t, g, sum+"  "+file)
+	e := newTarballEnv(t, g)
+	if out, err := e.install(t, d); err != nil {
+		t.Fatalf("install of 26.2.0 failed: %v\n%s", err, out)
+	}
+
+	old, oldSum := fakeNodeRelease(t, d.latest, "26.1.0", arch)
+	d.publish(t, g, oldSum+"  "+old)
+	out, err := e.install(t, d)
+	if err == nil {
+		t.Fatalf("installed an older signed release over 26.2.0:\n%s", out)
+	}
+	if !strings.Contains(out, "refusing to downgrade") {
+		t.Errorf("refusal does not say why:\n%s", out)
+	}
+	ver, _ := exec.Command(filepath.Join(e.bindir, "node-26"), "-v").Output()
+	if got := strings.TrimSpace(string(ver)); got != "v26.2.0" {
+		t.Errorf("node-26 is %q after the refused downgrade, want v26.2.0", got)
+	}
+}
+
+// The vendored keyring is the installer's whole trust root, and the .list is
+// what a reviewer and the weekly drift check read. gpgv trusts every PRIMARY
+// key in the .asc, so the two must agree exactly: an extra primary would be a
+// signer nobody reviewed. (Subkeys are part of their primary and allowed.)
+func TestVendoredNodeReleaseKeysMatchTheirList(t *testing.T) {
+	if _, err := exec.LookPath("gpg"); err != nil {
+		t.Skip("gpg not available")
+	}
+	root := repoRootFromTest(t)
+	home, err := os.MkdirTemp("", "g")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	asc, err := os.Open(filepath.Join(root, "scripts", "lib", "node-release-keys.asc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = asc.Close() }()
+	cmd := exec.Command("gpg", "--batch", "--show-keys", "--with-colons")
+	cmd.Stdin = asc
+	cmd.Env = append(os.Environ(), "GNUPGHOME="+home)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("gpg --show-keys: %v", err)
+	}
+	have := map[string]bool{}
+	afterPub := false
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Split(line, ":")
+		switch {
+		case f[0] == "pub":
+			afterPub = true
+		case f[0] == "fpr" && afterPub && len(f) > 9:
+			have[f[9]] = true
+			afterPub = false
+		case f[0] == "sub":
+			afterPub = false
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "scripts", "lib", "node-release-keys.list"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{}
+	for _, fp := range strings.Fields(string(raw)) {
+		want[fp] = true
+		if !have[fp] {
+			t.Errorf("%s is in node-release-keys.list but not in node-release-keys.asc", fp)
+		}
+	}
+	for fp := range have {
+		if !want[fp] {
+			t.Errorf("node-release-keys.asc carries primary key %s, which node-release-keys.list does not name", fp)
+		}
+	}
+	if len(want) == 0 {
+		t.Error("node-release-keys.list is empty")
+	}
+}

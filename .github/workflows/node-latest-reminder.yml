@@ -58,14 +58,16 @@ jobs:
             exit 0
           fi
 
-          title="Move the node major to ${latest_major}: node ${latest} is out and web/.nvmrc is still ${current}"
+          # The title carries the MAJOR only: it is the dedupe key, and a patch
+          # release while we are still behind must not file a second issue.
+          title="Move the node major to ${latest_major}: web/.nvmrc is still ${current}"
           num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
             --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)"
           if [ -n "$num" ]; then
             echo "reminder issue #${num} is already open; not duplicating."
             exit 0
           fi
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "Filed automatically by .github/workflows/node-latest-reminder.yml: node ${latest} is the newest release and web/.nvmrc still reads ${current}. fleet tracks the latest node major (ADR-0078).
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "Filed automatically by .github/workflows/node-latest-reminder.yml: node ${latest} was the newest release when this was filed, and web/.nvmrc still reads ${current}. fleet tracks the latest node major (ADR-0078).
 
           Bump every declaration point together (\`TestNodeMajorAgreesEverywhere\` in scripts/check_versions_test.go enforces the set):
 

@@ -371,6 +371,20 @@ fleet__node_tarball_install_in() {
   ver="${name#node-}"; ver="${ver%%-*}" # v26.10.0
   dest="$prefix/$name"
 
+  # Never move backwards. An older SHASUMS256.txt.asc is still validly signed,
+  # so a stale cache or anyone replaying nodejs.org responses could otherwise
+  # walk the links back to an older (possibly vulnerable) patch release: the
+  # signature proves who published a release, not that it is the newest.
+  local cur
+  if [[ -x "$bindir/node-$major" ]]; then
+    cur="$("$bindir/node-$major" -v 2>/dev/null || true)"
+    if [[ "$cur" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$cur" != "$ver" \
+          && "$(printf '%s\n%s\n' "${cur#v}" "${ver#v}" | sort -V | head -n1)" == "${ver#v}" ]]; then
+      echo "node tarball: ${dist} offers ${ver}, older than the installed ${cur} — refusing to downgrade" >&2
+      return 1
+    fi
+  fi
+
   if [[ ! -x "$dest/bin/node" ]] || [[ "$("$dest/bin/node" -v 2>/dev/null)" != "$ver" ]]; then
     "${fetch[@]}" -o "$tmp/$file" "$dist/$file" \
       || { echo "node tarball: could not fetch ${dist}/${file}" >&2; return 1; }

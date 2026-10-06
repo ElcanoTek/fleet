@@ -125,8 +125,10 @@ What we checked, so the next person doesn't repeat it:
   action rather than a code fix: run a different node build and see whether the
   teardown dump stops.
 
-  The repo now targets **node 24** (Active LTS; 22 is maintenance-only), which
-  is the forward version of that experiment — see
+  The repo then moved to **node 24** (Active LTS; 22 is maintenance-only), and
+  now tracks the latest major — **node 26** at the time of writing, per
+  [ADR-0078](adr/0078-track-the-latest-node-major.md). The node 24 move was
+  the forward version of that experiment — see
   [Choosing the interpreter](#choosing-the-interpreter). Be clear about what
   that is and is not: node 24.19.0 was verified here to build the web tier,
   pass its suite, and survive five start→SIGTERM cycles cleanly
