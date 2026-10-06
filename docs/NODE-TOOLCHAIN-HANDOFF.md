@@ -397,3 +397,58 @@ and a real `npm ci && npm run build` under two genuinely different node majors �
 this container has one interpreter, so the pin is proven by shebang override and
 by the read-back, not by two successful builds. The Fedora shebang rewrite is
 quoted from the packaging source rather than observed on a live box.
+
+## Tracking the latest major: the upstream fallback (2026-10-06)
+
+Record: [ADR-0078](adr/0078-track-the-latest-node-major.md).
+
+### What changed
+
+- **Policy.** The rule was "Active or Maintenance LTS, never Current". It is
+  now "the latest node major", and `web/.nvmrc` moved 24 → 26 in the same
+  change. `node-lts-reminder.yml`, which carried a hardcoded v26 LTS date,
+  became `node-latest-reminder.yml`. Each week it compares `.nvmrc` with
+  `nodejs.org/dist/index.json`, and the vendored release keys with
+  nodejs/release-keys, and files an issue on drift.
+- **Install path.** Fedora 43/44 carry no `nodejs26`. So
+  `fleet_node_tarball_install` (`scripts/lib/node-version.sh`) installs the
+  newest signed v26.x from nodejs.org, as the last step after both dnf
+  attempts:
+  - bootstrap takes this step when its dependency install misses the
+    versioned stream;
+  - `doctor --node` takes it when neither `nodejs<major>` nor `nodejs` gives a
+    node at or above the floor;
+  - `fleet update` reaches it through the existing handoff to `doctor --node`.
+- **Patching.** A full `fleet doctor` run refreshes an upstream install to the
+  newest v<major>.x. dnf does not see it, so this is the only thing that
+  patches it.
+
+### Judgment calls
+
+- **Vendored keys, not a keyserver.** Fetching keys from the same network as
+  the tarball would let one network attacker supply both. The vendored
+  keyring is reviewed in a PR and changes only through
+  `scripts/update-node-release-keys.sh`.
+- **`.tar.gz`, not `.tar.xz`.** gzip is on every box. The size difference does
+  not matter for a once-per-patch download.
+- **The versioned names in `/usr/local/bin`.** `node-26` and `npm-26` are the
+  shape the resolver, the npm interpreter pin and the `FLEET_NODE_BIN` stamp
+  already handle. None of that code needed a new branch, and once F45's RPM
+  is installed it outranks this install automatically (`/usr/bin` is searched
+  first).
+
+### What was verified, and what was not
+
+- `internal/admincli/scripts_node_tarball_test.go` serves a `file://` dist
+  signed by a throwaway key. It covers the happy path, an idempotent re-run
+  with the tarball gone, and a refresh to a newer patch. It also covers three
+  refusals that install nothing: a tampered tarball, a signature from a key
+  outside the keyring, and a checksum line smuggled in front of the signed
+  block.
+- The real path was run against nodejs.org from a dev container: v26.10.0
+  verified (signed by `5BE8A3F6…D356`), unpacked and linked, and
+  `npm-26 -v` reported 11.19.1.
+- **Not verified:** a live `fleet update` on a Fedora 44 box, and the
+  SELinux label `restorecon` gives `/usr/local/lib/fleet-node`. The tree
+  should get `lib_t`/`bin_t`, which a systemd service may exec, but this was
+  not observed on a box.

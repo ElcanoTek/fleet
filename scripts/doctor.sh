@@ -77,8 +77,10 @@ MAINT_TIMER="fleet-maintenance.timer"
 # Node floor: read from web/.nvmrc, the ONE place the target major is declared
 # (CI reads the same file via actions/setup-node's node-version-file). Hardcoding
 # it here is what let CI test '22' while this script's floor said 20 and the box
-# ran whatever `dnf install nodejs` meant. Doctor installs via dnf only — fleet
-# does not use NodeSource.
+# ran whatever `dnf install nodejs` meant. Doctor installs the versioned dnf
+# stream first; only when the distro has none for this major does it fetch the
+# signed nodejs.org release (fleet_node_tarball_install, ADR-0078). fleet does
+# not use NodeSource.
 # shellcheck source=lib/node-version.sh
 . "$SCRIPT_DIR/lib/node-version.sh"
 # The fleet-managed Caddyfile (marker, renderer, drift helpers) — shared with
@@ -252,7 +254,7 @@ stale_pause_hint() {
 if [[ "$DRY_RUN" == "1" && "$NODE_ONLY" == "1" ]]; then
   step "fleet doctor --node --dry-run (src=${SRC_DIR})"
   if [[ -n "$NODE_FLOOR" ]]; then
-    info "[dry-run] node >= ${NODE_FLOOR}: dnf install nodejs${NODE_FLOOR} nodejs${NODE_FLOOR}-npm (the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE} and assert the RESOLVED interpreter"
+    info "[dry-run] node >= ${NODE_FLOOR}: dnf install nodejs${NODE_FLOOR} nodejs${NODE_FLOOR}-npm (the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major; when the distro has no such stream, the signed upstream nodejs.org build into /usr/local/bin/node-${NODE_FLOOR}), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE} and assert the RESOLVED interpreter"
   else
     # Naming "nodejs-npm" and calling it the versioned stream would be a lie in
     # exactly the case where nothing can be resolved.
@@ -263,7 +265,7 @@ if [[ "$DRY_RUN" == "1" && "$NODE_ONLY" == "1" ]]; then
 fi
 if [[ "$DRY_RUN" == "1" ]]; then
   step "fleet doctor --dry-run (src=${SRC_DIR}, service=${SERVICE_NAME}, install=${INSTALL_DIR})"
-  info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR:-<web/.nvmrc>} (dnf install nodejs${NODE_FLOOR} — the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE}; go/git/curl/jq/podman/psql/npm present (dnf install)"
+  info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR:-<web/.nvmrc>} (dnf install nodejs${NODE_FLOOR} — the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major — else the signed upstream nodejs.org build), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE}; go/git/curl/jq/podman/psql/npm present (dnf install)"
   info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs nodejs${NODE_FLOOR} caddy)"
   info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, the client bundle service-owned and outside the checkout (a bare install runs on the staged copy under ${SERVICE_HOME}/bundle), containers.conf (cgroupfs), /run/${SERVICE_USER}, podman info as ${SERVICE_USER} (a stale pause process is reported with what to do — doctor never runs podman system migrate, which deletes a live fleet's sandbox pool)"
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
@@ -310,7 +312,25 @@ if [[ -z "$NODE_FLOOR" ]]; then
   node_bin=""
 else
 node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
-if [[ -n "$node_bin" ]]; then
+if [[ -n "$node_bin" ]] && fleet_node_is_tarball_install "$node_bin" && [[ "$CHECK_ONLY" == "0" ]]; then
+  # An upstream-tarball node (below) gets no patch releases from dnf, so doctor
+  # is what keeps it current: re-run the signed install, which is a no-op when
+  # the newest v<major>.x is already unpacked. A failed refresh (offline box)
+  # leaves the working install in place and says so.
+  _nb_before="$("$node_bin" -v 2>/dev/null)"
+  if fleet_node_tarball_install "$NODE_FLOOR" >/dev/null; then
+    hash -r
+    node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
+    if [[ -n "$node_bin" && "$("$node_bin" -v 2>/dev/null)" != "$_nb_before" ]]; then
+      fixed "refreshed the upstream node at ${node_bin}: ${_nb_before} -> $("$node_bin" -v)"
+      restart_needed=1
+    else
+      pass "node $("$node_bin" -v) at ${node_bin} (>= $NODE_FLOOR, per web/.nvmrc; upstream build, newest v${NODE_FLOOR}.x)"
+    fi
+  else
+    advise "node ${_nb_before} at ${node_bin} works, but refreshing it from nodejs.org failed (see above) — it stays on ${_nb_before}"
+  fi
+elif [[ -n "$node_bin" ]]; then
   pass "node $("$node_bin" -v) at ${node_bin} (>= $NODE_FLOOR, per web/.nvmrc)"
 elif [[ "$CHECK_ONLY" == "1" || "$HAVE_DNF" == "0" ]]; then
   fail "no node >= $NODE_FLOOR (web/.nvmrc) — have $(node -v 2>/dev/null || echo none); the web tier needs it"
@@ -347,8 +367,20 @@ else
     if [[ -n "$node_bin" ]]; then
       fixed "installed node $("$node_bin" -v) at ${node_bin}"
       restart_needed=1
+    elif fleet_node_tarball_install "$NODE_FLOOR" >/dev/null; then
+      # The distro has no nodejs${NODE_FLOOR} stream yet (node 26 on F44): fetch
+      # the signed upstream release instead — see fleet_node_tarball_install
+      # and ADR-0078. Its npm comes in the same tarball as npm-${NODE_FLOOR}.
+      hash -r
+      node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
+      if [[ -n "$node_bin" ]]; then
+        fixed "no nodejs${NODE_FLOOR} package in the distro repos — installed the signed upstream node $("$node_bin" -v) at ${node_bin}"
+        restart_needed=1
+      else
+        fail "installed the upstream node ${NODE_FLOOR} but no node >= ${NODE_FLOOR} resolves — inspect /usr/local/bin/node-${NODE_FLOOR}"
+      fi
     else
-      fail "no node >= $NODE_FLOOR after installing nodejs${NODE_FLOOR} and nodejs — inspect 'dnf repolist' / 'dnf list nodejs*'"
+      fail "no node >= $NODE_FLOOR after installing nodejs${NODE_FLOOR}, nodejs, and the upstream nodejs.org build — inspect 'dnf list nodejs*' and the error above"
     fi
   fi
 fi
