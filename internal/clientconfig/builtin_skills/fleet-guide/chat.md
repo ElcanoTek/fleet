@@ -112,6 +112,13 @@ order `fleet acp` received them. Up to 20 can wait behind the one running. A
 prompt running and 20 waiting. It is not sent to fleet, so send it again once
 the earlier ones have been answered, or cancel them from the client.
 
+If you close the editor, or stop the agent, while a reply is still running, and
+the editor lets the agent shut down (Neovim's CodeCompanion.nvim does), that
+turn is stopped in fleet too. Messages from the client still waiting behind it
+are dropped: they never reach fleet. A message fleet itself had already queued
+(behind a turn started from the web chat, say) still runs. An editor that
+force-kills its agent leaves the turn running: stop it from the web chat.
+
 ### What happens when you ask
 
 The assistant does the work rather than describing it. It has a private working

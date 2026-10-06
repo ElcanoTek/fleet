@@ -34,6 +34,9 @@ type fakeFleet struct {
 	turn func(w *sseWriter, r *http.Request)
 	// cancelStatus is what the Stop endpoint answers (0 = 204).
 	cancelStatus int
+	// cancelHold, when set, holds every Stop, once recorded, until it is
+	// closed: a slow or hung server. A Stop whose caller gives up ends.
+	cancelHold chan struct{}
 
 	mu      sync.Mutex
 	chats   []chatReq
@@ -92,6 +95,13 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.cancels = append(f.cancels, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/conversations/"), "/cancel")+" "+string(b))
 		f.mu.Unlock()
+		if f.cancelHold != nil {
+			select {
+			case <-f.cancelHold:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if f.cancelStatus != 0 {
 			w.WriteHeader(f.cancelStatus)
 			return
@@ -168,6 +178,7 @@ type harness struct {
 type harnessOpts struct {
 	turn         func(w *sseWriter, r *http.Request)
 	cancelStatus int
+	cancelHold   chan struct{} // see fakeFleet.cancelHold
 	cfgErr       error
 	publicURL    string
 	timeout      time.Duration
@@ -183,7 +194,7 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 	prevSettle := stopSettleWait
 	stopSettleWait = 50 * time.Millisecond
 	t.Cleanup(func() { stopSettleWait = prevSettle })
-	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus}
+	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus, cancelHold: o.cancelHold}
 	srv := httptest.NewServer(ff)
 	t.Cleanup(srv.Close)
 	serverURL := srv.URL
@@ -1461,9 +1472,10 @@ func TestCancelAfterASupersededPromptStopsTheNewerOne(t *testing.T) {
 // client closes fleet acp's stdin mid-turn, the Agent triggers the stop of
 // every prompt in flight, as a session/cancel would. The running turn gets a
 // Stop and answers cancelled, and a prompt still waiting for the session is
-// never submitted. This harness does not exit; `fleet acp` itself may exit
-// before that Stop is sent (run returns as soon as the connection closes), a
-// known gap closed separately.
+// never submitted. This harness does not exit: that `fleet acp` stays alive
+// until the Stop is answered (bounded), and handles signals and a broken
+// stdout the same way, is run's side, pinned by the TestRun* and
+// TestProcess* tests in run_test.go.
 func TestHangUpTriggersTheAgentsStop(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	defer close(release)
@@ -1496,10 +1508,82 @@ func TestHangUpTriggersTheAgentsStop(t *testing.T) {
 	}
 }
 
+// A client that goes away while prompts wait in a session's line (see
+// Agent.line), behind a turn whose Stop is slow: the waiters leave the line
+// at once, answered cancelled and never submitted, without waiting for the
+// turn ahead to finish stopping, so run's bounded wait (awaitStops) holds
+// only for that turn. Only the running turn gets a Stop.
+func TestHangUpReleasesPromptsWaitingInLine(t *testing.T) {
+	started, hold := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
+	var h *harness
+	h = newHarness(t, harnessOpts{cancelHold: hold, turn: func(w *sseWriter, r *http.Request) {
+		if h.fleet.nth() > 1 {
+			w.emit("turn.error", map[string]any{"message": "submitted after the client hung up"})
+			return
+		}
+		blockingTurn(started)(w, r)
+	}})
+	t.Cleanup(release)
+	sid := h.newSession(t)
+	first := h.promptAsync(t, sid, "long job", nil, 1)
+	<-started
+	second := h.promptAsync(t, sid, "waits in line", nil, 2)
+	third := h.promptAsync(t, sid, "waits behind it", nil, 3)
+	h.hangUp()
+
+	h.fleet.awaitStop(t) // the running turn's Stop is out, and held
+	for i, done := range []<-chan promptResult{second, third} {
+		select {
+		case r := <-done:
+			if r.err != nil || r.resp.StopReason != acpsdk.StopReasonCancelled {
+				t.Errorf("waiting prompt %d = %+v, %v; want cancelled", i+1, r.resp, r.err)
+			}
+		case <-time.After(5 * time.Second): // well inside the held Stop's 10s client timeout
+			t.Fatalf("waiting prompt %d did not leave the line while the turn ahead was still stopping", i+1)
+		}
+	}
+	h.waitTracked(t, sid, 1) // only the turn being stopped is left in flight
+	select {
+	case r := <-first:
+		t.Fatalf("the running prompt answered (%+v, %v) before its Stop did", r.resp, r.err)
+	default:
+	}
+	release()
+	if r := await(t, first, "the running prompt"); r.err != nil || r.resp.StopReason != acpsdk.StopReasonCancelled {
+		t.Errorf("running prompt = %+v, %v; want cancelled", r.resp, r.err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != 1 {
+		t.Errorf("a waiting prompt was submitted after the client hung up: %+v", h.fleet.chats)
+	}
+	if len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != `conv-slow {"scope":"turn","turn_id":"turn-slow"}` {
+		t.Errorf("cancels = %q, want only the running turn stopped", h.fleet.cancels)
+	}
+}
+
 func (f *fakeFleet) cancelsSnapshot() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.cancels)
+}
+
+// awaitStop waits (bounded) until the fake has received a Stop, and returns
+// the Stops received so far.
+func (f *fakeFleet) awaitStop(t *testing.T) []string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got := f.cancelsSnapshot()
+		if len(got) > 0 {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the fake never received a Stop")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // A text-only prompt whose lost answer's Stop fleet confirmed drops its key,
