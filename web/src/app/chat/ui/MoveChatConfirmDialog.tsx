@@ -149,7 +149,7 @@ function quoted(title?: string): string {
   return `“${title?.trim() || "This chat"}”`;
 }
 
-function TeamChip({ team, suffix }: { team?: string; suffix?: string }) {
+export function TeamChip({ team, suffix }: { team?: string; suffix?: string }) {
   return (
     <NameChip icon={<TeamGlyph className="size-3 shrink-0" />} suffix={suffix}>
       {team || "your team"}

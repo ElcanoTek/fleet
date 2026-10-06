@@ -6,6 +6,7 @@ package httpapi
 // is exempt from the orchestrator OpenAPI parity test — no openapi.yaml entries.
 
 import (
+	"container/heap"
 	"context"
 	"encoding/json"
 	"errors"
@@ -512,20 +513,59 @@ type sourcesGroup struct {
 // stall the project home. Newest-first, so the cap drops the oldest entries.
 const maxProjectFiles = 200
 
-// walkWorkspaceFiles lists every regular, non-upload file in convID's
-// workspace, newest first. Symlinks are skipped (WalkDir does not follow
+// maxWorkspaceWalkEntries bounds the directory entries one workspace walk
+// visits. The heap below bounds what is KEPT; this bounds the work, so a tree
+// with millions of entries cannot stall the project home either. Past it the
+// listing stops and is reported truncated.
+var maxWorkspaceWalkEntries = 20000 // a var so tests can shrink it
+
+// newestFiles is a bounded min-heap of the newest files seen so far: its root
+// is the WORST kept entry in newest-first order (oldest modtime; on a tie,
+// the larger path), so a better candidate replaces it in O(log n).
+type newestFiles []sourcesFile
+
+func newerFile(a, b sourcesFile) bool {
+	if a.ModifiedAt != b.ModifiedAt {
+		return a.ModifiedAt > b.ModifiedAt
+	}
+	return a.Path < b.Path
+}
+
+func (h newestFiles) Len() int           { return len(h) }
+func (h newestFiles) Less(i, j int) bool { return newerFile(h[j], h[i]) }
+func (h newestFiles) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *newestFiles) Push(x any)        { *h = append(*h, x.(sourcesFile)) }
+func (h *newestFiles) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
+// walkWorkspaceFiles lists the newest `limit` regular, non-upload files in
+// convID's workspace, newest first, and reports whether anything was left out
+// (more files than the limit, or the walk hit maxWorkspaceWalkEntries).
+// Only the bounded set is held during the walk — a runaway tree is never
+// collected whole and sorted. Symlinks are skipped (WalkDir does not follow
 // them): every workspace carries the bundle-mount symlinks (personas,
 // protocols, shared, skills, system_prompts) pointing OUTSIDE the root, and a
 // Sources entry must be a real file the user can open. The attachments/
 // subtree is skipped whole: uploads are never listed in Sources (ADR-0079).
-func walkWorkspaceFiles(convID string) []sourcesFile {
-	files := []sourcesFile{}
+func walkWorkspaceFiles(convID string, limit int) (files []sourcesFile, truncated bool) {
 	root, err := filepath.EvalSymlinks(tools.WorkspaceDirForConversation(convID))
 	if err != nil {
 		// Most conversations never touched a file — no workspace dir.
-		return files
+		return []sourcesFile{}, false
 	}
+	h := make(newestFiles, 0, limit)
+	visited := 0
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
+		visited++
+		if visited > maxWorkspaceWalkEntries {
+			truncated = true
+			return filepath.SkipAll
+		}
 		// Per-entry errors (perms, vanished mid-walk) skip the entry,
 		// never abort the whole listing.
 		if walkErr != nil {
@@ -546,21 +586,29 @@ func walkWorkspaceFiles(convID string) []sourcesFile {
 		if err != nil || !info.Mode().IsRegular() {
 			return nil //nolint:nilerr // best-effort listing
 		}
-		files = append(files, sourcesFile{
+		f := sourcesFile{
 			Path:       rel,
 			Name:       d.Name(),
 			Size:       info.Size(),
 			ModifiedAt: info.ModTime().Unix(),
-		})
+		}
+		switch {
+		case len(h) < limit:
+			heap.Push(&h, f)
+		case limit > 0 && newerFile(f, h[0]):
+			truncated = true
+			h[0] = f
+			heap.Fix(&h, 0)
+		default:
+			truncated = true
+		}
 		return nil
 	})
-	sort.SliceStable(files, func(i, j int) bool {
-		if files[i].ModifiedAt != files[j].ModifiedAt {
-			return files[i].ModifiedAt > files[j].ModifiedAt
-		}
-		return files[i].Path < files[j].Path
-	})
-	return files
+	files = make([]sourcesFile, len(h))
+	for i := len(h) - 1; i >= 0; i-- {
+		files[i] = heap.Pop(&h).(sourcesFile)
+	}
+	return files, truncated
 }
 
 // projectFiles handles GET /projects/{id}/files — the project home's Sources
@@ -602,7 +650,10 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 	flat := []projectFile{}
 	truncated := false
 	for _, conv := range convs {
-		all := walkWorkspaceFiles(conv.ID)
+		all, walkTruncated := walkWorkspaceFiles(conv.ID, maxProjectFiles)
+		if walkTruncated {
+			truncated = true
+		}
 		if len(all) == 0 {
 			continue
 		}

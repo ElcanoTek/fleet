@@ -284,6 +284,7 @@ type chatStore interface {
 	SetOutputShared(ctx context.Context, ownerEmail, convID, path string, shared bool) error
 	ReplaceOutputExclusions(ctx context.Context, ownerEmail, convID string, paths []string) error
 	RecordBranchOrigin(ctx context.Context, branchConvID string, o store.BranchOrigin) error
+	MaxMessageID(ctx context.Context, convID string) (int64, error)
 	GetBranchOrigin(ctx context.Context, ownerEmail, convID string) (*store.BranchOrigin, error)
 	BranchOriginsFor(ctx context.Context, convIDs []string) (map[string]*store.BranchOrigin, error)
 	ClaimBranchFilesAnnouncement(ctx context.Context, convID string) (*store.BranchOrigin, error)

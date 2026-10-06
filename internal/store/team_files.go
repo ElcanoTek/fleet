@@ -226,10 +226,13 @@ type BranchOrigin struct {
 	BranchedAt           int64        `json:"branched_at"`
 	CopiedFiles          []BranchFile `json:"copied_files"`
 	WithheldFiles        []string     `json:"withheld_files"`
-	// SourceMaxMessageID is the source's MAX(messages.id) at branch time —
-	// the high-water mark ViewerBranches compares against. Zero on record
-	// means "take it now" (RecordBranchOrigin reads it in the same
-	// statement). Never sent: a message id of someone else's chat.
+	// SourceMaxMessageID is the source's MAX(messages.id) read BEFORE the
+	// branch copied anything (MaxMessageID) — the high-water mark
+	// ViewerBranches compares against. The caller passes it explicitly;
+	// RecordBranchOrigin never reads it itself, because a read after the copy
+	// would count a source message that arrived mid-branch as seen. Zero
+	// means unknown and reports every source message as new. Never sent: a
+	// message id of someone else's chat.
 	SourceMaxMessageID int64 `json:"-"`
 	// SourceStillShared is computed per read: whether the branch's owner can
 	// still team-view the source. The banner links back only while it is
@@ -259,10 +262,7 @@ func (s *Store) RecordBranchOrigin(ctx context.Context, branchConvID string, o B
 		INSERT INTO conversation_branch_origins
 			(conversation_id, source_conversation_id, source_owner_email, source_title,
 			 branched_at, source_max_message_id, copied_files, withheld_files, files_announced)
-		VALUES ($1, $2, $3, $4, $5,
-		        COALESCE(NULLIF($8::bigint, 0),
-		                 (SELECT MAX(m.id) FROM messages m WHERE m.conversation_id = $2), 0),
-		        $6::jsonb, $7::jsonb, FALSE)
+		VALUES ($1, $2, $3, $4, $5, $8, $6::jsonb, $7::jsonb, FALSE)
 		ON CONFLICT (conversation_id) DO UPDATE SET
 			source_conversation_id = EXCLUDED.source_conversation_id,
 			source_owner_email = EXCLUDED.source_owner_email,
@@ -274,6 +274,16 @@ func (s *Store) RecordBranchOrigin(ctx context.Context, branchConvID string, o B
 		branchConvID, o.SourceConversationID, normalizeEmail(o.SourceOwnerEmail), o.SourceTitle,
 		o.BranchedAt, string(copied), string(withheld), o.SourceMaxMessageID)
 	return err
+}
+
+// MaxMessageID is convID's message-id high-water mark (0 when it has no
+// messages): what a teammate branch records as "seen" when it is read before
+// the branch copies anything.
+func (s *Store) MaxMessageID(ctx context.Context, convID string) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(id), 0) FROM messages WHERE conversation_id = $1`, convID).Scan(&id)
+	return id, err
 }
 
 func scanBranchOrigin(sc rowScanner) (*BranchOrigin, error) {

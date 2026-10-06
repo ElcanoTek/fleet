@@ -4026,6 +4026,23 @@ export function ChatExperience({
     return c?.team_visible ? c : undefined;
   };
 
+  // bulkSharedLoss is the team-shared part of the multi-select: deleting
+  // those ends the team's access just as a single delete does (B33), so the
+  // bulk confirm names it. The audience is the first shared chat's — a
+  // person is on one team, so the selection's audiences agree.
+  const bulkSharedLoss = () => {
+    const shared: ConversationSummary[] = [];
+    for (const id of selectedIds) {
+      const c = sharedChatById(id);
+      if (c) shared.push(c);
+    }
+    if (shared.length === 0) return undefined;
+    return {
+      conversationIds: shared.map((c) => c.id),
+      team: audienceForChat(shared[0]),
+    };
+  };
+
   // requestArchive is what the rail and the `a` shortcut call. Archiving a
   // SHARED chat ends its teammates' access, so it asks first (B34) with the
   // shared-file count; a private chat archives straight away, as before, and
@@ -5352,6 +5369,7 @@ export function ChatExperience({
         {bulkDeleteConfirm ? (
           <BulkDeleteConfirmModal
             count={selectedIds.size}
+            sharedLoss={bulkSharedLoss()}
             onCancel={() => setBulkDeleteConfirm(false)}
             onConfirm={() => {
               setBulkDeleteConfirm(false);

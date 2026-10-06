@@ -250,7 +250,10 @@ brancher's own files (0644 files, 0755 directories, written through an
 `os.Root` on the new workspace; the source is read with the same no-symlink
 opener as downloads). They never update: later unshares, edits or deletions by
 the owner do not reach them. Unshared outputs are recorded as `withheld_files`
-and stay locked names in the branch's transcript. The origin — source, owner,
+and stay locked names in the branch's transcript — as is every other workspace
+reference the transcript links that the branch did not receive (an upload,
+which is never copied or shared; a presented file missing on disk; one past the
+copy budget), so none of them renders as a live link that 404s. The origin — source, owner,
 the title as the brancher saw it, time, copied and withheld files — is stored
 in `conversation_branch_origins` and served as `branch_origin` on the branch
 response and on `GET /conversations/{id}`, with `source_still_shared` so the

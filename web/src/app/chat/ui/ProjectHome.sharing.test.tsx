@@ -604,6 +604,28 @@ describe("Sources", () => {
     );
   });
 
+  it("sends only the toggled group, never the whole cached map", async () => {
+    const calls = mockApi({
+      "/my-state": {
+        kept_personal: false,
+        has_shared_chat: true,
+        sources_open: { c1: true, br1: true },
+      },
+      "/files": { groups: GROUPS, truncated: false },
+    });
+    renderHome();
+    await screen.findByText("b.csv");
+    fireEvent.click(within(groupEl("c2")).getByRole("button", { expanded: false }));
+    expect(await within(groupEl("c2")).findByText("v.json")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        calls.find((c) => c.method === "PUT" && c.url.endsWith("/my-state"))?.body,
+      ).toEqual({ sources_open: { c2: true } }),
+    );
+    // The other remembered groups stay open locally.
+    expect(within(groupEl("c1")).getByText("b.csv")).toBeInTheDocument();
+  });
+
   it("sourcesFocus opens that chat's group", async () => {
     mockApi({ ...DONE, "/files": { groups: GROUPS, truncated: false } });
     renderHome({ sourcesFocus: "c2" });

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -39,6 +40,12 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 	// shared is set when the parent is a TEAMMATE's chat: the branch then
 	// carries the parent's shared outputs as the brancher's own copies.
 	var shared *store.TeamSharedConversation
+	// sourceHighWater is the source's message-id high-water mark, read
+	// BEFORE the transcript snapshot and the copy (teammate path only): a
+	// source message that lands while the branch is being made is then
+	// above it, so the branch reports "added messages since you branched"
+	// rather than counting a message it never saw as seen.
+	var sourceHighWater int64
 	parent, err := s.store.Get(r.Context(), user, parentConvID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -49,6 +56,11 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 		parentTitle = parent.Title
 	default:
 		var serr error
+		sourceHighWater, serr = s.store.MaxMessageID(r.Context(), parentConvID)
+		if serr != nil {
+			http.Error(w, serr.Error(), http.StatusInternalServerError)
+			return
+		}
 		shared, serr = s.store.GetTeamVisibleConversation(r.Context(), user, parentConvID)
 		if serr != nil {
 			http.Error(w, serr.Error(), http.StatusInternalServerError)
@@ -100,7 +112,7 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if shared != nil {
-		branch.BranchOrigin = s.carrySharedFilesIntoBranch(r.Context(), shared, branch)
+		branch.BranchOrigin = s.carrySharedFilesIntoBranch(r.Context(), shared, branch, sourceHighWater)
 	}
 	writeJSONStatus(w, http.StatusCreated, branch)
 }
@@ -118,10 +130,19 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 // The owner's OWN branch is untouched by this — it already reads their
 // workspace through their own history and needs no copy.
 //
+// Every OTHER workspace reference in the transcript the branch does not have
+// a copy of — an upload (never copied, never shared), a presented file that
+// is missing on disk, one past the copy budget — is recorded as withheld too,
+// so the branch renders it as a locked name rather than a live link that
+// 404s against the brancher's workspace.
+//
+// sourceHighWater is the source's message-id high-water mark read before the
+// branch was made; it is recorded verbatim, never re-read after the copy.
+//
 // Best-effort past the branch itself: the conversation already exists, so a
 // failure here is logged and the branch is returned without (some of) its
 // files rather than turned into an error the user cannot act on.
-func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.TeamSharedConversation, branch *store.Conversation) *store.BranchOrigin {
+func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.TeamSharedConversation, branch *store.Conversation, sourceHighWater int64) *store.BranchOrigin {
 	origin := store.BranchOrigin{
 		SourceConversationID: src.ID,
 		SourceOwnerEmail:     src.OwnerEmail,
@@ -129,6 +150,7 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 		BranchedAt:           branch.CreatedAt,
 		CopiedFiles:          []store.BranchFile{},
 		WithheldFiles:        []string{},
+		SourceMaxMessageID:   sourceHighWater,
 		SourceStillShared:    true,
 	}
 	outs, err := s.outputsFromHistory(ctx, src.ID, src.Messages)
@@ -137,8 +159,32 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 	} else {
 		origin.CopiedFiles, origin.WithheldFiles = copySharedOutputsIntoBranch(src.ID, branch.ID, outs)
 	}
+	origin.WithheldFiles = withholdUncopiedReferences(src.Messages, origin.CopiedFiles, origin.WithheldFiles)
 	if err := s.store.RecordBranchOrigin(ctx, branch.ID, origin); err != nil {
 		log.Printf("branch files: record origin of %s: %v", logSafeSlug(branch.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
 	}
 	return &origin
+}
+
+// withholdUncopiedReferences appends to withheld every workspace path the
+// transcript's assistant replies link or embed that was neither copied nor
+// already withheld — uploads, presented files missing on disk, anything a
+// failed listing never reached. Paths are in resolveWorkspaceRelPath's
+// decoded, "/"-joined form, the same form the web's workspacePathFromHref
+// produces, so the branch's WithheldFilesContext matches them.
+func withholdUncopiedReferences(history []agent.HistoryEntry, copied []store.BranchFile, withheld []string) []string {
+	have := make(map[string]bool, len(copied)+len(withheld))
+	for _, c := range copied {
+		have[c.Path] = true
+	}
+	for _, p := range withheld {
+		have[p] = true
+	}
+	for _, p := range presentedWorkspacePaths(history) {
+		if !have[p] {
+			have[p] = true
+			withheld = append(withheld, p)
+		}
+	}
+	return withheld
 }

@@ -177,8 +177,8 @@ export function ProjectSources({
     return id === mostRecentId;
   };
 
-  // The remembered map, this visit's overrides, and one more change — as a
-  // Map for local state and as plain entries for the PUT body.
+  // The remembered map, this visit's overrides, and one more change — the
+  // local view. The PUT carries the one change only (persistOpen).
   const withOpen = (id: string, open: boolean): Map<string, boolean> => {
     const next = new Map<string, boolean>(Object.entries(sourcesOpen ?? {}));
     for (const [k, v] of localOpen) next.set(k, v);
@@ -186,10 +186,13 @@ export function ProjectSources({
     return next;
   };
 
+  // Only the toggled key goes to the server, which merges it into the stored
+  // map: sending this tab's whole cached map would overwrite another tab's
+  // (or device's) choices with stale values. Built from entries, not by a
+  // computed-property write on a plain object.
   const persistOpen = (id: string, open: boolean) => {
-    const next = withOpen(id, open);
-    setLocalOpen(next);
-    onSourcesOpenChange(Object.fromEntries(next));
+    setLocalOpen(withOpen(id, open));
+    onSourcesOpenChange(Object.fromEntries([[id, open]]));
   };
 
   // Focus: open the group, scroll it into view, highlight it briefly. Runs
@@ -208,9 +211,8 @@ export function ProjectSources({
   if (focusReady && focus) {
     setHandledFocus(focus.nonce);
     if (!isOpen(focus.conversationId)) {
-      const next = withOpen(focus.conversationId, true);
-      setLocalOpen(next);
-      setPersistQueue(Object.fromEntries(next));
+      setLocalOpen(withOpen(focus.conversationId, true));
+      setPersistQueue(Object.fromEntries([[focus.conversationId, true]]));
     }
     setHighlight(focus.conversationId);
   }

@@ -379,9 +379,21 @@ export function ProjectHome({
   );
 
   const onSourcesOpenChange = useCallback(
-    (next: Record<string, boolean>) => {
-      setMyState((s) => (s ? { ...s, sources_open: next } : s));
-      void updateProjectMyState(project.id, { sources_open: next }).catch(() => {
+    (changes: Record<string, boolean>) => {
+      // changes holds only the toggled key(s); the server merges them into
+      // the stored map, and so does the local copy.
+      setMyState((s) =>
+        s
+          ? {
+              ...s,
+              sources_open: Object.fromEntries([
+                ...Object.entries(s.sources_open ?? {}),
+                ...Object.entries(changes),
+              ]),
+            }
+          : s,
+      );
+      void updateProjectMyState(project.id, { sources_open: changes }).catch(() => {
         // Remembering open groups is a convenience; the click already took.
       });
     },

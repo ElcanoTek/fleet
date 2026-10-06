@@ -364,7 +364,10 @@ func TestTeammateBranchCopiesSharedFiles(t *testing.T) {
 	if len(copied) != 3 || !copied["out/report.csv"] || !copied["chart.png"] || !copied["page.html"] {
 		t.Errorf("copied = %+v", o.CopiedFiles)
 	}
-	if len(o.WithheldFiles) != 1 || o.WithheldFiles[0] != "held.json" {
+	// Withheld: the unchecked output AND the upload the transcript links —
+	// uploads are never copied, so the branch must render it locked, not as a
+	// live link that 404s.
+	if strings.Join(o.WithheldFiles, ",") != "held.json,attachments/u1/in.pdf" {
 		t.Errorf("withheld = %v", o.WithheldFiles)
 	}
 	bws := filepath.Join(f.root, br.ID)
@@ -434,6 +437,67 @@ func TestTeammateBranchCopiesSharedFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.root, own.ID, "chart.png")); err == nil {
 		t.Error("the owner's own branch must not copy files")
+	}
+}
+
+// The branch's "seen" high-water mark is read before the copy: a source
+// message that lands WHILE the files are being copied is not in the branch,
+// so the viewer is told the source has added messages since.
+func TestTeammateBranchMidCopyMessageReportsChanged(t *testing.T) {
+	f := newFilesFixture(t)
+	msgs, _ := f.st.LoadHistory(f.ctx, f.chat.ID)
+	body, _ := json.Marshal(map[string]any{"branch_point_message_id": msgs[len(msgs)-1].ID})
+	appended := false
+	branchCopyAfterStat = func(string) {
+		if appended {
+			return
+		}
+		appended = true
+		if _, err := f.st.AppendHistory(f.ctx, f.chat.ID, []agent.HistoryEntry{textEntry("assistant", "late")}); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { branchCopyAfterStat = nil })
+	w := convSub(t, f.srv, "POST", "bob@x.com", f.chat.ID, "branch", string(body))
+	branchCopyAfterStat = nil
+	if w.Code != 201 || !appended {
+		t.Fatalf("branch: %d %s (appended=%v)", w.Code, w.Body.String(), appended)
+	}
+	tv := decode[struct {
+		ViewerBranch *store.ViewerBranch `json:"viewer_branch"`
+	}](t, convSub(t, f.srv, "GET", "bob@x.com", f.chat.ID, "team-view", ""))
+	if tv.ViewerBranch == nil || !tv.ViewerBranch.ChangedSince {
+		t.Errorf("viewer_branch = %+v, want changed_since after a mid-copy message", tv.ViewerBranch)
+	}
+}
+
+// Every workspace reference in the branched transcript that the branch did
+// not receive is withheld — a presented file missing on disk and an upload
+// included — and nothing is withheld twice.
+func TestTeammateBranchWithholdsEveryUncopiedReference(t *testing.T) {
+	f := newFilesFixture(t)
+	if _, err := f.st.AppendHistory(f.ctx, f.chat.ID, []agent.HistoryEntry{textEntry("assistant",
+		"Also [gone](out/gone.csv), [again](attachments/u1/in.pdf) and [report](out/report.csv).")}); err != nil {
+		t.Fatal(err)
+	}
+	msgs, _ := f.st.LoadHistory(f.ctx, f.chat.ID)
+	body, _ := json.Marshal(map[string]any{"branch_point_message_id": msgs[len(msgs)-1].ID})
+	w := convSub(t, f.srv, "POST", "bob@x.com", f.chat.ID, "branch", string(body))
+	if w.Code != 201 {
+		t.Fatalf("branch: %d %s", w.Code, w.Body.String())
+	}
+	o := decode[store.Conversation](t, w).BranchOrigin
+	if o == nil {
+		t.Fatal("no branch_origin")
+	}
+	got := strings.Join(o.WithheldFiles, ",")
+	if got != "held.json,attachments/u1/in.pdf,out/gone.csv" {
+		t.Errorf("withheld = %s", got)
+	}
+	for _, c := range o.CopiedFiles {
+		if strings.HasPrefix(c.Path, "attachments/") {
+			t.Errorf("upload copied: %s", c.Path)
+		}
 	}
 }
 

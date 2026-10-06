@@ -141,6 +141,10 @@ func TestBranchOriginAndViewerBranches(t *testing.T) {
 		t.Fatalf("team view: %v", err)
 	}
 	last := view.Messages[len(view.Messages)-1].ID
+	hw, err := f.s.MaxMessageID(f.ctx, c.ID)
+	if err != nil || hw < last {
+		t.Fatalf("MaxMessageID = %d, %v (last visible %d)", hw, err, last)
+	}
 
 	br, err := f.s.BranchConversation(f.ctx, "bob@x.com", c.ID, last, "Spread study (branch)")
 	if err != nil {
@@ -148,7 +152,7 @@ func TestBranchOriginAndViewerBranches(t *testing.T) {
 	}
 	if err := f.s.RecordBranchOrigin(f.ctx, br.ID, BranchOrigin{
 		SourceConversationID: c.ID, SourceOwnerEmail: "alice@x.com", SourceTitle: "Spread study",
-		BranchedAt:    br.CreatedAt,
+		BranchedAt: br.CreatedAt, SourceMaxMessageID: hw,
 		CopiedFiles:   []BranchFile{{Path: "out/a.csv", Name: "a.csv", Size: 3}},
 		WithheldFiles: []string{"out/held.csv"},
 	}); err != nil {
@@ -495,5 +499,41 @@ func TestArchivedChatCannotBeSharedAndUnarchiveStaysPrivate(t *testing.T) {
 	// Unarchived, it can be shared again.
 	if stored, err := f.s.SetConversationTeamVisible(f.ctx, "alice@x.com", c.ID, true); err != nil || !stored {
 		t.Errorf("share after unarchive = (%v, %v)", stored, err)
+	}
+}
+
+// The high-water mark is the one read BEFORE the branch, passed in — never
+// re-read when the origin is recorded. A source message that lands between
+// the branch's copy and the origin write is not in the branch, so it must
+// report changed_since.
+func TestBranchOriginHighWaterIsNotReadAfterCopy(t *testing.T) {
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
+	hw, err := f.s.MaxMessageID(f.ctx, c.ID)
+	if err != nil || hw == 0 {
+		t.Fatalf("MaxMessageID = %d, %v", hw, err)
+	}
+	br, err := f.s.BranchConversation(f.ctx, "bob@x.com", c.ID, hw, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mid-branch: the owner's next message arrives after the copy.
+	if _, err := f.s.db.ExecContext(f.ctx,
+		`INSERT INTO messages (conversation_id, role, type, content, created_at) VALUES ($1, 'assistant', 'text', '{"text":"late"}', $2)`,
+		c.ID, br.CreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.RecordBranchOrigin(f.ctx, br.ID, BranchOrigin{
+		SourceConversationID: c.ID, SourceOwnerEmail: "alice@x.com", SourceTitle: "Spread study",
+		BranchedAt: br.CreatedAt, SourceMaxMessageID: hw,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	vb, err := f.s.ViewerBranches(f.ctx, "bob@x.com", []string{c.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := vb[c.ID]; !ok || !got.ChangedSince {
+		t.Errorf("viewer branch = %+v (ok=%v): a message after the snapshot must report changed_since", got, ok)
 	}
 }
