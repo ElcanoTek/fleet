@@ -215,7 +215,7 @@ image); run them via the `npm` scripts documented below.
   version may flag or miss findings. [`.golangci.yml`](../.golangci.yml) no
   longer sets `run.go`: golangci-lint's documented default is the go.mod Go
   version, so that stays a single declaration too.
-- **Node.js** — the major in [`web/.nvmrc`](../web/.nvmrc) (currently 24) — and npm, for the
+- **Node.js** — the major in [`web/.nvmrc`](../web/.nvmrc) (currently 26) — and npm, for the
   `web/` lanes. CI reads the same file via `node-version-file`.
 - **PostgreSQL 18** for the Go suites that touch the chat/scheduler stores. CI
   uses the `postgres:18` service container.

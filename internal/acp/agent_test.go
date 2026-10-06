@@ -1594,6 +1594,169 @@ func TestTextSentAgainDuringAConfirmedStopRuns(t *testing.T) {
 	}
 }
 
+// Prompts waiting for a session run in the order they were tracked, even
+// when a later one reaches the session first: here "second" is held between
+// tracking and its wait (where the SDK's goroutine scheduling can leave it)
+// until "third" is already waiting. Arrival is the order of track calls; the
+// SDK does not promise its handlers start in wire order.
+func TestWaitingPromptsRunInArrivalOrder(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	gate := make(chan struct{})
+	prevHook := promptTracked
+	promptTracked = func(message string) {
+		if message == "second" {
+			<-gate
+		}
+	}
+	t.Cleanup(func() { promptTracked = prevHook })
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		if h.fleet.nth() > 1 {
+			w.emit("conversation", map[string]any{"id": "conv-o"})
+			w.emit("turn.completed", map[string]any{})
+			return
+		}
+		heldTurn(w, r, "conv-o", "turn-o", started, release)
+	}})
+	sid := h.newSession(t)
+	first := h.promptAsync(t, sid, "first", nil, 1)
+	<-started
+	second := h.promptAsync(t, sid, "second", nil, 2)
+	third := h.promptAsync(t, sid, "third", nil, 3)
+	time.Sleep(stopWindow) // "third" is waiting for the session; "second" is still held
+	close(gate)
+	time.Sleep(stopWindow) // "second" is waiting too, behind "third" for the session's mutex
+	close(release)
+	for i, done := range []<-chan promptResult{first, second, third} {
+		if r := await(t, done, fmt.Sprintf("prompt %d", i+1)); r.err != nil || r.resp.StopReason != acpsdk.StopReasonEndTurn {
+			t.Errorf("prompt %d = %+v, %v; want end_turn", i+1, r.resp, r.err)
+		}
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	order := make([]string, 0, len(h.fleet.chats))
+	for _, c := range h.fleet.chats {
+		order = append(order, c.Message)
+	}
+	if strings.Join(order, ",") != "first,second,third" {
+		t.Errorf("fleet received %q, want the prompts in the order they arrived", order)
+	}
+}
+
+// Prompts waiting behind a session's running turn are bounded: they have not
+// reached fleet, so the server's input-queue cap cannot see them. One beyond
+// maxWaitingPrompts is refused at once, never held or sent, and the ones
+// admitted still run in order once the session frees.
+func TestPromptsWaitingForASessionAreCapped(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		if h.fleet.nth() > 1 {
+			w.emit("conversation", map[string]any{"id": "conv-c"})
+			w.emit("turn.completed", map[string]any{})
+			return
+		}
+		heldTurn(w, r, "conv-c", "turn-c", started, release)
+	}})
+	sid := h.newSession(t)
+	admitted := make([]<-chan promptResult, 0, 1+maxWaitingPrompts)
+	admitted = append(admitted, h.promptAsync(t, sid, "long job", nil, 1))
+	<-started
+	for i := range maxWaitingPrompts {
+		admitted = append(admitted, h.promptAsync(t, sid, fmt.Sprintf("job %d", i), nil, i+2))
+	}
+	// Sent without blocking the test: an uncapped agent would hold it.
+	over := make(chan error, 1)
+	go func() {
+		_, err := h.prompt(sid, "one too many")
+		over <- err
+	}()
+	var err error
+	select {
+	case err = <-over:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the prompt beyond the cap was held to wait for the session instead of refused")
+	}
+	if err == nil || rpcCode(err) != -32603 || !strings.Contains(err.Error(), "waiting") {
+		t.Fatalf("prompt beyond the cap = %v, want an internal error saying the session has too many prompts waiting", err)
+	}
+	h.waitTracked(t, sid, maxWaitingPrompts+1) // the refused prompt was never tracked
+	close(release)
+	for i, done := range admitted {
+		if r := await(t, done, fmt.Sprintf("prompt %d", i)); r.err != nil || r.resp.StopReason != acpsdk.StopReasonEndTurn {
+			t.Errorf("admitted prompt %d = %+v, %v; want end_turn", i, r.resp, r.err)
+		}
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != maxWaitingPrompts+1 {
+		t.Errorf("chats = %d, want %d: the refused prompt must never reach fleet", len(h.fleet.chats), maxWaitingPrompts+1)
+	}
+	for _, c := range h.fleet.chats {
+		if c.Message == "one too many" {
+			t.Errorf("the refused prompt was submitted: %+v", c)
+		}
+	}
+}
+
+// Every same-text prompt that waited behind a resend whose Stop fleet
+// confirmed (here, on --timeout) is a resend of one message: the first to get
+// the session runs it under a fresh key, and the next reuses that key, so
+// fleet answers it with that run instead of running the message twice.
+func TestWaitersBehindAConfirmedStopShareOneSuccessorKey(t *testing.T) {
+	started := make(chan struct{})
+	var h *harness
+	h = newHarness(t, harnessOpts{timeout: time.Second, turn: func(w *sseWriter, r *http.Request) {
+		switch {
+		case h.fleet.nth() == 1:
+			w.w.WriteHeader(http.StatusOK) // the answer is lost; fleet never committed the input
+		case h.fleet.nth() == 2: // the resend runs until the timeout's Stop ends it
+			w.emit("conversation", map[string]any{"id": "conv-t"})
+			w.emit("turn.started", map[string]any{"turn_id": "turn-t"})
+			close(started)
+			<-r.Context().Done()
+		case h.fleet.resent():
+			replayAck(w, "completed", "conv-t")
+		default:
+			w.emit("conversation", map[string]any{"id": "conv-t"})
+			w.emit("text.delta", map[string]any{"text": "booked"})
+			w.emit("turn.completed", map[string]any{})
+		}
+	}})
+	sid := h.newSession(t)
+	if _, err := h.prompt(sid, "book the room"); err == nil {
+		t.Fatal("want the lost-answer error")
+	}
+	resend := h.promptAsync(t, sid, "book the room", nil, 1)
+	<-started
+	// Both arrive while the lost answer's key is unresolved, so both take it
+	// as their arrival key, and both wait behind the resend's Stop.
+	w1 := h.promptAsync(t, sid, "book the room", nil, 2)
+	w2 := h.promptAsync(t, sid, "book the room", nil, 3)
+
+	if r := await(t, resend, "the timed-out resend"); r.err == nil || !strings.Contains(r.err.Error(), "was stopped") {
+		t.Errorf("timed-out resend = %+v, %v; want the confirmed-stop timeout error", r.resp, r.err)
+	}
+	for i, done := range []<-chan promptResult{w1, w2} {
+		if r := await(t, done, fmt.Sprintf("waiter %d", i+1)); r.err != nil || r.resp.StopReason != acpsdk.StopReasonEndTurn {
+			t.Errorf("waiter %d = %+v, %v; want end_turn", i+1, r.resp, r.err)
+		}
+	}
+	if text := h.client.text(); strings.Count(text, "booked") != 1 || !strings.Contains(text, "already took this message") {
+		t.Errorf("text = %q, want the message run once and the second waiter answered with that run", text)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != 4 {
+		t.Fatalf("chats = %+v, want 4", h.fleet.chats)
+	}
+	if k := h.fleet.chats[2].InputID; k == h.fleet.chats[1].InputID || h.fleet.chats[3].InputID != k {
+		t.Errorf("keys = %q, %q, %q; want the stopped key dropped and one successor key shared by both waiters",
+			h.fleet.chats[1].InputID, h.fleet.chats[2].InputID, h.fleet.chats[3].InputID)
+	}
+}
+
 // Every prompt leaves inflight once it is answered (completed, failed, or
 // cancelled while running or while waiting), so a session/cancel reaches only
 // prompts still open, and the registry does not grow.
@@ -1631,6 +1794,9 @@ func TestInflightEmptiesWhenPromptsAreAnswered(t *testing.T) {
 	defer h.agent.mu.Unlock()
 	if len(h.agent.inflight) != 0 {
 		t.Errorf("inflight = %v after every prompt was answered, want empty", h.agent.inflight)
+	}
+	if len(h.agent.line) != 0 {
+		t.Errorf("line = %v after every prompt was answered, want empty", h.agent.line)
 	}
 }
 
@@ -1781,6 +1947,35 @@ func TestAcceptedNoteNamesThePlaceInLine(t *testing.T) {
 	}
 }
 
+// A resend answered with an earlier attempt says what became of that attempt
+// and where to see it. A direct input's row settles after its turn's stream
+// ends (not until boot recovery, if the settlement write keeps failing), so
+// "running" may be a turn that has finished, and the note says so rather than
+// claiming it is still running.
+func TestAcceptedNoteForAReplay(t *testing.T) {
+	const where = "the fleet web chat"
+	for _, tc := range []struct {
+		name string
+		q    chattui.QueuedError
+		want string
+	}{
+		{"running", chattui.QueuedError{Mode: "direct", State: "running", Replay: true},
+			"fleet already has this message from an earlier attempt; its turn is running or has finished (it is not run twice). See it, and how it ended, at " + where},
+		{"injected", chattui.QueuedError{State: "injected", Replay: true},
+			"fleet already has this message from an earlier attempt; its turn is running or has finished (it is not run twice). See it, and how it ended, at " + where},
+		{"completed", chattui.QueuedError{Mode: "direct", State: "completed", Replay: true},
+			"fleet already took this message from an earlier attempt (it is not run twice). How that turn ended — its reply, or an error — is in " + where},
+		{"cancelled", chattui.QueuedError{Mode: "direct", State: "cancelled", Replay: true},
+			"an earlier attempt of this message was cancelled (stopped, or it failed before it started), so it did not run. To run it, send it again as a new message."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := acceptedNote(&tc.q, where); got != tc.want {
+				t.Errorf("note = %q\nwant   %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // Cancelled while fleet was queueing the prompt (another surface owns the
 // running turn): the queued item is withdrawn, so it cannot run after the user
 // stopped it.
@@ -1830,7 +2025,7 @@ func TestReplayOfAnAcceptedInput(t *testing.T) {
 		}
 	}
 	for state, want := range map[string]string{
-		"running":   "already running this message from an earlier attempt",
+		"running":   "already has this message from an earlier attempt; its turn is running or has finished (it is not run twice). See it, and how it ended, at",
 		"completed": "already took this message from an earlier attempt (it is not run twice). How that turn ended — its reply, or an error — is in",
 	} {
 		t.Run(state, func(t *testing.T) {

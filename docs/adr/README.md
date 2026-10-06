@@ -86,3 +86,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0075](0075-vendor-answers-cross-the-mcp-broker.md) | A hosted vendor's own answer to a failed tool call crosses the MCP broker, bounded and scrubbed (amends the error clause of ADR-0040) | Accepted |
 | [0076](0076-fleet-publishes-account-events.md) | Fleet publishes signed account events; for centrally managed identities the most recent change wins (amends ADR-0074; amended for teams 2026-09-30) | Accepted |
 | [0077](0077-connector-outage-is-not-a-recurrence-strike.md) | A dead-letter caused by a declared connector that failed to connect transiently is re-run first and never counts toward the recurrence park breaker (amends ADR-0070) | Accepted |
+| [0078](0078-track-the-latest-node-major.md) | Track the latest node major (retires "LTS, never Current"); install the signed nodejs.org build when the distro has no `nodejs<major>` stream | Accepted |

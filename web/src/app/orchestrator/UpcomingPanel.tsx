@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { orchestratorApi, type UpcomingRun } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { describeCronExpression } from "@/app/shared/lib/cron";
@@ -50,6 +50,11 @@ const VIEWS: Array<{ id: UpcomingView; label: string }> = [
 ];
 
 export function UpcomingPanel() {
+  // One clock for the panel: the week board anchors on it, and the projection
+  // is re-requested when it rolls over, so after midnight the board never
+  // pages into days the last fetch did not cover.
+  const today = useLocalToday();
+  const todayKey = dayKey(today);
   const {
     data,
     loading,
@@ -68,7 +73,7 @@ export function UpcomingPanel() {
         ),
       [],
     ),
-    [],
+    [todayKey],
   );
   // View toggle: the chronological list (default) or a week board. Designed
   // so a month grid can slot in as a third view later. The choice persists
@@ -142,7 +147,7 @@ export function UpcomingPanel() {
           No upcoming runs. Recurring tasks and future one-shot schedules appear here.
         </div>
       ) : view === "week" ? (
-        <UpcomingWeek runs={runs} />
+        <UpcomingWeek runs={runs} today={today} />
       ) : (
         <UpcomingTimeline runs={runs} />
       )}
@@ -150,16 +155,44 @@ export function UpcomingPanel() {
   );
 }
 
+// useLocalToday — "now", re-read only when the local date changes. A bare
+// `new Date()` in a render body is impure (react purity lint, oxlint 1.86+)
+// and re-reading the clock on every week-arrow click could re-anchor the board
+// mid-session, so the value is a state snapshot. It is not frozen at mount,
+// though: the Operations Center is left open for days, so a timer fires just
+// after local midnight and advances the snapshot — otherwise Saturday's board
+// would keep calling the previous week "This week" on Sunday morning, and
+// UpcomingPanel re-requests the projection on the same tick.
+function useLocalToday(): Date {
+  const [today, setToday] = useState(() => new Date());
+  useEffect(() => {
+    const midnight = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+    // +1s so a timer that fires a hair early still lands on the new day.
+    const id = setTimeout(() => setToday(new Date()), Math.max(0, midnight.getTime() - Date.now()) + 1000);
+    return () => clearTimeout(id);
+  }, [today]);
+  return today;
+}
+
 // UpcomingWeek — the current calendar week as fixed Sun…Sat columns with
 // today highlighted, each day listing its runs in order. Fixed columns keep
 // the board's shape stable day to day (Wednesday is always the fourth
 // column); days already behind us render dimmed. Runs beyond Saturday are
 // summarized under the board.
-function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
+function UpcomingWeek({ runs, today }: { runs: UpcomingRun[]; today: Date }) {
   // weekOffset pages whole weeks: 0 = this week, 1 = next, … The upcoming
   // feed only projects forward, so past weeks aren't offered.
-  const [weekOffset, setWeekOffset] = useState(0);
-  const today = new Date();
+  // The offset is remembered together with the week it was chosen in, and
+  // reads as 0 once `today` rolls into a new week: a board paged ahead on
+  // Saturday would otherwise jump a further week at midnight, past the
+  // refreshed projection. Derived at render, so no effect resets it.
+  const thisWeek = dayKey(
+    new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay()),
+  );
+  const [paged, setPaged] = useState({ week: thisWeek, offset: 0 });
+  const weekOffset = paged.week === thisWeek ? paged.offset : 0;
+  const setWeekOffset = (next: (w: number) => number) =>
+    setPaged({ week: thisWeek, offset: next(weekOffset) });
   const sunday = new Date(
     today.getFullYear(),
     today.getMonth(),
