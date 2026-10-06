@@ -329,16 +329,16 @@ func TestQueuedErrorNamesThePlaceInLine(t *testing.T) {
 	}
 }
 
-// A replay's message gives the earlier input's state. Its row settles a
-// moment after its turn's stream ends, so "running" may be a turn that has
-// just finished, and the message allows for that.
+// A replay's message gives the earlier input's state. Its row settles after
+// its turn's stream ends (possibly much later, if settlement fails), so
+// "running" may be a turn that has finished, and the message allows for that.
 func TestQueuedErrorForAReplay(t *testing.T) {
 	for _, tc := range []struct {
 		q    QueuedError
 		want string
 	}{
-		{QueuedError{Mode: "direct", State: "running", Replay: true}, "this message is already running or has just finished (it was accepted earlier)"},
-		{QueuedError{Mode: "steer", State: "injected", Replay: true}, "this message is already running or has just finished (it was accepted earlier)"},
+		{QueuedError{Mode: "direct", State: "running", Replay: true}, "this message is already running or has finished (it was accepted earlier)"},
+		{QueuedError{Mode: "steer", State: "injected", Replay: true}, "this message is already running or has finished (it was accepted earlier)"},
 		{QueuedError{Mode: "direct", State: "completed", Replay: true}, "this message already ran (it was accepted earlier)"},
 		{QueuedError{Mode: "direct", State: "cancelled", Replay: true}, "this message was accepted earlier but did not run"},
 	} {

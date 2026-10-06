@@ -166,12 +166,13 @@ func (e *QueuedError) Replayed() bool {
 func (e *QueuedError) Error() string {
 	switch e.State {
 	case "running", "injected":
-		// The row settles a moment after its turn's stream ends, so a turn
-		// that has just finished can still be reported running. Only a
+		// The row settles after its turn's stream ends (normally a moment
+		// later; after a failed settlement write, not until boot recovery),
+		// so a finished turn can still be reported running. Only a
 		// replay reports this state, and fleet chat sends no input_id, so it
 		// never gets one (fleet acp words its own note); the text is kept
 		// accurate for any StreamInput caller that prints the error.
-		return "this message is already running or has just finished (it was accepted earlier)"
+		return "this message is already running or has finished (it was accepted earlier)"
 	case "completed":
 		return "this message already ran (it was accepted earlier)"
 	case "cancelled":
