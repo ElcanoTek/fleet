@@ -414,8 +414,20 @@ elif [[ -n "$node_bin" && -f "$WEB_ENV_FILE" ]]; then
   cur_major=""
   [[ -n "$cur_node_bin" && -x "$cur_node_bin" ]] && \
     cur_major="$("$cur_node_bin" -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
-  if [[ "${cur_major:-0}" -ge "$NODE_FLOOR" ]]; then
+  # A stamp on the upstream-tarball node is stale once the resolver prefers
+  # something else (the distro's nodejs<major> RPM arrived and /usr/bin wins):
+  # doctor stops refreshing the tarball at that point, so leaving the tier on
+  # it would freeze it on an unpatched build. Move it to the resolved node.
+  stamp_superseded=0
+  if [[ -n "$cur_node_bin" && "$cur_node_bin" != "$node_bin" ]] \
+      && fleet_node_is_tarball_install "$cur_node_bin" \
+      && ! fleet_node_is_tarball_install "$node_bin"; then
+    stamp_superseded=1
+  fi
+  if [[ "${cur_major:-0}" -ge "$NODE_FLOOR" && "$stamp_superseded" == "0" ]]; then
     pass "fleet-web runs ${cur_node_bin} ($("$cur_node_bin" -v))"
+  elif [[ "$CHECK_ONLY" == "1" && "$stamp_superseded" == "1" ]]; then
+    advise "fleet-web runs the upstream-tarball ${cur_node_bin}, but ${node_bin} now takes precedence and the tarball is no longer refreshed — \`sudo fleet doctor --node\` moves it"
   elif [[ "$CHECK_ONLY" == "1" ]]; then
     fail "fleet-web's FLEET_NODE_BIN is ${cur_node_bin:-unset} — not node >= $NODE_FLOOR; the tier would serve on the wrong major"
   else

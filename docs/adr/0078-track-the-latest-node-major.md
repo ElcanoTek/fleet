@@ -53,8 +53,10 @@ publishes a major newer than `.nvmrc`.
   versioned names Fedora's streams use, so the existing resolver
   (`fleet_resolve_node_bin`, `fleet_resolve_npm_cli`), the npm interpreter pin
   and the `FLEET_NODE_BIN` stamp all work unchanged. `/usr/bin` is searched
-  first, so once the distro ships the stream, the RPM wins with no further
-  action.
+  first, so once the distro's stream is installed it is the resolved node.
+  The next `fleet doctor` run moves a `FLEET_NODE_BIN` stamp still on the
+  tarball over to it, because the tarball is no longer refreshed from then
+  on. `--check` reports such a stamp.
 - dnf does not patch this install, so every full `fleet doctor` run (not
   `--check`) re-runs the signed install, which is a no-op when the newest
   `v<major>.x` is already present, and restarts the tier if it moved.

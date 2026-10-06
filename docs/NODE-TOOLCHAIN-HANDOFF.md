@@ -433,9 +433,12 @@ Record: [ADR-0078](adr/0078-track-the-latest-node-major.md).
   not matter for a once-per-patch download.
 - **The versioned names in `/usr/local/bin`.** `node-26` and `npm-26` are the
   shape the resolver, the npm interpreter pin and the `FLEET_NODE_BIN` stamp
-  already handle. None of that code needed a new branch, and once F45's RPM
-  is installed it outranks this install automatically (`/usr/bin` is searched
-  first).
+  already handle. Once F45's RPM is installed it outranks this install
+  (`/usr/bin` is searched first). The one new branch is in doctor's stamp
+  check: a `FLEET_NODE_BIN` still on the superseded tarball is moved to the
+  RPM (or reported under `--check`) rather than passed for having the right
+  major, because the tarball is no longer refreshed once it is not the
+  resolved node.
 
 ### What was verified, and what was not
 

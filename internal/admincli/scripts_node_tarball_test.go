@@ -419,3 +419,36 @@ func TestVendoredNodeReleaseKeysMatchTheirList(t *testing.T) {
 		t.Error("node-release-keys.list is empty")
 	}
 }
+
+// Once the resolver prefers another node (the distro RPM arrived), doctor stops
+// refreshing the upstream tarball, so a fleet-web stamp still on the tarball
+// would freeze the tier on an unpatched build. The stamp check must flag it,
+// not pass it because its major is fine.
+func TestDoctorFlagsAStampLeftOnASupersededTarballNode(t *testing.T) {
+	prefix := t.TempDir()
+	stamped := filepath.Join(prefix, "node-v99.0.0-linux-x64", "bin", "node")
+	if err := os.MkdirAll(filepath.Dir(stamped), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stamped, []byte("#!/bin/sh\necho v99.0.0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	webEnv := filepath.Join(t.TempDir(), "fleet-web.env")
+	if err := os.WriteFile(webEnv, []byte("FLEET_NODE_BIN="+stamped+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{
+		"SRC_DIR=" + fakeSrcDir(t, "1"),
+		"FLEET_WEB_ENV_FILE=" + webEnv,
+		"FLEET_NODE_TARBALL_PREFIX=" + prefix,
+		// The resolver's pick: any node outside the tarball prefix.
+		"PATH=" + nodeStubDir(t, "v999.0.0") + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}
+	out, _ := runScript(t, env, "doctor.sh", "--node", "--check")
+	if !strings.Contains(out, "no longer refreshed") {
+		t.Fatalf("a fleet-web stamp on a superseded tarball node was not flagged\n--- output ---\n%s", out)
+	}
+	if strings.Contains(out, "fleet-web runs "+stamped) {
+		t.Errorf("the superseded tarball stamp was passed as healthy\n--- output ---\n%s", out)
+	}
+}
