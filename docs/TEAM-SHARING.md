@@ -346,7 +346,9 @@ opener as downloads; a file whose size or modification time changed while it
 was being copied — truncated, or rewritten in place to the same length — is
 withheld rather than copied as a mix of two versions). The team gate is
 re-checked before each file: once the owner stops sharing (or archives) mid-copy,
-every file not yet copied is withheld. The discovery and copy run detached from
+every file not yet copied is withheld, and a file the owner unticks mid-copy is
+withheld even though it was shared when the copy started (the exclusions are
+re-read per file; a failed re-check withholds the rest). The discovery and copy run detached from
 the request's cancellation, bounded at two minutes (files past it are
 withheld), so a client that gives up mid-branch does not get a branch whose
 files silently did not come. The copy moves 1 MiB at a time and checks that

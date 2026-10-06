@@ -293,15 +293,17 @@ const maxBranchCopyBytes int64 = 1 << 30
 // A destination path that would traverse one of the workspace's seeded
 // bundle symlinks is refused by the root and the file is withheld.
 //
-// stillReadable is the team-read gate, asked again before EACH file: the copy
-// can run for a while, and once the owner stops sharing (or archives, or the
-// brancher leaves the team) every file not yet copied is withheld — the gate
-// that let the branch start does not keep the door open for the rest of it.
-// nil means no re-check (tests of the copy mechanics alone).
+// gate is asked again before EACH file: the copy can run for a while, and
+// the snapshot that let the branch start does not keep the door open for the
+// rest of it. It answers for one path: copy it, skip it (the owner unticked
+// it since discovery — only that file is withheld), or close (the owner
+// stopped sharing or archived, the brancher left the team, or the re-check
+// itself failed — that file and every one not yet copied is withheld). nil
+// means no re-check (tests of the copy mechanics alone).
 //
 // ctx bounds the whole copy (branchCopyTimeout): once it is done the file in
 // flight is abandoned and removed, and every file not yet copied is withheld.
-func copySharedOutputsIntoBranch(ctx context.Context, srcConvID, dstConvID string, outs []outputFile, stillReadable func() bool) (copied []store.BranchFile, withheld []string) {
+func copySharedOutputsIntoBranch(ctx context.Context, srcConvID, dstConvID string, outs []outputFile, gate func(path string) branchCopyDecision) (copied []store.BranchFile, withheld []string) {
 	copied, withheld = []store.BranchFile{}, []string{}
 	var shared []outputFile
 	for _, o := range outs {
@@ -339,11 +341,15 @@ func copySharedOutputsIntoBranch(ctx context.Context, srcConvID, dstConvID strin
 			closed = true
 			log.Printf("branch files: copy budget for %s ran out; withholding the remaining files", logSafeSlug(dstConvID))
 		}
-		if !closed && stillReadable != nil && !stillReadable() {
+		decision := branchCopyFile
+		if !closed && gate != nil {
+			decision = gate(o.Path)
+		}
+		if !closed && decision == branchCopyClosed {
 			closed = true
 			log.Printf("branch files: %s is no longer readable by the brancher; withholding the remaining files of %s", logSafeSlug(srcConvID), logSafeSlug(dstConvID))
 		}
-		if closed {
+		if closed || decision == branchCopySkip {
 			withheld = append(withheld, o.Path)
 			continue
 		}
@@ -358,6 +364,15 @@ func copySharedOutputsIntoBranch(ctx context.Context, srcConvID, dstConvID strin
 	}
 	return copied, withheld
 }
+
+// branchCopyDecision is copySharedOutputsIntoBranch's per-file gate answer.
+type branchCopyDecision int
+
+const (
+	branchCopyFile   branchCopyDecision = iota // still shared: copy it
+	branchCopySkip                             // unticked since discovery: withhold this one
+	branchCopyClosed                           // the chat closed to the brancher: withhold the rest
+)
 
 var errBranchCopyBudget = errors.New("branch copy budget exhausted")
 

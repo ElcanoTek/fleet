@@ -261,9 +261,15 @@ export function ProjectSources({
     setBusyPath(`${g.conversation_id}/${f.path}`);
     setError(null);
     try {
-      const res = await setOutputShared(g.conversation_id, f.path, !f.shared);
+      const want = !f.shared;
+      const res = await setOutputShared(g.conversation_id, f.path, want);
       toggleWrites.current += 1;
       const sharedBy = new Map(res.outputs.map((o) => [o.path, o.shared]));
+      // The write succeeded, so the toggled path's exclusion now matches the
+      // request even when the response omits it (the file vanished or fell
+      // out of discovery mid-write): a stale row would misstate what a
+      // recreated file would expose.
+      if (!sharedBy.has(f.path)) sharedBy.set(f.path, want);
       setGroups((prev) =>
         (prev ?? []).map((x) =>
           x.conversation_id !== g.conversation_id
@@ -411,7 +417,11 @@ export function ProjectSources({
                     <button
                       type="button"
                       aria-pressed={f.shared}
-                      disabled={busyPath === key}
+                      // One write at a time, and every toggle says so: a
+                      // click elsewhere mid-write would otherwise be dropped
+                      // silently (toggleShared is single-flight).
+                      disabled={busyPath !== null}
+                      aria-busy={busyPath === key || undefined}
                       title={
                         f.shared
                           ? `Shared with ${teamName}. Click to stop sharing`

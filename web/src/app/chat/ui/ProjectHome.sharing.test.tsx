@@ -616,6 +616,74 @@ describe("Sources", () => {
     await waitFor(() => expect(groupEl("c1")).toHaveTextContent("2 files · 2 shared"));
   });
 
+  it("applies the requested state to a toggled file the response no longer lists", async () => {
+    mockApi(
+      { ...DONE, "/files": { groups: GROUPS, truncated: false } },
+      {
+        // b.csv vanished mid-write: the reply lists only a.csv.
+        "/outputs/share": {
+          outputs: [{ path: "out/a.csv", name: "a.csv", size: 1, modified_at: 1, shared: true }],
+          total: 1,
+          shared_count: 1,
+          team_visible: true,
+        },
+      },
+    );
+    renderHome();
+    await screen.findByText("b.csv");
+    const row = () => within(groupEl("c1")).getAllByTestId("sources-file")[0];
+    fireEvent.click(within(row()).getByRole("button", { name: /b\.csv is only you/ }));
+    await waitFor(() => expect(row()).toHaveTextContent("· Shared"));
+    expect(within(row()).getByRole("button", { pressed: true })).toBeInTheDocument();
+  });
+
+  it("disables every file toggle while one write is in flight", async () => {
+    let release: (r: Response) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input).split("?")[0];
+        if (url.endsWith("/outputs/share") && init?.method === "POST") {
+          return new Promise<Response>((resolve) => {
+            release = resolve;
+          });
+        }
+        const body = url.endsWith("/files")
+          ? { groups: GROUPS, truncated: false }
+          : url.endsWith("/my-state")
+            ? DONE["/my-state"]
+            : {};
+        return new Response(JSON.stringify(body), { status: 200 });
+      }),
+    );
+    renderHome();
+    await screen.findByText("b.csv");
+    const toggles = () =>
+      within(groupEl("c1"))
+        .getAllByTestId("sources-file")
+        .flatMap((f) => within(f).queryAllByRole("button", { pressed: true }).concat(
+          within(f).queryAllByRole("button", { pressed: false }),
+        ));
+    expect(toggles()).toHaveLength(2);
+    fireEvent.click(within(groupEl("c1")).getByRole("button", { name: /b\.csv is only you/ }));
+    await waitFor(() => toggles().forEach((b) => expect(b).toBeDisabled()));
+    release(
+      new Response(
+        JSON.stringify({
+          outputs: [
+            { path: "out/a.csv", name: "a.csv", size: 1, modified_at: 1, shared: true },
+            { path: "out/b.csv", name: "b.csv", size: 1, modified_at: 1, shared: true },
+          ],
+          total: 2,
+          shared_count: 2,
+          team_visible: true,
+        }),
+        { status: 200 },
+      ),
+    );
+    await waitFor(() => toggles().forEach((b) => expect(b).toBeEnabled()));
+  });
+
   it("a private chat's group is download-only, with the note", async () => {
     mockApi({
       "/my-state": { kept_personal: false, has_shared_chat: true, sources_open: { c2: true } },

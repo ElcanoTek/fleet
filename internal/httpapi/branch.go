@@ -184,15 +184,28 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 		} else {
 			// Re-checked before every file: the copy can take a while, and
 			// an owner who stops sharing (or archives) mid-copy has closed
-			// the door for the files not yet copied.
-			stillReadable := func() bool {
+			// the door for the files not yet copied, while one who unticks
+			// a single file has closed it for that file. A failed re-check
+			// fails closed.
+			gate := func(p string) branchCopyDecision {
 				ok, gerr := s.store.CanTeamRead(copyCtx, branch.UserEmail, src.ID)
 				if gerr != nil {
 					log.Printf("branch files: re-check %s: %v", logSafeSlug(src.ID), logSafe(gerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
 				}
-				return gerr == nil && ok
+				if gerr != nil || !ok {
+					return branchCopyClosed
+				}
+				excluded, gerr := s.store.ListOutputExclusions(copyCtx, src.ID)
+				if gerr != nil {
+					log.Printf("branch files: re-check exclusions of %s: %v", logSafeSlug(src.ID), logSafe(gerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+					return branchCopyClosed
+				}
+				if excluded[p] {
+					return branchCopySkip
+				}
+				return branchCopyFile
 			}
-			origin.CopiedFiles, origin.WithheldFiles = copySharedOutputsIntoBranch(copyCtx, src.ID, branch.ID, outs, stillReadable)
+			origin.CopiedFiles, origin.WithheldFiles = copySharedOutputsIntoBranch(copyCtx, src.ID, branch.ID, outs, gate)
 		}
 	}
 	var refsTruncated bool

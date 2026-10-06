@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -510,6 +511,105 @@ func TestCopySharedOutputsWithholdsRestAfterBudget(t *testing.T) {
 	copied, withheld := copySharedOutputsIntoBranch(ctx, srcID, dstID, outs, nil)
 	if len(copied) != 0 || strings.Join(withheld, ",") != "a.csv,b.csv,c.csv" {
 		t.Errorf("copied=%+v withheld=%v, want all withheld", copied, withheld)
+	}
+}
+
+// An owner who unticks a file while an earlier one is still copying has
+// closed the door for it: the per-file gate re-reads the exclusions, so the
+// later files are withheld even though discovery listed them as shared.
+func TestCarrySharedFilesRechecksExclusionsPerFile(t *testing.T) {
+	f := newFilesFixture(t)
+	msgs, _ := f.st.LoadHistory(f.ctx, f.chat.ID)
+	point := msgs[len(msgs)-1].ID
+	branch, err := f.st.BranchConversation(f.ctx, "bob@x.com", f.chat.ID, point, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := f.st.GetTeamVisibleConversationMeta(f.ctx, "bob@x.com", f.chat.ID)
+	if err != nil || src == nil {
+		t.Fatalf("meta: %v %v", src, err)
+	}
+	// While the FIRST file is in flight, the owner unticks every shared one.
+	var once sync.Once
+	branchCopySource = func(r io.Reader) io.Reader {
+		once.Do(func() {
+			for _, p := range []string{"out/report.csv", "chart.png", "page.html"} {
+				if err := f.st.SetOutputShared(f.ctx, "alice@x.com", f.chat.ID, p, false); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+		return r
+	}
+	t.Cleanup(func() { branchCopySource = nil })
+	o := f.srv.carrySharedFilesIntoBranch(f.ctx, src, branch, point)
+	if len(o.CopiedFiles) != 1 {
+		t.Fatalf("copied = %+v, want only the file already in flight", o.CopiedFiles)
+	}
+	withheld := map[string]bool{}
+	for _, p := range o.WithheldFiles {
+		withheld[p] = true
+	}
+	for _, p := range []string{"out/report.csv", "chart.png", "page.html", "held.json"} {
+		if p != o.CopiedFiles[0].Path && !withheld[p] {
+			t.Errorf("%s unticked mid-copy but not withheld: %v", p, o.WithheldFiles)
+		}
+		if p == o.CopiedFiles[0].Path {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(f.root, branch.ID, filepath.FromSlash(p))); !os.IsNotExist(err) {
+			t.Errorf("%s was copied into the branch: %v", p, err)
+		}
+	}
+}
+
+// The gate's two refusals differ: skip withholds one file and goes on, close
+// withholds that file and every one after it.
+func TestCopySharedOutputsGateSkipVersusClose(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	srcID := "src-conv"
+	for _, n := range []string{"a.csv", "b.csv", "c.csv", "d.csv"} {
+		p := filepath.Join(root, srcID, n)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outs := []outputFile{{Path: "a.csv", Shared: true}, {Path: "b.csv", Shared: true}, {Path: "c.csv", Shared: true}, {Path: "d.csv", Shared: true}}
+	paths := func(fs []store.BranchFile) string {
+		out := make([]string, 0, len(fs))
+		for _, f := range fs {
+			out = append(out, f.Path)
+		}
+		return strings.Join(out, ",")
+	}
+
+	copied, withheld := copySharedOutputsIntoBranch(context.Background(), srcID, "dst-skip", outs, func(p string) branchCopyDecision {
+		if p == "b.csv" {
+			return branchCopySkip
+		}
+		return branchCopyFile
+	})
+	if paths(copied) != "a.csv,c.csv,d.csv" || strings.Join(withheld, ",") != "b.csv" {
+		t.Errorf("skip: copied=%s withheld=%v", paths(copied), withheld)
+	}
+
+	calls := 0
+	copied, withheld = copySharedOutputsIntoBranch(context.Background(), srcID, "dst-close", outs, func(p string) branchCopyDecision {
+		calls++
+		if p == "b.csv" {
+			return branchCopyClosed
+		}
+		return branchCopyFile
+	})
+	if paths(copied) != "a.csv" || strings.Join(withheld, ",") != "b.csv,c.csv,d.csv" {
+		t.Errorf("close: copied=%s withheld=%v", paths(copied), withheld)
+	}
+	if calls != 2 {
+		t.Errorf("gate asked %d times; once closed it is not asked again", calls)
 	}
 }
 
