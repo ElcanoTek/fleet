@@ -94,6 +94,15 @@ type Agent struct {
 	seq      uint64
 }
 
+// maxWaitingPrompts caps how many prompts may wait for one session behind
+// the prompt holding it. A waiting prompt has not reached fleet yet, so the
+// server's own input-queue cap (maxPendingInputs in internal/httpapi, also
+// 20) cannot see it; without this one a client could pile up any number of
+// payloads and goroutines here, each to run as a full governed turn once the
+// session frees. It is the same bound on unattended LLM spend, kept before
+// the prompts reach fleet: a prompt beyond it is refused, not held.
+const maxWaitingPrompts = 20
+
 // session maps one ACP session onto one fleet conversation. The conversation
 // id is learned from the first turn's `conversation` event; until then the
 // session has no server-side state at all.
@@ -131,6 +140,15 @@ type session struct {
 	// settled that message, and the same text sent again runs. Like
 	// unsettled, it is one small entry per lost answer, never evicted.
 	stoppedKeys map[string]bool
+	// successors maps a stopped key (stoppedKeys) to the one fresh key the
+	// same text runs under after that Stop. Every prompt that took the
+	// stopped key as its arrival key waited for the session behind the
+	// stopped attempt, so they are all resends of one message: the first to
+	// get the session runs it under the successor, and the rest reuse that
+	// key, so fleet answers them with that run instead of running the
+	// message once per waiter. One small entry per confirmed Stop of a lost
+	// answer, never evicted, like stoppedKeys.
+	successors map[string]string
 }
 
 // target returns the conversation a prompt under key is sent to: the one
@@ -319,10 +337,17 @@ func (a *Agent) Cancel(_ context.Context, p acpsdk.CancelNotification) error {
 
 // track registers a prompt that has just arrived on session sid until it is
 // answered (release). Its context is the prompt's stop signal: Cancel ends
-// it, and so does the client's connection closing (lifetime).
-func (a *Agent) track(sid acpsdk.SessionId) (stop context.Context, release func()) {
-	ctx, cancel := context.WithCancel(a.lifetime)
+// it, and so does the client's connection closing (lifetime). ok is false,
+// and nothing is registered, when the session already has a prompt running
+// and maxWaitingPrompts waiting: admission is bounded before the prompt
+// becomes a waiter.
+func (a *Agent) track(sid acpsdk.SessionId) (stop context.Context, release func(), ok bool) {
 	a.mu.Lock()
+	if len(a.inflight[sid]) > maxWaitingPrompts {
+		a.mu.Unlock()
+		return nil, nil, false
+	}
+	ctx, cancel := context.WithCancel(a.lifetime)
 	a.seq++
 	id := a.seq
 	if a.inflight[sid] == nil {
@@ -338,7 +363,7 @@ func (a *Agent) track(sid acpsdk.SessionId) (stop context.Context, release func(
 		}
 		a.mu.Unlock()
 		cancel()
-	}
+	}, true
 }
 
 // CloseSession forgets the session. The fleet conversation stays, like any
@@ -388,7 +413,14 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	// Tracked from arrival, not from when it gets the session, so a
 	// session/cancel also reaches a prompt still waiting for it. The last
 	// arrival step: a tracked prompt has its arrival key.
-	cancelCtx, release := a.track(p.SessionId)
+	cancelCtx, release, ok := a.track(p.SessionId)
+	if !ok {
+		// Refused before it was held or sent: nothing reached fleet, so the
+		// client can send it again once the session's prompts drain.
+		return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{
+			"error": fmt.Sprintf("this session already has a prompt running and %d waiting for it; wait for them to be answered (or send session/cancel) before sending another", maxWaitingPrompts),
+		})
+	}
 	defer release()
 
 	sess.mu.Lock()
@@ -727,7 +759,8 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 	stopped <- stopOutcome{intervened: true, err: err}
 }
 
-// idempotencyKey is the input_id for one prompt. The ACP client's own message
+// idempotencyKey is the input_id for one prompt. Under sess.mu: it may
+// record a successor key. The ACP client's own message
 // id (stable across its retries) wins; otherwise a retry of the prompt whose
 // outcome was lost reuses that prompt's key; otherwise a fresh key. earlier is
 // the key the text had unresolved when the prompt arrived ("" = none).
@@ -752,6 +785,21 @@ func idempotencyKey(messageID *string, sess *session, message, earlier string) s
 		// message is over, and the same text sent again runs, as it would
 		// had it been sent after the Stop settled.
 		return earlier
+	}
+	if earlier != "" {
+		// The stopped message runs again — but once, not once per prompt
+		// that was waiting behind its Stop: they all share one successor
+		// key (see successors), so the second and later are resends of the
+		// first and fleet answers them with its input.
+		if k, ok := sess.successors[earlier]; ok {
+			return k
+		}
+		if sess.successors == nil {
+			sess.successors = map[string]string{}
+		}
+		k := "fleet-acp-" + randomID()
+		sess.successors[earlier] = k
+		return k
 	}
 	return "fleet-acp-" + randomID()
 }
