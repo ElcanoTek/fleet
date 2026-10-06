@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { orchestratorApi, type UpcomingRun } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { describeCronExpression } from "@/app/shared/lib/cron";
@@ -150,6 +150,24 @@ export function UpcomingPanel() {
   );
 }
 
+// useLocalToday — "now", re-read only when the local date changes. A bare
+// `new Date()` in a render body is impure (react purity lint, oxlint 1.86+)
+// and re-reading the clock on every week-arrow click could re-anchor the board
+// mid-session, so the value is a state snapshot. It is not frozen at mount,
+// though: the Operations Center is left open for days, so a timer fires just
+// after local midnight and advances the snapshot — otherwise Saturday's board
+// would keep calling the previous week "This week" on Sunday morning.
+function useLocalToday(): Date {
+  const [today, setToday] = useState(() => new Date());
+  useEffect(() => {
+    const midnight = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+    // +1s so a timer that fires a hair early still lands on the new day.
+    const id = setTimeout(() => setToday(new Date()), Math.max(0, midnight.getTime() - Date.now()) + 1000);
+    return () => clearTimeout(id);
+  }, [today]);
+  return today;
+}
+
 // UpcomingWeek — the current calendar week as fixed Sun…Sat columns with
 // today highlighted, each day listing its runs in order. Fixed columns keep
 // the board's shape stable day to day (Wednesday is always the fourth
@@ -159,12 +177,7 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
   // weekOffset pages whole weeks: 0 = this week, 1 = next, … The upcoming
   // feed only projects forward, so past weeks aren't offered.
   const [weekOffset, setWeekOffset] = useState(0);
-  // "Today" is read once, when the board mounts, not on every render: a bare
-  // `new Date()` in the render body is impure (react purity lint, oxlint
-  // 1.86+), and re-reading the clock on each week-arrow click could re-anchor
-  // the board mid-session. The runs it buckets were fetched once at mount
-  // too, so one snapshot keeps the columns and the data on the same clock.
-  const [today] = useState(() => new Date());
+  const today = useLocalToday();
   const sunday = new Date(
     today.getFullYear(),
     today.getMonth(),
