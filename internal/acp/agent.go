@@ -868,7 +868,13 @@ func (a *Agent) reconcileLost(convID, key string) error {
 func acceptedNote(q *chattui.QueuedError, where string) string {
 	switch {
 	case q.Replayed() && (q.State == "running" || q.State == "injected"):
-		return "fleet is already running this message from an earlier attempt (it is not run twice). Follow it at " + where
+		// The input's row settles after its turn's stream ends — normally a
+		// moment later, but a settlement write that keeps failing leaves it
+		// "running" until boot recovery — so a resend can be answered
+		// "running" for a turn that has finished, and how it ended is not
+		// known here: the note allows for either, and points to where the
+		// outcome shows.
+		return "fleet already has this message from an earlier attempt; its turn is running or has finished (it is not run twice). See it, and how it ended, at " + where
 	case q.Replayed() && q.State == "completed":
 		// "completed" means the input's user entry committed, not that its
 		// turn succeeded: the turn may have failed or been stopped after.
