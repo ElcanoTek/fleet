@@ -618,14 +618,27 @@ function redactChunk(
   let out = chunk;
   // Images first: an image nested in a link (`[![alt](chart.png)](chart.png)`)
   // must lose its inner destination before the link pass reads the label.
+  // Each replaced image is bracketed by REDACTED_IMAGE so the link pass can
+  // tell a label that now says "not shared" from one the author wrote.
   out = out.replace(MD_IMAGE, (whole, alt, angled, bare) => {
     const ref = markdownDestRef(angled ?? bare ?? "");
-    return ref ? r.image(ref, alt) : whole;
+    return ref ? REDACTED_IMAGE + r.image(ref, alt) + REDACTED_IMAGE : whole;
   });
   out = out.replace(MD_LINK, (whole, bang, label, angled, bare) => {
     if (bang) return whole;
-    const ref = markdownDestRef(angled ?? bare ?? "");
-    return ref ? r.link(ref, label) : whole;
+    const dest = angled ?? bare ?? "";
+    const ref = markdownDestRef(dest);
+    if (ref) return r.link(ref, label);
+    // An external link around a redacted image
+    // (`[![preview](private.png)](https://example.com)`): the placeholder
+    // must not stay inside a live anchor, where its "not shared" text would
+    // lead to an arbitrary URL. Split it — the placeholder as text, then the
+    // target as its own link whose visible text is the destination.
+    if (dest && label.includes(REDACTED_IMAGE)) {
+      const target = angled !== undefined ? `<${angled}>` : bare;
+      return `${label} [${escapeMarkdown(dest)}](${target})`;
+    }
+    return whole;
   });
   if (refs.size > 0) {
     out = out.replace(MD_REF_USE, (whole, bang, label, refLabel) => {
@@ -637,14 +650,21 @@ function redactChunk(
       return bang ? r.image(ref, label) : r.link(ref, label);
     });
   }
-  return out.replace(BARE_FILE_REF, (whole) => {
-    // Keep sentence punctuation the URL ran into out of the filename.
-    const trailing = /[.,;:!?)\]]+$/.exec(whole)?.[0] ?? "";
-    const core = trailing ? whole.slice(0, -trailing.length) : whole;
-    const ref = workspaceFileRef(core);
-    return ref ? r.bare(ref) + trailing : whole;
-  });
+  return out
+    .replace(BARE_FILE_REF, (whole) => {
+      // Keep sentence punctuation the URL ran into out of the filename.
+      const trailing = /[.,;:!?)\]]+$/.exec(whole)?.[0] ?? "";
+      const core = trailing ? whole.slice(0, -trailing.length) : whole;
+      const ref = workspaceFileRef(core);
+      return ref ? r.bare(ref) + trailing : whole;
+    })
+    .split(REDACTED_IMAGE)
+    .join("");
 }
+
+// Brackets a redacted image inside redactChunk only (stripped before it
+// returns): a Unicode noncharacter, which no reply legitimately contains.
+const REDACTED_IMAGE = "\uFDD0";
 
 /** `daily_spend.png (file not shared)`, escaped so it re-parses as plain text. */
 function withheldFile(filename: string): string {

@@ -1446,3 +1446,78 @@ func TestMigration055UnfilesChatsTheirOwnersCannotSee(t *testing.T) {
 		t.Errorf("the owner's chat = project_id %v / team_visible %v, want it left alone", pid, visible)
 	}
 }
+
+// A compaction summary starts a new rendered message in the owner's chat, so
+// every reader who may not see the summary gets a CONTENT-FREE boundary in its
+// place — the team view, a teammate's branch, and the public snapshot — and
+// none of them gets the summary's text. Without it the replies either side
+// merged into one Markdown document: an unclosed fence before the summary
+// swallowed a link after it.
+func TestSummaryBecomesAContentFreeBoundaryForReaders(t *testing.T) {
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
+	if _, err := f.s.AppendHistory(f.ctx, c.ID, []agent.HistoryEntry{
+		{Role: "assistant", Type: "text", Content: []byte(`{"text":"raw:\n` + "```" + `\n"}`)},
+		{Role: "assistant", Type: "summary", Content: []byte(`{"text":"SECRET-SUMMARY","model":"m"}`)},
+		{Role: "assistant", Type: "text", Content: []byte(`{"text":"[after](after.csv)"}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wantShape := func(t *testing.T, door string, msgs []agent.HistoryEntry) {
+		t.Helper()
+		types := make([]string, 0, len(msgs))
+		for _, m := range msgs {
+			types = append(types, m.Type)
+			if strings.Contains(string(m.Content), "SECRET-SUMMARY") {
+				t.Errorf("%s: summary text leaked: %s", door, m.Content)
+			}
+			if m.Type == agent.EntryTypeSummaryBoundary && string(m.Content) != `{}` {
+				t.Errorf("%s: boundary carries content %s", door, m.Content)
+			}
+		}
+		want := []string{"text", "text", "text", agent.EntryTypeSummaryBoundary, "text"}
+		if strings.Join(types, ",") != strings.Join(want, ",") {
+			t.Errorf("%s: entry types = %v, want %v", door, types, want)
+		}
+	}
+
+	view, err := f.s.GetTeamVisibleConversation(f.ctx, "bob@x.com", c.ID)
+	if err != nil || view == nil {
+		t.Fatalf("team view: %v", err)
+	}
+	wantShape(t, "team view", view.Messages)
+
+	last := view.Messages[len(view.Messages)-1].ID
+	br, err := f.s.BranchConversation(f.ctx, "bob@x.com", c.ID, last, "fork")
+	if err != nil {
+		t.Fatalf("branch: %v", err)
+	}
+	copied, err := f.s.LoadHistory(f.ctx, br.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantShape(t, "teammate branch", copied)
+
+	// A branch that is itself shared keeps its boundary for the next reader.
+	if err := f.s.SetConversationProject(f.ctx, "bob@x.com", br.ID, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := f.s.SetConversationTeamVisible(f.ctx, "bob@x.com", br.ID, true); err != nil || !ok {
+		t.Fatalf("share branch: %v %v", ok, err)
+	}
+	again, err := f.s.GetTeamVisibleConversation(f.ctx, "alice@x.com", br.ID)
+	if err != nil || again == nil {
+		t.Fatalf("team view of the branch: %v", err)
+	}
+	wantShape(t, "team view of a branch", again.Messages)
+
+	const token = "tok-boundary-test"
+	if err := f.s.SetShareToken(f.ctx, "alice@x.com", c.ID, token, nil); err != nil {
+		t.Fatalf("share token: %v", err)
+	}
+	pub, err := f.s.GetConversationByShareToken(f.ctx, token, time.Now().Unix())
+	if err != nil || pub == nil {
+		t.Fatalf("public snapshot: %v", err)
+	}
+	wantShape(t, "public snapshot", pub.Messages)
+}

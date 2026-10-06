@@ -284,7 +284,7 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	files, filesTruncated, err := s.outputsFromHistory(r.Context(), snap.ID, outputHistoryOf(snap))
+	files, filesTruncated, err := s.outputsFromHistory(r.Context(), snap.ID, snap.Messages)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

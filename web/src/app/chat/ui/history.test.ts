@@ -278,6 +278,21 @@ describe("historyToMessages", () => {
     });
   });
 
+  it("splits at a content-free summary boundary (a teammate's branch) without rendering it", () => {
+    const msgs = historyToMessages([
+      user("go"),
+      asText("raw:\n```\n"),
+      { id: 7, role: "assistant", type: "summary_boundary", content: {} },
+      asText("[after](https://example.com/after)"),
+    ]);
+    // Same split as the summary banner, but no banner and no empty message.
+    expect(msgs.map((m) => [m.role, m.kind, m.content])).toEqual([
+      ["user", undefined, "go"],
+      ["assistant", undefined, "raw:\n```\n"],
+      ["assistant", undefined, "[after](https://example.com/after)"],
+    ]);
+  });
+
   it("flushes any in-flight assistant Message when a summary entry arrives", () => {
     const msgs = historyToMessages([
       user("go"),

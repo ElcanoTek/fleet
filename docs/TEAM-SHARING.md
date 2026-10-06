@@ -208,7 +208,10 @@ regular file in the chat's workspace, and that is not under `attachments/`.
 "Presented" means **rendered as a link or image**, decided by a real parser,
 not by link-shaped text. `internal/httpapi/outputs.go` groups the assistant's
 text entries into the messages the chat renders (consecutive assistant text,
-until a user message or a compaction summary — as `history.ts` does), applies
+until a user message or a compaction summary — as `history.ts` does; a
+teammate's view, a teammate's branch and a public link carry a content-free
+`summary_boundary` entry in the summary's place, which splits the same way and
+carries none of the summary), applies
 the renderer's own pre-parse rewrites (`normalizeAssistantMarkdown` and the
 unfenced-HTML-document wrap in `AssistantContent.tsx`), and parses each with
 goldmark — CommonMark plus GFM and footnotes, the dialect react-markdown with
@@ -251,7 +254,12 @@ answers `truncated: true`, `team-view` answers `files_truncated: true`, and
 Sources reports its existing `truncated`. A file referenced only before the
 bound is not an output for anyone: not listed, not copied into a branch (it is
 withheld there), and refused by the download gate — the bound narrows what a
-teammate can download, never widens it.
+teammate can download, never widens it. The walk also stops READING after the
+2,000 most recent rendered replies or 4 MiB of reply text, whichever comes
+first (a reply the byte budget would cut is skipped whole, never parsed
+without its start), and reports that through the same truncated flags — so a
+long chat with no links costs a bounded parse per read, not a transcript-sized
+one.
 
 **Escaped destinations.** CommonMark backslash escapes (`[r](my\_file.csv)`,
 any ASCII punctuation, bare or `<…>`, inline or in a reference definition) are

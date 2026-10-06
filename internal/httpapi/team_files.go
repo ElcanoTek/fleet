@@ -65,17 +65,6 @@ func (s *Server) outputsFromHistory(ctx context.Context, convID string, history 
 	return outs, truncated, nil
 }
 
-// outputHistoryOf is the history output discovery reads for a team snapshot:
-// its transcript plus content-free compaction markers, so replies group as
-// the owner's chat renders them (store.TeamSharedConversation.OutputHistory).
-// Falls back to the transcript for a snapshot built without it.
-func outputHistoryOf(snap *store.TeamSharedConversation) []agent.HistoryEntry {
-	if snap.OutputHistory != nil {
-		return snap.OutputHistory
-	}
-	return snap.Messages
-}
-
 // writeOutputsResponse is the one body GET outputs and POST outputs/share
 // both answer with. truncated is additive: true when older references were
 // beyond the discovery bound and are not in the list.
@@ -198,7 +187,7 @@ func (s *Server) handleTeamFile(w http.ResponseWriter, r *http.Request, user, co
 	// A path older than the discovery bound (maxOutputReferences) is not in
 	// this list and is refused like any non-output: the bound narrows what
 	// can be downloaded, never widens it.
-	outs, _, err := s.outputsFromHistory(r.Context(), snap.ID, outputHistoryOf(snap))
+	outs, _, err := s.outputsFromHistory(r.Context(), snap.ID, snap.Messages)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

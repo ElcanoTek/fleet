@@ -58,6 +58,19 @@ type HistoryEntry struct {
 // by the persist path and both replay switches.
 const entryTypeToolCall = "tool_call"
 
+// EntryTypeSummaryBoundary is a CONTENT-FREE stand-in for a compaction
+// summary, for a reader who may not see the summary itself: a teammate's
+// team view of a shared chat and the branch a teammate copies from it
+// (ADR-0057). A summary starts a new rendered message in the owner's chat, so
+// dropping it outright would merge the assistant replies on either side into
+// one Markdown document — an unclosed fence before it would swallow a link
+// after it, and the reader would see (and output discovery would parse) a
+// different transcript than the owner. The boundary keeps the split and
+// nothing else: its content is `{}`, it renders as nothing, and replay
+// ignores it (unlike a summary it does NOT reset the model's context — the
+// brancher's model never had the summary to continue from).
+const EntryTypeSummaryBoundary = "summary_boundary"
+
 // TextContent for Type=text (user + assistant). Images is set on the
 // user-side text entry when the user attached image files alongside their
 // message; replayHistory reads those files back into fantasy.FilePart on the
@@ -316,10 +329,11 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 			case "assistant":
 				pendingAssistant = append(pendingAssistant, fantasy.TextPart{Text: c.Text})
 			}
-		case "reasoning", "turn_summary":
+		case "reasoning", "turn_summary", EntryTypeSummaryBoundary:
 			// UI-facing only; never replayed to the model. Reasoning parts
-			// are rejected by providers outside their originating step, and
-			// turn_summary is just our own cost/duration metadata.
+			// are rejected by providers outside their originating step,
+			// turn_summary is just our own cost/duration metadata, and a
+			// summary boundary only splits rendered messages.
 			continue
 		case entryTypeToolCall:
 			var c ToolCallContent

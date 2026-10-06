@@ -652,7 +652,12 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 	copyQuery := `SELECT role, type, content, injected_context IS NULL FROM messages
 		 WHERE conversation_id = $1 AND id <= $2`
 	if redact {
-		copyQuery += ` AND type = 'text' AND role IN ('user', 'assistant')`
+		// teamTranscriptEntry below is the authoritative filter; this narrows
+		// the scan to the rows it can keep. Summaries are selected only to
+		// become content-free boundaries — their text is never copied.
+		// 'summary_boundary' is agent.EntryTypeSummaryBoundary (a constant
+		// literal here, so the query is never built by concatenation).
+		copyQuery += ` AND ((type = 'text' AND role IN ('user', 'assistant')) OR type IN ('summary', 'summary_boundary'))`
 	}
 	copyQuery += ` ORDER BY id ASC`
 	rows, err := s.db.QueryContext(ctx, copyQuery, parentConvID, branchPointMessageID)
@@ -669,6 +674,21 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 			return nil, err
 		}
 		e.Content = json.RawMessage(content)
+		if redact {
+			// Exactly what the team view showed: text, and a content-free
+			// boundary where the owner's chat has a summary, so the branch's
+			// transcript splits replies where the owner's (and the team
+			// view's) does. A boundary has nothing to strip.
+			kept, ok := teamTranscriptEntry(e)
+			if !ok {
+				continue
+			}
+			e = kept
+			if e.Type == agent.EntryTypeSummaryBoundary {
+				entries = append(entries, e)
+				continue
+			}
+		}
 		// Rows written BEFORE migration 056 embedded the injected blocks in
 		// the message text itself, so not selecting injected_context is not
 		// enough for them: strip by marker as well.
@@ -1229,8 +1249,12 @@ func (s *Store) GetConversationByShareToken(ctx context.Context, token string, n
 	// boundary: any consumer of this snapshot — including a raw JSON fetch —
 	// sees the transcript, not the agent's working trace (#226).
 	out.Messages = make([]agent.HistoryEntry, 0, len(msgs))
+	//
+	// A compaction summary passes only as a content-free boundary (the same
+	// filter the team view uses, teamTranscriptEntry): it splits the rendered
+	// replies where the owner's chat does, and carries none of the summary.
 	for _, m := range msgs {
-		if m.Type == "text" && (m.Role == "user" || m.Role == "assistant") {
+		if m, ok := teamTranscriptEntry(m); ok {
 			// Drop the persisted messages.id from the PUBLIC snapshot. LoadHistory
 			// populates it for the owner's branching flow (#454), but the #226 share
 			// contract deliberately omits internal identifiers — a global BIGSERIAL id

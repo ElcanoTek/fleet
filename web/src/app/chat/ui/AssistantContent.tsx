@@ -29,9 +29,11 @@ import {
 // B19/B20 locked file names (the read-only views' render-time file policy +
 // a branch's withheld files).
 import {
+  isWithheldPath,
   LockedFileLabel,
   ReadOnlyFilesContext,
   WithheldFileGate,
+  WithheldFilesContext,
 } from "./LockedFiles";
 import { conversationWorkspaceUrl } from "@/app/lib/conversationApiUrl";
 // WorkspaceImage moved to its own module so ToolChips can use it without
@@ -278,14 +280,23 @@ export default function AssistantMarkdown({
         innerImage && innerImage.type === "element"
           ? String(innerImage.properties?.src ?? "")
           : null;
+      const renderLink = (text: ReactNode) =>
+        renderLiveLink(raw, title ?? undefined, text, conversationId);
       return (
         <ReadOnlyLinkGate
           raw={raw}
           title={title ?? undefined}
           label={children}
           innerImageSrc={innerImageSrc}
+          renderLink={renderLink}
         >
-          {renderLiveLink(raw, title ?? undefined, children, conversationId)}
+          <BranchThumbnailLinkGate
+            raw={raw}
+            label={children}
+            innerImageSrc={innerImageSrc}
+            conversationId={conversationId}
+            renderLink={renderLink}
+          />
         </ReadOnlyLinkGate>
       );
     },
@@ -454,11 +465,67 @@ function ReadOnlyImageGate({
   );
 }
 
+// A clickable thumbnail whose IMAGE is locked or withheld must not keep that
+// label inside a live anchor: the visible text would say "(not shared)" while
+// a click went somewhere else entirely — for an external target, any URL the
+// markdown named. Every door splits it the same way: the image's locked label
+// as plain text, then the target as its OWN link whose visible text is where
+// it goes (the URL for an external target, the file name for a file).
+
+/** The visible text of a split thumbnail's target link (see above). */
+function splitTargetText(raw: string, conversationId: string | null): string {
+  const { isWorkspaceFile, downloadFilename } = resolveWorkspaceHref(
+    raw,
+    conversationId,
+  );
+  return isWorkspaceFile && downloadFilename ? downloadFilename : raw;
+}
+
+/**
+ * BranchThumbnailLinkGate is the live link outside a read-only view. In a
+ * teammate's BRANCH (WithheldFilesContext), a thumbnail whose image the branch
+ * did not receive renders split (above); everywhere else it is the ordinary
+ * link around its label.
+ */
+function BranchThumbnailLinkGate({
+  raw,
+  label,
+  innerImageSrc,
+  conversationId,
+  renderLink,
+}: {
+  raw: string;
+  label: ReactNode;
+  innerImageSrc: string | null;
+  conversationId: string | null;
+  renderLink: (text: ReactNode) => ReactNode;
+}) {
+  const ctx = useContext(WithheldFilesContext);
+  if (innerImageSrc === null || !ctx) return <>{renderLink(label)}</>;
+  const pathOf = (href: string) =>
+    workspacePathFromHref(
+      resolveWorkspaceHref(href, conversationId).href,
+      ctx.conversationId,
+    );
+  const inner = pathOf(innerImageSrc);
+  if (inner === null || !isWithheldPath(ctx, inner)) {
+    return <>{renderLink(label)}</>;
+  }
+  // The target is that same withheld file: its locked name says it all.
+  if (!raw || pathOf(raw) === inner) return <>{label}</>;
+  return (
+    <>
+      {label} {renderLink(splitTargetText(raw, conversationId))}
+    </>
+  );
+}
+
 function ReadOnlyLinkGate({
   raw,
   title,
   label,
   innerImageSrc,
+  renderLink,
   children,
 }: {
   raw: string;
@@ -466,19 +533,31 @@ function ReadOnlyLinkGate({
   label: ReactNode;
   /** The src of an image inside this link (a clickable thumbnail), if any. */
   innerImageSrc: string | null;
+  /** The live link around `text` — used for a split external target. */
+  renderLink: (text: ReactNode) => ReactNode;
   children: ReactNode;
 }) {
   const policy = useContext(ReadOnlyFilesContext);
   if (!policy) return <>{children}</>;
   const d = decideReadOnlyFile(raw, policy);
-  if (d.kind === "external") return <>{children}</>;
+  // A thumbnail whose image is NOT live (withheld, locked, an upload) never
+  // sits inside a live anchor — see splitTargetText above.
+  const innerLive =
+    innerImageSrc === null ||
+    ["external", "shared"].includes(decideReadOnlyFile(innerImageSrc, policy).kind);
+  if (d.kind === "external") {
+    if (innerLive) return <>{children}</>;
+    if (!raw) return <>{label}</>;
+    return (
+      <>
+        {label} {renderLink(raw)}
+      </>
+    );
+  }
   if (d.kind === "shared") {
     // A thumbnail whose image is NOT live (withheld or locked) is labelled
     // by the file it downloads, beside the image's own locked name — never a
     // live link whose only visible text says "not shared".
-    const innerLive =
-      innerImageSrc === null ||
-      ["external", "shared"].includes(decideReadOnlyFile(innerImageSrc, policy).kind);
     const anchor = (text: ReactNode) => (
       <a
         className="assistant-markdown-link"

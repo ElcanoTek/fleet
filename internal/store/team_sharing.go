@@ -28,6 +28,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -65,15 +66,14 @@ type TeamSharedConversation struct {
 	ProjectID string `json:"-"`
 	Lockdown  bool   `json:"-"`
 
+	// Messages is the transcript: user/assistant text, plus a CONTENT-FREE
+	// boundary (agent.EntryTypeSummaryBoundary) where the owner's chat has a
+	// compaction summary. A summary starts a new rendered message there, so
+	// without the boundary the read-only view would merge the replies on
+	// either side into one Markdown document — and parse a different one
+	// than output discovery and the owner's own chat do. The boundary carries
+	// the row's id and role and nothing of the summary.
 	Messages []agent.HistoryEntry `json:"messages"`
-
-	// OutputHistory is Messages plus a CONTENT-FREE marker for each
-	// compaction summary, server-side only (json:"-"): output discovery
-	// groups assistant replies exactly as the owner's chat renders them, and
-	// a summary starts a new rendered message there. Without the markers the
-	// team-files gate would parse two replies as one and could disagree with
-	// the owner's own outputs listing.
-	OutputHistory []agent.HistoryEntry `json:"-"`
 }
 
 // GetTeamVisibleConversation returns the read-only transcript of convID when
@@ -137,16 +137,28 @@ func (s *Store) GetTeamVisibleConversation(ctx context.Context, callerEmail, con
 	// reasoning entries whose content can include command output and API
 	// responses that were never part of what the owner shared.
 	out.Messages = make([]agent.HistoryEntry, 0, len(msgs))
-	out.OutputHistory = make([]agent.HistoryEntry, 0, len(msgs))
 	for _, m := range msgs {
-		if m.Type == "text" && (m.Role == "user" || m.Role == "assistant") {
-			out.Messages = append(out.Messages, m)
-			out.OutputHistory = append(out.OutputHistory, m)
-		} else if m.Type == "summary" {
-			out.OutputHistory = append(out.OutputHistory, agent.HistoryEntry{ID: m.ID, Role: m.Role, Type: m.Type})
+		if b, ok := teamTranscriptEntry(m); ok {
+			out.Messages = append(out.Messages, b)
 		}
 	}
 	return &out, nil
+}
+
+// teamTranscriptEntry is the ONE filter from a conversation's history to what
+// a teammate may read of it — the team view and the branch a teammate copies
+// both go through it, so the two can never disagree about where a rendered
+// message ends. User/assistant text passes as is; a compaction summary (or a
+// boundary already standing in for one, in a branch that is itself shared)
+// becomes a content-free boundary; everything else is dropped.
+func teamTranscriptEntry(m agent.HistoryEntry) (agent.HistoryEntry, bool) {
+	switch {
+	case m.Type == "text" && (m.Role == "user" || m.Role == "assistant"):
+		return m, true
+	case m.Type == "summary" || m.Type == agent.EntryTypeSummaryBoundary:
+		return agent.HistoryEntry{ID: m.ID, Role: m.Role, Type: agent.EntryTypeSummaryBoundary, Content: json.RawMessage(`{}`)}, true
+	}
+	return agent.HistoryEntry{}, false
 }
 
 // ListProjectTeamConversations returns the team-shared chats OTHER members

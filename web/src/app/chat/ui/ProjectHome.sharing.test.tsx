@@ -624,7 +624,7 @@ describe("Sources", () => {
     await waitFor(() => expect(within(groupEl("c2")).getByText("v.json")).toBeInTheDocument());
     expect(groupEl("c2")).toHaveTextContent("Share this chat and its files go with it.");
     expect(within(groupEl("c2")).queryByRole("button", { pressed: true })).toBeNull();
-    expect(within(groupEl("c2")).getByRole("button", { name: "Download v.json" })).toBeInTheDocument();
+    expect(within(groupEl("c2")).getByRole("link", { name: "Download v.json" })).toBeInTheDocument();
   });
 
   it("labels branch copies Your copy", async () => {
@@ -677,18 +677,28 @@ describe("Sources", () => {
     expect(await within(await findGroup("c2")).findByText("v.json")).toBeInTheDocument();
   });
 
+  // A direct `<a download>` navigation, never a fetch into a Blob: the
+  // browser streams the file to disk, so a large output is never buffered in
+  // the tab.
   it("downloads a teammate's file through the team-files route", async () => {
     const calls = mockApi({ ...DONE, "/files": { groups: GROUPS, truncated: false } });
     renderHome({ sourcesFocus: "t1" });
-    const btn = await within(await findGroup("t1")).findByRole("button", {
+    const link = await within(await findGroup("t1")).findByRole("link", {
       name: "Download x.xlsx",
     });
-    URL.createObjectURL = vi.fn(() => "blob:x");
-    URL.revokeObjectURL = vi.fn();
-    fireEvent.click(btn);
-    await waitFor(() =>
-      expect(calls.some((c) => c.url === "/api/conversations/t1/team-files/x.xlsx")).toBe(true),
-    );
+    expect(link).toHaveAttribute("href", "/api/conversations/t1/team-files/x.xlsx");
+    expect(link).toHaveAttribute("download", "x.xlsx");
+    expect(calls.some((c) => c.url.includes("/team-files/"))).toBe(false);
+  });
+
+  it("downloads an own file through the owner's workspace route", async () => {
+    mockApi({ ...DONE, "/files": { groups: GROUPS, truncated: false } });
+    renderHome({ sourcesFocus: "c2" });
+    const link = await within(await findGroup("c2")).findByRole("link", {
+      name: "Download v.json",
+    });
+    expect(link.getAttribute("href")).toMatch(/^\/api\/conversations\/c2\//);
+    expect(link).toHaveAttribute("download", "v.json");
   });
 });
 

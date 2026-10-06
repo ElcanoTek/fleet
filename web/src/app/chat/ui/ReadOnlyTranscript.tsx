@@ -42,6 +42,7 @@
 // workspace link or image reaches its DOM.
 
 import { useMemo, type ReactNode } from "react";
+import { SUMMARY_BOUNDARY } from "./history";
 import { ReadOnlyFilesContext } from "./LockedFiles";
 import {
   redactUnsharedFiles,
@@ -69,14 +70,27 @@ export type Bubble = {
 // toBubbles flattens stored history entries into a clean user/assistant text
 // thread, merging consecutive same-role text (an assistant reply can land as
 // several text entries within one turn).
+//
+// A summary boundary (SUMMARY_BOUNDARY — the content-free marker the server
+// sends where the owner's chat has a compaction summary) ends the bubble in
+// flight, as the summary banner does in the owner's chat (history.ts), and
+// never becomes a bubble of its own: it carries no text, and the summary it
+// stands for is not part of what was shared.
 export function toBubbles(entries: RawEntry[]): Bubble[] {
   const out: Bubble[] = [];
+  let split = false;
   for (const e of entries ?? []) {
+    if (e.type === SUMMARY_BOUNDARY) {
+      split = true;
+      continue;
+    }
     if (e.type !== "text" || (e.role !== "user" && e.role !== "assistant")) continue;
     const text = String((e.content as { text?: string } | null)?.text ?? "");
     if (!text) continue;
     const last = out[out.length - 1];
-    if (last && last.role === e.role) {
+    const merge = !split && last && last.role === e.role;
+    split = false;
+    if (merge) {
       last.text += text;
       if (e.id) last.lastId = e.id;
     } else {

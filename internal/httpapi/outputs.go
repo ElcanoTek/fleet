@@ -235,41 +235,84 @@ func markdownDestinations(markdown string) []string {
 	return out
 }
 
-// renderedReplies groups the assistant's text entries into the messages the
-// chat renders (web history.ts historyToMessages): consecutive assistant text
-// entries are ONE message, concatenated as-is, until a user text entry or a
-// compaction summary starts a new one. Discovery must parse the same units the
-// owner saw — a fence opened in one entry and closed in the next is one code
-// block on screen, and a link inside it is not a chip.
-func renderedReplies(history []agent.HistoryEntry) []string {
-	var out []string
-	var cur strings.Builder
+// Discovery's visit budget. The 500-path bound (maxOutputReferences) caps
+// what discovery KEEPS, but on its own it does not cap what it READS: a long
+// chat with no links at all would still have every reply decoded and parsed
+// on each outputs listing, branch copy, team-files download and team-view
+// poll. So the newest-first walk also stops after this many rendered replies
+// or this many bytes of reply payload, whichever comes first, and reports the
+// cut through the same truncated flag the path bound uses.
+const (
+	maxDiscoveryReplies = 2000
+	maxDiscoveryBytes   = 4 << 20 // 4 MiB of stored reply text
+)
+
+// isRenderedMessageBoundary reports whether e ends the assistant message the
+// chat is rendering: a user turn, a compaction summary, or the content-free
+// boundary that stands in for a summary in a teammate's view and branch.
+func isRenderedMessageBoundary(e agent.HistoryEntry) bool {
+	return e.Type == "summary" || e.Type == agent.EntryTypeSummaryBoundary ||
+		(e.Role == "user" && e.Type == "text")
+}
+
+// recentRenderedReplies groups the assistant's text entries into the messages
+// the chat renders (web history.ts historyToMessages): consecutive assistant
+// text entries are ONE message, concatenated as-is, until a user text entry or
+// a compaction summary (or its boundary) starts a new one. Discovery must
+// parse the same units the owner saw — a fence opened in one entry and closed
+// in the next is one code block on screen, and a link inside it is not a chip.
+//
+// Replies come back NEWEST FIRST, and the walk is bounded by maxReplies and
+// maxBytes (see maxDiscoveryReplies); truncated reports that older replies
+// were not visited. Only WHOLE replies are returned: a reply the byte budget
+// would cut is dropped entirely, because its tail parsed without its head is
+// a different Markdown document (a fence opened earlier would not be open),
+// and the gate must only ever narrow — never see a link the owner did not.
+func recentRenderedReplies(history []agent.HistoryEntry, maxReplies, maxBytes int) (replies []string, truncated bool) {
+	var parts []string // the open reply's entries, newest first
 	open := false
+	used := 0
 	flush := func() {
-		if open && cur.Len() > 0 {
-			out = append(out, cur.String())
+		if open {
+			var b strings.Builder
+			for i := len(parts) - 1; i >= 0; i-- {
+				b.WriteString(parts[i])
+			}
+			if b.Len() > 0 {
+				replies = append(replies, b.String())
+			}
 		}
-		cur.Reset()
+		parts = parts[:0]
 		open = false
 	}
-	for _, e := range history {
+	for i := len(history) - 1; i >= 0; i-- {
+		e := history[i]
 		switch {
-		case e.Type == "summary", e.Role == "user" && e.Type == "text":
+		case isRenderedMessageBoundary(e):
 			flush()
 		case e.Role == "assistant" && e.Type == "text":
+			if !open && len(replies) >= maxReplies {
+				return replies, true
+			}
+			used += len(e.Content)
+			if used > maxBytes {
+				// Drop the partial reply (see above) and stop.
+				return replies, true
+			}
 			var tc agent.TextContent
 			if err := json.Unmarshal(e.Content, &tc); err == nil {
-				cur.WriteString(tc.Text)
+				parts = append(parts, tc.Text)
 			}
 			open = true
 		}
 	}
 	flush()
-	return out
+	return replies, false
 }
 
 // presentedWorkspacePaths returns every workspace-relative path the
-// assistant's text replies link or embed, in first-seen order, deduplicated.
+// assistant's text replies link or embed (within the discovery visit budget),
+// in first-seen order, deduplicated.
 // Only role=assistant, type=text entries count: a path in a user message, a
 // tool result or reasoning is not a file chip.
 func presentedWorkspacePaths(history []agent.HistoryEntry) []string {
@@ -281,8 +324,9 @@ func presentedWorkspacePaths(history []agent.HistoryEntry) []string {
 			out = append(out, p)
 		}
 	}
-	for _, reply := range renderedReplies(history) {
-		for _, d := range markdownDestinations(reply) {
+	replies, _ := recentRenderedReplies(history, maxDiscoveryReplies, maxDiscoveryBytes)
+	for i := len(replies) - 1; i >= 0; i-- {
+		for _, d := range markdownDestinations(replies[i]) {
 			add(d)
 		}
 	}
@@ -312,11 +356,11 @@ func recentPresentedPaths(history []agent.HistoryEntry, limit int) (paths []stri
 // those as withheld — they are references it does not have a copy of).
 func boundedPresentedPaths(history []agent.HistoryEntry, limit int, includeUploads bool) (paths []string, truncated bool) {
 	seen := map[string]bool{}
-	replies := renderedReplies(history)
-	for i := len(replies) - 1; i >= 0; i-- {
+	replies, budgetCut := recentRenderedReplies(history, maxDiscoveryReplies, maxDiscoveryBytes)
+	for _, reply := range replies {
 		// Newest first within a reply too: a long agentic turn renders as
 		// ONE message, and its last references are its most recent.
-		dests := markdownDestinations(replies[i])
+		dests := markdownDestinations(reply)
 		for j := len(dests) - 1; j >= 0; j-- {
 			d := dests[j]
 			p, ok := resolveWorkspaceRelPath(d)
@@ -330,7 +374,7 @@ func boundedPresentedPaths(history []agent.HistoryEntry, limit int, includeUploa
 			paths = append(paths, p)
 		}
 	}
-	return paths, false
+	return paths, budgetCut
 }
 
 // outputFile is one output on the wire (GET /conversations/{id}/outputs, the

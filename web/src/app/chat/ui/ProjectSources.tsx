@@ -269,33 +269,13 @@ export function ProjectSources({
     }
   };
 
-  // Downloads go through fetch so a failure lands as an in-app error rather
-  // than a tab of raw server text.
-  const download = async (g: SourcesGroup, f: SourcesFile) => {
-    setError(null);
-    const href = g.mine
-      ? ownerFileUrl(g.conversation_id, f.path)
-      : teamFileUrl(g.conversation_id, f.path);
-    try {
-      const res = await fetch(href, { cache: "no-store" });
-      if (!res.ok) {
-        setError(`Couldn’t open “${f.name}” — it may have been removed or unshared since this list loaded.`);
-        return;
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = f.name;
-      a.rel = "noreferrer noopener";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 0);
-    } catch {
-      setError(`Couldn’t open “${f.name}” — the download failed.`);
-    }
-  };
+  // Downloads are a plain `<a href download>` navigation, not a fetch into a
+  // Blob: the browser streams the file straight to disk, so a large output
+  // never has to fit in this tab's memory first. The trade-off is where a
+  // failure shows — a file removed or unshared since this list loaded is
+  // reported by the browser's own downloads UI, not by an in-app message.
+  const downloadHref = (g: SourcesGroup, f: SourcesFile) =>
+    g.mine ? ownerFileUrl(g.conversation_id, f.path) : teamFileUrl(g.conversation_id, f.path);
 
   const total =
     ordered.theirs.reduce((n, g) => n + g.files.length, 0) +
@@ -438,15 +418,16 @@ export function ProjectSources({
                       )}
                     </button>
                   ) : null}
-                  <button
-                    type="button"
+                  <a
+                    href={downloadHref(g, f)}
+                    download={f.name}
+                    rel="noreferrer noopener"
                     aria-label={`Download ${f.name}`}
                     title="Download"
                     className="inline-flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                    onClick={() => void download(g, f)}
                   >
                     <Icon name="download" className="size-3.5" />
-                  </button>
+                  </a>
                 </div>
               );
             })}

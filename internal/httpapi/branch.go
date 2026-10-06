@@ -155,7 +155,7 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 	// Only what the branch actually copied: the source messages up to and
 	// including the branch point. A reply after it is not in the branch, so
 	// its files are neither copied nor named as withheld.
-	history := historyThrough(outputHistoryOf(src), sourceHighWater)
+	history := historyThrough(src.Messages, sourceHighWater)
 	outs, outsTruncated, err := s.outputsFromHistory(ctx, src.ID, history)
 	if err != nil {
 		log.Printf("branch files: outputs of %s: %v", logSafeSlug(src.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.

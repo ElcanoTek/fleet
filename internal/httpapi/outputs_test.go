@@ -200,6 +200,63 @@ func TestPresentedWorkspacePathsGroupsLikeTheChat(t *testing.T) {
 	}
 }
 
+// The content-free boundary a teammate's view and branch carry in place of a
+// summary splits exactly as the summary does: an unclosed fence before it does
+// not swallow a link after it.
+func TestPresentedWorkspacePathsSplitsAtSummaryBoundary(t *testing.T) {
+	history := []agent.HistoryEntry{
+		textEntry("assistant", "```\n[hidden](inside.csv)"),
+		{Role: "assistant", Type: agent.EntryTypeSummaryBoundary, Content: json.RawMessage(`{}`)},
+		textEntry("assistant", "[after](after.csv)"),
+	}
+	if got := presentedWorkspacePaths(history); !reflect.DeepEqual(got, []string{"after.csv"}) {
+		t.Errorf("presented across a boundary = %q, want [after.csv]", got)
+	}
+}
+
+// The visit budget bounds what discovery READS, not just what it keeps: past
+// maxDiscoveryReplies replies (or maxDiscoveryBytes of reply text) the walk
+// stops, reports truncated, and keeps only the newest whole replies — a reply
+// the byte budget would cut is dropped, never parsed headless.
+func TestRecentRenderedRepliesBudget(t *testing.T) {
+	var history []agent.HistoryEntry
+	for i := 0; i < 5; i++ {
+		history = append(history, textEntry("user", "q"), textEntry("assistant", fmt.Sprintf("[f](f%d.csv)", i)))
+	}
+	replies, truncated := recentRenderedReplies(history, 3, 1<<20)
+	if !truncated || len(replies) != 3 || replies[0] != "[f](f4.csv)" || replies[2] != "[f](f2.csv)" {
+		t.Errorf("reply budget: replies=%q truncated=%v, want the 3 newest and truncated", replies, truncated)
+	}
+	if replies, truncated := recentRenderedReplies(history, 5, 1<<20); truncated || len(replies) != 5 {
+		t.Errorf("within budget: replies=%d truncated=%v, want 5 and not truncated", len(replies), truncated)
+	}
+
+	// Byte budget: an older reply whose head would fall past the budget is
+	// dropped whole, so its opening fence can never be lost while its link
+	// is kept.
+	history = []agent.HistoryEntry{
+		textEntry("user", "q"),
+		textEntry("assistant", "```\n"),
+		textEntry("assistant", "[x](inside.csv)\n"),
+		textEntry("user", "q2"),
+		textEntry("assistant", "[new](new.csv)"),
+	}
+	newest := len(history[4].Content)
+	replies, truncated = recentRenderedReplies(history, 100, newest+len(history[2].Content))
+	if !truncated || !reflect.DeepEqual(replies, []string{"[new](new.csv)"}) {
+		t.Errorf("byte budget: replies=%q truncated=%v, want only the newest whole reply", replies, truncated)
+	}
+
+	// The truncation surfaces through the bounded path walk's flag.
+	var long []agent.HistoryEntry
+	for i := 0; i < maxDiscoveryReplies+1; i++ {
+		long = append(long, textEntry("user", "q"), textEntry("assistant", "no links here"))
+	}
+	if paths, truncated := recentPresentedPaths(long, maxOutputReferences); len(paths) != 0 || !truncated {
+		t.Errorf("a linkless chat past the reply budget: paths=%q truncated=%v, want none and truncated", paths, truncated)
+	}
+}
+
 func textEntry(role, text string) agent.HistoryEntry {
 	raw, _ := json.Marshal(agent.TextContent{Text: text})
 	return agent.HistoryEntry{Role: role, Type: "text", Content: raw}

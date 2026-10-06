@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { renderAssistantContent } from "./AssistantContent";
 import { ReadOnlyTranscript, toBubbles, type ReadOnlyAudience } from "./ReadOnlyTranscript";
-import { ReadOnlyFilesContext } from "./LockedFiles";
+import { ReadOnlyFilesContext, WithheldFilesContext } from "./LockedFiles";
 
 // The read-only renderer both doors onto someone else's conversation share:
 // a teammate's team view and a public share link. What it must NOT do is
@@ -296,5 +296,147 @@ describe("ReadOnlyTranscript — CommonMark-shaped references", () => {
     expect(container.querySelector("pre")?.textContent).toContain("print('[x](data.csv)')");
     expect(container.querySelector("iframe[title='HTML preview']")).not.toBeNull();
     expect(screen.getByRole("link", { name: "docs" })).toHaveAttribute("href", "https://example.com/a");
+  });
+});
+
+// A compaction summary starts a new message in the owner's chat. Readers who
+// may not see it get a content-free boundary in its place, and the read-only
+// renderer must split there too — otherwise an unclosed fence before the
+// summary swallows a link after it, and the reader sees a different document
+// than the owner (and than output discovery parses).
+describe("toBubbles — summary boundaries", () => {
+  const ENTRIES = [
+    { id: 1, role: "user", type: "text", content: { text: "show me" } },
+    { id: 2, role: "assistant", type: "text", content: { text: "raw:\n```\n" } },
+    { id: 3, role: "assistant", type: "summary_boundary", content: {} },
+    {
+      id: 4,
+      role: "assistant",
+      type: "text",
+      content: { text: "See [the docs](https://example.com/after)." },
+    },
+  ];
+
+  it("ends the bubble at the boundary and never renders the boundary itself", () => {
+    const bubbles = toBubbles(ENTRIES);
+    expect(bubbles.map((b) => b.text)).toEqual([
+      "show me",
+      "raw:\n```\n",
+      "See [the docs](https://example.com/after).",
+    ]);
+    expect(bubbles.map((b) => b.lastId)).toEqual([1, 2, 4]);
+  });
+
+  it("an unclosed fence before the boundary does not swallow the link after it", () => {
+    render(
+      <ReadOnlyTranscript
+        bubbles={toBubbles(ENTRIES)}
+        audience="team"
+        renderAssistant={(text) => renderAssistantContent(text, false, null)}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "the docs" })).toHaveAttribute(
+      "href",
+      "https://example.com/after",
+    );
+  });
+
+  it("a boundary with nothing after it adds no empty bubble", () => {
+    const bubbles = toBubbles([
+      { id: 1, role: "user", type: "text", content: { text: "hi" } },
+      { id: 2, role: "assistant", type: "summary_boundary", content: {} },
+    ]);
+    expect(bubbles).toHaveLength(1);
+  });
+});
+
+// `[![preview](private.png)](https://example.com)`: the outer link is
+// external, the image inside is not live. The image's locked label must never
+// sit inside a live anchor — the visible text would say "(not shared)" while a
+// click went to an arbitrary URL. Every door splits it: the label as plain
+// text, then the target as its own link whose visible text is the URL.
+describe("a locked image inside an external link", () => {
+  const CONV = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  const md = "[![preview](private.png)](https://example.com/x)";
+  const entries = [{ id: 1, role: "assistant", type: "text", content: { text: md } }];
+  const fileUrl = (p: string) => `/api/conversations/${CONV}/team-files/${encodeURIComponent(p)}`;
+
+  function expectSplit(container: HTMLElement, lockedText: RegExp) {
+    // The locked label is outside every anchor...
+    const label = screen.getByText(lockedText);
+    expect(label.closest("a")).toBeNull();
+    // ...and the external target is its own link, named by its URL.
+    const link = screen.getByRole("link", { name: "https://example.com/x" });
+    expect(link).toHaveAttribute("href", "https://example.com/x");
+    expect(link.textContent).toBe("https://example.com/x");
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelectorAll("a")).toHaveLength(1);
+  }
+
+  it("team view: locked label, then the external link on its own", () => {
+    const { container } = render(
+      <ReadOnlyTranscript
+        bubbles={toBubbles(entries)}
+        audience="team"
+        sharedFiles={{ shared: new Set(), fileUrl }}
+        renderAssistant={(t) => renderAssistantContent(t, false, null)}
+      />,
+    );
+    expectSplit(container, /private\.png \(not shared\)/);
+  });
+
+  it("public link: the image placeholder is never inside the external anchor", () => {
+    const { container } = render(
+      <ReadOnlyFilesContext.Provider
+        value={{ mode: "withhold", imagePlaceholder: "Image not shared with view-only links." }}
+      >
+        {renderAssistantContent(md, false, null)}
+      </ReadOnlyFilesContext.Provider>,
+    );
+    expectSplit(container, /Image not shared with view-only links\./);
+  });
+
+  it("public link through the full view (source pre-pass included)", () => {
+    const { container } = render(
+      <ReadOnlyTranscript
+        bubbles={toBubbles(entries)}
+        audience="link"
+        renderAssistant={(t) => renderAssistantContent(t, false, null)}
+      />,
+    );
+    expectSplit(container, /Image not shared with view-only links\./);
+  });
+
+  it("teammate branch: a withheld thumbnail image splits the same way", () => {
+    const { container } = render(
+      <WithheldFilesContext.Provider
+        value={{ conversationId: CONV, withheld: new Set(["private.png"]) }}
+      >
+        {renderAssistantContent(md, false, CONV)}
+      </WithheldFilesContext.Provider>,
+    );
+    expectSplit(container, /private\.png \(not shared\)/);
+  });
+
+  it("a live image inside an external link stays one thumbnail link", () => {
+    const { container } = render(
+      <ReadOnlyTranscript
+        bubbles={toBubbles([
+          {
+            id: 1,
+            role: "assistant",
+            type: "text",
+            content: { text: "[![p](https://cdn.example.com/p.png)](https://example.com/x)" },
+          },
+        ])}
+        audience="team"
+        sharedFiles={{ shared: new Set(), fileUrl }}
+        renderAssistant={(t) => renderAssistantContent(t, false, null)}
+      />,
+    );
+    expect(container.querySelector("img")?.closest("a")).toHaveAttribute(
+      "href",
+      "https://example.com/x",
+    );
   });
 });
