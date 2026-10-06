@@ -429,6 +429,12 @@ describe("redactUnsharedFiles", () => {
     );
   });
 
+  it("redacts a destination written with backslash escapes", () => {
+    expect(redactUnsharedFiles("[report](my\\_file.csv)", IMAGE_PLACEHOLDER)).toBe(
+      "my\\_file\\.csv (file not shared)",
+    );
+  });
+
   it("replaces an embedded workspace image with the caller's placeholder", () => {
     expect(
       redactUnsharedFiles("![Daily spend](daily_spend_by_channel.png)", IMAGE_PLACEHOLDER),
@@ -565,6 +571,28 @@ describe("linkSharedFiles — the teammate's view of the owner's outputs", () =>
     // An unshared image is a locked name too: nothing is fetched.
     expect(linkSharedFiles("![c](chart.png)", links)).toBe(
       `[chart\\.png (not shared)]${LOCK}`,
+    );
+  });
+
+  it("unescapes CommonMark backslash escapes in destinations before resolving", () => {
+    // The Go parser that lists outputs drops these escapes (as the renderer
+    // does), so the shared path is `my_file.csv` — not `my\_file.csv`.
+    const esc = {
+      shared: new Set(["my_file.csv", "out/a#1.csv", "ref_file.csv"]),
+      fileUrl: links.fileUrl,
+    };
+    expect(linkSharedFiles("[report](my\\_file.csv)", esc)).toBe(
+      `[report](${TEAM}my_file.csv)`,
+    );
+    expect(linkSharedFiles("![c](<out/a\\#1.csv>)", esc)).toBe(
+      `![c](${TEAM}out/a%231.csv)`,
+    );
+    expect(linkSharedFiles("[r][x]\n\n[x]: ref\\_file.csv", esc)).toBe(
+      `[r](${TEAM}ref_file.csv)\n`,
+    );
+    // An unshared escaped name locks by its real (unescaped) name.
+    expect(linkSharedFiles("[v](held\\_v1.json)", esc)).toBe(
+      `[held\\_v1\\.json (not shared)]${LOCK}`,
     );
   });
 

@@ -103,7 +103,7 @@ import {
   type ModelRouting,
 } from "@/app/shared/lib/modelRouting";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
-import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
+import { BulkDeleteConfirmModal, type BulkSharedLoss } from "./BulkDeleteConfirmModal";
 import { DeleteProjectConfirmDialog } from "./DeleteProjectConfirmDialog";
 import {
   decideMoveConfirm,
@@ -3461,7 +3461,8 @@ export function ChatExperience({
   // Plain create lands on the new project's home. From the share dialog
   // (moveChat set) the user STAYS on the chat: the chat moves in and, when
   // the project is shared, is shared with its outputs (the owner's earlier
-  // per-file choices kept) — then one toast says all three happened.
+  // per-file choices kept) — then one toast says all three happened. A move
+  // that fails after the create keeps the project and says it is empty.
   const createProjectFromDialog = async (
     input: NewProjectInput,
   ): Promise<string | null> => {
@@ -3498,7 +3499,23 @@ export function ChatExperience({
       conversations.find((c) => c.id === moveChat.id) ??
       archivedConversations.find((c) => c.id === moveChat.id);
     const moved = await applyMoveToProject(moveChat.id, created.id);
-    if (!moved) return null; // the rail toast already says why
+    if (!moved) {
+      // The project exists; only the move failed. Say exactly that — never
+      // "done", and never delete the project behind the user's back (that
+      // could fail too, and it throws away what they just typed). The user
+      // stays on the chat, one click from the project they created.
+      notify({
+        message: `Created ${created.name}, but couldn’t move the chat into it. Move it from the chat’s menu.`,
+        action: {
+          label: `Open ${created.name}`,
+          onClick: () => {
+            setTeamChatView(null);
+            setProjectHome({ id: created.id });
+          },
+        },
+      });
+      return null;
+    }
     const team = created.team_id;
     if (!team) {
       notify({
@@ -4055,20 +4072,26 @@ export function ChatExperience({
   };
 
   // bulkSharedLoss is the team-shared part of the multi-select: deleting
-  // those ends the team's access just as a single delete does (B33), so the
-  // bulk confirm names it. The audience is the first shared chat's — a
-  // person is on one team, so the selection's audiences agree.
-  const bulkSharedLoss = () => {
-    const shared: ConversationSummary[] = [];
+  // those ends each team's access just as a single delete does (B33), so the
+  // bulk confirm names it. Grouped by audience (audienceForChat): a selection
+  // can span projects shared with different teams, and the confirm must name
+  // every team that loses access, not just the first chat's. Largest group
+  // first, so the copy leads with the team most affected.
+  const bulkSharedLoss = (): BulkSharedLoss[] | undefined => {
+    const byTeam = new Map<string, BulkSharedLoss>();
     for (const id of selectedIds) {
       const c = sharedChatById(id);
-      if (c) shared.push(c);
+      if (!c) continue;
+      const team = audienceForChat(c);
+      const key = team ?? "";
+      const group = byTeam.get(key) ?? { conversationIds: [], team };
+      group.conversationIds.push(c.id);
+      byTeam.set(key, group);
     }
-    if (shared.length === 0) return undefined;
-    return {
-      conversationIds: shared.map((c) => c.id),
-      team: audienceForChat(shared[0]),
-    };
+    if (byTeam.size === 0) return undefined;
+    return [...byTeam.values()].sort(
+      (a, b) => b.conversationIds.length - a.conversationIds.length,
+    );
   };
 
   // requestArchive is what the rail and the `a` shortcut call. Archiving a

@@ -43,32 +43,37 @@ import (
 
 // ownerOutputs loads convID's history and exclusions and resolves its
 // outputs. The caller has already established that the caller may see them.
-func (s *Server) ownerOutputs(ctx context.Context, convID string) ([]outputFile, error) {
+// truncated reports that the transcript references more distinct files than
+// discovery considers (maxOutputReferences); the oldest were skipped.
+func (s *Server) ownerOutputs(ctx context.Context, convID string) (outs []outputFile, truncated bool, err error) {
 	history, err := s.store.LoadHistory(ctx, convID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	return s.outputsFromHistory(ctx, convID, history)
 }
 
 // outputsFromHistory is ownerOutputs for a caller that already holds the
 // transcript (team-view's snapshot, the branch path).
-func (s *Server) outputsFromHistory(ctx context.Context, convID string, history []agent.HistoryEntry) ([]outputFile, error) {
+func (s *Server) outputsFromHistory(ctx context.Context, convID string, history []agent.HistoryEntry) (outs []outputFile, truncated bool, err error) {
 	excluded, err := s.store.ListOutputExclusions(ctx, convID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return conversationOutputs(convID, history, excluded), nil
+	outs, truncated = conversationOutputs(convID, history, excluded)
+	return outs, truncated, nil
 }
 
 // writeOutputsResponse is the one body GET outputs and POST outputs/share
-// both answer with.
-func writeOutputsResponse(w http.ResponseWriter, outs []outputFile, teamVisible bool) {
+// both answer with. truncated is additive: true when older references were
+// beyond the discovery bound and are not in the list.
+func writeOutputsResponse(w http.ResponseWriter, outs []outputFile, truncated, teamVisible bool) {
 	writeJSON(w, map[string]any{
 		"outputs":      outs,
 		"total":        len(outs),
 		"shared_count": countShared(outs),
 		"team_visible": teamVisible,
+		"truncated":    truncated,
 	})
 }
 
@@ -124,12 +129,12 @@ func (s *Server) handleConversationOutputs(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	outs, err := s.ownerOutputs(r.Context(), convID)
+	outs, truncated, err := s.ownerOutputs(r.Context(), convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeOutputsResponse(w, outs, conv.TeamVisible)
+	writeOutputsResponse(w, outs, truncated, conv.TeamVisible)
 }
 
 // activeContentTypes are the types a browser would execute as a document.
@@ -178,7 +183,10 @@ func (s *Server) handleTeamFile(w http.ResponseWriter, r *http.Request, user, co
 	}
 	// Gates 2 and 3: a current output, not excluded. The transcript the
 	// outputs are derived from is the same filtered one the teammate reads.
-	outs, err := s.outputsFromHistory(r.Context(), snap.ID, snap.Messages)
+	// A path older than the discovery bound (maxOutputReferences) is not in
+	// this list and is refused like any non-output: the bound narrows what
+	// can be downloaded, never widens it.
+	outs, _, err := s.outputsFromHistory(r.Context(), snap.ID, snap.Messages)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

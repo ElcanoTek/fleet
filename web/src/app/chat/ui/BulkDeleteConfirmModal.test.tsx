@@ -42,7 +42,7 @@ describe("BulkDeleteConfirmModal", () => {
     render(
       <BulkDeleteConfirmModal
         count={4}
-        sharedLoss={{ conversationIds: ["a", "b"], team: "Elcano" }}
+        sharedLoss={[{ conversationIds: ["a", "b"], team: "Elcano" }]}
         onCancel={() => {}}
         onConfirm={() => {}}
       />,
@@ -54,12 +54,53 @@ describe("BulkDeleteConfirmModal", () => {
     );
   });
 
+  it("names every team a selection spans, with the files summed across all", async () => {
+    stubOutputs({ a: 1, b: 2, c: 0, d: 4 });
+    render(
+      <BulkDeleteConfirmModal
+        count={5}
+        sharedLoss={[
+          { conversationIds: ["a", "b", "c"], team: "Quant" },
+          { conversationIds: ["d"], team: "Ops" },
+        ]}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("bulk-delete-shared-loss")).toHaveTextContent(
+        "3 of these are shared with Quant and 1 with Ops. They lose access to them and their 7 shared files. Teammates who branched them keep their copies.",
+      ),
+    );
+  });
+
+  it("lists three teams with commas", async () => {
+    stubOutputs({ a: 0, b: 0, c: 0 });
+    render(
+      <BulkDeleteConfirmModal
+        count={3}
+        sharedLoss={[
+          { conversationIds: ["a"], team: "Quant" },
+          { conversationIds: ["b"], team: "Ops" },
+          { conversationIds: ["c"], team: "Risk" },
+        ]}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("bulk-delete-shared-loss")).toHaveTextContent(
+        "1 of these is shared with Quant, 1 with Ops and 1 with Risk. They lose access to them. Teammates who branched them keep their copies.",
+      ),
+    );
+  });
+
   it("drops the number when a count fails", async () => {
     stubOutputs({ a: 2, b: "fail" });
     render(
       <BulkDeleteConfirmModal
         count={3}
-        sharedLoss={{ conversationIds: ["a", "b"], team: "Elcano" }}
+        sharedLoss={[{ conversationIds: ["a", "b"], team: "Elcano" }]}
         onCancel={() => {}}
         onConfirm={() => {}}
       />,
@@ -77,7 +118,7 @@ describe("BulkDeleteConfirmModal", () => {
     render(
       <BulkDeleteConfirmModal
         count={2}
-        sharedLoss={{ conversationIds: ["a"], team: "Elcano" }}
+        sharedLoss={[{ conversationIds: ["a"], team: "Elcano" }]}
         onCancel={() => {}}
         onConfirm={() => {}}
       />,
@@ -96,7 +137,7 @@ describe("BulkDeleteConfirmModal", () => {
     render(
       <BulkDeleteConfirmModal
         count={2}
-        sharedLoss={{ conversationIds: ["a"], team: "Elcano" }}
+        sharedLoss={[{ conversationIds: ["a"], team: "Elcano" }]}
         onCancel={() => {}}
         onConfirm={onConfirm}
       />,

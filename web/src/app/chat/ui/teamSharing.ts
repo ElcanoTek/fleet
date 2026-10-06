@@ -21,6 +21,12 @@ export type ConversationOutputs = {
   total: number;
   shared_count: number;
   team_visible: boolean;
+  /**
+   * True when the chat references more distinct files than output discovery
+   * considers (the server keeps the most recent 500): older references are
+   * not in `outputs`. Optional so an older server still type-checks.
+   */
+  truncated?: boolean;
 };
 
 export type ShareWithTeamResult = {

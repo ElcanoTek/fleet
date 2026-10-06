@@ -388,6 +388,11 @@ type ViewerBranch struct {
 	// it is shown. Measured against the source's message-id high-water mark
 	// recorded at branch time, not timestamps: created_at and branched_at are
 	// whole seconds, so a message in the branch's own second would be missed.
+	// Only rows the team view exposes count (user/assistant text — the same
+	// filter GetTeamVisibleConversation applies): the branch point is the
+	// last VISIBLE text id, and a completed turn persists its turn_summary
+	// (and tool/reasoning rows) after that, so counting every row would make
+	// a fresh branch of a finished chat report changes nobody can see.
 	ChangedSince bool `json:"changed_since"`
 }
 
@@ -404,7 +409,8 @@ func (s *Store) ViewerBranches(ctx context.Context, viewerEmail string, sourceID
 		       o.source_conversation_id, o.conversation_id, o.branched_at,
 		       EXISTS (SELECT 1 FROM messages m
 		               WHERE m.conversation_id = o.source_conversation_id
-		                 AND m.id > o.source_max_message_id)
+		                 AND m.id > o.source_max_message_id
+		                 AND m.type = 'text' AND m.role IN ('user', 'assistant'))
 		FROM conversation_branch_origins o
 		JOIN conversations c ON c.id = o.conversation_id
 		WHERE c.user_email = $1 AND c.deleted_at IS NULL

@@ -536,3 +536,51 @@ func TestBranchOriginHighWaterIsNotReadAfterCopy(t *testing.T) {
 		t.Errorf("viewer branch = %+v (ok=%v): a message after the snapshot must report changed_since", got, ok)
 	}
 }
+
+// changed_since counts only what the team view shows. The branch point is the
+// last visible text id; a completed turn persists a turn_summary (and other
+// non-text rows) after it, which must not make a fresh branch read "changed".
+func TestViewerBranchesIgnoresInvisibleRows(t *testing.T) {
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
+	view, err := f.s.GetTeamVisibleConversation(f.ctx, "bob@x.com", c.ID)
+	if err != nil || view == nil || len(view.Messages) == 0 {
+		t.Fatalf("team view: %v", err)
+	}
+	last := view.Messages[len(view.Messages)-1].ID
+	for _, row := range [][2]string{
+		{"assistant", "turn_summary"}, {"assistant", "tool_call"}, {"tool", "tool_result"}, {"assistant", "reasoning"},
+	} {
+		if _, err := f.s.db.ExecContext(f.ctx,
+			`INSERT INTO messages (conversation_id, role, type, content, created_at) VALUES ($1, $2, $3, '{}', 0)`,
+			c.ID, row[0], row[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	br, err := f.s.BranchConversation(f.ctx, "bob@x.com", c.ID, last, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.RecordBranchOrigin(f.ctx, br.ID, BranchOrigin{
+		SourceConversationID: c.ID, SourceOwnerEmail: "alice@x.com", SourceTitle: "Spread study",
+		BranchedAt: br.CreatedAt, SourceMaxMessageID: last,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	vb, err := f.s.ViewerBranches(f.ctx, "bob@x.com", []string{c.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := vb[c.ID]; !ok || got.ChangedSince {
+		t.Errorf("viewer branch = %+v (ok=%v): rows the team view hides must not report changed_since", got, ok)
+	}
+	if _, err := f.s.db.ExecContext(f.ctx,
+		`INSERT INTO messages (conversation_id, role, type, content, created_at) VALUES ($1, 'user', 'text', '{"text":"next"}', 0)`,
+		c.ID); err != nil {
+		t.Fatal(err)
+	}
+	vb, _ = f.s.ViewerBranches(f.ctx, "bob@x.com", []string{c.ID})
+	if !vb[c.ID].ChangedSince {
+		t.Error("a later visible text row must report changed_since")
+	}
+}

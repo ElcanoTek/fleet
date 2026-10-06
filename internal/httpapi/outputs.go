@@ -140,8 +140,11 @@ var (
 	mdEscape   = regexp.MustCompile(`\\([!-/:-@\[-` + "`" + `{-~])`)
 )
 
-// unescapeDest drops CommonMark backslash escapes from a bare destination, as
-// the markdown renderer does before the href reaches resolveWorkspaceHref.
+// unescapeDest drops CommonMark backslash escapes (any ASCII punctuation)
+// from a link destination — bare or angle-bracketed, inline or in a reference
+// definition — as the markdown renderer does before the href reaches
+// resolveWorkspaceHref. workspaceHref.ts (unescapeMarkdownDest) applies the
+// same rule, so `[r](my\_file.csv)` is one path on both sides.
 func unescapeDest(s string) string { return mdEscape.ReplaceAllString(s, "$1") }
 
 func normalizeRefLabel(label string) string {
@@ -208,6 +211,46 @@ func presentedWorkspacePaths(history []agent.HistoryEntry) []string {
 	return out
 }
 
+// maxOutputReferences bounds how many distinct presented paths output
+// discovery considers per conversation. Discovery opens and stats every path
+// it considers, and it runs on hot paths — the outputs listing, Sources, the
+// branch copy, the team-files download gate and the team view's 12 s poll —
+// so an unbounded transcript would turn each of those into thousands of
+// syscalls. The bound keeps the MOST RECENT references (by message order):
+// the files a long chat is still working with are the ones a reader wants.
+const maxOutputReferences = 500
+
+// recentPresentedPaths is presentedWorkspacePaths, bounded: walking the
+// assistant's text replies newest message first, it keeps at most limit
+// distinct non-upload paths and reports truncated when an older reference
+// was dropped. Uploads are skipped before they count — they are never
+// outputs, so they must not crowd real ones out of the bound.
+func recentPresentedPaths(history []agent.HistoryEntry, limit int) (paths []string, truncated bool) {
+	seen := map[string]bool{}
+	for i := len(history) - 1; i >= 0; i-- {
+		e := history[i]
+		if e.Role != "assistant" || e.Type != "text" {
+			continue
+		}
+		var tc agent.TextContent
+		if err := json.Unmarshal(e.Content, &tc); err != nil || tc.Text == "" {
+			continue
+		}
+		for _, d := range markdownDestinations(tc.Text) {
+			p, ok := resolveWorkspaceRelPath(d)
+			if !ok || seen[p] || isUploadPath(p) {
+				continue
+			}
+			if len(paths) >= limit {
+				return paths, true
+			}
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	}
+	return paths, false
+}
+
 // markdownDestinations extracts the destinations of every inline link, inline
 // image and USED reference-style link/image in one markdown document,
 // skipping fenced blocks and inline code.
@@ -227,8 +270,9 @@ func markdownDestinations(markdown string) []string {
 		}
 		dest := m[2]
 		if dest == "" {
-			dest = unescapeDest(m[3])
+			dest = m[3]
 		}
+		dest = unescapeDest(dest)
 		key := normalizeRefLabel(m[1])
 		if _, dup := defs[key]; !dup { // CommonMark: the first definition wins
 			defs[key] = dest
@@ -239,7 +283,7 @@ func markdownDestinations(markdown string) []string {
 	var out []string
 	pick := func(angled, bare string) string {
 		if angled != "" {
-			return angled
+			return unescapeDest(angled)
 		}
 		return unescapeDest(bare)
 	}
@@ -392,17 +436,20 @@ func statWorkspaceFileNoFollow(wsDir, rel string) (fs.FileInfo, bool) {
 // conversationOutputs resolves a conversation's presented paths against its
 // workspace on disk and applies the owner's exclusions. Newest first
 // (modified_at desc, then path for a stable order).
-func conversationOutputs(convID string, history []agent.HistoryEntry, excluded map[string]bool) []outputFile {
-	out := []outputFile{}
-	presented := presentedWorkspacePaths(history)
+//
+// Only the maxOutputReferences most recent distinct references are
+// considered; truncated reports that older ones were not. A path beyond the
+// bound is not an output for any caller — not listed, not copied into a
+// branch, and refused by the team-files gate — so the gate stays an exact
+// match against this (bounded) list and never widens.
+func conversationOutputs(convID string, history []agent.HistoryEntry, excluded map[string]bool) (out []outputFile, truncated bool) {
+	out = []outputFile{}
+	presented, truncated := recentPresentedPaths(history, maxOutputReferences)
 	if len(presented) == 0 {
-		return out
+		return out, truncated
 	}
 	wsDir := tools.WorkspaceDirForConversation(convID)
 	for _, rel := range presented {
-		if isUploadPath(rel) {
-			continue
-		}
 		info, ok := statWorkspaceFileNoFollow(wsDir, rel)
 		if !ok {
 			continue
@@ -416,7 +463,7 @@ func conversationOutputs(convID string, history []agent.HistoryEntry, excluded m
 		})
 	}
 	sortOutputsNewestFirst(out)
-	return out
+	return out, truncated
 }
 
 func sortOutputsNewestFirst(out []outputFile) {

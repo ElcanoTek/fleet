@@ -171,7 +171,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 	}
 	// Counted before the flag flips: for an unshare, what is about to stop
 	// being shared is what the response must report.
-	outs, err := s.ownerOutputs(r.Context(), convID)
+	outs, _, err := s.ownerOutputs(r.Context(), convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -231,6 +231,10 @@ type teamViewResponse struct {
 	// size and date are zeroed — its NAME is already in the transcript, but
 	// nothing else about it was shared.
 	Files []outputFile `json:"files"`
+	// FilesTruncated is true when the transcript references more distinct
+	// files than discovery considers (maxOutputReferences): Files holds the
+	// most recent ones only, and the older references render locked.
+	FilesTruncated bool `json:"files_truncated"`
 	// ViewerBranch is the caller's own most recent branch of this chat, or
 	// null — "You branched this", and whether messages arrived since.
 	ViewerBranch *store.ViewerBranch `json:"viewer_branch"`
@@ -261,7 +265,7 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	files, err := s.outputsFromHistory(r.Context(), snap.ID, snap.Messages)
+	files, filesTruncated, err := s.outputsFromHistory(r.Context(), snap.ID, snap.Messages)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -274,7 +278,7 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 			}
 		}
 	}
-	resp := teamViewResponse{TeamSharedConversation: snap, ProjectID: snap.ProjectID, Files: files}
+	resp := teamViewResponse{TeamSharedConversation: snap, ProjectID: snap.ProjectID, Files: files, FilesTruncated: filesTruncated}
 	if snap.ProjectID != "" {
 		if p, perr := s.store.GetProject(r.Context(), snap.ProjectID); perr == nil && p != nil {
 			resp.ProjectName = p.Name

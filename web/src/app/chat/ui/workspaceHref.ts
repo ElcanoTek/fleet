@@ -503,6 +503,25 @@ export function workspaceFileRef(
   };
 }
 
+// CommonMark lets any ASCII punctuation be backslash-escaped in a link
+// destination (bare or <angled>, inline or in a reference definition), and the
+// renderer drops the backslash before the href exists. The Go parser the
+// server lists outputs with (outputs.go unescapeDest) does the same, so a raw
+// destination must be unescaped HERE before it is resolved — otherwise
+// `[report](my\_file.csv)` is `my_file.csv` to the server and `my\_file.csv`
+// to this rewrite, and a shared file renders locked.
+const MD_BACKSLASH_ESCAPE = /\\([!-/:-@[-`{-~])/g;
+
+/** A raw markdown destination with CommonMark backslash escapes removed. */
+export function unescapeMarkdownDest(dest: string): string {
+  return dest.replace(MD_BACKSLASH_ESCAPE, "$1");
+}
+
+/** workspaceFileRef for a destination read out of markdown source. */
+function markdownDestRef(dest: string): FileRef | null {
+  return workspaceFileRef(unescapeMarkdownDest(dest));
+}
+
 /** A workspace file a transcript references. */
 export type FileRef = { name: string; path: string | null };
 
@@ -554,7 +573,7 @@ function rewriteFileRefs(markdown: string, r: FileRefRenderers): string {
     const def = MD_REF_DEF.exec(line.text);
     if (!def) return;
     const label = normalizeRefLabel(def[1]);
-    const ref = workspaceFileRef(def[2] ?? def[3] ?? "");
+    const ref = markdownDestRef(def[2] ?? def[3] ?? "");
     const seen = firstDef.get(label);
     if (seen !== undefined) {
       // A duplicate never renders. Drop it when it names a workspace file
@@ -637,8 +656,8 @@ function redactChunk(
       (whole, alt, innerAngled, innerBare, outerAngled, outerBare) => {
         const innerDest = innerAngled ?? innerBare ?? "";
         const outerDest = outerAngled ?? outerBare ?? "";
-        const inner = workspaceFileRef(innerDest);
-        const outer = workspaceFileRef(outerDest);
+        const inner = markdownDestRef(innerDest);
+        const outer = markdownDestRef(outerDest);
         if (!inner && !outer) return whole;
         return linkedImage(inner, innerDest, alt, outer, outerDest);
       },
@@ -647,12 +666,12 @@ function redactChunk(
   // Images first: an image nested in a link (`[![alt](chart.png)](chart.png)`)
   // must lose its inner destination before the link pass reads the label.
   out = out.replace(MD_IMAGE, (whole, alt, angled, bare) => {
-    const ref = workspaceFileRef(angled ?? bare ?? "");
+    const ref = markdownDestRef(angled ?? bare ?? "");
     return ref ? r.image(ref, alt) : whole;
   });
   out = out.replace(MD_LINK, (whole, bang, label, angled, bare) => {
     if (bang) return whole;
-    const ref = workspaceFileRef(angled ?? bare ?? "");
+    const ref = markdownDestRef(angled ?? bare ?? "");
     return ref ? r.link(ref, label) : whole;
   });
   if (refs.size > 0) {

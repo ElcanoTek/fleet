@@ -151,7 +151,7 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 		SourceMaxMessageID:   sourceHighWater,
 		SourceStillShared:    true,
 	}
-	outs, err := s.outputsFromHistory(ctx, src.ID, src.Messages)
+	outs, _, err := s.outputsFromHistory(ctx, src.ID, src.Messages)
 	if err != nil {
 		log.Printf("branch files: outputs of %s: %v", logSafeSlug(src.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
 	} else {

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -692,5 +693,47 @@ func TestCopyOneOutputRejectsShortCopy(t *testing.T) {
 	}
 	if n, err := copyOneOutput(src, dst, "ok.csv", 1<<20); err != nil || n != 4 {
 		t.Fatalf("full copy = (%d, %v), want (4, nil)", n, err)
+	}
+}
+
+// Past the discovery bound the listings say truncated and the gate refuses an
+// older reference exactly like a non-output: the bound narrows downloads,
+// never widens them, and the newest references stay reachable.
+func TestOutputDiscoveryBoundAcrossRoutes(t *testing.T) {
+	f := newFilesFixture(t)
+	if err := os.WriteFile(filepath.Join(f.root, f.chat.ID, "new.csv"), []byte("n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for i := range maxOutputReferences {
+		fmt.Fprintf(&b, "[f%d](gone/f%d.csv) ", i, i)
+	}
+	if _, err := f.st.AppendHistory(f.ctx, f.chat.ID, []agent.HistoryEntry{
+		textEntry("assistant", b.String()),
+		textEntry("assistant", "Latest: [new](new.csv)"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := convSub(t, f.srv, "GET", "alice@x.com", f.chat.ID, "outputs", "")
+	got := decode[struct {
+		Outputs   []outputFile `json:"outputs"`
+		Truncated bool         `json:"truncated"`
+	}](t, w)
+	if !got.Truncated || len(got.Outputs) != 1 || got.Outputs[0].Path != "new.csv" {
+		t.Errorf("outputs = %+v truncated=%v, want only new.csv and truncated", got.Outputs, got.Truncated)
+	}
+	tv := decode[struct {
+		Files          []outputFile `json:"files"`
+		FilesTruncated bool         `json:"files_truncated"`
+	}](t, convSub(t, f.srv, "GET", "bob@x.com", f.chat.ID, "team-view", ""))
+	if !tv.FilesTruncated || len(tv.Files) != 1 {
+		t.Errorf("team-view files = %+v truncated=%v", tv.Files, tv.FilesTruncated)
+	}
+	if w := teamFile(t, f, "bob@x.com", "new.csv"); w.Code != 200 {
+		t.Errorf("newest reference: %d, want 200", w.Code)
+	}
+	if w := teamFile(t, f, "bob@x.com", "out/report.csv"); w.Code != 404 {
+		t.Errorf("a reference beyond the bound: %d, want 404", w.Code)
 	}
 }

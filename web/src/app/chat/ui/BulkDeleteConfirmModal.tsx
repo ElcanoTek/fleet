@@ -16,10 +16,12 @@ import { fetchConversationOutputs, plural } from "./teamSharing";
 // hazard.
 const COUNTDOWN_SECONDS = 3;
 
-// SharedLoss is the team-shared part of a bulk selection (B33 for many): the
-// chats that are shared with the team, and that team. Deleting them ends the
-// team's access exactly as a single delete does, so the confirm says so —
-// a bulk delete must not be the quiet way around the shared-chat warning.
+// BulkSharedLoss is one audience's part of a bulk selection (B33 for many):
+// the selected chats shared with that team, and the team. Deleting them ends
+// the team's access exactly as a single delete does, so the confirm says so —
+// a bulk delete must not be the quiet way around the shared-chat warning. A
+// selection can span audiences (chats in projects shared with different
+// teams), so the modal takes one group per team and names every one.
 export type BulkSharedLoss = {
   conversationIds: string[];
   team?: string;
@@ -61,14 +63,15 @@ export function BulkDeleteConfirmModal({
   onConfirm,
 }: {
   count: number;
-  // The team-shared chats in the selection, if any.
-  sharedLoss?: BulkSharedLoss;
+  // The team-shared chats in the selection, grouped by audience; empty or
+  // absent when none are shared.
+  sharedLoss?: BulkSharedLoss[];
   onCancel: () => void;
   onConfirm: () => void;
 }) {
   const [remaining, setRemaining] = useState(COUNTDOWN_SECONDS);
-  const sharedIds =
-    sharedLoss && sharedLoss.conversationIds.length > 0 ? sharedLoss.conversationIds : undefined;
+  const groups = (sharedLoss ?? []).filter((g) => g.conversationIds.length > 0);
+  const sharedIds = groups.length > 0 ? groups.flatMap((g) => g.conversationIds) : undefined;
   const sharedFiles = useSummedSharedFiles(sharedIds);
 
   useEffect(() => {
@@ -101,12 +104,7 @@ export function BulkDeleteConfirmModal({
         undone.
       </p>
       {sharedIds ? (
-        <SharedLossCopy
-          shared={sharedIds.length}
-          total={count}
-          team={sharedLoss?.team}
-          files={sharedFiles}
-        />
+        <SharedLossCopy groups={groups} total={count} files={sharedFiles} />
       ) : null}
       <div className="flex items-center justify-end gap-2">
         <button
@@ -142,18 +140,19 @@ export function BulkDeleteConfirmModal({
 
 // "2 of these are shared with Elcano. Elcano loses access to them and their 5
 // shared files. Teammates who branched them keep their copies." — the B33
-// copy, counted for a selection.
+// copy, counted for a selection. A selection spanning teams names each one:
+// "3 of these are shared with Quant and 1 with Ops. They lose access to them
+// and their 5 shared files. …" — the file count summed across all of them.
 function SharedLossCopy({
-  shared,
+  groups,
   total,
-  team,
   files,
 }: {
-  shared: number;
+  groups: BulkSharedLoss[];
   total: number;
-  team?: string;
   files: number | null | undefined;
 }) {
+  const shared = groups.reduce((n, g) => n + g.conversationIds.length, 0);
   const one = shared === 1;
   const lead =
     total === 1
@@ -167,6 +166,29 @@ function SharedLossCopy({
       : typeof files === "number"
         ? ` and ${their} ${plural(files, "shared file", "shared files")}`
         : ` and ${their} shared files`;
+  if (groups.length > 1) {
+    const first = groups[0];
+    const firstCount = first.conversationIds.length;
+    return (
+      <p
+        data-testid="bulk-delete-shared-loss"
+        className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]"
+      >
+        {firstCount} of these {firstCount === 1 ? "is" : "are"} shared with{" "}
+        <TeamChip team={first.team} />
+        {groups.slice(1).map((g, i) => (
+          <span key={g.team ?? ""}>
+            {i === groups.length - 2 ? " and " : ", "}
+            {g.conversationIds.length} with{" "}
+            <TeamChip team={g.team} suffix={i === groups.length - 2 ? "." : undefined} />
+          </span>
+        ))}{" "}
+        They lose access to {them}
+        {filesPart}. Teammates who branched {them} keep their copies.
+      </p>
+    );
+  }
+  const team = groups[0]?.team;
   return (
     <p
       data-testid="bulk-delete-shared-loss"

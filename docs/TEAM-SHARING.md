@@ -219,6 +219,23 @@ Two consequences follow, both deliberate:
 The output set is computed from the transcript and the disk on every read; it
 is not stored. A file deleted from the workspace stops being an output at once.
 
+**Discovery is bounded.** Each read considers at most the 500 most recent
+distinct references (newest message first; uploads do not count toward the
+bound), because every one is opened and stat'ed and the read runs on the
+outputs listing, Sources, the branch copy, the download gate and the team
+view's 12-second poll. Past the bound, `GET /conversations/{id}/outputs`
+answers `truncated: true`, `team-view` answers `files_truncated: true`, and
+Sources reports its existing `truncated`. A file referenced only before the
+bound is not an output for anyone: not listed, not copied into a branch (it is
+withheld there), and refused by the download gate — the bound narrows what a
+teammate can download, never widens it.
+
+**Escaped destinations.** CommonMark backslash escapes (`[r](my\_file.csv)`,
+any ASCII punctuation, bare or `<…>`, inline or in a reference definition) are
+removed before a destination is resolved — by the Go parser and by the web's
+team-view rewrite alike — so the escaped and unescaped spellings name the same
+output.
+
 **Per-file state is an exclusion list, default shared.** Sharing a chat shares
 all its outputs, including ones presented later — a shared chat is live, and its
 files are too — minus any the owner unchecked
@@ -270,7 +287,10 @@ branch was made. Messages rather than `updated_at`, because a rename or a share
 toggle also moves `updated_at`, and the banner says "has added messages since
 you branched". Measured by message id against the source's highest message id
 at branch time (`source_max_message_id`), not by timestamp, because both clocks
-are whole seconds. There is no per-person read state.
+are whole seconds. Only rows the team view shows count (user and assistant
+*text*): a branch is cut at the last visible text message, and a finished turn
+writes its `turn_summary` (and tool rows) after that, which nobody reading the
+team view could see change. There is no per-person read state.
 
 **Sources, grouped.** `GET /projects/{id}/files` answers `groups`, one per chat
 with files: the caller's own chats (`mine: true`, every non-upload file, each

@@ -302,3 +302,102 @@ describe("Move and share is one action (A1)", () => {
     expect(moves.map((m) => m.project_id)).toEqual(["p-team", ""]);
   });
 });
+
+describe("Create shared project from the share dialog (A1b)", () => {
+  it("keeps the project and says the move failed, one click from the project", async () => {
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    // No project is shared with the team yet (A1b), and the move is refused.
+    const created: unknown[] = [];
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (method === "GET" && url === "/api/projects")
+        return new Response(JSON.stringify({ projects: [PERSONAL_PROJECT, ...created] }));
+      if (method === "POST" && url === "/api/conversations/conv-a/project")
+        return new Response("boom", { status: 500 });
+      const res = await base(input, init);
+      if (method === "POST" && url === "/api/projects") created.push(await res.clone().json());
+      return res;
+    });
+    render(
+      <ChatToastProvider>
+        <ChatExperience initialUserEmail="user@example.com" />
+      </ChatToastProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTitle("Click to rename")).toHaveTextContent("Alpha chat"),
+    );
+    await screen.findByRole("button", { name: "Open project Scratch" });
+
+    // `\b`: the "Shared chat" row (its project is not listed here) is not it.
+    fireEvent.click(screen.getByRole("button", { name: /^Share\b/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create shared project" }));
+    const dialog = await screen.findByRole("dialog", { name: "New project" });
+    fireEvent.change(screen.getByPlaceholderText("e.g. Knowertech: Q4 planning"), {
+      target: { value: "Desk" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+
+    // Honest about the partial result — not "Created Desk and moved the chat in."
+    expect(
+      await screen.findByText(
+        "Created Desk, but couldn’t move the chat into it. Move it from the chat’s menu.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/moved the chat in/)).toBeNull();
+    // The project is kept (never deleted behind the user's back)…
+    expect(
+      fetchMock.mock.calls.some(
+        ([u, i]) => String(u).startsWith("/api/projects/") && i?.method === "DELETE",
+      ),
+    ).toBe(false);
+    // …the user stays on the chat, and the toast opens the new project.
+    expect(screen.queryByTestId("project-home")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open Desk" }));
+    expect(await screen.findByTestId("project-home")).toBeInTheDocument();
+  });
+});
+
+describe("bulk delete across teams", () => {
+  it("names every team the selection's shared chats are shared with", async () => {
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    const OPS_PROJECT = { ...SHARED_PROJECT, id: "p-ops", name: "Ops desk", team_id: "Ops" };
+    const OPS_CHAT: ConversationSummary = {
+      ...CONVS[1],
+      id: "conv-o",
+      title: "Ops chat",
+      project_id: "p-ops",
+    };
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if ((init?.method ?? "GET") === "GET") {
+        if (url === "/api/projects")
+          return new Response(
+            JSON.stringify({ projects: [SHARED_PROJECT, PERSONAL_PROJECT, OPS_PROJECT] }),
+          );
+        if (url === "/api/conversations")
+          return new Response(JSON.stringify({ conversations: [...CONVS, OPS_CHAT] }));
+        if (url === "/api/conversations/conv-o/outputs")
+          return new Response(
+            JSON.stringify({ outputs: [], total: 2, shared_count: 2, team_visible: true }),
+          );
+      }
+      return base(input, init);
+    });
+    await mountChat();
+    await openRowMenu("Shared chat");
+    fireEvent.click(await screen.findByRole("menuitem", { name: /^Select/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Project Ops desk \(/ }));
+    fireEvent.click(await screen.findByText("Ops chat"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("bulk-delete-shared-loss")).toHaveTextContent(
+        "1 of these is shared with Elcano and 1 with Ops. They lose access to them and their 5 shared files.",
+      ),
+    );
+  });
+});

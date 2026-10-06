@@ -70,6 +70,8 @@ type TeamChatSnapshot = {
   project_id?: string;
   project_name?: string;
   files?: OutputFile[];
+  /** `files` holds only the most recent referenced outputs; older references render locked. */
+  files_truncated?: boolean;
   viewer_branch?: ViewerBranch | null;
 };
 

@@ -657,10 +657,13 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		if len(all) == 0 {
 			continue
 		}
-		outs, err := s.ownerOutputs(ctx, conv.ID)
+		outs, outsTruncated, err := s.ownerOutputs(ctx, conv.ID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		if outsTruncated {
+			truncated = true
 		}
 		byPath := make(map[string]outputFile, len(outs))
 		for _, o := range outs {
@@ -707,10 +710,13 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		return
 	}
 	for _, conv := range team {
-		outs, err := s.ownerOutputs(ctx, conv.ID)
+		outs, outsTruncated, err := s.ownerOutputs(ctx, conv.ID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		if outsTruncated {
+			truncated = true
 		}
 		g := sourcesGroup{
 			ConversationID: conv.ID,

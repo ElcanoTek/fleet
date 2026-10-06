@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -80,8 +81,10 @@ func TestMarkdownDestinations(t *testing.T) {
 		"```\n[y](fenced.csv)\n```\n" +
 		"````\n```\n[z](nested.csv)\n```\n````\n" +
 		"After fences: [after](after.csv)\n" +
+		"Escapes everywhere: [a](<a\\_b.csv>) [r][esc]\n" +
 		"\n[deck]: deck.pptx\n" +
 		"[notes]: <notes file.md>\n" +
+		"[esc]: ref\\_\\#1.csv\n" +
 		"[orphan]: orphan.csv\n"
 	got := markdownDestinations(md)
 	want := []string{
@@ -94,6 +97,8 @@ func TestMarkdownDestinations(t *testing.T) {
 		"deck.pptx",
 		"notes file.md",
 		"after.csv",
+		"a_b.csv",    // escapes are dropped inside <…> too
+		"ref_#1.csv", // and in a reference definition
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("destinations =\n %q\nwant\n %q", got, want)
@@ -156,7 +161,10 @@ func TestConversationOutputsFiltersOnDisk(t *testing.T) {
 		"[r](report.xlsx) ![c](out/chart.png) [u](attachments/abc/upload.pdf) [gone](missing.csv) "+
 			"[d](adir) [alias](alias.pdf) [via](linkdir/abc/upload.pdf)")}
 
-	outs := conversationOutputs(conv, history, map[string]bool{"out/chart.png": true})
+	outs, truncated := conversationOutputs(conv, history, map[string]bool{"out/chart.png": true})
+	if truncated {
+		t.Error("a short transcript is not truncated")
+	}
 	got := map[string]bool{}
 	for _, o := range outs {
 		got[o.Path] = o.Shared
@@ -207,5 +215,54 @@ func TestOpenWorkspaceFileNoFollow(t *testing.T) {
 			_ = f.Close()
 			t.Errorf("open(%q) succeeded, want refusal", rel)
 		}
+	}
+}
+
+// Discovery is bounded: past maxOutputReferences distinct references only
+// the most recent are considered (and stat'ed), the result says so, and an
+// older reference is not an output for anyone — the team-files gate matches
+// against this same bounded list. Uploads never count toward the bound.
+func TestConversationOutputsBoundsReferences(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	const conv = "conv-cap"
+	ws := filepath.Join(root, conv)
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const extra = 7
+	history := make([]agent.HistoryEntry, 0, maxOutputReferences+extra)
+	for i := range maxOutputReferences + extra {
+		name := fmt.Sprintf("f%04d.csv", i)
+		if err := os.WriteFile(filepath.Join(ws, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// One upload reference per message: never an output, never counted.
+		history = append(history, textEntry("assistant",
+			fmt.Sprintf("[f](%s) [u](attachments/u%d.pdf)", name, i)))
+	}
+	outs, truncated := conversationOutputs(conv, history, nil)
+	if !truncated {
+		t.Error("more than maxOutputReferences references must report truncated")
+	}
+	if len(outs) != maxOutputReferences {
+		t.Fatalf("outputs = %d, want %d", len(outs), maxOutputReferences)
+	}
+	got := map[string]bool{}
+	for _, o := range outs {
+		got[o.Path] = true
+	}
+	for i := range extra {
+		if old := fmt.Sprintf("f%04d.csv", i); got[old] {
+			t.Errorf("%s is among the oldest references and must be dropped", old)
+		}
+	}
+	if newest := fmt.Sprintf("f%04d.csv", maxOutputReferences+extra-1); !got[newest] {
+		t.Errorf("the newest reference %s must be kept", newest)
+	}
+
+	// Exactly at the bound: everything considered, nothing truncated.
+	if _, truncated := conversationOutputs(conv, history[extra:], nil); truncated {
+		t.Error("exactly maxOutputReferences references is not truncated")
 	}
 }
