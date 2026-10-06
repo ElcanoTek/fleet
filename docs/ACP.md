@@ -197,6 +197,112 @@ adapter's `opts`), it records that file's path as `[acp] RPC log: <path>` in
 Neovim, and read it first: it holds every prompt and the full text of each
 buffer you shared.
 
+### Emacs (agent-shell)
+
+Tested against a real `fleet serve` with a live model, from Emacs 30.2 in a
+terminal and agent-shell 0.85.3 at commit `f44c96b` (2026-10-06), with acp.el
+`242cef6` and shell-maker `dcc05a8`. On 2026-10-06, connect, multi-turn,
+streamed answer text, thinking and tool calls (with
+`--model anthropic/claude-haiku-4.5`), cancel, a cancel that arrived just after
+the turn finished, `--timeout`, approving through the link in the reply,
+queueing behind a turn running in the web chat, `@file` mentions, and the
+daemon-down, credential and refused-image errors all worked through
+agent-shell. agent-shell ships no fleet agent, so define one in your init file:
+
+```elisp
+(require 'agent-shell)
+
+(defun fleet-acp-make-agent-config ()
+  "An agent-shell agent that runs `fleet acp'."
+  (agent-shell-make-agent-config
+   :identifier 'fleet
+   :mode-line-name "fleet"
+   :buffer-name "fleet"
+   :shell-prompt "fleet> "
+   :shell-prompt-regexp "fleet> "
+   ;; fleet refuses client-supplied MCP servers; [] keeps a global
+   ;; `agent-shell-mcp-servers' from being sent to it.
+   :mcp-servers []
+   :client-maker
+   (lambda (buffer)
+     (agent-shell--make-acp-client
+      :command "fleet"
+      :command-params '("acp" "--email" "acp-bot@example.com")
+      ;; The server env file's absolute path, never the token itself.
+      :environment-variables '("FLEET_ENV_FILE=/etc/fleet/fleet.env")
+      :context-buffer buffer))))
+
+(add-to-list 'agent-shell-agent-configs #'fleet-acp-make-agent-config)
+(setq agent-shell-preferred-agent-config 'fleet) ; optional: skip the agent picker
+```
+
+`M-x agent-shell` then starts a fleet shell; without the last line, it asks
+which agent to start. The snippet was checked live as written on 2026-10-06,
+with only the env file's path changed. Its client maker calls
+`agent-shell--make-acp-client`, an internal function (note the double dash)
+that every agent shipped with agent-shell also uses, so recheck the snippet
+after upgrading agent-shell.
+
+agent-shell starts `fleet acp` in the project's directory, with Emacs's
+environment plus the `:environment-variables` entries, which take precedence.
+As with CodeCompanion, set `FLEET_ENV_FILE` to the server env file's absolute
+path, so the `.env.local` fallback never reads a file from the project you are
+editing, and never put the token itself in your init file. Don't load the
+server env file with the `:load-env` option of
+`agent-shell-make-environment-variables` either: that copies every variable in
+it, the server's own secrets included, into the agent's environment.
+
+agent-shell sends the servers in `agent-shell-mcp-servers` to every agent whose
+config names none of its own. fleet refuses client-supplied MCP servers, so
+with that variable set, every fleet session would fail to start with invalid
+params (checked live). The snippet's `:mcp-servers []` is an empty vector,
+which, unlike `nil`, counts as the agent's own setting, so agent-shell sends
+fleet an empty list (checked live with the variable set).
+
+`@file` mentions need no override, unlike CodeCompanion's file context:
+agent-shell embeds a text file's content as a `resource` block, and the model
+answered from it (checked live). A file larger than
+`agent-shell-embed-file-size-limit` (100 KB by default) is sent as a bare
+`resource_link` instead, which fleet cannot read, so the model sees only the
+path. To share bigger files, raise the limit (it applies to every agent-shell
+agent):
+
+```elisp
+(setq agent-shell-embed-file-size-limit (* 512 1024))
+```
+
+With it, a 120 KB file was embedded and the model answered from it (checked
+live). Going much higher does not help: fleet's chat server takes at most 1 MB
+per request, and a prompt over that fails with an internal error saying the
+request body is too large (checked live with a 1.2 MB file). An image or any
+other binary file is sent as a `blob`, which fleet refuses with invalid params,
+as `initialize` advertises (checked live).
+
+Stopping a request (`C-c C-c`, then `y`) sends `session/cancel`, and fleet
+stops the turn server-side as described under "Protocol mapping". agent-shell
+marks the turn "Cancelled" and, unlike CodeCompanion, keeps listening, so it
+shows the notes fleet sends after a stop, such as the note that the turn had
+already finished before the Stop arrived (checked live). How the shell ends
+matters too. Quitting Emacs (`C-x C-c`, answering yes to killing its active
+processes) sends `fleet acp` `SIGHUP`, so a running turn is stopped (checked
+live). Killing the agent-shell buffer (`C-x k`) does not: acp.el ends the agent
+with `delete-process`, which sends `SIGKILL`, and the turn keeps running
+server-side (checked live). Stop it in the web chat.
+
+agent-shell's error box shows the error's `message`; "[ Details ]" expands the
+rest, including fleet's reason in `data.error`. agent-shell does not display
+the name and version fleet reports in `initialize`; `fleet version` prints
+them.
+
+For an adapter bug report, attach the JSON-RPC transcript. acp.el records it
+only while logging is on: set `acp-logging-enabled` to `t`, or run
+`M-x agent-shell-toggle-logging` before the exchange you want.
+`M-x agent-shell-view-acp-logs`, run from the shell, then shows every message
+in full (`M-x agent-shell-view-traffic` lists them, one line each). The log
+lives in an Emacs buffer and is gone when Emacs exits, so save it first, and
+read it before sharing: it holds every prompt and the full text of each file
+you mentioned.
+
 ## Protocol mapping
 
 | ACP | fleet |
@@ -299,6 +405,14 @@ What shipped:
   the reply, a cancel that arrived just after the turn finished, and a stop
   fleet could not confirm (the server was paused with `SIGSTOP` until
   `fleet acp`'s 10-second Stop request timed out).
+- Checked live against a real `fleet serve` with a live model from Emacs 30.2
+  and agent-shell 0.85.3 (`f44c96b`) on 2026-10-06: the features listed under
+  "Emacs (agent-shell)"; the snippet as published there, with a global
+  `agent-shell-mcp-servers` set (and, without the `:mcp-servers []` line,
+  `session/new` refused); `@file` mentions under the embed limit, over it, and
+  over it with the limit raised; a prompt over fleet's 1 MB request cap;
+  quitting Emacs and killing the agent-shell buffer mid-turn; and the logging
+  commands.
 
 Deviations and limits:
 
@@ -324,7 +438,8 @@ Deviations and limits:
   client that shares a file by sending only its path, rather than an embedded
   resource, loses that context: fleet cannot read the path. CodeCompanion.nvim
   does this by default; the configuration under "Neovim (CodeCompanion.nvim)"
-  works around it.
+  works around it. Emacs's agent-shell does it for a file over its embed limit
+  (100 KB by default); "Emacs (agent-shell)" says how to raise it.
 - **No `session/load`.** A session lives as long as the `fleet acp` process.
   The conversation itself persists in fleet, but resuming it over ACP is
   deferred until the session id can round-trip honestly.
@@ -342,7 +457,9 @@ Deviations and limits:
   agent's process group with `SIGKILL` when it drops the agent connection,
   without a `SIGTERM` or closing stdin first, so when Zed ends `fleet acp` that
   way the turn keeps running. Whether a plain Zed quit takes that path was not
-  checked.
+  checked. Killing an Emacs agent-shell buffer does send `SIGKILL`, and its
+  turn kept running (checked live on 2026-10-06); quitting Emacs instead stops
+  the turn (see "Emacs (agent-shell)").
 
 Deferred: a Buzz Desktop catalog entry (a custom command works today),
 `session/load`, and an ACP *client* in fleet (launching other ACP agents is a
