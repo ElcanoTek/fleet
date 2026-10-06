@@ -33,6 +33,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -718,8 +719,11 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 		// A timeout whose Stop found the turn already complete falls through:
 		// the turn finished, so its outcome is reported, not a timeout.
 		if stopErr != nil {
+			// What to do comes first and the Stop's error last: that error
+			// can quote a long server reply (a proxy's page), and a message
+			// cut to fit (errorMessage) must still say where to stop the turn.
 			return acpsdk.PromptResponse{}, reasonError(acpsdk.NewInternalError, fmt.Sprintf(
-				"the fleet turn did not finish within %s, and stopping it failed (%v): it may still be running — stop it at %s", a.timeout, stopErr, a.conversationPointer(convID)))
+				"the fleet turn did not finish within %s and may still be running — stop it at %s (stopping it failed: %v)", a.timeout, a.conversationPointer(convID), stopErr))
 		}
 		return acpsdk.PromptResponse{}, reasonError(acpsdk.NewInternalError, fmt.Sprintf(
 			"the fleet turn did not finish within %s and was stopped (raise it with fleet acp --timeout)", a.timeout))
@@ -1195,39 +1199,61 @@ func reasonError(kind func(data any) *acpsdk.RequestError, reason string) *acpsd
 	return e
 }
 
-// maxErrorMessage bounds an error's message, in runes. The reasons fleet acp
-// writes itself fit whole in practice, the longest (a timeout whose Stop
-// failed, with where to stop the turn) at about 350; one quoting the server,
-// such as a turn's error or a proxy's error page, may not.
+// maxErrorMessage bounds an error's message, in runes. fleet acp's own fix-it
+// texts fit whole (the longest, a missing token naming the env files it
+// tried, is about 250). A reason that quotes a reply from elsewhere — a
+// turn's error, a proxy's page, a failed Stop's answer — may not, so such a
+// reason puts what to do before what it quotes, where a cut keeps it.
 const maxErrorMessage = 400
+
+// maxWordBackoff is how far, in runes, a message cut mid-word backs off to
+// the word's start. A longer "word" (a URL, an unbroken run of a quoted
+// reply) is cut where the bound falls, so the cut cannot eat most of the
+// message.
+const maxWordBackoff = 40
 
 // errorMessage is reason as the one line an error's message carries: each run
 // of whitespace, line breaks included, becomes one space (a quoted response
-// body can span lines). A reason longer than maxErrorMessage is cut to its
-// first sentence, or, when that is still too long, after the last whole word
-// that fits, marked "…". data.error keeps the reason whole.
+// body can span lines). A reason longer than maxErrorMessage keeps as many
+// whole sentences as fit (wholeSentences) when they fill at least half the
+// bound. Otherwise the words that fit say more: it is cut at the bound,
+// after the last whole word (the part of a word the bound splits is dropped,
+// unless that part is over maxWordBackoff runes), and marked "…". data.error
+// keeps the reason whole.
 func errorMessage(reason string) string {
 	s := strings.Join(strings.Fields(reason), " ")
-	if utf8.RuneCountInString(s) <= maxErrorMessage {
+	r := []rune(s)
+	if len(r) <= maxErrorMessage {
 		return s
 	}
-	if n := firstSentence(s); n > 0 && utf8.RuneCountInString(s[:n]) <= maxErrorMessage {
+	if n := wholeSentences(s, maxErrorMessage); utf8.RuneCountInString(s[:n]) >= maxErrorMessage/2 {
 		return s[:n]
 	}
-	cut := string([]rune(s)[:maxErrorMessage])
-	if i := strings.LastIndexByte(cut, ' '); i > 0 {
-		cut = cut[:i]
+	cut := r[:maxErrorMessage]
+	if r[maxErrorMessage] != ' ' { // the bound splits a word: back off to its start, if near
+		for i := len(cut) - 1; i >= 0 && i >= len(cut)-maxWordBackoff; i-- {
+			if cut[i] == ' ' {
+				cut = cut[:i]
+				break
+			}
+		}
 	}
-	return cut + "…"
+	return string(cut) + "…"
 }
 
-// firstSentence is the length in bytes of s's first sentence, through the
-// '.', '!' or '?' a space follows, or 0 when s is one sentence. One inside
-// parentheses or a backtick span (a quoted error, a command) does not end it.
-func firstSentence(s string) int {
-	depth, quoted := 0, false
-	for i := 0; i+1 < len(s); i++ {
-		switch c := s[i]; {
+// wholeSentences is the length in bytes of the longest run of s's leading
+// whole sentences that fits in limit runes, or 0 when not even the first
+// does. A sentence ends at a '.', '!' or '?' followed by a space and a
+// capital letter, so "e.g. the", "hmm... ok" and a URL's "?x=1. next" do not
+// end one; nor does one inside parentheses or a backtick span (a quoted
+// error, a command). s has single spaces only (errorMessage).
+func wholeSentences(s string, limit int) int {
+	end, depth, quoted, runes := 0, 0, false, 0
+	for i, c := range s {
+		if runes++; runes > limit {
+			break
+		}
+		switch {
 		case c == '`':
 			quoted = !quoted
 		case quoted:
@@ -1235,11 +1261,22 @@ func firstSentence(s string) int {
 			depth++
 		case c == ')' && depth > 0:
 			depth--
-		case depth == 0 && (c == '.' || c == '!' || c == '?') && s[i+1] == ' ':
-			return i + 1
+		case depth == 0 && (c == '.' || c == '!' || c == '?') && startsSentence(s[i+1:]):
+			end = i + 1
 		}
 	}
-	return 0
+	return end
+}
+
+// startsSentence reports whether rest, the text after a full stop, starts a
+// new sentence: a space, then a capital letter.
+func startsSentence(rest string) bool {
+	after, ok := strings.CutPrefix(rest, " ")
+	if !ok {
+		return false
+	}
+	c, _ := utf8.DecodeRuneInString(after)
+	return unicode.IsUpper(c)
 }
 
 // promptText flattens an ACP prompt into the one message a fleet turn takes.

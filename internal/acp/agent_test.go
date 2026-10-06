@@ -34,8 +34,10 @@ type fakeFleet struct {
 	t *testing.T
 	// turn writes one turn's frames; nil means the default tool-using turn.
 	turn func(w *sseWriter, r *http.Request)
-	// cancelStatus is what the Stop endpoint answers (0 = 204).
+	// cancelStatus is what the Stop endpoint answers (0 = 204), with
+	// cancelBody as its body.
 	cancelStatus int
+	cancelBody   string
 	// cancelHold, when set, holds every Stop, once recorded, until it is
 	// closed: a slow or hung server. A Stop whose caller gives up ends.
 	cancelHold chan struct{}
@@ -106,6 +108,7 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if f.cancelStatus != 0 {
 			w.WriteHeader(f.cancelStatus)
+			_, _ = io.WriteString(w, f.cancelBody)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -180,6 +183,7 @@ type harness struct {
 type harnessOpts struct {
 	turn         func(w *sseWriter, r *http.Request)
 	cancelStatus int
+	cancelBody   string        // see fakeFleet.cancelStatus
 	cancelHold   chan struct{} // see fakeFleet.cancelHold
 	cfgErr       error
 	publicURL    string
@@ -196,7 +200,7 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 	prevSettle := stopSettleWait
 	stopSettleWait = 50 * time.Millisecond
 	t.Cleanup(func() { stopSettleWait = prevSettle })
-	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus, cancelHold: o.cancelHold}
+	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus, cancelBody: o.cancelBody, cancelHold: o.cancelHold}
 	srv := httptest.NewServer(ff)
 	t.Cleanup(srv.Close)
 	serverURL := srv.URL
@@ -640,18 +644,26 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 	noEmail := resolveErr(t, chattui.Flags{})
 	noToken := resolveErr(t, chattui.Flags{Email: "bot@example.com", EnvFile: "/nonexistent/fleet.env"})
 	longFailure := "the provider refused the request. " + strings.Repeat("Its detail runs on and on. ", 20)
+	// A proxy's 502 page, padded the way nginx pads its error pages: longer
+	// than the 512 bytes chattui quotes of a refused Stop.
+	proxyPage := "<html>\n<head><title>502 Bad Gateway</title></head>\n<body>\n<center><h1>502 Bad Gateway</h1></center>\n<hr><center>nginx</center>\n</body>\n</html>\n" +
+		strings.Repeat("<!-- a padding to disable MSIE and Chrome friendly error page -->\n", 6)
 
 	for _, tc := range []struct {
 		name string
 		err  func(t *testing.T) error
 		code int
-		// data is data.error, exactly as before message carried it.
+		// data is data.error, exactly: what it was before message carried
+		// the reason too (only the failed-Stop timeout's was reworded).
 		data string
 		// dataPrefix, when set, is data.error's start instead (the rest is the
-		// OS's text).
+		// OS's text, or a long quoted reply).
 		dataPrefix string
 		// message is the message wanted; "" means data.error itself.
 		message string
+		// messageHas, when set, replaces message: what a cut message must
+		// still say.
+		messageHas []string
 	}{
 		{
 			name: "403 wrong token",
@@ -722,12 +734,13 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 			data: "turn requires another model: the model is no longer offered; pick another",
 		},
 		{
-			// Too long for one line: message keeps the first sentence.
+			// Too long for one line: message keeps the whole sentences that
+			// fit (397 runes).
 			name:    "a long turn.error",
 			err:     promptWith(harnessOpts{turn: terminal("turn.error", longFailure)}),
 			code:    -32603,
 			data:    "turn failed: " + longFailure,
-			message: "turn failed: the provider refused the request.",
+			message: "turn failed: the provider refused the request." + strings.Repeat(" Its detail runs on and on.", 13),
 		},
 		{
 			name: "any other status",
@@ -752,7 +765,20 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 			err: promptWith(harnessOpts{turn: blockingTurn(make(chan struct{})), timeout: 200 * time.Millisecond,
 				cancelStatus: http.StatusBadGateway, publicURL: "https://fleet.example.com"}),
 			code: -32603,
-			data: "the fleet turn did not finish within 200ms, and stopping it failed (cancel returned 502: ): it may still be running — stop it at https://fleet.example.com/chat?c=conv-slow",
+			data: "the fleet turn did not finish within 200ms and may still be running — stop it at https://fleet.example.com/chat?c=conv-slow (stopping it failed: cancel returned 502: )",
+		},
+		{
+			// The Stop's answer is a long proxy page: the message is cut, and
+			// still says the turn may be running and where to stop it.
+			name: "--timeout whose Stop failed with a long reply",
+			err: promptWith(harnessOpts{turn: blockingTurn(make(chan struct{})), timeout: 200 * time.Millisecond,
+				cancelStatus: http.StatusBadGateway, cancelBody: proxyPage, publicURL: "https://fleet.example.com"}),
+			code:       -32603,
+			dataPrefix: "the fleet turn did not finish within 200ms and may still be running — stop it at https://fleet.example.com/chat?c=conv-slow (stopping it failed: cancel returned 502: <html>\n<head><title>502 Bad Gateway</title></head>",
+			messageHas: []string{
+				"the fleet turn did not finish within 200ms and may still be running — stop it at https://fleet.example.com/chat?c=conv-slow (stopping it failed: cancel returned 502: <html> <head><title>502 Bad Gateway</title></head>",
+				"…",
+			},
 		},
 		{
 			name: "client MCP servers",
@@ -807,7 +833,12 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 			if want == "" {
 				want = got
 			}
-			if re.Message != want || want == "" {
+			for _, part := range tc.messageHas {
+				if !strings.Contains(re.Message, part) {
+					t.Errorf("message = %q\nwant it to say %q", re.Message, part)
+				}
+			}
+			if tc.messageHas == nil && (re.Message != want || want == "") {
 				t.Errorf("message = %q\nwant      %q", re.Message, want)
 			}
 			if strings.ContainsAny(re.Message, "\r\n") || utf8.RuneCountInString(re.Message) > maxErrorMessage+1 {
@@ -835,20 +866,41 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 	})
 }
 
-// errorMessage keeps a reason whole when it fits one concise line, else its
-// first sentence, else the words that fit.
+// errorMessage keeps a reason whole when it fits one concise line, else the
+// whole sentences that fit, else the words that fit.
 func TestErrorMessageIsOneConciseLine(t *testing.T) {
-	long := func(sentence string) string {
-		return sentence + " " + strings.Repeat("And then more detail. ", 30)
-	}
+	tinyThenLong := "turn failed: Error. The provider said " + strings.Repeat("no ", 200)
+	wordEndsAtBound := "x" + strings.Repeat("abcd ", 100) // rune 400 is a space
 	for _, tc := range []struct {
 		name, reason, want string
 	}{
 		{"short, kept whole", "turn failed: rate limited. Retry in 20s.", "turn failed: rate limited. Retry in 20s."},
 		{"line breaks and runs of spaces collapse", "server returned 502:\n<html>\n\t<h1>Bad  Gateway</h1>\r\n</html>", "server returned 502: <html> <h1>Bad Gateway</h1> </html>"},
-		{"long: the first sentence", long("turn failed: the provider refused the request."), "turn failed: the provider refused the request."},
-		{"a full stop in parentheses does not end it", long("turn failed (see the log. It has more) and stopped."), "turn failed (see the log. It has more) and stopped."},
-		{"nor one in a command", long("run `fleet status. now` and retry!"), "run `fleet status. now` and retry!"},
+		{
+			// Not just the first ("turn failed: Error."): as many as fit.
+			"long: the whole sentences that fit",
+			"turn failed: Error." + strings.Repeat(" And then more detail.", 30),
+			"turn failed: Error." + strings.Repeat(" And then more detail.", 17),
+		},
+		{
+			// The sentences that fit would be a fraction of the bound: the
+			// words that fit say more.
+			"a short sentence, then a long one: the words that fit",
+			tinyThenLong,
+			tinyThenLong[:maxErrorMessage] + "…",
+		},
+		{
+			"a cut at a word's very end keeps the word",
+			wordEndsAtBound,
+			wordEndsAtBound[:maxErrorMessage] + "…",
+		},
+		{
+			// No space near the bound: cut there, rather than back to the
+			// last space, which would leave "turn failed:…".
+			"a long unbroken run is cut at the bound",
+			"turn failed: " + strings.Repeat("x", 600),
+			"turn failed: " + strings.Repeat("x", maxErrorMessage-len("turn failed: ")) + "…",
+		},
 		{"empty", " \n ", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -857,6 +909,13 @@ func TestErrorMessageIsOneConciseLine(t *testing.T) {
 			}
 		})
 	}
+	t.Run("no false sentence end past half the bound", func(t *testing.T) {
+		reason := "turn failed: " + strings.Repeat("the provider rejected the input ", 8) + "e.g. the image " + strings.Repeat("was far too large ", 20)
+		got := errorMessage(reason)
+		if !strings.Contains(got, "e.g. the image was far") || !strings.HasSuffix(got, "…") {
+			t.Errorf("errorMessage = %q, want it cut after the words that fit, not at \"e.g.\"", got)
+		}
+	})
 	t.Run("one long sentence: the words that fit", func(t *testing.T) {
 		reason := "the turn failed because " + strings.Repeat("ünïcode words ", 60)
 		got := errorMessage(reason)
@@ -876,6 +935,31 @@ func TestErrorMessageIsOneConciseLine(t *testing.T) {
 			t.Errorf("message = %q", got)
 		}
 	})
+}
+
+// A sentence ends at a full stop, '!' or '?' before a capitalised word, and
+// not inside parentheses or backticks; wholeSentences keeps as many as fit.
+func TestWholeSentences(t *testing.T) {
+	for _, tc := range []struct {
+		s     string
+		limit int
+		want  string
+	}{
+		{"One. Two. Three", 1000, "One. Two."},
+		{"One. Two. Three", 8, "One."},
+		{"one sentence only", 1000, ""},
+		{"the input, e.g. the image. Next", 1000, "the input, e.g. the image."},
+		{"fleet v1.2. then it stopped. Next", 1000, "fleet v1.2. then it stopped."},
+		{"hmm... ok. Next", 1000, "hmm... ok."},
+		{"see /chat?x=1. next time. Next", 1000, "see /chat?x=1. next time."},
+		{"failed (see the log. It has more) and stopped. Next", 1000, "failed (see the log. It has more) and stopped."},
+		{"run `fleet status. Now` and retry! Next", 1000, "run `fleet status. Now` and retry!"},
+		{"Ünïcode. Ölçü. Next", 14, "Ünïcode. Ölçü."}, // runes, not bytes
+	} {
+		if got := tc.s[:wholeSentences(tc.s, tc.limit)]; got != tc.want {
+			t.Errorf("wholeSentences(%q, %d) keeps %q, want %q", tc.s, tc.limit, got, tc.want)
+		}
+	}
 }
 
 func TestPolicyBlockIsARefusal(t *testing.T) {
