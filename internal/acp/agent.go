@@ -76,10 +76,46 @@ type Agent struct {
 	version   string
 
 	conn updater
+	// lifetime ends when the ACP client's connection closes (stdin EOF), and
+	// every prompt's stop signal derives from it: a client that hangs up mid
+	// turn triggers the stop of every prompt in flight, as a session/cancel
+	// would. Known gap, closed separately: run returns as soon as the
+	// connection closes, so `fleet acp` may exit before that Stop is sent.
+	lifetime context.Context
 
 	mu       sync.Mutex
 	sessions map[acpsdk.SessionId]*session
+	// inflight holds the stop of every prompt from its arrival until it is
+	// answered, by session id: the one running a turn and any waiting for
+	// the session. It is fleet acp's own stop signal (see Cancel), keyed
+	// apart from sessions so a session/cancel still reaches a prompt whose
+	// session was closed while it ran. seq numbers the entries.
+	inflight map[acpsdk.SessionId]map[uint64]context.CancelFunc
+	seq      uint64
+	// line is, per session, the turn of the last prompt tracked on it: a
+	// channel its prompt closes when it is done with the session. Each
+	// prompt tracked after it waits for that channel before it takes the
+	// session, so prompts run in the order they were tracked. sess.mu alone
+	// would not keep that order: the SDK runs each request on its own
+	// goroutine, so two prompts tracked in order can reach sess.mu in the
+	// other, and Go's mutex does not hand itself over first-come
+	// first-served anyway.
+	line map[acpsdk.SessionId]chan struct{}
 }
+
+// promptTracked runs once a prompt is tracked, before it waits for its
+// turn. A test seam (a no-op in production): it lets a test hold a prompt
+// between the two, where the SDK's scheduling can leave it.
+var promptTracked = func(_ string) {}
+
+// maxWaitingPrompts caps how many prompts may wait for one session behind
+// the prompt holding it. A waiting prompt has not reached fleet yet, so the
+// server's own input-queue cap (maxPendingInputs in internal/httpapi, also
+// 20) cannot see it; without this one a client could pile up any number of
+// payloads and goroutines here, each to run as a full governed turn once the
+// session frees. It is the same bound on unattended LLM spend, kept before
+// the prompts reach fleet: a prompt beyond it is refused, not held.
+const maxWaitingPrompts = 20
 
 // session maps one ACP session onto one fleet conversation. The conversation
 // id is learned from the first turn's `conversation` event; until then the
@@ -102,12 +138,31 @@ type session struct {
 	// memory is one small entry per prompt whose answer was lost, for the
 	// life of the session.
 	unsettled map[string]string
+	// keysMu guards writes to unsettled, which a prompt reads when it
+	// arrives, before it waits for mu (peekUnsettled). Reads under mu need
+	// no keysMu: every write holds mu as well.
+	keysMu sync.Mutex
 	// keyConv maps each unresolved key to the conversation it was first
 	// submitted to ("" = it started the session's conversation). A retry
 	// goes back there: fleet recognises a key only in the conversation that
 	// accepted it (or, sent with no conversation, per user), so a retry
 	// posted into a conversation created since would run the input again.
 	keyConv map[string]string
+	// stoppedKeys holds every key that was unresolved when its prompt began
+	// and that fleet then confirmed stopped. A prompt that took such a key
+	// as its arrival key (see Prompt) must not fall back to it: the Stop
+	// settled that message, and the same text sent again runs. Like
+	// unsettled, it is one small entry per lost answer, never evicted.
+	stoppedKeys map[string]bool
+	// successors maps a stopped key (stoppedKeys) to the one fresh key the
+	// same text runs under after that Stop. Every prompt that took the
+	// stopped key as its arrival key waited for the session behind the
+	// stopped attempt, so they are all resends of one message: the first to
+	// get the session runs it under the successor, and the rest reuse that
+	// key, so fleet answers them with that run instead of running the
+	// message once per waiter. One small entry per confirmed Stop of a lost
+	// answer, never evicted, like stoppedKeys.
+	successors map[string]string
 }
 
 // target returns the conversation a prompt under key is sent to: the one
@@ -143,6 +198,8 @@ func textKey(message string) string {
 // different prompt with the same text (say, one carrying a messageId, so a
 // different key) must not wipe an earlier prompt's pending retry key.
 func (s *session) clearUnsettled(message, key string) {
+	s.keysMu.Lock()
+	defer s.keysMu.Unlock()
 	if s.unsettled[textKey(message)] == key {
 		delete(s.unsettled, textKey(message))
 	}
@@ -152,10 +209,35 @@ func (s *session) setUnsettled(message, key string) {
 	if message == "" {
 		return // not a text-keyed prompt (see promptOnce); prompt text is never empty
 	}
+	s.keysMu.Lock()
+	defer s.keysMu.Unlock()
 	if s.unsettled == nil {
 		s.unsettled = map[string]string{}
 	}
 	s.unsettled[textKey(message)] = key
+}
+
+// recordStop records, after a prompt, a Stop fleet confirmed (stopped) of a
+// key that was its text's unresolved key when the prompt began
+// (textUnresolved): see stoppedKeys. Under mu, like every read of
+// stoppedKeys.
+func (s *session) recordStop(key string, textUnresolved, stopped bool) {
+	if !textUnresolved || !stopped {
+		return
+	}
+	if s.stoppedKeys == nil {
+		s.stoppedKeys = map[string]bool{}
+	}
+	s.stoppedKeys[key] = true
+}
+
+// peekUnsettled is message's unresolved key ("" = none), read without mu by a
+// prompt that has just arrived, possibly while another prompt holds the
+// session (see Prompt).
+func (s *session) peekUnsettled(message string) string {
+	s.keysMu.Lock()
+	defer s.keysMu.Unlock()
+	return s.unsettled[textKey(message)]
 }
 
 var _ acpsdk.Agent = (*Agent)(nil)
@@ -168,12 +250,28 @@ func NewAgent(client turnClient, cfgErr error, publicURL string, timeout time.Du
 		publicURL: strings.TrimRight(publicURL, "/"),
 		timeout:   timeout,
 		version:   version,
+		lifetime:  context.Background(),
 		sessions:  map[acpsdk.SessionId]*session{},
+		inflight:  map[acpsdk.SessionId]map[uint64]context.CancelFunc{},
+		line:      map[acpsdk.SessionId]chan struct{}{},
 	}
 }
 
 // SetConnection wires the connection session/update notifications go out on.
-func (a *Agent) SetConnection(c updater) { a.conn = c }
+// When it reports the client hanging up (the SDK connection's Done), that
+// ends the agent's lifetime, which triggers the stop of every prompt still in
+// flight (see lifetime for the gap).
+func (a *Agent) SetConnection(c updater) {
+	a.conn = c
+	if d, ok := c.(interface{ Done() <-chan struct{} }); ok {
+		ctx, hangUp := context.WithCancel(context.Background())
+		go func() {
+			<-d.Done()
+			hangUp()
+		}()
+		a.lifetime = ctx
+	}
+}
 
 // Initialize advertises only what is true: text prompts (plus the baseline
 // resource_link, and embedded text resources), no session/load, no images or
@@ -219,10 +317,94 @@ func (a *Agent) NewSession(_ context.Context, p acpsdk.NewSessionRequest) (acpsd
 	return acpsdk.NewSessionResponse{SessionId: id}, nil
 }
 
-// Cancel needs no work of its own: the SDK cancels the in-flight Prompt's
-// context on session/cancel, and Prompt stops the fleet turn server-side when
-// it sees that.
-func (a *Agent) Cancel(context.Context, acpsdk.CancelNotification) error { return nil }
+// Cancel is session/cancel: it stops every prompt in flight on the session
+// — the one running a fleet turn, which is stopped server-side (stopTurn),
+// and any still waiting for the session, which are never submitted — and
+// each answers with stop reason cancelled, as ACP requires.
+//
+// fleet acp owns this stop signal instead of reading it off the request
+// context the SDK hands Prompt, because acp-go-sdk (v0.13.5) cancels that
+// context for reasons that are not a Stop. Every session/prompt cancels the
+// context of the session's previous prompt, so a client resending a prompt
+// whose request is still open (a retry) would stop the very turn it
+// retries — fleet ran the message once but stopped it, and answered the
+// original cancelled. And the SDK keeps one cancel per session, which a
+// superseded prompt deletes when it returns, removing the newer prompt's
+// entry; its session/cancel would then reach nothing, and that prompt could
+// not be stopped at all. inflight keeps one entry per prompt until that
+// prompt is answered, so neither can happen here.
+//
+// It reaches the prompts in flight when it is handled. The SDK runs each
+// request on its own goroutine but queues notifications, so the wire order
+// of a prompt and a session/cancel sent close together is not kept, as
+// under the SDK's own handling. Rarely, a prompt sent right behind the
+// cancel is already tracked and is cancelled with the rest. Or one sent
+// right before it is not tracked yet, escapes the cancel, and runs once the
+// stopped turn has ended.
+func (a *Agent) Cancel(_ context.Context, p acpsdk.CancelNotification) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, stop := range a.inflight[p.SessionId] {
+		stop()
+	}
+	return nil
+}
+
+// track registers a prompt that has just arrived on session sid until it is
+// answered (release). Its context is the prompt's stop signal: Cancel ends
+// it, and so does the client's connection closing (lifetime). ok is false,
+// and nothing is registered, when the session already has a prompt running
+// and maxWaitingPrompts waiting: admission is bounded before the prompt
+// becomes a waiter.
+//
+// It also gives the prompt its place in the session's line (see line): it
+// may take the session once prev is closed, and release closes its own turn
+// for the prompt tracked next. "Arrival" order is the order of track calls,
+// not the order on the wire: the SDK starts a goroutine per request, and
+// two prompts sent back to back can reach track in either order.
+func (a *Agent) track(sid acpsdk.SessionId) (stop context.Context, prev <-chan struct{}, release func(), ok bool) {
+	a.mu.Lock()
+	if len(a.inflight[sid]) > maxWaitingPrompts {
+		a.mu.Unlock()
+		return nil, nil, nil, false
+	}
+	ctx, cancel := context.WithCancel(a.lifetime)
+	a.seq++
+	id := a.seq
+	if a.inflight[sid] == nil {
+		a.inflight[sid] = map[uint64]context.CancelFunc{}
+	}
+	a.inflight[sid][id] = cancel
+	turn := make(chan struct{})
+	prev = a.line[sid] // nil (the session is free): receiving from it would block forever, so see free below
+	if prev == nil {
+		prev = free
+	}
+	a.line[sid] = turn
+	a.mu.Unlock()
+	return ctx, prev, func() {
+		a.mu.Lock()
+		delete(a.inflight[sid], id)
+		if len(a.inflight[sid]) == 0 {
+			delete(a.inflight, sid)
+		}
+		// The last in line leaves none behind it: forget the session's
+		// line rather than keep a closed channel per session forever.
+		if a.line[sid] == turn {
+			delete(a.line, sid)
+		}
+		a.mu.Unlock()
+		close(turn)
+		cancel()
+	}, true
+}
+
+// free is the turn of a session no prompt is in line for: already closed.
+var free = func() chan struct{} {
+	c := make(chan struct{})
+	close(c)
+	return c
+}()
 
 // CloseSession forgets the session. The fleet conversation stays, like any
 // other chat, visible in the web UI.
@@ -235,6 +417,19 @@ func (a *Agent) CloseSession(_ context.Context, p acpsdk.CloseSessionRequest) (a
 
 // Prompt runs one governed fleet turn and streams it back as session/update
 // notifications.
+//
+// Only an explicit stop ends a prompt early: a session/cancel (Cancel), the
+// client's connection closing (see lifetime), or the --timeout. ctx is not a
+// stop signal, since the SDK also cancels it when a newer prompt arrives on
+// the session (see Cancel). Such a prompt is not stopped: prompts on a
+// session run one at a time, in the order they arrived (see track), so the newer one waits for the session and the
+// earlier one runs to its own outcome. A newer prompt that carries the same idempotency key (the
+// same messageId, or the same text while an earlier attempt's outcome is
+// unknown) is a resend of it, and fleet answers it with that input, never
+// running it twice. A `$/cancel_request` naming the prompt reaches it only as
+// ctx, indistinguishable from that supersede, so it is ignored; ACP lets an
+// agent ignore `$/` notifications, and session/cancel is its way to stop a
+// turn (the Go SDK's client sends one along with its `$/cancel_request`).
 func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
 	if a.cfgErr != nil {
 		return acpsdk.PromptResponse{}, acpsdk.NewAuthRequired(map[string]any{"error": a.cfgErr.Error()})
@@ -250,16 +445,43 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 		return acpsdk.PromptResponse{}, acpsdk.NewInvalidParams(map[string]any{"error": err.Error()})
 	}
 
+	// The text's unresolved key as this prompt arrives. If a resend of that
+	// key is running now and answered while this prompt waits, the key is
+	// settled by the time this one gets the session; this prompt is still a
+	// resend of the same message, so it keeps that key (idempotencyKey).
+	earlier := sess.peekUnsettled(message)
+	// Tracked from arrival, not from when it gets the session, so a
+	// session/cancel also reaches a prompt still waiting for it. The last
+	// arrival step: a tracked prompt has its arrival key.
+	cancelCtx, prev, release, ok := a.track(p.SessionId)
+	if !ok {
+		// Refused before it was held or sent: nothing reached fleet, so the
+		// client can send it again once the session's prompts drain.
+		return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{
+			"error": fmt.Sprintf("this session already has a prompt running and %d waiting for it; wait for them to be answered (or send session/cancel) before sending another", maxWaitingPrompts),
+		})
+	}
+	defer release()
+	promptTracked(message)
+
+	// Its turn in the session's line first, so prompts take the session in
+	// the order they were tracked. The wait is not cut short by a cancel: a
+	// cancelled prompt still waits for the prompt before it, then hands the
+	// session straight on (the check below, then release), so it never lets
+	// a later prompt run beside an earlier one, nor holds the line once the
+	// earlier one is done. A session/cancel stops the running turn too, so
+	// that wait is short; a client hanging up ends every prompt in line.
+	<-prev
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	// A prompt cancelled while it waited for this session (an earlier prompt
 	// still running) must never be submitted: once POSTed, fleet may start
 	// the turn or dispatch a tool before any Stop could land.
-	if ctx.Err() != nil {
+	if cancelCtx.Err() != nil {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
 	}
-	key := idempotencyKey(p.MessageId, sess, message)
-	return a.promptOnce(ctx, p, sess, message, key)
+	key := idempotencyKey(p.MessageId, sess, message, earlier)
+	return a.promptOnce(ctx, cancelCtx, p, sess, message, key)
 }
 
 // promptOnce submits the prompt under one idempotency key and translates the
@@ -268,15 +490,20 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 // any surface) and a launch that failed look the same, and resubmitting could
 // run a message after its Stop succeeded. The user is told to send it again
 // as a new message instead.
-func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *session, message, key string) (acpsdk.PromptResponse, error) {
-	// stopCtx ends when the client cancels (session/cancel, or a newer prompt
-	// superseding this one) or the timeout fires. The stream itself runs on a
-	// context that ignores both: a fleet turn is detached from its HTTP request
-	// by design, so dropping the stream would not stop it. Instead stopTurn
-	// stops the turn server-side first and only then ends the stream.
-	stopCtx, cancelStop := ctx, context.CancelFunc(func() {})
+//
+// cancelCtx is the prompt's stop signal (Agent.track): it ends on a
+// session/cancel or when the client hangs up (see Agent.lifetime for that
+// gap). ctx is the SDK's request context, used only for its values (see
+// Prompt).
+func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptRequest, sess *session, message, key string) (acpsdk.PromptResponse, error) {
+	// stopCtx ends when the client cancels (session/cancel, or hangs up) or
+	// the timeout fires. The stream itself runs on a context that ignores
+	// both: a fleet turn is detached from its HTTP request by design, so
+	// dropping the stream would not stop it. Instead stopTurn stops the turn
+	// server-side first and only then ends the stream.
+	stopCtx, cancelStop := cancelCtx, context.CancelFunc(func() {})
 	if a.timeout > 0 {
-		stopCtx, cancelStop = context.WithTimeout(ctx, a.timeout)
+		stopCtx, cancelStop = context.WithTimeout(cancelCtx, a.timeout)
 	}
 	defer cancelStop()
 	streamCtx, cancelStream := context.WithCancel(context.WithoutCancel(ctx))
@@ -292,6 +519,9 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 	// Whether key was already unresolved (an earlier attempt's answer was
 	// lost): a refusal of THIS attempt says nothing about that one.
 	_, wasUnresolved := sess.keyConv[key]
+	// Whether key is its text's unresolved key, which a prompt arriving while
+	// this one runs takes as its arrival key (see stoppedKeys).
+	textUnresolved := sess.unsettled[textKey(message)] == key
 	tr := newTranslator(p.SessionId, target, func(u acpsdk.SessionUpdate) {
 		if a.conn != nil {
 			_ = a.conn.SessionUpdate(sendCtx, acpsdk.SessionNotification{SessionId: p.SessionId, Update: u})
@@ -341,7 +571,7 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 	meta := map[string]any{"fleet.conversationId": convID}
 	var queued *chattui.QueuedError
 	isQueued := errors.As(streamErr, &queued)
-	if isQueued && (ctx.Err() != nil || stopCtx.Err() != nil) {
+	if isQueued && (cancelCtx.Err() != nil || stopCtx.Err() != nil) {
 		stop.intervened = true
 		// The watcher may already know the turn had ended; an acceptance that
 		// needed no stop (queued.State cancelled) must not erase that.
@@ -349,7 +579,7 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 			stopErr = accErr
 		}
 	}
-	if outcomeUnknown(streamErr) && (ctx.Err() != nil || stopCtx.Err() != nil) && !stop.intervened {
+	if outcomeUnknown(streamErr) && (cancelCtx.Err() != nil || stopCtx.Err() != nil) && !stop.intervened {
 		// Cancelled (or timed out) and the answer was lost before fleet said
 		// what it did with this prompt: find it by key and stop it, so it
 		// cannot run on after ACP reports it cancelled.
@@ -361,13 +591,14 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 		// stopped, and it is not an unconfirmed stop either.
 		stopErr, stop.alreadyEnded = nil, true
 	}
+	sess.recordStop(key, textUnresolved, stoppedForGood(stop, stopErr))
 	sess.retainKey(textMsg, key, target, convID, keep && !stoppedForGood(stop, stopErr), stopErr, queued)
 	// A staged approval stays pending in fleet whatever ended the turn —
 	// cancelled, timed out or errored included — so its pointer goes out
 	// before any outcome.
 	tr.flushApprovals(a.approvalPointer)
 	switch {
-	case ctx.Err() != nil:
+	case cancelCtx.Err() != nil:
 		// ACP requires a cancelled prompt to answer with the cancelled stop
 		// reason, not an error — so when fleet did not accept the Stop, the
 		// client is told in the transcript that the turn may still be running,
@@ -577,10 +808,12 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 	stopped <- stopOutcome{intervened: true, err: err}
 }
 
-// idempotencyKey is the input_id for one prompt. The ACP client's own message
+// idempotencyKey is the input_id for one prompt. Under sess.mu: it may
+// record a successor key. The ACP client's own message
 // id (stable across its retries) wins; otherwise a retry of the prompt whose
-// outcome was lost reuses that prompt's key; otherwise a fresh key.
-func idempotencyKey(messageID *string, sess *session, message string) string {
+// outcome was lost reuses that prompt's key; otherwise a fresh key. earlier is
+// the key the text had unresolved when the prompt arrived ("" = none).
+func idempotencyKey(messageID *string, sess *session, message, earlier string) string {
 	if messageID != nil && strings.TrimSpace(*messageID) != "" {
 		// Opaque: trimming decides only whether an id was sent. " job-1 "
 		// and "job-1" are different messages.
@@ -591,6 +824,30 @@ func idempotencyKey(messageID *string, sess *session, message string) string {
 		return "acp-msg-" + sess.ns + "-" + hex.EncodeToString(sum[:])
 	}
 	if k, ok := sess.unsettled[textKey(message)]; ok {
+		return k
+	}
+	if earlier != "" && !sess.stoppedKeys[earlier] {
+		// Settled while this prompt waited for the session, by the resend of
+		// it that was running then: this is another resend of the same
+		// message, answered with that input rather than run a second time.
+		// Not when that settling was a Stop fleet confirmed: the stopped
+		// message is over, and the same text sent again runs, as it would
+		// had it been sent after the Stop settled.
+		return earlier
+	}
+	if earlier != "" {
+		// The stopped message runs again — but once, not once per prompt
+		// that was waiting behind its Stop: they all share one successor
+		// key (see successors), so the second and later are resends of the
+		// first and fleet answers them with its input.
+		if k, ok := sess.successors[earlier]; ok {
+			return k
+		}
+		if sess.successors == nil {
+			sess.successors = map[string]string{}
+		}
+		k := "fleet-acp-" + randomID()
+		sess.successors[earlier] = k
 		return k
 	}
 	return "fleet-acp-" + randomID()

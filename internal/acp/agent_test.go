@@ -156,6 +156,13 @@ type harness struct {
 	fleet  *fakeFleet
 	client *recordingClient
 	conn   *acpsdk.ClientSideConnection
+	agent  *Agent
+	// hangUp closes the client's side of stdin, as a client exiting does.
+	hangUp func()
+	// raw writes one JSON-RPC line to fleet acp's stdin, for a message the
+	// SDK client does not send on its own. The pipe keeps it whole beside
+	// the SDK's writes, each of which is also one whole line.
+	raw func(line string)
 }
 
 type harnessOpts struct {
@@ -198,7 +205,66 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 			_ = c.Close()
 		}
 	})
-	return &harness{fleet: ff, client: rc, conn: conn}
+	return &harness{
+		fleet: ff, client: rc, conn: conn, agent: ag,
+		hangUp: func() { _ = c2aW.Close() },
+		raw: func(line string) {
+			if _, err := io.WriteString(c2aW, line+"\n"); err != nil {
+				t.Errorf("raw write: %v", err)
+			}
+		},
+	}
+}
+
+// promptAsync sends a prompt (with messageID, when not nil) without waiting
+// for its answer, and returns once the Agent tracks inFlight prompts on the
+// session, this one included: it has then taken every arrival step (the SDK
+// has superseded the prompt before it, it has its arrival key, and a
+// session/cancel reaches it). Answered prompts leave the count, so inFlight
+// counts only those still running or waiting.
+func (h *harness) promptAsync(t *testing.T, sid acpsdk.SessionId, text string, messageID *string, inFlight int) <-chan promptResult {
+	t.Helper()
+	done := make(chan promptResult, 1)
+	go func() {
+		r, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: messageID, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock(text)}})
+		done <- promptResult{r, err}
+	}()
+	h.waitTracked(t, sid, inFlight)
+	return done
+}
+
+// waitTracked waits until the Agent tracks exactly n prompts on sid.
+func (h *harness) waitTracked(t *testing.T, sid acpsdk.SessionId, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		h.agent.mu.Lock()
+		got := len(h.agent.inflight[sid])
+		h.agent.mu.Unlock()
+		if got == n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d prompts in flight on the session, want %d", got, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+type promptResult struct {
+	resp acpsdk.PromptResponse
+	err  error
+}
+
+func await(t *testing.T, done <-chan promptResult, what string) promptResult {
+	t.Helper()
+	select {
+	case r := <-done:
+		return r
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s did not return", what)
+		return promptResult{}
+	}
 }
 
 func (h *harness) newSession(t *testing.T) acpsdk.SessionId {
@@ -1125,26 +1191,649 @@ func TestNoUntargetedStop(t *testing.T) {
 	}
 }
 
-// A prompt already cancelled when it gets the session is never submitted.
+// nth is the ordinal (from 1) of the POST /chat being served: the fake
+// records each request before handing it to turn.
+func (f *fakeFleet) nth() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.chats)
+}
+
+// resent reports whether the POST /chat being served carries an input_id an
+// earlier one did: fleet answers such a resend with the input it holds.
+func (f *fakeFleet) resent() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	last := f.chats[len(f.chats)-1].InputID
+	for _, c := range f.chats[:len(f.chats)-1] {
+		if c.InputID == last {
+			return true
+		}
+	}
+	return false
+}
+
+// replayAck is fleet's answer to a resend of an input it already holds.
+func replayAck(w *sseWriter, state, conv string) {
+	w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"row-1","mode":"direct","state":"`+state+`"},"conversation_id":"`+conv+`"}`)
+}
+
+// heldTurn streams the start of a turn, closes started, then holds the turn
+// until release, when it completes with " and done" — or until the request
+// is gone (a Stop ended the stream).
+func heldTurn(w *sseWriter, r *http.Request, conv, turn string, started, release chan struct{}) {
+	w.emit("conversation", map[string]any{"id": conv})
+	w.emit("turn.started", map[string]any{"turn_id": turn})
+	w.emit("text.delta", map[string]any{"text": "working"})
+	close(started)
+	select {
+	case <-release:
+	case <-r.Context().Done():
+		return
+	}
+	w.emit("text.delta", map[string]any{"text": " and done"})
+	w.emit("turn.completed", map[string]any{"prompt_tokens": 3, "completion_tokens": 2})
+}
+
+// stopWindow is how long a test lets a wrongly-sent Stop go out before it
+// lets a held turn complete: the Stop needs only a loopback round trip.
+const stopWindow = 200 * time.Millisecond
+
+// A prompt cancelled while it waits for the session (an earlier prompt still
+// running) is never submitted: session/cancel stops the running turn and
+// answers both prompts cancelled, and only the first was ever sent to fleet.
 func TestCancelledPromptIsNeverSubmitted(t *testing.T) {
-	ff := &fakeFleet{t: t}
-	srv := httptest.NewServer(ff)
-	defer srv.Close()
-	ag := NewAgent(chattui.NewClient(chattui.Config{ServerURL: srv.URL, Email: "bot@example.com", Token: "test-token"}), nil, "", 0, "test")
-	s, err := ag.NewSession(context.Background(), acpsdk.NewSessionRequest{Cwd: "/", McpServers: []acpsdk.McpServer{}})
-	if err != nil {
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		if h.fleet.nth() > 1 {
+			w.emit("turn.error", map[string]any{"message": "a cancelled prompt was submitted"})
+			return
+		}
+		heldTurn(w, r, "conv-w", "turn-w", started, release)
+	}})
+	sid := h.newSession(t)
+	first := h.promptAsync(t, sid, "long job", nil, 1)
+	<-started
+	second := h.promptAsync(t, sid, "and then this", nil, 2)
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	resp, err := ag.Prompt(ctx, acpsdk.PromptRequest{SessionId: s.SessionId, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("x")}})
-	if err != nil || resp.StopReason != acpsdk.StopReasonCancelled {
-		t.Fatalf("got %+v, %v; want cancelled", resp, err)
+	for i, done := range []<-chan promptResult{first, second} {
+		if r := await(t, done, fmt.Sprintf("prompt %d", i+1)); r.err != nil || r.resp.StopReason != acpsdk.StopReasonCancelled {
+			t.Errorf("prompt %d = %+v, %v; want cancelled", i+1, r.resp, r.err)
+		}
 	}
-	ff.mu.Lock()
-	defer ff.mu.Unlock()
-	if len(ff.chats) != 0 {
-		t.Errorf("a cancelled prompt was POSTed: %+v", ff.chats)
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != 1 {
+		t.Errorf("a prompt cancelled before submission was POSTed: %+v", h.fleet.chats)
+	}
+	if len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != `conv-w {"scope":"turn","turn_id":"turn-w"}` {
+		t.Errorf("cancels = %q, want the running turn stopped", h.fleet.cancels)
+	}
+}
+
+// An ACP client that resends a prompt whose request is still open (a retry,
+// with the same messageId) must not stop the turn it retries. The SDK cancels
+// the first request's context the moment the resend arrives; fleet acp does
+// not take that as a Stop. The original streams on and answers with its own
+// outcome, and the resend, once it gets the session, is answered with the
+// replay of the same input: the message runs once, and nothing is stopped.
+func TestResendWhileRunningIsAReplayNotAStop(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		if h.fleet.resent() {
+			replayAck(w, "completed", "conv-1")
+			return
+		}
+		heldTurn(w, r, "conv-1", "turn-1", started, release)
+	}})
+	sid := h.newSession(t)
+	mid := "res-B"
+	first := h.promptAsync(t, sid, "run the slow job", &mid, 1)
+	<-started
+	second := h.promptAsync(t, sid, "run the slow job", &mid, 2) // the client's retry
+	time.Sleep(stopWindow)
+	close(release)
+
+	r1, r2 := await(t, first, "the original prompt"), await(t, second, "the resend")
+	if r1.err != nil || r1.resp.StopReason != acpsdk.StopReasonEndTurn || r1.resp.UserMessageId == nil || *r1.resp.UserMessageId != mid || r1.resp.Usage == nil {
+		t.Errorf("original = %+v, %v; want its own end_turn, userMessageId %q and usage", r1.resp, r1.err, mid)
+	}
+	if r2.err != nil || r2.resp.StopReason != acpsdk.StopReasonEndTurn || r2.resp.UserMessageId == nil || *r2.resp.UserMessageId != mid {
+		t.Errorf("resend = %+v, %v; want end_turn echoing userMessageId %q", r2.resp, r2.err, mid)
+	}
+	if text := h.client.text(); !strings.Contains(text, "working and done") || !strings.Contains(text, "fleet already took this message from an earlier attempt (it is not run twice)") {
+		t.Errorf("text = %q, want the original's whole answer and the resend's replay note", text)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.cancels) != 0 {
+		t.Errorf("the resend stopped the turn it retries: cancels = %q", h.fleet.cancels)
+	}
+	if len(h.fleet.chats) != 2 || h.fleet.chats[0].InputID != h.fleet.chats[1].InputID || h.fleet.chats[1].ConversationID != "conv-1" {
+		t.Errorf("chats = %+v, want the original and one resend of the same input into conv-1", h.fleet.chats)
+	}
+}
+
+// The same holds for a text-only resend. A prompt whose answer was lost keeps
+// its key for its text, so a resend reuses it; a second resend that arrives
+// while the first is running is the same message again, even though the
+// running one settles the key before the newer one gets the session.
+func TestTextResendWhileRunningIsAReplay(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		switch {
+		case h.fleet.nth() == 1:
+			w.w.WriteHeader(http.StatusOK) // the answer is lost; fleet never committed the input
+		case h.fleet.resent() && h.fleet.nth() > 2:
+			replayAck(w, "completed", "conv-t") // fleet holds the key now
+		case h.fleet.nth() == 2:
+			heldTurn(w, r, "conv-t", "turn-t", started, release) // the first resend runs it
+		default:
+			w.emit("conversation", map[string]any{"id": "conv-t"})
+			w.emit("text.delta", map[string]any{"text": "ran a second time"})
+			w.emit("turn.completed", map[string]any{})
+		}
+	}})
+	sid := h.newSession(t)
+	if _, err := h.prompt(sid, "book the room"); err == nil {
+		t.Fatal("want the lost-answer error")
+	}
+	first := h.promptAsync(t, sid, "book the room", nil, 1)
+	<-started
+	second := h.promptAsync(t, sid, "book the room", nil, 2)
+	time.Sleep(stopWindow)
+	close(release)
+
+	for i, done := range []<-chan promptResult{first, second} {
+		if r := await(t, done, fmt.Sprintf("resend %d", i+1)); r.err != nil || r.resp.StopReason != acpsdk.StopReasonEndTurn {
+			t.Errorf("resend %d = %+v, %v; want end_turn", i+1, r.resp, r.err)
+		}
+	}
+	if text := h.client.text(); !strings.Contains(text, "working and done") || !strings.Contains(text, "fleet already took this message") || strings.Contains(text, "ran a second time") {
+		t.Errorf("text = %q, want the run's answer and the replay note, and no second run", text)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.cancels) != 0 {
+		t.Errorf("a resend stopped the turn: cancels = %q", h.fleet.cancels)
+	}
+	if len(h.fleet.chats) != 3 || h.fleet.chats[1].InputID != h.fleet.chats[0].InputID || h.fleet.chats[2].InputID != h.fleet.chats[0].InputID {
+		t.Errorf("chats = %+v, want every attempt under the lost prompt's key", h.fleet.chats)
+	}
+}
+
+// A different prompt sent while a turn runs does not stop it either. Prompts
+// on a session run one at a time, so the new one waits for the session and
+// then runs as its own turn, once the first has answered with its own outcome.
+func TestSecondPromptWhileRunningWaitsItsTurn(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		if h.fleet.nth() > 1 {
+			w.emit("conversation", map[string]any{"id": "conv-1"})
+			w.emit("turn.started", map[string]any{"turn_id": "turn-2"})
+			w.emit("text.delta", map[string]any{"text": "; second answer"})
+			w.emit("turn.completed", map[string]any{})
+			return
+		}
+		heldTurn(w, r, "conv-1", "turn-1", started, release)
+	}})
+	sid := h.newSession(t)
+	first := h.promptAsync(t, sid, "first job", nil, 1)
+	<-started
+	second := h.promptAsync(t, sid, "second job", nil, 2)
+	time.Sleep(stopWindow)
+	if n := h.fleet.nth(); n != 1 {
+		t.Errorf("chats = %d while the first turn runs, want 1: the second waits for the session", n)
+	}
+	close(release)
+
+	for i, done := range []<-chan promptResult{first, second} {
+		if r := await(t, done, fmt.Sprintf("prompt %d", i+1)); r.err != nil || r.resp.StopReason != acpsdk.StopReasonEndTurn {
+			t.Errorf("prompt %d = %+v, %v; want end_turn", i+1, r.resp, r.err)
+		}
+	}
+	if text := h.client.text(); text != "working and done; second answer" {
+		t.Errorf("text = %q, want both answers whole, in order", text)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.cancels) != 0 {
+		t.Errorf("the second prompt stopped the first turn: cancels = %q", h.fleet.cancels)
+	}
+	if len(h.fleet.chats) != 2 || h.fleet.chats[1].Message != "second job" || h.fleet.chats[1].ConversationID != "conv-1" || h.fleet.chats[1].InputID == h.fleet.chats[0].InputID {
+		t.Errorf("chats = %+v, want the second prompt as its own input in conv-1", h.fleet.chats)
+	}
+}
+
+// A session/cancel still stops the newer prompt after a superseded one has
+// returned. The SDK keeps one cancel per session, and the returning prompt
+// deletes it although it is the newer prompt's, so the SDK's own handling of
+// session/cancel reaches nothing; fleet acp's per-prompt registry does.
+func TestCancelAfterASupersededPromptStopsTheNewerOne(t *testing.T) {
+	started1, release1, started2 := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		if h.fleet.nth() > 1 {
+			w.emit("conversation", map[string]any{"id": "conv-1"})
+			w.emit("turn.started", map[string]any{"turn_id": "turn-2"})
+			close(started2)
+			<-r.Context().Done()
+			return
+		}
+		heldTurn(w, r, "conv-1", "turn-1", started1, release1)
+	}})
+	sid := h.newSession(t)
+	first := h.promptAsync(t, sid, "first job", nil, 1)
+	<-started1
+	second := h.promptAsync(t, sid, "second job", nil, 2)
+	close(release1)
+	if r := await(t, first, "the first prompt"); r.err != nil || r.resp.StopReason != acpsdk.StopReasonEndTurn {
+		t.Errorf("first prompt = %+v, %v; want its own end_turn", r.resp, r.err)
+	}
+	select {
+	case <-started2:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second prompt's turn never started")
+	}
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	if r := await(t, second, "the newer prompt after session/cancel"); r.err != nil || r.resp.StopReason != acpsdk.StopReasonCancelled {
+		t.Errorf("newer prompt = %+v, %v; want cancelled", r.resp, r.err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != `conv-1 {"scope":"turn","turn_id":"turn-2"}` {
+		t.Errorf("cancels = %q, want only the newer turn stopped", h.fleet.cancels)
+	}
+}
+
+// A guard of the Agent's side of a hang-up (it passes on main too): when the
+// client closes fleet acp's stdin mid-turn, the Agent triggers the stop of
+// every prompt in flight, as a session/cancel would. The running turn gets a
+// Stop and answers cancelled, and a prompt still waiting for the session is
+// never submitted. This harness does not exit; `fleet acp` itself may exit
+// before that Stop is sent (run returns as soon as the connection closes), a
+// known gap closed separately.
+func TestHangUpTriggersTheAgentsStop(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		if h.fleet.nth() > 1 {
+			w.emit("turn.error", map[string]any{"message": "submitted after the client hung up"})
+			return
+		}
+		heldTurn(w, r, "conv-h", "turn-h", started, release)
+	}})
+	sid := h.newSession(t)
+	first := h.promptAsync(t, sid, "long job", nil, 1)
+	<-started
+	second := h.promptAsync(t, sid, "queued behind it", nil, 2)
+	h.hangUp()
+	// The answers still reach the client: only its side of stdin is closed.
+	for i, done := range []<-chan promptResult{first, second} {
+		if r := await(t, done, fmt.Sprintf("prompt %d after the hang-up", i+1)); r.err != nil || r.resp.StopReason != acpsdk.StopReasonCancelled {
+			t.Errorf("prompt %d = %+v, %v; want cancelled", i+1, r.resp, r.err)
+		}
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != `conv-h {"scope":"turn","turn_id":"turn-h"}` {
+		t.Errorf("cancels = %q, want the running turn stopped when the client hung up", h.fleet.cancels)
+	}
+	if len(h.fleet.chats) != 1 {
+		t.Errorf("a prompt was submitted after the client hung up: %+v", h.fleet.chats)
+	}
+}
+
+func (f *fakeFleet) cancelsSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.cancels)
+}
+
+// A text-only prompt whose lost answer's Stop fleet confirmed drops its key,
+// so the same text sent again runs. That holds for one sent while that Stop
+// is still settling: it arrives with the stopped key as its arrival key, but
+// must not fall back to it, or it would be answered "an earlier attempt of
+// this message was cancelled" instead of running.
+func TestTextSentAgainDuringAConfirmedStopRuns(t *testing.T) {
+	started, settle := make(chan struct{}), make(chan struct{})
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		switch {
+		case h.fleet.nth() == 1:
+			w.w.WriteHeader(http.StatusOK) // the answer is lost; fleet never committed the input
+		case h.fleet.nth() == 2: // the resend runs it until it is stopped
+			w.emit("conversation", map[string]any{"id": "conv-s"})
+			w.emit("turn.started", map[string]any{"turn_id": "turn-s"})
+			close(started)
+			<-settle
+			w.emit("turn.cancelled", map[string]any{})
+		case h.fleet.resent():
+			replayAck(w, "cancelled", "conv-s")
+		default:
+			w.emit("conversation", map[string]any{"id": "conv-s"})
+			w.emit("text.delta", map[string]any{"text": "booked"})
+			w.emit("turn.completed", map[string]any{})
+		}
+	}})
+	// The Stop settles on the turn's own terminal frame, which the test holds.
+	prevSettle := stopSettleWait
+	stopSettleWait = 10 * time.Second
+	t.Cleanup(func() { stopSettleWait = prevSettle })
+	sid := h.newSession(t)
+	if _, err := h.prompt(sid, "book the room"); err == nil {
+		t.Fatal("want the lost-answer error")
+	}
+	first := h.promptAsync(t, sid, "book the room", nil, 1)
+	<-started
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	// The Stop is out, so the cancel has been handled: the next prompt is
+	// sent after it, and the cancel does not reach it.
+	deadline := time.Now().Add(10 * time.Second)
+	for len(h.fleet.cancelsSnapshot()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	second := h.promptAsync(t, sid, "book the room", nil, 2)
+	close(settle)
+
+	if r := await(t, first, "the stopped resend"); r.err != nil || r.resp.StopReason != acpsdk.StopReasonCancelled {
+		t.Errorf("stopped resend = %+v, %v; want cancelled", r.resp, r.err)
+	}
+	if r := await(t, second, "the text sent again"); r.err != nil || r.resp.StopReason != acpsdk.StopReasonEndTurn {
+		t.Errorf("text sent again = %+v, %v; want end_turn", r.resp, r.err)
+	}
+	if text := h.client.text(); !strings.Contains(text, "booked") || strings.Contains(text, "send it again as a new message") {
+		t.Errorf("text = %q, want the message run again, not the cancelled replay", text)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != 3 || h.fleet.chats[2].InputID == h.fleet.chats[0].InputID {
+		t.Errorf("chats = %+v, want the text sent again under a fresh key", h.fleet.chats)
+	}
+}
+
+// Prompts waiting for a session run in the order they were tracked, even
+// when a later one reaches the session first: here "second" is held between
+// tracking and its wait (where the SDK's goroutine scheduling can leave it)
+// until "third" is already waiting. Arrival is the order of track calls; the
+// SDK does not promise its handlers start in wire order.
+func TestWaitingPromptsRunInArrivalOrder(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	gate := make(chan struct{})
+	prevHook := promptTracked
+	promptTracked = func(message string) {
+		if message == "second" {
+			<-gate
+		}
+	}
+	t.Cleanup(func() { promptTracked = prevHook })
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		if h.fleet.nth() > 1 {
+			w.emit("conversation", map[string]any{"id": "conv-o"})
+			w.emit("turn.completed", map[string]any{})
+			return
+		}
+		heldTurn(w, r, "conv-o", "turn-o", started, release)
+	}})
+	sid := h.newSession(t)
+	first := h.promptAsync(t, sid, "first", nil, 1)
+	<-started
+	second := h.promptAsync(t, sid, "second", nil, 2)
+	third := h.promptAsync(t, sid, "third", nil, 3)
+	time.Sleep(stopWindow) // "third" is waiting for the session; "second" is still held
+	close(gate)
+	time.Sleep(stopWindow) // "second" is waiting too, behind "third" for the session's mutex
+	close(release)
+	for i, done := range []<-chan promptResult{first, second, third} {
+		if r := await(t, done, fmt.Sprintf("prompt %d", i+1)); r.err != nil || r.resp.StopReason != acpsdk.StopReasonEndTurn {
+			t.Errorf("prompt %d = %+v, %v; want end_turn", i+1, r.resp, r.err)
+		}
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	order := make([]string, 0, len(h.fleet.chats))
+	for _, c := range h.fleet.chats {
+		order = append(order, c.Message)
+	}
+	if strings.Join(order, ",") != "first,second,third" {
+		t.Errorf("fleet received %q, want the prompts in the order they arrived", order)
+	}
+}
+
+// Prompts waiting behind a session's running turn are bounded: they have not
+// reached fleet, so the server's input-queue cap cannot see them. One beyond
+// maxWaitingPrompts is refused at once, never held or sent, and the ones
+// admitted still run in order once the session frees.
+func TestPromptsWaitingForASessionAreCapped(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		if h.fleet.nth() > 1 {
+			w.emit("conversation", map[string]any{"id": "conv-c"})
+			w.emit("turn.completed", map[string]any{})
+			return
+		}
+		heldTurn(w, r, "conv-c", "turn-c", started, release)
+	}})
+	sid := h.newSession(t)
+	admitted := make([]<-chan promptResult, 0, 1+maxWaitingPrompts)
+	admitted = append(admitted, h.promptAsync(t, sid, "long job", nil, 1))
+	<-started
+	for i := range maxWaitingPrompts {
+		admitted = append(admitted, h.promptAsync(t, sid, fmt.Sprintf("job %d", i), nil, i+2))
+	}
+	// Sent without blocking the test: an uncapped agent would hold it.
+	over := make(chan error, 1)
+	go func() {
+		_, err := h.prompt(sid, "one too many")
+		over <- err
+	}()
+	var err error
+	select {
+	case err = <-over:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the prompt beyond the cap was held to wait for the session instead of refused")
+	}
+	if err == nil || rpcCode(err) != -32603 || !strings.Contains(err.Error(), "waiting") {
+		t.Fatalf("prompt beyond the cap = %v, want an internal error saying the session has too many prompts waiting", err)
+	}
+	h.waitTracked(t, sid, maxWaitingPrompts+1) // the refused prompt was never tracked
+	close(release)
+	for i, done := range admitted {
+		if r := await(t, done, fmt.Sprintf("prompt %d", i)); r.err != nil || r.resp.StopReason != acpsdk.StopReasonEndTurn {
+			t.Errorf("admitted prompt %d = %+v, %v; want end_turn", i, r.resp, r.err)
+		}
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != maxWaitingPrompts+1 {
+		t.Errorf("chats = %d, want %d: the refused prompt must never reach fleet", len(h.fleet.chats), maxWaitingPrompts+1)
+	}
+	for _, c := range h.fleet.chats {
+		if c.Message == "one too many" {
+			t.Errorf("the refused prompt was submitted: %+v", c)
+		}
+	}
+}
+
+// Every same-text prompt that waited behind a resend whose Stop fleet
+// confirmed (here, on --timeout) is a resend of one message: the first to get
+// the session runs it under a fresh key, and the next reuses that key, so
+// fleet answers it with that run instead of running the message twice.
+func TestWaitersBehindAConfirmedStopShareOneSuccessorKey(t *testing.T) {
+	started := make(chan struct{})
+	var h *harness
+	h = newHarness(t, harnessOpts{timeout: time.Second, turn: func(w *sseWriter, r *http.Request) {
+		switch {
+		case h.fleet.nth() == 1:
+			w.w.WriteHeader(http.StatusOK) // the answer is lost; fleet never committed the input
+		case h.fleet.nth() == 2: // the resend runs until the timeout's Stop ends it
+			w.emit("conversation", map[string]any{"id": "conv-t"})
+			w.emit("turn.started", map[string]any{"turn_id": "turn-t"})
+			close(started)
+			<-r.Context().Done()
+		case h.fleet.resent():
+			replayAck(w, "completed", "conv-t")
+		default:
+			w.emit("conversation", map[string]any{"id": "conv-t"})
+			w.emit("text.delta", map[string]any{"text": "booked"})
+			w.emit("turn.completed", map[string]any{})
+		}
+	}})
+	sid := h.newSession(t)
+	if _, err := h.prompt(sid, "book the room"); err == nil {
+		t.Fatal("want the lost-answer error")
+	}
+	resend := h.promptAsync(t, sid, "book the room", nil, 1)
+	<-started
+	// Both arrive while the lost answer's key is unresolved, so both take it
+	// as their arrival key, and both wait behind the resend's Stop.
+	w1 := h.promptAsync(t, sid, "book the room", nil, 2)
+	w2 := h.promptAsync(t, sid, "book the room", nil, 3)
+
+	if r := await(t, resend, "the timed-out resend"); r.err == nil || !strings.Contains(r.err.Error(), "was stopped") {
+		t.Errorf("timed-out resend = %+v, %v; want the confirmed-stop timeout error", r.resp, r.err)
+	}
+	for i, done := range []<-chan promptResult{w1, w2} {
+		if r := await(t, done, fmt.Sprintf("waiter %d", i+1)); r.err != nil || r.resp.StopReason != acpsdk.StopReasonEndTurn {
+			t.Errorf("waiter %d = %+v, %v; want end_turn", i+1, r.resp, r.err)
+		}
+	}
+	if text := h.client.text(); strings.Count(text, "booked") != 1 || !strings.Contains(text, "already took this message") {
+		t.Errorf("text = %q, want the message run once and the second waiter answered with that run", text)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != 4 {
+		t.Fatalf("chats = %+v, want 4", h.fleet.chats)
+	}
+	if k := h.fleet.chats[2].InputID; k == h.fleet.chats[1].InputID || h.fleet.chats[3].InputID != k {
+		t.Errorf("keys = %q, %q, %q; want the stopped key dropped and one successor key shared by both waiters",
+			h.fleet.chats[1].InputID, h.fleet.chats[2].InputID, h.fleet.chats[3].InputID)
+	}
+}
+
+// Every prompt leaves inflight once it is answered (completed, failed, or
+// cancelled while running or while waiting), so a session/cancel reaches only
+// prompts still open, and the registry does not grow.
+func TestInflightEmptiesWhenPromptsAreAnswered(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		switch h.fleet.nth() {
+		case 1:
+			w.emit("conversation", map[string]any{"id": "conv-i"})
+			w.emit("turn.completed", map[string]any{})
+		case 3:
+			heldTurn(w, r, "conv-i", "turn-i", started, release)
+		default:
+			w.emit("turn.error", map[string]any{"message": "provider failed"})
+		}
+	}})
+	sid := h.newSession(t)
+	if _, err := h.prompt(sid, "fine"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.prompt(sid, "fails"); err == nil {
+		t.Fatal("want the turn error")
+	}
+	first := h.promptAsync(t, sid, "long job", nil, 1)
+	<-started
+	second := h.promptAsync(t, sid, "waiting", nil, 2)
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	await(t, first, "the running prompt")
+	await(t, second, "the waiting prompt")
+	h.agent.mu.Lock()
+	defer h.agent.mu.Unlock()
+	if len(h.agent.inflight) != 0 {
+		t.Errorf("inflight = %v after every prompt was answered, want empty", h.agent.inflight)
+	}
+	if len(h.agent.line) != 0 {
+		t.Errorf("line = %v after every prompt was answered, want empty", h.agent.line)
+	}
+}
+
+// inflight is keyed apart from the sessions for this: a session/cancel still
+// reaches a prompt whose session was closed (session/close) while it ran, so
+// its turn is stopped instead of left with no way to stop it.
+func TestCancelReachesAPromptOfAClosedSession(t *testing.T) {
+	started := make(chan struct{})
+	h := newHarness(t, harnessOpts{turn: blockingTurn(started)})
+	sid := h.newSession(t)
+	done := h.promptAsync(t, sid, "long job", nil, 1)
+	<-started
+	if _, err := h.conn.CloseSession(context.Background(), acpsdk.CloseSessionRequest{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	if r := await(t, done, "the prompt of the closed session"); r.err != nil || r.resp.StopReason != acpsdk.StopReasonCancelled {
+		t.Errorf("prompt = %+v, %v; want cancelled", r.resp, r.err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != `conv-slow {"scope":"turn","turn_id":"turn-slow"}` {
+		t.Errorf("cancels = %q, want the closed session's turn stopped", h.fleet.cancels)
+	}
+}
+
+// A bare `$/cancel_request` naming a prompt (an unstable ACP notification)
+// reaches the agent only as the request context, the same signal the SDK uses
+// for a superseding prompt, so fleet acp ignores it, as ACP allows for `$/`
+// notifications: the turn is not stopped and runs to its end. session/cancel
+// is how a client stops a turn (the Go SDK's client sends one alongside its
+// `$/cancel_request` when a prompt's context ends).
+func TestCancelRequestDoesNotStopTheTurn(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		if h.fleet.nth() > 1 {
+			w.emit("conversation", map[string]any{"id": "conv-c"})
+			w.emit("turn.completed", map[string]any{})
+			return
+		}
+		heldTurn(w, r, "conv-c", "turn-c", started, release)
+	}})
+	sid := h.newSession(t)
+	h.raw(`{"jsonrpc":"2.0","id":"p-1","method":"session/prompt","params":{"sessionId":"` + string(sid) + `","prompt":[{"type":"text","text":"long job"}]}}`)
+	<-started
+	h.raw(`{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"p-1"}}`)
+	time.Sleep(stopWindow)
+	close(release)
+	// Runs once the first turn has finished: prompts on a session are serial.
+	if _, err := h.prompt(sid, "next"); err != nil {
+		t.Fatal(err)
+	}
+	if text := h.client.text(); !strings.Contains(text, "working and done") {
+		t.Errorf("text = %q, want the turn streamed to its end", text)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.cancels) != 0 {
+		t.Errorf("$/cancel_request stopped the turn: cancels = %q", h.fleet.cancels)
+	}
+	if len(h.fleet.chats) != 2 {
+		t.Errorf("chats = %d, want 2", len(h.fleet.chats))
 	}
 }
 
@@ -1724,7 +2413,7 @@ func msgHash(mid string) string {
 func TestLongMessageIdIsBoundedAndStable(t *testing.T) {
 	long := strings.Repeat("m", 10000)
 	sess := &session{ns: "ns"}
-	k1, k2 := idempotencyKey(&long, sess, "x"), idempotencyKey(&long, sess, "y")
+	k1, k2 := idempotencyKey(&long, sess, "x", ""), idempotencyKey(&long, sess, "y", "")
 	if len(k1) > 128 || k1 != k2 {
 		t.Fatalf("key len %d, stable %v", len(k1), k1 == k2)
 	}
@@ -1744,7 +2433,7 @@ func TestUnresolvedPromptsAreNeverEvicted(t *testing.T) {
 	for i := range n {
 		sess.settle(fmt.Sprintf("acp-msg-%d", i), "newer", true)
 	}
-	if k := idempotencyKey(nil, sess, "prompt 0"); k != "key-0" || sess.target(k) != "" {
+	if k := idempotencyKey(nil, sess, "prompt 0", ""); k != "key-0" || sess.target(k) != "" {
 		t.Fatalf("retry of the first lost prompt = key %q conv %q, want key-0 in its original (none)", k, sess.target(k))
 	}
 }
@@ -1754,11 +2443,11 @@ func TestUnresolvedPromptsAreNeverEvicted(t *testing.T) {
 func TestMessageIdsAreOpaque(t *testing.T) {
 	sess := &session{ns: "ns"}
 	a, b := "job-1", " job-1 "
-	if idempotencyKey(&a, sess, "x") == idempotencyKey(&b, sess, "x") {
+	if idempotencyKey(&a, sess, "x", "") == idempotencyKey(&b, sess, "x", "") {
 		t.Fatal("distinct messageIds shared a key")
 	}
 	blank := "   "
-	if k := idempotencyKey(&blank, sess, "x"); strings.HasPrefix(k, "acp-msg-") {
+	if k := idempotencyKey(&blank, sess, "x", ""); strings.HasPrefix(k, "acp-msg-") {
 		t.Fatalf("a blank messageId was used as a key: %q", k)
 	}
 }

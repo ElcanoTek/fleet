@@ -1186,9 +1186,25 @@ func TestQueue_DrainedTurnPreCommitFailureRequeuesNotCompletes(t *testing.T) {
 	eng.failuresLeft.Store(1)
 	eng.release <- struct{}{} // finish turn 1; the drain launches the failing turn
 
-	// The 202-acknowledged input must come back to 'queued' — never a silent
+	// The 202-acknowledged input must come back to the queue — never a silent
 	// 'completed' with its text absent from history.
+	//
+	// "Back in the queue" is observed two ways, and both are needed. The
+	// turn's tail re-drains immediately after re-queueing, so the 'queued'
+	// state can last only microseconds before the row is re-claimed into a
+	// third turn — which the gated engine holds until the release below. A
+	// poll that only looked for 'queued' therefore passed only when it ran
+	// BEFORE the drain had claimed the row at all (seeing its original
+	// state, and asserting nothing), and timed out on a slow runner that
+	// polled after the re-claim. So: first wait for the failing turn to have
+	// run, then accept the row queued again OR re-drained into turn 3. A
+	// wrongly completed row is neither — it leaves the queue and nothing
+	// launches it — so the regression this guards still fails here.
+	waitFor(t, "the drained turn ran and failed", func() bool { return eng.turns.Load() >= 2 })
 	waitFor(t, "failed drained turn re-queues the row", func() bool {
+		if eng.turns.Load() >= 3 {
+			return true // re-queued and already re-claimed by the tail drain
+		}
 		items, _ := s.store.ListQueuedInputs(context.Background(), user, conv.ID)
 		for _, it := range items {
 			if it.ClientInputID == "keep-me" && it.State == "queued" {
