@@ -45,10 +45,10 @@ import (
 const SpecVersion = acpsdk.ProtocolVersionNumber
 
 // revisedMarker separates a superseded draft from the final answer. ACP
-// updates are append-only, so when fleet's final text does not extend what was
-// already streamed (an enforcement round replaced the draft), the client gets
-// the final answer again after this line rather than silently diverging from
-// the persisted conversation.
+// updates are append-only, so when fleet's final text does not read as, or
+// extend, what was streamed for it (fleet replaced the draft; see
+// translator.replace), the client gets the final answer again after this line
+// rather than silently diverging from the persisted conversation.
 const revisedMarker = "\n\n— revised answer —\n\n"
 
 // turnClient is the slice of chattui.Client the adapter needs: stream one

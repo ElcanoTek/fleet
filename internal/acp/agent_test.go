@@ -393,9 +393,13 @@ func TestTextReplaceReconcilesAppendOnly(t *testing.T) {
 		final  string
 		want   string
 	}{
+		{"identical adds nothing", []string{"Hello ", "there"}, "Hello there", "Hello there"},
 		{"extension sends the suffix", []string{"Hel"}, "Hello", "Hello"},
 		{"no deltas sends the final text", nil, "Final", "Final"},
 		{"divergent draft gets a revised answer", []string{"first draft"}, "better answer", "first draft" + revisedMarker + "better answer"},
+		// fleet trims its final text; whitespace streamed around it is not a
+		// revision.
+		{"surrounding whitespace adds nothing", []string{"\n\nHello there", "\n"}, "Hello there", "\n\nHello there\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -412,6 +416,130 @@ func TestTextReplaceReconcilesAppendOnly(t *testing.T) {
 			}
 			if got := h.client.text(); got != tc.want {
 				t.Errorf("text = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTextReplaceComparesTheFinalStep pins what text.replace is reconciled
+// against in a turn with tool calls. fleet's final text is the latest model
+// step that wrote text (agentcore's completed response), not everything the
+// turn streamed: the narration a model writes before a tool call is streamed
+// but is not part of it. Comparing against the whole turn sent every such
+// turn's answer twice, after a "— revised answer —" line (seen live from
+// Emacs agent-shell: text, run_python, then the answer, twice).
+func TestTextReplaceComparesTheFinalStep(t *testing.T) {
+	// A script entry is a text.delta, except toolStep (one tool.call plus its
+	// tool.result, as fleet's loop streams them after the step's text) and
+	// retryStep (turn.retry: an attempt abandoned after streaming part of a
+	// reply, which the re-driven attempt then streams again).
+	const (
+		toolStep  = "\x00tool"
+		retryStep = "\x00retry"
+	)
+	answer := "Great! The result is **391**. Here are four sentences about the sea:\n\n1. The sea is 391 shades of blue."
+	cases := []struct {
+		name   string
+		script []string
+		final  string
+		want   string
+	}{
+		{
+			// The live turn's shape: narration, run_python, then the answer.
+			// Nothing is added, and the answer is on the client once.
+			name:   "narration before a tool, then the answer",
+			script: []string{"I'll compute 17*23 and then write ", "sentences about the sea.", toolStep, "Great! The result is **391**. ", "Here are four sentences about the sea:\n\n1. The sea is 391 shades of blue."},
+			final:  answer,
+			want:   "I'll compute 17*23 and then write sentences about the sea." + answer,
+		},
+		{
+			name:   "the step after a tool opens with a blank line",
+			script: []string{"Let me check.", toolStep, "\n\n" + answer, "\n"},
+			final:  answer,
+			want:   "Let me check.\n\n" + answer + "\n",
+		},
+		{
+			name:   "several tool rounds with text between",
+			script: []string{"Let me look.", toolStep, "Found it; computing now.", toolStep, toolStep, "The answer is 42."},
+			final:  "The answer is 42.",
+			want:   "Let me look.Found it; computing now.The answer is 42.",
+		},
+		{
+			// The step after the last tool wrote nothing, so fleet's final text
+			// is the latest step that did (fantasy's finalResponse).
+			name:   "no text after the last tool",
+			script: []string{"Let me look.", toolStep, "Staged the email for approval.", toolStep},
+			final:  "Staged the email for approval.",
+			want:   "Let me look.Staged the email for approval.",
+		},
+		{
+			name:   "the final step is extended",
+			script: []string{"Let me look.", toolStep, "The answer"},
+			final:  "The answer is 42.",
+			want:   "Let me look.The answer is 42.",
+		},
+		{
+			// A provider that returns no completed text: fleet's final text is
+			// then everything the round streamed, trimmed.
+			name:   "the whole turn's text",
+			script: []string{"I'll check.", toolStep, " Done."},
+			final:  "I'll check. Done.",
+			want:   "I'll check. Done.",
+		},
+		{
+			name:   "nothing streamed around the tools",
+			script: []string{toolStep, toolStep},
+			final:  "Done.",
+			want:   "Done.",
+		},
+		{
+			// fleet replaced the final step's text (e.g. stripped a tool call
+			// the model wrote as text): one marker, then the final text.
+			name:   "a revised final step",
+			script: []string{"I'll compute it.", toolStep, "The result is 391. call:run_python{}"},
+			final:  "The result is 391.",
+			want:   "I'll compute it.The result is 391. call:run_python{}" + revisedMarker + "The result is 391.",
+		},
+		{
+			name:   "a reply retried after streaming part of it",
+			script: []string{"Let me look.", toolStep, "The answer", retryStep, "The answer is 42."},
+			final:  "The answer is 42.",
+			want:   "Let me look.The answerThe answer is 42." + revisedMarker + "The answer is 42.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+				w.emit("conversation", map[string]any{"id": "conv-steps"})
+				w.emit("turn.started", map[string]any{"turn_id": "turn-steps"})
+				for i, s := range tc.script {
+					switch s {
+					case toolStep:
+						id := fmt.Sprintf("call-%d", i)
+						w.emit("tool.call", map[string]any{"id": id, "name": "run_python", "input": `{"code":"17*23"}`})
+						w.emit("tool.result", map[string]any{"id": id, "name": "run_python", "text": "391", "is_err": false})
+					case retryStep:
+						w.emit("turn.retry", map[string]any{"delay_ms": 0})
+					default:
+						w.emit("text.delta", map[string]any{"text": s})
+					}
+				}
+				w.emit("text.replace", map[string]any{"text": tc.final})
+				w.emit("turn.completed", map[string]any{})
+			}})
+			if _, err := h.prompt(h.newSession(t), "x"); err != nil {
+				t.Fatal(err)
+			}
+			got := h.client.text()
+			if got != tc.want {
+				t.Errorf("text = %q, want %q", got, tc.want)
+			}
+			markers := strings.Count(got, revisedMarker)
+			if wantMarkers := strings.Count(tc.want, revisedMarker); markers != wantMarkers {
+				t.Errorf("%d revised-answer markers, want %d", markers, wantMarkers)
+			}
+			if markers == 0 && strings.Count(got, tc.final) != 1 {
+				t.Errorf("the final text is on the client %d times, want once: %q", strings.Count(got, tc.final), got)
 			}
 		})
 	}

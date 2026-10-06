@@ -3,6 +3,7 @@ package acp
 import (
 	"strings"
 	"sync"
+	"unicode"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -13,7 +14,9 @@ import (
 // the web UI and `fleet chat` render) into ACP session/update notifications.
 //
 //	text.delta         → agent_message_chunk
-//	text.replace       → the missing suffix, or revisedMarker + the final text
+//	text.replace       → nothing when the final step's streamed text already
+//	                     reads as it; else the missing suffix, or
+//	                     revisedMarker + the final text (see replace)
 //	reasoning.delta    → agent_thought_chunk
 //	tool.call          → tool_call (title = tool name, status in_progress)
 //	tool.result        → tool_call_update (completed / failed; pending while
@@ -40,9 +43,14 @@ type translator struct {
 	turn      string
 	turnKnown chan struct{}
 
-	// sent is the assistant text the client has been told is visible, so a
-	// text.replace can be reconciled against it.
+	// sent is all the assistant text the client has been shown this turn,
+	// step the part of it streamed since the last tool event (the model step
+	// still writing), and lastStep the latest closed step that streamed
+	// non-blank text. A text.replace is reconciled against them (see
+	// replace): fleet's final text is one step's text, not the whole turn's.
 	sent          strings.Builder
+	step          strings.Builder
+	lastStep      string
 	approvals     []stagedApproval
 	policyBlocked bool
 	usage         *acpsdk.Usage
@@ -152,6 +160,7 @@ func (t *translator) handle(ev chattui.Event) {
 	case "text.delta":
 		if s := ev.Str("text"); s != "" {
 			t.sent.WriteString(s)
+			t.step.WriteString(s)
 			t.send(acpsdk.UpdateAgentMessageText(s))
 		}
 	case "text.replace":
@@ -161,11 +170,13 @@ func (t *translator) handle(ev chattui.Event) {
 			t.send(acpsdk.UpdateAgentThoughtText(s))
 		}
 	case "tool.call":
+		t.endStep()
 		id := orDefault(ev.Str("id"), "call-"+randomID())
 		t.send(acpsdk.StartToolCall(acpsdk.ToolCallId(id), orDefault(ev.Str("name"), "tool"),
 			acpsdk.WithStartKind(acpsdk.ToolKindOther),
 			acpsdk.WithStartStatus(acpsdk.ToolCallStatusInProgress)))
 	case "tool.result":
+		t.endStep()
 		if id := ev.Str("id"); id != "" {
 			status := acpsdk.ToolCallStatusCompleted
 			name := ev.Str("name")
@@ -220,25 +231,75 @@ func (t *translator) handle(ev chattui.Event) {
 	}
 }
 
-// replace reconciles fleet's authoritative final text with what was streamed.
-// ACP cannot retract a chunk, so: identical → nothing; an extension → only the
-// missing suffix; a divergence (an enforcement round replaced the draft) → the
-// final text again after revisedMarker, so the client ends on what fleet
-// persisted.
-func (t *translator) replace(final string) {
-	sent := t.sent.String()
-	switch {
-	case final == sent:
-		return
-	case strings.HasPrefix(final, sent):
-		t.send(acpsdk.UpdateAgentMessageText(final[len(sent):]))
-	case sent == "":
-		t.send(acpsdk.UpdateAgentMessageText(final))
-	default:
-		t.send(acpsdk.UpdateAgentMessageText(revisedMarker + final))
+// endStep closes the model step whose text was streaming. fleet's tool loop
+// streams a step's text first and announces its tool calls only once the
+// step's stream has ended, then their results, and the next step's text
+// follows those: a tool event is where one step's text ends. Several calls in
+// a row close one step, so an empty step never displaces lastStep.
+func (t *translator) endStep() {
+	if s := t.step.String(); strings.TrimSpace(s) != "" {
+		t.lastStep = s
 	}
+	t.step.Reset()
+}
+
+// replace reconciles fleet's authoritative final text with what was streamed.
+//
+// The final text is not everything the turn streamed. agentcore takes it from
+// the round's completed response, which is the latest model step that wrote
+// text, trimmed: the narration a model writes before a tool call ("I'll
+// compute that first") is streamed but is not part of it. So it is compared
+// first with the text streamed since the last tool event, or, when the step
+// after the last tool wrote nothing, with the latest step that did. Only if
+// that fails is it compared with the whole turn's text, which is what fleet
+// falls back to for a provider that returns no completed text. Comparing
+// against the whole turn alone made every turn that wrote before a tool call
+// look revised, and the client got its answer twice.
+//
+// ACP cannot retract a chunk, so: already shown → nothing; an extension →
+// only the missing suffix; nothing streamed → the final text; a divergence
+// (fleet replaced what was streamed: a finalize pass stripped a tool call the
+// model wrote as text, a model call was retried after streaming part of a
+// reply) → the final text again after revisedMarker, so the client ends on
+// what fleet persisted.
+func (t *translator) replace(final string) {
+	step := t.step.String()
+	if strings.TrimSpace(step) == "" {
+		step = t.lastStep
+	}
+	rest, shown := unsent(final, step)
+	if !shown {
+		rest, shown = unsent(final, t.sent.String())
+	}
+	switch {
+	case !shown:
+		t.send(acpsdk.UpdateAgentMessageText(revisedMarker + final))
+	case rest != "":
+		t.send(acpsdk.UpdateAgentMessageText(rest))
+	}
+	// The client now ends on final, whichever way it got there.
 	t.sent.Reset()
 	t.sent.WriteString(final)
+	t.step.Reset()
+	t.step.WriteString(final)
+	t.lastStep = ""
+}
+
+// unsent reports whether a client that was streamed `streamed` already reads
+// as `final` up to a missing tail, and returns that tail: "" when it reads as
+// final, the rest when final extends it. fleet trims its final text, so
+// whitespace streamed before or after it is no difference (a step after a
+// tool often opens with a blank line). Blank streamed text is extended by any
+// final text, so a turn that streamed nothing gets the final text whole.
+func unsent(final, streamed string) (rest string, shown bool) {
+	s := strings.TrimLeftFunc(streamed, unicode.IsSpace)
+	if strings.HasPrefix(final, s) {
+		return final[len(s):], true
+	}
+	if s = strings.TrimRightFunc(s, unicode.IsSpace); strings.HasPrefix(final, s) {
+		return final[len(s):], true
+	}
+	return "", false
 }
 
 // flushApprovals appends a pointer for every approval still pending when the
