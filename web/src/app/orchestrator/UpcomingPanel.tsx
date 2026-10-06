@@ -159,7 +159,12 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
   // weekOffset pages whole weeks: 0 = this week, 1 = next, … The upcoming
   // feed only projects forward, so past weeks aren't offered.
   const [weekOffset, setWeekOffset] = useState(0);
-  const today = new Date();
+  // "Today" is read once, when the board mounts, not on every render: a bare
+  // `new Date()` in the render body is impure (react purity lint, oxlint
+  // 1.86+), and re-reading the clock on each week-arrow click could re-anchor
+  // the board mid-session. The runs it buckets were fetched once at mount
+  // too, so one snapshot keeps the columns and the data on the same clock.
+  const [today] = useState(() => new Date());
   const sunday = new Date(
     today.getFullYear(),
     today.getMonth(),
