@@ -33,6 +33,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -323,12 +324,11 @@ func (a *Agent) Authenticate(context.Context, acpsdk.AuthenticateRequest) (acpsd
 // bundle and are credential-brokered host-side.
 func (a *Agent) NewSession(_ context.Context, p acpsdk.NewSessionRequest) (acpsdk.NewSessionResponse, error) {
 	if a.cfgErr != nil {
-		return acpsdk.NewSessionResponse{}, acpsdk.NewAuthRequired(map[string]any{"error": a.cfgErr.Error()})
+		return acpsdk.NewSessionResponse{}, reasonError(acpsdk.NewAuthRequired, a.cfgErr.Error())
 	}
 	if len(p.McpServers) > 0 {
-		return acpsdk.NewSessionResponse{}, acpsdk.NewInvalidParams(map[string]any{
-			"error": "fleet does not accept MCP servers from the ACP client: its connectors come from the operator's bundle and run host-side with brokered credentials",
-		})
+		return acpsdk.NewSessionResponse{}, reasonError(acpsdk.NewInvalidParams,
+			"fleet does not accept MCP servers from the ACP client: its connectors come from the operator's bundle and run host-side with brokered credentials")
 	}
 	id := acpsdk.SessionId("fleet-acp-" + randomID())
 	a.mu.Lock()
@@ -514,17 +514,21 @@ func (a *Agent) CloseSession(_ context.Context, p acpsdk.CloseSessionRequest) (a
 // (the Go SDK's client sends one along with its `$/cancel_request`).
 func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
 	if a.cfgErr != nil {
-		return acpsdk.PromptResponse{}, acpsdk.NewAuthRequired(map[string]any{"error": a.cfgErr.Error()})
+		return acpsdk.PromptResponse{}, reasonError(acpsdk.NewAuthRequired, a.cfgErr.Error())
 	}
 	a.mu.Lock()
 	sess := a.sessions[p.SessionId]
 	a.mu.Unlock()
 	if sess == nil {
-		return acpsdk.PromptResponse{}, &acpsdk.RequestError{Code: -32002, Message: "Resource not found", Data: map[string]any{"sessionId": string(p.SessionId)}}
+		// ACP's resource_not_found has no SDK constructor. Its data stays the
+		// session id alone; the message says why there is no such session.
+		return acpsdk.PromptResponse{}, &acpsdk.RequestError{Code: -32002, Message: errorMessage(fmt.Sprintf(
+			"fleet acp has no session %q (it was closed, or opened by an earlier fleet acp process); start a new session", p.SessionId)),
+			Data: map[string]any{"sessionId": string(p.SessionId)}}
 	}
 	message, err := promptText(p.Prompt)
 	if err != nil {
-		return acpsdk.PromptResponse{}, acpsdk.NewInvalidParams(map[string]any{"error": err.Error()})
+		return acpsdk.PromptResponse{}, reasonError(acpsdk.NewInvalidParams, err.Error())
 	}
 
 	// The text's unresolved key as this prompt arrives. If a resend of that
@@ -539,9 +543,8 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	if !ok {
 		// Refused before it was held or sent: nothing reached fleet, so the
 		// client can send it again once the session's prompts drain.
-		return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{
-			"error": fmt.Sprintf("this session already has a prompt running and %d waiting for it; wait for them to be answered (or send session/cancel) before sending another", maxWaitingPrompts),
-		})
+		return acpsdk.PromptResponse{}, reasonError(acpsdk.NewInternalError, fmt.Sprintf(
+			"this session already has a prompt running and %d waiting for it; wait for them to be answered (or send session/cancel) before sending another", maxWaitingPrompts))
 	}
 	defer release()
 	promptTracked(message)
@@ -715,13 +718,11 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 		// A timeout whose Stop found the turn already complete falls through:
 		// the turn finished, so its outcome is reported, not a timeout.
 		if stopErr != nil {
-			return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{
-				"error": fmt.Sprintf("the fleet turn did not finish within %s, and stopping it failed (%v): it may still be running — stop it at %s", a.timeout, stopErr, a.conversationPointer(convID)),
-			})
+			return acpsdk.PromptResponse{}, reasonError(acpsdk.NewInternalError, fmt.Sprintf(
+				"the fleet turn did not finish within %s, and stopping it failed (%v): it may still be running — stop it at %s", a.timeout, stopErr, a.conversationPointer(convID)))
 		}
-		return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{
-			"error": fmt.Sprintf("the fleet turn did not finish within %s and was stopped (raise it with fleet acp --timeout)", a.timeout),
-		})
+		return acpsdk.PromptResponse{}, reasonError(acpsdk.NewInternalError, fmt.Sprintf(
+			"the fleet turn did not finish within %s and was stopped (raise it with fleet acp --timeout)", a.timeout))
 	}
 	if tr.policyBlocked {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonRefusal, Meta: meta}, nil
@@ -1159,13 +1160,86 @@ func (a *Agent) SetSessionMode(context.Context, acpsdk.SetSessionModeRequest) (a
 // requestError maps a failed turn onto a JSON-RPC error the client can show.
 // An auth failure (401/403 from POST /chat) is ACP's auth_required; anything
 // else — server unreachable, turn.error, turn.model_required — is an internal
-// error whose message is the same actionable text `fleet chat` prints.
+// error. Either way its message is the same actionable text `fleet chat`
+// prints (reasonError).
 func requestError(err error) error {
 	var se *chattui.StatusError
 	if errors.As(err, &se) && (se.Code == 401 || se.Code == 403) {
-		return acpsdk.NewAuthRequired(map[string]any{"error": se.Error()})
+		return reasonError(acpsdk.NewAuthRequired, se.Error())
 	}
-	return acpsdk.NewInternalError(map[string]any{"error": err.Error()})
+	return reasonError(acpsdk.NewInternalError, err.Error())
+}
+
+// reasonError is the JSON-RPC error of kind (one of acp-go-sdk's constructors:
+// NewAuthRequired, NewInternalError, NewInvalidParams) for reason, with the
+// reason as its message.
+//
+// The constructors set message to the kind's generic name ("Authentication
+// required", "Internal error", "Invalid params") and leave the reason in
+// data.error, and some ACP clients show only code and message: Emacs's
+// agent-shell hides the rest behind a Details button, so an unknown user, a
+// viewer, a wrong token and a missing email all read "Authentication
+// required". JSON-RPC 2.0 has clients act on code and makes message a short
+// description, so message is the reason alone (errorMessage), not prefixed
+// with the kind's name: the client shows the code beside it, and the name
+// would mislabel most reasons — a viewer's refusal is not a failed
+// authentication, nor a timeout or an unreachable server an internal error.
+// code is unchanged, and data.error still carries the reason whole, for
+// clients that read it. message is cut from data.error's own text, so it
+// carries nothing data.error did not.
+func reasonError(kind func(data any) *acpsdk.RequestError, reason string) *acpsdk.RequestError {
+	e := kind(map[string]any{"error": reason})
+	if m := errorMessage(reason); m != "" { // an empty reason keeps the kind's name
+		e.Message = m
+	}
+	return e
+}
+
+// maxErrorMessage bounds an error's message, in runes. The reasons fleet acp
+// writes itself fit whole in practice, the longest (a timeout whose Stop
+// failed, with where to stop the turn) at about 350; one quoting the server,
+// such as a turn's error or a proxy's error page, may not.
+const maxErrorMessage = 400
+
+// errorMessage is reason as the one line an error's message carries: each run
+// of whitespace, line breaks included, becomes one space (a quoted response
+// body can span lines). A reason longer than maxErrorMessage is cut to its
+// first sentence, or, when that is still too long, after the last whole word
+// that fits, marked "…". data.error keeps the reason whole.
+func errorMessage(reason string) string {
+	s := strings.Join(strings.Fields(reason), " ")
+	if utf8.RuneCountInString(s) <= maxErrorMessage {
+		return s
+	}
+	if n := firstSentence(s); n > 0 && utf8.RuneCountInString(s[:n]) <= maxErrorMessage {
+		return s[:n]
+	}
+	cut := string([]rune(s)[:maxErrorMessage])
+	if i := strings.LastIndexByte(cut, ' '); i > 0 {
+		cut = cut[:i]
+	}
+	return cut + "…"
+}
+
+// firstSentence is the length in bytes of s's first sentence, through the
+// '.', '!' or '?' a space follows, or 0 when s is one sentence. One inside
+// parentheses or a backtick span (a quoted error, a command) does not end it.
+func firstSentence(s string) int {
+	depth, quoted := 0, false
+	for i := 0; i+1 < len(s); i++ {
+		switch c := s[i]; {
+		case c == '`':
+			quoted = !quoted
+		case quoted:
+		case c == '(':
+			depth++
+		case c == ')' && depth > 0:
+			depth--
+		case depth == 0 && (c == '.' || c == '!' || c == '?') && s[i+1] == ' ':
+			return i + 1
+		}
+	}
+	return 0
 }
 
 // promptText flattens an ACP prompt into the one message a fleet turn takes.

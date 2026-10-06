@@ -10,11 +10,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/yuin/goldmark"
@@ -578,6 +580,300 @@ func TestFailuresBecomeClearErrors(t *testing.T) {
 		h.newSession(t)
 		if _, err := h.prompt("nope", "x"); rpcCode(err) != -32002 {
 			t.Fatalf("err = %v, want resource not found", err)
+		}
+	})
+}
+
+// wireError is err as the ACP client decoded it off the wire.
+func wireError(t *testing.T, err error) *acpsdk.RequestError {
+	t.Helper()
+	var re *acpsdk.RequestError
+	if !errors.As(err, &re) {
+		t.Fatalf("err = %v, want a JSON-RPC error", err)
+	}
+	return re
+}
+
+// resolveErr is the error `fleet acp` starts with when its config does not
+// resolve: the real chattui.Resolve, with nothing in the environment and no
+// env file to read.
+func resolveErr(t *testing.T, f chattui.Flags) error {
+	t.Helper()
+	_, err := chattui.Resolve(f, func(string) string { return "" },
+		func(string) ([]byte, error) { return nil, os.ErrNotExist },
+		func(string, ...string) (map[string]string, error) { return nil, os.ErrNotExist })
+	if err == nil {
+		t.Fatal("the config resolved; want an error")
+	}
+	return err
+}
+
+// Every error fleet acp answers with carries its reason in the JSON-RPC
+// message, not only in data.error: some clients show code and message alone
+// (Emacs's agent-shell hides data behind a Details button), and with the SDK's
+// generic message an unknown user, a viewer, a wrong token and a missing email
+// all read "Authentication required". code and data.error are as before.
+func TestErrorMessagesCarryTheReason(t *testing.T) {
+	refuse := func(status int, contentType, body string) func(w *sseWriter, _ *http.Request) {
+		return func(w *sseWriter, _ *http.Request) {
+			w.w.Header().Set("Content-Type", contentType)
+			w.w.WriteHeader(status)
+			_, _ = io.WriteString(w.w, body)
+		}
+	}
+	promptWith := func(o harnessOpts, blocks ...acpsdk.ContentBlock) func(t *testing.T) error {
+		if len(blocks) == 0 {
+			blocks = []acpsdk.ContentBlock{acpsdk.TextBlock("x")}
+		}
+		return func(t *testing.T) error {
+			h := newHarness(t, o)
+			_, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: h.newSession(t), Prompt: blocks})
+			return err
+		}
+	}
+	terminal := func(frame, message string) func(w *sseWriter, _ *http.Request) {
+		return func(w *sseWriter, _ *http.Request) {
+			w.emit("conversation", map[string]any{"id": "c"})
+			w.emit(frame, map[string]any{"message": message})
+		}
+	}
+	noEmail := resolveErr(t, chattui.Flags{})
+	noToken := resolveErr(t, chattui.Flags{Email: "bot@example.com", EnvFile: "/nonexistent/fleet.env"})
+	longFailure := "the provider refused the request. " + strings.Repeat("Its detail runs on and on. ", 20)
+
+	for _, tc := range []struct {
+		name string
+		err  func(t *testing.T) error
+		code int
+		// data is data.error, exactly as before message carried it.
+		data string
+		// dataPrefix, when set, is data.error's start instead (the rest is the
+		// OS's text).
+		dataPrefix string
+		// message is the message wanted; "" means data.error itself.
+		message string
+	}{
+		{
+			name: "403 wrong token",
+			err:  promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "text/plain", "forbidden\n")}),
+			code: -32000,
+			data: "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server",
+		},
+		{
+			name: "403 not a fleet user",
+			err:  promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "application/json", `{"error":"not_a_member"}`)}),
+			code: -32000,
+			data: "server rejected the request (403): bot@example.com is not a fleet user; an admin can add it with `fleet chat user add bot@example.com --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user",
+		},
+		{
+			name: "403 viewer",
+			err:  promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "application/json", `{"error":"read_only"}`)}),
+			code: -32000,
+			data: "server rejected the request (403): bot@example.com has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role bot@example.com --role member`",
+		},
+		{
+			name: "403 IP filter",
+			err:  promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "text/plain", "Access denied\n")}),
+			code: -32000,
+			data: "server rejected the request (403): the server's IP access control (FLEET_IP_ALLOWLIST / FLEET_IP_DENYLIST) does not admit this client's address; connect from an admitted address, or ask an admin to admit this one",
+		},
+		{
+			// A proxy's page over several lines, echoing the token: message is
+			// one line, and the token is redacted from both.
+			name:    "401 from a proxy",
+			err:     promptWith(harnessOpts{turn: refuse(http.StatusUnauthorized, "text/html", "<html>\n  <h1>401</h1>\n  Authorization: Bearer test-token\n</html>\n")}),
+			code:    -32000,
+			data:    "not authorized (401) for bot@example.com: <html>\n  <h1>401</h1>\n  Authorization: Bearer [redacted]\n</html>",
+			message: "not authorized (401) for bot@example.com: <html> <h1>401</h1> Authorization: Bearer [redacted] </html>",
+		},
+		{
+			name: "missing email at session/new",
+			err: func(t *testing.T) error {
+				h := newHarness(t, harnessOpts{cfgErr: noEmail})
+				if _, err := h.conn.Initialize(context.Background(), acpsdk.InitializeRequest{ProtocolVersion: 1}); err != nil {
+					t.Fatalf("initialize must still succeed: %v", err)
+				}
+				_, err := h.conn.NewSession(context.Background(), acpsdk.NewSessionRequest{Cwd: "/", McpServers: []acpsdk.McpServer{}})
+				return err
+			},
+			code: -32000,
+			data: "no user email: pass --email <you@example.com> or set FLEET_USER_EMAIL (your audit identity, so it is never guessed)",
+		},
+		{
+			name: "missing token at session/prompt",
+			err: func(t *testing.T) error {
+				h := newHarness(t, harnessOpts{cfgErr: noToken})
+				_, err := h.prompt("fleet-acp-any", "x")
+				return err
+			},
+			code: -32000,
+			data: noToken.Error(),
+		},
+		{
+			name: "turn.error",
+			err:  promptWith(harnessOpts{turn: terminal("turn.error", "budget exhausted")}),
+			code: -32603,
+			data: "turn failed: budget exhausted",
+		},
+		{
+			name: "turn.model_required",
+			err:  promptWith(harnessOpts{turn: terminal("turn.model_required", "the model is no longer offered; pick another")}),
+			code: -32603,
+			data: "turn requires another model: the model is no longer offered; pick another",
+		},
+		{
+			// Too long for one line: message keeps the first sentence.
+			name:    "a long turn.error",
+			err:     promptWith(harnessOpts{turn: terminal("turn.error", longFailure)}),
+			code:    -32603,
+			data:    "turn failed: " + longFailure,
+			message: "turn failed: the provider refused the request.",
+		},
+		{
+			name: "any other status",
+			err:  promptWith(harnessOpts{turn: refuse(http.StatusInternalServerError, "text/plain", "database unavailable\n")}),
+			code: -32603,
+			data: "server returned 500: database unavailable",
+		},
+		{
+			name:       "daemon down",
+			err:        promptWith(harnessOpts{serverURL: "http://127.0.0.1:1"}),
+			code:       -32603,
+			dataPrefix: "connect http://127.0.0.1:1: ",
+		},
+		{
+			name: "--timeout",
+			err:  promptWith(harnessOpts{turn: blockingTurn(make(chan struct{})), timeout: 200 * time.Millisecond}),
+			code: -32603,
+			data: "the fleet turn did not finish within 200ms and was stopped (raise it with fleet acp --timeout)",
+		},
+		{
+			name: "--timeout whose Stop failed",
+			err: promptWith(harnessOpts{turn: blockingTurn(make(chan struct{})), timeout: 200 * time.Millisecond,
+				cancelStatus: http.StatusBadGateway, publicURL: "https://fleet.example.com"}),
+			code: -32603,
+			data: "the fleet turn did not finish within 200ms, and stopping it failed (cancel returned 502: ): it may still be running — stop it at https://fleet.example.com/chat?c=conv-slow",
+		},
+		{
+			name: "client MCP servers",
+			err: func(t *testing.T) error {
+				h := newHarness(t, harnessOpts{})
+				if _, err := h.conn.Initialize(context.Background(), acpsdk.InitializeRequest{ProtocolVersion: 1}); err != nil {
+					t.Fatal(err)
+				}
+				_, err := h.conn.NewSession(context.Background(), acpsdk.NewSessionRequest{Cwd: "/", McpServers: []acpsdk.McpServer{
+					{Stdio: &acpsdk.McpServerStdio{Name: "x", Command: "/bin/true", Args: []string{}, Env: []acpsdk.EnvVariable{}}},
+				}})
+				return err
+			},
+			code: -32602,
+			data: "fleet does not accept MCP servers from the ACP client: its connectors come from the operator's bundle and run host-side with brokered credentials",
+		},
+		{
+			name: "image",
+			err:  promptWith(harnessOpts{}, acpsdk.ImageBlock("aGk=", "image/png")),
+			code: -32602,
+			data: "fleet acp does not accept image content (promptCapabilities.image is false)",
+		},
+		{
+			name: "audio",
+			err:  promptWith(harnessOpts{}, acpsdk.AudioBlock("aGk=", "audio/wav")),
+			code: -32602,
+			data: "fleet acp does not accept audio content (promptCapabilities.audio is false)",
+		},
+		{
+			name: "binary blob",
+			err: promptWith(harnessOpts{}, acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{
+				BlobResourceContents: &acpsdk.BlobResourceContents{Uri: "file:///repo/logo.png", Blob: "aGk="},
+			})),
+			code: -32602,
+			data: "fleet acp accepts text, resource_link and embedded text resources only",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			re := wireError(t, tc.err(t))
+			if re.Code != tc.code {
+				t.Errorf("code = %d, want %d", re.Code, tc.code)
+			}
+			data, _ := re.Data.(map[string]any)
+			got, _ := data["error"].(string)
+			switch {
+			case tc.dataPrefix != "" && !strings.HasPrefix(got, tc.dataPrefix):
+				t.Errorf("data.error = %q, want it to start %q", got, tc.dataPrefix)
+			case tc.dataPrefix == "" && got != tc.data:
+				t.Errorf("data.error = %q\nwant        %q", got, tc.data)
+			}
+			want := tc.message
+			if want == "" {
+				want = got
+			}
+			if re.Message != want || want == "" {
+				t.Errorf("message = %q\nwant      %q", re.Message, want)
+			}
+			if strings.ContainsAny(re.Message, "\r\n") || utf8.RuneCountInString(re.Message) > maxErrorMessage+1 {
+				t.Errorf("message is not one concise line: %q", re.Message)
+			}
+			if strings.Contains(re.Message, "test-token") || strings.Contains(got, "test-token") {
+				t.Fatal("the token value leaked into an error")
+			}
+		})
+	}
+
+	t.Run("unknown session", func(t *testing.T) {
+		h := newHarness(t, harnessOpts{})
+		h.newSession(t)
+		re := wireError(t, func() error { _, err := h.prompt("nope", "x"); return err }())
+		if re.Code != -32002 {
+			t.Errorf("code = %d, want -32002 (resource not found)", re.Code)
+		}
+		if data, _ := re.Data.(map[string]any); len(data) != 1 || data["sessionId"] != "nope" {
+			t.Errorf("data = %v, want the session id alone", re.Data)
+		}
+		if want := `fleet acp has no session "nope" (it was closed, or opened by an earlier fleet acp process); start a new session`; re.Message != want {
+			t.Errorf("message = %q\nwant      %q", re.Message, want)
+		}
+	})
+}
+
+// errorMessage keeps a reason whole when it fits one concise line, else its
+// first sentence, else the words that fit.
+func TestErrorMessageIsOneConciseLine(t *testing.T) {
+	long := func(sentence string) string {
+		return sentence + " " + strings.Repeat("And then more detail. ", 30)
+	}
+	for _, tc := range []struct {
+		name, reason, want string
+	}{
+		{"short, kept whole", "turn failed: rate limited. Retry in 20s.", "turn failed: rate limited. Retry in 20s."},
+		{"line breaks and runs of spaces collapse", "server returned 502:\n<html>\n\t<h1>Bad  Gateway</h1>\r\n</html>", "server returned 502: <html> <h1>Bad Gateway</h1> </html>"},
+		{"long: the first sentence", long("turn failed: the provider refused the request."), "turn failed: the provider refused the request."},
+		{"a full stop in parentheses does not end it", long("turn failed (see the log. It has more) and stopped."), "turn failed (see the log. It has more) and stopped."},
+		{"nor one in a command", long("run `fleet status. now` and retry!"), "run `fleet status. now` and retry!"},
+		{"empty", " \n ", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := errorMessage(tc.reason); got != tc.want {
+				t.Errorf("errorMessage = %q\nwant           %q", got, tc.want)
+			}
+		})
+	}
+	t.Run("one long sentence: the words that fit", func(t *testing.T) {
+		reason := "the turn failed because " + strings.Repeat("ünïcode words ", 60)
+		got := errorMessage(reason)
+		body, ok := strings.CutSuffix(got, "…")
+		if !ok || !strings.HasPrefix(reason, body+" ") || utf8.RuneCountInString(body) > maxErrorMessage || utf8.RuneCountInString(body) < maxErrorMessage-20 {
+			t.Errorf("errorMessage = %q, want the whole words of the first %d runes, then …", got, maxErrorMessage)
+		}
+	})
+	t.Run("one long word: cut at the bound", func(t *testing.T) {
+		got := errorMessage(strings.Repeat("é", 2*maxErrorMessage))
+		if want := strings.Repeat("é", maxErrorMessage) + "…"; got != want {
+			t.Errorf("errorMessage = %q, want %d runes then …", got, maxErrorMessage)
+		}
+	})
+	t.Run("an empty reason keeps the kind's name", func(t *testing.T) {
+		if got := reasonError(acpsdk.NewInternalError, "").Message; got != "Internal error" {
+			t.Errorf("message = %q", got)
 		}
 	})
 }
@@ -1734,7 +2030,8 @@ func TestPromptsWaitingForASessionAreCapped(t *testing.T) {
 		close(release)
 		t.Fatal("the prompt beyond the cap was held to wait for the session instead of refused")
 	}
-	if err == nil || rpcCode(err) != -32603 || !strings.Contains(err.Error(), "waiting") {
+	// Said in the message itself, which is all some clients show.
+	if err == nil || rpcCode(err) != -32603 || !strings.Contains(wireError(t, err).Message, fmt.Sprintf("a prompt running and %d waiting", maxWaitingPrompts)) {
 		t.Fatalf("prompt beyond the cap = %v, want an internal error saying the session has too many prompts waiting", err)
 	}
 	h.waitTracked(t, sid, maxWaitingPrompts+1) // the refused prompt was never tracked

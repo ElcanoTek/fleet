@@ -208,15 +208,35 @@ invalid params, which matches what `initialize` advertises.
 
 ## Errors
 
+Each error's JSON-RPC `message` is its reason (the text described below), on
+one line. It is not the generic name of the error's code ("Authentication
+required", "Internal error", "Invalid params"), which acp-go-sdk would put
+there and which some clients show alone: Emacs's agent-shell shows the code and
+`message` and keeps the rest behind its Details button. Nor is that name put in
+front of the reason: the client shows the code beside it, and the name would
+mislabel most reasons (a viewer's refusal is not a failed authentication, nor a
+timeout an internal error). Line breaks in a quoted server reply become spaces.
+A reason longer than 400 characters (in practice one quoting the server, such
+as a turn's error or a proxy's page) is cut to its first sentence, or to the
+words that fit. `data.error` carries the reason in full, as it always has, and
+the `code` is the same as before, so a client that acts on the code, as
+JSON-RPC intends, or reads `data`, sees no change. `message` is cut from the
+same text as `data.error` (for an unknown session, built around the id in
+`data`), so it exposes nothing `data` does not.
+
 | Failure | What the ACP client sees |
 | --- | --- |
 | No email / no token configured | `initialize` still succeeds; `session/new` answers `auth_required` (-32000) with the same fix-it text `fleet chat` prints. `fleet acp` keeps running, so the client shows the reason instead of "agent exited". |
 | Refused by the server (403) | `auth_required`, with text naming the reason the server gave: a wrong shared token names `FLEET_SERVER_TOKEN`; an email that is not a provisioned fleet user (`not_a_member`) names the user and `fleet chat user add <email> --password -`; a viewer-role user (`read_only`) names the user and `fleet chat user role <email> --role member`; a client address the server's IP filter refuses names `FLEET_IP_ALLOWLIST` / `FLEET_IP_DENYLIST`, without saying which list matched (the server does not say either). Any other 403 body (a reverse proxy's page, say) is quoted as a short one-line excerpt instead of being blamed on the token. The token value is never included. |
 | Any 401 | `auth_required`, with text naming the user. fleet itself sends a 401 here only for a revoked web session, which `fleet acp` never presents, so in practice it comes from a proxy in front of fleet. |
-| Daemon down | Internal error (-32603) naming the unreachable server URL |
+| Any other error status from the server | Internal error (-32603) quoting the status and the server's reply |
+| Daemon down | Internal error naming the unreachable server URL |
 | `turn.error` / `turn.model_required` | Internal error carrying the server's message |
-| `--timeout` exceeded | The turn is stopped server-side, then an internal error names the timeout and the flag. If the Stop fails, the error says so and that the turn may still be running. |
-| Unknown session id | -32002 resource not found |
+| `--timeout` exceeded | The turn is stopped server-side, then an internal error names the timeout and the flag. If the Stop fails, the error says so and that the turn may still be running, and where to stop it. |
+| A prompt beyond the 20 waiting for a session | Internal error saying the session already has a prompt running and 20 waiting (see `session/prompt`) |
+| Client-supplied `mcpServers`; an image, audio or binary blob in a prompt | Invalid params (-32602) naming what is refused |
+| Unknown session id | -32002 resource not found, naming the session and saying it was closed or opened by an earlier `fleet acp` process. `data` is `{"sessionId": …}`, as before. |
+| A request acp-go-sdk cannot decode or validate; an unsupported method | The SDK's own errors, with their generic message: `Invalid params` with the decoder's text in `data.error` (the SDK refuses the request before `fleet acp` sees it), or `Method not found` with the method in `data.method` |
 
 ## Honest scope
 
@@ -233,8 +253,10 @@ What shipped:
   still waiting for the session), a prompt resent or followed by another
   while a turn runs (one run, no Stop), `$/cancel_request`, timeout, 403,
   daemon-down, `turn.error`, policy refusal, approval pointers, refused
-  content, the stdio entry point (stdout carries only JSON-RPC), and the
-  no-execution-imports guard. No live model, no live Buzz in CI.
+  content, the reason in each error's `message` (with its `code` and
+  `data.error` as before), the stdio entry point (stdout carries only
+  JSON-RPC), and the no-execution-imports guard. No live model, no live Buzz
+  in CI.
 - Tests in `internal/acp` also cover the client going away mid-turn through
   the real entry point. In-process on pipes: stdin closed, a signal, prompts
   waiting in the session's line (they leave at once, unsent), a Stop that
