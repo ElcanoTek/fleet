@@ -930,9 +930,11 @@ export function ChatExperience({
   // branch_origin from GET /conversations/{id}, per conversation: present
   // only on a teammate's branch, it drives the B20 banner and which files
   // the branch transcript renders as locked names.
+  // A Map, not an object: the keys are conversation ids from the server,
+  // and a plain object would let a key like "__proto__" write a prototype.
   const [branchOrigins, setBranchOrigins] = useState<
-    Record<string, BranchOrigin>
-  >({});
+    ReadonlyMap<string, BranchOrigin>
+  >(() => new Map());
 
   const [memoryDraft, setMemoryDraft] = useState("");
   const [memoryKindDraft, setMemoryKindDraft] = useState<string>("fact");
@@ -2433,10 +2435,10 @@ export function ChatExperience({
         const origin =
           data.branch_origin ?? data.conversation.branch_origin ?? null;
         setBranchOrigins((prev) => {
-          if (!origin && !(conversationId in prev)) return prev;
-          const nextOrigins = { ...prev };
-          if (origin) nextOrigins[conversationId] = origin;
-          else delete nextOrigins[conversationId];
+          if (!origin && !prev.has(conversationId)) return prev;
+          const nextOrigins = new Map(prev);
+          if (origin) nextOrigins.set(conversationId, origin);
+          else nextOrigins.delete(conversationId);
           return nextOrigins;
         });
       }
@@ -3187,7 +3189,7 @@ export function ChatExperience({
   // names that were NOT shared at branch time — those render as locked names,
   // because the branch's workspace does not have them.
   const activeBranchOrigin = activeConversationId
-    ? branchOrigins[activeConversationId]
+    ? branchOrigins.get(activeConversationId)
     : undefined;
   const withheldFiles = useMemo(
     () =>

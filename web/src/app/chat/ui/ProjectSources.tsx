@@ -109,7 +109,11 @@ export function ProjectSources({
   const [error, setError] = useState<string | null>(null);
   // Local open/closed overrides, layered on the remembered map so a click
   // takes effect at once even before (or without) the PUT landing.
-  const [localOpen, setLocalOpen] = useState<Record<string, boolean>>({});
+  // A Map, not an object: the keys are conversation ids, and writing them as
+  // object properties would let a key like "__proto__" touch a prototype.
+  const [localOpen, setLocalOpen] = useState<ReadonlyMap<string, boolean>>(
+    () => new Map(),
+  );
   const [highlight, setHighlight] = useState<string | null>(null);
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const groupRefs = useRef(new Map<string, HTMLDivElement>());
@@ -165,15 +169,27 @@ export function ProjectSources({
   }, [ordered]);
 
   const isOpen = (id: string): boolean => {
-    if (id in localOpen) return localOpen[id];
-    if (sourcesOpen && id in sourcesOpen) return Boolean(sourcesOpen[id]);
+    const local = localOpen.get(id);
+    if (local !== undefined) return local;
+    if (sourcesOpen && Object.hasOwn(sourcesOpen, id)) {
+      return Boolean(sourcesOpen[id]);
+    }
     return id === mostRecentId;
   };
 
+  // The remembered map, this visit's overrides, and one more change — as a
+  // Map for local state and as plain entries for the PUT body.
+  const withOpen = (id: string, open: boolean): Map<string, boolean> => {
+    const next = new Map<string, boolean>(Object.entries(sourcesOpen ?? {}));
+    for (const [k, v] of localOpen) next.set(k, v);
+    next.set(id, open);
+    return next;
+  };
+
   const persistOpen = (id: string, open: boolean) => {
-    const next = { ...(sourcesOpen ?? {}), ...localOpen, [id]: open };
+    const next = withOpen(id, open);
     setLocalOpen(next);
-    onSourcesOpenChange(next);
+    onSourcesOpenChange(Object.fromEntries(next));
   };
 
   // Focus: open the group, scroll it into view, highlight it briefly. Runs
@@ -192,9 +208,9 @@ export function ProjectSources({
   if (focusReady && focus) {
     setHandledFocus(focus.nonce);
     if (!isOpen(focus.conversationId)) {
-      const next = { ...(sourcesOpen ?? {}), ...localOpen, [focus.conversationId]: true };
+      const next = withOpen(focus.conversationId, true);
       setLocalOpen(next);
-      setPersistQueue(next);
+      setPersistQueue(Object.fromEntries(next));
     }
     setHighlight(focus.conversationId);
   }
