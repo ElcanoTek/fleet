@@ -49,7 +49,7 @@ Division of labor across the three health verbs:
 |---|---|---|---|
 | `fleet status` | none | never | quick in-process checks (bundle, env, DBs, sandbox, unit) |
 | `fleet doctor` | root — `--dry-run` needs none, but **`--check` still does** (it probes the service user's rootless podman and reads 0600 env files) | **repairs** | everything status checks **plus** packages, podman prereqs, unit drift, env files — and fixes them (except a stale podman pause process: reported with the manual repair, never run) |
-| `fleet doctor --node` | root — **except `--node --check`**, the one read-only path needing none (it is what `fleet update --check` calls) | **repairs** | the node toolchain ONLY: install `nodejs<major>` + `-npm` per `web/.nvmrc`, stamp `FLEET_NODE_BIN`, assert the resolved interpreter **and that an npm belongs to it**, exit |
+| `fleet doctor --node` | root — **except `--node --check`**, the one read-only path needing none (it is what `fleet update --check` calls) | **repairs** | the node toolchain ONLY: install `nodejs<major>` + `-npm` per `web/.nvmrc` (or, when the distro has no such stream, the signed nodejs.org release into `/usr/local/bin/node-<major>` — [ADR-0078](adr/0078-track-the-latest-node-major.md)), stamp `FLEET_NODE_BIN`, assert the resolved interpreter **and that an npm belongs to it**, exit |
 | `/admin/doctor` (UI) | admin session | never | doctor's *diagnosable-from-the-process* subset, with fix hints |
 
 ## Design decisions

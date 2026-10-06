@@ -105,6 +105,20 @@ needs approval, the reply ends with a link or a `fleet chat --approve` command,
 because approvals are settled in fleet, not in the client. Images and audio are
 not accepted.
 
+A message sent from the client while an earlier one is still running does not
+stop it. It waits, and messages on the same session run one at a time, in the
+order `fleet acp` received them. Up to 20 can wait behind the one running. A
+21st is refused straight away with an error saying the session already has a
+prompt running and 20 waiting. It is not sent to fleet, so send it again once
+the earlier ones have been answered, or cancel them from the client.
+
+If you close the editor, or stop the agent, while a reply is still running, and
+the editor lets the agent shut down (Neovim's CodeCompanion.nvim does), that
+turn is stopped in fleet too. Messages from the client still waiting behind it
+are dropped: they never reach fleet. A message fleet itself had already queued
+(behind a turn started from the web chat, say) still runs. An editor that
+force-kills its agent leaves the turn running: stop it from the web chat.
+
 ### What happens when you ask
 
 The assistant does the work rather than describing it. It has a private working
@@ -627,6 +641,17 @@ Open the library, search or scroll, and select an entry to read it in full. **Us
 prompt** inserts it into your draft; send it as it is, or add to it first. In the
 Operations Center the same action fills the task's instructions and seeds the
 task's title from the prompt's name.
+
+Some deployment prompts are **forms**, marked **Form** in the list. Selecting one
+shows its questions instead of its text. Fill in the fields marked `*`; some
+forms keep extra settings under **More options**. **Use prompt** stays
+unavailable until every required field has an answer, and the **Prompt preview**
+under the form shows exactly what it will insert. An optional text, number or
+date field you leave empty is left out of the prompt, so there are no
+placeholders to hunt down afterwards. The finished prompt lands in
+your draft like any other, ready to read, change or attach files to before you
+send it. **Insert raw prompt** inserts the template with its `{placeholders}`
+instead, if you would rather fill it in by hand.
 
 ### Creating and editing
 

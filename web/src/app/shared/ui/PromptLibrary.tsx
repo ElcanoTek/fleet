@@ -9,6 +9,7 @@ import {
   type PromptLibraryItem,
   type PromptLibraryWrite,
 } from "@/app/shared/lib/orchestratorApi";
+import { isFormPrompt, PromptLibraryForm } from "./PromptLibraryForm";
 import { useDialogA11y } from "./useDialogA11y";
 
 // Not on the shared DialogShell (the B-2 pass), deliberately: this is the
@@ -26,7 +27,9 @@ type Props = {
   // caller label what it just inserted — the task form seeds an empty Title
   // from it, so picking "Reklaim daily health scan" out of the library names
   // the task as well as filling its prompt. Callers with nowhere to put a name
-  // (chat's composer) simply ignore the second argument.
+  // (chat's composer) simply ignore the second argument. For a form prompt
+  // (PromptLibraryForm) the content is the rendered template — or the raw
+  // template, from "Insert raw prompt" — never the YAML file itself.
   onInsert: (content: string, name?: string) => void;
   compact?: boolean;
 };
@@ -309,6 +312,7 @@ export function PromptLibrary({
                                       ? "Workspace"
                                       : "Private"}
                                 </span>
+                                {isFormPrompt(p) ? <span>· Form</span> : null}
                                 {p.path ? (
                                   <span className="truncate normal-case tracking-normal">
                                     {p.path}
@@ -432,32 +436,49 @@ export function PromptLibrary({
                             ) : null}
                           </div>
                         </div>
-                        <pre className="mt-3 min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs text-[var(--color-text-secondary)]">
-                          {selected.content}
-                        </pre>
-                        <div className="mt-3 flex items-center justify-between gap-3">
-                          <span className="text-xs text-[var(--color-text-muted)]">
-                            {selected.read_only
-                              ? `Tracked in ${selected.path}`
-                              : selected.visibility === "workspace"
-                                ? `Shared by ${selected.owner_username}`
-                                : "Only you can see this prompt"}
-                          </span>
-                          <button
-                            type="button"
-                            className="btn btn-primary"
-                            onClick={() => {
-                              onInsert(selected.content, selected.name);
+                        {isFormPrompt(selected) ? (
+                          // A form prompt shows its form where a plain entry
+                          // shows its text. Keyed by id so picking another
+                          // form starts from that form's own defaults.
+                          <PromptLibraryForm
+                            key={selected.id}
+                            prompt={selected}
+                            note={`Tracked in ${selected.path}`}
+                            onUse={(text) => {
+                              onInsert(text, selected.name);
                               setOpen(false);
                             }}
-                          >
-                            <Icon
-                              name="arrow-up"
-                              className="mr-1.5 size-3.5 rotate-90"
-                            />
-                            Use prompt
-                          </button>
-                        </div>
+                          />
+                        ) : (
+                          <>
+                            <pre className="mt-3 min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs text-[var(--color-text-secondary)]">
+                              {selected.content}
+                            </pre>
+                            <div className="mt-3 flex items-center justify-between gap-3">
+                              <span className="text-xs text-[var(--color-text-muted)]">
+                                {selected.read_only
+                                  ? `Tracked in ${selected.path}`
+                                  : selected.visibility === "workspace"
+                                    ? `Shared by ${selected.owner_username}`
+                                    : "Only you can see this prompt"}
+                              </span>
+                              <button
+                                type="button"
+                                className="btn btn-primary"
+                                onClick={() => {
+                                  onInsert(selected.content, selected.name);
+                                  setOpen(false);
+                                }}
+                              >
+                                <Icon
+                                  name="arrow-up"
+                                  className="mr-1.5 size-3.5 rotate-90"
+                                />
+                                Use prompt
+                              </button>
+                            </div>
+                          </>
+                        )}
                       </div>
                     ) : (
                       <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-[var(--color-text-muted)]">

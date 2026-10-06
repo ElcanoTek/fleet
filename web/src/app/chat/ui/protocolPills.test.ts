@@ -7,6 +7,7 @@ import {
   getPill,
   isPillReady,
   pillToPrompt,
+  type PillFormShape,
   type ProtocolPill,
 } from "./protocolPills";
 
@@ -175,6 +176,76 @@ describe("pillToPrompt — string template", () => {
     };
     expect(pillToPrompt(TEXTAREA_PILL, v)).toBe(
       "Wrap Acme.\nKPIs: CTR, goal 0.15%\nCPA, conversions / spend, under $40\nContext: {context}",
+    );
+  });
+});
+
+// The Prompt Library's form prompts render with one extra rule, opted into by
+// `dropBlankLines`: a template line whose tokens are ALL blank disappears, so an
+// optional field the user skipped leaves nothing behind. The cards never pass
+// the option, and the last test here pins that they are unaffected.
+describe("pillToPrompt — dropBlankLines (Prompt Library forms)", () => {
+  const LIBRARY_FORM: PillFormShape = {
+    title: "New campaign page",
+    fields: [
+      { key: "partner", label: "Partner", type: "select", required: true, options: ["TWC", "Other"] },
+      { key: "campaign", label: "Campaign", type: "text", required: true },
+      { key: "deals", label: "Deals", type: "textarea", advanced: true },
+      { key: "flight", label: "Flight", type: "daterange", advanced: true },
+      { key: "budget", label: "Budget", type: "number", advanced: true },
+      { key: "shareable", label: "Shareable", type: "toggle", advanced: true },
+    ],
+    promptTemplate:
+      "Create a page.\nPartner: {partner}\nCampaign: {campaign}\nDeals: {deals}\n" +
+      "Flight: {flight}\nBudget: {budget}\nShareable: {shareable}\n\nThanks.",
+  };
+  const filled = {
+    ...formInitialValues(LIBRARY_FORM),
+    campaign: "Go Raw CTV",
+    budget: "",
+  };
+
+  it("drops each line whose tokens were all left blank, and keeps token-free lines", () => {
+    expect(pillToPrompt(LIBRARY_FORM, filled, { dropBlankLines: true })).toBe(
+      // Deals (blank textarea), Flight (blank daterange) and Budget (cleared
+      // number) vanish; the blank separator line and "Thanks." have no tokens
+      // and stay. A toggle always renders yes/no, so its line is never dropped.
+      "Create a page.\nPartner: TWC\nCampaign: Go Raw CTV\nShareable: no\n\nThanks.",
+    );
+  });
+
+  it("keeps a filled optional line, with the value's own line breaks intact", () => {
+    const v = {
+      ...filled,
+      deals: "Deal A\nDeal B ",
+      flight: { from: "2026-01-01", to: "" },
+      budget: 2500,
+      shareable: true,
+    };
+    expect(pillToPrompt(LIBRARY_FORM, v, { dropBlankLines: true })).toBe(
+      "Create a page.\nPartner: TWC\nCampaign: Go Raw CTV\nDeals: Deal A\nDeal B\n" +
+        "Flight: 2026-01-01 → ?\nBudget: 2500\nShareable: yes\n\nThanks.",
+    );
+  });
+
+  it("keeps a line with at least one filled token, leaving its blank token in place", () => {
+    const shape: PillFormShape = {
+      ...LIBRARY_FORM,
+      promptTemplate: "Run {campaign} for {deals}.\nNotes: {deals}",
+    };
+    expect(pillToPrompt(shape, filled, { dropBlankLines: true })).toBe("Run Go Raw CTV for {deals}.");
+  });
+
+  it("decides on the template line, so a value containing a token cannot resurrect a dropped line", () => {
+    const shape: PillFormShape = { ...LIBRARY_FORM, promptTemplate: "Campaign: {campaign}\nDeals: {deals}" };
+    const v = { ...filled, campaign: "literal {deals}" };
+    expect(pillToPrompt(shape, v, { dropBlankLines: true })).toBe("Campaign: literal {deals}");
+  });
+
+  it("leaves the cards' rendering unchanged when the option is not passed", () => {
+    expect(pillToPrompt(LIBRARY_FORM, filled)).toBe(
+      "Create a page.\nPartner: TWC\nCampaign: Go Raw CTV\nDeals: {deals}\n" +
+        "Flight: {flight}\nBudget: {budget}\nShareable: no\n\nThanks.",
     );
   });
 });

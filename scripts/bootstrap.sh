@@ -862,8 +862,22 @@ if command -v dnf >/dev/null 2>&1; then
     # should still get a working box; the floor is then doctor.sh's to report.
     warn "installing nodejs${NODE_MAJOR} failed — falling back to the unversioned nodejs package."
     warn "  the web tier needs node >= ${NODE_MAJOR}; \`sudo fleet doctor\` will report the shortfall."
-    FLEET_DEPS=(git curl jq rsync golang nodejs npm python3 python3-pip gcc podman slirp4netns)  # unversioned fallback
+    FLEET_DEPS=(git curl jq rsync golang nodejs npm gnupg2 python3 python3-pip gcc podman slirp4netns)  # unversioned fallback
     run dnf install -y "${FLEET_DEPS[@]}" || warn "dependency install failed — install these by hand: ${FLEET_DEPS[*]}"
+    # The usual reason for that miss is a node major newer than the distro's
+    # streams (node 26 on Fedora 44). fleet tracks the latest major (ADR-0078),
+    # so instead of leaving the floor to doctor, fetch the signed nodejs.org
+    # release — the same install `fleet doctor --node` performs — unless the
+    # unversioned package happened to be new enough.
+    if [[ "$DRY_RUN" == "1" ]]; then
+      info "[dry-run] would install the signed upstream node ${NODE_MAJOR} from nodejs.org into /usr/local/bin/node-${NODE_MAJOR} if no node >= ${NODE_MAJOR} resolves"
+    elif ! fleet_resolve_node_bin "$NODE_MAJOR" >/dev/null; then
+      if tarball_node="$(fleet_node_tarball_install "$NODE_MAJOR")"; then
+        ok "no nodejs${NODE_MAJOR} package in the distro repos — installed the signed upstream node $("$tarball_node" -v) at ${tarball_node}"
+      else
+        warn "could not install node ${NODE_MAJOR} from nodejs.org either (see above); \`sudo fleet doctor --node\` retries it."
+      fi
+    fi
   fi
   [[ "$DRY_RUN" == "1" ]] || ok "system dependencies present (${FLEET_DEPS[*]})"
 else

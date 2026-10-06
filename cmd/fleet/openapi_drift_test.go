@@ -15,6 +15,7 @@ import (
 	"github.com/goccy/go-yaml"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/sched/handlers"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -273,6 +274,9 @@ var schemaModelRegistry = map[string]any{
 	// internal shapes.
 	"PromptLibraryWrite": handlers.PromptLibraryWrite{},
 	"PromptLibraryItem":  handlers.PromptLibraryItem{},
+	// One input of a Git form prompt, carried verbatim from the bundle loader
+	// in PromptLibraryItem.fields.
+	"PromptField": clientconfig.PromptField{},
 	// Pre-submission cost forecast (#233/#405). The estimate handler returns
 	// agentcore.CostForecast verbatim via writeJSON, so these three reusable
 	// schemas are backed by the exported, reflectable agentcore types.
