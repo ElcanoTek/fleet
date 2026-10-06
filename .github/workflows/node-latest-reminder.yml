@@ -48,7 +48,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          current="$(tr -dc '0-9' < web/.nvmrc)"
+          # The canonical parser (the major before the first dot): `tr -dc`
+          # would read a full-version .nvmrc like 26.10.0 as 26100.
+          # shellcheck source=/dev/null
+          . scripts/lib/node-version.sh
+          current="$(fleet_node_major_want .)"
           # index.json is newest-first; the first entry is the latest release.
           latest="$(curl -fsSL --retry 3 https://nodejs.org/dist/index.json | jq -r '.[0].version')"
           latest_major="$(printf '%s' "${latest#v}" | cut -d. -f1)"
@@ -84,14 +88,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          upstream="$(curl -fsSL --retry 3 https://raw.githubusercontent.com/nodejs/release-keys/main/keys.list | sort -u)"
-          vendored="$(sort -u scripts/lib/node-release-keys.list)"
-          if [ "${upstream}" = "${vendored}" ]; then
+          # Regenerate the keyring exactly as a maintainer would and diff the
+          # result. Comparing only keys.list (primary fingerprints) would miss
+          # a new or rotated SUBKEY under an existing primary — and a release
+          # signed by that subkey would then be refused by the stale keyring.
+          scripts/update-node-release-keys.sh
+          if git diff --quiet -- scripts/lib/node-release-keys.list scripts/lib/node-release-keys.asc; then
             echo "vendored node release keys match nodejs/release-keys."
             exit 0
           fi
-          echo "drift between scripts/lib/node-release-keys.list and nodejs/release-keys:"
-          diff <(printf '%s\n' "${vendored}") <(printf '%s\n' "${upstream}") || true
+          echo "drift between the vendored keyring and nodejs/release-keys:"
+          git diff --stat -- scripts/lib/node-release-keys.list scripts/lib/node-release-keys.asc
+          git diff -- scripts/lib/node-release-keys.list || true
 
           title="Refresh the vendored node release keys: nodejs/release-keys has changed"
           num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
@@ -102,7 +110,7 @@ jobs:
           fi
           gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "Filed automatically by .github/workflows/node-latest-reminder.yml: nodejs/release-keys' keys.list no longer matches scripts/lib/node-release-keys.list.
 
-          The upstream node fallback (fleet_node_tarball_install) trusts only the vendored keyring, so a release signed by a newly added releaser would be refused on boxes that need it.
+          The upstream node fallback (fleet_node_tarball_install) trusts only the vendored keyring, so a release signed by a newly added releaser (or a new subkey) would be refused on boxes that need it.
 
           - [ ] Run \`scripts/update-node-release-keys.sh\` and review the diff (added/removed fingerprints should match nodejs/release-keys' history).
           - [ ] \`make test\`

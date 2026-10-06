@@ -487,6 +487,13 @@ doctor_tools=(go git curl jq podman psql npm python3)
 for tool in "${doctor_tools[@]}"; do
   if command -v "$tool" >/dev/null 2>&1; then
     pass "$tool present"
+  elif [[ "$tool" == "npm" && -n "${npm_cli:-}" ]]; then
+    # No bare `npm` on PATH, but the npm that belongs to the resolved node is
+    # there (checked above) — the upstream-tarball install ships it as
+    # npm-<major> only, and the build pins that pair, never PATH's `npm`.
+    # Asking dnf for nodejs<major>-npm here would fail on exactly the distro
+    # the fallback exists for.
+    pass "npm present as ${npm_cli} (belongs to ${node_bin})"
   elif [[ "$CHECK_ONLY" == "1" || "$HAVE_DNF" == "0" ]]; then
     fail "$tool missing"
   else
