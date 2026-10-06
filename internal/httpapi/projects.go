@@ -654,9 +654,10 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		if walkTruncated {
 			truncated = true
 		}
-		if len(all) == 0 {
-			continue
-		}
+		// Outputs are resolved independently of the walk: the walk is
+		// bounded (file cap and visit budget), so an empty walk — e.g. the
+		// budget spent on thousands of empty directories — does not mean the
+		// chat has no current output. Skip the chat only when BOTH are empty.
 		outs, outsTruncated, err := s.ownerOutputs(ctx, conv.ID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -664,6 +665,9 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		}
 		if outsTruncated {
 			truncated = true
+		}
+		if len(all) == 0 && len(outs) == 0 {
+			continue
 		}
 		copied := map[string]bool{}
 		g := sourcesGroup{

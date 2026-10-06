@@ -274,13 +274,39 @@ type teamViewResponse struct {
 //
 // A chat the caller may not read is 404, indistinguishable from one that does
 // not exist — team membership is never probeable from here.
+//
+// Conditional (the live view's poll): the ETag is a version from a light
+// query under the SAME gate, run BEFORE the transcript is loaded. A matching
+// If-None-Match is answered 304 with no body — the poll then costs no history
+// load, no output discovery and no JSON. A caller who may not read the chat
+// gets the same 404 whatever If-None-Match says. The ETag on a 200 is the
+// version read before the body was built, so a change landing in between can
+// only make the NEXT poll refetch, never let it keep a stale body.
 func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Request, convID, user string) {
+	version, err := s.store.TeamViewVersion(r.Context(), user, convID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if version == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	etag := `W/"tv-` + version + `"`
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("ETag", etag)
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	snap, err := s.store.GetTeamVisibleConversation(r.Context(), user, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if snap == nil {
+		// Unshared between the version read and this one.
+		w.Header().Del("ETag")
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -314,6 +340,23 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	writeJSON(w, resp)
+}
+
+// etagMatches reports whether an If-None-Match header value matches etag,
+// using the weak comparison RFC 9110 prescribes for If-None-Match: "*", or
+// any listed tag whose opaque part equals etag's, W/ prefix ignored.
+func etagMatches(header, etag string) bool {
+	if header == "" {
+		return false
+	}
+	want := strings.TrimPrefix(etag, "W/")
+	for _, t := range strings.Split(header, ",") {
+		t = strings.TrimSpace(t)
+		if t == "*" || strings.TrimPrefix(t, "W/") == want {
+			return true
+		}
+	}
+	return false
 }
 
 // handleSharedConversation serves the public read-only snapshot for a share

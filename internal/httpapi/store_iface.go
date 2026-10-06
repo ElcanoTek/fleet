@@ -273,6 +273,9 @@ type chatStore interface {
 	// the read-only transcript a teammate opens from the project home. nil =
 	// not readable, indistinguishable from "no such chat".
 	GetTeamVisibleConversation(ctx context.Context, callerEmail, convID string) (*store.TeamSharedConversation, error)
+	// TeamViewVersion is team-view's cheap ETag read: same gate, no history
+	// load. "" = not readable (the handler answers 404, never 304).
+	TeamViewVersion(ctx context.Context, callerEmail, convID string) (string, error)
 	// LeaveTeamImpact is what leaving the team costs — quoted in the confirm.
 	LeaveTeamImpact(ctx context.Context, email, teamID string) (store.LeaveTeamImpact, error)
 	SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) (bool, error)

@@ -421,6 +421,70 @@ describe("TeamChatViewer — live (the owner keeps working)", () => {
     expect(screen.getByText("Now by region.")).toBeInTheDocument();
   });
 
+  it("polls conditionally and keeps the snapshot on a 304", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const sent: Array<string | null> = [];
+    let snap: Snap = WITH_FILES;
+    let etag = 'W/"tv-1"';
+    let status = 200;
+    const fetchMock = stubFetch((url, init) => {
+      if (!url.includes("/team-view")) return json({});
+      const inm = new Headers(init?.headers).get("If-None-Match");
+      sent.push(inm);
+      if (status === 404) return json({}, 404);
+      if (inm === etag) return new Response(null, { status: 304, headers: { ETag: etag } });
+      return new Response(JSON.stringify(snap), { status: 200, headers: { ETag: etag } });
+    });
+    renderFull(WITH_FILES);
+    await screen.findByText("Break spend down by channel.");
+    expect(sent).toEqual([null]);
+
+    // Unchanged: the poll sends the etag, gets a 304, and the transcript stays.
+    await act(async () => {
+      vi.advanceTimersByTime(TEAM_VIEW_POLL_MS);
+    });
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]).toBe('W/"tv-1"');
+    expect(screen.getByText("Break spend down by channel.")).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn’t load this chat/)).toBeNull();
+
+    // Changed: a 200 with a new etag repaints, and the next poll sends it.
+    snap = {
+      ...WITH_FILES,
+      messages: [
+        ...WITH_FILES.messages,
+        { id: 3, role: "user", type: "text", content: { text: "Now by region." } },
+      ],
+    };
+    etag = 'W/"tv-2"';
+    await act(async () => {
+      vi.advanceTimersByTime(TEAM_VIEW_POLL_MS);
+    });
+    expect(await screen.findByText("Now by region.")).toBeInTheDocument();
+    expect(sent[2]).toBe('W/"tv-1"');
+    await act(async () => {
+      vi.advanceTimersByTime(TEAM_VIEW_POLL_MS);
+    });
+    await waitFor(() => expect(sent).toHaveLength(4));
+    expect(sent[3]).toBe('W/"tv-2"');
+    expect(screen.getByText("Now by region.")).toBeInTheDocument();
+
+    // A 404 drops the snapshot AND its etag: the next read is unconditional.
+    status = 404;
+    await act(async () => {
+      vi.advanceTimersByTime(TEAM_VIEW_POLL_MS);
+    });
+    expect(
+      await screen.findByText("This chat isn’t shared with your team anymore."),
+    ).toBeInTheDocument();
+    await act(async () => {
+      vi.advanceTimersByTime(TEAM_VIEW_POLL_MS);
+    });
+    await waitFor(() => expect(sent).toHaveLength(6));
+    expect(sent[5]).toBeNull();
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
   it("clears a failed first load once a poll succeeds", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     let status = 500;

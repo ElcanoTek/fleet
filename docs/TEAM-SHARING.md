@@ -298,11 +298,34 @@ it is a live download or a locked name. A withheld file's size and date are
 zeroed for a teammate: its name is already in the transcript, nothing else
 about it was shared.
 
+**The live poll is conditional.** The open view re-reads `team-view` every
+12 seconds while visible. Every response carries a weak `ETag`, and the client
+sends the last one back as `If-None-Match`; when nothing changed the server
+answers `304 Not Modified` with no body and the view keeps what it shows. The
+version behind the ETag comes from one light query under the **same** read gate
+as the full snapshot, run *before* the transcript is loaded — a caller who may
+not read the chat gets the same `404` whatever `If-None-Match` says, never a
+`304`. It fingerprints the chat row (`updated_at`, title, owner, audience,
+project and the project's name), the visible transcript (count and highest id
+of the user/assistant text and summary rows), the exclusion set (count plus a
+hash of the sorted paths), the caller's own latest branch of the chat (which
+with the transcript decides `viewer_branch` / `changed_since`), and the
+caller. A 200's ETag is the version read before its body was built, so a change
+landing in between only makes the next poll refetch. **Not covered:** the
+workspace on disk. An output's size and date, and whether a referenced file
+exists yet, are read when the body is built, so a file that appears or changes
+on disk with no new message and no exclusion change shows on the next poll
+after a real change. In practice the agent writes a file and then presents it
+in a reply — a new message. The web proxy forwards `If-None-Match` and passes
+the `304` and its `ETag` through.
+
 **Branch contents.** A teammate's branch gets every output shared at the moment
 of branching, copied into its own workspace at the same relative path, as the
 brancher's own files (0644 files, 0755 directories, written through an
 `os.Root` on the new workspace; the source is read with the same no-symlink
-opener as downloads). They never update: later unshares, edits or deletions by
+opener as downloads; a file whose size or modification time changed while it
+was being copied — truncated, or rewritten in place to the same length — is
+withheld rather than copied as a mix of two versions). They never update: later unshares, edits or deletions by
 the owner do not reach them. Unshared outputs are recorded as `withheld_files`
 and stay locked names in the branch's transcript — as is every other workspace
 reference the transcript links that the branch did not receive (an upload,
@@ -346,7 +369,10 @@ in this project (their shared outputs only — the same gates as
 `team-conversations`, downloads through `team-files`). `file_count` and
 `shared_count` count outputs only. The flat `files` list (the caller's own
 files) is kept for older clients, and also skips uploads now. The UI decides
-the order; the server returns both kinds.
+the order; the server returns both kinds. A chat's outputs are resolved
+independently of the bounded workspace walk, so a walk that finds nothing
+(its entry budget spent on a tree of empty directories, say) still lists every
+current output; a chat is left out only when both are empty.
 
 **The team link.** `/chat?team=<id>` lands a signed-in teammate on the
 read-only view. `GET /conversations/{id}/team-link` tells the client where to

@@ -359,6 +359,19 @@ func copyOneOutput(srcDir string, dst *os.Root, rel string, budget int64) (int64
 	if err == nil && n != info.Size() {
 		err = errBranchCopyShort
 	}
+	// An in-place rewrite of the same length passes the size check yet
+	// leaves a file mixing old and new bytes. Re-stat the open descriptor:
+	// any change in size or mtime since the pre-copy stat means the bytes
+	// we read may not be one version of the file, so it is withheld.
+	if err == nil {
+		after, serr := in.Stat()
+		switch {
+		case serr != nil:
+			err = serr
+		case after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()):
+			err = errBranchCopyShort
+		}
+	}
 	if err != nil {
 		_ = dst.Remove(rel)
 		return 0, fmt.Errorf("copy: %w", err)

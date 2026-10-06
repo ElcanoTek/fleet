@@ -27,9 +27,12 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -143,6 +146,94 @@ func (s *Store) GetTeamVisibleConversation(ctx context.Context, callerEmail, con
 		}
 	}
 	return &out, nil
+}
+
+// TeamViewVersion is the cheap "has anything a team-view body is built from
+// changed?" read behind team-view's ETag (docs/TEAM-SHARING.md "Live view").
+// It runs BEFORE GetTeamVisibleConversation would load history, under the
+// SAME gate (teamReadableClause), and returns "" for a caller who may not
+// read the chat — the handler then answers 404 exactly as the full read
+// would, so a version is never handed to (nor a 304 given to) a caller the
+// transcript would be refused to.
+//
+// The version fingerprints, in one round trip on indexed columns:
+//   - the conversation row's updated_at, title, owner, audience and project
+//     (and that project's name, the breadcrumb);
+//   - the VISIBLE transcript (the teamTranscriptEntry filter) as count +
+//     max(id): messages are only ever inserted (with a fresh, larger id) or
+//     deleted, so any change to the visible set moves one of the two;
+//   - the exclusion set, as count + a hash of its sorted paths, so an
+//     unshare followed by a share of a different file still changes it;
+//   - the viewer's most recent live branch of the chat (id, branched_at and
+//     its high-water mark), which with max(id) determines viewer_branch and
+//     changed_since;
+//   - the caller's email: owner and teammate get different bodies.
+//
+// What it does NOT see is the workspace on disk: an output's size/date and
+// whether its file exists are read when the body is built. A file that
+// appears or changes on disk with no new message and no exclusion change
+// shows on the next poll after a real change — in practice the agent writes
+// a file and then presents it in a reply, which is a new message.
+func (s *Store) TeamViewVersion(ctx context.Context, callerEmail, convID string) (string, error) {
+	if convID == "" {
+		return "", nil
+	}
+	callerEmail = normalizeEmail(callerEmail)
+	team, err := s.callerTeam(ctx, callerEmail)
+	if err != nil {
+		return "", err
+	}
+	var (
+		updatedAt, msgCount, msgMax, exCount int64
+		title, owner, audience, projectID    string
+		projectName, exHash, vbID            string
+		vbAt, vbMark                         int64
+	)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT c.updated_at, c.title, c.user_email, COALESCE(c.team_shared_with, ''),
+		       COALESCE(c.project_id, ''),
+		       COALESCE((SELECT p.name FROM projects p WHERE p.id = c.project_id), ''),
+		       msg.n, msg.mx, ex.n, ex.h,
+		       COALESCE(vb.conversation_id, ''), COALESCE(vb.branched_at, 0),
+		       COALESCE(vb.source_max_message_id, 0)
+		FROM conversations c
+		CROSS JOIN LATERAL (
+			SELECT COUNT(*) AS n, COALESCE(MAX(m.id), 0) AS mx
+			FROM messages m
+			WHERE m.conversation_id = c.id
+			  AND ((m.type = 'text' AND m.role IN ('user', 'assistant'))
+			       OR m.type IN ('summary', '`+agent.EntryTypeSummaryBoundary+`'))
+		) msg
+		CROSS JOIN LATERAL (
+			SELECT COUNT(*) AS n, COALESCE(md5(string_agg(e.path, E'\n' ORDER BY e.path)), '') AS h
+			FROM conversation_output_exclusions e
+			WHERE e.conversation_id = c.id
+		) ex
+		LEFT JOIN LATERAL (
+			SELECT o.conversation_id, o.branched_at, o.source_max_message_id
+			FROM conversation_branch_origins o
+			JOIN conversations bc ON bc.id = o.conversation_id
+			WHERE o.source_conversation_id = c.id
+			  AND bc.user_email = $2 AND bc.deleted_at IS NULL
+			ORDER BY o.branched_at DESC, o.conversation_id DESC
+			LIMIT 1
+		) vb ON TRUE
+		WHERE `+teamReadableClause,
+		convID, callerEmail, team,
+	).Scan(&updatedAt, &title, &owner, &audience, &projectID, &projectName,
+		&msgCount, &msgMax, &exCount, &exHash, &vbID, &vbAt, &vbMark)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	h := sha256.New()
+	for _, part := range []any{convID, callerEmail, updatedAt, title, owner, audience, projectID, projectName,
+		msgCount, msgMax, exCount, exHash, vbID, vbAt, vbMark} {
+		fmt.Fprintf(h, "%v\x00", part)
+	}
+	return hex.EncodeToString(h.Sum(nil)[:16]), nil
 }
 
 // teamTranscriptEntry is the ONE filter from a conversation's history to what

@@ -815,6 +815,52 @@ func TestProjectFilesListsOlderOutputsPastTheWalkBound(t *testing.T) {
 	}
 }
 
+// The walk's visit budget can be spent before it reaches a single file (a
+// tree of empty directories that sorts first). That must not hide the chat's
+// current outputs: they are resolved independently of the walk, so the group
+// still lists every output with its toggle, and the listing says truncated.
+func TestProjectFilesListsOutputsWhenWalkFindsNoFiles(t *testing.T) {
+	f := newFilesFixture(t)
+	ws := filepath.Join(f.root, f.chat.ID)
+	for i := range 40 {
+		if err := os.MkdirAll(filepath.Join(ws, "aaa", fmt.Sprintf("d%03d", i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := maxWorkspaceWalkEntries
+	maxWorkspaceWalkEntries = 20
+	t.Cleanup(func() { maxWorkspaceWalkEntries = old })
+	if all, _ := walkWorkspaceFiles(f.chat.ID, maxProjectFiles); len(all) != 0 {
+		t.Fatalf("fixture: the walk should find no files, got %d", len(all))
+	}
+	type body struct {
+		Groups []struct {
+			ConversationID string `json:"conversation_id"`
+			FileCount      int    `json:"file_count"`
+			SharedCount    int    `json:"shared_count"`
+			Files          []struct {
+				Path   string `json:"path"`
+				Shared bool   `json:"shared"`
+				Output bool   `json:"output"`
+			} `json:"files"`
+		} `json:"groups"`
+		Truncated bool `json:"truncated"`
+	}
+	got := decode[body](t, projectSub(t, f.srv, "GET", "alice@x.com", f.project.ID+"/files", ""))
+	if len(got.Groups) != 1 || got.Groups[0].ConversationID != f.chat.ID {
+		t.Fatalf("groups = %+v, want alice's chat with its outputs", got.Groups)
+	}
+	g := got.Groups[0]
+	if g.FileCount != 4 || g.SharedCount != 3 || len(g.Files) != 4 || !got.Truncated {
+		t.Errorf("group = %+v truncated=%v, want 4 output rows (3 shared), truncated", g, got.Truncated)
+	}
+	for _, fl := range g.Files {
+		if !fl.Output {
+			t.Errorf("non-output row without a walk: %+v", fl)
+		}
+	}
+}
+
 func TestProjectMyStateEndpoint(t *testing.T) {
 	f := newTeamHTTPFixture(t)
 	// sources_open keys are chat ids in the project; keys naming no live chat
@@ -877,6 +923,53 @@ func TestCopyOneOutputRejectsShortCopy(t *testing.T) {
 	}
 	if n, err := copyOneOutput(src, dst, "ok.csv", 1<<20); err != nil || n != 4 {
 		t.Fatalf("full copy = (%d, %v), want (4, nil)", n, err)
+	}
+}
+
+// A same-size in-place rewrite during the copy passes the length check but
+// can leave a file mixing two versions; the post-copy re-stat of the open
+// descriptor (size + mtime) catches it and the copy is withheld.
+func TestCopyOneOutputRejectsSameSizeRewrite(t *testing.T) {
+	src := t.TempDir()
+	p := filepath.Join(src, "report.csv")
+	if err := os.WriteFile(p, []byte("a,b\n1,2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Unix(1_700_000_000, 0)
+	if err := os.Chtimes(p, old, old); err != nil {
+		t.Fatal(err)
+	}
+	dstDir := t.TempDir()
+	dst, err := os.OpenRoot(dstDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+
+	branchCopyAfterStat = func(p string) {
+		// Same length, different bytes, later mtime — same inode.
+		f, err := os.OpenFile(p, os.O_WRONLY, 0)
+		if err != nil {
+			t.Errorf("open: %v", err)
+			return
+		}
+		if _, err := f.WriteAt([]byte("x,y\n9,9\n"), 0); err != nil {
+			t.Errorf("rewrite: %v", err)
+		}
+		_ = f.Close()
+		later := old.Add(time.Minute)
+		if err := os.Chtimes(p, later, later); err != nil {
+			t.Errorf("chtimes: %v", err)
+		}
+	}
+	t.Cleanup(func() { branchCopyAfterStat = nil })
+
+	n, err := copyOneOutput(src, dst, "report.csv", 1<<20)
+	if !errors.Is(err, errBranchCopyShort) {
+		t.Fatalf("copyOneOutput = (%d, %v), want errBranchCopyShort", n, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dstDir, "report.csv")); !os.IsNotExist(statErr) {
+		t.Fatalf("mixed-version copy left behind: %v", statErr)
 	}
 }
 
@@ -978,5 +1071,104 @@ func TestBranchFilesNoteSurvivesAFailedFirstTurn(t *testing.T) {
 	}
 	if got := turn("third"); strings.Contains(got, "out/report.csv") {
 		t.Fatalf("a committed turn keeps the note claimed: %q", got)
+	}
+}
+
+// teamViewIf issues GET team-view as user with If-None-Match: etag.
+func teamViewIf(t *testing.T, srv *Server, user, convID, etag string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/conversations/"+convID+"/team-view", nil)
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	srv.conversationByID(w, req)
+	return w
+}
+
+// The live view's poll is conditional: an unchanged chat answers 304 with no
+// body; a new message, an exclusion change and the viewer's own new branch
+// each move the ETag; and a caller who may not read the chat gets 404 —
+// never 304 — whatever If-None-Match they send.
+func TestTeamViewConditionalPoll(t *testing.T) {
+	f := newFilesFixture(t)
+	w := teamViewIf(t, f.srv, "bob@x.com", f.chat.ID, "")
+	etag := w.Header().Get("ETag")
+	if w.Code != 200 || etag == "" {
+		t.Fatalf("first read: %d etag=%q", w.Code, etag)
+	}
+	notModified := func(step, tag string) {
+		t.Helper()
+		w := teamViewIf(t, f.srv, "bob@x.com", f.chat.ID, tag)
+		if w.Code != 304 || w.Body.Len() != 0 || w.Header().Get("ETag") != tag {
+			t.Fatalf("%s: %d etag=%q body=%q, want 304 with the same etag and no body",
+				step, w.Code, w.Header().Get("ETag"), w.Body.String())
+		}
+	}
+	changed := func(step, tag string) string {
+		t.Helper()
+		w := teamViewIf(t, f.srv, "bob@x.com", f.chat.ID, tag)
+		next := w.Header().Get("ETag")
+		if w.Code != 200 || next == "" || next == tag || w.Body.Len() == 0 {
+			t.Fatalf("%s: %d etag=%q (was %q), want 200 with a new etag", step, w.Code, next, tag)
+		}
+		return next
+	}
+	notModified("unchanged", etag)
+	// A list containing it matches too (weak comparison).
+	if w := teamViewIf(t, f.srv, "bob@x.com", f.chat.ID, `"other", `+etag); w.Code != 304 {
+		t.Errorf("etag list: %d, want 304", w.Code)
+	}
+	// The owner's body differs (withheld sizes are not zeroed): never the
+	// teammate's version.
+	if w := teamViewIf(t, f.srv, "alice@x.com", f.chat.ID, etag); w.Code != 200 {
+		t.Errorf("owner with the teammate's etag: %d, want 200", w.Code)
+	}
+
+	if _, err := f.st.AppendHistory(f.ctx, f.chat.ID, []agent.HistoryEntry{textEntry("assistant", "next reply")}); err != nil {
+		t.Fatal(err)
+	}
+	etag = changed("new message", etag)
+	notModified("after message", etag)
+
+	if err := f.st.SetOutputShared(f.ctx, "alice@x.com", f.chat.ID, "chart.png", false); err != nil {
+		t.Fatal(err)
+	}
+	etag = changed("exclusion added", etag)
+	// Swap which file is held back: same count, different set.
+	if err := f.st.SetOutputShared(f.ctx, "alice@x.com", f.chat.ID, "chart.png", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetOutputShared(f.ctx, "alice@x.com", f.chat.ID, "page.html", false); err != nil {
+		t.Fatal(err)
+	}
+	etag = changed("exclusion swapped", etag)
+
+	msgs, _ := f.st.LoadHistory(f.ctx, f.chat.ID)
+	b, _ := json.Marshal(map[string]any{"branch_point_message_id": msgs[len(msgs)-1].ID})
+	if w := convSub(t, f.srv, "POST", "bob@x.com", f.chat.ID, "branch", string(b)); w.Code != 201 {
+		t.Fatalf("branch: %d %s", w.Code, w.Body.String())
+	}
+	etag = changed("viewer branched", etag)
+	notModified("after branch", etag)
+	// A message after the branch flips changed_since — and the etag.
+	if _, err := f.st.AppendHistory(f.ctx, f.chat.ID, []agent.HistoryEntry{textEntry("user", "more")}); err != nil {
+		t.Fatal(err)
+	}
+	etag = changed("message after branch", etag)
+
+	// No read access: 404, not 304, with the CURRENT etag in hand.
+	if w := teamViewIf(t, f.srv, "zoe@x.com", f.chat.ID, etag); w.Code != 404 || w.Header().Get("ETag") != "" {
+		t.Errorf("other team with a matching etag: %d etag=%q, want 404 and no etag", w.Code, w.Header().Get("ETag"))
+	}
+	if w := teamViewIf(t, f.srv, "zoe@x.com", f.chat.ID, "*"); w.Code != 404 {
+		t.Errorf("other team with *: %d, want 404", w.Code)
+	}
+	if _, err := f.st.SetConversationTeamVisible(f.ctx, "alice@x.com", f.chat.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if w := teamViewIf(t, f.srv, "bob@x.com", f.chat.ID, etag); w.Code != 404 || w.Header().Get("ETag") != "" {
+		t.Errorf("unshared with a matching etag: %d etag=%q, want 404 and no etag", w.Code, w.Header().Get("ETag"))
 	}
 }

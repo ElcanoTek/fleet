@@ -122,6 +122,11 @@ export function TeamChatViewer({
   // an older response can never repaint a transcript (or resurrect one after
   // a newer 404) over a newer one.
   const loadGen = useRef(0);
+  // The ETag of the snapshot on screen. Polls send it as If-None-Match and a
+  // 304 keeps the snapshot as is — an unchanged chat costs the server a light
+  // version read instead of a full transcript load. Cleared with the
+  // snapshot (a 404), so the next read after that is unconditional.
+  const etagRef = useRef<string | null>(null);
   const load = useCallback(
     async (quiet: boolean, isCancelled: () => boolean) => {
       const gen = ++loadGen.current;
@@ -132,10 +137,21 @@ export function TeamChatViewer({
           if (!stale()) setLoadError("This chat link has an invalid id.");
           return;
         }
-        const res = await fetch(url, { cache: "no-store" });
+        const etag = etagRef.current;
+        const res = await fetch(url, {
+          cache: "no-store",
+          headers: etag ? { "If-None-Match": etag } : undefined,
+        });
         if (stale()) return;
+        if (res.status === 304) {
+          // Unchanged since the snapshot on screen; a 304 also means the
+          // read succeeded, so an earlier transient failure is retired.
+          setLoadError(null);
+          return;
+        }
         if (!res.ok) {
           if (res.status === 404) {
+            etagRef.current = null;
             setSnapshot(null);
             setLoadError("This chat isn’t shared with your team anymore.");
           } else if (!quiet) {
@@ -150,6 +166,7 @@ export function TeamChatViewer({
           // the stale "Couldn’t load" message on screen.
           setLoadError(null);
           setSnapshot(data);
+          etagRef.current = res.headers.get("ETag");
         }
       } catch {
         if (!quiet && !stale()) setLoadError("Couldn’t reach the server.");
@@ -161,6 +178,8 @@ export function TeamChatViewer({
   useEffect(() => {
     let cancelled = false;
     const isCancelled = () => cancelled;
+    // A different chat (or a remount) starts unconditional.
+    etagRef.current = null;
     queueMicrotask(() => void load(false, isCancelled));
     const visible = () =>
       typeof document === "undefined" || document.visibilityState === "visible";
