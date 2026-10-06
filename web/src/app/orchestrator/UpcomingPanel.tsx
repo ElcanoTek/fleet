@@ -50,6 +50,11 @@ const VIEWS: Array<{ id: UpcomingView; label: string }> = [
 ];
 
 export function UpcomingPanel() {
+  // One clock for the panel: the week board anchors on it, and the projection
+  // is re-requested when it rolls over, so after midnight the board never
+  // pages into days the last fetch did not cover.
+  const today = useLocalToday();
+  const todayKey = dayKey(today);
   const {
     data,
     loading,
@@ -68,7 +73,7 @@ export function UpcomingPanel() {
         ),
       [],
     ),
-    [],
+    [todayKey],
   );
   // View toggle: the chronological list (default) or a week board. Designed
   // so a month grid can slot in as a third view later. The choice persists
@@ -142,7 +147,7 @@ export function UpcomingPanel() {
           No upcoming runs. Recurring tasks and future one-shot schedules appear here.
         </div>
       ) : view === "week" ? (
-        <UpcomingWeek runs={runs} />
+        <UpcomingWeek runs={runs} today={today} />
       ) : (
         <UpcomingTimeline runs={runs} />
       )}
@@ -156,7 +161,8 @@ export function UpcomingPanel() {
 // mid-session, so the value is a state snapshot. It is not frozen at mount,
 // though: the Operations Center is left open for days, so a timer fires just
 // after local midnight and advances the snapshot — otherwise Saturday's board
-// would keep calling the previous week "This week" on Sunday morning.
+// would keep calling the previous week "This week" on Sunday morning, and
+// UpcomingPanel re-requests the projection on the same tick.
 function useLocalToday(): Date {
   const [today, setToday] = useState(() => new Date());
   useEffect(() => {
@@ -173,11 +179,10 @@ function useLocalToday(): Date {
 // the board's shape stable day to day (Wednesday is always the fourth
 // column); days already behind us render dimmed. Runs beyond Saturday are
 // summarized under the board.
-function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
+function UpcomingWeek({ runs, today }: { runs: UpcomingRun[]; today: Date }) {
   // weekOffset pages whole weeks: 0 = this week, 1 = next, … The upcoming
   // feed only projects forward, so past weeks aren't offered.
   const [weekOffset, setWeekOffset] = useState(0);
-  const today = useLocalToday();
   const sunday = new Date(
     today.getFullYear(),
     today.getMonth(),

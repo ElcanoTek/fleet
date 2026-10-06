@@ -262,5 +262,8 @@ describe("UpcomingPanel week view across midnight", () => {
     days = screen.getByTestId("upcoming-week").querySelectorAll(".upcoming-week-day");
     expect(days[0].className).toContain("upcoming-week-day--today");
     expect(days[6].className).not.toContain("upcoming-week-day--today");
+    // ...and the projection is re-requested for the new day, so the board's
+    // paging horizon never runs past what the server actually projected.
+    await waitFor(() => expect(upcomingRuns).toHaveBeenCalledTimes(2));
   });
 });
