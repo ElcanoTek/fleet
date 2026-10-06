@@ -178,6 +178,7 @@ type harness struct {
 type harnessOpts struct {
 	turn         func(w *sseWriter, r *http.Request)
 	cancelStatus int
+	cancelHold   chan struct{} // see fakeFleet.cancelHold
 	cfgErr       error
 	publicURL    string
 	timeout      time.Duration
@@ -193,7 +194,7 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 	prevSettle := stopSettleWait
 	stopSettleWait = 50 * time.Millisecond
 	t.Cleanup(func() { stopSettleWait = prevSettle })
-	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus}
+	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus, cancelHold: o.cancelHold}
 	srv := httptest.NewServer(ff)
 	t.Cleanup(srv.Close)
 	serverURL := srv.URL
@@ -1504,6 +1505,61 @@ func TestHangUpTriggersTheAgentsStop(t *testing.T) {
 	}
 	if len(h.fleet.chats) != 1 {
 		t.Errorf("a prompt was submitted after the client hung up: %+v", h.fleet.chats)
+	}
+}
+
+// A client that goes away while prompts wait in a session's line (see
+// Agent.line), behind a turn whose Stop is slow: the waiters leave the line
+// at once, answered cancelled and never submitted, without waiting for the
+// turn ahead to finish stopping, so run's bounded wait (awaitStops) holds
+// only for that turn. Only the running turn gets a Stop.
+func TestHangUpReleasesPromptsWaitingInLine(t *testing.T) {
+	started, hold := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
+	var h *harness
+	h = newHarness(t, harnessOpts{cancelHold: hold, turn: func(w *sseWriter, r *http.Request) {
+		if h.fleet.nth() > 1 {
+			w.emit("turn.error", map[string]any{"message": "submitted after the client hung up"})
+			return
+		}
+		blockingTurn(started)(w, r)
+	}})
+	t.Cleanup(release)
+	sid := h.newSession(t)
+	first := h.promptAsync(t, sid, "long job", nil, 1)
+	<-started
+	second := h.promptAsync(t, sid, "waits in line", nil, 2)
+	third := h.promptAsync(t, sid, "waits behind it", nil, 3)
+	h.hangUp()
+
+	h.fleet.awaitStop(t) // the running turn's Stop is out, and held
+	for i, done := range []<-chan promptResult{second, third} {
+		select {
+		case r := <-done:
+			if r.err != nil || r.resp.StopReason != acpsdk.StopReasonCancelled {
+				t.Errorf("waiting prompt %d = %+v, %v; want cancelled", i+1, r.resp, r.err)
+			}
+		case <-time.After(5 * time.Second): // well inside the held Stop's 10s client timeout
+			t.Fatalf("waiting prompt %d did not leave the line while the turn ahead was still stopping", i+1)
+		}
+	}
+	h.waitTracked(t, sid, 1) // only the turn being stopped is left in flight
+	select {
+	case r := <-first:
+		t.Fatalf("the running prompt answered (%+v, %v) before its Stop did", r.resp, r.err)
+	default:
+	}
+	release()
+	if r := await(t, first, "the running prompt"); r.err != nil || r.resp.StopReason != acpsdk.StopReasonCancelled {
+		t.Errorf("running prompt = %+v, %v; want cancelled", r.resp, r.err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != 1 {
+		t.Errorf("a waiting prompt was submitted after the client hung up: %+v", h.fleet.chats)
+	}
+	if len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != `conv-slow {"scope":"turn","turn_id":"turn-slow"}` {
+		t.Errorf("cancels = %q, want only the running turn stopped", h.fleet.cancels)
 	}
 }
 

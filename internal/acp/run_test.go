@@ -399,7 +399,7 @@ func TestRunStopsInFlightTurnsBeforeExiting(t *testing.T) {
 	}
 	stderr := r.stderr.String()
 	for _, want := range []string{
-		"fleet acp: the ACP client closed the connection with 2 prompts in flight; stopping their fleet turns",
+		"fleet acp: the ACP client closed the connection with 1 fleet turn running; stopping it before exiting",
 		"fleet acp: the client went away, so its turn was stopped: the fleet web chat (conversation conv-slow)",
 	} {
 		if !strings.Contains(stderr, want) {
@@ -466,7 +466,7 @@ func TestRunTreatsAStopSignalAsAHangUp(t *testing.T) {
 		t.Errorf("written to stdout after the signal: %q", extra)
 	}
 	stderr := r.stderr.String()
-	for _, want := range []string{"fleet acp: got SIGTERM with 1 prompt in flight", "its turn was stopped"} {
+	for _, want := range []string{"fleet acp: got SIGTERM with 1 fleet turn running", "its turn was stopped"} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("stderr lacks %q:\n%s", want, stderr)
 		}
@@ -501,8 +501,8 @@ func TestRunWithNothingInFlightExitsAtOnce(t *testing.T) {
 			if got := ff.cancelsSnapshot(); len(got) != 0 {
 				t.Errorf("Stops = %q, want none: the turn had finished", got)
 			}
-			if stderr := r.stderr.String(); strings.Contains(stderr, "in flight") {
-				t.Errorf("stderr reports prompts in flight:\n%s", stderr)
+			if stderr := r.stderr.String(); strings.Contains(stderr, "stopping") {
+				t.Errorf("stderr reports turns being stopped:\n%s", stderr)
 			}
 		})
 	}
@@ -586,6 +586,56 @@ func TestRunSubmitsNothingAfterAStopSignal(t *testing.T) {
 	}
 	if extra := r.rest(); len(extra) != 0 {
 		t.Errorf("written to stdout after the signal: %q", extra)
+	}
+}
+
+// Through the real entry point: one prompt running and two waiting in the
+// session's line when a SIGTERM arrives. Only the running turn gets a Stop,
+// the waiters are never submitted, run returns once that Stop is answered,
+// and nothing reaches stdout afterwards.
+func TestRunStopsTheTurnAndAbandonsItsLine(t *testing.T) {
+	tracked := make(chan string, 8)
+	prevHook := promptTracked
+	promptTracked = func(message string) { tracked <- message }
+	t.Cleanup(func() { promptTracked = prevHook }) // runs last: after run and its prompts are done
+	started, hold := make(chan struct{}), make(chan struct{})
+	var ff *fakeFleet
+	ff = &fakeFleet{t: t, cancelHold: hold, turn: heldUntilStopped(&ff, started)}
+	r := startRun(t, ff)
+	release := sync.OnceFunc(func() { close(hold) })
+	t.Cleanup(release)
+	sid := r.openSession()
+	r.prompt(3, sid, "long job")
+	r.working()
+	r.prompt(4, sid, "waits in line")
+	r.prompt(5, sid, "waits behind it")
+	for range 3 {
+		select {
+		case <-tracked:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the prompts were never all tracked")
+		}
+	}
+	r.stop <- syscall.SIGTERM
+
+	if got := ff.awaitStop(t); got[0] != slowTurnStop {
+		t.Fatalf("Stop = %q, want the running turn's", got)
+	}
+	release()
+	if code := r.awaitExit(10 * time.Second); code != 0 {
+		t.Errorf("exit %d, want 0", code)
+	}
+	if extra := r.rest(); len(extra) != 0 {
+		t.Errorf("written to stdout after the signal: %q", extra)
+	}
+	ff.mu.Lock()
+	chats, cancels := len(ff.chats), slices.Clone(ff.cancels)
+	ff.mu.Unlock()
+	if chats != 1 || len(cancels) != 1 {
+		t.Errorf("chats = %d, Stops = %q; want the running prompt alone submitted, and stopped", chats, cancels)
+	}
+	if want := "fleet acp: got SIGTERM with 1 fleet turn running"; !strings.Contains(r.stderr.String(), want) {
+		t.Errorf("stderr lacks %q:\n%s", want, r.stderr)
 	}
 }
 
@@ -718,7 +768,7 @@ func TestProcessStopsItsTurnOnASignal(t *testing.T) {
 			if err := p.awaitExit(10 * time.Second); err != nil {
 				t.Errorf("exit = %v, want status 0 (stderr: %s)", err, p.stderr)
 			}
-			if want := "fleet acp: got " + signalName(sig) + " with 1 prompt in flight"; !strings.Contains(p.stderr.String(), want) {
+			if want := "fleet acp: got " + signalName(sig) + " with 1 fleet turn running"; !strings.Contains(p.stderr.String(), want) {
 				t.Errorf("stderr lacks %q:\n%s", want, p.stderr)
 			}
 		})
@@ -826,7 +876,7 @@ func TestProcessKeepsAnInheritedSignalIgnore(t *testing.T) {
 	if err := p.awaitExit(10 * time.Second); err != nil {
 		t.Errorf("exit = %v, want status 0 (stderr: %s)", err, p.stderr)
 	}
-	if want := "fleet acp: got SIGTERM with 1 prompt in flight"; !strings.Contains(p.stderr.String(), want) {
+	if want := "fleet acp: got SIGTERM with 1 fleet turn running"; !strings.Contains(p.stderr.String(), want) {
 		t.Errorf("stderr lacks %q:\n%s", want, p.stderr)
 	}
 }

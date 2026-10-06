@@ -231,8 +231,8 @@ func signalName(s os.Signal) string {
 // awaitStops waits, up to hangUpWait, for every prompt in flight when the
 // client went away to finish its stop: a running turn is stopped
 // server-side (reportGone says how that went), and a prompt still waiting
-// for its session is abandoned unsubmitted. Nothing is said when nothing
-// was in flight, the normal way a client ends a session. If the wait runs
+// for its session is abandoned unsubmitted, at once. Nothing is said when no
+// turn was running, the normal way a client ends a session. If the wait runs
 // out, the process exits anyway, and stderr says a turn may still be running
 // and where to check, rather than leave the operator believing everything
 // stopped. The bound starts before anything is written, and errOut is a
@@ -241,15 +241,21 @@ func signalName(s os.Signal) string {
 func awaitStops(agent *Agent, why string, errOut io.Writer) {
 	wait := time.NewTimer(hangUpWait)
 	defer wait.Stop()
-	n, idle := agent.inFlight()
-	if n == 0 {
+	idle, turns := agent.inFlight()
+	select {
+	case <-idle:
 		return
+	default:
 	}
-	prompts := "prompt"
-	if n != 1 {
-		prompts += "s"
+	// Prompts that were only waiting for a session leave at once (Prompt):
+	// what is said, and waited on in earnest, is the turns being stopped.
+	if turns > 0 {
+		noun, them := "fleet turn", "it"
+		if turns != 1 {
+			noun, them = "fleet turns", "them"
+		}
+		fmt.Fprintf(errOut, "fleet acp: %s with %d %s running; stopping %s before exiting (waiting up to %s)\n", why, turns, noun, them, hangUpWait)
 	}
-	fmt.Fprintf(errOut, "fleet acp: %s with %d %s in flight; stopping their fleet turns before exiting (waiting up to %s)\n", why, n, prompts, hangUpWait)
 	select {
 	case <-idle:
 	case <-wait.C:

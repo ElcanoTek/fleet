@@ -425,24 +425,23 @@ func (a *Agent) track(sid acpsdk.SessionId) (stop context.Context, prev <-chan s
 	}, true
 }
 
-// inFlight reports how many prompts are in flight (tracked and not yet
-// answered), with a channel closed once none is. After a hang-up no prompt
-// is submitted any more (its stop has already fired), so the channel closes
-// once the running ones have stopped their turns.
-func (a *Agent) inFlight() (int, <-chan struct{}) {
+// inFlight returns a channel closed once no prompt is in flight (tracked and
+// not yet answered), and how many of them are running a fleet turn
+// (watchTurn). After a hang-up no prompt is submitted any more (its stop has
+// already fired), and a prompt waiting in a session's line leaves at once
+// (Prompt), so the channel closes once the running ones have stopped their
+// turns. turns, not the prompts, is what an operator is told is being
+// stopped: the waiters are leaving as it is counted.
+func (a *Agent) inFlight() (idle <-chan struct{}, turns int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	n := 0
-	for _, prompts := range a.inflight {
-		n += len(prompts)
-	}
-	idle := make(chan struct{})
-	if n == 0 {
-		close(idle)
+	c := make(chan struct{})
+	if len(a.inflight) == 0 {
+		close(c)
 	} else {
-		a.drained = append(a.drained, idle)
+		a.drained = append(a.drained, c)
 	}
-	return n, idle
+	return c, len(a.turns)
 }
 
 // watchTurn registers a running prompt's translator until the returned
@@ -548,13 +547,28 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	promptTracked(message)
 
 	// Its turn in the session's line first, so prompts take the session in
-	// the order they were tracked. The wait is not cut short by a cancel: a
-	// cancelled prompt still waits for the prompt before it, then hands the
-	// session straight on (the check below, then release), so it never lets
-	// a later prompt run beside an earlier one, nor holds the line once the
-	// earlier one is done. A session/cancel stops the running turn too, so
-	// that wait is short; a client hanging up ends every prompt in line.
-	<-prev
+	// the order they were tracked. The wait is not cut short by a
+	// session/cancel: a cancelled prompt still waits for the prompt before
+	// it, then hands the session straight on (the check below, then
+	// release), so it never lets a later prompt run beside an earlier one,
+	// nor holds the line once the earlier one is done. A session/cancel stops
+	// the running turn too, so that wait is short.
+	//
+	// The client going away (lifetime) does cut it short. From then on no
+	// prompt is ever submitted, so the line's order no longer matters: a
+	// waiter leaves at once, answered cancelled (to nobody: run has cut
+	// stdout), without waiting for the turn ahead to finish stopping and
+	// without taking the session. Its release passes the line on, so every
+	// waiter behind it leaves the same way, and run's bounded wait
+	// (awaitStops) holds only for the turns actually being stopped. So does
+	// a prompt tracked after the hang-up (a signal leaves stdin open).
+	select {
+	case <-prev:
+	case <-a.lifetime.Done():
+	}
+	if a.lifetime.Err() != nil {
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
+	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	// A prompt cancelled while it waited for this session (an earlier prompt
