@@ -166,13 +166,20 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 	// including the branch point. A reply after it is not in the branch, so
 	// its files are neither copied nor named as withheld.
 	history, err := s.discoveryHistory(copyCtx, src.ID, sourceHighWater)
-	var outsTruncated bool
+	// discoveryFailed fails the origin CLOSED: with no history (or no
+	// outputs/exclusions) nothing was copied and no reference could be named
+	// as withheld, so an empty withheld list would read as "every reference
+	// is live". Marking it truncated makes the web lock every reference that
+	// is neither a copied file nor in the branch's own workspace.
+	var outsTruncated, discoveryFailed bool
 	if err != nil {
+		discoveryFailed = true
 		log.Printf("branch files: history of %s: %v", logSafeSlug(src.ID), logSafe(err.Error()))
 	} else {
 		var outs []outputFile
 		outs, outsTruncated, err = s.outputsFromHistory(copyCtx, src.ID, history)
 		if err != nil {
+			discoveryFailed = true
 			log.Printf("branch files: outputs of %s: %v", logSafeSlug(src.ID), logSafe(err.Error()))
 		} else {
 			// Re-checked before every file: the copy can take a while, and
@@ -185,12 +192,12 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 				}
 				return gerr == nil && ok
 			}
-			origin.CopiedFiles, origin.WithheldFiles = copySharedOutputsIntoBranch(src.ID, branch.ID, outs, stillReadable)
+			origin.CopiedFiles, origin.WithheldFiles = copySharedOutputsIntoBranch(copyCtx, src.ID, branch.ID, outs, stillReadable)
 		}
 	}
 	var refsTruncated bool
 	origin.WithheldFiles, refsTruncated = withholdUncopiedReferences(history, origin.CopiedFiles, origin.WithheldFiles)
-	origin.WithheldTruncated = outsTruncated || refsTruncated
+	origin.WithheldTruncated = discoveryFailed || outsTruncated || refsTruncated
 	// The origin write gets its own budget: a copy that used all of
 	// branchCopyTimeout must still be able to record what it did.
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), branchOriginRecordTimeout)
@@ -205,7 +212,10 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 const branchOriginRecordTimeout = 10 * time.Second
 
 // branchCopyTimeout bounds the detached discovery + file copy above. Past it
-// the remaining files are withheld (named in the branch, not copied).
+// the remaining files are withheld (named in the branch, not copied) — the
+// copy observes it between chunks and abandons a read stuck on a stalled
+// filesystem (copyOneOutput) — and a discovery it cut short records the
+// origin as truncated (fail closed).
 var branchCopyTimeout = 2 * time.Minute // a var so tests can shrink it
 
 // withholdUncopiedReferences appends to withheld every workspace path the

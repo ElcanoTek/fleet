@@ -3,7 +3,9 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -399,5 +401,206 @@ func TestProjectFilesCapsGroupsPerHalf(t *testing.T) {
 	got := decode[body](t, projectSub(t, f.srv, "GET", "alice@x.com", f.project.ID+"/files", ""))
 	if len(got.Groups) != 1 || !got.GroupsTruncated {
 		t.Errorf("scan-capped: %+v", got)
+	}
+}
+
+// A discovery that fails after the branch is committed (here: the copy budget
+// is already spent) copies nothing and can name nothing as withheld. The
+// origin must fail CLOSED — recorded as truncated, so the web's allow-list
+// locks every reference — never an empty withheld list that reads as "every
+// file reference is live".
+func TestCarrySharedFilesFailsClosedWhenDiscoveryFails(t *testing.T) {
+	f := newFilesFixture(t)
+	msgs, _ := f.st.LoadHistory(f.ctx, f.chat.ID)
+	point := msgs[len(msgs)-1].ID
+	branch, err := f.st.BranchConversation(f.ctx, "bob@x.com", f.chat.ID, point, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := f.st.GetTeamVisibleConversationMeta(f.ctx, "bob@x.com", f.chat.ID)
+	if err != nil || src == nil {
+		t.Fatalf("meta: %v %v", src, err)
+	}
+	prev := branchCopyTimeout
+	branchCopyTimeout = time.Nanosecond
+	t.Cleanup(func() { branchCopyTimeout = prev })
+	o := f.srv.carrySharedFilesIntoBranch(f.ctx, src, branch, point)
+	if len(o.CopiedFiles) != 0 {
+		t.Errorf("copied = %+v, want nothing once discovery failed", o.CopiedFiles)
+	}
+	if !o.WithheldTruncated {
+		t.Error("a failed discovery must record the origin as truncated (fail closed)")
+	}
+	origins, err := f.st.BranchOriginsFor(f.ctx, []string{branch.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := origins[branch.ID]; rec == nil || !rec.WithheldTruncated {
+		t.Errorf("recorded origin = %+v, want withheld_truncated", rec)
+	}
+}
+
+// stallingReader blocks like a read on a hung filesystem: it returns only
+// when the test releases it, whatever the copy's context says.
+type stallingReader struct{ release <-chan struct{} }
+
+func (r stallingReader) Read([]byte) (int, error) {
+	<-r.release
+	return 0, errors.New("released")
+}
+
+// The copy budget interrupts a copy stuck on a stalled filesystem: the call
+// returns the context's error promptly, the partial destination is removed,
+// and the remaining files of the branch are withheld.
+func TestCopyOneOutputAbandonsStalledRead(t *testing.T) {
+	src := t.TempDir()
+	for _, n := range []string{"a.csv", "b.csv"} {
+		if err := os.WriteFile(filepath.Join(src, n), []byte("a,b\n1,2\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dstDir := t.TempDir()
+	dst, err := os.OpenRoot(dstDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	branchCopySource = func(io.Reader) io.Reader { return stallingReader{release} }
+	t.Cleanup(func() { branchCopySource = nil })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	n, err := copyOneOutput(ctx, src, dst, "a.csv", 1<<20)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("copyOneOutput = (%d, %v), want DeadlineExceeded", n, err)
+	}
+	if el := time.Since(start); el > 5*time.Second {
+		t.Fatalf("copy returned after %v; a stalled read must not hold it", el)
+	}
+	if _, statErr := os.Stat(filepath.Join(dstDir, "a.csv")); !os.IsNotExist(statErr) {
+		t.Fatalf("partial copy left behind: %v", statErr)
+	}
+}
+
+// Through the branch path: once the budget is spent mid-copy, the file in
+// flight and every remaining shared file are withheld, not copied.
+func TestCopySharedOutputsWithholdsRestAfterBudget(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	srcID, dstID := "src-conv", "dst-conv"
+	for _, n := range []string{"a.csv", "b.csv", "c.csv"} {
+		p := filepath.Join(root, srcID, n)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	branchCopySource = func(io.Reader) io.Reader { return stallingReader{release} }
+	t.Cleanup(func() { branchCopySource = nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	outs := []outputFile{{Path: "a.csv", Shared: true}, {Path: "b.csv", Shared: true}, {Path: "c.csv", Shared: true}}
+	copied, withheld := copySharedOutputsIntoBranch(ctx, srcID, dstID, outs, nil)
+	if len(copied) != 0 || strings.Join(withheld, ",") != "a.csv,b.csv,c.csv" {
+		t.Errorf("copied=%+v withheld=%v, want all withheld", copied, withheld)
+	}
+}
+
+// ?focus names the chat a "Manage in Sources" link sends the caller to: its
+// group is listed even past the per-half cap — for the owner's own chat and a
+// teammate's shared one alike — but only through the same listings as every
+// other group, so a teammate's PRIVATE chat id named as focus is not read.
+func TestProjectFilesFocusIncludedPastCap(t *testing.T) {
+	f := newFilesFixture(t)
+	addChat := func(title, file string, shared bool) string {
+		c, err := f.st.CreateConversation(f.ctx, "alice@x.com", title, "victoria", "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.st.SetConversationProject(f.ctx, "alice@x.com", c.ID, f.project.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(f.root, c.ID), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(f.root, c.ID, file), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.st.AppendHistory(f.ctx, c.ID, []agent.HistoryEntry{textEntry("assistant", "["+file+"]("+file+")")}); err != nil {
+			t.Fatal(err)
+		}
+		if shared {
+			if _, err := f.st.SetConversationTeamVisible(f.ctx, "alice@x.com", c.ID, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return c.ID
+	}
+	addChat("Second", "two.csv", true)
+	private := addChat("Private", "secret.csv", false)
+
+	type body struct {
+		Groups []struct {
+			ConversationID string `json:"conversation_id"`
+		} `json:"groups"`
+		GroupsTruncated bool `json:"groups_truncated"`
+	}
+	has := func(b body, id string) bool {
+		for _, g := range b.Groups {
+			if g.ConversationID == id {
+				return true
+			}
+		}
+		return false
+	}
+	old := maxSourcesGroups
+	maxSourcesGroups = 1
+	t.Cleanup(func() { maxSourcesGroups = old })
+
+	// Each caller's past-the-cap chat is the second of their half's listing
+	// in the handler's own order (updated_at is whole seconds, so ties fall
+	// to the id order and are not creation order).
+	mine, err := f.st.ListProjectConversationsForUser(f.ctx, "alice@x.com", f.project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	team, err := f.st.ListProjectTeamConversations(f.ctx, "bob@x.com", f.project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sortConversationsRecentFirst(mine)
+	sortConversationsRecentFirst(team)
+	if len(mine) != 3 || len(team) != 2 {
+		t.Fatalf("listings: mine %d team %d, want 3/2", len(mine), len(team))
+	}
+	for who, target := range map[string]string{"alice@x.com": mine[1].ID, "bob@x.com": team[1].ID} {
+		capped := decode[body](t, projectSub(t, f.srv, "GET", who, f.project.ID+"/files", ""))
+		if has(capped, target) || !capped.GroupsTruncated {
+			t.Fatalf("%s: precondition: %s must be past the cap: %+v", who, target, capped)
+		}
+		focused := decode[body](t, projectSub(t, f.srv, "GET", who, f.project.ID+"/files?focus="+target, ""))
+		n := 0
+		for _, g := range focused.Groups {
+			if g.ConversationID == target {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("%s: focused chat listed %d times past the cap, want once: %+v", who, n, focused)
+		}
+	}
+	// alice's own private chat is hers to focus; bob may not reach it.
+	if got := decode[body](t, projectSub(t, f.srv, "GET", "bob@x.com", f.project.ID+"/files?focus="+private, "")); has(got, private) {
+		t.Errorf("another user's private chat leaked through focus: %+v", got)
+	}
+	if w := projectSub(t, f.srv, "GET", "bob@x.com", f.project.ID+"/files?focus=../x", ""); w.Code != 400 {
+		t.Errorf("malformed focus: %d, want 400", w.Code)
 	}
 }

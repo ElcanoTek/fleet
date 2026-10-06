@@ -60,8 +60,9 @@ function mockApi(routes: Record<string, unknown>, writes: Record<string, unknown
         body: init?.body ? JSON.parse(String(init.body)) : undefined,
       });
       const table = method === "GET" ? routes : writes;
+      const path = url.split("?")[0];
       for (const [suffix, body] of Object.entries(table)) {
-        if (url.endsWith(suffix)) {
+        if (path.endsWith(suffix)) {
           return new Response(JSON.stringify(body), { status: 200 });
         }
       }
@@ -777,5 +778,82 @@ describe("Sources — a listing read before a toggle landed", () => {
     expect(
       document.querySelector(`[data-testid=sources-group][data-conversation-id="c1"]`),
     ).not.toHaveTextContent("1 shared");
+  });
+});
+
+describe("Sources — focus past the group cap", () => {
+  const OLD: SourcesGroup = {
+    ...GROUPS[1],
+    conversation_id: "c9",
+    title: "Old chat",
+    last_active_at: 1,
+    files: [
+      { path: "old.csv", name: "old.csv", size: 1, modified_at: 1, shared: true, output: true, your_copy: false },
+    ],
+  };
+  const sourcesProps = {
+    projectId: "p1",
+    teamName: "quant",
+    sourcesOpen: {},
+  };
+  const groupOf = (id: string) =>
+    document.querySelector(
+      `[data-testid=sources-group][data-conversation-id="${id}"]`,
+    ) as HTMLElement | null;
+
+  it("asks the server for the focused chat and opens the group it lists", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        urls.push(url);
+        // The server lists the old chat only because it was asked for it.
+        const groups = url.endsWith("/files?focus=c9") ? [...GROUPS, OLD] : GROUPS;
+        return new Response(JSON.stringify({ groups, truncated: true }), { status: 200 });
+      }),
+    );
+    const onSourcesOpenChange = vi.fn();
+    render(
+      <ProjectSources
+        {...sourcesProps}
+        reloadKey={0}
+        focus={{ conversationId: "c9", nonce: 1 }}
+        onSourcesOpenChange={onSourcesOpenChange}
+      />,
+    );
+    await waitFor(() => expect(groupOf("c9")).not.toBeNull());
+    expect(urls).toContain("/api/projects/p1/files?focus=c9");
+    expect(await within(groupOf("c9")!).findByText("old.csv")).toBeInTheDocument();
+    await waitFor(() => expect(onSourcesOpenChange).toHaveBeenCalledWith({ c9: true }));
+  });
+
+  it("stops waiting when the focused chat is not in the listing", async () => {
+    let listing = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        listing += 1;
+        // The first read for this focus does not have it (no files yet); a
+        // later reload does — it must not jump there out of the blue.
+        const groups = listing === 1 ? GROUPS : [...GROUPS, OLD];
+        return new Response(JSON.stringify({ groups }), { status: 200 });
+      }),
+    );
+    const onSourcesOpenChange = vi.fn();
+    const props = {
+      ...sourcesProps,
+      focus: { conversationId: "c9", nonce: 1 },
+      onSourcesOpenChange,
+    };
+    const { rerender } = render(<ProjectSources {...props} reloadKey={0} />);
+    // The listing renders normally — no endless "Loading…".
+    expect(await screen.findByText("a.csv")).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).toBeNull();
+    rerender(<ProjectSources {...props} reloadKey={1} />);
+    await waitFor(() => expect(groupOf("c9")).not.toBeNull());
+    expect(within(groupOf("c9")!).queryByText("old.csv")).toBeNull();
+    expect(groupOf("c9")!.className).not.toContain("color-primary");
+    expect(onSourcesOpenChange).not.toHaveBeenCalled();
   });
 });

@@ -40,7 +40,7 @@ async function mockProjects(page: Page, projects: unknown[]) {
     }),
   );
   // The project home's own reads; each spec overrides what it cares about.
-  await page.route("**/api/projects/*/files", (r: Route) =>
+  await page.route("**/api/projects/*/files{,?*}", (r: Route) =>
     r.fulfill({ json: { groups: [], files: [], truncated: false } }),
   );
   // Per-person project state: past the getting-started card.

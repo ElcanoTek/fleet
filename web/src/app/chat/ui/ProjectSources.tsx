@@ -123,13 +123,18 @@ export function ProjectSources({
   // before the click; such a listing is dropped and read again instead.
   const toggleWrites = useRef(0);
   const [relist, setRelist] = useState(0);
+  // The focused chat is sent with the listing so the server includes its
+  // group even past its per-half cap. loadedFor records which focus the
+  // groups on screen were read for: only THAT listing can say "not there".
+  const focusId = focus?.conversationId ?? null;
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
       void (async () => {
         const writesAtStart = toggleWrites.current;
         try {
-          const data = (await fetchProjectSources(projectId)) as {
+          const data = (await fetchProjectSources(projectId, focusId)) as {
             groups?: SourcesGroup[];
             truncated?: boolean;
             files?: LegacyFile[];
@@ -145,10 +150,12 @@ export function ProjectSources({
               : groupLegacy(data.files ?? []),
           );
           setTruncated(Boolean(data.truncated));
+          setLoadedFor(focusId);
           setError(null);
         } catch {
           if (cancelled) return;
           setGroups([]);
+          setLoadedFor(focusId);
           setError("Couldn’t load this project’s files.");
         }
       })();
@@ -156,7 +163,7 @@ export function ProjectSources({
     return () => {
       cancelled = true;
     };
-  }, [projectId, reloadKey, relist]);
+  }, [projectId, reloadKey, relist, focusId]);
 
   // Teammates' groups first, then the caller's own; most recently active
   // first within each.
@@ -209,12 +216,24 @@ export function ProjectSources({
   // once per request (nonce), and again once the listing lands if the group
   // was not on screen yet.
   const [handledFocus, setHandledFocus] = useState<number | null>(null);
-  const focusId = focus?.conversationId ?? null;
+  const focusFound = (groups ?? []).some((g) => g.conversation_id === focusId);
   const focusReady =
     focus !== null &&
     groups !== null &&
     handledFocus !== focus.nonce &&
-    (groups ?? []).some((g) => g.conversation_id === focusId);
+    focusFound;
+  // The listing read FOR this focus does not have it (the chat has no files,
+  // or the caller cannot see it): stop waiting — nothing to open, nothing
+  // highlighted, and a later reload does not jump to it out of the blue.
+  if (
+    focus !== null &&
+    groups !== null &&
+    handledFocus !== focus.nonce &&
+    !focusFound &&
+    loadedFor === focusId
+  ) {
+    setHandledFocus(focus.nonce);
+  }
   // Persisting the opened group goes to the parent from an effect: the
   // focus is noticed during render, where a parent update is not allowed.
   const [persistQueue, setPersistQueue] = useState<Record<string, boolean> | null>(null);

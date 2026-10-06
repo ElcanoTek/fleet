@@ -908,7 +908,7 @@ func TestCopyOneOutputRejectsShortCopy(t *testing.T) {
 	}
 	t.Cleanup(func() { branchCopyAfterStat = nil })
 
-	n, err := copyOneOutput(src, dst, "report.csv", 1<<20)
+	n, err := copyOneOutput(context.Background(), src, dst, "report.csv", 1<<20)
 	if !errors.Is(err, errBranchCopyShort) {
 		t.Fatalf("copyOneOutput = (%d, %v), want errBranchCopyShort", n, err)
 	}
@@ -921,7 +921,7 @@ func TestCopyOneOutputRejectsShortCopy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "ok.csv"), []byte("full"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := copyOneOutput(src, dst, "ok.csv", 1<<20); err != nil || n != 4 {
+	if n, err := copyOneOutput(context.Background(), src, dst, "ok.csv", 1<<20); err != nil || n != 4 {
 		t.Fatalf("full copy = (%d, %v), want (4, nil)", n, err)
 	}
 }
@@ -964,7 +964,7 @@ func TestCopyOneOutputRejectsSameSizeRewrite(t *testing.T) {
 	}
 	t.Cleanup(func() { branchCopyAfterStat = nil })
 
-	n, err := copyOneOutput(src, dst, "report.csv", 1<<20)
+	n, err := copyOneOutput(context.Background(), src, dst, "report.csv", 1<<20)
 	if !errors.Is(err, errBranchCopyShort) {
 		t.Fatalf("copyOneOutput = (%d, %v), want errBranchCopyShort", n, err)
 	}

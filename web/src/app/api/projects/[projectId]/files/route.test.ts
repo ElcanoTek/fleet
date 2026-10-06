@@ -49,6 +49,34 @@ describe("GET /api/projects/[projectId]/files", () => {
     );
   });
 
+  it("forwards an id-shaped focus to the Go handler", async () => {
+    const res = await GET(
+      new NextRequest(
+        "https://fleet.example.com/api/projects/p-growth/files?focus=0b6c7a1e-1f2d-4c3b-9a8e-7d6c5b4a3f21",
+      ),
+      context,
+    );
+    expect(res.status).toBe(200);
+    expect(chatServerFetchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ email: "alice@example.com" }),
+      "/projects/p-growth/files?focus=0b6c7a1e-1f2d-4c3b-9a8e-7d6c5b4a3f21",
+    );
+  });
+
+  it("refuses a focus that is not an id, without calling upstream", async () => {
+    for (const bad of ["../x", "a b", "x".repeat(65), ""]) {
+      chatServerFetchMock.mockClear();
+      const res = await GET(
+        new NextRequest(
+          `https://fleet.example.com/api/projects/p-growth/files?focus=${encodeURIComponent(bad)}`,
+        ),
+        context,
+      );
+      expect(res.status).toBe(400);
+      expect(chatServerFetchMock).not.toHaveBeenCalled();
+    }
+  });
+
   it("returns 401 when there is no session", async () => {
     getServerSessionMock.mockResolvedValue(null);
     const res = await GET(request, context);

@@ -53,7 +53,7 @@ async function mockProject(
   await page.route("**/api/projects/*/my-state", (r: Route) =>
     r.fulfill({ json: { kept_personal: false, has_shared_chat: true, sources_open: {} } }),
   );
-  await page.route("**/api/projects/*/files", (r: Route) =>
+  await page.route("**/api/projects/*/files{,?*}", (r: Route) =>
     r.fulfill({ json: { groups: opts.groups(), files: [], truncated: false } }),
   );
 }

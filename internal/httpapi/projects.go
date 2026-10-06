@@ -641,6 +641,11 @@ func walkWorkspaceFiles(convID string, limit int) (files []sourcesFile, truncate
 // with files), examining at most maxSourcesChatsScanned; the rest is reported
 // as truncated.
 //
+// The optional ?focus=<conversation id> names the chat a "Manage in Sources"
+// link sends the caller to: its group is included even past those caps, when
+// that chat is in one of the two listings above (the same gates; an id the
+// caller cannot see is ignored, indistinguishable from a chat with no files).
+//
 // Chats with no files are omitted. `files` is the legacy flat list of the
 // caller's own files, kept for older clients. Another member's PRIVATE chat
 // is never read here — the teammate half starts from the team listing.
@@ -651,6 +656,15 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 	}
 	ctx := r.Context()
 	user := userFromCtx(ctx)
+	// focus is the chat a "Manage in Sources" link is sending the caller to.
+	// Its group is listed even past the caps below, but only if the chat
+	// passes the same gates as any other group: it is found in the caller's
+	// OWN project listing or in the team listing, never read by id alone.
+	focus := r.URL.Query().Get("focus")
+	if focus != "" && !validSourcesFocus(focus) {
+		http.Error(w, "invalid focus", http.StatusBadRequest)
+		return
+	}
 	convs, err := s.store.ListProjectConversationsForUser(ctx, user, p.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -659,12 +673,13 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 	// Most recently active first (the listing's order, made explicit here
 	// because the caps below keep the head of it).
 	sortConversationsRecentFirst(convs)
-	ids := make([]string, 0, min(len(convs), maxSourcesChatsScanned))
+	ids := make([]string, 0, min(len(convs), maxSourcesChatsScanned)+1)
 	for i, c := range convs {
-		if i >= maxSourcesChatsScanned {
-			break
+		// Past the scan bound only the focused chat — one of the caller's
+		// own, being in this listing — may still be listed.
+		if i < maxSourcesChatsScanned || c.ID == focus {
+			ids = append(ids, c.ID)
 		}
-		ids = append(ids, c.ID)
 	}
 	origins, err := s.store.BranchOriginsFor(ctx, ids)
 	if err != nil {
@@ -674,75 +689,17 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 
 	groups := []sourcesGroup{}
 	flat := []projectFile{}
-	truncated, groupsTruncated := false, false
-	mineGroups := 0
-	for i, conv := range convs {
-		if mineGroups >= maxSourcesGroups || i >= maxSourcesChatsScanned {
-			groupsTruncated = true
-			break
-		}
-		all, walkTruncated := walkWorkspaceFiles(conv.ID, maxProjectFiles)
-		if walkTruncated {
-			truncated = true
-		}
-		// Outputs are resolved independently of the walk: the walk is
-		// bounded (file cap and visit budget), so an empty walk — e.g. the
-		// budget spent on thousands of empty directories — does not mean the
-		// chat has no current output. Skip the chat only when BOTH are empty.
-		outs, outsTruncated, err := s.ownerOutputs(ctx, conv.ID)
+	truncated := false
+
+	addMine := func(conv store.Conversation) (bool, error) {
+		g, ok, gTruncated, err := s.ownSourcesGroup(ctx, conv, origins[conv.ID])
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return false, err
 		}
-		if outsTruncated {
-			truncated = true
+		truncated = truncated || gTruncated
+		if !ok {
+			return false, nil
 		}
-		if len(all) == 0 && len(outs) == 0 {
-			continue
-		}
-		copied := map[string]bool{}
-		g := sourcesGroup{
-			ConversationID: conv.ID,
-			Title:          conv.Title,
-			OwnerEmail:     conv.UserEmail,
-			Mine:           true,
-			TeamVisible:    conv.TeamVisible,
-			LastActiveAt:   conv.UpdatedAt,
-			FileCount:      len(outs),
-			SharedCount:    countShared(outs),
-		}
-		if o := origins[conv.ID]; o != nil {
-			g.IsBranch, g.BranchedAt = true, o.BranchedAt
-			for _, f := range o.CopiedFiles {
-				copied[f.Path] = true
-			}
-		}
-		// Every current output first, whatever its age: FileCount and
-		// SharedCount count them, and each needs its row (and toggle). The
-		// bounded walk keeps only the newest files, so an older output can be
-		// missing from `all` — listing from the walk alone left a shared
-		// output counted but with no row to unshare it by. Then the newest
-		// non-output files fill the group up to the cap.
-		listed := make(map[string]bool, len(outs))
-		for _, o := range outs {
-			listed[o.Path] = true
-			g.Files = append(g.Files, sourcesFile{
-				Path: o.Path, Name: o.Name, Size: o.Size, ModifiedAt: o.ModifiedAt,
-				Shared: o.Shared, Output: true, YourCopy: copied[o.Path],
-			})
-		}
-		for _, f := range all {
-			if listed[f.Path] {
-				continue
-			}
-			if len(g.Files) >= maxProjectFiles {
-				truncated = true
-				break
-			}
-			f.YourCopy = copied[f.Path]
-			g.Files = append(g.Files, f)
-		}
-		sort.SliceStable(g.Files, func(i, j int) bool { return newerFile(g.Files[i], g.Files[j]) })
 		for _, f := range g.Files {
 			flat = append(flat, projectFile{
 				ConversationID: conv.ID, ConversationTitle: conv.Title,
@@ -750,7 +707,16 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 			})
 		}
 		groups = append(groups, g)
-		mineGroups++
+		return true, nil
+	}
+
+	// focusDone is set once the focused chat has been examined (listed, or
+	// found to have no files) so it is never listed twice.
+	focusDone := focus == ""
+	mineCut, err := listSourcesHalf(convs, focus, &focusDone, addMine)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	team, err := s.store.ListProjectTeamConversations(ctx, user, p.ID)
@@ -759,48 +725,25 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		return
 	}
 	sortConversationsRecentFirst(team)
-	teamGroups := 0
-	for i, conv := range team {
-		if teamGroups >= maxSourcesGroups || i >= maxSourcesChatsScanned {
-			groupsTruncated = true
-			break
-		}
-		outs, outsTruncated, err := s.ownerOutputs(ctx, conv.ID)
+
+	addTeam := func(conv store.Conversation) (bool, error) {
+		g, ok, gTruncated, err := s.teamSourcesGroup(ctx, conv)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return false, err
 		}
-		if outsTruncated {
-			truncated = true
+		truncated = truncated || gTruncated
+		if ok {
+			groups = append(groups, g)
 		}
-		g := sourcesGroup{
-			ConversationID: conv.ID,
-			Title:          conv.Title,
-			OwnerEmail:     conv.UserEmail,
-			TeamVisible:    conv.TeamVisible,
-			LastActiveAt:   conv.UpdatedAt,
-			Files:          []sourcesFile{},
-		}
-		for _, o := range outs {
-			if !o.Shared {
-				continue // a teammate never sees a file the owner held back
-			}
-			g.Files = append(g.Files, sourcesFile{
-				Path: o.Path, Name: o.Name, Size: o.Size, ModifiedAt: o.ModifiedAt,
-				Shared: true, Output: true,
-			})
-		}
-		if len(g.Files) == 0 {
-			continue
-		}
-		g.FileCount, g.SharedCount = len(g.Files), len(g.Files)
-		if len(g.Files) > maxProjectFiles {
-			g.Files = g.Files[:maxProjectFiles]
-			truncated = true
-		}
-		groups = append(groups, g)
-		teamGroups++
+		return ok, nil
 	}
+
+	teamCut, err := listSourcesHalf(team, focus, &focusDone, addTeam)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	groupsTruncated := mineCut || teamCut
 
 	sort.SliceStable(flat, func(i, j int) bool { return flat[i].ModifiedAt > flat[j].ModifiedAt })
 	if len(flat) > maxProjectFiles {
@@ -812,6 +755,164 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		"truncated":        truncated || groupsTruncated,
 		"groups_truncated": groupsTruncated,
 	})
+}
+
+// ownSourcesGroup builds the Sources group of one of the caller's OWN chats
+// (origin is its teammate-branch origin, if any); ok is false for a chat with
+// no files. truncated reports a bounded walk or discovery cut something.
+func (s *Server) ownSourcesGroup(ctx context.Context, conv store.Conversation, origin *store.BranchOrigin) (g sourcesGroup, ok, truncated bool, err error) {
+	all, walkTruncated := walkWorkspaceFiles(conv.ID, maxProjectFiles)
+	if walkTruncated {
+		truncated = true
+	}
+	// Outputs are resolved independently of the walk: the walk is
+	// bounded (file cap and visit budget), so an empty walk — e.g. the
+	// budget spent on thousands of empty directories — does not mean the
+	// chat has no current output. Skip the chat only when BOTH are empty.
+	outs, outsTruncated, err := s.ownerOutputs(ctx, conv.ID)
+	if err != nil {
+		return g, false, false, err
+	}
+	if outsTruncated {
+		truncated = true
+	}
+	if len(all) == 0 && len(outs) == 0 {
+		return g, false, truncated, nil
+	}
+	copied := map[string]bool{}
+	g = sourcesGroup{
+		ConversationID: conv.ID,
+		Title:          conv.Title,
+		OwnerEmail:     conv.UserEmail,
+		Mine:           true,
+		TeamVisible:    conv.TeamVisible,
+		LastActiveAt:   conv.UpdatedAt,
+		FileCount:      len(outs),
+		SharedCount:    countShared(outs),
+	}
+	if origin != nil {
+		g.IsBranch, g.BranchedAt = true, origin.BranchedAt
+		for _, f := range origin.CopiedFiles {
+			copied[f.Path] = true
+		}
+	}
+	// Every current output first, whatever its age: FileCount and
+	// SharedCount count them, and each needs its row (and toggle). The
+	// bounded walk keeps only the newest files, so an older output can be
+	// missing from `all` — listing from the walk alone left a shared
+	// output counted but with no row to unshare it by. Then the newest
+	// non-output files fill the group up to the cap.
+	listed := make(map[string]bool, len(outs))
+	for _, o := range outs {
+		listed[o.Path] = true
+		g.Files = append(g.Files, sourcesFile{
+			Path: o.Path, Name: o.Name, Size: o.Size, ModifiedAt: o.ModifiedAt,
+			Shared: o.Shared, Output: true, YourCopy: copied[o.Path],
+		})
+	}
+	for _, f := range all {
+		if listed[f.Path] {
+			continue
+		}
+		if len(g.Files) >= maxProjectFiles {
+			truncated = true
+			break
+		}
+		f.YourCopy = copied[f.Path]
+		g.Files = append(g.Files, f)
+	}
+	sort.SliceStable(g.Files, func(i, j int) bool { return newerFile(g.Files[i], g.Files[j]) })
+	return g, true, truncated, nil
+}
+
+// teamSourcesGroup builds the Sources group of a teammate's chat from the
+// team listing: its SHARED outputs only; ok is false when it has none.
+func (s *Server) teamSourcesGroup(ctx context.Context, conv store.Conversation) (g sourcesGroup, ok, truncated bool, err error) {
+	outs, outsTruncated, err := s.ownerOutputs(ctx, conv.ID)
+	if err != nil {
+		return g, false, false, err
+	}
+	if outsTruncated {
+		truncated = true
+	}
+	g = sourcesGroup{
+		ConversationID: conv.ID,
+		Title:          conv.Title,
+		OwnerEmail:     conv.UserEmail,
+		TeamVisible:    conv.TeamVisible,
+		LastActiveAt:   conv.UpdatedAt,
+		Files:          []sourcesFile{},
+	}
+	for _, o := range outs {
+		if !o.Shared {
+			continue // a teammate never sees a file the owner held back
+		}
+		g.Files = append(g.Files, sourcesFile{
+			Path: o.Path, Name: o.Name, Size: o.Size, ModifiedAt: o.ModifiedAt,
+			Shared: true, Output: true,
+		})
+	}
+	if len(g.Files) == 0 {
+		return g, false, truncated, nil
+	}
+	g.FileCount, g.SharedCount = len(g.Files), len(g.Files)
+	if len(g.Files) > maxProjectFiles {
+		g.Files = g.Files[:maxProjectFiles]
+		truncated = true
+	}
+	return g, true, truncated, nil
+}
+
+// listSourcesHalf adds the groups of one half of Sources (the caller's own
+// chats, or the team's) through add, most recently active first, up to
+// maxSourcesGroups groups out of at most maxSourcesChatsScanned chats; cut
+// reports that either bound left chats out. The focused chat (if not done
+// yet) is added even past the bounds — but only from this list, so focus
+// never reaches a chat the listing's own gates did not return.
+func listSourcesHalf(list []store.Conversation, focus string, focusDone *bool, add func(store.Conversation) (bool, error)) (cut bool, err error) {
+	n := 0
+	for i, conv := range list {
+		if n >= maxSourcesGroups || i >= maxSourcesChatsScanned {
+			cut = true
+			break
+		}
+		if conv.ID == focus {
+			*focusDone = true
+		}
+		added, err := add(conv)
+		if err != nil {
+			return cut, err
+		}
+		if added {
+			n++
+		}
+	}
+	if *focusDone {
+		return cut, nil
+	}
+	for _, conv := range list {
+		if conv.ID == focus {
+			*focusDone = true
+			_, err := add(conv)
+			return cut, err
+		}
+	}
+	return cut, nil
+}
+
+// validSourcesFocus bounds the ?focus id to the conversation-id alphabet
+// (UUIDs in practice) before it reaches any lookup.
+func validSourcesFocus(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	for _, c := range id {
+		ok := c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '-' || c == '_'
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // sortConversationsRecentFirst orders chats most recently active first

@@ -349,7 +349,13 @@ re-checked before each file: once the owner stops sharing (or archives) mid-copy
 every file not yet copied is withheld. The discovery and copy run detached from
 the request's cancellation, bounded at two minutes (files past it are
 withheld), so a client that gives up mid-branch does not get a branch whose
-files silently did not come. They never update: later unshares, edits or deletions by
+files silently did not come. The copy moves 1 MiB at a time and checks that
+bound between chunks; a read or write stuck on a stalled filesystem is
+abandoned when the bound passes (both descriptors are closed, the partial file
+is removed and withheld, and so is every file after it). If discovery itself
+fails (the transcript or exclusions read errors or runs out of time), nothing
+is copied and the origin is recorded with `withheld_truncated: true`, so every
+reference in the branch renders locked rather than live. They never update: later unshares, edits or deletions by
 the owner do not reach them. Unshared outputs are recorded as `withheld_files`
 and stay locked names in the branch's transcript — as is every other workspace
 reference the transcript links that the branch did not receive (an upload,
@@ -399,7 +405,13 @@ independently of the bounded workspace walk, so a walk that finds nothing
 current output; a chat is left out only when both are empty. Each half lists
 at most the 50 most recently active chats with files, examining at most 200
 chats to find them; past either bound the response says `truncated: true`
-(and the additive `groups_truncated: true`).
+(and the additive `groups_truncated: true`). An optional `?focus=<chat id>`
+(sent by "Manage in Sources") lists that chat's group even past both bounds,
+but only when it is in one of the two listings above — the caller's own chat
+in this project, or a teammate's chat passing the same team gates; any other
+id (a teammate's private chat, say) is ignored like a chat with no files. If
+the focused chat still is not listed, the panel simply shows the listing,
+with nothing opened or highlighted.
 
 **The team link.** `/chat?team=<id>` lands a signed-in teammate on the
 read-only view. `GET /conversations/{id}/team-link` tells the client where to

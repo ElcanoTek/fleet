@@ -215,11 +215,17 @@ export async function fetchTeamLinkStatus(
   );
 }
 
+// focus (optional) is the chat "Manage in Sources" is opening: the server
+// lists its group even past the per-half group cap, when the caller may see it.
 export async function fetchProjectSources(
   projectId: string,
+  focus?: string | null,
 ): Promise<ProjectSources> {
+  const query = focus ? `?focus=${enc(focus)}` : "";
   return json(
-    await fetch(`/api/projects/${enc(projectId)}/files`, { cache: "no-store" }),
+    await fetch(`/api/projects/${enc(projectId)}/files${query}`, {
+      cache: "no-store",
+    }),
   );
 }
 

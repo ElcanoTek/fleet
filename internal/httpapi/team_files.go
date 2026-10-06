@@ -36,6 +36,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -297,7 +298,10 @@ const maxBranchCopyBytes int64 = 1 << 30
 // brancher leaves the team) every file not yet copied is withheld — the gate
 // that let the branch start does not keep the door open for the rest of it.
 // nil means no re-check (tests of the copy mechanics alone).
-func copySharedOutputsIntoBranch(srcConvID, dstConvID string, outs []outputFile, stillReadable func() bool) (copied []store.BranchFile, withheld []string) {
+//
+// ctx bounds the whole copy (branchCopyTimeout): once it is done the file in
+// flight is abandoned and removed, and every file not yet copied is withheld.
+func copySharedOutputsIntoBranch(ctx context.Context, srcConvID, dstConvID string, outs []outputFile, stillReadable func() bool) (copied []store.BranchFile, withheld []string) {
 	copied, withheld = []store.BranchFile{}, []string{}
 	var shared []outputFile
 	for _, o := range outs {
@@ -331,6 +335,10 @@ func copySharedOutputsIntoBranch(srcConvID, dstConvID string, outs []outputFile,
 	var budget = maxBranchCopyBytes
 	closed := false
 	for _, o := range shared {
+		if !closed && ctx.Err() != nil {
+			closed = true
+			log.Printf("branch files: copy budget for %s ran out; withholding the remaining files", logSafeSlug(dstConvID))
+		}
 		if !closed && stillReadable != nil && !stillReadable() {
 			closed = true
 			log.Printf("branch files: %s is no longer readable by the brancher; withholding the remaining files of %s", logSafeSlug(srcConvID), logSafeSlug(dstConvID))
@@ -339,7 +347,7 @@ func copySharedOutputsIntoBranch(srcConvID, dstConvID string, outs []outputFile,
 			withheld = append(withheld, o.Path)
 			continue
 		}
-		n, err := copyOneOutput(srcDir, dst, o.Path, budget)
+		n, err := copyOneOutput(ctx, srcDir, dst, o.Path, budget)
 		if err != nil {
 			log.Printf("branch files: %q not copied into %s: %v", logSafeSlug(o.Path), logSafeSlug(dstConvID), logSafe(err.Error()))
 			withheld = append(withheld, o.Path)
@@ -363,12 +371,51 @@ var errBranchCopyShort = errors.New("source changed during copy")
 // copy; nil in production.
 var branchCopyAfterStat func(srcPath string)
 
-func copyOneOutput(srcDir string, dst *os.Root, rel string, budget int64) (int64, error) {
+// branchCopySource is a test seam wrapping the source reader (a reader that
+// stalls like a hung filesystem); nil in production.
+var branchCopySource func(io.Reader) io.Reader
+
+// branchCopyChunk is how much the copy moves between checks of ctx.
+const branchCopyChunk = 1 << 20
+
+// copyOneOutput copies one shared output into the branch workspace. It
+// observes ctx: the copy runs in chunks with ctx checked between them, and a
+// read or write that blocks on a stalled filesystem is abandoned when ctx is
+// done — the call returns ctx's error at once, the partial destination is
+// removed and the file is withheld. Both descriptors are closed when ctx is
+// done (context.AfterFunc) so a blocked syscall that the platform lets a
+// close interrupt returns, and the abandoned goroutine stops at its next
+// chunk; one that cannot be interrupted only leaks that goroutine until the
+// filesystem answers, never the branch request.
+func copyOneOutput(ctx context.Context, srcDir string, dst *os.Root, rel string, budget int64) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	in, info, err := openWorkspaceFileNoFollow(srcDir, rel)
 	if err != nil {
 		return 0, err
 	}
-	defer in.Close()
+	// closeAll runs once, whichever side gets there first: the AfterFunc on
+	// cancellation (interrupting a blocked read/write), or the deferred
+	// close on return. out is registered under outMu once it is open.
+	var closeOnce sync.Once
+	var out *os.File
+	var outMu sync.Mutex
+	closeAll := func() {
+		closeOnce.Do(func() {
+			_ = in.Close()
+			outMu.Lock()
+			if out != nil {
+				_ = out.Close()
+			}
+			outMu.Unlock()
+		})
+	}
+	stop := context.AfterFunc(ctx, closeAll)
+	defer func() {
+		stop()
+		closeAll()
+	}()
 	if info.Size() > budget {
 		return 0, errBranchCopyBudget
 	}
@@ -380,14 +427,49 @@ func copyOneOutput(srcDir string, dst *os.Root, rel string, budget int64) (int64
 			return 0, err
 		}
 	}
-	out, err := dst.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := dst.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return 0, err
 	}
+	outMu.Lock()
+	out = f
+	outMu.Unlock()
+	if ctx.Err() != nil {
+		// Cancelled between the open and the registration above: the
+		// AfterFunc may already have run without seeing out.
+		_ = f.Close()
+		_ = dst.Remove(rel)
+		return 0, fmt.Errorf("copy: %w", ctx.Err())
+	}
 	// Bounded by the size that was checked: a file still being written by
 	// the owner's sandbox cannot push the copy past the budget.
-	n, err := io.Copy(out, io.LimitReader(in, info.Size()))
-	if cerr := out.Close(); err == nil {
+	src := io.LimitReader(in, info.Size())
+	if branchCopySource != nil {
+		src = branchCopySource(src)
+	}
+	type result struct {
+		n   int64
+		err error
+	}
+	done := make(chan result, 1) // buffered: an abandoned copy never blocks
+	go func() {
+		n, err := copyChunks(ctx, f, src)
+		done <- result{n, err}
+	}()
+	var n int64
+	select {
+	case r := <-done:
+		n, err = r.n, r.err
+	case <-ctx.Done():
+		// The copy may be stuck in a syscall; do not wait for it. Unlinking
+		// is safe while it still holds the descriptor.
+		_ = dst.Remove(rel)
+		return 0, fmt.Errorf("copy: %w", ctx.Err())
+	}
+	outMu.Lock()
+	out = nil
+	outMu.Unlock()
+	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	// io.Copy over a LimitReader reports an early EOF as success, so a
@@ -414,6 +496,35 @@ func copyOneOutput(srcDir string, dst *os.Root, rel string, budget int64) (int64
 		return 0, fmt.Errorf("copy: %w", err)
 	}
 	return n, nil
+}
+
+// copyChunks copies src to dst branchCopyChunk bytes at a time, checking ctx
+// before every read so a slow (not stuck) filesystem stops at the budget.
+func copyChunks(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
+	buf := make([]byte, branchCopyChunk)
+	var n int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return n, err
+		}
+		nr, rerr := src.Read(buf)
+		if nr > 0 {
+			nw, werr := dst.Write(buf[:nr])
+			n += int64(nw)
+			if werr != nil {
+				return n, werr
+			}
+			if nw != nr {
+				return n, io.ErrShortWrite
+			}
+		}
+		if rerr == io.EOF {
+			return n, nil
+		}
+		if rerr != nil {
+			return n, rerr
+		}
+	}
 }
 
 // maxBranchFilesInNote bounds the injected first-turn note.
