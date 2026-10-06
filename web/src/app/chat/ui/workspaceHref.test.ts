@@ -536,6 +536,21 @@ describe("redactUnsharedFiles", () => {
 // The team view (B19): shared outputs become live team-files links, every
 // other workspace reference a locked name, uploads plain names. The public
 // link keeps redactUnsharedFiles — pinned at the end of this block.
+describe("redactUnsharedFiles — never withholds less than before", () => {
+  it("still redacts escaped, commented and indented references", () => {
+    // The public view may withhold MORE than renders, never less: these are
+    // not links when rendered, but the redaction keeps treating them as
+    // references, exactly as it always has.
+    for (const md of [
+      "See \\[x](secret.csv) here.",
+      "Done <!-- [x](secret.csv) --> ok",
+      "Intro.\n\n    [x](secret.csv)",
+    ]) {
+      expect(redactUnsharedFiles(md, "IMG")).toContain("(file not shared)");
+    }
+  });
+});
+
 describe("linkSharedFiles — the teammate's view of the owner's outputs", () => {
   const links = {
     shared: new Set(["daily_spend.png", "out/report final.xlsx", "data.csv"]),
@@ -562,6 +577,47 @@ describe("linkSharedFiles — the teammate's view of the owner's outputs", () =>
     expect(
       linkSharedFiles(`[r](sandbox:/opt/chat/workspace/${CONV}/data.csv)`, links),
     ).toBe(`[r](${TEAM}data.csv)`);
+  });
+
+  it("leaves link-shaped text that renders as NO link exactly as written", () => {
+    // The server's output discovery parses with CommonMark: none of these is
+    // a link there (so none is an output), and none renders as one here.
+    for (const md of [
+      "See \\[x](secret.csv) here.",
+      "See !\\[x](secret.png) here.",
+      "Done <!-- [x](secret.csv) --> ok",
+      "Intro.\n\n    [x](secret.csv)\n\nOutro.",
+      "Intro.\n\n\t[x](data.csv)",
+    ]) {
+      expect(linkSharedFiles(md, links)).toBe(md);
+    }
+    // An escaped `!` leaves a LINK behind, rewritten like one.
+    expect(linkSharedFiles("\\![d](data.csv)", links)).toBe(
+      `\\![d](${TEAM}data.csv)`,
+    );
+    // Two backslashes escape each other: the bracket after them is live.
+    expect(linkSharedFiles("\\\\[d](data.csv)", links)).toBe(
+      `\\\\[d](${TEAM}data.csv)`,
+    );
+  });
+
+  it("stays conservative where indentation is not a code block", () => {
+    // A lazy continuation of a paragraph, and a list item's indented
+    // paragraph, are prose — still rewritten.
+    expect(linkSharedFiles("Intro.\n    [v](v.json)", links)).toBe(
+      `Intro.\n    [v\\.json (not shared)]${LOCK}`,
+    );
+    expect(linkSharedFiles("- item\n\n    [v](v.json)", links)).toBe(
+      `- item\n\n    [v\\.json (not shared)]${LOCK}`,
+    );
+  });
+
+  it("rewrites a link the renderer un-codes from a `Label: code` line", () => {
+    // AssistantContent turns `File: \`…\`` into a bold label and PLAIN text,
+    // so the quoted link renders — and is rewritten like any other.
+    expect(linkSharedFiles("File: `[d](data.csv)`", links)).toBe(
+      `**File:** [d](${TEAM}data.csv)`,
+    );
   });
 
   it("renders an unshared output as a locked name, never a live link", () => {

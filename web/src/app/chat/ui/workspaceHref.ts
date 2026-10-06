@@ -425,7 +425,7 @@ export function linkSharedFiles(
     const d = decide(ref);
     return d === "upload" || d === "locked" ? { text: withheld(ref, d), ref } : d;
   };
-  return rewriteFileRefs(markdown, {
+  const renderers: FileRefRenderers = {
     // Both halves of a clickable thumbnail by the same rules as everywhere
     // else: a live image inside a live link stays a thumbnail link; a
     // withheld half becomes its locked name beside whatever half survives —
@@ -463,7 +463,11 @@ export function linkSharedFiles(
       if (d === "locked") return locked(ref);
       return `[${escapeMarkdown(ref.name)}](${d.url})`;
     },
-  });
+  };
+  // The team view must agree with the server about which references are
+  // links at all (outputs.go discovery): text the renderer shows as no link —
+  // escaped, commented out, indented code — is left exactly as written.
+  return rewriteFileRefs(markdown, renderers, { renderedOnly: true });
 }
 
 /**
@@ -555,10 +559,45 @@ type FileRefRenderers = {
  * workspace file are dropped and their uses rendered inline, so no later pass
  * can resurrect the original destination.
  */
-function rewriteFileRefs(markdown: string, r: FileRefRenderers): string {
+type RewriteOptions = {
+  /**
+   * Leave alone link-shaped text the renderer shows as NO link: behind a
+   * backslash-escaped `[` or `!`, inside an HTML comment, or in an indented
+   * code block (fenced blocks and code spans are skipped in every mode). The
+   * team view sets it so it agrees with the server's output discovery, which
+   * parses with a real CommonMark parser. Each test here is CONSERVATIVE —
+   * when unsure it still rewrites — because a missed exclusion only rewrites
+   * text that renders as no link anyway, while a wrong one would leave a real
+   * link untouched. The public redaction does not set it: it may withhold
+   * more than renders, never less.
+   */
+  renderedOnly?: boolean;
+};
+
+/**
+ * The renderer's pre-parse rewrites (AssistantContent.tsx), shared so a
+ * transcript is rewritten in the SAME shape it is then rendered in. The last
+ * one matters here: `Label: ` followed by a code span becomes a bold label and
+ * a PLAIN value, so a link quoted in that span renders as a link — and must
+ * be rewritten like one. Idempotent, so rendering the result re-applies it as
+ * a no-op.
+ */
+export function normalizeAssistantMarkdown(content: string): string {
+  return content
+    .replace(/(^|\n)\*\*([^*\n:]+)\*\*(?=\s*$|\n)/g, "$1**$2**")
+    .replace(/(^|\n)\*\*([^*\n:]+)(?=\n|$)/g, "$1$2")
+    .replace(/(^|\n)([A-Za-z][A-Za-z /]+):\s*`([^`]+)`/g, "$1**$2:** $3");
+}
+
+function rewriteFileRefs(
+  markdown: string,
+  r: FileRefRenderers,
+  opts: RewriteOptions = {},
+): string {
   if (!markdown) return markdown;
 
-  const lines = scanFenced(markdown.split("\n"));
+  const lines = scanFenced(normalizeAssistantMarkdown(markdown).split("\n"));
+  if (opts.renderedOnly) markIndentedCode(lines);
   const refs = new Map<string, FileRef>();
   // Every label's FIRST definition, workspace or not: CommonMark (and the Go
   // parser the server withholds with) resolve a label to its first
@@ -595,12 +634,79 @@ function rewriteFileRefs(markdown: string, r: FileRefRenderers): string {
   const out: string[] = [];
   lines.forEach((line, i) => {
     if (defLines.has(i)) return;
-    out.push(line.code ? line.text : redactLine(line.text, refs, r));
+    out.push(
+      line.code ? line.text : redactLine(line.text, refs, r, Boolean(opts.renderedOnly)),
+    );
   });
   return out.join("\n");
 }
 
 type ScannedLine = { text: string; code: boolean };
+
+// An indented code block line: four columns of indentation (a tab counts).
+const INDENTED_CODE = /^(?: {4}| {0,3}\t)/;
+// Anything that makes four-space indentation mean something else: a list item
+// (its continuation lines are indented) or a block quote.
+const LIST_OR_QUOTE = /^\s*(?:[-+*]|\d{1,9}[.)])(?:\s|$)|^\s{0,3}>/;
+
+/**
+ * Mark indented code blocks as code, conservatively. A run of indented lines
+ * is code only when it follows a blank line (or opens the bubble) — an
+ * indented line right after a paragraph line is a lazy continuation, not code
+ * — and only in a bubble with no list item or block quote anywhere, since
+ * there indentation may be a list item's paragraph. Every other case is left
+ * as prose (and rewritten), which is the safe direction.
+ */
+function markIndentedCode(lines: ScannedLine[]): void {
+  if (lines.some((l) => !l.code && LIST_OR_QUOTE.test(l.text))) return;
+  let prevBlank = true;
+  let inBlock = false;
+  for (const line of lines) {
+    if (line.code) {
+      // A fence (or its content) ends any indented block and is not blank.
+      inBlock = false;
+      prevBlank = false;
+      continue;
+    }
+    const blank = line.text.trim() === "";
+    if (blank) {
+      prevBlank = true;
+      continue;
+    }
+    if (INDENTED_CODE.test(line.text) && (inBlock || prevBlank)) {
+      line.code = true;
+      inBlock = true;
+    } else {
+      inBlock = false;
+    }
+    prevBlank = false;
+  }
+}
+
+// One HTML comment on a single line. CommonMark renders none of it (and the
+// chat renderer drops raw HTML outright). A comment spanning lines is not
+// recognised — the conservative miss.
+const HTML_COMMENT = /(<!--[\s\S]*?-->)/;
+// Private-use stand-ins for a backslash-escaped `[` / `!` while the link
+// passes run, so no pattern can open a link or image on one.
+const ESCAPED_BRACKET = "\uE000";
+const ESCAPED_BANG = "\uE001";
+
+/**
+ * Hide every `[` and `!` that an ODD run of backslashes escapes (an even run
+ * is escaped backslashes, and the bracket after it is live).
+ */
+function maskEscapes(chunk: string): string {
+  return chunk.replace(/(\\+)([[!])/g, (whole, slashes: string, ch: string) =>
+    slashes.length % 2 === 1
+      ? slashes + (ch === "[" ? ESCAPED_BRACKET : ESCAPED_BANG)
+      : whole,
+  );
+}
+
+function unmaskEscapes(chunk: string): string {
+  return chunk.replaceAll(ESCAPED_BRACKET, "[").replaceAll(ESCAPED_BANG, "!");
+}
 
 /** Tag each line with whether it sits inside a fenced code block (or is a fence).
  *
@@ -634,12 +740,23 @@ function redactLine(
   line: string,
   refs: Map<string, FileRef>,
   r: FileRefRenderers,
+  renderedOnly: boolean,
 ): string {
   // split() on a single-group regex interleaves the separators at odd indexes,
-  // so the code spans come back untouched.
+  // so the code spans (and, renderedOnly, the HTML comments) come back
+  // untouched.
+  const prose = (part: string) =>
+    renderedOnly
+      ? part
+          .split(HTML_COMMENT)
+          .map((p, j) =>
+            j % 2 === 1 ? p : unmaskEscapes(redactChunk(maskEscapes(p), refs, r)),
+          )
+          .join("")
+      : redactChunk(part, refs, r);
   return line
     .split(INLINE_CODE)
-    .map((part, i) => (i % 2 === 1 ? part : redactChunk(part, refs, r)))
+    .map((part, i) => (i % 2 === 1 ? part : prose(part)))
     .join("");
 }
 

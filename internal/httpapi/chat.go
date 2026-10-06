@@ -1052,7 +1052,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// with it, and that the copied transcript's other file mentions did not
 	// (ADR-0079). Without it the agent tries to open a withheld file the
 	// transcript links to.
-	injected = s.appendBranchFilesBlock(turnCtx, injected, conv.ID)
+	injected, branchNoteClaimed := s.appendBranchFilesBlock(turnCtx, injected, conv.ID)
 	// Announce the cross-chat shared file library (docs/SHARED-FILES.md) the
 	// same way: read-only paths under shared/ the agent can use immediately.
 	injected = s.appendSharedFilesBlock(turnCtx, injected)
@@ -1153,7 +1153,12 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			s.activeTurns.Done()
 		}()
 		defer releaseOnce()
-		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, injected, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments), steer)
+		userCommitted := s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, injected, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments), steer)
+		if branchNoteClaimed && !userCommitted {
+			// The branch-files note rode on a user message that never became
+			// durable: release the one-shot latch so the next turn carries it.
+			s.releaseBranchFilesAnnouncement(conv.ID)
+		}
 		// The turn (and its deferred finishTurn) is done: settle this turn's
 		// queue rows against the durable #798 record — the drained row
 		// completes only if its user entry committed (a pre-commit failure
@@ -1270,7 +1275,7 @@ func (s *Server) runTurnAsync(
 	projectInstructions string,
 	imageAttachments []agent.ImageAttachment,
 	steer *steerMailbox,
-) {
+) (userCommitted bool) {
 	// Turn-start timestamp, stamped on every tool-call audit row derived from
 	// this turn (the SDK does not propagate per-call timing, so the turn start is
 	// the available anchor — see deriveToolCallEntries).
@@ -1292,13 +1297,14 @@ func (s *Server) runTurnAsync(
 	// Mock mode: short-circuit the LLM loop with a scripted stream for
 	// Playwright + CI. Skips history replay + provider call entirely.
 	if s.cfg.MockMode {
-		if err := runMockTurn(turnCtx, s.store, conv, buf.turnID, userInput, buf); err != nil {
+		err := runMockTurn(turnCtx, s.store, conv, buf.turnID, userInput, buf)
+		if err != nil {
 			log.Printf("runMockTurn error (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		}
 		sweepCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		s.sweepRetention(sweepCtx)
-		return
+		return err == nil
 	}
 
 	// Availability layer (unified connector UX): drop opted-in servers the
@@ -1318,6 +1324,14 @@ func (s *Server) runTurnAsync(
 	// projection commits before turn.completed / turn.cancelled is advertised.
 	journal := newTurnJournalWriter(s.store, buf.turnID)
 	commits := &turnCommits{store: s.store, convID: conv.ID, turnID: buf.turnID, journal: journal}
+	// Reported to the caller however the turn ends (error, panic, success):
+	// whether the user entry became durable. State that rode on it — the
+	// branch-files note's one-shot latch — is released when it did not.
+	defer func() {
+		if userID, _ := commits.persisted(); userID > 0 {
+			userCommitted = true
+		}
+	}()
 
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
 		UserMessage:               userInput,
@@ -1385,7 +1399,7 @@ func (s *Server) runTurnAsync(
 		case !errors.Is(err, ErrModelSelectionRequired):
 			buf.Emit("turn.error", map[string]any{"message": err.Error()})
 		}
-		return
+		return userCommitted // finalized by the deferred commits check
 	}
 
 	// Persist with a fresh context. turnCtx may already be cancelled if
@@ -1513,6 +1527,7 @@ func (s *Server) runTurnAsync(
 		s.autoIndexMemories(memCtx, buf, conv.ID, user, userInput, res.FinalText)
 		memCancel()
 	}
+	return userCommitted // set by the deferred commits check
 }
 
 // sweepRetention runs the post-turn database retention sweeps — expired

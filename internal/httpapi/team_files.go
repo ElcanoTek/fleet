@@ -35,6 +35,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -62,6 +63,17 @@ func (s *Server) outputsFromHistory(ctx context.Context, convID string, history 
 	}
 	outs, truncated = conversationOutputs(convID, history, excluded)
 	return outs, truncated, nil
+}
+
+// outputHistoryOf is the history output discovery reads for a team snapshot:
+// its transcript plus content-free compaction markers, so replies group as
+// the owner's chat renders them (store.TeamSharedConversation.OutputHistory).
+// Falls back to the transcript for a snapshot built without it.
+func outputHistoryOf(snap *store.TeamSharedConversation) []agent.HistoryEntry {
+	if snap.OutputHistory != nil {
+		return snap.OutputHistory
+	}
+	return snap.Messages
 }
 
 // writeOutputsResponse is the one body GET outputs and POST outputs/share
@@ -186,7 +198,7 @@ func (s *Server) handleTeamFile(w http.ResponseWriter, r *http.Request, user, co
 	// A path older than the discovery bound (maxOutputReferences) is not in
 	// this list and is refused like any non-output: the bound narrows what
 	// can be downloaded, never widens it.
-	outs, _, err := s.outputsFromHistory(r.Context(), snap.ID, snap.Messages)
+	outs, _, err := s.outputsFromHistory(r.Context(), snap.ID, outputHistoryOf(snap))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -374,16 +386,33 @@ const maxBranchFilesInNote = 50
 // transcript, sees a link to a file the owner withheld, and confidently tries
 // to use a file it does not have. One-shot via the store latch; a failed
 // claim degrades to no note, never a failed turn.
-func (s *Server) appendBranchFilesBlock(ctx context.Context, injected, convID string) string {
+//
+// claimed reports that THIS call flipped the latch. The note only becomes
+// durable with the turn's user message (it is that message's injected
+// context), so a turn that fails before committing it must hand the latch
+// back — releaseBranchFilesAnnouncement — or the branch loses the note for
+// good.
+func (s *Server) appendBranchFilesBlock(ctx context.Context, injected, convID string) (_ string, claimed bool) {
 	origin, err := s.store.ClaimBranchFilesAnnouncement(ctx, convID)
 	if err != nil {
 		log.Printf("branch files note for %s: %v", logSafeSlug(convID), logSafe(err.Error()))
-		return injected
+		return injected, false
 	}
 	if origin == nil {
-		return injected
+		return injected, false
 	}
-	return injected + branchFilesNote(origin)
+	return injected + branchFilesNote(origin), true
+}
+
+// releaseBranchFilesAnnouncement hands back a latch appendBranchFilesBlock
+// claimed for a turn whose user message never committed, so the next turn
+// carries the note instead. Fresh context: the turn's own may be cancelled.
+func (s *Server) releaseBranchFilesAnnouncement(convID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.store.ReleaseBranchFilesAnnouncement(ctx, convID); err != nil {
+		log.Printf("branch files note for %s: release after a failed turn: %v", logSafeSlug(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+	}
 }
 
 // branchFilesNote renders the first-turn note for one branch origin.

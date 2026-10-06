@@ -168,19 +168,36 @@ func (s *Store) SetOutputShared(ctx context.Context, ownerEmail, convID, path st
 	return tx.Commit()
 }
 
-// maxExclusionsPerRequest bounds ReplaceOutputExclusions — the share dialog's
+// maxExclusionsPerRequest bounds ApplyOutputChecklist — the share dialog's
 // checklist, which lists one chat's outputs.
 const maxExclusionsPerRequest = 1000
 
-// ReplaceOutputExclusions makes the chat's exclusion set EXACTLY paths — the
-// share dialog's checklist, applied as one decision. Owner-only, atomic.
-func (s *Store) ReplaceOutputExclusions(ctx context.Context, ownerEmail, convID string, paths []string) error {
-	if len(paths) > maxExclusionsPerRequest {
+// ApplyOutputChecklist applies the share dialog's checklist as one decision,
+// over EXACTLY the paths the checklist showed: every path in listed is
+// excluded when it is in unshared and shared otherwise. An exclusion for a
+// path the checklist did not show — an output missing on disk right now, one
+// past the discovery bound, one presented after the dialog loaded — is left
+// exactly as it was: the owner made no decision about it, so a re-share with
+// an all-checked list must not quietly re-expose it if it comes back. A path
+// in unshared counts as listed. Owner-only, atomic.
+func (s *Store) ApplyOutputChecklist(ctx context.Context, ownerEmail, convID string, listed, unshared []string) error {
+	if len(listed) > maxExclusionsPerRequest || len(unshared) > maxExclusionsPerRequest {
 		return ErrInvalidOutputPath
 	}
-	for _, p := range paths {
+	excluded := make(map[string]bool, len(unshared))
+	for _, p := range unshared {
 		if !ValidOutputPath(p) {
 			return ErrInvalidOutputPath
+		}
+		excluded[p] = true
+	}
+	var share []string
+	for _, p := range listed {
+		if !ValidOutputPath(p) {
+			return ErrInvalidOutputPath
+		}
+		if !excluded[p] {
+			share = append(share, p)
 		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -191,12 +208,15 @@ func (s *Store) ReplaceOutputExclusions(ctx context.Context, ownerEmail, convID 
 	if err := ownsLiveConversationTx(ctx, tx, ownerEmail, convID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM conversation_output_exclusions WHERE conversation_id = $1`, convID); err != nil {
-		return err
+	if len(share) > 0 {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM conversation_output_exclusions WHERE conversation_id = $1 AND path = ANY($2)`,
+			convID, share); err != nil {
+			return err
+		}
 	}
 	now := time.Now().Unix()
-	for _, p := range paths {
+	for p := range excluded {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO conversation_output_exclusions (conversation_id, path, created_at)
 			 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, convID, p, now); err != nil {
@@ -226,6 +246,12 @@ type BranchOrigin struct {
 	BranchedAt           int64        `json:"branched_at"`
 	CopiedFiles          []BranchFile `json:"copied_files"`
 	WithheldFiles        []string     `json:"withheld_files"`
+	// WithheldTruncated is true when the transcript referenced more workspace
+	// files than WithheldFiles records (the list is bounded so one branch
+	// cannot park an unbounded JSONB array). A reader must then treat a
+	// reference that is in neither CopiedFiles nor WithheldFiles as withheld
+	// unless the file is in the branch's own workspace — never as live.
+	WithheldTruncated bool `json:"withheld_truncated"`
 	// SourceMaxMessageID is the branch point the copy used — the source's
 	// highest message id the branch actually contains, and the high-water
 	// mark ViewerBranches compares against. The caller passes it explicitly;
@@ -262,8 +288,8 @@ func (s *Store) RecordBranchOrigin(ctx context.Context, branchConvID string, o B
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO conversation_branch_origins
 			(conversation_id, source_conversation_id, source_owner_email, source_title,
-			 branched_at, source_max_message_id, copied_files, withheld_files, files_announced)
-		VALUES ($1, $2, $3, $4, $5, $8, $6::jsonb, $7::jsonb, FALSE)
+			 branched_at, source_max_message_id, copied_files, withheld_files, withheld_truncated, files_announced)
+		VALUES ($1, $2, $3, $4, $5, $8, $6::jsonb, $7::jsonb, $9, FALSE)
 		ON CONFLICT (conversation_id) DO UPDATE SET
 			source_conversation_id = EXCLUDED.source_conversation_id,
 			source_owner_email = EXCLUDED.source_owner_email,
@@ -271,9 +297,10 @@ func (s *Store) RecordBranchOrigin(ctx context.Context, branchConvID string, o B
 			branched_at = EXCLUDED.branched_at,
 			source_max_message_id = EXCLUDED.source_max_message_id,
 			copied_files = EXCLUDED.copied_files,
-			withheld_files = EXCLUDED.withheld_files`,
+			withheld_files = EXCLUDED.withheld_files,
+			withheld_truncated = EXCLUDED.withheld_truncated`,
 		branchConvID, o.SourceConversationID, normalizeEmail(o.SourceOwnerEmail), o.SourceTitle,
-		o.BranchedAt, string(copied), string(withheld), o.SourceMaxMessageID)
+		o.BranchedAt, string(copied), string(withheld), o.SourceMaxMessageID, o.WithheldTruncated)
 	return err
 }
 
@@ -281,7 +308,7 @@ func scanBranchOrigin(sc rowScanner) (*BranchOrigin, error) {
 	var o BranchOrigin
 	var copied, withheld []byte
 	if err := sc.Scan(&o.SourceConversationID, &o.SourceOwnerEmail, &o.SourceTitle,
-		&o.BranchedAt, &copied, &withheld); err != nil {
+		&o.BranchedAt, &copied, &withheld, &o.WithheldTruncated); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(copied, &o.CopiedFiles); err != nil || o.CopiedFiles == nil {
@@ -294,7 +321,7 @@ func scanBranchOrigin(sc rowScanner) (*BranchOrigin, error) {
 }
 
 const branchOriginColumns = `o.source_conversation_id, o.source_owner_email, o.source_title,
-		o.branched_at, o.copied_files, o.withheld_files`
+		o.branched_at, o.copied_files, o.withheld_files, o.withheld_truncated`
 
 // GetBranchOrigin returns the origin of ownerEmail's branch convID, or nil
 // when convID is not theirs or is not a teammate branch.
@@ -374,6 +401,16 @@ func (s *Store) ClaimBranchFilesAnnouncement(ctx context.Context, convID string)
 		return nil, err
 	}
 	return o, nil
+}
+
+// ReleaseBranchFilesAnnouncement undoes a ClaimBranchFilesAnnouncement whose
+// turn failed BEFORE its user message was committed: nothing durable carries
+// the note, so the next turn must claim it again rather than the branch losing
+// it forever. Idempotent; a no-op for a conversation that is not a branch.
+func (s *Store) ReleaseBranchFilesAnnouncement(ctx context.Context, convID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE conversation_branch_origins SET files_announced = FALSE WHERE conversation_id = $1`, convID)
+	return err
 }
 
 // ViewerBranch is the viewer's own most recent live branch of a teammate's

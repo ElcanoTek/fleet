@@ -282,11 +282,12 @@ type chatStore interface {
 	// that reveals nothing beyond routing; per-person project UI state.
 	ListOutputExclusions(ctx context.Context, convID string) (map[string]bool, error)
 	SetOutputShared(ctx context.Context, ownerEmail, convID, path string, shared bool) error
-	ReplaceOutputExclusions(ctx context.Context, ownerEmail, convID string, paths []string) error
+	ApplyOutputChecklist(ctx context.Context, ownerEmail, convID string, listed, unshared []string) error
 	RecordBranchOrigin(ctx context.Context, branchConvID string, o store.BranchOrigin) error
 	GetBranchOrigin(ctx context.Context, ownerEmail, convID string) (*store.BranchOrigin, error)
 	BranchOriginsFor(ctx context.Context, convIDs []string) (map[string]*store.BranchOrigin, error)
 	ClaimBranchFilesAnnouncement(ctx context.Context, convID string) (*store.BranchOrigin, error)
+	ReleaseBranchFilesAnnouncement(ctx context.Context, convID string) error
 	ViewerBranches(ctx context.Context, viewerEmail string, sourceIDs []string) (map[string]store.ViewerBranch, error)
 	ResolveTeamLink(ctx context.Context, callerEmail, convID string) (store.TeamLink, error)
 	GetProjectUserState(ctx context.Context, projectID, email string) (store.ProjectUserState, error)

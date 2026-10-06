@@ -48,6 +48,7 @@ import {
   sharedToast,
   teamLinkUrl,
   type ConversationOutputs,
+  type OutputChecklist,
   type ShareWithTeamResult,
 } from "./teamSharing";
 import { useEffect, useId, useState } from "react";
@@ -140,13 +141,14 @@ export type ShareDialogProps = {
   onCopyLink: (url: string) => void;
   onStopLink: (conversation: ConversationSummary) => void;
   /**
-   * Share with the team (A4/A6). `unsharedPaths`, when given, REPLACES the
-   * chat's excluded-file set (the checklist); omitted, earlier choices stand.
-   * Resolves null on failure (the caller sets `error`).
+   * Share with the team (A4/A6). `checklist`, when given, decides exactly the
+   * files the checklist LISTED (unchecked = held back, checked = shared); an
+   * earlier choice about a file it did not list stands. Omitted, every earlier
+   * choice stands. Resolves null on failure (the caller sets `error`).
    */
   onShareWithTeam: (
     conversation: ConversationSummary,
-    unsharedPaths?: string[],
+    checklist?: OutputChecklist,
   ) => Promise<ShareWithTeamResult | null>;
   /** Stop sharing with the team (A5b). Resolves null on failure. */
   onStopSharingWithTeam: (
@@ -309,9 +311,17 @@ export function ShareDialog({
   const shareNow = (c: ConversationSummary) =>
     run(async () => {
       // Only send the checklist when the owner opened it: otherwise the
-      // server's existing exclusions stand untouched.
-      const paths = chooseOpen || unchecked ? effectiveUnchecked : undefined;
-      const result = await onShareWithTeam(c, paths);
+      // server's existing exclusions stand untouched. It carries what it
+      // LISTED, so a file the list did not show keeps its earlier choice; and
+      // a checklist that never loaded lists nothing, so it changes nothing.
+      const checklist =
+        chooseOpen || unchecked
+          ? {
+              listedPaths: files ? files.outputs.map((f) => f.path) : [],
+              unsharedPaths: effectiveUnchecked,
+            }
+          : undefined;
+      const result = await onShareWithTeam(c, checklist);
       if (!result) return;
       setChooseOpen(false);
       setUnchecked(null);

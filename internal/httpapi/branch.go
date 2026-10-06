@@ -151,17 +151,35 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 		SourceMaxMessageID:   sourceHighWater,
 		SourceStillShared:    true,
 	}
-	outs, _, err := s.outputsFromHistory(ctx, src.ID, src.Messages)
+	// Only what the branch actually copied: the source messages up to and
+	// including the branch point. A reply after it is not in the branch, so
+	// its files are neither copied nor named as withheld.
+	history := historyThrough(outputHistoryOf(src), sourceHighWater)
+	outs, outsTruncated, err := s.outputsFromHistory(ctx, src.ID, history)
 	if err != nil {
 		log.Printf("branch files: outputs of %s: %v", logSafeSlug(src.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
 	} else {
 		origin.CopiedFiles, origin.WithheldFiles = copySharedOutputsIntoBranch(src.ID, branch.ID, outs)
 	}
-	origin.WithheldFiles = withholdUncopiedReferences(src.Messages, origin.CopiedFiles, origin.WithheldFiles)
+	var refsTruncated bool
+	origin.WithheldFiles, refsTruncated = withholdUncopiedReferences(history, origin.CopiedFiles, origin.WithheldFiles)
+	origin.WithheldTruncated = outsTruncated || refsTruncated
 	if err := s.store.RecordBranchOrigin(ctx, branch.ID, origin); err != nil {
 		log.Printf("branch files: record origin of %s: %v", logSafeSlug(branch.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
 	}
 	return &origin
+}
+
+// historyThrough returns the entries of history with an id at or below
+// through — what BranchConversation copies. Entries are in id order.
+func historyThrough(history []agent.HistoryEntry, through int64) []agent.HistoryEntry {
+	out := make([]agent.HistoryEntry, 0, len(history))
+	for _, e := range history {
+		if e.ID <= through {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // withholdUncopiedReferences appends to withheld every workspace path the
@@ -170,7 +188,15 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 // failed listing never reached. Paths are in resolveWorkspaceRelPath's
 // decoded, "/"-joined form, the same form the web's workspacePathFromHref
 // produces, so the branch's WithheldFilesContext matches them.
-func withholdUncopiedReferences(history []agent.HistoryEntry, copied []store.BranchFile, withheld []string) []string {
+//
+// Bounded like discovery itself: only the maxOutputReferences most recent
+// distinct references are considered, so the list persisted in
+// conversation_branch_origins stays bounded however long the transcript is.
+// truncated reports that older references were not considered; the branch
+// records it (BranchOrigin.WithheldTruncated) and the web then treats a
+// reference in neither list as withheld unless the branch's own workspace has
+// the file.
+func withholdUncopiedReferences(history []agent.HistoryEntry, copied []store.BranchFile, withheld []string) (_ []string, truncated bool) {
 	have := make(map[string]bool, len(copied)+len(withheld))
 	for _, c := range copied {
 		have[c.Path] = true
@@ -178,11 +204,12 @@ func withholdUncopiedReferences(history []agent.HistoryEntry, copied []store.Bra
 	for _, p := range withheld {
 		have[p] = true
 	}
-	for _, p := range presentedWorkspacePaths(history) {
+	refs, truncated := boundedPresentedPaths(history, maxOutputReferences, true)
+	for _, p := range refs {
 		if !have[p] {
 			have[p] = true
 			withheld = append(withheld, p)
 		}
 	}
-	return withheld
+	return withheld, truncated
 }

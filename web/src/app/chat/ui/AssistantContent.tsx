@@ -18,6 +18,7 @@ import { DiffBlock } from "./DiffBlock";
 import { isUnifiedDiff } from "@/app/lib/diffUtils";
 import {
   LOCKED_FILE_HREF,
+  normalizeAssistantMarkdown,
   PENDING_CONV_KEY,
   resolveWorkspaceHref,
   teamFileDownloadName,
@@ -321,11 +322,12 @@ export default function AssistantMarkdown({
     return null;
   }
 
+  // The same pre-parse rewrites the read-only views apply before rewriting
+  // file references (normalizeAssistantMarkdown), and that the server's output
+  // discovery mirrors (outputs.go) — one definition, so the three agree on
+  // what renders as a link.
   const normalizedContent = autoFenceRawHtmlDocument(
-    content
-      .replace(/(^|\n)\*\*([^*\n:]+)\*\*(?=\s*$|\n)/g, "$1**$2**")
-      .replace(/(^|\n)\*\*([^*\n:]+)(?=\n|$)/g, "$1$2")
-      .replace(/(^|\n)([A-Za-z][A-Za-z /]+):\s*`([^`]+)`/g, "$1**$2:** $3"),
+    normalizeAssistantMarkdown(content),
   );
 
   return (

@@ -73,17 +73,35 @@ func TestOutputExclusionsSurviveSharingChanges(t *testing.T) {
 	}
 	assertExcluded("after archive/unarchive", "out/v1.json")
 
-	// The dialog checklist replaces the set as one decision.
-	if err := f.s.ReplaceOutputExclusions(f.ctx, "alice@x.com", c.ID, []string{"a.csv", "b/c.csv"}); err != nil {
+	// The dialog checklist is one decision over exactly the paths it listed.
+	if err := f.s.ApplyOutputChecklist(f.ctx, "alice@x.com", c.ID,
+		[]string{"a.csv", "b/c.csv", "d.csv"}, []string{"a.csv", "b/c.csv"}); err != nil {
 		t.Fatal(err)
 	}
-	assertExcluded("after replace", "a.csv", "b/c.csv")
-	if err := f.s.ReplaceOutputExclusions(f.ctx, "alice@x.com", c.ID, nil); err != nil {
+	assertExcluded("after checklist", "a.csv", "b/c.csv", "out/v1.json")
+	// All checked: every LISTED exclusion goes. out/v1.json was not in the
+	// listing (missing on disk, past the bound…) — the owner made no decision
+	// about it, so its exclusion survives and it stays held back if it
+	// reappears.
+	if err := f.s.ApplyOutputChecklist(f.ctx, "alice@x.com", c.ID,
+		[]string{"a.csv", "b/c.csv", "d.csv"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	assertExcluded("after replace with none")
-	if err := f.s.ReplaceOutputExclusions(f.ctx, "bob@x.com", c.ID, []string{"x"}); !errors.Is(err, ErrConversationNotFound) {
-		t.Errorf("teammate replace err = %v", err)
+	assertExcluded("after an all-checked checklist", "out/v1.json")
+	// An unshared path counts as listed even if the client forgot to list it.
+	if err := f.s.ApplyOutputChecklist(f.ctx, "alice@x.com", c.ID, nil, []string{"e.csv"}); err != nil {
+		t.Fatal(err)
+	}
+	assertExcluded("after an unlisted unshare", "e.csv", "out/v1.json")
+	if err := f.s.ApplyOutputChecklist(f.ctx, "alice@x.com", c.ID, []string{"e.csv", "out/v1.json"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertExcluded("after listing and checking both")
+	if err := f.s.ApplyOutputChecklist(f.ctx, "alice@x.com", c.ID, []string{"../x"}, nil); !errors.Is(err, ErrInvalidOutputPath) {
+		t.Errorf("invalid listed path err = %v", err)
+	}
+	if err := f.s.ApplyOutputChecklist(f.ctx, "bob@x.com", c.ID, nil, []string{"x"}); !errors.Is(err, ErrConversationNotFound) {
+		t.Errorf("teammate checklist err = %v", err)
 	}
 
 	// Rows die with the chat.
@@ -582,5 +600,44 @@ func TestViewerBranchesIgnoresInvisibleRows(t *testing.T) {
 	vb, _ = f.s.ViewerBranches(f.ctx, "bob@x.com", []string{c.ID})
 	if !vb[c.ID].ChangedSince {
 		t.Error("a later visible text row must report changed_since")
+	}
+}
+
+// A turn that failed before committing its user message hands the first-turn
+// note's latch back: the next claim gets the note again, exactly once. The
+// truncation flag round-trips with the origin.
+func TestReleaseBranchFilesAnnouncement(t *testing.T) {
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
+	view, err := f.s.GetTeamVisibleConversation(f.ctx, "bob@x.com", c.ID)
+	if err != nil || view == nil {
+		t.Fatalf("team view: %v", err)
+	}
+	last := view.Messages[len(view.Messages)-1].ID
+	br, err := f.s.BranchConversation(f.ctx, "bob@x.com", c.ID, last, "branch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.RecordBranchOrigin(f.ctx, br.ID, BranchOrigin{
+		SourceConversationID: c.ID, SourceOwnerEmail: "alice@x.com", BranchedAt: br.CreatedAt,
+		SourceMaxMessageID: last, WithheldTruncated: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := f.s.ClaimBranchFilesAnnouncement(f.ctx, br.ID)
+	if err != nil || first == nil || !first.WithheldTruncated {
+		t.Fatalf("first claim = %+v, %v", first, err)
+	}
+	if err := f.s.ReleaseBranchFilesAnnouncement(f.ctx, br.ID); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := f.s.ClaimBranchFilesAnnouncement(f.ctx, br.ID); again == nil {
+		t.Error("a released note must be claimable again")
+	}
+	if again, _ := f.s.ClaimBranchFilesAnnouncement(f.ctx, br.ID); again != nil {
+		t.Error("a re-claimed note is still one-shot")
+	}
+	if err := f.s.ReleaseBranchFilesAnnouncement(f.ctx, c.ID); err != nil {
+		t.Errorf("releasing a non-branch is a no-op, got %v", err)
 	}
 }

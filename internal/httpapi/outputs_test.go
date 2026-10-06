@@ -86,12 +86,17 @@ func TestMarkdownDestinations(t *testing.T) {
 		"[notes]: <notes file.md>\n" +
 		"[esc]: ref\\_\\#1.csv\n" +
 		"[orphan]: orphan.csv\n"
-	got := markdownDestinations(md)
+	var got []string
+	for _, d := range markdownDestinations(md) {
+		if p, ok := resolveWorkspaceRelPath(d); ok {
+			got = append(got, p)
+		}
+	}
 	want := []string{
 		"out/report.xlsx",
 		"chart.png",
+		"full.png", // document order: the outer link opens before its image
 		"thumb.png",
-		"full.png",
 		"My File.csv",
 		"my_file.csv",
 		"deck.pptx",
@@ -102,6 +107,96 @@ func TestMarkdownDestinations(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("destinations =\n %q\nwant\n %q", got, want)
+	}
+}
+
+// Discovery matches only what the chat RENDERS as a link or image. Every
+// construct below contains link-shaped source text that CommonMark (and the
+// web's react-markdown + remark-gfm) renders as no link at all — so the file
+// was never a chip, and must never become a shared output.
+func TestMarkdownDestinationsOnlyRenderedLinks(t *testing.T) {
+	notLinks := map[string]string{
+		"backslash-escaped bracket": `See \[x](secret.csv) here.`,
+		"escaped image bracket":     `See !\[x](secret.png) here.`,
+		"inline HTML comment":       `Done <!-- [x](secret.csv) --> ok`,
+		"block HTML comment":        "<!--\n[x](secret.csv)\n-->\n\nafter",
+		"indented code block":       "Intro.\n\n    [x](secret.csv)\n\nOutro.",
+		"fenced code block":         "```\n[x](secret.csv)\n```",
+		"tilde fence":               "~~~\n[x](secret.csv)\n~~~",
+		"inline code span":          "Use `[x](secret.csv)` literally.",
+		"double-backtick span":      "Use ``a ` [x](secret.csv)`` literally.",
+		"raw HTML block":            "<div>\n[x](secret.csv)\n</div>",
+		"raw HTML anchor":           `<a href="secret.csv">x</a>`,
+		"link in image alt":         `![see [x](secret.csv)](https://example.com/p.png)`,
+		"unfenced HTML document":    "<!DOCTYPE html>\n<html>\n<body>\n\n[x](secret.csv)\n\n</body>\n</html>",
+		"email autolink":            "Write to <secret@report.csv> or secret@report.csv.",
+		"definition never used":     "[x]: secret.csv",
+	}
+	for name, md := range notLinks {
+		for _, d := range markdownDestinations(md) {
+			if p, ok := resolveWorkspaceRelPath(d); ok {
+				t.Errorf("%s: %q yielded workspace path %q, want none", name, md, p)
+			}
+		}
+	}
+
+	// And the shapes that DO render as links still count.
+	links := map[string]string{
+		"escaped backslash before bracket": `See \\[x](a.csv)`, // \\ is a literal backslash; the [ is live
+		"list continuation, 4 spaces":      "- item\n\n    [x](a.csv)",
+		"label-colon code span":            "File: `[x](a.csv)`", // the renderer un-codes this value
+		"angle autolink to sandbox path":   "<sandbox:/opt/chat/workspace/a.csv>",
+		"footnote body":                    "Note[^1].\n\n[^1]: See [x](a.csv).",
+		"table cell":                       "| f |\n|---|\n| [x](a.csv) |",
+		"first definition wins":            "[x]\n\n[x]: a.csv\n[x]: https://example.com/",
+		"entity in destination":            "[x](a&#46;csv)",
+	}
+	for name, md := range links {
+		var got []string
+		for _, d := range markdownDestinations(md) {
+			if p, ok := resolveWorkspaceRelPath(d); ok {
+				got = append(got, p)
+			}
+		}
+		if !reflect.DeepEqual(got, []string{"a.csv"}) {
+			t.Errorf("%s: %q yielded %q, want [a.csv]", name, md, got)
+		}
+	}
+	// A later definition never overrides the first, even when the first is
+	// external: the label renders as the external link, no chip.
+	for _, d := range markdownDestinations("[x]\n\n[x]: https://example.com/\n[x]: secret.csv") {
+		if p, ok := resolveWorkspaceRelPath(d); ok {
+			t.Errorf("second definition took over: %q", p)
+		}
+	}
+}
+
+// The chat renders consecutive assistant text entries (across tool calls,
+// until the next user message or compaction summary) as ONE message, so
+// discovery parses them as one: a fence opened in one entry and closed in the
+// next is one code block on screen, and a link inside it is not a chip.
+func TestPresentedWorkspacePathsGroupsLikeTheChat(t *testing.T) {
+	history := []agent.HistoryEntry{
+		textEntry("assistant", "Here is the raw output:\n```\n"),
+		{Role: "assistant", Type: "tool_call", Content: json.RawMessage(`{"id":"1","name":"bash","input":"{}"}`)},
+		textEntry("assistant", "[x](secret.csv)\n```\nand the [real](real.csv) file."),
+		textEntry("user", "thanks"),
+		// A new message: an unclosed fence above does not swallow this.
+		textEntry("assistant", "[next](next.csv)"),
+	}
+	got := presentedWorkspacePaths(history)
+	if want := []string{"real.csv", "next.csv"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("presented = %q, want %q", got, want)
+	}
+
+	// A compaction summary starts a new message too.
+	history = []agent.HistoryEntry{
+		textEntry("assistant", "```\n"),
+		{Role: "assistant", Type: "summary", Content: json.RawMessage(`{"text":"s"}`)},
+		textEntry("assistant", "[after](after.csv)"),
+	}
+	if got := presentedWorkspacePaths(history); !reflect.DeepEqual(got, []string{"after.csv"}) {
+		t.Errorf("presented across a summary = %q, want [after.csv]", got)
 	}
 }
 

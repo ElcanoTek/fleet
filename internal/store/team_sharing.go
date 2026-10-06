@@ -66,6 +66,14 @@ type TeamSharedConversation struct {
 	Lockdown  bool   `json:"-"`
 
 	Messages []agent.HistoryEntry `json:"messages"`
+
+	// OutputHistory is Messages plus a CONTENT-FREE marker for each
+	// compaction summary, server-side only (json:"-"): output discovery
+	// groups assistant replies exactly as the owner's chat renders them, and
+	// a summary starts a new rendered message there. Without the markers the
+	// team-files gate would parse two replies as one and could disagree with
+	// the owner's own outputs listing.
+	OutputHistory []agent.HistoryEntry `json:"-"`
 }
 
 // GetTeamVisibleConversation returns the read-only transcript of convID when
@@ -129,9 +137,13 @@ func (s *Store) GetTeamVisibleConversation(ctx context.Context, callerEmail, con
 	// reasoning entries whose content can include command output and API
 	// responses that were never part of what the owner shared.
 	out.Messages = make([]agent.HistoryEntry, 0, len(msgs))
+	out.OutputHistory = make([]agent.HistoryEntry, 0, len(msgs))
 	for _, m := range msgs {
 		if m.Type == "text" && (m.Role == "user" || m.Role == "assistant") {
 			out.Messages = append(out.Messages, m)
+			out.OutputHistory = append(out.OutputHistory, m)
+		} else if m.Type == "summary" {
+			out.OutputHistory = append(out.OutputHistory, agent.HistoryEntry{ID: m.ID, Role: m.Role, Type: m.Type})
 		}
 	}
 	return &out, nil

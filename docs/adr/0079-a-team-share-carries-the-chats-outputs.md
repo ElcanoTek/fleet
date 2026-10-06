@@ -49,10 +49,13 @@ presented in its replies — except the ones the owner unchecked.**
    without traversing a symlink, and is **not under `attachments/`**. Uploads
    are never outputs: never shared, listed or counted. A file the agent wrote
    but never linked is not an output either: it stays a download-only entry in
-   its owner's Sources. Code spans and fenced blocks are skipped, as the TS
-   redactor skips them — a path quoted in code is not a chip. Defining it by the
-   same rule the UI uses means "what the owner sees as a chip" and "what a
-   teammate may download" cannot disagree.
+   its owner's Sources. "Presented" means RENDERED as a link or image: replies
+   are grouped and normalized as the chat renders them and parsed with a
+   CommonMark + GFM parser (goldmark), so link-shaped text that renders as no
+   link — a code span, a fenced or indented code block, an HTML comment or raw
+   HTML, a backslash-escaped `[`, an image's alt text — is not a chip and never
+   an output. Defining it by what the UI renders means "what the owner sees as
+   a chip" and "what a teammate may download" cannot disagree.
 2. **Per-file state is a set of exclusions; default is shared.**
    `conversation_output_exclusions (conversation_id, path)` (migration 070).
    An output presented after sharing is shared automatically, because the
@@ -60,7 +63,9 @@ presented in its replies — except the ones the owner unchecked.**
    stop sharing, sharing again, archive and unarchive, and moves, so a later
    one-click share (the row pill, the getting-started card, the move toast)
    can never re-expose a file the owner held back. The share dialog's
-   checklist replaces the set in one write (`unshared_paths`), and that write
+   checklist decides exactly the files it listed in one write
+   (`unshared_paths` + `listed_paths`; an exclusion for a file it did not list
+   stands), and that write
    happens **before** the flag flips, so there is no instant in which a chat is
    shared with a file just unchecked.
 3. **The download route re-checks everything, every time.**

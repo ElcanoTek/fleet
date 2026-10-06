@@ -3,16 +3,19 @@
 //
 // Two halves, both host-side:
 //
-//   - presentedWorkspacePaths reads the assistant's TEXT replies and collects
-//     every markdown link / image destination that the web UI would rewrite
-//     into a workspace download. The rule is a port of
+//   - presentedWorkspacePaths reads the assistant's TEXT replies, grouped and
+//     normalized exactly as the chat renders them, parses each with a
+//     CommonMark + GFM parser (markdownDestinations), and collects the href of
+//     every link / image the chat RENDERS that the web UI would rewrite into a
+//     workspace download. Link-shaped text that renders as no link — inside a
+//     code span, a fenced or indented code block, an HTML comment or raw HTML,
+//     an image's alt text, or behind a backslash-escaped `[` — is not a chip
+//     and never an output. The href rule is a port of
 //     web/src/app/chat/ui/workspaceHref.ts (resolveScopedWorkspaceHref) so
 //     "what the owner sees as a chip" and "what a teammate may download" can
 //     never disagree: the same sandbox-prefix stripping, the same absolute-URL
 //     bailout, the same `.`/`..` reject (encoded forms included), the same
-//     per-segment percent-decoding. Code spans and fenced blocks are skipped
-//     exactly as the TS redactor skips them — a path quoted in code is not a
-//     chip.
+//     per-segment percent-decoding.
 //   - conversationOutputs keeps only presented paths that exist RIGHT NOW as
 //     regular files in the conversation's workspace, reached without
 //     traversing a symlink, and not under attachments/ (uploads are never
@@ -34,6 +37,12 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -121,66 +130,142 @@ func resolveWorkspaceRelPath(raw string) (string, bool) {
 	return rel, true
 }
 
-// Markdown shapes, ported from workspaceHref.ts so the two parsers agree on
-// what a link is. MD_DEST: an angle-bracketed destination or a bare run that
-// may carry balanced parens and backslash escapes; MD_TITLE: an optional
-// title.
-const (
-	mdDest  = `(?:<([^<>\n]*)>|((?:[^\s()\\]|\\.|\([^\s()]*\))+))?`
-	mdTitle = `(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?`
-)
+// markdownParser is the CommonMark + GFM parser discovery reads replies
+// with — the same dialect the chat renders them in (react-markdown with
+// remark-gfm). A real parser, not a set of link-shaped regexes, because the
+// question is "what did the owner SEE as a link", and only a parser answers
+// it: a backslash-escaped `\[x](a.csv)`, an HTML comment, an indented or
+// fenced code block, a code span, raw HTML and an image's alt text all CONTAIN
+// link-shaped text that renders as no link at all. A regex that matched any of
+// them would turn a file the owner was never shown as a chip into a shared
+// output. Footnotes are on because remark-gfm renders links inside them.
+var markdownParser = goldmark.New(goldmark.WithExtensions(extension.GFM, extension.Footnote)).Parser()
 
 var (
-	mdImage    = regexp.MustCompile(`!\[([^\]]*)\]\(\s*` + mdDest + mdTitle + `\s*\)`)
-	mdLink     = regexp.MustCompile(`(!?)\[([^\]]*)\]\(\s*` + mdDest + mdTitle + `\s*\)`)
-	mdRefUse   = regexp.MustCompile(`(!?)\[([^\]]*)\](?:\[([^\]]*)\])?`)
-	mdRefDef   = regexp.MustCompile(`^\s{0,3}\[([^\]]+)\]:\s*(?:<([^<>\n]*)>|(\S+))`)
-	codeFence  = regexp.MustCompile("^\\s{0,3}(`{3,}|~{3,})")
-	inlineCode = regexp.MustCompile("`+[^`]*`+")
-	mdEscape   = regexp.MustCompile(`\\([!-/:-@\[-` + "`" + `{-~])`)
+	// AssistantContent.tsx normalizes the reply before rendering it; the two
+	// rewrites that can change what parses as a link are mirrored here. The
+	// first drops a dangling `**` that opens a line; the second turns a
+	// "Label: <code span>" line into a bold label and a PLAIN value — which
+	// un-codes the value, so a link written inside that span renders as one.
+	mdDanglingBold = regexp.MustCompile(`(?m)^\*\*([^*\n:]+)$`)
+	mdLabelCode    = regexp.MustCompile("(?m)^([A-Za-z][A-Za-z /]+):\\s*`([^`]+)`")
+	htmlDocStart   = regexp.MustCompile(`(?i)<!DOCTYPE\s+html|<html[\s>]`)
+	htmlDocLine    = regexp.MustCompile(`(?i)^\s*(<!DOCTYPE\s+html|<html[\s>])`)
+	htmlDocEnd     = regexp.MustCompile(`(?i)</html>\s*$`)
+	fenceLine      = regexp.MustCompile("^\\s*```")
 )
 
-// unescapeDest drops CommonMark backslash escapes (any ASCII punctuation)
-// from a link destination — bare or angle-bracketed, inline or in a reference
-// definition — as the markdown renderer does before the href reaches
-// resolveWorkspaceHref. workspaceHref.ts (unescapeMarkdownDest) applies the
-// same rule, so `[r](my\_file.csv)` is one path on both sides.
-func unescapeDest(s string) string { return mdEscape.ReplaceAllString(s, "$1") }
-
-func normalizeRefLabel(label string) string {
-	return strings.ToLower(strings.Join(strings.Fields(label), " "))
-}
-
-// scanFencedLines tags each line with whether it sits inside (or is) a fenced
-// code block, with CommonMark's closing rule: same character, at least as
-// long as the opener. A port of workspaceHref.ts scanFenced.
-func scanFencedLines(lines []string) []bool {
-	code := make([]bool, len(lines))
-	fence := ""
-	for i, line := range lines {
-		m := codeFence.FindStringSubmatch(line)
-		if m == nil {
-			code[i] = fence != ""
+// autoFenceRawHTMLDocument is AssistantContent.tsx autoFenceRawHtmlDocument:
+// an unfenced `<!DOCTYPE html>…</html>` document is wrapped in an ```html
+// fence before rendering, so nothing inside it renders as markdown.
+func autoFenceRawHTMLDocument(content string) string {
+	if !htmlDocStart.MatchString(content) {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	out := make([]string, 0, len(lines)+2)
+	inFence, inHTML := false, false
+	for _, line := range lines {
+		if fenceLine.MatchString(line) {
+			if inHTML {
+				out = append(out, "```")
+				inHTML = false
+			}
+			inFence = !inFence
+			out = append(out, line)
 			continue
 		}
-		marker := m[1]
-		code[i] = true
-		switch {
-		case fence == "":
-			fence = marker
-		case marker[0] == fence[0] && len(marker) >= len(fence):
-			fence = ""
+		if inFence {
+			out = append(out, line)
+			continue
+		}
+		if !inHTML && htmlDocLine.MatchString(line) {
+			out = append(out, "```html", line)
+			inHTML = true
+			continue
+		}
+		out = append(out, line)
+		if inHTML && htmlDocEnd.MatchString(line) {
+			out = append(out, "```")
+			inHTML = false
 		}
 	}
-	return code
+	if inHTML {
+		out = append(out, "```")
+	}
+	return strings.Join(out, "\n")
 }
 
-// outsideInlineCode returns line with every inline code span blanked, so the
-// link passes see prose only.
-func outsideInlineCode(line string) string {
-	return inlineCode.ReplaceAllStringFunc(line, func(m string) string {
-		return strings.Repeat(" ", len(m))
+// normalizeLikeRenderer applies AssistantContent.tsx's pre-render rewrites.
+func normalizeLikeRenderer(content string) string {
+	content = mdDanglingBold.ReplaceAllString(content, "$1")
+	content = mdLabelCode.ReplaceAllString(content, "**$1:** $2")
+	return autoFenceRawHTMLDocument(content)
+}
+
+// markdownDestinations returns the href of every link and image the chat
+// RENDERS for one message's markdown, in document order: inline and
+// reference-style links and images (a reference resolves to its FIRST
+// definition), and URL autolinks. Each href is what the renderer puts on the
+// element — backslash escapes and entity references resolved, then
+// percent-encoded — so resolveWorkspaceRelPath sees exactly what the web's
+// resolveWorkspaceHref does. Nothing inside an image's alt text counts (it
+// renders as plain text), and email autolinks are mailto: links, never files.
+func markdownDestinations(markdown string) []string {
+	src := []byte(normalizeLikeRenderer(markdown))
+	doc := markdownParser.Parse(text.NewReader(src))
+	var out []string
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch v := n.(type) {
+		case *ast.Image:
+			out = append(out, string(util.URLEscape(v.Destination, true)))
+			return ast.WalkSkipChildren, nil
+		case *ast.Link:
+			out = append(out, string(util.URLEscape(v.Destination, true)))
+		case *ast.AutoLink:
+			if v.AutoLinkType == ast.AutoLinkURL {
+				out = append(out, string(util.URLEscape(v.URL(src), false)))
+			}
+		}
+		return ast.WalkContinue, nil
 	})
+	return out
+}
+
+// renderedReplies groups the assistant's text entries into the messages the
+// chat renders (web history.ts historyToMessages): consecutive assistant text
+// entries are ONE message, concatenated as-is, until a user text entry or a
+// compaction summary starts a new one. Discovery must parse the same units the
+// owner saw — a fence opened in one entry and closed in the next is one code
+// block on screen, and a link inside it is not a chip.
+func renderedReplies(history []agent.HistoryEntry) []string {
+	var out []string
+	var cur strings.Builder
+	open := false
+	flush := func() {
+		if open && cur.Len() > 0 {
+			out = append(out, cur.String())
+		}
+		cur.Reset()
+		open = false
+	}
+	for _, e := range history {
+		switch {
+		case e.Type == "summary", e.Role == "user" && e.Type == "text":
+			flush()
+		case e.Role == "assistant" && e.Type == "text":
+			var tc agent.TextContent
+			if err := json.Unmarshal(e.Content, &tc); err == nil {
+				cur.WriteString(tc.Text)
+			}
+			open = true
+		}
+	}
+	flush()
+	return out
 }
 
 // presentedWorkspacePaths returns every workspace-relative path the
@@ -196,15 +281,8 @@ func presentedWorkspacePaths(history []agent.HistoryEntry) []string {
 			out = append(out, p)
 		}
 	}
-	for _, e := range history {
-		if e.Role != "assistant" || e.Type != "text" {
-			continue
-		}
-		var tc agent.TextContent
-		if err := json.Unmarshal(e.Content, &tc); err != nil || tc.Text == "" {
-			continue
-		}
-		for _, d := range markdownDestinations(tc.Text) {
+	for _, reply := range renderedReplies(history) {
+		for _, d := range markdownDestinations(reply) {
 			add(d)
 		}
 	}
@@ -226,19 +304,23 @@ const maxOutputReferences = 500
 // was dropped. Uploads are skipped before they count — they are never
 // outputs, so they must not crowd real ones out of the bound.
 func recentPresentedPaths(history []agent.HistoryEntry, limit int) (paths []string, truncated bool) {
+	return boundedPresentedPaths(history, limit, false)
+}
+
+// boundedPresentedPaths is the walk behind recentPresentedPaths; with
+// includeUploads it also keeps upload references (a teammate branch records
+// those as withheld — they are references it does not have a copy of).
+func boundedPresentedPaths(history []agent.HistoryEntry, limit int, includeUploads bool) (paths []string, truncated bool) {
 	seen := map[string]bool{}
-	for i := len(history) - 1; i >= 0; i-- {
-		e := history[i]
-		if e.Role != "assistant" || e.Type != "text" {
-			continue
-		}
-		var tc agent.TextContent
-		if err := json.Unmarshal(e.Content, &tc); err != nil || tc.Text == "" {
-			continue
-		}
-		for _, d := range markdownDestinations(tc.Text) {
+	replies := renderedReplies(history)
+	for i := len(replies) - 1; i >= 0; i-- {
+		// Newest first within a reply too: a long agentic turn renders as
+		// ONE message, and its last references are its most recent.
+		dests := markdownDestinations(replies[i])
+		for j := len(dests) - 1; j >= 0; j-- {
+			d := dests[j]
 			p, ok := resolveWorkspaceRelPath(d)
-			if !ok || seen[p] || isUploadPath(p) {
+			if !ok || seen[p] || (!includeUploads && isUploadPath(p)) {
 				continue
 			}
 			if len(paths) >= limit {
@@ -249,85 +331,6 @@ func recentPresentedPaths(history []agent.HistoryEntry, limit int) (paths []stri
 		}
 	}
 	return paths, false
-}
-
-// markdownDestinations extracts the destinations of every inline link, inline
-// image and USED reference-style link/image in one markdown document,
-// skipping fenced blocks and inline code.
-func markdownDestinations(markdown string) []string {
-	lines := strings.Split(markdown, "\n")
-	code := scanFencedLines(lines)
-
-	defs := map[string]string{}
-	defLine := map[int]bool{}
-	for i, line := range lines {
-		if code[i] {
-			continue
-		}
-		m := mdRefDef.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		dest := m[2]
-		if dest == "" {
-			dest = m[3]
-		}
-		dest = unescapeDest(dest)
-		key := normalizeRefLabel(m[1])
-		if _, dup := defs[key]; !dup { // CommonMark: the first definition wins
-			defs[key] = dest
-		}
-		defLine[i] = true
-	}
-
-	var out []string
-	pick := func(angled, bare string) string {
-		if angled != "" {
-			return unescapeDest(angled)
-		}
-		return unescapeDest(bare)
-	}
-	for i, line := range lines {
-		if code[i] || defLine[i] {
-			continue
-		}
-		prose := outsideInlineCode(line)
-		// Images first, blanked once read, so an image nested inside a link
-		// label (`[![alt](chart.png)](chart.png)`) cannot hide the outer link.
-		prose = mdImage.ReplaceAllStringFunc(prose, func(m string) string {
-			sm := mdImage.FindStringSubmatch(m)
-			out = append(out, pick(sm[2], sm[3]))
-			return strings.Repeat(" ", len(m))
-		})
-		prose = mdLink.ReplaceAllStringFunc(prose, func(m string) string {
-			sm := mdLink.FindStringSubmatch(m)
-			out = append(out, pick(sm[3], sm[4]))
-			return strings.Repeat(" ", len(m))
-		})
-		if len(defs) == 0 {
-			continue
-		}
-		for _, loc := range mdRefUse.FindAllStringSubmatchIndex(prose, -1) {
-			// `[x](…)` is an inline link the passes above already took; RE2
-			// has no lookahead, so the `(?!\()` of the TS pattern is this.
-			if loc[1] < len(prose) && prose[loc[1]] == '(' {
-				continue
-			}
-			label := prose[loc[4]:loc[5]]
-			ref := ""
-			if loc[6] >= 0 {
-				ref = prose[loc[6]:loc[7]]
-			}
-			key := label
-			if strings.TrimSpace(ref) != "" {
-				key = ref
-			}
-			if dest, ok := defs[normalizeRefLabel(key)]; ok {
-				out = append(out, dest)
-			}
-		}
-	}
-	return out
 }
 
 // outputFile is one output on the wire (GET /conversations/{id}/outputs, the

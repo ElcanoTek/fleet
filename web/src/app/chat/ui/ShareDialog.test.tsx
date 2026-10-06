@@ -357,7 +357,10 @@ describe("ShareDialog — A4: team project, not shared", () => {
     });
     expect(props.onShareWithTeam).toHaveBeenCalledWith(
       expect.objectContaining({ id: "c1" }),
-      ["pacing_notes.json"],
+      {
+        listedPaths: [file().path, "pacing_notes.json"],
+        unsharedPaths: ["pacing_notes.json"],
+      },
     );
   });
 
@@ -577,7 +580,10 @@ describe("ShareDialog — A6: team project with a public link", () => {
     });
     expect(props.onShareWithTeam).toHaveBeenCalledWith(
       expect.objectContaining({ id: "c1" }),
-      ["pacing_notes.json"],
+      {
+        listedPaths: [file().path, "pacing_notes.json"],
+        unsharedPaths: ["pacing_notes.json"],
+      },
     );
   });
 });

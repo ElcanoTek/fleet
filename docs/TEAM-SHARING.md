@@ -180,7 +180,7 @@ than re-pointing them.
 
 | Route | Who | What |
 | --- | --- | --- |
-| `POST /conversations/{id}/share-with-team` | owner | the opt-in; stamps the owner's team as the audience. `409` when there is no team or no team-shared home. Body `{visible, unshared_paths?}` — `unshared_paths` (with `visible: true`) replaces the file exclusions. Answers `{team_visible, shared_files, total_files}`: the state it **stored**, and the shared-file count (for an unshare, how many just stopped being shared) |
+| `POST /conversations/{id}/share-with-team` | owner | the opt-in; stamps the owner's team as the audience. `409` when there is no team or no team-shared home. Body `{visible, unshared_paths?, listed_paths?}` — `unshared_paths` (with `visible: true`) is the checklist, applied to exactly `listed_paths` (default: the current outputs); exclusions for unlisted paths stand. Answers `{team_visible, shared_files, total_files}`: the state it **stored**, and the shared-file count (for an unshare, how many just stopped being shared) |
 | `GET /conversations/{id}/outputs` | owner | the chat's outputs, newest first, each with its own `shared` state, plus `total` / `shared_count` |
 | `POST /conversations/{id}/outputs/share` | owner | share or unshare one output: `{path, shared}` |
 | `GET /conversations/{id}/team-view` | a teammate (or the owner) | the read-only transcript, plus `project_id` / `project_name`, `files` (every output; an unshared one is a name only) and `viewer_branch` |
@@ -205,9 +205,26 @@ ADR-0079 records the decision; this is how it works.
 link or image — inline or reference-style — in an assistant *text* reply, that
 the web UI would turn into a workspace file chip, that exists right now as a
 regular file in the chat's workspace, and that is not under `attachments/`.
-The rule is a Go port of `resolveScopedWorkspaceHref`
-(`web/src/app/chat/ui/workspaceHref.ts`) in `internal/httpapi/outputs.go`, so
-what the owner sees as a chip and what a teammate may download cannot drift.
+"Presented" means **rendered as a link or image**, decided by a real parser,
+not by link-shaped text. `internal/httpapi/outputs.go` groups the assistant's
+text entries into the messages the chat renders (consecutive assistant text,
+until a user message or a compaction summary — as `history.ts` does), applies
+the renderer's own pre-parse rewrites (`normalizeAssistantMarkdown` and the
+unfenced-HTML-document wrap in `AssistantContent.tsx`), and parses each with
+goldmark — CommonMark plus GFM and footnotes, the dialect react-markdown with
+remark-gfm renders. Only `Link`, `Image` and URL-autolink nodes count, each
+with the href the renderer would emit (escapes and entities resolved), and
+references resolve to their **first** definition. So link-shaped text that
+renders as no link is never an output: a backslash-escaped `\[x](a.csv)`, an
+HTML comment or other raw HTML, a fenced or indented code block, a code span,
+an image's alt text, an unused reference definition, an email autolink. The
+href is then resolved by a Go port of `resolveScopedWorkspaceHref`
+(`web/src/app/chat/ui/workspaceHref.ts`), so what the owner sees as a chip and
+what a teammate may download cannot drift. The team view's rewrite
+(`linkSharedFiles`) leaves the same escaped, commented-out and indented-code
+text untouched; its tests for those are conservative (a doubtful case is still
+rewritten), and the public link's redaction keeps withholding them anyway — it
+may withhold more than renders, never less.
 Two consequences follow, both deliberate:
 
 - **Uploads are never outputs** — never shared, listed in Sources, counted in
@@ -220,8 +237,8 @@ The output set is computed from the transcript and the disk on every read; it
 is not stored. A file deleted from the workspace stops being an output at once.
 
 **Discovery is bounded.** Each read considers at most the 500 most recent
-distinct references (newest message first; uploads do not count toward the
-bound), because every one is opened and stat'ed and the read runs on the
+distinct references (newest first — by message, and within a message by
+position; uploads do not count toward the bound), because every one is opened and stat'ed and the read runs on the
 outputs listing, Sources, the branch copy, the download gate and the team
 view's 12-second poll. Past the bound, `GET /conversations/{id}/outputs`
 answers `truncated: true`, `team-view` answers `files_truncated: true`, and
@@ -243,7 +260,13 @@ files are too — minus any the owner unchecked
 unchecked across stop sharing, sharing again, archive, unarchive and moves. The
 "fast paths" (the row pill, the getting-started card, the move toast, a new
 chat started shared) never touch exclusions; the share dialog's checklist sends
-`unshared_paths` and replaces them, and Sources toggles one file at a time.
+`unshared_paths` with `listed_paths` — the files it showed — and decides exactly
+those (unchecked are excluded, checked are shared), while an exclusion for a
+file the checklist did not show (missing on disk when the dialog loaded, past
+the 500-reference bound) is left alone, so re-sharing with everything checked
+cannot quietly re-expose it if it comes back. A client that omits
+`listed_paths` is taken to have shown the chat's current outputs. Sources
+toggles one file at a time.
 
 **The download gate.** `GET /conversations/{id}/team-files/<path>` is the first
 cross-user file read in fleet, and it re-checks three things on every request:
@@ -270,7 +293,14 @@ the owner do not reach them. Unshared outputs are recorded as `withheld_files`
 and stay locked names in the branch's transcript — as is every other workspace
 reference the transcript links that the branch did not receive (an upload,
 which is never copied or shared; a presented file missing on disk; one past the
-copy budget), so none of them renders as a live link that 404s. The origin — source, owner,
+copy budget), so none of them renders as a live link that 404s. Only the
+messages the branch copied count — those up to and including the branch
+point; a reply after it contributes neither copies nor withheld names. The
+withheld list is bounded like discovery (the 500 most recent references); when
+references were dropped the origin says `withheld_truncated: true`, and the
+branch then renders a workspace reference live only if it is a copied file or
+one of the branch's own current outputs — everything else is a locked name.
+The origin — source, owner,
 the title as the brancher saw it, time, copied and withheld files — is stored
 in `conversation_branch_origins` and served as `branch_origin` on the branch
 response and on `GET /conversations/{id}`, with `source_still_shared` so the
@@ -278,7 +308,9 @@ banner links back only while the original is still readable. On the branch's
 **first turn** the agent is told which files it has and that any other file the
 transcript mentions did not come with it (one-shot, via a latch on the origin
 row); without that it reads a link to a withheld file and confidently tries to
-open it.
+open it. The note rides on that turn's user message, so a turn that fails
+before its user message is committed hands the latch back and the next turn
+carries the note instead.
 
 **"You branched this."** `viewer_branch` (on `team-view` and on each
 `team-conversations` row) is the caller's most recent branch of the chat that

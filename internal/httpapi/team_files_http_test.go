@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -140,6 +143,30 @@ func TestShareWithTeamCarriesFiles(t *testing.T) {
 	w = convSub(t, f.srv, "POST", "alice@x.com", f.chat.ID, "share-with-team", `{"visible":true}`)
 	if got := decode[resp](t, w); got.SharedFiles != 2 {
 		t.Errorf("fast-path share = %+v, want the earlier choices kept", got)
+	}
+	// The checklist decides only the paths it listed. An exclusion for a file
+	// the dialog never showed — here an output missing on disk right now —
+	// survives an all-checked re-share, with listed_paths and without it.
+	if err := f.st.SetOutputShared(f.ctx, "alice@x.com", f.chat.ID, "out/ghost.csv", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, req := range []string{
+		`{"visible":true,"unshared_paths":[],"listed_paths":["out/report.csv","chart.png","page.html","held.json"]}`,
+		`{"visible":true,"unshared_paths":[]}`,
+	} {
+		w = convSub(t, f.srv, "POST", "alice@x.com", f.chat.ID, "share-with-team", req)
+		if got := decode[resp](t, w); w.Code != 200 || got.SharedFiles != 4 {
+			t.Errorf("%s: share = %d %+v, want every listed file shared", req, w.Code, got)
+		}
+		if ex, _ := f.st.ListOutputExclusions(f.ctx, f.chat.ID); !ex["out/ghost.csv"] || len(ex) != 1 {
+			t.Errorf("%s: exclusions = %v, want only the unlisted out/ghost.csv kept", req, ex)
+		}
+	}
+	// Back to the earlier choices for the rest of the test.
+	w = convSub(t, f.srv, "POST", "alice@x.com", f.chat.ID, "share-with-team",
+		`{"visible":true,"unshared_paths":["chart.png","page.html"],"listed_paths":["chart.png","page.html"]}`)
+	if got := decode[resp](t, w); got.SharedFiles != 2 {
+		t.Errorf("re-share = %+v, want 2", got)
 	}
 	st, _ := f.st.GetProjectUserState(f.ctx, f.project.ID, "alice@x.com")
 	if !st.HasSharedChat {
@@ -419,12 +446,12 @@ func TestTeammateBranchCopiesSharedFiles(t *testing.T) {
 	}
 
 	// First turn: the note names the copies; then never again.
-	note := f.srv.appendBranchFilesBlock(f.ctx, "", br.ID)
-	if !strings.Contains(note, "`out/report.csv`") || strings.Contains(note, "held.json") || !strings.Contains(note, "NOT in this workspace") {
-		t.Errorf("note = %q", note)
+	note, claimed := f.srv.appendBranchFilesBlock(f.ctx, "", br.ID)
+	if !claimed || !strings.Contains(note, "`out/report.csv`") || strings.Contains(note, "held.json") || !strings.Contains(note, "NOT in this workspace") {
+		t.Errorf("note = %q (claimed=%v)", note, claimed)
 	}
-	if again := f.srv.appendBranchFilesBlock(f.ctx, "x", br.ID); again != "x" {
-		t.Errorf("second note = %q", again)
+	if again, claimed := f.srv.appendBranchFilesBlock(f.ctx, "x", br.ID); again != "x" || claimed {
+		t.Errorf("second note = %q (claimed=%v)", again, claimed)
 	}
 
 	// The owner's own branch copies nothing and has no origin.
@@ -539,6 +566,70 @@ func TestTeammateBranchWithholdsEveryUncopiedReference(t *testing.T) {
 		if strings.HasPrefix(c.Path, "attachments/") {
 			t.Errorf("upload copied: %s", c.Path)
 		}
+	}
+}
+
+// The branch copies messages only through the branch point, so its files are
+// only those: an output presented in a reply AFTER the branch point is neither
+// copied into the branch nor named as withheld in it.
+func TestTeammateBranchIgnoresRepliesPastTheBranchPoint(t *testing.T) {
+	f := newFilesFixture(t)
+	msgs, _ := f.st.LoadHistory(f.ctx, f.chat.ID)
+	point := msgs[len(msgs)-1].ID
+	if err := os.WriteFile(filepath.Join(f.root, f.chat.ID, "later.csv"), []byte("later"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.AppendHistory(f.ctx, f.chat.ID, []agent.HistoryEntry{
+		textEntry("user", "one more"),
+		textEntry("assistant", "Here is [later](later.csv) and [gone later](gone-later.csv)."),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]any{"branch_point_message_id": point})
+	w := convSub(t, f.srv, "POST", "bob@x.com", f.chat.ID, "branch", string(body))
+	if w.Code != 201 {
+		t.Fatalf("branch: %d %s", w.Code, w.Body.String())
+	}
+	br := decode[store.Conversation](t, w)
+	o := br.BranchOrigin
+	if o == nil {
+		t.Fatal("no branch_origin")
+	}
+	for _, c := range o.CopiedFiles {
+		if c.Path == "later.csv" {
+			t.Error("an output past the branch point must not be copied")
+		}
+	}
+	for _, p := range o.WithheldFiles {
+		if p == "later.csv" || p == "gone-later.csv" {
+			t.Errorf("a reference past the branch point must not be withheld: %v", o.WithheldFiles)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.root, br.ID, "later.csv")); err == nil {
+		t.Error("later.csv reached the branch workspace")
+	}
+	if o.WithheldTruncated {
+		t.Error("a short transcript is not truncated")
+	}
+}
+
+// The withheld list is bounded like discovery: past maxOutputReferences
+// distinct references only the most recent are recorded, and the origin says
+// the list is truncated so the web treats unknown references as withheld.
+func TestWithholdUncopiedReferencesIsBounded(t *testing.T) {
+	history := make([]agent.HistoryEntry, 0, maxOutputReferences+3)
+	for i := range maxOutputReferences + 3 {
+		history = append(history, textEntry("user", "q"), textEntry("assistant", fmt.Sprintf("[f](f%04d.csv)", i)))
+	}
+	withheld, truncated := withholdUncopiedReferences(history, nil, nil)
+	if !truncated || len(withheld) != maxOutputReferences {
+		t.Fatalf("withheld = %d (truncated=%v), want %d truncated", len(withheld), truncated, maxOutputReferences)
+	}
+	if withheld[0] != fmt.Sprintf("f%04d.csv", maxOutputReferences+2) {
+		t.Errorf("the most recent reference must be kept first, got %s", withheld[0])
+	}
+	if _, truncated := withholdUncopiedReferences(history[6:], nil, nil); truncated {
+		t.Error("exactly maxOutputReferences references is not truncated")
 	}
 }
 
@@ -735,5 +826,64 @@ func TestOutputDiscoveryBoundAcrossRoutes(t *testing.T) {
 	}
 	if w := teamFile(t, f, "bob@x.com", "out/report.csv"); w.Code != 404 {
 		t.Errorf("a reference beyond the bound: %d, want 404", w.Code)
+	}
+}
+
+// noteEngine records each turn's injected context; while failPreCommit is
+// set it fails BEFORE committing the user entry, like a provider preflight or
+// a lost DB write would.
+type noteEngine struct {
+	fakeEngine
+	failPreCommit atomic.Bool
+	mu2           sync.Mutex
+	injected      []string
+}
+
+func (e *noteEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
+	e.mu2.Lock()
+	e.injected = append(e.injected, in.InjectedContext)
+	e.mu2.Unlock()
+	if e.failPreCommit.Load() {
+		return nil, errors.New("preflight failed")
+	}
+	return e.fakeEngine.RunTurn(ctx, in, sink)
+}
+
+// The branch-files note is one-shot, but only once it is DURABLE: a first
+// turn that fails before its user message commits hands the latch back, and
+// the next turn carries the note. A committed turn keeps it claimed.
+func TestBranchFilesNoteSurvivesAFailedFirstTurn(t *testing.T) {
+	f := newFilesFixture(t)
+	br, err := f.st.CreateConversation(f.ctx, "bob@x.com", "branch", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.RecordBranchOrigin(f.ctx, br.ID, store.BranchOrigin{
+		SourceConversationID: f.chat.ID, SourceOwnerEmail: "alice@x.com", SourceTitle: "Spread study",
+		BranchedAt: 1, CopiedFiles: []store.BranchFile{{Path: "out/report.csv", Name: "report.csv", Size: 8}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	eng := &noteEngine{}
+	f.srv.agent = eng
+	turn := func(msg string) string {
+		t.Helper()
+		postChatJSON(t, f.srv, "bob@x.com", map[string]any{"message": msg, "conversation_id": br.ID})
+		waitFor(t, "turn goroutine finished", func() bool { return f.srv.activeTurnCount.Load() == 0 })
+		eng.mu2.Lock()
+		defer eng.mu2.Unlock()
+		return eng.injected[len(eng.injected)-1]
+	}
+
+	eng.failPreCommit.Store(true)
+	if got := turn("first"); !strings.Contains(got, "`out/report.csv`") {
+		t.Fatalf("first turn must carry the note: %q", got)
+	}
+	eng.failPreCommit.Store(false)
+	if got := turn("again"); !strings.Contains(got, "`out/report.csv`") {
+		t.Fatalf("a failed pre-commit turn must release the note to the next turn: %q", got)
+	}
+	if got := turn("third"); strings.Contains(got, "out/report.csv") {
+		t.Fatalf("a committed turn keeps the note claimed: %q", got)
 	}
 }

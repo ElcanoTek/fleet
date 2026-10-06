@@ -119,14 +119,19 @@ func (s *Server) handleConversationUnshare(w http.ResponseWriter, r *http.Reques
 // the team as its audience, never mints a public link, and is the only path by
 // which one teammate's conversation becomes readable by another.
 //
-// Body: { "visible": bool, "unshared_paths"?: [string] } (visible defaults to
+// Body: { "visible": bool, "unshared_paths"?: [string], "listed_paths"?: [string] } (visible defaults to
 // false = un-share). The ownership check is first, so a non-owned/unknown id
 // is 404; the store enforces ADR-0057's pairing, so sharing without a team or
 // without a team-shared project to appear in is 409 with the reason.
 //
 // A team share carries the chat's outputs (ADR-0079). unshared_paths, honored
-// only with visible=true, REPLACES the chat's exclusion set — the share
-// dialog's checklist applied as one decision. It is written BEFORE the flag
+// only with visible=true, is the share dialog's checklist applied as one
+// decision — over exactly the paths the checklist SHOWED (listed_paths): each
+// listed path is excluded when it is in unshared_paths and shared otherwise,
+// and an exclusion for a path the checklist did not show is left untouched,
+// so a file missing on disk (or beyond the discovery bound) when the dialog
+// loaded stays held back if it comes back. A client that omits listed_paths
+// is taken to have shown the chat's current outputs. It is written BEFORE the flag
 // flips, so there is no instant in which the chat is shared with a file the
 // owner just unchecked; if the share is then refused (409) the owner's file
 // choices are kept, which is harmless — they are theirs and only matter once
@@ -141,6 +146,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 	var body struct {
 		Visible       bool      `json:"visible"`
 		UnsharedPaths *[]string `json:"unshared_paths"`
+		ListedPaths   *[]string `json:"listed_paths"`
 	}
 	// A malformed body must not fall through to visible=false and silently
 	// UN-share the chat the caller was trying to share.
@@ -157,7 +163,20 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		return
 	}
 	if body.Visible && body.UnsharedPaths != nil {
-		if err := s.store.ReplaceOutputExclusions(r.Context(), user, convID, *body.UnsharedPaths); err != nil {
+		var listed []string
+		if body.ListedPaths != nil {
+			listed = *body.ListedPaths
+		} else {
+			current, _, err := s.ownerOutputs(r.Context(), convID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			for _, o := range current {
+				listed = append(listed, o.Path)
+			}
+		}
+		if err := s.store.ApplyOutputChecklist(r.Context(), user, convID, listed, *body.UnsharedPaths); err != nil {
 			switch {
 			case errors.Is(err, store.ErrInvalidOutputPath):
 				http.Error(w, "invalid unshared_paths", http.StatusBadRequest)
@@ -265,7 +284,7 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	files, filesTruncated, err := s.outputsFromHistory(r.Context(), snap.ID, snap.Messages)
+	files, filesTruncated, err := s.outputsFromHistory(r.Context(), snap.ID, outputHistoryOf(snap))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

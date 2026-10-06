@@ -84,6 +84,7 @@ import {
   shareChatWithTeam,
   sharedToast,
   type BranchOrigin,
+  type OutputChecklist,
   type ShareWithTeamResult,
   type TeamLinkStatus,
 } from "./teamSharing";
@@ -3191,15 +3192,55 @@ export function ChatExperience({
   const activeBranchOrigin = activeConversationId
     ? branchOrigins.get(activeConversationId)
     : undefined;
+  // When the server's withheld list was TRUNCATED (a transcript with more
+  // file references than it records), a reference in neither list may be a
+  // file the branch does not have. Then only what the branch provably has
+  // renders live: its copied files plus its own current outputs (files its
+  // agent presented and that exist in its workspace), re-read as the chat
+  // gains messages or a turn settles. Until that read lands, unknown
+  // references render locked — never a live link that 404s.
+  const branchTruncated = Boolean(activeBranchOrigin?.withheld_truncated);
+  const [branchAvailable, setBranchAvailable] = useState<{
+    id: string;
+    paths: ReadonlySet<string>;
+  } | null>(null);
+  const lastMessageState = messages[messages.length - 1]?.state;
+  useEffect(() => {
+    if (!branchTruncated || !activeConversationId) return;
+    let cancelled = false;
+    const id = activeConversationId;
+    fetchConversationOutputs(id)
+      .then((res) => {
+        if (!cancelled) {
+          setBranchAvailable({ id, paths: new Set(res.outputs.map((o) => o.path)) });
+        }
+      })
+      .catch(() => {
+        // Best-effort: unknown references stay locked.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [branchTruncated, activeConversationId, messages.length, lastMessageState]);
   const withheldFiles = useMemo(
     () =>
-      activeConversationId && activeBranchOrigin?.withheld_files?.length
+      activeConversationId &&
+      activeBranchOrigin &&
+      (activeBranchOrigin.withheld_files?.length || branchTruncated)
         ? {
             conversationId: activeConversationId,
-            withheld: new Set(activeBranchOrigin.withheld_files),
+            withheld: new Set(activeBranchOrigin.withheld_files ?? []),
+            available: branchTruncated
+              ? new Set([
+                  ...(activeBranchOrigin.copied_files ?? []).map((f) => f.path),
+                  ...(branchAvailable?.id === activeConversationId
+                    ? branchAvailable.paths
+                    : []),
+                ])
+              : null,
           }
         : null,
-    [activeConversationId, activeBranchOrigin],
+    [activeConversationId, activeBranchOrigin, branchTruncated, branchAvailable],
   );
 
   // The team-shared projects this user can promote a personal memory into
@@ -3842,13 +3883,13 @@ export function ChatExperience({
   // surfaced by ADR-0057). Optimistic like the link path; a failed write
   // re-reads the truth rather than leaving the control lying. Resolves the
   // server's result — the shared-file count every share toast quotes — or
-  // null on failure (shareError then carries the reason). `unsharedPaths`
-  // (the dialog checklist) replaces the chat's excluded-file set; omitted,
-  // the owner's earlier file choices stand.
+  // null on failure (shareError then carries the reason). `checklist` (the
+  // dialog's) decides exactly the files it listed; omitted, the owner's
+  // earlier file choices stand.
   const setTeamShared = async (
     conversation: ConversationSummary,
     visible: boolean,
-    unsharedPaths?: string[],
+    checklist?: OutputChecklist,
   ): Promise<ShareWithTeamResult | null> => {
     if (!conversationApiUrl(conversation.id, "/share-with-team")) {
       setShareError("Couldn't change team sharing — this chat has an invalid id.");
@@ -3864,7 +3905,7 @@ export function ChatExperience({
       const stored = await shareChatWithTeam(
         conversation.id,
         visible,
-        unsharedPaths,
+        checklist,
       );
       // Trust the STORED state, not what we asked for.
       if (stored.team_visible !== visible) await refreshConversations();
@@ -5980,8 +6021,8 @@ export function ChatExperience({
                 .catch(() => setShareLinkCopied(false));
             }}
             onStopLink={(c) => void unshareConversation(c)}
-            onShareWithTeam={(c, unsharedPaths) =>
-              setTeamShared(c, true, unsharedPaths)
+            onShareWithTeam={(c, checklist) =>
+              setTeamShared(c, true, checklist)
             }
             onStopSharingWithTeam={(c) => setTeamShared(c, false)}
             // Stays open after the move: the dialog re-renders in the shared

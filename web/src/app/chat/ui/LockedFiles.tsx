@@ -14,7 +14,9 @@
 //     into it, so the transcript still names outputs the branch does not have
 //     (branch_origin.withheld_files). The branch chat renders through the
 //     ordinary transcript, so those are recognised by path, through
-//     WithheldFilesContext, rather than by rewriting its markdown.
+//     WithheldFilesContext, rather than by rewriting its markdown. The list is
+//     bounded server-side; when it was truncated the context carries an
+//     allow-list instead, and anything outside it is locked.
 //
 // No provider (every other chat) means nothing is locked: the renderer behaves
 // exactly as before.
@@ -28,7 +30,21 @@ export type WithheldFiles = {
   conversationId: string;
   /** Workspace-relative paths the branch transcript names but does not have. */
   withheld: ReadonlySet<string>;
+  /**
+   * Set when the server's withheld list was truncated (branch_origin.
+   * withheld_truncated): an ALLOW-list — the branch's copied files plus its
+   * own current outputs. A workspace reference outside it renders locked,
+   * because the bounded withheld list cannot vouch for it. null: the withheld
+   * list is complete and everything not in it renders as before.
+   */
+  available?: ReadonlySet<string> | null;
 };
+
+/** Whether `path` names a file this branch cannot open. */
+export function isWithheldPath(ctx: WithheldFiles, path: string): boolean {
+  if (ctx.withheld.has(path)) return true;
+  return ctx.available ? !ctx.available.has(path) : false;
+}
 
 export const WithheldFilesContext = createContext<WithheldFiles | null>(null);
 
@@ -61,9 +77,9 @@ export function WithheldFileGate({
   children: ReactNode;
 }) {
   const ctx = useContext(WithheldFilesContext);
-  if (!ctx || ctx.withheld.size === 0) return <>{children}</>;
+  if (!ctx || (ctx.withheld.size === 0 && !ctx.available)) return <>{children}</>;
   const path = workspacePathFromHref(href, ctx.conversationId);
-  if (path === null || !ctx.withheld.has(path)) return <>{children}</>;
+  if (path === null || !isWithheldPath(ctx, path)) return <>{children}</>;
   return (
     <LockedFileLabel>
       {(path.split("/").pop() || name) + LOCKED_SUFFIX}

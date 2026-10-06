@@ -77,6 +77,36 @@ describe("the branch transcript locks withheld files", () => {
     expect(container.querySelector("img")).toBeNull();
   });
 
+  it("with a truncated withheld list, only files the branch has stay live", () => {
+    // `unknown.csv` is in neither list — past the server's bound — so it may
+    // be a file the branch never received: locked, not a link that 404s.
+    // `made-here.csv` is one of the branch's own outputs: live.
+    const { container } = render(
+      <WithheldFilesContext.Provider
+        value={{
+          conversationId: CONV,
+          withheld: new Set(["exclusion_list_v1.json"]),
+          available: new Set(["report.xlsx", "made-here.csv"]),
+        }}
+      >
+        {renderAssistantContent(
+          md + " Unknown: [u](unknown.csv). Mine: [m](made-here.csv)",
+          false,
+          CONV,
+        )}
+      </WithheldFilesContext.Provider>,
+    );
+    expect(screen.getByRole("link", { name: "report.xlsx" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "m" })).toHaveAttribute(
+      "href",
+      `/api/conversations/${CONV}/workspace/made-here.csv`,
+    );
+    expect(container.querySelector('a[href*="unknown.csv"]')).toBeNull();
+    expect(
+      screen.getAllByTestId("locked-file").some((l) => l.textContent === "unknown.csv (not shared)"),
+    ).toBe(true);
+  });
+
   it("changes nothing without the context (every other chat)", () => {
     const { container } = render(<>{renderAssistantContent(md, false, CONV)}</>);
     expect(container.querySelector('a[href*="exclusion_list_v1.json"]')).not.toBeNull();

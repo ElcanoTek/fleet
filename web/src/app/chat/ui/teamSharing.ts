@@ -51,6 +51,12 @@ export type BranchOrigin = {
   branched_at: number;
   copied_files: { path: string; name: string; size: number }[];
   withheld_files: string[];
+  /**
+   * The transcript referenced more files than withheld_files records (it is
+   * bounded): a reference in neither list is then treated as withheld unless
+   * the branch's own workspace has the file. Absent on older origins.
+   */
+  withheld_truncated?: boolean;
   source_still_shared: boolean;
 };
 
@@ -160,17 +166,36 @@ export async function setOutputShared(
 }
 
 /**
- * Share or stop sharing a chat with the team. `unshared_paths`, when given
- * with visible=true, replaces the chat's excluded-file set (the dialog's
- * checklist); omitted, the owner's earlier choices are kept.
+ * The share dialog's checklist as the owner saw it: every path it LISTED and
+ * the ones they unchecked. The server applies it to exactly the listed paths —
+ * an exclusion for a file the checklist did not show (missing on disk right
+ * now, past the listing bound) is left alone, so re-sharing with everything
+ * checked can never re-expose it.
+ */
+export type OutputChecklist = {
+  listedPaths: string[];
+  unsharedPaths: string[];
+};
+
+/**
+ * Share or stop sharing a chat with the team. `checklist`, when given with
+ * visible=true, is applied to the paths it listed; omitted, the owner's
+ * earlier choices are kept.
  */
 export async function shareChatWithTeam(
   conversationId: string,
   visible: boolean,
-  unsharedPaths?: string[],
+  checklist?: OutputChecklist,
 ): Promise<ShareWithTeamResult> {
-  const body: { visible: boolean; unshared_paths?: string[] } = { visible };
-  if (visible && unsharedPaths) body.unshared_paths = unsharedPaths;
+  const body: {
+    visible: boolean;
+    unshared_paths?: string[];
+    listed_paths?: string[];
+  } = { visible };
+  if (visible && checklist) {
+    body.unshared_paths = checklist.unsharedPaths;
+    body.listed_paths = checklist.listedPaths;
+  }
   return json(
     await fetch(`/api/conversations/${enc(conversationId)}/share-with-team`, {
       method: "POST",

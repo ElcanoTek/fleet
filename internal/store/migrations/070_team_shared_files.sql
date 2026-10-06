@@ -29,9 +29,15 @@ CREATE TABLE IF NOT EXISTS conversation_output_exclusions (
 -- messages.created_at, because both are whole seconds — a message written in
 -- the same second as the branch would otherwise never count.
 --
+-- withheld_truncated is set when the branch's transcript referenced more
+-- workspace files than the bounded withheld list records: the branch then
+-- treats a reference that is in neither list as withheld too, unless the
+-- file is in its own workspace now.
+--
 -- files_announced is the one-shot latch for the injected first-turn note that
 -- tells the agent which files it actually has (the transcript can mention
--- files that were withheld).
+-- files that were withheld). It is released again if the turn that claimed it
+-- fails before its user message is committed.
 CREATE TABLE IF NOT EXISTS conversation_branch_origins (
     conversation_id        TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
     source_conversation_id TEXT NOT NULL,
@@ -43,6 +49,7 @@ CREATE TABLE IF NOT EXISTS conversation_branch_origins (
     source_max_message_id  BIGINT NOT NULL DEFAULT 0,
     copied_files           JSONB NOT NULL DEFAULT '[]'::jsonb,
     withheld_files         JSONB NOT NULL DEFAULT '[]'::jsonb,
+    withheld_truncated     BOOLEAN NOT NULL DEFAULT FALSE,
     files_announced        BOOLEAN NOT NULL DEFAULT FALSE
 );
 -- "Has this viewer branched that chat?" is asked by source id.
