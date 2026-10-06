@@ -3192,21 +3192,28 @@ export function ChatExperience({
   const activeBranchOrigin = activeConversationId
     ? branchOrigins.get(activeConversationId)
     : undefined;
+  // The branch's OWN current outputs (files its transcript presents that exist
+  // in its workspace), re-read as the chat gains messages or a turn settles.
+  // They override the withheld list: a path withheld at branch time that the
+  // branch later creates and presents is the branch's own file, so it renders
+  // live rather than locked forever.
+  //
   // When the server's withheld list was TRUNCATED (a transcript with more
   // file references than it records), a reference in neither list may be a
   // file the branch does not have. Then only what the branch provably has
-  // renders live: its copied files plus its own current outputs (files its
-  // agent presented and that exist in its workspace), re-read as the chat
-  // gains messages or a turn settles. Until that read lands, unknown
-  // references render locked — never a live link that 404s.
+  // renders live: its copied files plus those outputs. Until that read lands,
+  // unknown references render locked — never a live link that 404s.
   const branchTruncated = Boolean(activeBranchOrigin?.withheld_truncated);
+  const branchHasWithheld = Boolean(
+    activeBranchOrigin?.withheld_files?.length || branchTruncated,
+  );
   const [branchAvailable, setBranchAvailable] = useState<{
     id: string;
     paths: ReadonlySet<string>;
   } | null>(null);
   const lastMessageState = messages[messages.length - 1]?.state;
   useEffect(() => {
-    if (!branchTruncated || !activeConversationId) return;
+    if (!branchHasWithheld || !activeConversationId) return;
     let cancelled = false;
     const id = activeConversationId;
     fetchConversationOutputs(id)
@@ -3216,32 +3223,34 @@ export function ChatExperience({
         }
       })
       .catch(() => {
-        // Best-effort: unknown references stay locked.
+        // Best-effort: withheld (and, truncated, unknown) references stay locked.
       });
     return () => {
       cancelled = true;
     };
-  }, [branchTruncated, activeConversationId, messages.length, lastMessageState]);
-  const withheldFiles = useMemo(
-    () =>
-      activeConversationId &&
-      activeBranchOrigin &&
-      (activeBranchOrigin.withheld_files?.length || branchTruncated)
-        ? {
-            conversationId: activeConversationId,
-            withheld: new Set(activeBranchOrigin.withheld_files ?? []),
-            available: branchTruncated
-              ? new Set([
-                  ...(activeBranchOrigin.copied_files ?? []).map((f) => f.path),
-                  ...(branchAvailable?.id === activeConversationId
-                    ? branchAvailable.paths
-                    : []),
-                ])
-              : null,
-          }
+  }, [branchHasWithheld, activeConversationId, messages.length, lastMessageState]);
+  const withheldFiles = useMemo(() => {
+    if (!activeConversationId || !activeBranchOrigin || !branchHasWithheld) return null;
+    const outputs =
+      branchAvailable?.id === activeConversationId ? branchAvailable.paths : null;
+    return {
+      conversationId: activeConversationId,
+      withheld: new Set(activeBranchOrigin.withheld_files ?? []),
+      outputs,
+      available: branchTruncated
+        ? new Set([
+            ...(activeBranchOrigin.copied_files ?? []).map((f) => f.path),
+            ...(outputs ?? []),
+          ])
         : null,
-    [activeConversationId, activeBranchOrigin, branchTruncated, branchAvailable],
-  );
+    };
+  }, [
+    activeConversationId,
+    activeBranchOrigin,
+    branchHasWithheld,
+    branchTruncated,
+    branchAvailable,
+  ]);
 
   // The team-shared projects this user can promote a personal memory into
   // (Item D5). A personal project has no team to learn anything, so it is not
@@ -3992,7 +4001,12 @@ export function ChatExperience({
         });
       })
       .catch(() => {
-        // Best-effort: no markers rather than wrong ones.
+        // No markers rather than wrong ones: this refresh exists because the
+        // states may have changed (a reply, the share dialog, Sources), so a
+        // failed read must not leave the PREVIOUS map's Shared / Not shared
+        // labels standing as if they were current.
+        if (cancelled) return;
+        setOutputShares((prev) => (prev?.id === id ? null : prev));
       });
     return () => {
       cancelled = true;

@@ -107,6 +107,33 @@ describe("the branch transcript locks withheld files", () => {
     ).toBe(true);
   });
 
+  it("lets the branch's own current outputs override the withheld list", () => {
+    // The branch later created and presented its own exclusion_list_v1.json:
+    // it is the branch's file now, so it is live, not locked forever — in the
+    // complete-list case and in the truncated (allow-list) case alike.
+    for (const available of [null, new Set(["report.xlsx"])]) {
+      const { container, unmount } = render(
+        <WithheldFilesContext.Provider
+          value={{
+            conversationId: CONV,
+            withheld: new Set(["exclusion_list_v1.json"]),
+            available,
+            outputs: new Set(["exclusion_list_v1.json"]),
+          }}
+        >
+          {renderAssistantContent(md, false, CONV)}
+        </WithheldFilesContext.Provider>,
+      );
+      expect(screen.getByRole("link", { name: "v1" })).toHaveAttribute(
+        "href",
+        `/api/conversations/${CONV}/workspace/exclusion_list_v1.json`,
+      );
+      expect(container.querySelector("img")).not.toBeNull();
+      expect(screen.queryByTestId("locked-file")).toBeNull();
+      unmount();
+    }
+  });
+
   it("changes nothing without the context (every other chat)", () => {
     const { container } = render(<>{renderAssistantContent(md, false, CONV)}</>);
     expect(container.querySelector('a[href*="exclusion_list_v1.json"]')).not.toBeNull();

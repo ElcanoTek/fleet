@@ -10,21 +10,29 @@
 // (including the markdown unit tests) keep working.
 
 import type { ReactElement, ReactNode } from "react";
-import { Children, isValidElement, useMemo, useState } from "react";
+import { Children, isValidElement, useContext, useMemo, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CopyButton } from "./ChatChips";
 import { DiffBlock } from "./DiffBlock";
 import { isUnifiedDiff } from "@/app/lib/diffUtils";
 import {
-  LOCKED_FILE_HREF,
+  decideReadOnlyFile,
+  LOCKED_SUFFIX,
   normalizeAssistantMarkdown,
   PENDING_CONV_KEY,
   resolveWorkspaceHref,
   teamFileDownloadName,
+  WITHHELD_SUFFIX,
+  type ReadOnlyFileDecision,
 } from "./workspaceHref";
-// B19/B20 locked file names (teammate view sentinel + a branch's withheld files).
-import { LockedFileLabel, WithheldFileGate } from "./LockedFiles";
+// B19/B20 locked file names (the read-only views' render-time file policy +
+// a branch's withheld files).
+import {
+  LockedFileLabel,
+  ReadOnlyFilesContext,
+  WithheldFileGate,
+} from "./LockedFiles";
 import { conversationWorkspaceUrl } from "@/app/lib/conversationApiUrl";
 // WorkspaceImage moved to its own module so ToolChips can use it without
 // statically importing this (now lazy-loaded) ReactMarkdown pipeline.
@@ -228,19 +236,22 @@ export default function AssistantMarkdown({
     // pass through unchanged so e.g. inline base64 still works and
     // the agent can still link to public images.
     img: ({ src, alt, title }) => {
+      const raw = typeof src === "string" ? src : "";
       const { href, downloadFilename: imageName } = resolveWorkspaceHref(
-        typeof src === "string" ? src : "",
+        raw,
         conversationId,
       );
       return (
-        <WithheldFileGate href={href} name={imageName}>
-          <WorkspaceImage
-            key={href}
-            src={href}
-            alt={alt ?? ""}
-            title={title ?? undefined}
-          />
-        </WithheldFileGate>
+        <ReadOnlyImageGate raw={raw} alt={alt ?? ""} title={title ?? undefined}>
+          <WithheldFileGate href={href} name={imageName}>
+            <WorkspaceImage
+              key={href}
+              src={href}
+              alt={alt ?? ""}
+              title={title ?? undefined}
+            />
+          </WithheldFileGate>
+        </ReadOnlyImageGate>
       );
     },
     // Same rewrite for <a href>: when the agent writes
@@ -255,59 +266,27 @@ export default function AssistantMarkdown({
     // is what makes the link recognizable as a link at all — without
     // it, react-markdown's bare <a> inherits body color and looks
     // identical to surrounding text.
-    a: ({ href, title, children }) => {
-      // A locked file the teammate view named but does not hand over
-      // (linkSharedFiles): its name and a lock, never an anchor.
-      if (href === LOCKED_FILE_HREF) {
-        return <LockedFileLabel>{children}</LockedFileLabel>;
-      }
-      const {
-        href: resolved,
-        isWorkspaceFile,
-        downloadFilename,
-      } = resolveWorkspaceHref(
-        typeof href === "string" ? href : "",
-        conversationId,
+    a: ({ node, href, title, children }) => {
+      const raw = typeof href === "string" ? href : "";
+      // A read-only view (team or public) decides a workspace reference
+      // here, on the href the CommonMark parser produced — see
+      // ReadOnlyLinkGate. Every other chat renders the live link below.
+      const innerImage = node?.children.find(
+        (c) => c.type === "element" && c.tagName === "img",
       );
-      const isExternal = /^https?:\/\//i.test(resolved);
-      const extraProps: {
-        target?: string;
-        rel?: string;
-        download?: string;
-      } = {};
-      if (isWorkspaceFile) {
-        // Pass the original basename so the browser saves with the
-        // name the agent referenced, not a percent-encoded URL slice.
-        extraProps.download = downloadFilename || "";
-      } else if (teamFileDownloadName(resolved)) {
-        // A shared output in the teammate view: same save-don't-navigate
-        // treatment as the owner's own workspace link.
-        extraProps.download = teamFileDownloadName(resolved) ?? "";
-      } else if (isExternal) {
-        extraProps.target = "_blank";
-        extraProps.rel = "noopener noreferrer";
-      }
-      const link = (
-        <a
-          className="assistant-markdown-link"
-          href={resolved || undefined}
+      const innerImageSrc =
+        innerImage && innerImage.type === "element"
+          ? String(innerImage.properties?.src ?? "")
+          : null;
+      return (
+        <ReadOnlyLinkGate
+          raw={raw}
           title={title ?? undefined}
-          {...extraProps}
+          label={children}
+          innerImageSrc={innerImageSrc}
         >
-          {children}
-        </a>
-      );
-      // B17: an owner's team-shared chat marks each output chip Shared /
-      // Not shared. Only workspace files can be outputs; everything else —
-      // and every chat with no marker context — renders unchanged.
-      return isWorkspaceFile ? (
-        <WithheldFileGate href={resolved} name={downloadFilename}>
-          <OutputLinkWithMarker href={resolved} fallbackName={downloadFilename}>
-            {link}
-          </OutputLinkWithMarker>
-        </WithheldFileGate>
-      ) : (
-        link
+          {renderLiveLink(raw, title ?? undefined, children, conversationId)}
+        </ReadOnlyLinkGate>
       );
     },
     strong: ({ children }) => (
@@ -351,6 +330,191 @@ export default function AssistantMarkdown({
       {normalizedContent}
     </ReactMarkdown>
   );
+}
+
+// renderLiveLink is the `a` override's ordinary rendering: rewrite a relative
+// href to the per-conversation workspace API. When the agent writes
+// `[Deck.pptx](Deck.pptx)` after producing the file via an MCP tool, the
+// browser would otherwise try to navigate to a sibling path of the chat page
+// and 404. Rewriting to the workspace API makes the link actually serve the
+// file. Workspace links also get a `download` attribute so the browser saves
+// the file instead of trying to render binary content inline, and external
+// links open in a new tab so we don't lose the chat state. Visible styling
+// (color + underline via .assistant-markdown-link) is what makes the link
+// recognizable as a link at all — without it, react-markdown's bare <a>
+// inherits body color and looks identical to surrounding text.
+function renderLiveLink(
+  raw: string,
+  title: string | undefined,
+  children: ReactNode,
+  conversationId: string | null,
+): ReactNode {
+  const {
+    href: resolved,
+    isWorkspaceFile,
+    downloadFilename,
+  } = resolveWorkspaceHref(raw, conversationId);
+  const isExternal = /^https?:\/\//i.test(resolved);
+  const extraProps: {
+    target?: string;
+    rel?: string;
+    download?: string;
+  } = {};
+  if (isWorkspaceFile) {
+    // Pass the original basename so the browser saves with the
+    // name the agent referenced, not a percent-encoded URL slice.
+    extraProps.download = downloadFilename || "";
+  } else if (teamFileDownloadName(resolved)) {
+    // A team-files route: same save-don't-navigate treatment as the
+    // owner's own workspace link.
+    extraProps.download = teamFileDownloadName(resolved) ?? "";
+  } else if (isExternal) {
+    extraProps.target = "_blank";
+    extraProps.rel = "noopener noreferrer";
+  }
+  const link = (
+    <a
+      className="assistant-markdown-link"
+      href={resolved || undefined}
+      title={title}
+      {...extraProps}
+    >
+      {children}
+    </a>
+  );
+  // B17: an owner's team-shared chat marks each output chip Shared /
+  // Not shared. Only workspace files can be outputs; everything else —
+  // and every chat with no marker context — renders unchanged.
+  return isWorkspaceFile ? (
+    <WithheldFileGate href={resolved} name={downloadFilename}>
+      <OutputLinkWithMarker href={resolved} fallbackName={downloadFilename}>
+        {link}
+      </OutputLinkWithMarker>
+    </WithheldFileGate>
+  ) : (
+    link
+  );
+}
+
+// ── read-only views: files decided at render time ─────────────────────────
+//
+// Under a ReadOnlyFilesContext (ReadOnlyTranscript: a teammate's team view or
+// a public share link) every workspace reference the markdown RENDERS is
+// decided by its parsed href (decideReadOnlyFile): a shared output points at
+// the team-files route; anything else renders as text — a locked name on the
+// team view, a withheld name (or the image placeholder) on a public link —
+// never an anchor or an <img>, because a disabled link is still a dead
+// promise. Deciding here rather than by rewriting markdown source is what
+// makes the answer agree with the server's goldmark-based output discovery:
+// nested brackets, escaped `]`, balanced parens in a destination are all
+// parsed by the same grammar on both sides.
+
+/** The text a withheld/locked/upload decision renders as, or null when live. */
+function readOnlyFileText(
+  d: ReadOnlyFileDecision,
+  imagePlaceholder: string | null,
+): ReactNode | null {
+  switch (d.kind) {
+    case "locked":
+      return <LockedFileLabel>{d.name + LOCKED_SUFFIX}</LockedFileLabel>;
+    case "upload":
+      return <span>{d.name}</span>;
+    case "withheld":
+      return (
+        <span data-testid="withheld-file">
+          {imagePlaceholder ?? d.name + WITHHELD_SUFFIX}
+        </span>
+      );
+    default:
+      return null;
+  }
+}
+
+function ReadOnlyImageGate({
+  raw,
+  alt,
+  title,
+  children,
+}: {
+  raw: string;
+  alt: string;
+  title?: string;
+  children: ReactNode;
+}) {
+  const policy = useContext(ReadOnlyFilesContext);
+  if (!policy) return <>{children}</>;
+  const d = decideReadOnlyFile(raw, policy);
+  if (d.kind === "external") return <>{children}</>;
+  if (d.kind === "shared") {
+    return <WorkspaceImage key={d.url} src={d.url} alt={alt} title={title} />;
+  }
+  return readOnlyFileText(
+    d,
+    policy.mode === "withhold" ? policy.imagePlaceholder : null,
+  );
+}
+
+function ReadOnlyLinkGate({
+  raw,
+  title,
+  label,
+  innerImageSrc,
+  children,
+}: {
+  raw: string;
+  title?: string;
+  label: ReactNode;
+  /** The src of an image inside this link (a clickable thumbnail), if any. */
+  innerImageSrc: string | null;
+  children: ReactNode;
+}) {
+  const policy = useContext(ReadOnlyFilesContext);
+  if (!policy) return <>{children}</>;
+  const d = decideReadOnlyFile(raw, policy);
+  if (d.kind === "external") return <>{children}</>;
+  if (d.kind === "shared") {
+    // A thumbnail whose image is NOT live (withheld or locked) is labelled
+    // by the file it downloads, beside the image's own locked name — never a
+    // live link whose only visible text says "not shared".
+    const innerLive =
+      innerImageSrc === null ||
+      ["external", "shared"].includes(decideReadOnlyFile(innerImageSrc, policy).kind);
+    const anchor = (text: ReactNode) => (
+      <a
+        className="assistant-markdown-link"
+        href={d.url}
+        title={title}
+        download={d.name}
+      >
+        {text}
+      </a>
+    );
+    return innerLive ? (
+      anchor(label)
+    ) : (
+      <>
+        {label} {anchor(d.name)}
+      </>
+    );
+  }
+  const text = readOnlyFileText(d, null);
+  // A clickable thumbnail whose target is withheld: on the team view the
+  // image (live if it was shared, else its own locked name) stays beside the
+  // target's locked name — one name when both are the same file. On a public
+  // link the target's withheld name stands alone, as the source pre-pass
+  // renders it.
+  if (innerImageSrc !== null && policy.mode === "shared") {
+    const inner = decideReadOnlyFile(innerImageSrc, policy);
+    if (inner.kind !== "external" && inner.kind !== "shared" && inner.path === d.path) {
+      return <>{label}</>;
+    }
+    return (
+      <>
+        {label} {text}
+      </>
+    );
+  }
+  return <>{text}</>;
 }
 
 // InlineHtmlPreview renders a ```html code block from an assistant

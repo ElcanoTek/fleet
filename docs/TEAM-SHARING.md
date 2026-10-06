@@ -220,11 +220,17 @@ HTML comment or other raw HTML, a fenced or indented code block, a code span,
 an image's alt text, an unused reference definition, an email autolink. The
 href is then resolved by a Go port of `resolveScopedWorkspaceHref`
 (`web/src/app/chat/ui/workspaceHref.ts`), so what the owner sees as a chip and
-what a teammate may download cannot drift. The team view's rewrite
-(`linkSharedFiles`) leaves the same escaped, commented-out and indented-code
-text untouched; its tests for those are conservative (a doubtful case is still
-rewritten), and the public link's redaction keeps withholding them anyway — it
-may withhold more than renders, never less.
+what a teammate may download cannot drift. The team view decides files at
+**render** time, not by rewriting markdown source: the assistant renderer's
+link and image overrides take the href react-markdown's CommonMark parser
+produced and decide it by its workspace path (`decideReadOnlyFile`) — a shared
+output becomes a team-files link or inline image, every other workspace
+reference a locked name. Nested label brackets, an escaped `]` and balanced
+parentheses in a destination are therefore parsed by the same grammar on both
+sides. The public link enforces the same render-time rule (no workspace link
+or image ever reaches its DOM) and also keeps its source redaction
+(`redactUnsharedFiles`) as a belt-and-braces pre-pass — it may withhold more
+than renders, never less.
 Two consequences follow, both deliberate:
 
 - **Uploads are never outputs** — never shared, listed in Sources, counted in

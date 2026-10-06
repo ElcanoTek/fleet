@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  LOCKED_FILE_HREF,
   PENDING_CONV_KEY,
-  linkSharedFiles,
+  decideReadOnlyFile,
   redactUnsharedFiles,
   teamFileDownloadName,
   workspaceFileRef,
@@ -551,211 +550,94 @@ describe("redactUnsharedFiles — never withholds less than before", () => {
   });
 });
 
-describe("linkSharedFiles — the teammate's view of the owner's outputs", () => {
+describe("decideReadOnlyFile — the read-only views' render-time file policy", () => {
   const links = {
-    shared: new Set(["daily_spend.png", "out/report final.xlsx", "data.csv"]),
+    shared: new Set(["daily_spend.png", "out/report final.xlsx", "data.csv", "foo(and(more)).csv"]),
     fileUrl: (path: string) =>
       `/api/conversations/${CONV}/team-files/${path
         .split("/")
         .map(encodeURIComponent)
         .join("/")}`,
   };
+  const team = { mode: "shared" as const, links };
+  const pub = { mode: "withhold" as const, imagePlaceholder: IMAGE_PLACEHOLDER };
   const TEAM = `/api/conversations/${CONV}/team-files/`;
-  const LOCK = `(${LOCKED_FILE_HREF})`;
 
-  it("points a shared output's link and image at the team-files route", () => {
-    expect(linkSharedFiles("[the data](data.csv)", links)).toBe(
-      `[the data](${TEAM}data.csv)`,
-    );
-    expect(linkSharedFiles("![Spend](daily_spend.png)", links)).toBe(
-      `![Spend](${TEAM}daily_spend.png)`,
-    );
-    // Nested folders and encoded names resolve to the same shared path.
-    expect(linkSharedFiles("[r](out/report%20final.xlsx)", links)).toBe(
-      `[r](${TEAM}out/report%20final.xlsx)`,
-    );
+  it("points a shared output at the team-files route, by its parsed href", () => {
+    expect(decideReadOnlyFile("data.csv", team)).toEqual({
+      kind: "shared",
+      name: "data.csv",
+      path: "data.csv",
+      url: `${TEAM}data.csv`,
+    });
+    // The href a CommonMark parser hands the renderer is percent-encoded.
+    expect(decideReadOnlyFile("out/report%20final.xlsx", team)).toMatchObject({
+      kind: "shared",
+      url: `${TEAM}out/report%20final.xlsx`,
+    });
+    expect(decideReadOnlyFile("foo(and(more)).csv", team)).toMatchObject({ kind: "shared" });
     expect(
-      linkSharedFiles(`[r](sandbox:/opt/chat/workspace/${CONV}/data.csv)`, links),
-    ).toBe(`[r](${TEAM}data.csv)`);
+      decideReadOnlyFile(`sandbox:/opt/chat/workspace/${CONV}/data.csv`, team),
+    ).toMatchObject({ kind: "shared", url: `${TEAM}data.csv` });
   });
 
-  it("leaves link-shaped text that renders as NO link exactly as written", () => {
-    // The server's output discovery parses with CommonMark: none of these is
-    // a link there (so none is an output), and none renders as one here.
-    for (const md of [
-      "See \\[x](secret.csv) here.",
-      "See !\\[x](secret.png) here.",
-      "Done <!-- [x](secret.csv) --> ok",
-      "Intro.\n\n    [x](secret.csv)\n\nOutro.",
-      "Intro.\n\n\t[x](data.csv)",
-    ]) {
-      expect(linkSharedFiles(md, links)).toBe(md);
+  it("locks every other workspace reference, uploads by name only", () => {
+    expect(decideReadOnlyFile("exclusion_list_v1.json", team)).toEqual({
+      kind: "locked",
+      name: "exclusion_list_v1.json",
+      path: "exclusion_list_v1.json",
+    });
+    expect(decideReadOnlyFile(`/api/conversations/${CONV}/workspace/data.csv`, team)).toMatchObject({
+      kind: "shared",
+    });
+    expect(decideReadOnlyFile("attachments/brief.pdf", team)).toMatchObject({
+      kind: "upload",
+      name: "brief.pdf",
+    });
+  });
+
+  it("never mints a URL for a path outside the shared set, traversal included", () => {
+    for (const raw of ["secret/data.csv", `/api/conversations/${CONV}/workspace/%2e%2e/data.csv`]) {
+      expect(decideReadOnlyFile(raw, team).kind).toBe("locked");
     }
-    // An escaped `!` leaves a LINK behind, rewritten like one.
-    expect(linkSharedFiles("\\![d](data.csv)", links)).toBe(
-      `\\![d](${TEAM}data.csv)`,
-    );
-    // Two backslashes escape each other: the bracket after them is live.
-    expect(linkSharedFiles("\\\\[d](data.csv)", links)).toBe(
-      `\\\\[d](${TEAM}data.csv)`,
-    );
-  });
-
-  it("stays conservative where indentation is not a code block", () => {
-    // A lazy continuation of a paragraph, and a list item's indented
-    // paragraph, are prose — still rewritten.
-    expect(linkSharedFiles("Intro.\n    [v](v.json)", links)).toBe(
-      `Intro.\n    [v\\.json (not shared)]${LOCK}`,
-    );
-    expect(linkSharedFiles("- item\n\n    [v](v.json)", links)).toBe(
-      `- item\n\n    [v\\.json (not shared)]${LOCK}`,
-    );
-  });
-
-  it("rewrites a link the renderer un-codes from a `Label: code` line", () => {
-    // AssistantContent turns `File: \`…\`` into a bold label and PLAIN text,
-    // so the quoted link renders — and is rewritten like any other.
-    expect(linkSharedFiles("File: `[d](data.csv)`", links)).toBe(
-      `**File:** [d](${TEAM}data.csv)`,
-    );
-  });
-
-  it("renders an unshared output as a locked name, never a live link", () => {
-    expect(linkSharedFiles("[v1](exclusion_list_v1.json)", links)).toBe(
-      `[exclusion\\_list\\_v1\\.json (not shared)]${LOCK}`,
-    );
-    // An unshared image is a locked name too: nothing is fetched.
-    expect(linkSharedFiles("![c](chart.png)", links)).toBe(
-      `[chart\\.png (not shared)]${LOCK}`,
-    );
-  });
-
-  it("unescapes CommonMark backslash escapes in destinations before resolving", () => {
-    // The Go parser that lists outputs drops these escapes (as the renderer
-    // does), so the shared path is `my_file.csv` — not `my\_file.csv`.
-    const esc = {
-      shared: new Set(["my_file.csv", "out/a#1.csv", "ref_file.csv"]),
-      fileUrl: links.fileUrl,
-    };
-    expect(linkSharedFiles("[report](my\\_file.csv)", esc)).toBe(
-      `[report](${TEAM}my_file.csv)`,
-    );
-    expect(linkSharedFiles("![c](<out/a\\#1.csv>)", esc)).toBe(
-      `![c](${TEAM}out/a%231.csv)`,
-    );
-    expect(linkSharedFiles("[r][x]\n\n[x]: ref\\_file.csv", esc)).toBe(
-      `[r](${TEAM}ref_file.csv)\n`,
-    );
-    // An unshared escaped name locks by its real (unescaped) name.
-    expect(linkSharedFiles("[v](held\\_v1.json)", esc)).toBe(
-      `[held\\_v1\\.json (not shared)]${LOCK}`,
-    );
-  });
-
-  it("names an upload plainly — uploads are never outputs, so never 'not shared'", () => {
-    expect(linkSharedFiles("[brief](attachments/brief.pdf)", links)).toBe(
-      "brief\\.pdf",
-    );
-  });
-
-  it("rewrites both halves of a clickable thumbnail", () => {
-    // shared thumb → shared full: a thumbnail link, both on the team route.
-    expect(linkSharedFiles("[![t](daily_spend.png)](data.csv)", links)).toBe(
-      `[![t](${TEAM}daily_spend.png)](${TEAM}data.csv)`,
-    );
-    // shared thumb → unshared full: the image stays, the link locks.
-    expect(linkSharedFiles("[![t](daily_spend.png)](full.png)", links)).toBe(
-      `![t](${TEAM}daily_spend.png) [full\\.png (not shared)]${LOCK}`,
-    );
-    // unshared thumb → shared full: the thumb locks, the full is linked by name.
-    expect(linkSharedFiles("[![t](thumb.png)](data.csv)", links)).toBe(
-      `[thumb\\.png (not shared)]${LOCK} [data\\.csv](${TEAM}data.csv)`,
-    );
-    // both unshared: two locked names; the same file: one.
-    expect(linkSharedFiles("[![t](thumb.png)](full.png)", links)).toBe(
-      `[thumb\\.png (not shared)]${LOCK} [full\\.png (not shared)]${LOCK}`,
-    );
-    expect(linkSharedFiles("[![t](chart.png)](chart.png)", links)).toBe(
-      `[chart\\.png (not shared)]${LOCK}`,
-    );
-    // An external thumbnail linking to a workspace file, and the reverse.
-    expect(linkSharedFiles("[![t](https://cdn.example/t.png)](full.png)", links)).toBe(
-      `![t](https://cdn.example/t.png) [full\\.png (not shared)]${LOCK}`,
-    );
-    expect(linkSharedFiles("[![t](daily_spend.png)](https://example.com/x)", links)).toBe(
-      `[![t](${TEAM}daily_spend.png)](https://example.com/x)`,
-    );
-    // Nothing in any of them still points at the owner's workspace.
-    for (const md of [
-      "[![t](daily_spend.png)](full.png)",
-      "[![t](thumb.png)](data.csv)",
-      "[![t](thumb.png)](full.png)",
-    ]) {
-      expect(linkSharedFiles(md, links)).not.toMatch(/\]\((?:full|thumb)\.png\)/);
+    // Rejected traversal is not a workspace reference at all — never a team URL.
+    for (const raw of ["../data.csv", "%2e%2e/data.csv"]) {
+      expect(decideReadOnlyFile(raw, team)).toEqual({ kind: "external" });
     }
   });
 
-  it("leaves the public redaction of a clickable thumbnail unchanged", () => {
+  it("withholds every workspace reference on a public link, shared or not", () => {
+    for (const raw of ["data.csv", "foo(and(more)).csv", "attachments/brief.pdf", "x.png"]) {
+      expect(decideReadOnlyFile(raw, pub).kind).toBe("withheld");
+    }
+  });
+
+  it("leaves external links and anchors to the ordinary renderer", () => {
+    for (const raw of ["https://example.com/a.csv", "mailto:a@b.c", "#top", ""]) {
+      expect(decideReadOnlyFile(raw, team)).toEqual({ kind: "external" });
+      expect(decideReadOnlyFile(raw, pub)).toEqual({ kind: "external" });
+    }
+  });
+});
+
+describe("redactUnsharedFiles — thumbnails and duplicate definitions", () => {
+  it("redacts a clickable thumbnail to the target's withheld name", () => {
     expect(redactUnsharedFiles("[![t](thumb.png)](full.png)", IMAGE_PLACEHOLDER)).toBe(
       "full\\.png (file not shared)",
     );
   });
 
-  it("handles reference-style and bare routes by the same rules", () => {
-    const md = ["See [the data][d] and [old][o].", "", "[d]: data.csv", "[o]: old.csv"].join("\n");
-    expect(linkSharedFiles(md, links)).toBe(
-      `See [the data](${TEAM}data.csv) and [old\\.csv (not shared)]${LOCK}.\n`,
-    );
-    expect(
-      linkSharedFiles(`Saved to /api/conversations/${CONV}/workspace/data.csv.`, links),
-    ).toBe(`Saved to [data\\.csv](${TEAM}data.csv).`);
-  });
-
   it("resolves a duplicate reference label to its FIRST definition, like CommonMark", () => {
-    // External first: the label is the external link; the later workspace
-    // duplicate is inert and dropped, and the use is left alone.
     const extFirst = ["See [x].", "", "[x]: https://example.com/a", "[x]: data.csv"].join("\n");
-    expect(linkSharedFiles(extFirst, links)).toBe(
-      ["See [x].", "", "[x]: https://example.com/a"].join("\n"),
-    );
     expect(redactUnsharedFiles(extFirst, IMAGE_PLACEHOLDER)).toBe(
       ["See [x].", "", "[x]: https://example.com/a"].join("\n"),
     );
-    // Workspace first: the use is rewritten from it, and the later external
-    // duplicate cannot become the label's definition once the first is gone.
     const wsFirst = ["See [x].", "", "[x]: old.csv", "[x]: https://example.com/a"].join("\n");
-    expect(linkSharedFiles(wsFirst, links)).toBe(
-      `See [old\\.csv (not shared)]${LOCK}.\n`,
-    );
     expect(redactUnsharedFiles(wsFirst, IMAGE_PLACEHOLDER)).toBe(
       "See old\\.csv (file not shared).\n",
     );
-    // Two workspace definitions: the first (shared) wins over the later one.
-    const twoWs = ["See [x].", "", "[x]: data.csv", "[x]: old.csv"].join("\n");
-    expect(linkSharedFiles(twoWs, links)).toBe(`See [x](${TEAM}data.csv).\n`);
-    // External duplicates of an external label stay exactly as written.
     const twoExt = ["See [x].", "", "[x]: https://a.example", "[x]: https://b.example"].join("\n");
     expect(redactUnsharedFiles(twoExt, IMAGE_PLACEHOLDER)).toBe(twoExt);
-    expect(linkSharedFiles(twoExt, links)).toBe(twoExt);
-  });
-
-  it("never mints a URL for a path outside the shared set, traversal included", () => {
-    const out = linkSharedFiles(
-      "[x](../data.csv) [y](%2e%2e/data.csv) [z](secret/data.csv)",
-      links,
-    );
-    expect(out).not.toContain("team-files");
-  });
-
-  it("leaves external links, anchors and code alone", () => {
-    const md = "[docs](https://example.com/a.csv) `[x](data.csv)`\n```\n[y](data.csv)\n```";
-    expect(linkSharedFiles(md, links)).toBe(md);
-  });
-
-  it("does not change what a public link shows (files are never exposed there)", () => {
-    expect(redactUnsharedFiles("[the data](data.csv)", "Image withheld.")).toBe(
-      "data\\.csv (file not shared)",
-    );
   });
 });
 

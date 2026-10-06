@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { renderAssistantContent } from "./AssistantContent";
 import { ReadOnlyTranscript, toBubbles, type ReadOnlyAudience } from "./ReadOnlyTranscript";
+import { ReadOnlyFilesContext } from "./LockedFiles";
 
 // The read-only renderer both doors onto someone else's conversation share:
 // a teammate's team view and a public share link. What it must NOT do is
@@ -183,5 +184,117 @@ describe("ReadOnlyTranscript — shared outputs on the team door", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(container.innerHTML).not.toContain("team-files");
     expect(screen.getByText(/daily_spend\.csv \(file not shared\)/)).toBeInTheDocument();
+  });
+});
+
+// The decision is made on what the CommonMark parser RENDERS, not on regexes
+// over the source (Codex round 7): label nesting, an escaped `]` and balanced
+// parens in a destination are all links to remark — and to the server's
+// goldmark discovery — so a shared output among them must be live, an
+// unshared one locked, and the public link must never emit any of them.
+describe("ReadOnlyTranscript — CommonMark-shaped references", () => {
+  const CONV = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  const md = [
+    "Nested: [outer [inner]](nested.csv)",
+    "",
+    "Escaped: [a\\]b](esc.csv)",
+    "",
+    "Parens: [p](foo(and(more)).csv)",
+    "",
+    "![chart [v2]](chart(1).png)",
+    "",
+    "[![thumb](thumb(1).png)](full(1).png)",
+  ].join("\n");
+  const entries = [{ id: 1, role: "assistant", type: "text", content: { text: md } }];
+  const ALL = ["nested.csv", "esc.csv", "foo(and(more)).csv", "chart(1).png", "thumb(1).png", "full(1).png"];
+  const fileUrl = (p: string) => `/api/conversations/${CONV}/team-files/${encodeURIComponent(p)}`;
+
+  function renderWith(audience: ReadOnlyAudience, shared: string[]) {
+    return render(
+      <ReadOnlyTranscript
+        bubbles={toBubbles(entries)}
+        audience={audience}
+        sharedFiles={{ shared: new Set(shared), fileUrl }}
+        renderAssistant={(text) => renderAssistantContent(text, false, null)}
+      />,
+    );
+  }
+
+  it("makes each shared one a live team-files link or image", () => {
+    const { container } = renderWith("team", ALL);
+    expect(screen.getByRole("link", { name: "outer [inner]" })).toHaveAttribute(
+      "href",
+      fileUrl("nested.csv"),
+    );
+    expect(screen.getByRole("link", { name: "a]b" })).toHaveAttribute("href", fileUrl("esc.csv"));
+    expect(screen.getByRole("link", { name: "p" })).toHaveAttribute(
+      "href",
+      fileUrl("foo(and(more)).csv"),
+    );
+    expect(screen.getByRole("link", { name: "p" })).toHaveAttribute("download", "foo(and(more)).csv");
+    const srcs = Array.from(container.querySelectorAll("img")).map((i) => i.getAttribute("src"));
+    expect(srcs).toEqual([fileUrl("chart(1).png"), fileUrl("thumb(1).png")]);
+    // The thumbnail stays a thumbnail link to its full-size file.
+    const thumb = container.querySelector(`img[src="${fileUrl("thumb(1).png")}"]`);
+    expect(thumb?.closest("a")).toHaveAttribute("href", fileUrl("full(1).png"));
+    expect(screen.queryByTestId("locked-file")).toBeNull();
+  });
+
+  it("locks each unshared one: a name, never an anchor or image", () => {
+    const { container } = renderWith("team", []);
+    const locked = screen.getAllByTestId("locked-file").map((l) => l.textContent);
+    for (const name of ALL) expect(locked).toContain(`${name} (not shared)`);
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("never emits a workspace link or image on a public link, shared or not", () => {
+    const { container } = renderWith("link", ALL);
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.innerHTML).not.toContain("team-files");
+    expect(container.innerHTML).not.toContain("/workspace/");
+  });
+
+  it("enforces the public policy at render, independent of the source pre-pass", () => {
+    // Markdown that reaches the renderer UNREDACTED (as if the regex pre-pass
+    // missed every reference) still yields no workspace link or image.
+    const { container } = render(
+      <ReadOnlyFilesContext.Provider
+        value={{ mode: "withhold", imagePlaceholder: "Image not shared with view-only links." }}
+      >
+        {renderAssistantContent(md, false, null)}
+      </ReadOnlyFilesContext.Provider>,
+    );
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toContain("nested.csv (file not shared)");
+    expect(container.textContent).toContain("foo(and(more)).csv (file not shared)");
+    expect(container.textContent).toContain("Image not shared with view-only links.");
+  });
+
+  it("keeps code blocks, html previews and external links working", () => {
+    const text = [
+      "```python",
+      "print('[x](data.csv)')",
+      "```",
+      "",
+      "```html",
+      "<p>hi</p>",
+      "```",
+      "",
+      "[docs](https://example.com/a)",
+    ].join("\n");
+    const { container } = render(
+      <ReadOnlyTranscript
+        bubbles={toBubbles([{ id: 1, role: "assistant", type: "text", content: { text } }])}
+        audience="team"
+        sharedFiles={{ shared: new Set(), fileUrl }}
+        renderAssistant={(t) => renderAssistantContent(t, false, null)}
+      />,
+    );
+    expect(container.querySelector("pre")?.textContent).toContain("print('[x](data.csv)')");
+    expect(container.querySelector("iframe[title='HTML preview']")).not.toBeNull();
+    expect(screen.getByRole("link", { name: "docs" })).toHaveAttribute("href", "https://example.com/a");
   });
 });

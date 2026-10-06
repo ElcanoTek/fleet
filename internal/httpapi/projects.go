@@ -665,10 +665,6 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		if outsTruncated {
 			truncated = true
 		}
-		byPath := make(map[string]outputFile, len(outs))
-		for _, o := range outs {
-			byPath[o.Path] = o
-		}
 		copied := map[string]bool{}
 		g := sourcesGroup{
 			ConversationID: conv.ID,
@@ -686,20 +682,37 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 				copied[f.Path] = true
 			}
 		}
-		for _, f := range all {
-			flat = append(flat, projectFile{
-				ConversationID: conv.ID, ConversationTitle: conv.Title,
-				Path: f.Path, Name: f.Name, Size: f.Size, ModifiedAt: f.ModifiedAt,
+		// Every current output first, whatever its age: FileCount and
+		// SharedCount count them, and each needs its row (and toggle). The
+		// bounded walk keeps only the newest files, so an older output can be
+		// missing from `all` — listing from the walk alone left a shared
+		// output counted but with no row to unshare it by. Then the newest
+		// non-output files fill the group up to the cap.
+		listed := make(map[string]bool, len(outs))
+		for _, o := range outs {
+			listed[o.Path] = true
+			g.Files = append(g.Files, sourcesFile{
+				Path: o.Path, Name: o.Name, Size: o.Size, ModifiedAt: o.ModifiedAt,
+				Shared: o.Shared, Output: true, YourCopy: copied[o.Path],
 			})
-			if o, ok := byPath[f.Path]; ok {
-				f.Output, f.Shared = true, o.Shared
+		}
+		for _, f := range all {
+			if listed[f.Path] {
+				continue
+			}
+			if len(g.Files) >= maxProjectFiles {
+				truncated = true
+				break
 			}
 			f.YourCopy = copied[f.Path]
 			g.Files = append(g.Files, f)
 		}
-		if len(g.Files) > maxProjectFiles {
-			g.Files = g.Files[:maxProjectFiles]
-			truncated = true
+		sort.SliceStable(g.Files, func(i, j int) bool { return newerFile(g.Files[i], g.Files[j]) })
+		for _, f := range g.Files {
+			flat = append(flat, projectFile{
+				ConversationID: conv.ID, ConversationTitle: conv.Title,
+				Path: f.Path, Name: f.Name, Size: f.Size, ModifiedAt: f.ModifiedAt,
+			})
 		}
 		groups = append(groups, g)
 	}

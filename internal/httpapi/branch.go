@@ -15,6 +15,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -164,11 +165,21 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 	var refsTruncated bool
 	origin.WithheldFiles, refsTruncated = withholdUncopiedReferences(history, origin.CopiedFiles, origin.WithheldFiles)
 	origin.WithheldTruncated = outsTruncated || refsTruncated
-	if err := s.store.RecordBranchOrigin(ctx, branch.ID, origin); err != nil {
+	// The branch is already committed and the copy above can take a while:
+	// a client that gave up (or a proxy that timed out) by now must not leave
+	// a branch with copied files but no origin — no banner, no locked names,
+	// links that 404. So the origin is written on a context detached from
+	// the request's cancellation, bounded on its own.
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), branchOriginRecordTimeout)
+	defer cancel()
+	if err := s.store.RecordBranchOrigin(recordCtx, branch.ID, origin); err != nil {
 		log.Printf("branch files: record origin of %s: %v", logSafeSlug(branch.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
 	}
 	return &origin
 }
+
+// branchOriginRecordTimeout bounds the detached origin write above.
+const branchOriginRecordTimeout = 10 * time.Second
 
 // historyThrough returns the entries of history with an id at or below
 // through — what BranchConversation copies. Entries are in id order.

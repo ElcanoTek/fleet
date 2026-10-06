@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
@@ -499,6 +500,43 @@ func TestTeammateBranchMidCopyMessageReportsChanged(t *testing.T) {
 	}
 }
 
+// The branch is committed before its files are copied; a request canceled
+// during that copy (the client gave up, a proxy timed out) must still leave
+// the branch with its recorded origin — never copied files with no banner and
+// no locked names.
+func TestTeammateBranchRecordsOriginAfterRequestCancel(t *testing.T) {
+	f := newFilesFixture(t)
+	msgs, _ := f.st.LoadHistory(f.ctx, f.chat.ID)
+	body, _ := json.Marshal(map[string]any{"branch_point_message_id": msgs[len(msgs)-1].ID})
+	reqCtx, cancel := context.WithCancel(context.WithValue(context.Background(), ctxKeyUser, "bob@x.com"))
+	defer cancel()
+	canceled := false
+	branchCopyAfterStat = func(string) {
+		canceled = true
+		cancel()
+	}
+	t.Cleanup(func() { branchCopyAfterStat = nil })
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/conversations/"+f.chat.ID+"/branch", strings.NewReader(string(body))).WithContext(reqCtx)
+	f.srv.conversationByID(w, req)
+	branchCopyAfterStat = nil
+	if w.Code != 201 || !canceled {
+		t.Fatalf("branch: %d %s (canceled=%v)", w.Code, w.Body.String(), canceled)
+	}
+	br := decode[store.Conversation](t, w)
+	origins, err := f.st.BranchOriginsFor(f.ctx, []string{br.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := origins[br.ID]
+	if o == nil {
+		t.Fatal("a canceled request left the committed branch without its origin")
+	}
+	if o.SourceConversationID != f.chat.ID || len(o.CopiedFiles) == 0 {
+		t.Errorf("origin = %+v, want the source and its copied files", o)
+	}
+}
+
 // The teammate branches at the message they last saw (their last poll); a
 // source message sent after that but BEFORE the branch POST is not in the
 // branch either, so it must report changed_since rather than count as seen.
@@ -719,6 +757,61 @@ func TestProjectFilesGrouped(t *testing.T) {
 		if !g.Mine {
 			t.Errorf("an unshared chat's files must disappear for teammates: %+v", g)
 		}
+	}
+}
+
+// Sources' workspace walk keeps only the newest maxProjectFiles files, but
+// every current output is counted — so every output must also have its row
+// (and toggle), however many newer scratch files bury it.
+func TestProjectFilesListsOlderOutputsPastTheWalkBound(t *testing.T) {
+	f := newFilesFixture(t)
+	ws := filepath.Join(f.root, f.chat.ID)
+	old := time.Now().Add(-48 * time.Hour)
+	for _, rel := range []string{"out/report.csv", "chart.png", "page.html", "held.json"} {
+		if err := os.Chtimes(filepath.Join(ws, filepath.FromSlash(rel)), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range maxProjectFiles + 20 {
+		if err := os.WriteFile(filepath.Join(ws, fmt.Sprintf("tmp%04d.log", i)), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type body struct {
+		Groups []struct {
+			FileCount   int `json:"file_count"`
+			SharedCount int `json:"shared_count"`
+			Files       []struct {
+				Path   string `json:"path"`
+				Shared bool   `json:"shared"`
+				Output bool   `json:"output"`
+			} `json:"files"`
+		} `json:"groups"`
+		Truncated bool `json:"truncated"`
+	}
+	got := decode[body](t, projectSub(t, f.srv, "GET", "alice@x.com", f.project.ID+"/files", ""))
+	if len(got.Groups) != 1 {
+		t.Fatalf("groups = %+v", got.Groups)
+	}
+	g := got.Groups[0]
+	if g.FileCount != 4 || g.SharedCount != 3 {
+		t.Fatalf("counts = %d/%d, want 4/3", g.FileCount, g.SharedCount)
+	}
+	outputs, shared := 0, 0
+	for _, fl := range g.Files {
+		if fl.Output {
+			outputs++
+			if fl.Shared {
+				shared++
+			}
+		}
+	}
+	if outputs != g.FileCount || shared != g.SharedCount {
+		t.Errorf("rows disagree with counts: %d outputs (%d shared) listed, counts %d/%d",
+			outputs, shared, g.FileCount, g.SharedCount)
+	}
+	if len(g.Files) != maxProjectFiles || !got.Truncated {
+		t.Errorf("files = %d (truncated=%v), want the cap %d, truncated", len(g.Files), got.Truncated, maxProjectFiles)
 	}
 }
 

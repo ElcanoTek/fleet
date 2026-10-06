@@ -293,16 +293,6 @@ const MD_LINK = new RegExp(
   `(!?)\\[([^\\]]*)\\]\\(\\s*${MD_DEST}${MD_TITLE}\\s*\\)`,
   "g",
 );
-// A clickable thumbnail — `[![alt](thumb.png)](full.png)` — matched as ONE
-// unit. The image and link passes cannot handle it piecewise: once the inner
-// image is rewritten, MD_LINK's label (`[^\]]*`) stops at the image's own
-// `]`, matches `[![alt](…)` as a link to the INNER destination, and the
-// outer `(full.png)` is never seen. Groups: alt, inner angled/bare, outer
-// angled/bare.
-const MD_LINKED_IMAGE = new RegExp(
-  `\\[\\s*!\\[([^\\]]*)\\]\\(\\s*${MD_DEST}${MD_TITLE}\\s*\\)\\s*\\]\\(\\s*${MD_DEST}${MD_TITLE}\\s*\\)`,
-  "g",
-);
 // Reference form — `[label][ref]`, collapsed `[ref][]`, shortcut `[ref]` —
 // paired with its `[ref]: dest` definition line. `(?!\()` keeps it off an
 // inline link the passes above left alone.
@@ -350,26 +340,30 @@ export function redactUnsharedFiles(
 
 // ── the team view: shared outputs become live, the rest stay locked ────────
 //
-// A chat shared with the team now carries its OUTPUTS (docs/TEAM-SHARING.md):
+// A chat shared with the team carries its OUTPUTS (docs/TEAM-SHARING.md):
 // every file the agent presented in a reply, minus the ones the owner
 // unchecked. A teammate fetches a shared one through the team-files route —
-// never the owner-scoped workspace route — so the rewrite below points each
-// shared reference there, and renders every other workspace reference as a
-// locked name. The public share link does NOT come through here: it keeps
-// redactUnsharedFiles above, because public links never expose files.
-
-/**
- * The destination a locked file reference renders with. An in-page anchor on
- * purpose: it survives react-markdown's URL sanitizer and the workspace
- * rewrite unchanged (both pass `#…` through), and the assistant renderer
- * recognizes it and draws the name with a lock glyph instead of an anchor. A
- * renderer that does not know it still shows "name (not shared)" — a link to
- * nowhere on this page, never a request.
- */
-export const LOCKED_FILE_HREF = "#fleet-file-not-shared";
+// never the owner-scoped workspace route.
+//
+// That decision is made at RENDER time, not by rewriting markdown source: the
+// assistant renderer's `a` and `img` overrides (AssistantContent.tsx) hand the
+// href the CommonMark parser actually produced to decideReadOnlyFile below.
+// Regexes over source cannot follow CommonMark's grammar — nested brackets in
+// a label (`[outer [inner]](a.csv)`), an escaped `]`, balanced parens in a
+// destination (`foo(and(more)).csv`) — while the server lists outputs with a
+// real parser (goldmark, outputs.go), so a source rewrite disagreed with the
+// server about which references were links, and a shared output rendered
+// locked. Deciding on the parsed href is the same answer the server gets.
+//
+// The public share link decides at render time too (every workspace reference
+// is withheld there); it additionally keeps redactUnsharedFiles above as a
+// belt-and-braces pre-pass, because public links never expose files.
 
 /** The marker a locked output renders with, after its filename (B19). */
 export const LOCKED_SUFFIX = " (not shared)";
+
+/** The marker a withheld file renders with on a public link (and as before). */
+export const WITHHELD_SUFFIX = NOT_SHARED_SUFFIX;
 
 /** Uploads live here; they are never outputs and never shared. */
 const UPLOADS_DIR = "attachments/";
@@ -382,92 +376,58 @@ export type SharedFileLinks = {
 };
 
 /**
- * linkSharedFiles is the team view's counterpart of redactUnsharedFiles. It
- * finds the same workspace references (same parser, same traversal rejects)
- * and decides each one by its workspace-relative path:
+ * How a read-only transcript treats the files its replies reference:
  *
- *   - a SHARED output → its link or image points at `fileUrl(path)`, so it is
- *     a live download, and an image renders inline from that URL;
- *   - an upload (`attachments/…`) → its plain filename, as before: uploads are
- *     never outputs, so saying "not shared" would suggest the owner could;
- *   - anything else (an unchecked output, a file that is not an output, an
- *     unparseable route) → `[name (not shared)](#fleet-file-not-shared)`, the
- *     locked name.
- *
- * Only paths in `shared` can produce a live URL, and the URL is built from
- * the server's own list — so a prompt-injected reference can never mint a
- * download for a file the owner did not share; the server re-checks anyway.
+ *   - `withhold` — a public link, or a team view from a server that sends no
+ *     file list: every workspace reference is plain text, images become
+ *     `imagePlaceholder`. Nothing is ever a link or an image.
+ *   - `shared` — the team view: a reference to a path in `links.shared` is a
+ *     live team-files download (images inline from it); every other workspace
+ *     reference is a locked name.
  */
-export function linkSharedFiles(
-  markdown: string,
-  links: SharedFileLinks,
-): string {
-  const decide = (ref: FileRef): { url: string } | "upload" | "locked" => {
-    if (ref.path && ref.path.startsWith(UPLOADS_DIR)) return "upload";
-    if (ref.path && links.shared.has(ref.path)) {
-      return { url: links.fileUrl(ref.path) };
-    }
-    return "locked";
-  };
-  const locked = (ref: FileRef) =>
-    `[${escapeMarkdown(ref.name)}${LOCKED_SUFFIX}](${LOCKED_FILE_HREF})`;
-  // What a withheld reference becomes on its own: a plain name for an upload,
-  // the locked marker for an unshared output.
-  const withheld = (ref: FileRef, d: "upload" | "locked") =>
-    d === "upload" ? escapeMarkdown(ref.name) : locked(ref);
-  // A destination's fate: a URL it may keep (external, or a shared output's
-  // team-files route) or a withheld rendering.
-  const resolve = (
-    ref: FileRef | null,
-    dest: string,
-  ): { url: string } | { text: string; ref: FileRef } => {
-    if (!ref) return { url: wrapDest(dest) };
-    const d = decide(ref);
-    return d === "upload" || d === "locked" ? { text: withheld(ref, d), ref } : d;
-  };
-  const renderers: FileRefRenderers = {
-    // Both halves of a clickable thumbnail by the same rules as everywhere
-    // else: a live image inside a live link stays a thumbnail link; a
-    // withheld half becomes its locked name beside whatever half survives —
-    // never a team view whose outer link still points at the owner's file.
-    linkedImage: (innerRef, innerDest, alt, outerRef, outerDest) => {
-      const inner = resolve(innerRef, innerDest);
-      const outer = resolve(outerRef, outerDest);
-      const innerMd = "url" in inner ? `![${alt}](${inner.url})` : inner.text;
-      if ("url" in outer) {
-        if ("url" in inner) return `[${innerMd}](${outer.url})`;
-        const label = outerRef ? escapeMarkdown(outerRef.name) : alt || outer.url;
-        return `${innerMd} [${label}](${outer.url})`;
-      }
-      if ("url" in inner) return `${innerMd} ${outer.text}`;
-      // Both withheld: one name when they are the same file.
-      return inner.ref.path !== null && inner.ref.path === outer.ref.path
-        ? inner.text
-        : `${inner.text} ${outer.text}`;
-    },
-    image: (ref, alt) => {
-      const d = decide(ref);
-      if (d === "upload") return escapeMarkdown(ref.name);
-      if (d === "locked") return locked(ref);
-      return `![${alt}](${d.url})`;
-    },
-    link: (ref, label) => {
-      const d = decide(ref);
-      if (d === "upload") return escapeMarkdown(ref.name);
-      if (d === "locked") return locked(ref);
-      return `[${label}](${d.url})`;
-    },
-    bare: (ref) => {
-      const d = decide(ref);
-      if (d === "upload") return escapeMarkdown(ref.name);
-      if (d === "locked") return locked(ref);
-      return `[${escapeMarkdown(ref.name)}](${d.url})`;
-    },
-  };
-  // The team view must agree with the server about which references are
-  // links at all (outputs.go discovery): text the renderer shows as no link —
-  // escaped, commented out, indented code — is left exactly as written.
-  return rewriteFileRefs(markdown, renderers, { renderedOnly: true });
+export type ReadOnlyFilePolicy =
+  | { mode: "withhold"; imagePlaceholder: string }
+  | { mode: "shared"; links: SharedFileLinks };
+
+export type ReadOnlyFileDecision =
+  /** Not a workspace reference (http(s), mailto, anchors): render as usual. */
+  | { kind: "external" }
+  /** A shared output: link/image at `url` (the team-files route). */
+  | { kind: "shared"; name: string; path: string; url: string }
+  /** An upload on the team view: its plain name (uploads are never outputs). */
+  | { kind: "upload"; name: string; path: string }
+  /** Team view, not shared: the locked name. */
+  | { kind: "locked"; name: string; path: string | null }
+  /** Public view: plain withheld text. */
+  | { kind: "withheld"; name: string; path: string | null };
+
+/**
+ * decideReadOnlyFile decides one href the markdown parser produced (after the
+ * renderer's urlTransform). Only a path in the policy's shared set can produce
+ * a URL, and that URL is built from the server's own list — so a
+ * prompt-injected reference can never mint a download for a file the owner
+ * did not share (the server re-checks anyway). Every other workspace reference
+ * — unshared, an upload, a traversal-rejected route — is never a link.
+ */
+export function decideReadOnlyFile(
+  raw: string | undefined | null,
+  policy: ReadOnlyFilePolicy,
+): ReadOnlyFileDecision {
+  const ref = workspaceFileRef(raw);
+  if (!ref) return { kind: "external" };
+  if (policy.mode === "withhold") return { kind: "withheld", ...ref };
+  if (ref.path && ref.path.startsWith(UPLOADS_DIR)) {
+    return { kind: "upload", name: ref.name, path: ref.path };
+  }
+  if (ref.path && policy.links.shared.has(ref.path)) {
+    return {
+      kind: "shared",
+      name: ref.name,
+      path: ref.path,
+      url: policy.links.fileUrl(ref.path),
+    };
+  }
+  return { kind: "locked", ...ref };
 }
 
 /**
@@ -536,42 +496,6 @@ type FileRefRenderers = {
   link: (ref: FileRef, label: string) => string;
   /** A bare route pasted into prose. */
   bare: (ref: FileRef) => string;
-  /**
-   * A clickable thumbnail, `[![alt](inner)](outer)`, where at least one of
-   * the two destinations is a workspace file (a null ref is an external
-   * destination, passed through as `innerDest`/`outerDest`). Optional: a
-   * caller without it gets the piecewise image-then-link passes (what the
-   * public redaction has always done).
-   */
-  linkedImage?: (
-    inner: FileRef | null,
-    innerDest: string,
-    alt: string,
-    outer: FileRef | null,
-    outerDest: string,
-  ) => string;
-};
-
-/**
- * The one parser both rewrites share: finds every workspace reference in a
- * bubble's markdown (inline, reference-style, bare routes — never inside code)
- * and hands each to the caller's renderer. Reference definitions naming a
- * workspace file are dropped and their uses rendered inline, so no later pass
- * can resurrect the original destination.
- */
-type RewriteOptions = {
-  /**
-   * Leave alone link-shaped text the renderer shows as NO link: behind a
-   * backslash-escaped `[` or `!`, inside an HTML comment, or in an indented
-   * code block (fenced blocks and code spans are skipped in every mode). The
-   * team view sets it so it agrees with the server's output discovery, which
-   * parses with a real CommonMark parser. Each test here is CONSERVATIVE —
-   * when unsure it still rewrites — because a missed exclusion only rewrites
-   * text that renders as no link anyway, while a wrong one would leave a real
-   * link untouched. The public redaction does not set it: it may withhold
-   * more than renders, never less.
-   */
-  renderedOnly?: boolean;
 };
 
 /**
@@ -589,15 +513,19 @@ export function normalizeAssistantMarkdown(content: string): string {
     .replace(/(^|\n)([A-Za-z][A-Za-z /]+):\s*`([^`]+)`/g, "$1**$2:** $3");
 }
 
-function rewriteFileRefs(
-  markdown: string,
-  r: FileRefRenderers,
-  opts: RewriteOptions = {},
-): string {
+/**
+ * The public redaction's source pre-pass: finds every workspace reference in a
+ * bubble's markdown (inline, reference-style, bare routes — never inside code)
+ * and hands each to the caller's renderer. Reference definitions naming a
+ * workspace file are dropped and their uses rendered inline, so no later pass
+ * can resurrect the original destination. It may withhold MORE than renders
+ * (it is a regex scan, not a CommonMark parser), never less; the renderer's
+ * ReadOnlyFilesContext enforcement backs up anything it misses.
+ */
+function rewriteFileRefs(markdown: string, r: FileRefRenderers): string {
   if (!markdown) return markdown;
 
   const lines = scanFenced(normalizeAssistantMarkdown(markdown).split("\n"));
-  if (opts.renderedOnly) markIndentedCode(lines);
   const refs = new Map<string, FileRef>();
   // Every label's FIRST definition, workspace or not: CommonMark (and the Go
   // parser the server withholds with) resolve a label to its first
@@ -634,79 +562,12 @@ function rewriteFileRefs(
   const out: string[] = [];
   lines.forEach((line, i) => {
     if (defLines.has(i)) return;
-    out.push(
-      line.code ? line.text : redactLine(line.text, refs, r, Boolean(opts.renderedOnly)),
-    );
+    out.push(line.code ? line.text : redactLine(line.text, refs, r));
   });
   return out.join("\n");
 }
 
 type ScannedLine = { text: string; code: boolean };
-
-// An indented code block line: four columns of indentation (a tab counts).
-const INDENTED_CODE = /^(?: {4}| {0,3}\t)/;
-// Anything that makes four-space indentation mean something else: a list item
-// (its continuation lines are indented) or a block quote.
-const LIST_OR_QUOTE = /^\s*(?:[-+*]|\d{1,9}[.)])(?:\s|$)|^\s{0,3}>/;
-
-/**
- * Mark indented code blocks as code, conservatively. A run of indented lines
- * is code only when it follows a blank line (or opens the bubble) — an
- * indented line right after a paragraph line is a lazy continuation, not code
- * — and only in a bubble with no list item or block quote anywhere, since
- * there indentation may be a list item's paragraph. Every other case is left
- * as prose (and rewritten), which is the safe direction.
- */
-function markIndentedCode(lines: ScannedLine[]): void {
-  if (lines.some((l) => !l.code && LIST_OR_QUOTE.test(l.text))) return;
-  let prevBlank = true;
-  let inBlock = false;
-  for (const line of lines) {
-    if (line.code) {
-      // A fence (or its content) ends any indented block and is not blank.
-      inBlock = false;
-      prevBlank = false;
-      continue;
-    }
-    const blank = line.text.trim() === "";
-    if (blank) {
-      prevBlank = true;
-      continue;
-    }
-    if (INDENTED_CODE.test(line.text) && (inBlock || prevBlank)) {
-      line.code = true;
-      inBlock = true;
-    } else {
-      inBlock = false;
-    }
-    prevBlank = false;
-  }
-}
-
-// One HTML comment on a single line. CommonMark renders none of it (and the
-// chat renderer drops raw HTML outright). A comment spanning lines is not
-// recognised — the conservative miss.
-const HTML_COMMENT = /(<!--[\s\S]*?-->)/;
-// Private-use stand-ins for a backslash-escaped `[` / `!` while the link
-// passes run, so no pattern can open a link or image on one.
-const ESCAPED_BRACKET = "\uE000";
-const ESCAPED_BANG = "\uE001";
-
-/**
- * Hide every `[` and `!` that an ODD run of backslashes escapes (an even run
- * is escaped backslashes, and the bracket after it is live).
- */
-function maskEscapes(chunk: string): string {
-  return chunk.replace(/(\\+)([[!])/g, (whole, slashes: string, ch: string) =>
-    slashes.length % 2 === 1
-      ? slashes + (ch === "[" ? ESCAPED_BRACKET : ESCAPED_BANG)
-      : whole,
-  );
-}
-
-function unmaskEscapes(chunk: string): string {
-  return chunk.replaceAll(ESCAPED_BRACKET, "[").replaceAll(ESCAPED_BANG, "!");
-}
 
 /** Tag each line with whether it sits inside a fenced code block (or is a fence).
  *
@@ -740,23 +601,12 @@ function redactLine(
   line: string,
   refs: Map<string, FileRef>,
   r: FileRefRenderers,
-  renderedOnly: boolean,
 ): string {
   // split() on a single-group regex interleaves the separators at odd indexes,
-  // so the code spans (and, renderedOnly, the HTML comments) come back
-  // untouched.
-  const prose = (part: string) =>
-    renderedOnly
-      ? part
-          .split(HTML_COMMENT)
-          .map((p, j) =>
-            j % 2 === 1 ? p : unmaskEscapes(redactChunk(maskEscapes(p), refs, r)),
-          )
-          .join("")
-      : redactChunk(part, refs, r);
+  // so the code spans come back untouched.
   return line
     .split(INLINE_CODE)
-    .map((part, i) => (i % 2 === 1 ? part : prose(part)))
+    .map((part, i) => (i % 2 === 1 ? part : redactChunk(part, refs, r)))
     .join("");
 }
 
@@ -766,20 +616,6 @@ function redactChunk(
   r: FileRefRenderers,
 ): string {
   let out = chunk;
-  const linkedImage = r.linkedImage;
-  if (linkedImage) {
-    out = out.replace(
-      MD_LINKED_IMAGE,
-      (whole, alt, innerAngled, innerBare, outerAngled, outerBare) => {
-        const innerDest = innerAngled ?? innerBare ?? "";
-        const outerDest = outerAngled ?? outerBare ?? "";
-        const inner = markdownDestRef(innerDest);
-        const outer = markdownDestRef(outerDest);
-        if (!inner && !outer) return whole;
-        return linkedImage(inner, innerDest, alt, outer, outerDest);
-      },
-    );
-  }
   // Images first: an image nested in a link (`[![alt](chart.png)](chart.png)`)
   // must lose its inner destination before the link pass reads the label.
   out = out.replace(MD_IMAGE, (whole, alt, angled, bare) => {
@@ -820,11 +656,6 @@ function withheldFile(filename: string): string {
 // `[`). Escaping them keeps the marker literal text.
 function escapeMarkdown(text: string): string {
   return text.replace(/[\\`*_{}[\]<>()#+\-.!|~]/g, "\\$&");
-}
-
-/** An external destination re-emitted as-is, angle-bracketed if it needs it. */
-function wrapDest(dest: string): string {
-  return /[\s()]/.test(dest) ? `<${dest}>` : dest;
 }
 
 function normalizeRefLabel(label: string): string {

@@ -4,6 +4,26 @@ import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { ChatToastProvider } from "./ChatToasts";
 import { clearChatSession } from "./chatSessionStore";
 
+// jsdom has no layout, so the real virtualizer mounts no transcript rows; the
+// file-state tests below assert on rendered replies, so every row renders.
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: (opts: { count: number; getItemKey: (i: number) => string | number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: opts.count }, (_, i) => ({
+        index: i,
+        key: opts.getItemKey(i),
+        start: i * 180,
+        size: 180,
+        end: (i + 1) * 180,
+        lane: 0,
+      })),
+    getTotalSize: () => opts.count * 180,
+    measureElement: () => {},
+    scrollToIndex: () => {},
+    getOffsetForIndex: () => [0, "start"],
+  }),
+}));
+
 // Full-mount coverage for the sharing decisions on the rail (#24–#28, #52):
 // every way a SHARED chat loses its audience asks first with the shared-file
 // count; moving a private chat into a shared project never shares it but says
@@ -275,6 +295,108 @@ describe("output share markers (B17)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
     await waitFor(() => expect(screen.queryByTestId("project-home")).toBeNull());
     await waitFor(() => expect(outputReads()).toBeGreaterThan(before));
+  });
+});
+
+describe("output share markers never go stale (Codex round 7)", () => {
+  it("drops the previous Shared / Not shared labels when a refresh fails", async () => {
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    let outputsFail = false;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if ((init?.method ?? "GET") === "GET") {
+        if (url === "/api/conversations/conv-s")
+          return new Response(
+            JSON.stringify({
+              conversation: CONVS[1],
+              history: [
+                { role: "user", type: "text", content: { text: "Make the report" } },
+                { role: "assistant", type: "text", content: { text: "Here: [report](report.csv)" } },
+              ],
+            }),
+          );
+        if (url === "/api/conversations/conv-s/outputs") {
+          if (outputsFail) return new Response("boom", { status: 500 });
+          return new Response(
+            JSON.stringify({
+              outputs: [
+                { path: "report.csv", name: "report.csv", size: 1, modified_at: 1, shared: true },
+              ],
+              total: 1,
+              shared_count: 1,
+              team_visible: true,
+            }),
+          );
+        }
+      }
+      return base(input, init);
+    });
+    await mountChat();
+    fireEvent.click(screen.getByRole("button", { name: /^Project Quant \(/ }));
+    fireEvent.click(await screen.findByText("Shared chat"));
+    expect(await screen.findByTestId("output-share-marker")).toHaveTextContent("Shared");
+
+    // The next refresh (Sources closing) fails: the old label must not stay.
+    outputsFail = true;
+    fireEvent.click(screen.getByRole("button", { name: "Open project Quant" }));
+    await screen.findByTestId("project-home");
+    fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
+    await waitFor(() => expect(screen.queryByTestId("project-home")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("output-share-marker")).toBeNull());
+    expect(screen.getByRole("link", { name: "report" })).toBeInTheDocument();
+  });
+});
+
+describe("a branch's own outputs override its withheld files (Codex round 7)", () => {
+  it("renders a withheld path live once the branch has it as an output", async () => {
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if ((init?.method ?? "GET") === "GET") {
+        if (url === "/api/conversations/conv-a")
+          return new Response(
+            JSON.stringify({
+              conversation: CONVS[0],
+              branch_origin: {
+                source_conversation_id: "src",
+                source_owner_email: "sam@example.com",
+                source_title: "Original",
+                branched_at: 1759622400,
+                copied_files: [],
+                withheld_files: ["v1.json", "gone.json"],
+                source_still_shared: true,
+              },
+              history: [
+                { role: "user", type: "text", content: { text: "go" } },
+                {
+                  role: "assistant",
+                  type: "text",
+                  content: { text: "Mine: [v1](v1.json). Not here: [g](gone.json)" },
+                },
+              ],
+            }),
+          );
+        if (url === "/api/conversations/conv-a/outputs")
+          return new Response(
+            JSON.stringify({
+              outputs: [{ path: "v1.json", name: "v1.json", size: 1, modified_at: 1, shared: false }],
+              total: 1,
+              shared_count: 0,
+              team_visible: false,
+            }),
+          );
+      }
+      return base(input, init);
+    });
+    await mountChat();
+    expect(await screen.findByRole("link", { name: "v1" })).toHaveAttribute(
+      "href",
+      "/api/conversations/conv-a/workspace/v1.json",
+    );
+    const locked = screen.getAllByTestId("locked-file").map((l) => l.textContent);
+    expect(locked).toEqual(["gone.json (not shared)"]);
   });
 });
 
