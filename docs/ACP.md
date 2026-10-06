@@ -288,12 +288,13 @@ Deviations and limits:
   default-deny card.
 - **Streamed text is append-only.** ACP cannot retract a chunk. When fleet's
   final answer replaces a draft that was already streamed (for example, it
-  stripped a tool call the model wrote as text, or retried a model call that
-  had already streamed part of a reply), the client gets the final answer
-  again after a `— revised answer —` line, so it ends on what fleet
-  persisted. Text a model writes before a tool call also stays in the
-  client's transcript; the web chat drops it when the turn ends, because
-  fleet's final answer is only the last step that wrote text.
+  stripped a tool call the model wrote into its final answer, or retried a
+  model call that had already streamed part of a reply), the client gets the
+  final answer again after a `— revised answer —` line, so it ends on what
+  fleet persisted. Text a model writes before a tool call also stays in the
+  client's transcript, as does a tool call it wrote as text that fleet then
+  ran for real; the web chat drops both when the turn ends, because fleet's
+  final answer is only the last step that wrote text.
 - **Tool detail stays in the run log.** Tool calls appear as titled
   `tool_call` updates with a status. Inputs and outputs are not forwarded.
 - **The client's filesystem and terminal are not used.** Tool calls run in

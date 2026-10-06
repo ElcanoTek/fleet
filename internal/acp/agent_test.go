@@ -400,6 +400,8 @@ func TestTextReplaceReconcilesAppendOnly(t *testing.T) {
 		// fleet trims its final text; whitespace streamed around it is not a
 		// revision.
 		{"surrounding whitespace adds nothing", []string{"\n\nHello there", "\n"}, "Hello there", "\n\nHello there\n"},
+		// Whitespace the client was already streamed is not sent again.
+		{"extension keeps streamed whitespace", []string{"Hello\n\n"}, "Hello\n\nWorld", "Hello\n\nWorld"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -471,6 +473,22 @@ func TestTextReplaceComparesTheFinalStep(t *testing.T) {
 			script: []string{"Let me look.", toolStep, "Staged the email for approval.", toolStep},
 			final:  "Staged the email for approval.",
 			want:   "Let me look.Staged the email for approval.",
+		},
+		{
+			// A step of only whitespace wrote no text, as fantasy's
+			// hasNonBlankText reads it: the latest step that did is the final
+			// text.
+			name:   "a blank step after the last tool",
+			script: []string{"Let me look.", toolStep, "Staged the email for approval.", toolStep, "\n\n"},
+			final:  "Staged the email for approval.",
+			want:   "Let me look.Staged the email for approval.\n\n",
+		},
+		{
+			// Nor does a blank step closed by a tool displace the step before it.
+			name:   "a blank step between tools",
+			script: []string{"Let me look.", toolStep, "The answer is 42.", toolStep, "\n", toolStep},
+			final:  "The answer is 42.",
+			want:   "Let me look.The answer is 42.\n",
 		},
 		{
 			name:   "the final step is extended",

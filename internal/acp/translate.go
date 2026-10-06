@@ -259,9 +259,11 @@ func (t *translator) endStep() {
 // ACP cannot retract a chunk, so: already shown → nothing; an extension →
 // only the missing suffix; nothing streamed → the final text; a divergence
 // (fleet replaced what was streamed: a finalize pass stripped a tool call the
-// model wrote as text, a model call was retried after streaming part of a
-// reply) → the final text again after revisedMarker, so the client ends on
-// what fleet persisted.
+// model wrote into its final answer, a model call was retried after streaming
+// part of a reply) → the final text again after revisedMarker, so the client
+// ends on what fleet persisted. A tool call the model wrote as text that the
+// finalize pass then ran for real is a closed step like any narration: the
+// client shows it, the tool, then the answer, with no marker.
 func (t *translator) replace(final string) {
 	step := t.step.String()
 	if strings.TrimSpace(step) == "" {
