@@ -31,6 +31,18 @@ describe("BranchOriginBanner", () => {
     expect(onOpenSource).toHaveBeenCalledWith("src-conv");
   });
 
+  it("does not promise files when none came with the branch", () => {
+    render(
+      <BranchOriginBanner
+        origin={{ ...ORIGIN, copied_files: [] }}
+        onOpenSource={() => {}}
+      />,
+    );
+    const banner = screen.getByTestId("branch-origin-banner");
+    expect(banner).toHaveTextContent(/No files came with it\./);
+    expect(banner).not.toHaveTextContent(/Shared files came with it/);
+  });
+
   it("drops the link once the original is no longer shared", () => {
     render(
       <BranchOriginBanner

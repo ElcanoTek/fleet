@@ -91,6 +91,32 @@ describe("ProjectSettingsDialog", () => {
     await waitFor(() => expect(props.onClose).toHaveBeenCalled());
   });
 
+  it("B28: Save waits for the counts before it can unshare", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/impact")) {
+          await gate;
+          return new Response(JSON.stringify(IMPACT), { status: 200 });
+        }
+        return new Response(JSON.stringify({ members: [] }), { status: 200 });
+      }),
+    );
+    const props = renderDialog();
+    fireEvent.click(screen.getByRole("radio", { name: /Only you/ }));
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(props.onSave).not.toHaveBeenCalled();
+    release?.();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+  });
+
   it("B26: no team — the team option is unavailable, with the A3a guidance", () => {
     stub();
     renderDialog({ project: PRIVATE, myTeam: "", isAdmin: true });

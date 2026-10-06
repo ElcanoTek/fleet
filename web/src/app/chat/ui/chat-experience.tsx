@@ -3872,7 +3872,28 @@ export function ChatExperience({
   ): Promise<ShareWithTeamResult | null> => {
     const moved = await applyMoveToProject(conversation.id, projectID);
     if (!moved) return null;
-    return setTeamShared({ ...conversation, project_id: projectID }, true);
+    const shared = await setTeamShared(
+      { ...conversation, project_id: projectID },
+      true,
+    );
+    if (shared) return shared;
+    // One button promised both halves. A share refused after the move landed
+    // (the chat was archived, the owner's team changed, the project stopped
+    // being shared) would otherwise leave the chat silently refiled and still
+    // private, so put it back where it was and say so.
+    const restored = await applyMoveToProject(
+      conversation.id,
+      conversation.project_id ?? "",
+    );
+    setShareError((reason) =>
+      [
+        reason ?? "Couldn't share the chat.",
+        restored
+          ? "It was moved back where it was."
+          : "It stayed in the new project, still Only you.",
+      ].join(" "),
+    );
+    return null;
   };
 
   // B17 (#40): in the owner's team-shared chat, each output chip carries a

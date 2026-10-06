@@ -277,3 +277,28 @@ describe("output share markers (B17)", () => {
     await waitFor(() => expect(outputReads()).toBeGreaterThan(before));
   });
 });
+
+describe("Move and share is one action (A1)", () => {
+  it("puts the chat back when the share half is refused", async () => {
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "POST" && String(input).endsWith("/share-with-team")) {
+        return new Response("an archived chat can't be shared with your team; unarchive it first", {
+          status: 409,
+        });
+      }
+      return base(input, init);
+    });
+    await mountChat();
+    fireEvent.click(screen.getByRole("button", { name: /^Share/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Move and share" }));
+
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(dialog).toHaveTextContent("It was moved back where it was."));
+    const moves = fetchMock.mock.calls
+      .filter(([u, i]) => String(u) === "/api/conversations/conv-a/project" && i?.method === "POST")
+      .map(([, i]) => JSON.parse(String(i?.body)) as { project_id: string });
+    expect(moves.map((m) => m.project_id)).toEqual(["p-team", ""]);
+  });
+});

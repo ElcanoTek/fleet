@@ -73,7 +73,15 @@ type TeamChatSnapshot = {
   viewer_branch?: ViewerBranch | null;
 };
 
-const BRANCHED_TOAST = "Branched into your own chat. Shared files came with it.";
+// The toast names what actually came along: a text-only chat, one whose
+// outputs the owner all unticked, or a copy that failed brings no files, and
+// saying "shared files came with it" then would send the reader looking for
+// files that do not exist.
+function branchedToast(copiedFiles: number): string {
+  if (copiedFiles <= 0) return "Branched into your own chat. No files came with it.";
+  if (copiedFiles === 1) return "Branched into your own chat. 1 shared file came with it.";
+  return `Branched into your own chat. ${copiedFiles} shared files came with it.`;
+}
 
 export function TeamChatViewer({
   conversationId,
@@ -195,9 +203,16 @@ export function TeamChatViewer({
         setError(`Couldn’t branch this chat (HTTP ${res.status}).`);
         return;
       }
-      const created = (await res.json()) as { id?: string };
+      const created = (await res.json()) as {
+        id?: string;
+        branch_origin?: { copied_files?: unknown[] } | null;
+      };
       if (created.id) {
-        notify({ message: BRANCHED_TOAST });
+        notify({
+          message: branchedToast(
+            created.branch_origin?.copied_files?.length ?? 0,
+          ),
+        });
         onBranched(created.id);
       }
     } catch {

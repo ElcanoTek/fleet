@@ -227,7 +227,19 @@ describe("TeamChatViewer — branching (B20)", () => {
   it("creates '<chat> (branch)', confirms with the toast, and opens the branch", async () => {
     const fetchMock = stubFetch((url) => {
       if (url.includes("/team-view")) return json(WITH_FILES);
-      if (url.includes("/branch")) return json({ id: "new-conv" }, 201);
+      if (url.includes("/branch"))
+        return json(
+          {
+            id: "new-conv",
+            branch_origin: {
+              copied_files: [
+                { path: "a.csv", name: "a.csv", size: 1 },
+                { path: "b.csv", name: "b.csv", size: 1 },
+              ],
+            },
+          },
+          201,
+        );
       return json({});
     });
     const onBranched = vi.fn();
@@ -243,7 +255,24 @@ describe("TeamChatViewer — branching (B20)", () => {
       title: "Channel spend review (branch)",
     });
     expect(
-      await screen.findByText("Branched into your own chat. Shared files came with it."),
+      await screen.findByText("Branched into your own chat. 2 shared files came with it."),
+    ).toBeInTheDocument();
+  });
+
+  it("says no files came along when the branch copied none", async () => {
+    stubFetch((url) => {
+      if (url.includes("/team-view")) return json(WITH_FILES);
+      if (url.includes("/branch"))
+        return json({ id: "new-conv", branch_origin: { copied_files: [] } }, 201);
+      return json({});
+    });
+    const onBranched = vi.fn();
+    renderFull(WITH_FILES, { onBranched });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Branch to continue in your own chat" }),
+    );
+    expect(
+      await screen.findByText("Branched into your own chat. No files came with it."),
     ).toBeInTheDocument();
   });
 });

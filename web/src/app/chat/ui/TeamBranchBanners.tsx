@@ -55,8 +55,10 @@ export function BranchOriginBanner({
       <BranchGlyph className="size-3.5 shrink-0 text-[var(--color-accent)]" />
       <span className="min-w-0 flex-1">
         Branched from {origin.source_owner_email}’s chat on{" "}
-        {formatDay(origin.branched_at)}. Shared files came with it as
-        your own copies.
+        {formatDay(origin.branched_at)}.{" "}
+        {origin.copied_files.length > 0
+          ? "Shared files came with it as your own copies."
+          : "No files came with it."}
       </span>
       {origin.source_still_shared ? (
         <button

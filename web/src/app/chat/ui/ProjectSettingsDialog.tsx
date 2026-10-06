@@ -517,7 +517,10 @@ export function ProjectSettingsDialog({
           </button>
           <button
             type="button"
-            disabled={saving}
+            // Switching to Only you promises the counts BEFORE Save (B28), so
+            // Save waits until they land; a failed count still settles, with
+            // its honest "couldn't count" wording.
+            disabled={saving || (unsharing && !impactState.settled)}
             className={pillPrimary}
             onClick={() => void save()}
           >
