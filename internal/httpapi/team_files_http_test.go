@@ -937,6 +937,48 @@ func TestProjectFilesSkipsHiddenAndFleetInternals(t *testing.T) {
 	}
 }
 
+// A teammate's group past the row cap: both counts describe the rows listed,
+// never the uncapped output set.
+func TestProjectFilesTeamGroupCountsAfterCap(t *testing.T) {
+	f := newFilesFixture(t)
+	ws := filepath.Join(f.root, f.chat.ID)
+	var reply strings.Builder
+	for i := range maxProjectFiles + 5 {
+		rel := fmt.Sprintf("many/f%04d.csv", i)
+		p := filepath.Join(ws, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(&reply, "[f](%s) ", rel)
+	}
+	if _, err := f.st.AppendHistory(f.ctx, f.chat.ID, []agent.HistoryEntry{textEntry("assistant", reply.String())}); err != nil {
+		t.Fatal(err)
+	}
+	type body struct {
+		Groups []struct {
+			Mine        bool `json:"mine"`
+			FileCount   int  `json:"file_count"`
+			SharedCount int  `json:"shared_count"`
+			Files       []struct {
+				Path string `json:"path"`
+			} `json:"files"`
+		} `json:"groups"`
+		Truncated bool `json:"truncated"`
+	}
+	got := decode[body](t, projectSub(t, f.srv, "GET", "bob@x.com", f.project.ID+"/files", ""))
+	if len(got.Groups) != 1 || got.Groups[0].Mine {
+		t.Fatalf("groups = %+v, want alice's shared chat", got.Groups)
+	}
+	g := got.Groups[0]
+	if len(g.Files) != maxProjectFiles || g.FileCount != maxProjectFiles || g.SharedCount != maxProjectFiles || !got.Truncated {
+		t.Errorf("rows=%d counts=%d/%d truncated=%v, want %d/%d/%d truncated",
+			len(g.Files), g.FileCount, g.SharedCount, got.Truncated, maxProjectFiles, maxProjectFiles, maxProjectFiles)
+	}
+}
+
 func TestProjectMyStateEndpoint(t *testing.T) {
 	f := newTeamHTTPFixture(t)
 	// sources_open keys are chat ids in the project; keys naming no live chat

@@ -981,12 +981,12 @@ func (s *Server) teamSourcesGroup(ctx context.Context, conv store.Conversation) 
 	if len(g.Files) == 0 {
 		return g, false, truncated, nil
 	}
-	g.SharedCount = len(g.Files)
 	if len(g.Files) > maxProjectFiles {
 		g.Files = g.Files[:maxProjectFiles]
 		truncated = true
 	}
-	g.FileCount = len(g.Files)
+	// Both counts after the cap: every listed row here is a shared output.
+	g.FileCount, g.SharedCount = len(g.Files), len(g.Files)
 	return g, true, truncated, nil
 }
 
