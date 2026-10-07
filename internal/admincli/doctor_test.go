@@ -160,6 +160,9 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// The operator's limit is read from journald's MERGED config, so a
 		// shadowed vendor drop-in is not mistaken for an active setting.
 		"systemd-analyze cat-config systemd/journald.conf",
+		// …and an unreadable merged config fails closed instead of reading
+		// as "no limit set".
+		`if ! merged="$(systemd-analyze cat-config systemd/journald.conf 2>/dev/null)"; then`,
 		// Vacuum removes only archived files; rotate first, then re-measure.
 		"journalctl --rotate --vacuum-size=1G",
 		"restart held by --no-restart",

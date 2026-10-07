@@ -1419,7 +1419,7 @@ journald_loaded_since() {
 check_journal_cap() {
   local src="$SRC_DIR/deploy/journald.conf.d/60-fleet-journal-cap.conf"
   local dst="/etc/systemd/journald.conf.d/60-fleet-journal-cap.conf"
-  local usage bytes operator="" operator_files="" f loaded
+  local usage bytes operator="" operator_files="" f loaded merged
   command -v journalctl >/dev/null 2>&1 && command -v systemd-analyze >/dev/null 2>&1 && [[ -f "$src" ]] || return 0
   usage="$(journal_usage)" bytes="$(journal_bytes)"
   # The operator's own limit, read from journald's MERGED configuration rather
@@ -1432,9 +1432,15 @@ check_journal_cap() {
   # or a lower-numbered drop-in, so theirs wins and ours goes. Every file that sets one is
   # collected, in precedence order (the last is the one in effect): journald
   # has loaded the operator's limit only if it started after all of them.
-  operator_files="$(systemd-analyze cat-config systemd/journald.conf 2>/dev/null | awk -v ours="$dst" '
+  # An unreadable merged config is not "no limit": fail closed rather than
+  # install over a limit doctor could not see.
+  if ! merged="$(systemd-analyze cat-config systemd/journald.conf 2>/dev/null)"; then
+    advise "could not read journald's merged configuration (systemd-analyze cat-config systemd/journald.conf) — journal cap left unchanged"
+    return 0
+  fi
+  operator_files="$(awk -v ours="$dst" '
     /^# \// { file = substr($0, 3); next }
-    /^[[:space:]]*(System|Runtime)MaxUse[[:space:]]*=/ && file != ours && !seen[file]++ { print file }' || true)"
+    /^[[:space:]]*(System|Runtime)MaxUse[[:space:]]*=/ && file != ours && !seen[file]++ { print file }' <<<"$merged")"
   operator="$(tail -n1 <<<"$operator_files")"
   if [[ -n "$operator" ]]; then
     if [[ ! -f "$dst" ]]; then
