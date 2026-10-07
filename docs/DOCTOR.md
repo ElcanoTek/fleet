@@ -147,6 +147,36 @@ Division of labor across the three health verbs:
   (`LimitCORE=0` keeps the memory image off disk either way). Don't harmonise
   them without that changing.
 
+- **Disk hygiene: reclaim what no timer can reach** (step 7). A sweep of
+  five production boxes found the same waste on every one: 2–6 GiB of
+  **root's** build caches (Go build cache, Go module cache, npm, dnf),
+  journals at 1.3–4 GiB, and, on two of them, ~1.3 GiB of images in
+  **root's** podman store. The caches escape the maintenance timer for a
+  structural reason. `fleet-maintenance` runs `fleet cleanup` as the service
+  user, so its `go clean` and `podman image prune` sweep *that* user's
+  caches, while `fleet update` builds as root. Doctor runs as root, so
+  doctor is the pass that can reclaim them. Three checks, each scoped
+  differently on purpose:
+  - **Root build caches** are reclaimed (`go clean -cache -testcache
+    -modcache`, `npm cache clean --force`, `dnf clean all`) only above
+    **3 GiB** combined. One update re-creates about 2 GiB, so a lower bar
+    would make every doctor run cost the next update a full re-download.
+    `--check` advises instead.
+  - **The journal** gets the shipped `deploy/journald.conf.d/60-fleet-journal-cap.conf`
+    (`SystemMaxUse=1G`), installed with a journald restart and a vacuum. It is
+    installed **only** when no `SystemMaxUse` is set anywhere. journald's
+    default ceiling is 10% of the filesystem (up to 4 GiB), on the same
+    volume as the databases and the image store; an operator who chose a
+    value keeps it.
+  - **Root's podman store** is **advisory only**. fleet's sandboxes live in
+    the service user's rootless store, so images in root's store are usually
+    pre-rootless build leftovers. But an operator may run root podman for
+    something of their own, and an image with no container is not proof it
+    is unwanted. The advisory prints the review and prune commands.
+
+  None of these touch databases, workspaces, the bundle or the service user's
+  image store. Those are user data or `fleet cleanup`'s job.
+
 ## Deviations / deliberately deferred
 
 - The `/admin/doctor` endpoint lives on the chat mux (like
@@ -154,6 +184,11 @@ Division of labor across the three health verbs:
   orchestrator's `docs/openapi.yaml` surface.
 - `doctor.sh` targets dnf hosts (the deployment posture); on non-dnf hosts the
   package steps degrade to advisories rather than guessing at apt equivalents.
+- Disk hygiene does not reclaim stale systemd coredumps, deploy backups in
+  `/opt/fleet`, or conversation workspaces. Coredumps stopped accruing once
+  `fleet-web` got `LimitCORE=0`. The backups were one box's history, not a
+  recurring pattern. Workspaces are user data, and deleting them is never a
+  cache sweep's call.
 - No scheduled/automatic doctor runs — an operator (or the admin UI) invokes
   it. Wiring `--check` into cron/systemd timers was deferred until wanted.
 - The in-process endpoint does not read `/etc/fleet/fleet.env` permissions or

@@ -33,6 +33,8 @@ func TestDoctorDryRunSmoke(t *testing.T) {
 		// has. Both are new enough that a silent regression is plausible.
 		"fleet-maintenance.timer",
 		"free space on the data dir",
+		"root build caches",
+		"60-fleet-journal-cap.conf",
 		"Sandbox smoke",
 		"Source freshness",
 		"staged copy under", // the client bundle must be service-owned and outside the checkout (#1655)
@@ -147,6 +149,16 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// scheduled work, which is a different statement to an operator.
 		"FLEET_DISK_MIN_FREE_PERCENT",
 		"HOLDING BACK scheduled tasks",
+		// Disk hygiene: fleet update fills ROOT's build caches while the
+		// maintenance timer runs as the service user, so doctor (root) is the
+		// only pass that can reclaim them — above a threshold, so a run does
+		// not cost the next update a full re-download. The journal cap yields
+		// to an operator's own SystemMaxUse, and root's podman store is only
+		// ever reported: an image with no container is not proof it is unwanted.
+		"ROOT_CACHE_RECLAIM_BYTES=$((3 * 1024 * 1024 * 1024))",
+		"go clean -cache -testcache -modcache",
+		`grep -sqE '^[[:space:]]*SystemMaxUse='`,
+		`advise "  review: podman images   —   reclaim if nothing of yours uses them: podman system prune -a"`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("doctor.sh must contain %q", want)

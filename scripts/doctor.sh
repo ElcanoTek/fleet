@@ -271,7 +271,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed; ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload); an operator-managed Caddyfile only gets an advisory when it routes no /v1"
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active, then the running server's record of MCP tool schema findings (fleet mcp schema-issues: invalid = withheld from the model, rewritten = older JSON Schema draft translated) is read and each finding advised"
-  info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor"
+  info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor; disk hygiene: root build caches (go build/module, npm, dnf — filled by fleet update as root, never reached by the maintenance timer) reclaimed above 3 GiB, the journal capped at 1G via journald.conf.d/60-fleet-journal-cap.conf unless the operator set SystemMaxUse, and images left in root's podman store reported"
   info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
   info "[dry-run] 9/9 Source freshness + build identity: report commits behind upstream, the installed binary's stamped version vs what ${SRC_DIR} would build now (a release tag fetched after the last build), and the paths that make the checkout read '.dirty' (fix stays 'fleet update' — doctor never pulls or rebuilds)"
   info "[dry-run] would restart ${SERVICE_NAME} + fleet-web after a toolchain/package upgrade or an app-unit reinstall above — a reinstalled fleet-backup unit does not bounce the app (unless --no-restart)"
@@ -1375,6 +1375,109 @@ check_bundle_residue() {
   advise "  review: git -C ${dir} status --porcelain -uall   —   then remove: sudo -u ${SERVICE_USER} git -C ${dir} clean -nd   (drop -n to apply)"
 }
 check_bundle_residue
+
+# Disk hygiene: the three trees that filled every production box and that NO
+# scheduled job reclaims (measured across five boxes: 2–6 GiB of root build
+# caches each, journals at 1.3–4 GiB, stale images in root's podman store).
+#
+# They escape the maintenance timer for one reason: fleet-maintenance runs
+# `fleet cleanup` as the SERVICE user, so its `go clean` and `podman image
+# prune` sweep that user's caches — while `fleet update` builds as ROOT, so the
+# Go build cache, the Go module cache and the npm cache it fills are root's, and
+# the service user cannot touch them. Doctor runs as root, so it is the pass
+# that can. Everything here is a cache or a log: the next `fleet update`
+# re-downloads what it needs, and nothing touches databases, workspaces, the
+# bundle or the service user's image store.
+human_bytes() { numfmt --to=iec --suffix=B "${1:-0}" 2>/dev/null || echo "${1:-0}B"; }
+dir_bytes() {
+  local p="$1" b=""
+  [[ -n "$p" && -d "$p" ]] && b="$(du -sxb "$p" 2>/dev/null | awk '{print $1}' || true)"
+  echo "${b:-0}"
+}
+
+# Root build caches. Reclaimed above a threshold rather than on every run: one
+# update re-creates ~2 GiB (Go build + module cache, npm), so a lower bar would
+# just make every doctor run cost the next update a full re-download.
+ROOT_CACHE_RECLAIM_BYTES=$((3 * 1024 * 1024 * 1024))
+check_root_build_caches() {
+  local gocache="" gomodcache="" npmcache="" total=0 parts=() b p
+  if command -v go >/dev/null 2>&1; then
+    gocache="$(go env GOCACHE 2>/dev/null || true)"
+    gomodcache="$(go env GOMODCACHE 2>/dev/null || true)"
+  fi
+  if command -v npm >/dev/null 2>&1; then
+    npmcache="$(npm config get cache 2>/dev/null || true)"
+  fi
+  [[ -z "$npmcache" ]] && npmcache="${HOME:-/root}/.npm"
+  for p in "go build cache:$gocache" "go module cache:$gomodcache" "npm cache:$npmcache" "dnf cache:/var/cache/libdnf5" "dnf cache (legacy):/var/cache/dnf"; do
+    b="$(dir_bytes "${p#*:}")"
+    (( b > 0 )) || continue
+    total=$(( total + b ))
+    parts+=("${p%%:*} $(human_bytes "$b")")
+  done
+  local summary="none"
+  (( ${#parts[@]} )) && { summary="$(printf '%s, ' "${parts[@]}")"; summary="${summary%, }"; }
+  if (( total < ROOT_CACHE_RECLAIM_BYTES )); then
+    pass "root build caches $(human_bytes "$total") (below the $(human_bytes "$ROOT_CACHE_RECLAIM_BYTES") reclaim threshold)"
+    return 0
+  fi
+  if [[ "$CHECK_ONLY" == "1" ]]; then
+    advise "root build caches hold $(human_bytes "$total") (${summary}) — fleet update fills them as root and the maintenance timer (which runs as ${SERVICE_USER}) never reclaims them; a doctor run without --check does: go clean -cache -testcache -modcache; npm cache clean --force; dnf clean all"
+    return 0
+  fi
+  # Each step is best-effort and independent (doctor runs under set -e): a
+  # failed sweep leaves a cache in place, which the next run reports again.
+  if [[ -n "$gocache$gomodcache" ]]; then go clean -cache -testcache -modcache >/dev/null 2>&1 || true; fi
+  if command -v npm >/dev/null 2>&1; then npm cache clean --force >/dev/null 2>&1 || true; fi
+  if [[ "$HAVE_DNF" == "1" ]]; then dnf clean all >/dev/null 2>&1 || true; fi
+  fixed "reclaimed root build caches (were $(human_bytes "$total"): ${summary}) — the next fleet update re-downloads what it needs"
+}
+check_root_build_caches
+
+# Journal cap. journald's default ceiling is 10% of the filesystem (≤ 4 GiB),
+# taken from the same volume as the databases and the image store. Doctor
+# installs the shipped 1 GiB cap only where the operator has set no SystemMaxUse
+# of their own — an explicit choice, larger or smaller, is theirs to make.
+journal_usage() { journalctl --disk-usage 2>/dev/null | sed -nE 's/.* take up ([^ ]+) .*/\1/p' | tail -n1 || true; }
+check_journal_cap() {
+  local src="$SRC_DIR/deploy/journald.conf.d/60-fleet-journal-cap.conf"
+  local dst="/etc/systemd/journald.conf.d/60-fleet-journal-cap.conf"
+  local usage
+  command -v journalctl >/dev/null 2>&1 && [[ -f "$src" ]] || return 0
+  usage="$(journal_usage)"
+  if [[ -f "$dst" ]] && diff -q <(grep -vE '^[[:space:]]*(#|$)' "$src") <(grep -vE '^[[:space:]]*(#|$)' "$dst") >/dev/null 2>&1; then
+    pass "journal capped by ${dst##*/} (using ${usage:-?})"
+  elif grep -sqE '^[[:space:]]*SystemMaxUse=' /etc/systemd/journald.conf /etc/systemd/journald.conf.d/*.conf /usr/lib/systemd/journald.conf.d/*.conf 2>/dev/null; then
+    pass "journal size set by the operator's own SystemMaxUse (using ${usage:-?})"
+  elif [[ "$CHECK_ONLY" == "1" ]]; then
+    advise "journal uncapped beyond journald's 10%-of-disk default (using ${usage:-?}) — a doctor run without --check installs ${dst} (SystemMaxUse=1G)"
+  else
+    if install -D -m 0644 "$src" "$dst" && systemctl restart systemd-journald; then
+      journalctl --vacuum-size=1G >/dev/null 2>&1 || true
+      fixed "installed ${dst} (SystemMaxUse=1G) and vacuumed the journal (was ${usage:-?}, now $(journal_usage))"
+    else
+      fail "could not install ${dst} or restart systemd-journald"
+    fi
+  fi
+}
+check_journal_cap
+
+# Root's podman store. fleet's sandboxes run in the SERVICE user's rootless
+# store, so images in root's store are leftovers — typically sandbox builds from
+# before the rootless move (two production boxes held ~1.3 GiB each). Advisory
+# only: an operator may run podman as root for something of their own, and an
+# image with no container is not proof it is unwanted.
+check_root_podman_store() {
+  local images containers size
+  [[ "$SERVICE_USER" != "root" ]] && command -v podman >/dev/null 2>&1 || return 0
+  images="$(podman images -q 2>/dev/null | wc -l || true)"
+  (( images > 0 )) || return 0
+  containers="$(podman ps -aq 2>/dev/null | wc -l || true)"
+  size="$(dir_bytes /var/lib/containers/storage)"
+  advise "root's podman store holds ${images} image(s) and ${containers} container(s), $(human_bytes "$size") — fleet sandboxes run in ${SERVICE_USER}'s rootless store, so these are not fleet's"
+  advise "  review: podman images   —   reclaim if nothing of yours uses them: podman system prune -a"
+}
+check_root_podman_store
 
 # ── 8. sandbox smoke ─────────────────────────────────────────────────────────
 step "8/9  Sandbox smoke"
