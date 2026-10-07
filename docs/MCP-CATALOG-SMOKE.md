@@ -127,14 +127,16 @@ Each probe therefore runs the way a user's run connects: under
 attempts, about seven seconds of waiting). A failure that survives that is
 then sorted:
 
-- **Outage → warning.** An HTTP 5xx or 429, a timeout, a refused or reset
-  connection, a temporary DNS failure, or a JSON-RPC error that says it is
-  temporary (`mcp.IsTransientConnectError`). The entry's subtest is skipped
+- **Outage → warning.** Any HTTP 5xx except 501 (including a CDN's
+  nonstandard ones, such as Cloudflare's 520–524 and 530), a 429, a timeout, a
+  refused or reset connection, a temporary DNS failure, or a JSON-RPC error
+  that says it is temporary (`mcp.IsTransientConnectError`). The entry's subtest is skipped
   with a `VENDOR OUTAGE` message. The workflow turns each one into a run
   annotation and lists it in the job summary. The job stays green and no
   issue is filed.
 - **Rot → failure.** Everything else: a host that no longer resolves (the
-  link lint fails an unresolvable docs host for the same reason), a 4xx (an
+  link lint fails an unresolvable docs host for the same reason), a 501 (the
+  endpoint does not implement the protocol), a 4xx (an
   `open` entry answering 401/403 may now need auth), a reply that is not MCP,
   an empty tool list, or an invalid tool schema.
 

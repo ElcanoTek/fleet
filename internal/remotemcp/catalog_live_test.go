@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -47,16 +48,24 @@ const catalogStrictEnv = "FLEET_CATALOG_STRICT"
 const vendorOutageMarker = "VENDOR OUTAGE"
 
 // vendorOutage reports whether a probe failure — after the connect retry —
-// says the vendor is down right now rather than that the listing is wrong: an
-// HTTP 5xx or 429, a timeout, a refused or reset connection, a JSON-RPC error
-// that says it is temporary (mcp.IsTransientConnectError). A host that no
-// longer resolves is the exception: the classifier calls DNS transient for a
-// run's sake, but for a shipped listing a missing host is rot, and the link
-// lint fails an unresolvable docs host for the same reason.
+// says the vendor is down right now rather than that the listing is wrong: a
+// timeout, a refused or reset connection, a 429, a JSON-RPC error that says it
+// is temporary (mcp.IsTransientConnectError), or any HTTP 5xx but 501. The
+// run classifier retries only 500/502/503/504; the smoke also counts the
+// nonstandard ones a CDN or proxy answers for a down origin (Cloudflare's
+// 520–524 and 530). 501 Not Implemented stays rot: the endpoint answered and
+// does not speak the protocol. A host that no longer resolves is rot too: the
+// classifier calls DNS transient for a run's sake, but for a shipped listing a
+// missing host is a dead entry, and the link lint fails an unresolvable docs
+// host for the same reason.
 func vendorOutage(err error) bool {
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
 		return false
+	}
+	var statusErr *mcp.HTTPStatusError
+	if errors.As(err, &statusErr) && statusErr.StatusCode >= 500 && statusErr.StatusCode <= 599 {
+		return statusErr.StatusCode != http.StatusNotImplemented
 	}
 	return mcp.IsTransientConnectError(err)
 }

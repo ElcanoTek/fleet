@@ -43,7 +43,7 @@ on:
         type: boolean
         default: false
       strict_smoke:
-        description: 'Fail the smoke job on a vendor outage (5xx, 429, timeout) too'
+        description: 'Fail the smoke job on a vendor outage (5xx but 501, 429, timeout) too'
         required: false
         type: boolean
         default: false
