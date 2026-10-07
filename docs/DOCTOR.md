@@ -174,7 +174,11 @@ Division of labor across the three health verbs:
     (vacuum removes only *archived* files) and then **re-measured**, so the
     verdict reports the actual size. A journal still over the cap on a later
     run is reclaimed again. `--no-restart` installs or removes the file but
-    holds the journald restart, with an advisory naming the command.
+    holds the journald restart, with an advisory naming the command. An
+    installed file counts as loaded only if `systemd-journald` started after
+    it was written (its `ActiveEnterTimestamp` vs. the file's mtime). Until
+    then, later runs advise the restart (`--check`, `--no-restart`) or perform
+    it, rather than passing on a journal that happens to be small.
     journald's default ceiling is 10% of the filesystem (up to 4 GiB), on the
     same volume as the databases and the image store.
   - **Root's podman store** is **advisory only**. fleet's sandboxes live in
