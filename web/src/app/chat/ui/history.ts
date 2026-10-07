@@ -886,6 +886,17 @@ export function applyTurnOutcome(
   };
 }
 
+/**
+ * SUMMARY_BOUNDARY is the history type of the CONTENT-FREE marker the server
+ * puts where a compaction summary was, for a reader not allowed to see the
+ * summary (the team view, a teammate's branch, a public link). A summary
+ * starts a new rendered message, so the marker must too — otherwise the
+ * replies either side would merge into one Markdown document and render (and
+ * be parsed for outputs) differently than the owner's chat. Mirrors
+ * agent.EntryTypeSummaryBoundary.
+ */
+export const SUMMARY_BOUNDARY = "summary_boundary";
+
 export type HistoryEntry = {
   /**
    * Persisted messages.id, present on entries loaded from server history (#454).
@@ -894,7 +905,14 @@ export type HistoryEntry = {
    */
   id?: number;
   role: "user" | "assistant" | "tool";
-  type: "text" | "reasoning" | "tool_call" | "tool_result" | "turn_summary" | "summary";
+  type:
+    | "text"
+    | "reasoning"
+    | "tool_call"
+    | "tool_result"
+    | "turn_summary"
+    | "summary"
+    | typeof SUMMARY_BOUNDARY;
   content: Record<string, unknown>;
   /**
    * The server-derived suffix for this turn, kept OUT of `content.text`
@@ -1005,6 +1023,14 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       const c = e.content as { id: string; name: string; input: string };
       const tc: ToolCall = { id: c.id, name: c.name, input: c.input, state: "done" };
       current.toolCalls = [...(current.toolCalls ?? []), tc];
+      continue;
+    }
+    if (e.type === SUMMARY_BOUNDARY) {
+      // A content-free stand-in for a summary the reader may not see (a
+      // teammate's branch, agent.EntryTypeSummaryBoundary). It renders as
+      // nothing — it only ends the assistant message in flight, exactly
+      // where the owner's chat ends it at the summary banner.
+      flush();
       continue;
     }
     if (e.type === "summary") {

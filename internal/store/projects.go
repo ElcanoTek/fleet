@@ -391,9 +391,36 @@ func (s *Store) DeleteProject(ctx context.Context, ownerEmail, id string) error 
 	return tx.Commit()
 }
 
+// ErrProjectNotAccessible refuses filing a chat into a project the caller
+// cannot see when the write runs — the handler's membership check passed, but
+// an ownership transfer (or a team change) landed before the write.
+var ErrProjectNotAccessible = errors.New("project not found")
+
+// lockAccessibleProjectTx locks project id FOR SHARE and confirms userEmail
+// can see it right now: its owner, or a member of the team it is shared
+// with. A transfer locks the row FOR UPDATE, so a filing write that passed
+// the handler's check before the transfer waits here, then re-reads the
+// row's new owner — and is refused instead of leaving a chat filed in a
+// project its owner can no longer see (one no rail section would list).
+func lockAccessibleProjectTx(ctx context.Context, tx *sql.Tx, id, userEmail string) error {
+	var one int
+	err := tx.QueryRowContext(ctx, `
+		SELECT 1 FROM projects p
+		WHERE p.id = $1
+		  AND (p.owner_email = $2
+		       OR (p.team_id <> '' AND p.team_id = (
+		             SELECT COALESCE(TRIM(u.team_id), '') FROM users u WHERE u.email = $2)))
+		FOR SHARE OF p`, id, normalizeEmail(userEmail)).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrProjectNotAccessible
+	}
+	return err
+}
+
 // CreateProjectConversation inserts a conversation bound to a project. The
 // handler validates membership + resolves inherited persona/model/connectors
-// before calling.
+// before calling; the store re-checks access under the project row's lock
+// (lockAccessibleProjectTx).
 func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool, projectID string, mcpServers []string) (*Conversation, error) {
 	id := uuid.NewString()
 	now := time.Now().Unix()
@@ -404,12 +431,23 @@ func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title,
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	if err := lockAccessibleProjectTx(ctx, tx, projectID, userEmail); err != nil {
+		return nil, err
+	}
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO conversations (id, user_email, title, persona, model, pinned, lockdown, project_id, optional_mcp_servers_enabled, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8, $9, $9)`,
 		id, userEmail, title, persona, model, lockdown, projectID, string(mcps), now,
 	)
 	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &Conversation{
@@ -440,6 +478,23 @@ func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title,
 // team" is not enough — that is the state a user reaches by refiling across
 // teams after an admin moves them.
 func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, projectID string) error {
+	return s.setConversationProject(ctx, userEmail, convID, projectID, nil)
+}
+
+// ErrConversationMoved refuses a conditional refile (SetConversationProjectIf)
+// because the chat is no longer where the caller expected it.
+var ErrConversationMoved = errors.New("the chat was moved since")
+
+// SetConversationProjectIf is SetConversationProject as a compare-and-set:
+// the move happens only while the chat is still filed in expected ("" =
+// unfiled), else ErrConversationMoved and nothing changes. It is what an
+// undo uses — putting a chat back must never overwrite a newer move made
+// elsewhere (another tab, another device) in the meantime.
+func (s *Store) SetConversationProjectIf(ctx context.Context, userEmail, convID, projectID, expected string) error {
+	return s.setConversationProject(ctx, userEmail, convID, projectID, &expected)
+}
+
+func (s *Store) setConversationProject(ctx context.Context, userEmail, convID, projectID string, expected *string) error {
 	var pid any // NULL when unfiling, matching the column's created-without-project state
 	if projectID != "" {
 		pid = projectID
@@ -456,10 +511,10 @@ func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, p
 		// project" — whose own unshare sweeps `WHERE project_id = ...` and
 		// cannot see a chat that has not landed yet — left a team-visible chat
 		// in a project that is no longer shared. The lock makes the two
-		// statements take turns. A missing project is not an error here: the
-		// UPDATE's own FK/EXISTS handling still decides the outcome.
-		if _, err := tx.ExecContext(ctx,
-			`SELECT 1 FROM projects WHERE id = $1 FOR SHARE`, projectID); err != nil {
+		// statements take turns. The same lock re-checks that the caller can
+		// still see the project: a transfer that took it from them between
+		// the handler's check and here is refused, not filed behind.
+		if err := lockAccessibleProjectTx(ctx, tx, projectID, userEmail); err != nil {
 			return err
 		}
 	}
@@ -482,13 +537,26 @@ func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, p
 				                AND p.team_id = conversations.team_shared_with)
 				THEN team_shared_with ELSE NULL END),
 			updated_at = $2
-		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		pid, time.Now().Unix(), convID, userEmail,
+		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL
+		   AND ($5::text IS NULL OR COALESCE(project_id, '') = $5::text)`,
+		pid, time.Now().Unix(), convID, userEmail, expected,
 	)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		if expected != nil {
+			var one int
+			err := tx.QueryRowContext(ctx,
+				`SELECT 1 FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
+				convID, userEmail).Scan(&one)
+			if err == nil {
+				return ErrConversationMoved
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
 		return ErrConversationNotFound
 	}
 	return tx.Commit()
@@ -560,12 +628,15 @@ func (s *Store) GetProjectMemory(ctx context.Context, projectID, memoryID string
 // UpdateProjectMemory applies a partial update to one team learning. The
 // project-scoped WHERE is the mirror image of UpdateMemory's `project_id IS
 // NULL`: the shared API can only touch shared rows, so neither scope can reach
-// the other. WHO may call this (the entry's writer, or the project owner) is
-// the handler's gate — the store enforces only the scope.
+// the other. WHO may call this — the entry's writer, or the project owner —
+// is re-checked here under the project row lock (lockMemoryActorTx), so an
+// ownership transfer that commits between the handler's gate and this write
+// cannot leave the previous owner editing other members' entries. An empty
+// actor skips that recheck (store-internal callers only).
 //
 // Retirement is the intended "remove" for a team learning: the entry stops
 // being injected but the record — and who wrote it — survives.
-func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID string, patch MemoryPatch) (*Memory, error) {
+func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID, actor string, patch MemoryPatch) (*Memory, error) {
 	if patch.Content == nil && patch.Kind == nil && patch.Pinned == nil &&
 		patch.Retired == nil && patch.ValidFrom == nil && patch.ValidTo == nil {
 		return nil, errInput("empty memory patch")
@@ -583,8 +654,16 @@ func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID str
 		k := NormalizeMemoryKind(*patch.Kind)
 		kind = &k
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockMemoryActorTx(ctx, tx, projectID, memoryID, actor); err != nil {
+		return nil, err
+	}
 	now := time.Now().Unix()
-	row := s.db.QueryRowContext(ctx,
+	row := tx.QueryRowContext(ctx,
 		`UPDATE memories SET
 			content    = COALESCE($1::text, content),
 			kind       = COALESCE($2::text, kind),
@@ -617,7 +696,42 @@ func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID str
 		}
 		return nil, err
 	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	return m, nil
+}
+
+// lockMemoryActorTx is the store-side half of "yours, or yours to own": it
+// takes the project row FOR SHARE — the lock TransferProjectOwnership's
+// FOR UPDATE conflicts with — and then checks actor against the learning's
+// author and the project's owner as they stand now. Either the transfer
+// commits first and this sees the new owner, or this commits first and the
+// transfer waits for it; there is no window where a just-demoted owner's
+// edit lands after the transfer. ErrMemoryNotFound for a learning that is
+// not this project's; ErrMemoryNotPermitted when actor is neither.
+func lockMemoryActorTx(ctx context.Context, tx *sql.Tx, projectID, memoryID, actor string) error {
+	var owner string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT owner_email FROM projects WHERE id = $1 FOR SHARE`, projectID).Scan(&owner); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrMemoryNotFound
+		}
+		return err
+	}
+	var author string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT user_email FROM memories WHERE id = $1 AND project_id = $2 FOR UPDATE`,
+		memoryID, projectID).Scan(&author); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrMemoryNotFound
+		}
+		return err
+	}
+	if actor == "" || normalizeEmail(author) == normalizeEmail(actor) || normalizeEmail(owner) == normalizeEmail(actor) {
+		return nil
+	}
+	return ErrMemoryNotPermitted
 }
 
 // MoveMemoryToProject promotes one of the caller's PERSONAL memories into a
@@ -683,11 +797,21 @@ func (s *Store) AcceptMemoryProposalIntoProject(ctx context.Context, userEmail, 
 	return m, nil
 }
 
-// DeleteProjectMemory removes one shared memory from the project. Any member
-// may delete (the handler enforces membership); the project-scoped WHERE keeps
-// it from touching personal rows.
-func (s *Store) DeleteProjectMemory(ctx context.Context, projectID, memoryID string) error {
-	res, err := s.db.ExecContext(ctx,
+// DeleteProjectMemory removes one shared memory from the project. The
+// handler enforces membership; the author-or-owner rule is re-checked under
+// the project row lock exactly as UpdateProjectMemory does (an empty actor
+// skips it), and the project-scoped WHERE keeps it from touching personal
+// rows.
+func (s *Store) DeleteProjectMemory(ctx context.Context, projectID, memoryID, actor string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockMemoryActorTx(ctx, tx, projectID, memoryID, actor); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx,
 		`DELETE FROM memories WHERE id = $1 AND project_id = $2`, memoryID, projectID)
 	if err != nil {
 		return err
@@ -695,7 +819,7 @@ func (s *Store) DeleteProjectMemory(ctx context.Context, projectID, memoryID str
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrMemoryNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ListProjectConversationsForUser returns the CALLER'S OWN live conversations

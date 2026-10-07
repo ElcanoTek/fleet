@@ -109,8 +109,10 @@ func TestConversationTeamView(t *testing.T) {
 		t.Errorf("snapshot = %+v", snap)
 	}
 	// The owner's working state is read for Branch but never sent: the fork's
-	// project and settings are decided server-side from the parent row.
-	for _, k := range []string{"persona", "model", "project_id", "lockdown"} {
+	// settings are decided server-side from the parent row. project_id IS
+	// sent since ADR-0079 — deliberately, as the breadcrumb back to the
+	// project the viewer reached the chat through.
+	for _, k := range []string{"persona", "model", "lockdown"} {
 		if strings.Contains(w.Body.String(), `"`+k+`"`) {
 			t.Errorf("snapshot leaks the owner's %s", k)
 		}
@@ -605,7 +607,7 @@ func TestAdminUserDeleteRefusesOwnedSharedProjects(t *testing.T) {
 	}
 
 	// After a transfer the delete goes through, and the team keeps everything.
-	if _, err := f.st.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com"); err != nil {
+	if _, err := f.st.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com", ""); err != nil {
 		t.Fatal(err)
 	}
 	w = httptest.NewRecorder()

@@ -99,7 +99,7 @@ function renderSidebar(overrides: Record<string, unknown> = {}) {
     onCreateProject: noop,
     onOpenProjectHome: noop,
     onPinProject: noop,
-    onShareProject: noop,
+    onNewChatInProject: noop,
     onRenameProject: noop,
     onDeleteProject: noop,
     projects: [SHARED_PROJECT, PERSONAL_PROJECT],
@@ -181,35 +181,105 @@ describe("ConversationSidebar — a project's empty state is viewer-aware", () =
     ).toHaveTextContent("1 shared by your team");
   });
 
-  it("keeps the filing copy when a team-shared project really is empty", () => {
-    // Counts loaded, and this project has none: nothing here for anyone, so
-    // the copy that teaches both filing paths is still the right one.
+  it("says just “No chats yet” when a team-shared project really is empty", () => {
+    // Counts loaded, and this project has none: nothing here for anyone.
+    // Decision #23 replaced the filing-paths paragraph with the short line.
     renderSidebar({ teamSharedChatCounts: {} });
     expandProject("Quant");
-    expect(screen.getByText(/No chats yet — drag one here/)).toBeInTheDocument();
+    expect(screen.getByText("No chats yet")).toBeInTheDocument();
+    expect(screen.queryByText(/drag one here/)).not.toBeInTheDocument();
     expect(screen.queryByText(/No chats of yours yet/)).not.toBeInTheDocument();
   });
 
-  it("keeps the filing copy for a personal project", () => {
+  it("says “No chats yet” for an empty personal project", () => {
     renderSidebar({ teamSharedChatCounts: { "p-mine": 7 } });
     expandProject("Scratch");
     // A personal project cannot hold a team-shared chat, so no count can
     // apply to it — and none is quoted even when the map bogusly carries one.
-    expect(screen.getByText(/No chats yet — drag one here/)).toBeInTheDocument();
+    expect(screen.getByText("No chats yet")).toBeInTheDocument();
     expect(screen.queryByText(/shared by your team/)).not.toBeInTheDocument();
   });
 
   it("asserts no number when the counts have not loaded", () => {
-    const onOpenProjectHome = vi.fn();
-    renderSidebar({ onOpenProjectHome });
+    renderSidebar();
     expandProject("Quant");
 
-    expect(screen.getByText(/No chats of yours yet/)).toBeInTheDocument();
+    // Not "No chats yet": teammates may have shared chats the rail can't
+    // count yet, so it only speaks for the viewer's own.
+    expect(screen.getByText("No chats of yours yet")).toBeInTheDocument();
     expect(screen.queryByText(/shared by your team/)).not.toBeInTheDocument();
-    const link = screen.getByRole("button", {
-      name: "Open Quant — anything your team shared is on the project home",
-    });
-    fireEvent.click(link);
-    expect(onOpenProjectHome).toHaveBeenCalledWith("p-shared");
+    expect(screen.queryByText("No chats yet")).not.toBeInTheDocument();
+  });
+});
+
+describe("ConversationSidebar — project rows (decision #23)", () => {
+  it("opens the project's home AND expands it when the name is clicked", () => {
+    const onOpenProjectHome = vi.fn();
+    renderSidebar({ onOpenProjectHome, teamSharedChatCounts: {} });
+    const chevron = screen.getByRole("button", { name: "Project Scratch (0 chats)" });
+    expect(chevron).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open project Scratch" }));
+    expect(onOpenProjectHome).toHaveBeenCalledWith("p-mine");
+    expect(chevron).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("No chats yet")).toBeInTheDocument();
+
+    // Clicking the name again keeps it open — opening never folds.
+    fireEvent.click(screen.getByRole("button", { name: "Open project Scratch" }));
+    expect(chevron).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("only folds and unfolds from the chevron — it never opens the home", () => {
+    const onOpenProjectHome = vi.fn();
+    renderSidebar({ onOpenProjectHome });
+    const chevron = screen.getByRole("button", { name: "Project Scratch (0 chats)" });
+    fireEvent.click(chevron);
+    expect(chevron).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(chevron);
+    expect(chevron).toHaveAttribute("aria-expanded", "false");
+    expect(onOpenProjectHome).not.toHaveBeenCalled();
+  });
+
+  it("offers Open, New chat, Share and Project settings to the owner", () => {
+    const onOpenProjectHome = vi.fn();
+    const onNewChatInProject = vi.fn();
+    renderSidebar({ onOpenProjectHome, onNewChatInProject });
+    const items = () =>
+      screen.getAllByRole("menuitem").map((el) => el.textContent?.trim());
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Project options for Scratch" }),
+    );
+    expect(items().slice(0, 4)).toEqual([
+      "Open project",
+      "New chat",
+      "Share…",
+      "Project settings…",
+    ]);
+    // Share opens the project's sharing, which lives in its settings.
+    fireEvent.click(screen.getByRole("menuitem", { name: "Share…" }));
+    expect(onOpenProjectHome).toHaveBeenCalledWith("p-mine", true);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Project options for Scratch" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "New chat" }));
+    expect(onNewChatInProject).toHaveBeenCalledWith("p-mine");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Project options for Scratch" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open project" }));
+    expect(onOpenProjectHome).toHaveBeenLastCalledWith("p-mine");
+  });
+
+  it("gives a member Open and New chat only — settings and sharing are the owner's", () => {
+    renderSidebar();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Project options for Quant" }),
+    );
+    expect(
+      screen.getAllByRole("menuitem").map((el) => el.textContent?.trim()),
+    ).toEqual(["Open project", "New chat"]);
   });
 });

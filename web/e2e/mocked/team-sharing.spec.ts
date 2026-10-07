@@ -10,9 +10,9 @@ import { mockChatBoot } from "./_mocks";
 //   opens it read-only  →
 //   branches it into a chat of their own.
 //
-// It also pins the narrowing that makes the feature coherent: the team toggle
-// is offered only inside a TEAM-SHARED project, and says which situation the
-// reader is in when it is not.
+// It also pins the narrowing that makes the feature coherent: a chat can be
+// shared with the team only inside a TEAM-SHARED project, and the dialog's
+// team block names the situation (A1 / A2 / A4) and its one fix when it is not.
 
 const SHARED_PROJECT = {
   id: "p-quant",
@@ -40,8 +40,12 @@ async function mockProjects(page: Page, projects: unknown[]) {
     }),
   );
   // The project home's own reads; each spec overrides what it cares about.
-  await page.route("**/api/projects/*/files", (r: Route) =>
-    r.fulfill({ json: { files: [], truncated: false } }),
+  await page.route("**/api/projects/*/files{,?*}", (r: Route) =>
+    r.fulfill({ json: { groups: [], files: [], truncated: false } }),
+  );
+  // Per-person project state: past the getting-started card.
+  await page.route("**/api/projects/*/my-state", (r: Route) =>
+    r.fulfill({ json: { kept_personal: false, has_shared_chat: true, sources_open: {} } }),
   );
   await page.route("**/api/projects/*/memories", (r: Route) =>
     r.fulfill({ json: { memories: [] } }),
@@ -73,8 +77,22 @@ test("the Share dialog holds both audiences and only offers the team inside a te
   const teamWrites: string[] = [];
   await page.route("**/api/conversations/c-shared/share-with-team", async (r: Route) => {
     teamWrites.push(r.request().postData() ?? "");
-    await r.fulfill({ json: { team_visible: true } });
+    await r.fulfill({ json: { team_visible: true, shared_files: 2, total_files: 2 } });
   });
+  // The chat's outputs: what the A4 file line counts and the toast quotes.
+  await page.route("**/api/conversations/*/outputs", (r: Route) =>
+    r.fulfill({
+      json: {
+        outputs: [
+          { path: "out/report.xlsx", name: "report.xlsx", size: 2048, modified_at: 1_700_000_300, shared: true },
+          { path: "out/chart.png", name: "chart.png", size: 4096, modified_at: 1_700_000_200, shared: true },
+        ],
+        total: 2,
+        shared_count: 2,
+        team_visible: false,
+      },
+    }),
+  );
 
   await page.goto("/chat");
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
@@ -95,35 +113,51 @@ test("the Share dialog holds both audiences and only offers the team inside a te
     await menu.getByRole("menuitem", { name: "Share…", exact: true }).click();
     return page.getByRole("dialog", { name: "Share this chat" });
   };
+  const teamBlock = (dialog: ReturnType<typeof page.getByRole>) =>
+    dialog.getByRole("region", { name: "Share with your team" });
 
-  // A chat filed nowhere: the toggle is off the table, and the copy says how
-  // to make it possible rather than greying out silently.
+  // A1 — a chat filed nowhere: it cannot be shared where it is, so the team
+  // block says why and offers the one fix (move it into a project shared with
+  // the team). Only team-shared projects are offered as the destination.
   let dialog = await openShare("Filed nowhere");
-  await expect(dialog.getByLabel(/Share with/)).toBeDisabled();
-  await expect(
-    dialog.getByText(/Move this chat into a team-shared project/),
-  ).toBeVisible();
+  await expect(dialog.getByTestId("share-dialog-where")).toContainText("Not in a project");
+  let block = teamBlock(dialog);
+  await expect(block).toHaveAttribute("data-state", "A1");
+  await expect(block).toContainText(
+    "To share a chat with quant, it needs to be in a project shared with quant. Pick one and this chat will move into it.",
+  );
+  await expect(block.getByLabel("Project shared with quant").locator("option")).toHaveText(["Quant"]);
+  await expect(block.getByRole("button", { name: "Move and share" })).toBeEnabled();
   // Opening the dialog must not mint a public link as a side effect.
   await expect(dialog.getByLabel("Share link URL")).toHaveCount(0);
-  await dialog.getByRole("button", { name: "Done" }).click();
+  await dialog.getByRole("button", { name: "Close share dialog" }).click();
 
-  // A chat in a PERSONAL project: a different situation, a different sentence.
+  // A2 — a chat in a PERSONAL project: a different situation, a different
+  // sentence, and the fix is sharing the project first — not this chat.
   await expandProject("Mine", 1);
   dialog = await openShare("In Mine");
-  await expect(dialog.getByLabel(/Share with/)).toBeDisabled();
-  await expect(dialog.getByText(/isn’t shared with your team/)).toBeVisible();
-  await dialog.getByRole("button", { name: "Done" }).click();
+  block = teamBlock(dialog);
+  await expect(block).toHaveAttribute("data-state", "A2");
+  await expect(block).toContainText("Mine isn’t shared with quant, so its chats are private to you.");
+  await expect(block.getByRole("button", { name: "Share project first" })).toBeVisible();
+  await expect(block.getByRole("button", { name: "Share with quant", exact: true })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Close share dialog" }).click();
 
-  // A chat in a team-shared project: the toggle works, and names the team.
+  // A4 → A5 — a chat in a team-shared project: one button shares it (with
+  // its files), names the team, and the dialog moves to the shared state.
   await expandProject("Quant", 1);
   dialog = await openShare("In Quant");
-  const toggle = dialog.getByLabel("Share with quant");
-  await expect(toggle).toBeEnabled();
-  await toggle.check();
+  block = teamBlock(dialog);
+  await expect(block).toHaveAttribute("data-state", "A4");
+  await expect(block.getByTestId("share-file-line")).toContainText("Includes 2 files");
+  await block.getByRole("button", { name: "Share with quant", exact: true }).click();
+  // The checklist was never opened, so the owner's file choices are untouched.
   await expect.poll(() => teamWrites.map((w) => JSON.parse(w))).toEqual([
     { visible: true },
   ]);
-  await dialog.getByRole("button", { name: "Done" }).click();
+  await expect(page.getByText("“In Quant” is shared with quant, with 2 files.")).toBeVisible();
+  await expect(block.getByRole("button", { name: "Copy link for quant" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Close share dialog" }).click();
 
   // The row now carries the TEAM badge, distinct from the link badge and
   // labelled with its audience.
@@ -184,15 +218,19 @@ test("a teammate finds a shared chat on the project home, reads it, and branches
   const home = page.getByTestId("project-home");
   await expect(home).toBeVisible();
 
-  // The Team section names whose chat it is and that it is read-only.
-  await expect(home.getByText("bob · read-only")).toBeVisible();
-  await home.getByRole("button", { name: /Basis trade/ }).click();
+  // "Shared by your team" names whose chat it is and what a reader can do.
+  const row = home.getByTestId("team-chat-row");
+  await expect(row).toContainText("bob@example.com");
+  await expect(row).toContainText("Read, branch");
+  await row.click();
 
-  // The read-only viewer: whose it is, which team, and no composer — but not a
-  // dead end either.
+  // The read-only viewer (B19): whose it is, and where the composer would be,
+  // a read-only line — but not a dead end either.
   const viewer = page.getByTestId("team-chat-viewer");
   await expect(viewer).toBeVisible();
-  await expect(viewer.getByText(/bob.*’s conversation · shared with quant · read-only/)).toBeVisible();
+  await expect(viewer.getByTestId("team-view-shared-by")).toHaveText("Shared by bob@example.com");
+  await expect(viewer.getByText("Read-only. This is Bob’s chat.")).toBeVisible();
+  await expect(viewer.getByRole("textbox")).toHaveCount(0);
   await expect(viewer.getByText("how did you size it?")).toBeVisible();
 
   await viewer.getByRole("button", { name: /Branch to continue in your own chat/ }).click();

@@ -3,9 +3,15 @@ import type { NextRequest } from "next/server";
 import {
   getRedirectUrl,
   getSessionFromRequest,
+  isSecureRequest,
   refreshSessionCookie,
 } from "@/app/lib/auth";
 import { BUILD_ID_HEADER, currentBuildId } from "@/app/lib/buildId";
+import {
+  TEAM_LINK_COOKIE,
+  TEAM_LINK_MAX_AGE_SECONDS,
+  isTeamLinkId,
+} from "@/app/lib/teamLinkCookie";
 
 // ONE gate for the unified frontend. It protects BOTH views — /chat/* and
 // /orchestrator/* — behind the same session check, and accepts BOTH login
@@ -149,6 +155,49 @@ function hasBearer(request: NextRequest): boolean {
   return !!auth && /^Bearer\s+\S/i.test(auth);
 }
 
+// Team links (`/chat?team=<id>`, B24) survive sign-in through a short-lived
+// cookie — see app/lib/teamLinkCookie.ts. These three helpers are the whole
+// mechanism: park the id on the way to /login, read it back once signed in,
+// and clear it once it has been used (or is not a valid id).
+function teamLinkParam(request: NextRequest): string | null {
+  const id = request.nextUrl.searchParams.get("team");
+  return isTeamLinkId(id) ? id : null;
+}
+
+function parkedTeamLink(request: NextRequest): string | null {
+  const id = request.cookies.get(TEAM_LINK_COOKIE)?.value;
+  return isTeamLinkId(id) ? id : null;
+}
+
+function clearTeamLink(res: NextResponse): NextResponse {
+  res.cookies.set({
+    name: TEAM_LINK_COOKIE,
+    value: "",
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 0,
+  });
+  return res;
+}
+
+// redirectToParkedTeamLink sends a signed-in request carrying a parked team
+// link to that chat, and clears the cookie so it is used exactly once.
+function redirectToParkedTeamLink(
+  request: NextRequest,
+  id: string,
+  pathname: string,
+): NextResponse {
+  return clearTeamLink(
+    decorate(
+      NextResponse.redirect(
+        getRedirectUrl(request, `/chat?team=${encodeURIComponent(id)}`),
+      ),
+      pathname,
+    ),
+  );
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -177,6 +226,9 @@ export async function proxy(request: NextRequest) {
 
   if (publicPaths.has(pathname)) {
     if (session) {
+      // Signed in with a team link parked: straight to the chat (B24).
+      const parked = parkedTeamLink(request);
+      if (parked) return redirectToParkedTeamLink(request, parked, pathname);
       return decorate(
         NextResponse.redirect(getRedirectUrl(request, "/chat")),
         pathname,
@@ -200,13 +252,50 @@ export async function proxy(request: NextRequest) {
       );
     }
 
+    // A signed-out visitor opening a team link (B24): sign in first, with
+    // the login card saying why, then land on the chat — the id rides in a
+    // short-lived httpOnly cookie because no sign-in path carries a return
+    // URL. Only a strictly valid id is parked.
+    const teamLink = pathname === "/chat" ? teamLinkParam(request) : null;
+    if (teamLink) {
+      const res = decorate(
+        NextResponse.redirect(getRedirectUrl(request, "/login?team_link=1")),
+        pathname,
+      );
+      res.cookies.set({
+        name: TEAM_LINK_COOKIE,
+        value: teamLink,
+        httpOnly: true,
+        sameSite: "lax",
+        secure: isSecureRequest(request),
+        path: "/",
+        maxAge: TEAM_LINK_MAX_AGE_SECONDS,
+      });
+      return res;
+    }
+
     return decorate(
       NextResponse.redirect(getRedirectUrl(request, "/login")),
       pathname,
     );
   }
 
+  // Signed in, landing home with a team link parked: every sign-in path ends
+  // with a redirect to `/` (or `/chat`), so this is where the visitor is sent
+  // on to the chat they opened. A request that already names its own team
+  // link wins, and just clears the parked one; so does a parked value that is
+  // not a valid id.
+  const landing = pathname === "/" || pathname === "/chat";
+  const hasParkedCookie = request.cookies.has(TEAM_LINK_COOKIE);
+  if (session && landing && hasParkedCookie) {
+    const parked = parkedTeamLink(request);
+    if (parked && !request.nextUrl.searchParams.has("team")) {
+      return redirectToParkedTeamLink(request, parked, pathname);
+    }
+  }
+
   const res = decorate(NextResponse.next(), pathname);
+  if (session && landing && hasParkedCookie) clearTeamLink(res);
   // Activity keeps an HMAC session alive: re-mint the cookie with a later idle
   // deadline when the last mint is over a minute old (ADR-0064). Bearer-only
   // and elcano_auth requests have nothing Fleet can refresh.

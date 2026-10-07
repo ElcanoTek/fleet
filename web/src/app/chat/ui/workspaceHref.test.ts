@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   PENDING_CONV_KEY,
+  decideReadOnlyFile,
   redactUnsharedFiles,
+  teamFileDownloadName,
+  workspaceFileRef,
   resolveTaskWorkspaceHref,
   resolveWorkspaceHref,
   unsharedFileName,
@@ -425,6 +428,12 @@ describe("redactUnsharedFiles", () => {
     );
   });
 
+  it("redacts a destination written with backslash escapes", () => {
+    expect(redactUnsharedFiles("[report](my\\_file.csv)", IMAGE_PLACEHOLDER)).toBe(
+      "my\\_file\\.csv (file not shared)",
+    );
+  });
+
   it("replaces an embedded workspace image with the caller's placeholder", () => {
     expect(
       redactUnsharedFiles("![Daily spend](daily_spend_by_channel.png)", IMAGE_PLACEHOLDER),
@@ -520,5 +529,147 @@ describe("redactUnsharedFiles", () => {
     const md = "Revenue rose 12% in Q3 — mostly paid search.";
     expect(redactUnsharedFiles(md, IMAGE_PLACEHOLDER)).toBe(md);
     expect(redactUnsharedFiles("", IMAGE_PLACEHOLDER)).toBe("");
+  });
+});
+
+// The team view (B19): shared outputs become live team-files links, every
+// other workspace reference a locked name, uploads plain names. The public
+// link keeps redactUnsharedFiles — pinned at the end of this block.
+describe("redactUnsharedFiles — never withholds less than before", () => {
+  it("still redacts escaped, commented and indented references", () => {
+    // The public view may withhold MORE than renders, never less: these are
+    // not links when rendered, but the redaction keeps treating them as
+    // references, exactly as it always has.
+    for (const md of [
+      "See \\[x](secret.csv) here.",
+      "Done <!-- [x](secret.csv) --> ok",
+      "Intro.\n\n    [x](secret.csv)",
+    ]) {
+      expect(redactUnsharedFiles(md, "IMG")).toContain("(file not shared)");
+    }
+  });
+});
+
+describe("decideReadOnlyFile — the read-only views' render-time file policy", () => {
+  const links = {
+    shared: new Set(["daily_spend.png", "out/report final.xlsx", "data.csv", "foo(and(more)).csv"]),
+    fileUrl: (path: string) =>
+      `/api/conversations/${CONV}/team-files/${path
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/")}`,
+  };
+  const team = { mode: "shared" as const, links };
+  const pub = { mode: "withhold" as const, imagePlaceholder: IMAGE_PLACEHOLDER };
+  const TEAM = `/api/conversations/${CONV}/team-files/`;
+
+  it("points a shared output at the team-files route, by its parsed href", () => {
+    expect(decideReadOnlyFile("data.csv", team)).toEqual({
+      kind: "shared",
+      name: "data.csv",
+      path: "data.csv",
+      url: `${TEAM}data.csv`,
+    });
+    // The href a CommonMark parser hands the renderer is percent-encoded.
+    expect(decideReadOnlyFile("out/report%20final.xlsx", team)).toMatchObject({
+      kind: "shared",
+      url: `${TEAM}out/report%20final.xlsx`,
+    });
+    expect(decideReadOnlyFile("foo(and(more)).csv", team)).toMatchObject({ kind: "shared" });
+    expect(
+      decideReadOnlyFile(`sandbox:/opt/chat/workspace/${CONV}/data.csv`, team),
+    ).toMatchObject({ kind: "shared", url: `${TEAM}data.csv` });
+  });
+
+  it("locks every other workspace reference, uploads by name only", () => {
+    expect(decideReadOnlyFile("exclusion_list_v1.json", team)).toEqual({
+      kind: "locked",
+      name: "exclusion_list_v1.json",
+      path: "exclusion_list_v1.json",
+    });
+    expect(decideReadOnlyFile(`/api/conversations/${CONV}/workspace/data.csv`, team)).toMatchObject({
+      kind: "shared",
+    });
+    expect(decideReadOnlyFile("attachments/brief.pdf", team)).toMatchObject({
+      kind: "upload",
+      name: "brief.pdf",
+    });
+  });
+
+  it("renders the owner's private skill files as plain names, like uploads", () => {
+    expect(decideReadOnlyFile("user-skills/pricing/SKILL.md", team)).toEqual({
+      kind: "upload",
+      name: "SKILL.md",
+      path: "user-skills/pricing/SKILL.md",
+    });
+    // Even if a stale or hostile shared list names one, no URL is minted.
+    const listed = {
+      mode: "shared" as const,
+      links: { shared: new Set(["user-skills/pricing/SKILL.md"]), fileUrl: (p: string) => `${TEAM}${p}` },
+    };
+    expect(decideReadOnlyFile("user-skills/pricing/SKILL.md", listed).kind).toBe("upload");
+    // Only the top-level dir is private: a nested user-skills/ is an ordinary path.
+    expect(decideReadOnlyFile("out/user-skills/x.md", team).kind).toBe("locked");
+  });
+
+  it("never mints a URL for a path outside the shared set, traversal included", () => {
+    for (const raw of ["secret/data.csv", `/api/conversations/${CONV}/workspace/%2e%2e/data.csv`]) {
+      expect(decideReadOnlyFile(raw, team).kind).toBe("locked");
+    }
+    // Rejected traversal is not a workspace reference at all — never a team URL.
+    for (const raw of ["../data.csv", "%2e%2e/data.csv"]) {
+      expect(decideReadOnlyFile(raw, team)).toEqual({ kind: "external" });
+    }
+  });
+
+  it("withholds every workspace reference on a public link, shared or not", () => {
+    for (const raw of ["data.csv", "foo(and(more)).csv", "attachments/brief.pdf", "x.png"]) {
+      expect(decideReadOnlyFile(raw, pub).kind).toBe("withheld");
+    }
+  });
+
+  it("leaves external links and anchors to the ordinary renderer", () => {
+    for (const raw of ["https://example.com/a.csv", "mailto:a@b.c", "#top", ""]) {
+      expect(decideReadOnlyFile(raw, team)).toEqual({ kind: "external" });
+      expect(decideReadOnlyFile(raw, pub)).toEqual({ kind: "external" });
+    }
+  });
+});
+
+describe("redactUnsharedFiles — thumbnails and duplicate definitions", () => {
+  it("redacts a clickable thumbnail to the target's withheld name", () => {
+    expect(redactUnsharedFiles("[![t](thumb.png)](full.png)", IMAGE_PLACEHOLDER)).toBe(
+      "full\\.png (file not shared)",
+    );
+  });
+
+  it("resolves a duplicate reference label to its FIRST definition, like CommonMark", () => {
+    const extFirst = ["See [x].", "", "[x]: https://example.com/a", "[x]: data.csv"].join("\n");
+    expect(redactUnsharedFiles(extFirst, IMAGE_PLACEHOLDER)).toBe(
+      ["See [x].", "", "[x]: https://example.com/a"].join("\n"),
+    );
+    const wsFirst = ["See [x].", "", "[x]: old.csv", "[x]: https://example.com/a"].join("\n");
+    expect(redactUnsharedFiles(wsFirst, IMAGE_PLACEHOLDER)).toBe(
+      "See old\\.csv (file not shared).\n",
+    );
+    const twoExt = ["See [x].", "", "[x]: https://a.example", "[x]: https://b.example"].join("\n");
+    expect(redactUnsharedFiles(twoExt, IMAGE_PLACEHOLDER)).toBe(twoExt);
+  });
+});
+
+describe("workspaceFileRef / teamFileDownloadName", () => {
+  it("resolves the workspace-relative path a reference names", () => {
+    expect(workspaceFileRef("out/a%20b.csv")).toEqual({ name: "a b.csv", path: "out/a b.csv" });
+    expect(workspaceFileRef(`/api/conversations/${CONV}/workspace/x/y.png`)).toEqual({
+      name: "y.png",
+      path: "x/y.png",
+    });
+    expect(workspaceFileRef("https://example.com/y.png")).toBeNull();
+  });
+
+  it("names a team-files download and nothing else", () => {
+    expect(teamFileDownloadName(`/api/conversations/${CONV}/team-files/out/a%20b.csv`)).toBe("a b.csv");
+    expect(teamFileDownloadName(`/api/conversations/${CONV}/workspace/a.csv`)).toBeNull();
+    expect(teamFileDownloadName("https://evil.example/api/conversations/x/team-files/a")).toBeNull();
   });
 });

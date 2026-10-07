@@ -1,6 +1,8 @@
 # ADR-0057: A team-shared chat lives inside a team-shared project
 
-- **Status:** Accepted
+- **Status:** Accepted; §4's "transcript only, no files" rule and the deferred
+  file-sharing alternative are superseded by
+  [ADR-0079](0079-a-team-share-carries-the-chats-outputs.md)
 - **Date:** 2026-09-03
 - **Deciders:** fleet maintainers
 

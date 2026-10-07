@@ -387,7 +387,7 @@ func TestPersonalMemoryMutatorsExcludeProjectRows(t *testing.T) {
 	}
 
 	// The project-scoped path still deletes the shared row.
-	if err := s.DeleteProjectMemory(ctx, proj.ID, pm.ID); err != nil {
+	if err := s.DeleteProjectMemory(ctx, proj.ID, pm.ID, ""); err != nil {
 		t.Fatalf("DeleteProjectMemory: %v", err)
 	}
 	if shared, _ := s.ListProjectMemories(ctx, proj.ID); len(shared) != 0 {

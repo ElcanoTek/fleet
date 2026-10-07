@@ -6,6 +6,7 @@ package httpapi
 // is exempt from the orchestrator OpenAPI parity test — no openapi.yaml entries.
 
 import (
+	"container/heap"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -182,6 +184,8 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 			s.projectImpact(w, r, p)
 		case "files":
 			s.projectFiles(w, r, p)
+		case "my-state":
+			s.projectMyState(w, r, p)
 		case "export":
 			s.projectExport(w, r, p)
 		default:
@@ -302,10 +306,30 @@ func (s *Server) projectTeamConversations(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if list == nil {
-		list = []store.Conversation{}
+	// Each row says whether the viewer has branched it ("You branched this",
+	// ADR-0079). The row itself still opens the owner's live chat.
+	ids := make([]string, 0, len(list))
+	for _, c := range list {
+		ids = append(ids, c.ID)
 	}
-	writeJSON(w, map[string]any{"conversations": list})
+	branches, err := s.store.ViewerBranches(r.Context(), user, ids)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type teamConversation struct {
+		store.Conversation
+		ViewerBranch *store.ViewerBranch `json:"viewer_branch"`
+	}
+	out := make([]teamConversation, 0, len(list))
+	for _, c := range list {
+		item := teamConversation{Conversation: c}
+		if vb, ok := branches[c.ID]; ok {
+			item.ViewerBranch = &vb
+		}
+		out = append(out, item)
+	}
+	writeJSON(w, map[string]any{"conversations": out})
 }
 
 // projectImpact handles GET /projects/{id}/impact — the counts the project's
@@ -377,8 +401,19 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	updated, err := s.store.TransferProjectOwnership(r.Context(), projectID, req.ToEmail)
+	// The store re-checks the owner under the project's row lock: an owner's
+	// request admitted above must not land after another transfer took the
+	// project from them. An admin acts for no particular owner.
+	actingOwner := user
+	if admin {
+		actingOwner = ""
+	}
+	updated, err := s.store.TransferProjectOwnership(r.Context(), projectID, req.ToEmail, actingOwner)
 	if err != nil {
+		if errors.Is(err, store.ErrNotProjectOwner) {
+			http.Error(w, "project not found", http.StatusNotFound)
+			return
+		}
 		// ONE message for every "that target won't do" case. Splitting it into
 		// "no such user" vs "not a member of this team" turned the route into
 		// an account-existence oracle over arbitrary addresses — exactly the
@@ -438,7 +473,8 @@ func (s *Server) projectMembersByID(w http.ResponseWriter, r *http.Request, user
 	writeJSON(w, map[string]any{"members": emails})
 }
 
-// projectFile is one entry in the project home's Sources list.
+// projectFile is one entry in the LEGACY flat Sources list (`files`), kept
+// for clients that predate the grouped shape.
 type projectFile struct {
 	ConversationID    string `json:"conversation_id"`
 	ConversationTitle string `json:"conversation_title"`
@@ -450,80 +486,605 @@ type projectFile struct {
 	ModifiedAt int64  `json:"modified_at"`
 }
 
-// maxProjectFiles caps the Sources listing — a runaway workspace (a build
-// tree, node_modules the agent unpacked) must not stall the project home.
-// Newest-first, so the cap drops the oldest entries.
+// sourcesFile is one file in a Sources group.
+type sourcesFile struct {
+	Path       string `json:"path"`
+	Name       string `json:"name"`
+	Size       int64  `json:"size"`
+	ModifiedAt int64  `json:"modified_at"`
+	// Shared is "an output the owner has not unchecked". Always false for a
+	// non-output, which is download-only and never shared.
+	Shared bool `json:"shared"`
+	// Output: presented in a reply (a file chip). Only outputs are counted.
+	Output bool `json:"output"`
+	// YourCopy: copied in when the caller branched a teammate's chat.
+	YourCopy bool `json:"your_copy"`
+}
+
+// sourcesGroup is one chat's files on the project home's Sources panel.
+type sourcesGroup struct {
+	ConversationID string `json:"conversation_id"`
+	Title          string `json:"title"`
+	OwnerEmail     string `json:"owner_email"`
+	// Mine: the caller owns the chat ("Your chats"); otherwise it is a
+	// teammate's shared chat ("From your team").
+	Mine        bool `json:"mine"`
+	TeamVisible bool `json:"team_visible"`
+	// IsBranch: the caller's branch of a teammate's chat (its copied files
+	// are labelled "Your copy · <date>").
+	IsBranch     bool          `json:"is_branch"`
+	BranchedAt   int64         `json:"branched_at,omitempty"`
+	LastActiveAt int64         `json:"last_active_at"`
+	FileCount    int           `json:"file_count"`
+	SharedCount  int           `json:"shared_count"`
+	Files        []sourcesFile `json:"files"`
+}
+
+// maxProjectFiles caps each Sources group (and the legacy flat list) — a
+// runaway workspace (a build tree, node_modules the agent unpacked) must not
+// stall the project home. Newest-first, so the cap drops the oldest entries.
 const maxProjectFiles = 200
 
+// Sources reads every chat it lists — a workspace walk plus output discovery
+// per chat — so the number of chats is bounded too, per half: the
+// maxSourcesGroups most recently active chats WITH files are listed, and at
+// most maxSourcesChatsScanned chats are examined to find them (a project of
+// hundreds of file-less chats must not cost hundreds of reads). Anything left
+// over is reported through `truncated` (and the additive `groups_truncated`).
+// Vars so tests can shrink them.
+var (
+	maxSourcesGroups       = 50
+	maxSourcesChatsScanned = 200
+)
+
+// The per-half caps above multiply per-chat ceilings (a 4 MiB transcript
+// parse, up to 500 output stats, a bounded workspace walk), so one request is
+// also bounded as a whole: at most maxSourcesDiscoveries chats are examined
+// across BOTH halves, and none is started once sourcesDiscoveryBudget has
+// elapsed. The first half (the caller's own chats) may use at most half of
+// each, so a project full of the caller's file-less chats cannot starve the
+// team's shared files; the team half gets whatever is left. What the budget
+// leaves out is reported as truncated, like the per-half cuts. The focused
+// chat is the one exception (one more examination), so "Manage in Sources"
+// still lands. Vars so tests can shrink them.
+var (
+	maxSourcesDiscoveries  = 100
+	sourcesDiscoveryBudget = 4 * time.Second
+	// sourcesFocusBudget is the focused chat's own window: it is examined
+	// even past the budgets above, but never without a deadline.
+	sourcesFocusBudget = 2 * time.Second
+)
+
+// sourcesBudget is one Sources request's shared discovery budget.
+type sourcesBudget struct {
+	left     int
+	deadline time.Time
+}
+
+// newSourcesBudgets returns the first half's budget (half the chats, half
+// the time) and a function giving the second half the rest once the first is
+// done.
+func newSourcesBudgets() (first *sourcesBudget, rest func() *sourcesBudget) {
+	start := time.Now()
+	half := maxSourcesDiscoveries / 2
+	first = &sourcesBudget{left: half, deadline: start.Add(sourcesDiscoveryBudget / 2)}
+	return first, func() *sourcesBudget {
+		// At least half the time from NOW: a first half that overran its
+		// own deadline (one examination finishing late) must not leave the
+		// team half none.
+		deadline := start.Add(sourcesDiscoveryBudget)
+		if floor := time.Now().Add(sourcesDiscoveryBudget / 2); floor.After(deadline) {
+			deadline = floor
+		}
+		return &sourcesBudget{
+			left:     maxSourcesDiscoveries - (half - first.left),
+			deadline: deadline,
+		}
+	}
+}
+
+// spend takes one chat examination from the budget; false once it is spent.
+func (b *sourcesBudget) spend() bool {
+	if b.left <= 0 || !time.Now().Before(b.deadline) {
+		return false
+	}
+	b.left--
+	return true
+}
+
+// maxWorkspaceWalkEntries bounds the directory entries one workspace walk
+// visits. The heap below bounds what is KEPT; this bounds the work, so a tree
+// with millions of entries cannot stall the project home either. Past it the
+// listing stops and is reported truncated.
+var maxWorkspaceWalkEntries = 20000 // a var so tests can shrink it
+
+// newestFiles is a bounded min-heap of the newest files seen so far: its root
+// is the WORST kept entry in newest-first order (oldest modtime; on a tie,
+// the larger path), so a better candidate replaces it in O(log n).
+type newestFiles []sourcesFile
+
+func newerFile(a, b sourcesFile) bool {
+	if a.ModifiedAt != b.ModifiedAt {
+		return a.ModifiedAt > b.ModifiedAt
+	}
+	return a.Path < b.Path
+}
+
+func (h newestFiles) Len() int           { return len(h) }
+func (h newestFiles) Less(i, j int) bool { return newerFile(h[j], h[i]) }
+func (h newestFiles) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *newestFiles) Push(x any)        { *h = append(*h, x.(sourcesFile)) }
+func (h *newestFiles) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
+// walkWorkspaceFiles lists the newest `limit` regular, non-upload files in
+// convID's workspace, newest first, and reports whether anything was left out
+// (more files than the limit, or the walk hit maxWorkspaceWalkEntries).
+// Only the bounded set is held during the walk — a runaway tree is never
+// collected whole and sorted. Symlinks are skipped (WalkDir does not follow
+// them): every workspace carries the bundle-mount symlinks (personas,
+// protocols, shared, skills, system_prompts) pointing OUTSIDE the root, and a
+// Sources entry must be a real file the user can open. The attachments/ and
+// user-skills/ subtrees are skipped whole: uploads and the owner's
+// materialized private skills are never listed in Sources (ADR-0079).
+// walkWorkspaceFilesAbandonable runs the walk on its own goroutine and returns
+// as soon as ctx is done — empty and truncated — even if a directory read is
+// stuck in the kernel on a stalled filesystem (the walk stops at ctx between
+// entries once that read returns, and its result is discarded).
+func walkWorkspaceFilesAbandonable(ctx context.Context, convID string, limit int) ([]sourcesFile, bool) {
+	type result struct {
+		files     []sourcesFile
+		truncated bool
+	}
+	release, ok := acquireFSWorker()
+	if !ok {
+		return []sourcesFile{}, true // a stalled filesystem holds every slot
+	}
+	done := make(chan result, 1)
+	go func() {
+		defer release()
+		files, truncated := walkWorkspaceFiles(ctx, convID, limit)
+		done <- result{files, truncated}
+	}()
+	select {
+	case r := <-done:
+		return r.files, r.truncated
+	case <-ctx.Done():
+		return []sourcesFile{}, true
+	}
+}
+
+// workspaceWalkHook is a test seam run for each entry the walk visits.
+var workspaceWalkHook func()
+
+func walkWorkspaceFiles(ctx context.Context, convID string, limit int) (files []sourcesFile, truncated bool) {
+	root, err := filepath.EvalSymlinks(tools.WorkspaceDirForConversation(convID))
+	if err != nil {
+		// Most conversations never touched a file — no workspace dir.
+		return []sourcesFile{}, false
+	}
+	h := make(newestFiles, 0, limit)
+	visited := 0
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
+		visited++
+		if workspaceWalkHook != nil {
+			workspaceWalkHook()
+		}
+		// The entry budget bounds the work; ctx bounds the time (Sources
+		// gives each half a deadline, and a slow filesystem must not let one
+		// chat's walk outlast it).
+		if visited > maxWorkspaceWalkEntries || ctx.Err() != nil {
+			truncated = true
+			return filepath.SkipAll
+		}
+		// Per-entry errors (perms, vanished mid-walk) skip the entry,
+		// never abort the whole listing.
+		if walkErr != nil {
+			return nil //nolint:nilerr // best-effort listing
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return nil //nolint:nilerr // best-effort listing
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			// attachments/ and user-skills/ (privateWorkspaceDirs) are the
+			// owner's uploads and private skills fleet put there, not work
+			// the chat produced.
+			if isPrivateWorkspacePath(rel) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			return nil //nolint:nilerr // best-effort listing
+		}
+		f := sourcesFile{
+			Path:       rel,
+			Name:       d.Name(),
+			Size:       info.Size(),
+			ModifiedAt: info.ModTime().Unix(),
+		}
+		switch {
+		case len(h) < limit:
+			heap.Push(&h, f)
+		case limit > 0 && newerFile(f, h[0]):
+			truncated = true
+			h[0] = f
+			heap.Fix(&h, 0)
+		default:
+			truncated = true
+		}
+		return nil
+	})
+	files = make([]sourcesFile, len(h))
+	for i := len(h) - 1; i >= 0; i-- {
+		files[i] = heap.Pop(&h).(sourcesFile)
+	}
+	return files, truncated
+}
+
 // projectFiles handles GET /projects/{id}/files — the project home's Sources
-// panel: every workspace file (uploads, generated CSVs/plots, …) across the
-// CALLER'S OWN conversations in the project, newest first. Same privacy rule
-// as projectConversations: another member's files are never listed. Download
-// goes through the existing per-conversation workspace streamer, which owns
-// the path-traversal guards.
+// panel, grouped by chat (ADR-0079):
+//
+//   - the caller's OWN chats: every regular file in each workspace except
+//     uploads, each flagged output / shared / your_copy. Non-outputs are
+//     download-only and never counted;
+//   - teammates' chats shared with the caller's team in THIS project (the
+//     same gates as team-conversations): their SHARED outputs only, downloaded
+//     through the team-files route, which re-checks every gate.
+//
+// Each half lists at most maxSourcesGroups chats (the most recently active
+// with files), examining at most maxSourcesChatsScanned, and the request as a
+// whole examines at most maxSourcesDiscoveries chats within
+// sourcesDiscoveryBudget; the rest is reported as truncated.
+//
+// The optional ?focus=<conversation id> names the chat a "Manage in Sources"
+// link sends the caller to: its group is included even past those caps, when
+// that chat is in one of the two listings above (the same gates; an id the
+// caller cannot see is ignored, indistinguishable from a chat with no files).
+//
+// Chats with no files are omitted. `files` is the legacy flat list of the
+// caller's own files, kept for older clients. Another member's PRIVATE chat
+// is never read here — the teammate half starts from the team listing.
 func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.Project) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	user := userFromCtx(r.Context())
-	convs, err := s.store.ListProjectConversationsForUser(r.Context(), user, p.ID)
+	ctx := r.Context()
+	user := userFromCtx(ctx)
+	// focus is the chat a "Manage in Sources" link is sending the caller to.
+	// Its group is listed even past the caps below, but only if the chat
+	// passes the same gates as any other group: it is found in the caller's
+	// OWN project listing or in the team listing, never read by id alone.
+	focus := r.URL.Query().Get("focus")
+	if focus != "" && !validSourcesFocus(focus) {
+		http.Error(w, "invalid focus", http.StatusBadRequest)
+		return
+	}
+	convs, err := s.store.ListProjectConversationsForUser(ctx, user, p.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	files := []projectFile{}
-	for _, conv := range convs {
-		wsDir := tools.WorkspaceDirForConversation(conv.ID)
-		root, err := filepath.EvalSymlinks(wsDir)
-		if err != nil {
-			// Most conversations never touched a file — no workspace dir.
-			continue
+	// Most recently active first (the listing's order, made explicit here
+	// because the caps below keep the head of it).
+	sortConversationsRecentFirst(convs)
+	ids := make([]string, 0, min(len(convs), maxSourcesChatsScanned)+1)
+	for i, c := range convs {
+		// Past the scan bound only the focused chat — one of the caller's
+		// own, being in this listing — may still be listed.
+		if i < maxSourcesChatsScanned || c.ID == focus {
+			ids = append(ids, c.ID)
 		}
-		title := conv.Title
-		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-			// Per-entry errors (perms, vanished mid-walk) skip the entry,
-			// never abort the whole listing.
-			if walkErr != nil || d.IsDir() {
-				return nil //nolint:nilerr // best-effort listing
-			}
-			info, err := d.Info()
-			if err != nil {
-				return nil //nolint:nilerr // best-effort listing
-			}
-			// Regular files only. Every conversation workspace carries the
-			// bundle-mount symlinks (personas, protocols, shared, skills,
-			// system_prompts) pointing OUTSIDE the workspace root; WalkDir
-			// does not follow them, so each surfaced as a "file" whose size
-			// was the length of its target path — and whose download
-			// correctly tripped the workspace path-traversal guard, dumping
-			// "path escapes workspace" into a tab. They are plumbing, not
-			// sources: a Sources entry must be a real file the user can open.
-			if !info.Mode().IsRegular() {
-				return nil
-			}
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return nil //nolint:nilerr // best-effort listing
-			}
-			files = append(files, projectFile{
-				ConversationID:    conv.ID,
-				ConversationTitle: title,
-				Path:              filepath.ToSlash(rel),
-				Name:              d.Name(),
-				Size:              info.Size(),
-				ModifiedAt:        info.ModTime().Unix(),
-			})
-			return nil
-		})
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].ModifiedAt > files[j].ModifiedAt })
+	origins, err := s.store.BranchOriginsFor(ctx, ids)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	groups := []sourcesGroup{}
+	flat := []projectFile{}
 	truncated := false
-	if len(files) > maxProjectFiles {
-		files = files[:maxProjectFiles]
+
+	addMine := func(ctx context.Context, conv store.Conversation) (bool, error) {
+		g, ok, gTruncated, err := s.ownSourcesGroup(ctx, conv, origins[conv.ID])
+		if err != nil {
+			return false, err
+		}
+		truncated = truncated || gTruncated
+		if !ok {
+			return false, nil
+		}
+		for _, f := range g.Files {
+			flat = append(flat, projectFile{
+				ConversationID: conv.ID, ConversationTitle: conv.Title,
+				Path: f.Path, Name: f.Name, Size: f.Size, ModifiedAt: f.ModifiedAt,
+			})
+		}
+		groups = append(groups, g)
+		return true, nil
+	}
+
+	// focusDone is set once the focused chat has been examined (listed, or
+	// found to have no files) so it is never listed twice.
+	focusDone := focus == ""
+	mineBudget, teamBudget := newSourcesBudgets()
+	mineCut, err := listSourcesHalf(ctx, convs, focus, &focusDone, mineBudget, addMine)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	team, err := s.store.ListProjectTeamConversations(ctx, user, p.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sortConversationsRecentFirst(team)
+
+	addTeam := func(ctx context.Context, conv store.Conversation) (bool, error) {
+		g, ok, gTruncated, err := s.teamSourcesGroup(ctx, conv)
+		if err != nil {
+			return false, err
+		}
+		truncated = truncated || gTruncated
+		if ok {
+			groups = append(groups, g)
+		}
+		return ok, nil
+	}
+
+	teamCut, err := listSourcesHalf(ctx, team, focus, &focusDone, teamBudget(), addTeam)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	groupsTruncated := mineCut || teamCut
+
+	sort.SliceStable(flat, func(i, j int) bool { return flat[i].ModifiedAt > flat[j].ModifiedAt })
+	if len(flat) > maxProjectFiles {
+		flat = flat[:maxProjectFiles]
 		truncated = true
 	}
-	writeJSON(w, map[string]any{"files": files, "truncated": truncated})
+	writeJSON(w, map[string]any{
+		"groups": groups, "files": flat,
+		"truncated":        truncated || groupsTruncated,
+		"groups_truncated": groupsTruncated,
+	})
+}
+
+// ownSourcesGroup builds the Sources group of one of the caller's OWN chats
+// (origin is its teammate-branch origin, if any); ok is false for a chat with
+// no files. truncated reports a bounded walk or discovery cut something.
+func (s *Server) ownSourcesGroup(ctx context.Context, conv store.Conversation, origin *store.BranchOrigin) (g sourcesGroup, ok, truncated bool, err error) {
+	all, walkTruncated := walkWorkspaceFilesAbandonable(ctx, conv.ID, maxProjectFiles)
+	if walkTruncated {
+		truncated = true
+	}
+	// Outputs are resolved independently of the walk: the walk is
+	// bounded (file cap and visit budget), so an empty walk — e.g. the
+	// budget spent on thousands of empty directories — does not mean the
+	// chat has no current output. Skip the chat only when BOTH are empty.
+	outs, outsTruncated, err := s.ownerOutputs(ctx, conv.ID)
+	if err != nil {
+		return g, false, false, err
+	}
+	if outsTruncated {
+		truncated = true
+	}
+	if len(all) == 0 && len(outs) == 0 {
+		return g, false, truncated, nil
+	}
+	copied := map[string]bool{}
+	g = sourcesGroup{
+		ConversationID: conv.ID,
+		Title:          conv.Title,
+		OwnerEmail:     conv.UserEmail,
+		Mine:           true,
+		TeamVisible:    conv.TeamVisible,
+		LastActiveAt:   conv.UpdatedAt,
+		FileCount:      len(outs),
+		SharedCount:    countShared(outs),
+	}
+	if origin != nil {
+		g.IsBranch, g.BranchedAt = true, origin.BranchedAt
+		for _, f := range origin.CopiedFiles {
+			copied[f.Path] = true
+		}
+	}
+	// Every current output first, whatever its age: FileCount and
+	// SharedCount count them, and each needs its row (and toggle). The
+	// bounded walk keeps only the newest files, so an older output can be
+	// missing from `all` — listing from the walk alone left a shared
+	// output counted but with no row to unshare it by. Then the newest
+	// non-output files fill the group up to the cap.
+	listed := make(map[string]bool, len(outs))
+	for _, o := range outs {
+		listed[o.Path] = true
+		g.Files = append(g.Files, sourcesFile{
+			Path: o.Path, Name: o.Name, Size: o.Size, ModifiedAt: o.ModifiedAt,
+			Shared: o.Shared, Output: true, YourCopy: copied[o.Path],
+		})
+	}
+	for _, f := range all {
+		if listed[f.Path] {
+			continue
+		}
+		if len(g.Files) >= maxProjectFiles {
+			truncated = true
+			break
+		}
+		f.YourCopy = copied[f.Path]
+		g.Files = append(g.Files, f)
+	}
+	sort.SliceStable(g.Files, func(i, j int) bool { return newerFile(g.Files[i], g.Files[j]) })
+	return g, true, truncated, nil
+}
+
+// teamSourcesGroup builds the Sources group of a teammate's chat from the
+// team listing: its SHARED outputs only; ok is false when it has none.
+func (s *Server) teamSourcesGroup(ctx context.Context, conv store.Conversation) (g sourcesGroup, ok, truncated bool, err error) {
+	outs, outsTruncated, err := s.ownerOutputs(ctx, conv.ID)
+	if err != nil {
+		return g, false, false, err
+	}
+	if outsTruncated {
+		truncated = true
+	}
+	g = sourcesGroup{
+		ConversationID: conv.ID,
+		Title:          conv.Title,
+		OwnerEmail:     conv.UserEmail,
+		TeamVisible:    conv.TeamVisible,
+		LastActiveAt:   conv.UpdatedAt,
+		Files:          []sourcesFile{},
+	}
+	for _, o := range outs {
+		if !o.Shared {
+			continue // a teammate never sees a file the owner held back
+		}
+		g.Files = append(g.Files, sourcesFile{
+			Path: o.Path, Name: o.Name, Size: o.Size, ModifiedAt: o.ModifiedAt,
+			Shared: true, Output: true,
+		})
+	}
+	if len(g.Files) == 0 {
+		return g, false, truncated, nil
+	}
+	g.FileCount, g.SharedCount = len(g.Files), len(g.Files)
+	if len(g.Files) > maxProjectFiles {
+		g.Files = g.Files[:maxProjectFiles]
+		truncated = true
+	}
+	return g, true, truncated, nil
+}
+
+// listSourcesHalf adds the groups of one half of Sources (the caller's own
+// chats, or the team's) through add, most recently active first, up to
+// maxSourcesGroups groups out of at most maxSourcesChatsScanned chats, each
+// examination spending one unit of the half's budget and running under the
+// half's deadline — a slow chat is cut off at it (ctx reaches the history
+// read and the workspace walk) rather than eating into the other half's
+// time; cut reports that any bound left chats out. The focused chat (if not
+// done yet) is added even past the bounds, on the request's own context —
+// but only from this list, so focus never reaches a chat the listing's own
+// gates did not return.
+func listSourcesHalf(ctx context.Context, list []store.Conversation, focus string, focusDone *bool, budget *sourcesBudget, add func(context.Context, store.Conversation) (bool, error)) (cut bool, err error) {
+	halfCtx, cancel := context.WithDeadline(ctx, budget.deadline)
+	defer cancel()
+	n := 0
+	for i, conv := range list {
+		if n >= maxSourcesGroups || i >= maxSourcesChatsScanned || !budget.spend() {
+			cut = true
+			break
+		}
+		added, err := add(halfCtx, conv)
+		if err != nil {
+			if (ctx.Err() == nil && halfCtx.Err() != nil) || errors.Is(err, errFilesystemBusy) {
+				// The half's deadline (not the request's), or a stalled
+				// filesystem holding every worker: stop here and say so,
+				// like any other bound.
+				cut = true
+				break
+			}
+			return cut, err
+		}
+		if conv.ID == focus && halfCtx.Err() == nil {
+			*focusDone = true
+		}
+		if added {
+			n++
+		}
+	}
+	if *focusDone {
+		return cut, nil
+	}
+	for _, conv := range list {
+		if conv.ID == focus {
+			*focusDone = true
+			// Past the count cap, not past a deadline: the focused chat gets
+			// a window of its own, so "Manage in Sources" cannot hang on a
+			// stalled filesystem either. Cut off, it is simply not listed.
+			focusCtx, cancelFocus := context.WithTimeout(ctx, sourcesFocusBudget)
+			defer cancelFocus()
+			_, err := add(focusCtx, conv)
+			if err != nil && ((ctx.Err() == nil && focusCtx.Err() != nil) || errors.Is(err, errFilesystemBusy)) {
+				return true, nil
+			}
+			return cut, err
+		}
+	}
+	return cut, nil
+}
+
+// validSourcesFocus bounds the ?focus id to the conversation-id alphabet
+// (UUIDs in practice) before it reaches any lookup.
+func validSourcesFocus(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	for _, c := range id {
+		ok := c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '-' || c == '_'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// sortConversationsRecentFirst orders chats most recently active first
+// (updated_at desc, then id desc — the store listings' own order).
+func sortConversationsRecentFirst(convs []store.Conversation) {
+	sort.SliceStable(convs, func(i, j int) bool {
+		if convs[i].UpdatedAt != convs[j].UpdatedAt {
+			return convs[i].UpdatedAt > convs[j].UpdatedAt
+		}
+		return convs[i].ID > convs[j].ID
+	})
+}
+
+// projectMyState handles GET/PUT /projects/{id}/my-state — the caller's own
+// UI state for this project (ADR-0079): the getting-started card's "Keep
+// personal" and has-shared-a-chat, and which Sources groups they left open.
+// Stored per user so it follows them across devices. PUT takes any subset of
+// {kept_personal, sources_open} (sources_open merges) and answers the full
+// state; has_shared_chat is set server-side by a successful share only.
+func (s *Server) projectMyState(w http.ResponseWriter, r *http.Request, p *store.Project) {
+	user := userFromCtx(r.Context())
+	switch r.Method {
+	case http.MethodGet:
+		st, err := s.store.GetProjectUserState(r.Context(), p.ID, user)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, st)
+	case http.MethodPut:
+		var body struct {
+			KeptPersonal *bool           `json:"kept_personal"`
+			SourcesOpen  map[string]bool `json:"sources_open"`
+		}
+		if !decodeJSONBody(w, r, &body) {
+			return
+		}
+		st, err := s.store.UpdateProjectUserState(r.Context(), p.ID, user, body.KeptPersonal, body.SourcesOpen)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, st)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // mayManageProjectMemory reports whether user may mutate this team learning:
@@ -581,7 +1142,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 		// valid_from/valid_to and the personal-memory PATCH honors them, so
 		// dropping them here answered 200 to a team-learning window change
 		// that never happened.
-		memory, err := s.store.UpdateProjectMemory(r.Context(), p.ID, memID, store.MemoryPatch{
+		memory, err := s.store.UpdateProjectMemory(r.Context(), p.ID, memID, user, store.MemoryPatch{
 			Content:   req.Content,
 			Kind:      req.Kind,
 			Pinned:    req.Pinned,
@@ -598,7 +1159,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 		if s.projectMemoryPermitted(w, r, p, memID, user) == nil {
 			return
 		}
-		if err := s.store.DeleteProjectMemory(r.Context(), p.ID, memID); err != nil {
+		if err := s.store.DeleteProjectMemory(r.Context(), p.ID, memID, user); err != nil {
 			writeMemoryStoreError(w, err)
 			return
 		}
@@ -771,6 +1332,10 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 		conv, err = s.store.CreateConversation(r.Context(), user, title, persona, model, lockdown)
 	}
 	if err != nil {
+		if errors.Is(err, store.ErrProjectNotAccessible) {
+			http.Error(w, "project not found", http.StatusNotFound)
+			return nil, false
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return nil, false
 	}

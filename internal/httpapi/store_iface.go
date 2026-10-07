@@ -47,6 +47,7 @@ type chatStore interface {
 	// SetConversationProject re-files a conversation into a project ("" =
 	// unfile); the handler validates membership first (#509 follow-up).
 	SetConversationProject(ctx context.Context, userEmail, convID, projectID string) error
+	SetConversationProjectIf(ctx context.Context, userEmail, convID, projectID, expected string) error
 	SetModel(ctx context.Context, userEmail, convID, model string) error
 	SetApprovalTimeout(ctx context.Context, userEmail, convID string, seconds *int) error
 	SetThinkingConfig(ctx context.Context, userEmail, convID string, cfg *store.ThinkingConfig) error
@@ -147,7 +148,7 @@ type chatStore interface {
 	CreateProjectConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool, projectID string, mcpServers []string) (*store.Conversation, error)
 	CreateProjectMemory(ctx context.Context, projectID, creatorEmail, content, kind string) (*store.Memory, error)
 	ListProjectMemories(ctx context.Context, projectID string) ([]store.Memory, error)
-	DeleteProjectMemory(ctx context.Context, projectID, memoryID string) error
+	DeleteProjectMemory(ctx context.Context, projectID, memoryID, actor string) error
 	ListProjectConversationIDs(ctx context.Context, projectID string) ([]string, error)
 	// ListProjectConversationsForUser is the project home's chat list —
 	// the CALLER'S OWN conversations only (chats stay private to their
@@ -161,7 +162,7 @@ type chatStore interface {
 	// UpdateProjectMemory the pin/edit/retire actions, and
 	// MoveMemoryToProject the promotion of a personal memory (ADR-0057).
 	GetProjectMemory(ctx context.Context, projectID, memoryID string) (*store.Memory, error)
-	UpdateProjectMemory(ctx context.Context, projectID, memoryID string, patch store.MemoryPatch) (*store.Memory, error)
+	UpdateProjectMemory(ctx context.Context, projectID, memoryID, actor string, patch store.MemoryPatch) (*store.Memory, error)
 	MoveMemoryToProject(ctx context.Context, userEmail, memoryID, projectID string) (*store.Memory, error)
 	// AcceptMemoryProposalIntoProject resolves a pending memory proposal into
 	// the project's shared memory instead of the caller's personal memory.
@@ -176,7 +177,7 @@ type chatStore interface {
 	// TransferProjectOwnership hands a project to another member — the fix for
 	// "the owner left", which used to freeze the definition and destroy the
 	// project with the account (ADR-0057). ProjectMemberEmails is the picker.
-	TransferProjectOwnership(ctx context.Context, projectID, newOwnerEmail string) (*store.Project, error)
+	TransferProjectOwnership(ctx context.Context, projectID, newOwnerEmail, actingOwner string) (*store.Project, error)
 	ProjectMemberEmails(ctx context.Context, projectID string) ([]string, error)
 
 	// Memories + memory proposals.
@@ -273,9 +274,38 @@ type chatStore interface {
 	// the read-only transcript a teammate opens from the project home. nil =
 	// not readable, indistinguishable from "no such chat".
 	GetTeamVisibleConversation(ctx context.Context, callerEmail, convID string) (*store.TeamSharedConversation, error)
+	// GetTeamVisibleConversationMeta is the same gate and row without the
+	// transcript (the branch and the team-files gate, which never need it).
+	GetTeamVisibleConversationMeta(ctx context.Context, callerEmail, convID string) (*store.TeamSharedConversation, error)
+	// CanTeamRead is the same gate as a yes/no, no row and no history: the
+	// branch copy re-checks it before each file.
+	CanTeamRead(ctx context.Context, callerEmail, convID string) (bool, error)
+	// LoadDiscoveryHistory is output discovery's narrow, budget-bounded,
+	// newest-first history read (see the store doc). Callers have already
+	// passed an ownership or team-read gate.
+	LoadDiscoveryHistory(ctx context.Context, convID string, throughID, maxBytes int64, more func(agent.HistoryEntry) bool) ([]agent.HistoryEntry, error)
+	// TeamViewVersion is team-view's cheap ETag read: same gate, no history
+	// load. "" = not readable (the handler answers 404, never 304).
+	TeamViewVersion(ctx context.Context, callerEmail, convID string) (string, error)
 	// LeaveTeamImpact is what leaving the team costs — quoted in the confirm.
 	LeaveTeamImpact(ctx context.Context, email, teamID string) (store.LeaveTeamImpact, error)
 	SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) (bool, error)
+	// Files in a team share (ADR-0079). Per-file share state is stored as
+	// exclusions (default shared); a teammate branch records its origin and
+	// the shared files copied into it; the team link resolves to a status
+	// that reveals nothing beyond routing; per-person project UI state.
+	ListOutputExclusions(ctx context.Context, convID string) (map[string]bool, error)
+	SetOutputShared(ctx context.Context, ownerEmail, convID, path string, shared bool) error
+	ApplyOutputChecklist(ctx context.Context, ownerEmail, convID string, listed, unshared []string) error
+	RecordBranchOrigin(ctx context.Context, branchConvID string, o store.BranchOrigin) error
+	GetBranchOrigin(ctx context.Context, ownerEmail, convID string) (*store.BranchOrigin, error)
+	BranchOriginsFor(ctx context.Context, convIDs []string) (map[string]*store.BranchOrigin, error)
+	PendingBranchFilesAnnouncement(ctx context.Context, convID string) (*store.BranchOrigin, error)
+	ViewerBranches(ctx context.Context, viewerEmail string, sourceIDs []string) (map[string]store.ViewerBranch, error)
+	ResolveTeamLink(ctx context.Context, callerEmail, convID string) (store.TeamLink, error)
+	GetProjectUserState(ctx context.Context, projectID, email string) (store.ProjectUserState, error)
+	UpdateProjectUserState(ctx context.Context, projectID, email string, keptPersonal *bool, sourcesOpen map[string]bool) (store.ProjectUserState, error)
+	MarkProjectSharedChat(ctx context.Context, convID, email string) error
 	AdminStats(ctx context.Context) ([]store.AdminRow, error)
 	// MigrationStatus reports applied vs pending chat-DB migrations for
 	// GET /admin/migrations (#256). Read-only.

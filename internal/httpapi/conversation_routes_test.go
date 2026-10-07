@@ -70,6 +70,10 @@ func conversationRoutePairs() []routePairProbe {
 		// TestConversationTeamView, which needs a two-user team fixture this
 		// single-owner probe deliberately does not build.
 		{sub: "team-view", method: http.MethodGet, body: nil, want: http.StatusNotFound},
+		// The team link resolves for ANY caller (ADR-0079); for the owner of
+		// a fresh chat it answers 200 {"status":"owner"}. The other statuses
+		// are covered in team_files_http_test.
+		{sub: "team-link", method: http.MethodGet, body: nil, want: http.StatusOK},
 		{sub: "mcp-servers", method: http.MethodGet, body: nil, want: http.StatusOK},
 		{sub: "mcp-servers", method: http.MethodPost, body: map[string][]string{"enabled_optional": {}}, want: http.StatusOK},
 		{sub: "export", method: http.MethodGet, body: nil, want: http.StatusOK},

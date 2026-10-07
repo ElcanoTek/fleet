@@ -181,6 +181,11 @@ type Conversation struct {
 	// are different and a single unlabeled icon conflated them. Set via
 	// POST /conversations/{id}/share-with-team.
 	TeamVisible bool `json:"team_visible,omitempty"`
+	// BranchOrigin is set, by the handlers that serve it, on a TEAMMATE'S
+	// branch only (ADR-0079): whose chat it came from and which shared files
+	// were copied in. Never scanned from the conversations row — it lives in
+	// conversation_branch_origins — so every listing leaves it nil and omits it.
+	BranchOrigin *BranchOrigin `json:"branch_origin,omitempty"`
 }
 
 // ThinkingConfig is the persisted shape of a conversation's extended-thinking
@@ -562,8 +567,11 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 	}
 	if parent == nil {
 		// Not the caller's own — the one other readable case is a chat a
-		// teammate shared with the team.
-		shared, terr := s.GetTeamVisibleConversation(ctx, userEmail, parentConvID)
+		// teammate shared with the team. The gate only: the copy below reads
+		// the messages itself (narrowed to what the gate lets a teammate
+		// read), so loading the whole transcript here would be a second full
+		// read of the owner's history for nothing.
+		shared, terr := s.GetTeamVisibleConversationMeta(ctx, userEmail, parentConvID)
 		if terr != nil {
 			return nil, terr
 		}
@@ -647,7 +655,12 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 	copyQuery := `SELECT role, type, content, injected_context IS NULL FROM messages
 		 WHERE conversation_id = $1 AND id <= $2`
 	if redact {
-		copyQuery += ` AND type = 'text' AND role IN ('user', 'assistant')`
+		// teamTranscriptEntry below is the authoritative filter; this narrows
+		// the scan to the rows it can keep. Summaries are selected only to
+		// become content-free boundaries — their text is never copied.
+		// 'summary_boundary' is agent.EntryTypeSummaryBoundary (a constant
+		// literal here, so the query is never built by concatenation).
+		copyQuery += ` AND ((type = 'text' AND role IN ('user', 'assistant')) OR type IN ('summary', 'summary_boundary'))`
 	}
 	copyQuery += ` ORDER BY id ASC`
 	rows, err := s.db.QueryContext(ctx, copyQuery, parentConvID, branchPointMessageID)
@@ -664,6 +677,21 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 			return nil, err
 		}
 		e.Content = json.RawMessage(content)
+		if redact {
+			// Exactly what the team view showed: text, and a content-free
+			// boundary where the owner's chat has a summary, so the branch's
+			// transcript splits replies where the owner's (and the team
+			// view's) does. A boundary has nothing to strip.
+			kept, ok := teamTranscriptEntry(e)
+			if !ok {
+				continue
+			}
+			e = kept
+			if e.Type == agent.EntryTypeSummaryBoundary {
+				entries = append(entries, e)
+				continue
+			}
+		}
 		// Rows written BEFORE migration 056 embedded the injected blocks in
 		// the message text itself, so not selecting injected_context is not
 		// enough for them: strip by marker as well.
@@ -1063,6 +1091,18 @@ func (s *Store) SetPinned(ctx context.Context, userEmail, convID string, pinned 
 // pin: "pinned" means keep-prominent, which is the opposite of filing away, so
 // the two states are mutually exclusive (the issue's pinned-interaction rule).
 // A soft-deleted conversation is not mutable (deleted_at IS NULL, #596).
+//
+// Archiving also UNSHARES the chat with the team (ADR-0079): team_visible and
+// the stamped audience are cleared in the same statement. Every read gate
+// already refused an archived chat, so this changes no access at the moment
+// of archiving — what it changes is unarchive, which brings the chat back as
+// Only you rather than silently re-exposing it (and every output presented in
+// it since) to the team. Unarchive clears them too, unconditionally: whatever
+// state the archived row is in (a pre-ADR-0079 share that was archived before
+// this rule, or any write that slipped past SetConversationTeamVisible's
+// archived refusal), unarchive never reopens team access. The owner's
+// per-file exclusions are untouched, so sharing again restores their earlier
+// file choices.
 func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archived bool) error {
 	now := time.Now().Unix()
 	var archivedAt any // NULL when unarchiving
@@ -1071,7 +1111,9 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 		archivedAt = now
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
+		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3,
+			team_visible = FALSE, team_shared_with = NULL
+		 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
 		archivedAt, pinned, now, convID, userEmail,
 	)
 	if err != nil {
@@ -1210,8 +1252,12 @@ func (s *Store) GetConversationByShareToken(ctx context.Context, token string, n
 	// boundary: any consumer of this snapshot — including a raw JSON fetch —
 	// sees the transcript, not the agent's working trace (#226).
 	out.Messages = make([]agent.HistoryEntry, 0, len(msgs))
+	//
+	// A compaction summary passes only as a content-free boundary (the same
+	// filter the team view uses, teamTranscriptEntry): it splits the rendered
+	// replies where the owner's chat does, and carries none of the summary.
 	for _, m := range msgs {
-		if m.Type == "text" && (m.Role == "user" || m.Role == "assistant") {
+		if m, ok := teamTranscriptEntry(m); ok {
 			// Drop the persisted messages.id from the PUBLIC snapshot. LoadHistory
 			// populates it for the owner's branching flow (#454), but the #226 share
 			// contract deliberately omits internal identifiers — a global BIGSERIAL id
@@ -1650,6 +1696,11 @@ var (
 	// ErrNoTeamShareHome: the chat is not in a project shared with the owner's
 	// team, so a teammate would have no surface listing it.
 	ErrNoTeamShareHome = errors.New("a chat can only be shared with your team from inside a project that is shared with that team")
+	// ErrArchivedNotShareable: the chat is archived. Every team read gate
+	// refuses an archived chat, and unarchive brings a chat back unshared,
+	// so a share stored now would be invisible until unarchive and then
+	// dropped by it — refused instead, so the owner is told to unarchive.
+	ErrArchivedNotShareable = errors.New("an archived chat can't be shared with your team; unarchive it first")
 )
 
 // SetConversationTeamVisible flips a conversation's team_visible flag (#237)
@@ -1674,6 +1725,11 @@ var (
 // membership with no way to take it back. Enforcing it here is what makes "a
 // team-shared chat always has a home" true rather than hoped for.
 //
+// Opting in is also refused for an ARCHIVED chat (ErrArchivedNotShareable):
+// unarchive brings a chat back unshared (SetArchived), so a share stored while
+// archived would either be silently dropped or — before that rule — silently
+// re-expose the chat on unarchive. The owner unarchives first.
+//
 // Opting OUT is never refused. Revocation must work from whatever state a row
 // is in, including one a pre-054 client created.
 func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) (bool, error) {
@@ -1697,16 +1753,20 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 	// who owns no such chat learns nothing about teams or projects (404), and
 	// only an owner sees which of the two share preconditions they are missing.
 	var homeTeam sql.NullString
+	var archived bool
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT p.team_id
+		SELECT p.team_id, c.archived_at IS NOT NULL
 		FROM conversations c
 		LEFT JOIN projects p ON p.id = c.project_id
 		WHERE c.id = $1 AND c.user_email = $2 AND c.deleted_at IS NULL`,
-		convID, ownerEmail).Scan(&homeTeam); err != nil {
+		convID, ownerEmail).Scan(&homeTeam, &archived); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, ErrConversationNotFound
 		}
 		return false, err
+	}
+	if archived {
+		return false, ErrArchivedNotShareable
 	}
 	var ownerTeam sql.NullString
 	if err := s.db.QueryRowContext(ctx,
@@ -1724,13 +1784,21 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 		`UPDATE conversations c SET
 			team_visible = TRUE, team_shared_with = $1, updated_at = $2
 		 WHERE c.id = $3 AND c.user_email = $4 AND c.deleted_at IS NULL
+		   AND c.archived_at IS NULL
 		   AND EXISTS (SELECT 1 FROM projects p WHERE p.id = c.project_id AND p.team_id = $1)`,
 		team, now, convID, ownerEmail)
 	if err != nil {
 		return false, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		// Lost a race with a write that moved the chat or unshared the project.
+		// Lost a race with a write that moved, archived or deleted the chat,
+		// or unshared the project. Re-read which, so the sentence is right.
+		var archivedNow bool
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT archived_at IS NOT NULL FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
+			convID, ownerEmail).Scan(&archivedNow); err == nil && archivedNow {
+			return false, ErrArchivedNotShareable
+		}
 		return false, ErrNoTeamShareHome
 	}
 	return true, nil

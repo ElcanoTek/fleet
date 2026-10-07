@@ -155,7 +155,9 @@ too. Below that, conversations are grouped:
 
 A chat row can carry two small badges, each labeled with its audience when you
 hover: one means it is shared by link, the other that it is shared with your
-team. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
+team. Click a project's name to open its home (and expand it); the chevron only
+folds it. Hovering a project shows its menu: **Open project**, **New chat**, and,
+for the owner, **Share…** and **Project settings…**. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
 
 Your account menu at the foot of the rail switches between **Light**, **Dark**,
 and **System** appearance and opens **Settings**.
@@ -179,8 +181,9 @@ Above the transcript sit three small controls, left to right: **Keyboard
 shortcuts** shows the same list as the [last section](#13-keyboard-shortcuts) of
 this guide; **Memories** opens the memory manager; and **Show details** toggles
 the assistant's reasoning, tool calls, and per-turn cost figures on or off across
-the whole conversation. A conversation you have shared with your team also shows
-a **Shared with team** chip here, which opens the share dialog.
+the whole conversation. Every conversation also shows who can see it — **Only
+you**, **Shared with** your team, or **Public link** — and a **Share** button.
+Both open the share dialog.
 
 ### The transcript
 
@@ -488,32 +491,44 @@ member.
 
 ### Setting one up
 
-**Create project** from the **Projects** group in the rail. A project has a name,
-standing instructions, and one switch: **Share with my team**. Off, the project
-is personal and only you see it. On, everyone on your team sees it in their rail
-and can work inside it. You need to be on a team for the switch to be available;
-teams are set up in **Settings → Team** and members are added by an admin. The
-same settings are reachable later from **Project settings** on the project home.
+**New project** (the **+** beside **Projects** in the rail) asks for a name, an
+optional set of instructions, and **Who can see it**: **Only you** (a private
+project) or your team. Shared with your team, everyone on it sees the project's
+instructions, its team learnings, and any chat shared with them — but each chat
+stays **Only you** until its owner shares it. You need to be on a team for the
+team option to be available; teams are set up in **Settings → Team** and members
+are added by an admin. Creating a project lands you on its home. The same choices
+are reachable later from **Project settings** (the gear on the project home, or
+the project's menu in the rail), which only the owner can open.
 
-The project's owner can hand it over with **Transfer** to another member, so a
-project outlives its creator's involvement. Deleting a project asks first and
-names what goes with it: its team learnings, and how many members' chats leave it
-and become temporary again. Turning **Share with my team** off asks too, and
-quotes how many teammates' chats it will unfile back into their own Temporary
-lists. Nothing in either case deletes a conversation; chats always stay with
-their owner.
+The project's owner can hand it over with **Transfer…** to another member, so a
+project outlives its creator's involvement; transfer is available once the
+project is shared. You keep using the project as a member of its team; if you
+have left that team, handing it over also ends your access, and your chats in
+it become temporary again — the transfer panel says which applies. Deleting a project asks first and names what goes with it:
+its team learnings, and how many people's chats leave it and become temporary
+again, with **Export first** offered. Switching a shared project to **Only you**
+shows, before you save, how many shared chats become Only you and how many
+teammates' chats move back to their own unfiled chats. Nothing in either case
+deletes a conversation; chats always stay with their owner.
 
 ### The project home
 
-Open a project from the rail to reach its home. Left to right, top to bottom:
+Open a project from the rail to reach its home. Its title carries a pill saying
+who can see it — **Only you** or **Shared with** your team; in a shared project
+the pill explains what the team sees. Until you have shared a chat in the
+project, a short **getting-started card** walks the next steps (share the
+project, add instructions, share a chat), each with a button that does it. The
+**×** hides it for now; in a personal project, **Keep personal** hides it for
+good. Then, top to bottom:
 
 | Area | What it holds |
 | --- | --- |
-| **Chats** | Your conversations in this project, with a search box scoped to it. Chats you have shared with the team carry a badge here. |
-| **Shared by your team** | Conversations your teammates have shared into this project. Open one to read it; see [Sharing with your team](#sharing-with-your-team). Until someone shares, it says so and reminds you that your own shared chats stay in your list above. |
+| **Your chats** | Your conversations in this project, with how many are shared with the team and a search box scoped to it. Each row has a pill, **Only you** or your team's name: switch it to share the chat (and its files) or to stop sharing it; **More sharing options…** opens the share dialog. In a shared project, **New chat** asks whether the new chat starts as **Only you** or shared with the team. |
+| **Shared by your team** | Conversations your teammates have shared into this project, with the owner and date. Open one to read it; see [Sharing with your team](#sharing-with-your-team). A row you have already branched says **You branched this**, and still opens the owner's live chat. |
 | **Instructions** | The standing instructions. Editable by the owner. |
 | **Team learnings** | One row per learning, each with who wrote it and when. **New team learning** adds one. The row menu holds **Pin**, **Edit**, **Retire** or **Restore**, and **Delete**. The same list is the Team learnings tab of the memory manager, so you can tend it without leaving a conversation. |
-| **Sources** | Files from your own conversations in this project. Files are never shared through a project; a teammate's files stay theirs. |
+| **Sources** | Files, grouped by chat. In a shared project, **From your team** comes first — the files teammates shared, each downloadable — then **Your chats**. Each of your groups shows how many of its files are shared; the toggle on a file shares or unshares it, and the arrow downloads it. Files you uploaded and your personal skills never appear here, and copies that came with a branch are labeled **Your copy**. Each section lists the 50 most recently active chats with files; past that, the panel says it is showing the newest files only. |
 
 Permissions in one line: **members manage their own learnings; the owner manages
 all of them.** Retire is the polite default when a learning stops being true. It
@@ -547,10 +562,10 @@ you hover over it. Here is everything in it.
 | **Download chat** | Export the conversation in one of three formats: **Web page**, which opens in any browser, looks like the chat, and prints to PDF; **Text document**, for pasting into email, Word, or Docs; or **Raw data**, the complete record for developers. **Include the agent's work** adds the tool calls, results, and reasoning; it is off by default so a long chat downloads as the conversation, not its machinery. |
 | **Make recurring task…** | Ask the assistant to turn this conversation into a scheduled task. See [From chat to a task](#10-from-chat-to-a-task). |
 | **Save as workflow** | Turn the whole conversation into a reusable workflow template in the prompt library. See [From chat to a task](#10-from-chat-to-a-task). |
-| **Share** | Opens one dialog with two audiences. **Share by link** creates a read-only link anyone can open: **Create link**, **Copy link**, **Stop sharing**. **Share with team** makes the conversation readable by your teammates, and is available only when the chat is inside a project shared with your team; if it is not, the dialog says so and offers **Move to project** right there. A chat can be shared both ways, either way, or neither, and each shows its own badge in the rail. |
-| **Select** | Enter selection mode to pin, label, or delete several conversations at once. |
-| **Archive** | Put it away without deleting it. Archived conversations never expire and can be unarchived from the **Archived** group. |
-| **Delete** | Remove the conversation and everything it produced. There is a confirmation, and no undo. |
+| **Share…** | Opens the share dialog: sharing with your team first, then **Share outside your team** (a public link). See [Sharing with your team](#sharing-with-your-team). |
+| **Select** | Enter selection mode to pin, label, or delete several conversations at once. If the selection includes chats shared with your team, the delete confirmation says how many, and that the team loses them and their shared files; teammates who branched them keep their copies. |
+| **Archive** | Put it away without deleting it. Archived conversations never expire and can be unarchived from the **Archived** group. Archiving a chat shared with your team stops sharing it (it asks first, with the number of shared files); unarchived, it comes back as **Only you**. An archived chat can't be shared with your team; unarchive it first. |
+| **Delete** | Remove the conversation and everything it produced. There is a confirmation, and no undo. For a chat shared with your team, the confirmation says what the team loses; teammates who branched it keep their copies. |
 
 > **What expires, and when.** An unpinned conversation that is not in a project,
 > not archived, and not shared is deleted after a period of inactivity — 14 days
@@ -572,27 +587,62 @@ and [Memory and projects](#7-memory-and-projects).
 
 ### Sharing with your team
 
-Sharing a conversation with your team is how a good piece of work travels. Two
-things to know about what it shares. It shares the **transcript only**: your
-messages and the assistant's replies. Tool calls, tool results, reasoning, and
-attachments are left out, and files the assistant produced stay behind your own
-account, so a conversation about a report does not hand out the report. And it
-shares **read-only**: a conversation has exactly one owner, and nothing a
-teammate does changes yours.
+Sharing a conversation with your team is how a good piece of work travels. A chat
+is shared with a team only when it sits in a project shared with that team **and**
+its owner shares it; sharing the project alone never shares its chats.
 
-A team-shared conversation always has a home: the project it sits in. If the chat
-is moved out of the project, the project is made personal or deleted, or you
-leave the team, the share ends with it. You can also end it yourself at any time
-from the same dialog.
+**The share dialog** (the **Share** button in the header, or **Share…** in a
+chat's menu) always leads with your team and offers one button that does the
+whole job for the situation you are in:
+
+| Situation | The button |
+| --- | --- |
+| The chat is in no project | **Move and share** into a project already shared with your team, or **Create shared project** if there is none yet — the chat moves in and is shared. |
+| The chat is in a personal project | **Share project first**, which takes you to the project home with the confirmation open; afterwards the getting-started card offers to share the chat in one click. |
+| The chat is in a project shared with your team | **Share with** your team. **Includes N files · Choose…** lets you untick files before sharing. |
+| The chat is shared | **Copy link for** your team, plus **Stop sharing** (which asks first and, when it can count them, says how many files stop being shared). |
+| You are not on a team | Nothing to share with yet; the dialog says how to get onto one. |
+
+**What it shares.** Your messages, the assistant's replies, and the **files the
+assistant presented in its replies** (the file links in the chat) — including
+files it presents later, because a shared chat is live. Files you untick stay
+unshared, even if you stop sharing and share again or archive and unarchive the
+chat. Files you uploaded are never shared, and files the assistant wrote without
+presenting them are not shared either. Tool calls, tool results, and reasoning
+are left out. In your own shared chat, each file link shows **Shared** or **Not
+shared**; click it to manage files in the project's **Sources**.
+
+It shares **read-only**: a conversation has exactly one owner, and nothing a
+teammate does changes yours. Teammates see new messages as you keep working.
+
+**The link for your team** opens only for signed-in members of your team, on the
+read-only view. Anyone else who opens it sees that the chat is shared with your
+team and nothing about it; a signed-out teammate is sent to sign in and then
+straight to the chat. Once a chat stops being shared, its link says so.
+
+**When sharing ends.** A team-shared conversation always has a home: the project
+it sits in. Moving it into another project shared with the same team keeps it
+shared. Moving it anywhere else, removing it from the project, archiving or
+deleting it ends the share — each asks first and says how many shared files go
+with it. Making the project personal, deleting it, or leaving the team ends the
+share too. Moving a chat into a shared project never shares it by itself; the
+confirmation offers **Share with** your team.
+
+**Share outside your team** is the separate public link: anyone with the URL can
+read the transcript, never the files.
 
 **Reading a teammate's chat.** Open it from **Shared by your team** on the
-project home. You get the transcript with a banner naming the owner and the team,
-and one action where the composer would be: **Branch to continue in your own
-chat**. That creates a new conversation of your own, filed into the same project,
-starting with everything in the transcript up to that point. It is private until
-you share it, and it is unaffected if the original is later unshared or deleted.
-Branch is the way to build on a colleague's work; co-writing a live conversation
-is not something the platform does.
+project home, or from a link they sent. You get the transcript with the owner's
+name; shared files are live downloads, and files the owner kept back show as
+locked names. Where the composer would be is one action: **Branch to continue in
+your own chat**. That creates a private conversation of your own, filed into the
+same project, starting with everything in the transcript, and **the shared files
+come with it as your own copies** — the assistant in your branch can use them.
+Your copies never change afterwards, even if the original is unshared or deleted.
+When you open a chat you have already branched, a banner links to your branch and
+says whether the owner has added messages since; **Branch again** starts a fresh
+branch from the current version. Branch is the way to build on a colleague's
+work; co-writing a live conversation is not something the platform does.
 
 ### While a turn is running
 

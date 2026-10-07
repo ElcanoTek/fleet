@@ -278,17 +278,18 @@ function ProjectPanel({
 }
 
 // ── Per-project kebab menu (rail Projects section) ───────────────────────────
-// Sits where the chat count used to be. "Project settings…" opens THIS
-// project's home with its settings dialog (the all-projects modal is
-// create-only now) and shows for everyone — members get the read-only home.
-// Rename and Delete mutate the project itself, so they render for the OWNER
-// only (the store's owner-scoped statements would reject anyone else anyway;
-// hiding them is honest UI, not the enforcement).
+// Decision #23: the hover menu on a project is Open, New chat, Share, Project
+// settings. Share and Project settings are the owner's (only the owner can
+// edit, share, or delete — B26); both open the project's settings dialog,
+// where "Who can see it" lives. The owner's list-keeping items (Pin, Rename,
+// Delete project) stay below a separator: the rail is still the only place a
+// project is pinned or renamed inline.
 function ProjectKebab({
   projectName,
   pinned,
-  teamShared,
   isOwner,
+  onOpen,
+  onNewChat,
   onEdit,
   onPin,
   onShare,
@@ -297,8 +298,9 @@ function ProjectKebab({
 }: {
   projectName: string;
   pinned: boolean;
-  teamShared: boolean;
   isOwner: boolean;
+  onOpen: () => void;
+  onNewChat: () => void;
   onEdit: () => void;
   onPin: () => void;
   onShare: () => void;
@@ -309,6 +311,10 @@ function ProjectKebab({
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const close = () => setOpen(false);
   const tip = usePortalTip("Options");
+  const item = (fn: () => void) => () => {
+    close();
+    fn();
+  };
   return (
     <>
       <button
@@ -349,55 +355,51 @@ function ProjectKebab({
         className="min-w-[11rem]"
       >
         <MenuItem
-          icon={<Icon name="briefcase" className="size-4" />}
-          onClick={() => {
-            close();
-            onEdit();
-          }}
+          icon={<Icon name="external-link" className="size-4" />}
+          onClick={item(onOpen)}
         >
-          Project settings…
+          Open project
+        </MenuItem>
+        <MenuItem
+          icon={<Icon name="plus" className="size-4" />}
+          onClick={item(onNewChat)}
+        >
+          New chat
         </MenuItem>
         {isOwner ? (
           <>
+            {/* The TEAM glyph, not the chain link: the chain link means "by
+                URL" and must not read as "my team can see this"
+                (ShareGlyphs.tsx). */}
+            <MenuItem
+              icon={<TeamGlyph className="size-4" />}
+              onClick={item(onShare)}
+            >
+              Share…
+            </MenuItem>
+            <MenuItem
+              icon={<Icon name="settings" className="size-4" />}
+              onClick={item(onEdit)}
+            >
+              Project settings…
+            </MenuItem>
+            <MenuSeparator />
             <MenuItem
               icon={<Icon name="pin" className="size-4" />}
-              onClick={() => {
-                close();
-                onPin();
-              }}
+              onClick={item(onPin)}
             >
               {pinned ? "Unpin" : "Pin"}
             </MenuItem>
             <MenuItem
               icon={<Icon name="edit" className="size-4" />}
-              onClick={() => {
-                close();
-                onRename();
-              }}
+              onClick={item(onRename)}
             >
               Rename
             </MenuItem>
-            {/* The TEAM glyph, not the chain link. The whole point of the pair
-                is that the chain link means "by URL" and must not read as "my
-                team can see this" (ShareGlyphs.tsx) — and this is the
-                project-level TEAM action. */}
-            <MenuItem
-              icon={<TeamGlyph className="size-4" />}
-              onClick={() => {
-                close();
-                onShare();
-              }}
-            >
-              {teamShared ? "Unshare from team" : "Share with team"}
-            </MenuItem>
-            <MenuSeparator />
             <MenuItem
               danger
               icon={<Icon name="trash" className="size-4" />}
-              onClick={() => {
-                close();
-                onDelete();
-              }}
+              onClick={item(onDelete)}
             >
               Delete project
             </MenuItem>
@@ -1040,7 +1042,7 @@ export function ConversationSidebar({
   onCreateProject,
   onOpenProjectHome,
   onPinProject,
-  onShareProject,
+  onNewChatInProject,
   onRenameProject,
   onDeleteProject,
   projects,
@@ -1134,10 +1136,8 @@ export function ConversationSidebar({
   // project floats to the top of the rail's list in place — no separate
   // Pinned section like chats have.
   onPinProject: (projectID: string, pinned: boolean) => void;
-  // Toggle team sharing (owner-only, from the project kebab): shared = the
-  // owner's whole team can see and use the project (#509's membership
-  // model). The server resolves the team and rejects owners without one.
-  onShareProject: (projectID: string, shared: boolean) => void;
+  // Start a chat in this project (the project menu's "New chat").
+  onNewChatInProject?: (projectID: string) => void;
   // Inline rename from the rail (project kebab → Rename); the parent PATCHes
   // just the name.
   onRenameProject: (projectID: string, name: string) => void;
@@ -1492,85 +1492,101 @@ export function ConversationSidebar({
                         : "",
                     ].join(" ")}
                   >
-                    {/* Row click = expand/collapse (the pre-home behavior);
-                        opening the HOME lives on the hover-revealed arrow
-                        beside the kebab, plus the kebab itself. */}
-                    <button
-                      type="button"
-                      aria-expanded={expanded}
-                      aria-label={`Project ${project.name} (${chats.length} chats)`}
-                      className={[
-                        "flex w-full items-center gap-2 rounded-md py-1.5 pl-2 pr-16 text-[0.875rem] transition",
-                        dropReady
-                          ? "text-[var(--color-text-primary)]"
-                          : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
-                      ].join(" ")}
-                      onClick={() =>
-                        setExpandedProjects((s) => {
-                          const next = new Set(s);
-                          if (next.has(project.id)) next.delete(project.id);
-                          else next.add(project.id);
-                          return next;
-                        })
-                      }
-                    >
-                      <Icon
-                        name="chevron-right"
-                        className={[
-                          "size-3 shrink-0 transition",
-                          expanded ? "rotate-90" : "",
-                        ].join(" ")}
-                      />
-                      {project.pinned ? (
+                    {/* Decision #23: the NAME opens the project's home and
+                        expands it; the chevron only folds. Two buttons, so
+                        each does one thing and says so. The chevron keeps
+                        the row's "Project <name> (N chats)" name and its
+                        aria-expanded — it is the disclosure control. */}
+                    <div className="flex w-full items-center rounded-md pr-9">
+                      <button
+                        type="button"
+                        aria-expanded={expanded}
+                        aria-label={`Project ${project.name} (${chats.length} chats)`}
+                        title={expanded ? "Collapse" : "Expand"}
+                        className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                        onClick={() =>
+                          setExpandedProjects((s) => {
+                            const next = new Set(s);
+                            if (next.has(project.id)) next.delete(project.id);
+                            else next.add(project.id);
+                            return next;
+                          })
+                        }
+                      >
                         <Icon
-                          name="pin"
-                          className="size-3 shrink-0 text-[var(--color-accent)]"
+                          name="chevron-right"
+                          className={[
+                            "size-3 shrink-0 transition",
+                            expanded ? "rotate-90" : "",
+                          ].join(" ")}
                         />
-                      ) : null}
-                      {teamShared ? (
-                        // Decorative HERE on purpose: this button carries its
-                        // own aria-label (the row's name + chat count), which
-                        // swallows any label nested inside it. The audience
-                        // text therefore lives in the sr-only sibling just
-                        // below, outside the button, where a screen reader
-                        // actually reaches it — the badge is never
-                        // title-attribute-only.
-                        <span title={teamSharedLabel} className="flex shrink-0">
-                          <TeamGlyph className="size-3 text-[var(--color-accent)]" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Open project ${project.name}`}
+                        className={[
+                          "flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-1 pr-2 text-[0.875rem] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",
+                          dropReady
+                            ? "text-[var(--color-text-primary)]"
+                            : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
+                        ].join(" ")}
+                        onClick={() => {
+                          setExpandedProjects((s) =>
+                            s.has(project.id) ? s : new Set(s).add(project.id),
+                          );
+                          openHome();
+                        }}
+                      >
+                        {project.pinned ? (
+                          <Icon
+                            name="pin"
+                            className="size-3 shrink-0 text-[var(--color-accent)]"
+                          />
+                        ) : null}
+                        {teamShared ? (
+                          // Decorative HERE on purpose: this button carries
+                          // its own aria-label, which swallows any label
+                          // nested inside it. The audience text lives in the
+                          // sr-only sibling just below, where a screen reader
+                          // actually reaches it.
+                          <span title={teamSharedLabel} className="flex shrink-0">
+                            <TeamGlyph className="size-3 text-[var(--color-accent)]" />
+                          </span>
+                        ) : null}
+                        <span className="min-w-0 flex-1 truncate text-left">
+                          {project.name}
                         </span>
-                      ) : null}
-                      <span className="min-w-0 flex-1 truncate text-left">
-                        {project.name}
-                      </span>
-                    </button>
+                      </button>
+                    </div>
                     {teamShared ? (
                       <span className="sr-only">{teamSharedLabel}</span>
                     ) : null}
                     <div className="absolute inset-y-0 right-1 flex items-center gap-0.5">
-                      <PortalTipIconButton
-                        tip="Open project"
-                        ariaLabel={`Open project ${project.name}`}
-                        icon="external-link"
-                        iconClassName="size-3.5"
-                        className={[
-                          "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
-                          "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
-                        ].join(" ")}
-                        onClick={openHome}
-                      />
                       <ProjectKebab
                         projectName={project.name}
                         pinned={Boolean(project.pinned)}
                         isOwner={project.owner_email === userEmail}
+                        onOpen={() => {
+                          setExpandedProjects((s) =>
+                            s.has(project.id) ? s : new Set(s).add(project.id),
+                          );
+                          openHome();
+                        }}
+                        onNewChat={() => {
+                          setSidebarOpen(false);
+                          onNewChatInProject?.(project.id);
+                        }}
                         onEdit={() => {
                           setSidebarOpen(false);
                           onOpenProjectHome(project.id, true);
                         }}
+                        // Project sharing lives in settings ("Who can see
+                        // it"), so Share opens the same dialog.
+                        onShare={() => {
+                          setSidebarOpen(false);
+                          onOpenProjectHome(project.id, true);
+                        }}
                         onPin={() => onPinProject(project.id, !project.pinned)}
-                        teamShared={Boolean(project.team_id)}
-                        onShare={() =>
-                          onShareProject(project.id, !project.team_id)
-                        }
                         onRename={() => setRenamingProjectId(project.id)}
                         onDelete={() => onDeleteProject(project.id)}
                       />
@@ -1599,29 +1615,13 @@ export function ConversationSidebar({
                           </button>
                         </>
                       ) : emptyState.kind === "team-count-unknown" ? (
-                        <>
-                          No chats of yours yet — drag one here, or use
-                          “Move to project” from a chat’s ⋮ menu.{" "}
-                          <button
-                            type="button"
-                            aria-label={`Open ${project.name} — anything your team shared is on the project home`}
-                            className="rounded text-left text-[var(--color-accent)] underline decoration-dotted underline-offset-2 transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                            onClick={openHome}
-                          >
-                            Anything your team shared is on the project home{" "}
-                            <span aria-hidden="true">&rarr;</span>
-                          </button>
-                        </>
+                        // Teammates may have shared chats here that the rail
+                        // can't count yet, so this says nothing about theirs.
+                        <>No chats of yours yet</>
                       ) : (
-                        /* Both filing paths, and the payoff. The old copy named
-                           drag alone (mouse-only) and never said why to bother
-                           — a project chat is exempt from expiry, which is the
-                           whole reason to file one (Item E2). */
-                        <>
-                          No chats yet — drag one here, or use “Move to
-                          project” from a chat’s ⋮ menu. Chats in a project
-                          don’t expire.
-                        </>
+                        // Decision #23: the short line, replacing the
+                        // filing-paths paragraph.
+                        <>No chats yet</>
                       )}
                     </p>
                   ) : (

@@ -60,6 +60,8 @@ export function ProjectsModal({
   onStartChat,
   initialCreate,
   initialSelectedId,
+  onNewProject,
+  onEditProject,
 }: {
   userEmail: string;
   onClose: () => void;
@@ -69,6 +71,13 @@ export function ProjectsModal({
   initialCreate?: boolean;
   // Open with this project pre-selected (the rail kebab's "Edit project…").
   initialSelectedId?: string;
+  // The app's one New project dialog (B27) and per-project settings dialog
+  // (B26–B31). When given, "New project" and "Edit" hand off to them instead
+  // of this modal's inline form, so a project is created and configured the
+  // same way — with the same "Only you / <team>" choice — from every entry
+  // point. Without them (standalone use) the inline form still works.
+  onNewProject?: () => void;
+  onEditProject?: (projectID: string) => void;
 }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null);
@@ -336,7 +345,7 @@ export function ProjectsModal({
             </div>
           </div>
         ) : (
-          <button type="button" className="self-start rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80" onClick={() => openEditor(null)}>
+          <button type="button" className="self-start rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80" onClick={() => (onNewProject ? onNewProject() : openEditor(null))}>
             New project
           </button>
         )}
@@ -361,7 +370,7 @@ export function ProjectsModal({
                       </button>
                       {p.owner_email === userEmail ? (
                         <>
-                          <button type="button" className="hover:text-[var(--color-text-primary)]" onClick={() => openEditor(p)}>
+                          <button type="button" className="hover:text-[var(--color-text-primary)]" onClick={() => (onEditProject ? onEditProject(p.id) : openEditor(p))}>
                             Edit
                           </button>
                           <button type="button" className="hover:text-[var(--color-danger)]" onClick={() => setConfirmDeleteId(p.id)}>
