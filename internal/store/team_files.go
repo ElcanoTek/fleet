@@ -754,6 +754,10 @@ func (s *Store) GetProjectUserState(ctx context.Context, projectID, email string
 // land instead of the later one overwriting the earlier with its stale read.
 func (s *Store) UpdateProjectUserState(ctx context.Context, projectID, email string, keptPersonal *bool, sourcesOpen map[string]bool) (ProjectUserState, error) {
 	email = normalizeEmail(email)
+	team, err := s.callerTeam(ctx, email)
+	if err != nil {
+		return ProjectUserState{}, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ProjectUserState{}, err
@@ -795,7 +799,7 @@ func (s *Store) UpdateProjectUserState(ctx context.Context, projectID, email str
 		cur.SourcesOpen[k] = v
 	}
 	if len(sourcesOpen) > 0 {
-		if err := pruneSourcesOpen(ctx, tx, projectID, cur.SourcesOpen, sourcesOpen, changed); err != nil {
+		if err := pruneSourcesOpen(ctx, tx, projectID, email, team, cur.SourcesOpen, sourcesOpen, changed); err != nil {
 			return ProjectUserState{}, err
 		}
 	}
@@ -815,20 +819,26 @@ func (s *Store) UpdateProjectUserState(ctx context.Context, projectID, email str
 	return cur, nil
 }
 
-// pruneSourcesOpen drops keys of open (in place) that no longer name a live
-// chat in projectID — a group that can no longer be shown has no state worth
-// keeping — then, if the map is still over maxSourcesOpenEntries, evicts in
+// pruneSourcesOpen drops keys of open (in place) that do not name a live chat
+// in projectID that the caller could see as a Sources group right now —
+// their own, or one shared with their team (the listing's own gates). A
+// group that cannot be shown has no state worth keeping, and keeping a key
+// only because the chat exists would let the returned map tell a member that
+// another member's PRIVATE chat is still in the project. Then, if the map is still over maxSourcesOpenEntries, evicts in
 // order: stored keys this write did not mention, then keys it re-sent
 // unchanged, and only then keys it changed (deterministic within each tier).
 // So a person with a full map can always record a new choice.
-func pruneSourcesOpen(ctx context.Context, tx *sql.Tx, projectID string, open, sent, changed map[string]bool) error {
+func pruneSourcesOpen(ctx context.Context, tx *sql.Tx, projectID, email, team string, open, sent, changed map[string]bool) error {
 	keys := make([]string, 0, len(open))
 	for k := range open {
 		keys = append(keys, k)
 	}
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id FROM conversations
-		WHERE id = ANY($1) AND project_id = $2 AND deleted_at IS NULL`, keys, projectID)
+		SELECT c.id FROM conversations c
+		WHERE c.id = ANY($1) AND c.project_id = $2 AND c.deleted_at IS NULL
+		  AND (c.user_email = $3
+		       OR (c.team_visible = TRUE AND c.archived_at IS NULL
+		           AND $4 <> '' AND c.team_shared_with = $4))`, keys, projectID, normalizeEmail(email), team)
 	if err != nil {
 		return err
 	}

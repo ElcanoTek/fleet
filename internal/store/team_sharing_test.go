@@ -836,7 +836,11 @@ func TestTeamShareNeedsAnAudienceAndAHome(t *testing.T) {
 				t.Fatal(err)
 			}
 			if pid := tc.home(t, f); pid != "" {
-				if err := f.s.SetConversationProject(f.ctx, "alice@x.com", c.ID, pid); err != nil {
+				// Filed directly: another team's project is a state only an
+				// admin team move leaves behind (the filing path itself
+				// refuses a project the caller cannot see).
+				if _, err := f.s.db.ExecContext(f.ctx,
+					`UPDATE conversations SET project_id = $1 WHERE id = $2`, pid, c.ID); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -1066,6 +1070,11 @@ func TestPairingComparesTheTeamNotJustThePresenceOfOne(t *testing.T) {
 		c := f.sharedChat(t, "alice@x.com", f.project.ID, "Study")
 		ops, err := f.s.CreateProject(f.ctx, &Project{OwnerEmail: "dana@x.com", Name: "Ops", TeamID: "ops"})
 		if err != nil {
+			t.Fatal(err)
+		}
+		// An admin moved alice to ops; she now refiles her quant-shared chat.
+		opsTeam := "ops"
+		if _, err := f.s.SetUserRoleTeam(f.ctx, "alice@x.com", nil, &opsTeam); err != nil {
 			t.Fatal(err)
 		}
 		if err := f.s.SetConversationProject(f.ctx, "alice@x.com", c.ID, ops.ID); err != nil {
@@ -1310,7 +1319,8 @@ func TestProjectImpactCountsChatsFromTeammates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.s.SetConversationProject(f.ctx, "dana@x.com", danas.ID, f.project.ID); err != nil {
+	if _, err := f.s.db.ExecContext(f.ctx,
+		`UPDATE conversations SET project_id = $1 WHERE id = $2`, f.project.ID, danas.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1625,5 +1635,80 @@ func TestTransferRacingTargetDeletionKeepsTheProject(t *testing.T) {
 		}
 	} else if p.OwnerEmail != "bob@x.com" {
 		t.Errorf("delete refused (%v) but owner = %s", deleteErr, p.OwnerEmail)
+	}
+}
+
+// Filing re-checks project access under the project row's lock: a departed
+// owner whose filing passed the handler's check before an admin transfer
+// took the project lands after it — and is refused, not left filed in a
+// project they can no longer see (which no rail section would list).
+func TestFilingAfterATransferIsRefused(t *testing.T) {
+	f := newTeamFixture(t)
+	ops := "ops"
+	if _, err := f.s.SetUserRoleTeam(f.ctx, "alice@x.com", nil, &ops); err != nil { // alice left quant
+		t.Fatal(err)
+	}
+	c, err := f.s.CreateConversation(f.ctx, "alice@x.com", "Late", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetConversationProject(f.ctx, "alice@x.com", c.ID, f.project.ID); !errors.Is(err, ErrProjectNotAccessible) {
+		t.Errorf("refile after the transfer = %v, want ErrProjectNotAccessible", err)
+	}
+	if _, err := f.s.CreateProjectConversation(f.ctx, "alice@x.com", "New", "victoria", "", false, f.project.ID, nil); !errors.Is(err, ErrProjectNotAccessible) {
+		t.Errorf("create after the transfer = %v, want ErrProjectNotAccessible", err)
+	}
+	var n int
+	if err := f.s.db.QueryRowContext(f.ctx,
+		`SELECT COUNT(*) FROM conversations WHERE user_email = 'alice@x.com' AND project_id = $1`, f.project.ID).Scan(&n); err != nil || n != 0 {
+		t.Errorf("%d of alice's chats (%v) filed in a project she cannot see", n, err)
+	}
+	// Bob, the new owner, files normally.
+	bc, err := f.s.CreateConversation(f.ctx, "bob@x.com", "Mine", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetConversationProject(f.ctx, "bob@x.com", bc.ID, f.project.ID); err != nil {
+		t.Errorf("the new owner's filing: %v", err)
+	}
+}
+
+// A conditional refile (the undo of Move and share) moves the chat only while
+// it is still where the caller expected; a newer move made elsewhere wins.
+func TestSetConversationProjectIfIsACompareAndSet(t *testing.T) {
+	f := newTeamFixture(t)
+	c, err := f.s.CreateConversation(f.ctx, "alice@x.com", "Moving", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := f.s.CreateProject(f.ctx, &Project{OwnerEmail: "alice@x.com", Name: "Other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetConversationProject(f.ctx, "alice@x.com", c.ID, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Another tab moves it on before the undo runs.
+	if err := f.s.SetConversationProject(f.ctx, "alice@x.com", c.ID, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetConversationProjectIf(f.ctx, "alice@x.com", c.ID, "", f.project.ID); !errors.Is(err, ErrConversationMoved) {
+		t.Fatalf("undo over a newer move = %v, want ErrConversationMoved", err)
+	}
+	if got, _ := f.s.Get(f.ctx, "alice@x.com", c.ID); got == nil || got.ProjectID != other.ID {
+		t.Fatalf("the newer move was overwritten: %+v", got)
+	}
+	// Still where expected: the undo applies.
+	if err := f.s.SetConversationProjectIf(f.ctx, "alice@x.com", c.ID, "", other.ID); err != nil {
+		t.Fatalf("undo in place: %v", err)
+	}
+	if got, _ := f.s.Get(f.ctx, "alice@x.com", c.ID); got == nil || got.ProjectID != "" {
+		t.Fatalf("undo did not apply: %+v", got)
+	}
+	if err := f.s.SetConversationProjectIf(f.ctx, "bob@x.com", c.ID, "", ""); !errors.Is(err, ErrConversationNotFound) {
+		t.Errorf("someone else's chat = %v, want ErrConversationNotFound", err)
 	}
 }

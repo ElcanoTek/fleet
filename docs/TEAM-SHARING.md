@@ -420,11 +420,14 @@ chats to find them, and the request as a whole examines at most 100 chats
 across both halves, starting none after four seconds — the caller's own half
 may use at most half of each, so their file-less chats cannot crowd out the
 team's shared files, and the team half always gets at least two seconds of its
-own; each half's deadline also reaches into a chat's history read and
-workspace walk, so one slow chat is cut off rather than overrunning it; past
-any bound the
+own; each half's deadline also reaches into a chat's history read, its
+output stats and its workspace walk — the filesystem calls run on capped,
+abandonable workers, so even a stalled mount cuts a chat off rather than
+holding the request (with every worker held by stuck calls, further reads fail
+fast instead of queueing) — past any bound the
 response says `truncated: true` (and the additive `groups_truncated: true`). An optional `?focus=<chat id>`
-(sent by "Manage in Sources") lists that chat's group even past both bounds,
+(sent by "Manage in Sources") lists that chat's group even past both count
+bounds, under a two-second window of its own,
 but only when it is in one of the two listings above — the caller's own chat
 in this project, or a teammate's chat passing the same team gates; any other
 id (a teammate's private chat, say) is ignored like a chat with no files. If

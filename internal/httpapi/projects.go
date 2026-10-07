@@ -550,6 +550,9 @@ var (
 var (
 	maxSourcesDiscoveries  = 100
 	sourcesDiscoveryBudget = 4 * time.Second
+	// sourcesFocusBudget is the focused chat's own window: it is examined
+	// even past the budgets above, but never without a deadline.
+	sourcesFocusBudget = 2 * time.Second
 )
 
 // sourcesBudget is one Sources request's shared discovery budget.
@@ -638,8 +641,13 @@ func walkWorkspaceFilesAbandonable(ctx context.Context, convID string, limit int
 		files     []sourcesFile
 		truncated bool
 	}
+	release, ok := acquireFSWorker()
+	if !ok {
+		return []sourcesFile{}, true // a stalled filesystem holds every slot
+	}
 	done := make(chan result, 1)
 	go func() {
+		defer release()
 		files, truncated := walkWorkspaceFiles(ctx, convID, limit)
 		done <- result{files, truncated}
 	}()
@@ -981,9 +989,10 @@ func listSourcesHalf(ctx context.Context, list []store.Conversation, focus strin
 		}
 		added, err := add(halfCtx, conv)
 		if err != nil {
-			if ctx.Err() == nil && halfCtx.Err() != nil {
-				// The half's deadline, not the request: stop here and
-				// say so, like any other bound.
+			if (ctx.Err() == nil && halfCtx.Err() != nil) || errors.Is(err, errFilesystemBusy) {
+				// The half's deadline (not the request's), or a stalled
+				// filesystem holding every worker: stop here and say so,
+				// like any other bound.
 				cut = true
 				break
 			}
@@ -1002,7 +1011,15 @@ func listSourcesHalf(ctx context.Context, list []store.Conversation, focus strin
 	for _, conv := range list {
 		if conv.ID == focus {
 			*focusDone = true
-			_, err := add(ctx, conv)
+			// Past the count cap, not past a deadline: the focused chat gets
+			// a window of its own, so "Manage in Sources" cannot hang on a
+			// stalled filesystem either. Cut off, it is simply not listed.
+			focusCtx, cancelFocus := context.WithTimeout(ctx, sourcesFocusBudget)
+			defer cancelFocus()
+			_, err := add(focusCtx, conv)
+			if err != nil && ((ctx.Err() == nil && focusCtx.Err() != nil) || errors.Is(err, errFilesystemBusy)) {
+				return true, nil
+			}
 			return cut, err
 		}
 	}
@@ -1315,6 +1332,10 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 		conv, err = s.store.CreateConversation(r.Context(), user, title, persona, model, lockdown)
 	}
 	if err != nil {
+		if errors.Is(err, store.ErrProjectNotAccessible) {
+			http.Error(w, "project not found", http.StatusNotFound)
+			return nil, false
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return nil, false
 	}

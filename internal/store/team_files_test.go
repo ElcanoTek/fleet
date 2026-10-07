@@ -772,3 +772,43 @@ func TestExclusionsCappedPerConversation(t *testing.T) {
 		t.Fatalf("one under the cap: %v", err)
 	}
 }
+
+// Sources state keeps only groups the caller could see: their own chats and
+// chats shared with their team. A key naming another member's PRIVATE chat
+// in the project is dropped exactly like a deleted one, so the returned map
+// never tells a member that private chat still exists here.
+func TestSourcesOpenKeepsOnlyVisibleChats(t *testing.T) {
+	f := newTeamFixture(t)
+	shared := f.sharedChat(t, "alice@x.com", f.project.ID, "Shared")
+	private, err := f.s.CreateConversation(f.ctx, "alice@x.com", "Private", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetConversationProject(f.ctx, "alice@x.com", private.ID, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	mine, err := f.s.CreateConversation(f.ctx, "bob@x.com", "Mine", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetConversationProject(f.ctx, "bob@x.com", mine.ID, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	st, err := f.s.UpdateProjectUserState(f.ctx, f.project.ID, "bob@x.com", nil,
+		map[string]bool{shared.ID: true, private.ID: true, mine.ID: false, "gone": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.SourcesOpen[private.ID]; ok {
+		t.Error("a teammate's private chat kept its Sources key")
+	}
+	if _, ok := st.SourcesOpen["gone"]; ok {
+		t.Error("a missing chat kept its Sources key")
+	}
+	if _, ok := st.SourcesOpen[shared.ID]; !ok {
+		t.Error("a chat shared with the team lost its key")
+	}
+	if _, ok := st.SourcesOpen[mine.ID]; !ok {
+		t.Error("the caller's own chat lost its key")
+	}
+}

@@ -9,6 +9,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -318,6 +319,10 @@ func (s *Server) handleConversationArchive(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleConversationRefile(w http.ResponseWriter, r *http.Request, user, id string) {
 	var req struct {
 		ProjectID string `json:"project_id"`
+		// ExpectedProjectID, when present, makes the move conditional: it
+		// happens only while the chat is still filed there ("" = unfiled),
+		// else 409. An undo sends it so it never overwrites a newer move.
+		ExpectedProjectID *string `json:"expected_project_id"`
 	}
 	if !decodeJSONBody(w, r, &req) {
 		return
@@ -331,7 +336,17 @@ func (s *Server) handleConversationRefile(w http.ResponseWriter, r *http.Request
 	// caller's — as ErrConversationNotFound; writeConversationMutationError
 	// turns that into the 404 every sibling mutation answers, instead of a
 	// 500 that told the client the server was at fault.
-	if err := s.store.SetConversationProject(r.Context(), user, id, req.ProjectID); err != nil {
+	var err error
+	if req.ExpectedProjectID != nil {
+		err = s.store.SetConversationProjectIf(r.Context(), user, id, req.ProjectID, *req.ExpectedProjectID)
+	} else {
+		err = s.store.SetConversationProject(r.Context(), user, id, req.ProjectID)
+	}
+	if errors.Is(err, store.ErrConversationMoved) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if err != nil {
 		writeConversationMutationError(w, err)
 		return
 	}

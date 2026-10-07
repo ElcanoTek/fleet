@@ -3640,10 +3640,15 @@ export function ChatExperience({
   // Resolves true when the re-filing stuck, so a caller can chain a second
   // step onto it (the "Pin it and remove" path) without acting on a move the
   // server rejected.
+  // expectedProjectID makes the move conditional (an undo): the server moves
+  // the chat only while it is still filed there, else answers 409 — the
+  // chat was moved elsewhere meanwhile, and "moved-elsewhere" is returned
+  // with the newer location left alone (no rail error: nothing failed).
   const applyMoveToProject = async (
     conversationId: string,
     projectID: string,
-  ): Promise<boolean> => {
+    expectedProjectID?: string,
+  ): Promise<boolean | "moved-elsewhere"> => {
     const projectUrl = conversationApiUrl(conversationId, "/project");
     if (!projectUrl) {
       showRailError("Couldn't move the chat — it has an invalid id.");
@@ -3689,8 +3694,18 @@ export function ChatExperience({
       const response = await fetch(projectUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project_id: projectID }),
+        body: JSON.stringify(
+          expectedProjectID === undefined
+            ? { project_id: projectID }
+            : { project_id: projectID, expected_project_id: expectedProjectID },
+        ),
       });
+      if (response.status === 409 && expectedProjectID !== undefined) {
+        setConversations(prev);
+        setArchivedConversations(prevArchived);
+        await refreshConversations();
+        return "moved-elsewhere";
+      }
       if (!response.ok) {
         console.error(
           "move to project failed:",
@@ -3987,16 +4002,21 @@ export function ChatExperience({
     // (the chat was archived, the owner's team changed, the project stopped
     // being shared) would otherwise leave the chat silently refiled and still
     // private, so put it back where it was and say so.
+    // Conditional on the chat still being in projectID: if it was moved again
+    // meanwhile (another tab), that newer choice stands.
     const restored = await applyMoveToProject(
       conversation.id,
       conversation.project_id ?? "",
+      projectID,
     );
     setShareError((reason) =>
       [
         reason ?? "Couldn't share the chat.",
-        restored
-          ? "It was moved back where it was."
-          : "It stayed in the new project, still Only you.",
+        restored === "moved-elsewhere"
+          ? "It was moved again meanwhile, so it was left where it is now."
+          : restored
+            ? "It was moved back where it was."
+            : "It stayed in the new project, still Only you.",
       ].join(" "),
     );
     return null;

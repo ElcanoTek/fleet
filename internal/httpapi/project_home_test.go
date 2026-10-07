@@ -54,9 +54,19 @@ func TestProjectHome_ConversationsAndFilesAreCallerScoped(t *testing.T) {
 	if _, err := st.CreateProject(ctx, &store.Project{OwnerEmail: other, Name: "decoy"}); err != nil {
 		t.Fatalf("decoy project: %v", err)
 	}
-	// File the foreign conversation into the SAME project id directly (the
-	// HTTP layer would 404 a non-member, but the store call stands in for a
-	// team member's own filing).
+	// The other member files their own (private) chat into the SAME project:
+	// make the project team-shared and them a member, as a real teammate is
+	// (the store refuses filing into a project the caller cannot see).
+	team := "home"
+	if _, err := st.CreateUser(ctx, other, "pw-123456"); err != nil {
+		t.Fatalf("CreateUser (other): %v", err)
+	}
+	if _, err := st.SetUserRoleTeam(ctx, other, nil, &team); err != nil {
+		t.Fatalf("SetUserRoleTeam (other): %v", err)
+	}
+	if _, err := st.UpdateProject(ctx, owner, proj.ID, store.ProjectPatch{TeamID: &team}); err != nil {
+		t.Fatalf("share the project: %v", err)
+	}
 	if err := st.SetConversationProject(ctx, other, theirs.ID, proj.ID); err != nil {
 		t.Fatalf("SetConversationProject (other): %v", err)
 	}

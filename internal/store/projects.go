@@ -391,9 +391,36 @@ func (s *Store) DeleteProject(ctx context.Context, ownerEmail, id string) error 
 	return tx.Commit()
 }
 
+// ErrProjectNotAccessible refuses filing a chat into a project the caller
+// cannot see when the write runs — the handler's membership check passed, but
+// an ownership transfer (or a team change) landed before the write.
+var ErrProjectNotAccessible = errors.New("project not found")
+
+// lockAccessibleProjectTx locks project id FOR SHARE and confirms userEmail
+// can see it right now: its owner, or a member of the team it is shared
+// with. A transfer locks the row FOR UPDATE, so a filing write that passed
+// the handler's check before the transfer waits here, then re-reads the
+// row's new owner — and is refused instead of leaving a chat filed in a
+// project its owner can no longer see (one no rail section would list).
+func lockAccessibleProjectTx(ctx context.Context, tx *sql.Tx, id, userEmail string) error {
+	var one int
+	err := tx.QueryRowContext(ctx, `
+		SELECT 1 FROM projects p
+		WHERE p.id = $1
+		  AND (p.owner_email = $2
+		       OR (p.team_id <> '' AND p.team_id = (
+		             SELECT COALESCE(TRIM(u.team_id), '') FROM users u WHERE u.email = $2)))
+		FOR SHARE OF p`, id, normalizeEmail(userEmail)).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrProjectNotAccessible
+	}
+	return err
+}
+
 // CreateProjectConversation inserts a conversation bound to a project. The
 // handler validates membership + resolves inherited persona/model/connectors
-// before calling.
+// before calling; the store re-checks access under the project row's lock
+// (lockAccessibleProjectTx).
 func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool, projectID string, mcpServers []string) (*Conversation, error) {
 	id := uuid.NewString()
 	now := time.Now().Unix()
@@ -404,12 +431,23 @@ func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title,
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	if err := lockAccessibleProjectTx(ctx, tx, projectID, userEmail); err != nil {
+		return nil, err
+	}
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO conversations (id, user_email, title, persona, model, pinned, lockdown, project_id, optional_mcp_servers_enabled, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8, $9, $9)`,
 		id, userEmail, title, persona, model, lockdown, projectID, string(mcps), now,
 	)
 	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &Conversation{
@@ -440,6 +478,23 @@ func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title,
 // team" is not enough — that is the state a user reaches by refiling across
 // teams after an admin moves them.
 func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, projectID string) error {
+	return s.setConversationProject(ctx, userEmail, convID, projectID, nil)
+}
+
+// ErrConversationMoved refuses a conditional refile (SetConversationProjectIf)
+// because the chat is no longer where the caller expected it.
+var ErrConversationMoved = errors.New("the chat was moved since")
+
+// SetConversationProjectIf is SetConversationProject as a compare-and-set:
+// the move happens only while the chat is still filed in expected ("" =
+// unfiled), else ErrConversationMoved and nothing changes. It is what an
+// undo uses — putting a chat back must never overwrite a newer move made
+// elsewhere (another tab, another device) in the meantime.
+func (s *Store) SetConversationProjectIf(ctx context.Context, userEmail, convID, projectID, expected string) error {
+	return s.setConversationProject(ctx, userEmail, convID, projectID, &expected)
+}
+
+func (s *Store) setConversationProject(ctx context.Context, userEmail, convID, projectID string, expected *string) error {
 	var pid any // NULL when unfiling, matching the column's created-without-project state
 	if projectID != "" {
 		pid = projectID
@@ -456,10 +511,10 @@ func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, p
 		// project" — whose own unshare sweeps `WHERE project_id = ...` and
 		// cannot see a chat that has not landed yet — left a team-visible chat
 		// in a project that is no longer shared. The lock makes the two
-		// statements take turns. A missing project is not an error here: the
-		// UPDATE's own FK/EXISTS handling still decides the outcome.
-		if _, err := tx.ExecContext(ctx,
-			`SELECT 1 FROM projects WHERE id = $1 FOR SHARE`, projectID); err != nil {
+		// statements take turns. The same lock re-checks that the caller can
+		// still see the project: a transfer that took it from them between
+		// the handler's check and here is refused, not filed behind.
+		if err := lockAccessibleProjectTx(ctx, tx, projectID, userEmail); err != nil {
 			return err
 		}
 	}
@@ -482,13 +537,26 @@ func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, p
 				                AND p.team_id = conversations.team_shared_with)
 				THEN team_shared_with ELSE NULL END),
 			updated_at = $2
-		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		pid, time.Now().Unix(), convID, userEmail,
+		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL
+		   AND ($5::text IS NULL OR COALESCE(project_id, '') = $5::text)`,
+		pid, time.Now().Unix(), convID, userEmail, expected,
 	)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		if expected != nil {
+			var one int
+			err := tx.QueryRowContext(ctx,
+				`SELECT 1 FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
+				convID, userEmail).Scan(&one)
+			if err == nil {
+				return ErrConversationMoved
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
 		return ErrConversationNotFound
 	}
 	return tx.Commit()

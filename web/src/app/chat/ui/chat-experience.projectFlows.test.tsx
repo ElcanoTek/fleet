@@ -480,8 +480,37 @@ describe("Move and share is one action (A1)", () => {
     await waitFor(() => expect(dialog).toHaveTextContent("It was moved back where it was."));
     const moves = fetchMock.mock.calls
       .filter(([u, i]) => String(u) === "/api/conversations/conv-a/project" && i?.method === "POST")
-      .map(([, i]) => JSON.parse(String(i?.body)) as { project_id: string });
+      .map(([, i]) => JSON.parse(String(i?.body)) as { project_id: string; expected_project_id?: string });
     expect(moves.map((m) => m.project_id)).toEqual(["p-team", ""]);
+    // The undo is conditional on the chat still being where the move put it.
+    expect(moves[1].expected_project_id).toBe("p-team");
+  });
+
+  it("leaves a newer move alone when the chat was moved again meanwhile", async () => {
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if ((init?.method ?? "GET") === "POST" && url.endsWith("/share-with-team")) {
+        return new Response("an archived chat can't be shared with your team; unarchive it first", {
+          status: 409,
+        });
+      }
+      if ((init?.method ?? "GET") === "POST" && url === "/api/conversations/conv-a/project") {
+        const body = JSON.parse(String(init?.body)) as { expected_project_id?: string };
+        // The undo finds the chat already moved elsewhere by another tab.
+        if (body.expected_project_id !== undefined) return new Response("moved", { status: 409 });
+      }
+      return base(input, init);
+    });
+    await mountChat();
+    fireEvent.click(screen.getByRole("button", { name: /^Share/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Move and share" }));
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() =>
+      expect(dialog).toHaveTextContent("It was moved again meanwhile, so it was left where it is now."),
+    );
+    expect(dialog).not.toHaveTextContent("It was moved back where it was.");
   });
 });
 

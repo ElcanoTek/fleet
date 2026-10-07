@@ -586,8 +586,13 @@ func conversationOutputsCtx(ctx context.Context, convID string, history []agent.
 		outs      []outputFile
 		truncated bool
 	}
+	release, ok := acquireFSWorker()
+	if !ok {
+		return nil, false, errFilesystemBusy
+	}
 	done := make(chan result, 1)
 	go func() {
+		defer release()
 		outs, truncated := conversationOutputsUntil(ctx, convID, history, excluded)
 		done <- result{outs, truncated}
 	}()
@@ -599,6 +604,30 @@ func conversationOutputsCtx(ctx context.Context, convID string, history []agent.
 		return r.outs, r.truncated, nil
 	case <-ctx.Done():
 		return nil, false, ctx.Err()
+	}
+}
+
+// Abandonable filesystem workers are capped process-wide. A worker the
+// caller abandoned keeps its slot until its stuck call returns, so a stalled
+// mount fills the pool and every further request fails fast with
+// errFilesystemBusy instead of piling up more stuck goroutines and open
+// descriptors behind it (the team view polls every 12 s). Healthy calls hold
+// a slot for milliseconds.
+var (
+	fsWorkerSlots     = make(chan struct{}, maxFSWorkers)
+	errFilesystemBusy = errors.New("workspace filesystem is not responding; try again shortly")
+)
+
+const maxFSWorkers = 64
+
+// acquireFSWorker takes a slot without waiting; ok is false when every slot
+// is held (a stalled filesystem). release must be called exactly once.
+func acquireFSWorker() (release func(), ok bool) {
+	select {
+	case fsWorkerSlots <- struct{}{}:
+		return func() { <-fsWorkerSlots }, true
+	default:
+		return nil, false
 	}
 }
 

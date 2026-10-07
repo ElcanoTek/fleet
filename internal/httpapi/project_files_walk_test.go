@@ -204,3 +204,53 @@ func TestOutputStatsAndWalkAreAbandonedAtDeadline(t *testing.T) {
 		t.Errorf("returned after %v; a stalled filesystem must not hold Sources", el)
 	}
 }
+
+// Abandoned filesystem workers are capped: with every slot held (a stalled
+// mount), output resolution and the walk fail fast instead of starting more
+// workers, and Sources reports that as a cut, not an error.
+func TestFilesystemWorkersAreCapped(t *testing.T) {
+	for range maxFSWorkers {
+		fsWorkerSlots <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for range maxFSWorkers {
+			<-fsWorkerSlots
+		}
+	})
+	if _, _, err := conversationOutputsCtx(context.Background(), "c", nil, nil); !errors.Is(err, errFilesystemBusy) {
+		t.Errorf("outputs with every slot held: err = %v, want errFilesystemBusy", err)
+	}
+	if files, truncated := walkWorkspaceFilesAbandonable(context.Background(), "c", maxProjectFiles); len(files) != 0 || !truncated {
+		t.Errorf("walk with every slot held = %v truncated=%v, want nothing and truncated", files, truncated)
+	}
+	first, _ := newSourcesBudgets()
+	done := false
+	cut, err := listSourcesHalf(context.Background(), []store.Conversation{{ID: "a"}}, "", &done, first,
+		func(context.Context, store.Conversation) (bool, error) { return false, errFilesystemBusy })
+	if err != nil || !cut {
+		t.Errorf("Sources half with a busy filesystem: cut=%v err=%v, want a cut and no error", cut, err)
+	}
+}
+
+// The focused chat, examined past the count cap, still runs under a deadline
+// of its own: a stalled examination ends as a cut, never a hung request.
+func TestFocusedSourcesDiscoveryIsBounded(t *testing.T) {
+	oldN, oldF := maxSourcesDiscoveries, sourcesFocusBudget
+	t.Cleanup(func() { maxSourcesDiscoveries, sourcesFocusBudget = oldN, oldF })
+	maxSourcesDiscoveries, sourcesFocusBudget = 0, 100*time.Millisecond // no budget: only the focus runs
+
+	first, _ := newSourcesBudgets()
+	done := false
+	start := time.Now()
+	cut, err := listSourcesHalf(context.Background(), []store.Conversation{{ID: "focus"}}, "focus", &done, first,
+		func(ctx context.Context, _ store.Conversation) (bool, error) {
+			<-ctx.Done() // a stalled filesystem
+			return false, ctx.Err()
+		})
+	if err != nil || !cut || !done {
+		t.Errorf("stalled focus: cut=%v err=%v done=%v, want a cut, no error, focus handled", cut, err, done)
+	}
+	if el := time.Since(start); el > 5*time.Second {
+		t.Errorf("focused discovery held the request for %v", el)
+	}
+}

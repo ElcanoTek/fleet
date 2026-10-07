@@ -47,6 +47,7 @@ type chatStore interface {
 	// SetConversationProject re-files a conversation into a project ("" =
 	// unfile); the handler validates membership first (#509 follow-up).
 	SetConversationProject(ctx context.Context, userEmail, convID, projectID string) error
+	SetConversationProjectIf(ctx context.Context, userEmail, convID, projectID, expected string) error
 	SetModel(ctx context.Context, userEmail, convID, model string) error
 	SetApprovalTimeout(ctx context.Context, userEmail, convID string, seconds *int) error
 	SetThinkingConfig(ctx context.Context, userEmail, convID string, cfg *store.ThinkingConfig) error

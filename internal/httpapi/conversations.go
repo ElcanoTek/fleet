@@ -450,6 +450,10 @@ func writeConversationMutationError(w http.ResponseWriter, err error) {
 		http.Error(w, "conversation not found", http.StatusNotFound)
 		return
 	}
+	if errors.Is(err, store.ErrProjectNotAccessible) {
+		http.Error(w, "project not found", http.StatusNotFound)
+		return
+	}
 	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 

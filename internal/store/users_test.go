@@ -268,9 +268,16 @@ func TestDeleteUser_PurgesRemoteMCPCredentialsAndProjects(t *testing.T) {
 	if _, err := s.CreateProjectMemory(ctx, proj.ID, alice, "shared fact", "note"); err != nil {
 		t.Fatalf("CreateProjectMemory: %v", err)
 	}
-	bobConv, err := s.CreateProjectConversation(ctx, bob, "bob's", "victoria", "", false, proj.ID, nil)
+	// Bob's chat filed in alice's personal project: the state a project
+	// made personal (or an ownership/team change) leaves behind — the
+	// filing path itself refuses a project the caller cannot see.
+	bobConv, err := s.CreateConversation(ctx, bob, "bob's", "victoria", "", false)
 	if err != nil {
-		t.Fatalf("CreateProjectConversation: %v", err)
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET project_id = $1 WHERE id = $2`, proj.ID, bobConv.ID); err != nil {
+		t.Fatalf("file bob's chat: %v", err)
 	}
 
 	if err := s.DeleteUser(ctx, alice); err != nil {
