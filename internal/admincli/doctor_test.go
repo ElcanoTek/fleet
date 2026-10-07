@@ -168,6 +168,11 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// it: a --no-restart run leaves it unloaded however small the journal.
 		"systemctl show -p ActiveEnterTimestamp --value systemd-journald",
 		`(( started >= mtime ))`,
+		// …and so is an operator's own limit file written after journald
+		// started; doctor advises (never performs) that restart.
+		`if journald_loaded_since "$operator"; then`,
+		// A cache root symlinked to another volume is measured at its target.
+		`du -sxbD "$p"`,
 		// …and the operator's value must win even AFTER fleet's cap is
 		// installed (a 60- drop-in would otherwise override it), the reclaim
 		// is verdicted on a re-measure rather than exit codes, and hygiene

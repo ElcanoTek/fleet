@@ -1314,7 +1314,9 @@ fi
 human_bytes() { numfmt --to=iec --suffix=B "${1:-0}" 2>/dev/null || echo "${1:-0}B"; }
 dir_bytes() {
   local p="$1" b=""
-  [[ -n "$p" && -d "$p" ]] && b="$(du -sxb "$p" 2>/dev/null | awk '{print $1}' || true)"
+  # -D follows the root itself when it is a symlink (a cache moved to another
+  # volume) without following links inside the tree.
+  [[ -n "$p" && -d "$p" ]] && b="$(du -sxbD "$p" 2>/dev/null | awk '{print $1}' || true)"
   echo "${b:-0}"
 }
 
@@ -1431,7 +1433,12 @@ check_journal_cap() {
     /^[[:space:]]*(System|Runtime)MaxUse[[:space:]]*=/ && file != ours { print file; exit }' || true)"
   if [[ -n "$operator" ]]; then
     if [[ ! -f "$dst" ]]; then
-      pass "journal size set by the operator in ${operator} (using ${usage:-?})"
+      # Their file, their restart: doctor only says when journald predates it.
+      if journald_loaded_since "$operator"; then
+        pass "journal size set by the operator in ${operator} (using ${usage:-?})"
+      else
+        advise "journal size set by the operator in ${operator}, but systemd-journald started before it was written and is still on its old limit — apply it with: systemctl restart systemd-journald"
+      fi
     elif [[ "$CHECK_ONLY" == "1" ]]; then
       advise "${dst} overrides the operator's journal size limit in ${operator} — a doctor run without --check removes fleet's cap so theirs applies"
     elif ! rm -f "$dst"; then
