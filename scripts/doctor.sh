@@ -1597,12 +1597,20 @@ check_bundle_residue() {
   dir="$(env_get FLEET_CLIENT_CONFIG_DIR)"
   [[ -n "$dir" && -e "$dir/.git" ]] || return 0
   command -v git >/dev/null 2>&1 || return 0
-  git config --global --add safe.directory "$dir" 2>/dev/null || true
+  # Read-only, and it must stay that way: doctor runs as root, and a plain
+  # `git status` opportunistically rewrites .git/index to refresh its stat
+  # cache — leaving a root-owned index that the ownership check above then
+  # flags (rootless :z relabel refused) on the NEXT doctor run, a problem
+  # doctor itself created. GIT_OPTIONAL_LOCKS=0 is git's documented switch for
+  # "don't write the index from a read-only command". safe.directory goes on
+  # the command line (a protected scope git honours) rather than
+  # `git config --global --add`, which appended a duplicate line to root's
+  # ~/.gitconfig on every run.
   # -uall lists files inside untracked dirs, so a single `reports/` holding 300
   # CSVs reads as 300 rather than 1. --ignored is deliberately NOT passed: a
   # bundle that has taken the .gitignore safety net would otherwise report clean
   # while still filling the disk.
-  mapfile -t _residue < <(git -C "$dir" status --porcelain -uall --ignored=no 2>/dev/null | awk '$1=="??"{sub(/^\?\? /,""); print}')
+  mapfile -t _residue < <(GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$dir" -C "$dir" status --porcelain -uall --ignored=no 2>/dev/null | awk '$1=="??"{sub(/^\?\? /,""); print}')
   count="${#_residue[@]}"
   if (( count == 0 )); then
     pass "client bundle checkout is clean (${dir})"

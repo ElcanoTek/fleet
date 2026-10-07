@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestDoctorDryRunSmoke — `doctor.sh --dry-run` must succeed on any host (no
@@ -277,5 +278,95 @@ stale_pause_hint`
 		if !strings.Contains(string(out), want) {
 			t.Errorf("want %q in:\n%s", want, out)
 		}
+	}
+}
+
+// TestDoctorBundleResidueIsReadOnly — check_bundle_residue runs as root on a
+// real box, so anything it writes into the bundle comes out root-owned. A plain
+// `git status` rewrites .git/index to refresh its stat cache, which left the
+// index root-owned and made the NEXT doctor run fail its own bundle-ownership
+// check (seen on every customer box after a repair-mode doctor). The check must
+// leave the index byte-for-byte and mtime-for-mtime alone, and must not grow the
+// caller's ~/.gitconfig with a safe.directory line per run.
+func TestDoctorBundleResidueIsReadOnly(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "doctor.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const name = "check_bundle_residue"
+	start := strings.Index(string(body), "\n"+name+"() {")
+	if start < 0 {
+		t.Fatalf("doctor.sh has no %s()", name)
+	}
+	end := strings.Index(string(body)[start:], "\n}\n")
+	fn := string(body)[start : start+end+3]
+
+	home := t.TempDir()
+	bundle := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", bundle}, args...)...)
+		cmd.Env = append(os.Environ(), "HOME="+home, "GIT_CONFIG_NOSYSTEM=1",
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	manifest := filepath.Join(bundle, "manifest.yaml")
+	if err := os.WriteFile(manifest, []byte("name: t\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "manifest.yaml")
+	git("commit", "-qm", "init")
+	// Touch the tracked file so its stat no longer matches the index entry:
+	// exactly the state in which `git status` refreshes and rewrites the index.
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(manifest, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "report.csv"), []byte("a,b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	index := filepath.Join(bundle, ".git", "index")
+	before, err := os.Stat(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeBytes, _ := os.ReadFile(index)
+
+	script := fn + `
+env_get() { echo "$BUNDLE"; }
+pass() { echo "pass: $*"; }
+advise() { echo "advise: $*"; }
+SERVICE_USER=svc
+` + name
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "BUNDLE="+bundle, "HOME="+home, "GIT_CONFIG_NOSYSTEM=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("bash: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "holds 1 untracked file(s)") {
+		t.Errorf("residue not reported:\n%s", out)
+	}
+	after, err := os.Stat(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterBytes, _ := os.ReadFile(index)
+	if !after.ModTime().Equal(before.ModTime()) || string(afterBytes) != string(beforeBytes) {
+		t.Errorf("check_bundle_residue rewrote %s (mtime %v → %v) — a root-run doctor leaves it root-owned", index, before.ModTime(), after.ModTime())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gitconfig")); err == nil {
+		t.Errorf("check_bundle_residue wrote %s — root's gitconfig grows a safe.directory line every run", filepath.Join(home, ".gitconfig"))
 	}
 }
