@@ -121,36 +121,45 @@ func (s *Store) SweepOrphanWorkspaces(ctx context.Context, root string) (int, er
 }
 
 // removeWorkspaceTree deletes root/name. A plain RemoveAll fails on any
-// directory the agent left without the owner-write bit — `chmod -R a-w`,
-// an archive that unpacked read-only modes, a tool that protects its
-// output — because unlinking an entry needs write permission on its
-// PARENT. On that failure the tree's directories are made owner-writable
-// and the removal retried.
+// directory the agent left without owner rwx — `chmod -R a-w`, `chmod 000 .`,
+// an archive that unpacked read-only modes — because unlinking an entry needs
+// write permission on its PARENT and listing one needs read. On that failure
+// the orphan dir itself and every directory under it are made owner-rwx and
+// the removal retried.
 //
-// The chmods go through an os.Root opened at the workspace dir, so a
-// symlink the sandbox planted inside it cannot redirect a chmod outside
-// the tree: Root refuses to resolve a path that escapes it. WalkDir does
-// not follow symlinks either, so only real directories are visited.
+// Every operation goes through an os.Root opened at the WORKSPACE ROOT, never
+// a host path joined from it. The sandbox can write the workspace, so it could
+// swap an orphan dir for a symlink between the two attempts; Root refuses to
+// resolve any name that escapes it, so a planted link can redirect neither the
+// chmods nor the removal outside the tree. WalkDir does not follow symlinks
+// either, so only real directories are visited.
 func removeWorkspaceTree(root, name string) error {
-	dir := filepath.Join(root, name)
-	if err := os.RemoveAll(dir); err == nil {
-		return nil
-	}
-	r, err := os.OpenRoot(dir)
+	r, err := os.OpenRoot(root)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
-	_ = fs.WalkDir(r.FS(), ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil || !d.IsDir() {
-			return nil //nolint:nilerr // best effort: an unreadable entry just stays unreadable; the RemoveAll below reports what is left.
-		}
-		if info, ierr := d.Info(); ierr == nil && info.Mode().Perm()&0o700 != 0o700 {
-			_ = r.Chmod(path, info.Mode().Perm()|0o700)
-		}
+	if err := r.RemoveAll(name); err == nil {
 		return nil
-	})
-	return os.RemoveAll(dir)
+	}
+	// The orphan dir first, through the parent root: an unreadable (0111,
+	// 0000) dir cannot be opened to walk until its own mode is repaired.
+	if info, lerr := r.Lstat(name); lerr == nil && info.IsDir() {
+		_ = r.Chmod(name, info.Mode().Perm()|0o700)
+	}
+	if sub, oerr := r.OpenRoot(name); oerr == nil {
+		_ = fs.WalkDir(sub.FS(), ".", func(path string, d fs.DirEntry, err error) error {
+			if err != nil || !d.IsDir() {
+				return nil //nolint:nilerr // best effort: an unreadable entry just stays unreadable; the RemoveAll below reports what is left.
+			}
+			if info, ierr := d.Info(); ierr == nil && info.Mode().Perm()&0o700 != 0o700 {
+				_ = sub.Chmod(path, info.Mode().Perm()|0o700)
+			}
+			return nil
+		})
+		_ = sub.Close()
+	}
+	return r.RemoveAll(name)
 }
 
 // liveConversationIDs returns the set of conversation ids currently in
