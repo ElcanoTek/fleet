@@ -540,4 +540,21 @@ describe("TeamChatViewer — live (the owner keeps working)", () => {
     });
     await waitFor(() => expect(src()).toContain("daily_spend_by_channel.png?v=2-12"));
   });
+  it("re-requests an image rewritten within the same second (the rev moves)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const withRev = (rev: string): Snap => ({
+      ...WITH_FILES,
+      files: WITH_FILES.files!.map((f) => (f.path === "daily_spend_by_channel.png" ? { ...f, rev } : f)),
+    });
+    let snap = withRev("1000000001-10");
+    stubFetch((url) => (url.includes("/team-view") ? json(snap) : json({})));
+    const { container } = renderFull(snap);
+    const src = () => container.querySelector("img")?.getAttribute("src");
+    await waitFor(() => expect(src()).toContain("?v=1000000001-10"));
+    snap = withRev("1000000002-10"); // same second, same size, new bytes
+    await act(async () => {
+      vi.advanceTimersByTime(TEAM_VIEW_POLL_MS);
+    });
+    await waitFor(() => expect(src()).toContain("?v=1000000002-10"));
+  });
 });

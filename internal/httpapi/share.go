@@ -281,12 +281,12 @@ type teamViewResponse struct {
 // query under the SAME gate, run BEFORE the transcript is loaded. A matching
 // If-None-Match is answered 304 with no body — the poll then costs no history
 // load, no output discovery and no JSON. A caller who may not read the chat
-// gets the same 404 whatever If-None-Match says. The ETag on a 200 is the
-// version read before the body was built, and it is only sent when a second
-// read AFTER the body was built returns the same version: a change landing
-// while the body is built (even one undone again — the exclusion revision
-// only moves forward) drops the ETag, so the next poll refetches instead of
-// matching a tag the served body does not correspond to.
+// gets the same 404 whatever If-None-Match says. The ETag on a 200 is NOT
+// that pre-read: it is the fingerprint of the values the body was actually
+// built from (store.TeamViewState). A change that lands while the body is
+// built — even one undone again before the next poll — therefore cannot pair
+// a body with a tag of some other state: the next poll's cheap fingerprint
+// matches the tag only if the current state is the one that body shows.
 func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Request, convID, user string) {
 	version, err := s.store.TeamViewVersion(r.Context(), user, convID)
 	if err != nil {
@@ -318,16 +318,17 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	files, filesTruncated, err := s.outputsFromHistory(r.Context(), snap.ID, snap.Messages)
+	excluded, err := s.store.ListOutputExclusions(r.Context(), snap.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	files, filesTruncated := conversationOutputs(snap.ID, snap.Messages, excluded)
 	isOwner := strings.EqualFold(snap.OwnerEmail, user)
 	if !isOwner {
 		for i := range files {
 			if !files[i].Shared {
-				files[i].Size, files[i].ModifiedAt = 0, 0
+				files[i].Size, files[i].ModifiedAt, files[i].Rev = 0, 0, ""
 			}
 		}
 	}
@@ -347,9 +348,21 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 			resp.ViewerBranch = &vb
 		}
 	}
-	if after, verr := s.store.TeamViewVersion(r.Context(), user, convID); verr != nil || after != version {
-		w.Header().Del("ETag")
+	served := store.TeamViewState{
+		ConvID: convID, Caller: user,
+		UpdatedAt: snap.UpdatedAt, Title: snap.Title, Owner: snap.OwnerEmail, Audience: snap.TeamID,
+		ProjectID: snap.ProjectID, ProjectName: resp.ProjectName,
+		ExclusionsHash: store.ExclusionSetHash(excluded),
 	}
+	for _, m := range snap.Messages {
+		served.MsgCount++
+		served.MsgMax = max(served.MsgMax, m.ID)
+	}
+	if resp.ViewerBranch != nil {
+		served.BranchID, served.BranchAt, served.BranchChanged =
+			resp.ViewerBranch.ConversationID, resp.ViewerBranch.BranchedAt, resp.ViewerBranch.ChangedSince
+	}
+	w.Header().Set("ETag", `W/"tv-`+served.Fingerprint()+`"`)
 	writeJSON(w, resp)
 }
 

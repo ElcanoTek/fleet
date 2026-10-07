@@ -73,10 +73,3 @@ CREATE TABLE IF NOT EXISTS project_user_state (
     updated_at      BIGINT NOT NULL,
     PRIMARY KEY (project_id, user_email)
 );
-
--- A per-chat revision of the exclusion set, bumped by every exclusion write.
--- The team view's version (its ETag) fingerprints the SET, and a set can
--- change and change back while one response is being built; the revision
--- only moves forward, so the handler can tell that the body it built may
--- not match the version it read. Constant default: no table rewrite.
-ALTER TABLE conversations ADD COLUMN IF NOT EXISTS output_share_rev BIGINT NOT NULL DEFAULT 0;

@@ -12,6 +12,12 @@ export type OutputFile = {
   name: string;
   size: number;
   modified_at: number;
+  /**
+   * The file's revision (modification time in nanoseconds and size): changes
+   * whenever its bytes are rewritten, even within the same second. Optional
+   * so an older server still type-checks.
+   */
+  rev?: string;
   /** Not excluded by the owner. Independent of whether the chat itself is shared. */
   shared: boolean;
 };

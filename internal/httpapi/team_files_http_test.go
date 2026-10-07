@@ -1087,31 +1087,105 @@ func teamViewIf(t *testing.T, srv *Server, user, convID, etag string) *httptest.
 	return w
 }
 
-// A change that lands while the body is built — even one undone again before
-// the body is done — must not leave the response carrying the version read
-// before it: the ETag is dropped, so the next poll refetches rather than
-// matching a tag the served body may not correspond to.
-func TestTeamViewDropsETagWhenStateMovesDuringBuild(t *testing.T) {
+// The ETag on a 200 is the fingerprint of what that body was BUILT from. A
+// project renamed A→B after the version read (so the body says B) and back
+// to A before the next poll must not let that poll 304 — the client holds B,
+// the state is A. And a body built in a settled state 304s on the next poll,
+// even with exclusions whose order or lengths a naive aggregate would get
+// wrong (unicode, case, a newline), and with the viewer's own branch present.
+func TestTeamViewETagIsTheServedBodysFingerprint(t *testing.T) {
 	f := newFilesFixture(t)
+	rename := func(name string) {
+		t.Helper()
+		if _, err := f.st.UpdateProject(f.ctx, "alice@x.com", f.project.ID, store.ProjectPatch{Name: &name}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	teamViewAfterVersion = func() {
 		teamViewAfterVersion = nil
-		for _, shared := range []bool{false, true} { // excluded, then re-shared
-			if err := f.st.SetOutputShared(f.ctx, "alice@x.com", f.chat.ID, "chart.png", shared); err != nil {
-				t.Error(err)
-			}
-		}
+		rename("Renamed")
 	}
 	t.Cleanup(func() { teamViewAfterVersion = nil })
 	w := teamViewIf(t, f.srv, "bob@x.com", f.chat.ID, "")
-	if w.Code != 200 {
-		t.Fatalf("team view: %d", w.Code)
+	tag := w.Header().Get("ETag")
+	if w.Code != 200 || tag == "" || !strings.Contains(w.Body.String(), `"project_name":"Renamed"`) {
+		t.Fatalf("mid-build rename: %d etag=%q body=%s", w.Code, tag, w.Body.String())
 	}
-	if tag := w.Header().Get("ETag"); tag != "" {
-		t.Errorf("ETag %q sent for a body built while the share state moved", tag)
+	rename("Quant") // back to the name the version read saw
+	if w := teamViewIf(t, f.srv, "bob@x.com", f.chat.ID, tag); w.Code != 200 {
+		t.Fatalf("poll after the rename was undone: %d, want 200 (the client holds the Renamed body)", w.Code)
 	}
-	// Quiet again: the next read carries an ETag as usual.
-	if w := teamViewIf(t, f.srv, "bob@x.com", f.chat.ID, ""); w.Code != 200 || w.Header().Get("ETag") == "" {
-		t.Errorf("settled read: %d etag=%q", w.Code, w.Header().Get("ETag"))
+
+	// Settled, with awkward exclusions and a branch of bob's: 200 then 304.
+	for _, p := range []string{"Zeta.csv", "alpha.csv", "é.csv", "a\nb.csv"} {
+		if err := f.st.SetOutputShared(f.ctx, "alice@x.com", f.chat.ID, p, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	msgs, _ := f.st.LoadHistory(f.ctx, f.chat.ID)
+	br, err := f.st.BranchConversation(f.ctx, "bob@x.com", f.chat.ID, msgs[len(msgs)-1].ID, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.RecordBranchOrigin(f.ctx, br.ID, store.BranchOrigin{
+		SourceConversationID: f.chat.ID, SourceOwnerEmail: "alice@x.com", SourceTitle: "t",
+		BranchedAt: br.CreatedAt, SourceMaxMessageID: msgs[len(msgs)-1].ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, who := range []string{"bob@x.com", "alice@x.com"} {
+		w := teamViewIf(t, f.srv, who, f.chat.ID, "")
+		tag := w.Header().Get("ETag")
+		if w.Code != 200 || tag == "" {
+			t.Fatalf("%s settled read: %d etag=%q", who, w.Code, tag)
+		}
+		if w := teamViewIf(t, f.srv, who, f.chat.ID, tag); w.Code != 304 {
+			t.Errorf("%s: poll with the served tag = %d, want 304 (served fingerprint must equal the cheap one)", who, w.Code)
+		}
+	}
+}
+
+// Each listed file carries a revision precise enough to tell two writes in
+// the same second apart (the viewer versions inline URLs by it); a file the
+// owner held back carries none for a teammate, like its size and date.
+func TestTeamViewFileRevSeesSameSecondRewrite(t *testing.T) {
+	f := newFilesFixture(t)
+	revOf := func(path string) string {
+		t.Helper()
+		w := teamViewIf(t, f.srv, "bob@x.com", f.chat.ID, "")
+		var body struct {
+			Files []struct {
+				Path string `json:"path"`
+				Rev  string `json:"rev"`
+			} `json:"files"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		for _, fl := range body.Files {
+			if fl.Path == path {
+				return fl.Rev
+			}
+		}
+		t.Fatalf("%s not listed", path)
+		return ""
+	}
+	p := filepath.Join(f.root, f.chat.ID, "chart.png")
+	sec := time.Unix(1767225600, 100)
+	if err := os.Chtimes(p, sec, sec); err != nil {
+		t.Fatal(err)
+	}
+	before := revOf("chart.png")
+	// Same second, same size, rewritten.
+	later := time.Unix(1767225600, 900)
+	if err := os.Chtimes(p, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if after := revOf("chart.png"); after == "" || after == before {
+		t.Errorf("rev %q -> %q: a same-second rewrite must change it", before, after)
+	}
+	if held := revOf("held.json"); held != "" {
+		t.Errorf("held-back file rev = %q for a teammate, want none", held)
 	}
 }
 

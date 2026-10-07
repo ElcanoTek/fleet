@@ -213,11 +213,12 @@ export function TeamChatViewer({
   const files = snapshot?.files;
   const sharedFiles = useMemo(() => {
     if (!files) return undefined;
-    // Each URL carries the file's revision (modified time and size), so a
-    // file the owner overwrites at the same path gets a NEW url on the next
-    // poll: an inline image re-requests its bytes instead of keeping the old
-    // ones under an unchanged src. The route ignores the query.
-    const rev = new Map(files.map((f) => [f.path, `${f.modified_at}-${f.size}`]));
+    // Each URL carries the file's revision (nanosecond modified time and
+    // size), so a file the owner overwrites at the same path gets a NEW url
+    // on the next poll: an inline image re-requests its bytes instead of
+    // keeping the old ones under an unchanged src. The route ignores the
+    // query. An older server sends no rev; whole-second time and size stand in.
+    const rev = new Map(files.map((f) => [f.path, f.rev ?? `${f.modified_at}-${f.size}`]));
     return {
       shared: new Set(files.filter((f) => f.shared).map((f) => f.path)),
       fileUrl: (path: string) => {

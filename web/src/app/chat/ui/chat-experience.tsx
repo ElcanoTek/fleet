@@ -914,6 +914,13 @@ export function ChatExperience({
     teamPreselected?: boolean;
     moveChat?: { id: string; title: string };
   }>(null);
+  // The dialog that is open NOW, for a create that resolves later: the
+  // dialog can be dismissed (or replaced by another) while its request is
+  // in flight, and that completion must not act on — or close — the new one.
+  const newProjectDialogRef = useRef(newProjectDialog);
+  useEffect(() => {
+    newProjectDialogRef.current = newProjectDialog;
+  }, [newProjectDialog]);
   // A shared chat staged for archiving while B34's confirm is up.
   const [pendingSharedArchive, setPendingSharedArchive] =
     useState<ConversationSummary | null>(null);
@@ -3224,7 +3231,11 @@ export function ChatExperience({
         }
       })
       .catch(() => {
-        // Best-effort: withheld (and, truncated, unknown) references stay locked.
+        // Fail closed: drop this chat's earlier list too, so withheld (and,
+        // truncated, unknown) references stay locked — an older list could
+        // still name a file the branch has since deleted or stopped
+        // presenting.
+        if (!cancelled) setBranchAvailable((prev) => (prev?.id === id ? null : prev));
       });
     return () => {
       cancelled = true;
@@ -3517,6 +3528,9 @@ export function ChatExperience({
   const createProjectFromDialog = async (
     input: NewProjectInput,
   ): Promise<string | null> => {
+    // The dialog this Create came from, captured BEFORE the request: what to
+    // move (and share) belongs to it, not to whatever is open when it lands.
+    const dialog = newProjectDialog;
     let created: Project;
     try {
       const res = await fetch("/api/projects", {
@@ -3538,9 +3552,26 @@ export function ChatExperience({
     } catch {
       return "Couldn't reach the server — no project was created.";
     }
-    const moveChat = newProjectDialog?.moveChat;
-    setNewProjectDialog(null);
+    const stillOpen = newProjectDialogRef.current === dialog;
+    if (stillOpen) setNewProjectDialog(null);
     await loadProjects();
+    if (!stillOpen) {
+      // Dismissed (or replaced) while the create was in flight: the project
+      // exists, but the person walked away from the move-and-share, so do
+      // neither — and leave whatever dialog is open now alone.
+      notify({
+        message: `Created ${created.name}.`,
+        action: {
+          label: `Open ${created.name}`,
+          onClick: () => {
+            setTeamChatView(null);
+            setProjectHome({ id: created.id });
+          },
+        },
+      });
+      return null;
+    }
+    const moveChat = dialog?.moveChat;
     if (!moveChat) {
       setTeamChatView(null);
       setProjectHome({ id: created.id });

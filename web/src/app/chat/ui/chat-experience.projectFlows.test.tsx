@@ -400,6 +400,66 @@ describe("a branch's own outputs override its withheld files (Codex round 7)", (
   });
 });
 
+describe("a failed outputs refresh fails a branch closed (Codex round 15)", () => {
+  it("drops the earlier list, so a once-live output locks again", async () => {
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    let outputsFail = false;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if ((init?.method ?? "GET") === "GET") {
+        if (url === "/api/conversations/conv-a")
+          return new Response(
+            JSON.stringify({
+              conversation: CONVS[0],
+              branch_origin: {
+                source_conversation_id: "src",
+                source_owner_email: "sam@example.com",
+                source_title: "Original",
+                branched_at: 1759622400,
+                copied_files: [],
+                withheld_files: ["v1.json"],
+                source_still_shared: true,
+              },
+              history: [
+                { role: "user", type: "text", content: { text: "go" } },
+                { role: "assistant", type: "text", content: { text: "Mine: [v1](v1.json)" } },
+              ],
+            }),
+          );
+        if (url === "/api/conversations/conv-a/outputs") {
+          if (outputsFail) return new Response("boom", { status: 500 });
+          return new Response(
+            JSON.stringify({
+              outputs: [{ path: "v1.json", name: "v1.json", size: 1, modified_at: 1, shared: false }],
+              total: 1,
+              shared_count: 0,
+              team_visible: false,
+            }),
+          );
+        }
+      }
+      return base(input, init);
+    });
+    await mountChat();
+    expect(await screen.findByRole("link", { name: "v1" })).toBeInTheDocument();
+
+    // Away and back: the refresh on return fails.
+    outputsFail = true;
+    fireEvent.click(screen.getByRole("button", { name: /^Project Quant \(/ }));
+    fireEvent.click(await screen.findByText("Shared chat"));
+    await waitFor(() => expect(screen.getByTitle("Click to rename")).toHaveTextContent("Shared chat"));
+    fireEvent.click(screen.getByText("Alpha chat"));
+    await waitFor(() => expect(screen.getByTitle("Click to rename")).toHaveTextContent("Alpha chat"));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("locked-file").map((l) => l.textContent)).toEqual([
+        "v1.json (not shared)",
+      ]),
+    );
+    expect(screen.queryByRole("link", { name: "v1" })).toBeNull();
+  });
+});
+
 describe("Move and share is one action (A1)", () => {
   it("puts the chat back when the share half is refused", async () => {
     const fetchMock = mockBackend();
@@ -479,6 +539,68 @@ describe("Create shared project from the share dialog (A1b)", () => {
     expect(screen.queryByTestId("project-home")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Open Desk" }));
     expect(await screen.findByTestId("project-home")).toBeInTheDocument();
+  });
+});
+
+describe("a create that lands after its dialog was dismissed (Codex round 15)", () => {
+  it("moves nothing and leaves the dialog open now alone", async () => {
+    const fetchMock = mockBackend();
+    const base = fetchMock.getMockImplementation()!;
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    // No project is shared with the team yet, so the share dialog offers A1b.
+    const created: unknown[] = [];
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (method === "GET" && url === "/api/projects")
+        return new Response(JSON.stringify({ projects: [PERSONAL_PROJECT, ...created] }));
+      if (method === "POST" && url === "/api/projects") {
+        await held;
+        const res = await base(input, init);
+        created.push(await res.clone().json());
+        return res;
+      }
+      return base(input, init);
+    });
+    render(
+      <ChatToastProvider>
+        <ChatExperience initialUserEmail="user@example.com" />
+      </ChatToastProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTitle("Click to rename")).toHaveTextContent("Alpha chat"),
+    );
+    await screen.findByRole("button", { name: "Open project Scratch" });
+
+    // The share dialog's "Create shared project" for this chat (move it in
+    // and share it)…
+    fireEvent.click(screen.getByRole("button", { name: /^Share\b/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create shared project" }));
+    const first = await screen.findByRole("dialog", { name: "New project" });
+    fireEvent.change(within(first).getByPlaceholderText("e.g. Knowertech: Q4 planning"), {
+      target: { value: "Desk" },
+    });
+    fireEvent.click(within(first).getByRole("button", { name: "Create project" }));
+    // …dismissed while the create is in flight, and a plain New project opened.
+    fireEvent.click(within(first).getByRole("button", { name: "Close new project" }));
+    await waitFor(() => expect(first).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+    const second = await screen.findByRole("dialog", { name: "New project" });
+
+    release();
+    expect(await screen.findByText("Created Desk.")).toBeInTheDocument();
+    expect(second).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([u, i]) => String(u) === "/api/conversations/conv-a/project" && i?.method === "POST",
+      ),
+    ).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(([u, i]) => String(u).endsWith("/share-with-team") && i?.method === "POST"),
+    ).toBe(false);
   });
 });
 

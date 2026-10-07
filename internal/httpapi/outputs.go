@@ -29,6 +29,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
@@ -441,7 +442,12 @@ type outputFile struct {
 	Name       string `json:"name"`
 	Size       int64  `json:"size"`
 	ModifiedAt int64  `json:"modified_at"`
-	Shared     bool   `json:"shared"`
+	// Rev identifies this version of the file's bytes as far as a stat can:
+	// the modification time in nanoseconds and the size. The team viewer puts
+	// it in each file URL so an overwrite at the same path is fetched again;
+	// modified_at alone is whole seconds and misses a same-second rewrite.
+	Rev    string `json:"rev,omitempty"`
+	Shared bool   `json:"shared"`
 }
 
 // isPrivateWorkspacePath reports whether rel lives under one of the owner-private
@@ -582,6 +588,7 @@ func conversationOutputs(convID string, history []agent.HistoryEntry, excluded m
 			Name:       path.Base(rel),
 			Size:       info.Size(),
 			ModifiedAt: info.ModTime().Unix(),
+			Rev:        fmt.Sprintf("%d-%d", info.ModTime().UnixNano(), info.Size()),
 			Shared:     !excluded[rel],
 		})
 	}

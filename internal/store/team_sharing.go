@@ -33,6 +33,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -176,12 +177,19 @@ func (s *Store) GetTeamVisibleConversationMeta(ctx context.Context, callerEmail,
 //   - the VISIBLE transcript (the teamTranscriptEntry filter) as count +
 //     max(id): messages are only ever inserted (with a fresh, larger id) or
 //     deleted, so any change to the visible set moves one of the two;
-//   - the exclusion set, as count + a hash of its sorted paths, so an
-//     unshare followed by a share of a different file still changes it;
+//   - the exclusion set, as a hash of its sorted, length-prefixed paths
+//     (ExclusionSetHash), so an unshare followed by a share of a different
+//     file still changes it;
 //   - the viewer's most recent live branch of the chat (id, branched_at and
-//     its high-water mark), which with max(id) determines viewer_branch and
-//     changed_since;
+//     whether visible messages arrived after it — viewer_branch and
+//     changed_since exactly as the body states them);
 //   - the caller's email: owner and teammate get different bodies.
+//
+// It is TeamViewState.Fingerprint over those values. The handler tags a 200
+// with the fingerprint of the values its body was BUILT from (not this
+// read), so a 304 — this read's fingerprint equal to the client's tag —
+// means the current state is the one the client holds, even when something
+// changed and changed back while that body was being built.
 //
 // What it does NOT see is the workspace on disk: an output's size/date and
 // whether its file exists are read when the body is built. A file that
@@ -197,19 +205,14 @@ func (s *Store) TeamViewVersion(ctx context.Context, callerEmail, convID string)
 	if err != nil {
 		return "", err
 	}
-	var (
-		updatedAt, msgCount, msgMax, exCount, exRev int64
-		title, owner, audience, projectID           string
-		projectName, exHash, vbID                   string
-		vbAt, vbMark                                int64
-	)
+	st := TeamViewState{ConvID: convID, Caller: callerEmail}
 	err = s.db.QueryRowContext(ctx, `
 		SELECT c.updated_at, c.title, c.user_email, COALESCE(c.team_shared_with, ''),
 		       COALESCE(c.project_id, ''),
 		       COALESCE((SELECT p.name FROM projects p WHERE p.id = c.project_id), ''),
-		       msg.n, msg.mx, ex.n, ex.h, c.output_share_rev,
+		       msg.n, msg.mx, ex.h,
 		       COALESCE(vb.conversation_id, ''), COALESCE(vb.branched_at, 0),
-		       COALESCE(vb.source_max_message_id, 0)
+		       COALESCE(vb.changed, FALSE)
 		FROM conversations c
 		CROSS JOIN LATERAL (
 			SELECT COUNT(*) AS n, COALESCE(MAX(m.id), 0) AS mx
@@ -221,13 +224,21 @@ func (s *Store) TeamViewVersion(ctx context.Context, callerEmail, convID string)
 		CROSS JOIN LATERAL (
 			-- Length-prefixed, so no two different sets aggregate to the
 			-- same string (a path may itself contain the separator).
-			SELECT COUNT(*) AS n,
-			       COALESCE(md5(string_agg(length(e.path)::text || ':' || e.path, '' ORDER BY e.path)), '') AS h
+			-- Byte lengths and byte order, so ExclusionSetHash computes the
+			-- same value in Go from the set a body was built from.
+			SELECT COALESCE(encode(sha256(convert_to(
+			           string_agg(octet_length(e.path)::text || ':' || e.path, ''
+			                      ORDER BY e.path COLLATE "C"), 'UTF8')), 'hex'), '') AS h
 			FROM conversation_output_exclusions e
 			WHERE e.conversation_id = c.id
 		) ex
 		LEFT JOIN LATERAL (
-			SELECT o.conversation_id, o.branched_at, o.source_max_message_id
+			SELECT o.conversation_id, o.branched_at,
+			       -- changed_since exactly as ViewerBranches computes it.
+			       EXISTS (SELECT 1 FROM messages m
+			               WHERE m.conversation_id = o.source_conversation_id
+			                 AND m.id > o.source_max_message_id
+			                 AND m.type = 'text' AND m.role IN ('user', 'assistant')) AS changed
 			FROM conversation_branch_origins o
 			JOIN conversations bc ON bc.id = o.conversation_id
 			WHERE o.source_conversation_id = c.id
@@ -237,20 +248,65 @@ func (s *Store) TeamViewVersion(ctx context.Context, callerEmail, convID string)
 		) vb ON TRUE
 		WHERE `+teamReadableClause,
 		convID, callerEmail, team,
-	).Scan(&updatedAt, &title, &owner, &audience, &projectID, &projectName,
-		&msgCount, &msgMax, &exCount, &exHash, &exRev, &vbID, &vbAt, &vbMark)
+	).Scan(&st.UpdatedAt, &st.Title, &st.Owner, &st.Audience, &st.ProjectID, &st.ProjectName,
+		&st.MsgCount, &st.MsgMax, &st.ExclusionsHash, &st.BranchID, &st.BranchAt, &st.BranchChanged)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", nil
 		}
 		return "", err
 	}
+	return st.Fingerprint(), nil
+}
+
+// TeamViewState is every database value a team-view body is built from —
+// what TeamViewVersion reads cheaply, and what the handler collects from the
+// body it actually built. Both sides fingerprint it the same way.
+type TeamViewState struct {
+	ConvID, Caller                    string
+	UpdatedAt                         int64
+	Title, Owner, Audience, ProjectID string
+	ProjectName                       string
+	// MsgCount and MsgMax are over the VISIBLE transcript (teamTranscriptEntry).
+	MsgCount, MsgMax int64
+	// ExclusionsHash is ExclusionSetHash of the owner's exclusions.
+	ExclusionsHash string
+	BranchID       string
+	BranchAt       int64
+	BranchChanged  bool
+}
+
+// Fingerprint is the team-view version of st. The caller is normalized here,
+// so the handler can pass the session's email as is.
+func (st TeamViewState) Fingerprint() string {
 	h := sha256.New()
-	for _, part := range []any{convID, callerEmail, updatedAt, title, owner, audience, projectID, projectName,
-		msgCount, msgMax, exCount, exHash, exRev, vbID, vbAt, vbMark} {
+	for _, part := range []any{st.ConvID, normalizeEmail(st.Caller), st.UpdatedAt, st.Title, st.Owner, st.Audience,
+		st.ProjectID, st.ProjectName, st.MsgCount, st.MsgMax, st.ExclusionsHash,
+		st.BranchID, st.BranchAt, st.BranchChanged} {
 		fmt.Fprintf(h, "%v\x00", part)
 	}
-	return hex.EncodeToString(h.Sum(nil)[:16]), nil
+	return hex.EncodeToString(h.Sum(nil)[:16])
+}
+
+// ExclusionSetHash is the Go twin of TeamViewVersion's exclusion aggregate:
+// SHA-256 over the paths in byte order, each prefixed by its byte length and
+// a colon (unambiguous even for a path containing any separator); "" for none.
+func ExclusionSetHash(excluded map[string]bool) string {
+	paths := make([]string, 0, len(excluded))
+	for p, ex := range excluded {
+		if ex {
+			paths = append(paths, p)
+		}
+	}
+	if len(paths) == 0 {
+		return ""
+	}
+	sort.Strings(paths)
+	h := sha256.New()
+	for _, p := range paths {
+		fmt.Fprintf(h, "%d:%s", len(p), p)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // teamTranscriptEntry is the ONE filter from a conversation's history to what
