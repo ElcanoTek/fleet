@@ -157,14 +157,18 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// ever reported: an image with no container is not proof it is unwanted.
 		"ROOT_CACHE_RECLAIM_BYTES=$((3 * 1024 * 1024 * 1024))",
 		"go clean -cache -testcache -modcache",
-		`grep -sqE '^[[:space:]]*SystemMaxUse[[:space:]]*=' "$f"`,
-		"but the vacuum failed",
+		// The operator's limit is read from journald's MERGED config, so a
+		// shadowed vendor drop-in is not mistaken for an active setting.
+		"systemd-analyze cat-config systemd/journald.conf",
+		// Vacuum removes only archived files; rotate first, then re-measure.
+		"journalctl --rotate --vacuum-size=1G",
+		"restart held by --no-restart",
 		"dnf --dump-main-config",
 		// …and the operator's value must win even AFTER fleet's cap is
 		// installed (a 60- drop-in would otherwise override it), the reclaim
 		// is verdicted on a re-measure rather than exit codes, and hygiene
 		// runs before the headroom verdict so a reclaimed box is not failed.
-		`removed ${dst} so the operator's SystemMaxUse in ${operator} applies`,
+		`removed ${dst} so the operator's limit in ${operator} applies`,
 		"root build cache reclaim left",
 		"{{.Store.GraphRoot}}",
 		`advise "  review: podman images   —   reclaim if nothing of yours uses them: podman system prune -a"`,

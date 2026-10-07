@@ -163,11 +163,20 @@ Division of labor across the three health verbs:
     would make every doctor run cost the next update a full re-download.
     `--check` advises instead.
   - **The journal** gets the shipped `deploy/journald.conf.d/60-fleet-journal-cap.conf`
-    (`SystemMaxUse=1G`), installed with a journald restart and a vacuum. It is
-    installed **only** when no `SystemMaxUse` is set anywhere. journald's
-    default ceiling is 10% of the filesystem (up to 4 GiB), on the same
-    volume as the databases and the image store; an operator who chose a
-    value keeps it.
+    (`SystemMaxUse=1G` and `RuntimeMaxUse=1G`, so a volatile journal is capped
+    too). It is installed **only** when the operator has set no limit of their
+    own, read from journald's *merged* configuration
+    (`systemd-analyze cat-config`). That applies systemd's precedence, so a
+    vendor drop-in shadowed by an `/etc` file or a `/dev/null` link is not
+    mistaken for an active setting. If an operator adds a limit later, doctor
+    removes fleet's file, because its `60-` name would otherwise override
+    theirs. "Installed" is not "in effect": the journal is rotated and vacuumed
+    (vacuum removes only *archived* files) and then **re-measured**, so the
+    verdict reports the actual size. A journal still over the cap on a later
+    run is reclaimed again. `--no-restart` installs or removes the file but
+    holds the journald restart, with an advisory naming the command.
+    journald's default ceiling is 10% of the filesystem (up to 4 GiB), on the
+    same volume as the databases and the image store.
   - **Root's podman store** is **advisory only**. fleet's sandboxes live in
     the service user's rootless store, so images in root's store are usually
     pre-rootless build leftovers. But an operator may run root podman for

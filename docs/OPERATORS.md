@@ -459,7 +459,7 @@ production-only bug. The pass covers, in order:
    `fleet update` fills those as root, and the maintenance timer runs as
    `fleet`, so the timer never reaches them. It caps the journal at 1G
    (`/etc/systemd/journald.conf.d/60-fleet-journal-cap.conf`) unless you set
-   `SystemMaxUse` yourself, and it *reports* images left in root's podman
+   `SystemMaxUse`/`RuntimeMaxUse` yourself, and it *reports* images left in root's podman
    store. Doctor never deletes those images itself. `--check` only reports.
    See [`docs/DOCTOR.md`](DOCTOR.md), "Disk hygiene".
 8. **Sandbox smoke** — `podman run --rm --network=none <image> true` **as the

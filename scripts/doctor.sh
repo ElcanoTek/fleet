@@ -271,7 +271,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed; ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload); an operator-managed Caddyfile only gets an advisory when it routes no /v1"
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active, then the running server's record of MCP tool schema findings (fleet mcp schema-issues: invalid = withheld from the model, rewritten = older JSON Schema draft translated) is read and each finding advised"
-  info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor; disk hygiene: root build caches (go build/module, npm, dnf — filled by fleet update as root, never reached by the maintenance timer) reclaimed above 3 GiB, the journal capped at 1G via journald.conf.d/60-fleet-journal-cap.conf unless the operator set SystemMaxUse, and images left in root's podman store reported"
+  info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor; disk hygiene: root build caches (go build/module, npm, dnf — filled by fleet update as root, never reached by the maintenance timer) reclaimed above 3 GiB, the journal capped at 1G via journald.conf.d/60-fleet-journal-cap.conf (persistent + volatile) unless the operator set a limit in journald's merged config, and images left in root's podman store reported"
   info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
   info "[dry-run] 9/9 Source freshness + build identity: report commits behind upstream, the installed binary's stamped version vs what ${SRC_DIR} would build now (a release tag fetched after the last build), and the paths that make the checkout read '.dirty' (fix stays 'fleet update' — doctor never pulls or rebuilds)"
   info "[dry-run] would restart ${SERVICE_NAME} + fleet-web after a toolchain/package upgrade or an app-unit reinstall above — a reinstalled fleet-backup unit does not bounce the app (unless --no-restart)"
@@ -1384,46 +1384,90 @@ check_root_build_caches
 
 # Journal cap. journald's default ceiling is 10% of the filesystem (≤ 4 GiB),
 # taken from the same volume as the databases and the image store. Doctor
-# installs the shipped 1 GiB cap only where the operator has set no SystemMaxUse
-# of their own — an explicit choice, larger or smaller, is theirs to make.
+# installs the shipped 1 GiB cap (persistent AND volatile storage) only where
+# the operator has set no size limit of their own — an explicit choice, larger
+# or smaller, is theirs to make.
+# The cap is 1 GiB (deploy/journald.conf.d/60-fleet-journal-cap.conf). It bounds
+# archived + active files together but rotation is lazy, so a capped journal can
+# sit a little over; past this slack it was not reclaimed.
+JOURNAL_CAP_SLACK_BYTES=$((1280 * 1024 * 1024))
 journal_usage() { journalctl --disk-usage 2>/dev/null | sed -nE 's/.* take up ([^ ]+) .*/\1/p' | tail -n1 || true; }
+journal_bytes() { local u; u="$(journal_usage)"; [[ -n "$u" ]] && numfmt --from=iec "${u%B}" 2>/dev/null || true; }
+# reclaim_journal rotates (vacuum only removes ARCHIVED files; --disk-usage
+# also counts the active ones) and vacuums, then re-measures: success means the
+# journal is actually within the cap, not that the command exited 0.
+reclaim_journal() {
+  local b
+  journalctl --rotate --vacuum-size=1G >/dev/null 2>&1 || true
+  b="$(journal_bytes)"
+  [[ -n "$b" ]] && (( b <= JOURNAL_CAP_SLACK_BYTES ))
+}
 check_journal_cap() {
   local src="$SRC_DIR/deploy/journald.conf.d/60-fleet-journal-cap.conf"
   local dst="/etc/systemd/journald.conf.d/60-fleet-journal-cap.conf"
-  local usage f operator=""
-  command -v journalctl >/dev/null 2>&1 && [[ -f "$src" ]] || return 0
-  usage="$(journal_usage)"
-  # The operator's own SystemMaxUse is looked for FIRST, excluding fleet's file:
-  # drop-ins are applied in lexical order after journald.conf, so once ours is
-  # installed it would silently override a value the operator set later in
-  # journald.conf or a lower-numbered drop-in. Theirs wins, so ours goes.
-  for f in /etc/systemd/journald.conf /etc/systemd/journald.conf.d/*.conf /run/systemd/journald.conf.d/*.conf /usr/lib/systemd/journald.conf.d/*.conf; do
-    [[ -f "$f" && "$f" != "$dst" ]] || continue
-    # systemd's syntax ignores whitespace around '=' (SystemMaxUse = 500M).
-    grep -sqE '^[[:space:]]*SystemMaxUse[[:space:]]*=' "$f" && { operator="$f"; break; }
-  done
+  local usage bytes operator=""
+  command -v journalctl >/dev/null 2>&1 && command -v systemd-analyze >/dev/null 2>&1 && [[ -f "$src" ]] || return 0
+  usage="$(journal_usage)" bytes="$(journal_bytes)"
+  # The operator's own limit, read from journald's MERGED configuration rather
+  # than raw files: cat-config applies systemd's precedence, so a vendor drop-in
+  # shadowed by a same-named /etc file or a /dev/null link never appears, and
+  # whitespace around '=' is the parser's problem, not ours. Any System/
+  # RuntimeMaxUse from a file other than fleet's is the operator's — and fleet's
+  # 60- drop-in would override one set in journald.conf or a lower-numbered
+  # drop-in, so theirs wins and ours goes.
+  operator="$(systemd-analyze cat-config systemd/journald.conf 2>/dev/null | awk -v ours="$dst" '
+    /^# \// { file = substr($0, 3); next }
+    /^[[:space:]]*(System|Runtime)MaxUse[[:space:]]*=/ && file != ours { print file; exit }' || true)"
   if [[ -n "$operator" ]]; then
     if [[ ! -f "$dst" ]]; then
-      pass "journal size set by the operator's own SystemMaxUse in ${operator} (using ${usage:-?})"
+      pass "journal size set by the operator in ${operator} (using ${usage:-?})"
     elif [[ "$CHECK_ONLY" == "1" ]]; then
-      advise "${dst} overrides the operator's SystemMaxUse in ${operator} — a doctor run without --check removes fleet's cap so theirs applies"
-    elif rm -f "$dst" && systemctl restart systemd-journald; then
-      fixed "removed ${dst} so the operator's SystemMaxUse in ${operator} applies"
+      advise "${dst} overrides the operator's journal size limit in ${operator} — a doctor run without --check removes fleet's cap so theirs applies"
+    elif ! rm -f "$dst"; then
+      fail "could not remove ${dst} (it overrides the operator's journal size limit in ${operator})"
+    elif [[ "$NO_RESTART" == "1" ]]; then
+      fixed "removed ${dst} so the operator's limit in ${operator} applies"
+      advise "  systemd-journald restart held by --no-restart — it applies on: systemctl restart systemd-journald"
+    elif systemctl restart systemd-journald; then
+      fixed "removed ${dst} so the operator's limit in ${operator} applies"
     else
-      fail "could not remove ${dst} (it overrides the operator's SystemMaxUse in ${operator})"
+      fail "removed ${dst} but could not restart systemd-journald to apply the operator's limit"
     fi
-  elif [[ -f "$dst" ]] && diff -q <(grep -vE '^[[:space:]]*(#|$)' "$src") <(grep -vE '^[[:space:]]*(#|$)' "$dst") >/dev/null 2>&1; then
-    pass "journal capped by ${dst##*/} (using ${usage:-?})"
-  elif [[ "$CHECK_ONLY" == "1" ]]; then
-    advise "journal uncapped beyond journald's 10%-of-disk default, or ${dst##*/} drifted (using ${usage:-?}) — a doctor run without --check installs ${dst} (SystemMaxUse=1G)"
-  elif install -D -m 0644 "$src" "$dst" && systemctl restart systemd-journald; then
-    if journalctl --vacuum-size=1G >/dev/null 2>&1; then
-      fixed "installed ${dst} (SystemMaxUse=1G) and vacuumed the journal (was ${usage:-?}, now $(journal_usage))"
+    return 0
+  fi
+  if [[ -f "$dst" ]] && diff -q <(grep -vE '^[[:space:]]*(#|$)' "$src") <(grep -vE '^[[:space:]]*(#|$)' "$dst") >/dev/null 2>&1; then
+    # Installed is not the same as in effect: a run whose vacuum failed, or a
+    # journald never restarted onto the file, leaves the old size behind.
+    if [[ -z "$bytes" ]] || (( bytes <= JOURNAL_CAP_SLACK_BYTES )); then
+      pass "journal capped by ${dst##*/} (using ${usage:-?})"
+    elif [[ "$CHECK_ONLY" == "1" ]]; then
+      advise "journal is ${usage} despite ${dst##*/} — a doctor run without --check rotates and vacuums it"
+    elif reclaim_journal; then
+      fixed "journal was ${usage} despite ${dst##*/} — rotated and vacuumed to $(journal_usage)"
     else
-      fail "installed ${dst} (SystemMaxUse=1G) but the vacuum failed — the journal is still ${usage:-?}: journalctl --vacuum-size=1G"
+      fail "journal is still $(journal_usage) after rotate + vacuum despite ${dst##*/}: journalctl --rotate --vacuum-size=1G"
     fi
+    return 0
+  fi
+  if [[ "$CHECK_ONLY" == "1" ]]; then
+    advise "journal uncapped beyond journald's 10%-of-disk default, or ${dst##*/} drifted (using ${usage:-?}) — a doctor run without --check installs ${dst} (1G, persistent and volatile)"
+    return 0
+  fi
+  if ! install -D -m 0644 "$src" "$dst"; then
+    fail "could not install ${dst}"
+    return 0
+  fi
+  if [[ "$NO_RESTART" == "1" ]]; then
+    # journald reads the cap only on restart; the vacuum below works without one.
+    advise "installed ${dst}; systemd-journald restart held by --no-restart — the cap applies on: systemctl restart systemd-journald"
+  elif ! systemctl restart systemd-journald; then
+    fail "installed ${dst} but could not restart systemd-journald to apply it"
+    return 0
+  fi
+  if reclaim_journal; then
+    fixed "installed ${dst} (1G cap) and reclaimed the journal (was ${usage:-?}, now $(journal_usage))"
   else
-    fail "could not install ${dst} or restart systemd-journald"
+    fail "installed ${dst} (1G cap) but the journal is still $(journal_usage) after rotate + vacuum: journalctl --rotate --vacuum-size=1G"
   fi
 }
 check_journal_cap
