@@ -361,9 +361,13 @@ re-read per file; a failed re-check withholds the rest). The discovery and copy 
 the request's cancellation, bounded at two minutes (files past it are
 withheld), so a client that gives up mid-branch does not get a branch whose
 files silently did not come. The copy moves 1 MiB at a time and checks that
-bound between chunks; a read or write stuck on a stalled filesystem is
-abandoned when the bound passes (both descriptors are closed, the partial file
-is removed and withheld, and so is every file after it). If discovery itself
+bound between chunks; any of a file's filesystem work — opening the source,
+creating the destination, reading and writing — that is stuck on a stalled
+filesystem is abandoned when the bound passes (both descriptors are closed,
+the partial file is removed and withheld, and so is every file after it). Each
+file's copy runs on one of the capped filesystem workers, taken before its
+first filesystem call; with every worker held by stuck calls, the file is
+withheld at once. If discovery itself
 fails (the transcript or exclusions read errors or runs out of time), nothing
 is copied and the origin is recorded with `withheld_truncated: true`, so every
 reference in the branch renders locked rather than live. They never update: later unshares, edits or deletions by

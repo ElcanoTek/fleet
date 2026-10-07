@@ -411,18 +411,77 @@ var branchCopySource func(io.Reader) io.Reader
 const branchCopyChunk = 1 << 20
 
 // copyOneOutput copies one shared output into the branch workspace. It
-// observes ctx: the copy runs in chunks with ctx checked between them, and a
-// read or write that blocks on a stalled filesystem is abandoned when ctx is
-// done — the call returns ctx's error at once, the partial destination is
-// removed and the file is withheld. Both descriptors are closed when ctx is
-// done (context.AfterFunc) so a blocked syscall that the platform lets a
-// close interrupt returns, and the abandoned goroutine stops at its next
-// chunk; one that cannot be interrupted only leaks that goroutine until the
-// filesystem answers, never the branch request.
+// observes ctx: the copy runs in chunks with ctx checked between them, and
+// ANY of its filesystem work — opening the source, creating directories and
+// the destination, reading and writing — that blocks on a stalled filesystem
+// is abandoned when ctx is done: the call returns ctx's error at once and the
+// file is withheld. The work runs on one of the process-wide filesystem
+// worker slots (acquireFSWorker), taken BEFORE the first filesystem call and
+// held until the worker exits, so abandoned copies cannot pile up past the
+// cap; with every slot held the file is withheld at once (fail closed).
+// Both descriptors are closed when ctx is done (context.AfterFunc), so a
+// blocked syscall that the platform lets a close interrupt returns.
+//
+// A worker that finishes after its caller gave up removes what it wrote:
+// the abandon/finish handshake under mu makes "the caller reported it
+// withheld" and "the file stays in the branch" mutually exclusive.
 func copyOneOutput(ctx context.Context, srcDir string, dst *os.Root, rel string, budget int64) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
+	release, ok := acquireFSWorker()
+	if !ok {
+		return 0, errFilesystemBusy
+	}
+	type result struct {
+		n   int64
+		err error
+	}
+	var (
+		mu        sync.Mutex
+		abandoned bool
+	)
+	done := make(chan result, 1) // buffered: an abandoned worker never blocks
+	go func() {
+		defer release()
+		n, err := copyOneOutputSync(ctx, srcDir, dst, rel, budget)
+		mu.Lock()
+		if abandoned && err == nil {
+			// The caller already reported this file withheld.
+			_ = dst.Remove(rel)
+			err = fmt.Errorf("copy: %w", context.Cause(ctx))
+		}
+		mu.Unlock()
+		done <- result{n, err}
+	}()
+	select {
+	case r := <-done:
+		return r.n, r.err
+	case <-ctx.Done():
+		mu.Lock()
+		select {
+		case r := <-done:
+			// Finished just as ctx ended: its outcome stands (and its file
+			// was not removed).
+			mu.Unlock()
+			return r.n, r.err
+		default:
+		}
+		abandoned = true
+		mu.Unlock()
+		// Remove a partial destination now (unlinking is safe while the
+		// stuck worker still holds the descriptor); one the worker creates
+		// later is removed by the worker itself.
+		_ = dst.Remove(rel)
+		return 0, fmt.Errorf("copy: %w", ctx.Err())
+	}
+}
+
+// copyOneOutputSync is copyOneOutput's worker: the whole copy, synchronous,
+// on the caller's goroutine. ctx still bounds it (chunk checks, and both
+// descriptors closed when ctx ends), and every failure removes the partial
+// destination.
+func copyOneOutputSync(ctx context.Context, srcDir string, dst *os.Root, rel string, budget int64) (int64, error) {
 	in, info, err := openWorkspaceFileNoFollow(srcDir, rel)
 	if err != nil {
 		return 0, err
@@ -479,36 +538,7 @@ func copyOneOutput(ctx context.Context, srcDir string, dst *os.Root, rel string,
 	if branchCopySource != nil {
 		src = branchCopySource(src)
 	}
-	type result struct {
-		n   int64
-		err error
-	}
-	// The copy runs on one of the process-wide filesystem worker slots
-	// (acquireFSWorker), held until the goroutine actually exits: a copy the
-	// caller abandoned on a stalled mount keeps its slot, so stuck copies
-	// cannot pile up past the cap. With every slot held the file is withheld
-	// (fail closed), like any other file that could not be copied.
-	release, ok := acquireFSWorker()
-	if !ok {
-		_ = dst.Remove(rel)
-		return 0, errFilesystemBusy
-	}
-	done := make(chan result, 1) // buffered: an abandoned copy never blocks
-	go func() {
-		defer release()
-		n, err := copyChunks(ctx, f, src)
-		done <- result{n, err}
-	}()
-	var n int64
-	select {
-	case r := <-done:
-		n, err = r.n, r.err
-	case <-ctx.Done():
-		// The copy may be stuck in a syscall; do not wait for it. Unlinking
-		// is safe while it still holds the descriptor.
-		_ = dst.Remove(rel)
-		return 0, fmt.Errorf("copy: %w", ctx.Err())
-	}
+	n, err := copyChunks(ctx, f, src)
 	outMu.Lock()
 	out = nil
 	outMu.Unlock()

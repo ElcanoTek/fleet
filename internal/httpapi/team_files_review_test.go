@@ -551,9 +551,8 @@ func TestCopyOneOutputAbandonsStalledRead(t *testing.T) {
 	}
 	defer dst.Close()
 	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
 	branchCopySource = func(io.Reader) io.Reader { return stallingReader{release} }
-	t.Cleanup(func() { branchCopySource = nil })
+	t.Cleanup(func() { releaseStalledWorkers(t, release); branchCopySource = nil })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -586,9 +585,8 @@ func TestCopySharedOutputsWithholdsRestAfterBudget(t *testing.T) {
 		}
 	}
 	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
 	branchCopySource = func(io.Reader) io.Reader { return stallingReader{release} }
-	t.Cleanup(func() { branchCopySource = nil })
+	t.Cleanup(func() { releaseStalledWorkers(t, release); branchCopySource = nil })
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	outs := []outputFile{{Path: "a.csv", Shared: true}, {Path: "b.csv", Shared: true}, {Path: "c.csv", Shared: true}}
@@ -815,5 +813,74 @@ func TestCopyOneOutputRespectsTheWorkerCap(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dstDir, "a.csv")); !os.IsNotExist(err) {
 		t.Errorf("a refused copy left a file behind: %v", err)
+	}
+}
+
+// The worker slot is taken before the FIRST filesystem call: a copy stuck
+// before it ever reads (here, between the stat and the destination open)
+// is abandoned at the deadline like a stuck read, still counts against the
+// cap while stuck, and — once the filesystem answers — removes whatever it
+// would have written, so a file reported withheld never stays in the branch.
+func TestCopyOneOutputAbandonsAStallBeforeTheCopy(t *testing.T) {
+	srcDir, dstDir := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "a.csv"), []byte("abc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := os.OpenRoot(dstDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+	release := make(chan struct{})
+	branchCopyAfterStat = func(string) { <-release }
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			releaseStalledWorkers(t, release)
+		}
+		branchCopyAfterStat = nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := copyOneOutput(ctx, srcDir, dst, "a.csv", 1<<20); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stalled before the copy: err = %v, want DeadlineExceeded", err)
+	}
+	if el := time.Since(start); el > 5*time.Second {
+		t.Fatalf("returned after %v", el)
+	}
+	if len(fsWorkerSlots) != 1 {
+		t.Errorf("a stuck copy holds %d worker slots, want 1", len(fsWorkerSlots))
+	}
+	released = true
+	releaseStalledWorkers(t, release)
+	if _, err := os.Stat(filepath.Join(dstDir, "a.csv")); !os.IsNotExist(err) {
+		t.Errorf("an abandoned copy left its file behind: %v", err)
+	}
+}
+
+// releaseStalledWorkers unblocks the abandoned copy workers a test parked and
+// waits for every filesystem worker slot to come back, so test seams are not
+// cleared while a worker can still read them.
+func releaseStalledWorkers(t *testing.T, release chan struct{}) {
+	t.Helper()
+	close(release)
+	// Filling every slot is a channel operation, so it happens-after each
+	// worker's release (polling len() would not order the seam reads).
+	timeout := time.After(5 * time.Second)
+	taken := 0
+fill:
+	for taken < maxFSWorkers {
+		select {
+		case fsWorkerSlots <- struct{}{}:
+			taken++
+		case <-timeout:
+			t.Error("an abandoned filesystem worker never exited")
+			break fill
+		}
+	}
+	for range taken {
+		<-fsWorkerSlots
 	}
 }
