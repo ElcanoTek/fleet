@@ -705,9 +705,10 @@ func TestProjectFilesGrouped(t *testing.T) {
 		} `json:"files"`
 	}
 
-	// The owner: one group, hers, with the non-output scratch file download-only.
+	// The owner: one group, hers, with the non-output scratch file
+	// download-only — and counted, since the count is the rows listed.
 	got := decode[body](t, projectSub(t, f.srv, "GET", "alice@x.com", f.project.ID+"/files", ""))
-	if len(got.Groups) != 1 || !got.Groups[0].Mine || got.Groups[0].FileCount != 4 || got.Groups[0].SharedCount != 3 {
+	if len(got.Groups) != 1 || !got.Groups[0].Mine || got.Groups[0].FileCount != 5 || got.Groups[0].SharedCount != 3 {
 		t.Fatalf("owner groups = %+v", got.Groups)
 	}
 	for _, fl := range got.Groups[0].Files {
@@ -768,8 +769,8 @@ func TestProjectFilesGrouped(t *testing.T) {
 }
 
 // Sources' workspace walk keeps only the newest maxProjectFiles files, but
-// every current output is counted — so every output must also have its row
-// (and toggle), however many newer scratch files bury it.
+// every current output must keep its row (and toggle), however many newer
+// scratch files bury it — and the count is still the rows listed.
 func TestProjectFilesListsOlderOutputsPastTheWalkBound(t *testing.T) {
 	f := newFilesFixture(t)
 	ws := filepath.Join(f.root, f.chat.ID)
@@ -801,8 +802,8 @@ func TestProjectFilesListsOlderOutputsPastTheWalkBound(t *testing.T) {
 		t.Fatalf("groups = %+v", got.Groups)
 	}
 	g := got.Groups[0]
-	if g.FileCount != 4 || g.SharedCount != 3 {
-		t.Fatalf("counts = %d/%d, want 4/3", g.FileCount, g.SharedCount)
+	if g.FileCount != maxProjectFiles || g.SharedCount != 3 {
+		t.Fatalf("counts = %d/%d, want %d/3", g.FileCount, g.SharedCount, maxProjectFiles)
 	}
 	outputs, shared := 0, 0
 	for _, fl := range g.Files {
@@ -813,9 +814,9 @@ func TestProjectFilesListsOlderOutputsPastTheWalkBound(t *testing.T) {
 			}
 		}
 	}
-	if outputs != g.FileCount || shared != g.SharedCount {
-		t.Errorf("rows disagree with counts: %d outputs (%d shared) listed, counts %d/%d",
-			outputs, shared, g.FileCount, g.SharedCount)
+	if outputs != 4 || shared != g.SharedCount || len(g.Files) != g.FileCount {
+		t.Errorf("rows disagree with counts: %d rows, %d outputs (%d shared), counts %d/%d",
+			len(g.Files), outputs, shared, g.FileCount, g.SharedCount)
 	}
 	if len(g.Files) != maxProjectFiles || !got.Truncated {
 		t.Errorf("files = %d (truncated=%v), want the cap %d, truncated", len(g.Files), got.Truncated, maxProjectFiles)
@@ -865,6 +866,116 @@ func TestProjectFilesListsOutputsWhenWalkFindsNoFiles(t *testing.T) {
 		if !fl.Output {
 			t.Errorf("non-output row without a walk: %+v", fl)
 		}
+	}
+}
+
+// Sources never lists fleet's internal state or hidden files: the .fleet/
+// tool-output recovery slots, a .git/ tree, a dotfile at the root. The count
+// is the rows listed, and a chat whose ONLY files are hidden has no group.
+func TestProjectFilesSkipsHiddenAndFleetInternals(t *testing.T) {
+	f := newFilesFixture(t)
+	hidden := []string{
+		".fleet/tool-output/.next-slot",
+		".fleet/tool-output/.used",
+		".fleet/tool-output/.gitignore",
+		".fleet/tool-output/artifact-cb92de7928.txt",
+		".git/HEAD",
+		".env",
+		"out/.DS_Store",
+	}
+	write := func(ws string, rels []string) {
+		for _, rel := range rels {
+			p := filepath.Join(ws, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	write(filepath.Join(f.root, f.chat.ID), hidden)
+
+	// A second chat of alice's in the project with nothing but internals.
+	only, err := f.st.CreateConversation(f.ctx, "alice@x.com", "Internals only", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetConversationProject(f.ctx, "alice@x.com", only.ID, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	write(filepath.Join(f.root, only.ID), hidden)
+
+	type body struct {
+		Groups []struct {
+			ConversationID string `json:"conversation_id"`
+			FileCount      int    `json:"file_count"`
+			SharedCount    int    `json:"shared_count"`
+			Files          []struct {
+				Path string `json:"path"`
+			} `json:"files"`
+		} `json:"groups"`
+		Files []struct {
+			Path string `json:"path"`
+		} `json:"files"`
+	}
+	got := decode[body](t, projectSub(t, f.srv, "GET", "alice@x.com", f.project.ID+"/files", ""))
+	if len(got.Groups) != 1 || got.Groups[0].ConversationID != f.chat.ID {
+		t.Fatalf("groups = %+v, want only the chat with real files", got.Groups)
+	}
+	g := got.Groups[0]
+	for _, fl := range g.Files {
+		if strings.HasPrefix(fl.Path, ".") || strings.Contains(fl.Path, "/.") {
+			t.Errorf("hidden file listed: %s", fl.Path)
+		}
+	}
+	if g.FileCount != len(g.Files) || g.FileCount != 5 || g.SharedCount != 3 {
+		t.Errorf("counts = %d/%d over %d rows, want 5/3 over 5", g.FileCount, g.SharedCount, len(g.Files))
+	}
+	if len(got.Files) != 5 {
+		t.Errorf("legacy flat list = %d files, want the same 5", len(got.Files))
+	}
+}
+
+// A teammate's group past the row cap: both counts describe the rows listed,
+// never the uncapped output set.
+func TestProjectFilesTeamGroupCountsAfterCap(t *testing.T) {
+	f := newFilesFixture(t)
+	ws := filepath.Join(f.root, f.chat.ID)
+	var reply strings.Builder
+	for i := range maxProjectFiles + 5 {
+		rel := fmt.Sprintf("many/f%04d.csv", i)
+		p := filepath.Join(ws, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(&reply, "[f](%s) ", rel)
+	}
+	if _, err := f.st.AppendHistory(f.ctx, f.chat.ID, []agent.HistoryEntry{textEntry("assistant", reply.String())}); err != nil {
+		t.Fatal(err)
+	}
+	type body struct {
+		Groups []struct {
+			Mine        bool `json:"mine"`
+			FileCount   int  `json:"file_count"`
+			SharedCount int  `json:"shared_count"`
+			Files       []struct {
+				Path string `json:"path"`
+			} `json:"files"`
+		} `json:"groups"`
+		Truncated bool `json:"truncated"`
+	}
+	got := decode[body](t, projectSub(t, f.srv, "GET", "bob@x.com", f.project.ID+"/files", ""))
+	if len(got.Groups) != 1 || got.Groups[0].Mine {
+		t.Fatalf("groups = %+v, want alice's shared chat", got.Groups)
+	}
+	g := got.Groups[0]
+	if len(g.Files) != maxProjectFiles || g.FileCount != maxProjectFiles || g.SharedCount != maxProjectFiles || !got.Truncated {
+		t.Errorf("rows=%d counts=%d/%d truncated=%v, want %d/%d/%d truncated",
+			len(g.Files), g.FileCount, g.SharedCount, got.Truncated, maxProjectFiles, maxProjectFiles, maxProjectFiles)
 	}
 }
 

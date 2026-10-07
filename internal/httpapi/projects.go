@@ -495,7 +495,7 @@ type sourcesFile struct {
 	// Shared is "an output the owner has not unchecked". Always false for a
 	// non-output, which is download-only and never shared.
 	Shared bool `json:"shared"`
-	// Output: presented in a reply (a file chip). Only outputs are counted.
+	// Output: presented in a reply (a file chip). Only outputs are shareable.
 	Output bool `json:"output"`
 	// YourCopy: copied in when the caller branched a teammate's chat.
 	YourCopy bool `json:"your_copy"`
@@ -512,12 +512,14 @@ type sourcesGroup struct {
 	TeamVisible bool `json:"team_visible"`
 	// IsBranch: the caller's branch of a teammate's chat (its copied files
 	// are labelled "Your copy · <date>").
-	IsBranch     bool          `json:"is_branch"`
-	BranchedAt   int64         `json:"branched_at,omitempty"`
-	LastActiveAt int64         `json:"last_active_at"`
-	FileCount    int           `json:"file_count"`
-	SharedCount  int           `json:"shared_count"`
-	Files        []sourcesFile `json:"files"`
+	IsBranch     bool  `json:"is_branch"`
+	BranchedAt   int64 `json:"branched_at,omitempty"`
+	LastActiveAt int64 `json:"last_active_at"`
+	// FileCount is len(Files): the rows the group lists, so the header and
+	// the list always agree. SharedCount is the shared outputs among them.
+	FileCount   int           `json:"file_count"`
+	SharedCount int           `json:"shared_count"`
+	Files       []sourcesFile `json:"files"`
 }
 
 // maxProjectFiles caps each Sources group (and the legacy flat list) — a
@@ -631,7 +633,8 @@ func (h *newestFiles) Pop() any {
 // protocols, shared, skills, system_prompts) pointing OUTSIDE the root, and a
 // Sources entry must be a real file the user can open. The attachments/ and
 // user-skills/ subtrees are skipped whole: uploads and the owner's
-// materialized private skills are never listed in Sources (ADR-0079).
+// materialized private skills are never listed in Sources (ADR-0079). So is
+// every dot-named file or directory (hiddenWorkspaceName), .fleet/ included.
 // walkWorkspaceFilesAbandonable runs the walk on its own goroutine and returns
 // as soon as ctx is done — empty and truncated — even if a directory read is
 // stuck in the kernel on a stalled filesystem (the walk stops at ctx between
@@ -657,6 +660,17 @@ func walkWorkspaceFilesAbandonable(ctx context.Context, convID string, limit int
 	case <-ctx.Done():
 		return []sourcesFile{}, true
 	}
+}
+
+// hiddenWorkspaceName reports whether a workspace entry is hidden from the
+// Sources walk: anything dot-named. That covers fleet's own .fleet/ tree (the
+// tool-output recovery slots — .next-slot, .used, artifact-*.txt — and their
+// .gitignore) as well as .git/, .cache/ and the like: internal state the
+// chat never presented, which only made a group look full of files nobody
+// made. An OUTPUT is still listed whatever its name — the agent presented
+// it, and a shared one needs its row to be unshared by.
+func hiddenWorkspaceName(name string) bool {
+	return strings.HasPrefix(name, ".")
 }
 
 // workspaceWalkHook is a test seam run for each entry the walk visits.
@@ -695,10 +709,14 @@ func walkWorkspaceFiles(ctx context.Context, convID string, limit int) (files []
 		if d.IsDir() {
 			// attachments/ and user-skills/ (privateWorkspaceDirs) are the
 			// owner's uploads and private skills fleet put there, not work
-			// the chat produced.
-			if isPrivateWorkspacePath(rel) {
+			// the chat produced; a dot-named directory (.fleet/, .git/, …)
+			// is internal state, never listed either.
+			if rel != "." && (isPrivateWorkspacePath(rel) || hiddenWorkspaceName(d.Name())) {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if hiddenWorkspaceName(d.Name()) {
 			return nil
 		}
 		info, err := d.Info()
@@ -734,8 +752,9 @@ func walkWorkspaceFiles(ctx context.Context, convID string, limit int) (files []
 // panel, grouped by chat (ADR-0079):
 //
 //   - the caller's OWN chats: every regular file in each workspace except
-//     uploads, each flagged output / shared / your_copy. Non-outputs are
-//     download-only and never counted;
+//     uploads and hidden (dot-named) entries, each flagged output / shared /
+//     your_copy. Non-outputs are download-only; file_count counts every
+//     listed row, shared_count the shared outputs;
 //   - teammates' chats shared with the caller's team in THIS project (the
 //     same gates as team-conversations): their SHARED outputs only, downloaded
 //     through the team-files route, which re-checks every gate.
@@ -892,7 +911,6 @@ func (s *Server) ownSourcesGroup(ctx context.Context, conv store.Conversation, o
 		Mine:           true,
 		TeamVisible:    conv.TeamVisible,
 		LastActiveAt:   conv.UpdatedAt,
-		FileCount:      len(outs),
 		SharedCount:    countShared(outs),
 	}
 	if origin != nil {
@@ -901,8 +919,8 @@ func (s *Server) ownSourcesGroup(ctx context.Context, conv store.Conversation, o
 			copied[f.Path] = true
 		}
 	}
-	// Every current output first, whatever its age: FileCount and
-	// SharedCount count them, and each needs its row (and toggle). The
+	// Every current output first, whatever its age: SharedCount counts
+	// them, and each needs its row (and toggle). The
 	// bounded walk keeps only the newest files, so an older output can be
 	// missing from `all` — listing from the walk alone left a shared
 	// output counted but with no row to unshare it by. Then the newest
@@ -926,6 +944,9 @@ func (s *Server) ownSourcesGroup(ctx context.Context, conv store.Conversation, o
 		f.YourCopy = copied[f.Path]
 		g.Files = append(g.Files, f)
 	}
+	// FileCount is what the group lists — outputs and download-only files
+	// alike — so the header never says "0 files" over a list of rows.
+	g.FileCount = len(g.Files)
 	sort.SliceStable(g.Files, func(i, j int) bool { return newerFile(g.Files[i], g.Files[j]) })
 	return g, true, truncated, nil
 }
@@ -960,11 +981,12 @@ func (s *Server) teamSourcesGroup(ctx context.Context, conv store.Conversation) 
 	if len(g.Files) == 0 {
 		return g, false, truncated, nil
 	}
-	g.FileCount, g.SharedCount = len(g.Files), len(g.Files)
 	if len(g.Files) > maxProjectFiles {
 		g.Files = g.Files[:maxProjectFiles]
 		truncated = true
 	}
+	// Both counts after the cap: every listed row here is a shared output.
+	g.FileCount, g.SharedCount = len(g.Files), len(g.Files)
 	return g, true, truncated, nil
 }
 

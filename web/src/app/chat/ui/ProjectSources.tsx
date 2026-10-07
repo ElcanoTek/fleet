@@ -28,9 +28,11 @@ import {
 //   - The share toggle exists only on outputs of the caller's own TEAM-SHARED
 //     chats. A private chat's group is download-only, with one line saying
 //     how its files get shared (share the chat). Non-outputs — files the agent
-//     wrote but never presented — are download-only everywhere and never
-//     counted.
-//   - Uploads never appear: the backend excludes them from the listing.
+//     wrote but never presented — are download-only everywhere. A group's
+//     "N files" is the rows it lists; "· M shared" (team-shared chats only)
+//     counts the shared outputs among them.
+//   - Uploads, fleet's internal state (.fleet/) and hidden dot-files never
+//     appear: the backend excludes them from the listing.
 //   - The most recently active group is open by default; each person's
 //     open/closed choices are remembered per project (my-state.sources_open).
 //     "Manage" / "Manage in Sources" focus one group: open, scroll, highlight.
