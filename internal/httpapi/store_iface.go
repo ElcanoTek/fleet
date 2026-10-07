@@ -305,7 +305,7 @@ type chatStore interface {
 	ResolveTeamLink(ctx context.Context, callerEmail, convID string) (store.TeamLink, error)
 	GetProjectUserState(ctx context.Context, projectID, email string) (store.ProjectUserState, error)
 	UpdateProjectUserState(ctx context.Context, projectID, email string, keptPersonal *bool, sourcesOpen map[string]bool) (store.ProjectUserState, error)
-	MarkProjectSharedChat(ctx context.Context, projectID, email string) error
+	MarkProjectSharedChat(ctx context.Context, convID, email string) error
 	AdminStats(ctx context.Context) ([]store.AdminRow, error)
 	// MigrationStatus reports applied vs pending chat-DB migrations for
 	// GET /admin/migrations (#256). Read-only.

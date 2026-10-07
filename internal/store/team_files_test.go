@@ -308,7 +308,7 @@ func TestProjectUserState(t *testing.T) {
 	if _, ok := st.SourcesOpen[c2.ID]; !ok {
 		t.Error("a closed group must be remembered as closed")
 	}
-	if err := f.s.MarkProjectSharedChat(f.ctx, f.project.ID, "bob@x.com"); err != nil {
+	if err := f.s.MarkProjectSharedChat(f.ctx, c2.ID, "bob@x.com"); err != nil {
 		t.Fatal(err)
 	}
 	st, _ = f.s.GetProjectUserState(f.ctx, f.project.ID, "bob@x.com")
@@ -470,9 +470,9 @@ func TestDeleteUserRemovesProjectUserState(t *testing.T) {
 	if _, err := f.s.UpdateProjectUserState(f.ctx, f.project.ID, "bob@x.com", &yes, nil); err == nil {
 		t.Error("a state write for a deleted account succeeded")
 	}
-	if err := f.s.MarkProjectSharedChat(f.ctx, f.project.ID, "bob@x.com"); err == nil {
-		t.Error("a shared-chat mark for a deleted account succeeded")
-	}
+	// (The shared-chat mark reads the chat, which went with the account: it
+	// has nothing to record, and the count below confirms no row came back.)
+	_ = f.s.MarkProjectSharedChat(f.ctx, "gone", "bob@x.com")
 	if err := f.s.db.QueryRowContext(f.ctx,
 		`SELECT COUNT(*) FROM project_user_state WHERE user_email = 'bob@x.com'`).Scan(&n); err != nil || n != 0 {
 		t.Errorf("%d rows (%v) for the deleted account after late writes", n, err)
@@ -810,5 +810,45 @@ func TestSourcesOpenKeepsOnlyVisibleChats(t *testing.T) {
 	}
 	if _, ok := st.SourcesOpen[mine.ID]; !ok {
 		t.Error("the caller's own chat lost its key")
+	}
+}
+
+// The shared-chat mark credits the project the chat is filed in when the mark
+// is written — the one that actually hosts the share — not a project read
+// before a racing refile. A chat that is no longer shared credits nothing.
+func TestMarkProjectSharedChatCreditsTheChatsCurrentProject(t *testing.T) {
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "bob@x.com", f.project.ID, "Moving")
+	second, err := f.s.CreateProject(f.ctx, &Project{OwnerEmail: "alice@x.com", Name: "Second", TeamID: "quant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A refile to another quant project raced the share: the share stands
+	// (same team), and the mark must land on the project it moved to.
+	if err := f.s.SetConversationProject(f.ctx, "bob@x.com", c.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.MarkProjectSharedChat(f.ctx, c.ID, "bob@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := f.s.GetProjectUserState(f.ctx, second.ID, "bob@x.com"); !st.HasSharedChat {
+		t.Error("the project hosting the share was not credited")
+	}
+	if st, _ := f.s.GetProjectUserState(f.ctx, f.project.ID, "bob@x.com"); st.HasSharedChat {
+		t.Error("the project the chat left was credited")
+	}
+	// Unshared in between: nothing is credited.
+	if _, err := f.s.SetConversationTeamVisible(f.ctx, "bob@x.com", c.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	other := f.sharedChat(t, "alice@x.com", f.project.ID, "Alice's")
+	if _, err := f.s.SetConversationTeamVisible(f.ctx, "alice@x.com", other.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.MarkProjectSharedChat(f.ctx, other.ID, "alice@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := f.s.GetProjectUserState(f.ctx, f.project.ID, "alice@x.com"); st.HasSharedChat {
+		t.Error("a chat no longer shared credited its project")
 	}
 }

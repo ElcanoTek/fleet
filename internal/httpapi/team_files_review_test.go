@@ -788,3 +788,32 @@ func TestProjectFilesFocusIncludedPastCap(t *testing.T) {
 		t.Errorf("malformed focus: %d, want 400", w.Code)
 	}
 }
+
+// The branch copy shares the process-wide filesystem worker cap: with every
+// slot held (stuck calls on a stalled mount), a file is withheld rather than
+// starting another worker, and no partial copy is left behind.
+func TestCopyOneOutputRespectsTheWorkerCap(t *testing.T) {
+	srcDir, dstDir := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "a.csv"), []byte("abc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := os.OpenRoot(dstDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+	for range maxFSWorkers {
+		fsWorkerSlots <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for range maxFSWorkers {
+			<-fsWorkerSlots
+		}
+	})
+	if _, err := copyOneOutput(context.Background(), srcDir, dst, "a.csv", 1<<20); !errors.Is(err, errFilesystemBusy) {
+		t.Fatalf("copy with every slot held: err = %v, want errFilesystemBusy", err)
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "a.csv")); !os.IsNotExist(err) {
+		t.Errorf("a refused copy left a file behind: %v", err)
+	}
+}

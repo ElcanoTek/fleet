@@ -238,7 +238,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 	if stored {
 		// Retires this person's getting-started card in the project. Display
 		// state: a failure is logged, never a failed share.
-		if err := s.store.MarkProjectSharedChat(r.Context(), conv.ProjectID, user); err != nil {
+		if err := s.store.MarkProjectSharedChat(r.Context(), convID, user); err != nil {
 			log.Printf("share-with-team: record has_shared_chat for %s: %v", logSafeSlug(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
 		}
 	} else if !conv.TeamVisible {

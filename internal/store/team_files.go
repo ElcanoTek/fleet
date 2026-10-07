@@ -898,19 +898,24 @@ func sentKey(sent map[string]bool, k string) bool {
 	return ok
 }
 
-// MarkProjectSharedChat records that email has shared a chat in projectID —
-// what retires their getting-started card. Server-side only, flipped by a
-// successful share-with-team, so the card's "done" state is a fact rather
-// than a client claim. Never flipped back.
-func (s *Store) MarkProjectSharedChat(ctx context.Context, projectID, email string) error {
-	if projectID == "" {
-		return nil
-	}
+// MarkProjectSharedChat records that email has shared a chat in the project
+// the shared chat convID is filed in NOW — what retires their getting-started
+// card there. Server-side only, called after a successful share-with-team, so
+// the card's "done" state is a fact rather than a client claim; never flipped
+// back. The project is read from the chat at write time, not passed in: a
+// refile that raced the share must credit the project that actually hosts
+// it, and a chat no longer shared (moved out of a team project in between)
+// credits nothing.
+func (s *Store) MarkProjectSharedChat(ctx context.Context, convID, email string) error {
+	email = normalizeEmail(email)
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO project_user_state (project_id, user_email, has_shared_chat, updated_at)
-		SELECT $1, $2, TRUE, $3 WHERE EXISTS (SELECT 1 FROM projects WHERE id = $1)
+		SELECT c.project_id, $2, TRUE, $3
+		FROM conversations c
+		WHERE c.id = $1 AND c.user_email = $2 AND c.deleted_at IS NULL
+		  AND c.team_visible = TRUE AND c.project_id IS NOT NULL
 		ON CONFLICT (project_id, user_email) DO UPDATE SET
 			has_shared_chat = TRUE, updated_at = EXCLUDED.updated_at`,
-		projectID, normalizeEmail(email), time.Now().Unix())
+		convID, email, time.Now().Unix())
 	return err
 }

@@ -483,8 +483,19 @@ func copyOneOutput(ctx context.Context, srcDir string, dst *os.Root, rel string,
 		n   int64
 		err error
 	}
+	// The copy runs on one of the process-wide filesystem worker slots
+	// (acquireFSWorker), held until the goroutine actually exits: a copy the
+	// caller abandoned on a stalled mount keeps its slot, so stuck copies
+	// cannot pile up past the cap. With every slot held the file is withheld
+	// (fail closed), like any other file that could not be copied.
+	release, ok := acquireFSWorker()
+	if !ok {
+		_ = dst.Remove(rel)
+		return 0, errFilesystemBusy
+	}
 	done := make(chan result, 1) // buffered: an abandoned copy never blocks
 	go func() {
+		defer release()
 		n, err := copyChunks(ctx, f, src)
 		done <- result{n, err}
 	}()
