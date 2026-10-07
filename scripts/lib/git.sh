@@ -12,16 +12,32 @@
 # times carried hundreds of identical entries. This adds the line only when it
 # is missing and collapses duplicates left behind by those older runs, so the
 # next update tidies a box nobody cleaned by hand. --fixed-value matches DIR
-# literally (a path is not a regex). Best effort, like the call it replaces: a
-# git without --fixed-value (< 2.30) or an unwritable config never fails the run.
+# literally (a path is not a regex).
+#
+# Present is not the same as effective: git reads safe.directory as a list in
+# which an EMPTY value resets everything before it. The old bare --add always
+# appended after any such reset, so it always took effect; this helper must
+# keep that property. DIR counts as trusted only when its last occurrence comes
+# after the last empty value; otherwise it is collapsed and re-added at the
+# end. Best effort, like the call it replaces: an unwritable config never fails
+# the run, and a git without --fixed-value (< 2.30) skips the dedupe but still
+# gets an effective entry.
 git_trust_dir() {
-  local dir="$1" n
-  n="$(git config --global --get-all safe.directory 2>/dev/null | grep -cxF -- "$dir" || true)"
-  if (( n > 1 )); then
-    git config --global --fixed-value --unset-all safe.directory "$dir" 2>/dev/null || return 0
-    n=0
+  local dir="$1" e n=0 effective=0
+  local -a entries=()
+  mapfile -t entries < <(git config --global --get-all safe.directory 2>/dev/null || true)
+  for e in "${entries[@]}"; do
+    if [[ -z "$e" ]]; then
+      effective=0
+    elif [[ "$e" == "$dir" ]]; then
+      n=$((n + 1))
+      effective=1
+    fi
+  done
+  (( n == 1 && effective )) && return 0
+  if (( n > 0 )) && ! git config --global --fixed-value --unset-all safe.directory "$dir" 2>/dev/null; then
+    # Could not dedupe; an entry that already takes effect is good enough.
+    (( effective )) && return 0
   fi
-  if (( n == 0 )); then
-    git config --global --add safe.directory "$dir" 2>/dev/null || true
-  fi
+  git config --global --add safe.directory "$dir" 2>/dev/null || true
 }

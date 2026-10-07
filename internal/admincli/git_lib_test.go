@@ -76,6 +76,31 @@ git config --global --add safe.directory /opt/fleetXsrc`)
 	if n := count("/srv/new"); n != 1 {
 		t.Errorf("/srv/new: %d entries, want 1 (%v)", n, entries())
 	}
+	// An empty value resets git's safe.directory list, so an entry that sits
+	// only BEFORE a reset trusts nothing. The helper must leave DIR after the
+	// last reset (the old bare --add always did, by appending), exactly once.
+	run(`git config --global --add safe.directory /srv/reset-me
+git config --global --add safe.directory ""
+git_trust_dir /srv/reset-me; git_trust_dir /srv/reset-me`)
+	if n := count("/srv/reset-me"); n != 1 {
+		t.Errorf("/srv/reset-me: %d entries, want 1 (%v)", n, entries())
+	}
+	// -z: NUL-terminated values, so the empty reset entry survives parsing
+	// (newline output cannot tell a trailing empty value from the final newline).
+	raw := strings.Split(strings.TrimSuffix(run("git config --global -z --get-all safe.directory"), "\x00"), "\x00")
+	lastReset, lastDir := -1, -1
+	for i, e := range raw {
+		switch e {
+		case "":
+			lastReset = i
+		case "/srv/reset-me":
+			lastDir = i
+		}
+	}
+	if lastReset < 0 || lastDir < lastReset {
+		t.Errorf("/srv/reset-me is not after the last empty safe.directory (reset at %d, entry at %d): %q", lastReset, lastDir, raw)
+	}
+
 	if got := strings.TrimSpace(run("git config --global user.name")); got != "keep-me" {
 		t.Errorf("user.name = %q after git_trust_dir, want keep-me", got)
 	}
