@@ -448,13 +448,32 @@ func TestProjectFilesRequestWideDiscoveryBudget(t *testing.T) {
 	oldN, oldT := maxSourcesDiscoveries, sourcesDiscoveryBudget
 	t.Cleanup(func() { maxSourcesDiscoveries, sourcesDiscoveryBudget = oldN, oldT })
 
-	// The count: one examination for the whole request.
+	// The count: two examinations for the whole request, at most one of them
+	// in the caller's own half. Alice's two chats: one examined, one cut.
+	maxSourcesDiscoveries = 2
+	if got := decode[body](t, projectSub(t, f.srv, "GET", "alice@x.com", f.project.ID+"/files", "")); len(got.Groups) != 1 || !got.GroupsTruncated || !got.Truncated {
+		t.Errorf("alice count-capped: %v truncated=%v", ids(got), got.GroupsTruncated)
+	}
+	// One examination in all: bob (no chats of his own) gets it for the team half.
 	maxSourcesDiscoveries = 1
-	for _, who := range []string{"alice@x.com", "bob@x.com"} {
-		got := decode[body](t, projectSub(t, f.srv, "GET", who, f.project.ID+"/files", ""))
-		if len(got.Groups) != 1 || !got.GroupsTruncated || !got.Truncated {
-			t.Errorf("%s count-capped: %v truncated=%v", who, ids(got), got.GroupsTruncated)
+	if got := decode[body](t, projectSub(t, f.srv, "GET", "bob@x.com", f.project.ID+"/files", "")); len(got.Groups) != 1 || !got.GroupsTruncated {
+		t.Errorf("bob count-capped: %v truncated=%v", ids(got), got.GroupsTruncated)
+	}
+
+	// The caller's own file-less chats cannot starve the team half: bob files
+	// three empty chats of his own, and still sees both of alice's shared ones.
+	for i := 0; i < 3; i++ {
+		c, err := f.st.CreateConversation(f.ctx, "bob@x.com", fmt.Sprintf("Empty %d", i), "victoria", "", false)
+		if err != nil {
+			t.Fatal(err)
 		}
+		if err := f.st.SetConversationProject(f.ctx, "bob@x.com", c.ID, f.project.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	maxSourcesDiscoveries = 4
+	if got := decode[body](t, projectSub(t, f.srv, "GET", "bob@x.com", f.project.ID+"/files", "")); len(got.Groups) != 2 {
+		t.Errorf("bob with three empty chats of his own: %v, want alice's two shared chats", ids(got))
 	}
 
 	// The deadline: already spent, so nothing is examined — except the focus.

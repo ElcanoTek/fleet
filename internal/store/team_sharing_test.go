@@ -1592,3 +1592,38 @@ func TestTransferProjectOwnershipRechecksActingOwner(t *testing.T) {
 		t.Fatalf("admin transfer: %v", err)
 	}
 }
+
+// Deleting an account and transferring a project TO it serialize on the
+// account row: a transfer arriving after DeleteUser's shared-project guard
+// waits for the delete and is then refused (the account is gone), so the
+// delete's later statements can never take the just-transferred team project
+// with them. Whatever the order, the project survives.
+func TestTransferRacingTargetDeletionKeepsTheProject(t *testing.T) {
+	f := newTeamFixture(t)
+	transferErr := make(chan error, 1)
+	deleteUserAfterGuard = func() {
+		deleteUserAfterGuard = nil
+		go func() {
+			_, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com", "alice@x.com")
+			transferErr <- err
+		}()
+		// Give the transfer every chance to commit before the delete goes on.
+		time.Sleep(300 * time.Millisecond)
+	}
+	t.Cleanup(func() { deleteUserAfterGuard = nil })
+	deleteErr := f.s.DeleteUser(f.ctx, "bob@x.com")
+	tErr := <-transferErr
+
+	p, err := f.s.GetProject(f.ctx, f.project.ID)
+	if err != nil || p == nil {
+		t.Fatalf("the team project was deleted (delete=%v, transfer=%v): %v", deleteErr, tErr, err)
+	}
+	if deleteErr == nil {
+		// The delete won: the transfer must have been refused.
+		if tErr == nil || p.OwnerEmail != "alice@x.com" {
+			t.Errorf("delete won but transfer = %v, owner = %s", tErr, p.OwnerEmail)
+		}
+	} else if p.OwnerEmail != "bob@x.com" {
+		t.Errorf("delete refused (%v) but owner = %s", deleteErr, p.OwnerEmail)
+	}
+}

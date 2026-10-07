@@ -685,6 +685,10 @@ func (s *Store) UpdatePassword(ctx context.Context, email, plainPassword string)
 // revocation is a remotemcp-service concern (it needs an HTTP client and
 // the decrypted refresh token) and is NOT attempted here — the rows, and
 // with them the only ciphertext copies, are gone after this commit.
+// deleteUserAfterGuard is a test seam: it runs right after DeleteUser's
+// shared-project guard, where a concurrent transfer could otherwise land.
+var deleteUserAfterGuard func()
+
 func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	email = normalizeEmail(email)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -705,12 +709,27 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	// owner who shared a project between the check and the COMMIT would have
 	// had it deleted anyway — exactly the outcome the guard exists to prevent.
 	// FOR UPDATE also serializes against a concurrent PATCH.
+	//
+	// The account row is locked FIRST (FOR UPDATE), before the guard: a
+	// project transfer locks its target account FOR SHARE, so the two
+	// serialize. A transfer that got there first commits before the guard
+	// runs (and the guard then refuses — the account owns a shared project);
+	// one that comes second waits, finds the account gone, and is refused.
+	// Without it a transfer could commit between this guard and the deletes
+	// below, which would then take the just-transferred project with them.
+	if _, err := tx.ExecContext(ctx,
+		`SELECT 1 FROM users WHERE email = $1 FOR UPDATE`, email); err != nil {
+		return fmt.Errorf("lock account: %w", err)
+	}
 	shared, err := teamSharedProjectsOwnedByTx(ctx, tx, email)
 	if err != nil {
 		return fmt.Errorf("check owned team-shared projects: %w", err)
 	}
 	if len(shared) > 0 {
 		return &OwnsSharedProjectsError{Projects: shared}
+	}
+	if deleteUserAfterGuard != nil {
+		deleteUserAfterGuard()
 	}
 
 	if _, err := tx.ExecContext(ctx,

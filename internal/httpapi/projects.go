@@ -541,9 +541,12 @@ var (
 // parse, up to 500 output stats, a bounded workspace walk), so one request is
 // also bounded as a whole: at most maxSourcesDiscoveries chats are examined
 // across BOTH halves, and none is started once sourcesDiscoveryBudget has
-// elapsed. What that leaves out is reported as truncated, like the per-half
-// cuts. The focused chat is the one exception (one more examination), so
-// "Manage in Sources" still lands. Vars so tests can shrink them.
+// elapsed. The first half (the caller's own chats) may use at most half of
+// each, so a project full of the caller's file-less chats cannot starve the
+// team's shared files; the team half gets whatever is left. What the budget
+// leaves out is reported as truncated, like the per-half cuts. The focused
+// chat is the one exception (one more examination), so "Manage in Sources"
+// still lands. Vars so tests can shrink them.
 var (
 	maxSourcesDiscoveries  = 100
 	sourcesDiscoveryBudget = 4 * time.Second
@@ -555,8 +558,19 @@ type sourcesBudget struct {
 	deadline time.Time
 }
 
-func newSourcesBudget() *sourcesBudget {
-	return &sourcesBudget{left: maxSourcesDiscoveries, deadline: time.Now().Add(sourcesDiscoveryBudget)}
+// newSourcesBudgets returns the first half's budget (half the chats, half
+// the time) and a function giving the second half the rest once the first is
+// done.
+func newSourcesBudgets() (first *sourcesBudget, rest func() *sourcesBudget) {
+	start := time.Now()
+	half := maxSourcesDiscoveries / 2
+	first = &sourcesBudget{left: half, deadline: start.Add(sourcesDiscoveryBudget / 2)}
+	return first, func() *sourcesBudget {
+		return &sourcesBudget{
+			left:     maxSourcesDiscoveries - (half - first.left),
+			deadline: start.Add(sourcesDiscoveryBudget),
+		}
+	}
 }
 
 // spend takes one chat examination from the budget; false once it is spent.
@@ -757,8 +771,8 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 	// focusDone is set once the focused chat has been examined (listed, or
 	// found to have no files) so it is never listed twice.
 	focusDone := focus == ""
-	budget := newSourcesBudget()
-	mineCut, err := listSourcesHalf(convs, focus, &focusDone, budget, addMine)
+	mineBudget, teamBudget := newSourcesBudgets()
+	mineCut, err := listSourcesHalf(convs, focus, &focusDone, mineBudget, addMine)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -783,7 +797,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		return ok, nil
 	}
 
-	teamCut, err := listSourcesHalf(team, focus, &focusDone, budget, addTeam)
+	teamCut, err := listSourcesHalf(team, focus, &focusDone, teamBudget(), addTeam)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
