@@ -150,6 +150,11 @@ type RPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Raw     string `json:"-"` // Original JSON for debugging
+	// HTTPStatus is the non-2xx status the error arrived under, 0 when it
+	// came on a 2xx (or over stdio). The JSON-RPC error is what callers
+	// branch on; the status is kept so a classifier can still tell a 503
+	// whose body happens to be a JSON-RPC error from a server's own refusal.
+	HTTPStatus int `json:"-"`
 }
 
 // HTTPStatusError is what the HTTP transport returns when a server answers a
@@ -207,7 +212,12 @@ func (t *HTTPTransport) httpStatusResponse(resp *http.Response, wantID int) (jso
 		// has and which must stay an HTTPStatusError with its own text.
 		if env, derr := decodeJSONRPCEnvelope(br); derr == nil && (env.JSONRPC != "" || env.ID.matchesInt(wantID)) {
 			t.noteStatusBodyMismatch(resp.StatusCode, env)
-			return interpretJSONRPC(env, wantID)
+			result, ierr := interpretJSONRPC(env, wantID)
+			var rpcErr *RPCError
+			if errors.As(ierr, &rpcErr) {
+				rpcErr.HTTPStatus = resp.StatusCode
+			}
+			return result, ierr
 		}
 	}
 	// The head holds only what the peek or the decoder pulled through the tee

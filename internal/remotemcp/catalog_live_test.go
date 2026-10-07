@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -63,9 +64,19 @@ func vendorOutage(err error) bool {
 	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
 		return false
 	}
+	status := 0
 	var statusErr *mcp.HTTPStatusError
-	if errors.As(err, &statusErr) && statusErr.StatusCode >= 500 && statusErr.StatusCode <= 599 {
-		return statusErr.StatusCode != http.StatusNotImplemented
+	var rpcErr *mcp.RPCError
+	switch {
+	case errors.As(err, &statusErr):
+		status = statusErr.StatusCode
+	case errors.As(err, &rpcErr):
+		// A 5xx whose body is a JSON-RPC error ("Internal error") is the
+		// same outage as one with a plain-text body.
+		status = rpcErr.HTTPStatus
+	}
+	if status >= 500 && status <= 599 {
+		return status != http.StatusNotImplemented
 	}
 	return mcp.IsTransientConnectError(err)
 }
@@ -153,9 +164,22 @@ func checkCatalogToolSchemas(t *testing.T, url string, issues []agentcore.ToolSc
 // One subtest per entry, in parallel (one request each, to distinct hosts),
 // so a single dead vendor names itself instead of hiding the rest of the
 // shelf or holding it up.
+//
+// Outages only warn (failUnlessOutagef), so a common-mode failure — the runner
+// lost its network, DNS is down, a client regression times every probe out —
+// would skip every subtest and pass. The parent therefore fails unless at
+// least one entry actually completed a handshake: one vendor down is weather,
+// every vendor down is the smoke not checking anything.
 func TestCatalogLiveOpenEntries(t *testing.T) {
 	svc, entries := catalogLiveService(t)
 	ran := 0
+	var succeeded atomic.Int32
+	// Cleanup runs after the parallel subtests have all finished.
+	t.Cleanup(func() {
+		if ran > 0 && succeeded.Load() == 0 {
+			t.Errorf("none of the %d open entries completed a handshake; every probe failed or was skipped as an outage, which is the runner or fleet's client, not %d vendors at once", ran, ran)
+		}
+	})
 	for _, e := range entries {
 		if e.Auth != "open" || strings.Contains(e.URL, "{") {
 			continue
@@ -170,6 +194,7 @@ func TestCatalogLiveOpenEntries(t *testing.T) {
 			if tools == 0 {
 				t.Fatalf("%s: handshake succeeded but the server lists no tools", e.URL)
 			}
+			succeeded.Add(1)
 			t.Logf("%s: %d tools", e.Name, tools)
 		})
 	}
@@ -281,6 +306,12 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			badTools, badErr := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, "fleet-catalog-smoke-invalid-key")
 			if badErr == nil {
 				t.Fatalf("%s let an invalid key through the handshake and the read-only verification call (%d tools); the vendor changed where it checks keys, or the key is not being sent where it expects it", fixtureName(f.Entry, f.Variant), badTools)
+			}
+			// An outage between the two probes proves nothing about the key:
+			// a 503 would otherwise pass handshakeRefused as a refusal, and a
+			// dropped connection would fail the fixture.
+			if vendorOutage(badErr) {
+				failUnlessOutagef(t, badErr, "%s: the invalid-key probe hit an outage, so the key shape was not checked: %v", fixtureName(f.Entry, f.Variant), badErr)
 			}
 			var kr *keyRejectedError
 			if !handshakeRefused(badErr) && !errors.As(badErr, &kr) {

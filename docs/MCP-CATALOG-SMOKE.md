@@ -128,9 +128,12 @@ attempts, about seven seconds of waiting). A failure that survives that is
 then sorted:
 
 - **Outage → warning.** Any HTTP 5xx except 501 (including a CDN's
-  nonstandard ones, such as Cloudflare's 520–524 and 530), a 429, a timeout, a
-  refused or reset connection, a temporary DNS failure, or a JSON-RPC error
-  that says it is temporary (`mcp.IsTransientConnectError`). The entry's subtest is skipped
+  nonstandard ones, such as Cloudflare's 520–524 and 530, and a 5xx whose body
+  is a JSON-RPC error), a 429, a timeout, a refused or reset connection, a
+  temporary DNS failure, or a JSON-RPC error that says it is temporary
+  (`mcp.IsTransientConnectError`). The same applies to an api_key fixture's
+  invalid-key control probe: an outage there means the key shape was not
+  checked, so it is not counted as the vendor refusing the key. The entry's subtest is skipped
   with a `VENDOR OUTAGE` message. The workflow turns each one into a run
   annotation and lists it in the job summary. The job stays green and no
   issue is filed.
@@ -139,6 +142,11 @@ then sorted:
   endpoint does not implement the protocol), a 4xx (an
   `open` entry answering 401/403 may now need auth), a reply that is not MCP,
   an empty tool list, or an invalid tool schema.
+
+**At least one open entry must succeed.** If every open probe fails or is
+skipped as an outage, `TestCatalogLiveOpenEntries` fails anyway: twelve vendors
+are not down at once. That is the runner losing its network, DNS failing for
+everyone, or a regression in fleet's own client, and it must alarm.
 
 The `strict_smoke` dispatch input (`FLEET_CATALOG_STRICT=1`) turns outage
 warnings into failures for a deliberate sweep, as `strict_links` does for the

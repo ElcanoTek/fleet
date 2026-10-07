@@ -392,3 +392,29 @@ func TestRetryTransientConnectRegistersAfterANotifyBlip(t *testing.T) {
 		t.Fatal("server not registered after the retried handshake")
 	}
 }
+
+// A JSON-RPC error that arrives on a non-2xx keeps its status, so a classifier
+// can tell a 503 carrying {"error":{"message":"Internal error"}} from the
+// server refusing the request; the RPCError is still what errors.As finds.
+func TestHTTPStatusRPCErrorKeepsItsStatus(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusServiceUnavailable} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}`))
+		}))
+		_, err := NewHTTPTransport(srv.URL).Call(context.Background(), "initialize", map[string]any{})
+		srv.Close()
+		var rpcErr *RPCError
+		if !errors.As(err, &rpcErr) || rpcErr.Code != -32603 {
+			t.Fatalf("status %d: err = %v, want the JSON-RPC error", status, err)
+		}
+		want := status
+		if status == http.StatusOK {
+			want = 0
+		}
+		if rpcErr.HTTPStatus != want {
+			t.Fatalf("status %d: RPCError.HTTPStatus = %d, want %d", status, rpcErr.HTTPStatus, want)
+		}
+	}
+}
