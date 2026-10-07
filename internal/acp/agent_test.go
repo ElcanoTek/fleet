@@ -402,6 +402,10 @@ func TestTextReplaceReconcilesAppendOnly(t *testing.T) {
 		{"surrounding whitespace adds nothing", []string{"\n\nHello there", "\n"}, "Hello there", "\n\nHello there\n"},
 		// Whitespace the client was already streamed is not sent again.
 		{"extension keeps streamed whitespace", []string{"Hello\n\n"}, "Hello\n\nWorld", "Hello\n\nWorld"},
+		// Streamed trailing whitespace final does not have is a difference
+		// once anything follows it: a tail appended after it would read as
+		// neither.
+		{"an extension past trailing whitespace is a revision", []string{"Hello\n\n"}, "Hello world", "Hello\n\n" + revisedMarker + "Hello world"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -503,6 +507,14 @@ func TestTextReplaceComparesTheFinalStep(t *testing.T) {
 			script: []string{"I'll check.", toolStep, " Done."},
 			final:  "I'll check. Done.",
 			want:   "I'll check. Done.",
+		},
+		{
+			// The whole turn is the final text, and its last step is a prefix
+			// of it: already shown, not an extension by the last step.
+			name:   "the whole turn's text repeats the last step",
+			script: []string{"A", toolStep, "A"},
+			final:  "AA",
+			want:   "AA",
 		},
 		{
 			name:   "nothing streamed around the tools",

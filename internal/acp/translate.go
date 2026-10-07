@@ -269,9 +269,16 @@ func (t *translator) replace(final string) {
 	if strings.TrimSpace(step) == "" {
 		step = t.lastStep
 	}
-	rest, shown := unsent(final, step)
-	if !shown {
-		rest, shown = unsent(final, t.sent.String())
+	// A whole turn that already reads as final exactly is checked first: when
+	// fleet's final text is the whole turn (no completed response text) and
+	// its last step is a prefix of it (two steps that each wrote "A", a final
+	// "AA"), the last step alone would read as an extension and repeat it.
+	rest, shown := unsent(final, t.sent.String())
+	if !shown || rest != "" {
+		rest, shown = unsent(final, step)
+		if !shown {
+			rest, shown = unsent(final, t.sent.String())
+		}
 	}
 	switch {
 	case !shown:
@@ -291,15 +298,18 @@ func (t *translator) replace(final string) {
 // as `final` up to a missing tail, and returns that tail: "" when it reads as
 // final, the rest when final extends it. fleet trims its final text, so
 // whitespace streamed before or after it is no difference (a step after a
-// tool often opens with a blank line). Blank streamed text is extended by any
-// final text, so a turn that streamed nothing gets the final text whole.
+// tool often opens with a blank line). Trailing whitespace is ignored only
+// when nothing follows it, though: appending a tail after streamed whitespace
+// final does not have ("Hello\n\n" then "Hello world") would leave the client
+// reading neither. Blank streamed text is extended by any final text, so a
+// turn that streamed nothing gets the final text whole.
 func unsent(final, streamed string) (rest string, shown bool) {
 	s := strings.TrimLeftFunc(streamed, unicode.IsSpace)
 	if strings.HasPrefix(final, s) {
 		return final[len(s):], true
 	}
-	if s = strings.TrimRightFunc(s, unicode.IsSpace); strings.HasPrefix(final, s) {
-		return final[len(s):], true
+	if strings.TrimRightFunc(s, unicode.IsSpace) == final {
+		return "", true
 	}
 	return "", false
 }
