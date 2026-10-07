@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -151,5 +154,53 @@ func TestSourcesHalfDeadlineCutsAndTeamHalfKeepsItsTime(t *testing.T) {
 	time.Sleep(sourcesDiscoveryBudget) // the first half overran the whole request window
 	if !rest().spend() {
 		t.Error("the team half got no time after a first half that overran")
+	}
+}
+
+// A stalled filesystem cannot hold Sources past its deadline: the output
+// stats and the workspace walk are abandoned when ctx is done, even while a
+// filesystem call is still stuck.
+func TestOutputStatsAndWalkAreAbandonedAtDeadline(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	if err := os.MkdirAll(filepath.Join(root, "c"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "c", "a.csv"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The abandoned goroutines are still parked in the hooks when the test
+	// ends: release them and wait for every hook call to return before the
+	// hooks are cleared: one stat (a.csv) and one walk entry (the root —
+	// by the time it is released the deadline has passed, so the walk stops
+	// there).
+	release := make(chan struct{})
+	returned := make(chan struct{}, 2)
+	outputStatHook = func(string) { <-release; returned <- struct{}{} }
+	workspaceWalkHook = func() { <-release; returned <- struct{}{} }
+	t.Cleanup(func() {
+		close(release)
+		for range 2 {
+			select {
+			case <-returned:
+			case <-time.After(5 * time.Second):
+				t.Error("a parked filesystem call never returned")
+			}
+		}
+		outputStatHook, workspaceWalkHook = nil, nil
+	})
+
+	history := []agent.HistoryEntry{{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"[a](a.csv)"}`)}}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, _, err := conversationOutputsCtx(ctx, "c", history, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("stalled stats: err = %v, want DeadlineExceeded", err)
+	}
+	if files, truncated := walkWorkspaceFilesAbandonable(ctx, "c", maxProjectFiles); len(files) != 0 || !truncated {
+		t.Errorf("stalled walk = %v truncated=%v, want nothing and truncated", files, truncated)
+	}
+	if el := time.Since(start); el > 5*time.Second {
+		t.Errorf("returned after %v; a stalled filesystem must not hold Sources", el)
 	}
 }

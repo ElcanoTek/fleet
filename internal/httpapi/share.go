@@ -15,6 +15,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -190,12 +191,18 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 			return
 		}
 	}
-	// Counted before the flag flips: for an unshare, what is about to stop
-	// being shared is what the response must report.
-	outs, _, err := s.ownerOutputs(r.Context(), convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	// A share counts its outputs first and fails closed (nothing shared) if
+	// it cannot. An UNSHARE revokes first: the counts are only the toast's
+	// "N files stopped being shared", and a slow or failing workspace read
+	// must never be the reason a chat stays shared. Exclusions do not change
+	// on unshare, so counting afterwards counts the same files.
+	var outs []outputFile
+	if body.Visible {
+		var err error
+		if outs, _, err = s.ownerOutputs(r.Context(), convID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	stored, err := s.store.SetConversationTeamVisible(r.Context(), user, convID, body.Visible)
 	if err != nil {
@@ -217,6 +224,16 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if !body.Visible {
+		countCtx, cancel := context.WithTimeout(r.Context(), unshareCountTimeout)
+		var cerr error
+		outs, _, cerr = s.ownerOutputs(countCtx, convID)
+		cancel()
+		if cerr != nil {
+			log.Printf("share-with-team: count after unsharing %s: %v", logSafeSlug(convID), logSafe(cerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+			outs = nil                                                                                              // the chat IS unshared; only the count is unknown
+		}
+	}
 	sharedFiles := countShared(outs)
 	if stored {
 		// Retires this person's getting-started card in the project. Display
@@ -236,6 +253,10 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		"total_files":  len(outs),
 	})
 }
+
+// unshareCountTimeout bounds the best-effort count an unshare reports after
+// it has already revoked the chat.
+const unshareCountTimeout = 10 * time.Second
 
 // teamViewResponse is the team-view body: the transcript snapshot plus what a
 // teammate needs to render the chat's files and their own branch of it.
@@ -323,7 +344,11 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	files, filesTruncated := conversationOutputs(snap.ID, snap.Messages, excluded)
+	files, filesTruncated, err := conversationOutputsCtx(r.Context(), snap.ID, snap.Messages, excluded)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	isOwner := strings.EqualFold(snap.OwnerEmail, user)
 	if !isOwner {
 		for i := range files {

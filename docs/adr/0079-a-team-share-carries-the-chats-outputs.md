@@ -123,7 +123,7 @@ presented in its replies — except the ones the owner unchecked.**
   that the public snapshot carries no files.
 - `internal/store/team_files_test.go` — exclusions survive stop/share again/
   archive/unarchive/move and die with the chat; archive unshares; a same-team
-  move keeps sharing; branch origins, viewer branches, the one-shot note latch;
+  move keeps sharing; branch origins, viewer branches, the first-turn note;
   the team-link statuses.
 
 ## Consequences

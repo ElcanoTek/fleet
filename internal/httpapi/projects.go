@@ -629,6 +629,31 @@ func (h *newestFiles) Pop() any {
 // Sources entry must be a real file the user can open. The attachments/ and
 // user-skills/ subtrees are skipped whole: uploads and the owner's
 // materialized private skills are never listed in Sources (ADR-0079).
+// walkWorkspaceFilesAbandonable runs the walk on its own goroutine and returns
+// as soon as ctx is done — empty and truncated — even if a directory read is
+// stuck in the kernel on a stalled filesystem (the walk stops at ctx between
+// entries once that read returns, and its result is discarded).
+func walkWorkspaceFilesAbandonable(ctx context.Context, convID string, limit int) ([]sourcesFile, bool) {
+	type result struct {
+		files     []sourcesFile
+		truncated bool
+	}
+	done := make(chan result, 1)
+	go func() {
+		files, truncated := walkWorkspaceFiles(ctx, convID, limit)
+		done <- result{files, truncated}
+	}()
+	select {
+	case r := <-done:
+		return r.files, r.truncated
+	case <-ctx.Done():
+		return []sourcesFile{}, true
+	}
+}
+
+// workspaceWalkHook is a test seam run for each entry the walk visits.
+var workspaceWalkHook func()
+
 func walkWorkspaceFiles(ctx context.Context, convID string, limit int) (files []sourcesFile, truncated bool) {
 	root, err := filepath.EvalSymlinks(tools.WorkspaceDirForConversation(convID))
 	if err != nil {
@@ -639,6 +664,9 @@ func walkWorkspaceFiles(ctx context.Context, convID string, limit int) (files []
 	visited := 0
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
 		visited++
+		if workspaceWalkHook != nil {
+			workspaceWalkHook()
+		}
 		// The entry budget bounds the work; ctx bounds the time (Sources
 		// gives each half a deadline, and a slow filesystem must not let one
 		// chat's walk outlast it).
@@ -830,7 +858,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 // (origin is its teammate-branch origin, if any); ok is false for a chat with
 // no files. truncated reports a bounded walk or discovery cut something.
 func (s *Server) ownSourcesGroup(ctx context.Context, conv store.Conversation, origin *store.BranchOrigin) (g sourcesGroup, ok, truncated bool, err error) {
-	all, walkTruncated := walkWorkspaceFiles(ctx, conv.ID, maxProjectFiles)
+	all, walkTruncated := walkWorkspaceFilesAbandonable(ctx, conv.ID, maxProjectFiles)
 	if walkTruncated {
 		truncated = true
 	}

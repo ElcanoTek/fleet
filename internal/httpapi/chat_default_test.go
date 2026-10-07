@@ -205,8 +205,8 @@ func (s *fakeChatStore) ListSharedFiles(_ context.Context) ([]store.SharedFile, 
 }
 
 // Teammate-branch file note (ADR-0079): no fake conversation is a teammate
-// branch, so the latch never fires and the turn injects nothing.
-func (s *fakeChatStore) ClaimBranchFilesAnnouncement(_ context.Context, _ string) (*store.BranchOrigin, error) {
+// branch, so no note is ever due and the turn injects nothing.
+func (s *fakeChatStore) PendingBranchFilesAnnouncement(_ context.Context, _ string) (*store.BranchOrigin, error) {
 	return nil, nil
 }
 

@@ -215,15 +215,13 @@ func TestBranchOriginAndViewerBranches(t *testing.T) {
 		t.Error("new messages in the source must report changed_since")
 	}
 
-	// The first-turn note is claimed exactly once.
-	first, err := f.s.ClaimBranchFilesAnnouncement(f.ctx, br.ID)
+	// The first-turn note is due (and carries the origin) until the branch
+	// commits a user message of its own.
+	first, err := f.s.PendingBranchFilesAnnouncement(f.ctx, br.ID)
 	if err != nil || first == nil || len(first.CopiedFiles) != 1 {
-		t.Fatalf("first claim = %+v, %v", first, err)
+		t.Fatalf("pending note = %+v, %v", first, err)
 	}
-	if again, _ := f.s.ClaimBranchFilesAnnouncement(f.ctx, br.ID); again != nil {
-		t.Error("the note must be claimed once")
-	}
-	if none, _ := f.s.ClaimBranchFilesAnnouncement(f.ctx, c.ID); none != nil {
+	if none, _ := f.s.PendingBranchFilesAnnouncement(f.ctx, c.ID); none != nil {
 		t.Error("a non-branch has nothing to announce")
 	}
 
@@ -615,10 +613,13 @@ func TestViewerBranchesIgnoresInvisibleRows(t *testing.T) {
 	}
 }
 
-// A turn that failed before committing its user message hands the first-turn
-// note's latch back: the next claim gets the note again, exactly once. The
+// The first-turn note is derived from committed rows, not a latch: it stays
+// due across any number of turns that fail (or a process that dies) before a
+// user message commits — nothing to release, nothing a crash can strand — and
+// is never due again once one has. The copied transcript's own user rows
+// (ids below the branch's recorded high-water mark) do not count. The
 // truncation flag round-trips with the origin.
-func TestReleaseBranchFilesAnnouncement(t *testing.T) {
+func TestBranchFilesNoteDueUntilAUserTurnCommits(t *testing.T) {
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 	view, err := f.s.GetTeamVisibleConversation(f.ctx, "bob@x.com", c.ID)
@@ -636,21 +637,29 @@ func TestReleaseBranchFilesAnnouncement(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	first, err := f.s.ClaimBranchFilesAnnouncement(f.ctx, br.ID)
-	if err != nil || first == nil || !first.WithheldTruncated {
-		t.Fatalf("first claim = %+v, %v", first, err)
+	for i := 0; i < 3; i++ { // turns that never committed: still due, every time
+		o, err := f.s.PendingBranchFilesAnnouncement(f.ctx, br.ID)
+		if err != nil || o == nil || !o.WithheldTruncated {
+			t.Fatalf("read %d: pending = %+v, %v", i, o, err)
+		}
 	}
-	if err := f.s.ReleaseBranchFilesAnnouncement(f.ctx, br.ID); err != nil {
+	// An assistant row alone (no user turn) does not settle it either.
+	if _, err := f.s.db.ExecContext(f.ctx,
+		`INSERT INTO messages (conversation_id, role, type, content, created_at) VALUES ($1, 'assistant', 'text', '{"text":"x"}', 0)`,
+		br.ID); err != nil {
 		t.Fatal(err)
 	}
-	if again, _ := f.s.ClaimBranchFilesAnnouncement(f.ctx, br.ID); again == nil {
-		t.Error("a released note must be claimable again")
+	if o, _ := f.s.PendingBranchFilesAnnouncement(f.ctx, br.ID); o == nil {
+		t.Error("no user turn has committed yet; the note is still due")
 	}
-	if again, _ := f.s.ClaimBranchFilesAnnouncement(f.ctx, br.ID); again != nil {
-		t.Error("a re-claimed note is still one-shot")
+	// The first user turn commits (carrying the note): never due again.
+	if _, err := f.s.db.ExecContext(f.ctx,
+		`INSERT INTO messages (conversation_id, role, type, content, created_at) VALUES ($1, 'user', 'text', '{"text":"go"}', 0)`,
+		br.ID); err != nil {
+		t.Fatal(err)
 	}
-	if err := f.s.ReleaseBranchFilesAnnouncement(f.ctx, c.ID); err != nil {
-		t.Errorf("releasing a non-branch is a no-op, got %v", err)
+	if o, _ := f.s.PendingBranchFilesAnnouncement(f.ctx, br.ID); o != nil {
+		t.Error("the note is due again after a user turn committed")
 	}
 }
 

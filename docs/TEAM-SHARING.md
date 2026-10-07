@@ -180,7 +180,7 @@ than re-pointing them.
 
 | Route | Who | What |
 | --- | --- | --- |
-| `POST /conversations/{id}/share-with-team` | owner | the opt-in; stamps the owner's team as the audience. `409` when there is no team or no team-shared home. Body `{visible, unshared_paths?, listed_paths?}` — `unshared_paths` (with `visible: true`) is the checklist, applied to exactly `listed_paths` (default: the current outputs); exclusions for unlisted paths stand. Answers `{team_visible, shared_files, total_files}`: the state it **stored**, and the shared-file count (for an unshare, how many just stopped being shared) |
+| `POST /conversations/{id}/share-with-team` | owner | the opt-in; stamps the owner's team as the audience. `409` when there is no team or no team-shared home. Body `{visible, unshared_paths?, listed_paths?}` — `unshared_paths` (with `visible: true`) is the checklist, applied to exactly `listed_paths` (default: the current outputs); exclusions for unlisted paths stand. Answers `{team_visible, shared_files, total_files}`: the state it **stored**, and the shared-file count (for an unshare, how many just stopped being shared — counted best-effort AFTER the chat is revoked, `0` when the count fails; a share counts first and fails closed) |
 | `GET /conversations/{id}/outputs` | owner | the chat's outputs, newest first, each with its own `shared` state, plus `total` / `shared_count` |
 | `POST /conversations/{id}/outputs/share` | owner | share or unshare one output: `{path, shared}` |
 | `GET /conversations/{id}/team-view` | a teammate (or the owner) | the read-only transcript, plus `project_id` / `project_name`, `files` (every output; an unshared one is a name only) and `viewer_branch` |
@@ -384,11 +384,12 @@ in `conversation_branch_origins` and served as `branch_origin` on the branch
 response and on `GET /conversations/{id}`, with `source_still_shared` so the
 banner links back only while the original is still readable. On the branch's
 **first turn** the agent is told which files it has and that any other file the
-transcript mentions did not come with it (one-shot, via a latch on the origin
-row); without that it reads a link to a withheld file and confidently tries to
-open it. The note rides on that turn's user message, so a turn that fails
-before its user message is committed hands the latch back and the next turn
-carries the note instead.
+transcript mentions did not come with it; without that it reads a link to a
+withheld file and confidently tries to open it. "First turn" is read from
+committed rows, not a latch: the note is due until a user message of the
+branch's own commits past the branch's message high-water mark recorded with
+the origin. It rides on that message, so a turn that fails — or a server that
+dies — before the message commits leaves the note due for the next turn.
 
 **"You branched this."** `viewer_branch` (on `team-view` and on each
 `team-conversations` row) is the caller's most recent branch of the chat that

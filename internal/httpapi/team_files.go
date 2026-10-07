@@ -37,7 +37,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -76,8 +75,7 @@ func (s *Server) outputsFromHistory(ctx context.Context, convID string, history 
 	if err != nil {
 		return nil, false, err
 	}
-	outs, truncated = conversationOutputs(convID, history, excluded)
-	return outs, truncated, nil
+	return conversationOutputsCtx(ctx, convID, history, excluded)
 }
 
 // writeOutputsResponse is the one body GET outputs and POST outputs/share
@@ -133,6 +131,16 @@ func (s *Server) handleConversationOutputs(w http.ResponseWriter, r *http.Reques
 			http.Error(w, `"shared" is required`, http.StatusBadRequest)
 			return
 		}
+		// The listing the response carries is read BEFORE the write, and the
+		// write's own effect applied to it after: once the exclusion has
+		// committed, nothing may fail the request — a 500 then would tell the
+		// owner a share failed while teammates can already download the file.
+		// A read failure happens first and changes nothing.
+		outs, truncated, err := s.ownerOutputs(r.Context(), convID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		if err := s.store.SetOutputShared(r.Context(), user, convID, body.Path, *body.Shared); err != nil {
 			switch {
 			case errors.Is(err, store.ErrInvalidOutputPath):
@@ -146,6 +154,13 @@ func (s *Server) handleConversationOutputs(w http.ResponseWriter, r *http.Reques
 			}
 			return
 		}
+		for i := range outs {
+			if outs[i].Path == body.Path {
+				outs[i].Shared = *body.Shared
+			}
+		}
+		writeOutputsResponse(w, outs, truncated, conv.TeamVisible)
+		return
 	}
 	outs, truncated, err := s.ownerOutputs(r.Context(), convID)
 	if err != nil {
@@ -551,35 +566,21 @@ const maxBranchFilesInNote = 50
 // telling the agent which files came with the branch and that transcript
 // mentions of any other file did not. Without it the agent reads its copied
 // transcript, sees a link to a file the owner withheld, and confidently tries
-// to use a file it does not have. One-shot via the store latch; a failed
-// claim degrades to no note, never a failed turn.
-//
-// claimed reports that THIS call flipped the latch. The note only becomes
-// durable with the turn's user message (it is that message's injected
-// context), so a turn that fails before committing it must hand the latch
-// back — releaseBranchFilesAnnouncement — or the branch loses the note for
-// good.
-func (s *Server) appendBranchFilesBlock(ctx context.Context, injected, convID string) (_ string, claimed bool) {
-	origin, err := s.store.ClaimBranchFilesAnnouncement(ctx, convID)
+// to use a file it does not have. "First turn" is read from committed data
+// (store.PendingBranchFilesAnnouncement): the note is due until a user
+// message of the branch's own commits — and that message carries it as its
+// injected context — so a failed turn or a crash never loses it. A failed
+// read degrades to no note, never a failed turn.
+func (s *Server) appendBranchFilesBlock(ctx context.Context, injected, convID string) string {
+	origin, err := s.store.PendingBranchFilesAnnouncement(ctx, convID)
 	if err != nil {
 		log.Printf("branch files note for %s: %v", logSafeSlug(convID), logSafe(err.Error()))
-		return injected, false
+		return injected
 	}
 	if origin == nil {
-		return injected, false
+		return injected
 	}
-	return injected + branchFilesNote(origin), true
-}
-
-// releaseBranchFilesAnnouncement hands back a latch appendBranchFilesBlock
-// claimed for a turn whose user message never committed, so the next turn
-// carries the note instead. Fresh context: the turn's own may be cancelled.
-func (s *Server) releaseBranchFilesAnnouncement(convID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := s.store.ReleaseBranchFilesAnnouncement(ctx, convID); err != nil {
-		log.Printf("branch files note for %s: release after a failed turn: %v", logSafeSlug(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
-	}
+	return injected + branchFilesNote(origin)
 }
 
 // branchFilesNote renders the first-turn note for one branch origin.

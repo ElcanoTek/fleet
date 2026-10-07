@@ -27,6 +27,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -572,6 +573,40 @@ func statWorkspaceFileNoFollow(wsDir, rel string) (fs.FileInfo, bool) {
 // branch, and refused by the team-files gate — so the gate stays an exact
 // match against this (bounded) list and never widens.
 func conversationOutputs(convID string, history []agent.HistoryEntry, excluded map[string]bool) (out []outputFile, truncated bool) {
+	return conversationOutputsUntil(context.Background(), convID, history, excluded)
+}
+
+// conversationOutputsCtx is conversationOutputs bounded by ctx, and
+// abandonable: the stats run on their own goroutine and the caller returns
+// ctx.Err() as soon as ctx is done, even if a stat is stuck in the kernel on
+// a stalled filesystem (that goroutine finishes, and is discarded, whenever
+// the stat returns; between stats it stops at ctx itself).
+func conversationOutputsCtx(ctx context.Context, convID string, history []agent.HistoryEntry, excluded map[string]bool) ([]outputFile, bool, error) {
+	type result struct {
+		outs      []outputFile
+		truncated bool
+	}
+	done := make(chan result, 1)
+	go func() {
+		outs, truncated := conversationOutputsUntil(ctx, convID, history, excluded)
+		done <- result{outs, truncated}
+	}()
+	select {
+	case r := <-done:
+		if err := ctx.Err(); err != nil {
+			return nil, false, err // stopped early at ctx: not a complete list
+		}
+		return r.outs, r.truncated, nil
+	case <-ctx.Done():
+		return nil, false, ctx.Err()
+	}
+}
+
+// outputStatHook is a test seam run before each output's stat (a stalled
+// filesystem is simulated by blocking in it).
+var outputStatHook func(rel string)
+
+func conversationOutputsUntil(ctx context.Context, convID string, history []agent.HistoryEntry, excluded map[string]bool) (out []outputFile, truncated bool) {
 	out = []outputFile{}
 	presented, truncated := recentPresentedPaths(history, maxOutputReferences)
 	if len(presented) == 0 {
@@ -579,6 +614,12 @@ func conversationOutputs(convID string, history []agent.HistoryEntry, excluded m
 	}
 	wsDir := tools.WorkspaceDirForConversation(convID)
 	for _, rel := range presented {
+		if ctx.Err() != nil {
+			return out, truncated
+		}
+		if outputStatHook != nil {
+			outputStatHook(rel)
+		}
 		info, ok := statWorkspaceFileNoFollow(wsDir, rel)
 		if !ok {
 			continue

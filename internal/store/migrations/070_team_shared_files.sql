@@ -34,10 +34,10 @@ CREATE TABLE IF NOT EXISTS conversation_output_exclusions (
 -- treats a reference that is in neither list as withheld too, unless the
 -- file is in its own workspace now.
 --
--- files_announced is the one-shot latch for the injected first-turn note that
--- tells the agent which files it actually has (the transcript can mention
--- files that were withheld). It is released again if the turn that claimed it
--- fails before its user message is committed.
+-- branch_max_message_id decides the injected first-turn note that tells the
+-- agent which files it actually has (the transcript can mention files that
+-- were withheld): the note is due until the branch commits a user message
+-- past it.
 CREATE TABLE IF NOT EXISTS conversation_branch_origins (
     conversation_id        TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
     source_conversation_id TEXT NOT NULL,
@@ -50,7 +50,11 @@ CREATE TABLE IF NOT EXISTS conversation_branch_origins (
     copied_files           JSONB NOT NULL DEFAULT '[]'::jsonb,
     withheld_files         JSONB NOT NULL DEFAULT '[]'::jsonb,
     withheld_truncated     BOOLEAN NOT NULL DEFAULT FALSE,
-    files_announced        BOOLEAN NOT NULL DEFAULT FALSE,
+    -- The branch's OWN message high-water mark when the origin was recorded
+    -- (before the branch request returns, so before any turn of its own).
+    -- The first-turn file note is due while no user message exists past it:
+    -- derived from committed data, so a crash mid-turn cannot lose it.
+    branch_max_message_id  BIGINT NOT NULL DEFAULT 0,
     -- Recording order, for "the viewer's most recent branch": branched_at is
     -- whole seconds and conversation ids are random, so two branches made in
     -- one second need a monotonic tie-breaker. The origin is recorded before

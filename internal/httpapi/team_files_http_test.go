@@ -446,13 +446,20 @@ func TestTeammateBranchCopiesSharedFiles(t *testing.T) {
 		t.Errorf("team-conversations = %+v", tc.Conversations)
 	}
 
-	// First turn: the note names the copies; then never again.
-	note, claimed := f.srv.appendBranchFilesBlock(f.ctx, "", br.ID)
-	if !claimed || !strings.Contains(note, "`out/report.csv`") || strings.Contains(note, "held.json") || !strings.Contains(note, "NOT in this workspace") {
-		t.Errorf("note = %q (claimed=%v)", note, claimed)
+	// First turn: the note names the copies — as often as asked until a user
+	// turn of the branch's own commits; then never again.
+	note := f.srv.appendBranchFilesBlock(f.ctx, "", br.ID)
+	if !strings.Contains(note, "`out/report.csv`") || strings.Contains(note, "held.json") || !strings.Contains(note, "NOT in this workspace") {
+		t.Errorf("note = %q", note)
 	}
-	if again, claimed := f.srv.appendBranchFilesBlock(f.ctx, "x", br.ID); again != "x" || claimed {
-		t.Errorf("second note = %q (claimed=%v)", again, claimed)
+	if again := f.srv.appendBranchFilesBlock(f.ctx, "", br.ID); again != note {
+		t.Errorf("no user turn has committed; the note must still be due, got %q", again)
+	}
+	if _, err := f.st.AppendHistory(f.ctx, br.ID, []agent.HistoryEntry{textEntry("user", "go")}); err != nil {
+		t.Fatal(err)
+	}
+	if again := f.srv.appendBranchFilesBlock(f.ctx, "x", br.ID); again != "x" {
+		t.Errorf("note after the first user turn committed = %q", again)
 	}
 
 	// The owner's own branch copies nothing and has no origin.
@@ -1186,6 +1193,93 @@ func TestTeamViewFileRevSeesSameSecondRewrite(t *testing.T) {
 	}
 	if held := revOf("held.json"); held != "" {
 		t.Errorf("held-back file rev = %q for a teammate, want none", held)
+	}
+}
+
+// readFailsAfterWriteStore lets every write through and fails every
+// exclusion read that comes AFTER a SetOutputShared — the shape of a
+// transient DB error between the toggle's commit and its response.
+type readFailsAfterWriteStore struct {
+	*store.Store
+	wrote bool
+}
+
+func (s *readFailsAfterWriteStore) SetOutputShared(ctx context.Context, owner, convID, path string, shared bool) error {
+	err := s.Store.SetOutputShared(ctx, owner, convID, path, shared)
+	s.wrote = err == nil
+	return err
+}
+
+func (s *readFailsAfterWriteStore) ListOutputExclusions(ctx context.Context, convID string) (map[string]bool, error) {
+	if s.wrote {
+		return nil, errors.New("transient read failure")
+	}
+	return s.Store.ListOutputExclusions(ctx, convID)
+}
+
+// A toggle whose exclusion change has committed never answers as failed: the
+// listing is read before the write and the write applied to it, so a read
+// error after the commit cannot turn a share teammates can already use into
+// "Couldn't share" on the owner's screen.
+func TestOutputToggleNeverReportsACommittedShareAsFailed(t *testing.T) {
+	f := newFilesFixture(t)
+	f.srv.store = &readFailsAfterWriteStore{Store: f.st}
+	w := convSub(t, f.srv, "POST", "alice@x.com", f.chat.ID, "outputs/share", `{"path":"held.json","shared":true}`)
+	if w.Code != 200 {
+		t.Fatalf("toggle after a committed share: %d %s, want 200", w.Code, w.Body.String())
+	}
+	var body struct {
+		Outputs []struct {
+			Path   string `json:"path"`
+			Shared bool   `json:"shared"`
+		} `json:"outputs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, o := range body.Outputs {
+		if o.Path == "held.json" {
+			found = true
+			if !o.Shared {
+				t.Error("held.json listed as not shared after its share committed")
+			}
+		}
+	}
+	if !found {
+		t.Error("held.json missing from the response")
+	}
+	if ex, _ := f.st.ListOutputExclusions(f.ctx, f.chat.ID); ex["held.json"] {
+		t.Error("the share did not commit")
+	}
+}
+
+// exclusionsDownStore fails every exclusion read — output discovery cannot
+// run at all.
+type exclusionsDownStore struct{ *store.Store }
+
+func (exclusionsDownStore) ListOutputExclusions(context.Context, string) (map[string]bool, error) {
+	return nil, errors.New("exclusions unavailable")
+}
+
+// Stop sharing revokes first and counts after, best-effort: a discovery that
+// cannot run must never be why a chat stays shared. Sharing still fails
+// closed when it cannot count.
+func TestStopSharingRevokesEvenWhenCountingFails(t *testing.T) {
+	f := newFilesFixture(t)
+	f.srv.store = exclusionsDownStore{f.st}
+	w := convSub(t, f.srv, "POST", "alice@x.com", f.chat.ID, "share-with-team", `{"visible":false}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"team_visible":false`) {
+		t.Fatalf("stop sharing with discovery down: %d %s", w.Code, w.Body.String())
+	}
+	if c, _ := f.st.Get(f.ctx, "alice@x.com", f.chat.ID); c == nil || c.TeamVisible {
+		t.Fatal("the chat is still shared")
+	}
+	if w := convSub(t, f.srv, "POST", "alice@x.com", f.chat.ID, "share-with-team", `{"visible":true}`); w.Code != 500 {
+		t.Errorf("share with discovery down: %d, want 500 (fail closed)", w.Code)
+	}
+	if c, _ := f.st.Get(f.ctx, "alice@x.com", f.chat.ID); c == nil || c.TeamVisible {
+		t.Error("a share that could not count its files went through")
 	}
 }
 

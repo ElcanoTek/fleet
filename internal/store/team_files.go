@@ -438,8 +438,10 @@ func (s *Store) RecordBranchOrigin(ctx context.Context, branchConvID string, o B
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO conversation_branch_origins
 			(conversation_id, source_conversation_id, source_owner_email, source_title,
-			 branched_at, source_max_message_id, copied_files, withheld_files, withheld_truncated, files_announced)
-		VALUES ($1, $2, $3, $4, $5, $8, $6::jsonb, $7::jsonb, $9, FALSE)
+			 branched_at, source_max_message_id, copied_files, withheld_files, withheld_truncated,
+			 branch_max_message_id)
+		VALUES ($1, $2, $3, $4, $5, $8, $6::jsonb, $7::jsonb, $9,
+		        (SELECT COALESCE(MAX(m.id), 0) FROM messages m WHERE m.conversation_id = $1))
 		ON CONFLICT (conversation_id) DO UPDATE SET
 			source_conversation_id = EXCLUDED.source_conversation_id,
 			source_owner_email = EXCLUDED.source_owner_email,
@@ -535,15 +537,22 @@ func (p prefixedScanner) Scan(dest ...any) error {
 	return p.rows.Scan(append([]any{p.first}, dest...)...)
 }
 
-// ClaimBranchFilesAnnouncement flips the one-shot latch on a teammate
-// branch's first-turn file note and returns the origin when THIS call flipped
-// it — nil when convID is not a teammate branch or the note was already
-// claimed. Atomic, so two racing turns cannot both inject it.
-func (s *Store) ClaimBranchFilesAnnouncement(ctx context.Context, convID string) (*BranchOrigin, error) {
+// PendingBranchFilesAnnouncement returns the origin of teammate branch convID
+// while its first-turn file note is still due — no user message of the
+// branch's own has committed past branch_max_message_id — and nil otherwise
+// (not a branch, or a turn already carried the note). Derived from committed
+// rows, not a latch: a turn that fails, or a process that dies, before its
+// user message commits leaves the note due for the next turn, and once one
+// commits (the note is its persisted injected context) it is never due again.
+func (s *Store) PendingBranchFilesAnnouncement(ctx context.Context, convID string) (*BranchOrigin, error) {
 	o, err := scanBranchOrigin(s.db.QueryRowContext(ctx, `
-		UPDATE conversation_branch_origins o SET files_announced = TRUE
-		WHERE o.conversation_id = $1 AND o.files_announced = FALSE
-		RETURNING `+branchOriginColumns, convID))
+		SELECT `+branchOriginColumns+`
+		FROM conversation_branch_origins o
+		WHERE o.conversation_id = $1
+		  AND NOT EXISTS (SELECT 1 FROM messages m
+		                  WHERE m.conversation_id = o.conversation_id
+		                    AND m.id > o.branch_max_message_id
+		                    AND m.role = 'user')`, convID))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -551,16 +560,6 @@ func (s *Store) ClaimBranchFilesAnnouncement(ctx context.Context, convID string)
 		return nil, err
 	}
 	return o, nil
-}
-
-// ReleaseBranchFilesAnnouncement undoes a ClaimBranchFilesAnnouncement whose
-// turn failed BEFORE its user message was committed: nothing durable carries
-// the note, so the next turn must claim it again rather than the branch losing
-// it forever. Idempotent; a no-op for a conversation that is not a branch.
-func (s *Store) ReleaseBranchFilesAnnouncement(ctx context.Context, convID string) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE conversation_branch_origins SET files_announced = FALSE WHERE conversation_id = $1`, convID)
-	return err
 }
 
 // ViewerBranch is the viewer's own most recent live branch of a teammate's
