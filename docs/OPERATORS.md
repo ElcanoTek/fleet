@@ -454,6 +454,14 @@ production-only bug. The pass covers, in order:
    ([docs/TIMERS.md](TIMERS.md)); a timer whose last run
    **failed** is a failure, because a box that looks covered and is not is the
    worse state. See [`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md).
+   The same step checks disk headroom and **disk hygiene**. It reclaims root's
+   build caches (Go build + module cache, npm, dnf) once they pass 3 GiB.
+   `fleet update` fills those as root, and the maintenance timer runs as
+   `fleet`, so the timer never reaches them. It caps the journal at 1G
+   (`/etc/systemd/journald.conf.d/60-fleet-journal-cap.conf`) unless you set
+   `SystemMaxUse`/`RuntimeMaxUse` yourself, and it *reports* images left in root's podman
+   store. Doctor never deletes those images itself. `--check` only reports.
+   See [`docs/DOCTOR.md`](DOCTOR.md), "Disk hygiene".
 8. **Sandbox smoke** — `podman run --rm --network=none <image> true` **as the
    `fleet` user** (the image lives in *that* user's rootless store).
 9. **Source freshness + build identity** — reports commits behind upstream,

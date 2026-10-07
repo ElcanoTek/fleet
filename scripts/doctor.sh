@@ -271,7 +271,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed; ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload); an operator-managed Caddyfile only gets an advisory when it routes no /v1"
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active, then the running server's record of MCP tool schema findings (fleet mcp schema-issues: invalid = withheld from the model, rewritten = older JSON Schema draft translated) is read and each finding advised"
-  info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor"
+  info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor; disk hygiene: root build caches (go build/module, npm, dnf — filled by fleet update as root, never reached by the maintenance timer) reclaimed above 3 GiB, the journal capped at 1G via journald.conf.d/60-fleet-journal-cap.conf (persistent + volatile) unless the operator set a limit in journald's merged config, and images left in root's podman store reported"
   info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
   info "[dry-run] 9/9 Source freshness + build identity: report commits behind upstream, the installed binary's stamped version vs what ${SRC_DIR} would build now (a release tag fetched after the last build), and the paths that make the checkout read '.dirty' (fix stays 'fleet update' — doctor never pulls or rebuilds)"
   info "[dry-run] would restart ${SERVICE_NAME} + fleet-web after a toolchain/package upgrade or an app-unit reinstall above — a reinstalled fleet-backup unit does not bounce the app (unless --no-restart)"
@@ -1296,6 +1296,252 @@ if command -v systemctl >/dev/null 2>&1; then
     fi
   fi
 fi
+
+# Disk hygiene: the three trees that filled every production box and that NO
+# scheduled job reclaims (measured across five boxes: 2–6 GiB of root build
+# caches each, journals at 1.3–4 GiB, stale images in root's podman store).
+#
+# They escape the maintenance timer for one reason: fleet-maintenance runs
+# `fleet cleanup` as the SERVICE user, so its `go clean` and `podman image
+# prune` sweep that user's caches — while `fleet update` builds as ROOT, so the
+# Go build cache, the Go module cache and the npm cache it fills are root's, and
+# the service user cannot touch them. Doctor runs as root, so it is the pass
+# that can. Everything here is a cache or a log: the next `fleet update`
+# re-downloads what it needs, and nothing touches databases, workspaces, the
+# bundle or the service user's image store. It runs BEFORE the headroom
+# verdict below, so a box these trees had filled is judged on the space left
+# after the reclaim, not failed for a problem this pass just fixed.
+human_bytes() { numfmt --to=iec --suffix=B "${1:-0}" 2>/dev/null || echo "${1:-0}B"; }
+dir_bytes() {
+  local p="$1" b=""
+  # -D follows the root itself when it is a symlink (a cache moved to another
+  # volume) without following links inside the tree.
+  [[ -n "$p" && -d "$p" ]] && b="$(du -sxbD "$p" 2>/dev/null | awk '{print $1}' || true)"
+  echo "${b:-0}"
+}
+
+# Root build caches. Reclaimed above a threshold rather than on every run: one
+# update re-creates ~2 GiB (Go build + module cache, npm), so a lower bar would
+# just make every doctor run cost the next update a full re-download.
+ROOT_CACHE_RECLAIM_BYTES=$((3 * 1024 * 1024 * 1024))
+# measure_root_build_caches sets rc_total (bytes) and rc_summary for the caches
+# below; called again after a reclaim so the verdict reports what is left, not
+# what was attempted.
+measure_root_build_caches() {
+  local gocache="" gomodcache="" npmcache="" dnfcache="" parts=() b p
+  rc_total=0 rc_summary="none" rc_have_go=0
+  if command -v go >/dev/null 2>&1; then
+    gocache="$(go env GOCACHE 2>/dev/null || true)"
+    gomodcache="$(go env GOMODCACHE 2>/dev/null || true)"
+    [[ -n "$gocache$gomodcache" ]] && rc_have_go=1
+  fi
+  if command -v npm >/dev/null 2>&1; then
+    npmcache="$(npm config get cache 2>/dev/null || true)"
+  fi
+  [[ -z "$npmcache" ]] && npmcache="${HOME:-/root}/.npm"
+  # dnf5's system_cachedir is configurable; ask dnf for the active one and fall
+  # back to the defaults (dnf5, then dnf4) when it cannot say.
+  if [[ "$HAVE_DNF" == "1" ]]; then
+    dnfcache="$(dnf --dump-main-config 2>/dev/null | sed -nE 's/^system_cachedir[[:space:]]*=[[:space:]]*//p' | head -n1 || true)"
+  fi
+  if [[ -z "$dnfcache" ]]; then
+    dnfcache=/var/cache/libdnf5
+    [[ -d "$dnfcache" ]] || dnfcache=/var/cache/dnf
+  fi
+  for p in "go build cache:$gocache" "go module cache:$gomodcache" "npm cache:$npmcache" "dnf cache:$dnfcache"; do
+    b="$(dir_bytes "${p#*:}")"
+    (( b > 0 )) || continue
+    rc_total=$(( rc_total + b ))
+    parts+=("${p%%:*} $(human_bytes "$b")")
+  done
+  (( ${#parts[@]} )) && { rc_summary="$(printf '%s, ' "${parts[@]}")"; rc_summary="${rc_summary%, }"; }
+  return 0
+}
+check_root_build_caches() {
+  local before before_summary
+  measure_root_build_caches
+  if (( rc_total < ROOT_CACHE_RECLAIM_BYTES )); then
+    pass "root build caches $(human_bytes "$rc_total") (below the $(human_bytes "$ROOT_CACHE_RECLAIM_BYTES") reclaim threshold)"
+    return 0
+  fi
+  if [[ "$CHECK_ONLY" == "1" ]]; then
+    advise "root build caches hold $(human_bytes "$rc_total") (${rc_summary}) — fleet update fills them as root and the maintenance timer (which runs as ${SERVICE_USER}) never reclaims them; a doctor run without --check does: go clean -cache -testcache -modcache; npm cache clean --force; dnf clean all"
+    return 0
+  fi
+  before="$rc_total" before_summary="$rc_summary"
+  # Each step is best-effort and independent (doctor runs under set -e); the
+  # re-measure below, not the exit codes, decides the verdict — a dnf lock or a
+  # read-only cache leaves bytes behind whatever the command claimed.
+  if [[ "$rc_have_go" == "1" ]]; then go clean -cache -testcache -modcache >/dev/null 2>&1 || true; fi
+  if command -v npm >/dev/null 2>&1; then npm cache clean --force >/dev/null 2>&1 || true; fi
+  if [[ "$HAVE_DNF" == "1" ]]; then dnf clean all >/dev/null 2>&1 || true; fi
+  measure_root_build_caches
+  if (( rc_total < ROOT_CACHE_RECLAIM_BYTES )); then
+    fixed "reclaimed root build caches: $(human_bytes "$before") -> $(human_bytes "$rc_total") (were: ${before_summary}) — the next fleet update re-downloads what it needs"
+  else
+    fail "root build cache reclaim left $(human_bytes "$rc_total") (${rc_summary}; was $(human_bytes "$before")) — a cleanup step failed (dnf lock? read-only cache?): go clean -cache -testcache -modcache; npm cache clean --force; dnf clean all"
+  fi
+}
+check_root_build_caches
+
+# Journal cap. journald's default ceiling is 10% of the filesystem (≤ 4 GiB),
+# taken from the same volume as the databases and the image store. Doctor
+# installs the shipped 1 GiB cap (persistent AND volatile storage) only where
+# the operator has set no size limit of their own — an explicit choice, larger
+# or smaller, is theirs to make.
+# The cap is 1 GiB (deploy/journald.conf.d/60-fleet-journal-cap.conf). It bounds
+# archived + active files together but rotation is lazy, so a capped journal can
+# sit a little over; past this slack it was not reclaimed.
+JOURNAL_CAP_SLACK_BYTES=$((1280 * 1024 * 1024))
+# LC_ALL=C: the size is parsed out of journalctl's prose, which is localized.
+journal_usage() { LC_ALL=C journalctl --disk-usage 2>/dev/null | sed -nE 's/.* take up ([^ ]+) .*/\1/p' | tail -n1 || true; }
+journal_bytes() { local u; u="$(journal_usage)"; [[ -n "$u" ]] && numfmt --from=iec "${u%B}" 2>/dev/null || true; }
+# reclaim_journal rotates (vacuum only removes ARCHIVED files; --disk-usage
+# also counts the active ones) and vacuums, then re-measures: success means the
+# journal is actually within the cap, not that the command exited 0.
+reclaim_journal() {
+  local b
+  journalctl --rotate --vacuum-size=1G >/dev/null 2>&1 || true
+  b="$(journal_bytes)"
+  [[ -n "$b" ]] && (( b <= JOURNAL_CAP_SLACK_BYTES ))
+}
+# journald_loaded_since reports whether the running systemd-journald started
+# at or after FILE was last written — i.e. whether it has read it. An unknown
+# start time or mtime counts as not loaded: a restart is cheap, a false "capped"
+# lets the journal regrow to the default ceiling.
+journald_loaded_since() {
+  local started mtime
+  started="$(systemctl show -p ActiveEnterTimestamp --value systemd-journald 2>/dev/null || true)"
+  [[ -n "$started" ]] && started="$(date -d "$started" +%s 2>/dev/null || true)"
+  mtime="$(stat -c %Y "$1" 2>/dev/null || true)"
+  [[ -n "$started" && -n "$mtime" ]] && (( started >= mtime ))
+}
+check_journal_cap() {
+  local src="$SRC_DIR/deploy/journald.conf.d/60-fleet-journal-cap.conf"
+  local dst="/etc/systemd/journald.conf.d/60-fleet-journal-cap.conf"
+  local usage bytes operator="" operator_files="" f loaded merged
+  command -v journalctl >/dev/null 2>&1 && command -v systemd-analyze >/dev/null 2>&1 && [[ -f "$src" ]] || return 0
+  usage="$(journal_usage)" bytes="$(journal_bytes)"
+  # The operator's own limit, read from journald's MERGED configuration rather
+  # than raw files: cat-config applies systemd's precedence, so a vendor drop-in
+  # shadowed by a same-named /etc file or a /dev/null link never appears, and
+  # whitespace around '=' is the parser's problem, not ours. Any System/
+  # RuntimeMaxUse from a file other than fleet's is an explicit choice — the
+  # operator's, or a vendor's in /usr/lib (still a limit, not journald's 10%
+  # default) — and fleet's 60- drop-in would override one set in journald.conf
+  # or a lower-numbered drop-in, so theirs wins and ours goes. Every file that sets one is
+  # collected, in precedence order (the last is the one in effect): journald
+  # has loaded the operator's limit only if it started after all of them.
+  # An unreadable merged config is not "no limit": fail closed rather than
+  # install over a limit doctor could not see.
+  if ! merged="$(systemd-analyze cat-config systemd/journald.conf 2>/dev/null)"; then
+    advise "could not read journald's merged configuration (systemd-analyze cat-config systemd/journald.conf) — journal cap left unchanged"
+    return 0
+  fi
+  operator_files="$(awk -v ours="$dst" '
+    /^# \// { file = substr($0, 3); next }
+    /^[[:space:]]*(System|Runtime)MaxUse[[:space:]]*=/ && file != ours && !seen[file]++ { print file }' <<<"$merged")"
+  operator="$(tail -n1 <<<"$operator_files")"
+  if [[ -n "$operator" ]]; then
+    if [[ ! -f "$dst" ]]; then
+      # Their files, their restart: doctor only says when journald predates one.
+      loaded=1
+      while IFS= read -r f; do
+        journald_loaded_since "$f" || loaded=0
+      done <<<"$operator_files"
+      if [[ "$loaded" == "1" ]]; then
+        pass "journal size limit set explicitly in ${operator} — not fleet's; doctor defers to it (using ${usage:-?})"
+      else
+        advise "journal size limit set explicitly in ${operator}, but systemd-journald started before it (or another file setting a limit) was written and is still on its old limit — apply it with: systemctl restart systemd-journald"
+      fi
+    elif [[ "$CHECK_ONLY" == "1" ]]; then
+      advise "${dst} overrides the explicit journal size limit in ${operator} — a doctor run without --check removes fleet's cap so theirs applies"
+    elif ! rm -f "$dst"; then
+      fail "could not remove ${dst} (it overrides the explicit journal size limit in ${operator})"
+    elif [[ "$NO_RESTART" == "1" ]]; then
+      fixed "removed ${dst} so the explicit limit in ${operator} applies"
+      advise "  systemd-journald restart held by --no-restart — it applies on: systemctl restart systemd-journald"
+    elif systemctl restart systemd-journald; then
+      fixed "removed ${dst} so the explicit limit in ${operator} applies"
+    else
+      fail "removed ${dst} but could not restart systemd-journald to apply the explicit limit"
+    fi
+    return 0
+  fi
+  if [[ -f "$dst" ]] && diff -q <(grep -vE '^[[:space:]]*(#|$)' "$src") <(grep -vE '^[[:space:]]*(#|$)' "$dst") >/dev/null 2>&1; then
+    # Installed is not the same as in effect. journald reads the cap only at
+    # start, so a file written after it started (a --no-restart run, or a hand
+    # copy) is not loaded however small the journal is right now; and a run
+    # whose vacuum failed leaves the old size behind.
+    loaded=1
+    if ! journald_loaded_since "$dst"; then
+      loaded=0
+      if [[ "$CHECK_ONLY" == "1" ]]; then
+        advise "${dst##*/} is installed but systemd-journald has not restarted since, so it is still on its default limit — a doctor run without --check restarts it: systemctl restart systemd-journald"
+      elif [[ "$NO_RESTART" == "1" ]]; then
+        advise "${dst##*/} is installed but systemd-journald has not restarted since; restart held by --no-restart — the cap applies on: systemctl restart systemd-journald"
+      elif systemctl restart systemd-journald; then
+        loaded=1
+        fixed "restarted systemd-journald to load ${dst##*/} (it was installed after journald started)"
+      else
+        fail "${dst##*/} is installed but systemd-journald could not be restarted to load it: systemctl restart systemd-journald"
+      fi
+    fi
+    if [[ -z "$bytes" ]]; then
+      advise "could not measure the journal (journalctl --disk-usage), so the 1G cap is unconfirmed"
+    elif (( bytes <= JOURNAL_CAP_SLACK_BYTES )); then
+      if [[ "$loaded" == "1" ]]; then pass "journal capped by ${dst##*/} (using ${usage:-?})"; fi
+    elif [[ "$CHECK_ONLY" == "1" ]]; then
+      advise "journal is ${usage} despite ${dst##*/} — a doctor run without --check rotates and vacuums it"
+    elif reclaim_journal; then
+      fixed "journal was ${usage} despite ${dst##*/} — rotated and vacuumed to $(journal_usage)"
+    else
+      fail "journal is still $(journal_usage) after rotate + vacuum despite ${dst##*/}: journalctl --rotate --vacuum-size=1G"
+    fi
+    return 0
+  fi
+  if [[ "$CHECK_ONLY" == "1" ]]; then
+    advise "journal uncapped beyond journald's 10%-of-disk default, or ${dst##*/} drifted (using ${usage:-?}) — a doctor run without --check installs ${dst} (1G, persistent and volatile)"
+    return 0
+  fi
+  if ! install -D -m 0644 "$src" "$dst"; then
+    fail "could not install ${dst}"
+    return 0
+  fi
+  if [[ "$NO_RESTART" == "1" ]]; then
+    # journald reads the cap only on restart; the vacuum below works without one.
+    advise "installed ${dst}; systemd-journald restart held by --no-restart — the cap applies on: systemctl restart systemd-journald"
+  elif ! systemctl restart systemd-journald; then
+    fail "installed ${dst} but could not restart systemd-journald to apply it"
+    return 0
+  fi
+  if reclaim_journal; then
+    fixed "installed ${dst} (1G cap) and reclaimed the journal (was ${usage:-?}, now $(journal_usage))"
+  else
+    fail "installed ${dst} (1G cap) but the journal is still $(journal_usage) after rotate + vacuum: journalctl --rotate --vacuum-size=1G"
+  fi
+}
+check_journal_cap
+
+# Root's podman store. fleet's sandboxes run in the SERVICE user's rootless
+# store, so images in root's store are leftovers — typically sandbox builds from
+# before the rootless move (two production boxes held ~1.3 GiB each). Advisory
+# only: an operator may run podman as root for something of their own, and an
+# image with no container is not proof it is unwanted.
+check_root_podman_store() {
+  local images containers size graphroot
+  [[ "$SERVICE_USER" != "root" ]] && command -v podman >/dev/null 2>&1 || return 0
+  images="$(podman images -a -q 2>/dev/null | wc -l || true)"
+  (( images > 0 )) || return 0
+  containers="$(podman ps -aq 2>/dev/null | wc -l || true)"
+  # The CONFIGURED graph root (storage.conf may move it), the same store the
+  # image/container counts above came from.
+  graphroot="$(podman info --format '{{.Store.GraphRoot}}' 2>/dev/null || true)"
+  size="$(dir_bytes "${graphroot:-/var/lib/containers/storage}")"
+  advise "root's podman store holds ${images} image(s) and ${containers} container(s), $(human_bytes "$size") — fleet sandboxes run in ${SERVICE_USER}'s rootless store, so these are not fleet's"
+  advise "  review: podman images -a   —   reclaim if nothing of yours uses them: podman system prune -a"
+}
+check_root_podman_store
 
 # Disk headroom. Thresholds mirror internal/boxdoctor's checkDisk (85% warn /
 # 95% fail) so the box-level pass and the in-process /admin/doctor report reach

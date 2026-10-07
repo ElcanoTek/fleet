@@ -147,6 +147,50 @@ Division of labor across the three health verbs:
   (`LimitCORE=0` keeps the memory image off disk either way). Don't harmonise
   them without that changing.
 
+- **Disk hygiene: reclaim what no timer can reach** (step 7). A sweep of
+  five production boxes found the same waste on every one: 2–6 GiB of
+  **root's** build caches (Go build cache, Go module cache, npm, dnf),
+  journals at 1.3–4 GiB, and, on two of them, ~1.3 GiB of images in
+  **root's** podman store. The caches escape the maintenance timer for a
+  structural reason. `fleet-maintenance` runs `fleet cleanup` as the service
+  user, so its `go clean` and `podman image prune` sweep *that* user's
+  caches, while `fleet update` builds as root. Doctor runs as root, so
+  doctor is the pass that can reclaim them. Three checks, each scoped
+  differently on purpose:
+  - **Root build caches** are reclaimed (`go clean -cache -testcache
+    -modcache`, `npm cache clean --force`, `dnf clean all`) only above
+    **3 GiB** combined. One update re-creates about 2 GiB, so a lower bar
+    would make every doctor run cost the next update a full re-download.
+    `--check` advises instead.
+  - **The journal** gets the shipped `deploy/journald.conf.d/60-fleet-journal-cap.conf`
+    (`SystemMaxUse=1G` and `RuntimeMaxUse=1G`, so a volatile journal is capped
+    too). It is installed **only** when no other file sets a limit (the
+    operator's, or one a vendor ships in `/usr/lib`; doctor defers to either),
+    read from journald's *merged* configuration
+    (`systemd-analyze cat-config`). That applies systemd's precedence, so a
+    vendor drop-in shadowed by an `/etc` file or a `/dev/null` link is not
+    mistaken for an active setting. If an operator adds a limit later, doctor
+    removes fleet's file, because its `60-` name would otherwise override
+    theirs. "Installed" is not "in effect": the journal is rotated and vacuumed
+    (vacuum removes only *archived* files) and then **re-measured**, so the
+    verdict reports the actual size. A journal still over the cap on a later
+    run is reclaimed again. `--no-restart` installs or removes the file but
+    holds the journald restart, with an advisory naming the command. An
+    installed file counts as loaded only if `systemd-journald` started after
+    it was written (its `ActiveEnterTimestamp` vs. the file's mtime). Until
+    then, later runs advise the restart (`--check`, `--no-restart`) or perform
+    it, rather than passing on a journal that happens to be small.
+    journald's default ceiling is 10% of the filesystem (up to 4 GiB), on the
+    same volume as the databases and the image store.
+  - **Root's podman store** is **advisory only**. fleet's sandboxes live in
+    the service user's rootless store, so images in root's store are usually
+    pre-rootless build leftovers. But an operator may run root podman for
+    something of their own, and an image with no container is not proof it
+    is unwanted. The advisory prints the review and prune commands.
+
+  None of these touch databases, workspaces, the bundle or the service user's
+  image store. Those are user data or `fleet cleanup`'s job.
+
 ## Deviations / deliberately deferred
 
 - The `/admin/doctor` endpoint lives on the chat mux (like
@@ -154,6 +198,11 @@ Division of labor across the three health verbs:
   orchestrator's `docs/openapi.yaml` surface.
 - `doctor.sh` targets dnf hosts (the deployment posture); on non-dnf hosts the
   package steps degrade to advisories rather than guessing at apt equivalents.
+- Disk hygiene does not reclaim stale systemd coredumps, deploy backups in
+  `/opt/fleet`, or conversation workspaces. Coredumps stopped accruing once
+  `fleet-web` got `LimitCORE=0`. The backups were one box's history, not a
+  recurring pattern. Workspaces are user data, and deleting them is never a
+  cache sweep's call.
 - No scheduled/automatic doctor runs — an operator (or the admin UI) invokes
   it. Wiring `--check` into cron/systemd timers was deferred until wanted.
 - The in-process endpoint does not read `/etc/fleet/fleet.env` permissions or

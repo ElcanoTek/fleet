@@ -382,13 +382,28 @@ func attachFrozenArgsRaw(m map[string]any, raw []byte) {
 func (c *Client) refusal(resp *http.Response) *StatusError {
 	const excerptCap = 512
 	excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, excerptCap))
+	// The excerpt is quoted to the user, and `fleet acp` hands it to an ACP
+	// client that may write it to a log. fleet never echoes the token, but a
+	// proxy in between might (a debug page dumping request headers), so
+	// redact it once here, before any branch quotes the body.
 	excerpt = redactToken(excerpt, c.cfg.Token, len(excerpt) == excerptCap)
 	msg := strings.TrimSpace(string(excerpt))
 	switch resp.StatusCode {
 	case http.StatusForbidden:
 		return &StatusError{Code: resp.StatusCode, msg: forbiddenMessage(c.cfg.Email, excerpt)}
-	case http.StatusUnauthorized, http.StatusBadRequest:
+	case http.StatusUnauthorized:
 		return &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("not authorized (%d) for %s: %s", resp.StatusCode, c.cfg.Email, msg)}
+	case http.StatusBadRequest:
+		// A 400 is fleet refusing the request itself (a body over the chat
+		// server's 1 MB cap, an empty message, a model lockdown mode refuses),
+		// not who sent it: the one identity 400, a missing X-User-Email,
+		// never comes from `fleet chat` or `fleet acp`, which refuse an
+		// empty email before sending anything. So it is quoted as a
+		// rejection, never as "not authorized".
+		if msg == "" {
+			return &StatusError{Code: resp.StatusCode, msg: "server rejected the request (400)"}
+		}
+		return &StatusError{Code: resp.StatusCode, msg: "server rejected the request (400): " + msg}
 	default:
 		return &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("server returned %d: %s", resp.StatusCode, msg)}
 	}

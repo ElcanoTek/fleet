@@ -208,16 +208,44 @@ invalid params, which matches what `initialize` advertises.
 
 ## Errors
 
+The JSON-RPC `message` of each error below, except the last two rows, is its
+reason (the text described there), on one line. It is not the generic name of
+the error's code ("Authentication required", "Internal error", "Invalid
+params"), which acp-go-sdk would put there and which some clients show alone:
+Emacs's agent-shell shows the code and `message` and keeps the rest behind its
+Details button. Nor is that name put in front of the reason: the client shows
+the code beside it, and the name would mislabel most reasons (a viewer's
+refusal is not a failed authentication, nor a timeout an internal error). Line
+breaks in a quoted server reply become spaces. A reason longer than 400
+characters (in practice one quoting a reply, such as a turn's error or a
+proxy's page) keeps as many whole sentences as fit, when they fill at least
+half of that; otherwise it is cut after the last whole word that fits (a
+"word" over 40 characters, such as a long URL, is cut where the limit falls)
+and ends in "…". A reason that quotes a reply says what to do before the
+quote, so the cut keeps it. The `code` is unchanged, so a client that acts on
+it, as JSON-RPC intends, works as before. `message` is only ever the reason or
+a cut of it. `data` is left out when `message` holds the whole reason (only
+its whitespace changed), and is `{"error": …}` with the reason in full only
+when `message` was cut: Zed shows an error as its `message` followed by its
+`data` as JSON, so a reason whole in both showed twice, while
+CodeCompanion.nvim reads `data.error` when it is there and `message`
+otherwise, and agent-shell shows `message`.
+
 | Failure | What the ACP client sees |
 | --- | --- |
 | No email / no token configured | `initialize` still succeeds; `session/new` answers `auth_required` (-32000) with the same fix-it text `fleet chat` prints. `fleet acp` keeps running, so the client shows the reason instead of "agent exited". |
 | Refused by the server (403) | `session/new` answers `auth_required`, with text naming the reason the server gave: a wrong shared token names `FLEET_SERVER_TOKEN`; an email that is not a provisioned fleet user (`not_a_member`) names the user and `fleet chat user add <email> --password -`; a viewer-role user (`read_only` on a prompt; the `viewer` role `GET /me` reports at `session/new`) names the user and `fleet chat user role <email> --role member`; a client address the server's IP filter refuses names `FLEET_IP_ALLOWLIST` / `FLEET_IP_DENYLIST`, without saying which list matched (the server does not say either). Any other 403 body (a reverse proxy's page, say) is quoted as a short one-line excerpt instead of being blamed on the token. The token value is never included. A refusal that starts after the session opened (a role changed mid-session, say) is answered the same way on the next prompt. |
 | Any 401 | `session/new` answers `auth_required`, with text naming the user (or the next prompt does, when the 401 starts after the session opened). fleet itself sends a 401 here only for a revoked web session, which `fleet acp` never presents, so in practice it comes from a proxy in front of fleet. |
+| Any other error status from the server | Internal error (-32603) quoting the status and the server's reply |
 | Daemon down | Internal error (-32603) naming the unreachable server URL, on the prompt: `session/new` opens the session when the server cannot be reached (see `session/new`). |
 | Identity check inconclusive at `session/new`: no answer, a 404 (a server older than `/me`), a 5xx, any other 4xx, or a 200 that is not the expected JSON | The session opens, and the first prompt reports any real problem as above. |
 | `turn.error` / `turn.model_required` | Internal error carrying the server's message |
-| `--timeout` exceeded | The turn is stopped server-side, then an internal error names the timeout and the flag. If the Stop fails, the error says so and that the turn may still be running. |
-| Unknown session id | -32002 resource not found |
+| `--timeout` exceeded | The turn is stopped server-side, then an internal error names the timeout and the flag. If the Stop fails, the error says the turn may still be running and where to stop it, then why the Stop failed. |
+| A prompt beyond the 20 waiting for a session | Internal error saying the session already has a prompt running and 20 waiting (see `session/prompt`) |
+| Client-supplied `mcpServers`; an image, audio or binary blob in a prompt | Invalid params (-32602) naming what is refused |
+| Unknown session id | -32002 resource not found, naming the session and saying it was closed or opened by an earlier `fleet acp` process. Like every error here, it has no `data` unless its message had to be cut: the client sent the id, and `message` names it. |
+| A request acp-go-sdk cannot decode or validate | The SDK's own `Invalid params`, with the generic message and the decoder's text in `data.error`: the SDK refuses the request before `fleet acp` sees it |
+| An unsupported method | -32601 with the generic message `Method not found` and the method in `data.method`, whether `fleet acp` itself or the SDK answers it |
 
 ## Honest scope
 
@@ -234,7 +262,9 @@ What shipped:
   still waiting for the session), a prompt resent or followed by another
   while a turn runs (one run, no Stop), `$/cancel_request`, timeout, 403,
   daemon-down, `turn.error`, policy refusal, approval pointers, refused
-  content, the stdio entry point (stdout carries only JSON-RPC), and the
+  content, the reason in each error's `message` (with its `code` unchanged,
+  and `data` only when the message is cut, checked on the raw JSON-RPC as
+  well), the stdio entry point (stdout carries only JSON-RPC), and the
   no-execution-imports guard. No live model, no live Buzz in CI.
 - The identity check at `session/new` is covered by tests on both sides.
   `internal/chattui` runs `CheckIdentity` against a test server answering
