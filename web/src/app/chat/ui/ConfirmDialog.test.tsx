@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ConfirmDialog, NameChip } from "./ConfirmDialog";
 import { DeleteProjectConfirmDialog } from "./DeleteProjectConfirmDialog";
 
@@ -195,29 +195,88 @@ describe("ConfirmDialog", () => {
 });
 
 describe("DeleteProjectConfirmDialog", () => {
-  it("keeps the rail kebab's copy and renders the project as a chip", () => {
-    render(
-      <DeleteProjectConfirmDialog
-        projectName="test 2"
-        onCancel={() => {}}
-        onConfirm={() => {}}
-      />,
-    );
-    expect(screen.getByRole("dialog")).toHaveTextContent(
-      /Delete test 2\? Its team learnings are lost, and every member's chats leave the project and become temporary\. Open the project to see the counts and export first\./,
-    );
-    expect(screen.getByText("test 2")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Delete project" }),
-    ).toBeInTheDocument();
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("falls back to 'this project' when the name isn't known", () => {
+  it("uses B29's copy and real counts from /impact, with Export first", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({ memories: 4, chats: 3, members: 2, team_shared_chats: 1 }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const onConfirm = vi.fn();
+    render(
+      <DeleteProjectConfirmDialog
+        projectId="p1"
+        projectName="test 2"
+        onCancel={() => {}}
+        onConfirm={onConfirm}
+      />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Delete test 2?" });
+    await waitFor(() =>
+      expect(dialog).toHaveTextContent(
+        "3 chats from 2 people leave the project and become temporary. They expire unless someone pins them.",
+      ),
+    );
+    expect(dialog).toHaveTextContent("Team learnings (4) are lost.");
+    expect(dialog).toHaveTextContent("Instructions and sharing are removed.");
+    expect(screen.getByRole("link", { name: "Export first" })).toHaveAttribute(
+      "href",
+      "/api/projects/p1/export",
+    );
+    expect(onConfirm).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Delete project" }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds Delete project until the counts land", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await gate;
+        return new Response(
+          JSON.stringify({ memories: 0, chats: 1, members: 1, team_shared_chats: 0 }),
+          { status: 200 },
+        );
+      }),
+    );
+    const onConfirm = vi.fn();
+    render(
+      <DeleteProjectConfirmDialog
+        projectId="p1"
+        projectName="test 2"
+        onCancel={() => {}}
+        onConfirm={onConfirm}
+      />,
+    );
+    const del = screen.getByRole("button", { name: "Delete project" });
+    expect(del).toBeDisabled();
+    fireEvent.click(del);
+    expect(onConfirm).not.toHaveBeenCalled();
+    release?.();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Delete project" })).toBeEnabled());
+  });
+
+  it("states what is lost without inventing counts when it has no id", () => {
     render(
       <DeleteProjectConfirmDialog onCancel={() => {}} onConfirm={() => {}} />,
     );
-    expect(screen.getByRole("dialog")).toHaveTextContent(
-      /Delete this project\?/,
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent(/Delete this project\?/);
+    expect(dialog).toHaveTextContent(
+      "Every chat in it leaves the project and becomes temporary.",
     );
+    expect(dialog).toHaveTextContent("Its team learnings are lost.");
+    expect(screen.queryByRole("link", { name: "Export first" })).toBeNull();
   });
 });

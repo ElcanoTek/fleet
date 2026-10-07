@@ -206,6 +206,12 @@ func (s *Store) GetMemory(ctx context.Context, userEmail, id string) (*Memory, e
 // API, the project's rows for the project API). The HTTP layer maps it to 404.
 var ErrMemoryNotFound = errors.New("memory not found")
 
+// ErrMemoryNotPermitted is returned by UpdateProjectMemory /
+// DeleteProjectMemory when the acting user is neither the team learning's
+// author nor the project's CURRENT owner, as re-read under the project row
+// lock. The HTTP layer maps it to 403.
+var ErrMemoryNotPermitted = errors.New("only the author or the project owner can change this team learning")
+
 // ErrMemoryProposalNotFound is ErrMemoryNotFound for a pending proposal: the
 // id names no proposal of the caller's (already accepted, dismissed, or never
 // theirs). 404 at the HTTP layer.

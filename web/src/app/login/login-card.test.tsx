@@ -263,6 +263,18 @@ describe("LoginPage — server-side wiring", () => {
     ).toBeInTheDocument();
   });
 
+  // B24: the proxy sends a signed-out team-link visitor to /login?team_link=1.
+  it("shows the team-link copy for ?team_link=1 and the bundle copy otherwise", async () => {
+    stubMeta(null, false);
+    const { default: LoginPage } = await import("./page");
+    render(await LoginPage({ searchParams: Promise.resolve({ team_link: "1" }) }));
+    expect(screen.getByText("Sign in to open this chat")).toBeInTheDocument();
+    cleanup();
+    render(await LoginPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.queryByText("Sign in to open this chat")).toBeNull();
+    expect(screen.getByText("Welcome aboard.")).toBeInTheDocument();
+  });
+
   // The login page is the one page a locked-out operator must be able to reach.
   it("still renders when the backend is unreachable", async () => {
     globalThis.fetch = vi.fn(async () => {
@@ -340,5 +352,29 @@ describe("LoginCard — matches Auth's sign-in card", () => {
     } finally {
       window.history.replaceState(null, "", "/login");
     }
+  });
+});
+
+// B24: a signed-out visitor who opened a team link is told why they are
+// signing in and where they will land. The sign-in controls do not change.
+describe("LoginCard — team link (B24)", () => {
+  afterEach(cleanup);
+
+  it("replaces the welcome copy with the team-link copy", () => {
+    render(<LoginCard magicLinkLoginEnabled={false} {...DEFAULT_COPY} teamLink />);
+    expect(
+      screen.getByRole("heading", { name: "Sign in to open this chat" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("You’ll go straight to the chat after you sign in."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(DEFAULT_COPY.title)).toBeNull();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
+  });
+
+  it("keeps the bundle copy without a team link", () => {
+    render(<LoginCard magicLinkLoginEnabled={false} {...DEFAULT_COPY} />);
+    expect(screen.getByText(DEFAULT_COPY.title)).toBeInTheDocument();
+    expect(screen.queryByText("Sign in to open this chat")).toBeNull();
   });
 });

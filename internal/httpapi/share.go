@@ -15,9 +15,11 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -118,25 +120,98 @@ func (s *Server) handleConversationUnshare(w http.ResponseWriter, r *http.Reques
 // the team as its audience, never mints a public link, and is the only path by
 // which one teammate's conversation becomes readable by another.
 //
-// Body: { "visible": bool } (default false = un-share). The store gates on
-// ownership, so a non-owned/unknown id is 404, and enforces ADR-0057's pairing,
-// so sharing without a team or without a team-shared project to appear in is
-// 409 with the reason. The response reports the state that was STORED.
+// Body: { "visible": bool, "unshared_paths"?: [string], "listed_paths"?: [string] } (visible defaults to
+// false = un-share). The ownership check is first, so a non-owned/unknown id
+// is 404; the store enforces ADR-0057's pairing, so sharing without a team or
+// without a team-shared project to appear in is 409 with the reason.
+//
+// A team share carries the chat's outputs (ADR-0079). unshared_paths, honored
+// only with visible=true, is the share dialog's checklist applied as one
+// decision — over exactly the paths the checklist SHOWED (listed_paths): each
+// listed path is excluded when it is in unshared_paths and shared otherwise,
+// and an exclusion for a path the checklist did not show is left untouched,
+// so a file missing on disk (or beyond the discovery bound) when the dialog
+// loaded stays held back if it comes back. A client that omits listed_paths
+// is taken to have shown the chat's current outputs. It is written BEFORE the flag
+// flips, so there is no instant in which the chat is shared with a file the
+// owner just unchecked; if the share is then refused (409) the owner's file
+// choices are kept, which is harmless — they are theirs and only matter once
+// the chat is shared. Omitted, the owner's earlier choices stand, which is
+// what makes the fast paths (row pill, card, toast) safe to be one click.
+//
+// The response reports the state that was STORED plus the file counts the
+// toasts quote: shared_files is the outputs now shared — or, for an unshare,
+// the outputs that WERE shared and just stopped ("3 shared files stopped being
+// shared") — and total_files every output.
 func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.Request, convID, user string) {
 	var body struct {
-		Visible bool `json:"visible"`
+		Visible       bool      `json:"visible"`
+		UnsharedPaths *[]string `json:"unshared_paths"`
+		ListedPaths   *[]string `json:"listed_paths"`
 	}
 	// A malformed body must not fall through to visible=false and silently
 	// UN-share the chat the caller was trying to share.
 	if !decodeOptionalJSONBody(w, r, &body) {
 		return
 	}
+	conv, err := s.store.Get(r.Context(), user, convID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if conv == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if body.Visible && body.UnsharedPaths != nil {
+		var listed []string
+		if body.ListedPaths != nil {
+			listed = *body.ListedPaths
+		} else {
+			current, _, err := s.ownerOutputs(r.Context(), convID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			for _, o := range current {
+				listed = append(listed, o.Path)
+			}
+		}
+		if err := s.store.ApplyOutputChecklist(r.Context(), user, convID, listed, *body.UnsharedPaths); err != nil {
+			switch {
+			case errors.Is(err, store.ErrInvalidOutputPath):
+				http.Error(w, "invalid unshared_paths", http.StatusBadRequest)
+			case errors.Is(err, store.ErrTooManyExclusions):
+				http.Error(w, err.Error(), http.StatusConflict)
+			case errors.Is(err, store.ErrConversationNotFound):
+				http.Error(w, "not found", http.StatusNotFound)
+			default:
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+	}
+	// A share counts its outputs first and fails closed (nothing shared) if
+	// it cannot. An UNSHARE revokes first: the counts are only the toast's
+	// "N files stopped being shared", and a slow or failing workspace read
+	// must never be the reason a chat stays shared. Exclusions do not change
+	// on unshare, so counting afterwards counts the same files.
+	var outs []outputFile
+	if body.Visible {
+		var err error
+		if outs, _, err = s.ownerOutputs(r.Context(), convID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	stored, err := s.store.SetConversationTeamVisible(r.Context(), user, convID, body.Visible)
 	if err != nil {
-		// A chat with no team, or no team-shared project to appear in, cannot
-		// be shared — 409 with the store's sentence, which names which of the
-		// two it is. This is a refusal of the request, not a server fault.
-		if errors.Is(err, store.ErrNoTeamToShareWith) || errors.Is(err, store.ErrNoTeamShareHome) {
+		// A chat with no team, no team-shared project to appear in, or that
+		// is archived cannot be shared — 409 with the store's sentence, which
+		// names which it is. This is a refusal of the request, not a server
+		// fault.
+		if errors.Is(err, store.ErrNoTeamToShareWith) || errors.Is(err, store.ErrNoTeamShareHome) ||
+			errors.Is(err, store.ErrArchivedNotShareable) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
@@ -149,9 +224,62 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if !body.Visible {
+		countCtx, cancel := context.WithTimeout(r.Context(), unshareCountTimeout)
+		var cerr error
+		outs, _, cerr = s.ownerOutputs(countCtx, convID)
+		cancel()
+		if cerr != nil {
+			log.Printf("share-with-team: count after unsharing %s: %v", logSafeSlug(convID), logSafe(cerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+			outs = nil                                                                                              // the chat IS unshared; only the count is unknown
+		}
+	}
+	sharedFiles := countShared(outs)
+	if stored {
+		// Retires this person's getting-started card in the project. Display
+		// state: a failure is logged, never a failed share.
+		if err := s.store.MarkProjectSharedChat(r.Context(), convID, user); err != nil {
+			log.Printf("share-with-team: record has_shared_chat for %s: %v", logSafeSlug(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+		}
+	} else if !conv.TeamVisible {
+		// Unsharing a chat that was not shared stops nothing.
+		sharedFiles = 0
+	}
 	// The STORED state, never the requested one: a client that is told
 	// team_visible:true must be able to believe it.
-	writeJSON(w, map[string]any{"team_visible": stored})
+	writeJSON(w, map[string]any{
+		"team_visible": stored,
+		"shared_files": sharedFiles,
+		"total_files":  len(outs),
+	})
+}
+
+// unshareCountTimeout bounds the best-effort count an unshare reports after
+// it has already revoked the chat.
+const unshareCountTimeout = 10 * time.Second
+
+// teamViewResponse is the team-view body: the transcript snapshot plus what a
+// teammate needs to render the chat's files and their own branch of it.
+type teamViewResponse struct {
+	*store.TeamSharedConversation
+	// ProjectID / ProjectName are the breadcrumb back to the project home.
+	// The snapshot's own ProjectID stays json:"-" (it is read for Branch);
+	// this is the deliberate, named exposure — the viewer reached the chat
+	// through that project, so its id and name are already theirs to know.
+	ProjectID   string `json:"project_id"`
+	ProjectName string `json:"project_name"`
+	// Files is every output: shared ones are live downloads through the
+	// team-files route, the rest render as locked names. A withheld file's
+	// size and date are zeroed — its NAME is already in the transcript, but
+	// nothing else about it was shared.
+	Files []outputFile `json:"files"`
+	// FilesTruncated is true when the transcript references more distinct
+	// files than discovery considers (maxOutputReferences): Files holds the
+	// most recent ones only, and the older references render locked.
+	FilesTruncated bool `json:"files_truncated"`
+	// ViewerBranch is the caller's own most recent branch of this chat, or
+	// null — "You branched this", and whether messages arrived since.
+	ViewerBranch *store.ViewerBranch `json:"viewer_branch"`
 }
 
 // handleConversationTeamView serves GET /conversations/{id}/team-view — the
@@ -163,23 +291,125 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 // and the project it lives in, so the viewer's one forward action — Branch —
 // can file the fork back into the same project.
 //
-// What it exposes is the TRANSCRIPT only. Attachments and generated files in
-// the chat's workspace stay behind the owner-scoped workspace route: a shared
-// conversation ABOUT a report must not hand out the report.
+// Since ADR-0079 it also lists the chat's OUTPUTS with their share state;
+// the bytes of a shared one are served by GET /conversations/{id}/team-files,
+// which re-checks every gate. Uploads are never outputs and never listed.
 //
 // A chat the caller may not read is 404, indistinguishable from one that does
 // not exist — team membership is never probeable from here.
+//
+// Conditional (the live view's poll): the ETag is a version from a light
+// query under the SAME gate, run BEFORE the transcript is loaded. A matching
+// If-None-Match is answered 304 with no body — the poll then costs no history
+// load, no output discovery and no JSON. A caller who may not read the chat
+// gets the same 404 whatever If-None-Match says. The ETag on a 200 is NOT
+// that pre-read: it is the fingerprint of the values the body was actually
+// built from (store.TeamViewState). A change that lands while the body is
+// built — even one undone again before the next poll — therefore cannot pair
+// a body with a tag of some other state: the next poll's cheap fingerprint
+// matches the tag only if the current state is the one that body shows.
 func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Request, convID, user string) {
+	version, err := s.store.TeamViewVersion(r.Context(), user, convID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if version == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	etag := `W/"tv-` + version + `"`
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("ETag", etag)
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if teamViewAfterVersion != nil {
+		teamViewAfterVersion()
+	}
 	snap, err := s.store.GetTeamVisibleConversation(r.Context(), user, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if snap == nil {
+		// Unshared between the version read and this one.
+		w.Header().Del("ETag")
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, snap)
+	excluded, err := s.store.ListOutputExclusions(r.Context(), snap.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	files, filesTruncated, err := conversationOutputsCtx(r.Context(), snap.ID, snap.Messages, excluded)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	isOwner := strings.EqualFold(snap.OwnerEmail, user)
+	if !isOwner {
+		for i := range files {
+			if !files[i].Shared {
+				files[i].Size, files[i].ModifiedAt, files[i].Rev = 0, 0, ""
+			}
+		}
+	}
+	resp := teamViewResponse{TeamSharedConversation: snap, ProjectID: snap.ProjectID, Files: files, FilesTruncated: filesTruncated}
+	if snap.ProjectID != "" {
+		if p, perr := s.store.GetProject(r.Context(), snap.ProjectID); perr == nil && p != nil {
+			resp.ProjectName = p.Name
+		}
+	}
+	if !isOwner {
+		branches, berr := s.store.ViewerBranches(r.Context(), user, []string{snap.ID})
+		if berr != nil {
+			http.Error(w, berr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if vb, ok := branches[snap.ID]; ok {
+			resp.ViewerBranch = &vb
+		}
+	}
+	served := store.TeamViewState{
+		ConvID: convID, Caller: user,
+		UpdatedAt: snap.UpdatedAt, Title: snap.Title, Owner: snap.OwnerEmail, Audience: snap.TeamID,
+		ProjectID: snap.ProjectID, ProjectName: resp.ProjectName,
+		ExclusionsHash: store.ExclusionSetHash(excluded),
+	}
+	for _, m := range snap.Messages {
+		served.MsgCount++
+		served.MsgMax = max(served.MsgMax, m.ID)
+	}
+	if resp.ViewerBranch != nil {
+		served.BranchID, served.BranchAt, served.BranchChanged =
+			resp.ViewerBranch.ConversationID, resp.ViewerBranch.BranchedAt, resp.ViewerBranch.ChangedSince
+	}
+	w.Header().Set("ETag", `W/"tv-`+served.Fingerprint()+`"`)
+	writeJSON(w, resp)
+}
+
+// teamViewAfterVersion is a test seam: it runs between the team view's
+// version read and the body it builds, where a concurrent change can land.
+var teamViewAfterVersion func()
+
+// etagMatches reports whether an If-None-Match header value matches etag,
+// using the weak comparison RFC 9110 prescribes for If-None-Match: "*", or
+// any listed tag whose opaque part equals etag's, W/ prefix ignored.
+func etagMatches(header, etag string) bool {
+	if header == "" {
+		return false
+	}
+	want := strings.TrimPrefix(etag, "W/")
+	for _, t := range strings.Split(header, ",") {
+		t = strings.TrimSpace(t)
+		if t == "*" || strings.TrimPrefix(t, "W/") == want {
+			return true
+		}
+	}
+	return false
 }
 
 // handleSharedConversation serves the public read-only snapshot for a share

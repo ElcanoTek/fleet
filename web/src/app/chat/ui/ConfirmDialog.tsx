@@ -69,8 +69,10 @@ export function ConfirmDialog({
   onCancel: () => void;
   onConfirm: () => void;
   // An optional second way forward — not a second confirm, a different
-  // outcome (e.g. "pin it first, then remove it").
-  secondary?: { label: string; onClick: () => void };
+  // outcome (e.g. "pin it first, then remove it"). `disabled` holds it
+  // alongside the confirm when both promise a consequence that is still
+  // being counted (`busy` covers the confirm only).
+  secondary?: { label: string; onClick: () => void; disabled?: boolean };
   testId?: string;
   title?: string;
   // Rich visual title; the plain title remains the dialog and scrim name.
@@ -115,7 +117,8 @@ export function ConfirmDialog({
         {secondary ? (
           <button
             type="button"
-            className="rounded-md border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+            disabled={secondary.disabled}
+            className="rounded-md border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] disabled:opacity-60"
             onClick={secondary.onClick}
           >
             {secondary.label}

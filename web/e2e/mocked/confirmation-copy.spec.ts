@@ -94,20 +94,24 @@ for (const width of [1280, 390]) {
         } else {
           await page.getByRole("button", { name: "Project options for Research" }).click();
           if (action === "delete") {
+            // B29: counts in a list, no inline identity chips.
             await page.getByRole("menuitem", { name: "Delete project", exact: true }).click();
             dialog = page.getByTestId("rail-delete-project-confirm");
-            chipCount = 1;
+            chipCount = 0;
           } else {
             await page.getByRole("menuitem", { name: "Project settings…" }).click();
             const settings = page.getByRole("dialog", { name: "Settings for Research" });
+            chipCount = 0;
             if (action === "transfer") {
-              await settings.getByRole("button", { name: "Transfer ownership…" }).click();
-              await settings.getByLabel("Transfer ownership of Research").selectOption("alex@example.com");
-              await settings.getByRole("button", { name: "Transfer", exact: true }).click();
-              dialog = page.getByRole("dialog", { name: "Transfer Research to alex@example.com?", exact: true });
+              // B30: the member picker lives inside settings.
+              await settings.getByRole("button", { name: "Transfer…", exact: true }).click();
+              await settings.getByRole("radio", { name: /alex@example\.com/ }).click();
+              dialog = settings.getByRole("group", { name: "Transfer ownership" });
+              await expect(dialog).toContainText("alex@example.com becomes the owner.");
             } else {
-              await settings.getByRole("checkbox", { name: /Share with my team/ }).click();
-              dialog = page.getByRole("dialog", { name: "Stop sharing Research with Platform?", exact: true });
+              // B28: switching to Only you counts what changes before Save.
+              await settings.getByRole("radio", { name: /Only you/ }).click();
+              dialog = settings;
               await expect(dialog).toContainText("2 chats from teammates");
             }
           }

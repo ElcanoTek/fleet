@@ -1,23 +1,42 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { useDialogDismiss } from "@/app/shared/ui/useDialogDismiss";
 import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
 import type { ConversationSummary } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
-import { ConfirmDialog, NameChip } from "./ConfirmDialog";
-import { DialogShell } from "@/app/shared/ui/DialogShell";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { Icon } from "./Icon";
-import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
-import { formatBytes, stripMarkdown } from "./formatters";
-import { conversationWorkspaceUrl } from "@/app/lib/conversationApiUrl";
+import { useChatToast } from "./ChatToasts";
+import {
+  fetchProjectMyState,
+  formatDay,
+  plural,
+  shareChatWithTeam,
+  sharedToast,
+  updateProjectMyState,
+  type ProjectMyState,
+} from "./teamSharing";
+import { ProjectVisibilityPill } from "./ProjectVisibilityPill";
+import {
+  buildGettingStarted,
+  ProjectGettingStarted,
+  type StepActionKind,
+} from "./ProjectGettingStarted";
+import { ProjectSources, type SourcesFocus } from "./ProjectSources";
+import {
+  TeamChatsSection,
+  YourChatsSection,
+  type ProjectChatEntry,
+  type TeamChatEntry,
+} from "./ProjectChatSections";
 
 // Project home (#509 follow-up): the page a project's rail row opens — title,
 // this member's chats in the project, the TEAM's shared chats beside them, a
 // Sources panel (workspace files from those chats), and the two team-level
 // context layers — Instructions and Team learnings — as a pair on the right.
-// Also hosts the PER-PROJECT settings dialog (name / sharing / delete); the
-// all-projects modal stays only for creation.
+// Per-project settings (name / sharing / transfer / delete) are
+// ProjectSettingsDialog, which the parent renders when the gear or the
+// visibility pill asks for it.
 //
 // The three context layers a project chat is fed by, named the way the UI now
 // names them and in the order the prompt builder actually assembles them
@@ -32,40 +51,16 @@ import { conversationWorkspaceUrl } from "@/app/lib/conversationApiUrl";
 // entries tagged `[project]`. The helper copy under Instructions says exactly
 // that, rather than naming two of the three.
 //
-// Privacy: "Chats" and Sources show the CALLER'S OWN conversations only — a
+// Privacy: "Your chats" shows the CALLER'S OWN conversations only — a
 // team-shared project shares its definition, never a member's private chats.
-// The Team section is the one exception and is doubly gated: a shared team
-// AND the owner's explicit per-chat opt-in (ADR-0013 / ADR-0057).
-
-type ProjectChatEntry = {
-  id: string;
-  title: string;
-  updated_at: number;
-  // Last text message's snippet ("You: …" when the user spoke last) — the
-  // 1–2 line history under each chat title.
-  preview?: string;
-  // The owner's two share states, so a row can carry the right badge(s).
-  share_token?: string;
-  team_visible?: boolean;
-};
-
-// A teammate's chat in this project. user_email is the owner — the section is
-// the one place a member sees whose work a chat is.
-type TeamChatEntry = {
-  id: string;
-  title: string;
-  user_email: string;
-  updated_at: number;
-};
-
-type ProjectFileEntry = {
-  conversation_id: string;
-  conversation_title: string;
-  path: string;
-  name: string;
-  size: number;
-  modified_at: number;
-};
+// "Shared by your team" and Sources' "From your team" are the exceptions and
+// are doubly gated: a shared team AND the owner's explicit per-chat opt-in
+// (ADR-0013 / ADR-0057), plus, for files, the owner's per-file choice.
+//
+// Fleet Projects sharing (docs/TEAM-SHARING.md) made this page the place that
+// teaches the team path: the header pill says who sees the project, the
+// getting-started card walks a person to their first shared chat, every row
+// carries its own Only you / <team> switch, and Sources groups files by chat.
 
 // One team learning. user_email is the writer (provenance, recorded at write
 // time); retired_at set = kept for the record but no longer injected.
@@ -79,40 +74,6 @@ type TeamLearning = {
   created_at?: number;
   updated_at?: number;
 };
-
-// What a change to the project would cost, from GET /api/projects/{id}/impact
-// — read by the delete confirm and by the un-share confirm.
-type ProjectImpact = {
-  memories: number;
-  chats: number;
-  members: number;
-  team_shared_chats: number;
-  // Chats in this project owned by somebody OTHER than the owner: what making
-  // the project personal unfiles (docs/TEAM-SHARING.md, "The untick confirm
-  // quotes real counts"). OPTIONAL and nullable here on purpose — the field is
-  // newer than this UI, and the store's LeaveTeamImpact sets the precedent
-  // (internal/store/team_sharing.go): "we could not work out what this costs
-  // you" must not render as "nothing".
-  chats_from_teammates?: number | null;
-  teammates_with_chats?: number | null;
-};
-
-// plural renders "1 chat" / "2 chats" — shared by every confirm here.
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
-function formatDay(unixSeconds: number): string {
-  if (!unixSeconds) return "";
-  try {
-    return new Date(unixSeconds * 1000).toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-    });
-  } catch {
-    return "";
-  }
-}
 
 // The local part of an email — enough to say whose chat this is without
 // turning every row into an address.
@@ -129,17 +90,19 @@ export function ProjectHome({
   chats,
   userEmail,
   isOwner,
-  initialSettingsOpen,
   onBack,
   onOpenChat,
   onOpenTeamChat,
   onNewChat,
   onSaveInstructions,
   onUpdateSettings,
-  onTransfer,
   myTeam,
-  onSettingsClosed,
-  onDelete,
+  onOpenSettings,
+  shareFirst,
+  sourcesFocus,
+  onOpenShareDialog,
+  onManageSources,
+  onChatsChanged,
 }: {
   project: Project;
   chats: ConversationSummary[];
@@ -147,92 +110,55 @@ export function ProjectHome({
   // (its author, or the project owner) without a second round trip.
   userEmail: string;
   isOwner: boolean;
-  // Open straight into the settings dialog (the rail kebab's
-  // "Project settings…" path).
-  initialSettingsOpen?: boolean;
   onBack: () => void;
   onOpenChat: (conversationId: string) => void;
   // Open a TEAMMATE's shared chat in the read-only viewer.
   onOpenTeamChat: (conversationId: string) => void;
-  onNewChat: () => void;
-  // Both mutations resolve true on success — the dialogs/cards keep their
-  // draft (and show the parent's rail-error toast) on failure.
+  // Start a chat in this project. `afterCreate` runs once the conversation
+  // exists and before it opens — how "New chat · Shared with <team>" shares
+  // it (a chat with no messages yet can still be shared).
+  onNewChat: (afterCreate?: (conversationId: string) => Promise<void>) => void;
+  // Both mutations resolve true on success — the Instructions card and the
+  // share-project confirm keep their state (and the parent toasts the error)
+  // on failure. Here onUpdateSettings only ever shares the project; renames,
+  // making it personal, transfer and delete live in ProjectSettingsDialog.
   onSaveInstructions: (instructions: string) => Promise<boolean>;
   onUpdateSettings: (patch: {
     name?: string;
     team_shared?: boolean;
   }) => Promise<boolean>;
-  // Hand the project to another member (ADR-0057). Resolves true on success;
-  // the dialog keeps its draft and shows the reason on failure.
-  onTransfer: (toEmail: string) => Promise<string | null>;
   // The viewer's own team (#1157): "" = not in a team, so team sharing cannot
-  // work yet and the dialog says where to fix that instead of letting the
-  // toggle 400. undefined = not read yet — the copy stays neutral.
+  // work yet and the getting-started card says where to fix that.
+  // undefined = not read yet — the copy stays neutral.
   myTeam?: string;
-  // Called whenever the settings dialog opens or closes from inside, so the
-  // parent's `settings` flag tracks it and a later request to open is a state
-  // change rather than a no-op. Optional: the panel works standalone.
-  onSettingsClosed?: (open: boolean) => void;
-  onDelete: () => void;
+  // The gear and the visibility pill's "Project settings" ask the parent,
+  // which renders ProjectSettingsDialog (B26–B31) — the one settings surface.
+  onOpenSettings: () => void;
+  // "Share project first" from the share dialog's A2 state (B14/B15): open
+  // with the share-the-project confirm already up, naming the chat the owner
+  // came from as the next step.
+  shareFirst?: { conversationId: string; title: string };
+  // "Manage in Sources" / a toast's "Manage": open and scroll to this chat's
+  // Sources group.
+  sourcesFocus?: string;
+  // The full share dialog for one of the caller's chats ("More sharing
+  // options…").
+  onOpenShareDialog?: (conversationId: string) => void;
+  // Reopen this home at a chat's Sources group after it has closed (a toast's
+  // "Manage" outlives the page that raised it).
+  onManageSources?: (conversationId: string) => void;
+  // A chat's sharing changed here; the parent re-reads its conversation list.
+  onChatsChanged?: () => void;
 }) {
-  const [files, setFiles] = useState<ProjectFileEntry[] | null>(null);
-  // A download that fails (a file the agent deleted since the listing, a
-  // permission change) used to open a tab of raw server text. The Sources
-  // list fetches instead, and reports failure here, in the app.
-  const [fileError, setFileError] = useState<string | null>(null);
+  const { notify } = useChatToast();
   // Server-side chat list with previews; the prop list (already in client
   // state) renders instantly while this loads, then the previews fill in.
   const [fetchedChats, setFetchedChats] = useState<ProjectChatEntry[] | null>(null);
   const [teamChats, setTeamChats] = useState<TeamChatEntry[] | null>(null);
-  // Like fileError: a failed team-chats read is REPORTED, not rendered as
+  // A failed team-chats read is REPORTED, not rendered as
   // "Nothing shared by your teammates yet" — the two look identical to a
   // reader and only one of them is true.
   const [teamChatsError, setTeamChatsError] = useState<string | null>(null);
-  const [filesTruncated, setFilesTruncated] = useState(false);
-  // Read at mount AND on every later transition to true. As mount-only state
-  // this dialog opened at most once per project: the parent keeps ProjectHome
-  // mounted (keyed on the project id) and only flips its `settings` flag, so
-  // "Project settings…" from the rail kebab was dead after the first Cancel,
-  // and dead outright whenever the home was already open. The parent is told
-  // when it closes so its flag can fall back to false and the next open is a
-  // real transition again.
-  const [settingsOpen, setSettingsOpenState] = useState(
-    Boolean(initialSettingsOpen),
-  );
-  const setSettingsOpen = useCallback(
-    (open: boolean) => {
-      setSettingsOpenState(open);
-      onSettingsClosed?.(open);
-    },
-    [onSettingsClosed],
-  );
-  // Render-time reset (React's "adjust state when a prop changes" pattern, as
-  // used for the instruction and name drafts above) rather than an effect: an
-  // effect would render once with the stale value first.
-  const [seenSettingsRequest, setSeenSettingsRequest] = useState(
-    Boolean(initialSettingsOpen),
-  );
-  if (Boolean(initialSettingsOpen) !== seenSettingsRequest) {
-    setSeenSettingsRequest(Boolean(initialSettingsOpen));
-    if (initialSettingsOpen) setSettingsOpenState(true);
-  }
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  // Un-ticking "Share with my team" is not a visibility change: it moves
-  // teammates' chats out of the project. It asks first, with the count.
-  const [confirmUnshare, setConfirmUnshare] = useState(false);
-  // The transfer confirm lives inside TransferOwnership; the parent tracks it
-  // only so one Escape press cannot dismiss the confirm AND the settings
-  // dialog under it (both listen on the document).
-  const [confirmTransfer, setConfirmTransfer] = useState(false);
-  // Escape closes the settings dialog — but only while a confirm ISN'T stacked
-  // on top of it, so one press never dismisses both. DialogShell now enforces
-  // the same rule for every dialog (only the last one mounted answers
-  // Escape); this stays as the parent-side statement of it, and the two agree.
-  const closeSettings = useCallback(() => setSettingsOpen(false), [setSettingsOpen]);
-  useDialogDismiss(
-    settingsOpen && !confirmDelete && !confirmUnshare && !confirmTransfer,
-    closeSettings,
-  );
   // Search over both chat lists (Item E1). Client-side over lists already in
   // memory: a project's chats are bounded by what one member filed there, and
   // the point is finding a chat you know is here, fast.
@@ -252,23 +178,6 @@ export function ProjectHome({
     setDraft(project.instructions ?? "");
   }
   const dirty = draft !== savedInstructions;
-
-  // Settings dialog draft — same render-time reset when the saved values
-  // change (e.g. after a successful PATCH refreshes the projects list).
-  const [nameDraft, setNameDraft] = useState(project.name);
-  // Stable, collision-free id so the visible "Name" caption is a real
-  // <label htmlFor> for the name field (clicking it focuses the input)
-  // instead of unassociated text sitting above it.
-  const projectNameInputId = useId();
-  const [sharedDraft, setSharedDraft] = useState(Boolean(project.team_id));
-  const [savingSettings, setSavingSettings] = useState(false);
-  const settingsKey = `${project.name}\u0000${project.team_id ?? ""}`;
-  const [seenSettingsKey, setSeenSettingsKey] = useState(settingsKey);
-  if (settingsKey !== seenSettingsKey) {
-    setSeenSettingsKey(settingsKey);
-    setNameDraft(project.name);
-    setSharedDraft(Boolean(project.team_id));
-  }
 
   // Chat list with previews — best-effort; failure keeps the prop list.
   //
@@ -350,41 +259,35 @@ export function ProjectHome({
     };
   }, [project.id, teamShared]);
 
-  // Sources — fetched per open. A FAILURE is reported, not rendered as an
-  // empty state: "this project has no files" and "we could not ask" look
-  // identical to a reader and only one of them is true.
+  // ── Sharing on the project home (Fleet Projects sharing) ──────────────────
+  //
+  // The project's team ("" = personal) and the viewer's own team, as names.
+  // A personal project is shared with the viewer's team, so the card and the
+  // share-first confirm name THAT team before the project carries one.
+  const teamName = project.team_id ?? "";
+  const shareTeam = teamName || myTeam || "";
+
+  // Per-person, per-project UI state: getting-started dismissal ("Keep
+  // personal"), whether this person has shared a chat here, and which Sources
+  // groups they keep open. A failed read is not "fresh state": the card then
+  // falls back to the live chat list (any chat of theirs already shared here
+  // means they are past it), and Sources to its own defaults.
+  const [myState, setMyState] = useState<ProjectMyState | null>(null);
+  const [myStateFailed, setMyStateFailed] = useState(false);
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
       void (async () => {
         try {
-          const res = await fetch(
-            `/api/projects/${encodeURIComponent(project.id)}/files`,
-            {
-              cache: "no-store",
-            },
-          );
-          if (!res.ok) {
-            if (!cancelled) {
-              setFiles([]);
-              setFileError(`Couldn’t load this project’s files (HTTP ${res.status}).`);
-            }
-            return;
-          }
-          const data = (await res.json()) as {
-            files?: ProjectFileEntry[];
-            truncated?: boolean;
-          };
-          if (!cancelled) {
-            setFiles(data.files ?? []);
-            setFileError(null);
-            setFilesTruncated(Boolean(data.truncated));
-          }
+          const d = await fetchProjectMyState(project.id);
+          if (cancelled) return;
+          setMyState({
+            kept_personal: Boolean(d?.kept_personal),
+            has_shared_chat: Boolean(d?.has_shared_chat),
+            sources_open: d?.sources_open ?? {},
+          });
         } catch {
-          if (!cancelled) {
-            setFiles([]);
-            setFileError("Couldn’t reach the server to list this project’s files.");
-          }
+          if (!cancelled) setMyStateFailed(true);
         }
       })();
     });
@@ -393,36 +296,233 @@ export function ProjectHome({
     };
   }, [project.id]);
 
+  // X on the card hides it for now (this visit), not for good.
+  const [cardHidden, setCardHidden] = useState(false);
+  // Flipped the moment a share from this page lands, so the card goes without
+  // waiting for a my-state re-read.
+  const [sharedHere, setSharedHere] = useState(false);
+  const [newChatMenuOpen, setNewChatMenuOpen] = useState(false);
+  const newChatAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const instructionsId = useId();
+  const [sourcesReloadKey, setSourcesReloadKey] = useState(0);
+  // A share changed somewhere else (the share dialog opened from a row's
+  // "More sharing options…", the rail): the live list's key moves, and
+  // Sources re-reads so its groups' Only you / <team> state and counts follow.
+  const [seenLiveKey, setSeenLiveKey] = useState(liveKey);
+  if (liveKey !== seenLiveKey) {
+    setSeenLiveKey(liveKey);
+    setSourcesReloadKey((k) => k + 1);
+  }
+  const [busy, setBusy] = useState<{ shareProject?: boolean; shareReadyChat?: boolean }>({});
+
+  // "Share project first" (B14/B15). The confirm opens on arrival; after it,
+  // step 3 of the card names the chat the owner came from. If the project is
+  // somehow already shared, there is nothing to confirm — go straight to
+  // naming the chat.
+  const shareFirstChat = shareFirst
+    ? { id: shareFirst.conversationId, title: shareFirst.title }
+    : null;
+  const [shareFirstConfirm, setShareFirstConfirm] = useState<{
+    id: string;
+    title: string;
+  } | null>(() => (shareFirstChat && !project.team_id ? shareFirstChat : null));
+  const [readyChat, setReadyChat] = useState<{ id: string; title: string } | null>(
+    () => (shareFirstChat && project.team_id ? shareFirstChat : null),
+  );
+  const [seenShareFirst, setSeenShareFirst] = useState<string | null>(
+    shareFirst?.conversationId ?? null,
+  );
+  if ((shareFirst?.conversationId ?? null) !== seenShareFirst) {
+    setSeenShareFirst(shareFirst?.conversationId ?? null);
+    if (shareFirstChat) {
+      if (project.team_id) setReadyChat(shareFirstChat);
+      else setShareFirstConfirm(shareFirstChat);
+    }
+  }
+
+  // Sources focus: from the prop (the share dialog's "Manage in Sources")
+  // and from this page's own toasts. The nonce makes a second "Manage" for
+  // the same chat a new request.
+  const [sourcesFocusState, setSourcesFocusState] = useState<SourcesFocus | null>(
+    sourcesFocus ? { conversationId: sourcesFocus, nonce: 1 } : null,
+  );
+  const [seenSourcesFocus, setSeenSourcesFocus] = useState<string | null>(
+    sourcesFocus ?? null,
+  );
+  if ((sourcesFocus ?? null) !== seenSourcesFocus) {
+    setSeenSourcesFocus(sourcesFocus ?? null);
+    if (sourcesFocus) {
+      setSourcesFocusState((f) => ({
+        conversationId: sourcesFocus,
+        nonce: (f?.nonce ?? 0) + 1,
+      }));
+    }
+  }
+  // A toast outlives this page (opening a chat unmounts it), so its "Manage"
+  // asks the parent to reopen the home when the page is gone.
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  const manage = useCallback(
+    (conversationId: string) => {
+      if (mountedRef.current) {
+        setSourcesFocusState((f) => ({ conversationId, nonce: (f?.nonce ?? 0) + 1 }));
+      } else {
+        onManageSources?.(conversationId);
+      }
+    },
+    [onManageSources],
+  );
+
+  const onSourcesOpenChange = useCallback(
+    (changes: Record<string, boolean>) => {
+      // changes holds only the toggled key(s); the server merges them into
+      // the stored map, and so does the local copy.
+      setMyState((s) =>
+        s
+          ? {
+              ...s,
+              sources_open: Object.fromEntries([
+                ...Object.entries(s.sources_open ?? {}),
+                ...Object.entries(changes),
+              ]),
+            }
+          : s,
+      );
+      void updateProjectMyState(project.id, { sources_open: changes }).catch(() => {
+        // Remembering open groups is a convenience; the click already took.
+      });
+    },
+    [project.id],
+  );
+
+  // shareChat is the one fast path every share on this page takes (row pill,
+  // card, New chat · Shared): it shares every output and confirms the files
+  // in a toast whose "Manage" opens Sources at the chat (B5, #36).
+  const shareChat = useCallback(
+    async (id: string, title: string, team: string): Promise<boolean> => {
+      try {
+        const r = await shareChatWithTeam(id, true);
+        notify(sharedToast(title || "Untitled", team, r.shared_files, () => manage(id)));
+        return true;
+      } catch (err) {
+        notify({
+          message: `Couldn’t share “${title || "Untitled"}” with ${team}. ${
+            err instanceof Error ? err.message : ""
+          }`.trim(),
+        });
+        return false;
+      }
+    },
+    [notify, manage],
+  );
+
+  const patchChatShared = (id: string, visible: boolean) => {
+    setFetchedChats((prev) =>
+      prev ? prev.map((c) => (c.id === id ? { ...c, team_visible: visible } : c)) : prev,
+    );
+    setSourcesReloadKey((k) => k + 1);
+    onChatsChanged?.();
+  };
+
+  const shareFromHere = async (chat: { id: string; title: string }) => {
+    const ok = await shareChat(chat.id, chat.title, teamName);
+    if (!ok) return;
+    setSharedHere(true);
+    setReadyChat((r) => (r && r.id === chat.id ? null : r));
+    patchChatShared(chat.id, true);
+  };
+
+  const unshareFromHere = async (chat: { id: string; title: string }) => {
+    const title = chat.title || "Untitled";
+    try {
+      const r = await shareChatWithTeam(chat.id, false);
+      const n = r.shared_files;
+      notify({
+        message: `“${title}” is Only you again${
+          n > 0
+            ? `, and ${plural(n, "shared file", "shared files")} stopped being shared.`
+            : "."
+        }`,
+      });
+      patchChatShared(chat.id, false);
+    } catch (err) {
+      notify({
+        message: `Couldn’t stop sharing “${title}”. ${
+          err instanceof Error ? err.message : ""
+        }`.trim(),
+      });
+    }
+  };
+
+  // New chat · Only you is today's path; New chat · Shared with <team>
+  // creates the chat and shares it before it opens.
+  const startChat = (shared: boolean) => {
+    if (!shared || !teamName) {
+      onNewChat();
+      return;
+    }
+    const team = teamName;
+    onNewChat(async (id) => {
+      // A brand-new chat has no outputs yet, so the B5 toast's file count
+      // would always be zero; the prototype's own sentence says it better.
+      try {
+        await shareChatWithTeam(id, true);
+        notify({
+          message: `New chat shared with ${team}. Files it creates will be shared too.`,
+        });
+      } catch (err) {
+        notify({
+          message: `Couldn’t share the new chat with ${team}. ${
+            err instanceof Error ? err.message : ""
+          }`.trim(),
+        });
+      }
+    });
+  };
+
+  const shareProject = async (thenReady?: { id: string; title: string }) => {
+    setBusy((b) => ({ ...b, shareProject: true }));
+    const ok = await onUpdateSettings({ team_shared: true });
+    setBusy((b) => ({ ...b, shareProject: false }));
+    if (!ok) return;
+    if (thenReady) {
+      setReadyChat(thenReady);
+      setCardHidden(false);
+      notify({
+        message: `${project.name} is shared with ${shareTeam}. Now share your chat from the card.`,
+      });
+    } else {
+      notify({
+        message: `${project.name} is shared with ${shareTeam}. Chats stay Only you.`,
+      });
+    }
+  };
+
+  const keepPersonal = () => {
+    setMyState((s) => ({
+      kept_personal: true,
+      has_shared_chat: s?.has_shared_chat ?? false,
+      sources_open: s?.sources_open ?? {},
+    }));
+    notify({
+      message: `Got it. ${project.name} stays personal, and the card won’t come back.`,
+    });
+    void updateProjectMyState(project.id, { kept_personal: true }).catch(() => {
+      notify({ message: "Couldn’t save that choice. The card may come back next time." });
+    });
+  };
+
   const saveInstructions = async () => {
     if (savingInstructions || !dirty) return;
     setSavingInstructions(true);
     const ok = await onSaveInstructions(draft);
     setSavingInstructions(false);
     if (ok) setSavedInstructions(draft);
-  };
-
-  const [settingsError, setSettingsError] = useState<string | null>(null);
-  const saveSettings = async () => {
-    if (savingSettings) return;
-    setSettingsError(null);
-    // An empty name used to produce an empty patch, so the dialog closed with
-    // the rename silently discarded.
-    if (!nameDraft.trim()) {
-      setSettingsError("A project needs a name.");
-      return;
-    }
-    const patch: { name?: string; team_shared?: boolean } = {};
-    if (nameDraft.trim() !== project.name) patch.name = nameDraft.trim();
-    if (sharedDraft !== Boolean(project.team_id))
-      patch.team_shared = sharedDraft;
-    if (Object.keys(patch).length === 0) {
-      setSettingsOpen(false);
-      return;
-    }
-    setSavingSettings(true);
-    const ok = await onUpdateSettings(patch);
-    setSavingSettings(false);
-    if (ok) setSettingsOpen(false);
   };
 
   // Fetched list (with previews) once it lands; the prop list until then.
@@ -452,39 +552,74 @@ export function ProjectHome({
     [teamChats, q],
   );
   const searchable = chatList.length + (teamChats?.length ?? 0) > 0;
-  // How many of the viewer's OWN chats are team-shared. The Team section's
-  // empty state says so, because "nothing shared yet" read as false to an
-  // owner looking at their own team-badged rows.
-  const mySharedCount = chatList.filter((c) => c.team_visible).length;
 
-  // A file download goes through fetch so a failure lands as an in-app error
-  // instead of a tab full of server text (Item B1's secondary fix). The blob
-  // URL is revoked on the next tick — long enough for the click to be taken.
-  const downloadFile = async (f: ProjectFileEntry) => {
-    setFileError(null);
-    const href = conversationWorkspaceUrl(f.conversation_id, f.path);
-    if (!href) {
-      setFileError(`Couldn’t open “${f.name}” — its path isn’t a valid workspace file.`);
-      return;
-    }
-    try {
-      const res = await fetch(href, { cache: "no-store" });
-      if (!res.ok) {
-        setFileError(`Couldn’t open “${f.name}” — it may have been removed since this list loaded.`);
+  // ── Getting-started card (B6 / B8 / B12 / B25) ────────────────────────────
+  // Per person, per project, until they have shared a chat here. A chat of
+  // theirs already shared here counts too: people who shared before the card
+  // existed are past it, whatever my-state says.
+  const iSharedHere = chatList.some((c) => c.team_visible);
+  const hasShared = sharedHere || Boolean(myState?.has_shared_chat) || iSharedHere;
+  // The chat "Share project first" brought the owner here, while it is still
+  // Only you.
+  const readyEntry =
+    readyChat && !chatList.some((c) => c.id === readyChat.id && c.team_visible)
+      ? {
+          id: readyChat.id,
+          title: chatList.find((c) => c.id === readyChat.id)?.title || readyChat.title,
+        }
+      : null;
+  // "Keep personal" is for good — except that sharing the project from the
+  // share dialog's "Share project first" is an explicit change of mind.
+  const keptPersonal = Boolean(myState?.kept_personal) && !readyEntry;
+  const showCard =
+    (myState !== null || myStateFailed) &&
+    // The variant depends on the viewer's team: wait for that read.
+    (Boolean(teamName) || myTeam !== undefined) &&
+    // Only the owner can act on a personal project.
+    (Boolean(teamName) || isOwner) &&
+    !hasShared &&
+    !cardHidden &&
+    !keptPersonal;
+  const cardModel = showCard
+    ? buildGettingStarted({
+        projectName: project.name,
+        projectTeam: teamName,
+        myTeam: myTeam ?? "",
+        isOwner,
+        hasInstructions: Boolean(savedInstructions.trim()),
+        myChatCount: chatList.length,
+        myPrivateChatCount: chatList.filter((c) => !c.team_visible).length,
+        readyChat: readyEntry,
+        busy,
+      })
+    : null;
+
+  const onCardAction = (kind: StepActionKind) => {
+    switch (kind) {
+      case "add-instructions": {
+        const el = document.getElementById(instructionsId);
+        el?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+        el?.focus();
         return;
       }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = f.name;
-      a.rel = "noreferrer noopener";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 0);
-    } catch {
-      setFileError(`Couldn’t open “${f.name}” — the download failed.`);
+      case "new-chat":
+        if (teamName) {
+          newChatAnchorRef.current?.scrollIntoView?.({ block: "nearest" });
+          setNewChatMenuOpen(true);
+        } else {
+          startChat(false);
+        }
+        return;
+      case "share-project":
+        void shareProject();
+        return;
+      case "share-ready-chat":
+        if (!readyEntry) return;
+        setBusy((b) => ({ ...b, shareReadyChat: true }));
+        void shareFromHere(readyEntry).finally(() =>
+          setBusy((b) => ({ ...b, shareReadyChat: false })),
+        );
+        return;
     }
   };
 
@@ -494,9 +629,12 @@ export function ProjectHome({
       data-testid="project-home"
     >
       <div className="mx-auto max-w-5xl">
-        {/* Header: back · title (+pin) · settings */}
+        {/* Header: back · title (+pin) · who sees it · settings */}
         <div className="mb-4">
-          <div className="flex items-center gap-3">
+          {/* Wraps on a phone: the title keeps a readable width and the
+              visibility pill + gear drop to a second line, instead of the
+              pill squeezing the project name down to two letters. */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <button
               type="button"
               aria-label="Back to chat"
@@ -509,7 +647,7 @@ export function ProjectHome({
               name="briefcase"
               className="size-5 shrink-0 text-[var(--color-accent)]"
             />
-            <h1 className="min-w-0 flex-1 truncate text-[1.35rem] font-semibold text-[var(--color-text-primary)]">
+            <h1 className="min-w-0 flex-1 basis-[9rem] truncate text-[1.35rem] font-semibold text-[var(--color-text-primary)] sm:flex-initial sm:basis-auto">
               {project.name}
             </h1>
             {project.pinned ? (
@@ -518,26 +656,22 @@ export function ProjectHome({
                 className="size-4 shrink-0 text-[var(--color-accent)]"
               />
             ) : null}
-            {project.team_id ? (
-              // The chip NAMES the team. "Shared with team" was true and
-              // useless: an owner an admin has since moved to another team saw a
-              // project that looked entirely normal, and the only surface that
-              // explained the state was the share dialog on one of its chats.
-              <span
-                title={`Shared with ${project.team_id}`}
-                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-0.5 text-[0.7rem] text-[var(--color-text-muted)]"
-              >
-                <TeamGlyph className="size-3" />
-                Shared with {project.team_id}
-              </span>
-            ) : null}
+            {/* The pill NAMES the team (C-9): an owner an admin has since
+                moved to another team must still see which team this project
+                points at. */}
+            <ProjectVisibilityPill
+              teamName={teamName}
+              isOwner={isOwner}
+              onOpenSettings={onOpenSettings}
+            />
+            <span className="flex-1" />
             {isOwner ? (
               <button
                 type="button"
                 aria-label="Project settings"
                 title="Project settings"
                 className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                onClick={() => setSettingsOpen(true)}
+                onClick={onOpenSettings}
               >
                 <Icon name="settings" className="size-4" />
               </button>
@@ -558,16 +692,16 @@ export function ProjectHome({
         </div>
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
-          {/* Main column: new chat + this member's chats + the team's. */}
+          {/* Main column: getting started + this member's chats + the team's. */}
           <div className="min-w-0">
-            <button
-              type="button"
-              className="mb-4 flex w-full items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-4 py-3 text-left text-[0.9rem] font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-              onClick={onNewChat}
-            >
-              <Icon name="plus" className="size-4 shrink-0" />
-              New chat in {project.name}
-            </button>
+            {cardModel ? (
+              <ProjectGettingStarted
+                model={cardModel}
+                onAction={onCardAction}
+                onDismiss={() => setCardHidden(true)}
+                onKeepPersonal={keepPersonal}
+              />
+            ) : null}
 
             {searchable ? (
               <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5">
@@ -596,133 +730,30 @@ export function ProjectHome({
               </div>
             ) : null}
 
-            <p className="px-1 pb-1 text-[0.65rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
-              Chats
-            </p>
-            {chatList.length === 0 ? (
-              // The empty state teaches BOTH filing paths and says why to
-              // bother — the payoff is the reason anyone files anything
-              // (Item E2).
-              <p className="px-1 py-2 text-[0.85rem] leading-[1.6] text-[var(--color-text-muted)]">
-                No chats yet. Start one above, drag a chat onto the project in
-                the sidebar, or use <strong>Move to project</strong> from any
-                chat&rsquo;s ⋮ menu. Chats in a project don&rsquo;t expire.
-              </p>
-            ) : visibleChats.length === 0 ? (
-              <p className="px-1 py-2 text-[0.85rem] text-[var(--color-text-muted)]">
-                No chats of yours match “{query}”.
-              </p>
-            ) : (
-              <div className="flex flex-col gap-0.5">
-                {visibleChats.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    className="flex w-full items-start gap-3 rounded-md px-3 py-2.5 text-left transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                    onClick={() => onOpenChat(c.id)}
-                  >
-                    <Icon
-                      name="message"
-                      className="mt-0.5 size-4 shrink-0 text-[var(--color-text-muted)]"
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex min-w-0 items-center gap-1.5">
-                        <span className="truncate text-[0.9rem] text-[var(--color-text-primary)]">
-                          {c.title || "Untitled"}
-                        </span>
-                        {c.team_visible ? (
-                          <span
-                            title={`Shared with ${project.team_id || "your team"}`}
-                            aria-label={`Shared with ${project.team_id || "your team"}`}
-                            className="shrink-0 text-[var(--color-accent)]"
-                          >
-                            <TeamGlyph className="size-3" />
-                          </span>
-                        ) : null}
-                        {c.share_token ? (
-                          <span
-                            title="Shared by link — anyone with the link"
-                            aria-label="Shared by link — anyone with the link"
-                            className="shrink-0 text-[var(--color-accent)]"
-                          >
-                            <ShareGlyph className="size-3" />
-                          </span>
-                        ) : null}
-                      </span>
-                      {c.preview ? (
-                        <span className="mt-0.5 line-clamp-2 block text-[0.78rem] leading-snug text-[var(--color-text-muted)]">
-                          {stripMarkdown(c.preview)}
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="shrink-0 font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-muted)]">
-                      {formatDay(c.updated_at)}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
+            <YourChatsSection
+              chats={chatList}
+              visibleChats={visibleChats}
+              query={query}
+              teamName={teamName}
+              showEmptyText={!cardModel}
+              newChatMenuOpen={newChatMenuOpen}
+              onNewChatMenuOpenChange={setNewChatMenuOpen}
+              newChatAnchorRef={newChatAnchorRef}
+              onNewChat={startChat}
+              onOpenChat={onOpenChat}
+              onShare={(c) => void shareFromHere(c)}
+              onUnshare={(c) => void unshareFromHere(c)}
+              onMoreOptions={(id) => onOpenShareDialog?.(id)}
+            />
 
             {teamShared ? (
-              <div className="mt-6">
-                {/* C-3 / vocabulary: the heading says WHOSE chats this holds.
-                    "Team" left the owner reading their own team-badged chats
-                    directly above as if they belonged here too, and the empty
-                    state then told them to do the thing they had just done. */}
-                <p className="flex items-center gap-1.5 px-1 pb-1 text-[0.65rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
-                  <TeamGlyph className="size-3" />
-                  Shared by your team
-                </p>
-                {teamChatsError ? (
-                  <p
-                    role="alert"
-                    className="mx-1 mb-2 rounded-md border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-2 py-1.5 text-[0.72rem] leading-[1.5] text-[var(--color-danger)]"
-                  >
-                    {teamChatsError}
-                  </p>
-                ) : null}
-                {teamChats === null ? (
-                  <p className="px-1 py-2 text-[0.85rem] text-[var(--color-text-muted)]">
-                    Loading…
-                  </p>
-                ) : teamChatsError ? null : teamChats.length === 0 ? (
-                  <p className="px-1 py-2 text-[0.85rem] leading-[1.6] text-[var(--color-text-muted)]">
-                    Nothing shared by your teammates yet. Chats you share stay
-                    in your list above, marked with the team badge.
-                    {mySharedCount > 0
-                      ? ` You’ve shared ${plural(mySharedCount, "chat", "chats")} with the team.`
-                      : ""}
-                  </p>
-                ) : visibleTeamChats.length === 0 ? (
-                  <p className="px-1 py-2 text-[0.85rem] text-[var(--color-text-muted)]">
-                    No shared chats match “{query}”.
-                  </p>
-                ) : (
-                  <div className="flex flex-col gap-0.5">
-                    {visibleTeamChats.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        className="flex w-full items-start gap-3 rounded-md px-3 py-2.5 text-left transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                        onClick={() => onOpenTeamChat(c.id)}
-                      >
-                        <TeamGlyph className="mt-0.5 size-4 shrink-0 text-[var(--color-text-muted)]" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[0.9rem] text-[var(--color-text-primary)]">
-                            {c.title || "Untitled"}
-                          </span>
-                          <span className="mt-0.5 block truncate text-[0.78rem] text-[var(--color-text-muted)]">
-                            {shortName(c.user_email)} · read-only
-                          </span>
-                        </span>
-                        <span className="shrink-0 font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-muted)]">
-                          {formatDay(c.updated_at)}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <TeamChatsSection
+                teamChats={teamChats}
+                visibleTeamChats={visibleTeamChats}
+                error={teamChatsError}
+                query={query}
+                onOpenTeamChat={onOpenTeamChat}
+              />
             ) : null}
           </div>
 
@@ -747,6 +778,7 @@ export function ProjectHome({
               </div>
               {isOwner ? (
                 <textarea
+                  id={instructionsId}
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   rows={8}
@@ -789,203 +821,45 @@ export function ProjectHome({
               teamShared={teamShared}
             />
 
-            <div className={cardClass}>
-              <h2 className="mb-2 flex items-center gap-1.5 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">
-                <Icon name="paperclip" className="size-3.5 shrink-0" />
-                Sources
-              </h2>
-              {fileError ? (
-                <p className="mb-2 rounded-md border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-2 py-1.5 text-[0.72rem] leading-[1.5] text-[var(--color-danger)]">
-                  {fileError}
-                </p>
-              ) : null}
-              {files === null ? (
-                <p className="text-[0.8rem] text-[var(--color-text-muted)]">
-                  Loading…
-                </p>
-              ) : files.length === 0 ? (
-                // C-4 / B-1: Sources is owner-scoped by design (a team share
-                // exposes the transcript, never the files), so promising
-                // "files from this project's chats" described files that
-                // exist and are withheld on purpose. It says whose files it
-                // lists instead.
-                <p className="text-[0.8rem] leading-[1.5] text-[var(--color-text-muted)]">
-                  Files from <strong className="font-medium">your</strong>{" "}
-                  chats in this project appear here.
-                </p>
-              ) : (
-                <div className="flex flex-col gap-0.5">
-                  {files.map((f) => (
-                    <button
-                      key={`${f.conversation_id}/${f.path}`}
-                      type="button"
-                      className="group flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition hover:bg-[var(--color-overlay-soft)]"
-                      title={`${f.name} — from “${f.conversation_title || "Untitled"}”`}
-                      onClick={() => void downloadFile(f)}
-                    >
-                      <Icon
-                        name="download"
-                        className="size-3.5 shrink-0 text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)]"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[0.8rem] text-[var(--color-text-primary)]">
-                          {f.name}
-                        </span>
-                        <span className="block truncate text-[0.68rem] text-[var(--color-text-muted)]">
-                          {f.conversation_title || "Untitled"}
-                        </span>
-                      </span>
-                      <span className="shrink-0 font-[family-name:var(--font-code)] text-[0.68rem] text-[var(--color-text-muted)]">
-                        {formatBytes(f.size)}
-                      </span>
-                    </button>
-                  ))}
-                  {filesTruncated ? (
-                    <p className="px-2 pt-1 text-[0.7rem] text-[var(--color-text-muted)]">
-                      Showing the newest 200 files.
-                    </p>
-                  ) : null}
-                </div>
-              )}
-            </div>
+            <ProjectSources
+              projectId={project.id}
+              teamName={teamName}
+              reloadKey={sourcesReloadKey}
+              focus={sourcesFocusState}
+              sourcesOpen={myState?.sources_open}
+              onSourcesOpenChange={onSourcesOpenChange}
+            />
           </div>
         </div>
       </div>
 
-      {/* Per-project settings dialog — name / sharing / delete. Pin lives in
-          the rail kebab (it's a list-ordering control, not project state the
-          home needs to duplicate). */}
-      {settingsOpen ? (
-        <DialogShell
-          label={`Settings for ${project.name}`}
-          scrimLabel="Close settings"
-          onDismiss={() => setSettingsOpen(false)}
-          className="max-w-sm p-5"
+      {/* B14: "Share project first" lands with this confirm already open.
+          Cancel changes nothing; confirming shares the PROJECT only — the
+          chat stays Only you until the card's one-click "Share it". */}
+      {shareFirstConfirm ? (
+        <ConfirmDialog
+          title={`Share ${project.name} with ${shareTeam || "your team"}?`}
+          confirmLabel={`Share with ${shareTeam || "your team"}`}
+          confirmTone="accent"
+          busy={busy.shareProject}
+          testId="share-project-first-confirm"
+          onCancel={() => setShareFirstConfirm(null)}
+          onConfirm={() => {
+            const chat = shareFirstConfirm;
+            setShareFirstConfirm(null);
+            void shareProject(chat);
+          }}
         >
-          <h2 className="mb-4 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-            Project settings
-          </h2>
-          <label
-            htmlFor={projectNameInputId}
-            className="mb-1 block text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
-          >
-            Name
-          </label>
-          <input
-            id={projectNameInputId}
-            value={nameDraft}
-            onChange={(e) => setNameDraft(e.target.value)}
-            maxLength={128}
-            // aria-label is kept deliberately: inside a dialog already titled
-            // "Settings for <project>", "Project name" is the unambiguous
-            // accessible name (and the one the e2e specs query by), while the
-            // htmlFor/id pair above supplies the missing click-to-focus
-            // association the bare <label> never had.
-            aria-label="Project name"
-            className="mb-4 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)]"
-          />
-          <label className="mb-1 flex items-center gap-2 text-[0.85rem] text-[var(--color-text-primary)]">
-            <input
-              type="checkbox"
-              checked={sharedDraft}
-              disabled={myTeam === ""}
-              onChange={(e) => {
-                const next = e.target.checked;
-                // Un-ticking asks first (Item 14): the tick only clears
-                // once the confirm is answered, so Cancel leaves the
-                // dialog exactly as it was.
-                if (!next && Boolean(project.team_id)) {
-                  setConfirmUnshare(true);
-                  return;
-                }
-                setSharedDraft(next);
-              }}
-            />
-            Share with my team{myTeam ? ` (${myTeam})` : ""}
-          </label>
-          <p className="mb-4 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
-            {myTeam === ""
-              ? "You are not in a team yet — create one in Settings → Team, then share this project with it."
-              : "Members can chat in the project, read and write its team learnings, and share individual chats into it. Only you can edit or delete the project."}
+          <p className="m-0">
+            {shareTeam || "Your team"} will see {project.name}&rsquo;s
+            instructions and Team learnings. Each chat stays Only you until you
+            share it.
           </p>
-          {project.team_id && !sharedDraft ? (
-            // Turning sharing off is not just a visibility change: it
-            // unshares every chat members shared into the project, and the
-            // ones that belong to teammates leave it (they cannot stay filed
-            // in a project their owner can no longer see).
-            <p className="mb-4 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]">
-              Turning sharing off unshares every chat members shared into this
-              project, and moves teammates&rsquo; chats to their unfiled
-              chats.
-            </p>
-          ) : null}
-          <TransferOwnership
-            projectId={project.id}
-            projectName={project.name}
-            currentOwner={project.owner_email}
-            onTransfer={onTransfer}
-            onConfirmOpenChange={setConfirmTransfer}
-          />
-          {settingsError ? (
-            <p
-              role="alert"
-              className="mb-3 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]"
-            >
-              {settingsError}
-            </p>
-          ) : null}
-          <div className="flex items-center justify-between">
-            <button
-              type="button"
-              className="rounded-md px-2.5 py-1.5 text-[0.8rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
-              onClick={() => setConfirmDelete(true)}
-            >
-              Delete project
-            </button>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
-                onClick={() => setSettingsOpen(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={savingSettings}
-                className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:opacity-60"
-                onClick={() => void saveSettings()}
-              >
-                {savingSettings ? "Saving…" : "Save"}
-              </button>
-            </div>
-          </div>
-        </DialogShell>
-      ) : null}
-
-      {confirmUnshare ? (
-        <UnshareTeamConfirm
-          projectId={project.id}
-          projectName={project.name}
-          teamId={project.team_id ?? ""}
-          onCancel={() => setConfirmUnshare(false)}
-          onConfirm={() => {
-            setConfirmUnshare(false);
-            setSharedDraft(false);
-          }}
-        />
-      ) : null}
-
-      {confirmDelete ? (
-        <DeleteProjectConfirm
-          project={project}
-          onCancel={() => setConfirmDelete(false)}
-          onConfirm={() => {
-            setConfirmDelete(false);
-            setSettingsOpen(false);
-            onDelete();
-          }}
-        />
+          <p className="m-0">
+            Next, you can share &ldquo;{shareFirstConfirm.title || "Untitled"}
+            &rdquo;.
+          </p>
+        </ConfirmDialog>
       ) : null}
     </div>
   );
@@ -1429,405 +1303,5 @@ function LearningActions({
         </MenuItem>
       </Menu>
     </>
-  );
-}
-
-// ── Transfer ownership ───────────────────────────────────────────────────────
-//
-// A project is owner-only to edit and delete, and could not change hands — so
-// "the owner left" was terminal: the definition froze (every mutation is
-// owner-scoped) and deleting the departing account destroyed the project and
-// every team learning in it. Handing it over is the missing move, and the
-// admin path (a departed owner cannot click anything) is why the endpoint
-// authorizes owner-OR-admin rather than owner alone.
-//
-// Collapsed until asked for: it is a once-in-a-project action sitting in a
-// dialog people open to rename things, and it should not read as a routine
-// control.
-function TransferOwnership({
-  projectId,
-  projectName,
-  currentOwner,
-  onTransfer,
-  onConfirmOpenChange,
-}: {
-  projectId: string;
-  projectName: string;
-  currentOwner: string;
-  onTransfer: (toEmail: string) => Promise<string | null>;
-  // Told when the confirm opens/closes, so the settings dialog above can stop
-  // answering Escape while it is up.
-  onConfirmOpenChange: (open: boolean) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [confirming, setConfirmingState] = useState(false);
-  const setConfirming = useCallback(
-    (v: boolean) => {
-      setConfirmingState(v);
-      onConfirmOpenChange(v);
-    },
-    [onConfirmOpenChange],
-  );
-  const [members, setMembers] = useState<string[] | null>(null);
-  const [choice, setChoice] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [reloadNonce, setReloadNonce] = useState(0);
-  const selectId = useId();
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    queueMicrotask(() => {
-      void (async () => {
-        try {
-          const res = await fetch(
-            `/api/projects/${encodeURIComponent(projectId)}/members`,
-            { cache: "no-store" },
-          );
-          if (!res.ok) {
-            // A FAILED lookup is not an empty team. Rendering it as one told
-            // the owner "nobody else is on this project's team yet" and sent
-            // them off to fix a problem that does not exist, with no retry.
-            if (!cancelled) {
-              setMembers([]);
-              setLoadError(`Couldn’t load this project’s members (HTTP ${res.status}).`);
-            }
-            return;
-          }
-          const data = (await res.json()) as { members?: string[] };
-          if (!cancelled) {
-            setMembers(data.members ?? []);
-            setLoadError(null);
-          }
-        } catch {
-          if (!cancelled) {
-            setMembers([]);
-            setLoadError("Couldn’t reach the server to list this project’s members.");
-          }
-        }
-      })();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, projectId, reloadNonce]);
-
-  // Everyone but the current owner — handing it to themselves is a no-op the
-  // server accepts silently, but offering it would just be confusing.
-  const candidates = (members ?? []).filter(
-    (m) => m.toLowerCase() !== currentOwner.toLowerCase(),
-  );
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        className="mb-4 justify-self-start text-[0.75rem] text-[var(--color-text-muted)] underline transition hover:text-[var(--color-text-primary)]"
-        onClick={() => setOpen(true)}
-      >
-        Transfer ownership…
-      </button>
-    );
-  }
-
-  return (
-    <div className="mb-4 rounded-md border border-[var(--color-border)] p-3">
-      <label
-        htmlFor={selectId}
-        className="mb-1 block text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
-      >
-        Transfer ownership of {projectName}
-      </label>
-      <p className="mb-2 text-[0.72rem] leading-[1.5] text-[var(--color-text-muted)]">
-        The new owner can edit and delete the project. Its team, team learnings
-        and everyone&rsquo;s chats are unchanged — and you stay a member if
-        you&rsquo;re on the team.
-      </p>
-      {members === null ? (
-        <p className="text-[0.75rem] text-[var(--color-text-muted)]">Loading members…</p>
-      ) : loadError ? (
-        <p className="text-[0.75rem] leading-[1.5] text-[var(--color-danger)]">
-          {loadError}{" "}
-          <button
-            type="button"
-            className="underline"
-            onClick={() => {
-              setMembers(null);
-              setLoadError(null);
-              setReloadNonce((n) => n + 1);
-            }}
-          >
-            Try again
-          </button>
-        </p>
-      ) : candidates.length === 0 ? (
-        <p className="text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
-          Nobody else is on this project&rsquo;s team yet. Share the project with
-          a team, or have an admin add someone to it, and they&rsquo;ll appear
-          here.
-        </p>
-      ) : (
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            id={selectId}
-            value={choice}
-            onChange={(e) => setChoice(e.target.value)}
-            className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-1.5 text-[0.8rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)]"
-          >
-            <option value="">Choose a member…</option>
-            {candidates.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            disabled={busy || !choice}
-            className="shrink-0 rounded-md border border-[var(--color-border-strong)] px-2.5 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-40"
-            onClick={() => setConfirming(true)}
-          >
-            {busy ? "Transferring…" : "Transfer"}
-          </button>
-        </div>
-      )}
-      {confirming ? (
-        <ConfirmDialog
-          title={`Transfer ${projectName} to ${choice}?`}
-          titleContent={<>Transfer <NameChip>{projectName}</NameChip> to <NameChip suffix="?">{choice}</NameChip></>}
-          confirmLabel="Transfer"
-          confirmTone="accent"
-          layer="stacked"
-          busy={busy}
-          onCancel={() => setConfirming(false)}
-          onConfirm={() => {
-            setConfirming(false);
-            setBusy(true);
-            setError(null);
-            void onTransfer(choice).then((err) => {
-              setBusy(false);
-              if (err) setError(err);
-              else setOpen(false);
-            });
-          }}
-        >
-          <p className="m-0">
-            They&rsquo;ll be able to edit and delete it; you won&rsquo;t.
-          </p>
-        </ConfirmDialog>
-      ) : null}
-      {error ? (
-        <p className="mt-2 text-[0.72rem] text-[var(--color-danger)]">{error}</p>
-      ) : null}
-      <button
-        type="button"
-        className="mt-2 text-[0.72rem] text-[var(--color-text-muted)] underline hover:text-[var(--color-text-primary)]"
-        onClick={() => setOpen(false)}
-      >
-        Cancel
-      </button>
-    </div>
-  );
-}
-
-// ── Un-share confirm (Item 14) ───────────────────────────────────────────────
-//
-// Turning "Share with my team" off takes the project's chats away from the
-// people who filed them there: a teammate's chat cannot live in a project they
-// can no longer see, so it leaves and becomes an unfiled (temporary) chat of
-// theirs. The dialog quotes how many, from the same /impact endpoint the
-// delete confirm reads.
-//
-// The count is OPTIONAL, and the three states are deliberately different
-// sentences — the pattern `LeaveTeamImpact` establishes in
-// internal/store/team_sharing.go: "we could not work out what this costs you"
-// is not "nothing". A missing field or a failed fetch must never render as 0.
-function UnshareTeamConfirm({
-  projectId,
-  projectName,
-  teamId,
-  onCancel,
-  onConfirm,
-}: {
-  projectId: string;
-  projectName: string;
-  teamId: string;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const [impact, setImpact] = useState<ProjectImpact | null>(null);
-  const [settled, setSettled] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    queueMicrotask(() => {
-      void (async () => {
-        try {
-          const res = await fetch(
-            `/api/projects/${encodeURIComponent(projectId)}/impact`,
-            { cache: "no-store" },
-          );
-          if (!res.ok) {
-            if (!cancelled) setSettled(true);
-            return;
-          }
-          const data = (await res.json()) as ProjectImpact;
-          if (!cancelled) {
-            setImpact(data);
-            setSettled(true);
-          }
-        } catch {
-          if (!cancelled) setSettled(true);
-        }
-      })();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId]);
-
-  const teammateChats =
-    typeof impact?.chats_from_teammates === "number"
-      ? impact.chats_from_teammates
-      : null;
-
-  return (
-    <ConfirmDialog
-      title={
-        teamId
-          ? `Stop sharing ${projectName} with ${teamId}?`
-          : `Stop sharing ${projectName} with your team?`
-      }
-      titleContent={<>Stop sharing <NameChip>{projectName}</NameChip> with <NameChip icon={<TeamGlyph className="size-3 shrink-0" />} suffix="?">{teamId || "your team"}</NameChip></>}
-      confirmLabel="Stop sharing"
-      confirmTone="danger"
-      layer="stacked"
-      onCancel={onCancel}
-      onConfirm={onConfirm}
-    >
-      {teammateChats === null ? (
-        <p className="m-0">
-          {settled
-            ? "Chats from teammates will move to their unfiled chats — we couldn’t work out how many."
-            : "Counting the chats from teammates this moves…"}
-        </p>
-      ) : teammateChats > 0 ? (
-        <p className="m-0">
-          {plural(teammateChats, "chat", "chats")} from teammates will move to
-          their unfiled chats.
-        </p>
-      ) : (
-        <p className="m-0">
-          No chats from teammates are filed here, so none will move.
-        </p>
-      )}
-      <p className="m-0">
-        Every chat members shared into this project stops being shared, and
-        team learnings stay but only you can see them.
-      </p>
-    </ConfirmDialog>
-  );
-}
-
-// ── Delete confirm (Item A6) ─────────────────────────────────────────────────
-//
-// Deleting a project is not just "remove a label". Its team learnings die with
-// it (by design — they are project state) and every member's chats leave it,
-// which drops them into Temporary where retention can reach them. The confirm
-// states both, with real counts, and offers the export that already exists
-// rather than leaving the owner to find it afterwards.
-function DeleteProjectConfirm({
-  project,
-  onCancel,
-  onConfirm,
-}: {
-  project: Project;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const [impact, setImpact] = useState<ProjectImpact | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    queueMicrotask(() => {
-      void (async () => {
-        try {
-          const res = await fetch(
-            `/api/projects/${encodeURIComponent(project.id)}/impact`,
-            { cache: "no-store" },
-          );
-          if (!res.ok) return;
-          const data = (await res.json()) as ProjectImpact;
-          if (!cancelled) setImpact(data);
-        } catch {
-          // Counts are copy: without them the dialog still states WHAT is
-          // lost, just not how much.
-        }
-      })();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [project.id]);
-
-  return (
-    <DialogShell
-      label={`Delete ${project.name}?`}
-      scrimLabel="Cancel deleting the project"
-      onDismiss={onCancel}
-      layer="stacked"
-      className="max-w-[28rem] p-5"
-    >
-      <h2 className="mb-2 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-        Delete {project.name}?
-      </h2>
-      <ul className="mb-4 grid list-disc gap-[0.35rem] pl-[1.1rem] text-[0.85rem] leading-[1.55] text-[var(--color-text-secondary)]">
-        <li>
-          {impact
-            ? `${plural(impact.memories, "team learning", "team learnings")} will be lost`
-            : "This project’s team learnings will be lost"}{" "}
-          — they belong to the project and are not kept anywhere else.
-        </li>
-        <li>
-          {impact
-            ? `${plural(impact.chats, "chat", "chats")} from ${plural(impact.members, "member", "members")} will leave the project`
-            : "Members’ chats will leave the project"}
-            , become temporary, and expire unless pinned. The chats themselves
-            stay with their owners.
-        </li>
-        {impact && impact.team_shared_chats > 0 ? (
-          <li>
-            {plural(impact.team_shared_chats, "chat", "chats")} shared with the
-            team will stop being shared.
-          </li>
-        ) : null}
-      </ul>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <a
-          href={`/api/projects/${encodeURIComponent(project.id)}/export`}
-          className="rounded-md border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-        >
-          Export first
-        </a>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className="rounded-md px-3 py-1.5 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="rounded-md px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
-            onClick={onConfirm}
-          >
-            Delete project
-          </button>
-        </div>
-      </div>
-    </DialogShell>
   );
 }

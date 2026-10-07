@@ -204,6 +204,17 @@ func (s *fakeChatStore) ListSharedFiles(_ context.Context) ([]store.SharedFile, 
 	return nil, nil
 }
 
+// Teammate-branch file note (ADR-0079): no fake conversation is a teammate
+// branch, so no note is ever due and the turn injects nothing.
+func (s *fakeChatStore) PendingBranchFilesAnnouncement(_ context.Context, _ string) (*store.BranchOrigin, error) {
+	return nil, nil
+}
+
+// Branch origin on the conversation read: the fake has none.
+func (s *fakeChatStore) GetBranchOrigin(_ context.Context, _, _ string) (*store.BranchOrigin, error) {
+	return nil, nil
+}
+
 func (s *fakeChatStore) CreateConversation(_ context.Context, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error) {
 	if s.onCreate != nil {
 		s.onCreate()

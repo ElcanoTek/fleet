@@ -1048,6 +1048,11 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// a report downloaded on turn 1 gets forgotten by turn 4 even though
 	// it's still on disk. Empty workspaces (first turn) skip the block.
 	injected = appendWorkspaceInventoryBlock(injected, tools.WorkspaceDirForConversation(conv.ID))
+	// A teammate's branch, on its first turn only: which shared files came
+	// with it, and that the copied transcript's other file mentions did not
+	// (ADR-0079). Without it the agent tries to open a withheld file the
+	// transcript links to.
+	injected = s.appendBranchFilesBlock(turnCtx, injected, conv.ID)
 	// Announce the cross-chat shared file library (docs/SHARED-FILES.md) the
 	// same way: read-only paths under shared/ the agent can use immediately.
 	injected = s.appendSharedFilesBlock(turnCtx, injected)

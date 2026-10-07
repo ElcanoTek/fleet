@@ -411,7 +411,7 @@ func TestProjectMemoryManagement(t *testing.T) {
 	// Retire is the default remove: the entry stops being injected, the record
 	// (and its author) survives.
 	yes := true
-	retired, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, MemoryPatch{Retired: &yes})
+	retired, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, "", MemoryPatch{Retired: &yes})
 	if err != nil {
 		t.Fatalf("UpdateProjectMemory: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestProjectMemoryManagement(t *testing.T) {
 	// The validity window is patchable on a team learning too (it was silently
 	// dropped before), and 0 clears a bound the same way the personal API does.
 	from, to := int64(1_700_000_000), int64(1_800_000_000)
-	windowed, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, MemoryPatch{ValidFrom: &from, ValidTo: &to})
+	windowed, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, "", MemoryPatch{ValidFrom: &from, ValidTo: &to})
 	if err != nil {
 		t.Fatalf("UpdateProjectMemory(window): %v", err)
 	}
@@ -430,7 +430,7 @@ func TestProjectMemoryManagement(t *testing.T) {
 		t.Errorf("validity window not applied: from=%v to=%v", windowed.ValidFrom, windowed.ValidTo)
 	}
 	zero := int64(0)
-	cleared, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, MemoryPatch{ValidTo: &zero})
+	cleared, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, "", MemoryPatch{ValidTo: &zero})
 	if err != nil {
 		t.Fatalf("UpdateProjectMemory(clear valid_to): %v", err)
 	}
@@ -558,7 +558,7 @@ func TestTransferProjectOwnership(t *testing.T) {
 	chat := f.sharedChat(t, "alice@x.com", f.project.ID, "Study")
 
 	// Alice → Bob, a teammate.
-	moved, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com")
+	moved, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com", "")
 	if err != nil {
 		t.Fatalf("transfer: %v", err)
 	}
@@ -591,13 +591,13 @@ func TestTransferProjectOwnership(t *testing.T) {
 
 	// Handing a team-shared project outside its team is refused — it would be
 	// shared with a team its owner is not in.
-	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "dana@x.com"); !errors.Is(err, ErrNotAProjectMember) {
+	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "dana@x.com", ""); !errors.Is(err, ErrNotAProjectMember) {
 		t.Errorf("cross-team transfer: got %v, want ErrNotAProjectMember", err)
 	}
 	// An unknown account is refused with the SAME sentinel as a real account
 	// in the wrong team. Distinguishing them turned the route into an
 	// account-existence oracle over arbitrary addresses.
-	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "ghost@x.com"); !errors.Is(err, ErrNotAProjectMember) {
+	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "ghost@x.com", ""); !errors.Is(err, ErrNotAProjectMember) {
 		t.Errorf("unknown target: got %v, want ErrNotAProjectMember (indistinguishable from a wrong-team target)", err)
 	}
 	// A PERSONAL project cannot be transferred at all: there is no membership
@@ -608,11 +608,11 @@ func TestTransferProjectOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.s.TransferProjectOwnership(f.ctx, personal.ID, "bob@x.com"); !errors.Is(err, ErrNotAProjectMember) {
+	if _, err := f.s.TransferProjectOwnership(f.ctx, personal.ID, "bob@x.com", ""); !errors.Is(err, ErrNotAProjectMember) {
 		t.Errorf("personal transfer: got %v, want ErrNotAProjectMember", err)
 	}
 	// Re-transferring to the current owner is an idempotent no-op.
-	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com"); err != nil {
+	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com", ""); err != nil {
 		t.Errorf("idempotent re-transfer: %v", err)
 	}
 }
@@ -652,7 +652,7 @@ func TestDeleteUserRefusesToTakeTeamSharedProjects(t *testing.T) {
 	}
 
 	// Transfer, then the delete goes through.
-	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com"); err != nil {
+	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.s.DeleteUser(f.ctx, "alice@x.com"); err != nil {
@@ -698,6 +698,14 @@ func TestProjectMemberEmails(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("members = %v, want %v", got, want)
 		}
+	}
+
+	// A disabled teammate is not offered: the transfer would refuse them.
+	if _, err := f.s.db.ExecContext(f.ctx, `UPDATE users SET enabled = FALSE WHERE email = 'bob@x.com'`); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := f.s.ProjectMemberEmails(f.ctx, f.project.ID); len(got) != 1 || got[0] != "alice@x.com" {
+		t.Errorf("members with bob disabled = %v, want only alice", got)
 	}
 
 	// A personal project has exactly one: its owner.
@@ -828,7 +836,11 @@ func TestTeamShareNeedsAnAudienceAndAHome(t *testing.T) {
 				t.Fatal(err)
 			}
 			if pid := tc.home(t, f); pid != "" {
-				if err := f.s.SetConversationProject(f.ctx, "alice@x.com", c.ID, pid); err != nil {
+				// Filed directly: another team's project is a state only an
+				// admin team move leaves behind (the filing path itself
+				// refuses a project the caller cannot see).
+				if _, err := f.s.db.ExecContext(f.ctx,
+					`UPDATE conversations SET project_id = $1 WHERE id = $2`, pid, c.ID); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -1060,6 +1072,11 @@ func TestPairingComparesTheTeamNotJustThePresenceOfOne(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// An admin moved alice to ops; she now refiles her quant-shared chat.
+		opsTeam := "ops"
+		if _, err := f.s.SetUserRoleTeam(f.ctx, "alice@x.com", nil, &opsTeam); err != nil {
+			t.Fatal(err)
+		}
 		if err := f.s.SetConversationProject(f.ctx, "alice@x.com", c.ID, ops.ID); err != nil {
 			t.Fatal(err)
 		}
@@ -1243,7 +1260,7 @@ func TestRevokingProjectAccessUnfilesInsteadOfHiding(t *testing.T) {
 					t.Fatalf("the owner must keep her own project's chats filed: project_id = %q", pid)
 				}
 				// …and loses it the moment the project is someone else's.
-				if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, bob); err != nil {
+				if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, bob, ""); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -1302,7 +1319,8 @@ func TestProjectImpactCountsChatsFromTeammates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.s.SetConversationProject(f.ctx, "dana@x.com", danas.ID, f.project.ID); err != nil {
+	if _, err := f.s.db.ExecContext(f.ctx,
+		`UPDATE conversations SET project_id = $1 WHERE id = $2`, f.project.ID, danas.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1444,5 +1462,310 @@ func TestMigration055UnfilesChatsTheirOwnersCannotSee(t *testing.T) {
 	}
 	if pid == nil || *pid != f.project.ID || !visible {
 		t.Errorf("the owner's chat = project_id %v / team_visible %v, want it left alone", pid, visible)
+	}
+}
+
+// A compaction summary starts a new rendered message in the owner's chat, so
+// every reader who may not see the summary gets a CONTENT-FREE boundary in its
+// place — the team view, a teammate's branch, and the public snapshot — and
+// none of them gets the summary's text. Without it the replies either side
+// merged into one Markdown document: an unclosed fence before the summary
+// swallowed a link after it.
+func TestSummaryBecomesAContentFreeBoundaryForReaders(t *testing.T) {
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
+	if _, err := f.s.AppendHistory(f.ctx, c.ID, []agent.HistoryEntry{
+		{Role: "assistant", Type: "text", Content: []byte(`{"text":"raw:\n` + "```" + `\n"}`)},
+		{Role: "assistant", Type: "summary", Content: []byte(`{"text":"SECRET-SUMMARY","model":"m"}`)},
+		{Role: "assistant", Type: "text", Content: []byte(`{"text":"[after](after.csv)"}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wantShape := func(t *testing.T, door string, msgs []agent.HistoryEntry) {
+		t.Helper()
+		types := make([]string, 0, len(msgs))
+		for _, m := range msgs {
+			types = append(types, m.Type)
+			if strings.Contains(string(m.Content), "SECRET-SUMMARY") {
+				t.Errorf("%s: summary text leaked: %s", door, m.Content)
+			}
+			if m.Type == agent.EntryTypeSummaryBoundary && string(m.Content) != `{}` {
+				t.Errorf("%s: boundary carries content %s", door, m.Content)
+			}
+		}
+		want := []string{"text", "text", "text", agent.EntryTypeSummaryBoundary, "text"}
+		if strings.Join(types, ",") != strings.Join(want, ",") {
+			t.Errorf("%s: entry types = %v, want %v", door, types, want)
+		}
+	}
+
+	view, err := f.s.GetTeamVisibleConversation(f.ctx, "bob@x.com", c.ID)
+	if err != nil || view == nil {
+		t.Fatalf("team view: %v", err)
+	}
+	wantShape(t, "team view", view.Messages)
+
+	last := view.Messages[len(view.Messages)-1].ID
+	br, err := f.s.BranchConversation(f.ctx, "bob@x.com", c.ID, last, "fork")
+	if err != nil {
+		t.Fatalf("branch: %v", err)
+	}
+	copied, err := f.s.LoadHistory(f.ctx, br.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantShape(t, "teammate branch", copied)
+
+	// A branch that is itself shared keeps its boundary for the next reader.
+	if err := f.s.SetConversationProject(f.ctx, "bob@x.com", br.ID, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := f.s.SetConversationTeamVisible(f.ctx, "bob@x.com", br.ID, true); err != nil || !ok {
+		t.Fatalf("share branch: %v %v", ok, err)
+	}
+	again, err := f.s.GetTeamVisibleConversation(f.ctx, "alice@x.com", br.ID)
+	if err != nil || again == nil {
+		t.Fatalf("team view of the branch: %v", err)
+	}
+	wantShape(t, "team view of a branch", again.Messages)
+
+	const token = "tok-boundary-test"
+	if err := f.s.SetShareToken(f.ctx, "alice@x.com", c.ID, token, nil); err != nil {
+		t.Fatalf("share token: %v", err)
+	}
+	pub, err := f.s.GetConversationByShareToken(f.ctx, token, time.Now().Unix())
+	if err != nil || pub == nil {
+		t.Fatalf("public snapshot: %v", err)
+	}
+	wantShape(t, "public snapshot", pub.Messages)
+}
+
+// The transfer's checks are re-read under row locks inside its transaction:
+// a project made personal, or a target moved out of the team, between the
+// early checks and the update is refused, and the owner is unchanged.
+func TestTransferProjectOwnershipRechecksInTransaction(t *testing.T) {
+	for name, race := range map[string]string{
+		"project made personal": `UPDATE projects SET team_id = '' WHERE id = $1`,
+		"target left the team":  `UPDATE users SET team_id = 'other' WHERE email = 'bob@x.com' AND $1 <> ''`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newTeamFixture(t)
+			transferAfterChecks = func() {
+				if _, err := f.s.db.ExecContext(f.ctx, race, f.project.ID); err != nil {
+					t.Error(err)
+				}
+			}
+			t.Cleanup(func() { transferAfterChecks = nil })
+			if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com", ""); !errors.Is(err, ErrNotAProjectMember) {
+				t.Fatalf("transfer = %v, want ErrNotAProjectMember", err)
+			}
+			p, err := f.s.GetProject(f.ctx, f.project.ID)
+			if err != nil || p.OwnerEmail != "alice@x.com" {
+				t.Errorf("owner = %+v (%v), want alice unchanged", p, err)
+			}
+		})
+	}
+}
+
+// An owner's transfer is bound to the owner it was admitted for: once another
+// transfer has taken the project, a request authorized while alice owned it
+// is refused under the row lock instead of handing bob's project onward. An
+// admin transfer ("") is not bound to an owner.
+func TestTransferProjectOwnershipRechecksActingOwner(t *testing.T) {
+	f := newTeamFixture(t)
+	quant := "quant"
+	if _, err := f.s.CreateUser(f.ctx, "erin@x.com", "pw-123456"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.SetUserRoleTeam(f.ctx, "erin@x.com", nil, &quant); err != nil {
+		t.Fatal(err)
+	}
+	transferAfterChecks = func() {
+		// A concurrent transfer lands between alice's admission and her update.
+		transferAfterChecks = nil
+		if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com", "alice@x.com"); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { transferAfterChecks = nil })
+	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "erin@x.com", "alice@x.com"); !errors.Is(err, ErrNotProjectOwner) {
+		t.Fatalf("stale owner's transfer = %v, want ErrNotProjectOwner", err)
+	}
+	if p, _ := f.s.GetProject(f.ctx, f.project.ID); p == nil || p.OwnerEmail != "bob@x.com" {
+		t.Fatalf("owner = %+v, want bob (the transfer that got there first)", p)
+	}
+	// The current owner, and an admin, can still transfer.
+	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "alice@x.com", "bob@x.com"); err != nil {
+		t.Fatalf("current owner's transfer: %v", err)
+	}
+	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com", ""); err != nil {
+		t.Fatalf("admin transfer: %v", err)
+	}
+}
+
+// Deleting an account and transferring a project TO it serialize on the
+// account row: a transfer arriving after DeleteUser's shared-project guard
+// waits for the delete and is then refused (the account is gone), so the
+// delete's later statements can never take the just-transferred team project
+// with them. Whatever the order, the project survives.
+func TestTransferRacingTargetDeletionKeepsTheProject(t *testing.T) {
+	f := newTeamFixture(t)
+	transferErr := make(chan error, 1)
+	deleteUserAfterGuard = func() {
+		deleteUserAfterGuard = nil
+		go func() {
+			_, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com", "alice@x.com")
+			transferErr <- err
+		}()
+		// Give the transfer every chance to commit before the delete goes on.
+		time.Sleep(300 * time.Millisecond)
+	}
+	t.Cleanup(func() { deleteUserAfterGuard = nil })
+	deleteErr := f.s.DeleteUser(f.ctx, "bob@x.com")
+	tErr := <-transferErr
+
+	p, err := f.s.GetProject(f.ctx, f.project.ID)
+	if err != nil || p == nil {
+		t.Fatalf("the team project was deleted (delete=%v, transfer=%v): %v", deleteErr, tErr, err)
+	}
+	if deleteErr == nil {
+		// The delete won: the transfer must have been refused.
+		if tErr == nil || p.OwnerEmail != "alice@x.com" {
+			t.Errorf("delete won but transfer = %v, owner = %s", tErr, p.OwnerEmail)
+		}
+	} else if p.OwnerEmail != "bob@x.com" {
+		t.Errorf("delete refused (%v) but owner = %s", deleteErr, p.OwnerEmail)
+	}
+}
+
+// Filing re-checks project access under the project row's lock: a departed
+// owner whose filing passed the handler's check before an admin transfer
+// took the project lands after it — and is refused, not left filed in a
+// project they can no longer see (which no rail section would list).
+func TestFilingAfterATransferIsRefused(t *testing.T) {
+	f := newTeamFixture(t)
+	ops := "ops"
+	if _, err := f.s.SetUserRoleTeam(f.ctx, "alice@x.com", nil, &ops); err != nil { // alice left quant
+		t.Fatal(err)
+	}
+	c, err := f.s.CreateConversation(f.ctx, "alice@x.com", "Late", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetConversationProject(f.ctx, "alice@x.com", c.ID, f.project.ID); !errors.Is(err, ErrProjectNotAccessible) {
+		t.Errorf("refile after the transfer = %v, want ErrProjectNotAccessible", err)
+	}
+	if _, err := f.s.CreateProjectConversation(f.ctx, "alice@x.com", "New", "victoria", "", false, f.project.ID, nil); !errors.Is(err, ErrProjectNotAccessible) {
+		t.Errorf("create after the transfer = %v, want ErrProjectNotAccessible", err)
+	}
+	var n int
+	if err := f.s.db.QueryRowContext(f.ctx,
+		`SELECT COUNT(*) FROM conversations WHERE user_email = 'alice@x.com' AND project_id = $1`, f.project.ID).Scan(&n); err != nil || n != 0 {
+		t.Errorf("%d of alice's chats (%v) filed in a project she cannot see", n, err)
+	}
+	// Bob, the new owner, files normally.
+	bc, err := f.s.CreateConversation(f.ctx, "bob@x.com", "Mine", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetConversationProject(f.ctx, "bob@x.com", bc.ID, f.project.ID); err != nil {
+		t.Errorf("the new owner's filing: %v", err)
+	}
+}
+
+// A conditional refile (the undo of Move and share) moves the chat only while
+// it is still where the caller expected; a newer move made elsewhere wins.
+func TestSetConversationProjectIfIsACompareAndSet(t *testing.T) {
+	f := newTeamFixture(t)
+	c, err := f.s.CreateConversation(f.ctx, "alice@x.com", "Moving", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := f.s.CreateProject(f.ctx, &Project{OwnerEmail: "alice@x.com", Name: "Other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetConversationProject(f.ctx, "alice@x.com", c.ID, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Another tab moves it on before the undo runs.
+	if err := f.s.SetConversationProject(f.ctx, "alice@x.com", c.ID, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetConversationProjectIf(f.ctx, "alice@x.com", c.ID, "", f.project.ID); !errors.Is(err, ErrConversationMoved) {
+		t.Fatalf("undo over a newer move = %v, want ErrConversationMoved", err)
+	}
+	if got, _ := f.s.Get(f.ctx, "alice@x.com", c.ID); got == nil || got.ProjectID != other.ID {
+		t.Fatalf("the newer move was overwritten: %+v", got)
+	}
+	// Still where expected: the undo applies.
+	if err := f.s.SetConversationProjectIf(f.ctx, "alice@x.com", c.ID, "", other.ID); err != nil {
+		t.Fatalf("undo in place: %v", err)
+	}
+	if got, _ := f.s.Get(f.ctx, "alice@x.com", c.ID); got == nil || got.ProjectID != "" {
+		t.Fatalf("undo did not apply: %+v", got)
+	}
+	if err := f.s.SetConversationProjectIf(f.ctx, "bob@x.com", c.ID, "", ""); !errors.Is(err, ErrConversationNotFound) {
+		t.Errorf("someone else's chat = %v, want ErrConversationNotFound", err)
+	}
+}
+
+// The author-or-owner rule on a team learning is re-checked under the project
+// row lock: once ownership moves, the previous owner can no longer edit or
+// delete another member's entry — including when the transfer commits while
+// the mutation is waiting on the lock (the handler's gate read the old owner).
+func TestProjectMemoryMutationRechecksOwnerUnderLock(t *testing.T) {
+	f := newTeamFixture(t)
+	m, err := f.s.CreateProjectMemory(f.ctx, f.project.ID, "bob@x.com", "quote spreads in bps", "fact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := true
+	if _, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, "alice@x.com", MemoryPatch{Pinned: &pin}); err != nil {
+		t.Fatalf("owner edit of a member's learning: %v", err)
+	}
+
+	// A transfer holds the project row while alice's edit arrives; the edit
+	// waits, then sees bob as owner and is refused.
+	tx, err := f.s.db.BeginTx(f.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(f.ctx, `SELECT 1 FROM projects WHERE id = $1 FOR UPDATE`, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	unpin := false
+	editErr := make(chan error, 1)
+	go func() {
+		_, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, "alice@x.com", MemoryPatch{Pinned: &unpin})
+		editErr <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	if _, err := tx.ExecContext(f.ctx, `UPDATE projects SET owner_email = 'bob@x.com' WHERE id = $1`, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-editErr; !errors.Is(err, ErrMemoryNotPermitted) {
+		t.Fatalf("demoted owner's edit = %v, want ErrMemoryNotPermitted", err)
+	}
+	if err := f.s.DeleteProjectMemory(f.ctx, f.project.ID, m.ID, "alice@x.com"); !errors.Is(err, ErrMemoryNotPermitted) {
+		t.Fatalf("demoted owner's delete = %v, want ErrMemoryNotPermitted", err)
+	}
+	got, err := f.s.GetProjectMemory(f.ctx, f.project.ID, m.ID)
+	if err != nil || got == nil || !got.Pinned {
+		t.Fatalf("learning after refused edits = %+v, %v; want it intact and pinned", got, err)
+	}
+	// The author still manages their own entry.
+	if err := f.s.DeleteProjectMemory(f.ctx, f.project.ID, m.ID, "bob@x.com"); err != nil {
+		t.Fatalf("author delete: %v", err)
+	}
+	if err := f.s.DeleteProjectMemory(f.ctx, f.project.ID, m.ID, "bob@x.com"); !errors.Is(err, ErrMemoryNotFound) {
+		t.Fatalf("second delete = %v, want ErrMemoryNotFound", err)
 	}
 }
