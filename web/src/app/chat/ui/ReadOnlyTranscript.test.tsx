@@ -418,6 +418,55 @@ describe("a locked image inside an external link", () => {
     expectSplit(container, /private\.png \(not shared\)/);
   });
 
+  it("team view: an image nested under emphasis splits too", () => {
+    const nested = [
+      { id: 1, role: "assistant", type: "text", content: { text: "[**![preview](private.png)**](https://example.com/x)" } },
+    ];
+    const { container } = render(
+      <ReadOnlyTranscript
+        bubbles={toBubbles(nested)}
+        audience="team"
+        sharedFiles={{ shared: new Set(), fileUrl }}
+        renderAssistant={(t) => renderAssistantContent(t, false, null)}
+      />,
+    );
+    expectSplit(container, /private\.png \(not shared\)/);
+  });
+
+  it("team view: a locked image after a shared one still splits the link", () => {
+    const mixed = [
+      {
+        id: 1,
+        role: "assistant",
+        type: "text",
+        content: { text: "[![a](shared.png) ![b](private.png)](https://example.com/x)" },
+      },
+    ];
+    const { container } = render(
+      <ReadOnlyTranscript
+        bubbles={toBubbles(mixed)}
+        audience="team"
+        sharedFiles={{ shared: new Set(["shared.png"]), fileUrl }}
+        renderAssistant={(t) => renderAssistantContent(t, false, null)}
+      />,
+    );
+    expect(screen.getByText(/private\.png \(not shared\)/).closest("a")).toBeNull();
+    const link = screen.getByRole("link", { name: "https://example.com/x" });
+    expect(link.textContent).toBe("https://example.com/x");
+    expect(container.querySelectorAll("a")).toHaveLength(1);
+  });
+
+  it("teammate branch: a nested withheld image splits too", () => {
+    const { container } = render(
+      <WithheldFilesContext.Provider
+        value={{ conversationId: CONV, withheld: new Set(["private.png"]) }}
+      >
+        {renderAssistantContent("[**![preview](private.png)**](https://example.com/x)", false, CONV)}
+      </WithheldFilesContext.Provider>,
+    );
+    expectSplit(container, /private\.png \(not shared\)/);
+  });
+
   it("a live image inside an external link stays one thumbnail link", () => {
     const { container } = render(
       <ReadOnlyTranscript

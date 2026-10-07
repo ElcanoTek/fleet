@@ -228,6 +228,17 @@ describe("ProjectSettingsDialog", () => {
     expect(props.onSave).not.toHaveBeenCalled();
   });
 
+  it("an owner who has left the team is told they lose the project and its chats go temporary", async () => {
+    stub();
+    renderDialog({ myTeam: "other" });
+    fireEvent.click(screen.getByRole("button", { name: "Transfer…" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /jules@x.com/ }));
+    const group = screen.getByRole("group", { name: "Transfer ownership" });
+    expect(group).toHaveTextContent(/jules@x\.com becomes the owner\. You’re no longer on /);
+    expect(group).toHaveTextContent(/you lose access to .*, and your chats in it become temporary again\./);
+    expect(group).not.toHaveTextContent("You stay a member");
+  });
+
   it("B29: delete quotes real counts and offers Export first", async () => {
     stub();
     const props = renderDialog();

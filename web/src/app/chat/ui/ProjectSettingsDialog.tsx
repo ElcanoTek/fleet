@@ -189,6 +189,10 @@ export function ProjectSettingsDialog({
 }) {
   const { notify } = useChatToast();
   const wasShared = Boolean(project.team_id);
+  // The owner keeps the project after a transfer only through its team: an
+  // owner who has left that team (the case transfer exists for) loses access,
+  // and the server moves their chats in it back to temporary.
+  const ownerStaysMember = !wasShared || myTeam === project.team_id;
   // The team this project is (or would be) shared with. A shared project
   // names its own team — the owner may since have moved (C-9).
   const team = wasShared ? project.team_id : myTeam;
@@ -419,7 +423,9 @@ export function ProjectSettingsDialog({
               </div>
               <p className="m-0 text-[0.78rem] leading-[1.5] text-[var(--color-text-secondary)]">
                 {pick
-                  ? `${pick} becomes the owner. You stay a member: you keep your chats here and can still share them, but you can’t edit settings, share the project, or delete it. This happens right away, separately from Save.`
+                  ? ownerStaysMember
+                    ? `${pick} becomes the owner. You stay a member: you keep your chats here and can still share them, but you can’t edit settings, share the project, or delete it. This happens right away, separately from Save.`
+                    : `${pick} becomes the owner. You’re no longer on ${project.team_id}, so you lose access to ${short}, and your chats in it become temporary again. This happens right away, separately from Save.`
                   : `Pick who should own ${short}.`}
               </p>
             </>

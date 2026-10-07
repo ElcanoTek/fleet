@@ -1521,3 +1521,30 @@ func TestSummaryBecomesAContentFreeBoundaryForReaders(t *testing.T) {
 	}
 	wantShape(t, "public snapshot", pub.Messages)
 }
+
+// The transfer's checks are re-read under row locks inside its transaction:
+// a project made personal, or a target moved out of the team, between the
+// early checks and the update is refused, and the owner is unchanged.
+func TestTransferProjectOwnershipRechecksInTransaction(t *testing.T) {
+	for name, race := range map[string]string{
+		"project made personal": `UPDATE projects SET team_id = '' WHERE id = $1`,
+		"target left the team":  `UPDATE users SET team_id = 'other' WHERE email = 'bob@x.com' AND $1 <> ''`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newTeamFixture(t)
+			transferAfterChecks = func() {
+				if _, err := f.s.db.ExecContext(f.ctx, race, f.project.ID); err != nil {
+					t.Error(err)
+				}
+			}
+			t.Cleanup(func() { transferAfterChecks = nil })
+			if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com"); !errors.Is(err, ErrNotAProjectMember) {
+				t.Fatalf("transfer = %v, want ErrNotAProjectMember", err)
+			}
+			p, err := f.s.GetProject(f.ctx, f.project.ID)
+			if err != nil || p.OwnerEmail != "alice@x.com" {
+				t.Errorf("owner = %+v (%v), want alice unchanged", p, err)
+			}
+		})
+	}
+}

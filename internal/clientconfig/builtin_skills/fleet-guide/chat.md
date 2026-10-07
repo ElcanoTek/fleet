@@ -503,7 +503,9 @@ the project's menu in the rail), which only the owner can open.
 
 The project's owner can hand it over with **Transfer…** to another member, so a
 project outlives its creator's involvement; transfer is available once the
-project is shared. Deleting a project asks first and names what goes with it:
+project is shared. You keep using the project as a member of its team; if you
+have left that team, handing it over also ends your access, and your chats in
+it become temporary again — the transfer panel says which applies. Deleting a project asks first and names what goes with it:
 its team learnings, and how many people's chats leave it and become temporary
 again, with **Export first** offered. Switching a shared project to **Only you**
 shows, before you save, how many shared chats become Only you and how many

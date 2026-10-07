@@ -537,6 +537,10 @@ func (s *Store) ProjectMemberEmails(ctx context.Context, projectID string) ([]st
 	return out, rows.Err()
 }
 
+// transferAfterChecks is a test seam: it runs between TransferProjectOwnership's
+// early checks and its transaction, where a concurrent change can land.
+var transferAfterChecks func()
+
 // TransferProjectOwnership hands a project to newOwnerEmail. It changes ONLY
 // who may edit and delete the definition: the team it is shared with, its
 // team learnings, its chats and every member's access are untouched, because
@@ -591,11 +595,39 @@ func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwne
 	if strings.TrimSpace(target.TeamID) != p.TeamID {
 		return nil, ErrNotAProjectMember
 	}
+	if transferAfterChecks != nil {
+		transferAfterChecks()
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	// The checks above ran outside this transaction, so they are re-read
+	// here under row locks: the project FOR UPDATE (a concurrent "make
+	// personal" waits, or has already cleared team_id and is refused) and
+	// the target FOR SHARE (a concurrent team change or disable waits, or
+	// has already moved them and is refused). Same single sentinel.
+	var lockedTeam string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(team_id, '') FROM projects WHERE id = $1 FOR UPDATE`, projectID).Scan(&lockedTeam); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("project not found")
+		}
+		return nil, err
+	}
+	var targetTeam sql.NullString
+	err = tx.QueryRowContext(ctx,
+		`SELECT team_id FROM users WHERE email = $1 AND enabled = TRUE FOR SHARE`, newOwner).Scan(&targetTeam)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotAProjectMember
+	}
+	if err != nil {
+		return nil, err
+	}
+	if lockedTeam == "" || strings.TrimSpace(targetTeam.String) != lockedTeam {
+		return nil, ErrNotAProjectMember
+	}
 	row := tx.QueryRowContext(ctx,
 		`UPDATE projects SET owner_email = $1, updated_at = $2 WHERE id = $3
 		 RETURNING `+projectColumns,

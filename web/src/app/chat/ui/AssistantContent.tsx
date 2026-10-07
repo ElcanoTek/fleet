@@ -273,13 +273,9 @@ export default function AssistantMarkdown({
       // A read-only view (team or public) decides a workspace reference
       // here, on the href the CommonMark parser produced — see
       // ReadOnlyLinkGate. Every other chat renders the live link below.
-      const innerImage = node?.children.find(
-        (c) => c.type === "element" && c.tagName === "img",
-      );
-      const innerImageSrc =
-        innerImage && innerImage.type === "element"
-          ? String(innerImage.properties?.src ?? "")
-          : null;
+      // Every image anywhere inside the label — `[**![x](a.png)**](…)`
+      // nests it under <strong>, and a label can hold several.
+      const innerImageSrcs = node ? descendantImageSrcs(node) : [];
       const renderLink = (text: ReactNode) =>
         renderLiveLink(raw, title ?? undefined, text, conversationId);
       return (
@@ -287,13 +283,13 @@ export default function AssistantMarkdown({
           raw={raw}
           title={title ?? undefined}
           label={children}
-          innerImageSrc={innerImageSrc}
+          innerImageSrcs={innerImageSrcs}
           renderLink={renderLink}
         >
           <BranchThumbnailLinkGate
             raw={raw}
             label={children}
-            innerImageSrc={innerImageSrc}
+            innerImageSrcs={innerImageSrcs}
             conversationId={conversationId}
             renderLink={renderLink}
           />
@@ -481,6 +477,22 @@ function splitTargetText(raw: string, conversationId: string | null): string {
   return isWorkspaceFile && downloadFilename ? downloadFilename : raw;
 }
 
+// descendantImageSrcs collects the src of every <img> under a hast node, at
+// any depth, in document order.
+function descendantImageSrcs(node: { children?: unknown[] }): string[] {
+  const out: string[] = [];
+  const walk = (n: unknown) => {
+    if (!n || typeof n !== "object") return;
+    const el = n as { type?: string; tagName?: string; properties?: { src?: unknown }; children?: unknown[] };
+    if (el.type === "element" && el.tagName === "img") {
+      out.push(String(el.properties?.src ?? ""));
+    }
+    el.children?.forEach(walk);
+  };
+  node.children?.forEach(walk);
+  return out;
+}
+
 /**
  * BranchThumbnailLinkGate is the live link outside a read-only view. In a
  * teammate's BRANCH (WithheldFilesContext), a thumbnail whose image the branch
@@ -490,29 +502,34 @@ function splitTargetText(raw: string, conversationId: string | null): string {
 function BranchThumbnailLinkGate({
   raw,
   label,
-  innerImageSrc,
+  innerImageSrcs,
   conversationId,
   renderLink,
 }: {
   raw: string;
   label: ReactNode;
-  innerImageSrc: string | null;
+  innerImageSrcs: string[];
   conversationId: string | null;
   renderLink: (text: ReactNode) => ReactNode;
 }) {
   const ctx = useContext(WithheldFilesContext);
-  if (innerImageSrc === null || !ctx) return <>{renderLink(label)}</>;
+  if (innerImageSrcs.length === 0 || !ctx) return <>{renderLink(label)}</>;
   const pathOf = (href: string) =>
     workspacePathFromHref(
       resolveWorkspaceHref(href, conversationId).href,
       ctx.conversationId,
     );
-  const inner = pathOf(innerImageSrc);
-  if (inner === null || !isWithheldPath(ctx, inner)) {
-    return <>{renderLink(label)}</>;
+  // ANY withheld image in the label splits the link: one locked name inside
+  // a live anchor is the disguised clickable lock this gate exists to stop.
+  const withheld = new Set<string>();
+  for (const src of innerImageSrcs) {
+    const p = pathOf(src);
+    if (p !== null && isWithheldPath(ctx, p)) withheld.add(p);
   }
-  // The target is that same withheld file: its locked name says it all.
-  if (!raw || pathOf(raw) === inner) return <>{label}</>;
+  if (withheld.size === 0) return <>{renderLink(label)}</>;
+  // The target is a withheld image's own file: its locked name says it all.
+  const target = raw ? pathOf(raw) : null;
+  if (!raw || (target !== null && withheld.has(target))) return <>{label}</>;
   return (
     <>
       {label} {renderLink(splitTargetText(raw, conversationId))}
@@ -524,15 +541,15 @@ function ReadOnlyLinkGate({
   raw,
   title,
   label,
-  innerImageSrc,
+  innerImageSrcs,
   renderLink,
   children,
 }: {
   raw: string;
   title?: string;
   label: ReactNode;
-  /** The src of an image inside this link (a clickable thumbnail), if any. */
-  innerImageSrc: string | null;
+  /** The src of every image inside this link (a clickable thumbnail), at any depth. */
+  innerImageSrcs: string[];
   /** The live link around `text` — used for a split external target. */
   renderLink: (text: ReactNode) => ReactNode;
   children: ReactNode;
@@ -541,10 +558,10 @@ function ReadOnlyLinkGate({
   if (!policy) return <>{children}</>;
   const d = decideReadOnlyFile(raw, policy);
   // A thumbnail whose image is NOT live (withheld, locked, an upload) never
-  // sits inside a live anchor — see splitTargetText above.
-  const innerLive =
-    innerImageSrc === null ||
-    ["external", "shared"].includes(decideReadOnlyFile(innerImageSrc, policy).kind);
+  // sits inside a live anchor — see splitTargetText above. Every image in
+  // the label counts: one locked image beside a live one still splits it.
+  const inners = innerImageSrcs.map((src) => decideReadOnlyFile(src, policy));
+  const innerLive = inners.every((i) => i.kind === "external" || i.kind === "shared");
   if (d.kind === "external") {
     if (innerLive) return <>{children}</>;
     if (!raw) return <>{label}</>;
@@ -582,11 +599,11 @@ function ReadOnlyLinkGate({
   // target's locked name — one name when both are the same file. On a public
   // link the target's withheld name stands alone, as the source pre-pass
   // renders it.
-  if (innerImageSrc !== null && policy.mode === "shared") {
-    const inner = decideReadOnlyFile(innerImageSrc, policy);
-    if (inner.kind !== "external" && inner.kind !== "shared" && inner.path === d.path) {
-      return <>{label}</>;
-    }
+  if (inners.length > 0 && policy.mode === "shared") {
+    const sameLockedFile = inners.some(
+      (i) => i.kind !== "external" && i.kind !== "shared" && i.path === d.path,
+    );
+    if (sameLockedFile) return <>{label}</>;
     return (
       <>
         {label} {text}
