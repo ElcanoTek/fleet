@@ -6,12 +6,17 @@ package remotemcp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 )
 
@@ -32,6 +37,83 @@ import (
 // headless — those are verified by hand (docs/MCP-CATALOG-STATUS.md).
 
 const catalogLiveEnv = "FLEET_CATALOG_LIVE"
+
+// catalogStrictEnv turns a vendor outage from a warning into a failure, for a
+// deliberate sweep (the workflow's strict_smoke dispatch input) — the same
+// switch the link lint's --strict is.
+const catalogStrictEnv = "FLEET_CATALOG_STRICT"
+
+// vendorOutageMarker starts the skip message of a probe lost to a vendor
+// outage. The workflow greps for it to annotate the run, so keep the two in
+// step.
+const vendorOutageMarker = "VENDOR OUTAGE"
+
+// vendorOutage reports whether a probe failure — after the connect retry —
+// says the vendor is down right now rather than that the listing is wrong:
+//
+//   - an HTTP 429 or any 5xx but 501, whatever the body: plain text
+//     (HTTPStatusError), a JSON-RPC error (RPCError) or a JSON-RPC error not
+//     attributed to the request (UnattributedResponseError). The run
+//     classifier retries only 500/502/503/504/429 and reads a JSON-RPC
+//     body's wording; the smoke goes by the status, and also counts the
+//     nonstandard ones a CDN answers for a down origin (Cloudflare's 520–524
+//     and 530). 501 Not Implemented stays rot: the endpoint answered and does
+//     not speak the protocol;
+//   - otherwise whatever mcp.IsTransientConnectError calls transient: a
+//     timeout, a refused or reset connection, a temporary DNS failure, a
+//     JSON-RPC error that says it is temporary.
+//
+// A host that no longer resolves is rot, not an outage: the classifier calls
+// DNS transient for a run's sake, but for a shipped listing a missing host is
+// a dead entry, and the link lint fails an unresolvable docs host for the same
+// reason.
+func vendorOutage(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return false
+	}
+	switch status := httpStatusOf(err); {
+	case status == http.StatusTooManyRequests:
+		return true
+	case status >= 500 && status <= 599:
+		return status != http.StatusNotImplemented
+	}
+	return mcp.IsTransientConnectError(err)
+}
+
+// httpStatusOf is the non-2xx HTTP status a probe failure arrived under, in
+// whichever error form the transport reported it; 0 when there was none.
+func httpStatusOf(err error) int {
+	var statusErr *mcp.HTTPStatusError
+	var rpcErr *mcp.RPCError
+	var unattributed *mcp.UnattributedResponseError
+	switch {
+	case errors.As(err, &statusErr):
+		return statusErr.StatusCode
+	case errors.As(err, &rpcErr):
+		return rpcErr.HTTPStatus
+	case errors.As(err, &unattributed):
+		return unattributed.HTTPStatus
+	}
+	return 0
+}
+
+// failUnlessOutagef fails the subtest on err, except that a vendor outage only
+// skips it with a vendorOutageMarker warning unless FLEET_CATALOG_STRICT=1.
+// One third-party service having a bad night is not a fault in fleet's
+// catalog, and a lane that goes red for it trains people to ignore the alarm
+// (#1683: one 503 from kiwi-flights filed one). What still fails is what the
+// catalog's curation contract covers: an endpoint that answers but is not a
+// working MCP server, refuses an open handshake, lists no tools or a broken
+// schema, or whose host is gone.
+func failUnlessOutagef(t *testing.T, err error, format string, args ...any) {
+	t.Helper()
+	msg := fmt.Sprintf(format, args...)
+	if vendorOutage(err) && os.Getenv(catalogStrictEnv) != "1" {
+		t.Skipf("%s (warning, not a catalog fault; %s=1 fails it): %s", vendorOutageMarker, catalogStrictEnv, msg)
+	}
+	t.Fatal(msg)
+}
 
 // catalogLiveService is the smallest Service that can run probeServer: the
 // same SSRF-safe client and timeout the real one is built with, no store. The
@@ -55,11 +137,23 @@ func catalogLiveService(t *testing.T) (*Service, []clientconfig.RemoteMCPCatalog
 // probeForTest runs one add-time probe under the service's own timeout and
 // returns the tool count; a refused key (at the handshake or at the
 // read-only verification call) comes back as the error.
+//
+// The probe gets the connect retry a run gets (mcp.RetryTransientConnect
+// under a fresh WithConnectRetry allowance): a vendor 503 or 429 that clears
+// within seconds would not have kept the server out of a user's run, so it
+// must not file the nightly alarm either (#1683). What still fails is what a
+// run would also fail on — an outage outlasting the retries, a refusal, a
+// dead host — and the last attempt's error is the one reported.
 func (s *Service) probeForTest(t *testing.T, url, header, query, prefix, credential string) (int, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTPTimeout)
+	ctx, cancel := context.WithTimeout(mcp.WithConnectRetry(context.Background()), s.cfg.HTTPTimeout+mcp.MaxConnectRetryBudget)
 	defer cancel()
-	report, err := s.probeServer(ctx, url, header, query, prefix, credential)
+	var report ProbeReport
+	err := mcp.RetryTransientConnect(ctx, url, func(attemptCtx context.Context) error {
+		var perr error
+		report, perr = s.probeServer(attemptCtx, url, header, query, prefix, credential)
+		return perr
+	})
 	if err == nil {
 		checkCatalogToolSchemas(t, url, report.SchemaIssues)
 	}
@@ -87,9 +181,22 @@ func checkCatalogToolSchemas(t *testing.T, url string, issues []agentcore.ToolSc
 // One subtest per entry, in parallel (one request each, to distinct hosts),
 // so a single dead vendor names itself instead of hiding the rest of the
 // shelf or holding it up.
+//
+// Outages only warn (failUnlessOutagef), so a common-mode failure — the runner
+// lost its network, DNS is down, a client regression times every probe out —
+// would skip every subtest and pass. The parent therefore fails unless at
+// least one entry actually completed a handshake: one vendor down is weather,
+// every vendor down is the smoke not checking anything.
 func TestCatalogLiveOpenEntries(t *testing.T) {
 	svc, entries := catalogLiveService(t)
 	ran := 0
+	var succeeded atomic.Int32
+	// Cleanup runs after the parallel subtests have all finished.
+	t.Cleanup(func() {
+		if ran > 0 && succeeded.Load() == 0 {
+			t.Errorf("none of the %d open entries completed a handshake; every probe failed or was skipped as an outage, which is the runner or fleet's client, not %d vendors at once", ran, ran)
+		}
+	})
 	for _, e := range entries {
 		if e.Auth != "open" || strings.Contains(e.URL, "{") {
 			continue
@@ -99,11 +206,12 @@ func TestCatalogLiveOpenEntries(t *testing.T) {
 			t.Parallel()
 			tools, err := svc.probeForTest(t, e.URL, "", "", "", "")
 			if err != nil {
-				t.Fatalf("%s: unauthenticated handshake failed (docs: %s): %v", e.URL, e.DocsURL, err)
+				failUnlessOutagef(t, err, "%s: unauthenticated handshake failed (docs: %s): %v", e.URL, e.DocsURL, err)
 			}
 			if tools == 0 {
 				t.Fatalf("%s: handshake succeeded but the server lists no tools", e.URL)
 			}
+			succeeded.Add(1)
 			t.Logf("%s: %d tools", e.Name, tools)
 		})
 	}
@@ -203,7 +311,7 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			}
 			tools, err := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, key)
 			if err != nil {
-				t.Fatalf("%s: handshake with the fixture key failed: %v", fixtureName(f.Entry, f.Variant), err)
+				failUnlessOutagef(t, err, "%s: handshake with the fixture key failed: %v", fixtureName(f.Entry, f.Variant), err)
 			}
 			if tools == 0 {
 				t.Fatalf("%s: handshake succeeded but the server lists no tools", fixtureName(f.Entry, f.Variant))
@@ -215,6 +323,12 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			badTools, badErr := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, "fleet-catalog-smoke-invalid-key")
 			if badErr == nil {
 				t.Fatalf("%s let an invalid key through the handshake and the read-only verification call (%d tools); the vendor changed where it checks keys, or the key is not being sent where it expects it", fixtureName(f.Entry, f.Variant), badTools)
+			}
+			// An outage between the two probes proves nothing about the key:
+			// a 503 would otherwise pass handshakeRefused as a refusal, and a
+			// dropped connection would fail the fixture.
+			if vendorOutage(badErr) {
+				failUnlessOutagef(t, badErr, "%s: the invalid-key probe hit an outage, so the key shape was not checked: %v", fixtureName(f.Entry, f.Variant), badErr)
 			}
 			var kr *keyRejectedError
 			if !handshakeRefused(badErr) && !errors.As(badErr, &kr) {

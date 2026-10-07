@@ -20,7 +20,7 @@ use) instead of blocking a merge. Three jobs:
 | job | what it does | fails when |
 |---|---|---|
 | `links` | `scripts/mcp-catalog-lint.sh` fetches every entry's `docs_url` (other link fields on dispatch) | a link answers 404/410 or its host does not resolve |
-| `smoke` | `go test -run TestCatalogLive ./internal/remotemcp/` with `FLEET_CATALOG_LIVE=1` | an `open` entry fails fleet's handshake or lists no tools; an armed api_key fixture fails |
+| `smoke` | `go test -run TestCatalogLive ./internal/remotemcp/` with `FLEET_CATALOG_LIVE=1` | an `open` entry fails fleet's handshake or lists no tools; an armed api_key fixture fails — but a vendor outage only warns (see [Outages warn, rot fails](#outages-warn-rot-fails)) |
 | `alarm` | files or comments on "Scheduled Nightly MCP catalog smoke run failed" | only on a scheduled failure of either job |
 
 Both checks are read-only against the vendors and carry no credential unless
@@ -113,6 +113,59 @@ awk shows up in the PR gate, not as a silently smaller nightly.
   first tool call), the fixture proves reachability and the tool list, and the
   table says so. No secret is configured yet; the fixtures are ready for the
   first one.
+
+### Outages warn, rot fails
+
+The smoke checks fleet's *listing*, not the vendors' uptime, so one service
+having a bad night must not turn the lane red: an alarm that fires for that
+trains people to close it unread. The first such alarm (#1683, 2026-10-06)
+was exactly that. Kiwi.com's host answered a single HTTP 503 to
+`notifications/initialized`; the next night it was green again.
+
+Each probe therefore runs the way a user's run connects: under
+`mcp.RetryTransientConnect` with a fresh `WithConnectRetry` allowance (three
+attempts, about seven seconds of waiting). A failure that survives that is
+then sorted:
+
+- **Outage → warning.** An HTTP 429 or any 5xx except 501, whatever the
+  body (plain text or a JSON-RPC error, attributed to the request or not),
+  including a CDN's nonstandard ones such as Cloudflare's 520–524 and 530; a
+  timeout, a refused or reset connection, a
+  temporary DNS failure, or a JSON-RPC error that says it is temporary
+  (`mcp.IsTransientConnectError`). The same applies to an api_key fixture's
+  invalid-key control probe: an outage there means the key shape was not
+  checked, so it is not counted as the vendor refusing the key. The entry's subtest is skipped
+  with a `VENDOR OUTAGE` message. The workflow turns each one into a run
+  annotation and lists it in the job summary. The job stays green and no
+  issue is filed.
+- **Rot → failure.** Everything else: a host that no longer resolves (the
+  link lint fails an unresolvable docs host for the same reason), a 501 (the
+  endpoint does not implement the protocol), a 4xx (an
+  `open` entry answering 401/403 may now need auth), a reply that is not MCP,
+  an empty tool list, or an invalid tool schema.
+
+**At least one open entry must succeed.** If every open probe fails or is
+skipped as an outage, `TestCatalogLiveOpenEntries` fails anyway: twelve vendors
+are not down at once. That is the runner losing its network, DNS failing for
+everyone, or a regression in fleet's own client, and it must alarm.
+
+The `strict_smoke` dispatch input (`FLEET_CATALOG_STRICT=1`) turns outage
+warnings into failures for a deliberate sweep, as `strict_links` does for the
+link lint. What this costs: **a vendor that stays down every night only ever
+warns.** It shows on each run's page and summary but files no issue. If that
+starts to matter, a consecutive-nights rule needs state the lane does not keep
+today.
+
+The same alarm exposed a client bug, fixed alongside. `notifications/initialized`
+reported a refused POST as a plain error, so `IsTransientConnectError` could
+not see its status. A user's run therefore did not retry a 503 there (it
+retries one at `initialize`), and a 401 there was not recognised as a refused
+credential. It is now an `*mcp.HTTPStatusError` like any refused request.
+Likewise, a JSON-RPC error that arrives on a non-2xx now keeps its status
+(`RPCError.HTTPStatus`, `UnattributedResponseError.HTTPStatus`), and
+`IsTransientConnectError` honours it. A run therefore retries a 503 whose body
+says only "Internal error", unless the server's message says outright not to
+retry.
 
 Run locally:
 

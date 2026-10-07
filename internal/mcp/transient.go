@@ -31,6 +31,9 @@ type UnattributedResponseError struct {
 	WantID     int
 	Raw        string
 	Carried    *RPCError
+	// HTTPStatus is the non-2xx status the response arrived under, 0 on a
+	// 2xx — kept for the same reason as RPCError.HTTPStatus.
+	HTTPStatus int
 }
 
 func newUnattributedResponseError(responseID string, wantID int, raw []byte) *UnattributedResponseError {
@@ -55,15 +58,17 @@ func (e *UnattributedResponseError) Error() string {
 // resolution — production saw a one-minute "lookup pages.elcanotek.com: no
 // such host" blip fail a whole run), a timeout or deadline on the dial or the
 // request, a refused, reset or unreachable connection, an HTTP 500, 502, 503,
-// 504 or 429, and a JSON-RPC error whose message says the condition is
-// temporary (fast.io answers "Auth validation temporarily unavailable.
-// Retry." with code -32000 while its auth backend is down).
+// 504 or 429 — whether the body is plain text or a JSON-RPC error, attributed
+// to the request or not — and a JSON-RPC error whose message says the
+// condition is temporary (fast.io answers "Auth validation temporarily
+// unavailable. Retry." with code -32000 while its auth backend is down).
 //
 // Not transient: an HTTP 401/403 or any other 4xx, a 501 (the server does not
 // implement the request) and any other 5xx, a malformed URL, a TLS or
-// protocol failure, a JSON-RPC error that does not say it is temporary
-// ("Invalid API key. Do not retry.", "This tool is unavailable on your
-// plan"), and the caller's own cancellation.
+// protocol failure, a JSON-RPC error on a 2xx or other status that does not
+// say it is temporary ("This tool is unavailable on your plan"), a JSON-RPC
+// error that says not to retry ("Invalid API key. Do not retry.") whatever
+// status it arrived on, and the caller's own cancellation.
 //
 // A DNS failure stays transient although a typo'd or decommissioned host
 // fails the same way forever: the recurrence park breaker bounds that case
@@ -90,15 +95,31 @@ func IsTransientConnectError(err error) bool {
 	}
 	var statusErr *HTTPStatusError
 	if errors.As(err, &statusErr) {
-		switch statusErr.StatusCode {
-		case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable,
-			http.StatusGatewayTimeout, http.StatusTooManyRequests:
-			return true
-		}
-		return false
+		return transientHTTPStatus(statusErr.StatusCode)
 	}
-	if rpcErr := connectRPCError(err); rpcErr != nil {
-		return rpcMessageSaysTransient(rpcErr.Message)
+	if rpcErr, status := connectRPCError(err); rpcErr != nil || status != 0 {
+		// A JSON-RPC error that arrived on a 429/5xx is that status first —
+		// a 503 whose body says only "Internal error" is the same outage as
+		// a plain-text 503 — unless the server says outright not to retry.
+		message := ""
+		if rpcErr != nil {
+			message = rpcErr.Message
+		}
+		if rpcMessageForbidsRetry(message) {
+			return false
+		}
+		return transientHTTPStatus(status) || rpcMessageSaysTransient(message)
+	}
+	return false
+}
+
+// transientHTTPStatus reports whether an HTTP status is one a later attempt
+// can clear: 500, 502, 503, 504 or 429.
+func transientHTTPStatus(status int) bool {
+	switch status {
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout, http.StatusTooManyRequests:
+		return true
 	}
 	return false
 }
@@ -119,16 +140,16 @@ func isRetryableConnectError(err error) bool {
 
 // connectRPCError returns the JSON-RPC error a failed handshake carried —
 // answered to the request or unattributed (id:null) — or nil.
-func connectRPCError(err error) *RPCError {
+func connectRPCError(err error) (*RPCError, int) {
 	var rpcErr *RPCError
 	if errors.As(err, &rpcErr) {
-		return rpcErr
+		return rpcErr, rpcErr.HTTPStatus
 	}
 	var unattributed *UnattributedResponseError
 	if errors.As(err, &unattributed) {
-		return unattributed.Carried
+		return unattributed.Carried, unattributed.HTTPStatus
 	}
-	return nil
+	return nil, 0
 }
 
 // rpcMessageSaysTransient reads a JSON-RPC error message the way an operator
@@ -139,14 +160,25 @@ func connectRPCError(err error) *RPCError {
 // permanent — and an explicit "do not retry" / "do not try again" always
 // wins.
 func rpcMessageSaysTransient(message string) bool {
+	if rpcMessageForbidsRetry(message) {
+		return false
+	}
+	m := strings.Join(strings.Fields(strings.ToLower(message)), " ")
+	for _, phrase := range []string{"temporar", "try again", "service unavailable", "server unavailable", "service is unavailable", "server is unavailable"} {
+		if strings.Contains(m, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// rpcMessageForbidsRetry reports whether a JSON-RPC error message says
+// outright not to retry ("Invalid API key. Do not retry."). It wins over
+// both the message's other wording and the HTTP status it arrived on.
+func rpcMessageForbidsRetry(message string) bool {
 	m := strings.Join(strings.Fields(strings.ToLower(message)), " ")
 	for _, negation := range []string{"do not retry", "don't retry", "do not try again", "don't try again"} {
 		if strings.Contains(m, negation) {
-			return false
-		}
-	}
-	for _, phrase := range []string{"temporar", "try again", "service unavailable", "server unavailable", "service is unavailable", "server is unavailable"} {
-		if strings.Contains(m, phrase) {
 			return true
 		}
 	}
@@ -190,7 +222,7 @@ func ConnectErrorSummary(err error) string {
 	if errors.As(err, &statusErr) {
 		return fmt.Sprintf("HTTP %d %s", statusErr.StatusCode, http.StatusText(statusErr.StatusCode))
 	}
-	if rpcErr := connectRPCError(err); rpcErr != nil {
+	if rpcErr, _ := connectRPCError(err); rpcErr != nil {
 		message := strings.Join(strings.Fields(rpcErr.Message), " ")
 		if utf8.RuneCountInString(message) > maxConnectErrorSummaryRunes {
 			message = string([]rune(message)[:maxConnectErrorSummaryRunes]) + "…"
