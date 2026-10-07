@@ -214,8 +214,12 @@ func (t *HTTPTransport) httpStatusResponse(resp *http.Response, wantID int) (jso
 			t.noteStatusBodyMismatch(resp.StatusCode, env)
 			result, ierr := interpretJSONRPC(env, wantID)
 			var rpcErr *RPCError
-			if errors.As(ierr, &rpcErr) {
+			var unattributed *UnattributedResponseError
+			switch {
+			case errors.As(ierr, &rpcErr):
 				rpcErr.HTTPStatus = resp.StatusCode
+			case errors.As(ierr, &unattributed):
+				unattributed.HTTPStatus = resp.StatusCode
 			}
 			return result, ierr
 		}

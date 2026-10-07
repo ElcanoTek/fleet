@@ -417,4 +417,16 @@ func TestHTTPStatusRPCErrorKeepsItsStatus(t *testing.T) {
 			t.Fatalf("status %d: RPCError.HTTPStatus = %d, want %d", status, rpcErr.HTTPStatus, want)
 		}
 	}
+	// The id:null form keeps its status too.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal error"}}`))
+	}))
+	defer srv.Close()
+	_, err := NewHTTPTransport(srv.URL).Call(context.Background(), "initialize", map[string]any{})
+	var unattributed *UnattributedResponseError
+	if !errors.As(err, &unattributed) || unattributed.HTTPStatus != http.StatusServiceUnavailable {
+		t.Fatalf("id:null on a 503: err = %#v, want an UnattributedResponseError with HTTPStatus 503", err)
+	}
 }

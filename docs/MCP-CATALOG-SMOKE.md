@@ -127,9 +127,10 @@ Each probe therefore runs the way a user's run connects: under
 attempts, about seven seconds of waiting). A failure that survives that is
 then sorted:
 
-- **Outage → warning.** Any HTTP 5xx except 501 (including a CDN's
-  nonstandard ones, such as Cloudflare's 520–524 and 530, and a 5xx whose body
-  is a JSON-RPC error), a 429, a timeout, a refused or reset connection, a
+- **Outage → warning.** An HTTP 429 or any 5xx except 501, whatever the
+  body (plain text or a JSON-RPC error, attributed to the request or not),
+  including a CDN's nonstandard ones such as Cloudflare's 520–524 and 530; a
+  timeout, a refused or reset connection, a
   temporary DNS failure, or a JSON-RPC error that says it is temporary
   (`mcp.IsTransientConnectError`). The same applies to an api_key fixture's
   invalid-key control probe: an outage there means the key shape was not

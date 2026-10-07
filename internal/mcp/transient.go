@@ -31,6 +31,9 @@ type UnattributedResponseError struct {
 	WantID     int
 	Raw        string
 	Carried    *RPCError
+	// HTTPStatus is the non-2xx status the response arrived under, 0 on a
+	// 2xx — kept for the same reason as RPCError.HTTPStatus.
+	HTTPStatus int
 }
 
 func newUnattributedResponseError(responseID string, wantID int, raw []byte) *UnattributedResponseError {

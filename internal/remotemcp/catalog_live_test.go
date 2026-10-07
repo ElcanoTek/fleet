@@ -49,36 +49,53 @@ const catalogStrictEnv = "FLEET_CATALOG_STRICT"
 const vendorOutageMarker = "VENDOR OUTAGE"
 
 // vendorOutage reports whether a probe failure — after the connect retry —
-// says the vendor is down right now rather than that the listing is wrong: a
-// timeout, a refused or reset connection, a 429, a JSON-RPC error that says it
-// is temporary (mcp.IsTransientConnectError), or any HTTP 5xx but 501. The
-// run classifier retries only 500/502/503/504; the smoke also counts the
-// nonstandard ones a CDN or proxy answers for a down origin (Cloudflare's
-// 520–524 and 530). 501 Not Implemented stays rot: the endpoint answered and
-// does not speak the protocol. A host that no longer resolves is rot too: the
-// classifier calls DNS transient for a run's sake, but for a shipped listing a
-// missing host is a dead entry, and the link lint fails an unresolvable docs
-// host for the same reason.
+// says the vendor is down right now rather than that the listing is wrong:
+//
+//   - an HTTP 429 or any 5xx but 501, whatever the body: plain text
+//     (HTTPStatusError), a JSON-RPC error (RPCError) or a JSON-RPC error not
+//     attributed to the request (UnattributedResponseError). The run
+//     classifier retries only 500/502/503/504/429 and reads a JSON-RPC
+//     body's wording; the smoke goes by the status, and also counts the
+//     nonstandard ones a CDN answers for a down origin (Cloudflare's 520–524
+//     and 530). 501 Not Implemented stays rot: the endpoint answered and does
+//     not speak the protocol;
+//   - otherwise whatever mcp.IsTransientConnectError calls transient: a
+//     timeout, a refused or reset connection, a temporary DNS failure, a
+//     JSON-RPC error that says it is temporary.
+//
+// A host that no longer resolves is rot, not an outage: the classifier calls
+// DNS transient for a run's sake, but for a shipped listing a missing host is
+// a dead entry, and the link lint fails an unresolvable docs host for the same
+// reason.
 func vendorOutage(err error) bool {
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
 		return false
 	}
-	status := 0
-	var statusErr *mcp.HTTPStatusError
-	var rpcErr *mcp.RPCError
-	switch {
-	case errors.As(err, &statusErr):
-		status = statusErr.StatusCode
-	case errors.As(err, &rpcErr):
-		// A 5xx whose body is a JSON-RPC error ("Internal error") is the
-		// same outage as one with a plain-text body.
-		status = rpcErr.HTTPStatus
-	}
-	if status >= 500 && status <= 599 {
+	switch status := httpStatusOf(err); {
+	case status == http.StatusTooManyRequests:
+		return true
+	case status >= 500 && status <= 599:
 		return status != http.StatusNotImplemented
 	}
 	return mcp.IsTransientConnectError(err)
+}
+
+// httpStatusOf is the non-2xx HTTP status a probe failure arrived under, in
+// whichever error form the transport reported it; 0 when there was none.
+func httpStatusOf(err error) int {
+	var statusErr *mcp.HTTPStatusError
+	var rpcErr *mcp.RPCError
+	var unattributed *mcp.UnattributedResponseError
+	switch {
+	case errors.As(err, &statusErr):
+		return statusErr.StatusCode
+	case errors.As(err, &rpcErr):
+		return rpcErr.HTTPStatus
+	case errors.As(err, &unattributed):
+		return unattributed.HTTPStatus
+	}
+	return 0
 }
 
 // failUnlessOutagef fails the subtest on err, except that a vendor outage only
