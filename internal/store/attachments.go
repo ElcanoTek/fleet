@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -91,6 +92,7 @@ func (s *Store) SweepOrphanWorkspaces(ctx context.Context, root string) (int, er
 		return 0, fmt.Errorf("readdir %s: %w", root, err)
 	}
 	removed := 0
+	var errs []error
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -105,11 +107,50 @@ func (s *Store) SweepOrphanWorkspaces(ctx context.Context, root string) (int, er
 		if _, alive := live[name]; alive {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(root, name)); err == nil {
-			removed++
+		if err := removeWorkspaceTree(root, name); err != nil {
+			// Reported, not swallowed: a dir that cannot be removed is
+			// retried every pass, so a silent failure pins its bytes
+			// forever (a read-only subdir did exactly that to 4.8 GB on a
+			// production box). Keep sweeping the rest.
+			errs = append(errs, fmt.Errorf("remove orphan workspace %s: %w", name, err))
+			continue
 		}
+		removed++
 	}
-	return removed, nil
+	return removed, errors.Join(errs...)
+}
+
+// removeWorkspaceTree deletes root/name. A plain RemoveAll fails on any
+// directory the agent left without the owner-write bit — `chmod -R a-w`,
+// an archive that unpacked read-only modes, a tool that protects its
+// output — because unlinking an entry needs write permission on its
+// PARENT. On that failure the tree's directories are made owner-writable
+// and the removal retried.
+//
+// The chmods go through an os.Root opened at the workspace dir, so a
+// symlink the sandbox planted inside it cannot redirect a chmod outside
+// the tree: Root refuses to resolve a path that escapes it. WalkDir does
+// not follow symlinks either, so only real directories are visited.
+func removeWorkspaceTree(root, name string) error {
+	dir := filepath.Join(root, name)
+	if err := os.RemoveAll(dir); err == nil {
+		return nil
+	}
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	_ = fs.WalkDir(r.FS(), ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return nil //nolint:nilerr // best effort: an unreadable entry just stays unreadable; the RemoveAll below reports what is left.
+		}
+		if info, ierr := d.Info(); ierr == nil && info.Mode().Perm()&0o700 != 0o700 {
+			_ = r.Chmod(path, info.Mode().Perm()|0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(dir)
 }
 
 // liveConversationIDs returns the set of conversation ids currently in

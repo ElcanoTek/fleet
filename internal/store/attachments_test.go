@@ -151,6 +151,43 @@ func TestSweepOrphanWorkspaces(t *testing.T) {
 	}
 }
 
+// TestSweepOrphanWorkspacesReadOnlySubdir — an orphan whose tree holds a
+// directory without the owner-write bit (an agent's `chmod a-w`, an archive
+// unpacked with read-only modes) must still be removed. A plain RemoveAll
+// fails there, and the sweep used to drop that error, so the dir — 4.8 GB of
+// it on one production box — was retried and silently kept forever.
+func TestSweepOrphanWorkspacesReadOnlySubdir(t *testing.T) {
+	s := newTestStore(t)
+	root := t.TempDir()
+	orphan := filepath.Join(root, "0a3c2f6e-5b1d-4c8e-9f7a-2d4b6e8a0c1f")
+	locked := filepath.Join(orphan, "nissan", "Nissan")
+	if err := os.MkdirAll(locked, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "report.csv"), []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o550); err != nil {
+		t.Fatal(err)
+	}
+	// If the sweep regresses, put the bit back so t.TempDir can clean up.
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o750) })
+	if os.RemoveAll(orphan) == nil {
+		t.Skip("filesystem lets a plain RemoveAll through a read-only dir (running as root?) — nothing to prove")
+	}
+
+	removed, err := s.SweepOrphanWorkspaces(context.Background(), root)
+	if err != nil {
+		t.Fatalf("SweepOrphanWorkspaces: %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("removed=%d, want 1", removed)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("orphan with a read-only subdir should be gone: err=%v", err)
+	}
+}
+
 func TestSweepOrphanWorkspacesMissingRoot(t *testing.T) {
 	s := newTestStore(t)
 	n, err := s.SweepOrphanWorkspaces(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"))

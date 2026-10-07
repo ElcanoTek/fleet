@@ -104,10 +104,13 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 	// downloaded into <root>/<convID>/ goes with them. Ordered after
 	// sweepRetention so rows that expired on THIS pass have their directories
 	// reclaimed on the same pass rather than the next one.
-	if removed, err := s.store.SweepOrphanWorkspaces(ctx,
-		tools.WorkspaceDirForConversation("")); err != nil {
+	// A partial failure still reports what WAS removed: the error names
+	// only the dirs that could not be.
+	removed, err := s.store.SweepOrphanWorkspaces(ctx, tools.WorkspaceDirForConversation(""))
+	if err != nil {
 		log.Printf("maintenance: workspace sweep: %v", err)
-	} else if removed > 0 {
+	}
+	if removed > 0 {
 		log.Printf("maintenance: workspace sweep removed %d orphan dir(s)", removed)
 	}
 
