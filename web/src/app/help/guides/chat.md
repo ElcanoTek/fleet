@@ -105,6 +105,10 @@ needs approval, the reply ends with a link or a `fleet chat --approve` command,
 because approvals are settled in fleet, not in the client. Images and audio are
 not accepted.
 
+MCP servers you set up in your editor are not used by fleet. fleet's tools and
+connectors are the ones your operator set up, and they run on the fleet server.
+The first reply in a session says so, naming the servers your editor sent.
+
 A message sent from the client while an earlier one is still running does not
 stop it. It waits, and messages on the same session run one at a time, in the
 order `fleet acp` received them. Up to 20 can wait behind the one running. A
