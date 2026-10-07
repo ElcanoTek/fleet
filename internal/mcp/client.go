@@ -1439,10 +1439,16 @@ func (t *HTTPTransport) Notify(ctx context.Context, method string, params interf
 	t.captureSessionID(resp.Header)
 	// A notification has no response body; drain (bounded — the bytes are
 	// discarded, but time inside the client timeout shouldn't be burned on a
-	// server streaming garbage past the response cap).
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, int64(httpResponseCaptureCap)))
+	// server streaming garbage past the response cap). The head is kept so a
+	// refusal can quote its reason.
+	head := &headCapture{max: httpStatusBodyCap}
+	_, _ = io.Copy(io.Discard, io.TeeReader(io.LimitReader(resp.Body, int64(httpResponseCaptureCap)), head))
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("notification %s: unexpected status %d", method, resp.StatusCode)
+		// Typed like a refused request, so a 503 here is transient to
+		// IsTransientConnectError (and retried) and a 401 is Unauthorized. A
+		// plain error hid both: one vendor 503 on notifications/initialized
+		// failed a registration that a retry would have completed (#1683).
+		return fmt.Errorf("notification %s: %w", method, &HTTPStatusError{StatusCode: resp.StatusCode, Body: firstLine(bytes.TrimSpace(head.buf))})
 	}
 	return nil
 }

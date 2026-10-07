@@ -298,3 +298,97 @@ func TestRetryTransientConnectSharesOneRunBudget(t *testing.T) {
 		t.Fatal("a charge past the allowance leaves nothing")
 	}
 }
+
+// notifyFlakyMCPServer answers initialize and tools/list normally but refuses
+// the first failNotifies notifications/initialized POSTs with status — the
+// shape that lost kiwi-flights its nightly smoke on 2026-10-06 (#1683).
+func notifyFlakyMCPServer(t *testing.T, failNotifies int32, status int) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var notifies atomic.Int32
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     *int   `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Method == "notifications/initialized" {
+			if notifies.Add(1) <= failNotifies {
+				http.Error(w, "upstream unavailable", status)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]any{"jsonrpc": "2.0", "id": req.ID}
+		switch req.Method {
+		case "initialize":
+			resp["result"] = map[string]any{"protocolVersion": "2024-11-05"}
+		case "tools/list":
+			resp["result"] = map[string]any{"tools": []Tool{{Name: "search", Description: "search"}}}
+		default:
+			resp["result"] = map[string]any{}
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv, &notifies
+}
+
+// A refused notifications/initialized is an HTTPStatusError like a refused
+// request, so the classifier sees its status: 503 transient, 401 Unauthorized
+// and not transient. It used to be a plain error that both missed.
+func TestNotifyRefusalCarriesItsHTTPStatus(t *testing.T) {
+	for _, c := range []struct {
+		status        int
+		transient     bool
+		unauthorized  bool
+		wantBodyQuote string
+	}{
+		{http.StatusServiceUnavailable, true, false, "upstream unavailable"},
+		{http.StatusUnauthorized, false, true, "upstream unavailable"},
+		{http.StatusNotFound, false, false, "upstream unavailable"},
+	} {
+		t.Run(http.StatusText(c.status), func(t *testing.T) {
+			srv, _ := notifyFlakyMCPServer(t, 1, c.status)
+			err := NewHTTPTransport(srv.URL).Notify(context.Background(), "notifications/initialized", map[string]any{})
+			var statusErr *HTTPStatusError
+			if !errors.As(err, &statusErr) || statusErr.StatusCode != c.status {
+				t.Fatalf("err = %v, want an HTTPStatusError %d", err, c.status)
+			}
+			if statusErr.Body != c.wantBodyQuote {
+				t.Fatalf("body = %q, want %q", statusErr.Body, c.wantBodyQuote)
+			}
+			if !strings.HasPrefix(err.Error(), "notification notifications/initialized: ") {
+				t.Fatalf("err = %q, want it to name the notification", err)
+			}
+			if got := IsTransientConnectError(err); got != c.transient {
+				t.Fatalf("IsTransientConnectError = %v, want %v", got, c.transient)
+			}
+			if got := statusErr.Unauthorized(); got != c.unauthorized {
+				t.Fatalf("Unauthorized = %v, want %v", got, c.unauthorized)
+			}
+		})
+	}
+}
+
+func TestRetryTransientConnectRegistersAfterANotifyBlip(t *testing.T) {
+	noConnectRetryDelay(t)
+	srv, notifies := notifyFlakyMCPServer(t, 1, http.StatusServiceUnavailable)
+	client := NewClient()
+	defer func() { _ = client.Close() }()
+	ctx := WithConnectRetry(context.Background())
+	err := RetryTransientConnect(ctx, "kiwi", func(ctx context.Context) error {
+		return client.AddHTTPServerWithOptions(ctx, "kiwi", srv.URL, HTTPServerOptions{})
+	})
+	if err != nil {
+		t.Fatalf("registration failed after one 503 on notifications/initialized: %v", err)
+	}
+	if got := notifies.Load(); got != 2 {
+		t.Fatalf("notifications/initialized attempts = %d, want 2", got)
+	}
+	if !client.HasServer("kiwi") {
+		t.Fatal("server not registered after the retried handshake")
+	}
+}

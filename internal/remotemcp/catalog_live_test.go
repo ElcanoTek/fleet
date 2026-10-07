@@ -6,12 +6,15 @@ package remotemcp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 )
 
@@ -32,6 +35,48 @@ import (
 // headless — those are verified by hand (docs/MCP-CATALOG-STATUS.md).
 
 const catalogLiveEnv = "FLEET_CATALOG_LIVE"
+
+// catalogStrictEnv turns a vendor outage from a warning into a failure, for a
+// deliberate sweep (the workflow's strict_smoke dispatch input) — the same
+// switch the link lint's --strict is.
+const catalogStrictEnv = "FLEET_CATALOG_STRICT"
+
+// vendorOutageMarker starts the skip message of a probe lost to a vendor
+// outage. The workflow greps for it to annotate the run, so keep the two in
+// step.
+const vendorOutageMarker = "VENDOR OUTAGE"
+
+// vendorOutage reports whether a probe failure — after the connect retry —
+// says the vendor is down right now rather than that the listing is wrong: an
+// HTTP 5xx or 429, a timeout, a refused or reset connection, a JSON-RPC error
+// that says it is temporary (mcp.IsTransientConnectError). A host that no
+// longer resolves is the exception: the classifier calls DNS transient for a
+// run's sake, but for a shipped listing a missing host is rot, and the link
+// lint fails an unresolvable docs host for the same reason.
+func vendorOutage(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return false
+	}
+	return mcp.IsTransientConnectError(err)
+}
+
+// failUnlessOutagef fails the subtest on err, except that a vendor outage only
+// skips it with a vendorOutageMarker warning unless FLEET_CATALOG_STRICT=1.
+// One third-party service having a bad night is not a fault in fleet's
+// catalog, and a lane that goes red for it trains people to ignore the alarm
+// (#1683: one 503 from kiwi-flights filed one). What still fails is what the
+// catalog's curation contract covers: an endpoint that answers but is not a
+// working MCP server, refuses an open handshake, lists no tools or a broken
+// schema, or whose host is gone.
+func failUnlessOutagef(t *testing.T, err error, format string, args ...any) {
+	t.Helper()
+	msg := fmt.Sprintf(format, args...)
+	if vendorOutage(err) && os.Getenv(catalogStrictEnv) != "1" {
+		t.Skipf("%s (warning, not a catalog fault; %s=1 fails it): %s", vendorOutageMarker, catalogStrictEnv, msg)
+	}
+	t.Fatal(msg)
+}
 
 // catalogLiveService is the smallest Service that can run probeServer: the
 // same SSRF-safe client and timeout the real one is built with, no store. The
@@ -55,11 +100,23 @@ func catalogLiveService(t *testing.T) (*Service, []clientconfig.RemoteMCPCatalog
 // probeForTest runs one add-time probe under the service's own timeout and
 // returns the tool count; a refused key (at the handshake or at the
 // read-only verification call) comes back as the error.
+//
+// The probe gets the connect retry a run gets (mcp.RetryTransientConnect
+// under a fresh WithConnectRetry allowance): a vendor 503 or 429 that clears
+// within seconds would not have kept the server out of a user's run, so it
+// must not file the nightly alarm either (#1683). What still fails is what a
+// run would also fail on — an outage outlasting the retries, a refusal, a
+// dead host — and the last attempt's error is the one reported.
 func (s *Service) probeForTest(t *testing.T, url, header, query, prefix, credential string) (int, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTPTimeout)
+	ctx, cancel := context.WithTimeout(mcp.WithConnectRetry(context.Background()), s.cfg.HTTPTimeout+mcp.MaxConnectRetryBudget)
 	defer cancel()
-	report, err := s.probeServer(ctx, url, header, query, prefix, credential)
+	var report ProbeReport
+	err := mcp.RetryTransientConnect(ctx, url, func(attemptCtx context.Context) error {
+		var perr error
+		report, perr = s.probeServer(attemptCtx, url, header, query, prefix, credential)
+		return perr
+	})
 	if err == nil {
 		checkCatalogToolSchemas(t, url, report.SchemaIssues)
 	}
@@ -99,7 +156,7 @@ func TestCatalogLiveOpenEntries(t *testing.T) {
 			t.Parallel()
 			tools, err := svc.probeForTest(t, e.URL, "", "", "", "")
 			if err != nil {
-				t.Fatalf("%s: unauthenticated handshake failed (docs: %s): %v", e.URL, e.DocsURL, err)
+				failUnlessOutagef(t, err, "%s: unauthenticated handshake failed (docs: %s): %v", e.URL, e.DocsURL, err)
 			}
 			if tools == 0 {
 				t.Fatalf("%s: handshake succeeded but the server lists no tools", e.URL)
@@ -203,7 +260,7 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			}
 			tools, err := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, key)
 			if err != nil {
-				t.Fatalf("%s: handshake with the fixture key failed: %v", fixtureName(f.Entry, f.Variant), err)
+				failUnlessOutagef(t, err, "%s: handshake with the fixture key failed: %v", fixtureName(f.Entry, f.Variant), err)
 			}
 			if tools == 0 {
 				t.Fatalf("%s: handshake succeeded but the server lists no tools", fixtureName(f.Entry, f.Variant))
