@@ -170,9 +170,11 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		`(( started >= mtime ))`,
 		// …and so is an operator's own limit file written after journald
 		// started; doctor advises (never performs) that restart.
-		`if journald_loaded_since "$operator"; then`,
+		`journald_loaded_since "$f" || loaded=0`,
 		// A cache root symlinked to another volume is measured at its target.
 		`du -sxbD "$p"`,
+		// journalctl's --disk-usage prose is localized; parse it in the C locale.
+		"LC_ALL=C journalctl --disk-usage",
 		// …and the operator's value must win even AFTER fleet's cap is
 		// installed (a 60- drop-in would otherwise override it), the reclaim
 		// is verdicted on a re-measure rather than exit codes, and hygiene

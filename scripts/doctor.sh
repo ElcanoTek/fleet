@@ -1393,7 +1393,8 @@ check_root_build_caches
 # archived + active files together but rotation is lazy, so a capped journal can
 # sit a little over; past this slack it was not reclaimed.
 JOURNAL_CAP_SLACK_BYTES=$((1280 * 1024 * 1024))
-journal_usage() { journalctl --disk-usage 2>/dev/null | sed -nE 's/.* take up ([^ ]+) .*/\1/p' | tail -n1 || true; }
+# LC_ALL=C: the size is parsed out of journalctl's prose, which is localized.
+journal_usage() { LC_ALL=C journalctl --disk-usage 2>/dev/null | sed -nE 's/.* take up ([^ ]+) .*/\1/p' | tail -n1 || true; }
 journal_bytes() { local u; u="$(journal_usage)"; [[ -n "$u" ]] && numfmt --from=iec "${u%B}" 2>/dev/null || true; }
 # reclaim_journal rotates (vacuum only removes ARCHIVED files; --disk-usage
 # also counts the active ones) and vacuums, then re-measures: success means the
@@ -1418,7 +1419,7 @@ journald_loaded_since() {
 check_journal_cap() {
   local src="$SRC_DIR/deploy/journald.conf.d/60-fleet-journal-cap.conf"
   local dst="/etc/systemd/journald.conf.d/60-fleet-journal-cap.conf"
-  local usage bytes operator=""
+  local usage bytes operator="" operator_files="" f loaded
   command -v journalctl >/dev/null 2>&1 && command -v systemd-analyze >/dev/null 2>&1 && [[ -f "$src" ]] || return 0
   usage="$(journal_usage)" bytes="$(journal_bytes)"
   # The operator's own limit, read from journald's MERGED configuration rather
@@ -1427,17 +1428,24 @@ check_journal_cap() {
   # whitespace around '=' is the parser's problem, not ours. Any System/
   # RuntimeMaxUse from a file other than fleet's is the operator's — and fleet's
   # 60- drop-in would override one set in journald.conf or a lower-numbered
-  # drop-in, so theirs wins and ours goes.
-  operator="$(systemd-analyze cat-config systemd/journald.conf 2>/dev/null | awk -v ours="$dst" '
+  # drop-in, so theirs wins and ours goes. Every file that sets one is
+  # collected, in precedence order (the last is the one in effect): journald
+  # has loaded the operator's limit only if it started after all of them.
+  operator_files="$(systemd-analyze cat-config systemd/journald.conf 2>/dev/null | awk -v ours="$dst" '
     /^# \// { file = substr($0, 3); next }
-    /^[[:space:]]*(System|Runtime)MaxUse[[:space:]]*=/ && file != ours { print file; exit }' || true)"
+    /^[[:space:]]*(System|Runtime)MaxUse[[:space:]]*=/ && file != ours && !seen[file]++ { print file }' || true)"
+  operator="$(tail -n1 <<<"$operator_files")"
   if [[ -n "$operator" ]]; then
     if [[ ! -f "$dst" ]]; then
-      # Their file, their restart: doctor only says when journald predates it.
-      if journald_loaded_since "$operator"; then
+      # Their files, their restart: doctor only says when journald predates one.
+      loaded=1
+      while IFS= read -r f; do
+        journald_loaded_since "$f" || loaded=0
+      done <<<"$operator_files"
+      if [[ "$loaded" == "1" ]]; then
         pass "journal size set by the operator in ${operator} (using ${usage:-?})"
       else
-        advise "journal size set by the operator in ${operator}, but systemd-journald started before it was written and is still on its old limit — apply it with: systemctl restart systemd-journald"
+        advise "journal size set by the operator in ${operator}, but systemd-journald started before it (or another file setting a limit) was written and is still on its old limit — apply it with: systemctl restart systemd-journald"
       fi
     elif [[ "$CHECK_ONLY" == "1" ]]; then
       advise "${dst} overrides the operator's journal size limit in ${operator} — a doctor run without --check removes fleet's cap so theirs applies"
@@ -1458,7 +1466,7 @@ check_journal_cap() {
     # start, so a file written after it started (a --no-restart run, or a hand
     # copy) is not loaded however small the journal is right now; and a run
     # whose vacuum failed leaves the old size behind.
-    local loaded=1
+    loaded=1
     if ! journald_loaded_since "$dst"; then
       loaded=0
       if [[ "$CHECK_ONLY" == "1" ]]; then
