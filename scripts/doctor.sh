@@ -1326,7 +1326,7 @@ ROOT_CACHE_RECLAIM_BYTES=$((3 * 1024 * 1024 * 1024))
 # below; called again after a reclaim so the verdict reports what is left, not
 # what was attempted.
 measure_root_build_caches() {
-  local gocache="" gomodcache="" npmcache="" parts=() b p
+  local gocache="" gomodcache="" npmcache="" dnfcache="" parts=() b p
   rc_total=0 rc_summary="none" rc_have_go=0
   if command -v go >/dev/null 2>&1; then
     gocache="$(go env GOCACHE 2>/dev/null || true)"
@@ -1337,7 +1337,16 @@ measure_root_build_caches() {
     npmcache="$(npm config get cache 2>/dev/null || true)"
   fi
   [[ -z "$npmcache" ]] && npmcache="${HOME:-/root}/.npm"
-  for p in "go build cache:$gocache" "go module cache:$gomodcache" "npm cache:$npmcache" "dnf cache:/var/cache/libdnf5" "dnf cache (legacy):/var/cache/dnf"; do
+  # dnf5's system_cachedir is configurable; ask dnf for the active one and fall
+  # back to the defaults (dnf5, then dnf4) when it cannot say.
+  if [[ "$HAVE_DNF" == "1" ]]; then
+    dnfcache="$(dnf --dump-main-config 2>/dev/null | sed -nE 's/^system_cachedir[[:space:]]*=[[:space:]]*//p' | head -n1 || true)"
+  fi
+  if [[ -z "$dnfcache" ]]; then
+    dnfcache=/var/cache/libdnf5
+    [[ -d "$dnfcache" ]] || dnfcache=/var/cache/dnf
+  fi
+  for p in "go build cache:$gocache" "go module cache:$gomodcache" "npm cache:$npmcache" "dnf cache:$dnfcache"; do
     b="$(dir_bytes "${p#*:}")"
     (( b > 0 )) || continue
     rc_total=$(( rc_total + b ))
@@ -1390,7 +1399,8 @@ check_journal_cap() {
   # journald.conf or a lower-numbered drop-in. Theirs wins, so ours goes.
   for f in /etc/systemd/journald.conf /etc/systemd/journald.conf.d/*.conf /run/systemd/journald.conf.d/*.conf /usr/lib/systemd/journald.conf.d/*.conf; do
     [[ -f "$f" && "$f" != "$dst" ]] || continue
-    grep -sqE '^[[:space:]]*SystemMaxUse=' "$f" && { operator="$f"; break; }
+    # systemd's syntax ignores whitespace around '=' (SystemMaxUse = 500M).
+    grep -sqE '^[[:space:]]*SystemMaxUse[[:space:]]*=' "$f" && { operator="$f"; break; }
   done
   if [[ -n "$operator" ]]; then
     if [[ ! -f "$dst" ]]; then
@@ -1407,8 +1417,11 @@ check_journal_cap() {
   elif [[ "$CHECK_ONLY" == "1" ]]; then
     advise "journal uncapped beyond journald's 10%-of-disk default, or ${dst##*/} drifted (using ${usage:-?}) — a doctor run without --check installs ${dst} (SystemMaxUse=1G)"
   elif install -D -m 0644 "$src" "$dst" && systemctl restart systemd-journald; then
-    journalctl --vacuum-size=1G >/dev/null 2>&1 || true
-    fixed "installed ${dst} (SystemMaxUse=1G) and vacuumed the journal (was ${usage:-?}, now $(journal_usage))"
+    if journalctl --vacuum-size=1G >/dev/null 2>&1; then
+      fixed "installed ${dst} (SystemMaxUse=1G) and vacuumed the journal (was ${usage:-?}, now $(journal_usage))"
+    else
+      fail "installed ${dst} (SystemMaxUse=1G) but the vacuum failed — the journal is still ${usage:-?}: journalctl --vacuum-size=1G"
+    fi
   else
     fail "could not install ${dst} or restart systemd-journald"
   fi

@@ -157,7 +157,9 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// ever reported: an image with no container is not proof it is unwanted.
 		"ROOT_CACHE_RECLAIM_BYTES=$((3 * 1024 * 1024 * 1024))",
 		"go clean -cache -testcache -modcache",
-		`grep -sqE '^[[:space:]]*SystemMaxUse=' "$f"`,
+		`grep -sqE '^[[:space:]]*SystemMaxUse[[:space:]]*=' "$f"`,
+		"but the vacuum failed",
+		"dnf --dump-main-config",
 		// …and the operator's value must win even AFTER fleet's cap is
 		// installed (a 60- drop-in would otherwise override it), the reclaim
 		// is verdicted on a re-measure rather than exit codes, and hygiene
