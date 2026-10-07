@@ -89,6 +89,9 @@ MAINT_TIMER="fleet-maintenance.timer"
 . "$SCRIPT_DIR/lib/caddyfile.sh"
 # shellcheck source=lib/bundle.sh
 . "$SCRIPT_DIR/lib/bundle.sh"
+# Idempotent safe.directory trust for the root-run git calls below.
+# shellcheck source=lib/git.sh
+. "$SCRIPT_DIR/lib/git.sh"
 NODE_FLOOR="$(fleet_node_major_want "$SRC_DIR" || true)"
 if [[ -z "$NODE_FLOOR" ]]; then
   # No silent default. A hardcoded fallback would point at whatever major was
@@ -1713,7 +1716,7 @@ step "9/9  Source freshness + build identity"
 # Report-only in every mode: pulling and rebuilding is `fleet update`'s job,
 # and doctor silently kicking off a deploy would be a surprise.
 if [[ -e "$SRC_DIR/.git" ]]; then
-  git config --global --add safe.directory "$SRC_DIR" 2>/dev/null || true
+  git_trust_dir "$SRC_DIR"
   # --tags because the build stamps its version from the release tags
   # (docs/VERSIONING.md): a checkout holding the commits but not the tag would
   # build — and the identity check below would compare against — `dev+g<sha>`.
