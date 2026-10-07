@@ -164,8 +164,9 @@ Division of labor across the three health verbs:
     `--check` advises instead.
   - **The journal** gets the shipped `deploy/journald.conf.d/60-fleet-journal-cap.conf`
     (`SystemMaxUse=1G` and `RuntimeMaxUse=1G`, so a volatile journal is capped
-    too). It is installed **only** when the operator has set no limit of their
-    own, read from journald's *merged* configuration
+    too). It is installed **only** when no other file sets a limit (the
+    operator's, or one a vendor ships in `/usr/lib`; doctor defers to either),
+    read from journald's *merged* configuration
     (`systemd-analyze cat-config`). That applies systemd's precedence, so a
     vendor drop-in shadowed by an `/etc` file or a `/dev/null` link is not
     mistaken for an active setting. If an operator adds a limit later, doctor

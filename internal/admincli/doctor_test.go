@@ -179,10 +179,12 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// installed (a 60- drop-in would otherwise override it), the reclaim
 		// is verdicted on a re-measure rather than exit codes, and hygiene
 		// runs before the headroom verdict so a reclaimed box is not failed.
-		`removed ${dst} so the operator's limit in ${operator} applies`,
+		`removed ${dst} so the explicit limit in ${operator} applies`,
 		"root build cache reclaim left",
 		"{{.Store.GraphRoot}}",
-		`advise "  review: podman images   —   reclaim if nothing of yours uses them: podman system prune -a"`,
+		// Build leftovers are often intermediate images, hidden without -a.
+		`podman images -a -q`,
+		`advise "  review: podman images -a   —   reclaim if nothing of yours uses them: podman system prune -a"`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("doctor.sh must contain %q", want)

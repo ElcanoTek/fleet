@@ -1426,9 +1426,10 @@ check_journal_cap() {
   # than raw files: cat-config applies systemd's precedence, so a vendor drop-in
   # shadowed by a same-named /etc file or a /dev/null link never appears, and
   # whitespace around '=' is the parser's problem, not ours. Any System/
-  # RuntimeMaxUse from a file other than fleet's is the operator's — and fleet's
-  # 60- drop-in would override one set in journald.conf or a lower-numbered
-  # drop-in, so theirs wins and ours goes. Every file that sets one is
+  # RuntimeMaxUse from a file other than fleet's is an explicit choice — the
+  # operator's, or a vendor's in /usr/lib (still a limit, not journald's 10%
+  # default) — and fleet's 60- drop-in would override one set in journald.conf
+  # or a lower-numbered drop-in, so theirs wins and ours goes. Every file that sets one is
   # collected, in precedence order (the last is the one in effect): journald
   # has loaded the operator's limit only if it started after all of them.
   operator_files="$(systemd-analyze cat-config systemd/journald.conf 2>/dev/null | awk -v ours="$dst" '
@@ -1443,21 +1444,21 @@ check_journal_cap() {
         journald_loaded_since "$f" || loaded=0
       done <<<"$operator_files"
       if [[ "$loaded" == "1" ]]; then
-        pass "journal size set by the operator in ${operator} (using ${usage:-?})"
+        pass "journal size limit set explicitly in ${operator} — not fleet's; doctor defers to it (using ${usage:-?})"
       else
-        advise "journal size set by the operator in ${operator}, but systemd-journald started before it (or another file setting a limit) was written and is still on its old limit — apply it with: systemctl restart systemd-journald"
+        advise "journal size limit set explicitly in ${operator}, but systemd-journald started before it (or another file setting a limit) was written and is still on its old limit — apply it with: systemctl restart systemd-journald"
       fi
     elif [[ "$CHECK_ONLY" == "1" ]]; then
-      advise "${dst} overrides the operator's journal size limit in ${operator} — a doctor run without --check removes fleet's cap so theirs applies"
+      advise "${dst} overrides the explicit journal size limit in ${operator} — a doctor run without --check removes fleet's cap so theirs applies"
     elif ! rm -f "$dst"; then
-      fail "could not remove ${dst} (it overrides the operator's journal size limit in ${operator})"
+      fail "could not remove ${dst} (it overrides the explicit journal size limit in ${operator})"
     elif [[ "$NO_RESTART" == "1" ]]; then
-      fixed "removed ${dst} so the operator's limit in ${operator} applies"
+      fixed "removed ${dst} so the explicit limit in ${operator} applies"
       advise "  systemd-journald restart held by --no-restart — it applies on: systemctl restart systemd-journald"
     elif systemctl restart systemd-journald; then
-      fixed "removed ${dst} so the operator's limit in ${operator} applies"
+      fixed "removed ${dst} so the explicit limit in ${operator} applies"
     else
-      fail "removed ${dst} but could not restart systemd-journald to apply the operator's limit"
+      fail "removed ${dst} but could not restart systemd-journald to apply the explicit limit"
     fi
     return 0
   fi
@@ -1524,7 +1525,7 @@ check_journal_cap
 check_root_podman_store() {
   local images containers size graphroot
   [[ "$SERVICE_USER" != "root" ]] && command -v podman >/dev/null 2>&1 || return 0
-  images="$(podman images -q 2>/dev/null | wc -l || true)"
+  images="$(podman images -a -q 2>/dev/null | wc -l || true)"
   (( images > 0 )) || return 0
   containers="$(podman ps -aq 2>/dev/null | wc -l || true)"
   # The CONFIGURED graph root (storage.conf may move it), the same store the
@@ -1532,7 +1533,7 @@ check_root_podman_store() {
   graphroot="$(podman info --format '{{.Store.GraphRoot}}' 2>/dev/null || true)"
   size="$(dir_bytes "${graphroot:-/var/lib/containers/storage}")"
   advise "root's podman store holds ${images} image(s) and ${containers} container(s), $(human_bytes "$size") — fleet sandboxes run in ${SERVICE_USER}'s rootless store, so these are not fleet's"
-  advise "  review: podman images   —   reclaim if nothing of yours uses them: podman system prune -a"
+  advise "  review: podman images -a   —   reclaim if nothing of yours uses them: podman system prune -a"
 }
 check_root_podman_store
 
