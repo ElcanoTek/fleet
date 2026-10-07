@@ -194,7 +194,7 @@ Stream events map onto `session/update`:
 | `text.delta` | `agent_message_chunk` |
 | `reasoning.delta` | `agent_thought_chunk` |
 | `tool.call` / `tool.result` | `tool_call` (title = tool name, `in_progress`) / `tool_call_update` (`completed` or `failed`; `pending` for a call that fleet staged as an approval card, whose placeholder result is not a failure; a call whose staging itself failed stays `failed`) |
-| `text.replace` | Nothing when it matches what was streamed; the missing suffix when it extends it; otherwise the final text after a `— revised answer —` line (see below) |
+| `text.replace` | fleet's final text is the turn's last model step that wrote text, not the whole turn, so it is compared with the text streamed since the last tool call (or with the latest step that streamed text, and failing that with the whole turn), ignoring surrounding whitespace. Nothing when it matches; the missing suffix when it extends it; otherwise the final text after a `— revised answer —` line (see below) |
 | `tool.approval_required` | When the turn ends, however it ends (completed, cancelled, timed out or errored), a text pointer to the approval in fleet. A `preview_email` card is display-only (its one action is Dismiss), so it gets a "draft preview is open, nothing was sent" pointer, never approve instructions, and its tool call shows `completed`. |
 | `turn.policy_blocked` | Stop reason `refusal` |
 
@@ -316,10 +316,15 @@ Deviations and limits:
   file. It is never read from a different deployment's file. ACP's
   `session/request_permission` is deliberately not used to re-implement the
   default-deny card.
-- **Streamed text is append-only.** ACP cannot retract a chunk. When an
-  enforcement round replaces a draft that was already streamed, the client
-  gets the final answer again after a `— revised answer —` line, so it ends
-  on what fleet persisted.
+- **Streamed text is append-only.** ACP cannot retract a chunk. When fleet's
+  final answer replaces a draft that was already streamed (for example, it
+  stripped a tool call the model wrote into its final answer, or retried a
+  model call that had already streamed part of a reply), the client gets the
+  final answer again after a `— revised answer —` line, so it ends on what
+  fleet persisted. Text a model writes before a tool call also stays in the
+  client's transcript, as does a tool call it wrote as text that fleet then
+  ran for real; the web chat drops both when the turn ends, because fleet's
+  final answer is only the last step that wrote text.
 - **Tool detail stays in the run log.** Tool calls appear as titled
   `tool_call` updates with a status. Inputs and outputs are not forwarded.
 - **The client's filesystem and terminal are not used.** Tool calls run in
