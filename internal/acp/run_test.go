@@ -114,11 +114,14 @@ func TestRunSpeaksACPOnStdio(t *testing.T) {
 
 // TestErrorDataOnTheWire reads errors as the client gets them off stdout. An
 // error whose message holds the whole reason has no data key at all, not
-// "data":{} or "data":null (Zed would print either beside the message, and
-// the SDK client decodes a missing data and "data":null alike, so the
-// harness's tests cannot tell them apart). A cut message keeps the whole
-// reason in data.error, and errors fleet acp does not word itself keep the
-// data acp-go-sdk gives them.
+// "data":{} or "data":null. Zed prints a non-null data beside the message,
+// so "data":{} would show as a stray "{}". And Neovim's CodeCompanion indexes
+// data.error whenever data decodes to anything but nil, which a JSON null
+// does (vim.NIL), so "data":null would raise inside its error handler and
+// the reason would never show. The SDK client decodes a missing data and
+// "data":null alike, so the harness's other tests cannot tell them apart. A
+// cut message keeps the whole reason in data.error, and errors fleet acp
+// does not word itself keep the data acp-go-sdk gives them.
 func TestErrorDataOnTheWire(t *testing.T) {
 	longFailure := "the provider refused the request. " + strings.Repeat("Its detail runs on and on. ", 20)
 	srv := httptest.NewServer(&fakeFleet{t: t, turn: func(w *sseWriter, _ *http.Request) {
@@ -191,7 +194,7 @@ func TestErrorDataOnTheWire(t *testing.T) {
 		t.Fatalf("session/new reply = %s", res)
 	}
 
-	for _, tc := range []struct {
+	for i, tc := range []struct {
 		name, params, message string
 		code                  string
 	}{
@@ -208,7 +211,7 @@ func TestErrorDataOnTheWire(t *testing.T) {
 			message: `fleet acp has no session "nope" (it was closed, or opened by an earlier fleet acp process); start a new session`,
 		},
 	} {
-		_, e := call(3, "session/prompt", tc.params)
+		_, e := call(10+i, "session/prompt", tc.params)
 		if string(e["code"]) != tc.code || str(e["message"]) != tc.message {
 			t.Errorf("%s: error = %s, want code %s, message %q", tc.name, wire(e), tc.code, tc.message)
 		}

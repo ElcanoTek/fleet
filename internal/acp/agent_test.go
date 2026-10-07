@@ -959,6 +959,41 @@ func TestErrorMessageIsOneConciseLine(t *testing.T) {
 	})
 }
 
+// data is left out exactly when message holds the whole reason. The bound is
+// in runes of the reason on one line, so it is pinned with two-byte runes (a
+// byte count would cut them early) and with a reason whose line breaks put it
+// over the bound until they are collapsed (a raw count would cut it).
+func TestReasonErrorKeepsDataOnlyWhenCut(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason, message string
+		cut                   bool
+	}{
+		{name: "400 two-byte runes", reason: strings.Repeat("é", maxErrorMessage), message: strings.Repeat("é", maxErrorMessage)},
+		{name: "401 two-byte runes", reason: strings.Repeat("é", maxErrorMessage+1), cut: true},
+		{
+			name:    "over the bound until line breaks collapse",
+			reason:  strings.Repeat("abc\n\n\n\n", 100),
+			message: strings.TrimSuffix(strings.Repeat("abc ", 100), " "),
+		},
+		{name: "empty", reason: "", message: "Internal error"},
+		{name: "only whitespace", reason: " \n\t ", message: "Internal error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := reasonError(acpsdk.NewInternalError, tc.reason)
+			if !tc.cut {
+				if e.Message != tc.message || e.Data != nil {
+					t.Errorf("message = %q, data = %#v; want %q and no data", e.Message, e.Data, tc.message)
+				}
+				return
+			}
+			data, ok := e.Data.(map[string]any)
+			if !strings.HasSuffix(e.Message, "…") || !ok || len(data) != 1 || data["error"] != tc.reason {
+				t.Errorf("message = %q, data = %#v; want a cut message and data {\"error\": the whole reason}", e.Message, e.Data)
+			}
+		})
+	}
+}
+
 // A sentence ends at a full stop, '!' or '?' before a capitalised word, and
 // not inside parentheses or backticks; wholeSentences keeps as many as fit.
 func TestWholeSentences(t *testing.T) {

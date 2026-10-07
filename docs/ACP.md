@@ -242,7 +242,7 @@ otherwise, and agent-shell shows `message`.
 | `--timeout` exceeded | The turn is stopped server-side, then an internal error names the timeout and the flag. If the Stop fails, the error says the turn may still be running and where to stop it, then why the Stop failed. |
 | A prompt beyond the 20 waiting for a session | Internal error saying the session already has a prompt running and 20 waiting (see `session/prompt`) |
 | Client-supplied `mcpServers`; an image, audio or binary blob in a prompt | Invalid params (-32602) naming what is refused |
-| Unknown session id | -32002 resource not found, naming the session and saying it was closed or opened by an earlier `fleet acp` process. Its `data` follows the rule above too, so it no longer carries `{"sessionId": …}`: the client sent the id, and `message` names it. |
+| Unknown session id | -32002 resource not found, naming the session and saying it was closed or opened by an earlier `fleet acp` process. Like every error here, it has no `data` unless its message had to be cut: the client sent the id, and `message` names it. |
 | A request acp-go-sdk cannot decode or validate | The SDK's own `Invalid params`, with the generic message and the decoder's text in `data.error`: the SDK refuses the request before `fleet acp` sees it |
 | An unsupported method | -32601 with the generic message `Method not found` and the method in `data.method`, whether `fleet acp` itself or the SDK answers it |
 

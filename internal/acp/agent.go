@@ -1192,14 +1192,15 @@ func requestError(err error) error {
 //
 // data is left out when message holds the whole reason (on one line: only
 // whitespace changed), and is {"error": reason} only when message had to be
-// cut. Zed shows an error as its message followed by data as JSON, so a
-// data.error beside a whole message showed the reason twice; Neovim's
-// CodeCompanion (data.error when present, else message) and agent-shell
-// (message) lose nothing without it. A cut message keeps data.error, so the
-// whole reason still reaches a client that reads it. The omitted data is the
-// untyped nil: RequestError.Data is an `any` with omitempty, which drops only
-// a nil interface, so an empty map would go out as "data":{} and a nil map as
-// "data":null.
+// cut. An empty reason has nothing to carry: message stays the kind's name and
+// there is no data either. Zed shows an error as its message followed by data
+// as JSON, so a data.error beside a whole message showed the reason twice;
+// Neovim's CodeCompanion (data.error when present, else message) and
+// agent-shell (message) lose nothing without it. A cut message keeps
+// data.error, so the whole reason still reaches a client that reads it. The
+// omitted data is the untyped nil: RequestError.Data is an `any` with
+// omitempty, which drops only a nil interface, so an empty map would go out as
+// "data":{} and a nil map as "data":null.
 func reasonError(kind func(data any) *acpsdk.RequestError, reason string) *acpsdk.RequestError {
 	e := kind(map[string]any{"error": reason})
 	m := errorMessage(reason)
