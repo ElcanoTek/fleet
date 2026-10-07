@@ -10,11 +10,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/yuin/goldmark"
@@ -32,17 +34,24 @@ type fakeFleet struct {
 	t *testing.T
 	// turn writes one turn's frames; nil means the default tool-using turn.
 	turn func(w *sseWriter, r *http.Request)
-	// cancelStatus is what the Stop endpoint answers (0 = 204).
+	// cancelStatus is what the Stop endpoint answers (0 = 204), with
+	// cancelBody as its body.
 	cancelStatus int
+	cancelBody   string
 	// cancelHold, when set, holds every Stop, once recorded, until it is
 	// closed: a slow or hung server. A Stop whose caller gives up ends.
 	cancelHold chan struct{}
+	// me answers GET /me, session/new's identity check; nil answers 404, as a
+	// server older than /me does, which opens the session unchecked.
+	me func(w http.ResponseWriter, r *http.Request)
 
 	mu      sync.Mutex
 	chats   []chatReq
 	bodies  []string // each POST /chat body, raw
 	cancels []string
 	headers []http.Header
+	// meHeaders records every GET /me's headers, nil handler included.
+	meHeaders []http.Header
 }
 
 type chatReq struct {
@@ -69,6 +78,15 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	case r.URL.Path == "/client-config":
 		_, _ = io.WriteString(w, `{"models":{"default_model":"test/default"}}`)
+	case r.URL.Path == "/me":
+		f.mu.Lock()
+		f.meHeaders = append(f.meHeaders, r.Header.Clone())
+		f.mu.Unlock()
+		if f.me == nil {
+			http.NotFound(w, r)
+			return
+		}
+		f.me(w, r)
 	case r.URL.Path == "/chat":
 		raw, _ := io.ReadAll(r.Body)
 		var body chatReq
@@ -107,6 +125,7 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if f.cancelStatus != 0 {
 			w.WriteHeader(f.cancelStatus)
+			_, _ = io.WriteString(w, f.cancelBody)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -167,6 +186,7 @@ func (c *recordingClient) WaitForTerminalExit(context.Context, acpsdk.WaitForTer
 
 type harness struct {
 	fleet  *fakeFleet
+	srv    *httptest.Server // the fake server, which a test may stop (Close is idempotent)
 	client *recordingClient
 	conn   *acpsdk.ClientSideConnection
 	agent  *Agent
@@ -181,7 +201,9 @@ type harness struct {
 type harnessOpts struct {
 	turn         func(w *sseWriter, r *http.Request)
 	cancelStatus int
-	cancelHold   chan struct{} // see fakeFleet.cancelHold
+	cancelBody   string                                       // see fakeFleet.cancelStatus
+	cancelHold   chan struct{}                                // see fakeFleet.cancelHold
+	me           func(w http.ResponseWriter, r *http.Request) // see fakeFleet.me
 	cfgErr       error
 	publicURL    string
 	timeout      time.Duration
@@ -198,7 +220,7 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 	prevSettle := stopSettleWait
 	stopSettleWait = 50 * time.Millisecond
 	t.Cleanup(func() { stopSettleWait = prevSettle })
-	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus, cancelHold: o.cancelHold}
+	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus, cancelBody: o.cancelBody, cancelHold: o.cancelHold, me: o.me}
 	srv := httptest.NewServer(ff)
 	t.Cleanup(srv.Close)
 	serverURL := srv.URL
@@ -224,7 +246,7 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 		}
 	})
 	return &harness{
-		fleet: ff, client: rc, conn: conn, agent: ag,
+		fleet: ff, srv: srv, client: rc, conn: conn, agent: ag,
 		hangUp: func() { _ = c2aW.Close() },
 		raw: func(line string) {
 			if _, err := io.WriteString(c2aW, line+"\n"); err != nil {
@@ -408,9 +430,19 @@ func TestTextReplaceReconcilesAppendOnly(t *testing.T) {
 		final  string
 		want   string
 	}{
+		{"identical adds nothing", []string{"Hello ", "there"}, "Hello there", "Hello there"},
 		{"extension sends the suffix", []string{"Hel"}, "Hello", "Hello"},
 		{"no deltas sends the final text", nil, "Final", "Final"},
 		{"divergent draft gets a revised answer", []string{"first draft"}, "better answer", "first draft" + revisedMarker + "better answer"},
+		// fleet trims its final text; whitespace streamed around it is not a
+		// revision.
+		{"surrounding whitespace adds nothing", []string{"\n\nHello there", "\n"}, "Hello there", "\n\nHello there\n"},
+		// Whitespace the client was already streamed is not sent again.
+		{"extension keeps streamed whitespace", []string{"Hello\n\n"}, "Hello\n\nWorld", "Hello\n\nWorld"},
+		// Streamed trailing whitespace final does not have is a difference
+		// once anything follows it: a tail appended after it would read as
+		// neither.
+		{"an extension past trailing whitespace is a revision", []string{"Hello\n\n"}, "Hello world", "Hello\n\n" + revisedMarker + "Hello world"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -427,6 +459,154 @@ func TestTextReplaceReconcilesAppendOnly(t *testing.T) {
 			}
 			if got := h.client.text(); got != tc.want {
 				t.Errorf("text = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTextReplaceComparesTheFinalStep pins what text.replace is reconciled
+// against in a turn with tool calls. fleet's final text is the latest model
+// step that wrote text (agentcore's completed response), not everything the
+// turn streamed: the narration a model writes before a tool call is streamed
+// but is not part of it. Comparing against the whole turn sent every such
+// turn's answer twice, after a "— revised answer —" line (seen live from
+// Emacs agent-shell: text, run_python, then the answer, twice).
+func TestTextReplaceComparesTheFinalStep(t *testing.T) {
+	// A script entry is a text.delta, except toolStep (one tool.call plus its
+	// tool.result, as fleet's loop streams them after the step's text) and
+	// retryStep (turn.retry: an attempt abandoned after streaming part of a
+	// reply, which the re-driven attempt then streams again).
+	const (
+		toolStep  = "\x00tool"
+		retryStep = "\x00retry"
+	)
+	answer := "Great! The result is **391**. Here are four sentences about the sea:\n\n1. The sea is 391 shades of blue."
+	cases := []struct {
+		name   string
+		script []string
+		final  string
+		want   string
+	}{
+		{
+			// The live turn's shape: narration, run_python, then the answer.
+			// Nothing is added, and the answer is on the client once.
+			name:   "narration before a tool, then the answer",
+			script: []string{"I'll compute 17*23 and then write ", "sentences about the sea.", toolStep, "Great! The result is **391**. ", "Here are four sentences about the sea:\n\n1. The sea is 391 shades of blue."},
+			final:  answer,
+			want:   "I'll compute 17*23 and then write sentences about the sea." + answer,
+		},
+		{
+			name:   "the step after a tool opens with a blank line",
+			script: []string{"Let me check.", toolStep, "\n\n" + answer, "\n"},
+			final:  answer,
+			want:   "Let me check.\n\n" + answer + "\n",
+		},
+		{
+			name:   "several tool rounds with text between",
+			script: []string{"Let me look.", toolStep, "Found it; computing now.", toolStep, toolStep, "The answer is 42."},
+			final:  "The answer is 42.",
+			want:   "Let me look.Found it; computing now.The answer is 42.",
+		},
+		{
+			// The step after the last tool wrote nothing, so fleet's final text
+			// is the latest step that did (fantasy's finalResponse).
+			name:   "no text after the last tool",
+			script: []string{"Let me look.", toolStep, "Staged the email for approval.", toolStep},
+			final:  "Staged the email for approval.",
+			want:   "Let me look.Staged the email for approval.",
+		},
+		{
+			// A step of only whitespace wrote no text, as fantasy's
+			// hasNonBlankText reads it: the latest step that did is the final
+			// text.
+			name:   "a blank step after the last tool",
+			script: []string{"Let me look.", toolStep, "Staged the email for approval.", toolStep, "\n\n"},
+			final:  "Staged the email for approval.",
+			want:   "Let me look.Staged the email for approval.\n\n",
+		},
+		{
+			// Nor does a blank step closed by a tool displace the step before it.
+			name:   "a blank step between tools",
+			script: []string{"Let me look.", toolStep, "The answer is 42.", toolStep, "\n", toolStep},
+			final:  "The answer is 42.",
+			want:   "Let me look.The answer is 42.\n",
+		},
+		{
+			name:   "the final step is extended",
+			script: []string{"Let me look.", toolStep, "The answer"},
+			final:  "The answer is 42.",
+			want:   "Let me look.The answer is 42.",
+		},
+		{
+			// A provider that returns no completed text: fleet's final text is
+			// then everything the round streamed, trimmed.
+			name:   "the whole turn's text",
+			script: []string{"I'll check.", toolStep, " Done."},
+			final:  "I'll check. Done.",
+			want:   "I'll check. Done.",
+		},
+		{
+			// The whole turn is the final text, and its last step is a prefix
+			// of it: already shown, not an extension by the last step.
+			name:   "the whole turn's text repeats the last step",
+			script: []string{"A", toolStep, "A"},
+			final:  "AA",
+			want:   "AA",
+		},
+		{
+			name:   "nothing streamed around the tools",
+			script: []string{toolStep, toolStep},
+			final:  "Done.",
+			want:   "Done.",
+		},
+		{
+			// fleet replaced the final step's text (e.g. stripped a tool call
+			// the model wrote as text): one marker, then the final text.
+			name:   "a revised final step",
+			script: []string{"I'll compute it.", toolStep, "The result is 391. call:run_python{}"},
+			final:  "The result is 391.",
+			want:   "I'll compute it.The result is 391. call:run_python{}" + revisedMarker + "The result is 391.",
+		},
+		{
+			name:   "a reply retried after streaming part of it",
+			script: []string{"Let me look.", toolStep, "The answer", retryStep, "The answer is 42."},
+			final:  "The answer is 42.",
+			want:   "Let me look.The answerThe answer is 42." + revisedMarker + "The answer is 42.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+				w.emit("conversation", map[string]any{"id": "conv-steps"})
+				w.emit("turn.started", map[string]any{"turn_id": "turn-steps"})
+				for i, s := range tc.script {
+					switch s {
+					case toolStep:
+						id := fmt.Sprintf("call-%d", i)
+						w.emit("tool.call", map[string]any{"id": id, "name": "run_python", "input": `{"code":"17*23"}`})
+						w.emit("tool.result", map[string]any{"id": id, "name": "run_python", "text": "391", "is_err": false})
+					case retryStep:
+						w.emit("turn.retry", map[string]any{"delay_ms": 0})
+					default:
+						w.emit("text.delta", map[string]any{"text": s})
+					}
+				}
+				w.emit("text.replace", map[string]any{"text": tc.final})
+				w.emit("turn.completed", map[string]any{})
+			}})
+			if _, err := h.prompt(h.newSession(t), "x"); err != nil {
+				t.Fatal(err)
+			}
+			got := h.client.text()
+			if got != tc.want {
+				t.Errorf("text = %q, want %q", got, tc.want)
+			}
+			markers := strings.Count(got, revisedMarker)
+			if wantMarkers := strings.Count(tc.want, revisedMarker); markers != wantMarkers {
+				t.Errorf("%d revised-answer markers, want %d", markers, wantMarkers)
+			}
+			if markers == 0 && strings.Count(got, tc.final) != 1 {
+				t.Errorf("the final text is on the client %d times, want once: %q", strings.Count(got, tc.final), got)
 			}
 		})
 	}
@@ -595,6 +775,599 @@ func TestFailuresBecomeClearErrors(t *testing.T) {
 			t.Fatalf("err = %v, want resource not found", err)
 		}
 	})
+}
+
+// wireError is err as the ACP client decoded it off the wire.
+func wireError(t *testing.T, err error) *acpsdk.RequestError {
+	t.Helper()
+	var re *acpsdk.RequestError
+	if !errors.As(err, &re) {
+		t.Fatalf("err = %v, want a JSON-RPC error", err)
+	}
+	return re
+}
+
+// resolveErr is the error `fleet acp` starts with when its config does not
+// resolve: the real chattui.Resolve, with nothing in the environment and no
+// env file to read.
+func resolveErr(t *testing.T, f chattui.Flags) error {
+	t.Helper()
+	_, err := chattui.Resolve(f, func(string) string { return "" },
+		func(string) ([]byte, error) { return nil, os.ErrNotExist },
+		func(string, ...string) (map[string]string, error) { return nil, os.ErrNotExist })
+	if err == nil {
+		t.Fatal("the config resolved; want an error")
+	}
+	return err
+}
+
+// Every error fleet acp answers with carries its reason in the JSON-RPC
+// message: some clients show code and message alone (Emacs's agent-shell
+// hides data behind a Details button), and with the SDK's generic message an
+// unknown user, a viewer, a wrong token and a missing email all read
+// "Authentication required". code is as before. data is left out when the
+// message holds the whole reason, since Zed prints data beside the message
+// and would show the reason twice; a cut message keeps it whole in data.error.
+func TestErrorMessagesCarryTheReason(t *testing.T) {
+	refuse := func(status int, contentType, body string) func(w *sseWriter, _ *http.Request) {
+		return func(w *sseWriter, _ *http.Request) {
+			w.w.Header().Set("Content-Type", contentType)
+			w.w.WriteHeader(status)
+			_, _ = io.WriteString(w.w, body)
+		}
+	}
+	promptWith := func(o harnessOpts, blocks ...acpsdk.ContentBlock) func(t *testing.T) error {
+		if len(blocks) == 0 {
+			blocks = []acpsdk.ContentBlock{acpsdk.TextBlock("x")}
+		}
+		return func(t *testing.T) error {
+			h := newHarness(t, o)
+			_, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: h.newSession(t), Prompt: blocks})
+			return err
+		}
+	}
+	terminal := func(frame, message string) func(w *sseWriter, _ *http.Request) {
+		return func(w *sseWriter, _ *http.Request) {
+			w.emit("conversation", map[string]any{"id": "c"})
+			w.emit(frame, map[string]any{"message": message})
+		}
+	}
+	noEmail := resolveErr(t, chattui.Flags{})
+	noToken := resolveErr(t, chattui.Flags{Email: "bot@example.com", EnvFile: "/nonexistent/fleet.env"})
+	longFailure := "the provider refused the request. " + strings.Repeat("Its detail runs on and on. ", 20)
+	// A proxy's 502 page, padded the way nginx pads its error pages: longer
+	// than the 512 bytes chattui quotes of a refused Stop.
+	proxyPage := "<html>\n<head><title>502 Bad Gateway</title></head>\n<body>\n<center><h1>502 Bad Gateway</h1></center>\n<hr><center>nginx</center>\n</body>\n</html>\n" +
+		strings.Repeat("<!-- a padding to disable MSIE and Chrome friendly error page -->\n", 6)
+
+	for _, tc := range []struct {
+		name string
+		err  func(t *testing.T) error
+		code int
+		// message is the message wanted: the whole reason, on one line, so
+		// the error has no data.
+		message string
+		// messagePrefix, when set, is message's start instead (the rest is
+		// the OS's text).
+		messagePrefix string
+		// data is data.error, exactly, for a reason too long for message:
+		// message is cut, and data.error carries the reason whole.
+		data string
+		// dataPrefix, when set, is data.error's start instead (the rest is a
+		// long quoted reply).
+		dataPrefix string
+		// messageHas, when set, replaces message: what a cut message must
+		// still say.
+		messageHas []string
+	}{
+		{
+			name:    "403 wrong token",
+			err:     promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "text/plain", "forbidden\n")}),
+			code:    -32000,
+			message: "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server",
+		},
+		{
+			name:    "403 not a fleet user",
+			err:     promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "application/json", `{"error":"not_a_member"}`)}),
+			code:    -32000,
+			message: "server rejected the request (403): bot@example.com is not a fleet user; an admin can add it with `fleet chat user add bot@example.com --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user",
+		},
+		{
+			name:    "403 viewer",
+			err:     promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "application/json", `{"error":"read_only"}`)}),
+			code:    -32000,
+			message: "server rejected the request (403): bot@example.com has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role bot@example.com --role member`",
+		},
+		{
+			name:    "403 IP filter",
+			err:     promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "text/plain", "Access denied\n")}),
+			code:    -32000,
+			message: "server rejected the request (403): the server's IP access control (FLEET_IP_ALLOWLIST / FLEET_IP_DENYLIST) does not admit this client's address; connect from an admitted address, or ask an admin to admit this one",
+		},
+		{
+			// A proxy's page over several lines, echoing the token: message is
+			// the whole reason on one line, with the token redacted, so there
+			// is no data.
+			name:    "401 from a proxy",
+			err:     promptWith(harnessOpts{turn: refuse(http.StatusUnauthorized, "text/html", "<html>\n  <h1>401</h1>\n  Authorization: Bearer test-token\n</html>\n")}),
+			code:    -32000,
+			message: "not authorized (401) for bot@example.com: <html> <h1>401</h1> Authorization: Bearer [redacted] </html>",
+		},
+		{
+			name: "missing email at session/new",
+			err: func(t *testing.T) error {
+				h := newHarness(t, harnessOpts{cfgErr: noEmail})
+				if _, err := h.conn.Initialize(context.Background(), acpsdk.InitializeRequest{ProtocolVersion: 1}); err != nil {
+					t.Fatalf("initialize must still succeed: %v", err)
+				}
+				_, err := h.conn.NewSession(context.Background(), acpsdk.NewSessionRequest{Cwd: "/", McpServers: []acpsdk.McpServer{}})
+				return err
+			},
+			code:    -32000,
+			message: "no user email: pass --email <you@example.com> or set FLEET_USER_EMAIL (your audit identity, so it is never guessed)",
+		},
+		{
+			name: "missing token at session/prompt",
+			err: func(t *testing.T) error {
+				h := newHarness(t, harnessOpts{cfgErr: noToken})
+				_, err := h.prompt("fleet-acp-any", "x")
+				return err
+			},
+			code:    -32000,
+			message: noToken.Error(),
+		},
+		{
+			name:    "turn.error",
+			err:     promptWith(harnessOpts{turn: terminal("turn.error", "budget exhausted")}),
+			code:    -32603,
+			message: "turn failed: budget exhausted",
+		},
+		{
+			name:    "turn.model_required",
+			err:     promptWith(harnessOpts{turn: terminal("turn.model_required", "the model is no longer offered; pick another")}),
+			code:    -32603,
+			message: "turn requires another model: the model is no longer offered; pick another",
+		},
+		{
+			// Too long for one line: message keeps the whole sentences that
+			// fit (397 runes), and data.error the whole reason.
+			name:    "a long turn.error",
+			err:     promptWith(harnessOpts{turn: terminal("turn.error", longFailure)}),
+			code:    -32603,
+			data:    "turn failed: " + longFailure,
+			message: "turn failed: the provider refused the request." + strings.Repeat(" Its detail runs on and on.", 13),
+		},
+		{
+			name:    "any other status",
+			err:     promptWith(harnessOpts{turn: refuse(http.StatusInternalServerError, "text/plain", "database unavailable\n")}),
+			code:    -32603,
+			message: "server returned 500: database unavailable",
+		},
+		{
+			name:          "daemon down",
+			err:           promptWith(harnessOpts{serverURL: "http://127.0.0.1:1"}),
+			code:          -32603,
+			messagePrefix: "connect http://127.0.0.1:1: ",
+		},
+		{
+			name:    "--timeout",
+			err:     promptWith(harnessOpts{turn: blockingTurn(make(chan struct{})), timeout: 200 * time.Millisecond}),
+			code:    -32603,
+			message: "the fleet turn did not finish within 200ms and was stopped (raise it with fleet acp --timeout)",
+		},
+		{
+			name: "--timeout whose Stop failed",
+			err: promptWith(harnessOpts{turn: blockingTurn(make(chan struct{})), timeout: 200 * time.Millisecond,
+				cancelStatus: http.StatusBadGateway, publicURL: "https://fleet.example.com"}),
+			code:    -32603,
+			message: "the fleet turn did not finish within 200ms and may still be running — stop it at https://fleet.example.com/chat?c=conv-slow (stopping it failed: cancel returned 502: )",
+		},
+		{
+			// The Stop's answer is a long proxy page: the message is cut, and
+			// still says the turn may be running and where to stop it;
+			// data.error has the whole reason.
+			name: "--timeout whose Stop failed with a long reply",
+			err: promptWith(harnessOpts{turn: blockingTurn(make(chan struct{})), timeout: 200 * time.Millisecond,
+				cancelStatus: http.StatusBadGateway, cancelBody: proxyPage, publicURL: "https://fleet.example.com"}),
+			code:       -32603,
+			dataPrefix: "the fleet turn did not finish within 200ms and may still be running — stop it at https://fleet.example.com/chat?c=conv-slow (stopping it failed: cancel returned 502: <html>\n<head><title>502 Bad Gateway</title></head>",
+			messageHas: []string{
+				"the fleet turn did not finish within 200ms and may still be running — stop it at https://fleet.example.com/chat?c=conv-slow (stopping it failed: cancel returned 502: <html> <head><title>502 Bad Gateway</title></head>",
+				"…",
+			},
+		},
+		{
+			name:    "image",
+			err:     promptWith(harnessOpts{}, acpsdk.ImageBlock("aGk=", "image/png")),
+			code:    -32602,
+			message: "fleet acp does not accept image content (promptCapabilities.image is false)",
+		},
+		{
+			name:    "audio",
+			err:     promptWith(harnessOpts{}, acpsdk.AudioBlock("aGk=", "audio/wav")),
+			code:    -32602,
+			message: "fleet acp does not accept audio content (promptCapabilities.audio is false)",
+		},
+		{
+			name: "binary blob",
+			err: promptWith(harnessOpts{}, acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{
+				BlobResourceContents: &acpsdk.BlobResourceContents{Uri: "file:///repo/logo.png", Blob: "aGk="},
+			})),
+			code:    -32602,
+			message: "fleet acp accepts text, resource_link and embedded text resources only",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			re := wireError(t, tc.err(t))
+			if re.Code != tc.code {
+				t.Errorf("code = %d, want %d", re.Code, tc.code)
+			}
+			cut := tc.data != "" || tc.dataPrefix != ""
+			data, _ := re.Data.(map[string]any)
+			got, _ := data["error"].(string)
+			switch {
+			case !cut && re.Data != nil:
+				t.Errorf("data = %v, want none: message holds the whole reason", re.Data)
+			case cut && len(data) != 1:
+				t.Errorf("data = %v, want data.error alone", re.Data)
+			case tc.dataPrefix != "" && !strings.HasPrefix(got, tc.dataPrefix):
+				t.Errorf("data.error = %q, want it to start %q", got, tc.dataPrefix)
+			case tc.data != "" && got != tc.data:
+				t.Errorf("data.error = %q\nwant        %q", got, tc.data)
+			}
+			switch {
+			case tc.messageHas != nil:
+				for _, part := range tc.messageHas {
+					if !strings.Contains(re.Message, part) {
+						t.Errorf("message = %q\nwant it to say %q", re.Message, part)
+					}
+				}
+			case tc.messagePrefix != "":
+				if !strings.HasPrefix(re.Message, tc.messagePrefix) {
+					t.Errorf("message = %q, want it to start %q", re.Message, tc.messagePrefix)
+				}
+			case re.Message != tc.message || tc.message == "":
+				t.Errorf("message = %q\nwant      %q", re.Message, tc.message)
+			}
+			if strings.ContainsAny(re.Message, "\r\n") || utf8.RuneCountInString(re.Message) > maxErrorMessage+1 {
+				t.Errorf("message is not one concise line: %q", re.Message)
+			}
+			if strings.Contains(re.Message, "test-token") || strings.Contains(got, "test-token") {
+				t.Fatal("the token value leaked into an error")
+			}
+		})
+	}
+
+	t.Run("unknown session", func(t *testing.T) {
+		h := newHarness(t, harnessOpts{})
+		h.newSession(t)
+		re := wireError(t, func() error { _, err := h.prompt("nope", "x"); return err }())
+		if re.Code != -32002 {
+			t.Errorf("code = %d, want -32002 (resource not found)", re.Code)
+		}
+		if re.Data != nil {
+			t.Errorf("data = %v, want none: message names the session whole", re.Data)
+		}
+		if want := `fleet acp has no session "nope" (it was closed, or opened by an earlier fleet acp process); start a new session`; re.Message != want {
+			t.Errorf("message = %q\nwant      %q", re.Message, want)
+		}
+		// An id too long for the message: it is cut, and data.error names the
+		// session whole, as for any other reason.
+		long := strings.Repeat("x", 2*maxErrorMessage)
+		re = wireError(t, func() error { _, err := h.prompt(acpsdk.SessionId(long), "x"); return err }())
+		data, _ := re.Data.(map[string]any)
+		if got, _ := data["error"].(string); re.Code != -32002 || len(data) != 1 || !strings.Contains(got, `"`+long+`"`) || !strings.HasSuffix(re.Message, "…") {
+			t.Errorf("code = %d, data = %v, message = %q; want resource not found, cut, naming the session whole in data.error", re.Code, re.Data, re.Message)
+		}
+	})
+}
+
+// errorMessage keeps a reason whole when it fits one concise line, else the
+// whole sentences that fit, else the words that fit.
+func TestErrorMessageIsOneConciseLine(t *testing.T) {
+	tinyThenLong := "turn failed: Error. The provider said " + strings.Repeat("no ", 200)
+	wordEndsAtBound := "x" + strings.Repeat("abcd ", 100) // rune 400 is a space
+	for _, tc := range []struct {
+		name, reason, want string
+	}{
+		{"short, kept whole", "turn failed: rate limited. Retry in 20s.", "turn failed: rate limited. Retry in 20s."},
+		{"line breaks and runs of spaces collapse", "server returned 502:\n<html>\n\t<h1>Bad  Gateway</h1>\r\n</html>", "server returned 502: <html> <h1>Bad Gateway</h1> </html>"},
+		{
+			// Not just the first ("turn failed: Error."): as many as fit.
+			"long: the whole sentences that fit",
+			"turn failed: Error." + strings.Repeat(" And then more detail.", 30),
+			"turn failed: Error." + strings.Repeat(" And then more detail.", 17),
+		},
+		{
+			// The sentences that fit would be a fraction of the bound: the
+			// words that fit say more.
+			"a short sentence, then a long one: the words that fit",
+			tinyThenLong,
+			tinyThenLong[:maxErrorMessage] + "…",
+		},
+		{
+			"a cut at a word's very end keeps the word",
+			wordEndsAtBound,
+			wordEndsAtBound[:maxErrorMessage] + "…",
+		},
+		{
+			// No space near the bound: cut there, rather than back to the
+			// last space, which would leave "turn failed:…".
+			"a long unbroken run is cut at the bound",
+			"turn failed: " + strings.Repeat("x", 600),
+			"turn failed: " + strings.Repeat("x", maxErrorMessage-len("turn failed: ")) + "…",
+		},
+		{"empty", " \n ", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := errorMessage(tc.reason); got != tc.want {
+				t.Errorf("errorMessage = %q\nwant           %q", got, tc.want)
+			}
+		})
+	}
+	t.Run("no false sentence end past half the bound", func(t *testing.T) {
+		reason := "turn failed: " + strings.Repeat("the provider rejected the input ", 8) + "e.g. the image " + strings.Repeat("was far too large ", 20)
+		got := errorMessage(reason)
+		if !strings.Contains(got, "e.g. the image was far") || !strings.HasSuffix(got, "…") {
+			t.Errorf("errorMessage = %q, want it cut after the words that fit, not at \"e.g.\"", got)
+		}
+	})
+	t.Run("one long sentence: the words that fit", func(t *testing.T) {
+		reason := "the turn failed because " + strings.Repeat("ünïcode words ", 60)
+		got := errorMessage(reason)
+		body, ok := strings.CutSuffix(got, "…")
+		if !ok || !strings.HasPrefix(reason, body+" ") || utf8.RuneCountInString(body) > maxErrorMessage || utf8.RuneCountInString(body) < maxErrorMessage-20 {
+			t.Errorf("errorMessage = %q, want the whole words of the first %d runes, then …", got, maxErrorMessage)
+		}
+	})
+	t.Run("one long word: cut at the bound", func(t *testing.T) {
+		got := errorMessage(strings.Repeat("é", 2*maxErrorMessage))
+		if want := strings.Repeat("é", maxErrorMessage) + "…"; got != want {
+			t.Errorf("errorMessage = %q, want %d runes then …", got, maxErrorMessage)
+		}
+	})
+	t.Run("an empty reason keeps the kind's name", func(t *testing.T) {
+		if got := reasonError(acpsdk.NewInternalError, "").Message; got != "Internal error" {
+			t.Errorf("message = %q", got)
+		}
+	})
+}
+
+// data is left out exactly when message holds the whole reason. The bound is
+// in runes of the reason on one line, so it is pinned with two-byte runes (a
+// byte count would cut them early) and with a reason whose line breaks put it
+// over the bound until they are collapsed (a raw count would cut it).
+func TestReasonErrorKeepsDataOnlyWhenCut(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason, message string
+		cut                   bool
+	}{
+		{name: "400 two-byte runes", reason: strings.Repeat("é", maxErrorMessage), message: strings.Repeat("é", maxErrorMessage)},
+		{name: "401 two-byte runes", reason: strings.Repeat("é", maxErrorMessage+1), cut: true},
+		{
+			name:    "over the bound until line breaks collapse",
+			reason:  strings.Repeat("abc\n\n\n\n", 100),
+			message: strings.TrimSuffix(strings.Repeat("abc ", 100), " "),
+		},
+		{name: "empty", reason: "", message: "Internal error"},
+		{name: "only whitespace", reason: " \n\t ", message: "Internal error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := reasonError(acpsdk.NewInternalError, tc.reason)
+			if !tc.cut {
+				if e.Message != tc.message || e.Data != nil {
+					t.Errorf("message = %q, data = %#v; want %q and no data", e.Message, e.Data, tc.message)
+				}
+				return
+			}
+			data, ok := e.Data.(map[string]any)
+			if !strings.HasSuffix(e.Message, "…") || !ok || len(data) != 1 || data["error"] != tc.reason {
+				t.Errorf("message = %q, data = %#v; want a cut message and data {\"error\": the whole reason}", e.Message, e.Data)
+			}
+		})
+	}
+}
+
+// A sentence ends at a full stop, '!' or '?' before a capitalised word, and
+// not inside parentheses or backticks; wholeSentences keeps as many as fit.
+func TestWholeSentences(t *testing.T) {
+	for _, tc := range []struct {
+		s     string
+		limit int
+		want  string
+	}{
+		{"One. Two. Three", 1000, "One. Two."},
+		{"One. Two. Three", 8, "One."},
+		{"one sentence only", 1000, ""},
+		{"the input, e.g. the image. Next", 1000, "the input, e.g. the image."},
+		{"fleet v1.2. then it stopped. Next", 1000, "fleet v1.2. then it stopped."},
+		{"hmm... ok. Next", 1000, "hmm... ok."},
+		{"see /chat?x=1. next time. Next", 1000, "see /chat?x=1. next time."},
+		{"failed (see the log. It has more) and stopped. Next", 1000, "failed (see the log. It has more) and stopped."},
+		{"run `fleet status. Now` and retry! Next", 1000, "run `fleet status. Now` and retry!"},
+		{"Ünïcode. Ölçü. Next", 14, "Ünïcode. Ölçü."}, // runes, not bytes
+	} {
+		if got := tc.s[:wholeSentences(tc.s, tc.limit)]; got != tc.want {
+			t.Errorf("wholeSentences(%q, %d) keeps %q, want %q", tc.s, tc.limit, got, tc.want)
+		}
+	}
+}
+
+// rpcReason is a JSON-RPC error's message: the reason fleet acp gives, as
+// the client receives it (reasonError; every reason these tests expect fits
+// the message whole).
+func rpcReason(err error) string {
+	var re *acpsdk.RequestError
+	if !errors.As(err, &re) {
+		return ""
+	}
+	return re.Message
+}
+
+// meAnswer is a GET /me handler that answers status with body.
+func meAnswer(status int, contentType, body string) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	}
+}
+
+// session/new asks the server (GET /me) whether it takes turns from the
+// configured user and token, so every credential problem the server finds
+// fails the session as it opens — before the user has typed a prompt — with
+// the error and reason that prompt would have got: auth_required for a
+// refusal (a viewer included, though /me refuses no GET), an internal error
+// for a server that is down. An answer that is no verdict on the identity (a
+// server older than /me, a 5xx) opens the session. Nothing is ever POSTed to
+// /chat by the check, and the token is in no error.
+func TestSessionNewChecksTheIdentity(t *testing.T) {
+	tests := []struct {
+		name     string
+		me       func(http.ResponseWriter, *http.Request)
+		wantCode int    // 0 = the session opens
+		want     string // the error message, exactly
+	}{
+		{
+			name:     "viewer",
+			me:       meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"viewer","team_id":"","admin":false}`),
+			wantCode: -32000,
+			want:     "server rejected the request (403): bot@example.com has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role bot@example.com --role member`",
+		},
+		{
+			name:     "not a member",
+			me:       meAnswer(http.StatusForbidden, "application/json", `{"error":"not_a_member"}`),
+			wantCode: -32000,
+			want:     "server rejected the request (403): bot@example.com is not a fleet user; an admin can add it with `fleet chat user add bot@example.com --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user",
+		},
+		{
+			name:     "wrong token",
+			me:       meAnswer(http.StatusForbidden, "text/plain; charset=utf-8", "forbidden\n"),
+			wantCode: -32000,
+			want:     "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server",
+		},
+		{
+			name:     "ip filter",
+			me:       meAnswer(http.StatusForbidden, "text/plain; charset=utf-8", "Access denied\n"),
+			wantCode: -32000,
+			want:     "server rejected the request (403): the server's IP access control (FLEET_IP_ALLOWLIST / FLEET_IP_DENYLIST) does not admit this client's address; connect from an admitted address, or ask an admin to admit this one",
+		},
+		{
+			name:     "401 from a proxy echoing the token",
+			me:       meAnswer(http.StatusUnauthorized, "text/plain", "unauthorized: X-Chat-Server-Token: test-token\n"),
+			wantCode: -32000,
+			want:     "not authorized (401) for bot@example.com: unauthorized: X-Chat-Server-Token: [redacted]",
+		},
+		{name: "member", me: meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"member","team_id":"","admin":false}`)},
+		{name: "admin", me: meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"admin","team_id":"","admin":true}`)},
+		{name: "server older than /me (404)"}, // fakeFleet answers 404 with no me handler
+		{name: "500", me: meAnswer(http.StatusInternalServerError, "text/plain; charset=utf-8", "membership check failed\n")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t, harnessOpts{me: tt.me})
+			ctx := context.Background()
+			if _, err := h.conn.Initialize(ctx, acpsdk.InitializeRequest{ProtocolVersion: acpsdk.ProtocolVersionNumber}); err != nil {
+				t.Fatalf("initialize: %v", err)
+			}
+			s, err := h.conn.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: "/work", McpServers: []acpsdk.McpServer{}})
+			h.fleet.mu.Lock()
+			calls := h.fleet.meHeaders
+			h.fleet.mu.Unlock()
+			if len(calls) != 1 || calls[0].Get("X-Chat-Server-Token") != "test-token" || calls[0].Get("X-User-Email") != "bot@example.com" || calls[0].Get("X-Fleet-Client") != "fleet-acp" {
+				t.Fatalf("GET /me calls = %v, want one with the turn's auth headers", calls)
+			}
+			if tt.wantCode == 0 {
+				if err != nil {
+					t.Fatalf("session/new: %v, want the session opened", err)
+				}
+				// The session works: the first prompt runs its turn.
+				if _, err := h.prompt(s.SessionId, "hi"); err != nil {
+					t.Fatalf("prompt: %v", err)
+				}
+				return
+			}
+			if rpcCode(err) != tt.wantCode {
+				t.Fatalf("session/new err = %v, want code %d", err, tt.wantCode)
+			}
+			if got := rpcReason(err); got != tt.want {
+				t.Errorf("reason = %q\nwant     %q", got, tt.want)
+			}
+			if strings.Contains(err.Error(), "test-token") {
+				t.Errorf("the token value leaked into an error: %v", err)
+			}
+			h.fleet.mu.Lock()
+			defer h.fleet.mu.Unlock()
+			if len(h.fleet.chats) != 0 {
+				t.Errorf("POST /chat calls = %+v, want none", h.fleet.chats)
+			}
+		})
+	}
+}
+
+// A GET /me that gets no answer at all is no verdict: the session opens, and
+// the prompt reports the unreachable server (TestFailuresBecomeClearErrors,
+// "daemon down"). Here /me drops the connection while POST /chat answers, so
+// the session's first prompt runs its turn.
+func TestSessionNewOpensWhenTheCheckGetsNoAnswer(t *testing.T) {
+	h := newHarness(t, harnessOpts{me: func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}})
+	ctx := context.Background()
+	if _, err := h.conn.Initialize(ctx, acpsdk.InitializeRequest{ProtocolVersion: acpsdk.ProtocolVersionNumber}); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	s, err := h.conn.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: "/work", McpServers: []acpsdk.McpServer{}})
+	if err != nil {
+		t.Fatalf("session/new with /me dropping the connection: %v, want the session opened", err)
+	}
+	if _, err := h.prompt(s.SessionId, "hi"); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+}
+
+// A session/new the client cancels while GET /me is pending records no
+// session: the client never learns its ID, so it could never be closed.
+func TestSessionNewCancelledDuringTheCheckRecordsNoSession(t *testing.T) {
+	asked := make(chan struct{})
+	h := newHarness(t, harnessOpts{me: func(_ http.ResponseWriter, r *http.Request) {
+		close(asked)
+		<-r.Context().Done()
+	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-asked
+		cancel()
+	}()
+	_, err := h.agent.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: "/work", McpServers: []acpsdk.McpServer{}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("session/new err = %v, want context.Canceled", err)
+	}
+	h.agent.mu.Lock()
+	defer h.agent.mu.Unlock()
+	if n := len(h.agent.sessions); n != 0 {
+		t.Fatalf("%d sessions recorded, want none", n)
+	}
+}
+
+// A role changed after the session opened is still caught on the prompt: the
+// check at session/new does not replace the turn's own refusal.
+func TestRefusalAfterTheSessionOpenedStillReachesThePrompt(t *testing.T) {
+	h := newHarness(t, harnessOpts{
+		me: meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"member"}`),
+		turn: func(w *sseWriter, _ *http.Request) {
+			w.w.Header().Set("Content-Type", "application/json")
+			w.w.WriteHeader(http.StatusForbidden)
+			_, _ = w.w.Write([]byte(`{"error":"read_only"}`))
+		},
+	})
+	_, err := h.prompt(h.newSession(t), "x")
+	if rpcCode(err) != -32000 || !strings.Contains(rpcReason(err), "bot@example.com has the read-only viewer role") {
+		t.Fatalf("err = %v, want auth_required naming the viewer role", err)
+	}
 }
 
 func TestPolicyBlockIsARefusal(t *testing.T) {
@@ -1741,7 +2514,8 @@ func TestPromptsWaitingForASessionAreCapped(t *testing.T) {
 		close(release)
 		t.Fatal("the prompt beyond the cap was held to wait for the session instead of refused")
 	}
-	if err == nil || rpcCode(err) != -32603 || !strings.Contains(err.Error(), "waiting") {
+	// Said in the message itself, which is all some clients show.
+	if err == nil || rpcCode(err) != -32603 || !strings.Contains(wireError(t, err).Message, fmt.Sprintf("a prompt running and %d waiting", maxWaitingPrompts)) {
 		t.Fatalf("prompt beyond the cap = %v, want an internal error saying the session has too many prompts waiting", err)
 	}
 	h.waitTracked(t, sid, maxWaitingPrompts+1) // the refused prompt was never tracked

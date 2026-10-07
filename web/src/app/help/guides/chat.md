@@ -109,6 +109,13 @@ MCP servers you set up in your editor are not used by fleet. fleet's tools and
 connectors are the ones your operator set up, and they run on the fleet server.
 The first reply in a session says so, naming the servers your editor sent.
 
+When the client opens a session, `fleet acp` checks your user and token with the
+fleet server first. A wrong token, an email that is not a fleet user, a
+read-only viewer, or an address the server does not admit stops the session
+from opening, with an error that says which and how to fix it. A server that
+cannot be reached does not: the session opens, and your first message reports
+the problem.
+
 A message sent from the client while an earlier one is still running does not
 stop it. It waits, and messages on the same session run one at a time, in the
 order `fleet acp` received them. Up to 20 can wait behind the one running. A

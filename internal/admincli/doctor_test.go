@@ -33,6 +33,8 @@ func TestDoctorDryRunSmoke(t *testing.T) {
 		// has. Both are new enough that a silent regression is plausible.
 		"fleet-maintenance.timer",
 		"free space on the data dir",
+		"root build caches",
+		"60-fleet-journal-cap.conf",
 		"Sandbox smoke",
 		"Source freshness",
 		"staged copy under", // the client bundle must be service-owned and outside the checkout (#1655)
@@ -147,6 +149,45 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// scheduled work, which is a different statement to an operator.
 		"FLEET_DISK_MIN_FREE_PERCENT",
 		"HOLDING BACK scheduled tasks",
+		// Disk hygiene: fleet update fills ROOT's build caches while the
+		// maintenance timer runs as the service user, so doctor (root) is the
+		// only pass that can reclaim them — above a threshold, so a run does
+		// not cost the next update a full re-download. The journal cap yields
+		// to an operator's own SystemMaxUse, and root's podman store is only
+		// ever reported: an image with no container is not proof it is unwanted.
+		"ROOT_CACHE_RECLAIM_BYTES=$((3 * 1024 * 1024 * 1024))",
+		"go clean -cache -testcache -modcache",
+		// The operator's limit is read from journald's MERGED config, so a
+		// shadowed vendor drop-in is not mistaken for an active setting.
+		"systemd-analyze cat-config systemd/journald.conf",
+		// …and an unreadable merged config fails closed instead of reading
+		// as "no limit set".
+		`if ! merged="$(systemd-analyze cat-config systemd/journald.conf 2>/dev/null)"; then`,
+		// Vacuum removes only archived files; rotate first, then re-measure.
+		"journalctl --rotate --vacuum-size=1G",
+		"restart held by --no-restart",
+		"dnf --dump-main-config",
+		// An installed cap is only in effect once journald has restarted onto
+		// it: a --no-restart run leaves it unloaded however small the journal.
+		"systemctl show -p ActiveEnterTimestamp --value systemd-journald",
+		`(( started >= mtime ))`,
+		// …and so is an operator's own limit file written after journald
+		// started; doctor advises (never performs) that restart.
+		`journald_loaded_since "$f" || loaded=0`,
+		// A cache root symlinked to another volume is measured at its target.
+		`du -sxbD "$p"`,
+		// journalctl's --disk-usage prose is localized; parse it in the C locale.
+		"LC_ALL=C journalctl --disk-usage",
+		// …and the operator's value must win even AFTER fleet's cap is
+		// installed (a 60- drop-in would otherwise override it), the reclaim
+		// is verdicted on a re-measure rather than exit codes, and hygiene
+		// runs before the headroom verdict so a reclaimed box is not failed.
+		`removed ${dst} so the explicit limit in ${operator} applies`,
+		"root build cache reclaim left",
+		"{{.Store.GraphRoot}}",
+		// Build leftovers are often intermediate images, hidden without -a.
+		`podman images -a -q`,
+		`advise "  review: podman images -a   —   reclaim if nothing of yours uses them: podman system prune -a"`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("doctor.sh must contain %q", want)
