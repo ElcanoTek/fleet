@@ -418,7 +418,10 @@ at most the 50 most recently active chats with files, examining at most 200
 chats to find them, and the request as a whole examines at most 100 chats
 across both halves, starting none after four seconds — the caller's own half
 may use at most half of each, so their file-less chats cannot crowd out the
-team's shared files; past any bound the
+team's shared files, and the team half always gets at least two seconds of its
+own; each half's deadline also reaches into a chat's history read and
+workspace walk, so one slow chat is cut off rather than overrunning it; past
+any bound the
 response says `truncated: true` (and the additive `groups_truncated: true`). An optional `?focus=<chat id>`
 (sent by "Manage in Sources") lists that chat's group even past both bounds,
 but only when it is in one of the two listings above — the caller's own chat

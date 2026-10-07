@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
 import type { Project } from "./ProjectsModal";
 
@@ -75,6 +75,37 @@ describe("ProjectSettingsDialog", () => {
     expect(screen.getByRole("dialog")).toHaveTextContent(
       "Owner: sam@x.com. Only the owner can edit, share, or delete.",
     );
+  });
+
+  it("a save that lands after the dialog was dismissed closes nothing", async () => {
+    stub();
+    let finish: (ok: boolean) => void = () => {};
+    const onClose = vi.fn();
+    const { unmount } = render(
+      <ProjectSettingsDialog
+        project={SHARED}
+        myTeam="Elcano"
+        isAdmin={false}
+        onClose={onClose}
+        onSave={() =>
+          new Promise<boolean>((resolve) => {
+            finish = resolve;
+          })
+        }
+        onTransfer={vi.fn(async () => null)}
+        onDelete={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /Only you/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    // Dismissed while the save is in flight (another project's settings may
+    // be open by the time it lands).
+    unmount();
+    await act(async () => {
+      finish(true);
+    });
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("B28: switching to Only you counts what changes before Save", async () => {

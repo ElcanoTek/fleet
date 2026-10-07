@@ -467,6 +467,18 @@ func TestDeleteUserRemovesProjectUserState(t *testing.T) {
 	if st, _ := f.s.GetProjectUserState(f.ctx, f.project.ID, "alice@x.com"); !st.KeptPersonal {
 		t.Error("another user's state must be untouched")
 	}
+	// A write that lands after the deletion (a request admitted before it)
+	// cannot leave state behind for a future account under the same address.
+	if _, err := f.s.UpdateProjectUserState(f.ctx, f.project.ID, "bob@x.com", &yes, nil); err == nil {
+		t.Error("a state write for a deleted account succeeded")
+	}
+	if err := f.s.MarkProjectSharedChat(f.ctx, f.project.ID, "bob@x.com"); err == nil {
+		t.Error("a shared-chat mark for a deleted account succeeded")
+	}
+	if err := f.s.db.QueryRowContext(f.ctx,
+		`SELECT COUNT(*) FROM project_user_state WHERE user_email = 'bob@x.com'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("%d rows (%v) for the deleted account after late writes", n, err)
+	}
 }
 
 // An archived chat cannot be team-shared, and unarchive never reopens team

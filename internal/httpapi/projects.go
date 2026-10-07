@@ -566,9 +566,16 @@ func newSourcesBudgets() (first *sourcesBudget, rest func() *sourcesBudget) {
 	half := maxSourcesDiscoveries / 2
 	first = &sourcesBudget{left: half, deadline: start.Add(sourcesDiscoveryBudget / 2)}
 	return first, func() *sourcesBudget {
+		// At least half the time from NOW: a first half that overran its
+		// own deadline (one examination finishing late) must not leave the
+		// team half none.
+		deadline := start.Add(sourcesDiscoveryBudget)
+		if floor := time.Now().Add(sourcesDiscoveryBudget / 2); floor.After(deadline) {
+			deadline = floor
+		}
 		return &sourcesBudget{
 			left:     maxSourcesDiscoveries - (half - first.left),
-			deadline: start.Add(sourcesDiscoveryBudget),
+			deadline: deadline,
 		}
 	}
 }
@@ -622,7 +629,7 @@ func (h *newestFiles) Pop() any {
 // Sources entry must be a real file the user can open. The attachments/ and
 // user-skills/ subtrees are skipped whole: uploads and the owner's
 // materialized private skills are never listed in Sources (ADR-0079).
-func walkWorkspaceFiles(convID string, limit int) (files []sourcesFile, truncated bool) {
+func walkWorkspaceFiles(ctx context.Context, convID string, limit int) (files []sourcesFile, truncated bool) {
 	root, err := filepath.EvalSymlinks(tools.WorkspaceDirForConversation(convID))
 	if err != nil {
 		// Most conversations never touched a file — no workspace dir.
@@ -632,7 +639,10 @@ func walkWorkspaceFiles(convID string, limit int) (files []sourcesFile, truncate
 	visited := 0
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
 		visited++
-		if visited > maxWorkspaceWalkEntries {
+		// The entry budget bounds the work; ctx bounds the time (Sources
+		// gives each half a deadline, and a slow filesystem must not let one
+		// chat's walk outlast it).
+		if visited > maxWorkspaceWalkEntries || ctx.Err() != nil {
 			truncated = true
 			return filepath.SkipAll
 		}
@@ -749,7 +759,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 	flat := []projectFile{}
 	truncated := false
 
-	addMine := func(conv store.Conversation) (bool, error) {
+	addMine := func(ctx context.Context, conv store.Conversation) (bool, error) {
 		g, ok, gTruncated, err := s.ownSourcesGroup(ctx, conv, origins[conv.ID])
 		if err != nil {
 			return false, err
@@ -772,7 +782,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 	// found to have no files) so it is never listed twice.
 	focusDone := focus == ""
 	mineBudget, teamBudget := newSourcesBudgets()
-	mineCut, err := listSourcesHalf(convs, focus, &focusDone, mineBudget, addMine)
+	mineCut, err := listSourcesHalf(ctx, convs, focus, &focusDone, mineBudget, addMine)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -785,7 +795,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 	}
 	sortConversationsRecentFirst(team)
 
-	addTeam := func(conv store.Conversation) (bool, error) {
+	addTeam := func(ctx context.Context, conv store.Conversation) (bool, error) {
 		g, ok, gTruncated, err := s.teamSourcesGroup(ctx, conv)
 		if err != nil {
 			return false, err
@@ -797,7 +807,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		return ok, nil
 	}
 
-	teamCut, err := listSourcesHalf(team, focus, &focusDone, teamBudget(), addTeam)
+	teamCut, err := listSourcesHalf(ctx, team, focus, &focusDone, teamBudget(), addTeam)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -820,7 +830,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 // (origin is its teammate-branch origin, if any); ok is false for a chat with
 // no files. truncated reports a bounded walk or discovery cut something.
 func (s *Server) ownSourcesGroup(ctx context.Context, conv store.Conversation, origin *store.BranchOrigin) (g sourcesGroup, ok, truncated bool, err error) {
-	all, walkTruncated := walkWorkspaceFiles(conv.ID, maxProjectFiles)
+	all, walkTruncated := walkWorkspaceFiles(ctx, conv.ID, maxProjectFiles)
 	if walkTruncated {
 		truncated = true
 	}
@@ -925,23 +935,34 @@ func (s *Server) teamSourcesGroup(ctx context.Context, conv store.Conversation) 
 // listSourcesHalf adds the groups of one half of Sources (the caller's own
 // chats, or the team's) through add, most recently active first, up to
 // maxSourcesGroups groups out of at most maxSourcesChatsScanned chats, each
-// examination spending one unit of the request-wide budget; cut reports that
-// any bound left chats out. The focused chat (if not done yet) is added even
-// past the bounds — but only from this list, so focus never reaches a chat
-// the listing's own gates did not return.
-func listSourcesHalf(list []store.Conversation, focus string, focusDone *bool, budget *sourcesBudget, add func(store.Conversation) (bool, error)) (cut bool, err error) {
+// examination spending one unit of the half's budget and running under the
+// half's deadline — a slow chat is cut off at it (ctx reaches the history
+// read and the workspace walk) rather than eating into the other half's
+// time; cut reports that any bound left chats out. The focused chat (if not
+// done yet) is added even past the bounds, on the request's own context —
+// but only from this list, so focus never reaches a chat the listing's own
+// gates did not return.
+func listSourcesHalf(ctx context.Context, list []store.Conversation, focus string, focusDone *bool, budget *sourcesBudget, add func(context.Context, store.Conversation) (bool, error)) (cut bool, err error) {
+	halfCtx, cancel := context.WithDeadline(ctx, budget.deadline)
+	defer cancel()
 	n := 0
 	for i, conv := range list {
 		if n >= maxSourcesGroups || i >= maxSourcesChatsScanned || !budget.spend() {
 			cut = true
 			break
 		}
-		if conv.ID == focus {
-			*focusDone = true
-		}
-		added, err := add(conv)
+		added, err := add(halfCtx, conv)
 		if err != nil {
+			if ctx.Err() == nil && halfCtx.Err() != nil {
+				// The half's deadline, not the request: stop here and
+				// say so, like any other bound.
+				cut = true
+				break
+			}
 			return cut, err
+		}
+		if conv.ID == focus && halfCtx.Err() == nil {
+			*focusDone = true
 		}
 		if added {
 			n++
@@ -953,7 +974,7 @@ func listSourcesHalf(list []store.Conversation, focus string, focusDone *bool, b
 	for _, conv := range list {
 		if conv.ID == focus {
 			*focusDone = true
-			_, err := add(conv)
+			_, err := add(ctx, conv)
 			return cut, err
 		}
 	}

@@ -830,7 +830,7 @@ func TestProjectFilesListsOutputsWhenWalkFindsNoFiles(t *testing.T) {
 	old := maxWorkspaceWalkEntries
 	maxWorkspaceWalkEntries = 20
 	t.Cleanup(func() { maxWorkspaceWalkEntries = old })
-	if all, _ := walkWorkspaceFiles(f.chat.ID, maxProjectFiles); len(all) != 0 {
+	if all, _ := walkWorkspaceFiles(context.Background(), f.chat.ID, maxProjectFiles); len(all) != 0 {
 		t.Fatalf("fixture: the walk should find no files, got %d", len(all))
 	}
 	type body struct {

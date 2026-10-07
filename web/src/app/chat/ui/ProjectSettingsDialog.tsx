@@ -224,6 +224,21 @@ export function ProjectSettingsDialog({
 
   const short = project.name;
 
+  // Whether this dialog is still the one on screen. A save or transfer can
+  // land after the person dismissed it (and maybe opened another project's
+  // settings): closing then would close THAT dialog — onClose closes
+  // whatever settings are open — and throw away its edits.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const closeIfStillOpen = () => {
+    if (mounted.current) onClose();
+  };
+
   const save = async () => {
     if (saving) return;
     setError(null);
@@ -243,7 +258,7 @@ export function ProjectSettingsDialog({
     const ok = await onSave(patch);
     setSaving(false);
     if (!ok) return;
-    onClose();
+    closeIfStillOpen();
     if (shared && !wasShared)
       notify({ message: `Shared with ${team || "your team"}. Chats stay Only you.` });
     else if (!shared && wasShared)
@@ -261,7 +276,7 @@ export function ProjectSettingsDialog({
       setTransferError(err);
       return;
     }
-    onClose();
+    closeIfStillOpen();
     notify({ message: `${pick} now owns ${project.name}.` });
   };
 

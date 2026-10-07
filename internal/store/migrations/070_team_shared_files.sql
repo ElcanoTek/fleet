@@ -63,10 +63,14 @@ CREATE INDEX IF NOT EXISTS idx_branch_origins_source
 
 -- Per-person, per-project UI state that must follow a user across devices:
 -- the getting-started card ("Keep personal", and whether they have shared a
--- chat here yet) and which Sources groups they left open.
+-- chat here yet) and which Sources groups they left open. It goes with the
+-- account (ON DELETE CASCADE): a write racing the account's deletion waits
+-- on the row's key lock and then fails, instead of leaving state behind for
+-- a new account later created under the same address. Every authenticated
+-- request already has a users row (the auth middleware requires one).
 CREATE TABLE IF NOT EXISTS project_user_state (
     project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    user_email      TEXT NOT NULL,
+    user_email      TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
     kept_personal   BOOLEAN NOT NULL DEFAULT FALSE,
     has_shared_chat BOOLEAN NOT NULL DEFAULT FALSE,
     sources_open    JSONB NOT NULL DEFAULT '{}'::jsonb,

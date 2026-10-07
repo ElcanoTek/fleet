@@ -328,7 +328,7 @@ func TestUserSkillsAreNeverOutputs(t *testing.T) {
 		t.Errorf("the branch must name the skill as withheld: %v", br.BranchOrigin.WithheldFiles)
 	}
 
-	files, _ := walkWorkspaceFiles(f.chat.ID, maxProjectFiles)
+	files, _ := walkWorkspaceFiles(context.Background(), f.chat.ID, maxProjectFiles)
 	for _, fl := range files {
 		if strings.HasPrefix(fl.Path, userSkillsRoot+"/") {
 			t.Errorf("Sources walk lists %s", fl.Path)
