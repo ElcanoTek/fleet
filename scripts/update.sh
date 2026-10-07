@@ -98,6 +98,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/bundle.sh
 . "$SCRIPT_DIR/lib/bundle.sh"
+# Idempotent safe.directory trust for the root-run git calls below.
+# shellcheck source=lib/git.sh
+. "$SCRIPT_DIR/lib/git.sh"
 
 SRC_DIR="${SRC_DIR:-$REPO_ROOT}"
 # Client bundle dir: env/flag wins; else the dir bootstrap persisted under the
@@ -374,7 +377,7 @@ fi
 # ── 1. pull the fleet checkout ────────────────────────────────────────────
 step "1/5  Updating the fleet checkout"
 cd "$SRC_DIR"
-git config --global --add safe.directory "$SRC_DIR" 2>/dev/null || true
+git_trust_dir "$SRC_DIR"
 
 before_sha="$(git rev-parse HEAD)"
 
@@ -642,7 +645,7 @@ elif [[ "$DRY_RUN" == "1" ]]; then
 elif [[ -n "$CLIENT_CONFIG_PIN" ]]; then
   # Pinned: advance ONLY to the configured ref (a deliberate operator action),
   # never a silent fast-forward to whatever HEAD became.
-  git config --global --add safe.directory "$CLIENT_DIR" 2>/dev/null || true
+  git_trust_dir "$CLIENT_DIR"
   if ! git -C "$CLIENT_DIR" fetch --quiet --tags origin; then
     warn "git fetch failed in ${CLIENT_DIR} — checking out the pinned ref from the existing objects"
   fi
@@ -674,7 +677,7 @@ elif [[ -n "$CLIENT_CONFIG_PIN" ]]; then
     BUNDLE_STALE_WHY="pinned ref ${CLIENT_CONFIG_PIN} could not be checked out"
   fi
 else
-  git config --global --add safe.directory "$CLIENT_DIR" 2>/dev/null || true
+  git_trust_dir "$CLIENT_DIR"
   # NOT --quiet: when a fast-forward is refused, git's own message is the whole
   # diagnosis (detached HEAD, no upstream, diverged, local edits, wrong branch).
   # Swallowing it left the operator a bare "could not fast-forward" and no way
