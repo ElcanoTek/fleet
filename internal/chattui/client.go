@@ -222,9 +222,10 @@ func otherQueued(n int) string {
 	return fmt.Sprintf("%d other queued messages", n)
 }
 
-// StatusError is a non-2xx answer to POST /chat. Code lets a caller tell an
-// auth failure (401/403) from any other refusal without matching on text; the
-// message never carries the token.
+// StatusError is a non-2xx answer to POST /chat, or a refusal CheckIdentity
+// found before any turn was sent. Code lets a caller tell an auth failure
+// (401/403) from any other refusal without matching on text; the message never
+// carries the token.
 type StatusError struct {
 	Code int
 	msg  string
@@ -296,33 +297,7 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 		return convID, fmt.Errorf("server accepted the request (%d) but its acknowledgement was unreadable: %v", resp.StatusCode, orDefault(errString(derr), "not a queue acknowledgement"))
 	}
 	if resp.StatusCode != http.StatusOK {
-		const excerptCap = 512
-		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, excerptCap))
-		// The excerpt is quoted to the user, and `fleet acp` hands it to an ACP
-		// client that may write it to a log. fleet never echoes the token, but a
-		// proxy in between might (a debug page dumping request headers), so
-		// redact it once here, before any branch quotes the body.
-		excerpt = redactToken(excerpt, c.cfg.Token, len(excerpt) == excerptCap)
-		msg := strings.TrimSpace(string(excerpt))
-		switch resp.StatusCode {
-		case http.StatusForbidden:
-			return convID, &StatusError{Code: resp.StatusCode, msg: forbiddenMessage(c.cfg.Email, excerpt)}
-		case http.StatusUnauthorized:
-			return convID, &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("not authorized (%d) for %s: %s", resp.StatusCode, c.cfg.Email, msg)}
-		case http.StatusBadRequest:
-			// A 400 is fleet refusing the request itself (a body over the chat
-			// server's 1 MB cap, an empty message, a model lockdown mode refuses),
-			// not who sent it: the one identity 400, a missing X-User-Email,
-			// never comes from `fleet chat` or `fleet acp`, which refuse an
-			// empty email before sending anything. So it is quoted as a
-			// rejection, never as "not authorized".
-			if msg == "" {
-				return convID, &StatusError{Code: resp.StatusCode, msg: "server rejected the request (400)"}
-			}
-			return convID, &StatusError{Code: resp.StatusCode, msg: "server rejected the request (400): " + msg}
-		default:
-			return convID, &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("server returned %d: %s", resp.StatusCode, msg)}
-		}
+		return convID, c.refusal(resp)
 	}
 
 	newConvID := convID
@@ -397,42 +372,88 @@ func attachFrozenArgsRaw(m map[string]any, raw []byte) {
 	m["frozen_args"] = fa
 }
 
-// forbiddenMessage turns a 403 from POST /chat into fix-it text, keyed on the
-// body each fleet refusal writes: the shared-token check answers a plain-text
-// "forbidden", membershipMiddleware {"error":"not_a_member"} for an
-// X-User-Email that is not a provisioned user, rejectViewerWrites
+// refusal turns a non-2xx answer (POST /chat's, or GET /me's in
+// CheckIdentity) into a *StatusError with fix-it text, so a refusal reads the
+// same whichever request met it. The excerpt is quoted to the user, and
+// `fleet acp` hands it to an ACP client that may write it to a log. fleet
+// never echoes the token, but a proxy in between might (a debug page dumping
+// request headers), so it is redacted once here, before any branch quotes the
+// body.
+func (c *Client) refusal(resp *http.Response) *StatusError {
+	const excerptCap = 512
+	excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, excerptCap))
+	// The excerpt is quoted to the user, and `fleet acp` hands it to an ACP
+	// client that may write it to a log. fleet never echoes the token, but a
+	// proxy in between might (a debug page dumping request headers), so
+	// redact it once here, before any branch quotes the body.
+	excerpt = redactToken(excerpt, c.cfg.Token, len(excerpt) == excerptCap)
+	msg := strings.TrimSpace(string(excerpt))
+	switch resp.StatusCode {
+	case http.StatusForbidden:
+		return &StatusError{Code: resp.StatusCode, msg: forbiddenMessage(c.cfg.Email, excerpt)}
+	case http.StatusUnauthorized:
+		return &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("not authorized (%d) for %s: %s", resp.StatusCode, c.cfg.Email, msg)}
+	case http.StatusBadRequest:
+		// A 400 is fleet refusing the request itself (a body over the chat
+		// server's 1 MB cap, an empty message, a model lockdown mode refuses),
+		// not who sent it: the one identity 400, a missing X-User-Email,
+		// never comes from `fleet chat` or `fleet acp`, which refuse an
+		// empty email before sending anything. So it is quoted as a
+		// rejection, never as "not authorized".
+		if msg == "" {
+			return &StatusError{Code: resp.StatusCode, msg: "server rejected the request (400)"}
+		}
+		return &StatusError{Code: resp.StatusCode, msg: "server rejected the request (400): " + msg}
+	default:
+		return &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("server returned %d: %s", resp.StatusCode, msg)}
+	}
+}
+
+// forbiddenPrefix opens every 403 text (forbiddenMessage, readOnlyMessage).
+const forbiddenPrefix = "server rejected the request (403)"
+
+// forbiddenMessage turns a 403 from POST /chat (or GET /me) into fix-it text,
+// keyed on the body each fleet refusal writes: the shared-token check answers
+// a plain-text "forbidden", membershipMiddleware {"error":"not_a_member"} for
+// an X-User-Email that is not a provisioned user, rejectViewerWrites
 // {"error":"read_only"} for a viewer, and the IP filter a plain-text "Access
-// denied" (it is the outermost middleware and /healthz skips it, so Ping passes
-// and only the turn fails). Advice is given only for a body that names its
-// cause: the token is blamed only for the token check's own body, because
-// sending a non-member or a filtered address after FLEET_SERVER_TOKEN chases
-// the one setting that is already right. Anything else — a reverse proxy's
-// page, a refusal added later — is quoted as a short excerpt rather than
-// guessed at. The IP-filter text keeps that filter's uniformity: it does not
-// say which list matched, because the server deliberately does not say either.
-// No branch ever includes the token value.
+// denied" (it is the outermost middleware and /healthz skips it, so Ping
+// passes and only CheckIdentity and the turn fail). Advice is given only for
+// a body that names its cause: the token is blamed only for the token check's
+// own body, because sending a non-member or a filtered address after
+// FLEET_SERVER_TOKEN chases the one setting that is already right. Anything
+// else — a reverse proxy's page, a refusal added later — is quoted as a short
+// excerpt rather than guessed at. The IP-filter text keeps that filter's
+// uniformity: it does not say which list matched, because the server
+// deliberately does not say either. No branch ever includes the token value.
 func forbiddenMessage(email string, body []byte) string {
-	const prefix = "server rejected the request (403)"
 	var refusal struct {
 		Error string `json:"error"`
 	}
 	_ = json.Unmarshal(body, &refusal)
 	switch refusal.Error {
 	case "not_a_member":
-		return fmt.Sprintf("%s: %s is not a fleet user; an admin can add it with `fleet chat user add %s --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user", prefix, email, email)
+		return fmt.Sprintf("%s: %s is not a fleet user; an admin can add it with `fleet chat user add %s --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user", forbiddenPrefix, email, email)
 	case "read_only":
-		return fmt.Sprintf("%s: %s has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role %s --role member`", prefix, email, email)
+		return readOnlyMessage(email)
 	}
 	switch text := strings.TrimSpace(string(body)); text {
 	case "forbidden":
-		return prefix + ": check FLEET_SERVER_TOKEN matches the server"
+		return forbiddenPrefix + ": check FLEET_SERVER_TOKEN matches the server"
 	case "Access denied":
-		return prefix + ": the server's IP access control (FLEET_IP_ALLOWLIST / FLEET_IP_DENYLIST) does not admit this client's address; connect from an admitted address, or ask an admin to admit this one"
+		return forbiddenPrefix + ": the server's IP access control (FLEET_IP_ALLOWLIST / FLEET_IP_DENYLIST) does not admit this client's address; connect from an admitted address, or ask an admin to admit this one"
 	case "":
-		return prefix
+		return forbiddenPrefix
 	default:
-		return prefix + ": " + shortExcerpt(text, 160)
+		return forbiddenPrefix + ": " + shortExcerpt(text, 160)
 	}
+}
+
+// readOnlyMessage is the viewer's refusal text, in one place for both ways it
+// is met: a turn's 403 {"error":"read_only"} (forbiddenMessage), and the
+// viewer role CheckIdentity reads off GET /me before any turn is sent.
+func readOnlyMessage(email string) string {
+	return fmt.Sprintf("%s: %s has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role %s --role member`", forbiddenPrefix, email, email)
 }
 
 // redactToken replaces every whole occurrence of token in a quoted response
@@ -741,6 +762,56 @@ func (c *Client) Ping(ctx context.Context) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("fleet server health check returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// roleViewer is the read-only role's name on GET /me (store.RoleViewer: this
+// package talks to the server over HTTP and does not import the store).
+const roleViewer = "viewer"
+
+// CheckIdentity asks the server, before any turn is sent, whether it would
+// take turns from this client's user and token, so a refusal can be reported
+// when a session opens rather than on its first message. GET /me passes the
+// same IP filter, shared-token check and membership check as POST /chat, so
+// a 401 or 403 there is the refusal the first turn would get, in the same
+// words (refusal). The viewer role is the one refusal /me cannot answer with —
+// rejectViewerWrites stops only writes — so it is read off the role /me
+// reports, and given the text a turn's read_only 403 gets (readOnlyMessage),
+// as a 403.
+//
+// Any other answer is not a verdict on the identity, and returns nil so the
+// session opens and its first turn reports whatever is wrong: a 404 (a server
+// older than /me: `fleet acp` may be a newer binary than the server), a 5xx,
+// a 400, a 429, and a 200 whose body is unreadable (the checks in front of the
+// handler passed, so the user is admitted; only the role is unknown, and a
+// viewer's first turn still gets the read_only refusal). An unreachable
+// server (refused, unresolvable, or silent past the check's 10s bound) is an
+// error worded like a turn's ("connect <url>: …"). A quoted body is redacted
+// and capped as a turn's is, and no branch includes the token.
+func (c *Client) CheckIdentity(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ServerURL+"/me", nil)
+	if err != nil {
+		return err
+	}
+	c.setAuthHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("connect %s: %w", c.cfg.ServerURL, err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return c.refusal(resp)
+	case http.StatusOK:
+		var me struct {
+			Role string `json:"role"`
+		}
+		if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&me) == nil && me.Role == roleViewer {
+			return &StatusError{Code: http.StatusForbidden, msg: readOnlyMessage(c.cfg.Email)}
+		}
 	}
 	return nil
 }

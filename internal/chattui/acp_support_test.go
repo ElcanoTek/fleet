@@ -9,6 +9,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // The pieces `fleet acp` (internal/acp) relies on: the public web URL for
@@ -493,4 +496,173 @@ func TestModelNewConversationsOnly(t *testing.T) {
 			t.Errorf("newOnly=%v: models sent = %q, want %q", newOnly, models, want)
 		}
 	}
+}
+
+// CheckIdentity is `fleet acp`'s session/new check: GET /me with a turn's own
+// auth headers. Every refusal is a StatusError in the words the first turn
+// would get (a 401 or 403, which fleet acp maps to auth_required; the viewer
+// role included); an answer that is no verdict on the identity (an older
+// server with no /me, a 5xx, a 4xx other than 401/403, an unreadable 200) is
+// nil, so the session opens; and the token is in no message, even when a body
+// echoes it.
+func TestCheckIdentity(t *testing.T) {
+	const (
+		email = "nobody@example.com"
+		token = "super-secret-token"
+	)
+	tests := []struct {
+		name        string
+		status      int
+		contentType string
+		body        string
+		wantCode    int    // 0 = nil: the session opens
+		want        string // the exact message, when wantCode != 0
+	}{
+		{name: "member", status: 200, contentType: "application/json", body: `{"email":"nobody@example.com","role":"member","team_id":"","admin":false}`},
+		{name: "admin", status: 200, contentType: "application/json", body: `{"email":"nobody@example.com","role":"admin","team_id":"ops","admin":true}`},
+		{
+			name: "viewer", status: 200, contentType: "application/json",
+			body:     `{"email":"nobody@example.com","role":"viewer","team_id":"","admin":false}`,
+			wantCode: http.StatusForbidden,
+			want:     "server rejected the request (403): nobody@example.com has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role nobody@example.com --role member`",
+		},
+		{
+			name: "wrong token", status: 403, contentType: "text/plain; charset=utf-8", body: "forbidden\n",
+			wantCode: http.StatusForbidden,
+			want:     "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server",
+		},
+		{
+			name: "not a member", status: 403, contentType: "application/json", body: `{"error":"not_a_member"}`,
+			wantCode: http.StatusForbidden,
+			want:     "server rejected the request (403): nobody@example.com is not a fleet user; an admin can add it with `fleet chat user add nobody@example.com --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user",
+		},
+		{
+			name: "ip filter", status: 403, contentType: "text/plain; charset=utf-8", body: "Access denied\n",
+			wantCode: http.StatusForbidden,
+			want:     "server rejected the request (403): the server's IP access control (FLEET_IP_ALLOWLIST / FLEET_IP_DENYLIST) does not admit this client's address; connect from an admitted address, or ask an admin to admit this one",
+		},
+		{
+			name: "403 proxy page echoing the token", status: 403, contentType: "text/html",
+			body:     "<pre>X-Chat-Server-Token: " + token + "</pre>",
+			wantCode: http.StatusForbidden,
+			want:     "server rejected the request (403): <pre>X-Chat-Server-Token: [redacted]</pre>",
+		},
+		{
+			name: "401 echoing the token", status: 401, contentType: "text/plain",
+			body:     "unauthorized: X-Chat-Server-Token: " + token + "\n",
+			wantCode: http.StatusUnauthorized,
+			want:     "not authorized (401) for nobody@example.com: unauthorized: X-Chat-Server-Token: [redacted]",
+		},
+		{name: "404 from a server older than /me", status: 404, contentType: "text/plain; charset=utf-8", body: "404 page not found\n"},
+		{name: "500", status: 500, contentType: "text/plain; charset=utf-8", body: "membership check failed\n"},
+		{name: "502 from a proxy", status: 502, contentType: "text/html", body: "<html>bad gateway</html>"},
+		{name: "429", status: 429, contentType: "text/plain", body: "slow down\n"},
+		{name: "400", status: 400, contentType: "text/plain", body: "bad request\n"},
+		{name: "malformed 200", status: 200, contentType: "application/json", body: `{"role":`},
+		{name: "200 that is not JSON", status: 200, contentType: "text/html", body: "<html>a web page</html>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/me" {
+					t.Errorf("request = %s %s, want GET /me", r.Method, r.URL.Path)
+				}
+				if r.Header.Get("X-Chat-Server-Token") != token || r.Header.Get("X-User-Email") != email || r.Header.Get("X-Fleet-Client") != "fleet-acp" {
+					t.Errorf("auth headers = %v", r.Header)
+				}
+				w.Header().Set("Content-Type", tt.contentType)
+				w.WriteHeader(tt.status)
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer srv.Close()
+			err := NewClient(Config{ServerURL: srv.URL, Email: email, Token: token, ClientName: "fleet-acp"}).CheckIdentity(context.Background())
+			if tt.wantCode == 0 {
+				if err != nil {
+					t.Fatalf("err = %v, want nil (the session opens)", err)
+				}
+				return
+			}
+			var se *StatusError
+			if !errors.As(err, &se) || se.Code != tt.wantCode {
+				t.Fatalf("err = %#v, want *StatusError %d", err, tt.wantCode)
+			}
+			if se.Error() != tt.want {
+				t.Errorf("message = %q\nwant      %q", se.Error(), tt.want)
+			}
+			if strings.Contains(se.Error(), token) {
+				t.Errorf("error must NOT leak the token: %v", se)
+			}
+		})
+	}
+}
+
+// A viewer found by CheckIdentity and a viewer's turn refused with
+// roleViewer copies store.RoleViewer, since the client does not import the
+// store; a renamed role would otherwise let a viewer's session open.
+func TestRoleViewerMatchesTheStore(t *testing.T) {
+	if roleViewer != store.RoleViewer {
+		t.Fatalf("roleViewer = %q, store.RoleViewer = %q", roleViewer, store.RoleViewer)
+	}
+}
+
+// {"error":"read_only"} read the same: the wording lives in one place.
+func TestCheckIdentityViewerMatchesTheTurnRefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/me" {
+			_, _ = io.WriteString(w, `{"email":"v@example.com","role":"viewer"}`)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"error":"read_only"}`)
+	}))
+	defer srv.Close()
+	c := NewClient(Config{ServerURL: srv.URL, Email: "v@example.com", Token: "tok"})
+	checkErr := c.CheckIdentity(context.Background())
+	_, turnErr := c.Stream(context.Background(), "hi", "", func(Event) {})
+	var checkSE, turnSE *StatusError
+	if !errors.As(checkErr, &checkSE) || !errors.As(turnErr, &turnSE) {
+		t.Fatalf("check = %#v, turn = %#v; want both *StatusError", checkErr, turnErr)
+	}
+	if checkSE.Code != turnSE.Code || checkSE.Error() != turnSE.Error() {
+		t.Errorf("check = %d %q\nturn  = %d %q", checkSE.Code, checkSE.Error(), turnSE.Code, turnSE.Error())
+	}
+}
+
+// A server CheckIdentity cannot reach is an error worded like a turn's
+// ("connect <url>: …"), not a StatusError, so fleet acp reports it as an
+// internal error rather than an auth problem: a refused connection, and a
+// server that never answers (cut off by the caller's deadline here; the
+// check's own bound is 10s).
+func TestCheckIdentityUnreachable(t *testing.T) {
+	const token = "super-secret-token"
+	t.Run("connection refused", func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		url := srv.URL
+		srv.Close() // nothing listens there now
+		err := NewClient(Config{ServerURL: url, Email: "a@b.c", Token: token}).CheckIdentity(context.Background())
+		var se *StatusError
+		if err == nil || errors.As(err, &se) {
+			t.Fatalf("err = %#v, want a transport error", err)
+		}
+		if !strings.HasPrefix(err.Error(), "connect "+url+": ") || !strings.Contains(err.Error(), "connection refused") {
+			t.Errorf("err = %q, want it to name %s and the refused connection", err, url)
+		}
+		if strings.Contains(err.Error(), token) {
+			t.Errorf("error must NOT leak the token: %v", err)
+		}
+	})
+	t.Run("no answer", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+		}))
+		defer srv.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: token}).CheckIdentity(ctx)
+		var se *StatusError
+		if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &se) || !strings.HasPrefix(err.Error(), "connect "+srv.URL+": ") {
+			t.Fatalf("err = %v, want a transport error naming %s and the deadline", err, srv.URL)
+		}
+	})
 }
