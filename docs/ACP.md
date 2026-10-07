@@ -220,8 +220,8 @@ agent-shell. agent-shell ships no fleet agent, so define one in your init file:
    :buffer-name "fleet"
    :shell-prompt "fleet> "
    :shell-prompt-regexp "fleet> "
-   ;; fleet refuses client-supplied MCP servers; [] keeps a global
-   ;; `agent-shell-mcp-servers' from being sent to it.
+   ;; fleet ignores client-supplied MCP servers (its first reply says so);
+   ;; [] keeps a global `agent-shell-mcp-servers' from being sent to it.
    :mcp-servers []
    :client-maker
    (lambda (buffer)
@@ -238,7 +238,8 @@ agent-shell. agent-shell ships no fleet agent, so define one in your init file:
 
 `M-x agent-shell` then starts a fleet shell; without the last line, it asks
 which agent to start. The snippet was checked live as written on 2026-10-06,
-with only the env file's path changed. Its client maker calls
+and again with its current comments on 2026-10-07, with only the env file's
+path changed. Its client maker calls
 `agent-shell--make-acp-client`, an internal function (note the double dash)
 that every agent shipped with agent-shell also uses, so recheck the snippet
 after upgrading agent-shell.
@@ -253,11 +254,12 @@ server env file with the `:load-env` option of
 it, the server's own secrets included, into the agent's environment.
 
 agent-shell sends the servers in `agent-shell-mcp-servers` to every agent whose
-config names none of its own. fleet refuses client-supplied MCP servers, so
-with that variable set, every fleet session would fail to start with invalid
-params (checked live). The snippet's `:mcp-servers []` is an empty vector,
-which, unlike `nil`, counts as the agent's own setting, so agent-shell sends
-fleet an empty list (checked live with the variable set).
+config names none of its own. fleet does not use them (see `session/new`):
+the session opens, and the first reply starts with a note naming the servers
+it ignored (checked live on 2026-10-07). The snippet's `:mcp-servers []` is an
+empty vector, which, unlike `nil`, counts as the agent's own setting, so
+agent-shell sends fleet an empty list and there is no note (checked live with
+the variable set). Leave it out if you'd rather see the note.
 
 `@file` mentions need no override, unlike CodeCompanion's file context:
 agent-shell embeds a text file's content as a `resource` block, and the model
@@ -273,8 +275,9 @@ agent):
 
 With it, a 120 KB file was embedded and the model answered from it (checked
 live). Going much higher does not help: fleet's chat server takes at most 1 MB
-per request, and a prompt over that fails with an internal error saying the
-request body is too large (checked live with a 1.2 MB file). An image or any
+per request, and a prompt over that fails with an internal error, "server
+rejected the request (400): bad json: http: request body too large" (checked
+live with a 1.2 MB file). An image or any
 other binary file is sent as a `blob`, which fleet refuses with invalid params,
 as `initialize` advertises (checked live).
 
@@ -289,10 +292,12 @@ live). Killing the agent-shell buffer (`C-x k`) does not: acp.el ends the agent
 with `delete-process`, which sends `SIGKILL`, and the turn keeps running
 server-side (checked live). Stop it in the web chat.
 
-agent-shell's error box shows the error's `message`; "[ Details ]" expands the
-rest, including fleet's reason in `data.error`. agent-shell does not display
-the name and version fleet reports in `initialize`; `fleet version` prints
-them.
+agent-shell's error box shows the error's `message`, which is fleet's reason
+(see Errors); "[ Details ]" expands the raw error. A wrong token, an email
+that is not a fleet user or a viewer is reported as soon as the shell starts,
+because `fleet acp` checks the user and token when the session opens (all
+checked live on 2026-10-07). agent-shell does not display the name and version
+fleet reports in `initialize`; `fleet version` prints them.
 
 For an adapter bug report, attach the JSON-RPC transcript. acp.el records it
 only while logging is on: set `acp-logging-enabled` to `t`, or run
@@ -302,6 +307,85 @@ in full (`M-x agent-shell-view-traffic` lists them, one line each). The log
 lives in an Emacs buffer and is gone when Emacs exits, so save it first, and
 read it before sharing: it holds every prompt and the full text of each file
 you mentioned.
+
+### Zed
+
+Tested against a real `fleet serve` with a live model, from Zed 1.22.0 (the
+stable Linux arm64 build). On 2026-10-07, connect, multi-turn, streamed answer
+text, thinking and tool calls, cancel, a cancel that arrived just after the
+turn finished, `--timeout`, approving through the link in the reply, queueing
+behind a turn running in the web chat, `@file` mentions, an MCP server
+configured in Zed, and the daemon-down and credential errors all worked
+through Zed. Add fleet as a custom agent in Zed's `settings.json`:
+
+```json
+{
+  "agent_servers": {
+    "fleet": {
+      "type": "custom",
+      "command": "fleet",
+      "args": ["acp", "--email", "acp-bot@example.com"],
+      "env": { "FLEET_ENV_FILE": "/etc/fleet/fleet.env" }
+    }
+  }
+}
+```
+
+Then open the Agent Panel, click "+" and pick fleet under "External Agents".
+The snippet was checked live as written on 2026-10-07, with only the env
+file's path changed and `fleet` on Zed's `PATH`. Zed starts `fleet acp` in the
+project's directory, with its own environment plus `env`. As with the other
+clients, set `FLEET_ENV_FILE` to the server env file's absolute path, and never
+put the token itself in `settings.json`. Zed keeps one `fleet acp` process for
+all fleet threads and reads `args` and `env` only when it starts it, so restart
+Zed after changing them: a new thread reuses the running process.
+
+Zed sends every MCP server configured in Zed (`context_servers`) to every
+external agent. fleet does not use them (see `session/new`): the thread opens,
+and the first reply starts with a note naming the servers it ignored (checked
+live).
+
+`@file` mentions need no setup: Zed embeds a text file's content as a
+`resource` block, and the model answered from it (checked live). A larger file
+is embedded as its first 1 KB only, under a heading saying it is too large to
+show in full, so the model never sees the rest: a 15 KB file went whole and a
+20 KB one was cut (checked live). The heading also says no outline was
+available, so for a file Zed can outline it may send an outline instead (not
+checked). Zed itself refuses an image mention, since `initialize` advertises no
+image support: it shows "This model does not support images yet" and sends the
+rest of the message without it (checked live).
+
+Stopping a reply (the stop button) sends `session/cancel`, and fleet stops the
+turn server-side as described under "Protocol mapping". Zed marks the running
+tool call failed (a red ✗) but shows no "Cancelled" label. It keeps listening
+after a cancel, so it shows the notes fleet sends after a stop, such as the
+note that the turn had already finished before the Stop arrived (checked
+live). Quitting Zed while a reply is running does not stop the turn: Zed kills
+`fleet acp` with `SIGKILL`, so it cannot send a Stop, and the turn ran to
+completion (checked live). Stop the reply in Zed first, or stop the turn in the
+web chat afterwards.
+
+Zed shows an error's `message` in its "An Error Happened" box, followed by the
+error's `data` when there is any, which fleet sends only when the message had
+to be cut (see Errors). A credential problem is reported when the thread opens:
+Zed's "Authenticate to fleet" view then shows fleet's reason, for example
+"server rejected the request (403): viewer@example.com has the read-only viewer
+role… `fleet chat user role viewer@example.com --role member`". Fix the problem
+and start a new thread; fleet offers no sign-in methods, so there is nothing to
+authenticate in Zed. One that starts mid-session (a role changed, say) is
+answered on the next message, where Zed shows its own fixed "Authentication
+Required" text and an Authenticate button that leads nowhere, not fleet's
+reason. With the server unreachable, the thread still opens and the first
+message reports "connect …: connection refused" (checked live). Zed renders
+the message as Markdown, so a flag such as `--timeout` reads "–timeout" there.
+Zed does not display the name and version fleet reports in `initialize`;
+`fleet version` prints them.
+
+For an adapter bug report, run "dev: open acp logs" from the command palette:
+it lists every message between Zed and `fleet acp` since the agent started,
+with a button to copy them. Read it before sharing: it holds every prompt and
+the full text of each file you mentioned. Zed's own log (`zed: open log`) also
+records what `fleet acp` writes to stderr.
 
 ## Protocol mapping
 
@@ -498,11 +582,24 @@ What shipped:
 - Checked live against a real `fleet serve` with a live model from Emacs 30.2
   and agent-shell 0.85.3 (`f44c96b`) on 2026-10-06: the features listed under
   "Emacs (agent-shell)"; the snippet as published there, with a global
-  `agent-shell-mcp-servers` set (and, without the `:mcp-servers []` line,
-  `session/new` refused); `@file` mentions under the embed limit, over it, and
-  over it with the limit raised; a prompt over fleet's 1 MB request cap;
-  quitting Emacs and killing the agent-shell buffer mid-turn; and the logging
-  commands.
+  `agent-shell-mcp-servers` set (without the `:mcp-servers []` line, that
+  build refused `session/new`; it no longer does, see below); `@file` mentions
+  under the embed limit, over it, and over it with the limit raised; a prompt
+  over fleet's 1 MB request cap; quitting Emacs and killing the agent-shell
+  buffer mid-turn; and the logging commands.
+- Checked live against a real `fleet serve` with a live model from Zed 1.22.0
+  on 2026-10-07: the features listed under "Zed", the snippet as published
+  there, `@file` mentions of a 15 KB, a 20 KB and a 120 KB file, an image
+  mention, an MCP server in Zed's `context_servers`, quitting Zed mid-turn
+  (the turn ran to completion, with and without a stdio logger between Zed and
+  `fleet acp`), and "dev: open acp logs".
+- Rechecked live on 2026-10-07 with Emacs agent-shell and Zed after the changes
+  to error messages, the check at `session/new` and client MCP servers: a turn
+  whose model wrote text before a tool call shows its answer once; an unknown
+  user, a viewer and a wrong token are reported with their reason when the
+  session opens; `--timeout` and an over-size request show their reason, with
+  no `data`; an unreachable server opens the session and the first prompt
+  reports it; and MCP servers sent by the editor get the note once.
 
 Deviations and limits:
 
@@ -534,7 +631,8 @@ Deviations and limits:
   resource, loses that context: fleet cannot read the path. CodeCompanion.nvim
   does this by default; the configuration under "Neovim (CodeCompanion.nvim)"
   works around it. Emacs's agent-shell does it for a file over its embed limit
-  (100 KB by default); "Emacs (agent-shell)" says how to raise it.
+  (100 KB by default); "Emacs (agent-shell)" says how to raise it. Zed sends
+  only the first 1 KB of a file over about 16 KB (see "Zed").
 - **The client's MCP servers are not used.** ACP's
   [session setup](https://agentclientprotocol.com/protocol/session-setup)
   says "All Agents **MUST** support connecting to MCP servers via stdio" and
@@ -569,11 +667,10 @@ Deviations and limits:
   send a Stop, and so does a client that kills it before a slow fleet has
   taken one. The turn keeps running server-side until it ends or reaches one
   of fleet's own ceilings; it stays visible in the web chat, and can be
-  stopped there. Zed's source (read on 2026-10-06, not tested live) kills its
-  agent's process group with `SIGKILL` when it drops the agent connection,
-  without a `SIGTERM` or closing stdin first, so when Zed ends `fleet acp` that
-  way the turn keeps running. Whether a plain Zed quit takes that path was not
-  checked. Killing an Emacs agent-shell buffer does send `SIGKILL`, and its
+  stopped there. Zed kills `fleet acp` with `SIGKILL` when it quits, without a
+  `SIGTERM` or closing stdin first, so quitting Zed with a reply running leaves
+  that turn running (checked live with Zed 1.22.0 on 2026-10-07; see "Zed").
+  Killing an Emacs agent-shell buffer does send `SIGKILL`, and its
   turn kept running (checked live on 2026-10-06); quitting Emacs instead stops
   the turn (see "Emacs (agent-shell)").
 
