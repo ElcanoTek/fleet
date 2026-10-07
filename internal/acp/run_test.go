@@ -112,6 +112,142 @@ func TestRunSpeaksACPOnStdio(t *testing.T) {
 	}
 }
 
+// TestErrorDataOnTheWire reads errors as the client gets them off stdout. An
+// error whose message holds the whole reason has no data key at all, not
+// "data":{} or "data":null (Zed would print either beside the message, and
+// the SDK client decodes a missing data and "data":null alike, so the
+// harness's tests cannot tell them apart). A cut message keeps the whole
+// reason in data.error, and errors fleet acp does not word itself keep the
+// data acp-go-sdk gives them.
+func TestErrorDataOnTheWire(t *testing.T) {
+	longFailure := "the provider refused the request. " + strings.Repeat("Its detail runs on and on. ", 20)
+	srv := httptest.NewServer(&fakeFleet{t: t, turn: func(w *sseWriter, _ *http.Request) {
+		w.emit("conversation", map[string]any{"id": "c"})
+		w.emit("turn.error", map[string]any{"message": longFailure})
+	}})
+	defer srv.Close()
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("test-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	var stderr bytes.Buffer
+	exit := make(chan int, 1)
+	go func() {
+		exit <- run([]string{"--server", srv.URL, "--email", "bot@example.com", "--token-file", tokenFile}, inR, outW, &stderr, nil)
+		_ = outW.Close()
+	}()
+	lines := bufio.NewScanner(outR)
+	lines.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	// call sends one request and returns its reply's result, or the members
+	// of its error exactly as they are on the wire. Notifications are skipped.
+	call := func(id int, method, params string) (json.RawMessage, map[string]json.RawMessage) {
+		t.Helper()
+		if _, err := fmt.Fprintf(inW, `{"jsonrpc":"2.0","id":%d,"method":%q,"params":%s}`+"\n", id, method, params); err != nil {
+			t.Fatal(err)
+		}
+		for lines.Scan() {
+			var m struct {
+				ID     json.RawMessage            `json:"id"`
+				Method string                     `json:"method"`
+				Result json.RawMessage            `json:"result"`
+				Error  map[string]json.RawMessage `json:"error"`
+			}
+			if err := json.Unmarshal(lines.Bytes(), &m); err != nil {
+				t.Fatalf("non-JSON line on stdout: %q", lines.Text())
+			}
+			if m.Method != "" {
+				continue
+			}
+			if string(m.ID) != fmt.Sprint(id) {
+				t.Fatalf("reply %s, want the reply to %d", lines.Text(), id)
+			}
+			return m.Result, m.Error
+		}
+		t.Fatalf("stdout closed early: %v (stderr: %s)", lines.Err(), stderr.String())
+		return nil, nil
+	}
+	str := func(raw json.RawMessage) string {
+		var s string
+		_ = json.Unmarshal(raw, &s)
+		return s
+	}
+	// wire is an error's members as JSON again: the keys it has on the wire.
+	wire := func(e map[string]json.RawMessage) string {
+		b, _ := json.Marshal(e)
+		return string(b)
+	}
+
+	if _, e := call(1, "initialize", `{"protocolVersion":1,"clientCapabilities":{}}`); e != nil {
+		t.Fatalf("initialize: %v", e)
+	}
+	res, _ := call(2, "session/new", `{"cwd":"/tmp","mcpServers":[]}`)
+	var sess struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(res, &sess); err != nil || sess.SessionID == "" {
+		t.Fatalf("session/new reply = %s", res)
+	}
+
+	for _, tc := range []struct {
+		name, params, message string
+		code                  string
+	}{
+		{
+			name:    "refused content",
+			params:  `{"sessionId":"` + sess.SessionID + `","prompt":[{"type":"image","data":"aGk=","mimeType":"image/png"}]}`,
+			code:    "-32602",
+			message: "fleet acp does not accept image content (promptCapabilities.image is false)",
+		},
+		{
+			name:    "unknown session",
+			params:  `{"sessionId":"nope","prompt":[{"type":"text","text":"x"}]}`,
+			code:    "-32002",
+			message: `fleet acp has no session "nope" (it was closed, or opened by an earlier fleet acp process); start a new session`,
+		},
+	} {
+		_, e := call(3, "session/prompt", tc.params)
+		if string(e["code"]) != tc.code || str(e["message"]) != tc.message {
+			t.Errorf("%s: error = %s, want code %s, message %q", tc.name, wire(e), tc.code, tc.message)
+		}
+		if _, ok := e["data"]; ok {
+			t.Errorf("%s: error = %s, want no data key: the message holds the whole reason", tc.name, wire(e))
+		}
+	}
+
+	// A long turn.error: the message is cut, data.error is the reason whole.
+	_, e := call(4, "session/prompt", `{"sessionId":"`+sess.SessionID+`","prompt":[{"type":"text","text":"x"}]}`)
+	var data map[string]string
+	if err := json.Unmarshal(e["data"], &data); err != nil || len(data) != 1 || data["error"] != "turn failed: "+longFailure {
+		t.Errorf("error = %s, want data {\"error\": the whole reason}", wire(e))
+	}
+	if msg := str(e["message"]); string(e["code"]) != "-32603" || msg == "" || msg == data["error"] {
+		t.Errorf("error = %s, want an internal error with the reason cut", wire(e))
+	}
+
+	// Errors fleet acp does not word itself keep their data: its own
+	// method-not-found and acp-go-sdk's refusal of params it cannot decode.
+	if _, e := call(5, "authenticate", `{"methodId":"x"}`); string(e["code"]) != "-32601" || str(e["message"]) != "Method not found" || string(e["data"]) != `{"method":"authenticate"}` {
+		t.Errorf("authenticate error = %s, want -32601, \"Method not found\", data.method", wire(e))
+	}
+	_, e = call(6, "session/prompt", `{"sessionId":7,"prompt":[]}`)
+	if err := json.Unmarshal(e["data"], &data); err != nil || string(e["code"]) != "-32602" || str(e["message"]) != "Invalid params" || data["error"] == "" {
+		t.Errorf("undecodable params error = %s, want acp-go-sdk's -32602, \"Invalid params\", data.error", wire(e))
+	}
+
+	_ = inW.Close()
+	select {
+	case code := <-exit:
+		if code != 0 {
+			t.Errorf("exit %d", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("fleet acp did not exit after stdin closed")
+	}
+}
+
 func TestRunRejectsStrayArguments(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := run([]string{"serve"}, strings.NewReader(""), io.Discard, &stderr, nil); code != 2 {

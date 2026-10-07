@@ -613,10 +613,12 @@ func resolveErr(t *testing.T, f chattui.Flags) error {
 }
 
 // Every error fleet acp answers with carries its reason in the JSON-RPC
-// message, not only in data.error: some clients show code and message alone
-// (Emacs's agent-shell hides data behind a Details button), and with the SDK's
-// generic message an unknown user, a viewer, a wrong token and a missing email
-// all read "Authentication required". code and data.error are as before.
+// message: some clients show code and message alone (Emacs's agent-shell
+// hides data behind a Details button), and with the SDK's generic message an
+// unknown user, a viewer, a wrong token and a missing email all read
+// "Authentication required". code is as before. data is left out when the
+// message holds the whole reason, since Zed prints data beside the message
+// and would show the reason twice; a cut message keeps it whole in data.error.
 func TestErrorMessagesCarryTheReason(t *testing.T) {
 	refuse := func(status int, contentType, body string) func(w *sseWriter, _ *http.Request) {
 		return func(w *sseWriter, _ *http.Request) {
@@ -653,49 +655,53 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 		name string
 		err  func(t *testing.T) error
 		code int
-		// data is data.error, exactly: what it was before message carried
-		// the reason too (only the failed-Stop timeout's was reworded).
-		data string
-		// dataPrefix, when set, is data.error's start instead (the rest is the
-		// OS's text, or a long quoted reply).
-		dataPrefix string
-		// message is the message wanted; "" means data.error itself.
+		// message is the message wanted: the whole reason, on one line, so
+		// the error has no data.
 		message string
+		// messagePrefix, when set, is message's start instead (the rest is
+		// the OS's text).
+		messagePrefix string
+		// data is data.error, exactly, for a reason too long for message:
+		// message is cut, and data.error carries the reason whole.
+		data string
+		// dataPrefix, when set, is data.error's start instead (the rest is a
+		// long quoted reply).
+		dataPrefix string
 		// messageHas, when set, replaces message: what a cut message must
 		// still say.
 		messageHas []string
 	}{
 		{
-			name: "403 wrong token",
-			err:  promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "text/plain", "forbidden\n")}),
-			code: -32000,
-			data: "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server",
+			name:    "403 wrong token",
+			err:     promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "text/plain", "forbidden\n")}),
+			code:    -32000,
+			message: "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server",
 		},
 		{
-			name: "403 not a fleet user",
-			err:  promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "application/json", `{"error":"not_a_member"}`)}),
-			code: -32000,
-			data: "server rejected the request (403): bot@example.com is not a fleet user; an admin can add it with `fleet chat user add bot@example.com --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user",
+			name:    "403 not a fleet user",
+			err:     promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "application/json", `{"error":"not_a_member"}`)}),
+			code:    -32000,
+			message: "server rejected the request (403): bot@example.com is not a fleet user; an admin can add it with `fleet chat user add bot@example.com --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user",
 		},
 		{
-			name: "403 viewer",
-			err:  promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "application/json", `{"error":"read_only"}`)}),
-			code: -32000,
-			data: "server rejected the request (403): bot@example.com has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role bot@example.com --role member`",
+			name:    "403 viewer",
+			err:     promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "application/json", `{"error":"read_only"}`)}),
+			code:    -32000,
+			message: "server rejected the request (403): bot@example.com has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role bot@example.com --role member`",
 		},
 		{
-			name: "403 IP filter",
-			err:  promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "text/plain", "Access denied\n")}),
-			code: -32000,
-			data: "server rejected the request (403): the server's IP access control (FLEET_IP_ALLOWLIST / FLEET_IP_DENYLIST) does not admit this client's address; connect from an admitted address, or ask an admin to admit this one",
+			name:    "403 IP filter",
+			err:     promptWith(harnessOpts{turn: refuse(http.StatusForbidden, "text/plain", "Access denied\n")}),
+			code:    -32000,
+			message: "server rejected the request (403): the server's IP access control (FLEET_IP_ALLOWLIST / FLEET_IP_DENYLIST) does not admit this client's address; connect from an admitted address, or ask an admin to admit this one",
 		},
 		{
 			// A proxy's page over several lines, echoing the token: message is
-			// one line, and the token is redacted from both.
+			// the whole reason on one line, with the token redacted, so there
+			// is no data.
 			name:    "401 from a proxy",
 			err:     promptWith(harnessOpts{turn: refuse(http.StatusUnauthorized, "text/html", "<html>\n  <h1>401</h1>\n  Authorization: Bearer test-token\n</html>\n")}),
 			code:    -32000,
-			data:    "not authorized (401) for bot@example.com: <html>\n  <h1>401</h1>\n  Authorization: Bearer [redacted]\n</html>",
 			message: "not authorized (401) for bot@example.com: <html> <h1>401</h1> Authorization: Bearer [redacted] </html>",
 		},
 		{
@@ -708,8 +714,8 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 				_, err := h.conn.NewSession(context.Background(), acpsdk.NewSessionRequest{Cwd: "/", McpServers: []acpsdk.McpServer{}})
 				return err
 			},
-			code: -32000,
-			data: "no user email: pass --email <you@example.com> or set FLEET_USER_EMAIL (your audit identity, so it is never guessed)",
+			code:    -32000,
+			message: "no user email: pass --email <you@example.com> or set FLEET_USER_EMAIL (your audit identity, so it is never guessed)",
 		},
 		{
 			name: "missing token at session/prompt",
@@ -718,24 +724,24 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 				_, err := h.prompt("fleet-acp-any", "x")
 				return err
 			},
-			code: -32000,
-			data: noToken.Error(),
+			code:    -32000,
+			message: noToken.Error(),
 		},
 		{
-			name: "turn.error",
-			err:  promptWith(harnessOpts{turn: terminal("turn.error", "budget exhausted")}),
-			code: -32603,
-			data: "turn failed: budget exhausted",
+			name:    "turn.error",
+			err:     promptWith(harnessOpts{turn: terminal("turn.error", "budget exhausted")}),
+			code:    -32603,
+			message: "turn failed: budget exhausted",
 		},
 		{
-			name: "turn.model_required",
-			err:  promptWith(harnessOpts{turn: terminal("turn.model_required", "the model is no longer offered; pick another")}),
-			code: -32603,
-			data: "turn requires another model: the model is no longer offered; pick another",
+			name:    "turn.model_required",
+			err:     promptWith(harnessOpts{turn: terminal("turn.model_required", "the model is no longer offered; pick another")}),
+			code:    -32603,
+			message: "turn requires another model: the model is no longer offered; pick another",
 		},
 		{
 			// Too long for one line: message keeps the whole sentences that
-			// fit (397 runes).
+			// fit (397 runes), and data.error the whole reason.
 			name:    "a long turn.error",
 			err:     promptWith(harnessOpts{turn: terminal("turn.error", longFailure)}),
 			code:    -32603,
@@ -743,33 +749,34 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 			message: "turn failed: the provider refused the request." + strings.Repeat(" Its detail runs on and on.", 13),
 		},
 		{
-			name: "any other status",
-			err:  promptWith(harnessOpts{turn: refuse(http.StatusInternalServerError, "text/plain", "database unavailable\n")}),
-			code: -32603,
-			data: "server returned 500: database unavailable",
+			name:    "any other status",
+			err:     promptWith(harnessOpts{turn: refuse(http.StatusInternalServerError, "text/plain", "database unavailable\n")}),
+			code:    -32603,
+			message: "server returned 500: database unavailable",
 		},
 		{
-			name:       "daemon down",
-			err:        promptWith(harnessOpts{serverURL: "http://127.0.0.1:1"}),
-			code:       -32603,
-			dataPrefix: "connect http://127.0.0.1:1: ",
+			name:          "daemon down",
+			err:           promptWith(harnessOpts{serverURL: "http://127.0.0.1:1"}),
+			code:          -32603,
+			messagePrefix: "connect http://127.0.0.1:1: ",
 		},
 		{
-			name: "--timeout",
-			err:  promptWith(harnessOpts{turn: blockingTurn(make(chan struct{})), timeout: 200 * time.Millisecond}),
-			code: -32603,
-			data: "the fleet turn did not finish within 200ms and was stopped (raise it with fleet acp --timeout)",
+			name:    "--timeout",
+			err:     promptWith(harnessOpts{turn: blockingTurn(make(chan struct{})), timeout: 200 * time.Millisecond}),
+			code:    -32603,
+			message: "the fleet turn did not finish within 200ms and was stopped (raise it with fleet acp --timeout)",
 		},
 		{
 			name: "--timeout whose Stop failed",
 			err: promptWith(harnessOpts{turn: blockingTurn(make(chan struct{})), timeout: 200 * time.Millisecond,
 				cancelStatus: http.StatusBadGateway, publicURL: "https://fleet.example.com"}),
-			code: -32603,
-			data: "the fleet turn did not finish within 200ms and may still be running — stop it at https://fleet.example.com/chat?c=conv-slow (stopping it failed: cancel returned 502: )",
+			code:    -32603,
+			message: "the fleet turn did not finish within 200ms and may still be running — stop it at https://fleet.example.com/chat?c=conv-slow (stopping it failed: cancel returned 502: )",
 		},
 		{
 			// The Stop's answer is a long proxy page: the message is cut, and
-			// still says the turn may be running and where to stop it.
+			// still says the turn may be running and where to stop it;
+			// data.error has the whole reason.
 			name: "--timeout whose Stop failed with a long reply",
 			err: promptWith(harnessOpts{turn: blockingTurn(make(chan struct{})), timeout: 200 * time.Millisecond,
 				cancelStatus: http.StatusBadGateway, cancelBody: proxyPage, publicURL: "https://fleet.example.com"}),
@@ -792,28 +799,28 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 				}})
 				return err
 			},
-			code: -32602,
-			data: "fleet does not accept MCP servers from the ACP client: its connectors come from the operator's bundle and run host-side with brokered credentials",
+			code:    -32602,
+			message: "fleet does not accept MCP servers from the ACP client: its connectors come from the operator's bundle and run host-side with brokered credentials",
 		},
 		{
-			name: "image",
-			err:  promptWith(harnessOpts{}, acpsdk.ImageBlock("aGk=", "image/png")),
-			code: -32602,
-			data: "fleet acp does not accept image content (promptCapabilities.image is false)",
+			name:    "image",
+			err:     promptWith(harnessOpts{}, acpsdk.ImageBlock("aGk=", "image/png")),
+			code:    -32602,
+			message: "fleet acp does not accept image content (promptCapabilities.image is false)",
 		},
 		{
-			name: "audio",
-			err:  promptWith(harnessOpts{}, acpsdk.AudioBlock("aGk=", "audio/wav")),
-			code: -32602,
-			data: "fleet acp does not accept audio content (promptCapabilities.audio is false)",
+			name:    "audio",
+			err:     promptWith(harnessOpts{}, acpsdk.AudioBlock("aGk=", "audio/wav")),
+			code:    -32602,
+			message: "fleet acp does not accept audio content (promptCapabilities.audio is false)",
 		},
 		{
 			name: "binary blob",
 			err: promptWith(harnessOpts{}, acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{
 				BlobResourceContents: &acpsdk.BlobResourceContents{Uri: "file:///repo/logo.png", Blob: "aGk="},
 			})),
-			code: -32602,
-			data: "fleet acp accepts text, resource_link and embedded text resources only",
+			code:    -32602,
+			message: "fleet acp accepts text, resource_link and embedded text resources only",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -821,25 +828,32 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 			if re.Code != tc.code {
 				t.Errorf("code = %d, want %d", re.Code, tc.code)
 			}
+			cut := tc.data != "" || tc.dataPrefix != ""
 			data, _ := re.Data.(map[string]any)
 			got, _ := data["error"].(string)
 			switch {
+			case !cut && re.Data != nil:
+				t.Errorf("data = %v, want none: message holds the whole reason", re.Data)
+			case cut && len(data) != 1:
+				t.Errorf("data = %v, want data.error alone", re.Data)
 			case tc.dataPrefix != "" && !strings.HasPrefix(got, tc.dataPrefix):
 				t.Errorf("data.error = %q, want it to start %q", got, tc.dataPrefix)
-			case tc.dataPrefix == "" && got != tc.data:
+			case tc.data != "" && got != tc.data:
 				t.Errorf("data.error = %q\nwant        %q", got, tc.data)
 			}
-			want := tc.message
-			if want == "" {
-				want = got
-			}
-			for _, part := range tc.messageHas {
-				if !strings.Contains(re.Message, part) {
-					t.Errorf("message = %q\nwant it to say %q", re.Message, part)
+			switch {
+			case tc.messageHas != nil:
+				for _, part := range tc.messageHas {
+					if !strings.Contains(re.Message, part) {
+						t.Errorf("message = %q\nwant it to say %q", re.Message, part)
+					}
 				}
-			}
-			if tc.messageHas == nil && (re.Message != want || want == "") {
-				t.Errorf("message = %q\nwant      %q", re.Message, want)
+			case tc.messagePrefix != "":
+				if !strings.HasPrefix(re.Message, tc.messagePrefix) {
+					t.Errorf("message = %q, want it to start %q", re.Message, tc.messagePrefix)
+				}
+			case re.Message != tc.message || tc.message == "":
+				t.Errorf("message = %q\nwant      %q", re.Message, tc.message)
 			}
 			if strings.ContainsAny(re.Message, "\r\n") || utf8.RuneCountInString(re.Message) > maxErrorMessage+1 {
 				t.Errorf("message is not one concise line: %q", re.Message)
@@ -857,11 +871,19 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 		if re.Code != -32002 {
 			t.Errorf("code = %d, want -32002 (resource not found)", re.Code)
 		}
-		if data, _ := re.Data.(map[string]any); len(data) != 1 || data["sessionId"] != "nope" {
-			t.Errorf("data = %v, want the session id alone", re.Data)
+		if re.Data != nil {
+			t.Errorf("data = %v, want none: message names the session whole", re.Data)
 		}
 		if want := `fleet acp has no session "nope" (it was closed, or opened by an earlier fleet acp process); start a new session`; re.Message != want {
 			t.Errorf("message = %q\nwant      %q", re.Message, want)
+		}
+		// An id too long for the message: it is cut, and data.error names the
+		// session whole, as for any other reason.
+		long := strings.Repeat("x", 2*maxErrorMessage)
+		re = wireError(t, func() error { _, err := h.prompt(acpsdk.SessionId(long), "x"); return err }())
+		data, _ := re.Data.(map[string]any)
+		if got, _ := data["error"].(string); re.Code != -32002 || len(data) != 1 || !strings.Contains(got, `"`+long+`"`) || !strings.HasSuffix(re.Message, "…") {
+			t.Errorf("code = %d, data = %v, message = %q; want resource not found, cut, naming the session whole in data.error", re.Code, re.Data, re.Message)
 		}
 	})
 }

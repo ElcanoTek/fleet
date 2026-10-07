@@ -222,11 +222,14 @@ proxy's page) keeps as many whole sentences as fit, when they fill at least
 half of that; otherwise it is cut after the last whole word that fits (a
 "word" over 40 characters, such as a long URL, is cut where the limit falls)
 and ends in "…". A reason that quotes a reply says what to do before the
-quote, so the cut keeps it. `data.error` carries the reason in full, and the
-`code` is unchanged, so a client that acts on the code, as JSON-RPC intends,
-or reads `data`, works as before. `message` is cut from the same text as
-`data.error` (for an unknown session, built around the id in `data`), so it
-exposes nothing `data` does not.
+quote, so the cut keeps it. The `code` is unchanged, so a client that acts on
+it, as JSON-RPC intends, works as before. `message` is only ever the reason or
+a cut of it. `data` is left out when `message` holds the whole reason (only
+its whitespace changed), and is `{"error": …}` with the reason in full only
+when `message` was cut: Zed shows an error as its `message` followed by its
+`data` as JSON, so a reason whole in both showed twice, while
+CodeCompanion.nvim reads `data.error` when it is there and `message`
+otherwise, and agent-shell shows `message`.
 
 | Failure | What the ACP client sees |
 | --- | --- |
@@ -239,7 +242,7 @@ exposes nothing `data` does not.
 | `--timeout` exceeded | The turn is stopped server-side, then an internal error names the timeout and the flag. If the Stop fails, the error says the turn may still be running and where to stop it, then why the Stop failed. |
 | A prompt beyond the 20 waiting for a session | Internal error saying the session already has a prompt running and 20 waiting (see `session/prompt`) |
 | Client-supplied `mcpServers`; an image, audio or binary blob in a prompt | Invalid params (-32602) naming what is refused |
-| Unknown session id | -32002 resource not found, naming the session and saying it was closed or opened by an earlier `fleet acp` process. `data` is `{"sessionId": …}`, as before. |
+| Unknown session id | -32002 resource not found, naming the session and saying it was closed or opened by an earlier `fleet acp` process. Its `data` follows the rule above too, so it no longer carries `{"sessionId": …}`: the client sent the id, and `message` names it. |
 | A request acp-go-sdk cannot decode or validate | The SDK's own `Invalid params`, with the generic message and the decoder's text in `data.error`: the SDK refuses the request before `fleet acp` sees it |
 | An unsupported method | -32601 with the generic message `Method not found` and the method in `data.method`, whether `fleet acp` itself or the SDK answers it |
 
@@ -259,9 +262,9 @@ What shipped:
   while a turn runs (one run, no Stop), `$/cancel_request`, timeout, 403,
   daemon-down, `turn.error`, policy refusal, approval pointers, refused
   content, the reason in each error's `message` (with its `code` unchanged,
-  and the reason in full in `data.error`), the stdio entry point (stdout
-  carries only JSON-RPC), and the no-execution-imports guard. No live model,
-  no live Buzz in CI.
+  and `data` only when the message is cut, checked on the raw JSON-RPC as
+  well), the stdio entry point (stdout carries only JSON-RPC), and the
+  no-execution-imports guard. No live model, no live Buzz in CI.
 - Tests in `internal/acp` also cover the client going away mid-turn through
   the real entry point. In-process on pipes: stdin closed, a signal, prompts
   waiting in the session's line (they leave at once, unsent), a Stop that

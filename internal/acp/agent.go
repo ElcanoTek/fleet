@@ -521,11 +521,10 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	sess := a.sessions[p.SessionId]
 	a.mu.Unlock()
 	if sess == nil {
-		// ACP's resource_not_found has no SDK constructor. Its data stays the
-		// session id alone; the message says why there is no such session.
-		return acpsdk.PromptResponse{}, &acpsdk.RequestError{Code: -32002, Message: errorMessage(fmt.Sprintf(
-			"fleet acp has no session %q (it was closed, or opened by an earlier fleet acp process); start a new session", p.SessionId)),
-			Data: map[string]any{"sessionId": string(p.SessionId)}}
+		// The message names the session and says why there is none, so like
+		// every reason it has no data unless it is cut (reasonError).
+		return acpsdk.PromptResponse{}, reasonError(resourceNotFound, fmt.Sprintf(
+			"fleet acp has no session %q (it was closed, or opened by an earlier fleet acp process); start a new session", p.SessionId))
 	}
 	message, err := promptText(p.Prompt)
 	if err != nil {
@@ -1175,8 +1174,8 @@ func requestError(err error) error {
 }
 
 // reasonError is the JSON-RPC error of kind (one of acp-go-sdk's constructors:
-// NewAuthRequired, NewInternalError, NewInvalidParams) for reason, with the
-// reason as its message.
+// NewAuthRequired, NewInternalError, NewInvalidParams; or resourceNotFound)
+// for reason, with the reason as its message.
 //
 // The constructors set message to the kind's generic name ("Authentication
 // required", "Internal error", "Invalid params") and leave the reason in
@@ -1188,15 +1187,35 @@ func requestError(err error) error {
 // with the kind's name: the client shows the code beside it, and the name
 // would mislabel most reasons — a viewer's refusal is not a failed
 // authentication, nor a timeout or an unreachable server an internal error.
-// code is unchanged, and data.error still carries the reason whole, for
-// clients that read it. message is cut from data.error's own text, so it
-// carries nothing data.error did not.
+// code is unchanged. message is only ever the reason or a cut of it, so it
+// carries nothing the reason did not.
+//
+// data is left out when message holds the whole reason (on one line: only
+// whitespace changed), and is {"error": reason} only when message had to be
+// cut. Zed shows an error as its message followed by data as JSON, so a
+// data.error beside a whole message showed the reason twice; Neovim's
+// CodeCompanion (data.error when present, else message) and agent-shell
+// (message) lose nothing without it. A cut message keeps data.error, so the
+// whole reason still reaches a client that reads it. The omitted data is the
+// untyped nil: RequestError.Data is an `any` with omitempty, which drops only
+// a nil interface, so an empty map would go out as "data":{} and a nil map as
+// "data":null.
 func reasonError(kind func(data any) *acpsdk.RequestError, reason string) *acpsdk.RequestError {
 	e := kind(map[string]any{"error": reason})
-	if m := errorMessage(reason); m != "" { // an empty reason keeps the kind's name
+	m := errorMessage(reason)
+	if m != "" { // an empty reason keeps the kind's name
 		e.Message = m
 	}
+	if m == oneLine(reason) {
+		e.Data = nil
+	}
 	return e
+}
+
+// resourceNotFound is ACP's resource_not_found (-32002), shaped like
+// acp-go-sdk's constructors, which have none for it.
+func resourceNotFound(data any) *acpsdk.RequestError {
+	return &acpsdk.RequestError{Code: -32002, Message: "Resource not found", Data: data}
 }
 
 // maxErrorMessage bounds an error's message, in runes. fleet acp's own fix-it
@@ -1218,10 +1237,10 @@ const maxWordBackoff = 40
 // whole sentences as fit (wholeSentences) when they fill at least half the
 // bound. Otherwise the words that fit say more: it is cut at the bound,
 // after the last whole word (the part of a word the bound splits is dropped,
-// unless that part is over maxWordBackoff runes), and marked "…". data.error
-// keeps the reason whole.
+// unless that part is over maxWordBackoff runes), and marked "…".
+// reasonError then keeps the whole reason in data.error.
 func errorMessage(reason string) string {
-	s := strings.Join(strings.Fields(reason), " ")
+	s := oneLine(reason)
 	r := []rune(s)
 	if len(r) <= maxErrorMessage {
 		return s
@@ -1239,6 +1258,12 @@ func errorMessage(reason string) string {
 		}
 	}
 	return string(cut) + "…"
+}
+
+// oneLine is s with each run of whitespace, line breaks included, as one
+// space: the whole of s, on one line.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // wholeSentences is the length in bytes of the longest run of s's leading
