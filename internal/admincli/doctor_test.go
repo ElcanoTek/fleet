@@ -164,6 +164,10 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		"journalctl --rotate --vacuum-size=1G",
 		"restart held by --no-restart",
 		"dnf --dump-main-config",
+		// An installed cap is only in effect once journald has restarted onto
+		// it: a --no-restart run leaves it unloaded however small the journal.
+		"systemctl show -p ActiveEnterTimestamp --value systemd-journald",
+		`(( started >= mtime ))`,
 		// …and the operator's value must win even AFTER fleet's cap is
 		// installed (a 60- drop-in would otherwise override it), the reclaim
 		// is verdicted on a re-measure rather than exit codes, and hygiene

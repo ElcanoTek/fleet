@@ -1402,6 +1402,17 @@ reclaim_journal() {
   b="$(journal_bytes)"
   [[ -n "$b" ]] && (( b <= JOURNAL_CAP_SLACK_BYTES ))
 }
+# journald_loaded_since reports whether the running systemd-journald started
+# at or after FILE was last written — i.e. whether it has read it. An unknown
+# start time or mtime counts as not loaded: a restart is cheap, a false "capped"
+# lets the journal regrow to the default ceiling.
+journald_loaded_since() {
+  local started mtime
+  started="$(systemctl show -p ActiveEnterTimestamp --value systemd-journald 2>/dev/null || true)"
+  [[ -n "$started" ]] && started="$(date -d "$started" +%s 2>/dev/null || true)"
+  mtime="$(stat -c %Y "$1" 2>/dev/null || true)"
+  [[ -n "$started" && -n "$mtime" ]] && (( started >= mtime ))
+}
 check_journal_cap() {
   local src="$SRC_DIR/deploy/journald.conf.d/60-fleet-journal-cap.conf"
   local dst="/etc/systemd/journald.conf.d/60-fleet-journal-cap.conf"
@@ -1436,10 +1447,28 @@ check_journal_cap() {
     return 0
   fi
   if [[ -f "$dst" ]] && diff -q <(grep -vE '^[[:space:]]*(#|$)' "$src") <(grep -vE '^[[:space:]]*(#|$)' "$dst") >/dev/null 2>&1; then
-    # Installed is not the same as in effect: a run whose vacuum failed, or a
-    # journald never restarted onto the file, leaves the old size behind.
-    if [[ -z "$bytes" ]] || (( bytes <= JOURNAL_CAP_SLACK_BYTES )); then
-      pass "journal capped by ${dst##*/} (using ${usage:-?})"
+    # Installed is not the same as in effect. journald reads the cap only at
+    # start, so a file written after it started (a --no-restart run, or a hand
+    # copy) is not loaded however small the journal is right now; and a run
+    # whose vacuum failed leaves the old size behind.
+    local loaded=1
+    if ! journald_loaded_since "$dst"; then
+      loaded=0
+      if [[ "$CHECK_ONLY" == "1" ]]; then
+        advise "${dst##*/} is installed but systemd-journald has not restarted since, so it is still on its default limit — a doctor run without --check restarts it: systemctl restart systemd-journald"
+      elif [[ "$NO_RESTART" == "1" ]]; then
+        advise "${dst##*/} is installed but systemd-journald has not restarted since; restart held by --no-restart — the cap applies on: systemctl restart systemd-journald"
+      elif systemctl restart systemd-journald; then
+        loaded=1
+        fixed "restarted systemd-journald to load ${dst##*/} (it was installed after journald started)"
+      else
+        fail "${dst##*/} is installed but systemd-journald could not be restarted to load it: systemctl restart systemd-journald"
+      fi
+    fi
+    if [[ -z "$bytes" ]]; then
+      advise "could not measure the journal (journalctl --disk-usage), so the 1G cap is unconfirmed"
+    elif (( bytes <= JOURNAL_CAP_SLACK_BYTES )); then
+      if [[ "$loaded" == "1" ]]; then pass "journal capped by ${dst##*/} (using ${usage:-?})"; fi
     elif [[ "$CHECK_ONLY" == "1" ]]; then
       advise "journal is ${usage} despite ${dst##*/} — a doctor run without --check rotates and vacuums it"
     elif reclaim_journal; then
