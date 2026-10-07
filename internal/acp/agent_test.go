@@ -47,6 +47,7 @@ type fakeFleet struct {
 
 	mu      sync.Mutex
 	chats   []chatReq
+	bodies  []string // each POST /chat body, raw
 	cancels []string
 	headers []http.Header
 	// meHeaders records every GET /me's headers, nil handler included.
@@ -87,10 +88,12 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.me(w, r)
 	case r.URL.Path == "/chat":
+		raw, _ := io.ReadAll(r.Body)
 		var body chatReq
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		_ = json.Unmarshal(raw, &body)
 		f.mu.Lock()
 		f.chats = append(f.chats, body)
+		f.bodies = append(f.bodies, string(raw))
 		f.headers = append(f.headers, r.Header.Clone())
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -204,7 +207,8 @@ type harnessOpts struct {
 	cfgErr       error
 	publicURL    string
 	timeout      time.Duration
-	serverURL    string // override (e.g. a closed port)
+	serverURL    string    // override (e.g. a closed port)
+	diag         io.Writer // the Agent's stderr (nil: discarded)
 }
 
 // newHarness wires a real SDK client to the real Agent over in-memory pipes,
@@ -226,6 +230,9 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 	cc := chattui.NewClient(chattui.Config{ServerURL: serverURL, Email: "bot@example.com", Token: "test-token", ClientName: "fleet-acp"})
 	cc.AdoptDefaultModel("test/default")
 	ag := NewAgent(cc, o.cfgErr, o.publicURL, o.timeout, "test")
+	if o.diag != nil {
+		ag.diag = o.diag
+	}
 
 	c2aR, c2aW := io.Pipe()
 	a2cR, a2cW := io.Pipe()
@@ -302,11 +309,18 @@ func await(t *testing.T, done <-chan promptResult, what string) promptResult {
 
 func (h *harness) newSession(t *testing.T) acpsdk.SessionId {
 	t.Helper()
+	return h.newSessionWith(t, []acpsdk.McpServer{})
+}
+
+// newSessionWith opens a session whose session/new carries servers, as a
+// client that forwards its own MCP servers sends it.
+func (h *harness) newSessionWith(t *testing.T, servers []acpsdk.McpServer) acpsdk.SessionId {
+	t.Helper()
 	ctx := context.Background()
 	if _, err := h.conn.Initialize(ctx, acpsdk.InitializeRequest{ProtocolVersion: acpsdk.ProtocolVersionNumber}); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
-	s, err := h.conn.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: "/work", McpServers: []acpsdk.McpServer{}})
+	s, err := h.conn.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: "/work", McpServers: servers})
 	if err != nil {
 		t.Fatalf("session/new: %v", err)
 	}
@@ -335,7 +349,8 @@ func TestInitializeAdvertisesOnlyWhatShips(t *testing.T) {
 		t.Errorf("protocolVersion = %d, want %d", resp.ProtocolVersion, SpecVersion)
 	}
 	caps := resp.AgentCapabilities
-	if caps.LoadSession || caps.PromptCapabilities.Image || caps.PromptCapabilities.Audio {
+	if caps.LoadSession || caps.PromptCapabilities.Image || caps.PromptCapabilities.Audio ||
+		caps.McpCapabilities.Http || caps.McpCapabilities.Sse || caps.McpCapabilities.Acp {
 		t.Errorf("over-advertised capabilities: %+v", caps)
 	}
 	if !caps.PromptCapabilities.EmbeddedContext {
@@ -962,21 +977,6 @@ func TestErrorMessagesCarryTheReason(t *testing.T) {
 			},
 		},
 		{
-			name: "client MCP servers",
-			err: func(t *testing.T) error {
-				h := newHarness(t, harnessOpts{})
-				if _, err := h.conn.Initialize(context.Background(), acpsdk.InitializeRequest{ProtocolVersion: 1}); err != nil {
-					t.Fatal(err)
-				}
-				_, err := h.conn.NewSession(context.Background(), acpsdk.NewSessionRequest{Cwd: "/", McpServers: []acpsdk.McpServer{
-					{Stdio: &acpsdk.McpServerStdio{Name: "x", Command: "/bin/true", Args: []string{}, Env: []acpsdk.EnvVariable{}}},
-				}})
-				return err
-			},
-			code:    -32602,
-			message: "fleet does not accept MCP servers from the ACP client: its connectors come from the operator's bundle and run host-side with brokered credentials",
-		},
-		{
 			name:    "image",
 			err:     promptWith(harnessOpts{}, acpsdk.ImageBlock("aGk=", "image/png")),
 			code:    -32602,
@@ -1411,19 +1411,11 @@ func TestApprovalsPointBackToFleet(t *testing.T) {
 	})
 }
 
+// Client MCP servers are ignored rather than refused (clientmcp_test.go).
 func TestRefusesWhatItDoesNotAdvertise(t *testing.T) {
 	h := newHarness(t, harnessOpts{})
-	if _, err := h.conn.Initialize(context.Background(), acpsdk.InitializeRequest{ProtocolVersion: 1}); err != nil {
-		t.Fatal(err)
-	}
-	_, err := h.conn.NewSession(context.Background(), acpsdk.NewSessionRequest{Cwd: "/", McpServers: []acpsdk.McpServer{
-		{Stdio: &acpsdk.McpServerStdio{Name: "x", Command: "/bin/true", Args: []string{}, Env: []acpsdk.EnvVariable{}}},
-	}})
-	if rpcCode(err) != -32602 {
-		t.Errorf("client MCP servers: err = %v, want invalid params", err)
-	}
 	sid := h.newSession(t)
-	_, err = h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, Prompt: []acpsdk.ContentBlock{acpsdk.ImageBlock("aGk=", "image/png")}})
+	_, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, Prompt: []acpsdk.ContentBlock{acpsdk.ImageBlock("aGk=", "image/png")}})
 	if rpcCode(err) != -32602 {
 		t.Errorf("image prompt: err = %v, want invalid params", err)
 	}

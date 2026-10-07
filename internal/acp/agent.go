@@ -92,9 +92,11 @@ type Agent struct {
 	// exits (awaitStops).
 	lifetime context.Context
 	hangUp   context.CancelFunc
-	// diag is where a prompt cut short by the client going away says how its
-	// turn ended (reportGone): its answer and notes would go to stdout, which
-	// nobody reads any more. run sets it to stderr.
+	// diag is stderr, for what fleet acp tells the operator rather than the
+	// client: the MCP servers a session/new sent that are ignored
+	// (NewSession), and how the turn of a prompt cut short by the client going
+	// away ended (reportGone; its answer and notes would go to stdout, which
+	// nobody reads any more). run sets it.
 	diag io.Writer
 
 	mu       sync.Mutex
@@ -150,6 +152,17 @@ type session struct {
 	// a client may number messageIds per session, so an unscoped key would
 	// match another session's prompt and answer this one with its replay.
 	ns string
+	// mcpNotice tells the user that the MCP servers the client sent with
+	// session/new are not used (clientMCPServers.notice; "" = none were sent,
+	// or it has been told). The first prompt that gets the session and is
+	// still not cancelled sends it, just before its submission, so ahead of
+	// its turn's output and whatever that prompt's outcome; sending clears
+	// it, so it goes out at most once per session (sendMCPNotice). A prompt
+	// that ends before that point (refused, cancelled before it got the
+	// session, or left when the client went away) leaves it for the next. One
+	// cancelled while the notice was being written is not submitted, but the
+	// notice has gone out, so it is not repeated. Under mu.
+	mcpNotice string
 	// unsettled holds, per prompt text (by its hash), the key of every
 	// prompt whose outcome is unknown: the request may have been accepted
 	// but the answer was lost (a transport failure). A retry of the same
@@ -299,8 +312,10 @@ func (a *Agent) SetConnection(c updater) {
 
 // Initialize advertises only what is true: text prompts (plus the baseline
 // resource_link, and embedded text resources), no session/load, no images or
-// audio, no MCP servers from the client, no auth methods (identity is the
-// operator-provisioned fleet user, resolved host-side from the environment).
+// audio, no MCP capabilities (session/new ignores every MCP server the client
+// sends, even the stdio ones ACP expects every agent to support), no auth
+// methods (identity is the operator-provisioned fleet user, resolved
+// host-side from the environment).
 func (a *Agent) Initialize(_ context.Context, _ acpsdk.InitializeRequest) (acpsdk.InitializeResponse, error) {
 	title := "fleet"
 	return acpsdk.InitializeResponse{
@@ -322,9 +337,21 @@ func (a *Agent) Authenticate(context.Context, acpsdk.AuthenticateRequest) (acpsd
 // NewSession opens an ACP session. Nothing is created in fleet yet — the
 // conversation is born on the first prompt, like a new web chat. The client's
 // cwd is recorded but not used: tool calls run in fleet's sandbox workspace,
-// never in the client's filesystem. Client-supplied MCP servers are refused
-// rather than ignored, because fleet's connectors come from the operator's
-// bundle and are credential-brokered host-side.
+// never in the client's filesystem.
+//
+// Client-supplied MCP servers are accepted and ignored: never started,
+// contacted, stored or forwarded. fleet's tools and connectors come from the
+// operator's bundle and run host-side with brokered credentials; a client's
+// servers run on the client's machine, out of fleet's reach. They are not
+// refused, because clients send every MCP server their user configured to
+// every ACP agent (Zed its context_servers, Emacs agent-shell its
+// agent-shell-mcp-servers), so a refusal left such a user unable to open a
+// session at all. Only their names are kept (ignoredMCPServers): an entry can
+// carry secrets in its env, headers, args, URL or _meta. The operator is told
+// on stderr once the session opens (a refused session logs nothing about
+// them), and the user by the session's first prompt (mcpNotice). An
+// entry the SDK cannot decode (env as an object, say) never reaches here: the
+// SDK answers session/new with invalid params itself.
 //
 // Before the session opens, the server is asked whether it takes turns from
 // the configured user and token (chattui's CheckIdentity), so a wrong token,
@@ -345,10 +372,7 @@ func (a *Agent) NewSession(ctx context.Context, p acpsdk.NewSessionRequest) (acp
 	if a.cfgErr != nil {
 		return acpsdk.NewSessionResponse{}, reasonError(acpsdk.NewAuthRequired, a.cfgErr.Error())
 	}
-	if len(p.McpServers) > 0 {
-		return acpsdk.NewSessionResponse{}, reasonError(acpsdk.NewInvalidParams,
-			"fleet does not accept MCP servers from the ACP client: its connectors come from the operator's bundle and run host-side with brokered credentials")
-	}
+	sess := &session{cwd: p.Cwd, ns: randomID()}
 	if err := a.client.CheckIdentity(ctx); err != nil {
 		// A client that cancelled session/new (or went away) while /me was
 		// pending never learns the session's ID and could never close it,
@@ -361,9 +385,14 @@ func (a *Agent) NewSession(ctx context.Context, p acpsdk.NewSessionRequest) (acp
 			return acpsdk.NewSessionResponse{}, requestError(err)
 		}
 	}
+	if len(p.McpServers) > 0 {
+		ignored := ignoredMCPServers(p.McpServers)
+		sess.mcpNotice = ignored.notice()
+		_, _ = io.WriteString(a.diag, ignored.stderrLine())
+	}
 	id := acpsdk.SessionId("fleet-acp-" + randomID())
 	a.mu.Lock()
-	a.sessions[id] = &session{cwd: p.Cwd, ns: randomID()}
+	a.sessions[id] = sess
 	a.mu.Unlock()
 	return acpsdk.NewSessionResponse{SessionId: id}, nil
 }
@@ -657,6 +686,9 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 		}
 	})
 	defer a.watchTurn(tr)()
+	if !sendMCPNotice(cancelCtx, sess, tr) {
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
+	}
 
 	streamDone := make(chan struct{})
 	stopped := make(chan stopOutcome, 1)
@@ -790,6 +822,27 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 		resp.Usage = tr.usage
 	}
 	return resp, nil
+}
+
+// sendMCPNotice sends the session's MCP-server notice, if it is still to be
+// sent (session.mcpNotice), just before the prompt is submitted: so it comes
+// ahead of anything the turn streams and goes out whatever the prompt's
+// outcome, an error included. tr.send, not tr.handle: the notice is fleet
+// acp's, not the turn's, so it is no part of the text a text.replace is
+// reconciled against (fleet's final text never contains it). Under sess.mu.
+//
+// ok is false when the prompt must not be submitted after all. The send is a
+// write to stdout, which waits on the client to read it, so a session/cancel
+// (or the client going away) can land after Prompt's last check and before
+// the submission; it is honoured as that check honours it. The notice has
+// gone out, so it stays cleared.
+func sendMCPNotice(cancelCtx context.Context, sess *session, tr *translator) (ok bool) {
+	if sess.mcpNotice == "" {
+		return true
+	}
+	tr.send(acpsdk.UpdateAgentMessageText(sess.mcpNotice))
+	sess.mcpNotice = ""
+	return cancelCtx.Err() == nil
 }
 
 // reportGone says on stderr (diag) what became of a cancelled prompt's turn

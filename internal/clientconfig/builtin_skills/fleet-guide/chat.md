@@ -105,6 +105,10 @@ needs approval, the reply ends with a link or a `fleet chat --approve` command,
 because approvals are settled in fleet, not in the client. Images and audio are
 not accepted.
 
+MCP servers you set up in your editor are not used by fleet. fleet's tools and
+connectors are the ones your operator set up, and they run on the fleet server.
+The first reply in a session says so, naming the servers your editor sent.
+
 When the client opens a session, `fleet acp` checks your user and token with the
 fleet server first. A wrong token, an email that is not a fleet user, a
 read-only viewer, or an address the server does not admit stops the session

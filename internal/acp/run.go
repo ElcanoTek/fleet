@@ -48,8 +48,9 @@ const DefaultTimeout = 30 * time.Minute
 // it.
 var hangUpWait = 20 * time.Second
 
-// stderrWait bounds how long one line written to stderr while the client goes
-// away may hold that up (boundedWriter). A var so tests can shorten it.
+// stderrWait bounds how long one line fleet acp writes to stderr may hold up
+// what wrote it (boundedWriter): a session/new, or the client going away. A
+// var so tests can shorten it.
 var stderrWait = time.Second
 
 // Run is the `fleet acp` entry point: an ACP agent on stdin/stdout. stdout
@@ -161,9 +162,11 @@ func run(argv []string, in io.Reader, out, errOut io.Writer, listen func() <-cha
 	}
 
 	agent := NewAgent(client, cfgErr, cfg.PublicURL, *timeout, version.Version())
-	// What fleet acp says once the client has gone must never hold up the
-	// exit (boundedWriter). slog keeps plain stderr: it serves the live
-	// connection, not the shutdown.
+	// What fleet acp itself says on stderr (Agent.diag) goes through
+	// boundedWriter: the MCP servers a session/new ignores, and what became
+	// of the turns once the client has gone, which must never hold up the
+	// exit. slog keeps plain stderr: it carries only the SDK's diagnostics
+	// about the live connection.
 	diag := boundedWriter{w: errOut}
 	agent.diag = diag
 	// A failed write to stdout is the client going away too (clientOut):
@@ -268,13 +271,17 @@ func awaitStops(agent *Agent, why string, errOut io.Writer) {
 // take it within stderrWait.
 var errStderrStuck = errors.New("fleet acp: stderr did not take the write in time")
 
-// boundedWriter is stderr for what fleet acp says once the client has gone.
-// That client may have left stderr a full pipe that nobody drains, and a
-// write to it then blocks for good: with stdin already at EOF nothing else
-// would end the process, so the bound on the shutdown (hangUpWait) would not
-// hold. Each write therefore runs on its own goroutine and is waited for at
-// most stderrWait. A line that misses that is given up on (it still goes out
-// if stderr drains before the process exits), and the shutdown goes on.
+// boundedWriter is stderr for what fleet acp itself says (Agent.diag): the
+// MCP servers a session/new ignores and, once the client has gone, what
+// became of its turns. A client may leave stderr a full pipe that nobody
+// drains, and a write to it then blocks for good: after the client has gone,
+// with stdin already at EOF, nothing else would end the process, so the bound
+// on the shutdown (hangUpWait) would not hold. Each write therefore runs on
+// its own goroutine and is waited for at most stderrWait. A line that misses
+// that is given up on (it still goes out if stderr drains before the process
+// exits), and the caller goes on. While the client is connected, a stuck
+// stderr costs each session/new that carries MCP servers that wait, and
+// leaves one goroutine blocked on its write.
 type boundedWriter struct{ w io.Writer }
 
 func (b boundedWriter) Write(p []byte) (int, error) {
