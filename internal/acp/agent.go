@@ -325,17 +325,20 @@ func (a *Agent) Authenticate(context.Context, acpsdk.AuthenticateRequest) (acpsd
 // bundle and are credential-brokered host-side.
 //
 // Before the session opens, the server is asked whether it takes turns from
-// the configured user and token (chattui's CheckIdentity), so a wrong token, an
-// unprovisioned email, a viewer, an address the IP filter refuses or a server
-// that is down fails here, before the user has typed a prompt, rather than on
-// that prompt. Some clients can only show the reason here: Zed answers an
-// auth_required prompt with fixed "Authentication Required" text of its own,
-// whatever the error says, while it shows a session/new error's message. The
-// error is the one the first prompt would have got (requestError):
-// auth_required for a refusal, internal for a server it could not reach. An
-// answer that is no verdict on the identity (an older server without /me, a
-// 5xx) opens the session, and the first prompt reports any real problem. The
-// check runs last, after the checks that need no server.
+// the configured user and token (chattui's CheckIdentity), so a wrong token,
+// an unprovisioned email, a viewer or an address the IP filter refuses fails
+// here, before the user has typed a prompt, rather than on that prompt. Some
+// clients can only show the reason here: Zed answers an auth_required prompt
+// with fixed "Authentication Required" text of its own, whatever the error
+// says, while it shows a session/new error's message. The error is the one
+// the first prompt would have got (requestError): auth_required. Only a
+// refusal is a verdict. An answer that is none on the identity opens the
+// session, and the first prompt reports any real problem: no answer at all
+// (a server that is down or unreachable), an older server without /me, a
+// 5xx. A server that cannot be reached is left to the prompt on purpose:
+// CodeCompanion shows a session/new error only as a notice without its
+// text, but a prompt's error in the chat. The check runs last, after the
+// checks that need no server.
 func (a *Agent) NewSession(ctx context.Context, p acpsdk.NewSessionRequest) (acpsdk.NewSessionResponse, error) {
 	if a.cfgErr != nil {
 		return acpsdk.NewSessionResponse{}, acpsdk.NewAuthRequired(map[string]any{"error": a.cfgErr.Error()})
@@ -346,7 +349,10 @@ func (a *Agent) NewSession(ctx context.Context, p acpsdk.NewSessionRequest) (acp
 		})
 	}
 	if err := a.client.CheckIdentity(ctx); err != nil {
-		return acpsdk.NewSessionResponse{}, requestError(err)
+		var se *chattui.StatusError
+		if errors.As(err, &se) { // a refusal; no answer at all is no verdict
+			return acpsdk.NewSessionResponse{}, requestError(err)
+		}
 	}
 	id := acpsdk.SessionId("fleet-acp-" + randomID())
 	a.mu.Lock()

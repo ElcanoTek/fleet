@@ -13,7 +13,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -563,14 +562,10 @@ func TestFailuresBecomeClearErrors(t *testing.T) {
 			t.Fatalf("a membership refusal must not blame (or leak) the token: %v", err)
 		}
 	})
-	t.Run("daemon down after the session opened", func(t *testing.T) {
-		// Down from the start fails session/new instead
-		// (TestSessionNewChecksTheIdentity).
-		h := newHarness(t, harnessOpts{})
-		sid := h.newSession(t)
-		h.srv.Close()
-		_, err := h.prompt(sid, "x")
-		if rpcCode(err) != -32603 || !strings.Contains(err.Error(), "connect "+h.srv.URL) {
+	t.Run("daemon down", func(t *testing.T) {
+		h := newHarness(t, harnessOpts{serverURL: "http://127.0.0.1:1"})
+		_, err := h.prompt(h.newSession(t), "x")
+		if rpcCode(err) != -32603 || !strings.Contains(err.Error(), "connect http://127.0.0.1:1") {
 			t.Fatalf("err = %v, want an internal error naming the unreachable server", err)
 		}
 	})
@@ -634,11 +629,10 @@ func meAnswer(status int, contentType, body string) func(http.ResponseWriter, *h
 // /chat by the check, and the token is in no error.
 func TestSessionNewChecksTheIdentity(t *testing.T) {
 	tests := []struct {
-		name      string
-		me        func(http.ResponseWriter, *http.Request)
-		serverURL string
-		wantCode  int    // 0 = the session opens
-		want      string // data.error, exactly; or, for the internal error, its prefix
+		name     string
+		me       func(http.ResponseWriter, *http.Request)
+		wantCode int    // 0 = the session opens
+		want     string // data.error, exactly
 	}{
 		{
 			name:     "viewer",
@@ -670,12 +664,6 @@ func TestSessionNewChecksTheIdentity(t *testing.T) {
 			wantCode: -32000,
 			want:     "not authorized (401) for bot@example.com: unauthorized: X-Chat-Server-Token: [redacted]",
 		},
-		{
-			name:      "server down",
-			serverURL: "http://127.0.0.1:1",
-			wantCode:  -32603,
-			want:      `connect http://127.0.0.1:1: Get "http://127.0.0.1:1/me": `,
-		},
 		{name: "member", me: meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"member","team_id":"","admin":false}`)},
 		{name: "admin", me: meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"admin","team_id":"","admin":true}`)},
 		{name: "server older than /me (404)"}, // fakeFleet answers 404 with no me handler
@@ -683,19 +671,17 @@ func TestSessionNewChecksTheIdentity(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newHarness(t, harnessOpts{me: tt.me, serverURL: tt.serverURL})
+			h := newHarness(t, harnessOpts{me: tt.me})
 			ctx := context.Background()
 			if _, err := h.conn.Initialize(ctx, acpsdk.InitializeRequest{ProtocolVersion: acpsdk.ProtocolVersionNumber}); err != nil {
 				t.Fatalf("initialize: %v", err)
 			}
 			s, err := h.conn.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: "/work", McpServers: []acpsdk.McpServer{}})
-			if tt.serverURL == "" {
-				h.fleet.mu.Lock()
-				calls := h.fleet.meHeaders
-				h.fleet.mu.Unlock()
-				if len(calls) != 1 || calls[0].Get("X-Chat-Server-Token") != "test-token" || calls[0].Get("X-User-Email") != "bot@example.com" || calls[0].Get("X-Fleet-Client") != "fleet-acp" {
-					t.Fatalf("GET /me calls = %v, want one with the turn's auth headers", calls)
-				}
+			h.fleet.mu.Lock()
+			calls := h.fleet.meHeaders
+			h.fleet.mu.Unlock()
+			if len(calls) != 1 || calls[0].Get("X-Chat-Server-Token") != "test-token" || calls[0].Get("X-User-Email") != "bot@example.com" || calls[0].Get("X-Fleet-Client") != "fleet-acp" {
+				t.Fatalf("GET /me calls = %v, want one with the turn's auth headers", calls)
 			}
 			if tt.wantCode == 0 {
 				if err != nil {
@@ -710,7 +696,7 @@ func TestSessionNewChecksTheIdentity(t *testing.T) {
 			if rpcCode(err) != tt.wantCode {
 				t.Fatalf("session/new err = %v, want code %d", err, tt.wantCode)
 			}
-			if got := rpcReason(err); (tt.wantCode == -32000 && got != tt.want) || !strings.HasPrefix(got, tt.want) {
+			if got := rpcReason(err); got != tt.want {
 				t.Errorf("reason = %q\nwant     %q", got, tt.want)
 			}
 			if strings.Contains(err.Error(), "test-token") {
@@ -725,34 +711,27 @@ func TestSessionNewChecksTheIdentity(t *testing.T) {
 	}
 }
 
-// A session/new that failed because the server could not be reached leaves
-// nothing behind: once the server answers, the next session/new opens.
-func TestSessionNewOpensOnceTheServerIsBack(t *testing.T) {
-	var down atomic.Bool
-	down.Store(true)
-	h := newHarness(t, harnessOpts{me: func(w http.ResponseWriter, r *http.Request) {
-		if down.Load() {
-			// Drop the connection without an answer: a transport failure,
-			// as from a server going away mid-request.
-			conn, _, err := w.(http.Hijacker).Hijack()
-			if err == nil {
-				_ = conn.Close()
-			}
-			return
+// A GET /me that gets no answer at all is no verdict: the session opens, and
+// the prompt reports the unreachable server (TestFailuresBecomeClearErrors,
+// "daemon down"). Here /me drops the connection while POST /chat answers, so
+// the session's first prompt runs its turn.
+func TestSessionNewOpensWhenTheCheckGetsNoAnswer(t *testing.T) {
+	h := newHarness(t, harnessOpts{me: func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
 		}
-		meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"member"}`)(w, r)
 	}})
 	ctx := context.Background()
 	if _, err := h.conn.Initialize(ctx, acpsdk.InitializeRequest{ProtocolVersion: acpsdk.ProtocolVersionNumber}); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
-	_, err := h.conn.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: "/work", McpServers: []acpsdk.McpServer{}})
-	if rpcCode(err) != -32603 || !strings.HasPrefix(rpcReason(err), "connect "+h.srv.URL+": ") {
-		t.Fatalf("session/new with the server down: err = %v, want an internal error naming %s", err, h.srv.URL)
+	s, err := h.conn.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: "/work", McpServers: []acpsdk.McpServer{}})
+	if err != nil {
+		t.Fatalf("session/new with /me dropping the connection: %v, want the session opened", err)
 	}
-	down.Store(false)
-	if _, err := h.prompt(h.newSession(t), "hi"); err != nil {
-		t.Fatalf("prompt once the server is back: %v", err)
+	if _, err := h.prompt(s.SessionId, "hi"); err != nil {
+		t.Fatalf("prompt: %v", err)
 	}
 }
 

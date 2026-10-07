@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // The pieces `fleet acp` (internal/acp) relies on: the public web URL for
@@ -532,6 +534,14 @@ func TestCheckIdentity(t *testing.T) {
 }
 
 // A viewer found by CheckIdentity and a viewer's turn refused with
+// roleViewer copies store.RoleViewer, since the client does not import the
+// store; a renamed role would otherwise let a viewer's session open.
+func TestRoleViewerMatchesTheStore(t *testing.T) {
+	if roleViewer != store.RoleViewer {
+		t.Fatalf("roleViewer = %q, store.RoleViewer = %q", roleViewer, store.RoleViewer)
+	}
+}
+
 // {"error":"read_only"} read the same: the wording lives in one place.
 func TestCheckIdentityViewerMatchesTheTurnRefusal(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
