@@ -62,6 +62,11 @@ func TestIsTransientConnectError(t *testing.T) {
 		{"json-rpc do not retry", &RPCError{Code: -32001, Message: "Invalid API key. Do not retry."}, false, "JSON-RPC error -32001: Invalid API key. Do not retry."},
 		{"json-rpc unavailable on plan", &RPCError{Code: -32001, Message: "This tool is unavailable on your plan"}, false, "JSON-RPC error -32001: This tool is unavailable on your plan"},
 		{"json-rpc temporary but do not try again", &RPCError{Code: -32001, Message: "Account temporarily locked; do not try again"}, false, "JSON-RPC error -32001: Account temporarily locked; do not try again"},
+		{"json-rpc generic error on a 503", &RPCError{Code: -32603, Message: "Internal error", HTTPStatus: 503}, true, "JSON-RPC error -32603: Internal error"},
+		{"json-rpc generic error on a 429", &RPCError{Code: -32000, Message: "rate limit exceeded", HTTPStatus: 429}, true, "JSON-RPC error -32000: rate limit exceeded"},
+		{"json-rpc do not retry on a 503", &RPCError{Code: -32001, Message: "Invalid API key. Do not retry.", HTTPStatus: 503}, false, "JSON-RPC error -32001: Invalid API key. Do not retry."},
+		{"json-rpc generic error on a 501", &RPCError{Code: -32601, Message: "Method not found", HTTPStatus: 501}, false, "JSON-RPC error -32601: Method not found"},
+		{"unattributed generic error on a 502", &UnattributedResponseError{ResponseID: "null", WantID: 1, Raw: `{"code":-32603,"message":"Internal error"}`, Carried: &RPCError{Code: -32603, Message: "Internal error"}, HTTPStatus: 502}, true, "JSON-RPC error -32603: Internal error"},
 		{"http 501", &HTTPStatusError{StatusCode: 501}, false, "HTTP 501 Not Implemented"},
 		{"bad url", errors.New(`parse "::": missing protocol scheme`), false, "failed to connect"},
 		{"caller cancelled", &url.Error{Op: "Post", URL: "https://x/mcp", Err: context.Canceled}, false, "failed to connect"},
@@ -428,5 +433,49 @@ func TestHTTPStatusRPCErrorKeepsItsStatus(t *testing.T) {
 	var unattributed *UnattributedResponseError
 	if !errors.As(err, &unattributed) || unattributed.HTTPStatus != http.StatusServiceUnavailable {
 		t.Fatalf("id:null on a 503: err = %#v, want an UnattributedResponseError with HTTPStatus 503", err)
+	}
+}
+
+// A 503 whose body is a generic JSON-RPC error is retried like a plain-text
+// 503: the status says the server is down, whatever the message says.
+func TestRetryTransientConnectRetriesAJSONRPCBodied503(t *testing.T) {
+	noConnectRetryDelay(t)
+	var initializes atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     *int   `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		if req.Method == "initialize" && initializes.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32603, "message": "Internal error"}})
+			return
+		}
+		if req.ID == nil {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		resp := map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}}
+		switch req.Method {
+		case "initialize":
+			resp["result"] = map[string]any{"protocolVersion": "2024-11-05"}
+		case "tools/list":
+			resp["result"] = map[string]any{"tools": []Tool{{Name: "search", Description: "search"}}}
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+	client := NewClient()
+	defer func() { _ = client.Close() }()
+	err := RetryTransientConnect(WithConnectRetry(context.Background()), "vendor", func(ctx context.Context) error {
+		return client.AddHTTPServerWithOptions(ctx, "vendor", srv.URL, HTTPServerOptions{})
+	})
+	if err != nil {
+		t.Fatalf("registration failed after one JSON-RPC-bodied 503: %v", err)
+	}
+	if got := initializes.Load(); got != 2 {
+		t.Fatalf("initialize attempts = %d, want 2", got)
 	}
 }

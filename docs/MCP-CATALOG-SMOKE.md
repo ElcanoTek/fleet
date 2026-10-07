@@ -161,6 +161,11 @@ reported a refused POST as a plain error, so `IsTransientConnectError` could
 not see its status. A user's run therefore did not retry a 503 there (it
 retries one at `initialize`), and a 401 there was not recognised as a refused
 credential. It is now an `*mcp.HTTPStatusError` like any refused request.
+Likewise, a JSON-RPC error that arrives on a non-2xx now keeps its status
+(`RPCError.HTTPStatus`, `UnattributedResponseError.HTTPStatus`), and
+`IsTransientConnectError` honours it. A run therefore retries a 503 whose body
+says only "Internal error", unless the server's message says outright not to
+retry.
 
 Run locally:
 
