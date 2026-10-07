@@ -348,7 +348,8 @@ func (a *Agent) Authenticate(context.Context, acpsdk.AuthenticateRequest) (acpsd
 // agent-shell-mcp-servers), so a refusal left such a user unable to open a
 // session at all. Only their names are kept (ignoredMCPServers): an entry can
 // carry secrets in its env, headers, args, URL or _meta. The operator is told
-// on stderr here, and the user by the session's first prompt (mcpNotice). An
+// on stderr once the session opens (a refused session logs nothing about
+// them), and the user by the session's first prompt (mcpNotice). An
 // entry the SDK cannot decode (env as an object, say) never reaches here: the
 // SDK answers session/new with invalid params itself.
 //
@@ -372,11 +373,6 @@ func (a *Agent) NewSession(ctx context.Context, p acpsdk.NewSessionRequest) (acp
 		return acpsdk.NewSessionResponse{}, reasonError(acpsdk.NewAuthRequired, a.cfgErr.Error())
 	}
 	sess := &session{cwd: p.Cwd, ns: randomID()}
-	if len(p.McpServers) > 0 {
-		ignored := ignoredMCPServers(p.McpServers)
-		sess.mcpNotice = ignored.notice()
-		_, _ = io.WriteString(a.diag, ignored.stderrLine())
-	}
 	if err := a.client.CheckIdentity(ctx); err != nil {
 		// A client that cancelled session/new (or went away) while /me was
 		// pending never learns the session's ID and could never close it,
@@ -388,6 +384,11 @@ func (a *Agent) NewSession(ctx context.Context, p acpsdk.NewSessionRequest) (acp
 		if errors.As(err, &se) { // a refusal; no answer at all is no verdict
 			return acpsdk.NewSessionResponse{}, requestError(err)
 		}
+	}
+	if len(p.McpServers) > 0 {
+		ignored := ignoredMCPServers(p.McpServers)
+		sess.mcpNotice = ignored.notice()
+		_, _ = io.WriteString(a.diag, ignored.stderrLine())
 	}
 	id := acpsdk.SessionId("fleet-acp-" + randomID())
 	a.mu.Lock()

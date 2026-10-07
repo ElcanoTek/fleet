@@ -642,3 +642,23 @@ func (c cancelOnNotice) SessionUpdate(ctx context.Context, n acpsdk.SessionNotif
 	}
 	return c.updater.SessionUpdate(ctx, n)
 }
+
+// A session/new the server refuses (the identity check at session/new) opens
+// no session, so stderr says nothing about the client's MCP servers: the
+// ignoring line is written only once the session opens.
+func TestRefusedSessionLogsNoMCPServers(t *testing.T) {
+	stderr := &lockedBuffer{}
+	h := newHarness(t, harnessOpts{diag: stderr, me: meAnswer(http.StatusForbidden, "text/plain; charset=utf-8", "forbidden\n")})
+	if _, err := h.conn.Initialize(context.Background(), acpsdk.InitializeRequest{ProtocolVersion: acpsdk.ProtocolVersionNumber}); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	_, err := h.conn.NewSession(context.Background(), acpsdk.NewSessionRequest{Cwd: "/work", McpServers: []acpsdk.McpServer{
+		{Stdio: &acpsdk.McpServerStdio{Name: "refused-canary", Command: "/bin/true", Args: []string{}, Env: []acpsdk.EnvVariable{}}},
+	}})
+	if rpcCode(err) != -32000 {
+		t.Fatalf("session/new err = %v, want auth_required", err)
+	}
+	if got := stderr.String(); strings.Contains(got, "refused-canary") || strings.Contains(got, "MCP") {
+		t.Errorf("stderr = %q, want nothing about the client's MCP servers", got)
+	}
+}
