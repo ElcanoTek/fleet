@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,11 +38,16 @@ type fakeFleet struct {
 	// cancelHold, when set, holds every Stop, once recorded, until it is
 	// closed: a slow or hung server. A Stop whose caller gives up ends.
 	cancelHold chan struct{}
+	// me answers GET /me, session/new's identity check; nil answers 404, as a
+	// server older than /me does, which opens the session unchecked.
+	me func(w http.ResponseWriter, r *http.Request)
 
 	mu      sync.Mutex
 	chats   []chatReq
 	cancels []string
 	headers []http.Header
+	// meHeaders records every GET /me's headers, nil handler included.
+	meHeaders []http.Header
 }
 
 type chatReq struct {
@@ -68,6 +74,15 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	case r.URL.Path == "/client-config":
 		_, _ = io.WriteString(w, `{"models":{"default_model":"test/default"}}`)
+	case r.URL.Path == "/me":
+		f.mu.Lock()
+		f.meHeaders = append(f.meHeaders, r.Header.Clone())
+		f.mu.Unlock()
+		if f.me == nil {
+			http.NotFound(w, r)
+			return
+		}
+		f.me(w, r)
 	case r.URL.Path == "/chat":
 		var body chatReq
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -164,6 +179,7 @@ func (c *recordingClient) WaitForTerminalExit(context.Context, acpsdk.WaitForTer
 
 type harness struct {
 	fleet  *fakeFleet
+	srv    *httptest.Server // the fake server, which a test may stop (Close is idempotent)
 	client *recordingClient
 	conn   *acpsdk.ClientSideConnection
 	agent  *Agent
@@ -178,7 +194,8 @@ type harness struct {
 type harnessOpts struct {
 	turn         func(w *sseWriter, r *http.Request)
 	cancelStatus int
-	cancelHold   chan struct{} // see fakeFleet.cancelHold
+	cancelHold   chan struct{}                                // see fakeFleet.cancelHold
+	me           func(w http.ResponseWriter, r *http.Request) // see fakeFleet.me
 	cfgErr       error
 	publicURL    string
 	timeout      time.Duration
@@ -194,7 +211,7 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 	prevSettle := stopSettleWait
 	stopSettleWait = 50 * time.Millisecond
 	t.Cleanup(func() { stopSettleWait = prevSettle })
-	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus, cancelHold: o.cancelHold}
+	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus, cancelHold: o.cancelHold, me: o.me}
 	srv := httptest.NewServer(ff)
 	t.Cleanup(srv.Close)
 	serverURL := srv.URL
@@ -217,7 +234,7 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 		}
 	})
 	return &harness{
-		fleet: ff, client: rc, conn: conn, agent: ag,
+		fleet: ff, srv: srv, client: rc, conn: conn, agent: ag,
 		hangUp: func() { _ = c2aW.Close() },
 		raw: func(line string) {
 			if _, err := io.WriteString(c2aW, line+"\n"); err != nil {
@@ -546,10 +563,14 @@ func TestFailuresBecomeClearErrors(t *testing.T) {
 			t.Fatalf("a membership refusal must not blame (or leak) the token: %v", err)
 		}
 	})
-	t.Run("daemon down", func(t *testing.T) {
-		h := newHarness(t, harnessOpts{serverURL: "http://127.0.0.1:1"})
-		_, err := h.prompt(h.newSession(t), "x")
-		if rpcCode(err) != -32603 || !strings.Contains(err.Error(), "connect http://127.0.0.1:1") {
+	t.Run("daemon down after the session opened", func(t *testing.T) {
+		// Down from the start fails session/new instead
+		// (TestSessionNewChecksTheIdentity).
+		h := newHarness(t, harnessOpts{})
+		sid := h.newSession(t)
+		h.srv.Close()
+		_, err := h.prompt(sid, "x")
+		if rpcCode(err) != -32603 || !strings.Contains(err.Error(), "connect "+h.srv.URL) {
 			t.Fatalf("err = %v, want an internal error naming the unreachable server", err)
 		}
 	})
@@ -580,6 +601,176 @@ func TestFailuresBecomeClearErrors(t *testing.T) {
 			t.Fatalf("err = %v, want resource not found", err)
 		}
 	})
+}
+
+// rpcReason is a JSON-RPC error's data.error: the reason fleet acp gives,
+// as the client receives it.
+func rpcReason(err error) string {
+	var re *acpsdk.RequestError
+	if !errors.As(err, &re) {
+		return ""
+	}
+	data, _ := re.Data.(map[string]any)
+	reason, _ := data["error"].(string)
+	return reason
+}
+
+// meAnswer is a GET /me handler that answers status with body.
+func meAnswer(status int, contentType, body string) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	}
+}
+
+// session/new asks the server (GET /me) whether it takes turns from the
+// configured user and token, so every credential problem the server finds
+// fails the session as it opens — before the user has typed a prompt — with
+// the error and reason that prompt would have got: auth_required for a
+// refusal (a viewer included, though /me refuses no GET), an internal error
+// for a server that is down. An answer that is no verdict on the identity (a
+// server older than /me, a 5xx) opens the session. Nothing is ever POSTed to
+// /chat by the check, and the token is in no error.
+func TestSessionNewChecksTheIdentity(t *testing.T) {
+	tests := []struct {
+		name      string
+		me        func(http.ResponseWriter, *http.Request)
+		serverURL string
+		wantCode  int    // 0 = the session opens
+		want      string // data.error, exactly; or, for the internal error, its prefix
+	}{
+		{
+			name:     "viewer",
+			me:       meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"viewer","team_id":"","admin":false}`),
+			wantCode: -32000,
+			want:     "server rejected the request (403): bot@example.com has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role bot@example.com --role member`",
+		},
+		{
+			name:     "not a member",
+			me:       meAnswer(http.StatusForbidden, "application/json", `{"error":"not_a_member"}`),
+			wantCode: -32000,
+			want:     "server rejected the request (403): bot@example.com is not a fleet user; an admin can add it with `fleet chat user add bot@example.com --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user",
+		},
+		{
+			name:     "wrong token",
+			me:       meAnswer(http.StatusForbidden, "text/plain; charset=utf-8", "forbidden\n"),
+			wantCode: -32000,
+			want:     "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server",
+		},
+		{
+			name:     "ip filter",
+			me:       meAnswer(http.StatusForbidden, "text/plain; charset=utf-8", "Access denied\n"),
+			wantCode: -32000,
+			want:     "server rejected the request (403): the server's IP access control (FLEET_IP_ALLOWLIST / FLEET_IP_DENYLIST) does not admit this client's address; connect from an admitted address, or ask an admin to admit this one",
+		},
+		{
+			name:     "401 from a proxy echoing the token",
+			me:       meAnswer(http.StatusUnauthorized, "text/plain", "unauthorized: X-Chat-Server-Token: test-token\n"),
+			wantCode: -32000,
+			want:     "not authorized (401) for bot@example.com: unauthorized: X-Chat-Server-Token: [redacted]",
+		},
+		{
+			name:      "server down",
+			serverURL: "http://127.0.0.1:1",
+			wantCode:  -32603,
+			want:      `connect http://127.0.0.1:1: Get "http://127.0.0.1:1/me": `,
+		},
+		{name: "member", me: meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"member","team_id":"","admin":false}`)},
+		{name: "admin", me: meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"admin","team_id":"","admin":true}`)},
+		{name: "server older than /me (404)"}, // fakeFleet answers 404 with no me handler
+		{name: "500", me: meAnswer(http.StatusInternalServerError, "text/plain; charset=utf-8", "membership check failed\n")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t, harnessOpts{me: tt.me, serverURL: tt.serverURL})
+			ctx := context.Background()
+			if _, err := h.conn.Initialize(ctx, acpsdk.InitializeRequest{ProtocolVersion: acpsdk.ProtocolVersionNumber}); err != nil {
+				t.Fatalf("initialize: %v", err)
+			}
+			s, err := h.conn.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: "/work", McpServers: []acpsdk.McpServer{}})
+			if tt.serverURL == "" {
+				h.fleet.mu.Lock()
+				calls := h.fleet.meHeaders
+				h.fleet.mu.Unlock()
+				if len(calls) != 1 || calls[0].Get("X-Chat-Server-Token") != "test-token" || calls[0].Get("X-User-Email") != "bot@example.com" || calls[0].Get("X-Fleet-Client") != "fleet-acp" {
+					t.Fatalf("GET /me calls = %v, want one with the turn's auth headers", calls)
+				}
+			}
+			if tt.wantCode == 0 {
+				if err != nil {
+					t.Fatalf("session/new: %v, want the session opened", err)
+				}
+				// The session works: the first prompt runs its turn.
+				if _, err := h.prompt(s.SessionId, "hi"); err != nil {
+					t.Fatalf("prompt: %v", err)
+				}
+				return
+			}
+			if rpcCode(err) != tt.wantCode {
+				t.Fatalf("session/new err = %v, want code %d", err, tt.wantCode)
+			}
+			if got := rpcReason(err); (tt.wantCode == -32000 && got != tt.want) || !strings.HasPrefix(got, tt.want) {
+				t.Errorf("reason = %q\nwant     %q", got, tt.want)
+			}
+			if strings.Contains(err.Error(), "test-token") {
+				t.Errorf("the token value leaked into an error: %v", err)
+			}
+			h.fleet.mu.Lock()
+			defer h.fleet.mu.Unlock()
+			if len(h.fleet.chats) != 0 {
+				t.Errorf("POST /chat calls = %+v, want none", h.fleet.chats)
+			}
+		})
+	}
+}
+
+// A session/new that failed because the server could not be reached leaves
+// nothing behind: once the server answers, the next session/new opens.
+func TestSessionNewOpensOnceTheServerIsBack(t *testing.T) {
+	var down atomic.Bool
+	down.Store(true)
+	h := newHarness(t, harnessOpts{me: func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() {
+			// Drop the connection without an answer: a transport failure,
+			// as from a server going away mid-request.
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
+		meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"member"}`)(w, r)
+	}})
+	ctx := context.Background()
+	if _, err := h.conn.Initialize(ctx, acpsdk.InitializeRequest{ProtocolVersion: acpsdk.ProtocolVersionNumber}); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	_, err := h.conn.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: "/work", McpServers: []acpsdk.McpServer{}})
+	if rpcCode(err) != -32603 || !strings.HasPrefix(rpcReason(err), "connect "+h.srv.URL+": ") {
+		t.Fatalf("session/new with the server down: err = %v, want an internal error naming %s", err, h.srv.URL)
+	}
+	down.Store(false)
+	if _, err := h.prompt(h.newSession(t), "hi"); err != nil {
+		t.Fatalf("prompt once the server is back: %v", err)
+	}
+}
+
+// A role changed after the session opened is still caught on the prompt: the
+// check at session/new does not replace the turn's own refusal.
+func TestRefusalAfterTheSessionOpenedStillReachesThePrompt(t *testing.T) {
+	h := newHarness(t, harnessOpts{
+		me: meAnswer(http.StatusOK, "application/json", `{"email":"bot@example.com","role":"member"}`),
+		turn: func(w *sseWriter, _ *http.Request) {
+			w.w.Header().Set("Content-Type", "application/json")
+			w.w.WriteHeader(http.StatusForbidden)
+			_, _ = w.w.Write([]byte(`{"error":"read_only"}`))
+		},
+	})
+	_, err := h.prompt(h.newSession(t), "x")
+	if rpcCode(err) != -32000 || !strings.Contains(rpcReason(err), "bot@example.com has the read-only viewer role") {
+		t.Fatalf("err = %v, want auth_required naming the viewer role", err)
+	}
 }
 
 func TestPolicyBlockIsARefusal(t *testing.T) {

@@ -51,9 +51,11 @@ const SpecVersion = acpsdk.ProtocolVersionNumber
 // the persisted conversation.
 const revisedMarker = "\n\n— revised answer —\n\n"
 
-// turnClient is the slice of chattui.Client the adapter needs: stream one
-// governed turn, and stop one server-side.
+// turnClient is the slice of chattui.Client the adapter needs: check, as a
+// session opens, that the server takes turns from its user and token; stream
+// one governed turn; and stop one server-side.
 type turnClient interface {
+	CheckIdentity(ctx context.Context) error
 	StreamInput(ctx context.Context, message, convID, inputID string, onEvent func(chattui.Event)) (string, error)
 	Cancel(convID, turnID string) error
 	CancelInput(convID, inputID string) error
@@ -321,7 +323,20 @@ func (a *Agent) Authenticate(context.Context, acpsdk.AuthenticateRequest) (acpsd
 // never in the client's filesystem. Client-supplied MCP servers are refused
 // rather than ignored, because fleet's connectors come from the operator's
 // bundle and are credential-brokered host-side.
-func (a *Agent) NewSession(_ context.Context, p acpsdk.NewSessionRequest) (acpsdk.NewSessionResponse, error) {
+//
+// Before the session opens, the server is asked whether it takes turns from
+// the configured user and token (chattui's CheckIdentity), so a wrong token, an
+// unprovisioned email, a viewer, an address the IP filter refuses or a server
+// that is down fails here, before the user has typed a prompt, rather than on
+// that prompt. Some clients can only show the reason here: Zed answers an
+// auth_required prompt with fixed "Authentication Required" text of its own,
+// whatever the error says, while it shows a session/new error's message. The
+// error is the one the first prompt would have got (requestError):
+// auth_required for a refusal, internal for a server it could not reach. An
+// answer that is no verdict on the identity (an older server without /me, a
+// 5xx) opens the session, and the first prompt reports any real problem. The
+// check runs last, after the checks that need no server.
+func (a *Agent) NewSession(ctx context.Context, p acpsdk.NewSessionRequest) (acpsdk.NewSessionResponse, error) {
 	if a.cfgErr != nil {
 		return acpsdk.NewSessionResponse{}, acpsdk.NewAuthRequired(map[string]any{"error": a.cfgErr.Error()})
 	}
@@ -329,6 +344,9 @@ func (a *Agent) NewSession(_ context.Context, p acpsdk.NewSessionRequest) (acpsd
 		return acpsdk.NewSessionResponse{}, acpsdk.NewInvalidParams(map[string]any{
 			"error": "fleet does not accept MCP servers from the ACP client: its connectors come from the operator's bundle and run host-side with brokered credentials",
 		})
+	}
+	if err := a.client.CheckIdentity(ctx); err != nil {
+		return acpsdk.NewSessionResponse{}, requestError(err)
 	}
 	id := acpsdk.SessionId("fleet-acp-" + randomID())
 	a.mu.Lock()
@@ -1156,10 +1174,12 @@ func (a *Agent) SetSessionMode(context.Context, acpsdk.SetSessionModeRequest) (a
 	return acpsdk.SetSessionModeResponse{}, acpsdk.NewMethodNotFound(acpsdk.AgentMethodSessionSetMode)
 }
 
-// requestError maps a failed turn onto a JSON-RPC error the client can show.
-// An auth failure (401/403 from POST /chat) is ACP's auth_required; anything
-// else — server unreachable, turn.error, turn.model_required — is an internal
-// error whose message is the same actionable text `fleet chat` prints.
+// requestError maps a failed turn, or a failed identity check at session/new,
+// onto a JSON-RPC error the client can show. An auth failure (401/403 from
+// POST /chat or GET /me, or the viewer role /me reports) is ACP's
+// auth_required; anything else — server unreachable, turn.error,
+// turn.model_required — is an internal error whose message is the same
+// actionable text `fleet chat` prints.
 func requestError(err error) error {
 	var se *chattui.StatusError
 	if errors.As(err, &se) && (se.Code == 401 || se.Code == 403) {
