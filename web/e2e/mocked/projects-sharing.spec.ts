@@ -269,11 +269,12 @@ test("a teammate reads a shared chat: shared file downloads, unshared file is a 
   await expect(viewer).toBeVisible();
   await expect(viewer.getByTestId("team-view-shared-by")).toHaveText("Shared by sam@example.com");
 
-  // The shared output is a live download through the team-files route…
+  // The shared output is a live download through the team-files route,
+  // its URL versioned by the file's modified time and size…
   const download = viewer.getByRole("link", { name: "the Q3 report" });
   await expect(download).toHaveAttribute(
     "href",
-    "/api/conversations/c-sam/team-files/out/report.xlsx",
+    "/api/conversations/c-sam/team-files/out/report.xlsx?v=1700000300-2048",
   );
   // …the one the owner unchecked is a locked name, never a link to the file.
   await expect(viewer.getByText("exclusion_list_v1.json (not shared)")).toBeVisible();

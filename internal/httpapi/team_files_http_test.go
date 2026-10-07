@@ -1087,6 +1087,34 @@ func teamViewIf(t *testing.T, srv *Server, user, convID, etag string) *httptest.
 	return w
 }
 
+// A change that lands while the body is built — even one undone again before
+// the body is done — must not leave the response carrying the version read
+// before it: the ETag is dropped, so the next poll refetches rather than
+// matching a tag the served body may not correspond to.
+func TestTeamViewDropsETagWhenStateMovesDuringBuild(t *testing.T) {
+	f := newFilesFixture(t)
+	teamViewAfterVersion = func() {
+		teamViewAfterVersion = nil
+		for _, shared := range []bool{false, true} { // excluded, then re-shared
+			if err := f.st.SetOutputShared(f.ctx, "alice@x.com", f.chat.ID, "chart.png", shared); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	t.Cleanup(func() { teamViewAfterVersion = nil })
+	w := teamViewIf(t, f.srv, "bob@x.com", f.chat.ID, "")
+	if w.Code != 200 {
+		t.Fatalf("team view: %d", w.Code)
+	}
+	if tag := w.Header().Get("ETag"); tag != "" {
+		t.Errorf("ETag %q sent for a body built while the share state moved", tag)
+	}
+	// Quiet again: the next read carries an ETag as usual.
+	if w := teamViewIf(t, f.srv, "bob@x.com", f.chat.ID, ""); w.Code != 200 || w.Header().Get("ETag") == "" {
+		t.Errorf("settled read: %d etag=%q", w.Code, w.Header().Get("ETag"))
+	}
+}
+
 // The live view's poll is conditional: an unchanged chat answers 304 with no
 // body; a new message, an exclusion change and the viewer's own new branch
 // each move the ETag; and a caller who may not read the chat gets 404 —

@@ -328,16 +328,22 @@ as the full snapshot, run *before* the transcript is loaded — a caller who may
 not read the chat gets the same `404` whatever `If-None-Match` says, never a
 `304`. It fingerprints the chat row (`updated_at`, title, owner, audience,
 project and the project's name), the visible transcript (count and highest id
-of the user/assistant text and summary rows), the exclusion set (count plus a
-hash of the sorted, length-prefixed paths), the caller's own latest branch of the chat (which
-with the transcript decides `viewer_branch` / `changed_since`), and the
-caller. A 200's ETag is the version read before its body was built, so a change
-landing in between only makes the next poll refetch. **Not covered:** the
+of the user/assistant text and summary rows), the exclusion set (count, a
+hash of the sorted, length-prefixed paths, and a per-chat revision every
+exclusion write bumps — so a change undone again still moves it), the caller's
+own latest branch of the chat (which with the transcript decides
+`viewer_branch` / `changed_since`), and the caller. A 200 carries an ETag only
+when the version read again after its body was built still matches the one read
+before, so a change landing in between leaves the response untagged and the
+next poll refetches. **Not covered:** the
 workspace on disk. An output's size and date, and whether a referenced file
 exists yet, are read when the body is built, so a file that appears or changes
 on disk with no new message and no exclusion change shows on the next poll
 after a real change. In practice the agent writes a file and then presents it
-in a reply — a new message. The web proxy forwards `If-None-Match` and passes
+in a reply — a new message. The viewer puts each shared file's size and
+modified time in its URL (`?v=`, ignored by the route), so an image the owner
+overwrites at the same path is fetched again once a poll brings the new
+metadata. The web proxy forwards `If-None-Match` and passes
 the `304` and its `ETag` through.
 
 **Branch contents.** A teammate's branch gets every output shared at the moment

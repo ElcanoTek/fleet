@@ -280,6 +280,16 @@ func exclusionCapTx(ctx context.Context, tx *sql.Tx, convID string) error {
 	return nil
 }
 
+// bumpOutputShareRevTx advances the chat's exclusion-set revision. Every
+// exclusion write calls it inside its transaction (under the chat row lock
+// ownsLiveConversationTx took), so the team view's version moves forward on
+// every change — even one a later write undoes.
+func bumpOutputShareRevTx(ctx context.Context, tx *sql.Tx, convID string) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE conversations SET output_share_rev = output_share_rev + 1 WHERE id = $1`, convID)
+	return err
+}
+
 // SetOutputShared records the owner's choice for one output: shared=false
 // adds an exclusion, shared=true removes it. Owner-only; idempotent.
 func (s *Store) SetOutputShared(ctx context.Context, ownerEmail, convID, path string, shared bool) error {
@@ -306,6 +316,9 @@ func (s *Store) SetOutputShared(ctx context.Context, ownerEmail, convID, path st
 		if err == nil {
 			err = exclusionCapTx(ctx, tx, convID)
 		}
+	}
+	if err == nil {
+		err = bumpOutputShareRevTx(ctx, tx, convID)
 	}
 	if err != nil {
 		return err
@@ -372,6 +385,9 @@ func (s *Store) ApplyOutputChecklist(ctx context.Context, ownerEmail, convID str
 		if err := exclusionCapTx(ctx, tx, convID); err != nil {
 			return err
 		}
+	}
+	if err := bumpOutputShareRevTx(ctx, tx, convID); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

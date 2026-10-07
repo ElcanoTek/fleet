@@ -198,16 +198,16 @@ func (s *Store) TeamViewVersion(ctx context.Context, callerEmail, convID string)
 		return "", err
 	}
 	var (
-		updatedAt, msgCount, msgMax, exCount int64
-		title, owner, audience, projectID    string
-		projectName, exHash, vbID            string
-		vbAt, vbMark                         int64
+		updatedAt, msgCount, msgMax, exCount, exRev int64
+		title, owner, audience, projectID           string
+		projectName, exHash, vbID                   string
+		vbAt, vbMark                                int64
 	)
 	err = s.db.QueryRowContext(ctx, `
 		SELECT c.updated_at, c.title, c.user_email, COALESCE(c.team_shared_with, ''),
 		       COALESCE(c.project_id, ''),
 		       COALESCE((SELECT p.name FROM projects p WHERE p.id = c.project_id), ''),
-		       msg.n, msg.mx, ex.n, ex.h,
+		       msg.n, msg.mx, ex.n, ex.h, c.output_share_rev,
 		       COALESCE(vb.conversation_id, ''), COALESCE(vb.branched_at, 0),
 		       COALESCE(vb.source_max_message_id, 0)
 		FROM conversations c
@@ -238,7 +238,7 @@ func (s *Store) TeamViewVersion(ctx context.Context, callerEmail, convID string)
 		WHERE `+teamReadableClause,
 		convID, callerEmail, team,
 	).Scan(&updatedAt, &title, &owner, &audience, &projectID, &projectName,
-		&msgCount, &msgMax, &exCount, &exHash, &vbID, &vbAt, &vbMark)
+		&msgCount, &msgMax, &exCount, &exHash, &exRev, &vbID, &vbAt, &vbMark)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", nil
@@ -247,7 +247,7 @@ func (s *Store) TeamViewVersion(ctx context.Context, callerEmail, convID string)
 	}
 	h := sha256.New()
 	for _, part := range []any{convID, callerEmail, updatedAt, title, owner, audience, projectID, projectName,
-		msgCount, msgMax, exCount, exHash, vbID, vbAt, vbMark} {
+		msgCount, msgMax, exCount, exHash, exRev, vbID, vbAt, vbMark} {
 		fmt.Fprintf(h, "%v\x00", part)
 	}
 	return hex.EncodeToString(h.Sum(nil)[:16]), nil
@@ -505,9 +505,10 @@ func teamSharedProjectsOwnedBy(ctx context.Context, q queryer, email, lock strin
 	return out, rows.Err()
 }
 
-// ProjectMemberEmails lists who a project can be handed to: everyone in its
-// team, plus the current owner (who is always a member, team or not). Sorted,
-// deduplicated, emails only — the transfer picker's options.
+// ProjectMemberEmails lists who a project can be handed to: every ENABLED
+// account in its team (the transfer refuses a disabled one, so the picker must
+// not offer it), plus the current owner (who is always a member, team or not).
+// Sorted, deduplicated, emails only — the transfer picker's options.
 //
 // This enumerates every account in the team, including people who have never
 // shared anything, which is more than a plain member could learn from the
@@ -520,7 +521,7 @@ func (s *Store) ProjectMemberEmails(ctx context.Context, projectID string) ([]st
 			UNION
 			SELECT u.email FROM users u
 			JOIN projects p ON p.id = $1
-			WHERE p.team_id <> '' AND u.team_id = p.team_id
+			WHERE p.team_id <> '' AND u.team_id = p.team_id AND u.enabled = TRUE
 		) m ORDER BY email`, projectID)
 	if err != nil {
 		return nil, err
@@ -536,6 +537,10 @@ func (s *Store) ProjectMemberEmails(ctx context.Context, projectID string) ([]st
 	}
 	return out, rows.Err()
 }
+
+// ErrNotProjectOwner refuses a transfer by someone who no longer owns the
+// project when the transaction runs (another transfer got there first).
+var ErrNotProjectOwner = errors.New("project not found")
 
 // transferAfterChecks is a test seam: it runs between TransferProjectOwnership's
 // early checks and its transaction, where a concurrent change can land.
@@ -556,7 +561,7 @@ var transferAfterChecks func()
 // enforces is that the result makes sense: the project is TEAM-SHARED and the
 // target is in that team. Every refusal is the same ErrNotAProjectMember, so
 // the route says nothing about which addresses have accounts.
-func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwnerEmail string) (*Project, error) {
+func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwnerEmail, actingOwner string) (*Project, error) {
 	newOwner := normalizeEmail(newOwnerEmail)
 	if newOwner == "" {
 		return nil, errors.New("new owner email required")
@@ -608,13 +613,20 @@ func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwne
 	// personal" waits, or has already cleared team_id and is refused) and
 	// the target FOR SHARE (a concurrent team change or disable waits, or
 	// has already moved them and is refused). Same single sentinel.
-	var lockedTeam string
+	var lockedTeam, lockedOwner string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(team_id, '') FROM projects WHERE id = $1 FOR UPDATE`, projectID).Scan(&lockedTeam); err != nil {
+		`SELECT COALESCE(team_id, ''), owner_email FROM projects WHERE id = $1 FOR UPDATE`, projectID).Scan(&lockedTeam, &lockedOwner); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.New("project not found")
 		}
 		return nil, err
+	}
+	// The caller's authority is re-checked under the same lock: a request
+	// the handler admitted while actingOwner owned the project must not
+	// transfer it after someone else's transfer took it away. An admin
+	// transfer passes "" and is not bound to an owner.
+	if actingOwner != "" && normalizeEmail(lockedOwner) != normalizeEmail(actingOwner) {
+		return nil, ErrNotProjectOwner
 	}
 	var targetTeam sql.NullString
 	err = tx.QueryRowContext(ctx,

@@ -211,16 +211,22 @@ export function TeamChatViewer({
   const branchPoint = [...bubbles].reverse().find((b) => b.lastId)?.lastId ?? 0;
 
   const files = snapshot?.files;
-  const sharedFiles = useMemo(
-    () =>
-      files
-        ? {
-            shared: new Set(files.filter((f) => f.shared).map((f) => f.path)),
-            fileUrl: (path: string) => teamFileUrl(conversationId, path),
-          }
-        : undefined,
-    [files, conversationId],
-  );
+  const sharedFiles = useMemo(() => {
+    if (!files) return undefined;
+    // Each URL carries the file's revision (modified time and size), so a
+    // file the owner overwrites at the same path gets a NEW url on the next
+    // poll: an inline image re-requests its bytes instead of keeping the old
+    // ones under an unchanged src. The route ignores the query.
+    const rev = new Map(files.map((f) => [f.path, `${f.modified_at}-${f.size}`]));
+    return {
+      shared: new Set(files.filter((f) => f.shared).map((f) => f.path)),
+      fileUrl: (path: string) => {
+        const v = rev.get(path);
+        const url = teamFileUrl(conversationId, path);
+        return v ? `${url}?v=${encodeURIComponent(v)}` : url;
+      },
+    };
+  }, [files, conversationId]);
 
   const branch = async () => {
     if (!snapshot || branching || !branchPoint) return;

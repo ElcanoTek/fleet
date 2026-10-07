@@ -282,8 +282,11 @@ type teamViewResponse struct {
 // If-None-Match is answered 304 with no body — the poll then costs no history
 // load, no output discovery and no JSON. A caller who may not read the chat
 // gets the same 404 whatever If-None-Match says. The ETag on a 200 is the
-// version read before the body was built, so a change landing in between can
-// only make the NEXT poll refetch, never let it keep a stale body.
+// version read before the body was built, and it is only sent when a second
+// read AFTER the body was built returns the same version: a change landing
+// while the body is built (even one undone again — the exclusion revision
+// only moves forward) drops the ETag, so the next poll refetches instead of
+// matching a tag the served body does not correspond to.
 func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Request, convID, user string) {
 	version, err := s.store.TeamViewVersion(r.Context(), user, convID)
 	if err != nil {
@@ -300,6 +303,9 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 	if etagMatches(r.Header.Get("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
+	}
+	if teamViewAfterVersion != nil {
+		teamViewAfterVersion()
 	}
 	snap, err := s.store.GetTeamVisibleConversation(r.Context(), user, convID)
 	if err != nil {
@@ -341,8 +347,15 @@ func (s *Server) handleConversationTeamView(w http.ResponseWriter, r *http.Reque
 			resp.ViewerBranch = &vb
 		}
 	}
+	if after, verr := s.store.TeamViewVersion(r.Context(), user, convID); verr != nil || after != version {
+		w.Header().Del("ETag")
+	}
 	writeJSON(w, resp)
 }
+
+// teamViewAfterVersion is a test seam: it runs between the team view's
+// version read and the body it builds, where a concurrent change can land.
+var teamViewAfterVersion func()
 
 // etagMatches reports whether an If-None-Match header value matches etag,
 // using the weak comparison RFC 9110 prescribes for If-None-Match: "*", or

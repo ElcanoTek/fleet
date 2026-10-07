@@ -401,8 +401,19 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	updated, err := s.store.TransferProjectOwnership(r.Context(), projectID, req.ToEmail)
+	// The store re-checks the owner under the project's row lock: an owner's
+	// request admitted above must not land after another transfer took the
+	// project from them. An admin acts for no particular owner.
+	actingOwner := user
+	if admin {
+		actingOwner = ""
+	}
+	updated, err := s.store.TransferProjectOwnership(r.Context(), projectID, req.ToEmail, actingOwner)
 	if err != nil {
+		if errors.Is(err, store.ErrNotProjectOwner) {
+			http.Error(w, "project not found", http.StatusNotFound)
+			return
+		}
 		// ONE message for every "that target won't do" case. Splitting it into
 		// "no such user" vs "not a member of this team" turned the route into
 		// an account-existence oracle over arbitrary addresses — exactly the

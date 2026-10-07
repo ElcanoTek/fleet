@@ -607,7 +607,7 @@ func TestAdminUserDeleteRefusesOwnedSharedProjects(t *testing.T) {
 	}
 
 	// After a transfer the delete goes through, and the team keeps everything.
-	if _, err := f.st.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com"); err != nil {
+	if _, err := f.st.TransferProjectOwnership(f.ctx, f.project.ID, "bob@x.com", ""); err != nil {
 		t.Fatal(err)
 	}
 	w = httptest.NewRecorder()

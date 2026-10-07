@@ -204,7 +204,7 @@ describe("TeamChatViewer — read-only view with shared files (B19)", () => {
     await waitFor(() => {
       const img = container.querySelector("img");
       expect(img?.getAttribute("src")).toBe(
-        `/api/conversations/${CONV}/team-files/daily_spend_by_channel.png`,
+        `/api/conversations/${CONV}/team-files/daily_spend_by_channel.png?v=1-10`,
       );
     });
     // Nothing is ever requested from the owner's own workspace route.
@@ -521,5 +521,23 @@ describe("TeamChatViewer — live (the owner keeps working)", () => {
     // Nothing on screen to keep: the quiet read must say so, not leave
     // the reader on "Loading…".
     expect(await screen.findByText("Couldn’t load this chat (HTTP 500).")).toBeInTheDocument();
+  });
+  it("re-requests an inline image the owner overwrote at the same path", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let snap: Snap = WITH_FILES;
+    stubFetch((url) => (url.includes("/team-view") ? json(snap) : json({})));
+    const { container } = renderFull(WITH_FILES);
+    const src = () => container.querySelector("img")?.getAttribute("src");
+    await waitFor(() => expect(src()).toContain("daily_spend_by_channel.png?v=1-10"));
+    snap = {
+      ...WITH_FILES,
+      files: WITH_FILES.files!.map((f) =>
+        f.path === "daily_spend_by_channel.png" ? { ...f, size: 12, modified_at: 2 } : f,
+      ),
+    };
+    await act(async () => {
+      vi.advanceTimersByTime(TEAM_VIEW_POLL_MS);
+    });
+    await waitFor(() => expect(src()).toContain("daily_spend_by_channel.png?v=2-12"));
   });
 });

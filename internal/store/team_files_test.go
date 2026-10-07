@@ -751,3 +751,26 @@ func TestExclusionsCappedPerConversation(t *testing.T) {
 		t.Fatalf("one under the cap: %v", err)
 	}
 }
+
+// The team-view version moves on every exclusion write, even one a later
+// write undoes: the set fingerprint alone would return to its old value.
+func TestTeamViewVersionMovesOnUndoneExclusion(t *testing.T) {
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
+	before, err := f.s.TeamViewVersion(f.ctx, "bob@x.com", c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, shared := range []bool{false, true} {
+		if err := f.s.SetOutputShared(f.ctx, "alice@x.com", c.ID, "out.csv", shared); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := f.s.TeamViewVersion(f.ctx, "bob@x.com", c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == before {
+		t.Error("an exclusion added and removed again left the team-view version unchanged")
+	}
+}

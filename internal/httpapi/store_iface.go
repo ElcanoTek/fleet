@@ -176,7 +176,7 @@ type chatStore interface {
 	// TransferProjectOwnership hands a project to another member — the fix for
 	// "the owner left", which used to freeze the definition and destroy the
 	// project with the account (ADR-0057). ProjectMemberEmails is the picker.
-	TransferProjectOwnership(ctx context.Context, projectID, newOwnerEmail string) (*store.Project, error)
+	TransferProjectOwnership(ctx context.Context, projectID, newOwnerEmail, actingOwner string) (*store.Project, error)
 	ProjectMemberEmails(ctx context.Context, projectID string) ([]string, error)
 
 	// Memories + memory proposals.
