@@ -10,17 +10,40 @@
 // (including the markdown unit tests) keep working.
 
 import type { ReactElement, ReactNode } from "react";
-import { Children, isValidElement, useMemo, useState } from "react";
+import { Children, isValidElement, useContext, useMemo, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CopyButton } from "./ChatChips";
 import { DiffBlock } from "./DiffBlock";
 import { isUnifiedDiff } from "@/app/lib/diffUtils";
-import { PENDING_CONV_KEY, resolveWorkspaceHref } from "./workspaceHref";
+import {
+  decideReadOnlyFile,
+  LOCKED_SUFFIX,
+  normalizeAssistantMarkdown,
+  PENDING_CONV_KEY,
+  resolveWorkspaceHref,
+  teamFileDownloadName,
+  WITHHELD_SUFFIX,
+  type ReadOnlyFileDecision,
+} from "./workspaceHref";
+// B19/B20 locked file names (the read-only views' render-time file policy +
+// a branch's withheld files).
+import {
+  isWithheldPath,
+  LockedFileLabel,
+  ReadOnlyFilesContext,
+  WithheldFileGate,
+  WithheldFilesContext,
+} from "./LockedFiles";
 import { conversationWorkspaceUrl } from "@/app/lib/conversationApiUrl";
 // WorkspaceImage moved to its own module so ToolChips can use it without
 // statically importing this (now lazy-loaded) ReactMarkdown pipeline.
 import { WorkspaceImage } from "./WorkspaceImage";
+import {
+  OutputShareMarker,
+  useOutputShareMarkers,
+  workspacePathFromHref,
+} from "./OutputShareMarkers";
 
 // ── markdown renderer ────────────────────────────────────────────────────
 
@@ -215,17 +238,22 @@ export default function AssistantMarkdown({
     // pass through unchanged so e.g. inline base64 still works and
     // the agent can still link to public images.
     img: ({ src, alt, title }) => {
-      const { href } = resolveWorkspaceHref(
-        typeof src === "string" ? src : "",
+      const raw = typeof src === "string" ? src : "";
+      const { href, downloadFilename: imageName } = resolveWorkspaceHref(
+        raw,
         conversationId,
       );
       return (
-        <WorkspaceImage
-          key={href}
-          src={href}
-          alt={alt ?? ""}
-          title={title ?? undefined}
-        />
+        <ReadOnlyImageGate raw={raw} alt={alt ?? ""} title={title ?? undefined}>
+          <WithheldFileGate href={href} name={imageName}>
+            <WorkspaceImage
+              key={href}
+              src={href}
+              alt={alt ?? ""}
+              title={title ?? undefined}
+            />
+          </WithheldFileGate>
+        </ReadOnlyImageGate>
       );
     },
     // Same rewrite for <a href>: when the agent writes
@@ -240,38 +268,32 @@ export default function AssistantMarkdown({
     // is what makes the link recognizable as a link at all — without
     // it, react-markdown's bare <a> inherits body color and looks
     // identical to surrounding text.
-    a: ({ href, title, children }) => {
-      const {
-        href: resolved,
-        isWorkspaceFile,
-        downloadFilename,
-      } = resolveWorkspaceHref(
-        typeof href === "string" ? href : "",
-        conversationId,
-      );
-      const isExternal = /^https?:\/\//i.test(resolved);
-      const extraProps: {
-        target?: string;
-        rel?: string;
-        download?: string;
-      } = {};
-      if (isWorkspaceFile) {
-        // Pass the original basename so the browser saves with the
-        // name the agent referenced, not a percent-encoded URL slice.
-        extraProps.download = downloadFilename || "";
-      } else if (isExternal) {
-        extraProps.target = "_blank";
-        extraProps.rel = "noopener noreferrer";
-      }
+    a: ({ node, href, title, children }) => {
+      const raw = typeof href === "string" ? href : "";
+      // A read-only view (team or public) decides a workspace reference
+      // here, on the href the CommonMark parser produced — see
+      // ReadOnlyLinkGate. Every other chat renders the live link below.
+      // Every image anywhere inside the label — `[**![x](a.png)**](…)`
+      // nests it under <strong>, and a label can hold several.
+      const innerImageSrcs = node ? descendantImageSrcs(node) : [];
+      const renderLink = (text: ReactNode) =>
+        renderLiveLink(raw, title ?? undefined, text, conversationId);
       return (
-        <a
-          className="assistant-markdown-link"
-          href={resolved || undefined}
+        <ReadOnlyLinkGate
+          raw={raw}
           title={title ?? undefined}
-          {...extraProps}
+          label={children}
+          innerImageSrcs={innerImageSrcs}
+          renderLink={renderLink}
         >
-          {children}
-        </a>
+          <BranchThumbnailLinkGate
+            raw={raw}
+            label={children}
+            innerImageSrcs={innerImageSrcs}
+            conversationId={conversationId}
+            renderLink={renderLink}
+          />
+        </ReadOnlyLinkGate>
       );
     },
     strong: ({ children }) => (
@@ -286,11 +308,12 @@ export default function AssistantMarkdown({
     return null;
   }
 
+  // The same pre-parse rewrites the read-only views apply before rewriting
+  // file references (normalizeAssistantMarkdown), and that the server's output
+  // discovery mirrors (outputs.go) — one definition, so the three agree on
+  // what renders as a link.
   const normalizedContent = autoFenceRawHtmlDocument(
-    content
-      .replace(/(^|\n)\*\*([^*\n:]+)\*\*(?=\s*$|\n)/g, "$1**$2**")
-      .replace(/(^|\n)\*\*([^*\n:]+)(?=\n|$)/g, "$1$2")
-      .replace(/(^|\n)([A-Za-z][A-Za-z /]+):\s*`([^`]+)`/g, "$1**$2:** $3"),
+    normalizeAssistantMarkdown(content),
   );
 
   return (
@@ -314,6 +337,280 @@ export default function AssistantMarkdown({
       {normalizedContent}
     </ReactMarkdown>
   );
+}
+
+// renderLiveLink is the `a` override's ordinary rendering: rewrite a relative
+// href to the per-conversation workspace API. When the agent writes
+// `[Deck.pptx](Deck.pptx)` after producing the file via an MCP tool, the
+// browser would otherwise try to navigate to a sibling path of the chat page
+// and 404. Rewriting to the workspace API makes the link actually serve the
+// file. Workspace links also get a `download` attribute so the browser saves
+// the file instead of trying to render binary content inline, and external
+// links open in a new tab so we don't lose the chat state. Visible styling
+// (color + underline via .assistant-markdown-link) is what makes the link
+// recognizable as a link at all — without it, react-markdown's bare <a>
+// inherits body color and looks identical to surrounding text.
+function renderLiveLink(
+  raw: string,
+  title: string | undefined,
+  children: ReactNode,
+  conversationId: string | null,
+): ReactNode {
+  const {
+    href: resolved,
+    isWorkspaceFile,
+    downloadFilename,
+  } = resolveWorkspaceHref(raw, conversationId);
+  const isExternal = /^https?:\/\//i.test(resolved);
+  const extraProps: {
+    target?: string;
+    rel?: string;
+    download?: string;
+  } = {};
+  if (isWorkspaceFile) {
+    // Pass the original basename so the browser saves with the
+    // name the agent referenced, not a percent-encoded URL slice.
+    extraProps.download = downloadFilename || "";
+  } else if (teamFileDownloadName(resolved)) {
+    // A team-files route: same save-don't-navigate treatment as the
+    // owner's own workspace link.
+    extraProps.download = teamFileDownloadName(resolved) ?? "";
+  } else if (isExternal) {
+    extraProps.target = "_blank";
+    extraProps.rel = "noopener noreferrer";
+  }
+  const link = (
+    <a
+      className="assistant-markdown-link"
+      href={resolved || undefined}
+      title={title}
+      {...extraProps}
+    >
+      {children}
+    </a>
+  );
+  // B17: an owner's team-shared chat marks each output chip Shared /
+  // Not shared. Only workspace files can be outputs; everything else —
+  // and every chat with no marker context — renders unchanged.
+  return isWorkspaceFile ? (
+    <WithheldFileGate href={resolved} name={downloadFilename}>
+      <OutputLinkWithMarker href={resolved} fallbackName={downloadFilename}>
+        {link}
+      </OutputLinkWithMarker>
+    </WithheldFileGate>
+  ) : (
+    link
+  );
+}
+
+// ── read-only views: files decided at render time ─────────────────────────
+//
+// Under a ReadOnlyFilesContext (ReadOnlyTranscript: a teammate's team view or
+// a public share link) every workspace reference the markdown RENDERS is
+// decided by its parsed href (decideReadOnlyFile): a shared output points at
+// the team-files route; anything else renders as text — a locked name on the
+// team view, a withheld name (or the image placeholder) on a public link —
+// never an anchor or an <img>, because a disabled link is still a dead
+// promise. Deciding here rather than by rewriting markdown source is what
+// makes the answer agree with the server's goldmark-based output discovery:
+// nested brackets, escaped `]`, balanced parens in a destination are all
+// parsed by the same grammar on both sides.
+
+/** The text a withheld/locked/upload decision renders as, or null when live. */
+function readOnlyFileText(
+  d: ReadOnlyFileDecision,
+  imagePlaceholder: string | null,
+): ReactNode | null {
+  switch (d.kind) {
+    case "locked":
+      return <LockedFileLabel>{d.name + LOCKED_SUFFIX}</LockedFileLabel>;
+    case "upload":
+      return <span>{d.name}</span>;
+    case "withheld":
+      return (
+        <span data-testid="withheld-file">
+          {imagePlaceholder ?? d.name + WITHHELD_SUFFIX}
+        </span>
+      );
+    default:
+      return null;
+  }
+}
+
+function ReadOnlyImageGate({
+  raw,
+  alt,
+  title,
+  children,
+}: {
+  raw: string;
+  alt: string;
+  title?: string;
+  children: ReactNode;
+}) {
+  const policy = useContext(ReadOnlyFilesContext);
+  if (!policy) return <>{children}</>;
+  const d = decideReadOnlyFile(raw, policy);
+  if (d.kind === "external") return <>{children}</>;
+  if (d.kind === "shared") {
+    return <WorkspaceImage key={d.url} src={d.url} alt={alt} title={title} />;
+  }
+  return readOnlyFileText(
+    d,
+    policy.mode === "withhold" ? policy.imagePlaceholder : null,
+  );
+}
+
+// A clickable thumbnail whose IMAGE is locked or withheld must not keep that
+// label inside a live anchor: the visible text would say "(not shared)" while
+// a click went somewhere else entirely — for an external target, any URL the
+// markdown named. Every door splits it the same way: the image's locked label
+// as plain text, then the target as its OWN link whose visible text is where
+// it goes (the URL for an external target, the file name for a file).
+
+/** The visible text of a split thumbnail's target link (see above). */
+function splitTargetText(raw: string, conversationId: string | null): string {
+  const { isWorkspaceFile, downloadFilename } = resolveWorkspaceHref(
+    raw,
+    conversationId,
+  );
+  return isWorkspaceFile && downloadFilename ? downloadFilename : raw;
+}
+
+// descendantImageSrcs collects the src of every <img> under a hast node, at
+// any depth, in document order.
+function descendantImageSrcs(node: { children?: unknown[] }): string[] {
+  const out: string[] = [];
+  const walk = (n: unknown) => {
+    if (!n || typeof n !== "object") return;
+    const el = n as { type?: string; tagName?: string; properties?: { src?: unknown }; children?: unknown[] };
+    if (el.type === "element" && el.tagName === "img") {
+      out.push(String(el.properties?.src ?? ""));
+    }
+    el.children?.forEach(walk);
+  };
+  node.children?.forEach(walk);
+  return out;
+}
+
+/**
+ * BranchThumbnailLinkGate is the live link outside a read-only view. In a
+ * teammate's BRANCH (WithheldFilesContext), a thumbnail whose image the branch
+ * did not receive renders split (above); everywhere else it is the ordinary
+ * link around its label.
+ */
+function BranchThumbnailLinkGate({
+  raw,
+  label,
+  innerImageSrcs,
+  conversationId,
+  renderLink,
+}: {
+  raw: string;
+  label: ReactNode;
+  innerImageSrcs: string[];
+  conversationId: string | null;
+  renderLink: (text: ReactNode) => ReactNode;
+}) {
+  const ctx = useContext(WithheldFilesContext);
+  if (innerImageSrcs.length === 0 || !ctx) return <>{renderLink(label)}</>;
+  const pathOf = (href: string) =>
+    workspacePathFromHref(
+      resolveWorkspaceHref(href, conversationId).href,
+      ctx.conversationId,
+    );
+  // ANY withheld image in the label splits the link: one locked name inside
+  // a live anchor is the disguised clickable lock this gate exists to stop.
+  const withheld = new Set<string>();
+  for (const src of innerImageSrcs) {
+    const p = pathOf(src);
+    if (p !== null && isWithheldPath(ctx, p)) withheld.add(p);
+  }
+  if (withheld.size === 0) return <>{renderLink(label)}</>;
+  // The target is a withheld image's own file: its locked name says it all.
+  const target = raw ? pathOf(raw) : null;
+  if (!raw || (target !== null && withheld.has(target))) return <>{label}</>;
+  return (
+    <>
+      {label} {renderLink(splitTargetText(raw, conversationId))}
+    </>
+  );
+}
+
+function ReadOnlyLinkGate({
+  raw,
+  title,
+  label,
+  innerImageSrcs,
+  renderLink,
+  children,
+}: {
+  raw: string;
+  title?: string;
+  label: ReactNode;
+  /** The src of every image inside this link (a clickable thumbnail), at any depth. */
+  innerImageSrcs: string[];
+  /** The live link around `text` — used for a split external target. */
+  renderLink: (text: ReactNode) => ReactNode;
+  children: ReactNode;
+}) {
+  const policy = useContext(ReadOnlyFilesContext);
+  if (!policy) return <>{children}</>;
+  const d = decideReadOnlyFile(raw, policy);
+  // A thumbnail whose image is NOT live (withheld, locked, an upload) never
+  // sits inside a live anchor — see splitTargetText above. Every image in
+  // the label counts: one locked image beside a live one still splits it.
+  const inners = innerImageSrcs.map((src) => decideReadOnlyFile(src, policy));
+  const innerLive = inners.every((i) => i.kind === "external" || i.kind === "shared");
+  if (d.kind === "external") {
+    if (innerLive) return <>{children}</>;
+    if (!raw) return <>{label}</>;
+    return (
+      <>
+        {label} {renderLink(raw)}
+      </>
+    );
+  }
+  if (d.kind === "shared") {
+    // A thumbnail whose image is NOT live (withheld or locked) is labelled
+    // by the file it downloads, beside the image's own locked name — never a
+    // live link whose only visible text says "not shared".
+    const anchor = (text: ReactNode) => (
+      <a
+        className="assistant-markdown-link"
+        href={d.url}
+        title={title}
+        download={d.name}
+      >
+        {text}
+      </a>
+    );
+    return innerLive ? (
+      anchor(label)
+    ) : (
+      <>
+        {label} {anchor(d.name)}
+      </>
+    );
+  }
+  const text = readOnlyFileText(d, null);
+  // A clickable thumbnail whose target is withheld: on the team view the
+  // image (live if it was shared, else its own locked name) stays beside the
+  // target's locked name — one name when both are the same file. On a public
+  // link the target's withheld name stands alone, as the source pre-pass
+  // renders it.
+  if (inners.length > 0 && policy.mode === "shared") {
+    const sameLockedFile = inners.some(
+      (i) => i.kind !== "external" && i.kind !== "shared" && i.path === d.path,
+    );
+    if (sameLockedFile) return <>{label}</>;
+    return (
+      <>
+        {label} {text}
+      </>
+    );
+  }
+  return <>{text}</>;
 }
 
 // InlineHtmlPreview renders a ```html code block from an assistant
@@ -413,3 +710,34 @@ function InlineHtmlPreview({
   );
 }
 
+
+// OutputLinkWithMarker appends the B17 share marker to a workspace link when
+// the transcript sits under an OutputShareContext (an owner's team-shared
+// chat) and the link's path is one of that chat's outputs. It reads the
+// context itself so the memoised `components` map keeps its identity.
+function OutputLinkWithMarker({
+  href,
+  fallbackName,
+  children,
+}: {
+  href: string;
+  fallbackName: string;
+  children: ReactNode;
+}) {
+  const markers = useOutputShareMarkers();
+  if (!markers) return <>{children}</>;
+  const path = workspacePathFromHref(href, markers.conversationId);
+  const shared = path === null ? undefined : markers.shared.get(path);
+  if (path === null || shared === undefined) return <>{children}</>;
+  return (
+    <>
+      {children}
+      <OutputShareMarker
+        name={path.split("/").pop() || fallbackName}
+        shared={shared}
+        team={markers.team}
+        onClick={() => markers.onOpenSources(path)}
+      />
+    </>
+  );
+}

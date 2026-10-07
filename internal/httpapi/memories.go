@@ -46,6 +46,8 @@ func writeMemoryStoreError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, store.ErrProjectNotOwner):
 		http.Error(w, "only the project owner can do that", http.StatusForbidden)
+	case errors.Is(err, store.ErrMemoryNotPermitted):
+		http.Error(w, err.Error(), http.StatusForbidden)
 	case store.IsInputError(err):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:

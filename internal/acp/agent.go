@@ -33,6 +33,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -45,15 +47,17 @@ import (
 const SpecVersion = acpsdk.ProtocolVersionNumber
 
 // revisedMarker separates a superseded draft from the final answer. ACP
-// updates are append-only, so when fleet's final text does not extend what was
-// already streamed (an enforcement round replaced the draft), the client gets
-// the final answer again after this line rather than silently diverging from
-// the persisted conversation.
+// updates are append-only, so when fleet's final text does not read as, or
+// extend, what was streamed for it (fleet replaced the draft; see
+// translator.replace), the client gets the final answer again after this line
+// rather than silently diverging from the persisted conversation.
 const revisedMarker = "\n\n— revised answer —\n\n"
 
-// turnClient is the slice of chattui.Client the adapter needs: stream one
-// governed turn, and stop one server-side.
+// turnClient is the slice of chattui.Client the adapter needs: check, as a
+// session opens, that the server takes turns from its user and token; stream
+// one governed turn; and stop one server-side.
 type turnClient interface {
+	CheckIdentity(ctx context.Context) error
 	StreamInput(ctx context.Context, message, convID, inputID string, onEvent func(chattui.Event)) (string, error)
 	Cancel(convID, turnID string) error
 	CancelInput(convID, inputID string) error
@@ -88,9 +92,11 @@ type Agent struct {
 	// exits (awaitStops).
 	lifetime context.Context
 	hangUp   context.CancelFunc
-	// diag is where a prompt cut short by the client going away says how its
-	// turn ended (reportGone): its answer and notes would go to stdout, which
-	// nobody reads any more. run sets it to stderr.
+	// diag is stderr, for what fleet acp tells the operator rather than the
+	// client: the MCP servers a session/new sent that are ignored
+	// (NewSession), and how the turn of a prompt cut short by the client going
+	// away ended (reportGone; its answer and notes would go to stdout, which
+	// nobody reads any more). run sets it.
 	diag io.Writer
 
 	mu       sync.Mutex
@@ -146,6 +152,17 @@ type session struct {
 	// a client may number messageIds per session, so an unscoped key would
 	// match another session's prompt and answer this one with its replay.
 	ns string
+	// mcpNotice tells the user that the MCP servers the client sent with
+	// session/new are not used (clientMCPServers.notice; "" = none were sent,
+	// or it has been told). The first prompt that gets the session and is
+	// still not cancelled sends it, just before its submission, so ahead of
+	// its turn's output and whatever that prompt's outcome; sending clears
+	// it, so it goes out at most once per session (sendMCPNotice). A prompt
+	// that ends before that point (refused, cancelled before it got the
+	// session, or left when the client went away) leaves it for the next. One
+	// cancelled while the notice was being written is not submitted, but the
+	// notice has gone out, so it is not repeated. Under mu.
+	mcpNotice string
 	// unsettled holds, per prompt text (by its hash), the key of every
 	// prompt whose outcome is unknown: the request may have been accepted
 	// but the answer was lost (a transport failure). A retry of the same
@@ -295,8 +312,10 @@ func (a *Agent) SetConnection(c updater) {
 
 // Initialize advertises only what is true: text prompts (plus the baseline
 // resource_link, and embedded text resources), no session/load, no images or
-// audio, no MCP servers from the client, no auth methods (identity is the
-// operator-provisioned fleet user, resolved host-side from the environment).
+// audio, no MCP capabilities (session/new ignores every MCP server the client
+// sends, even the stdio ones ACP expects every agent to support), no auth
+// methods (identity is the operator-provisioned fleet user, resolved
+// host-side from the environment).
 func (a *Agent) Initialize(_ context.Context, _ acpsdk.InitializeRequest) (acpsdk.InitializeResponse, error) {
 	title := "fleet"
 	return acpsdk.InitializeResponse{
@@ -318,21 +337,62 @@ func (a *Agent) Authenticate(context.Context, acpsdk.AuthenticateRequest) (acpsd
 // NewSession opens an ACP session. Nothing is created in fleet yet — the
 // conversation is born on the first prompt, like a new web chat. The client's
 // cwd is recorded but not used: tool calls run in fleet's sandbox workspace,
-// never in the client's filesystem. Client-supplied MCP servers are refused
-// rather than ignored, because fleet's connectors come from the operator's
-// bundle and are credential-brokered host-side.
-func (a *Agent) NewSession(_ context.Context, p acpsdk.NewSessionRequest) (acpsdk.NewSessionResponse, error) {
+// never in the client's filesystem.
+//
+// Client-supplied MCP servers are accepted and ignored: never started,
+// contacted, stored or forwarded. fleet's tools and connectors come from the
+// operator's bundle and run host-side with brokered credentials; a client's
+// servers run on the client's machine, out of fleet's reach. They are not
+// refused, because clients send every MCP server their user configured to
+// every ACP agent (Zed its context_servers, Emacs agent-shell its
+// agent-shell-mcp-servers), so a refusal left such a user unable to open a
+// session at all. Only their names are kept (ignoredMCPServers): an entry can
+// carry secrets in its env, headers, args, URL or _meta. The operator is told
+// on stderr once the session opens (a refused session logs nothing about
+// them), and the user by the session's first prompt (mcpNotice). An
+// entry the SDK cannot decode (env as an object, say) never reaches here: the
+// SDK answers session/new with invalid params itself.
+//
+// Before the session opens, the server is asked whether it takes turns from
+// the configured user and token (chattui's CheckIdentity), so a wrong token,
+// an unprovisioned email, a viewer or an address the IP filter refuses fails
+// here, before the user has typed a prompt, rather than on that prompt. Some
+// clients can only show the reason here: Zed answers an auth_required prompt
+// with fixed "Authentication Required" text of its own, whatever the error
+// says, while it shows a session/new error's message. The error is the one
+// the first prompt would have got (requestError): auth_required. Only a
+// refusal is a verdict. An answer that is none on the identity opens the
+// session, and the first prompt reports any real problem: no answer at all
+// (a server that is down or unreachable), an older server without /me, a
+// 5xx. A server that cannot be reached is left to the prompt on purpose:
+// CodeCompanion shows a session/new error only as a notice without its
+// text, but a prompt's error in the chat. The check runs last, after the
+// checks that need no server.
+func (a *Agent) NewSession(ctx context.Context, p acpsdk.NewSessionRequest) (acpsdk.NewSessionResponse, error) {
 	if a.cfgErr != nil {
-		return acpsdk.NewSessionResponse{}, acpsdk.NewAuthRequired(map[string]any{"error": a.cfgErr.Error()})
+		return acpsdk.NewSessionResponse{}, reasonError(acpsdk.NewAuthRequired, a.cfgErr.Error())
+	}
+	sess := &session{cwd: p.Cwd, ns: randomID()}
+	if err := a.client.CheckIdentity(ctx); err != nil {
+		// A client that cancelled session/new (or went away) while /me was
+		// pending never learns the session's ID and could never close it,
+		// so no session is recorded for it.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return acpsdk.NewSessionResponse{}, ctxErr
+		}
+		var se *chattui.StatusError
+		if errors.As(err, &se) { // a refusal; no answer at all is no verdict
+			return acpsdk.NewSessionResponse{}, requestError(err)
+		}
 	}
 	if len(p.McpServers) > 0 {
-		return acpsdk.NewSessionResponse{}, acpsdk.NewInvalidParams(map[string]any{
-			"error": "fleet does not accept MCP servers from the ACP client: its connectors come from the operator's bundle and run host-side with brokered credentials",
-		})
+		ignored := ignoredMCPServers(p.McpServers)
+		sess.mcpNotice = ignored.notice()
+		_, _ = io.WriteString(a.diag, ignored.stderrLine())
 	}
 	id := acpsdk.SessionId("fleet-acp-" + randomID())
 	a.mu.Lock()
-	a.sessions[id] = &session{cwd: p.Cwd, ns: randomID()}
+	a.sessions[id] = sess
 	a.mu.Unlock()
 	return acpsdk.NewSessionResponse{SessionId: id}, nil
 }
@@ -514,17 +574,20 @@ func (a *Agent) CloseSession(_ context.Context, p acpsdk.CloseSessionRequest) (a
 // (the Go SDK's client sends one along with its `$/cancel_request`).
 func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
 	if a.cfgErr != nil {
-		return acpsdk.PromptResponse{}, acpsdk.NewAuthRequired(map[string]any{"error": a.cfgErr.Error()})
+		return acpsdk.PromptResponse{}, reasonError(acpsdk.NewAuthRequired, a.cfgErr.Error())
 	}
 	a.mu.Lock()
 	sess := a.sessions[p.SessionId]
 	a.mu.Unlock()
 	if sess == nil {
-		return acpsdk.PromptResponse{}, &acpsdk.RequestError{Code: -32002, Message: "Resource not found", Data: map[string]any{"sessionId": string(p.SessionId)}}
+		// The message names the session and says why there is none, so like
+		// every reason it has no data unless it is cut (reasonError).
+		return acpsdk.PromptResponse{}, reasonError(resourceNotFound, fmt.Sprintf(
+			"fleet acp has no session %q (it was closed, or opened by an earlier fleet acp process); start a new session", p.SessionId))
 	}
 	message, err := promptText(p.Prompt)
 	if err != nil {
-		return acpsdk.PromptResponse{}, acpsdk.NewInvalidParams(map[string]any{"error": err.Error()})
+		return acpsdk.PromptResponse{}, reasonError(acpsdk.NewInvalidParams, err.Error())
 	}
 
 	// The text's unresolved key as this prompt arrives. If a resend of that
@@ -539,9 +602,8 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	if !ok {
 		// Refused before it was held or sent: nothing reached fleet, so the
 		// client can send it again once the session's prompts drain.
-		return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{
-			"error": fmt.Sprintf("this session already has a prompt running and %d waiting for it; wait for them to be answered (or send session/cancel) before sending another", maxWaitingPrompts),
-		})
+		return acpsdk.PromptResponse{}, reasonError(acpsdk.NewInternalError, fmt.Sprintf(
+			"this session already has a prompt running and %d waiting for it; wait for them to be answered (or send session/cancel) before sending another", maxWaitingPrompts))
 	}
 	defer release()
 	promptTracked(message)
@@ -624,6 +686,9 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 		}
 	})
 	defer a.watchTurn(tr)()
+	if !sendMCPNotice(cancelCtx, sess, tr) {
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
+	}
 
 	streamDone := make(chan struct{})
 	stopped := make(chan stopOutcome, 1)
@@ -715,13 +780,14 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 		// A timeout whose Stop found the turn already complete falls through:
 		// the turn finished, so its outcome is reported, not a timeout.
 		if stopErr != nil {
-			return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{
-				"error": fmt.Sprintf("the fleet turn did not finish within %s, and stopping it failed (%v): it may still be running — stop it at %s", a.timeout, stopErr, a.conversationPointer(convID)),
-			})
+			// What to do comes first and the Stop's error last: that error
+			// can quote a long server reply (a proxy's page), and a message
+			// cut to fit (errorMessage) must still say where to stop the turn.
+			return acpsdk.PromptResponse{}, reasonError(acpsdk.NewInternalError, fmt.Sprintf(
+				"the fleet turn did not finish within %s and may still be running — stop it at %s (stopping it failed: %v)", a.timeout, a.conversationPointer(convID), stopErr))
 		}
-		return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{
-			"error": fmt.Sprintf("the fleet turn did not finish within %s and was stopped (raise it with fleet acp --timeout)", a.timeout),
-		})
+		return acpsdk.PromptResponse{}, reasonError(acpsdk.NewInternalError, fmt.Sprintf(
+			"the fleet turn did not finish within %s and was stopped (raise it with fleet acp --timeout)", a.timeout))
 	}
 	if tr.policyBlocked {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonRefusal, Meta: meta}, nil
@@ -756,6 +822,27 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 		resp.Usage = tr.usage
 	}
 	return resp, nil
+}
+
+// sendMCPNotice sends the session's MCP-server notice, if it is still to be
+// sent (session.mcpNotice), just before the prompt is submitted: so it comes
+// ahead of anything the turn streams and goes out whatever the prompt's
+// outcome, an error included. tr.send, not tr.handle: the notice is fleet
+// acp's, not the turn's, so it is no part of the text a text.replace is
+// reconciled against (fleet's final text never contains it). Under sess.mu.
+//
+// ok is false when the prompt must not be submitted after all. The send is a
+// write to stdout, which waits on the client to read it, so a session/cancel
+// (or the client going away) can land after Prompt's last check and before
+// the submission; it is honoured as that check honours it. The notice has
+// gone out, so it stays cleared.
+func sendMCPNotice(cancelCtx context.Context, sess *session, tr *translator) (ok bool) {
+	if sess.mcpNotice == "" {
+		return true
+	}
+	tr.send(acpsdk.UpdateAgentMessageText(sess.mcpNotice))
+	sess.mcpNotice = ""
+	return cancelCtx.Err() == nil
 }
 
 // reportGone says on stderr (diag) what became of a cancelled prompt's turn
@@ -1156,16 +1243,150 @@ func (a *Agent) SetSessionMode(context.Context, acpsdk.SetSessionModeRequest) (a
 	return acpsdk.SetSessionModeResponse{}, acpsdk.NewMethodNotFound(acpsdk.AgentMethodSessionSetMode)
 }
 
-// requestError maps a failed turn onto a JSON-RPC error the client can show.
-// An auth failure (401/403 from POST /chat) is ACP's auth_required; anything
-// else — server unreachable, turn.error, turn.model_required — is an internal
-// error whose message is the same actionable text `fleet chat` prints.
+// requestError maps a failed turn, or a failed identity check at session/new,
+// onto a JSON-RPC error the client can show. An auth failure (401/403 from
+// POST /chat or GET /me, or the viewer role /me reports) is ACP's
+// auth_required; anything else — server unreachable, turn.error,
+// turn.model_required — is an internal error. Either way its message is the
+// same actionable text `fleet chat` prints (reasonError).
 func requestError(err error) error {
 	var se *chattui.StatusError
 	if errors.As(err, &se) && (se.Code == 401 || se.Code == 403) {
-		return acpsdk.NewAuthRequired(map[string]any{"error": se.Error()})
+		return reasonError(acpsdk.NewAuthRequired, se.Error())
 	}
-	return acpsdk.NewInternalError(map[string]any{"error": err.Error()})
+	return reasonError(acpsdk.NewInternalError, err.Error())
+}
+
+// reasonError is the JSON-RPC error of kind (one of acp-go-sdk's constructors:
+// NewAuthRequired, NewInternalError, NewInvalidParams; or resourceNotFound)
+// for reason, with the reason as its message.
+//
+// The constructors set message to the kind's generic name ("Authentication
+// required", "Internal error", "Invalid params") and leave the reason in
+// data.error, and some ACP clients show only code and message: Emacs's
+// agent-shell hides the rest behind a Details button, so an unknown user, a
+// viewer, a wrong token and a missing email all read "Authentication
+// required". JSON-RPC 2.0 has clients act on code and makes message a short
+// description, so message is the reason alone (errorMessage), not prefixed
+// with the kind's name: the client shows the code beside it, and the name
+// would mislabel most reasons — a viewer's refusal is not a failed
+// authentication, nor a timeout or an unreachable server an internal error.
+// code is unchanged. message is only ever the reason or a cut of it, so it
+// carries nothing the reason did not.
+//
+// data is left out when message holds the whole reason (on one line: only
+// whitespace changed), and is {"error": reason} only when message had to be
+// cut. An empty reason has nothing to carry: message stays the kind's name and
+// there is no data either. Zed shows an error as its message followed by data
+// as JSON, so a data.error beside a whole message showed the reason twice;
+// Neovim's CodeCompanion (data.error when present, else message) and
+// agent-shell (message) lose nothing without it. A cut message keeps
+// data.error, so the whole reason still reaches a client that reads it. The
+// omitted data is the untyped nil: RequestError.Data is an `any` with
+// omitempty, which drops only a nil interface, so an empty map would go out as
+// "data":{} and a nil map as "data":null.
+func reasonError(kind func(data any) *acpsdk.RequestError, reason string) *acpsdk.RequestError {
+	e := kind(map[string]any{"error": reason})
+	m := errorMessage(reason)
+	if m != "" { // an empty reason keeps the kind's name
+		e.Message = m
+	}
+	if m == oneLine(reason) {
+		e.Data = nil
+	}
+	return e
+}
+
+// resourceNotFound is ACP's resource_not_found (-32002), shaped like
+// acp-go-sdk's constructors, which have none for it.
+func resourceNotFound(data any) *acpsdk.RequestError {
+	return &acpsdk.RequestError{Code: -32002, Message: "Resource not found", Data: data}
+}
+
+// maxErrorMessage bounds an error's message, in runes. fleet acp's own fix-it
+// texts fit whole (the longest, a missing token naming the env files it
+// tried, is about 250). A reason that quotes a reply from elsewhere — a
+// turn's error, a proxy's page, a failed Stop's answer — may not, so such a
+// reason puts what to do before what it quotes, where a cut keeps it.
+const maxErrorMessage = 400
+
+// maxWordBackoff is how far, in runes, a message cut mid-word backs off to
+// the word's start. A longer "word" (a URL, an unbroken run of a quoted
+// reply) is cut where the bound falls, so the cut cannot eat most of the
+// message.
+const maxWordBackoff = 40
+
+// errorMessage is reason as the one line an error's message carries: each run
+// of whitespace, line breaks included, becomes one space (a quoted response
+// body can span lines). A reason longer than maxErrorMessage keeps as many
+// whole sentences as fit (wholeSentences) when they fill at least half the
+// bound. Otherwise the words that fit say more: it is cut at the bound,
+// after the last whole word (the part of a word the bound splits is dropped,
+// unless that part is over maxWordBackoff runes), and marked "…".
+// reasonError then keeps the whole reason in data.error.
+func errorMessage(reason string) string {
+	s := oneLine(reason)
+	r := []rune(s)
+	if len(r) <= maxErrorMessage {
+		return s
+	}
+	if n := wholeSentences(s, maxErrorMessage); utf8.RuneCountInString(s[:n]) >= maxErrorMessage/2 {
+		return s[:n]
+	}
+	cut := r[:maxErrorMessage]
+	if r[maxErrorMessage] != ' ' { // the bound splits a word: back off to its start, if near
+		for i := len(cut) - 1; i >= 0 && i >= len(cut)-maxWordBackoff; i-- {
+			if cut[i] == ' ' {
+				cut = cut[:i]
+				break
+			}
+		}
+	}
+	return string(cut) + "…"
+}
+
+// oneLine is s with each run of whitespace, line breaks included, as one
+// space: the whole of s, on one line.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// wholeSentences is the length in bytes of the longest run of s's leading
+// whole sentences that fits in limit runes, or 0 when not even the first
+// does. A sentence ends at a '.', '!' or '?' followed by a space and a
+// capital letter, so "e.g. the", "hmm... ok" and a URL's "?x=1. next" do not
+// end one; nor does one inside parentheses or a backtick span (a quoted
+// error, a command). s has single spaces only (errorMessage).
+func wholeSentences(s string, limit int) int {
+	end, depth, quoted, runes := 0, 0, false, 0
+	for i, c := range s {
+		if runes++; runes > limit {
+			break
+		}
+		switch {
+		case c == '`':
+			quoted = !quoted
+		case quoted:
+		case c == '(':
+			depth++
+		case c == ')' && depth > 0:
+			depth--
+		case depth == 0 && (c == '.' || c == '!' || c == '?') && startsSentence(s[i+1:]):
+			end = i + 1
+		}
+	}
+	return end
+}
+
+// startsSentence reports whether rest, the text after a full stop, starts a
+// new sentence: a space, then a capital letter.
+func startsSentence(rest string) bool {
+	after, ok := strings.CutPrefix(rest, " ")
+	if !ok {
+		return false
+	}
+	c, _ := utf8.DecodeRuneInString(after)
+	return unicode.IsUpper(c)
 }
 
 // promptText flattens an ACP prompt into the one message a fleet turn takes.

@@ -177,11 +177,11 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 		resp.DeletedConversations = n
 		// Their workspace dirs are now orphans — reap them in the same
 		// action so the operator sees the space come back immediately.
-		if removed, err := s.store.SweepOrphanWorkspaces(r.Context(), workspaceRoot); err != nil {
+		removed, err := s.store.SweepOrphanWorkspaces(r.Context(), workspaceRoot)
+		if err != nil {
 			log.Printf("admin storage cleanup: workspace sweep: %v", err)
-		} else {
-			resp.RemovedWorkspaces = removed
 		}
+		resp.RemovedWorkspaces = removed
 	}
 
 	if req.SweepFiles {

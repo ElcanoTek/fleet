@@ -99,7 +99,7 @@ require("codecompanion").setup({
             default = { "fleet", "acp", "--email", "acp-bot@example.com" },
           },
           defaults = {
-            mcpServers = {}, -- fleet refuses client-supplied MCP servers: keep this, not "inherit_from_config"
+            mcpServers = {}, -- fleet ignores client-supplied MCP servers (its first reply would say so), so send none
             timeout = 20000, -- CodeCompanion's wait for initialize/session/new; prompts are bounded by `fleet acp --timeout`
           },
           handlers = {
@@ -307,8 +307,8 @@ you mentioned.
 
 | ACP | fleet |
 | --- | --- |
-| `initialize` | Protocol 1; `agentInfo` `fleet` + the build version; capabilities: text prompts, embedded text resources (`promptCapabilities.embeddedContext`), and `loadSession: false`. No auth methods, no image or audio. |
-| `session/new` | Records a session. The fleet conversation is created by the first prompt, like a new web chat. Client-supplied `mcpServers` are **refused** (invalid params), not ignored: fleet's connectors come from the operator's bundle and run host-side with brokered credentials. |
+| `initialize` | Protocol 1; `agentInfo` `fleet` + the build version; capabilities: text prompts, embedded text resources (`promptCapabilities.embeddedContext`), and `loadSession: false`. No auth methods, no image or audio, no `mcpCapabilities` (client MCP servers are ignored; see `session/new`). |
+| `session/new` | Checks the configured user and token with the server, then records a session. The check is one `GET /me` with the same headers a prompt sends, bounded at 10 s; `/me` sits behind the same IP filter, shared-token check and membership check as `POST /chat`. A refusal fails `session/new` with `auth_required` and the text the first prompt would have got (see Errors), so it shows when the session opens instead of after a prompt has been typed: a wrong token, an email that is not a fleet user, a viewer-role user, an address the IP filter refuses, or a 401. For fleet's own refusals the text is identical; a proxy's 401 or 403 can depend on the path. `/me` refuses no read, so a viewer is recognised by the `role` it reports and gets the same text a viewer's prompt does. An answer that says nothing about the identity opens the session anyway, and the first prompt reports any real problem: no answer at all (a server that is down, unresolvable, or silent for the 10 s; left to the prompt on purpose, because some clients, such as CodeCompanion.nvim, show a `session/new` error only as a notice without its text, but a prompt's error in the chat), a 404 (a server older than `/me`: a newer `fleet` binary may run `fleet acp` against an older server), a 5xx, any other 4xx, or a 200 whose body is not the expected JSON. The fleet conversation is created by the first prompt, like a new web chat. A missing email or token is found before the server is asked. Client-supplied `mcpServers` are accepted and **ignored**: `fleet acp` never starts, contacts, stores or forwards them, because fleet's tools and connectors come from the operator's bundle and run host-side with brokered credentials. They are not refused, because clients send every MCP server their user configured to every ACP agent: Zed forwards the servers in its `context_servers` setting (Zed 1.22.0 showed "Failed to Launch — Invalid params" while `fleet acp` refused them) and Emacs agent-shell its `agent-shell-mcp-servers`, so a refusal left such a user unable to open a session at all. Only the servers' names are used and kept. An entry can carry secrets in its `env`, `headers`, `args`, `url` or `_meta`, and `fleet acp` never logs, shows or keeps any of those. `fleet acp` writes one line to stderr at `session/new` once the identity check has not refused it, each name quoted (`fleet acp: ignoring 1 MCP server sent by the client ("dummy-mcp"); fleet's connectors come from the operator's bundle`), and the user is told once per session: the first prompt that gets the session and is not cancelled opens with an `agent_message_chunk` of its own paragraph, ``fleet does not use the MCP server your editor sent (`dummy-mcp`): fleet's tools and connectors come from the fleet operator and run on the fleet server.``, sent just before its submission. So it comes ahead of anything the turn streams and goes out whatever the prompt's outcome: answered, queued by fleet, or failed. Later prompts in the session, a resend of that first prompt included, do not repeat it. A prompt that ends before that point (refused content, over the waiting cap, cancelled before it got the session, the client gone) leaves the notice for the next one. A `session/cancel` (or the client going away) that lands while the notice is being written is honoured before the submission: the prompt answers `cancelled` and is never sent to fleet, and the notice, which has gone out, is not repeated. The notice is not part of the fleet conversation, and `text.replace` is reconciled against the turn's own text without it, so it never causes a `— revised answer —`. Each name is shown on one line: control and space characters (line breaks, tabs, escapes) become a space, Unicode format characters (category Cf: bidi overrides, zero-width spaces) are dropped, runs of spaces collapse, and the name is cut at 60 characters. Other invisible characters (U+3164, variation selectors) pass through, harmless inside the Markdown inline code the notice puts each name in. At most 5 names are listed, then "and N more"; an entry with no name shows as "unnamed" (`""` on stderr). `acp-go-sdk` decodes each entry before `fleet acp` sees it: a `null` entry, `{}` and an entry of a transport the SDK does not know decode (as HTTP) and are ignored like the rest, but an entry the SDK cannot decode makes the SDK itself answer `session/new` with invalid params (see Deviations and limits). |
 | `session/prompt` | One `POST /chat` turn. Later prompts in the session continue the same fleet conversation. The conversation id is taken from the `X-Fleet-Conversation-Id` response header as well as the first frame, so a stream that dies early does not start a second conversation on retry. Each prompt carries an idempotency `input_id`: the client's `messageId` when it sends one (echoed back as `userMessageId`, and scoped to the ACP session, since clients may number messages per session), otherwise a key that a retry of the same text reuses after a lost answer. fleet records that key whether the prompt started a turn directly or was queued (`docs/INPUT-QUEUE.md`), so a resend within the input queue's retention window (`docs/INPUT-QUEUE.md`) is answered with the original input and never run twice. The reply then says the message is already running or has finished, was already taken (how that turn ended, its reply or an error, is in the conversation), or is still queued (with its place in line when fleet reports one), and where to follow it. A prompt sent while an earlier prompt on the session is still open never stops it: prompts on a session run one at a time, so the new one waits for the session while the earlier one runs on and answers with its own outcome. Waiting prompts take the session in the order `fleet acp` received them (the order its handlers registered them: `acp-go-sdk` runs each request on its own goroutine, so two prompts sent at almost the same moment may be received in either order). If the new one carries the same key (the same `messageId`, or the same text while an earlier attempt's outcome is unknown), it is then answered with that input as above and never run twice; otherwise it runs as its own turn. At most 20 prompts wait for a session behind the one running (the same bound as fleet's own input queue, which cannot see prompts that have not reached it yet); one more is refused at once with an internal error saying the session already has a prompt running and 20 waiting, and is never sent to fleet, so the client can send it again once they are answered. Each prompt with an unknown outcome (a lost answer, or a 5xx, which can follow an input fleet committed), or whose cancel fleet did not confirm, keeps its own key until it is answered, so unrelated prompts in between do not break a later retry; these keys are never evicted (a forgotten key would let its retry run twice), so they cost one small entry per lost answer for the life of the session. A prompt whose answer was lost while it was being cancelled is stopped by its key (`POST /conversations/{id}/cancel` with `input_id`): fleet withdraws it if still queued, cancels its turn if running, and refuses to launch it if its turn has not registered yet, atomically with registration; if the prompt has not reached fleet at all, fleet takes its key with a cancelled record, so the late arrival never runs. A Stop fleet does not accept, or sends but cannot confirm in time (and the turn's stream does not confirm either), is reported as unconfirmed, and one that reached fleet after the turn had already finished (whether the Stop named the turn or the input's key, the turn's final frame arrived first, or fleet accepted the Stop but the turn completed, or failed on its own, in the same instant, which the adapter learns by reading on to the turn's final frame) says so: the prompt still ends `cancelled`, as ACP requires, with a note that nothing was stopped and what the turn did stands. A retry of an unresolved prompt goes to the conversation it was first sent to (none, for a session's first prompt), since fleet recognises a key only there; it does not move the session to another conversation. If fleet reports that an earlier attempt was accepted and cancelled, the prompt is not resubmitted: fleet does not record why an input was cancelled, and a Stop from any surface looks the same as a launch that failed, so resubmitting could run a message after its Stop succeeded. The reply says it did not run and asks for it to be sent again as a new message (a new `messageId`). A text-only prompt whose lost answer's Stop fleet confirmed drops its key, so sending the same text again runs it rather than replaying the cancelled attempt. Every same-text prompt that was already waiting behind that Stop is a resend of the one message: the first to get the session runs it under a fresh key and the rest reuse that key, so it runs once, and the rest are answered with that run. A prompt cancelled while fleet was queueing it, or whose resend was answered with an earlier attempt that is still queued or running, is stopped by its key the same way. If the conversation already has a running turn (started from another surface, such as the web chat), fleet queues the prompt to run after it; the prompt then ends `end_turn` with a note saying it was queued, its place in line when fleet reports one (next, or how many other queued messages run first), and where to follow it, rather than an error inviting a retry. The response carries `_meta["fleet.conversationId"]` and token `usage`. |
 | `session/cancel` | Stops the turn **server-side** (`POST /conversations/{id}/cancel`, scope `turn`) and answers the prompt with stop reason `cancelled`. Closing the HTTP stream alone would not stop the turn, because fleet detaches a turn from its request by design. If fleet does not accept the Stop, the prompt still answers `cancelled` (ACP requires it), but the transcript says the turn may still be running and where to stop it. A turn stopped from another fleet surface, such as the web chat's Stop, also ends as `cancelled`, including a Stop that cancelled the prompt before its turn started. The Stop names the watched turn (`turn_id` from `turn.started`), and the server cancels it only while it is the running turn, so it can never hit a follow-up queued from another surface. The turn id comes from the `X-Fleet-Turn-Id` response header or the `turn.started` frame. A turn already reported as over is never sent a Stop, and an untargeted Stop is never sent. Without the turn id, the prompt is stopped by its key instead (`input_id`, as under `session/prompt`): fleet withdraws it if still queued, cancels its turn if running, and the prompt reports a confirmed stop, an input that had already finished, or an unconfirmed stop, whichever fleet answers. Only when no conversation is known either is the stop reported as unconfirmed. It reaches every prompt open on the session when it is handled: the one running a turn, and any still waiting for an earlier prompt on the session, which are never sent to fleet. The SDK does not keep the order of a prompt and a cancel sent at almost the same moment, so rarely such a prompt is cancelled too, or escapes the cancel and runs after the stopped turn. A later `session/prompt` is not a cancel, although `acp-go-sdk` cancels the earlier request's context when one arrives on the session: `fleet acp` keeps its own stop for each prompt, so the earlier prompt runs on (see `session/prompt`). A `$/cancel_request` naming a prompt arrives as that same context, cannot be told apart from it, and is ignored, which ACP allows for `$/` notifications. |
 | `session/close` | Forgets the session. The conversation stays in fleet like any chat. |
@@ -322,7 +322,7 @@ Stream events map onto `session/update`:
 | `text.delta` | `agent_message_chunk` |
 | `reasoning.delta` | `agent_thought_chunk` |
 | `tool.call` / `tool.result` | `tool_call` (title = tool name, `in_progress`) / `tool_call_update` (`completed` or `failed`; `pending` for a call that fleet staged as an approval card, whose placeholder result is not a failure; a call whose staging itself failed stays `failed`) |
-| `text.replace` | Nothing when it matches what was streamed; the missing suffix when it extends it; otherwise the final text after a `— revised answer —` line (see below) |
+| `text.replace` | fleet's final text is the turn's last model step that wrote text, not the whole turn, so it is compared with the text streamed since the last tool call (or with the latest step that streamed text, and failing that with the whole turn), ignoring surrounding whitespace. Nothing when it matches; the missing suffix when it extends it; otherwise the final text after a `— revised answer —` line (see below) |
 | `tool.approval_required` | When the turn ends, however it ends (completed, cancelled, timed out or errored), a text pointer to the approval in fleet. A `preview_email` card is display-only (its one action is Dismiss), so it gets a "draft preview is open, nothing was sent" pointer, never approve instructions, and its tool call shows `completed`. |
 | `turn.policy_blocked` | Stop reason `refusal` |
 
@@ -336,15 +336,44 @@ invalid params, which matches what `initialize` advertises.
 
 ## Errors
 
+The JSON-RPC `message` of each error below, except the last two rows, is its
+reason (the text described there), on one line. It is not the generic name of
+the error's code ("Authentication required", "Internal error", "Invalid
+params"), which acp-go-sdk would put there and which some clients show alone:
+Emacs's agent-shell shows the code and `message` and keeps the rest behind its
+Details button. Nor is that name put in front of the reason: the client shows
+the code beside it, and the name would mislabel most reasons (a viewer's
+refusal is not a failed authentication, nor a timeout an internal error). Line
+breaks in a quoted server reply become spaces. A reason longer than 400
+characters (in practice one quoting a reply, such as a turn's error or a
+proxy's page) keeps as many whole sentences as fit, when they fill at least
+half of that; otherwise it is cut after the last whole word that fits (a
+"word" over 40 characters, such as a long URL, is cut where the limit falls)
+and ends in "…". A reason that quotes a reply says what to do before the
+quote, so the cut keeps it. The `code` is unchanged, so a client that acts on
+it, as JSON-RPC intends, works as before. `message` is only ever the reason or
+a cut of it. `data` is left out when `message` holds the whole reason (only
+its whitespace changed), and is `{"error": …}` with the reason in full only
+when `message` was cut: Zed shows an error as its `message` followed by its
+`data` as JSON, so a reason whole in both showed twice, while
+CodeCompanion.nvim reads `data.error` when it is there and `message`
+otherwise, and agent-shell shows `message`.
+
 | Failure | What the ACP client sees |
 | --- | --- |
 | No email / no token configured | `initialize` still succeeds; `session/new` answers `auth_required` (-32000) with the same fix-it text `fleet chat` prints. `fleet acp` keeps running, so the client shows the reason instead of "agent exited". |
-| Refused by the server (403) | `auth_required`, with text naming the reason the server gave: a wrong shared token names `FLEET_SERVER_TOKEN`; an email that is not a provisioned fleet user (`not_a_member`) names the user and `fleet chat user add <email> --password -`; a viewer-role user (`read_only`) names the user and `fleet chat user role <email> --role member`; a client address the server's IP filter refuses names `FLEET_IP_ALLOWLIST` / `FLEET_IP_DENYLIST`, without saying which list matched (the server does not say either). Any other 403 body (a reverse proxy's page, say) is quoted as a short one-line excerpt instead of being blamed on the token. The token value is never included. |
-| Any 401 | `auth_required`, with text naming the user. fleet itself sends a 401 here only for a revoked web session, which `fleet acp` never presents, so in practice it comes from a proxy in front of fleet. |
-| Daemon down | Internal error (-32603) naming the unreachable server URL |
+| Refused by the server (403) | `session/new` answers `auth_required`, with text naming the reason the server gave: a wrong shared token names `FLEET_SERVER_TOKEN`; an email that is not a provisioned fleet user (`not_a_member`) names the user and `fleet chat user add <email> --password -`; a viewer-role user (`read_only` on a prompt; the `viewer` role `GET /me` reports at `session/new`) names the user and `fleet chat user role <email> --role member`; a client address the server's IP filter refuses names `FLEET_IP_ALLOWLIST` / `FLEET_IP_DENYLIST`, without saying which list matched (the server does not say either). Any other 403 body (a reverse proxy's page, say) is quoted as a short one-line excerpt instead of being blamed on the token. The token value is never included. A refusal that starts after the session opened (a role changed mid-session, say) is answered the same way on the next prompt. |
+| Any 401 | `session/new` answers `auth_required`, with text naming the user (or the next prompt does, when the 401 starts after the session opened). fleet itself sends a 401 here only for a revoked web session, which `fleet acp` never presents, so in practice it comes from a proxy in front of fleet. |
+| Any other error status from the server | Internal error (-32603) quoting the status and the server's reply |
+| Daemon down | Internal error (-32603) naming the unreachable server URL, on the prompt: `session/new` opens the session when the server cannot be reached (see `session/new`). |
+| Identity check inconclusive at `session/new`: no answer, a 404 (a server older than `/me`), a 5xx, any other 4xx, or a 200 that is not the expected JSON | The session opens, and the first prompt reports any real problem as above. |
 | `turn.error` / `turn.model_required` | Internal error carrying the server's message |
-| `--timeout` exceeded | The turn is stopped server-side, then an internal error names the timeout and the flag. If the Stop fails, the error says so and that the turn may still be running. |
-| Unknown session id | -32002 resource not found |
+| `--timeout` exceeded | The turn is stopped server-side, then an internal error names the timeout and the flag. If the Stop fails, the error says the turn may still be running and where to stop it, then why the Stop failed. |
+| A prompt beyond the 20 waiting for a session | Internal error saying the session already has a prompt running and 20 waiting (see `session/prompt`) |
+| An image, audio or binary blob in a prompt | Invalid params (-32602) naming what is refused |
+| Unknown session id | -32002 resource not found, naming the session and saying it was closed or opened by an earlier `fleet acp` process. Like every error here, it has no `data` unless its message had to be cut: the client sent the id, and `message` names it. |
+| A request acp-go-sdk cannot decode or validate | The SDK's own `Invalid params`, with the generic message and the decoder's text in `data.error`: the SDK refuses the request before `fleet acp` sees it |
+| An unsupported method | -32601 with the generic message `Method not found` and the method in `data.method`, whether `fleet acp` itself or the SDK answers it |
 
 ## Honest scope
 
@@ -361,8 +390,39 @@ What shipped:
   still waiting for the session), a prompt resent or followed by another
   while a turn runs (one run, no Stop), `$/cancel_request`, timeout, 403,
   daemon-down, `turn.error`, policy refusal, approval pointers, refused
-  content, the stdio entry point (stdout carries only JSON-RPC), and the
+  content, the reason in each error's `message` (with its `code` unchanged,
+  and `data` only when the message is cut, checked on the raw JSON-RPC as
+  well), the stdio entry point (stdout carries only JSON-RPC), and the
   no-execution-imports guard. No live model, no live Buzz in CI.
+- The identity check at `session/new` is covered by tests on both sides.
+  `internal/chattui` runs `CheckIdentity` against a test server answering
+  `GET /me` with a member, an admin, a viewer, each 403 body fleet writes
+  (wrong token, `not_a_member`, the IP filter), a proxy's 403 page and a 401
+  that echo the token (redacted), a 404, 500, 502, 429 and 400, a malformed
+  200 and a 200 that is not JSON, plus a refused connection and a server that
+  never answers; it pins each exact text, that the viewer text is the one a
+  viewer's prompt gets, and that the token appears in none. `internal/acp`
+  drives `session/new` through a real SDK client: `auth_required` with the
+  exact reason for a viewer, a non-member, a wrong token, the IP filter and a
+  401; a session that opens when `GET /me` gets no answer, and runs a prompt
+  once the server answers; a session that opens, and runs a prompt, for a
+  member, an admin, a 404 and a 500; and a refusal that starts after the session opened
+  still reaching the prompt.
+- Checked live against a real `fleet serve` on 2026-10-07. In Zed 1.22.0, a
+  viewer, an unknown user and a wrong token failed `session/new` with
+  `auth_required` (Zed shows the reason in its "Authenticate to fleet" view
+  when the error's `message` carries it), a member's session opened and
+  answered, and with the server unreachable the session opened and the
+  prompt reported it. In Neovim's CodeCompanion.nvim, a viewer's refusal at
+  `session/new` shows as an error notice holding the raw error, reason
+  included, rather than in the chat as a prompt's error does, and an
+  unreachable server is still reported in the chat. Emacs agent-shell and
+  Buzz were not re-checked.
+- Seen live with Zed 1.22.0 on 2026-10-07, before the identity check: Zed
+  answers an `auth_required` error on a prompt with its own fixed
+  "Authentication Required" text, whatever the error says, so a reason the
+  server gave only at the first prompt never reached the user. That is why
+  the check runs at `session/new`.
 - Tests in `internal/acp` also cover the client going away mid-turn through
   the real entry point. In-process on pipes: stdin closed, a signal, prompts
   waiting in the session's line (they leave at once, unsent), a Stop that
@@ -372,6 +432,36 @@ What shipped:
   exit, a second `SIGTERM` ends the process at once, a broken stdout stops the
   turn with stdin still open, and a `SIGHUP` it was started with ignored stays
   ignored.
+- Tests in `internal/acp` also cover client-supplied MCP servers. `session/new`
+  with stdio, HTTP, SSE and ACP-transport servers succeeds, and none is
+  started, contacted or sent to fleet (a stdio command that would leave a
+  marker file, HTTP and SSE URLs on a listener that counts requests). The
+  first prompt's updates open with the notice; a later prompt, and a session
+  that sent no servers, get none. Through the real entry point, with Zed's
+  entry verbatim, an unknown transport and an empty entry, distinctive
+  secrets in an env value, a header value, an arg, URL queries, `_meta`, the
+  command and the env and header names appear nowhere on stdout, on stderr or
+  in what reached fleet. Names with line breaks, escape sequences and bidi
+  overrides are shown on one line, long names and long lists are cut, a
+  Markdown parser reads each name as inline code, and stderr quotes each
+  name. `text.replace` still reconciles with the notice in front. A first
+  prompt queued by fleet, one with a prompt waiting behind it, one that
+  fails, a lost answer and its resend, prompts that end before they are
+  submitted, and a `session/cancel` that lands while the notice is being
+  written each behave as described under `session/new`. A `null` entry is
+  accepted and shown unnamed. Entries the SDK cannot decode (`env` or
+  `headers` as an object, `args` as a string, an entry that is not an
+  object) are refused by the SDK with an error that carries none of their
+  values.
+- Checked against a real `fleet serve` on 2026-10-07, with client MCP
+  servers. Zed 1.22.0 with an MCP server in its `context_servers` (a build
+  that refused them showed "Failed to Launch — Invalid params" there): the
+  thread opened, the first reply started with the notice, the second had
+  none, and Zed's log showed the stderr line. Emacs agent-shell 0.85.3 with a
+  global `agent-shell-mcp-servers` and no per-agent `:mcp-servers` override:
+  the session opened and the first reply started with the notice. Zed was
+  rechecked with the final wording and the quoted stderr names; a cancel that
+  lands while the notice is being written is covered by a test, not live.
 - Checked against a real `fleet serve` on 2026-10-05: a retry with the same
   `messageId` while its turn ran (one run; the original ended `end_turn` with
   its answer, and the retry got the replay note), a dropped connection
@@ -427,10 +517,15 @@ Deviations and limits:
   file. It is never read from a different deployment's file. ACP's
   `session/request_permission` is deliberately not used to re-implement the
   default-deny card.
-- **Streamed text is append-only.** ACP cannot retract a chunk. When an
-  enforcement round replaces a draft that was already streamed, the client
-  gets the final answer again after a `— revised answer —` line, so it ends
-  on what fleet persisted.
+- **Streamed text is append-only.** ACP cannot retract a chunk. When fleet's
+  final answer replaces a draft that was already streamed (for example, it
+  stripped a tool call the model wrote into its final answer, or retried a
+  model call that had already streamed part of a reply), the client gets the
+  final answer again after a `— revised answer —` line, so it ends on what
+  fleet persisted. Text a model writes before a tool call also stays in the
+  client's transcript, as does a tool call it wrote as text that fleet then
+  ran for real; the web chat drops both when the turn ends, because fleet's
+  final answer is only the last step that wrote text.
 - **Tool detail stays in the run log.** Tool calls appear as titled
   `tool_call` updates with a status. Inputs and outputs are not forwarded.
 - **The client's filesystem and terminal are not used.** Tool calls run in
@@ -440,6 +535,27 @@ Deviations and limits:
   does this by default; the configuration under "Neovim (CodeCompanion.nvim)"
   works around it. Emacs's agent-shell does it for a file over its embed limit
   (100 KB by default); "Emacs (agent-shell)" says how to raise it.
+- **The client's MCP servers are not used.** ACP's
+  [session setup](https://agentclientprotocol.com/protocol/session-setup)
+  says "All Agents **MUST** support connecting to MCP servers via stdio" and
+  "Agents **SHOULD** connect to all MCP servers specified by the Client".
+  fleet takes the list and ignores it: fleet's tools and connectors are the
+  operator's, run host-side, and a client's servers run on the client's
+  machine. The user is told once per session, in the first reply (see
+  `session/new`).
+- **An MCP server entry the SDK cannot decode still fails `session/new`.**
+  `acp-go-sdk` decodes each `mcpServers` entry before `fleet acp` sees the
+  request, and answers invalid params itself (`invalid variant payload` or
+  `no matching variant for union`, with none of the entry's values) for an
+  entry that is not a JSON object, or whose transport it recognises (by
+  `type`, or a stdio entry by its `name`, `command`, `args` and `env` keys)
+  but which has a field of the wrong JSON type: `env` or `headers` as an
+  object (the `mcp.json` shape) rather than ACP's list of `name` and `value`
+  pairs, or `args` as a string. Such a client cannot open a session until the
+  entry is fixed or left out: the refusal comes before `fleet acp` could
+  ignore it. An entry with no `type` that does not match its transport is
+  tried as each transport in turn: one it fits is ignored like the rest, and
+  one it fits none of is refused the same way.
 - **No `session/load`.** A session lives as long as the `fleet acp` process.
   The conversation itself persists in fleet, but resuming it over ACP is
   deferred until the session id can round-trip honestly.

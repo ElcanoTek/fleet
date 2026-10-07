@@ -9,8 +9,9 @@ type Params = { params: Promise<{ conversationId: string }> };
 
 // POST /api/conversations/{id}/share-with-team → the owner opts this chat in
 // or out of read-only visibility for their team (ADR-0013 / ADR-0057). Body:
-// { visible: boolean }. Ownership is the Go handler's gate; this proxy only
-// authenticates and forwards.
+// { visible: boolean, unshared_paths?: string[], listed_paths?: string[] } —
+// forwarded verbatim (the Go handler validates it). Ownership is the Go
+// handler's gate; this proxy only authenticates and forwards.
 export async function POST(request: NextRequest, { params }: Params) {
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;

@@ -22,6 +22,7 @@ vi.mock("@/app/lib/auth", () => ({
     refreshSessionCookieMock(...args),
   getRedirectUrl: (...args: unknown[]) =>
     getRedirectUrlMock(...(args as [unknown, string])),
+  isSecureRequest: () => true,
 }));
 vi.mock("@/app/lib/buildId", () => ({
   BUILD_ID_HEADER: "x-build-id",
@@ -338,5 +339,117 @@ describe("proxy", () => {
     expect(denied.headers.get("content-security-policy")).toContain(
       "default-src 'self'",
     );
+  });
+});
+
+// Team links (B24): a signed-out visitor opening `/chat?team=<id>` signs in
+// first and then lands on that chat. No sign-in path carries a return URL, so
+// the id is parked in a short-lived httpOnly cookie and redeemed — once — on
+// the first signed-in request home.
+describe("proxy — team link sign-in", () => {
+  const ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  const SESSION = { email: "a@x.com", exp: 0, source: "password" };
+
+  beforeEach(() => {
+    getSessionFromRequestMock.mockReset();
+    getRedirectUrlMock.mockClear();
+    refreshSessionCookieMock.mockReset();
+  });
+
+  function setCookie(res: Response): string {
+    return res.headers.get("set-cookie") ?? "";
+  }
+
+  it("parks a valid id and sends a signed-out visitor to the team-link login", async () => {
+    getSessionFromRequestMock.mockResolvedValue(null);
+    const res = await proxy(req(`/chat?team=${ID}`));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe(
+      "https://chat.elcanotek.com/login?team_link=1",
+    );
+    const cookie = setCookie(res);
+    expect(cookie).toContain(`fleet_team_link=${ID}`);
+    expect(cookie).toMatch(/HttpOnly/i);
+    expect(cookie).toMatch(/SameSite=lax/i);
+    expect(cookie).toMatch(/Path=\//i);
+    expect(cookie).toMatch(/Max-Age=1800/i);
+    // Security headers ride on this redirect like every other.
+    expect(res.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+  });
+
+  it("does not park an id that is not a conversation UUID", async () => {
+    getSessionFromRequestMock.mockResolvedValue(null);
+    for (const bad of [
+      "not-a-uuid",
+      `${ID}/../x`,
+      encodeURIComponent(`https://evil.example/${ID}`),
+      `${ID};x=1`,
+    ]) {
+      const res = await proxy(req(`/chat?team=${bad}`));
+      expect(res.headers.get("location")).toBe("https://chat.elcanotek.com/login");
+      expect(setCookie(res)).not.toContain("fleet_team_link");
+    }
+  });
+
+  it("only parks from /chat, not from other gated pages", async () => {
+    getSessionFromRequestMock.mockResolvedValue(null);
+    const res = await proxy(req(`/orchestrator?team=${ID}`));
+    expect(res.headers.get("location")).toBe("https://chat.elcanotek.com/login");
+    expect(setCookie(res)).not.toContain("fleet_team_link");
+  });
+
+  it("redeems the parked id on the signed-in landing and clears the cookie", async () => {
+    getSessionFromRequestMock.mockResolvedValue(SESSION);
+    for (const path of ["/", "/chat"]) {
+      const res = await proxy(req(path, { cookie: `fleet_team_link=${ID}` }));
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toBe(
+        `https://chat.elcanotek.com/chat?team=${ID}`,
+      );
+      expect(setCookie(res)).toMatch(/fleet_team_link=;.*Max-Age=0/i);
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    }
+  });
+
+  it("redeems straight from /login when the visitor is already signed in", async () => {
+    getSessionFromRequestMock.mockResolvedValue(SESSION);
+    const res = await proxy(req("/login", { cookie: `fleet_team_link=${ID}` }));
+    expect(res.headers.get("location")).toBe(
+      `https://chat.elcanotek.com/chat?team=${ID}`,
+    );
+    expect(setCookie(res)).toMatch(/Max-Age=0/i);
+  });
+
+  it("lets a request that names its own team link through and clears the parked one", async () => {
+    getSessionFromRequestMock.mockResolvedValue(SESSION);
+    const res = await proxy(
+      req(`/chat?team=${ID}`, { cookie: "fleet_team_link=0f8fad5b-d9cb-469f-a165-000000000000" }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+    expect(setCookie(res)).toMatch(/fleet_team_link=;.*Max-Age=0/i);
+  });
+
+  it("drops a parked value that is not a valid id instead of redirecting to it", async () => {
+    getSessionFromRequestMock.mockResolvedValue(SESSION);
+    const res = await proxy(req("/chat", { cookie: "fleet_team_link=../../evil" }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+    expect(setCookie(res)).toMatch(/Max-Age=0/i);
+  });
+
+  it("leaves other signed-in pages and the cookie alone", async () => {
+    getSessionFromRequestMock.mockResolvedValue(SESSION);
+    const res = await proxy(req("/orchestrator", { cookie: `fleet_team_link=${ID}` }));
+    expect(res.status).toBe(200);
+    expect(setCookie(res)).not.toContain("fleet_team_link");
+  });
+
+  it("changes nothing for a signed-in request with no parked link", async () => {
+    getSessionFromRequestMock.mockResolvedValue(SESSION);
+    const res = await proxy(req("/chat"));
+    expect(res.status).toBe(200);
+    expect(setCookie(res)).not.toContain("fleet_team_link");
   });
 });

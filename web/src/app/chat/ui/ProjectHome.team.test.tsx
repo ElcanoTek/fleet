@@ -12,8 +12,9 @@ import type { Project } from "./ProjectsModal";
 import type { ConversationSummary } from "./chat-experience";
 
 // The project home is where the three P1 items land (C3 Team section, D2 Team
-// learnings, E1 search) plus the A6 delete confirm — so this exercises them on
-// one page, the way a member meets them.
+// learnings, E1 search) — so this exercises them on one page, the way a member
+// meets them. Settings (rename, sharing, transfer, delete) are
+// ProjectSettingsDialog and are tested there.
 
 const PROJECT: Project = {
   id: "p1",
@@ -82,9 +83,8 @@ function renderHome(
     onNewChat: vi.fn(),
     onSaveInstructions: vi.fn(async () => true),
     onUpdateSettings: vi.fn(async () => true),
-    onTransfer: vi.fn(async () => null),
+    onOpenSettings: vi.fn(),
     myTeam: "quant",
-    onDelete: vi.fn(),
     ...over,
   };
   render(<ProjectHome {...props} />);
@@ -110,7 +110,7 @@ afterEach(() => {
 });
 
 describe("ProjectHome — the Team section (C3)", () => {
-  it("lists teammates' shared chats separately from your own, with the owner and a read-only note", async () => {
+  it("lists teammates' shared chats separately from your own, with the owner and what you can do", async () => {
     mockRoutes({
       "/team-conversations": {
         conversations: [
@@ -126,24 +126,19 @@ describe("ProjectHome — the Team section (C3)", () => {
     const props = renderHome();
 
     const shared = await screen.findByText("Bob's basis trade");
-    expect(screen.getByText(/bob · read-only/)).toBeInTheDocument();
+    expect(screen.getByText("bob@x.com")).toBeInTheDocument();
+    expect(screen.getByText("Read, branch")).toBeInTheDocument();
     // Opening a teammate's chat goes to the read-only viewer, not the editor.
     fireEvent.click(shared);
     expect(props.onOpenTeamChat).toHaveBeenCalledWith("t1");
     expect(props.onOpenChat).not.toHaveBeenCalled();
   });
 
-  it("teaches how to share when the section is empty", async () => {
+  it("says where teammates' chats will appear when the section is empty", async () => {
     mockRoutes({ "/team-conversations": { conversations: [] } });
     renderHome();
-    // The old copy ("No shared chats yet. Share one with your team from its ⋮
-    // menu.") was false from the owner's vantage — their own shared chats are
-    // badged directly above — and instructed them to do what they had done.
     expect(
-      await screen.findByText(/Nothing shared by your teammates yet\./),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Chats you share stay in your list above, marked with the team badge\./),
+      await screen.findByText("Nothing from teammates yet. Chats they share show up here."),
     ).toBeInTheDocument();
   });
 
@@ -179,13 +174,23 @@ describe("ProjectHome — search (E1)", () => {
 });
 
 describe("ProjectHome — empty state (E2)", () => {
-  it("names both filing paths and the payoff", async () => {
-    mockRoutes({});
+  // The empty-state paragraph shows only once the getting-started card is
+  // gone (it replaces the paragraph while it is up).
+  it("names both ways in, and who can see a new chat", async () => {
+    mockRoutes({ "/my-state": { has_shared_chat: true, kept_personal: false, sources_open: {} } });
     renderHome({ chats: [] });
     const empty = await screen.findByText(/No chats yet\./);
-    expect(empty).toHaveTextContent("drag a chat onto the project");
-    expect(empty).toHaveTextContent("Move to project");
-    expect(empty).toHaveTextContent("Chats in a project don’t expire");
+    expect(empty).toHaveTextContent(
+      "No chats yet. Start one with New chat, or move one here from the sidebar. New chats can only be seen by you until you share them.",
+    );
+    expect(screen.queryByTestId("getting-started")).toBeNull();
+  });
+
+  it("is replaced by the getting-started card until the person has shared a chat", async () => {
+    mockRoutes({ "/my-state": { has_shared_chat: false, kept_personal: false, sources_open: {} } });
+    renderHome({ chats: [] });
+    expect(await screen.findByTestId("getting-started")).toBeInTheDocument();
+    expect(screen.queryByText(/No chats yet\./)).toBeNull();
   });
 });
 
@@ -299,33 +304,6 @@ describe("ProjectHome — Team learnings (D2)", () => {
   });
 });
 
-describe("ProjectHome — delete confirm (A6)", () => {
-  it("states what members lose, with counts, and offers the export", async () => {
-    mockRoutes({
-      "/impact": { memories: 4, chats: 9, members: 3, team_shared_chats: 2 },
-    });
-    const props = renderHome({ initialSettingsOpen: true });
-
-    fireEvent.click(screen.getByRole("button", { name: "Delete project" }));
-    const dialog = await screen.findByRole("dialog", { name: "Delete Quant?" });
-
-    await waitFor(() =>
-      expect(dialog).toHaveTextContent("4 team learnings will be lost"),
-    );
-    expect(dialog).toHaveTextContent("9 chats from 3 members will leave the project");
-    expect(dialog).toHaveTextContent("2 chats shared with the team will stop being shared");
-    expect(within(dialog).getByRole("link", { name: "Export first" })).toHaveAttribute(
-      "href",
-      "/api/projects/p1/export",
-    );
-
-    // Nothing is destroyed until the confirm is answered.
-    expect(props.onDelete).not.toHaveBeenCalled();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Delete project" }));
-    expect(props.onDelete).toHaveBeenCalled();
-  });
-});
-
 describe("ProjectHome — the three context layers (D3)", () => {
   it("names all three, in the order the prompt builder assembles them", async () => {
     mockRoutes({});
@@ -337,92 +315,9 @@ describe("ProjectHome — the three context layers (D3)", () => {
   });
 });
 
-describe("ProjectHome — ownership transfer", () => {
-  it("hands the project to a teammate, and never to the current owner", async () => {
-    mockRoutes({ "/members": { members: ["alice@x.com", "bob@x.com"] } });
-    const props = renderHome({ initialSettingsOpen: true });
-
-    // Collapsed by default: a once-in-a-project action should not read as a
-    // routine control in a dialog people open to rename things.
-    expect(screen.queryByLabelText(/Transfer ownership of/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Transfer ownership…" }));
-
-    const picker = await screen.findByLabelText("Transfer ownership of Quant");
-    const options = within(picker as HTMLSelectElement)
-      .getAllByRole("option")
-      .map((o) => (o as HTMLOptionElement).value);
-    // The current owner is not offered — handing it to yourself is a no-op.
-    expect(options).toEqual(["", "bob@x.com"]);
-
-    fireEvent.change(picker, { target: { value: "bob@x.com" } });
-    fireEvent.click(screen.getByRole("button", { name: "Transfer" }));
-
-    // In-app confirm, not window.confirm(): it can name the project and the
-    // new owner, and it looks like the rest of the app.
-    const confirm = await screen.findByRole("dialog", {
-      name: "Transfer Quant to bob@x.com?",
-    });
-    expect(props.onTransfer).not.toHaveBeenCalled();
-    fireEvent.click(within(confirm).getByRole("button", { name: "Transfer" }));
-
-    await waitFor(() => expect(props.onTransfer).toHaveBeenCalledWith("bob@x.com"));
-  });
-
-  it("says why there is nobody to transfer to, rather than an empty picker", async () => {
-    mockRoutes({ "/members": { members: ["alice@x.com"] } });
-    renderHome({ initialSettingsOpen: true });
-    fireEvent.click(screen.getByRole("button", { name: "Transfer ownership…" }));
-    expect(
-      await screen.findByText(/Nobody else is on this project’s team yet/),
-    ).toBeInTheDocument();
-  });
-
-  it("surfaces the server's reason when a transfer is refused", async () => {
-    mockRoutes({ "/members": { members: ["alice@x.com", "bob@x.com"] } });
-    renderHome({
-      initialSettingsOpen: true,
-      onTransfer: vi.fn(async () => "the new owner must be a member of the project's team"),
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Transfer ownership…" }));
-    const picker = await screen.findByLabelText("Transfer ownership of Quant");
-    fireEvent.change(picker, { target: { value: "bob@x.com" } });
-    fireEvent.click(screen.getByRole("button", { name: "Transfer" }));
-    const confirm = await screen.findByRole("dialog", {
-      name: /^Transfer Quant to/,
-    });
-    fireEvent.click(within(confirm).getByRole("button", { name: "Transfer" }));
-
-    expect(
-      await screen.findByText(/must be a member of the project’s team|must be a member of the project's team/),
-    ).toBeInTheDocument();
-  });
-});
-
 // The panel's own failure modes. Each of these rendered a confident, wrong
 // statement about the project — the worst thing a surface like this can do.
 describe("ProjectHome — failure states don't lie", () => {
-  it("does not report an empty team when the members lookup failed", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input).endsWith("/members")) {
-          return new Response("boom", { status: 500 });
-        }
-        return new Response(JSON.stringify({}), { status: 200 });
-      }),
-    );
-    renderHome({ initialSettingsOpen: true });
-    fireEvent.click(screen.getByRole("button", { name: "Transfer ownership…" }));
-
-    expect(
-      await screen.findByText(/Couldn’t load this project’s members/),
-    ).toBeInTheDocument();
-    // The "nobody else is on this project's team yet" copy sends the owner off
-    // to fix a problem that may not exist.
-    expect(screen.queryByText(/Nobody else is on this project/)).toBeNull();
-    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
-  });
-
   it("does not report an empty Team section when the shared-chats lookup failed", async () => {
     vi.stubGlobal(
       "fetch",
@@ -597,94 +492,56 @@ describe("ProjectHome — the header chip (C9)", () => {
 });
 
 describe("ProjectHome — Sources (C4 / B1)", () => {
-  it("says whose files it lists, rather than promising the project's", async () => {
-    mockRoutes({ "/files": { files: [] } });
-    renderHome();
-    // The old copy promised "files from this project's chats", which for a
-    // teammate described files that exist and are withheld by design.
+  it("says whose files it lists, per project type", async () => {
+    mockRoutes({ "/files": { groups: [], truncated: false, files: [] } });
+    renderHome({ project: { ...PROJECT, team_id: undefined } });
     const empty = await screen.findByText(/chats in this project appear here/);
     expect(empty).toHaveTextContent("Files from your chats in this project appear here.");
     expect(screen.queryByText(/uploads, generated/)).toBeNull();
+    cleanup();
+
+    renderHome();
+    expect(
+      await screen.findByText(
+        "Your files and your team’s. Files in your shared chats are shared automatically. Adjust that here.",
+      ),
+    ).toBeInTheDocument();
   });
 });
 
-describe("ProjectHome — Team section, the owner's vantage (C3)", () => {
-  it("counts the viewer's own shares in the empty state", async () => {
+describe("ProjectHome — Your chats, the owner's vantage (C3)", () => {
+  it("counts how many of the viewer's chats are shared with the team", async () => {
     mockRoutes({ "/team-conversations": { conversations: [] } });
     renderHome({
       chats: [
         { ...OWN_CHATS[0], team_visible: true },
-        { ...OWN_CHATS[1], team_visible: true },
+        { ...OWN_CHATS[1], team_visible: false },
       ],
     });
-    expect(
-      await screen.findByText(/You’ve shared 2 chats with the team\./),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("1 of 2 shared with quant")).toBeInTheDocument();
   });
 
-  it("does not mention shares the viewer has not made", async () => {
-    mockRoutes({ "/team-conversations": { conversations: [] } });
-    renderHome();
-    await screen.findByText(/Nothing shared by your teammates yet\./);
-    expect(screen.queryByText(/You’ve shared/)).toBeNull();
+  it("does not count shares in a personal project", async () => {
+    mockRoutes({});
+    renderHome({ project: { ...PROJECT, team_id: undefined } });
+    await screen.findByText("Spread study");
+    expect(screen.queryByText(/of 2 shared with/)).toBeNull();
   });
 });
 
-describe("ProjectHome — un-ticking Share with my team (14)", () => {
-  it("quotes how many of the teammates' chats it moves", async () => {
-    mockRoutes({
-      "/impact": {
-        memories: 1,
-        chats: 9,
-        members: 3,
-        team_shared_chats: 2,
-        chats_from_teammates: 4,
-        teammates_with_chats: 2,
-      },
-    });
-    renderHome({ initialSettingsOpen: true });
-
-    fireEvent.click(screen.getByRole("checkbox"));
-    const dialog = await screen.findByRole("dialog", {
-      name: "Stop sharing Quant with quant?",
-    });
-    await waitFor(() =>
-      expect(dialog).toHaveTextContent(
-        "4 chats from teammates will move to their unfiled chats.",
-      ),
-    );
-    // Un-ticking is only staged once the confirm is answered.
-    expect(screen.getByRole("checkbox")).toBeChecked();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Stop sharing" }));
-    expect(screen.getByRole("checkbox")).not.toBeChecked();
+describe("ProjectHome — settings live in one dialog", () => {
+  it("the owner's gear asks the parent for ProjectSettingsDialog instead of opening its own", async () => {
+    mockRoutes({});
+    const props = renderHome();
+    fireEvent.click(await screen.findByRole("button", { name: "Project settings" }));
+    expect(props.onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog", { name: /^Settings for/ })).toBeNull();
   });
 
-  it("keeps the tick when the confirm is cancelled", async () => {
-    mockRoutes({ "/impact": { memories: 0, chats: 0, members: 0, team_shared_chats: 0, chats_from_teammates: 0 } });
-    renderHome({ initialSettingsOpen: true });
-
-    fireEvent.click(screen.getByRole("checkbox"));
-    const dialog = await screen.findByRole("dialog", { name: /^Stop sharing/ });
-    expect(dialog).toHaveTextContent("No chats from teammates are filed here");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(screen.getByRole("checkbox")).toBeChecked();
-  });
-
-  it("says it does not know rather than claiming nothing moves", async () => {
-    // An older server, or a failed read: the count is simply absent. Rendering
-    // that as 0 is the LeaveTeamImpact bug (internal/store/team_sharing.go) —
-    // "we could not work out what this costs you" is not "nothing".
-    mockRoutes({ "/impact": { memories: 1, chats: 2, members: 2, team_shared_chats: 1 } });
-    renderHome({ initialSettingsOpen: true });
-
-    fireEvent.click(screen.getByRole("checkbox"));
-    const dialog = await screen.findByRole("dialog", { name: /^Stop sharing/ });
-    await waitFor(() =>
-      expect(dialog).toHaveTextContent(
-        "Chats from teammates will move to their unfiled chats — we couldn’t work out how many.",
-      ),
-    );
-    expect(dialog).not.toHaveTextContent("0 chats");
-    expect(dialog).not.toHaveTextContent("No chats from teammates");
+  it("a member has no gear", async () => {
+    mockRoutes({});
+    renderHome({ isOwner: false, userEmail: "bob@x.com" });
+    await screen.findByTestId("project-home");
+    expect(screen.queryByRole("button", { name: "Project settings" })).toBeNull();
   });
 });

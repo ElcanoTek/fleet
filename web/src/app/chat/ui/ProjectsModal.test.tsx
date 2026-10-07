@@ -194,3 +194,31 @@ describe("ProjectsModal confirms", () => {
     expect(JSON.parse(patches[0]).team_shared).toBe(false);
   });
 });
+
+describe("ProjectsModal hands off to the app's project dialogs", () => {
+  it("opens the New project dialog and per-project settings instead of its inline form", async () => {
+    mockFetch((url) =>
+      url.startsWith("/api/projects")
+        ? new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 })
+        : meBody("platform"),
+    );
+    const onNewProject = vi.fn();
+    const onEditProject = vi.fn();
+    render(
+      <ProjectsModal
+        userEmail="ann@x.com"
+        onClose={() => {}}
+        onStartChat={() => {}}
+        onNewProject={onNewProject}
+        onEditProject={onEditProject}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "New project" }));
+    expect(onNewProject).toHaveBeenCalledTimes(1);
+    // The inline create form did not open.
+    expect(screen.queryByPlaceholderText("Project name")).toBeNull();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(onEditProject).toHaveBeenCalledWith("p1");
+  });
+});

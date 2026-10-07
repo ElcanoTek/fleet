@@ -27,8 +27,13 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -65,6 +70,13 @@ type TeamSharedConversation struct {
 	ProjectID string `json:"-"`
 	Lockdown  bool   `json:"-"`
 
+	// Messages is the transcript: user/assistant text, plus a CONTENT-FREE
+	// boundary (agent.EntryTypeSummaryBoundary) where the owner's chat has a
+	// compaction summary. A summary starts a new rendered message there, so
+	// without the boundary the read-only view would merge the replies on
+	// either side into one Markdown document — and parse a different one
+	// than output discovery and the owner's own chat do. The boundary carries
+	// the row's id and role and nothing of the summary.
 	Messages []agent.HistoryEntry `json:"messages"`
 }
 
@@ -86,6 +98,35 @@ type TeamSharedConversation struct {
 // migration 054. Membership state is never leaked: every refusal is the same
 // nil.
 func (s *Store) GetTeamVisibleConversation(ctx context.Context, callerEmail, convID string) (*TeamSharedConversation, error) {
+	out, err := s.GetTeamVisibleConversationMeta(ctx, callerEmail, convID)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	msgs, err := s.LoadHistory(ctx, out.ID)
+	if err != nil {
+		return nil, err
+	}
+	// Transcript only — the same filter the public snapshot applies, and for
+	// the same reason: the full history carries tool_call / tool_result /
+	// reasoning entries whose content can include command output and API
+	// responses that were never part of what the owner shared.
+	out.Messages = make([]agent.HistoryEntry, 0, len(msgs))
+	for _, m := range msgs {
+		if b, ok := teamTranscriptEntry(m); ok {
+			out.Messages = append(out.Messages, b)
+		}
+	}
+	return out, nil
+}
+
+// GetTeamVisibleConversationMeta is GetTeamVisibleConversation without the
+// transcript: the same gate and the same row, Messages left nil. It is for a
+// caller that needs the chat's identity under the team-read gate but not its
+// history — the branch (which copies messages with its own narrowed query)
+// and anything that runs output discovery through LoadDiscoveryHistory —
+// so a teammate's branch or file download never loads every row of the
+// owner's chat (tool results and reasoning included) only to throw it away.
+func (s *Store) GetTeamVisibleConversationMeta(ctx context.Context, callerEmail, convID string) (*TeamSharedConversation, error) {
 	callerEmail = normalizeEmail(callerEmail)
 	if convID == "" {
 		return nil, nil
@@ -119,22 +160,169 @@ func (s *Store) GetTeamVisibleConversation(ctx context.Context, callerEmail, con
 		}
 		return nil, err
 	}
+	return &out, nil
+}
 
-	msgs, err := s.LoadHistory(ctx, out.ID)
-	if err != nil {
-		return nil, err
+// TeamViewVersion is the cheap "has anything a team-view body is built from
+// changed?" read behind team-view's ETag (docs/TEAM-SHARING.md "Live view").
+// It runs BEFORE GetTeamVisibleConversation would load history, under the
+// SAME gate (teamReadableClause), and returns "" for a caller who may not
+// read the chat — the handler then answers 404 exactly as the full read
+// would, so a version is never handed to (nor a 304 given to) a caller the
+// transcript would be refused to.
+//
+// The version fingerprints, in one round trip on indexed columns:
+//   - the conversation row's updated_at, title, owner, audience and project
+//     (and that project's name, the breadcrumb);
+//   - the VISIBLE transcript (the teamTranscriptEntry filter) as count +
+//     max(id): messages are only ever inserted (with a fresh, larger id) or
+//     deleted, so any change to the visible set moves one of the two;
+//   - the exclusion set, as a hash of its sorted, length-prefixed paths
+//     (ExclusionSetHash), so an unshare followed by a share of a different
+//     file still changes it;
+//   - the viewer's most recent live branch of the chat (id, branched_at and
+//     whether visible messages arrived after it — viewer_branch and
+//     changed_since exactly as the body states them);
+//   - the caller's email: owner and teammate get different bodies.
+//
+// It is TeamViewState.Fingerprint over those values. The handler tags a 200
+// with the fingerprint of the values its body was BUILT from (not this
+// read), so a 304 — this read's fingerprint equal to the client's tag —
+// means the current state is the one the client holds, even when something
+// changed and changed back while that body was being built.
+//
+// What it does NOT see is the workspace on disk: an output's size/date and
+// whether its file exists are read when the body is built. A file that
+// appears or changes on disk with no new message and no exclusion change
+// shows on the next poll after a real change — in practice the agent writes
+// a file and then presents it in a reply, which is a new message.
+func (s *Store) TeamViewVersion(ctx context.Context, callerEmail, convID string) (string, error) {
+	if convID == "" {
+		return "", nil
 	}
-	// Transcript only — the same filter the public snapshot applies, and for
-	// the same reason: the full history carries tool_call / tool_result /
-	// reasoning entries whose content can include command output and API
-	// responses that were never part of what the owner shared.
-	out.Messages = make([]agent.HistoryEntry, 0, len(msgs))
-	for _, m := range msgs {
-		if m.Type == "text" && (m.Role == "user" || m.Role == "assistant") {
-			out.Messages = append(out.Messages, m)
+	callerEmail = normalizeEmail(callerEmail)
+	team, err := s.callerTeam(ctx, callerEmail)
+	if err != nil {
+		return "", err
+	}
+	st := TeamViewState{ConvID: convID, Caller: callerEmail}
+	err = s.db.QueryRowContext(ctx, `
+		SELECT c.updated_at, c.title, c.user_email, COALESCE(c.team_shared_with, ''),
+		       COALESCE(c.project_id, ''),
+		       COALESCE((SELECT p.name FROM projects p WHERE p.id = c.project_id), ''),
+		       msg.n, msg.mx, ex.h,
+		       COALESCE(vb.conversation_id, ''), COALESCE(vb.branched_at, 0),
+		       COALESCE(vb.changed, FALSE)
+		FROM conversations c
+		CROSS JOIN LATERAL (
+			SELECT COUNT(*) AS n, COALESCE(MAX(m.id), 0) AS mx
+			FROM messages m
+			WHERE m.conversation_id = c.id
+			  AND ((m.type = 'text' AND m.role IN ('user', 'assistant'))
+			       OR m.type IN ('summary', '`+agent.EntryTypeSummaryBoundary+`'))
+		) msg
+		CROSS JOIN LATERAL (
+			-- Length-prefixed, so no two different sets aggregate to the
+			-- same string (a path may itself contain the separator).
+			-- Byte lengths and byte order, so ExclusionSetHash computes the
+			-- same value in Go from the set a body was built from.
+			SELECT COALESCE(encode(sha256(convert_to(
+			           string_agg(octet_length(e.path)::text || ':' || e.path, ''
+			                      ORDER BY e.path COLLATE "C"), 'UTF8')), 'hex'), '') AS h
+			FROM conversation_output_exclusions e
+			WHERE e.conversation_id = c.id
+		) ex
+		LEFT JOIN LATERAL (
+			SELECT o.conversation_id, o.branched_at,
+			       -- changed_since exactly as ViewerBranches computes it.
+			       EXISTS (SELECT 1 FROM messages m
+			               WHERE m.conversation_id = o.source_conversation_id
+			                 AND m.id > o.source_max_message_id
+			                 AND m.type = 'text' AND m.role IN ('user', 'assistant')) AS changed
+			FROM conversation_branch_origins o
+			JOIN conversations bc ON bc.id = o.conversation_id
+			WHERE o.source_conversation_id = c.id
+			  AND bc.user_email = $2 AND bc.deleted_at IS NULL
+			ORDER BY o.seq DESC
+			LIMIT 1
+		) vb ON TRUE
+		WHERE `+teamReadableClause,
+		convID, callerEmail, team,
+	).Scan(&st.UpdatedAt, &st.Title, &st.Owner, &st.Audience, &st.ProjectID, &st.ProjectName,
+		&st.MsgCount, &st.MsgMax, &st.ExclusionsHash, &st.BranchID, &st.BranchAt, &st.BranchChanged)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return st.Fingerprint(), nil
+}
+
+// TeamViewState is every database value a team-view body is built from —
+// what TeamViewVersion reads cheaply, and what the handler collects from the
+// body it actually built. Both sides fingerprint it the same way.
+type TeamViewState struct {
+	ConvID, Caller                    string
+	UpdatedAt                         int64
+	Title, Owner, Audience, ProjectID string
+	ProjectName                       string
+	// MsgCount and MsgMax are over the VISIBLE transcript (teamTranscriptEntry).
+	MsgCount, MsgMax int64
+	// ExclusionsHash is ExclusionSetHash of the owner's exclusions.
+	ExclusionsHash string
+	BranchID       string
+	BranchAt       int64
+	BranchChanged  bool
+}
+
+// Fingerprint is the team-view version of st. The caller is normalized here,
+// so the handler can pass the session's email as is.
+func (st TeamViewState) Fingerprint() string {
+	h := sha256.New()
+	for _, part := range []any{st.ConvID, normalizeEmail(st.Caller), st.UpdatedAt, st.Title, st.Owner, st.Audience,
+		st.ProjectID, st.ProjectName, st.MsgCount, st.MsgMax, st.ExclusionsHash,
+		st.BranchID, st.BranchAt, st.BranchChanged} {
+		fmt.Fprintf(h, "%v\x00", part)
+	}
+	return hex.EncodeToString(h.Sum(nil)[:16])
+}
+
+// ExclusionSetHash is the Go twin of TeamViewVersion's exclusion aggregate:
+// SHA-256 over the paths in byte order, each prefixed by its byte length and
+// a colon (unambiguous even for a path containing any separator); "" for none.
+func ExclusionSetHash(excluded map[string]bool) string {
+	paths := make([]string, 0, len(excluded))
+	for p, ex := range excluded {
+		if ex {
+			paths = append(paths, p)
 		}
 	}
-	return &out, nil
+	if len(paths) == 0 {
+		return ""
+	}
+	sort.Strings(paths)
+	h := sha256.New()
+	for _, p := range paths {
+		fmt.Fprintf(h, "%d:%s", len(p), p)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// teamTranscriptEntry is the ONE filter from a conversation's history to what
+// a teammate may read of it — the team view and the branch a teammate copies
+// both go through it, so the two can never disagree about where a rendered
+// message ends. User/assistant text passes as is; a compaction summary (or a
+// boundary already standing in for one, in a branch that is itself shared)
+// becomes a content-free boundary; everything else is dropped.
+func teamTranscriptEntry(m agent.HistoryEntry) (agent.HistoryEntry, bool) {
+	switch {
+	case m.Type == "text" && (m.Role == "user" || m.Role == "assistant"):
+		return m, true
+	case m.Type == "summary" || m.Type == agent.EntryTypeSummaryBoundary:
+		return agent.HistoryEntry{ID: m.ID, Role: m.Role, Type: agent.EntryTypeSummaryBoundary, Content: json.RawMessage(`{}`)}, true
+	}
+	return agent.HistoryEntry{}, false
 }
 
 // ListProjectTeamConversations returns the team-shared chats OTHER members
@@ -373,9 +561,10 @@ func teamSharedProjectsOwnedBy(ctx context.Context, q queryer, email, lock strin
 	return out, rows.Err()
 }
 
-// ProjectMemberEmails lists who a project can be handed to: everyone in its
-// team, plus the current owner (who is always a member, team or not). Sorted,
-// deduplicated, emails only — the transfer picker's options.
+// ProjectMemberEmails lists who a project can be handed to: every ENABLED
+// account in its team (the transfer refuses a disabled one, so the picker must
+// not offer it), plus the current owner (who is always a member, team or not).
+// Sorted, deduplicated, emails only — the transfer picker's options.
 //
 // This enumerates every account in the team, including people who have never
 // shared anything, which is more than a plain member could learn from the
@@ -388,7 +577,7 @@ func (s *Store) ProjectMemberEmails(ctx context.Context, projectID string) ([]st
 			UNION
 			SELECT u.email FROM users u
 			JOIN projects p ON p.id = $1
-			WHERE p.team_id <> '' AND u.team_id = p.team_id
+			WHERE p.team_id <> '' AND u.team_id = p.team_id AND u.enabled = TRUE
 		) m ORDER BY email`, projectID)
 	if err != nil {
 		return nil, err
@@ -405,6 +594,14 @@ func (s *Store) ProjectMemberEmails(ctx context.Context, projectID string) ([]st
 	return out, rows.Err()
 }
 
+// ErrNotProjectOwner refuses a transfer by someone who no longer owns the
+// project when the transaction runs (another transfer got there first).
+var ErrNotProjectOwner = errors.New("project not found")
+
+// transferAfterChecks is a test seam: it runs between TransferProjectOwnership's
+// early checks and its transaction, where a concurrent change can land.
+var transferAfterChecks func()
+
 // TransferProjectOwnership hands a project to newOwnerEmail. It changes ONLY
 // who may edit and delete the definition: the team it is shared with, its
 // team learnings, its chats and every member's access are untouched, because
@@ -420,7 +617,7 @@ func (s *Store) ProjectMemberEmails(ctx context.Context, projectID string) ([]st
 // enforces is that the result makes sense: the project is TEAM-SHARED and the
 // target is in that team. Every refusal is the same ErrNotAProjectMember, so
 // the route says nothing about which addresses have accounts.
-func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwnerEmail string) (*Project, error) {
+func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwnerEmail, actingOwner string) (*Project, error) {
 	newOwner := normalizeEmail(newOwnerEmail)
 	if newOwner == "" {
 		return nil, errors.New("new owner email required")
@@ -459,11 +656,46 @@ func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwne
 	if strings.TrimSpace(target.TeamID) != p.TeamID {
 		return nil, ErrNotAProjectMember
 	}
+	if transferAfterChecks != nil {
+		transferAfterChecks()
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	// The checks above ran outside this transaction, so they are re-read
+	// here under row locks: the project FOR UPDATE (a concurrent "make
+	// personal" waits, or has already cleared team_id and is refused) and
+	// the target FOR SHARE (a concurrent team change or disable waits, or
+	// has already moved them and is refused). Same single sentinel.
+	var lockedTeam, lockedOwner string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(team_id, ''), owner_email FROM projects WHERE id = $1 FOR UPDATE`, projectID).Scan(&lockedTeam, &lockedOwner); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("project not found")
+		}
+		return nil, err
+	}
+	// The caller's authority is re-checked under the same lock: a request
+	// the handler admitted while actingOwner owned the project must not
+	// transfer it after someone else's transfer took it away. An admin
+	// transfer passes "" and is not bound to an owner.
+	if actingOwner != "" && normalizeEmail(lockedOwner) != normalizeEmail(actingOwner) {
+		return nil, ErrNotProjectOwner
+	}
+	var targetTeam sql.NullString
+	err = tx.QueryRowContext(ctx,
+		`SELECT team_id FROM users WHERE email = $1 AND enabled = TRUE FOR SHARE`, newOwner).Scan(&targetTeam)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotAProjectMember
+	}
+	if err != nil {
+		return nil, err
+	}
+	if lockedTeam == "" || strings.TrimSpace(targetTeam.String) != lockedTeam {
+		return nil, ErrNotAProjectMember
+	}
 	row := tx.QueryRowContext(ctx,
 		`UPDATE projects SET owner_email = $1, updated_at = $2 WHERE id = $3
 		 RETURNING `+projectColumns,

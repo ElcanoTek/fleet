@@ -151,6 +151,114 @@ func TestSweepOrphanWorkspaces(t *testing.T) {
 	}
 }
 
+// TestSweepOrphanWorkspacesReadOnlySubdir — an orphan whose tree holds a
+// directory without the owner-write bit (an agent's `chmod a-w`, an archive
+// unpacked with read-only modes) must still be removed. A plain RemoveAll
+// fails there, and the sweep used to drop that error, so the dir — 4.8 GB of
+// it on one production box — was retried and silently kept forever.
+func TestSweepOrphanWorkspacesReadOnlySubdir(t *testing.T) {
+	s := newTestStore(t)
+	root := t.TempDir()
+	orphan := filepath.Join(root, "0a3c2f6e-5b1d-4c8e-9f7a-2d4b6e8a0c1f")
+	locked := filepath.Join(orphan, "nissan", "Nissan")
+	if err := os.MkdirAll(locked, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "report.csv"), []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o550); err != nil {
+		t.Fatal(err)
+	}
+	// If the sweep regresses, put the bit back so t.TempDir can clean up.
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o750) })
+	if os.RemoveAll(orphan) == nil {
+		t.Skip("filesystem lets a plain RemoveAll through a read-only dir (running as root?) — nothing to prove")
+	}
+
+	removed, err := s.SweepOrphanWorkspaces(context.Background(), root)
+	if err != nil {
+		t.Fatalf("SweepOrphanWorkspaces: %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("removed=%d, want 1", removed)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("orphan with a read-only subdir should be gone: err=%v", err)
+	}
+}
+
+// TestSweepOrphanWorkspacesUnreadableOrphan — the orphan dir ITSELF without
+// owner read (`chmod 000 .` / `chmod 0111 .` by the sandbox) cannot be opened
+// to walk, so its mode is repaired through the parent before the walk.
+func TestSweepOrphanWorkspacesUnreadableOrphan(t *testing.T) {
+	for _, mode := range []os.FileMode{0o000, 0o111} {
+		t.Run(mode.String(), func(t *testing.T) {
+			s := newTestStore(t)
+			root := t.TempDir()
+			orphan := filepath.Join(root, "1b4d3e7f-6c2e-4d9f-8a0b-3e5c7f9b1d2a")
+			if err := os.MkdirAll(filepath.Join(orphan, "sub"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(orphan, "sub", "f.csv"), []byte("x"), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(orphan, mode); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(orphan, 0o750) })
+
+			removed, err := s.SweepOrphanWorkspaces(context.Background(), root)
+			if err != nil {
+				t.Fatalf("SweepOrphanWorkspaces: %v", err)
+			}
+			if removed != 1 {
+				t.Errorf("removed=%d, want 1", removed)
+			}
+			if _, err := os.Lstat(orphan); !os.IsNotExist(err) {
+				t.Errorf("unreadable orphan should be gone: err=%v", err)
+			}
+		})
+	}
+}
+
+// TestRemoveWorkspaceTreeSymlinkCannotEscape — a sandbox that swaps an orphan
+// for a symlink to a directory OUTSIDE the workspace must not get that
+// directory chmodded or deleted: every operation goes through an os.Root at the
+// workspace root, which refuses to resolve an escaping name.
+func TestRemoveWorkspaceTreeSymlinkCannotEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "locked")
+	if err := os.MkdirAll(victim, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(victim, "keep.txt"), []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(victim, 0o550); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(victim, 0o750) })
+	const name = "2c5e4f8a-7d3f-4ea0-9b1c-4f6d8a0c2e3b"
+	if err := os.Symlink(outside, filepath.Join(root, name)); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = removeWorkspaceTree(root, name)
+
+	info, err := os.Stat(victim)
+	if err != nil {
+		t.Fatalf("directory outside the workspace was removed: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o550 {
+		t.Errorf("directory outside the workspace was chmodded: mode %o, want 550", got)
+	}
+	if _, err := os.Stat(filepath.Join(victim, "keep.txt")); err != nil {
+		t.Errorf("file outside the workspace was removed: %v", err)
+	}
+}
+
 func TestSweepOrphanWorkspacesMissingRoot(t *testing.T) {
 	s := newTestStore(t)
 	n, err := s.SweepOrphanWorkspaces(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"))
