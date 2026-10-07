@@ -414,8 +414,14 @@ with files: the caller's own chats (`mine: true`, every non-upload file, each
 flagged `output` / `shared` / `your_copy`, with `is_branch` and `branched_at`
 for a teammate branch) and the teammates' chats shared with the caller's team
 in this project (their shared outputs only — the same gates as
-`team-conversations`, downloads through `team-files`). `file_count` and
-`shared_count` count outputs only. The flat `files` list (the caller's own
+`team-conversations`, downloads through `team-files`). `file_count` is the
+number of files the group lists (`len(files)`, so the header never disagrees
+with the rows), `shared_count` the shared outputs among them. The workspace
+walk skips every dot-named file or directory — fleet's own `.fleet/` state
+(the tool-output recovery slots: `.next-slot`, `.used`, `artifact-*.txt`),
+`.git/`, a stray `.env` — so a chat whose only files are internals has no
+group; an output the agent presented is still listed whatever its name, so a
+shared one keeps its row to be unshared by. The flat `files` list (the caller's own
 files) is kept for older clients, and also skips uploads now. The UI decides
 the order; the server returns both kinds. A chat's outputs are resolved
 independently of the bounded workspace walk, so a walk that finds nothing

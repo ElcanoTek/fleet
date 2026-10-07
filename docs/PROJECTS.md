@@ -138,8 +138,9 @@ and when the owner is no longer in that team (an admin moved them, which
 unshared their chats but left the project pointed at the old team) one line
 under the chip says so and names both ways out: share it with the team they are
 in now, or make it personal. And the **Sources** panel is grouped by chat
-(ADR-0079): the viewer's own chats, with every file except uploads (only the
-outputs are counted and shareable; other files are download-only), and the
+(ADR-0079): the viewer's own chats, with every file except uploads and
+hidden internals such as `.fleet/` (only the outputs are shareable; other
+files are download-only; a group's count is the files it lists), and the
 teammates' chats shared with them in this project, with just the files those
 owners shared. A person's open/closed groups and the getting-started card's
 "Keep personal" are stored per user per project (`GET`/`PUT
