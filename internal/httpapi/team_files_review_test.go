@@ -551,8 +551,9 @@ func TestCopyOneOutputAbandonsStalledRead(t *testing.T) {
 	}
 	defer dst.Close()
 	release := make(chan struct{})
+	unstall := sync.OnceFunc(func() { releaseStalledWorkers(t, release) })
 	branchCopySource = func(io.Reader) io.Reader { return stallingReader{release} }
-	t.Cleanup(func() { releaseStalledWorkers(t, release); branchCopySource = nil })
+	t.Cleanup(func() { unstall(); branchCopySource = nil })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -564,6 +565,10 @@ func TestCopyOneOutputAbandonsStalledRead(t *testing.T) {
 	if el := time.Since(start); el > 5*time.Second {
 		t.Fatalf("copy returned after %v; a stalled read must not hold it", el)
 	}
+	// The abandoned worker owns the partial destination (the caller does no
+	// filesystem cleanup of its own): once the stalled read returns and the
+	// worker exits, nothing is left behind.
+	unstall()
 	if _, statErr := os.Stat(filepath.Join(dstDir, "a.csv")); !os.IsNotExist(statErr) {
 		t.Fatalf("partial copy left behind: %v", statErr)
 	}

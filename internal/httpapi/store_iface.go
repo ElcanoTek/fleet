@@ -148,7 +148,7 @@ type chatStore interface {
 	CreateProjectConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool, projectID string, mcpServers []string) (*store.Conversation, error)
 	CreateProjectMemory(ctx context.Context, projectID, creatorEmail, content, kind string) (*store.Memory, error)
 	ListProjectMemories(ctx context.Context, projectID string) ([]store.Memory, error)
-	DeleteProjectMemory(ctx context.Context, projectID, memoryID string) error
+	DeleteProjectMemory(ctx context.Context, projectID, memoryID, actor string) error
 	ListProjectConversationIDs(ctx context.Context, projectID string) ([]string, error)
 	// ListProjectConversationsForUser is the project home's chat list —
 	// the CALLER'S OWN conversations only (chats stay private to their
@@ -162,7 +162,7 @@ type chatStore interface {
 	// UpdateProjectMemory the pin/edit/retire actions, and
 	// MoveMemoryToProject the promotion of a personal memory (ADR-0057).
 	GetProjectMemory(ctx context.Context, projectID, memoryID string) (*store.Memory, error)
-	UpdateProjectMemory(ctx context.Context, projectID, memoryID string, patch store.MemoryPatch) (*store.Memory, error)
+	UpdateProjectMemory(ctx context.Context, projectID, memoryID, actor string, patch store.MemoryPatch) (*store.Memory, error)
 	MoveMemoryToProject(ctx context.Context, userEmail, memoryID, projectID string) (*store.Memory, error)
 	// AcceptMemoryProposalIntoProject resolves a pending memory proposal into
 	// the project's shared memory instead of the caller's personal memory.

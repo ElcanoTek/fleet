@@ -364,7 +364,9 @@ files silently did not come. The copy moves 1 MiB at a time and checks that
 bound between chunks; any of a file's filesystem work — opening the source,
 creating the destination, reading and writing — that is stuck on a stalled
 filesystem is abandoned when the bound passes (both descriptors are closed,
-the partial file is removed and withheld, and so is every file after it). Each
+the file is withheld, and so is every file after it; the stuck worker removes
+the partial file when its call returns, so the request never makes another
+call on the stalled filesystem). Each
 file's copy runs on one of the capped filesystem workers, taken before its
 first filesystem call; with every worker held by stuck calls, the file is
 withheld at once. If discovery itself
@@ -641,7 +643,10 @@ Both are fixed:
 - `POST /projects/{id}/transfer {"to_email": …}` hands the project over. It
   changes **only** who may edit and delete — the team, the team learnings, the
   chats and everyone's access are untouched, because none of those are keyed on
-  the owner. Two callers are authorized: the **owner**, and an **admin** —
+  the owner. Who may edit or delete a team learning (its author, or the
+  project's owner) is re-checked under the project row lock that the transfer
+  takes, so an edit the previous owner started before the hand-over cannot land
+  after it. Two callers are authorized: the **owner**, and an **admin** —
   the admin path is the point, since a departed owner cannot click anything, and
   it is why the route sits *before* the membership gate (an admin is usually not
   a member). Anyone else gets the same 404 a non-member gets for any project

@@ -411,7 +411,7 @@ func TestProjectMemoryManagement(t *testing.T) {
 	// Retire is the default remove: the entry stops being injected, the record
 	// (and its author) survives.
 	yes := true
-	retired, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, MemoryPatch{Retired: &yes})
+	retired, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, "", MemoryPatch{Retired: &yes})
 	if err != nil {
 		t.Fatalf("UpdateProjectMemory: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestProjectMemoryManagement(t *testing.T) {
 	// The validity window is patchable on a team learning too (it was silently
 	// dropped before), and 0 clears a bound the same way the personal API does.
 	from, to := int64(1_700_000_000), int64(1_800_000_000)
-	windowed, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, MemoryPatch{ValidFrom: &from, ValidTo: &to})
+	windowed, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, "", MemoryPatch{ValidFrom: &from, ValidTo: &to})
 	if err != nil {
 		t.Fatalf("UpdateProjectMemory(window): %v", err)
 	}
@@ -430,7 +430,7 @@ func TestProjectMemoryManagement(t *testing.T) {
 		t.Errorf("validity window not applied: from=%v to=%v", windowed.ValidFrom, windowed.ValidTo)
 	}
 	zero := int64(0)
-	cleared, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, MemoryPatch{ValidTo: &zero})
+	cleared, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, "", MemoryPatch{ValidTo: &zero})
 	if err != nil {
 		t.Fatalf("UpdateProjectMemory(clear valid_to): %v", err)
 	}
@@ -1710,5 +1710,62 @@ func TestSetConversationProjectIfIsACompareAndSet(t *testing.T) {
 	}
 	if err := f.s.SetConversationProjectIf(f.ctx, "bob@x.com", c.ID, "", ""); !errors.Is(err, ErrConversationNotFound) {
 		t.Errorf("someone else's chat = %v, want ErrConversationNotFound", err)
+	}
+}
+
+// The author-or-owner rule on a team learning is re-checked under the project
+// row lock: once ownership moves, the previous owner can no longer edit or
+// delete another member's entry — including when the transfer commits while
+// the mutation is waiting on the lock (the handler's gate read the old owner).
+func TestProjectMemoryMutationRechecksOwnerUnderLock(t *testing.T) {
+	f := newTeamFixture(t)
+	m, err := f.s.CreateProjectMemory(f.ctx, f.project.ID, "bob@x.com", "quote spreads in bps", "fact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := true
+	if _, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, "alice@x.com", MemoryPatch{Pinned: &pin}); err != nil {
+		t.Fatalf("owner edit of a member's learning: %v", err)
+	}
+
+	// A transfer holds the project row while alice's edit arrives; the edit
+	// waits, then sees bob as owner and is refused.
+	tx, err := f.s.db.BeginTx(f.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(f.ctx, `SELECT 1 FROM projects WHERE id = $1 FOR UPDATE`, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	unpin := false
+	editErr := make(chan error, 1)
+	go func() {
+		_, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, "alice@x.com", MemoryPatch{Pinned: &unpin})
+		editErr <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	if _, err := tx.ExecContext(f.ctx, `UPDATE projects SET owner_email = 'bob@x.com' WHERE id = $1`, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-editErr; !errors.Is(err, ErrMemoryNotPermitted) {
+		t.Fatalf("demoted owner's edit = %v, want ErrMemoryNotPermitted", err)
+	}
+	if err := f.s.DeleteProjectMemory(f.ctx, f.project.ID, m.ID, "alice@x.com"); !errors.Is(err, ErrMemoryNotPermitted) {
+		t.Fatalf("demoted owner's delete = %v, want ErrMemoryNotPermitted", err)
+	}
+	got, err := f.s.GetProjectMemory(f.ctx, f.project.ID, m.ID)
+	if err != nil || got == nil || !got.Pinned {
+		t.Fatalf("learning after refused edits = %+v, %v; want it intact and pinned", got, err)
+	}
+	// The author still manages their own entry.
+	if err := f.s.DeleteProjectMemory(f.ctx, f.project.ID, m.ID, "bob@x.com"); err != nil {
+		t.Fatalf("author delete: %v", err)
+	}
+	if err := f.s.DeleteProjectMemory(f.ctx, f.project.ID, m.ID, "bob@x.com"); !errors.Is(err, ErrMemoryNotFound) {
+		t.Fatalf("second delete = %v, want ErrMemoryNotFound", err)
 	}
 }

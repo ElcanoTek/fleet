@@ -1142,7 +1142,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 		// valid_from/valid_to and the personal-memory PATCH honors them, so
 		// dropping them here answered 200 to a team-learning window change
 		// that never happened.
-		memory, err := s.store.UpdateProjectMemory(r.Context(), p.ID, memID, store.MemoryPatch{
+		memory, err := s.store.UpdateProjectMemory(r.Context(), p.ID, memID, user, store.MemoryPatch{
 			Content:   req.Content,
 			Kind:      req.Kind,
 			Pinned:    req.Pinned,
@@ -1159,7 +1159,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 		if s.projectMemoryPermitted(w, r, p, memID, user) == nil {
 			return
 		}
-		if err := s.store.DeleteProjectMemory(r.Context(), p.ID, memID); err != nil {
+		if err := s.store.DeleteProjectMemory(r.Context(), p.ID, memID, user); err != nil {
 			writeMemoryStoreError(w, err)
 			return
 		}

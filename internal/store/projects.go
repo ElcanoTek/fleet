@@ -628,12 +628,15 @@ func (s *Store) GetProjectMemory(ctx context.Context, projectID, memoryID string
 // UpdateProjectMemory applies a partial update to one team learning. The
 // project-scoped WHERE is the mirror image of UpdateMemory's `project_id IS
 // NULL`: the shared API can only touch shared rows, so neither scope can reach
-// the other. WHO may call this (the entry's writer, or the project owner) is
-// the handler's gate — the store enforces only the scope.
+// the other. WHO may call this — the entry's writer, or the project owner —
+// is re-checked here under the project row lock (lockMemoryActorTx), so an
+// ownership transfer that commits between the handler's gate and this write
+// cannot leave the previous owner editing other members' entries. An empty
+// actor skips that recheck (store-internal callers only).
 //
 // Retirement is the intended "remove" for a team learning: the entry stops
 // being injected but the record — and who wrote it — survives.
-func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID string, patch MemoryPatch) (*Memory, error) {
+func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID, actor string, patch MemoryPatch) (*Memory, error) {
 	if patch.Content == nil && patch.Kind == nil && patch.Pinned == nil &&
 		patch.Retired == nil && patch.ValidFrom == nil && patch.ValidTo == nil {
 		return nil, errInput("empty memory patch")
@@ -651,8 +654,16 @@ func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID str
 		k := NormalizeMemoryKind(*patch.Kind)
 		kind = &k
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockMemoryActorTx(ctx, tx, projectID, memoryID, actor); err != nil {
+		return nil, err
+	}
 	now := time.Now().Unix()
-	row := s.db.QueryRowContext(ctx,
+	row := tx.QueryRowContext(ctx,
 		`UPDATE memories SET
 			content    = COALESCE($1::text, content),
 			kind       = COALESCE($2::text, kind),
@@ -685,7 +696,42 @@ func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID str
 		}
 		return nil, err
 	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	return m, nil
+}
+
+// lockMemoryActorTx is the store-side half of "yours, or yours to own": it
+// takes the project row FOR SHARE — the lock TransferProjectOwnership's
+// FOR UPDATE conflicts with — and then checks actor against the learning's
+// author and the project's owner as they stand now. Either the transfer
+// commits first and this sees the new owner, or this commits first and the
+// transfer waits for it; there is no window where a just-demoted owner's
+// edit lands after the transfer. ErrMemoryNotFound for a learning that is
+// not this project's; ErrMemoryNotPermitted when actor is neither.
+func lockMemoryActorTx(ctx context.Context, tx *sql.Tx, projectID, memoryID, actor string) error {
+	var owner string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT owner_email FROM projects WHERE id = $1 FOR SHARE`, projectID).Scan(&owner); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrMemoryNotFound
+		}
+		return err
+	}
+	var author string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT user_email FROM memories WHERE id = $1 AND project_id = $2 FOR UPDATE`,
+		memoryID, projectID).Scan(&author); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrMemoryNotFound
+		}
+		return err
+	}
+	if actor == "" || normalizeEmail(author) == normalizeEmail(actor) || normalizeEmail(owner) == normalizeEmail(actor) {
+		return nil
+	}
+	return ErrMemoryNotPermitted
 }
 
 // MoveMemoryToProject promotes one of the caller's PERSONAL memories into a
@@ -751,11 +797,21 @@ func (s *Store) AcceptMemoryProposalIntoProject(ctx context.Context, userEmail, 
 	return m, nil
 }
 
-// DeleteProjectMemory removes one shared memory from the project. Any member
-// may delete (the handler enforces membership); the project-scoped WHERE keeps
-// it from touching personal rows.
-func (s *Store) DeleteProjectMemory(ctx context.Context, projectID, memoryID string) error {
-	res, err := s.db.ExecContext(ctx,
+// DeleteProjectMemory removes one shared memory from the project. The
+// handler enforces membership; the author-or-owner rule is re-checked under
+// the project row lock exactly as UpdateProjectMemory does (an empty actor
+// skips it), and the project-scoped WHERE keeps it from touching personal
+// rows.
+func (s *Store) DeleteProjectMemory(ctx context.Context, projectID, memoryID, actor string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockMemoryActorTx(ctx, tx, projectID, memoryID, actor); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx,
 		`DELETE FROM memories WHERE id = $1 AND project_id = $2`, memoryID, projectID)
 	if err != nil {
 		return err
@@ -763,7 +819,7 @@ func (s *Store) DeleteProjectMemory(ctx context.Context, projectID, memoryID str
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrMemoryNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ListProjectConversationsForUser returns the CALLER'S OWN live conversations

@@ -469,10 +469,11 @@ func copyOneOutput(ctx context.Context, srcDir string, dst *os.Root, rel string,
 		}
 		abandoned = true
 		mu.Unlock()
-		// Remove a partial destination now (unlinking is safe while the
-		// stuck worker still holds the descriptor); one the worker creates
-		// later is removed by the worker itself.
-		_ = dst.Remove(rel)
+		// No cleanup here: a Remove on this goroutine is one more syscall
+		// on the filesystem that just stalled. The worker owns the partial
+		// destination — copyOneOutputSync removes it on every failure, and
+		// the abandoned-success branch above removes a completed one — so it
+		// is cleaned up whenever the stuck call returns.
 		return 0, fmt.Errorf("copy: %w", ctx.Err())
 	}
 }
