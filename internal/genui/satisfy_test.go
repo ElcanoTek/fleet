@@ -53,7 +53,7 @@ func TestNeverUsable(t *testing.T) {
 }
 
 func TestBooleanComparisons(t *testing.T) {
-	bools := map[string]string{"gate": kindBool}
+	bools := map[string]inputKind{"gate": {kind: kindBool}}
 	cases := []struct {
 		vis, dis string
 		want     bool
@@ -76,7 +76,7 @@ func TestBooleanComparisons(t *testing.T) {
 }
 
 func TestNumberComparisons(t *testing.T) {
-	kinds := map[string]string{"n": kindNumber, "s": kindSlider}
+	kinds := map[string]inputKind{"n": {kind: kindNumber}, "s": {kind: kindSlider}}
 	cases := []struct {
 		vis, dis string
 		want     bool
@@ -104,5 +104,32 @@ func TestNumberComparisons(t *testing.T) {
 	}
 	if !neverTrue("n > 5 && n < 3", kinds) || neverTrue("n > 3 && n < 5", kinds) {
 		t.Error("contradictory and satisfiable ranges")
+	}
+}
+
+func TestSliderDomain(t *testing.T) {
+	kinds := map[string]inputKind{"s": {kind: kindSlider, domain: &sliderDomain{min: 0, max: 10, step: 1}}}
+	cases := []struct {
+		vis, dis string
+		want     bool
+	}{
+		{"s > 10", "", true},         // the slider never goes past 10
+		{"s < 0", "", true},          // nor below 0
+		{"s > 9.5", "s >= 10", true}, // the only position above 9.5 is 10
+		{"s > 9", "", false},         // 10
+		{"s == 2.5", "", true},       // off the step grid
+		{"s >= 3 && s <= 4", "", false},
+	}
+	for _, c := range cases {
+		if got := neverUsable(c.vis, c.dis, kinds); got != c.want {
+			t.Errorf("neverUsable(%q, %q) = %v, want %v", c.vis, c.dis, got, c.want)
+		}
+	}
+}
+
+func TestSliderDomainDecimals(t *testing.T) {
+	kinds := map[string]inputKind{"s": {kind: kindSlider, domain: &sliderDomain{min: 0, max: 1, step: 0.1}}}
+	if neverUsable("s == 0.3", "", kinds) {
+		t.Error("0.3 is a position of a 0..1 slider stepping by 0.1")
 	}
 }

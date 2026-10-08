@@ -48,6 +48,19 @@ type numAtom struct {
 	c     float64
 }
 
+// inputKind is what the check knows about one input: its kind and, for a
+// slider, the values its range control can actually hold.
+type inputKind struct {
+	kind   string
+	domain *sliderDomain
+}
+
+type sliderDomain struct{ min, max, step float64 }
+
+// maxDomainPoints bounds the slider positions scanned for representatives;
+// a finer slider is treated as any number (less precise, never wrong).
+const maxDomainPoints = 100000
+
 // Input kinds the check understands (see validator.inputKinds).
 const (
 	kindBool   = "bool"   // toggle: always true or false
@@ -151,7 +164,7 @@ func (p *skelParser) compare(t []token) *bnode {
 	var field token
 	var op string
 	var lit []token
-	known := func(k token) bool { return k.kind == tIdent && p.sk.kinds[k.text] != "" }
+	known := func(k token) bool { return k.kind == tIdent && p.sk.kinds[k.text].kind != "" }
 	switch {
 	case len(t) >= 3 && known(t[0]) && t[1].kind == tOp:
 		field, op, lit = t[0], t[1].text, t[2:]
@@ -160,7 +173,7 @@ func (p *skelParser) compare(t []token) *bnode {
 	default:
 		return nil
 	}
-	switch p.sk.kinds[field.text] {
+	switch p.sk.kinds[field.text].kind {
 	case kindBool:
 		if len(lit) != 1 || lit[0].kind != tIdent || (lit[0].text != "true" && lit[0].text != "false") || (op != "==" && op != "!=") {
 			return nil
@@ -265,7 +278,7 @@ func (p *skelParser) primary() *bnode {
 			return p.atomOf(start)
 		}
 		// A bare number input read for truthiness: a fact about its value.
-		if k := p.sk.kinds[t.text]; k == kindNumber || k == kindSlider {
+		if k := p.sk.kinds[t.text].kind; k == kindNumber || k == kindSlider {
 			return p.sk.atom("num:"+t.text+" truthy", &numAtom{field: t.text, op: "truthy"})
 		}
 		return p.atomOf(start)
@@ -286,10 +299,10 @@ func (p *skelParser) primary() *bnode {
 type skeleton struct {
 	keys  map[string]int
 	nums  []*numAtom // by atom id; nil for a free atom
-	kinds map[string]string
+	kinds map[string]inputKind
 }
 
-func newSkeleton(kinds map[string]string) *skeleton {
+func newSkeleton(kinds map[string]inputKind) *skeleton {
 	return &skeleton{keys: map[string]int{}, kinds: kinds}
 }
 
@@ -319,7 +332,9 @@ type value struct {
 }
 
 // candidates are the values worth trying for a number input: each literal
-// it is compared with, the points between and beyond them, and blank.
+// it is compared with, the points between and beyond them, and blank. A
+// slider with a known domain is tried only at positions it can hold: one
+// per distinct outcome of the comparisons, found by scanning its positions.
 func (s *skeleton) candidates(field string) []value {
 	var cs []float64
 	for _, a := range s.nums {
@@ -329,6 +344,9 @@ func (s *skeleton) candidates(field string) []value {
 	}
 	cs = append(cs, 0) // truthiness turns on zero
 	sort.Float64s(cs)
+	if d := s.kinds[field].domain; d != nil && (d.max-d.min)/d.step < maxDomainPoints {
+		return s.domainCandidates(field, d)
+	}
 	var out []value
 	for i, c := range cs {
 		if i > 0 && c == cs[i-1] {
@@ -342,8 +360,39 @@ func (s *skeleton) candidates(field string) []value {
 		out = append(out, value{n: c})
 	}
 	out = append(out, value{n: cs[len(cs)-1] + 1})
-	if s.kinds[field] == kindNumber {
+	if s.kinds[field].kind == kindNumber {
 		out = append(out, value{null: true})
+	}
+	return out
+}
+
+// domainCandidates picks, among a slider's positions, one per distinct
+// truth assignment of the field's atoms.
+func (s *skeleton) domainCandidates(field string, d *sliderDomain) []value {
+	var mine []*numAtom
+	for _, a := range s.nums {
+		if a != nil && a.field == field {
+			mine = append(mine, a)
+		}
+	}
+	seen := map[string]bool{}
+	var out []value
+	n := int(math.Floor((d.max-d.min)/d.step + 1e-9))
+	for k := 0; k <= n; k++ {
+		// The browser reports a position as a short decimal (0.3, not
+		// 0.30000000000000004), so round away float noise before comparing.
+		v := value{n: math.Round((d.min+float64(k)*d.step)*1e9) / 1e9}
+		sig := make([]byte, len(mine))
+		for i, a := range mine {
+			sig[i] = '0'
+			if a.holds(v) {
+				sig[i] = '1'
+			}
+		}
+		if !seen[string(sig)] {
+			seen[string(sig)] = true
+			out = append(out, v)
+		}
 	}
 	return out
 }
@@ -456,14 +505,14 @@ func (s *skeleton) satisfiable(want, deny []*bnode) bool {
 
 // neverTrue: a condition that holds in no state at all. kinds names the
 // inputs the check understands (see the constants above); nil is allowed.
-func neverTrue(src string, kinds map[string]string) bool {
+func neverTrue(src string, kinds map[string]inputKind) bool {
 	s := newSkeleton(kinds)
 	n := s.parse(src)
 	return n != nil && !s.satisfiable([]*bnode{n}, nil)
 }
 
 // neverUsable: an action that is disabled in every state where it is shown.
-func neverUsable(visibleIf, disabledIf string, kinds map[string]string) bool {
+func neverUsable(visibleIf, disabledIf string, kinds map[string]inputKind) bool {
 	s := newSkeleton(kinds)
 	var want, deny []*bnode
 	if visibleIf != "" {

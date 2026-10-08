@@ -3460,6 +3460,30 @@
      }
     ]
    }
+  },
+  {
+   "name": "action shown only past a slider's max",
+   "valid": false,
+   "error_contains": "can never be pressed",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "slider",
+      "id": "n",
+      "label": "N",
+      "min": 0,
+      "max": 10
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "visible_if": "n > 10"
+     }
+    ]
+   }
   }
  ]
 }

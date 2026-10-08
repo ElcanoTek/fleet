@@ -10,7 +10,17 @@ import { useContext, useState } from "react";
 import type { Reply, Submission } from "./model";
 import { fieldLabels, GenUiContext, summarizeValue } from "./transcript";
 
-export function SubmissionBubble({ submission, raw }: { submission: Submission; raw: string }) {
+// A card answer the server refused (or never received) stays in the
+// transcript until a reload; it says so, rather than reading as sent.
+function NotSentNote() {
+  return (
+    <div role="status" data-testid="genui-not-sent" className="mt-1 text-[0.72rem] text-[var(--color-danger)]">
+      Not sent. The card is still open to try again.
+    </div>
+  );
+}
+
+export function SubmissionBubble({ submission, raw, notSent }: { submission: Submission; raw: string; notSent?: boolean }) {
   const { cards } = useContext(GenUiContext);
   const spec = cards.get(submission.cardId);
   const labels = fieldLabels(spec);
@@ -49,6 +59,7 @@ export function SubmissionBubble({ submission, raw }: { submission: Submission; 
       >
         {showRaw ? "Hide what was sent" : "Show what was sent"}
       </button>
+      {notSent ? <NotSentNote /> : null}
       {showRaw ? (
         <pre
           className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.72rem]"
@@ -66,7 +77,7 @@ export function SubmissionBubble({ submission, raw }: { submission: Submission; 
  * with the card it answered named underneath (the marker line is for the
  * model and the transcript, not for reading).
  */
-export function ReplyBubble({ reply }: { reply: Reply }) {
+export function ReplyBubble({ reply, notSent }: { reply: Reply; notSent?: boolean }) {
   const { cards } = useContext(GenUiContext);
   const spec = cards.get(reply.cardId);
   const action = spec?.actions?.find((a) => a.id === reply.actionId)?.label ?? reply.actionId;
@@ -83,6 +94,7 @@ export function ReplyBubble({ reply }: { reply: Reply }) {
           {spec?.title ?? "Card"} · {action}
         </span>
       </div>
+      {notSent ? <NotSentNote /> : null}
     </div>
   );
 }

@@ -67,6 +67,9 @@ type CardCtx = {
   focusField: (path: string) => void;
   /** Paths of inputs currently shown and enabled — the ones Fix can reach. */
   visible: Set<string>;
+  /** Bumped whenever the values are replaced wholesale (an adopted answer,
+   *  a restored draft, a cancelled edit): per-item UI state then starts over. */
+  epoch: number;
 };
 
 const Ctx = createContext<CardCtx | null>(null);
@@ -333,16 +336,14 @@ function loadPending(cardId: string, currentKey: string): string | null {
     const raw = window.localStorage.getItem(PENDING_PREFIX + cardId);
     if (!raw) return null;
     const v = JSON.parse(raw) as { action?: unknown; at?: unknown; after?: unknown };
-    if (
-      typeof v.action !== "string" ||
-      typeof v.at !== "number" ||
-      Date.now() - v.at > PENDING_TTL_MS ||
-      v.after !== currentKey
-    ) {
+    if (typeof v.action !== "string" || typeof v.at !== "number" || Date.now() - v.at > PENDING_TTL_MS) {
       window.localStorage.removeItem(PENDING_PREFIX + cardId);
       return null;
     }
-    return v.action;
+    // A hold typed against another answer is not this tab's: its answer has
+    // moved on here. It is left in place (not removed) for a tab whose
+    // transcript has not caught up yet; the TTL clears it.
+    return v.after === currentKey ? v.action : null;
   } catch {
     return null;
   }
@@ -366,6 +367,19 @@ let sendSeq = 0;
 function nextSendId(): string {
   sendSeq += 1;
   return `${PAGE_LOAD}-${sendSeq}`;
+}
+
+/** When the card's current hold expires (ms since epoch), if it has one. */
+function pendingExpiry(cardId: string): number | null {
+  const mem = pendingMemory.get(cardId);
+  if (mem) return mem.at + PENDING_TTL_MS;
+  try {
+    const raw = window.localStorage.getItem(PENDING_PREFIX + cardId);
+    const v = raw ? (JSON.parse(raw) as { at?: unknown }) : null;
+    return typeof v?.at === "number" ? v.at + PENDING_TTL_MS : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The send that set the card's current hold, if any. */
@@ -423,6 +437,11 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
   const [values, setValuesState] = useState<Values>(() =>
     normalizeValues(spec, initialDraft?.values ?? (submission ? submission.values : null)),
   );
+  const [epoch, setEpoch] = useState(0);
+  const replaceValues = (v: Values) => {
+    setValuesState(v);
+    setEpoch((e) => e + 1);
+  };
   const [editing, setEditing] = useState(() => !!submission && initialDraft !== null);
   const [sending, setSending] = useState<string | null>(null);
   const [showErrors, setShowErrors] = useState(false);
@@ -492,7 +511,9 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
       // refused and vanish, and the user's values must survive that. A draft
       // records the answer it was typed against, so once this answer holds,
       // the next load finds it stale and drops it.
-      if (!readOnly) savePending(storeId, null);
+      // Only this tab's copy of the hold goes: the stored one stays for a tab
+      // whose transcript has not caught up, and reads as stale here.
+      pendingMemory.delete(storeId);
     }
     // The transcript can move BACK to an earlier answer: a resend from
     // "Edit and resend" was refused and its optimistic message withdrawn. If
@@ -506,15 +527,15 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     setSeenMessageId(submission?.messageId ?? reply?.messageId ?? null);
     const edit = rolledBack && !readOnly ? peekDraft(storeId) : null;
     if (edit && edit.after === answerKey && draftSent(storeId, edit) !== answerKey) {
-      setValuesState(normalizeValues(spec, edit.values));
+      replaceValues(normalizeValues(spec, edit.values));
       setEditing(true);
       setClearedServerErrors(new Set(edit.cleared ?? []));
     } else if (submission) {
-      setValuesState(normalizeValues(spec, submission.values));
+      replaceValues(normalizeValues(spec, submission.values));
     } else if (reply) {
       // A quick reply sends only its fixed text: show what a reload would
       // (the defaults), not edits that were never sent.
-      setValuesState(normalizeValues(spec, null));
+      replaceValues(normalizeValues(spec, null));
     }
   }
   const locked = !!readOnly || !!retired || !!superseded || (submittedAction !== null && !editing);
@@ -534,6 +555,20 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, [storeId, readOnly]);
+
+  // A hold lasts PENDING_TTL_MS. Checked only on load, one that expired while
+  // the card stayed mounted (its sender gone after a reload, the answer lost)
+  // would lock the card for good: re-check it when it is due.
+  useEffect(() => {
+    if (!awaiting || readOnly) return;
+    const due = pendingExpiry(storeId);
+    if (due === null) return;
+    const timer = window.setTimeout(
+      () => setAwaitingState(loadPending(storeId, answerKeyRef.current)),
+      Math.max(0, due - Date.now()) + 1000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [awaiting, storeId, readOnly]);
 
   useEffect(() => {
     if (!awaiting) return;
@@ -633,8 +668,8 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     // Fields freeze while an answer is on its way too (sending, or held
     // until it reaches the transcript): an edit made then would be typed
     // against the answer being replaced and lost when it lands.
-    () => ({ cardId, values, locked: fieldsLocked, errors, setField, setValues, focusField, visible }),
-    [cardId, values, fieldsLocked, errors, setField, setValues, focusField, visible],
+    () => ({ cardId, values, locked: fieldsLocked, errors, setField, setValues, focusField, visible, epoch }),
+    [cardId, values, fieldsLocked, errors, setField, setValues, focusField, visible, epoch],
   );
 
   const scope = scopeFor(values);
@@ -648,6 +683,8 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     setConfirming(null);
     setNotice(null);
     setSending(action.id);
+    // Takes back the hold this send published, if it is still this send's.
+    let release = () => {};
     try {
       const message =
         action.kind === "message"
@@ -666,6 +703,14 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
           : answerKeyOf({ cardId, actionId: action.id, values: submitValues }, null);
       if (!readOnly) markDraftSent(storeId, sentKey);
       const sendId = nextSendId();
+      // Publish the hold before the send, not after: a direct send resolves
+      // only once its whole turn has run, and the same card open in another
+      // tab must lock now (storage events reach it), or a click there could
+      // queue a duplicate. Refused, it is taken back below.
+      if (!readOnly) savePending(storeId, action.id, answerKeyRef.current, sendId);
+      release = () => {
+        if (!readOnly && pendingSend(storeId) === sendId) savePending(storeId, null);
+      };
       const accepted = await onSubmit(message, () => {
         // Only this send's own hold: one the user unlocked (and perhaps
         // replaced with a newer send) is not this verdict's to release.
@@ -677,6 +722,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
         window.dispatchEvent(new CustomEvent(UNSENT_EVENT, { detail: storeId }));
       });
       if (accepted === false) {
+        release();
         if (!readOnly) markDraftSent(storeId, "");
         setNotice("Not sent. Try again.");
       } else if (submissionKeyRef.current === keyAtClick) {
@@ -686,6 +732,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
         setAwaiting(action.id, sendId);
       }
     } catch {
+      release();
       if (!readOnly) markDraftSent(storeId, "");
       setNotice("Could not send. Try again.");
     } finally {
@@ -877,7 +924,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
                       // sit under the "Sent" label.
                       setEditing(false);
                       setShowErrors(false);
-                      setValuesState(normalizeValues(spec, submission?.values));
+                      replaceValues(normalizeValues(spec, submission?.values));
                       saveDraft(storeId, null);
                       // The sent values are back, so are their server errors.
                       clearedRef.current = new Set();
@@ -2201,7 +2248,7 @@ function freshKeys(n: number): number[] {
 }
 
 function Repeater({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
-  const { values, locked: cardLocked } = useCard();
+  const { values, locked: cardLocked, epoch } = useCard();
   // A disabled repeater (or one nested in a disabled scope) keeps its expand
   // toggles usable but offers no add / duplicate / remove, and its fields
   // disable through ItemContext.
@@ -2214,12 +2261,15 @@ function Repeater({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const [keys, setKeys] = useState<number[]>(() => freshKeys(items.length));
   // The first item starts open.
   const [openKeys, setOpenKeys] = useState<Set<number>>(() => new Set(keys.slice(0, 1)));
-  // The value changed from outside (a restored draft, an adopted answer):
+  // The value was replaced from outside (a restored draft, an adopted answer
+  // — the card bumps its epoch — or a length this repeater did not make):
   // identities can no longer be matched, so the items start afresh.
+  const [seenEpoch, setSeenEpoch] = useState(epoch);
   let itemKeys = keys;
-  if (keys.length !== items.length) {
+  if (keys.length !== items.length || seenEpoch !== epoch) {
     itemKeys = freshKeys(items.length);
     setKeys(itemKeys);
+    setSeenEpoch(epoch);
     setOpenKeys(new Set(itemKeys.slice(0, 1)));
   }
   const toggleOpen = (k: number) =>

@@ -44,7 +44,11 @@ function lex(src: string): Tok[] {
         }
         i++;
       }
-      toks.push({ kind: "num", text: rs.slice(start, i).join(""), pos: start });
+      const lit = rs.slice(start, i).join("");
+      // A literal too large for a double would read as Infinity: refused on
+      // both sides (internal/genui/expr.go lex).
+      if (!Number.isFinite(Number(lit))) throw new ExprError(`number ${lit.slice(0, 20)} at ${start} is too large`);
+      toks.push({ kind: "num", text: lit, pos: start });
     } else if (c === "'" || c === '"') {
       const start = i;
       i++;

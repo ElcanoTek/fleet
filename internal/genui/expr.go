@@ -2,6 +2,8 @@ package genui
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -103,7 +105,13 @@ func lex(src string) ([]token, error) {
 				}
 				i++
 			}
-			toks = append(toks, token{tNum, string(rs[start:i]), start})
+			lit := string(rs[start:i])
+			// A literal too large for a float64 would be Infinity in the
+			// browser: refused on both sides (expr.ts lex).
+			if f, err := strconv.ParseFloat(lit, 64); err != nil || math.IsInf(f, 0) {
+				return nil, fmt.Errorf("number %s at %d is too large", truncateRunes(lit, 20), start)
+			}
+			toks = append(toks, token{tNum, lit, start})
 		case c == '\'' || c == '"':
 			quote := c
 			start := i

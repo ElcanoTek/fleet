@@ -91,7 +91,8 @@ possible state is tried: a condition that can never be true, or an action that
 is hidden or disabled in every state, is refused. A toggle compared with
 `true` / `false` is the toggle itself, and a number or slider input compared
 with number literals (`n > 0`, `n >= 0`, a bare `n`) is tried at concrete
-values covering every range those literals separate, blank included. Anything
+values covering every range those literals separate, blank included (a slider
+only at positions its range and step allow). Anything
 else (arithmetic, two inputs compared, text and lists) is treated as unknown,
 so the check never refuses a card that could work (`internal/genui/satisfy.go`).
 

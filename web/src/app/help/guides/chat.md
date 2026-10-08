@@ -464,7 +464,8 @@ card helps; you can also simply ask for one ("give me a form for this").
 - **Your answers become your next message.** Pressing a button sends what you
   entered as an ordinary message, shown as a compact summary of the card's name,
   the button you pressed and your answers (**Show what was sent** reveals the
-  exact text). The card itself never acts: the assistant reads your answers and
+  exact text); if it could not be sent, the summary says **Not sent** and the
+  card stays open to try again. The card itself never acts: the assistant reads your answers and
   carries on, and anything it then does that needs approval still shows its
   usual approval card.
 - **Some buttons ask first.** A button that asks a question before sending

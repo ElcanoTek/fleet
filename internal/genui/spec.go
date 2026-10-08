@@ -314,6 +314,7 @@ type field struct {
 	// items is a repeater's item count when the card opens (its value, else
 	// max(1, min_items)) — the indexes a field_error or Fix link can name.
 	items int
+	obj   map[string]any // the component's own props
 }
 
 type validator struct {
@@ -458,8 +459,11 @@ func (v *validator) component(path string, raw any, depth int, repeater string) 
 			}
 		} else {
 			v.declare(path, id, typ, repeater)
-			if f, ok := v.fields[id]; ok && typ == "repeater" {
-				f.items = initialItems(obj)
+			if f, ok := v.fields[id]; ok && f.path == path {
+				f.obj = obj
+				if typ == "repeater" {
+					f.items = initialItems(obj)
+				}
 			}
 		}
 	} else if hasID && !idRe.MatchString(id) {
@@ -476,16 +480,28 @@ func (v *validator) component(path string, raw any, depth int, repeater string) 
 // can reason about, by kind. Ids are unique across the card, so within one
 // condition a name always means one value (a repeater field's, inside its
 // item).
-func (v *validator) inputKinds() map[string]string {
-	out := map[string]string{}
+func (v *validator) inputKinds() map[string]inputKind {
+	out := map[string]inputKind{}
 	for id, f := range v.fields {
 		switch f.typ {
 		case "toggle":
-			out[id] = kindBool
+			out[id] = inputKind{kind: kindBool}
 		case "number":
-			out[id] = kindNumber
+			out[id] = inputKind{kind: kindNumber}
 		case "slider":
-			out[id] = kindSlider
+			// A range control can only hold min + k*step within [min, max]
+			// (step 1 when unset, as it renders).
+			k := inputKind{kind: kindSlider}
+			lo, okLo := f.obj["min"].(float64)
+			hi, okHi := f.obj["max"].(float64)
+			step, okStep := f.obj["step"].(float64)
+			if !okStep {
+				step, okStep = 1, true
+			}
+			if okLo && okHi && okStep && step > 0 && hi >= lo {
+				k.domain = &sliderDomain{min: lo, max: hi, step: step}
+			}
+			out[id] = k
 		}
 	}
 	return out

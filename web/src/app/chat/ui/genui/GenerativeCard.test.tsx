@@ -801,7 +801,8 @@ describe("seventh Codex pass", () => {
     await user.click(screen.getByRole("button", { name: "Edit and resend" }));
     expect(screen.queryByTestId("genui-awaiting")).toBeNull();
     expect(screen.getByRole("button", { name: "Go" })).toBeTruthy();
-    expect(window.localStorage.getItem("fleet.genui.pending.hold")).toBeNull();
+    // The stored hold may stay (another tab whose transcript has not caught
+    // up still needs it, until its TTL), but here it is read as stale.
   });
 });
 
@@ -1368,6 +1369,76 @@ describe("repeater item identity", () => {
     });
     render(<GenerativeCard cardId="rb" spec={s} onSubmit={() => {}} />);
     expect(screen.getByRole("button", { name: /Item 1/ })).toBeTruthy();
+  });
+});
+
+describe("holds and other tabs", () => {
+  it("publishes the hold when a send starts, before its turn finishes", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({ title: "P", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+    let finish: (v: boolean) => void = () => {};
+    const onSubmit = vi.fn(() => new Promise<boolean>((r) => (finish = r)));
+    render(<GenerativeCard cardId="pub" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    // The direct turn is still running: another tab must already see a hold.
+    expect(window.localStorage.getItem("fleet.genui.pending.pub")).toContain('"action":"a"');
+    await act(async () => finish(false));
+    // Refused: taken back.
+    expect(window.localStorage.getItem("fleet.genui.pending.pub")).toBeNull();
+  });
+
+  it("expires a hold while the card stays mounted", async () => {
+    vi.useFakeTimers();
+    try {
+      window.localStorage.clear();
+      const s = spec({ title: "E", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+      const key = "fleet.genui.pending.exp";
+      // Set by an earlier page load 29 minutes ago; its sender is gone.
+      window.localStorage.setItem(key, JSON.stringify({ action: "a", at: Date.now() - 29 * 60 * 1000, after: "", send: "old" }));
+      render(<GenerativeCard cardId="exp" spec={s} onSubmit={() => {}} />);
+      expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+      });
+      expect(screen.queryByTestId("genui-awaiting")).toBeNull();
+      expect(screen.getByRole("button", { name: "Yes" })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("repeater values replaced from outside", () => {
+  it("start item-local state afresh even at the same length", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "R",
+      components: [
+        {
+          type: "repeater",
+          id: "lines",
+          label: "Lines",
+          value: [{}, {}],
+          fields: [{ type: "include_exclude", id: "geo", label: "Geo", options: ["US", "CA"] }],
+        },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    const view = render(<GenerativeCard cardId="rx" spec={s} onSubmit={() => {}} />);
+    const first = document.querySelector('[data-repeater-item="0"]') as HTMLElement;
+    await user.click(within(first).getByRole("button", { name: "Exclude" }));
+    // Another tab answers with different two-item data.
+    const answer = {
+      cardId: "rx",
+      actionId: "go",
+      values: { lines: [{ geo: { include: ["CA"], exclude: [] } }, { geo: { include: [], exclude: ["US"] } }] },
+      messageId: 4,
+    };
+    view.rerender(<GenerativeCard cardId="rx" spec={s} submission={answer} onSubmit={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Edit and resend" }));
+    const again = document.querySelector('[data-repeater-item="0"]') as HTMLElement;
+    expect(within(again).getByRole("button", { name: "Include" }).getAttribute("aria-pressed")).toBe("true");
   });
 });
 
