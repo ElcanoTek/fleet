@@ -2879,7 +2879,7 @@
   {
    "name": "action shown and disabled on the same condition",
    "valid": false,
-   "error_contains": "same condition as visible_if",
+   "error_contains": "can never be pressed",
    "card": {
     "title": "x",
     "components": [
@@ -3049,6 +3049,119 @@
      {
       "id": "go",
       "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "action disabled by a tautology",
+   "valid": false,
+   "error_contains": "can never be pressed",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "gate",
+      "label": "Gate"
+     },
+     {
+      "type": "toggle",
+      "id": "block",
+      "label": "Block"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "disabled_if": "gate || !gate"
+     }
+    ]
+   }
+  },
+  {
+   "name": "action disabled whenever it is shown",
+   "valid": false,
+   "error_contains": "can never be pressed",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "gate",
+      "label": "Gate"
+     },
+     {
+      "type": "toggle",
+      "id": "block",
+      "label": "Block"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "visible_if": "gate",
+      "disabled_if": "gate || block"
+     }
+    ]
+   }
+  },
+  {
+   "name": "component visible_if that contradicts itself",
+   "valid": false,
+   "error_contains": "can never be true",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "gate",
+      "label": "Gate"
+     },
+     {
+      "type": "toggle",
+      "id": "block",
+      "label": "Block"
+     },
+     {
+      "type": "text",
+      "text": "hi",
+      "visible_if": "gate && !gate"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "action shown and enabled in some state",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "gate",
+      "label": "Gate"
+     },
+     {
+      "type": "toggle",
+      "id": "block",
+      "label": "Block"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "visible_if": "gate",
+      "disabled_if": "!gate || block"
      }
     ]
    }

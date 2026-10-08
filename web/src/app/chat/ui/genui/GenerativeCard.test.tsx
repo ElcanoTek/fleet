@@ -1129,6 +1129,69 @@ describe("chart accessibility", () => {
   });
 });
 
+describe("a stale unsent verdict", () => {
+  it("does not release a newer send's hold after Unlock and resend", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({ title: "U", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+    const callbacks: (() => void)[] = [];
+    const onSubmit = vi.fn(async (_m: string, cb?: () => void) => {
+      if (cb) callbacks.push(cb);
+      return true;
+    });
+    render(<GenerativeCard cardId="stale" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Unlock" }));
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
+    // The first send's late verdict arrives: the second send's hold stays.
+    act(() => callbacks[0]());
+    expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
+    expect(screen.queryByText("Not sent. Try again.")).toBeNull();
+    act(() => callbacks[1]());
+    expect(screen.queryByTestId("genui-awaiting")).toBeNull();
+  });
+});
+
+describe("identical resend with storage full", () => {
+  it("still knows the resend was accepted after a remount", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({ title: "I", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    const first = { cardId: "irq", actionId: "go", values: { n: "a" }, messageId: 1 };
+    const view = render(<GenerativeCard cardId="irq" spec={s} submission={first} onSubmit={vi.fn().mockResolvedValue(true)} />);
+    await user.click(screen.getByRole("button", { name: "Edit and resend" }));
+    const box = screen.getByLabelText(/Name/);
+    await user.type(box, "b");
+    await user.type(box, "{Backspace}");
+    // The quota fills before the send: the sent marker cannot be written.
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    try {
+      await user.click(screen.getByRole("button", { name: "Go" }));
+    } finally {
+      setItem.mockRestore();
+    }
+    const second = { ...first, messageId: 2 };
+    view.rerender(<GenerativeCard cardId="irq" spec={s} submission={second} onSubmit={() => {}} />);
+    view.unmount();
+    render(<GenerativeCard cardId="irq" spec={s} submission={second} onSubmit={() => {}} />);
+    expect(screen.queryByRole("button", { name: "Cancel edit" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit and resend" })).toBeTruthy();
+  });
+});
+
+describe("required toggle", () => {
+  it("shows the red required marker like other required fields", () => {
+    const s = spec({ title: "T", components: [{ type: "toggle", id: "ok", label: "I agree", required: true }, { type: "toggle", id: "opt", label: "Optional" }], actions: [{ id: "go", label: "Go" }] });
+    render(<GenerativeCard cardId="rt" spec={s} onSubmit={() => {}} />);
+    expect(screen.getAllByTestId("genui-required-mark")).toHaveLength(1);
+    expect(screen.getByRole("switch", { name: "I agree (required)" })).toBeTruthy();
+  });
+});
+
 describe("identical resend", () => {
   it("does not reopen the editor on remount once the identical resend is accepted", async () => {
     window.localStorage.clear();

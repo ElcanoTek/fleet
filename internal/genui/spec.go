@@ -821,6 +821,10 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 			continue
 		}
 		v.conds = append(v.conds, condRef{path: path + "." + cond, refs: refs})
+		if neverTrue(src) {
+			v.addf(path+"."+cond, "can never be true whatever the inputs are (it contradicts itself), so it never changes; fix the logic or drop it")
+			continue
+		}
 		// A visible_if that reads any input it hides (the component itself,
 		// or an input inside it) can lock that input away for good: "gate &&
 		// !empty(name)" on name never opens once name is empty and hidden.
@@ -1437,12 +1441,12 @@ func (v *validator) actions(raw any, hasInput bool) {
 				v.addf(ap+"."+cond, "%s", unreachableMsg)
 			}
 		}
-		// Shown only while the condition holds and disabled whenever it does:
-		// the button can never be pressed.
-		if vis, ok := obj["visible_if"].(string); ok {
-			if dis, ok := obj["disabled_if"].(string); ok && strings.Join(strings.Fields(vis), "") == strings.Join(strings.Fields(dis), "") {
-				v.addf(ap+".disabled_if", "is the same condition as visible_if, so the button is disabled whenever it is shown; drop one")
-			}
+		// A button disabled in every state where it is shown (or never shown)
+		// can never be pressed; see satisfy.go for what is decided.
+		vis, _ := obj["visible_if"].(string)
+		dis, _ := obj["disabled_if"].(string)
+		if (vis != "" || dis != "") && neverUsable(vis, dis) {
+			v.addf(ap, "can never be pressed: whatever the inputs are, it is hidden or disabled (check visible_if and disabled_if together)")
 		}
 		kind, _ := obj["kind"].(string)
 		if kind == "" {

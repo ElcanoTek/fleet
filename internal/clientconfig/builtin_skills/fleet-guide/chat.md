@@ -467,10 +467,21 @@ card helps; you can also simply ask for one ("give me a form for this").
   exact text). The card itself never acts: the assistant reads your answers and
   carries on, and anything it then does that needs approval still shows its
   usual approval card.
+- **Some buttons ask first.** A button that asks a question before sending
+  shows **Yes** and **Back** in its place; **Back** (or `Escape`) returns
+  without sending.
 - **A sent card locks.** It keeps your answers on screen. **Edit and resend**
-  unlocks it to change something and send again.
+  unlocks it to change something and send again; **Cancel edit** puts back
+  what you sent.
+- **A card waits for its answer to arrive.** If the assistant is still
+  replying, or the connection dropped as you pressed the button, the card
+  shows **Sent · … — waiting to reach the assistant** and keeps its buttons off
+  so you do not send twice. **Unlock** frees them if you want to send again
+  anyway. If the connection recovers and your answer never arrived, the card
+  unlocks by itself and says **Not sent. Try again.**
 - **An optional single choice can be undone.** A list of round options shows
-  **Clear choice** once you pick one, if the question is optional.
+  **Clear choice** once you pick one, and a table you pick one row from shows
+  **Clear selection**, if the question is optional.
 - **Updated cards replace older ones.** When the assistant checks your answers
   and comes back with a corrected version, the earlier card collapses to a
   one-line note (**Show** opens it), with any problems marked on the new card's

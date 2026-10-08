@@ -171,7 +171,7 @@ function loadDraft(cardId: string, answerKey: string): StoredDraft | null {
   const key = DRAFT_PREFIX + cardId;
   try {
     const d = readDraft(key);
-    if (d && Date.now() - d.at <= DRAFT_TTL_MS && d.after === answerKey && d.sent !== answerKey) return d;
+    if (d && Date.now() - d.at <= DRAFT_TTL_MS && d.after === answerKey && draftSent(cardId, d) !== answerKey) return d;
     window.localStorage.removeItem(key);
     return null;
   } catch {
@@ -217,46 +217,64 @@ function saveDraft(cardId: string, values: Values | null, after = "", cleared: I
   const key = DRAFT_PREFIX + cardId;
   try {
     if (!values) {
+      sentMemory.delete(cardId);
       window.localStorage.removeItem(key);
       return;
     }
     // Pruning scans every draft: only when this card starts one, not per edit.
     if (window.localStorage.getItem(key) === null) pruneDrafts(key);
-    const json = JSON.stringify({ values, at: Date.now(), after, cleared: [...cleared] });
-    try {
-      window.localStorage.setItem(key, json);
-      return;
-    } catch {
-      // A long pasted list can fill the origin's quota. Only now, make room
-      // by dropping other drafts, least recently edited first, until it fits.
-    }
-    const others = otherDrafts(key);
-    for (;;) {
-      const victim = others.pop();
-      if (!victim) return;
-      window.localStorage.removeItem(victim.key);
-      try {
-        window.localStorage.setItem(key, json);
-        return;
-      } catch {
-        // still full: drop the next one
-      }
-    }
+    sentMemory.delete(cardId);
+    putDraft(key, JSON.stringify({ values, at: Date.now(), after, cleared: [...cleared] }));
   } catch {
     // Private mode: a draft is a convenience, never state we rely on.
   }
 }
 
+/** Writes a draft; true once stored. */
+function putDraft(key: string, json: string): boolean {
+  try {
+    window.localStorage.setItem(key, json);
+    return true;
+  } catch {
+    // A long pasted list can fill the origin's quota. Only now, make room
+    // by dropping other drafts, least recently edited first, until it fits.
+  }
+  const others = otherDrafts(key);
+  for (;;) {
+    const victim = others.pop();
+    if (!victim) return false;
+    window.localStorage.removeItem(victim.key);
+    try {
+      window.localStorage.setItem(key, json);
+      return true;
+    } catch {
+      // still full: drop the next one
+    }
+  }
+}
+
+// A draft's `sent` marker that could not be stored (the quota is full even
+// after evicting other drafts): kept for this page's life, so a remount still
+// sees the resend it records.
+const sentMemory = new Map<string, string>();
+
 /** Records (or, with "", clears) the answer key a draft was resent as. */
 function markDraftSent(storeId: string, sent: string) {
   const key = DRAFT_PREFIX + storeId;
+  if (sent) sentMemory.set(storeId, sent);
+  else sentMemory.delete(storeId);
   try {
     const d = readDraft(key);
     if (!d) return;
-    window.localStorage.setItem(key, JSON.stringify({ ...d, sent: sent || undefined }));
+    if (putDraft(key, JSON.stringify({ ...d, sent: sent || undefined }))) sentMemory.delete(storeId);
   } catch {
-    // A draft is a convenience.
+    // A draft is a convenience; the in-memory marker still holds.
   }
+}
+
+/** The answer key a draft was resent as (stored, or kept in memory). */
+function draftSent(storeId: string, d: StoredDraft): string | undefined {
+  return d.sent ?? sentMemory.get(storeId);
 }
 
 /** A transcript answer without its message id (see loadPending, loadDraft). */
@@ -281,11 +299,14 @@ const PENDING_TTL_MS = 30 * 60 * 1000;
 // A hold is also kept in memory for the page's life: it guards against a
 // duplicate queued answer, so it must survive a remount even when storage is
 // full or blocked (localStorage then only carries it across a reload).
-const pendingMemory = new Map<string, { action: string; at: number; after: string }>();
+// `send` names the send that set the hold, so a late verdict about an older
+// send (one the user unlocked and replaced) cannot release a newer hold.
+const pendingMemory = new Map<string, { action: string; at: number; after: string; send?: string }>();
 
 /** Forgets in-memory holds (tests; the page itself never needs to). */
 export function resetPendingHolds() {
   pendingMemory.clear();
+  sentMemory.clear();
 }
 
 function loadPending(cardId: string, currentKey: string): string | null {
@@ -313,14 +334,36 @@ function loadPending(cardId: string, currentKey: string): string | null {
   }
 }
 
-function savePending(cardId: string, action: string | null, after = "") {
-  if (action) pendingMemory.set(cardId, { action, at: Date.now(), after });
+function savePending(cardId: string, action: string | null, after = "", send?: string) {
+  if (action) pendingMemory.set(cardId, { action, at: Date.now(), after, send });
   else pendingMemory.delete(cardId);
   try {
-    if (action) window.localStorage.setItem(PENDING_PREFIX + cardId, JSON.stringify({ action, at: Date.now(), after }));
+    if (action) window.localStorage.setItem(PENDING_PREFIX + cardId, JSON.stringify({ action, at: Date.now(), after, send }));
     else window.localStorage.removeItem(PENDING_PREFIX + cardId);
   } catch {
     // Convenience only, like drafts.
+  }
+}
+
+// Send ids are unique within the page; a stored hold from an earlier page
+// load carries the load's timestamp prefix, so it never matches either.
+const PAGE_LOAD = Date.now().toString(36);
+let sendSeq = 0;
+function nextSendId(): string {
+  sendSeq += 1;
+  return `${PAGE_LOAD}-${sendSeq}`;
+}
+
+/** The send that set the card's current hold, if any. */
+function pendingSend(cardId: string): string | undefined {
+  const mem = pendingMemory.get(cardId);
+  if (mem) return mem.send;
+  try {
+    const raw = window.localStorage.getItem(PENDING_PREFIX + cardId);
+    const v = raw ? (JSON.parse(raw) as { send?: unknown }) : null;
+    return typeof v?.send === "string" ? v.send : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -417,9 +460,9 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     readOnly ? null : loadPending(storeId, answerKey),
   );
   const setAwaiting = useCallback(
-    (a: string | null) => {
+    (a: string | null, send?: string) => {
       setAwaitingState(a);
-      if (!readOnly) savePending(storeId, a, answerKeyRef.current);
+      if (!readOnly) savePending(storeId, a, answerKeyRef.current, send);
     },
     [storeId, readOnly],
   );
@@ -445,7 +488,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     // older submission is a rollback too.
     setSeenMessageId(submission?.messageId ?? reply?.messageId ?? null);
     const edit = rolledBack && !readOnly ? peekDraft(storeId) : null;
-    if (edit && edit.after === answerKey && edit.sent !== answerKey) {
+    if (edit && edit.after === answerKey && draftSent(storeId, edit) !== answerKey) {
       setValuesState(normalizeValues(spec, edit.values));
       setEditing(true);
       setClearedServerErrors(new Set(edit.cleared ?? []));
@@ -582,13 +625,15 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
           ? answerKeyOf(null, { cardId, actionId: action.id, text: "" })
           : answerKeyOf({ cardId, actionId: action.id, values: submitValues }, null);
       if (!readOnly) markDraftSent(storeId, sentKey);
+      const sendId = nextSendId();
       const accepted = await onSubmit(message, () => {
+        // Only this send's own hold: one the user unlocked (and perhaps
+        // replaced with a newer send) is not this verdict's to release.
+        if (readOnly || pendingSend(storeId) !== sendId) return;
         // This instance may have unmounted (virtualized transcript): clear
         // the stored hold, and tell whichever instance is mounted now.
-        if (!readOnly) {
-          savePending(storeId, null);
-          markDraftSent(storeId, "");
-        }
+        savePending(storeId, null);
+        markDraftSent(storeId, "");
         window.dispatchEvent(new CustomEvent(UNSENT_EVENT, { detail: storeId }));
       });
       if (accepted === false) {
@@ -598,7 +643,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
         // Hold the actions until the message reaches the transcript (a
         // queued message is accepted long before it is echoed), so a second
         // click cannot queue a duplicate — quick replies included.
-        setAwaiting(action.id);
+        setAwaiting(action.id, sendId);
       }
     } catch {
       if (!readOnly) markDraftSent(storeId, "");
@@ -731,8 +776,11 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
             {!locked && awaiting ? (
               <div className="flex flex-wrap items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]" role="status">
                 <span data-testid="genui-awaiting">
-                  Sent · {(spec.actions ?? []).find((a) => a.id === awaiting)?.label ?? awaiting} — it will reach the
-                  assistant after the current reply
+                  {/* Queued behind a running reply, or sent while the
+                      connection dropped: either way it has not reached the
+                      transcript yet. */}
+                  Sent · {(spec.actions ?? []).find((a) => a.id === awaiting)?.label ?? awaiting} — waiting to reach the
+                  assistant
                 </span>
                 <button type="button" className="underline hover:text-[var(--color-text-primary)]" onClick={() => setAwaiting(null)}>
                   Unlock
@@ -1934,7 +1982,16 @@ function Toggle({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
       >
         <span className={["absolute top-0.5 size-4 rounded-full bg-[var(--color-white)] transition-all", on ? "left-[1.125rem]" : "left-0.5"].join(" ")} />
       </button>
-      <span className="text-[0.8125rem]">{str(c.label).trim()}</span>
+      <span className="text-[0.8125rem]">
+        {str(c.label).trim()}
+        {/* The same visual marker as every other required field; the
+            switch's accessible name already says "(required)". */}
+        {c.required === true ? (
+          <span className="ml-0.5 text-[var(--color-danger)]" aria-hidden data-testid="genui-required-mark">
+            *
+          </span>
+        ) : null}
+      </span>
     </label>
   );
 }
