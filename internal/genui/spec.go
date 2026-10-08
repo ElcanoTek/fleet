@@ -105,6 +105,7 @@ const (
 	kObjects    // []object validated against a sub-spec (items)
 	kRows       // table rows: []object of primitives
 	kFieldPath  // "id" or "repeater[i].field", resolved after the walk
+	kNonBlank   // a string the user must be able to read: never empty or whitespace
 )
 
 type prop struct {
@@ -267,12 +268,12 @@ var actionProps = map[string]prop{
 	"style":       enum("primary", "secondary", "danger"),
 	"message":     p(kString),
 	"validate":    p(kBool),
-	"confirm":     p(kString),
+	"confirm":     p(kNonBlank),
 	"visible_if":  p(kExpr),
 	"disabled_if": p(kExpr),
 }
 
-var fieldErrorProps = map[string]prop{"field": req(kFieldPath), "message": req(kString)}
+var fieldErrorProps = map[string]prop{"field": req(kFieldPath), "message": req(kNonBlank)}
 
 // ComponentTypes lists the catalog, sorted.
 func ComponentTypes() []string {
@@ -525,7 +526,7 @@ func (v *validator) checkProp(path string, pr prop, val any, repeater string) {
 		if !containsStr(pr.enum, s) {
 			v.addf(path, "must be one of: %s", strings.Join(pr.enum, ", "))
 		}
-	case kString, kURL, kDate, kFieldPath, kTemplate, kExpr:
+	case kString, kURL, kDate, kFieldPath, kTemplate, kExpr, kNonBlank:
 		v.checkTextProp(path, pr, val, repeater)
 	case kOptions, kStringList, kNumberList, kObjects, kRows:
 		v.checkListProp(path, pr, val, repeater)
@@ -555,6 +556,13 @@ func (v *validator) checkTextProp(path string, pr prop, val any, repeater string
 				v.addf(path, "must be a YYYY-MM-DD date")
 			}
 		}
+	case kNonBlank:
+		s, ok := val.(string)
+		if !ok || strings.TrimSpace(s) == "" {
+			v.addf(path, "must be a non-blank string")
+			return
+		}
+		v.checkString(path, s)
 	case kFieldPath:
 		s, ok := val.(string)
 		if !ok {
@@ -798,6 +806,15 @@ func (v *validator) componentRules(path, typ string, obj map[string]any) {
 		custom, _ := obj["allow_custom"].(bool)
 		if !hasOpts && !custom {
 			v.addf(path, "needs options, or allow_custom: true for free entry")
+		}
+		if req, _ := obj["required"].(bool); req {
+			if hi, ok := num("max_items"); ok && hi == 0 {
+				v.addf(path+".max_items", "a required field must allow at least one item")
+			}
+		}
+	case "progress":
+		if hi, ok := num("max"); ok && hi <= 0 {
+			v.addf(path+".max", "must be greater than 0")
 		}
 	case "list_input":
 		// A paste can be enormous; the card-level max_items may narrow the

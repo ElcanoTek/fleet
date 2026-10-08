@@ -1779,6 +1779,95 @@
      }
     ]
    }
+  },
+  {
+   "name": "blank confirm",
+   "valid": false,
+   "error_contains": "confirm: must be a non-blank string",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text",
+      "text": "x"
+     }
+    ],
+    "actions": [
+     {
+      "id": "d",
+      "label": "Delete",
+      "kind": "message",
+      "message": "del",
+      "confirm": " "
+     }
+    ]
+   }
+  },
+  {
+   "name": "blank field error message",
+   "valid": false,
+   "error_contains": "message: must be a non-blank string",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "n"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ],
+    "field_errors": [
+     {
+      "field": "n",
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "progress max of zero",
+   "valid": false,
+   "error_contains": "max: must be greater than 0",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "progress",
+      "value": "5",
+      "max": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "required multi_select capped at zero",
+   "valid": false,
+   "error_contains": "at least one item",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "multi_select",
+      "id": "m",
+      "options": [
+       "a"
+      ],
+      "required": true,
+      "max_items": 0
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
   }
  ]
 }

@@ -544,6 +544,33 @@ describe("fourth Codex pass", () => {
   });
 });
 
+describe("fifth Codex pass", () => {
+  it("does not re-hold a card whose message echoed before the send resolved", async () => {
+    const user = userEvent.setup();
+    let resolve: (v: boolean) => void = () => {};
+    const onSubmit = vi.fn(() => new Promise<boolean>((r) => (resolve = r)));
+    const s = spec({ ...form, actions: [{ id: "order", label: "Place order" }] });
+    const view = render(<GenerativeCard cardId="echo" spec={s} onSubmit={onSubmit} />);
+    await user.type(screen.getByLabelText(/Name/), "Ada");
+    await user.click(screen.getByRole("button", { name: "Place order" }));
+    // The direct turn echoes the user message while it is still streaming…
+    view.rerender(
+      <GenerativeCard cardId="echo" spec={s} submission={{ cardId: "echo", actionId: "order", values: { name: "Ada" }, messageId: 3 }} onSubmit={onSubmit} />,
+    );
+    // …and only then does submitPrompt resolve.
+    await act(async () => resolve(true));
+    expect(screen.queryByTestId("genui-awaiting")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Edit and resend" }));
+    expect(screen.getByRole("button", { name: "Place order" })).toBeTruthy();
+  });
+
+  it("names an unlabeled input after its id", () => {
+    const s = spec({ title: "U", components: [{ type: "text_input", id: "budget_note" }], actions: [{ id: "go", label: "Go" }] });
+    render(<GenerativeCard cardId="u" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByLabelText("budget_note")).toBeTruthy();
+  });
+});
+
 describe("tables and disabled repeaters", () => {
   it("binds a selectable table inside a repeater to its own item", async () => {
     const user = userEvent.setup();

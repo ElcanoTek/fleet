@@ -27,6 +27,7 @@ import remarkGfm from "remark-gfm";
 import { evaluateSafe, renderTemplate, toText, truthy, type Scope } from "./expr";
 import {
   buildReplyMessage,
+  parseListText,
   buildSubmissionMessage,
   children,
   collect,
@@ -232,6 +233,10 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, onSub
       ? `r\u0000${reply.messageId ?? ""}\u0000${reply.actionId}`
       : "";
   const [seenSubmission, setSeenSubmission] = useState(submissionKey);
+  const submissionKeyRef = useRef(submissionKey);
+  useEffect(() => {
+    submissionKeyRef.current = submissionKey;
+  }, [submissionKey]);
   if (seenSubmission !== submissionKey) {
     setSeenSubmission(submissionKey);
     if (submission || reply) {
@@ -332,6 +337,10 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, onSub
 
   const send = async (action: Action) => {
     if (!onSubmit) return;
+    // A direct send resolves only after the whole turn streams, by which
+    // time its message has usually echoed (and cleared any hold). Hold only
+    // if the transcript has not moved on since the click.
+    const keyAtClick = submissionKeyRef.current;
     setConfirming(null);
     setNotice(null);
     setSending(action.id);
@@ -342,7 +351,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, onSub
           : await onSubmit(buildSubmissionMessage(cardId, action.id, submitValues));
       if (accepted === false) {
         setNotice("Not sent. Try again.");
-      } else {
+      } else if (submissionKeyRef.current === keyAtClick) {
         // Hold the actions until the message reaches the transcript (a
         // queued message is accepted long before it is echoed), so a second
         // click cannot queue a duplicate — quick replies included.
@@ -385,7 +394,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, onSub
 
   const onAction = (action: Action) => {
     if (!passesGates(action)) return;
-    if (action.confirm) {
+    if (typeof action.confirm === "string" && action.confirm.trim()) {
       setConfirming(action);
       return;
     }
@@ -1197,6 +1206,13 @@ function InputField({ c, Render }: { c: Component; Render: Renderer }) {
   const label = str(c.label);
   return (
     <div className="grid min-w-0 content-start gap-1" data-genui-field={path} data-invalid={err ? "true" : undefined}>
+      {!label && c.type !== "toggle" ? (
+        // No visible label: the field id still names the control for
+        // assistive technology (the validator allows label-less inputs).
+        <label id={`${inputId}-label`} htmlFor={inputId} className="sr-only">
+          {id}
+        </label>
+      ) : null}
       {label && c.type !== "toggle" ? (
         <label id={`${inputId}-label`} htmlFor={inputId} className="text-[0.78rem] font-medium text-[var(--color-text-secondary)]">
           {label}
@@ -1536,13 +1552,7 @@ function DateInput({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   );
 }
 
-export function parseListText(text: string, dedupe: boolean): string[] {
-  const lines = text
-    .split(/[\r\n]+/)
-    .map((l) => l.trim())
-    .filter((l) => l !== "");
-  return dedupe ? Array.from(new Set(lines)) : lines;
-}
+export { parseListText };
 
 function ListInput({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const v = Array.isArray(value) ? (value as string[]) : [];

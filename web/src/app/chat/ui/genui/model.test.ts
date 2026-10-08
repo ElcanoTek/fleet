@@ -153,3 +153,10 @@ describe("isCalendarDate", () => {
     expect(isCalendarDate("26-1-1")).toBe(false);
   });
 });
+
+describe("list_input defaults", () => {
+  it("are trimmed, blank-free and deduped like typed text", () => {
+    const s: CardSpec = { title: "L", components: [{ type: "list_input", id: "d" }, { type: "list_input", id: "k", dedupe: false }] };
+    expect(normalizeValues(s, { d: [" a.com", "a.com", "", "b.com "], k: ["x", "x"] })).toEqual({ d: ["a.com", "b.com"], k: ["x", "x"] });
+  });
+});

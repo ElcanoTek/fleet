@@ -4216,10 +4216,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         void followQueueDrain(finalTarget);
       }
     }
-    // Reaching the end means the turn was posted (its own failure, if any,
-    // is reported on the turn). The boolean lets callers that are not the
-    // composer — a generative-UI card — tell "accepted" from "refused".
-    return true;
+    // True only when the server accepted the POST (streamTurn flips
+    // `accepted` on the response headers). A request refused before that — a
+    // 429, a 5xx, a network failure — reports false, so callers that are not
+    // the composer (a generative-UI card) never treat it as sent. A turn that
+    // was accepted and then failed still counts as sent: its failure is shown
+    // on the turn, with Retry.
+    return accepted.value;
   };
 
   return {

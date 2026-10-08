@@ -140,6 +140,16 @@ export function walkInputs(list: Component[], visit: (c: Component) => void): vo
 const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
 /** The empty / default value an input starts with. */
+/** A pasted list: one item per line, trimmed, blanks dropped, deduped by default. */
+export function parseListText(text: string, dedupe: boolean): string[] {
+  return normalizeList(text.split(/[\r\n]+/), dedupe);
+}
+
+export function normalizeList(items: string[], dedupe: boolean): string[] {
+  const lines = items.map((l) => l.trim()).filter((l) => l !== "");
+  return dedupe ? Array.from(new Set(lines)) : lines;
+}
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** A real calendar date in YYYY-MM-DD (rejects 2026-02-31), like Go's time.Parse. */
@@ -181,7 +191,8 @@ export function defaultValue(c: Component): unknown {
       return Array.from(new Set(strArr(v))).filter((x) => custom || opts.has(x));
     }
     case "list_input":
-      return strArr(v);
+      // Same trim / drop-blank / dedupe the textarea applies to typed text.
+      return normalizeList(strArr(v), c.dedupe !== false);
     case "include_exclude": {
       const o = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
       const opts = optionSet();

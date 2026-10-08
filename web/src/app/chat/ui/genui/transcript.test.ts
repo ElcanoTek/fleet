@@ -78,3 +78,15 @@ describe("quick replies", () => {
     expect(s.replies.has("c2")).toBe(false);
   });
 });
+
+describe("refused card messages", () => {
+  it("do not lock the card when their turn failed before doing anything", () => {
+    const failed = { id: 3, role: "assistant", content: "Turn failed", state: "done", failed: true } as unknown as Message;
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "c1", input: card("One"), resultText: "UI_DISPLAYED card_id=c1" }]),
+      user(2, buildSubmissionMessage("c1", "go", { a: 1 })),
+      failed,
+    ]);
+    expect(s.submissions.has("c1")).toBe(false);
+  });
+});

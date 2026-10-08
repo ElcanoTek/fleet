@@ -55,8 +55,16 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
   const submissions = new Map<string, Submission>();
   const superseded = new Set<string>();
   const replies = new Map<string, Reply>();
-  for (const m of messages) {
+  for (let idx = 0; idx < messages.length; idx++) {
+    const m = messages[idx];
     if (m.role === "user") {
+      // A card message whose turn failed before doing anything (a refused
+      // POST leaves its optimistic bubble behind, followed by a failed
+      // assistant slot) must not lock the card: nothing was answered.
+      const next = messages[idx + 1];
+      if (next && next.role === "assistant" && (next.failed || next.modelRequired) && !(next.toolCalls ?? []).length) {
+        continue;
+      }
       const sub = parseSubmissionMessage(m.content);
       if (sub) {
         submissions.set(sub.cardId, { ...sub, messageId: m.id });
