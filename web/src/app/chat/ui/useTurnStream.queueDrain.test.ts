@@ -860,3 +860,21 @@ describe("a lost queued response when the server cannot be asked", () => {
     expect(setPromptForKey).toHaveBeenLastCalledWith(CONV, "[UI submission] card=c1 action=go\n{}");
   });
 });
+
+describe("a direct card send whose response is lost while the server is unreachable", () => {
+  it("is held as possibly sent while recovery owns the outcome", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/chat") throw new TypeError("network error");
+        return new Response("upstream down", { status: 503 });
+      }),
+    );
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const sending = result.current.submitPrompt("[UI submission] card=c1 action=go\n{}", { fromCard: true });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await sending).toBe(true);
+  });
+});

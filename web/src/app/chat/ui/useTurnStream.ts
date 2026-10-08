@@ -4037,6 +4037,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // The response was lost and the server could not be asked whether it
     // holds the submission: a card holds rather than offering a resend.
     let uncertain = false;
+    // The server answered that it holds no copy of this submission.
+    let absent = false;
 
     try {
       await streamTurn(
@@ -4141,6 +4143,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // path's queued ack: undo the notSent mark so a generative-UI card
           // holds instead of offering a resend that would queue a duplicate.
           if (landed === "unknown" && !accepted.value) uncertain = true;
+          if (landed === "no") absent = true;
           if (!accepted.value && landed === "yes") {
             accepted.value = true;
             setConvMessages(target, (current) =>
@@ -4323,6 +4326,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // the composer (a generative-UI card) never treat it as sent. A turn that
     // was accepted and then failed still counts as sent: its failure is shown
     // on the turn, with Retry.
+    //
+    // A card send whose outcome recovery still owns (the response was lost
+    // and the server could not yet be asked, or is still being asked) is
+    // uncertain too, unless the server definitively said it holds nothing:
+    // the card holds instead of inviting a retry that could duplicate it.
+    if (!accepted.value && !absent && recoveryOwns(resolveTarget())) uncertain = true;
     return accepted.value || (uncertain && fromCard);
   };
 

@@ -375,7 +375,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
   const [seenSubmission, setSeenSubmission] = useState(submissionKey);
   // The message id of the answer last seen, to tell a rollback (a withdrawn
   // resend uncovers an OLDER message) from a new answer with the same values.
-  const [seenMessageId, setSeenMessageId] = useState<number | null>(submission?.messageId ?? null);
+  const [seenMessageId, setSeenMessageId] = useState<number | null>(submission?.messageId ?? reply?.messageId ?? null);
   const submissionKeyRef = useRef(submissionKey);
   useEffect(() => {
     submissionKeyRef.current = submissionKey;
@@ -414,7 +414,9 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     // replaced by the older values.
     const rolledBack =
       !!submission && submission.messageId !== undefined && seenMessageId !== null && submission.messageId < seenMessageId;
-    setSeenMessageId(submission?.messageId ?? null);
+    // Either kind of answer counts: a refused quick reply withdrawn over an
+    // older submission is a rollback too.
+    setSeenMessageId(submission?.messageId ?? reply?.messageId ?? null);
     const edit = rolledBack && !readOnly ? peekDraft(storeId) : null;
     if (edit && edit.after === answerKey) {
       setValuesState(normalizeValues(spec, edit.values));
@@ -1157,8 +1159,18 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         </table>
       </div>
       {mode !== "none" ? (
-        <div className="text-[0.72rem] text-[var(--color-text-muted)]">
-          {mode === "multi" ? `${Array.isArray(selected) ? selected.length : 0} of ${rows.length} selected` : selected ? `Selected: ${String(selected)}` : "Select a row"}
+        <div className="flex flex-wrap items-center gap-2 text-[0.72rem] text-[var(--color-text-muted)]">
+          <span>
+            {mode === "multi" ? `${Array.isArray(selected) ? selected.length : 0} of ${rows.length} selected` : selected ? `Selected: ${String(selected)}` : "Select a row"}
+          </span>
+          {/* A checked native radio cannot be unchecked from the keyboard, and
+              the row itself is not focusable: an optional single choice
+              needs an explicit way back to "none". */}
+          {mode === "single" && selected && c.required !== true && !locked && c.disabled !== true && item?.disabled !== true ? (
+            <button type="button" className="underline hover:text-[var(--color-text-primary)]" onClick={() => onChange?.("")}>
+              Clear selection
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>

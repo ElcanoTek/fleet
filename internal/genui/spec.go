@@ -381,7 +381,15 @@ func Validate(raw []byte) (Card, []Issue) {
 		v.component(fmt.Sprintf("components[%d]", i), comp, 1, "")
 	}
 
-	v.reach = reachableInputs(comps)
+	var gates map[string]gated
+	v.reach, gates = reachableInputs(comps)
+	if cyc := visibilityCycles(gates); len(cyc) > 0 {
+		for _, id := range cyc {
+			if f, ok := v.fields[id]; ok {
+				v.addf(f.path+".visible_if", "is part of a visibility cycle (%s show each other); gate them on an input outside the cycle", strings.Join(cyc, ", "))
+			}
+		}
+	}
 	for _, c := range v.conds {
 		if v.unreachable(c.refs) {
 			v.addf(c.path, "%s", unreachableMsg)
@@ -834,15 +842,7 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 func (v *validator) componentRules(path, typ string, obj map[string]any) {
 	v.constantConditions(path, obj)
 	num := func(k string) (float64, bool) { f, ok := obj[k].(float64); return f, ok }
-	// A required input must have room for an answer: a zero cap on a
-	// required field can never be satisfied.
-	if req, _ := obj["required"].(bool); req {
-		for _, k := range []string{"max_items", "max_length"} {
-			if hi, ok := num(k); ok && hi == 0 {
-				v.addf(path+"."+k, "a required field cannot have %s 0", k)
-			}
-		}
-	}
+	v.requiredRules(path, typ, obj)
 	switch typ {
 	case "section":
 		// A collapsed section's header is its only way open; it needs a name.
@@ -1365,6 +1365,47 @@ func (v *validator) actions(raw any, hasInput bool) {
 	}
 }
 
+// requiredRules: a required input must be answerable. A zero cap can never be
+// satisfied, and a disabled field is never validated in the browser but is
+// still submitted, so required + disabled needs an answer already in place.
+func (v *validator) requiredRules(path, typ string, obj map[string]any) {
+	if req, _ := obj["required"].(bool); !req {
+		return
+	}
+	for _, k := range []string{"max_items", "max_length"} {
+		if hi, ok := obj[k].(float64); ok && hi == 0 {
+			v.addf(path+"."+k, "a required field cannot have %s 0", k)
+		}
+	}
+	if dis, _ := obj["disabled"].(bool); dis && !answered(typ, obj["value"]) {
+		v.addf(path+".required", "a disabled required field needs a value that answers it (the user cannot fill it in); give it one, or drop required or disabled")
+	}
+}
+
+// answered reports whether a default satisfies `required` for its input type
+// (mirroring checkField's emptiness test; a toggle must be on).
+func answered(typ string, val any) bool {
+	switch x := val.(type) {
+	case nil:
+		return false
+	case bool:
+		return typ != "toggle" || x
+	case string:
+		return strings.TrimSpace(x) != ""
+	case []any:
+		return len(x) > 0
+	case map[string]any:
+		if typ == "include_exclude" {
+			inc, _ := x["include"].([]any)
+			exc, _ := x["exclude"].([]any)
+			return len(inc)+len(exc) > 0
+		}
+		return true
+	default:
+		return true
+	}
+}
+
 // numberValue refuses a number / slider default outside its own [min, max] or
 // off the step grid from min. A slider's native range control would coerce it
 // (the thumb shows one number, the card submits another); a disabled number
@@ -1421,6 +1462,9 @@ func (v *validator) unreachable(refs []string) bool {
 // and whether it, or an enclosing repeater, is disabled.
 type gated struct {
 	gates [][]string
+	// shows: input ids read by visible_if conditions on the path (own and
+	// enclosing) — the edges visibilityCycles follows.
+	shows []string
 	fixed bool
 }
 
@@ -1430,20 +1474,24 @@ type gated struct {
 // input, a gate on the input itself, and a cycle of gates (a shown by b, b by
 // a) all come out unreachable. Conditions that read no input are refused
 // elsewhere and do not gate here.
-func reachableInputs(comps []any) map[string]bool {
+func reachableInputs(comps []any) (map[string]bool, map[string]gated) {
 	info := map[string]gated{}
-	var walk func(list []any, gates [][]string, fixed bool)
-	walk = func(list []any, gates [][]string, fixed bool) {
+	var walk func(list []any, gates [][]string, shows []string, fixed bool)
+	walk = func(list []any, gates [][]string, shows []string, fixed bool) {
 		for _, k := range list {
 			m, ok := k.(map[string]any)
 			if !ok {
 				continue
 			}
 			own := gates
+			ownShows := shows
 			for _, cond := range []string{"visible_if", "disabled_if"} {
 				if src, ok := m[cond].(string); ok {
 					if refs, err := ParseExpr(src); err == nil && len(refs) > 0 {
 						own = append(append([][]string{}, own...), refs)
+						if cond == "visible_if" {
+							ownShows = append(append([]string{}, ownShows...), refs...)
+						}
 					}
 				}
 			}
@@ -1454,27 +1502,27 @@ func reachableInputs(comps []any) map[string]bool {
 			typ, _ := m["type"].(string)
 			if spec, ok := components[typ]; ok && (spec.input || typ == "table") {
 				if id, ok := m["id"].(string); ok {
-					info[id] = gated{gates: own, fixed: f}
+					info[id] = gated{gates: own, shows: ownShows, fixed: f}
 				}
 			}
 			if c, ok := m["children"].([]any); ok {
-				walk(c, own, f)
+				walk(c, own, ownShows, f)
 			}
 			if c, ok := m["fields"].([]any); ok {
-				walk(c, own, f)
+				walk(c, own, ownShows, f)
 			}
 			if tabs, ok := m["tabs"].([]any); ok {
 				for _, t := range tabs {
 					if tm, ok := t.(map[string]any); ok {
 						if c, ok := tm["children"].([]any); ok {
-							walk(c, own, f)
+							walk(c, own, ownShows, f)
 						}
 					}
 				}
 			}
 		}
 	}
-	walk(comps, nil, false)
+	walk(comps, nil, nil, false)
 	reach := map[string]bool{}
 	for changed := true; changed; {
 		changed = false
@@ -1495,7 +1543,62 @@ func reachableInputs(comps []any) map[string]bool {
 			}
 		}
 	}
-	return reach
+	return reach, info
+}
+
+// visibilityCycles returns, sorted, the inputs whose visibility depends on
+// itself through other inputs (a shown by b, b shown by a — also when each
+// condition also reads an editable gate: "gate && b" / "gate && a" with both
+// false never opens). Whether such a cycle can open depends on the values and
+// the logic, so it is refused: gate visibility on inputs outside the cycle.
+func visibilityCycles(info map[string]gated) []string {
+	const (
+		white = iota
+		grey
+		black
+	)
+	color := map[string]int{}
+	onCycle := map[string]bool{}
+	var stack []string
+	var visit func(id string)
+	visit = func(id string) {
+		color[id] = grey
+		stack = append(stack, id)
+		for _, dep := range info[id].shows {
+			if _, isInput := info[dep]; !isInput || dep == id {
+				continue // self-reference is reported on its own
+			}
+			switch color[dep] {
+			case white:
+				visit(dep)
+			case grey:
+				for i := len(stack) - 1; i >= 0; i-- {
+					onCycle[stack[i]] = true
+					if stack[i] == dep {
+						break
+					}
+				}
+			}
+		}
+		stack = stack[:len(stack)-1]
+		color[id] = black
+	}
+	ids := make([]string, 0, len(info))
+	for id := range info {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if color[id] == white {
+			visit(id)
+		}
+	}
+	out := make([]string, 0, len(onCycle))
+	for id := range onCycle {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // opens: a gate can change if it reads a reachable input, or anything that is

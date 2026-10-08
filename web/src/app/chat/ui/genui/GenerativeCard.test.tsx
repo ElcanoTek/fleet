@@ -1233,3 +1233,43 @@ describe("fifteenth Codex pass", () => {
     expect(screen.getByRole("radio", { name: "acct_1" })).toBeTruthy();
   });
 });
+
+describe("sixteenth Codex pass", () => {
+  it("lets the keyboard clear an optional single-select table", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "T",
+      components: [{ type: "table", id: "pick", label: "Pick", select: "single", row_key: "id", columns: [{ key: "id" }], rows: [{ id: "r1" }], value: "r1" }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    const onSubmit = vi.fn().mockResolvedValue(true);
+    render(<GenerativeCard cardId="tclear" spec={s} onSubmit={onSubmit} />);
+    screen.getByRole("button", { name: "Clear selection" }).focus();
+    await user.keyboard("{Enter}");
+    expect(screen.queryByRole("button", { name: "Clear selection" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(parseSubmissionMessage(onSubmit.mock.calls[0][0])?.values).toMatchObject({ pick: "" });
+  });
+
+  it("restores the edit when a refused quick reply is withdrawn", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({
+      title: "Q",
+      components: [{ type: "text_input", id: "n", label: "Name" }],
+      actions: [
+        { id: "go", label: "Go" },
+        { id: "no", label: "Never mind", kind: "message", message: "cancel" },
+      ],
+    });
+    const first = { cardId: "qr", actionId: "go", values: { n: "Ada" }, messageId: 2 };
+    const view = render(<GenerativeCard cardId="qr" spec={s} submission={first} onSubmit={vi.fn().mockResolvedValue(false)} />);
+    await user.click(screen.getByRole("button", { name: "Edit and resend" }));
+    await user.clear(screen.getByLabelText(/Name/));
+    await user.type(screen.getByLabelText(/Name/), "Grace");
+    view.rerender(<GenerativeCard cardId="qr" spec={s} reply={{ cardId: "qr", actionId: "no", text: "cancel", messageId: 5 }} onSubmit={() => {}} />);
+    view.rerender(<GenerativeCard cardId="qr" spec={s} submission={first} onSubmit={() => {}} />);
+    expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("Grace");
+    expect(screen.getByLabelText(/Name/)).not.toBeDisabled();
+  });
+});

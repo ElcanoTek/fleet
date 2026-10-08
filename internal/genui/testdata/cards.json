@@ -2568,6 +2568,86 @@
      }
     ]
    }
+  },
+  {
+   "name": "visibility cycle behind an editable gate",
+   "valid": false,
+   "error_contains": "visibility cycle",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "gate",
+      "label": "Gate"
+     },
+     {
+      "type": "toggle",
+      "id": "a",
+      "label": "A",
+      "required": true,
+      "visible_if": "gate && b"
+     },
+     {
+      "type": "toggle",
+      "id": "b",
+      "label": "B",
+      "visible_if": "gate && a"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "disabled required toggle that is off",
+   "valid": false,
+   "error_contains": "disabled required field needs a value",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "t",
+      "label": "T",
+      "required": true,
+      "disabled": true
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "disabled required text with a value",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "n",
+      "label": "N",
+      "required": true,
+      "disabled": true,
+      "value": "Acme"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
   }
  ]
 }
