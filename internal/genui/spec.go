@@ -790,10 +790,34 @@ func (v *validator) repeaterRules(path string, obj map[string]any, num func(stri
 		v.addf(path, "min_items must not exceed max_items")
 	}
 	if kids, ok := obj["fields"].([]any); ok {
-		for i, k := range kids {
-			if m, ok := k.(map[string]any); ok {
-				if t, _ := m["type"].(string); t == "repeater" {
-					v.addf(fmt.Sprintf("%s.fields[%d]", path, i), "repeaters cannot nest; flatten the inner list or use a second card")
+		v.noNestedRepeater(path+".fields", kids)
+	}
+}
+
+// noNestedRepeater refuses a repeater anywhere under another repeater's
+// fields — through section / columns / tabs wrappers too. Card state and
+// error paths are one repeater level deep ("rep[i].field"), so an inner
+// repeater would write to the wrong place.
+func (v *validator) noNestedRepeater(path string, kids []any) {
+	for i, k := range kids {
+		m, ok := k.(map[string]any)
+		if !ok {
+			continue
+		}
+		kp := fmt.Sprintf("%s[%d]", path, i)
+		if t, _ := m["type"].(string); t == "repeater" {
+			v.addf(kp, "repeaters cannot nest (not even inside a section, columns or tabs); flatten the inner list or use a second card")
+			continue
+		}
+		if c, ok := m["children"].([]any); ok {
+			v.noNestedRepeater(kp+".children", c)
+		}
+		if tabs, ok := m["tabs"].([]any); ok {
+			for j, t := range tabs {
+				if tm, ok := t.(map[string]any); ok {
+					if c, ok := tm["children"].([]any); ok {
+						v.noNestedRepeater(fmt.Sprintf("%s.tabs[%d].children", kp, j), c)
+					}
 				}
 			}
 		}
@@ -821,9 +845,54 @@ func (v *validator) tableRules(path string, obj map[string]any) {
 		rk, _ := obj["row_key"].(string)
 		if !keys[rk] {
 			v.addf(path+".row_key", "required when selectable: the column key whose value identifies a row")
+		} else {
+			v.selectableRowKeys(path, rk, obj)
 		}
 	} else if _, ok := obj["id"]; ok {
 		v.addf(path+".id", "only a selectable table (select: single|multi) takes an id")
+	}
+}
+
+// selectableRowKeys requires every row of a selectable table to carry a
+// unique, non-empty STRING under row_key (the submitted identifier must be the
+// row's own value, not display text derived from a number or null), and a
+// default selection to name existing rows.
+func (v *validator) selectableRowKeys(path, rk string, obj map[string]any) {
+	rows, _ := obj["rows"].([]any)
+	seen := map[string]bool{}
+	for i, r := range rows {
+		m, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		key, ok := m[rk].(string)
+		rp := fmt.Sprintf("%s.rows[%d].%s", path, i, rk)
+		switch {
+		case !ok || strings.TrimSpace(key) == "":
+			v.addf(rp, "every row of a selectable table needs a non-empty string %q (the value submitted for that row)", rk)
+		case seen[key]:
+			v.addf(rp, "duplicate row_key value %q; each row needs its own", key)
+		default:
+			seen[key] = true
+		}
+	}
+	var picked []string
+	switch val := obj["value"].(type) {
+	case string:
+		if val != "" {
+			picked = []string{val}
+		}
+	case []any:
+		for _, e := range val {
+			if s, ok := e.(string); ok {
+				picked = append(picked, s)
+			}
+		}
+	}
+	for _, k := range picked {
+		if !seen[k] {
+			v.addf(path+".value", "%q is not the row_key of any row", k)
+		}
 	}
 }
 

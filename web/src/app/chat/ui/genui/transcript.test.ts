@@ -41,6 +41,8 @@ describe("deriveGenUiState", () => {
     expect(isRenderableCardCall(refused)).toBe(false);
     expect(isRenderableCardCall({ ...refused, state: "error" })).toBe(false);
     expect(isRenderableCardCall({ ...refused, resultText: undefined, state: "pending" })).toBe(false);
+    // A call with no stored result (cancelled turn) never passed validation.
+    expect(isRenderableCardCall({ ...refused, resultText: undefined, state: "done" })).toBe(false);
     expect(isRenderableCardCall({ ...refused, resultText: "UI_DISPLAYED card_id=x" })).toBe(true);
     expect(isRenderableCardCall({ ...refused, name: "bash", resultText: "UI_DISPLAYED" })).toBe(false);
   });

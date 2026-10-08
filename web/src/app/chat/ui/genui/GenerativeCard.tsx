@@ -48,7 +48,8 @@ import {
 
 // ───────────────────────── context ─────────────────────────
 
-type ItemCtx = { repeater: string; index: number; item: Values };
+// disabled: the enclosing repeater is disabled, so its fields are too.
+type ItemCtx = { repeater: string; index: number; item: Values; disabled?: boolean };
 
 type CardCtx = {
   cardId: string;
@@ -174,7 +175,6 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
   );
   const [editing, setEditing] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
-  const [sentAction, setSentAction] = useState<string | null>(null);
   const [showErrors, setShowErrors] = useState(false);
   const [confirming, setConfirming] = useState<Action | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -182,7 +182,24 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
   const [clearedServerErrors, setClearedServerErrors] = useState<Set<string>>(() => new Set());
   const rootRef = useRef<HTMLDivElement | null>(null);
 
-  const submittedAction = submission?.actionId ?? sentAction;
+  // The card locks on the TRANSCRIPT's submission, never optimistically: a
+  // send that was refused (a rejected queue request, an upload failure) must
+  // leave the card editable and its draft intact. When a new submission
+  // lands (first send, or an edit resent), adopt its values and drop the
+  // draft.
+  const submittedAction = submission?.actionId ?? null;
+  const submissionKey = submission ? `${submission.actionId}\u0000${JSON.stringify(submission.values)}` : "";
+  const [seenSubmission, setSeenSubmission] = useState(submissionKey);
+  if (seenSubmission !== submissionKey) {
+    setSeenSubmission(submissionKey);
+    if (submission) {
+      setEditing(false);
+      setValuesState(overlay(defaults, submission.values));
+    }
+  }
+  useEffect(() => {
+    if (submissionKey && !readOnly) saveDraft(cardId, null);
+  }, [cardId, submissionKey, readOnly]);
   const locked = !!readOnly || !!superseded || (submittedAction !== null && !editing);
 
   const setValues = useCallback(
@@ -255,10 +272,7 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
         await onSubmit(str(action.message));
       } else {
         await onSubmit(buildSubmissionMessage(cardId, action.id, submitValues));
-        saveDraft(cardId, null);
       }
-      setSentAction(action.id);
-      setEditing(false);
     } catch {
       setNotice("Could not send. Try again.");
     } finally {
@@ -365,7 +379,14 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
                   );
                 })}
                 {editing ? (
-                  <button type="button" className="text-[0.75rem] text-[var(--color-text-muted)] underline" onClick={() => setEditing(false)}>
+                  <button type="button" className="text-[0.75rem] text-[var(--color-text-muted)] underline" onClick={() => {
+                      // Back to exactly what was sent: unsent edits must not
+                      // sit under the "Sent" label.
+                      setEditing(false);
+                      setShowErrors(false);
+                      setValuesState(overlay(defaults, submission?.values));
+                      saveDraft(cardId, null);
+                    }}>
                     Cancel edit
                   </button>
                 ) : null}
@@ -400,7 +421,7 @@ function Node({ c }: { c: Component }) {
   if (!isVisible(c, scope)) return null;
   const R = RENDERERS[c.type];
   if (!R) return null; // unknown component: the server refuses these; draw nothing
-  if (isInput(c) && c.type !== "table") return <InputField c={c} Render={R} />;
+  if (isInput(c)) return <InputField c={c} Render={R} />;
   return <R c={c} />;
 }
 
@@ -669,31 +690,33 @@ function cellText(v: unknown): string {
   return String(v);
 }
 
-function Table({ c }: { c: Component }) {
-  const { values, setField, locked, errors } = useCard();
+function Table({ c, value, onChange }: Parameters<Renderer>[0]) {
+  // A selectable table is an input: InputField wraps it and binds value /
+  // onChange (to the card, or to the current repeater item) and draws its
+  // label and errors. A display-only table renders bare.
+  const { locked } = useCard();
+  const wrapped = onChange !== undefined;
   const cols = objs(c.columns).map((col) => ({
     key: str(col.key),
     label: str(col.label) || str(col.key),
     align: col.align === "right" || col.align === "center" ? (col.align as string) : "left",
   }));
   const rows = objs(c.rows);
-  const id = str(c.id);
   const mode = c.select === "single" || c.select === "multi" ? (c.select as string) : "none";
   const rowKey = str(c.row_key);
-  const selected = id ? values[id] : undefined;
+  const selected = wrapped ? value : undefined;
   const isSel = (k: string) => (mode === "multi" ? Array.isArray(selected) && selected.includes(k) : selected === k);
   const toggle = (k: string) => {
-    if (!id || locked) return;
-    if (mode === "single") setField(id, selected === k ? "" : k);
+    if (!wrapped || locked || c.disabled === true) return;
+    if (mode === "single") onChange?.(selected === k ? "" : k);
     else {
       const cur = Array.isArray(selected) ? (selected as string[]) : [];
-      setField(id, cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]);
+      onChange?.(cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]);
     }
   };
-  const err = id ? errors[id] : undefined;
   return (
-    <div className="grid min-w-0 gap-1" data-genui-field={id || undefined}>
-      {c.label ? <div className="text-[0.78rem] font-medium">{str(c.label)}</div> : null}
+    <div className="grid min-w-0 gap-1">
+      {!wrapped && c.label ? <div className="text-[0.78rem] font-medium">{str(c.label)}</div> : null}
       <div className="max-h-[22rem] min-w-0 overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)]">
         <table className="w-full border-collapse text-[0.78rem]">
           <thead className="sticky top-0 bg-[var(--color-bg)]">
@@ -712,7 +735,9 @@ function Table({ c }: { c: Component }) {
           </thead>
           <tbody>
             {rows.map((r, i) => {
-              const k = rowKey ? cellText(r[rowKey]) : String(i);
+              // The validator requires a unique string row_key per row on a
+              // selectable table; submit that exact value, never display text.
+              const k = rowKey && typeof r[rowKey] === "string" ? (r[rowKey] as string) : String(i);
               const on = mode !== "none" && isSel(k);
               return (
                 <tr
@@ -752,7 +777,6 @@ function Table({ c }: { c: Component }) {
           {mode === "multi" ? `${Array.isArray(selected) ? selected.length : 0} of ${rows.length} selected` : selected ? `Selected: ${String(selected)}` : "Select a row"}
         </div>
       ) : null}
-      {err ? <FieldError text={err} /> : null}
     </div>
   );
 }
@@ -1027,7 +1051,7 @@ function InputField({ c, Render }: { c: Component; Render: Renderer }) {
         // A repeater's own fields lock themselves; its expand buttons must not.
         <Render c={c} value={value} onChange={onChange} inputId={inputId} />
       ) : (
-        <fieldset disabled={locked || c.disabled === true} className="m-0 min-w-0 border-0 p-0">
+        <fieldset disabled={locked || c.disabled === true || item?.disabled === true} className="m-0 min-w-0 border-0 p-0">
           <Render c={c} value={value} onChange={onChange} inputId={inputId} />
         </fieldset>
       )}
@@ -1468,7 +1492,11 @@ function IncludeExcludeInput({ c, value, onChange, inputId }: Parameters<Rendere
 }
 
 function Repeater({ c, value, onChange }: Parameters<Renderer>[0]) {
-  const { values, locked } = useCard();
+  const { values, locked: cardLocked } = useCard();
+  // A disabled repeater (or one nested in a disabled scope) keeps its expand
+  // toggles usable but offers no add / duplicate / remove, and its fields
+  // disable through ItemContext.
+  const locked = cardLocked || c.disabled === true;
   const fields = children(c, "fields");
   const items = Array.isArray(value) ? (value as Values[]) : [];
   const id = str(c.id);
@@ -1530,7 +1558,7 @@ function Repeater({ c, value, onChange }: Parameters<Renderer>[0]) {
             </div>
             {open ? (
               <div className="grid min-w-0 gap-3 border-t border-[var(--color-border)] p-2.5">
-                <ItemContext.Provider value={{ repeater: id, index: i, item }}>
+                <ItemContext.Provider value={{ repeater: id, index: i, item, disabled: c.disabled === true }}>
                   <Nodes list={fields} />
                 </ItemContext.Provider>
               </div>

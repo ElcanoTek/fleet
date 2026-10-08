@@ -69,7 +69,8 @@ reply, which serves as quick-reply buttons), `field_errors` (inline errors on
 `id` or `repeater[i].field`), and `replaces` (collapses an older card).
 
 A `table` with `select: single|multi` is an input that submits its `row_key`
-values. A `status_list` item with `field` gets a **Fix** link that jumps to that
+values; every row must carry a unique, non-empty string under `row_key`.
+A `status_list` item with `field` gets a **Fix** link that jumps to that
 field, revealing it if it sits in another tab. Inputs hidden by `visible_if`
 are neither validated nor submitted, so a stale hidden value never reads as an
 answer the user gave.

@@ -99,8 +99,28 @@ describe("interaction", () => {
     const sub = parseSubmissionMessage(onSubmit.mock.calls[0][0]);
     // The hidden gift note is not submitted.
     expect(sub).toEqual({ cardId: "call_7", actionId: "order", values: { name: "Ada", qty: 2, price: 5, gift: false } });
+  });
+
+  it("locks only once the submission is in the transcript; a refused send stays editable with its draft", async () => {
+    const user = userEvent.setup();
+    const s = spec(form);
+    // submitPrompt resolves normally even when the server refused the turn.
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const view = render(<GenerativeCard cardId="lock_card" spec={s} onSubmit={onSubmit} />);
+    await user.type(screen.getByLabelText(/Name/), "Ada");
+    await user.click(screen.getByRole("button", { name: "Place order" }));
+    await user.click(screen.getByRole("button", { name: "Yes, place order" }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    // No submission in the transcript yet: still editable, draft kept.
+    expect(screen.queryByTestId("genui-submitted")).toBeNull();
+    expect(screen.getByLabelText(/Name/)).toBeEnabled();
+    expect(window.localStorage.getItem("fleet.genui.draft.lock_card")).toContain("Ada");
+    // The user message lands: the card locks and the draft is dropped.
+    const submission = parseSubmissionMessage(onSubmit.mock.calls[0][0]);
+    view.rerender(<GenerativeCard cardId="lock_card" spec={s} submission={submission} onSubmit={onSubmit} />);
     expect(await screen.findByTestId("genui-submitted")).toBeTruthy();
     expect(screen.getByLabelText(/Name/)).toBeDisabled();
+    expect(window.localStorage.getItem("fleet.genui.draft.lock_card")).toBeNull();
   });
 
   it("a message action sends its fixed text without validating", async () => {
@@ -137,6 +157,12 @@ describe("interaction", () => {
     expect(screen.getByTestId("genui-stat-value").textContent).toBe("15");
     await user.click(screen.getByRole("button", { name: "Edit and resend" }));
     expect(screen.getByLabelText(/Name/)).toBeEnabled();
+    // Cancelling the edit puts back exactly what was sent.
+    await user.clear(screen.getByLabelText(/Name/));
+    await user.type(screen.getByLabelText(/Name/), "Changed");
+    await user.click(screen.getByRole("button", { name: "Cancel edit" }));
+    expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("Grace");
+    expect(screen.getByLabelText(/Name/)).toBeDisabled();
   });
 
   it("collapses a replaced card", () => {
@@ -195,6 +221,64 @@ describe("repeater", () => {
     expect(parseSubmissionMessage(onSubmit.mock.calls[0][0])?.values).toEqual({
       lines: [{ channel: "CTV" }, { channel: "CTV" }],
     });
+  });
+});
+
+describe("tables and disabled repeaters", () => {
+  it("binds a selectable table inside a repeater to its own item", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const s = spec({
+      title: "Seats",
+      components: [
+        {
+          type: "repeater",
+          id: "lines",
+          value: [{}, {}],
+          fields: [
+            {
+              type: "table",
+              id: "seat",
+              label: "Seat",
+              select: "single",
+              row_key: "id",
+              columns: [{ key: "id" }, { key: "name" }],
+              rows: [
+                { id: "s1", name: "One" },
+                { id: "s2", name: "Two" },
+              ],
+            },
+          ],
+        },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="t" spec={s} onSubmit={onSubmit} />);
+    // Open the second item too, then pick a different row in each.
+    await user.click(screen.getByRole("button", { name: /Item 2/ }));
+    const first = document.querySelector('[data-repeater-item="0"]') as HTMLElement;
+    const second = document.querySelector('[data-repeater-item="1"]') as HTMLElement;
+    await user.click(within(first).getByRole("radio", { name: "Select s1" }));
+    await user.click(within(second).getByRole("radio", { name: "Select s2" }));
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(parseSubmissionMessage(onSubmit.mock.calls[0][0])?.values).toEqual({ lines: [{ seat: "s1" }, { seat: "s2" }] });
+  });
+
+  it("a disabled repeater offers no add / duplicate / remove and disables its fields", () => {
+    const s = spec({
+      title: "Locked lines",
+      components: [
+        { type: "repeater", id: "lines", disabled: true, value: [{ n: 1 }], fields: [{ type: "number", id: "n", label: "N" }] },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="d" spec={s} onSubmit={() => {}} />);
+    expect(screen.queryByRole("button", { name: "+ Add" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Duplicate" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(screen.getByLabelText("N")).toBeDisabled();
+    // Reading stays possible: the item still collapses.
+    expect(screen.getByRole("button", { name: /Item 1/ })).toBeEnabled();
   });
 });
 

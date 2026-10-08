@@ -21,13 +21,13 @@ export const EMPTY_GENUI_STATE: GenUiState = { cards: new Map(), submissions: ne
  * Whether a tool call should draw a card: a show_ui call the server accepted.
  * A refused spec (UI_INVALID, an error result) draws nothing — the model is
  * told to fix and re-call, and the retry is the card the user should see.
- * A call whose result has not arrived yet waits: validation is instant, so
- * the wait is invisible, and it avoids flashing a card that is about to be
- * refused.
+ * Only an explicit UI_DISPLAYED result counts: history reconstruction marks a
+ * call with no stored result as done (a cancelled turn, a server stopped
+ * between call and result), and such a spec never passed validation.
  */
 export function isRenderableCardCall(tc: ToolCall): boolean {
   if (tc.name !== SHOW_UI_TOOL || tc.state !== "done") return false;
-  return tc.resultText === undefined || tc.resultText.startsWith("UI_DISPLAYED");
+  return typeof tc.resultText === "string" && tc.resultText.startsWith("UI_DISPLAYED");
 }
 
 export function deriveGenUiState(messages: Message[]): GenUiState {

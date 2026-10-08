@@ -1,129 +1,1181 @@
 {
-  "_comment": "Shared fixture for show_ui card specs. Go (spec_test.go) validates every case and checks `valid` / `error_contains`. The web suite (GenerativeCard.test.tsx) renders every VALID card and asserts it draws without an error box, so a component the validator accepts is one the renderer can draw.",
-  "cases": [
-    {
-      "name": "minimal display card",
-      "valid": true,
-      "card": {"title": "Hello", "components": [{"type": "text", "text": "Hi there"}]}
-    },
-    {
-      "name": "multi-item campaign builder",
-      "valid": true,
-      "card": {
-        "title": "New campaign",
-        "description": "{{ count(lines) }} line(s) · {{ count(lines) * len(exchanges) }} deal(s) to create",
-        "components": [
-          {"type": "tabs", "variant": "steps", "tabs": [
-            {"label": "Basics", "children": [
-              {"type": "columns", "children": [
-                {"type": "text_input", "id": "advertiser", "label": "Advertiser", "required": true},
-                {"type": "text_input", "id": "agency", "label": "Agency", "placeholder": "NA if none"}
-              ]},
-              {"type": "columns", "children": [
-                {"type": "date", "id": "start", "label": "Start", "required": true, "min": "2026-01-01"},
-                {"type": "date", "id": "end", "label": "End"}
-              ]},
-              {"type": "toggle", "id": "ongoing", "label": "Open-ended", "value": false},
-              {"type": "callout", "tone": "warning", "text": "Set an end date or turn on Open-ended.", "visible_if": "!ongoing && empty(end)"}
-            ]},
-            {"label": "Lines", "children": [
-              {"type": "multi_select", "id": "exchanges", "label": "Exchanges", "options": ["Exchange A", "Exchange B", {"value": "c", "label": "Exchange C", "description": "Streaming only"}], "value": ["Exchange A"]},
-              {"type": "repeater", "id": "lines", "label": "Lines", "item_label": "Line {{ index }} · {{ channel }}", "min_items": 1, "max_items": 50, "add_label": "Add line",
-               "value": [{"channel": "Display", "cpm": 3}],
-               "fields": [
-                 {"type": "choice", "id": "channel", "label": "Channel", "options": ["Display", "Video", "CTV"], "variant": "segmented", "required": true},
-                 {"type": "number", "id": "cpm", "label": "Floor CPM", "min": 0, "step": 0.01, "prefix": "$"},
-                 {"type": "include_exclude", "id": "geo", "label": "Geography", "allow_custom": true, "include_label": "Allow", "exclude_label": "Block"},
-                 {"type": "list_input", "id": "domains", "label": "Domain list", "placeholder": "one per line", "visible_if": "channel != 'CTV'"},
-                 {"type": "text", "tone": "muted", "text": "Line {{ index }} floor: {{ cpm ? fixed(cpm, 2) : 'default' }}"}
-               ]}
-            ]},
-            {"label": "Review", "children": [
-              {"type": "stat", "label": "Deals", "value": "{{ count(lines) * len(exchanges) }}"},
-              {"type": "facts", "items": [{"label": "Advertiser", "value": "{{ advertiser }}"}, {"label": "Avg floor", "value": "{{ avg(lines.cpm) }}"}]},
-              {"type": "status_list", "items": [
-                {"status": "pass", "label": "Dates valid"},
-                {"status": "fail", "label": "Line 1 floor below minimum", "detail": "Minimum is $0.10", "field": "lines[0].cpm"}
-              ]}
-            ]}
-          ]}
-        ],
-        "actions": [
-          {"id": "audit", "label": "Check", "kind": "submit", "style": "secondary"},
-          {"id": "create", "label": "Create deals", "kind": "submit", "style": "primary", "confirm": "Create these deals now?", "disabled_if": "count(lines) == 0"},
-          {"id": "cancel", "label": "Never mind", "kind": "message", "message": "Cancel this, I don't need it.", "validate": false}
-        ],
-        "field_errors": [{"field": "lines[0].cpm", "message": "Must be at least 0.10"}, {"field": "advertiser", "message": "Required"}]
-      }
-    },
-    {
-      "name": "display components",
-      "valid": true,
-      "card": {
-        "title": "Q3 snapshot",
-        "components": [
-          {"type": "heading", "text": "Spend"},
-          {"type": "badges", "items": [{"text": "Live", "tone": "success"}, {"text": "3 paused", "tone": "warning"}]},
-          {"type": "chart", "kind": "bar", "labels": ["Jul", "Aug", "Sep"], "unit": "$", "series": [{"name": "Spend", "values": [10, 20, null]}]},
-          {"type": "chart", "kind": "line", "labels": ["Jul", "Aug"], "series": [{"name": "A", "values": [1, 2]}, {"name": "B", "values": [2, 1]}]},
-          {"type": "table", "columns": [{"key": "name", "label": "Name"}, {"key": "spend", "label": "Spend", "align": "right"}], "rows": [{"name": "A", "spend": 10}, {"name": "B", "spend": null}]},
-          {"type": "diff", "title": "Proposed changes", "rows": [{"label": "Floor", "before": "$1.00", "after": "$1.50"}]},
-          {"type": "progress", "label": "Budget used", "value": "62", "max": 100},
-          {"type": "code", "text": "SELECT 1", "language": "sql"},
-          {"type": "link", "text": "Docs", "url": "https://example.com/docs"},
-          {"type": "divider"},
-          {"type": "section", "title": "Details", "collapsible": true, "collapsed": true, "children": [{"type": "text", "text": "**bold**", "markdown": true}]}
+ "_comment": "Shared fixture for show_ui card specs. Go (spec_test.go) validates every case and checks `valid` / `error_contains`. The web suite (GenerativeCard.test.tsx) renders every VALID card and asserts it draws without an error box, so a component the validator accepts is one the renderer can draw.",
+ "cases": [
+  {
+   "name": "minimal display card",
+   "valid": true,
+   "card": {
+    "title": "Hello",
+    "components": [
+     {
+      "type": "text",
+      "text": "Hi there"
+     }
+    ]
+   }
+  },
+  {
+   "name": "multi-item campaign builder",
+   "valid": true,
+   "card": {
+    "title": "New campaign",
+    "description": "{{ count(lines) }} line(s) · {{ count(lines) * len(exchanges) }} deal(s) to create",
+    "components": [
+     {
+      "type": "tabs",
+      "variant": "steps",
+      "tabs": [
+       {
+        "label": "Basics",
+        "children": [
+         {
+          "type": "columns",
+          "children": [
+           {
+            "type": "text_input",
+            "id": "advertiser",
+            "label": "Advertiser",
+            "required": true
+           },
+           {
+            "type": "text_input",
+            "id": "agency",
+            "label": "Agency",
+            "placeholder": "NA if none"
+           }
+          ]
+         },
+         {
+          "type": "columns",
+          "children": [
+           {
+            "type": "date",
+            "id": "start",
+            "label": "Start",
+            "required": true,
+            "min": "2026-01-01"
+           },
+           {
+            "type": "date",
+            "id": "end",
+            "label": "End"
+           }
+          ]
+         },
+         {
+          "type": "toggle",
+          "id": "ongoing",
+          "label": "Open-ended",
+          "value": false
+         },
+         {
+          "type": "callout",
+          "tone": "warning",
+          "text": "Set an end date or turn on Open-ended.",
+          "visible_if": "!ongoing && empty(end)"
+         }
         ]
-      }
-    },
-    {
-      "name": "calculator with slider and selectable table",
-      "valid": true,
-      "card": {
-        "title": "Budget calculator",
-        "components": [
-          {"type": "slider", "id": "budget", "label": "Budget", "min": 1000, "max": 100000, "step": 500, "prefix": "$", "value": 20000},
-          {"type": "number", "id": "cpm", "label": "CPM", "value": 12.5},
-          {"type": "stat", "label": "Impressions", "value": "{{ cpm ? round(budget / cpm * 1000) : 0 }}"},
-          {"type": "table", "id": "picked", "select": "multi", "row_key": "id", "columns": [{"key": "id"}, {"key": "name"}], "rows": [{"id": "1", "name": "One"}, {"id": "2", "name": "Two"}], "value": ["1"]},
-          {"type": "select", "id": "region", "label": "Region", "options": ["US", "CA"], "value": "US"},
-          {"type": "text_input", "id": "notes", "label": "Notes", "multiline": true, "max_length": 500}
+       },
+       {
+        "label": "Lines",
+        "children": [
+         {
+          "type": "multi_select",
+          "id": "exchanges",
+          "label": "Exchanges",
+          "options": [
+           "Exchange A",
+           "Exchange B",
+           {
+            "value": "c",
+            "label": "Exchange C",
+            "description": "Streaming only"
+           }
+          ],
+          "value": [
+           "Exchange A"
+          ]
+         },
+         {
+          "type": "repeater",
+          "id": "lines",
+          "label": "Lines",
+          "item_label": "Line {{ index }} · {{ channel }}",
+          "min_items": 1,
+          "max_items": 50,
+          "add_label": "Add line",
+          "value": [
+           {
+            "channel": "Display",
+            "cpm": 3
+           }
+          ],
+          "fields": [
+           {
+            "type": "choice",
+            "id": "channel",
+            "label": "Channel",
+            "options": [
+             "Display",
+             "Video",
+             "CTV"
+            ],
+            "variant": "segmented",
+            "required": true
+           },
+           {
+            "type": "number",
+            "id": "cpm",
+            "label": "Floor CPM",
+            "min": 0,
+            "step": 0.01,
+            "prefix": "$"
+           },
+           {
+            "type": "include_exclude",
+            "id": "geo",
+            "label": "Geography",
+            "allow_custom": true,
+            "include_label": "Allow",
+            "exclude_label": "Block"
+           },
+           {
+            "type": "list_input",
+            "id": "domains",
+            "label": "Domain list",
+            "placeholder": "one per line",
+            "visible_if": "channel != 'CTV'"
+           },
+           {
+            "type": "text",
+            "tone": "muted",
+            "text": "Line {{ index }} floor: {{ cpm ? fixed(cpm, 2) : 'default' }}"
+           }
+          ]
+         }
+        ]
+       },
+       {
+        "label": "Review",
+        "children": [
+         {
+          "type": "stat",
+          "label": "Deals",
+          "value": "{{ count(lines) * len(exchanges) }}"
+         },
+         {
+          "type": "facts",
+          "items": [
+           {
+            "label": "Advertiser",
+            "value": "{{ advertiser }}"
+           },
+           {
+            "label": "Avg floor",
+            "value": "{{ avg(lines.cpm) }}"
+           }
+          ]
+         },
+         {
+          "type": "status_list",
+          "items": [
+           {
+            "status": "pass",
+            "label": "Dates valid"
+           },
+           {
+            "status": "fail",
+            "label": "Line 1 floor below minimum",
+            "detail": "Minimum is $0.10",
+            "field": "lines[0].cpm"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "audit",
+      "label": "Check",
+      "kind": "submit",
+      "style": "secondary"
+     },
+     {
+      "id": "create",
+      "label": "Create deals",
+      "kind": "submit",
+      "style": "primary",
+      "confirm": "Create these deals now?",
+      "disabled_if": "count(lines) == 0"
+     },
+     {
+      "id": "cancel",
+      "label": "Never mind",
+      "kind": "message",
+      "message": "Cancel this, I don't need it.",
+      "validate": false
+     }
+    ],
+    "field_errors": [
+     {
+      "field": "lines[0].cpm",
+      "message": "Must be at least 0.10"
+     },
+     {
+      "field": "advertiser",
+      "message": "Required"
+     }
+    ]
+   }
+  },
+  {
+   "name": "display components",
+   "valid": true,
+   "card": {
+    "title": "Q3 snapshot",
+    "components": [
+     {
+      "type": "heading",
+      "text": "Spend"
+     },
+     {
+      "type": "badges",
+      "items": [
+       {
+        "text": "Live",
+        "tone": "success"
+       },
+       {
+        "text": "3 paused",
+        "tone": "warning"
+       }
+      ]
+     },
+     {
+      "type": "chart",
+      "kind": "bar",
+      "labels": [
+       "Jul",
+       "Aug",
+       "Sep"
+      ],
+      "unit": "$",
+      "series": [
+       {
+        "name": "Spend",
+        "values": [
+         10,
+         20,
+         null
+        ]
+       }
+      ]
+     },
+     {
+      "type": "chart",
+      "kind": "line",
+      "labels": [
+       "Jul",
+       "Aug"
+      ],
+      "series": [
+       {
+        "name": "A",
+        "values": [
+         1,
+         2
+        ]
+       },
+       {
+        "name": "B",
+        "values": [
+         2,
+         1
+        ]
+       }
+      ]
+     },
+     {
+      "type": "table",
+      "columns": [
+       {
+        "key": "name",
+        "label": "Name"
+       },
+       {
+        "key": "spend",
+        "label": "Spend",
+        "align": "right"
+       }
+      ],
+      "rows": [
+       {
+        "name": "A",
+        "spend": 10
+       },
+       {
+        "name": "B",
+        "spend": null
+       }
+      ]
+     },
+     {
+      "type": "diff",
+      "title": "Proposed changes",
+      "rows": [
+       {
+        "label": "Floor",
+        "before": "$1.00",
+        "after": "$1.50"
+       }
+      ]
+     },
+     {
+      "type": "progress",
+      "label": "Budget used",
+      "value": "62",
+      "max": 100
+     },
+     {
+      "type": "code",
+      "text": "SELECT 1",
+      "language": "sql"
+     },
+     {
+      "type": "link",
+      "text": "Docs",
+      "url": "https://example.com/docs"
+     },
+     {
+      "type": "divider"
+     },
+     {
+      "type": "section",
+      "title": "Details",
+      "collapsible": true,
+      "collapsed": true,
+      "children": [
+       {
+        "type": "text",
+        "text": "**bold**",
+        "markdown": true
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "calculator with slider and selectable table",
+   "valid": true,
+   "card": {
+    "title": "Budget calculator",
+    "components": [
+     {
+      "type": "slider",
+      "id": "budget",
+      "label": "Budget",
+      "min": 1000,
+      "max": 100000,
+      "step": 500,
+      "prefix": "$",
+      "value": 20000
+     },
+     {
+      "type": "number",
+      "id": "cpm",
+      "label": "CPM",
+      "value": 12.5
+     },
+     {
+      "type": "stat",
+      "label": "Impressions",
+      "value": "{{ cpm ? round(budget / cpm * 1000) : 0 }}"
+     },
+     {
+      "type": "table",
+      "id": "picked",
+      "select": "multi",
+      "row_key": "id",
+      "columns": [
+       {
+        "key": "id"
+       },
+       {
+        "key": "name"
+       }
+      ],
+      "rows": [
+       {
+        "id": "1",
+        "name": "One"
+       },
+       {
+        "id": "2",
+        "name": "Two"
+       }
+      ],
+      "value": [
+       "1"
+      ]
+     },
+     {
+      "type": "select",
+      "id": "region",
+      "label": "Region",
+      "options": [
+       "US",
+       "CA"
+      ],
+      "value": "US"
+     },
+     {
+      "type": "text_input",
+      "id": "notes",
+      "label": "Notes",
+      "multiline": true,
+      "max_length": 500
+     }
+    ],
+    "actions": [
+     {
+      "id": "save",
+      "label": "Use these numbers"
+     }
+    ]
+   }
+  },
+  {
+   "name": "quick replies only",
+   "valid": true,
+   "card": {
+    "title": "Which one?",
+    "components": [
+     {
+      "type": "text",
+      "text": "Pick a path."
+     }
+    ],
+    "actions": [
+     {
+      "id": "a",
+      "label": "Option A",
+      "kind": "message",
+      "message": "Go with option A"
+     },
+     {
+      "id": "b",
+      "label": "Option B",
+      "kind": "message",
+      "message": "Go with option B"
+     }
+    ]
+   }
+  },
+  {
+   "name": "missing title",
+   "valid": false,
+   "error_contains": "title",
+   "card": {
+    "components": [
+     {
+      "type": "text",
+      "text": "x"
+     }
+    ]
+   }
+  },
+  {
+   "name": "no components",
+   "valid": false,
+   "error_contains": "components",
+   "card": {
+    "title": "x",
+    "components": []
+   }
+  },
+  {
+   "name": "unknown component",
+   "valid": false,
+   "error_contains": "unknown component type \"html\"",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "html",
+      "html": "<b>x</b>"
+     }
+    ]
+   }
+  },
+  {
+   "name": "unknown prop",
+   "valid": false,
+   "error_contains": "unknown property",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text",
+      "text": "x",
+      "style": "color:red"
+     }
+    ]
+   }
+  },
+  {
+   "name": "input without id",
+   "valid": false,
+   "error_contains": "every input needs an id",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "label": "Name"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "inputs without submit",
+   "valid": false,
+   "error_contains": "no actions",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "n"
+     }
+    ]
+   }
+  },
+  {
+   "name": "inputs with only message actions",
+   "valid": false,
+   "error_contains": "no submit action",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "n"
+     }
+    ],
+    "actions": [
+     {
+      "id": "a",
+      "label": "A",
+      "kind": "message",
+      "message": "a"
+     }
+    ]
+   }
+  },
+  {
+   "name": "duplicate ids",
+   "valid": false,
+   "error_contains": "duplicate id",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "n"
+     },
+     {
+      "type": "number",
+      "id": "n"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "reserved id",
+   "valid": false,
+   "error_contains": "reserved",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "sum"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "select without options",
+   "valid": false,
+   "error_contains": "options",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "select",
+      "id": "s"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "select value not an option",
+   "valid": false,
+   "error_contains": "not one of the options",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "select",
+      "id": "s",
+      "options": [
+       "a"
+      ],
+      "value": "b"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "expression reads unknown field",
+   "valid": false,
+   "error_contains": "not an input id",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text",
+      "text": "{{ price * 2 }}"
+     }
+    ]
+   }
+  },
+  {
+   "name": "expression syntax error",
+   "valid": false,
+   "error_contains": "expression",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "number",
+      "id": "a"
+     },
+     {
+      "type": "text",
+      "text": "{{ a + }}"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "unclosed template",
+   "valid": false,
+   "error_contains": "unclosed",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text",
+      "text": "{{ oops"
+     }
+    ]
+   }
+  },
+  {
+   "name": "repeater field read outside repeater",
+   "valid": false,
+   "error_contains": "use lines.cpm",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "lines",
+      "fields": [
+       {
+        "type": "number",
+        "id": "cpm"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": "{{ cpm }}"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "index outside repeater",
+   "valid": false,
+   "error_contains": "index is only defined",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text",
+      "text": "{{ index }}"
+     }
+    ]
+   }
+  },
+  {
+   "name": "nested repeater",
+   "valid": false,
+   "error_contains": "cannot nest",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "a",
+      "fields": [
+       {
+        "type": "repeater",
+        "id": "b",
+        "fields": [
+         {
+          "type": "number",
+          "id": "c"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "non-https link",
+   "valid": false,
+   "error_contains": "https",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "link",
+      "text": "x",
+      "url": "javascript:alert(1)"
+     }
+    ]
+   }
+  },
+  {
+   "name": "chart length mismatch",
+   "valid": false,
+   "error_contains": "labels",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "chart",
+      "kind": "bar",
+      "labels": [
+       "a",
+       "b"
+      ],
+      "series": [
+       {
+        "name": "s",
+        "values": [
+         1
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "selectable table without row_key",
+   "valid": false,
+   "error_contains": "row_key",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "table",
+      "id": "t",
+      "select": "single",
+      "columns": [
+       {
+        "key": "a"
+       }
+      ],
+      "rows": []
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "message action without message",
+   "valid": false,
+   "error_contains": "kind \"message\"",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text",
+      "text": "x"
+     }
+    ],
+    "actions": [
+     {
+      "id": "a",
+      "label": "A",
+      "kind": "message"
+     }
+    ]
+   }
+  },
+  {
+   "name": "field error on unknown field",
+   "valid": false,
+   "error_contains": "no input with id",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "n"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ],
+    "field_errors": [
+     {
+      "field": "nope",
+      "message": "bad"
+     }
+    ]
+   }
+  },
+  {
+   "name": "repeater value with unknown key",
+   "valid": false,
+   "error_contains": "not a field of this repeater",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "r",
+      "fields": [
+       {
+        "type": "number",
+        "id": "n"
+       }
+      ],
+      "value": [
+       {
+        "m": 1
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "slider min not below max",
+   "valid": false,
+   "error_contains": "min must be less than max",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "slider",
+      "id": "s",
+      "min": 5,
+      "max": 5
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "unknown top-level key",
+   "valid": false,
+   "error_contains": "unknown top-level key",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text",
+      "text": "x"
+     }
+    ],
+    "script": "x"
+   }
+  },
+  {
+   "name": "nested repeater through a section",
+   "valid": false,
+   "error_contains": "cannot nest",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "a",
+      "fields": [
+       {
+        "type": "section",
+        "children": [
+         {
+          "type": "tabs",
+          "tabs": [
+           {
+            "label": "t",
+            "children": [
+             {
+              "type": "repeater",
+              "id": "b",
+              "fields": [
+               {
+                "type": "number",
+                "id": "c"
+               }
+              ]
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "selectable table with a numeric row key",
+   "valid": false,
+   "error_contains": "non-empty string",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "table",
+      "id": "t",
+      "select": "multi",
+      "row_key": "id",
+      "columns": [
+       {
+        "key": "id"
+       }
+      ],
+      "rows": [
+       {
+        "id": 1
+       },
+       {
+        "id": "2"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "selectable table with duplicate row keys",
+   "valid": false,
+   "error_contains": "duplicate row_key",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "table",
+      "id": "t",
+      "select": "single",
+      "row_key": "id",
+      "columns": [
+       {
+        "key": "id"
+       }
+      ],
+      "rows": [
+       {
+        "id": "a"
+       },
+       {
+        "id": "a"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "selectable table default naming no row",
+   "valid": false,
+   "error_contains": "not the row_key of any row",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "table",
+      "id": "t",
+      "select": "single",
+      "row_key": "id",
+      "columns": [
+       {
+        "key": "id"
+       }
+      ],
+      "rows": [
+       {
+        "id": "a"
+       }
+      ],
+      "value": "b"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "selectable table inside a repeater",
+   "valid": true,
+   "card": {
+    "title": "Pick per line",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "lines",
+      "fields": [
+       {
+        "type": "table",
+        "id": "seat",
+        "label": "Seat",
+        "select": "single",
+        "row_key": "id",
+        "columns": [
+         {
+          "key": "id"
+         },
+         {
+          "key": "name"
+         }
         ],
-        "actions": [{"id": "save", "label": "Use these numbers"}]
-      }
-    },
-    {
-      "name": "quick replies only",
-      "valid": true,
-      "card": {"title": "Which one?", "components": [{"type": "text", "text": "Pick a path."}], "actions": [
-        {"id": "a", "label": "Option A", "kind": "message", "message": "Go with option A"},
-        {"id": "b", "label": "Option B", "kind": "message", "message": "Go with option B"}
-      ]}
-    },
-    {"name": "missing title", "valid": false, "error_contains": "title", "card": {"components": [{"type": "text", "text": "x"}]}},
-    {"name": "no components", "valid": false, "error_contains": "components", "card": {"title": "x", "components": []}},
-    {"name": "unknown component", "valid": false, "error_contains": "unknown component type \"html\"", "card": {"title": "x", "components": [{"type": "html", "html": "<b>x</b>"}]}},
-    {"name": "unknown prop", "valid": false, "error_contains": "unknown property", "card": {"title": "x", "components": [{"type": "text", "text": "x", "style": "color:red"}]}},
-    {"name": "input without id", "valid": false, "error_contains": "every input needs an id", "card": {"title": "x", "components": [{"type": "text_input", "label": "Name"}], "actions": [{"id": "go", "label": "Go"}]}},
-    {"name": "inputs without submit", "valid": false, "error_contains": "no actions", "card": {"title": "x", "components": [{"type": "text_input", "id": "n"}]}},
-    {"name": "inputs with only message actions", "valid": false, "error_contains": "no submit action", "card": {"title": "x", "components": [{"type": "text_input", "id": "n"}], "actions": [{"id": "a", "label": "A", "kind": "message", "message": "a"}]}},
-    {"name": "duplicate ids", "valid": false, "error_contains": "duplicate id", "card": {"title": "x", "components": [{"type": "text_input", "id": "n"}, {"type": "number", "id": "n"}], "actions": [{"id": "go", "label": "Go"}]}},
-    {"name": "reserved id", "valid": false, "error_contains": "reserved", "card": {"title": "x", "components": [{"type": "text_input", "id": "sum"}], "actions": [{"id": "go", "label": "Go"}]}},
-    {"name": "select without options", "valid": false, "error_contains": "options", "card": {"title": "x", "components": [{"type": "select", "id": "s"}], "actions": [{"id": "go", "label": "Go"}]}},
-    {"name": "select value not an option", "valid": false, "error_contains": "not one of the options", "card": {"title": "x", "components": [{"type": "select", "id": "s", "options": ["a"], "value": "b"}], "actions": [{"id": "go", "label": "Go"}]}},
-    {"name": "expression reads unknown field", "valid": false, "error_contains": "not an input id", "card": {"title": "x", "components": [{"type": "text", "text": "{{ price * 2 }}"}]}},
-    {"name": "expression syntax error", "valid": false, "error_contains": "expression", "card": {"title": "x", "components": [{"type": "number", "id": "a"}, {"type": "text", "text": "{{ a + }}"}], "actions": [{"id": "go", "label": "Go"}]}},
-    {"name": "unclosed template", "valid": false, "error_contains": "unclosed", "card": {"title": "x", "components": [{"type": "text", "text": "{{ oops"}]}},
-    {"name": "repeater field read outside repeater", "valid": false, "error_contains": "use lines.cpm", "card": {"title": "x", "components": [{"type": "repeater", "id": "lines", "fields": [{"type": "number", "id": "cpm"}]}, {"type": "text", "text": "{{ cpm }}"}], "actions": [{"id": "go", "label": "Go"}]}},
-    {"name": "index outside repeater", "valid": false, "error_contains": "index is only defined", "card": {"title": "x", "components": [{"type": "text", "text": "{{ index }}"}]}},
-    {"name": "nested repeater", "valid": false, "error_contains": "cannot nest", "card": {"title": "x", "components": [{"type": "repeater", "id": "a", "fields": [{"type": "repeater", "id": "b", "fields": [{"type": "number", "id": "c"}]}]}], "actions": [{"id": "go", "label": "Go"}]}},
-    {"name": "non-https link", "valid": false, "error_contains": "https", "card": {"title": "x", "components": [{"type": "link", "text": "x", "url": "javascript:alert(1)"}]}},
-    {"name": "chart length mismatch", "valid": false, "error_contains": "labels", "card": {"title": "x", "components": [{"type": "chart", "kind": "bar", "labels": ["a", "b"], "series": [{"name": "s", "values": [1]}]}]}},
-    {"name": "selectable table without row_key", "valid": false, "error_contains": "row_key", "card": {"title": "x", "components": [{"type": "table", "id": "t", "select": "single", "columns": [{"key": "a"}], "rows": []}], "actions": [{"id": "go", "label": "Go"}]}},
-    {"name": "message action without message", "valid": false, "error_contains": "kind \"message\"", "card": {"title": "x", "components": [{"type": "text", "text": "x"}], "actions": [{"id": "a", "label": "A", "kind": "message"}]}},
-    {"name": "field error on unknown field", "valid": false, "error_contains": "no input with id", "card": {"title": "x", "components": [{"type": "text_input", "id": "n"}], "actions": [{"id": "go", "label": "Go"}], "field_errors": [{"field": "nope", "message": "bad"}]}},
-    {"name": "repeater value with unknown key", "valid": false, "error_contains": "not a field of this repeater", "card": {"title": "x", "components": [{"type": "repeater", "id": "r", "fields": [{"type": "number", "id": "n"}], "value": [{"m": 1}]}], "actions": [{"id": "go", "label": "Go"}]}},
-    {"name": "slider min not below max", "valid": false, "error_contains": "min must be less than max", "card": {"title": "x", "components": [{"type": "slider", "id": "s", "min": 5, "max": 5}], "actions": [{"id": "go", "label": "Go"}]}},
-    {"name": "unknown top-level key", "valid": false, "error_contains": "unknown top-level key", "card": {"title": "x", "components": [{"type": "text", "text": "x"}], "script": "x"}}
-  ]
+        "rows": [
+         {
+          "id": "s1",
+          "name": "One"
+         },
+         {
+          "id": "s2",
+          "name": "Two"
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  }
+ ]
 }
