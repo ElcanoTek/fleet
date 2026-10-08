@@ -829,3 +829,34 @@ describe("a queued (busy-conversation) submission whose response was lost", () =
     expect(setPromptForKey).toHaveBeenLastCalledWith(CONV, "keep it short");
   });
 });
+
+describe("a lost queued response when the server cannot be asked", () => {
+  const run = async (fromCard: boolean) => {
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/chat") throw new TypeError("network error");
+        // Every follow-up read fails too: the outcome is unknown.
+        return new Response("upstream down", { status: 503 });
+      }),
+    );
+    const setPromptForKey = vi.fn();
+    const deps = { ...h.deps, setPromptForKey, streamingConvsRef: { current: new Set([CONV]) } };
+    const { result } = renderHook(() => useTurnStream(deps));
+    const sent = await result.current.submitPrompt("[UI submission] card=c1 action=go\n{}", { fromCard });
+    return { sent, setPromptForKey };
+  };
+
+  it("holds a card answer as possibly sent rather than inviting a duplicate", async () => {
+    const { sent, setPromptForKey } = await run(true);
+    expect(sent).toBe(true);
+    expect(setPromptForKey).not.toHaveBeenCalled();
+  });
+
+  it("gives typed text back so it is not lost", async () => {
+    const { sent, setPromptForKey } = await run(false);
+    expect(sent).toBe(false);
+    expect(setPromptForKey).toHaveBeenLastCalledWith(CONV, "[UI submission] card=c1 action=go\n{}");
+  });
+});

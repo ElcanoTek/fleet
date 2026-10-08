@@ -74,3 +74,11 @@ describe("unique()", () => {
     expect(performance.now() - start).toBeLessThan(1500);
   });
 });
+
+describe("aggregates near the float limit", () => {
+  it("average without overflowing, and sum to null when it cannot be represented", () => {
+    expect(evaluate("avg(xs)", { xs: [1e308, 1e308] })).toBe(1e308);
+    expect(evaluate("sum(xs)", { xs: [1e308, 1e308] })).toBeNull();
+    expect(evaluate("sum(xs)", { xs: [1, 2] })).toBe(3);
+  });
+});

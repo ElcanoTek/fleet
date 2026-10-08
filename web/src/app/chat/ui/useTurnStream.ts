@@ -928,19 +928,24 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   };
 
   // submissionLanded answers, for a submission whose POST response was lost:
-  // does the server hold it? A queue row with its submission id says yes.
+  // does the server hold it? A queue row with its submission id says "yes".
   // So does a persisted copy beyond the ones this client already accounts
   // for — a queued input can drain and complete before the queue is read,
-  // and a completed row is no longer listed. Unknown (an unreachable server)
-  // is no.
-  const submissionLanded = async (convId: string, text: string, submissionId: string): Promise<boolean> => {
+  // and a completed row is no longer listed. "no" needs both reads to have
+  // answered; a read that could not be made is "unknown", never "no" — the
+  // server may well hold the input, and a retry would duplicate it.
+  const submissionLanded = async (
+    convId: string,
+    text: string,
+    submissionId: string,
+  ): Promise<"yes" | "no" | "unknown"> => {
     const queued = await refreshQueue(convId);
-    if (queued?.some((q) => q.submission_id === submissionId)) return true;
+    if (queued?.some((q) => q.submission_id === submissionId)) return "yes";
     const url = conversationApiUrl(convId);
-    if (!url) return false;
+    if (!url) return queued ? "no" : "unknown";
     try {
       const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) return false;
+      if (!res.ok) return "unknown";
       const data = (await res.json()) as { history?: HistoryEntry[] | null };
       const persisted = (data.history ?? []).filter(
         (e) => e.role === "user" && (e.content as { text?: unknown } | undefined)?.text === text,
@@ -948,9 +953,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       const known = (messagesByConvRef.current.get(convId) ?? []).filter(
         (m) => m.role === "user" && m.content === text && !m.notSent,
       ).length;
-      return persisted > known;
+      if (persisted > known) return "yes";
+      return queued ? "no" : "unknown";
     } catch {
-      return false;
+      return "unknown";
     }
   };
 
@@ -3878,7 +3884,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // have queued the input. Report it sent only if the queue holds a
         // row with this submission's id — otherwise a card would offer a
         // resend and queue a duplicate.
-        if (await submissionLanded(convId, value, queueSubmissionId)) return true;
+        const landed = await submissionLanded(convId, value, queueSubmissionId);
+        if (landed === "yes") return true;
+        // Unknown is not refused. A card treats its answer as possibly sent
+        // (it holds, with Unlock, instead of offering a duplicate resend);
+        // typed text goes back to the composer either way, so it is not lost.
+        if (landed === "unknown" && fromCard) return true;
         restoreComposer();
         return false;
       }
@@ -4023,6 +4034,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     };
     // Whether the server took this submission (see streamTurn's parameter).
     const accepted = { value: false };
+    // The response was lost and the server could not be asked whether it
+    // holds the submission: a card holds rather than offering a resend.
+    let uncertain = false;
 
     try {
       await streamTurn(
@@ -4126,7 +4140,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // this input. Then it is accepted, as on the direct
           // path's queued ack: undo the notSent mark so a generative-UI card
           // holds instead of offering a resend that would queue a duplicate.
-          if (!accepted.value && landed) {
+          if (landed === "unknown" && !accepted.value) uncertain = true;
+          if (!accepted.value && landed === "yes") {
             accepted.value = true;
             setConvMessages(target, (current) =>
               current.map((m) => (m.id === baseId && m.notSent ? { ...m, notSent: false } : m)),
@@ -4308,7 +4323,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // the composer (a generative-UI card) never treat it as sent. A turn that
     // was accepted and then failed still counts as sent: its failure is shown
     // on the turn, with Retry.
-    return accepted.value;
+    return accepted.value || (uncertain && fromCard);
   };
 
   return {

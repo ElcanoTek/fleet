@@ -812,6 +812,22 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 			continue
 		}
 		v.conds = append(v.conds, condRef{path: path + "." + cond, refs: refs})
+		// A visible_if that reads any input it hides (the component itself,
+		// or an input inside it) can lock that input away for good: "gate &&
+		// !empty(name)" on name never opens once name is empty and hidden.
+		// Whether some other branch could still open it depends on the
+		// expression's logic, so it is refused outright — gate visibility on
+		// other inputs.
+		if cond == "visible_if" {
+			owned := map[string]map[string]any{}
+			collectInputs([]any{obj}, owned)
+			for _, r := range refs {
+				if _, mine := owned[r]; mine {
+					v.addf(path+".visible_if", "reads %q, an input it hides; gate visibility on other inputs only", r)
+					break
+				}
+			}
+		}
 	}
 }
 
@@ -1083,8 +1099,14 @@ func (v *validator) checkValue(path, typ string, obj map[string]any, val any) {
 		if s, ok := val.(string); !ok {
 			v.addf(path, "must be a YYYY-MM-DD string")
 		} else if s != "" {
-			if !isCalendarDate(s) {
+			lo, _ := obj["min"].(string)
+			hi, _ := obj["max"].(string)
+			switch {
+			case !isCalendarDate(s):
 				v.addf(path, "must be a YYYY-MM-DD string (year 0001 or later)")
+			// YYYY-MM-DD compares correctly as text.
+			case lo != "" && s < lo, hi != "" && s > hi:
+				v.addf(path, "%s is outside min..max", s)
 			}
 		}
 	case "number", "slider":

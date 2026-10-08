@@ -147,7 +147,8 @@ export function optionsOf(c: Component): { value: string; label: string; descrip
       const ob = o as { value: string; label?: unknown; description?: unknown };
       out.push({
         value: ob.value,
-        label: typeof ob.label === "string" && ob.label ? ob.label : ob.value,
+        // A blank label would draw an unnamed option: fall back to the value.
+        label: typeof ob.label === "string" && ob.label.trim() ? ob.label : ob.value,
         description: typeof ob.description === "string" ? ob.description : undefined,
       });
     }

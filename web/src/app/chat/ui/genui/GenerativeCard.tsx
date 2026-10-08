@@ -260,7 +260,22 @@ const PENDING_TTL_MS = 30 * 60 * 1000;
 // card was unmounted (virtualized off-screen) and the hold is spent. An
 // identical resend cannot be told apart from the answer before it; that
 // hold is shown only under Edit, can be dismissed, and expires.
+// A hold is also kept in memory for the page's life: it guards against a
+// duplicate queued answer, so it must survive a remount even when storage is
+// full or blocked (localStorage then only carries it across a reload).
+const pendingMemory = new Map<string, { action: string; at: number; after: string }>();
+
+/** Forgets in-memory holds (tests; the page itself never needs to). */
+export function resetPendingHolds() {
+  pendingMemory.clear();
+}
+
 function loadPending(cardId: string, currentKey: string): string | null {
+  const mem = pendingMemory.get(cardId);
+  if (mem) {
+    if (Date.now() - mem.at <= PENDING_TTL_MS && mem.after === currentKey) return mem.action;
+    pendingMemory.delete(cardId);
+  }
   try {
     const raw = window.localStorage.getItem(PENDING_PREFIX + cardId);
     if (!raw) return null;
@@ -281,6 +296,8 @@ function loadPending(cardId: string, currentKey: string): string | null {
 }
 
 function savePending(cardId: string, action: string | null, after = "") {
+  if (action) pendingMemory.set(cardId, { action, at: Date.now(), after });
+  else pendingMemory.delete(cardId);
   try {
     if (action) window.localStorage.setItem(PENDING_PREFIX + cardId, JSON.stringify({ action, at: Date.now(), after }));
     else window.localStorage.removeItem(PENDING_PREFIX + cardId);
@@ -356,6 +373,9 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     answerKeyRef.current = answerKey;
   }, [answerKey]);
   const [seenSubmission, setSeenSubmission] = useState(submissionKey);
+  // The message id of the answer last seen, to tell a rollback (a withdrawn
+  // resend uncovers an OLDER message) from a new answer with the same values.
+  const [seenMessageId, setSeenMessageId] = useState<number | null>(submission?.messageId ?? null);
   const submissionKeyRef = useRef(submissionKey);
   useEffect(() => {
     submissionKeyRef.current = submissionKey;
@@ -392,7 +412,10 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     // the stored draft was typed against the answer now current, it is that
     // unsent edit — restore it and reopen editing, so the changes are not
     // replaced by the older values.
-    const edit = submission && !readOnly ? peekDraft(storeId) : null;
+    const rolledBack =
+      !!submission && submission.messageId !== undefined && seenMessageId !== null && submission.messageId < seenMessageId;
+    setSeenMessageId(submission?.messageId ?? null);
+    const edit = rolledBack && !readOnly ? peekDraft(storeId) : null;
     if (edit && edit.after === answerKey) {
       setValuesState(normalizeValues(spec, edit.values));
       setEditing(true);
@@ -608,7 +631,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
         <div className="grid min-w-0 gap-3 px-3.5 py-3">
           <Nodes list={spec.components} />
         </div>
-        {actions.length > 0 || sentLabel ? (
+        {actions.length > 0 || sentLabel || (retired && !readOnly && !superseded) ? (
           <div className="flex flex-col gap-2 border-t border-[var(--color-border)] px-3.5 py-2.5">
             {retired && !readOnly && !superseded && !sentLabel ? (
               <div data-testid="genui-retired" className="text-[0.75rem] text-[var(--color-text-muted)]">
@@ -1908,7 +1931,7 @@ function IncludeExcludeInput({ c, value, onChange, inputId }: Parameters<Rendere
   );
 }
 
-function Repeater({ c, value, onChange }: Parameters<Renderer>[0]) {
+function Repeater({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const { values, locked: cardLocked } = useCard();
   // A disabled repeater (or one nested in a disabled scope) keeps its expand
   // toggles usable but offers no add / duplicate / remove, and its fields
@@ -1940,7 +1963,9 @@ function Repeater({ c, value, onChange }: Parameters<Renderer>[0]) {
     if (Number.isInteger(i)) setOpenIdx((s) => new Set(s).add(i));
   });
   return (
-    <div ref={ref} className="grid min-w-0 gap-1.5">
+    // One labelled group: the field label names it, and InputField ties the
+    // help, error and required state to it.
+    <div ref={ref} className="grid min-w-0 gap-1.5" role="group" id={inputId} aria-labelledby={inputId ? `${inputId}-label` : undefined}>
       {items.map((item, i) => {
         const scope = scopeFor(values, item, i);
         const label = labelTpl ? renderTemplate(labelTpl, scope) : `Item ${i + 1}`;

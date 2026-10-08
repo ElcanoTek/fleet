@@ -161,3 +161,12 @@ describe("an unconfirmed card answer", () => {
     expect(s.submissions.get("c1")?.actionId).toBe("go");
   });
 });
+
+describe("summarizeValue", () => {
+  it("bounds long values in the compact bubble", () => {
+    const long = "x".repeat(5000);
+    expect(summarizeValue(long).length).toBeLessThanOrEqual(121);
+    expect(summarizeValue([long]).length).toBeLessThanOrEqual(121);
+    expect(summarizeValue("short")).toBe("short");
+  });
+});

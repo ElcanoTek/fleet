@@ -2518,6 +2518,56 @@
      }
     ]
    }
+  },
+  {
+   "name": "visibility that mixes another gate with the input itself",
+   "valid": false,
+   "error_contains": "an input it hides",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "gate",
+      "label": "Gate"
+     },
+     {
+      "type": "text_input",
+      "id": "name",
+      "required": true,
+      "visible_if": "gate && !empty(name)"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "date default before min",
+   "valid": false,
+   "error_contains": "outside min..max",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "date",
+      "id": "d",
+      "min": "2026-01-01",
+      "value": "2025-01-01",
+      "disabled": true
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
   }
  ]
 }

@@ -1,13 +1,14 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, cleanup as cleanupRender, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import GenerativeCard, { RENDERERS, parseListText } from "./GenerativeCard";
+import GenerativeCard, { RENDERERS, parseListText, resetPendingHolds } from "./GenerativeCard";
 import { buildReplyMessage, parseCardSpec, parseSubmissionMessage, type CardSpec } from "./model";
 import { loadFixture } from "./fixtures";
 
 type Case = { name: string; valid: boolean; card: unknown };
 
 beforeEach(() => {
+  resetPendingHolds();
   try {
     window.localStorage.clear();
   } catch {
@@ -1166,5 +1167,69 @@ describe("fourteenth Codex pass", () => {
     expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("Grace");
     expect(screen.getByLabelText(/Name/)).not.toBeDisabled();
     expect(screen.getByRole("button", { name: "Go" })).toBeTruthy();
+  });
+});
+
+describe("fifteenth Codex pass", () => {
+  it("locks on an accepted identical resend instead of reopening the editor", async () => {
+    const user = userEvent.setup();
+    const s = spec({ title: "I", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    const first = { cardId: "same", actionId: "go", values: { n: "Ada" }, messageId: 2 };
+    const view = render(<GenerativeCard cardId="same" spec={s} submission={first} onSubmit={vi.fn().mockResolvedValue(true)} />);
+    await user.click(screen.getByRole("button", { name: "Edit and resend" }));
+    await user.type(screen.getByLabelText(/Name/), "x");
+    await user.type(screen.getByLabelText(/Name/), "{Backspace}");
+    // Resent unchanged; the new message (a higher id) is accepted.
+    view.rerender(<GenerativeCard cardId="same" spec={s} submission={{ ...first, messageId: 6 }} onSubmit={() => {}} />);
+    expect(screen.getByTestId("genui-submitted")).toBeTruthy();
+    expect(screen.getByLabelText(/Name/)).toBeDisabled();
+  });
+
+  it("keeps a queued hold across a remount when storage is full", async () => {
+    const user = userEvent.setup();
+    const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    try {
+      const s = spec({ title: "Q", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+      const first = render(<GenerativeCard cardId="full" spec={s} onSubmit={vi.fn().mockResolvedValue(true)} />);
+      await user.click(screen.getByRole("button", { name: "Yes" }));
+      expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
+      first.unmount();
+      render(<GenerativeCard cardId="full" spec={s} onSubmit={() => {}} />);
+      expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("names a repeater group by its label", () => {
+    const s = spec({
+      title: "R",
+      components: [{ type: "repeater", id: "lines", label: "Lines", required: true, fields: [{ type: "number", id: "n", label: "N" }] }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="repg" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByRole("group", { name: /^Lines\s*\(required\)$/ })).toBeTruthy();
+  });
+
+  it("explains a retired card even when its actions are hidden", () => {
+    const s = spec({
+      title: "Old",
+      components: [{ type: "toggle", id: "ok", label: "OK" }],
+      actions: [{ id: "go", label: "Go", visible_if: "ok" }],
+    });
+    render(<GenerativeCard cardId="ret2" spec={s} retired onSubmit={() => {}} />);
+    expect(screen.getByTestId("genui-retired")).toBeTruthy();
+  });
+
+  it("falls back to an option's value when its label is blank", () => {
+    const s = spec({
+      title: "O",
+      components: [{ type: "choice", id: "acct", label: "Account", options: [{ value: "acct_1", label: " " }, "acct_2"] }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="opt" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByRole("radio", { name: "acct_1" })).toBeTruthy();
   });
 });

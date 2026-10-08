@@ -392,10 +392,13 @@ function uniqueValues(items: Value[]): Value[] {
 const FUNCS: Record<string, (args: Value[]) => Value> = {
   len: ([v]) => (typeof v === "string" ? Array.from(v).length : list(v).length),
   count: ([v]) => list(v).length,
-  sum: (a) => numbers(a).reduce((s, n) => s + n, 0),
+  // Results stay finite like every other value (norm): an overflowing sum is
+  // null, and the mean is taken as a sum of shares, which cannot overflow
+  // when the inputs are finite.
+  sum: (a) => numOrNull(numbers(a).reduce((s, n) => s + n, 0)),
   avg: (a) => {
     const ns = numbers(a);
-    return ns.length ? ns.reduce((s, n) => s + n, 0) / ns.length : null;
+    return ns.length ? numOrNull(ns.reduce((s, n) => s + n / ns.length, 0)) : null;
   },
   min: (a) => {
     const ns = numbers(a);

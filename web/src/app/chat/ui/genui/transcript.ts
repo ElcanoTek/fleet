@@ -113,15 +113,20 @@ export function fieldLabels(spec: CardSpec | undefined): Map<string, string> {
   return out;
 }
 
+// The bubble is a summary: each shown value is bounded (the full text is
+// behind "Show what was sent"), so a long answer does not lay out in full.
+const SUMMARY_VALUE_CHARS = 120;
+const clip = (s: string) => (s.length > SUMMARY_VALUE_CHARS ? `${s.slice(0, SUMMARY_VALUE_CHARS)}…` : s);
+
 /** One-line rendering of a submitted value for the sent bubble. */
 export function summarizeValue(v: unknown): string {
   if (v === null || v === undefined || v === "") return "—";
   if (typeof v === "boolean") return v ? "Yes" : "No";
-  if (typeof v === "number" || typeof v === "string") return String(v);
+  if (typeof v === "number" || typeof v === "string") return clip(String(v));
   if (Array.isArray(v)) {
     if (v.every((x) => typeof x !== "object" || x === null)) {
       if (v.length === 0) return "—";
-      const shown = v.slice(0, 8).map((x) => String(x));
+      const shown = v.slice(0, 8).map((x) => clip(String(x)));
       return v.length > 8 ? `${shown.join(", ")} +${v.length - 8} more` : shown.join(", ");
     }
     return `${v.length} item${v.length === 1 ? "" : "s"}`;
