@@ -467,6 +467,17 @@ func (v *validator) component(path string, raw any, depth int, repeater string) 
 	}
 }
 
+// toggles: the declared toggle ids, whose values are always booleans.
+func (v *validator) toggles() map[string]bool {
+	out := map[string]bool{}
+	for id, f := range v.fields {
+		if f.typ == "toggle" {
+			out[id] = true
+		}
+	}
+	return out
+}
+
 func (v *validator) declare(path, id, typ, repeater string) {
 	if !idRe.MatchString(id) {
 		v.addf(path+".id", "ids must match %s", idRe.String())
@@ -821,7 +832,7 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 			continue
 		}
 		v.conds = append(v.conds, condRef{path: path + "." + cond, refs: refs})
-		if neverTrue(src) {
+		if neverTrue(src, v.toggles()) {
 			v.addf(path+"."+cond, "can never be true whatever the inputs are (it contradicts itself), so it never changes; fix the logic or drop it")
 			continue
 		}
@@ -1465,7 +1476,7 @@ func (v *validator) actions(raw any, hasInput bool) {
 		// can never be pressed; see satisfy.go for what is decided.
 		vis, _ := obj["visible_if"].(string)
 		dis, _ := obj["disabled_if"].(string)
-		if (vis != "" || dis != "") && neverUsable(vis, dis) {
+		if (vis != "" || dis != "") && neverUsable(vis, dis, v.toggles()) {
 			v.addf(ap, "can never be pressed: whatever the inputs are, it is hidden or disabled (check visible_if and disabled_if together)")
 		}
 		kind, _ := obj["kind"].(string)
@@ -1565,7 +1576,13 @@ func (v *validator) numberValue(path string, obj map[string]any, n float64) {
 		v.addf(path, "%v is outside min..max", n)
 		return
 	}
-	if step, ok := obj["step"].(float64); ok && step > 0 {
+	step, ok := obj["step"].(float64)
+	if !ok && obj["type"] == "slider" {
+		// A range control with no step attribute steps by 1 (the HTML
+		// default the renderer applies), so its value snaps to that grid.
+		step, ok = 1, true
+	}
+	if ok && step > 0 {
 		base := 0.0
 		if hasMin {
 			base = minV

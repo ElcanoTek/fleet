@@ -277,9 +277,23 @@ function draftSent(storeId: string, d: StoredDraft): string | undefined {
   return d.sent ?? sentMemory.get(storeId);
 }
 
+// An answer's values serialize to its identity key. The transcript caches
+// each parsed answer (transcript.ts), so the same values object comes back on
+// every streamed render; serializing a near-1 MiB answer once per object,
+// not once per render, keeps a long reply smooth.
+const valuesKeys = new WeakMap<object, string>();
+function valuesKey(values: Values): string {
+  let k = valuesKeys.get(values);
+  if (k === undefined) {
+    k = JSON.stringify(values);
+    valuesKeys.set(values, k);
+  }
+  return k;
+}
+
 /** A transcript answer without its message id (see loadPending, loadDraft). */
 function answerKeyOf(submission: Submission | null | undefined, reply: Reply | null | undefined): string {
-  if (submission) return `s\u0000${submission.actionId}\u0000${JSON.stringify(submission.values)}`;
+  if (submission) return `s\u0000${submission.actionId}\u0000${valuesKey(submission.values)}`;
   if (reply) return `r\u0000${reply.actionId}`;
   return "";
 }
@@ -433,7 +447,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
   // Keyed by the transcript message, not the payload: resending identical
   // values is a new submission and must lock the card again.
   const submissionKey = submission
-    ? `s\u0000${submission.messageId ?? ""}\u0000${submission.actionId}\u0000${JSON.stringify(submission.values)}`
+    ? `s\u0000${submission.messageId ?? ""}\u0000${submission.actionId}\u0000${valuesKey(submission.values)}`
     : reply
       ? `r\u0000${reply.messageId ?? ""}\u0000${reply.actionId}`
       : "";
@@ -497,9 +511,14 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
       setClearedServerErrors(new Set(edit.cleared ?? []));
     } else if (submission) {
       setValuesState(normalizeValues(spec, submission.values));
+    } else if (reply) {
+      // A quick reply sends only its fixed text: show what a reload would
+      // (the defaults), not edits that were never sent.
+      setValuesState(normalizeValues(spec, null));
     }
   }
   const locked = !!readOnly || !!retired || !!superseded || (submittedAction !== null && !editing);
+  const fieldsLocked = locked || awaiting !== null || sending !== null;
 
   // Another tab holding (or releasing) this card: storage events reach every
   // other tab, so the same card open twice cannot queue the same answer twice.
@@ -611,8 +630,11 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
   }, []);
 
   const ctx = useMemo<CardCtx>(
-    () => ({ cardId, values, locked, errors, setField, setValues, focusField, visible }),
-    [cardId, values, locked, errors, setField, setValues, focusField, visible],
+    // Fields freeze while an answer is on its way too (sending, or held
+    // until it reaches the transcript): an edit made then would be typed
+    // against the answer being replaced and lost when it lands.
+    () => ({ cardId, values, locked: fieldsLocked, errors, setField, setValues, focusField, visible }),
+    [cardId, values, fieldsLocked, errors, setField, setValues, focusField, visible],
   );
 
   const scope = scopeFor(values);
@@ -2092,7 +2114,10 @@ function IncludeExcludeInput({ c, value, onChange, inputId }: Parameters<Rendere
       : { include: [], exclude: [] };
   const [side, setSide] = useState<"include" | "exclude">("include");
   const { locked } = useCard();
-  const names = { include: str(c.include_label) || "Include", exclude: str(c.exclude_label) || "Exclude" };
+  const names = { include: str(c.include_label).trim() || "Include", exclude: str(c.exclude_label).trim() || "Exclude" };
+  // The adder is gone once the card locks, so the field's id, label, help
+  // and error state live on this always-rendered group (as for multi_select).
+  const labelId = inputId ? `${inputId}-label` : undefined;
   const taken = new Set([...v.include, ...v.exclude]);
   const set = (next: IncludeExclude) => onChange?.(next);
   const lane = (k: "include" | "exclude") => {
@@ -2129,7 +2154,7 @@ function IncludeExcludeInput({ c, value, onChange, inputId }: Parameters<Rendere
     );
   };
   return (
-    <div className="grid min-w-0 gap-1.5">
+    <div className="grid min-w-0 gap-1.5" role="group" id={inputId} aria-labelledby={labelId}>
       <div className="grid min-w-0 grid-cols-1 gap-1.5 sm:grid-cols-2">
         {lane("include")}
         {lane("exclude")}
@@ -2153,7 +2178,13 @@ function IncludeExcludeInput({ c, value, onChange, inputId }: Parameters<Rendere
               </button>
             ))}
           </div>
-          <Adder c={c} taken={taken} inputId={inputId} onAdd={(x) => set({ ...v, [side]: [...v[side], x] })} />
+          <Adder
+            c={c}
+            taken={taken}
+            inputId={inputId ? `${inputId}-add` : undefined}
+            labelledBy={labelId}
+            onAdd={(x) => set({ ...v, [side]: [...v[side], x] })}
+          />
         </div>
       ) : null}
     </div>

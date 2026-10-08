@@ -105,8 +105,8 @@ describe("interaction", () => {
   it("locks only once the submission is in the transcript; a refused send stays editable with its draft", async () => {
     const user = userEvent.setup();
     const s = spec(form);
-    // submitPrompt resolves normally even when the server refused the turn.
-    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    // submitPrompt reports a refused send as false.
+    const onSubmit = vi.fn().mockResolvedValue(false);
     const view = render(<GenerativeCard cardId="lock_card" spec={s} onSubmit={onSubmit} />);
     await user.type(screen.getByLabelText(/Name/), "Ada");
     await user.click(screen.getByRole("button", { name: "Place order" }));
@@ -1255,6 +1255,77 @@ describe("a hold set in another tab", () => {
   });
 });
 
+describe("render cost of a large answer", () => {
+  it("serializes the answer's values once, not on every render", () => {
+    const s = spec({ title: "L", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    const values = { n: "x".repeat(10_000) };
+    const spy = vi.spyOn(JSON, "stringify");
+    try {
+      const view = render(<GenerativeCard cardId="lg" spec={s} submission={{ cardId: "lg", actionId: "go", values, messageId: 1 }} onSubmit={() => {}} />);
+      // Each streamed delta re-derives the transcript: a new submission
+      // object around the same (cached) values.
+      for (let i = 0; i < 5; i++) {
+        view.rerender(<GenerativeCard cardId="lg" spec={s} submission={{ cardId: "lg", actionId: "go", values, messageId: 1 }} onSubmit={() => {}} />);
+      }
+      expect(spy.mock.calls.filter((c) => c[0] === values).length).toBeLessThanOrEqual(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("fields while an answer is on its way", () => {
+  it("freeze while held, and thaw on Unlock", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({ title: "F", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    render(<GenerativeCard cardId="frz" spec={s} onSubmit={vi.fn().mockResolvedValue(true)} />);
+    await user.type(screen.getByLabelText(/Name/), "a");
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
+    expect(screen.getByLabelText(/Name/)).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Unlock" }));
+    expect(screen.getByLabelText(/Name/)).toBeEnabled();
+  });
+});
+
+describe("include_exclude labels", () => {
+  it("fall back from whitespace and keep a labelled group when locked", () => {
+    const s = spec({
+      title: "IE",
+      components: [{ type: "include_exclude", id: "geo", label: "Geo", options: ["US", "CA"], include_label: " ", exclude_label: " ", value: { include: ["US"], exclude: [] } }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    const answer = { cardId: "iel", actionId: "go", values: { geo: { include: ["US"], exclude: [] } }, messageId: 1 };
+    const view = render(<GenerativeCard cardId="iel" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByRole("button", { name: "Include" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Exclude" })).toBeTruthy();
+    view.rerender(<GenerativeCard cardId="iel" spec={s} submission={answer} onSubmit={() => {}} />);
+    expect(screen.getByRole("group", { name: "Geo" })).toBeTruthy();
+  });
+});
+
+describe("a quick reply after editing fields", () => {
+  it("shows the defaults the reply leaves, not the unsent edits", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({
+      title: "Q",
+      components: [{ type: "text_input", id: "n", label: "Name", value: "orig" }],
+      actions: [
+        { id: "go", label: "Go" },
+        { id: "nah", label: "Never mind", kind: "message", message: "skip" },
+      ],
+    });
+    const view = render(<GenerativeCard cardId="qr2" spec={s} onSubmit={() => {}} />);
+    const box = screen.getByLabelText(/Name/);
+    await user.clear(box);
+    await user.type(box, "edited");
+    view.rerender(<GenerativeCard cardId="qr2" spec={s} reply={{ cardId: "qr2", actionId: "nah", text: "skip", messageId: 3 }} onSubmit={() => {}} />);
+    expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("orig");
+  });
+});
+
 describe("identical resend", () => {
   it("does not reopen the editor on remount once the identical resend is accepted", async () => {
     window.localStorage.clear();
@@ -1545,7 +1616,7 @@ describe("structural accessibility of every valid fixture card", () => {
     it(c.name, async () => {
       const user = userEvent.setup();
       const s = spec(c.card);
-      render(<GenerativeCard cardId="a11y" spec={s} onSubmit={() => {}} />);
+      const view = render(<GenerativeCard cardId="a11y" spec={s} onSubmit={() => {}} />);
       const card = screen.getByTestId("genui-card");
       audit(card, `${c.name} (fresh)`);
       // Pressing the first submit action shows any validation errors.
@@ -1556,6 +1627,11 @@ describe("structural accessibility of every valid fixture card", () => {
           await user.click(btn);
           audit(screen.getByTestId("genui-card"), `${c.name} (after submit)`);
         }
+        // The answer lands: the card locks (adders and editors go away).
+        view.rerender(
+          <GenerativeCard cardId="a11y" spec={s} submission={{ cardId: "a11y", actionId: submit.id, values: {}, messageId: 1 }} onSubmit={() => {}} />,
+        );
+        audit(screen.getByTestId("genui-card"), `${c.name} (answered)`);
       }
     });
   }

@@ -380,10 +380,12 @@ export function checkField(c: Component, v: unknown): string {
       // The card does not submit through HTML form validation, so the
       // input's step rule (based at min, like the native control) is
       // enforced here.
-      if (typeof c.step === "number" && c.step > 0) {
+      // A slider with no step steps by 1, like the range control it renders.
+      const step = typeof c.step === "number" ? c.step : c.type === "slider" ? 1 : undefined;
+      if (step !== undefined && step > 0) {
         const base = typeof c.min === "number" ? c.min : 0;
-        const k = (n - base) / c.step;
-        if (Math.abs(k - Math.round(k)) > 1e-9) return `Must be in steps of ${c.step}${base ? ` from ${base}` : ""}`;
+        const k = (n - base) / step;
+        if (Math.abs(k - Math.round(k)) > 1e-9) return `Must be in steps of ${step}${base ? ` from ${base}` : ""}`;
       }
       return "";
     }

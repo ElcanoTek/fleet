@@ -24,7 +24,7 @@ func TestNeverTrue(t *testing.T) {
 		if _, err := ParseExpr(src); err != nil {
 			t.Fatalf("%q does not parse: %v", src, err)
 		}
-		if got := neverTrue(src); got != want {
+		if got := neverTrue(src, nil); got != want {
 			t.Errorf("neverTrue(%q) = %v, want %v", src, got, want)
 		}
 	}
@@ -46,7 +46,30 @@ func TestNeverUsable(t *testing.T) {
 		{"a || b", "a", false},
 	}
 	for _, c := range cases {
-		if got := neverUsable(c.vis, c.dis); got != c.want {
+		if got := neverUsable(c.vis, c.dis, nil); got != c.want {
+			t.Errorf("neverUsable(%q, %q) = %v, want %v", c.vis, c.dis, got, c.want)
+		}
+	}
+}
+
+func TestBooleanComparisons(t *testing.T) {
+	bools := map[string]bool{"gate": true}
+	cases := []struct {
+		vis, dis string
+		want     bool
+	}{
+		{"gate == true", "gate", true},
+		{"true == gate", "gate", true},
+		{"gate != false", "gate", true},
+		{"gate == false", "!gate", true},
+		{"gate != true", "!gate", true},
+		{"gate == true", "!gate", false},
+		{"gate == false", "gate", false},
+		// Not a toggle: the comparison stays opaque (no false alarm).
+		{"name == true", "name", false},
+	}
+	for _, c := range cases {
+		if got := neverUsable(c.vis, c.dis, bools); got != c.want {
 			t.Errorf("neverUsable(%q, %q) = %v, want %v", c.vis, c.dis, got, c.want)
 		}
 	}

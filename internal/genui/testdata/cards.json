@@ -3297,6 +3297,29 @@
      }
     ]
    }
+  },
+  {
+   "name": "action shown on gate == true but disabled on gate",
+   "valid": false,
+   "error_contains": "can never be pressed",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "gate",
+      "label": "Gate"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "visible_if": "gate == true",
+      "disabled_if": "gate"
+     }
+    ]
+   }
   }
  ]
 }

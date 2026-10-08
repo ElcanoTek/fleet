@@ -31,6 +31,10 @@ type skelParser struct {
 	toks  []token
 	pos   int
 	atoms map[string]int
+	// bools: input ids whose value is always a boolean (toggles). For those,
+	// "x == true" IS x and "x == false" IS !x, so the comparison shares x's
+	// atom instead of floating free of it.
+	bools map[string]bool
 }
 
 func (p *skelParser) peek() token { return p.toks[p.pos] }
@@ -48,8 +52,12 @@ func (p *skelParser) isOp(s string) bool {
 
 // atomOf names the tokens from start up to the current position.
 func (p *skelParser) atomOf(start int) *bnode {
+	return p.atomFor(p.toks[start:p.pos])
+}
+
+func (p *skelParser) atomFor(toks []token) *bnode {
 	var b strings.Builder
-	for _, t := range p.toks[start:p.pos] {
+	for _, t := range toks {
 		fmt.Fprintf(&b, "%d:%s ", t.kind, t.text)
 	}
 	key := b.String()
@@ -110,7 +118,32 @@ func (p *skelParser) operand() *bnode {
 		p.unary()
 	}
 	if chained {
+		if b := p.boolCompare(start); b != nil {
+			return b
+		}
 		return p.atomOf(start)
+	}
+	return n
+}
+
+// boolCompare reduces "x == true", "x != false", "false == x"... on a
+// boolean input x to x or !x. Anything else is left to be an opaque atom.
+func (p *skelParser) boolCompare(start int) *bnode {
+	t := p.toks[start:p.pos]
+	if len(t) != 3 || t[1].kind != tOp || (t[1].text != "==" && t[1].text != "!=") {
+		return nil
+	}
+	isLit := func(k token) bool { return k.kind == tIdent && (k.text == "true" || k.text == "false") }
+	field, lit := t[0], t[2]
+	if isLit(field) {
+		field, lit = lit, field
+	}
+	if !isLit(lit) || field.kind != tIdent || !p.bools[field.text] {
+		return nil
+	}
+	n := p.atomFor([]token{field})
+	if (lit.text == "true") != (t[1].text == "==") {
+		return &bnode{op: 'n', l: n}
 	}
 	return n
 }
@@ -197,6 +230,7 @@ func (n *bnode) eval(state uint) bool {
 // the parse error elsewhere).
 type skeleton struct {
 	atoms map[string]int
+	bools map[string]bool
 }
 
 func (s *skeleton) parse(src string) *bnode {
@@ -204,7 +238,7 @@ func (s *skeleton) parse(src string) *bnode {
 	if err != nil {
 		return nil
 	}
-	p := &skelParser{toks: toks, atoms: s.atoms}
+	p := &skelParser{toks: toks, atoms: s.atoms, bools: s.bools}
 	return p.expr()
 }
 
@@ -234,16 +268,17 @@ func satisfiable(atoms int, want, deny []*bnode) bool {
 	return false
 }
 
-// neverTrue: a condition that holds in no state at all.
-func neverTrue(src string) bool {
-	s := &skeleton{atoms: map[string]int{}}
+// neverTrue: a condition that holds in no state at all. bools names the
+// boolean-valued inputs (see skelParser.bools); nil is allowed.
+func neverTrue(src string, bools map[string]bool) bool {
+	s := &skeleton{atoms: map[string]int{}, bools: bools}
 	n := s.parse(src)
 	return n != nil && !satisfiable(len(s.atoms), []*bnode{n}, nil)
 }
 
 // neverUsable: an action that is disabled in every state where it is shown.
-func neverUsable(visibleIf, disabledIf string) bool {
-	s := &skeleton{atoms: map[string]int{}}
+func neverUsable(visibleIf, disabledIf string, bools map[string]bool) bool {
+	s := &skeleton{atoms: map[string]int{}, bools: bools}
 	var want, deny []*bnode
 	if visibleIf != "" {
 		want = append(want, s.parse(visibleIf))

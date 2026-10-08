@@ -739,6 +739,30 @@
     }
    },
    "valid": false
+  },
+  {
+   "name": "slider without step off the unit grid",
+   "component": {
+    "type": "slider",
+    "id": "f",
+    "label": "F",
+    "min": 0,
+    "max": 10,
+    "value": 0.5
+   },
+   "valid": false
+  },
+  {
+   "name": "slider without step on the unit grid",
+   "component": {
+    "type": "slider",
+    "id": "f",
+    "label": "F",
+    "min": 0,
+    "max": 10,
+    "value": 3
+   },
+   "valid": true
   }
  ]
 }

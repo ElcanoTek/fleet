@@ -66,7 +66,8 @@ is the shared list that both test suites assert against.
 
 Plus card-level `actions` (`submit` sends the values; `message` sends a fixed
 reply, which serves as quick-reply buttons), `field_errors` (inline errors on
-`id` or `repeater[i].field`), and `replaces` (collapses an older card).
+`id` or `repeater[i].field`, with `i` the 0-based item position, unlike the
+1-based `index` in expressions), and `replaces` (collapses an older card).
 
 A quick reply is sent as `[UI reply] card=<id> action=<id>` followed by the
 button's text, so the card it answered is known from the marker rather than by
