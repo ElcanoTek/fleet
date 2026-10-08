@@ -91,6 +91,16 @@ describe("refused card messages", () => {
     expect(s.submissions.has("c1")).toBe(false);
   });
 
+  it("do not lock the card when stopped before the server took them", () => {
+    const cancelled = { id: 3, role: "assistant", content: "", state: "done", cancelled: true } as unknown as Message;
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "c1", input: card("One"), resultText: "UI_DISPLAYED card_id=c1" }]),
+      { ...user(2, buildSubmissionMessage("c1", "go", { a: 1 })), notSent: true },
+      cancelled,
+    ]);
+    expect(s.submissions.has("c1")).toBe(false);
+  });
+
   it("still lock the card when they were accepted and the turn then failed", () => {
     const modelRequired = {
       id: 3,

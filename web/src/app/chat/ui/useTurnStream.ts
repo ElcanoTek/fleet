@@ -35,6 +35,7 @@ import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { mcpAccountOverrides } from "./mcpAccounts";
 import { allocMessageIds } from "./messageIds";
+import { isCardMessage } from "./genui/model";
 import { enabledOptionalMcpServerNames } from "./mcpSelection";
 import {
   createRecoveryElection,
@@ -3749,11 +3750,21 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     const composerKey = convId ?? PENDING_CONV_KEY;
     if (!value || !userEmail) return false;
     if (modelError) return false;
+    // A generative-UI card's answer is not composer text: it neither clears
+    // nor restores what the user is typing, and never takes the composer's
+    // pending attachments with it.
+    const fromCard = isCardMessage(value);
+    const clearComposer = () => {
+      if (!fromCard) setPromptForKey(composerKey, "");
+    };
+    const restoreComposer = () => {
+      if (!fromCard) setPromptForKey(composerKey, value);
+    };
     // Busy conversation (#785): the submission QUEUES server-side instead of
     // being dropped (and instead of the old implicit cancel). The composer
     // clears; the chip strip under it tracks the queued input's lifecycle.
     if (convId && streamingConvsRef.current.has(convId)) {
-      setPromptForKey(composerKey, "");
+      clearComposer();
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -3767,7 +3778,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         });
         const kind = classifyQueueSubmitResponse(res);
         if (kind === "error") {
-          setPromptForKey(composerKey, value); // give the text back
+          restoreComposer(); // give the text back
           return false;
         }
         if (kind === "stream") {
@@ -3829,7 +3840,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           return true;
         }
       } catch {
-        setPromptForKey(composerKey, value);
+        restoreComposer();
         return false;
       }
       void refreshQueue(convId);
@@ -3840,7 +3851,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // the text still in the composer so the user can retry without losing
     // their message. Empty list → no-op, fast path unchanged.
     let uploadedAttachments: UploadedAttachmentMeta[] = [];
-    if (getPendingAttachmentsForKey(composerKey).length > 0) {
+    if (!fromCard && getPendingAttachmentsForKey(composerKey).length > 0) {
       try {
         uploadedAttachments = await uploadPendingAttachments(composerKey);
       } catch (err) {
@@ -3852,12 +3863,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
     }
 
-    setPromptForKey(composerKey, "");
-    setPendingAttachmentsForKey(composerKey, []);
-    setAttachmentErrorForKey(composerKey, null);
-    // Composer just emptied — re-arm the spreadsheet nudge for the next
-    // upload (formerly handled by a pendingAttachments.length effect).
-    setSpreadsheetNudgeDismissed(false);
+    if (!fromCard) {
+      setPromptForKey(composerKey, "");
+      setPendingAttachmentsForKey(composerKey, []);
+      setAttachmentErrorForKey(composerKey, null);
+      // Composer just emptied — re-arm the spreadsheet nudge for the next
+      // upload (formerly handled by a pendingAttachments.length effect).
+      setSpreadsheetNudgeDismissed(false);
+    }
 
     const baseId = allocMessageIds(2);
     const assistantId = baseId + 1;

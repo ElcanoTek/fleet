@@ -2043,6 +2043,40 @@
      }
     ]
    }
+  },
+  {
+   "name": "required display-only table",
+   "valid": false,
+   "error_contains": "only a selectable table (select: single|multi) can be required",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "table",
+      "required": true,
+      "columns": [
+       {
+        "key": "a"
+       }
+      ],
+      "rows": [
+       {
+        "a": "1"
+       }
+      ]
+     },
+     {
+      "type": "text_input",
+      "id": "n"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
   }
  ]
 }

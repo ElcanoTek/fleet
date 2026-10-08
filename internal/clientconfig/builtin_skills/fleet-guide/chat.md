@@ -474,7 +474,8 @@ card helps; you can also simply ask for one ("give me a form for this").
   one-line note (**Show** opens it), with any problems marked on the new card's
   fields.
 - **Unsent answers are kept in this browser** while you scroll or reload, until
-  you send them.
+  you send them, for up to 7 days and for the 20 cards you edited most recently.
+  Sending from a card leaves whatever you are typing in the message box alone.
 - **Very large answers are not sent.** If your answers (usually a long pasted
   list) are too big for one message, the card says so and sends nothing.
   Shorten the list and press the button again.

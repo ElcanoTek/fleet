@@ -157,8 +157,11 @@ to change. The loop that replaces a bespoke form:
   the submitted-answers bubble but not the card.
 - **No per-deployment switch.** The tool is part of the interactive roster for
   every deployment. An operator who wants it off has no setting yet.
-- **Drafts are per browser.** Unsent answers persist in `localStorage` (they
-  survive the virtualized transcript's remounts and reloads), not across
-  devices.
-- **Submitting from a card clears the composer**, like the existing "Ask
-  again" button. It goes through the same send path.
+- **Drafts are per browser, and bounded.** Unsent answers persist in
+  `localStorage` (they survive the virtualized transcript's remounts and
+  reloads), not across devices. A draft lasts 7 days, and only the 20 most
+  recently edited cards keep one: an abandoned card has no other cleanup.
+
+A card send goes through the composer's send path, but it leaves the composer
+alone: the text being typed stays, its pending attachments are not sent with
+the card answer, and a refused card answer is not restored into it.

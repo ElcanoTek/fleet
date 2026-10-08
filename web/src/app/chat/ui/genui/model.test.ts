@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSubmissionMessage,
+  buildReplyMessage,
+  isCardMessage,
   checkField,
   MAX_LIST_ITEMS,
   collect,
@@ -190,5 +192,23 @@ describe("email format", () => {
     for (const ok of ["a@b.com", "first.last+tag@sub.example.co.uk", " a@b.io "]) {
       expect(checkField(email, ok)).toBe("");
     }
+  });
+});
+
+describe("calendar dates", () => {
+  it("accepts years below 100, which Date.UTC would remap", () => {
+    expect(isCalendarDate("0001-01-01")).toBe(true);
+    expect(isCalendarDate("0099-12-31")).toBe(true);
+    expect(isCalendarDate("0099-02-30")).toBe(false);
+    expect(isCalendarDate("2024-02-29")).toBe(true);
+    expect(isCalendarDate("2023-02-29")).toBe(false);
+  });
+});
+
+describe("isCardMessage", () => {
+  it("recognizes card submissions and quick replies only", () => {
+    expect(isCardMessage(buildSubmissionMessage("c", "go", {}))).toBe(true);
+    expect(isCardMessage(buildReplyMessage("c", "a", "yes"))).toBe(true);
+    expect(isCardMessage("hello")).toBe(false);
   });
 });

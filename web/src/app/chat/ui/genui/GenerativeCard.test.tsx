@@ -850,3 +850,40 @@ describe("eighth Codex pass", () => {
     expect(inputs.every((i) => i.value === "0")).toBe(true);
   });
 });
+
+describe("ninth Codex pass", () => {
+  it("keeps the progressbar's ARIA value inside its range", () => {
+    const s = spec({
+      title: "P",
+      components: [
+        { type: "number", id: "q", label: "Q", value: 250 },
+        { type: "progress", label: "Used", value: "q", max: 100 },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="prog" spec={s} onSubmit={() => {}} />);
+    const bar = screen.getByRole("progressbar");
+    expect(bar.getAttribute("aria-valuenow")).toBe("100");
+    expect(screen.getByText(/250 \/ 100/)).toBeTruthy();
+  });
+
+  it("keeps a bounded number of drafts, dropping the least recently edited", async () => {
+    window.localStorage.clear();
+    for (let i = 0; i < 25; i++) {
+      window.localStorage.setItem(`fleet.genui.draft.old${i}`, JSON.stringify({ values: { n: "x" }, at: Date.now() - 1000 + i }));
+    }
+    window.localStorage.setItem("fleet.genui.draft.legacy", JSON.stringify({ n: "no timestamp" }));
+    window.localStorage.setItem("fleet.genui.draft.stale", JSON.stringify({ values: { n: "x" }, at: Date.now() - 30 * 24 * 3600 * 1000 }));
+    const user = userEvent.setup();
+    const s = spec({ title: "D", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    render(<GenerativeCard cardId="fresh" spec={s} onSubmit={() => {}} />);
+    await user.type(screen.getByLabelText(/Name/), "A");
+    const keys = Object.keys(window.localStorage).filter((k) => k.startsWith("fleet.genui.draft."));
+    expect(keys.length).toBe(20);
+    expect(keys).toContain("fleet.genui.draft.fresh");
+    expect(keys).toContain("fleet.genui.draft.old24");
+    expect(keys).not.toContain("fleet.genui.draft.old0");
+    expect(keys).not.toContain("fleet.genui.draft.legacy");
+    expect(keys).not.toContain("fleet.genui.draft.stale");
+  });
+});

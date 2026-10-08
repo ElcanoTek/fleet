@@ -195,7 +195,9 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export function isCalendarDate(s: string): boolean {
   if (!DATE_RE.test(s)) return false;
   const [y, m, d] = s.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
+  // setUTCFullYear, not Date.UTC: Date.UTC maps years 0–99 to 1900–1999.
+  const dt = new Date(0);
+  dt.setUTCFullYear(y, m - 1, d);
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
 }
 
@@ -460,6 +462,16 @@ export function buildReplyMessage(cardId: string, actionId: string, text: string
 }
 
 const REPLY_RE = /^\[UI reply\] card=(\S+) action=(\S+)\n([\s\S]*)$/;
+
+/**
+ * Whether a message was written by a card (a submission or a quick reply),
+ * not typed in the composer. Such a send must leave the composer alone: its
+ * text, its attachments, and — when the send is refused — no marker text
+ * restored into it.
+ */
+export function isCardMessage(text: string): boolean {
+  return text.startsWith(UI_SUBMISSION_PREFIX) || text.startsWith(UI_REPLY_PREFIX);
+}
 
 export function parseReplyMessage(text: string): Reply | null {
   if (!text.startsWith(UI_REPLY_PREFIX)) return null;

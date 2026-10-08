@@ -687,3 +687,31 @@ describe("a submission whose acknowledgement was lost", () => {
     expect(bubble?.notSent).toBeFalsy();
   });
 });
+
+describe("a card answer queued behind a running turn", () => {
+  const refusedQueue = async (text: string) => {
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    const harnessFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+        String(input) === "/api/chat" ? new Response("boom", { status: 500 }) : harnessFetch(input, init),
+      ),
+    );
+    const setPromptForKey = vi.fn();
+    const deps = { ...h.deps, setPromptForKey, streamingConvsRef: { current: new Set([CONV]) } };
+    const { result } = renderHook(() => useTurnStream(deps));
+    expect(await result.current.submitPrompt(text)).toBe(false);
+    return setPromptForKey;
+  };
+
+  it("never writes its marker text into the composer when refused", async () => {
+    const setPromptForKey = await refusedQueue("[UI submission] card=c1 action=go\n{}");
+    expect(setPromptForKey).not.toHaveBeenCalled();
+  });
+
+  it("still gives typed text back to the composer when refused", async () => {
+    const setPromptForKey = await refusedQueue("keep it short");
+    expect(setPromptForKey).toHaveBeenLastCalledWith(CONV, "keep it short");
+  });
+});

@@ -923,8 +923,13 @@ func (v *validator) tableRules(path string, obj map[string]any) {
 		} else {
 			v.selectableRowKeys(path, rk, obj)
 		}
-	} else if _, ok := obj["id"]; ok {
-		v.addf(path+".id", "only a selectable table (select: single|multi) takes an id")
+	} else {
+		if _, ok := obj["id"]; ok {
+			v.addf(path+".id", "only a selectable table (select: single|multi) takes an id")
+		}
+		if _, ok := obj["required"]; ok {
+			v.addf(path+".required", "only a selectable table (select: single|multi) can be required: a display table collects nothing")
+		}
 	}
 }
 

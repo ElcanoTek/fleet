@@ -129,21 +129,64 @@ export type GenerativeCardProps = {
 
 const DRAFT_PREFIX = "fleet.genui.draft.";
 
+// Drafts are bounded: an unsent card is usually abandoned (replaced by a
+// newer card, its conversation deleted), and nothing else would ever reclaim
+// its entry. A draft older than DRAFT_TTL_MS is dropped, and at most
+// MAX_DRAFTS are kept — the least recently edited go first.
+const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_DRAFTS = 20;
+
+type StoredDraft = { values: Values; at: number };
+
+function readDraft(key: string): StoredDraft | null {
+  const raw = window.localStorage.getItem(key);
+  if (!raw) return null;
+  const v = JSON.parse(raw) as Partial<StoredDraft> | null;
+  if (!v || typeof v.at !== "number" || !v.values || typeof v.values !== "object" || Array.isArray(v.values)) return null;
+  return { values: v.values, at: v.at };
+}
+
 function loadDraft(cardId: string): Values | null {
   try {
-    const raw = window.localStorage.getItem(DRAFT_PREFIX + cardId);
-    if (!raw) return null;
-    const v = JSON.parse(raw);
-    return v && typeof v === "object" && !Array.isArray(v) ? (v as Values) : null;
+    const d = readDraft(DRAFT_PREFIX + cardId);
+    if (!d || Date.now() - d.at > DRAFT_TTL_MS) return null;
+    return d.values;
   } catch {
     return null;
   }
 }
 
+/** Drops expired or unreadable drafts, then the oldest past MAX_DRAFTS - 1. */
+function pruneDrafts(keep: string) {
+  const live: { key: string; at: number }[] = [];
+  for (let i = 0; i < window.localStorage.length; i++) {
+    const key = window.localStorage.key(i);
+    if (!key || !key.startsWith(DRAFT_PREFIX) || key === keep) continue;
+    let d: StoredDraft | null = null;
+    try {
+      d = readDraft(key);
+    } catch {
+      d = null;
+    }
+    if (!d || Date.now() - d.at > DRAFT_TTL_MS) live.push({ key, at: -1 });
+    else live.push({ key, at: d.at });
+  }
+  live.sort((a, b) => b.at - a.at);
+  for (const [i, d] of live.entries()) {
+    if (d.at < 0 || i >= MAX_DRAFTS - 1) window.localStorage.removeItem(d.key);
+  }
+}
+
 function saveDraft(cardId: string, values: Values | null) {
+  const key = DRAFT_PREFIX + cardId;
   try {
-    if (values) window.localStorage.setItem(DRAFT_PREFIX + cardId, JSON.stringify(values));
-    else window.localStorage.removeItem(DRAFT_PREFIX + cardId);
+    if (!values) {
+      window.localStorage.removeItem(key);
+      return;
+    }
+    const isNew = window.localStorage.getItem(key) === null;
+    if (isNew) pruneDrafts(key);
+    window.localStorage.setItem(key, JSON.stringify({ values, at: Date.now() }));
   } catch {
     // Private mode / quota: a draft is a convenience, never state we rely on.
   }
@@ -1080,7 +1123,8 @@ function Progress({ c }: { c: Component }) {
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={max}
-        aria-valuenow={v}
+        // The bar and its ARIA value stay in range; the label shows the raw value.
+        aria-valuenow={max > 0 ? Math.max(0, Math.min(max, v)) : 0}
         aria-label={str(c.label) || "Progress"}
       >
         <div className="h-full rounded-full bg-[var(--color-accent)]" style={{ width: `${pct}%` }} />
