@@ -1074,6 +1074,61 @@ describe("a held send proven unsent", () => {
   });
 });
 
+describe("multi_select at its cap", () => {
+  it("keeps a labelled group carrying help and errors when the adder is gone", () => {
+    const s = spec({
+      title: "M",
+      components: [{ type: "multi_select", id: "tags", label: "Tags", help: "Pick one", options: ["a", "b"], max_items: 1, value: ["a"] }],
+      actions: [{ id: "go", label: "Go" }],
+      field_errors: [{ field: "tags", message: "Not allowed" }],
+    });
+    render(<GenerativeCard cardId="msc" spec={s} onSubmit={() => {}} />);
+    expect(screen.queryByRole("textbox")).toBeNull();
+    const group = screen.getByRole("group", { name: "Tags" });
+    expect(group.getAttribute("aria-invalid")).toBe("true");
+    const described = (group.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent);
+    expect(described).toEqual(["Pick one", "Not allowed"]);
+  });
+
+  it("names the adder by the field label below the cap", () => {
+    const s = spec({ title: "M", components: [{ type: "multi_select", id: "tags", label: "Tags", options: ["a", "b"] }], actions: [{ id: "go", label: "Go" }] });
+    render(<GenerativeCard cardId="msa" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByRole("textbox", { name: "Tags" })).toBeTruthy();
+  });
+});
+
+describe("confirmation focus", () => {
+  it("moves focus to Yes, and back to the action on Back or Escape", async () => {
+    const user = userEvent.setup();
+    const s = spec({ title: "C", components: [{ type: "text", text: "?" }], actions: [{ id: "go", label: "Delete", confirm: "Really?" }] });
+    render(<GenerativeCard cardId="cf" spec={s} onSubmit={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Yes, delete" }));
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Delete" }));
+    await user.keyboard("{Enter}");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Yes, delete" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Delete" }));
+  });
+});
+
+describe("chart accessibility", () => {
+  it("exposes the series values as a table", () => {
+    const s = spec({
+      title: "Spend",
+      components: [{ type: "chart", kind: "bar", title: "Spend", labels: ["Mon", "Tue"], unit: "$", series: [{ name: "Ads", values: [10, null] }] }],
+    });
+    render(<GenerativeCard cardId="ch" spec={s} onSubmit={() => {}} />);
+    const table = screen.getByRole("table", { name: "Spend" });
+    expect(within(table).getByRole("columnheader", { name: "Ads" })).toBeTruthy();
+    const mon = within(table).getByRole("row", { name: /Mon/ });
+    expect(mon.textContent).toContain("$10");
+    expect(within(table).getByRole("row", { name: /Tue/ }).textContent).toContain("No value");
+  });
+});
+
 describe("identical resend", () => {
   it("does not reopen the editor on remount once the identical resend is accepted", async () => {
     window.localStorage.clear();

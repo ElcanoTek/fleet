@@ -928,3 +928,47 @@ describe("a held card send that recovery later proves absent", () => {
     expect(await run(true)).not.toHaveBeenCalled();
   });
 });
+
+describe("a held queued card send", () => {
+  const run = async (landed: boolean) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/chat") throw new TypeError("network error");
+        return new Response("upstream down", { status: 503 });
+      }),
+    );
+    const deps = { ...h.deps, streamingConvsRef: { current: new Set([CONV]) } };
+    const { result } = renderHook(() => useTurnStream(deps));
+    const onUnsent = vi.fn();
+    const text = "[UI submission] card=c1 action=go\n{}";
+    const sending = result.current.submitPrompt(text, { fromCard: true, onUnsent });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await sending).toBe(true);
+    // The server comes back.
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/queue")) return json({ items: [] });
+        if (url.includes("/api/conversations/"))
+          return json({ history: landed ? [{ role: "user", type: "text", content: { text } }] : [] });
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(120_000);
+    return onUnsent;
+  };
+
+  it("releases the hold once the server shows it never arrived", async () => {
+    expect(await run(false)).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the hold when the server has it", async () => {
+    expect(await run(true)).not.toHaveBeenCalled();
+  });
+});

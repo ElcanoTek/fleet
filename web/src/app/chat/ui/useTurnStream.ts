@@ -3792,6 +3792,21 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
   // `fromCard`: a generative-UI card is sending its answer. Said by the
   // caller, never inferred from the text — a user may type anything.
+  // recheckHeldSend: a card send held as "possibly sent" that no recovery
+  // chain will settle. Re-asks the server until it answers; "no" calls
+  // onUnsent, "yes" ends quietly, and an unmount stops it.
+  const recheckHeldSend = (convId: string, text: string, submissionId: string, onUnsent: () => void, attempt = 0) => {
+    window.setTimeout(() => {
+      void (async () => {
+        if (recoveryUnmountedRef.current) return;
+        const landed = await submissionLanded(convId, text, submissionId);
+        if (recoveryUnmountedRef.current) return;
+        if (landed === "no") onUnsent();
+        else if (landed === "unknown") recheckHeldSend(convId, text, submissionId, onUnsent, attempt + 1);
+      })();
+    }, recoveryDelayFor(attempt));
+  };
+
   const submitPrompt = async (
     submittedPrompt: string,
     // onUnsent: a card send reported as held (uncertain) whose absence the
@@ -3911,7 +3926,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // Unknown is not refused. A card treats its answer as possibly sent
         // (it holds, with Unlock, instead of offering a duplicate resend);
         // typed text goes back to the composer either way, so it is not lost.
-        if (landed === "unknown" && fromCard) return true;
+        if (landed === "unknown" && fromCard) {
+          // No recovery chain follows a queued send, so keep asking (on the
+          // recovery backoff) until the server answers either way; a
+          // definitive "not there" releases the card's hold.
+          if (opts?.onUnsent) recheckHeldSend(convId, value, queueSubmissionId, opts.onUnsent);
+          return true;
+        }
         restoreComposer();
         return false;
       }

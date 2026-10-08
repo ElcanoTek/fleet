@@ -924,8 +924,7 @@ func (v *validator) repeaterRules(path string, obj map[string]any, num func(stri
 // disabledItems: a disabled repeater disables every field in its items, and
 // a disabled field is submitted without being validated, so each required
 // field must already be answered in every item the browser will render (the
-// value's items over the field defaults, or the min_items fresh items). A
-// field gated by visible_if is left alone: hidden, it is not submitted.
+// value's items over the field defaults, or the min_items fresh items).
 func (v *validator) disabledItems(path string, obj map[string]any, kids []any) {
 	fields := map[string]map[string]any{}
 	collectInputs(kids, fields)
@@ -941,8 +940,9 @@ func (v *validator) disabledItems(path string, obj map[string]any, kids []any) {
 	}
 	for _, id := range sortedCompKeys(fields) {
 		f := fields[id]
-		req, _ := f["required"].(bool)
-		if _, gated := f["visible_if"]; !req || gated {
+		// A visible_if gate does not excuse it: once shown, the field is
+		// disabled with the rest of the item and submitted unvalidated.
+		if req, _ := f["required"].(bool); !req {
 			continue
 		}
 		typ, _ := f["type"].(string)
@@ -1200,6 +1200,7 @@ func (v *validator) checkCollectionValue(path, typ string, obj map[string]any, v
 				v.addf(path, "at most %d items", MaxListItems)
 			}
 		}
+		v.itemCount(path, obj, listCount(typ, obj, val.([]any)))
 	case "include_exclude":
 		m, ok := val.(map[string]any)
 		if !ok {
@@ -1239,6 +1240,13 @@ func (v *validator) checkCollectionValue(path, typ string, obj map[string]any, v
 		if len(arr) > MaxRepeaterItems {
 			v.addf(path, "at most %d items", MaxRepeaterItems)
 		}
+		n := 0
+		for _, item := range arr {
+			if _, ok := item.(map[string]any); ok {
+				n++
+			}
+		}
+		v.itemCount(path, obj, n)
 		fields := map[string]map[string]any{}
 		if kids, ok := obj["fields"].([]any); ok {
 			collectInputs(kids, fields)
@@ -1264,6 +1272,46 @@ func (v *validator) checkCollectionValue(path, typ string, obj map[string]any, v
 	default:
 		v.addf(path, "%s does not take a value", typ)
 	}
+}
+
+// itemCount checks a collection default against the input's own bounds.
+// Over max_items is never a value the user could have built. Under
+// min_items is fine while the user can add more, but a disabled input is
+// submitted without being validated, so its default must already comply.
+func (v *validator) itemCount(path string, obj map[string]any, n int) {
+	if hi, ok := obj["max_items"].(float64); ok && float64(n) > hi {
+		v.addf(path, "has %d items, more than max_items %v", n, hi)
+	}
+	if lo, ok := obj["min_items"].(float64); ok && float64(n) < lo {
+		if dis, _ := obj["disabled"].(bool); dis {
+			v.addf(path, "has %d items, fewer than min_items %v, and the input is disabled (the user cannot add any)", n, lo)
+		}
+	}
+}
+
+// listCount is how many entries the browser keeps from a list default: a
+// list_input drops blank lines (and repeats, with dedupe), like normalizeList
+// in web/src/app/chat/ui/genui/model.ts.
+func listCount(typ string, obj map[string]any, arr []any) int {
+	if typ != "list_input" {
+		return len(arr)
+	}
+	// dedupe defaults to on in the browser.
+	dedupe := true
+	if d, ok := obj["dedupe"].(bool); ok {
+		dedupe = d
+	}
+	seen := map[string]bool{}
+	n := 0
+	for _, e := range arr {
+		s := strings.TrimSpace(e.(string))
+		if s == "" || (dedupe && seen[s]) {
+			continue
+		}
+		seen[s] = true
+		n++
+	}
+	return n
 }
 
 // includeExcludeEntries refuses a default the user could not have built: an

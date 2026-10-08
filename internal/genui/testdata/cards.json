@@ -2898,6 +2898,160 @@
      }
     ]
    }
+  },
+  {
+   "name": "disabled repeater below min_items",
+   "valid": false,
+   "error_contains": "fewer than min_items",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "r",
+      "label": "R",
+      "disabled": true,
+      "min_items": 2,
+      "value": [],
+      "fields": [
+       {
+        "type": "text_input",
+        "id": "n",
+        "label": "N"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "editable repeater below min_items",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "r",
+      "label": "R",
+      "min_items": 2,
+      "value": [],
+      "fields": [
+       {
+        "type": "text_input",
+        "id": "n",
+        "label": "N"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "multi_select default over max_items",
+   "valid": false,
+   "error_contains": "more than max_items",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "multi_select",
+      "id": "m",
+      "label": "M",
+      "options": [
+       "a",
+       "b"
+      ],
+      "max_items": 1,
+      "disabled": true,
+      "value": [
+       "a",
+       "b"
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "list_input default counts after dedupe",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "list_input",
+      "id": "l",
+      "label": "L",
+      "max_items": 2,
+      "value": [
+       "a",
+       "a",
+       " ",
+       "b"
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "disabled repeater with a gated unanswered required field",
+   "valid": false,
+   "error_contains": "the repeater is disabled",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "gate",
+      "label": "Gate"
+     },
+     {
+      "type": "repeater",
+      "id": "r",
+      "label": "R",
+      "disabled": true,
+      "fields": [
+       {
+        "type": "text_input",
+        "id": "n",
+        "label": "N",
+        "required": true,
+        "visible_if": "gate"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
   }
  ]
 }

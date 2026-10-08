@@ -661,6 +661,31 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
   const confirmingVisible = confirming && isVisible(confirming, scope) ? confirming : null;
   // Discard it outright, so it does not silently return if the action shows again.
   if (confirming && !confirmingVisible) setConfirming(null);
+  // Keyboard focus follows the confirmation: the action row it replaces
+  // unmounts the focused button, so focus moves to Yes when it opens and
+  // back to the originating action when the user backs out.
+  const confirmId = confirmingVisible?.id ?? null;
+  const confirmYesRef = useRef<HTMLButtonElement | null>(null);
+  const refocusRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (confirmId) {
+      confirmYesRef.current?.focus();
+      return;
+    }
+    const back = refocusRef.current;
+    refocusRef.current = null;
+    if (back) rootRef.current?.querySelector<HTMLElement>(`[data-action-id="${CSS.escape(back)}"]`)?.focus();
+  }, [confirmId]);
+  const backOut = () => {
+    refocusRef.current = confirming?.id ?? null;
+    setConfirming(null);
+  };
+  const escapeBacksOut = (e: { key: string; preventDefault: () => void }) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      backOut();
+    }
+  };
   const sentLabel = submittedAction
     ? (spec.actions ?? []).find((a) => a.id === submittedAction)?.label ?? submittedAction
     : null;
@@ -718,13 +743,15 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
               <div className="flex flex-wrap items-center gap-2" role="alertdialog" aria-label="Confirm">
                 <span className="text-[0.78rem]">{confirmingVisible.confirm}</span>
                 <button
+                  ref={confirmYesRef}
                   type="button"
                   className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] hover:opacity-90"
                   onClick={() => onConfirm(confirmingVisible)}
+                  onKeyDown={escapeBacksOut}
                 >
                   Yes, {confirmingVisible.label.toLowerCase()}
                 </button>
-                <button type="button" className={chipButton} onClick={() => setConfirming(null)}>
+                <button type="button" className={chipButton} onClick={backOut} onKeyDown={escapeBacksOut}>
                   Back
                 </button>
               </div>
@@ -1340,7 +1367,10 @@ function Chart({ c }: { c: Component }) {
   return (
     <figure className="m-0 grid min-w-0 gap-1">
       {c.title ? <figcaption className="text-[0.78rem] font-medium">{str(c.title)}</figcaption> : null}
-      <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img" aria-label={str(c.title) || "Chart"}>
+      {/* The drawing is visual only; the table below carries the same data
+          for assistive technology (an SVG image is announced by its name
+          alone, and its <title> tooltips are not reachable). */}
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" aria-hidden="true">
         <line x1={padL} x2={W - 8} y1={y(0)} y2={y(0)} stroke="var(--color-border-strong)" />
         <text x={padL - 4} y={y(maxV) + 4} textAnchor="end" fontSize="11" fill="var(--color-text-muted)">
           {fmt(maxV)}
@@ -1402,6 +1432,29 @@ function Chart({ c }: { c: Component }) {
               });
             })}
       </svg>
+      <table className="sr-only">
+        <caption>{str(c.title) || "Chart"}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Label</th>
+            {series.map((s, si) => (
+              <th key={si} scope="col">
+                {s.name || `Series ${si + 1}`}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {labels.map((l, i) => (
+            <tr key={i}>
+              <th scope="row">{l}</th>
+              {series.map((s, si) => (
+                <td key={si}>{s.values[i] == null ? "No value" : fmt(s.values[i] as number)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
       {series.length > 1 ? (
         <div className="flex flex-wrap gap-3 text-[0.72rem] text-[var(--color-text-muted)]">
           {series.map((s, si) => (
@@ -1770,11 +1823,13 @@ function Adder({
   taken,
   onAdd,
   inputId,
+  labelledBy,
 }: {
   c: Component;
   taken: Set<string>;
   onAdd: (v: string) => void;
   inputId?: string;
+  labelledBy?: string;
 }) {
   const opts = optionsOf(c).filter((o) => !taken.has(o.value));
   const custom = c.allow_custom === true;
@@ -1795,6 +1850,7 @@ function Adder({
     <div className="grid min-w-0 gap-1">
       <input
         id={inputId}
+        aria-labelledby={labelledBy}
         type="text"
         className={inputClass}
         placeholder={str(c.placeholder) || (custom ? "Type and press Enter…" : "Search options…")}
@@ -1829,8 +1885,11 @@ function MultiSelect({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const v = Array.isArray(value) ? (value as string[]) : [];
   const { locked } = useCard();
   const max = numOr(c.max_items);
+  // The adder disappears at max_items, so the field's id, label, help and
+  // error state live on this always-rendered group instead.
+  const labelId = inputId ? `${inputId}-label` : undefined;
   return (
-    <div className="grid min-w-0 gap-1.5">
+    <div className="grid min-w-0 gap-1.5" role="group" id={inputId} aria-labelledby={labelId}>
       {v.length > 0 ? (
         <div className="flex flex-wrap gap-1">
           {v.map((x) => (
@@ -1839,7 +1898,13 @@ function MultiSelect({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         </div>
       ) : null}
       {max === undefined || v.length < max ? (
-        <Adder c={c} taken={new Set(v)} onAdd={(x) => onChange?.(v.includes(x) ? v : [...v, x])} inputId={inputId} />
+        <Adder
+          c={c}
+          taken={new Set(v)}
+          onAdd={(x) => onChange?.(v.includes(x) ? v : [...v, x])}
+          inputId={inputId ? `${inputId}-add` : undefined}
+          labelledBy={labelId}
+        />
       ) : null}
     </div>
   );
