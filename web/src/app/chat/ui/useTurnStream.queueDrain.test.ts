@@ -880,7 +880,7 @@ describe("a direct card send whose response is lost while the server is unreacha
 });
 
 describe("a held card send that recovery later proves absent", () => {
-  const run = async (landed: boolean) => {
+  const run = async (landed: boolean, queueFailures = 0) => {
     vi.useFakeTimers();
     const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
     vi.stubGlobal(
@@ -903,7 +903,10 @@ describe("a held card send that recovery later proves absent", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.includes("/queue")) return json({ items: [] });
+        if (url.includes("/queue")) {
+          if (queueFailures-- > 0) return new Response("upstream down", { status: 503 });
+          return json({ items: [] });
+        }
         if (url.includes("/inflight")) return json({ inflight: false, turn_id: "" });
         if (url.includes("/api/conversations/"))
           return json({
@@ -926,6 +929,10 @@ describe("a held card send that recovery later proves absent", () => {
 
   it("leaves the hold when the server does hold the submission", async () => {
     expect(await run(true)).not.toHaveBeenCalled();
+  });
+
+  it("keeps asking when the answer is still unknown after recovery", async () => {
+    expect(await run(false, 3)).toHaveBeenCalledTimes(1);
   });
 });
 

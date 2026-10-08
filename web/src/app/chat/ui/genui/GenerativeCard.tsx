@@ -1184,7 +1184,11 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
     <div className="grid min-w-0 gap-1" {...group}>
       {!wrapped && c.label ? <div className="text-[0.78rem] font-medium">{str(c.label).trim()}</div> : null}
       <div className="max-h-[22rem] min-w-0 overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)]">
-        <table className="w-full border-collapse text-[0.78rem]">
+        <table
+          className="w-full border-collapse text-[0.78rem]"
+          // Named by the field's label when it is an input, else by its own.
+          {...(wrapped && inputId ? { "aria-labelledby": `${inputId}-label` } : { "aria-label": str(c.label).trim() || "Table" })}
+        >
           <thead className="sticky top-0 bg-[var(--color-bg)]">
             <tr>
               {mode !== "none" ? <th className="w-8 border-b border-[var(--color-border)]" aria-label="Select" /> : null}
@@ -1498,7 +1502,7 @@ function Diff({ c }: { c: Component }) {
     <div className="grid min-w-0 gap-1">
       {c.title ? <div className="text-[0.78rem] font-medium">{str(c.title)}</div> : null}
       <div className="overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)]">
-        <table className="w-full border-collapse text-[0.78rem]">
+        <table className="w-full border-collapse text-[0.78rem]" aria-label={str(c.title).trim() || "Changes"}>
           <tbody>
             {objs(c.rows).map((r, i) => (
               <tr key={i} className="border-b border-[var(--color-border)] last:border-b-0">
@@ -1586,7 +1590,9 @@ function InputField({ c, Render }: { c: Component; Render: Renderer }) {
         // A repeater's own fields lock themselves; its expand buttons must not.
         <Render c={c} value={value} onChange={onChange} inputId={inputId} />
       ) : (
-        <fieldset disabled={locked || c.disabled === true || item?.disabled === true} className="m-0 min-w-0 border-0 p-0">
+        // The fieldset only carries `disabled` to the control inside; it has
+        // no legend, so it is not announced as an unnamed group.
+        <fieldset role="none" disabled={locked || c.disabled === true || item?.disabled === true} className="m-0 min-w-0 border-0 p-0">
           <Render c={c} value={value} onChange={onChange} inputId={inputId} />
         </fieldset>
       )}

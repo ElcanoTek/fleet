@@ -463,8 +463,13 @@ function ev(n: Node, scope: Scope): Value {
       return Object.prototype.hasOwnProperty.call(scope, n.name) ? norm(scope[n.name]) : null;
     case "member":
       return member(ev(n.obj, scope), n.name);
-    case "call":
-      return FUNCS[n.fn](n.args.map((a) => ev(a, scope)));
+    case "call": {
+      // One choke point keeps every function's result in the Value domain:
+      // a number that is not finite (an overflow, a NaN) becomes null, so no
+      // function can leak "Infinity" or "NaN" into a template or condition.
+      const out = FUNCS[n.fn](n.args.map((a) => ev(a, scope)));
+      return typeof out === "number" ? numOrNull(out) : out;
+    }
     case "unary": {
       const v = ev(n.arg, scope);
       return n.op === "!" ? !truthy(v) : numOrNull(-num(v));

@@ -13,7 +13,9 @@ import {
   parseSubmissionMessage,
   UI_SUBMISSION_PREFIX,
   type CardSpec,
+  type Component,
 } from "./model";
+import { loadFixture } from "./fixtures";
 
 const spec: CardSpec = {
   title: "T",
@@ -217,4 +219,17 @@ describe("restored repeater values", () => {
     const restored = normalizeValues(spec!, { lines: Array.from({ length: 5000 }, () => ({})) });
     expect((restored.lines as unknown[]).length).toBe(MAX_REPEATER_ITEMS);
   });
+});
+
+describe("disabled defaults (shared with internal/genui TestDisabledDefaultsFixture)", () => {
+  type DCase = { name: string; component: Record<string, unknown>; valid: boolean };
+  const { cases } = loadFixture<{ cases: DCase[] }>("disabled_defaults.json");
+  for (const c of cases) {
+    it(c.name, () => {
+      const comp = { ...c.component, disabled: true } as unknown as Component;
+      const spec = { title: "x", components: [comp], actions: [{ id: "go", label: "Go" }] } as unknown as CardSpec;
+      const values = normalizeValues(spec, null);
+      expect(checkField(comp, values[String(comp.id)]) === "").toBe(c.valid);
+    });
+  }
 });

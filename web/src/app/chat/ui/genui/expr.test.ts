@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluate, parseExpr, renderTemplate, ExprError } from "./expr";
+import { evaluate, evaluateSafe, parseExpr, renderTemplate, ExprError } from "./expr";
 import { loadFixture } from "./fixtures";
 
 type Case = { expr: string; valid: boolean; scope?: Record<string, unknown>; want?: unknown };
@@ -86,5 +86,22 @@ describe("aggregates near the float limit", () => {
     expect(evaluate("round(x, 2)", { x: 1e308 })).toBe(1e308);
     expect(evaluate("round(x, 2)", { x: -1e308 })).toBe(-1e308);
     expect(evaluate("round(x, 2)", { x: 1.005 })).toBe(1.01);
+  });
+});
+
+describe("every function stays finite", () => {
+  it("never yields Infinity or NaN for extreme or junk inputs", () => {
+    const scope = { big: 1.7e308, neg: -1.7e308, xs: [1.7e308, 1.7e308, -1e-308], s: "abc", nested: [[1], { a: 1 }] };
+    const args = ["big", "neg", "xs", "s", "nested", "0", "-1", "11", "big * 10"];
+    const fns = ["len", "count", "sum", "avg", "min", "max", "abs", "floor", "ceil", "round", "fixed", "number"];
+    for (const fn of fns) {
+      for (const a of args) {
+        for (const b of ["", ", 2", ", big", ", -5"]) {
+          const v = evaluateSafe(`${fn}(${a}${b})`, scope);
+          if (typeof v === "number") expect(Number.isFinite(v)).toBe(true);
+          if (typeof v === "string") expect(v).not.toMatch(/Infinity|NaN/);
+        }
+      }
+    }
   });
 });

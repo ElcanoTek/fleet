@@ -170,3 +170,44 @@ func TestCatalogMatchesFixture(t *testing.T) {
 		t.Fatalf("catalog drift:\n got  %v\n want %v", got, want)
 	}
 }
+
+// TestDisabledDefaultsFixture pins the validator to the browser's checkField:
+// a disabled field is submitted unvalidated, so its default must be accepted
+// here exactly when checkField would pass it. The browser half runs the same
+// file (web/src/app/chat/ui/genui/model.test.ts).
+func TestDisabledDefaultsFixture(t *testing.T) {
+	raw, err := os.ReadFile("testdata/disabled_defaults.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fx struct {
+		Cases []struct {
+			Name      string         `json:"name"`
+			Component map[string]any `json:"component"`
+			Valid     bool           `json:"valid"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &fx); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range fx.Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			comp := map[string]any{"disabled": true}
+			for k, v := range c.Component {
+				comp[k] = v
+			}
+			card, _ := json.Marshal(map[string]any{
+				"title":      "x",
+				"components": []any{comp},
+				"actions":    []any{map[string]any{"id": "go", "label": "Go"}},
+			})
+			_, issues := Validate(card)
+			if c.Valid && len(issues) != 0 {
+				t.Fatalf("expected the default accepted, got %v", issues)
+			}
+			if !c.Valid && len(issues) == 0 {
+				t.Fatal("expected the default refused, got no issues")
+			}
+		})
+	}
+}

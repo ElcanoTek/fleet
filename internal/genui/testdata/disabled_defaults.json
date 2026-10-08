@@ -1,0 +1,713 @@
+{
+ "_comment": "Disabled-field defaults: the browser submits a disabled field without validating it, so the validator (internal/genui) must accept a disabled field's default exactly when checkField (web/src/app/chat/ui/genui/model.ts) passes on its normalized value. Each component is tested with disabled: true.",
+ "cases": [
+  {
+   "name": "text plain",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "value": "hello"
+   },
+   "valid": true
+  },
+  {
+   "name": "text required blank",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "required": true,
+    "value": "  "
+   },
+   "valid": false
+  },
+  {
+   "name": "text required absent",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "required": true
+   },
+   "valid": false
+  },
+  {
+   "name": "text required answered",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "required": true,
+    "value": "x"
+   },
+   "valid": true
+  },
+  {
+   "name": "text under min_length",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "min_length": 3,
+    "value": "ab"
+   },
+   "valid": false
+  },
+  {
+   "name": "text at min_length",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "min_length": 3,
+    "value": "abc"
+   },
+   "valid": true
+  },
+  {
+   "name": "text over max_length",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "max_length": 2,
+    "value": "abc"
+   },
+   "valid": false
+  },
+  {
+   "name": "text astral char counts two units",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "max_length": 1,
+    "value": "\ud83d\ude00"
+   },
+   "valid": false
+  },
+  {
+   "name": "text bad email",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "format": "email",
+    "value": "nope"
+   },
+   "valid": false
+  },
+  {
+   "name": "text good email",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "format": "email",
+    "value": "a@b.co"
+   },
+   "valid": true
+  },
+  {
+   "name": "text email trimmed",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "format": "email",
+    "value": " a@b.co "
+   },
+   "valid": true
+  },
+  {
+   "name": "text bad url scheme",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "format": "url",
+    "value": "javascript:alert(1)"
+   },
+   "valid": false
+  },
+  {
+   "name": "text good url",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "format": "url",
+    "value": "https://example.com"
+   },
+   "valid": true
+  },
+  {
+   "name": "text blank optional email",
+   "component": {
+    "type": "text_input",
+    "id": "f",
+    "label": "F",
+    "format": "email",
+    "value": ""
+   },
+   "valid": true
+  },
+  {
+   "name": "number in range",
+   "component": {
+    "type": "number",
+    "id": "f",
+    "label": "F",
+    "min": 0,
+    "max": 10,
+    "value": 5
+   },
+   "valid": true
+  },
+  {
+   "name": "number below min",
+   "component": {
+    "type": "number",
+    "id": "f",
+    "label": "F",
+    "min": 0,
+    "value": -1
+   },
+   "valid": false
+  },
+  {
+   "name": "number above max",
+   "component": {
+    "type": "number",
+    "id": "f",
+    "label": "F",
+    "max": 10,
+    "value": 11
+   },
+   "valid": false
+  },
+  {
+   "name": "number off step",
+   "component": {
+    "type": "number",
+    "id": "f",
+    "label": "F",
+    "min": 0,
+    "step": 2,
+    "value": 3
+   },
+   "valid": false
+  },
+  {
+   "name": "number on step from min",
+   "component": {
+    "type": "number",
+    "id": "f",
+    "label": "F",
+    "min": 1,
+    "step": 2,
+    "value": 3
+   },
+   "valid": true
+  },
+  {
+   "name": "number decimal step",
+   "component": {
+    "type": "number",
+    "id": "f",
+    "label": "F",
+    "step": 0.1,
+    "value": 0.3
+   },
+   "valid": true
+  },
+  {
+   "name": "number required absent",
+   "component": {
+    "type": "number",
+    "id": "f",
+    "label": "F",
+    "required": true
+   },
+   "valid": false
+  },
+  {
+   "name": "number required zero",
+   "component": {
+    "type": "number",
+    "id": "f",
+    "label": "F",
+    "required": true,
+    "value": 0
+   },
+   "valid": true
+  },
+  {
+   "name": "slider on grid",
+   "component": {
+    "type": "slider",
+    "id": "f",
+    "label": "F",
+    "min": 0,
+    "max": 10,
+    "step": 5,
+    "value": 5
+   },
+   "valid": true
+  },
+  {
+   "name": "slider off grid",
+   "component": {
+    "type": "slider",
+    "id": "f",
+    "label": "F",
+    "min": 0,
+    "max": 10,
+    "step": 5,
+    "value": 3
+   },
+   "valid": false
+  },
+  {
+   "name": "date in range",
+   "component": {
+    "type": "date",
+    "id": "f",
+    "label": "F",
+    "min": "2026-01-01",
+    "max": "2026-12-31",
+    "value": "2026-06-01"
+   },
+   "valid": true
+  },
+  {
+   "name": "date before min",
+   "component": {
+    "type": "date",
+    "id": "f",
+    "label": "F",
+    "min": "2026-01-01",
+    "value": "2025-12-31"
+   },
+   "valid": false
+  },
+  {
+   "name": "date after max",
+   "component": {
+    "type": "date",
+    "id": "f",
+    "label": "F",
+    "max": "2026-01-01",
+    "value": "2026-01-02"
+   },
+   "valid": false
+  },
+  {
+   "name": "date required absent",
+   "component": {
+    "type": "date",
+    "id": "f",
+    "label": "F",
+    "required": true
+   },
+   "valid": false
+  },
+  {
+   "name": "select option",
+   "component": {
+    "type": "select",
+    "id": "f",
+    "label": "F",
+    "options": [
+     "a",
+     "b"
+    ],
+    "value": "a"
+   },
+   "valid": true
+  },
+  {
+   "name": "select required absent",
+   "component": {
+    "type": "select",
+    "id": "f",
+    "label": "F",
+    "options": [
+     "a",
+     "b"
+    ],
+    "required": true
+   },
+   "valid": false
+  },
+  {
+   "name": "select required answered",
+   "component": {
+    "type": "select",
+    "id": "f",
+    "label": "F",
+    "options": [
+     "a",
+     "b"
+    ],
+    "required": true,
+    "value": "b"
+   },
+   "valid": true
+  },
+  {
+   "name": "choice required absent",
+   "component": {
+    "type": "choice",
+    "id": "f",
+    "label": "F",
+    "options": [
+     "a",
+     "b"
+    ],
+    "required": true
+   },
+   "valid": false
+  },
+  {
+   "name": "choice answered",
+   "component": {
+    "type": "choice",
+    "id": "f",
+    "label": "F",
+    "options": [
+     "a",
+     "b"
+    ],
+    "required": true,
+    "value": "a"
+   },
+   "valid": true
+  },
+  {
+   "name": "multi within max",
+   "component": {
+    "type": "multi_select",
+    "id": "f",
+    "label": "F",
+    "options": [
+     "a",
+     "b",
+     "c"
+    ],
+    "max_items": 2,
+    "value": [
+     "a",
+     "b"
+    ]
+   },
+   "valid": true
+  },
+  {
+   "name": "multi over max",
+   "component": {
+    "type": "multi_select",
+    "id": "f",
+    "label": "F",
+    "options": [
+     "a",
+     "b",
+     "c"
+    ],
+    "max_items": 1,
+    "value": [
+     "a",
+     "b"
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "multi required empty",
+   "component": {
+    "type": "multi_select",
+    "id": "f",
+    "label": "F",
+    "options": [
+     "a",
+     "b",
+     "c"
+    ],
+    "required": true,
+    "value": []
+   },
+   "valid": false
+  },
+  {
+   "name": "multi required answered",
+   "component": {
+    "type": "multi_select",
+    "id": "f",
+    "label": "F",
+    "options": [
+     "a",
+     "b",
+     "c"
+    ],
+    "required": true,
+    "value": [
+     "c"
+    ]
+   },
+   "valid": true
+  },
+  {
+   "name": "list within max after dedupe",
+   "component": {
+    "type": "list_input",
+    "id": "f",
+    "label": "F",
+    "max_items": 2,
+    "value": [
+     "x",
+     "x",
+     "y"
+    ]
+   },
+   "valid": true
+  },
+  {
+   "name": "list over max",
+   "component": {
+    "type": "list_input",
+    "id": "f",
+    "label": "F",
+    "max_items": 2,
+    "value": [
+     "x",
+     "y",
+     "z"
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "list without dedupe counts repeats",
+   "component": {
+    "type": "list_input",
+    "id": "f",
+    "label": "F",
+    "max_items": 2,
+    "dedupe": false,
+    "value": [
+     "x",
+     "x",
+     "y"
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "list required only blanks",
+   "component": {
+    "type": "list_input",
+    "id": "f",
+    "label": "F",
+    "required": true,
+    "value": [
+     " "
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "list required answered",
+   "component": {
+    "type": "list_input",
+    "id": "f",
+    "label": "F",
+    "required": true,
+    "value": [
+     "x"
+    ]
+   },
+   "valid": true
+  },
+  {
+   "name": "toggle required off",
+   "component": {
+    "type": "toggle",
+    "id": "f",
+    "label": "F",
+    "required": true,
+    "value": false
+   },
+   "valid": false
+  },
+  {
+   "name": "toggle required on",
+   "component": {
+    "type": "toggle",
+    "id": "f",
+    "label": "F",
+    "required": true,
+    "value": true
+   },
+   "valid": true
+  },
+  {
+   "name": "toggle optional off",
+   "component": {
+    "type": "toggle",
+    "id": "f",
+    "label": "F",
+    "value": false
+   },
+   "valid": true
+  },
+  {
+   "name": "include_exclude required empty",
+   "component": {
+    "type": "include_exclude",
+    "id": "f",
+    "label": "F",
+    "options": [
+     "a",
+     "b"
+    ],
+    "required": true,
+    "value": {
+     "include": [],
+     "exclude": []
+    }
+   },
+   "valid": false
+  },
+  {
+   "name": "include_exclude required answered",
+   "component": {
+    "type": "include_exclude",
+    "id": "f",
+    "label": "F",
+    "options": [
+     "a",
+     "b"
+    ],
+    "required": true,
+    "value": {
+     "include": [
+      "a"
+     ],
+     "exclude": []
+    }
+   },
+   "valid": true
+  },
+  {
+   "name": "repeater within bounds",
+   "component": {
+    "type": "repeater",
+    "id": "f",
+    "label": "F",
+    "fields": [
+     {
+      "type": "text_input",
+      "id": "n",
+      "label": "N"
+     }
+    ],
+    "min_items": 1,
+    "max_items": 2,
+    "value": [
+     {
+      "n": "a"
+     }
+    ]
+   },
+   "valid": true
+  },
+  {
+   "name": "repeater below min",
+   "component": {
+    "type": "repeater",
+    "id": "f",
+    "label": "F",
+    "fields": [
+     {
+      "type": "text_input",
+      "id": "n",
+      "label": "N"
+     }
+    ],
+    "min_items": 2,
+    "value": [
+     {
+      "n": "a"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "repeater above max",
+   "component": {
+    "type": "repeater",
+    "id": "f",
+    "label": "F",
+    "fields": [
+     {
+      "type": "text_input",
+      "id": "n",
+      "label": "N"
+     }
+    ],
+    "max_items": 1,
+    "value": [
+     {
+      "n": "a"
+     },
+     {
+      "n": "b"
+     }
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "repeater required empty",
+   "component": {
+    "type": "repeater",
+    "id": "f",
+    "label": "F",
+    "fields": [
+     {
+      "type": "text_input",
+      "id": "n",
+      "label": "N"
+     }
+    ],
+    "required": true,
+    "value": []
+   },
+   "valid": false
+  },
+  {
+   "name": "repeater required answered",
+   "component": {
+    "type": "repeater",
+    "id": "f",
+    "label": "F",
+    "fields": [
+     {
+      "type": "text_input",
+      "id": "n",
+      "label": "N"
+     }
+    ],
+    "required": true,
+    "value": [
+     {
+      "n": "a"
+     }
+    ]
+   },
+   "valid": true
+  }
+ ]
+}

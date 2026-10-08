@@ -1492,6 +1492,15 @@ func answered(typ string, val any) bool {
 	case string:
 		return strings.TrimSpace(x) != ""
 	case []any:
+		if typ == "list_input" {
+			// The browser drops blank lines (normalizeList).
+			for _, e := range x {
+				if s, ok := e.(string); ok && strings.TrimSpace(s) != "" {
+					return true
+				}
+			}
+			return false
+		}
 		return len(x) > 0
 	case map[string]any:
 		if typ == "include_exclude" {

@@ -84,6 +84,18 @@ field, revealing it if it sits in another tab. Inputs hidden by `visible_if`
 are neither validated nor submitted, so a stale hidden value never reads as an
 answer the user gave.
 
+A disabled input is submitted without being validated (the user cannot fix
+it), so the validator refuses any default the browser would reject as an
+answer: a required field left blank, a value off its length, format, range,
+step or item bounds. This is a pinned pair too: the validator and the
+browser's `checkField` run the same cases from
+`internal/genui/testdata/disabled_defaults.json`.
+
+Every valid card in `cards.json` is also rendered in a structural
+accessibility test: each control, group and table has an accessible name,
+every `aria-labelledby` / `aria-describedby` reference resolves, and ids are
+unique, both as first shown and after a submit shows its errors.
+
 ## Expressions
 
 The one logic surface is a small, side-effect-free expression language. It is
@@ -99,7 +111,8 @@ reads against the card's inputs, so a typo becomes a tool error the model fixes
 in the same turn. `web/src/app/chat/ui/genui/expr.ts` is a hand-written
 interpreter over the same grammar (never `eval`) that evaluates forgivingly:
 missing names are `null`, `null` is 0 in arithmetic, and division by zero is
-`null`. Both run `internal/genui/testdata/expressions.json`.
+`null`. No result is ever a non-finite number: an overflow or `NaN` from any
+operator or function becomes `null`. Both run `internal/genui/testdata/expressions.json`.
 
 ## Limits
 

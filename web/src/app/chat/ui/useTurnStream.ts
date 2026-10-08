@@ -3795,16 +3795,23 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // recheckHeldSend: a card send held as "possibly sent" that no recovery
   // chain will settle. Re-asks the server until it answers; "no" calls
   // onUnsent, "yes" ends quietly, and an unmount stops it.
-  const recheckHeldSend = (convId: string, text: string, submissionId: string, onUnsent: () => void, attempt = 0) => {
-    window.setTimeout(() => {
-      void (async () => {
-        if (recoveryUnmountedRef.current) return;
-        const landed = await submissionLanded(convId, text, submissionId);
-        if (recoveryUnmountedRef.current) return;
-        if (landed === "no") onUnsent();
-        else if (landed === "unknown") recheckHeldSend(convId, text, submissionId, onUnsent, attempt + 1);
-      })();
-    }, recoveryDelayFor(attempt));
+  const recheckHeldSend = (
+    convId: string,
+    text: string,
+    submissionId: string,
+    onUnsent: () => void,
+    attempt = 0,
+    now = false,
+  ) => {
+    const ask = async () => {
+      if (recoveryUnmountedRef.current) return;
+      const landed = await submissionLanded(convId, text, submissionId);
+      if (recoveryUnmountedRef.current) return;
+      if (landed === "no") onUnsent();
+      else if (landed === "unknown") recheckHeldSend(convId, text, submissionId, onUnsent, attempt + 1);
+    };
+    if (now) void ask();
+    else window.setTimeout(() => void ask(), recoveryDelayFor(attempt));
   };
 
   const submitPrompt = async (
@@ -4385,11 +4392,20 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         await recoveryReleased(resolveTarget());
         if (recoveryUnmountedRef.current) return;
         const target = resolveTarget();
-        if ((await submissionLanded(target, value, submissionId)) !== "no") return;
-        setConvMessages(target, (current) =>
-          current.map((m) => (m.id === baseId && m.role === "user" ? { ...m, notSent: true } : m)),
+        // Still unknown after recovery: keep asking, as for a queued send.
+        recheckHeldSend(
+          target,
+          value,
+          submissionId,
+          () => {
+            setConvMessages(target, (current) =>
+              current.map((m) => (m.id === baseId && m.role === "user" ? { ...m, notSent: true } : m)),
+            );
+            onUnsent();
+          },
+          0,
+          true,
         );
-        onUnsent();
       })();
     }
     return accepted.value || held;

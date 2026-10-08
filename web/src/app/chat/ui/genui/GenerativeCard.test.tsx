@@ -1391,3 +1391,46 @@ describe("sixteenth Codex pass", () => {
     expect(screen.getByLabelText(/Name/)).not.toBeDisabled();
   });
 });
+
+describe("structural accessibility of every valid fixture card", () => {
+  const NAMED_ROLES = ["textbox", "combobox", "spinbutton", "slider", "switch", "checkbox", "radio", "radiogroup", "group", "button", "table", "tab", "tabpanel", "alertdialog"];
+  const audit = (root: HTMLElement, label: string) => {
+    for (const role of NAMED_ROLES) {
+      const all = within(root).queryAllByRole(role);
+      const named = within(root).queryAllByRole(role, { name: /\S/ });
+      expect(named.length, `${label}: every ${role} has an accessible name`).toBe(all.length);
+    }
+    const ids = Array.from(root.querySelectorAll("[id]")).map((e) => e.id);
+    expect(new Set(ids).size, `${label}: ids are unique`).toBe(ids.length);
+    for (const attr of ["aria-labelledby", "aria-describedby", "aria-controls"]) {
+      for (const el of Array.from(root.querySelectorAll(`[${attr}]`))) {
+        for (const id of (el.getAttribute(attr) ?? "").split(/\s+/).filter(Boolean)) {
+          expect(document.getElementById(id), `${label}: ${attr} "${id}" resolves`).not.toBeNull();
+        }
+      }
+    }
+    for (const lbl of Array.from(root.querySelectorAll("label[for]"))) {
+      const target = document.getElementById(lbl.getAttribute("for") ?? "");
+      expect(target, `${label}: label for "${lbl.getAttribute("for")}" resolves`).not.toBeNull();
+    }
+  };
+  const { cases } = loadFixture<{ cases: Case[] }>("cards.json");
+  for (const c of cases.filter((x) => x.valid)) {
+    it(c.name, async () => {
+      const user = userEvent.setup();
+      const s = spec(c.card);
+      render(<GenerativeCard cardId="a11y" spec={s} onSubmit={() => {}} />);
+      const card = screen.getByTestId("genui-card");
+      audit(card, `${c.name} (fresh)`);
+      // Pressing the first submit action shows any validation errors.
+      const submit = (s.actions ?? []).find((a) => a.kind !== "message" && !a.confirm && !a.visible_if && !a.disabled_if);
+      if (submit) {
+        const btn = within(card).queryByRole("button", { name: submit.label });
+        if (btn && !(btn as HTMLButtonElement).disabled) {
+          await user.click(btn);
+          audit(screen.getByTestId("genui-card"), `${c.name} (after submit)`);
+        }
+      }
+    });
+  }
+});
