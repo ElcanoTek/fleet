@@ -45,3 +45,32 @@ describe("renderTemplate", () => {
     expect(renderTemplate("a {{ 1 + }} b", {})).toBe("a ⚠ b");
   });
 });
+
+describe("unique()", () => {
+  // The definition: keep each item no earlier kept item is == to.
+  const reference = (xs: unknown[]) => {
+    const out: unknown[] = [];
+    for (const x of xs) if (!out.some((y) => evaluate("a == b", { a: x, b: y }) === true)) out.push(x);
+    return out;
+  };
+  const pool: unknown[] = [null, 0, 1, 2, 1.5, "0", "1", " 1 ", "1.0", "", " ", "a", "A", true, false, [1], { k: 1 }];
+
+  it("matches the pairwise definition on mixed values", () => {
+    let seed = 7;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    for (let round = 0; round < 300; round++) {
+      const xs = Array.from({ length: 1 + Math.floor(rand() * 10) }, () => pool[Math.floor(rand() * pool.length)]);
+      expect(evaluate("unique(xs)", { xs })).toEqual(reference(xs));
+    }
+  });
+
+  it("stays fast on a full-size list", () => {
+    const xs = Array.from({ length: 20000 }, (_, i) => `domain${i % 15000}.example`);
+    const start = performance.now();
+    expect(evaluate("len(unique(xs))", { xs })).toBe(15000);
+    expect(performance.now() - start).toBeLessThan(1500);
+  });
+});

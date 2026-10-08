@@ -605,3 +605,40 @@ describe("a direct submission the server queued instead of running", () => {
     expect(msgs.some((m) => m.state === "thinking" || m.state === "streaming")).toBe(false);
   }, 20_000);
 });
+
+// A generative-UI card counts a refused message as unanswered and an accepted
+// one as answered, even when its turn then fails (#1700). The bubble of a
+// message the server never took carries notSent so the two can be told apart.
+describe("a submission the server refused", () => {
+  it("is marked notSent and reported as not sent", async () => {
+    const h = makeHarness({
+      initial: answeredTranscript(),
+      persisted: [
+        { role: "user", type: "text", content: { text: "run the analysis" } },
+        { role: "assistant", type: "text", content: { text: "Here is the analysis." } },
+      ],
+      queue: [[]],
+      inflight: [{ inflight: false }],
+    });
+    const harnessFetch = globalThis.fetch;
+    const seen: Message[][] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/chat") {
+          return new Response("slow down", { status: 429, headers: { "Retry-After": "5" } });
+        }
+        seen.push([...(h.store.get(CONV) ?? [])]);
+        return harnessFetch(input, init);
+      }),
+    );
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const sent = await result.current.submitPrompt("[UI submission] card=c1 action=go\n{}");
+    expect(sent).toBe(false);
+    // While the bubble is on screen it says the server never took it.
+    const bubble = seen
+      .flat()
+      .find((m) => m.role === "user" && m.content.startsWith("[UI submission]"));
+    expect(bubble?.notSent).toBe(true);
+  });
+});

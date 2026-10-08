@@ -796,6 +796,7 @@ export function ChatTranscript({
                                           submission={genUi.submissions.get(tc.id) ?? null}
                                           reply={genUi.replies.get(tc.id) ?? null}
                                           superseded={genUi.superseded.has(tc.id)}
+                                          retired={isPreSummary}
                                           onSubmit={(text) => submitPrompt(text)}
                                         />
                                       </Suspense>

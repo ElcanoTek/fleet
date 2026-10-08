@@ -475,6 +475,13 @@ card helps; you can also simply ask for one ("give me a form for this").
   fields.
 - **Unsent answers are kept in this browser** while you scroll or reload, until
   you send them.
+- **Very large answers are not sent.** If your answers (usually a long pasted
+  list) are too big for one message, the card says so and sends nothing.
+  Shorten the list and press the button again.
+- **Cards from before a compaction are read-only.** Once a conversation is
+  compacted (see [Long conversations](#long-conversations)), a card from the
+  summarized part can't be answered, because the assistant no longer has that
+  card's details. Ask it to show the card again.
 
 Interactive cards appear only in Chat in the web app. Scheduled tasks never show
 them. Terminal chat names the card and points you to the web chat; editor

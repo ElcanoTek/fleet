@@ -34,6 +34,8 @@ import {
   normalizeValues,
   isInput,
   isVisible,
+  MAX_SUBMISSION_BYTES,
+  submissionBytes,
   newItem,
   optionsOf,
   scopeFor,
@@ -113,6 +115,13 @@ export type GenerativeCardProps = {
   superseded?: boolean;
   /** Shared / read-only transcripts: render, never submit. */
   readOnly?: boolean;
+  /**
+   * The card predates the conversation's summary (shown only when the user
+   * expands compacted history). The model no longer has its definition in
+   * context, so an answer would arrive as ids and values it cannot read: the
+   * card renders locked and says to ask for it again.
+   */
+  retired?: boolean;
   /** Sends a user turn (the submission message or a quick reply). */
   // Resolves false when the message was refused (nothing was sent).
   onSubmit?: (message: string) => void | Promise<void | boolean>;
@@ -146,21 +155,36 @@ const PENDING_PREFIX = "fleet.genui.pending.";
 // (a cancelled queue item, a closed tab) stops holding the card.
 const PENDING_TTL_MS = 30 * 60 * 1000;
 
-function loadPending(cardId: string): string | null {
+// A hold records the transcript answer it was armed after (`after`: that
+// answer's action and values, "" for a first answer — message ids are not
+// stable across a history reload, so they are left out). If the answer has
+// changed by the time the card mounts, the held message echoed while the
+// card was unmounted (virtualized off-screen) and the hold is spent. An
+// identical resend cannot be told apart from the answer before it; that
+// hold is shown only under Edit, can be dismissed, and expires.
+function loadPending(cardId: string, currentKey: string): string | null {
   try {
     const raw = window.localStorage.getItem(PENDING_PREFIX + cardId);
     if (!raw) return null;
-    const v = JSON.parse(raw) as { action?: unknown; at?: unknown };
-    if (typeof v.action !== "string" || typeof v.at !== "number" || Date.now() - v.at > PENDING_TTL_MS) return null;
+    const v = JSON.parse(raw) as { action?: unknown; at?: unknown; after?: unknown };
+    if (
+      typeof v.action !== "string" ||
+      typeof v.at !== "number" ||
+      Date.now() - v.at > PENDING_TTL_MS ||
+      v.after !== currentKey
+    ) {
+      window.localStorage.removeItem(PENDING_PREFIX + cardId);
+      return null;
+    }
     return v.action;
   } catch {
     return null;
   }
 }
 
-function savePending(cardId: string, action: string | null) {
+function savePending(cardId: string, action: string | null, after = "") {
   try {
-    if (action) window.localStorage.setItem(PENDING_PREFIX + cardId, JSON.stringify({ action, at: Date.now() }));
+    if (action) window.localStorage.setItem(PENDING_PREFIX + cardId, JSON.stringify({ action, at: Date.now(), after }));
     else window.localStorage.removeItem(PENDING_PREFIX + cardId);
   } catch {
     // Convenience only, like drafts.
@@ -191,26 +215,12 @@ export default function GenerativeCard(props: GenerativeCardProps) {
   return <CardBody {...props} />;
 }
 
-function CardBody({ cardId, spec, submission, reply, superseded, readOnly, onSubmit }: GenerativeCardProps) {
+function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retired, onSubmit }: GenerativeCardProps) {
   const [values, setValuesState] = useState<Values>(() =>
     normalizeValues(spec, submission ? submission.values : readOnly ? null : loadDraft(cardId)),
   );
   const [editing, setEditing] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
-  // An accepted submit that has not reached the transcript yet — a message
-  // queued behind a running turn is accepted but not echoed until that turn
-  // ends. Actions stay disabled so a second click cannot queue a duplicate.
-  // Kept in localStorage too: the transcript is virtualized (an off-screen
-  // card unmounts), and a remount must not re-enable a button whose message
-  // is still queued.
-  const [awaiting, setAwaitingState] = useState<string | null>(() => (readOnly ? null : loadPending(cardId)));
-  const setAwaiting = useCallback(
-    (a: string | null) => {
-      setAwaitingState(a);
-      if (!readOnly) savePending(cardId, a);
-    },
-    [cardId, readOnly],
-  );
   const [showErrors, setShowErrors] = useState(false);
   const [confirming, setConfirming] = useState<Action | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -232,17 +242,43 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, onSub
     : reply
       ? `r\u0000${reply.messageId ?? ""}\u0000${reply.actionId}`
       : "";
+  // The same answer without its message id (see loadPending).
+  const answerKey = submission
+    ? `s\u0000${submission.actionId}\u0000${JSON.stringify(submission.values)}`
+    : reply
+      ? `r\u0000${reply.actionId}`
+      : "";
+  const answerKeyRef = useRef(answerKey);
+  useEffect(() => {
+    answerKeyRef.current = answerKey;
+  }, [answerKey]);
   const [seenSubmission, setSeenSubmission] = useState(submissionKey);
   const submissionKeyRef = useRef(submissionKey);
   useEffect(() => {
     submissionKeyRef.current = submissionKey;
   }, [submissionKey]);
+  // An accepted submit that has not reached the transcript yet — a message
+  // queued behind a running turn is accepted but not echoed until that turn
+  // ends. Actions stay disabled so a second click cannot queue a duplicate.
+  // Kept in localStorage too: the transcript is virtualized (an off-screen
+  // card unmounts), and a remount must not re-enable a button whose message
+  // is still queued.
+  const [awaiting, setAwaitingState] = useState<string | null>(() =>
+    readOnly ? null : loadPending(cardId, answerKey),
+  );
+  const setAwaiting = useCallback(
+    (a: string | null) => {
+      setAwaitingState(a);
+      if (!readOnly) savePending(cardId, a, answerKeyRef.current);
+    },
+    [cardId, readOnly],
+  );
   if (seenSubmission !== submissionKey) {
     setSeenSubmission(submissionKey);
     if (submission || reply) {
       setEditing(false);
-      setAwaiting(null);
-      savePending(cardId, null);
+      setAwaitingState(null);
+      if (!readOnly) savePending(cardId, null);
     }
     if (submission) {
       setValuesState(normalizeValues(spec, submission.values));
@@ -251,7 +287,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, onSub
   useEffect(() => {
     if (submissionKey && !readOnly) saveDraft(cardId, null);
   }, [cardId, submissionKey, readOnly]);
-  const locked = !!readOnly || !!superseded || (submittedAction !== null && !editing);
+  const locked = !!readOnly || !!retired || !!superseded || (submittedAction !== null && !editing);
 
   const setValues = useCallback(
     (fn: (v: Values) => Values) => {
@@ -354,10 +390,18 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, onSub
     setNotice(null);
     setSending(action.id);
     try {
-      const accepted =
+      const message =
         action.kind === "message"
-          ? await onSubmit(buildReplyMessage(cardId, action.id, str(action.message)))
-          : await onSubmit(buildSubmissionMessage(cardId, action.id, submitValues));
+          ? buildReplyMessage(cardId, action.id, str(action.message))
+          : buildSubmissionMessage(cardId, action.id, submitValues);
+      const bytes = submissionBytes(message);
+      if (bytes > MAX_SUBMISSION_BYTES) {
+        setNotice(
+          `Too large to send (${Math.ceil(bytes / 1024).toLocaleString()} KB; the chat takes up to ${(MAX_SUBMISSION_BYTES / 1024).toLocaleString()} KB). Shorten the longest list.`,
+        );
+        return;
+      }
+      const accepted = await onSubmit(message);
       if (accepted === false) {
         setNotice("Not sent. Try again.");
       } else if (submissionKeyRef.current === keyAtClick) {
@@ -451,10 +495,15 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, onSub
         </div>
         {actions.length > 0 || sentLabel ? (
           <div className="flex flex-col gap-2 border-t border-[var(--color-border)] px-3.5 py-2.5">
+            {retired && !readOnly && !superseded && !sentLabel ? (
+              <div data-testid="genui-retired" className="text-[0.75rem] text-[var(--color-text-muted)]">
+                From before this conversation was summarized — ask the assistant to show it again to answer it.
+              </div>
+            ) : null}
             {locked && sentLabel && !superseded ? (
               <div className="flex flex-wrap items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]">
                 <span data-testid="genui-submitted">Sent · {sentLabel}</span>
-                {!readOnly && onSubmit && submission && (spec.actions ?? []).some((a) => a.kind !== "message") ? (
+                {!readOnly && !retired && onSubmit && submission && (spec.actions ?? []).some((a) => a.kind !== "message") ? (
                   <button type="button" className="underline hover:text-[var(--color-text-primary)]" onClick={() => setEditing(true)}>
                     Edit and resend
                   </button>
@@ -569,6 +618,19 @@ type Renderer = (p: { c: Component; value?: unknown; onChange?: (v: unknown) => 
 const rootOfPath = (path: string) => path.split(/[[.]/)[0];
 
 /**
+ * The input id a container should look a field path up by. At card level
+ * that is the path's root ("lines[2].cpm" → "lines", owned by whatever holds
+ * the repeater). Inside a repeater item it is the field's own id, and only
+ * for this item's paths ("lines[2].cpm" → "cpm" in item 2, nothing in item
+ * 0), since a section or tabs in the repeater's fields owns item fields.
+ */
+function containerKey(path: string, item: ItemCtx | null): string | null {
+  if (!item) return rootOfPath(path);
+  const prefix = `${item.repeater}[${item.index}].`;
+  return path.startsWith(prefix) ? rootOfPath(path.slice(prefix.length)) : null;
+}
+
+/**
  * Subscribe a container to the card's "genui:reveal" event (dispatched by
  * focusField with the target field path) so collapsed content opens before
  * the field is looked up.
@@ -606,8 +668,10 @@ function Section({ c }: { c: Component }) {
   const title = str(c.title) || (collapsible ? "Details" : "");
   const ref = useRef<HTMLElement | null>(null);
   const owned = useMemo(() => idsUnder(children(c)), [c]);
+  const item = useContext(ItemContext);
   useReveal(ref, (path) => {
-    if (owned.has(rootOfPath(path))) setOpen(true);
+    const key = containerKey(path, item);
+    if (key !== null && owned.has(key)) setOpen(true);
   });
   return (
     <section ref={ref} className="grid min-w-0 gap-2.5 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
@@ -671,21 +735,18 @@ function Tabs({ c }: { c: Component }) {
     );
     return m;
   }, [tabs]);
-  const rootOf = (path: string) => path.split(/[[.]/)[0];
-  const errCount = (i: number) => Object.keys(errors).filter((p) => owner.get(rootOf(p)) === i).length;
+  const item = useContext(ItemContext);
+  const ownerOf = (path: string) => {
+    const key = containerKey(path, item);
+    return key === null ? undefined : owner.get(key);
+  };
+  const errCount = (i: number) => Object.keys(errors).filter((p) => ownerOf(p) === i).length;
 
   const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const card = ref.current?.closest("[data-testid='genui-card']");
-    if (!card) return;
-    const onReveal = (e: Event) => {
-      const path = (e as CustomEvent<string>).detail;
-      const i = owner.get(rootOf(path));
-      if (i !== undefined) setActive(i);
-    };
-    card.addEventListener("genui:reveal", onReveal);
-    return () => card.removeEventListener("genui:reveal", onReveal);
-  }, [owner]);
+  useReveal(ref, (path) => {
+    const i = ownerOf(path);
+    if (i !== undefined) setActive(i);
+  });
 
   const current = tabs[Math.min(active, tabs.length - 1)];
   if (!current) return null;

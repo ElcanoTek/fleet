@@ -80,13 +80,33 @@ describe("quick replies", () => {
 });
 
 describe("refused card messages", () => {
-  it("do not lock the card when their turn failed before doing anything", () => {
-    const failed = { id: 3, role: "assistant", content: "Turn failed", state: "done", failed: true } as unknown as Message;
+  const failed = { id: 3, role: "assistant", content: "Turn failed", state: "done", failed: true } as unknown as Message;
+
+  it("do not lock the card when the server never took them", () => {
     const s = deriveGenUiState([
       assistant(1, [{ id: "c1", input: card("One"), resultText: "UI_DISPLAYED card_id=c1" }]),
-      user(2, buildSubmissionMessage("c1", "go", { a: 1 })),
+      { ...user(2, buildSubmissionMessage("c1", "go", { a: 1 })), notSent: true },
       failed,
     ]);
     expect(s.submissions.has("c1")).toBe(false);
+  });
+
+  it("still lock the card when they were accepted and the turn then failed", () => {
+    const modelRequired = {
+      id: 3,
+      role: "assistant",
+      content: "",
+      state: "done",
+      failed: true,
+      modelRequired: { message: "pick another", failedModel: "x" },
+    } as unknown as Message;
+    for (const next of [failed, modelRequired]) {
+      const s = deriveGenUiState([
+        assistant(1, [{ id: "c1", input: card("One"), resultText: "UI_DISPLAYED card_id=c1" }]),
+        user(2, buildSubmissionMessage("c1", "go", { a: 1 })),
+        next,
+      ]);
+      expect(s.submissions.get("c1")?.actionId).toBe("go");
+    }
   });
 });

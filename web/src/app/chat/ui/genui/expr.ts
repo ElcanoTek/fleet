@@ -354,6 +354,41 @@ function equal(a: Value, b: Value): boolean {
   return a === b;
 }
 
+// unique() keeps each item no earlier item is `equal` to, in order — the
+// same result as scanning the output for every item, but indexed, because a
+// list_input can hold 20,000 entries and expressions re-run on every render.
+// `equal` matches a number to the same number, to a non-blank numeric string
+// of that value, and to true/false as 1/0; any other string or boolean only
+// to itself; null to null; an object or list to nothing. Each set below
+// indexes one of those cases.
+function uniqueValues(items: Value[]): Value[] {
+  const out: Value[] = [];
+  let sawNull = false;
+  const nums = new Set<number>();
+  const numericStrs = new Set<number>();
+  const strs = new Set<string>();
+  const bools = new Set<boolean>();
+  for (const x of items) {
+    if (x === null) {
+      if (sawNull) continue;
+      sawNull = true;
+    } else if (typeof x === "number") {
+      if (nums.has(x) || numericStrs.has(x) || (x === 1 && bools.has(true)) || (x === 0 && bools.has(false))) continue;
+      nums.add(x);
+    } else if (typeof x === "string") {
+      const n = x.trim() === "" ? NaN : num(x);
+      if (strs.has(x) || (Number.isFinite(n) && nums.has(n))) continue;
+      strs.add(x);
+      if (Number.isFinite(n)) numericStrs.add(n);
+    } else if (typeof x === "boolean") {
+      if (bools.has(x) || nums.has(x ? 1 : 0)) continue;
+      bools.add(x);
+    }
+    out.push(x);
+  }
+  return out;
+}
+
 const FUNCS: Record<string, (args: Value[]) => Value> = {
   len: ([v]) => (typeof v === "string" ? Array.from(v).length : list(v).length),
   count: ([v]) => list(v).length,
@@ -402,11 +437,7 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
     if (typeof v === "object") return Object.values(v).every((x) => Array.isArray(x) && x.length === 0);
     return false;
   },
-  unique: ([v]) => {
-    const out: Value[] = [];
-    for (const x of list(v)) if (!out.some((y) => equal(x, y))) out.push(x);
-    return out;
-  },
+  unique: ([v]) => uniqueValues(list(v)),
 };
 
 function member(obj: Value, name: string): Value {

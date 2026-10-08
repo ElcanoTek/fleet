@@ -10,6 +10,20 @@ import { evaluateSafe, truthy, type Scope } from "./expr";
 export const SHOW_UI_TOOL = "show_ui";
 /** Must match genui.MaxListItems in internal/genui/spec.go. */
 export const MAX_LIST_ITEMS = 20000;
+/**
+ * The largest card message (as it appears JSON-escaped in the POST body) a
+ * card will send. /api/chat refuses bodies over 1 MiB (maxJSONBodyBytes in
+ * internal/httpapi/routes.go); the rest is left for the other request fields.
+ * A list at MAX_LIST_ITEMS of long entries can exceed this, so the card checks
+ * the serialized size before sending rather than failing as "Not sent".
+ */
+export const MAX_SUBMISSION_BYTES = 960 * 1024;
+
+/** The message's size as it travels in the JSON request body, in bytes. */
+export function submissionBytes(message: string): number {
+  return new TextEncoder().encode(JSON.stringify(message)).length;
+}
+
 /** Must match tools.UISubmissionPrefix in internal/tools/show_ui.go. */
 export const UI_SUBMISSION_PREFIX = "[UI submission]";
 

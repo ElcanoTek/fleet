@@ -723,3 +723,97 @@ describe("include/exclude lanes and list input", () => {
     expect(parseListText("a\na", false)).toEqual(["a", "a"]);
   });
 });
+
+describe("seventh Codex pass", () => {
+  it("opens a collapsed section inside a repeater item to reveal that item's field", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "R",
+      components: [
+        {
+          type: "repeater",
+          id: "lines",
+          value: [{ cpm: 1 }, {}],
+          fields: [
+            {
+              type: "section",
+              title: "Pricing",
+              collapsible: true,
+              collapsed: true,
+              children: [{ type: "number", id: "cpm", label: "CPM", required: true }],
+            },
+          ],
+        },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    const onSubmit = vi.fn();
+    render(<GenerativeCard cardId="rsec" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    // Item 2 (index 1) opened, and its Pricing section with it; item 1's stays shut.
+    const item = document.querySelector("[data-repeater-item='1']") as HTMLElement;
+    expect(await within(item).findByLabelText(/CPM/)).toBeTruthy();
+    const first = document.querySelector("[data-repeater-item='0']") as HTMLElement;
+    expect(within(first).queryByLabelText(/CPM/)).toBeNull();
+  });
+
+  it("drops a hold whose message echoed while the card was unmounted", async () => {
+    const user = userEvent.setup();
+    const s = spec({ title: "H", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    const first = render(<GenerativeCard cardId="hold" spec={s} onSubmit={vi.fn().mockResolvedValue(true)} />);
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
+    first.unmount();
+    // Remounts with the echo already in the transcript.
+    render(
+      <GenerativeCard
+        cardId="hold"
+        spec={s}
+        submission={{ cardId: "hold", actionId: "go", values: { n: "" }, messageId: 9 }}
+        onSubmit={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Edit and resend" }));
+    expect(screen.queryByTestId("genui-awaiting")).toBeNull();
+    expect(screen.getByRole("button", { name: "Go" })).toBeTruthy();
+    expect(window.localStorage.getItem("fleet.genui.pending.hold")).toBeNull();
+  });
+});
+
+describe("cards from before the summary", () => {
+  it("render locked with no actions and say to ask again", () => {
+    const s = spec({ title: "Old", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    render(<GenerativeCard cardId="old" spec={s} retired onSubmit={() => {}} />);
+    expect(screen.getByTestId("genui-retired")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Go" })).toBeNull();
+    expect(screen.getByLabelText(/Name/)).toBeDisabled();
+  });
+
+  it("keep showing an answer they already had, without Edit and resend", () => {
+    const s = spec({ title: "Old", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    render(
+      <GenerativeCard cardId="old2" spec={s} retired submission={{ cardId: "old2", actionId: "go", values: { n: "A" } }} onSubmit={() => {}} />,
+    );
+    expect(screen.getByTestId("genui-submitted")).toBeTruthy();
+    expect(screen.queryByTestId("genui-retired")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit and resend" })).toBeNull();
+  });
+});
+
+describe("submission size", () => {
+  it("refuses, before sending, an answer larger than the chat accepts", async () => {
+    const user = userEvent.setup();
+    const long = Array.from({ length: 20000 }, (_, i) => `publisher-${String(i).padStart(6, "0")}.a-rather-long-example-domain-name.example.com`);
+    const s = spec({
+      title: "Big",
+      components: [{ type: "list_input", id: "domains", label: "Domains", value: long }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    const onSubmit = vi.fn().mockResolvedValue(true);
+    render(<GenerativeCard cardId="big" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toMatch(/Too large to send/);
+  });
+});

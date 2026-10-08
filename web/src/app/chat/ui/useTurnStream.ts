@@ -3984,6 +3984,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       void loadMemories();
     } catch (error) {
       const target = resolveTarget();
+      if (!accepted.value) {
+        // The server never took this submission: say so on its bubble, so a
+        // generative-UI card does not count it as an answer (#1700). The
+        // recovery below may still find a turn the server started for it —
+        // the card then sees that turn's tool calls and keeps the answer.
+        setConvMessages(target, (current) =>
+          current.map((m) => (m.id === baseId && m.role === "user" ? { ...m, notSent: true } : m)),
+        );
+      }
       if (supersededStreamsRef.current.has(abortController)) {
         // We aborted this POST ourselves because its socket was dead and a
         // replacement stream has taken over the conversation

@@ -58,11 +58,19 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
   for (let idx = 0; idx < messages.length; idx++) {
     const m = messages[idx];
     if (m.role === "user") {
-      // A card message whose turn failed before doing anything (a refused
-      // POST leaves its optimistic bubble behind, followed by a failed
-      // assistant slot) must not lock the card: nothing was answered.
+      // A card message the server refused (its POST was rejected or never
+      // arrived — the optimistic bubble stays behind, followed by a failed
+      // assistant slot) must not lock the card: nothing was answered. An
+      // ACCEPTED message whose turn then failed is different — the server
+      // holds it and the card reported it sent — so it still locks.
       const next = messages[idx + 1];
-      if (next && next.role === "assistant" && (next.failed || next.modelRequired) && !(next.toolCalls ?? []).length) {
+      if (
+        m.notSent &&
+        next &&
+        next.role === "assistant" &&
+        (next.failed || next.modelRequired) &&
+        !(next.toolCalls ?? []).length
+      ) {
         continue;
       }
       const sub = parseSubmissionMessage(m.content);
