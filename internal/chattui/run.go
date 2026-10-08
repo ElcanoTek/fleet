@@ -190,10 +190,14 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 			visible.Reset()
 			visible.WriteString(ev.Str("text"))
 		case "tool.call":
-			if n := ev.Str("name"); n == showUITool {
-				fmt.Fprintln(errOut, "▸ "+n+" (interactive card — open this chat on the web to use it)")
-			} else if n != "" {
+			if n := ev.Str("name"); n != "" {
 				fmt.Fprintln(errOut, "▸ "+n)
+			}
+		case "tool.result":
+			// Point to the web chat only for a card the server accepted: a
+			// refused spec (UI_INVALID) draws nothing anywhere.
+			if ev.Str("name") == showUITool && strings.HasPrefix(ev.Str("text"), "UI_DISPLAYED") {
+				fmt.Fprintln(errOut, "  ◧ interactive card shown — open this chat on the web to use it")
 			}
 		case "tool.approval_required":
 			// Critical tool staged for human review. One-shot has no card to

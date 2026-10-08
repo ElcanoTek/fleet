@@ -6,6 +6,7 @@ import {
   collect,
   initialValues,
   normalizeValues,
+  isCalendarDate,
   parseCardSpec,
   parseSubmissionMessage,
   UI_SUBMISSION_PREFIX,
@@ -140,5 +141,15 @@ describe("normalizeValues", () => {
       unknown: 1,
     });
     expect(v).toEqual({ region: "", tags: ["a"], day: "", geo: { include: ["US"], exclude: ["CA"] }, row: "" });
+  });
+});
+
+describe("isCalendarDate", () => {
+  it("accepts real dates only", () => {
+    expect(isCalendarDate("2026-02-28")).toBe(true);
+    expect(isCalendarDate("2028-02-29")).toBe(true);
+    expect(isCalendarDate("2026-02-31")).toBe(false);
+    expect(isCalendarDate("2026-99-99")).toBe(false);
+    expect(isCalendarDate("26-1-1")).toBe(false);
   });
 });

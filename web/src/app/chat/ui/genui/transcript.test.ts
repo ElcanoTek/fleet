@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Message } from "../history";
-import { buildSubmissionMessage } from "./model";
+import { buildReplyMessage, buildSubmissionMessage } from "./model";
 import { deriveGenUiState, isRenderableCardCall, summarizeValue } from "./transcript";
 
 const card = (title: string, extra: Record<string, unknown> = {}) =>
@@ -60,7 +60,7 @@ describe("summarizeValue", () => {
 });
 
 describe("quick replies", () => {
-  it("attribute a matching user message to the most recent card offering it", () => {
+  it("attribute a reply by its marker, never by matching text", () => {
     const quick = (title: string) =>
       JSON.stringify({
         title,
@@ -70,10 +70,11 @@ describe("quick replies", () => {
     const s = deriveGenUiState([
       assistant(1, [{ id: "c1", input: quick("One"), resultText: "UI_DISPLAYED card_id=c1" }]),
       assistant(2, [{ id: "c2", input: quick("Two"), resultText: "UI_DISPLAYED card_id=c2" }]),
-      user(3, "  Yes, go ahead "),
-      user(4, "something else"),
+      // Typed by hand: same words, no marker — locks nothing.
+      user(3, "Yes, go ahead"),
+      user(4, buildReplyMessage("c1", "yes", "Yes, go ahead")),
     ]);
-    expect(s.replies.get("c2")).toBe("yes");
-    expect(s.replies.has("c1")).toBe(false);
+    expect(s.replies.get("c1")).toEqual({ cardId: "c1", actionId: "yes", text: "Yes, go ahead", messageId: 4 });
+    expect(s.replies.has("c2")).toBe(false);
   });
 });

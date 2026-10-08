@@ -20,6 +20,12 @@ const ShowUIToolName = "show_ui"
 // told to expect it. Keep the three in step.
 const UISubmissionPrefix = "[UI submission]"
 
+// UIReplyPrefix opens the user message a card's quick-reply ("message")
+// button sends: "[UI reply] card=<id> action=<id>" on the first line, then the
+// button's fixed text. The marker ties the reply to the card that offered it
+// (the web locks that card and only that one) instead of guessing from text.
+const UIReplyPrefix = "[UI reply]"
+
 // ShowUIParams is the agent-facing argument shape. Components, actions and
 // field errors are loosely typed on purpose: the real schema is the recursive
 // component catalog that genui.Validate enforces, which a portable tool
@@ -51,7 +57,7 @@ Options are strings or {value, label?, description?}. A selectable table submits
 
 EXPRESSIONS — used in {{ }} templates (text, heading, callout, stat value/caption, facts value, status_list label/detail, badges text, description, help, item_label) and in visible_if / disabled_if / progress value. Read input ids by name; inside a repeater's fields also that item's fields and index (1-based); from outside, repeater_id.field is the array of that field across items. Operators: + - * / % == != < <= > >= && || ! ?: ( ) and literals ('text', 12.5, true, false, null). Functions: ` + "len count sum avg min max abs floor ceil round(x, digits?) fixed(x, digits) number string upper lower join(list, sep?) contains(list|text, x) empty unique" + `. Example: "{{ count(lines) * len(exchanges) }} deals", visible_if "channel == 'Video'".
 
-ACTIONS — {id, label, kind: "submit" (default; sends the values) | "message" (sends the fixed "message" text as the user's reply — use for quick-reply buttons), style?, validate? (default true: required fields must be filled), confirm? (a confirmation question), visible_if?, disabled_if?}. At most 6.
+ACTIONS — {id, label, kind: "submit" (default; sends the values) | "message" (sends the fixed "message" text as the user's reply, after a "` + UIReplyPrefix + ` card=<card_id> action=<action_id>" line — use for quick-reply buttons), style?, validate? (default true: required fields must be filled), confirm? (a confirmation question), visible_if?, disabled_if?}. At most 6.
 
 The spec is validated: a mistake comes back as a tool error naming the path — fix it and call again. Keep cards focused (one task per card); limits: 800 components, 500 table rows, 2000 options per input.`
 
@@ -90,7 +96,7 @@ func ShowUIResult(callID string, input []byte) fantasy.ToolResponse {
 	case interactive:
 		fmt.Fprintf(&b, " Do not restate its contents. End your turn now with at most one short sentence. When the user submits, their next message will start with %q followed by the values as JSON; act on those values with your normal tools.", fmt.Sprintf("%s card=%s action=<action_id>", UISubmissionPrefix, callID))
 	case len(card.Actions) > 0:
-		b.WriteString(" Its buttons send their fixed message as the user's next reply; end your turn now with at most one short sentence.")
+		fmt.Fprintf(&b, " Its buttons send their fixed message as the user's next reply (after a %q line); end your turn now with at most one short sentence.", fmt.Sprintf("%s card=%s action=<action_id>", UIReplyPrefix, callID))
 	default:
 		b.WriteString(" It is display-only; continue your answer without repeating what the card shows.")
 	}

@@ -765,6 +765,13 @@ func (v *validator) options(path string, val any) {
 func (v *validator) componentRules(path, typ string, obj map[string]any) {
 	num := func(k string) (float64, bool) { f, ok := obj[k].(float64); return f, ok }
 	switch typ {
+	case "section":
+		// A collapsed section's header is its only way open; it needs a name.
+		if c, _ := obj["collapsible"].(bool); c {
+			if t, _ := obj["title"].(string); strings.TrimSpace(t) == "" {
+				v.addf(path+".title", "required when collapsible: it is the toggle that opens the section")
+			}
+		}
 	case "text_input":
 		lo, okLo := num("min_length")
 		hi, okHi := num("max_length")
@@ -863,9 +870,16 @@ func (v *validator) tableRules(path string, obj map[string]any) {
 		v.addf(path+".columns", "at most %d columns", MaxTableColumns)
 	}
 	keys := map[string]bool{}
-	for _, c := range cols {
+	for i, c := range cols {
 		if m, ok := c.(map[string]any); ok {
 			if k, ok := m["key"].(string); ok {
+				cp := fmt.Sprintf("%s.columns[%d].key", path, i)
+				switch {
+				case strings.TrimSpace(k) == "":
+					v.addf(cp, "column keys must be non-empty")
+				case keys[k]:
+					v.addf(cp, "duplicate column key %q", k)
+				}
 				keys[k] = true
 			}
 		}
@@ -1191,6 +1205,9 @@ func (v *validator) actions(raw any, hasInput bool) {
 			v.addf(ap+".id", "duplicate action id %q", id)
 		}
 		seen[id] = true
+		if lbl, ok := obj["label"].(string); ok && strings.TrimSpace(lbl) == "" {
+			v.addf(ap+".label", "must be non-blank: it is the button's only name")
+		}
 		kind, _ := obj["kind"].(string)
 		if kind == "" {
 			kind = "submit"

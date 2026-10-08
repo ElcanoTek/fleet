@@ -142,6 +142,14 @@ const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is 
 /** The empty / default value an input starts with. */
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** A real calendar date in YYYY-MM-DD (rejects 2026-02-31), like Go's time.Parse. */
+export function isCalendarDate(s: string): boolean {
+  if (!DATE_RE.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
 /**
  * The value an input starts with: its `value` when that is something the
  * control could have produced, else the empty value. "Could have produced"
@@ -158,7 +166,7 @@ export function defaultValue(c: Component): unknown {
     case "text_input":
       return typeof v === "string" ? v : "";
     case "date":
-      return typeof v === "string" && DATE_RE.test(v) ? v : "";
+      return typeof v === "string" && isCalendarDate(v) ? v : "";
     case "select":
     case "choice":
       return typeof v === "string" && optionSet().has(v) ? v : "";
@@ -281,7 +289,9 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** One input's own problem, or "" (required-ness included). */
 export function checkField(c: Component, v: unknown): string {
-  if (c.required === true && c.type !== "toggle" && isEmpty(c, v)) return "Required";
+  // A required toggle is an acknowledgement: it must be switched on.
+  if (c.required === true && c.type === "toggle") return v === true ? "" : "Required";
+  if (c.required === true && isEmpty(c, v)) return "Required";
   if (isEmpty(c, v)) return "";
   switch (c.type) {
     case "text_input": {
@@ -372,7 +382,8 @@ export function collect(
           if (err) errors[prefix + c.id] = err;
           continue;
         }
-        const err = checkField(c, v);
+        // A disabled field cannot be fixed by the user, so it never blocks.
+        const err = off ? "" : checkField(c, v);
         if (err) errors[prefix + c.id] = err;
         write[c.id] = v;
       }
@@ -384,11 +395,35 @@ export function collect(
   return { values: out, errors, visible };
 }
 
+/** Must match tools.UIReplyPrefix in internal/tools/show_ui.go. */
+export const UI_REPLY_PREFIX = "[UI reply]";
+
+export type Reply = { cardId: string; actionId: string; text: string; messageId?: number };
+
+/** A quick-reply button's message: a marker line naming the card, then its text. */
+export function buildReplyMessage(cardId: string, actionId: string, text: string): string {
+  return `${UI_REPLY_PREFIX} card=${cardId} action=${actionId}\n${text}`;
+}
+
+const REPLY_RE = /^\[UI reply\] card=(\S+) action=(\S+)\n([\s\S]*)$/;
+
+export function parseReplyMessage(text: string): Reply | null {
+  if (!text.startsWith(UI_REPLY_PREFIX)) return null;
+  const m = REPLY_RE.exec(text);
+  return m ? { cardId: m[1], actionId: m[2], text: m[3] } : null;
+}
+
 export function buildSubmissionMessage(cardId: string, actionId: string, values: Values): string {
   return `${UI_SUBMISSION_PREFIX} card=${cardId} action=${actionId}\n\`\`\`json\n${JSON.stringify(values)}\n\`\`\``;
 }
 
-export type Submission = { cardId: string; actionId: string; values: Values };
+export type Submission = {
+  cardId: string;
+  actionId: string;
+  values: Values;
+  /** The transcript message it came from — two identical resends differ here. */
+  messageId?: number;
+};
 
 const SUBMISSION_RE = /^\[UI submission\] card=(\S+) action=(\S+)\n```json\n([\s\S]*)\n```\s*$/;
 

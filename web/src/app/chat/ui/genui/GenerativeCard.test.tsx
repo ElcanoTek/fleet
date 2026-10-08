@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import GenerativeCard, { RENDERERS, parseListText } from "./GenerativeCard";
-import { parseCardSpec, parseSubmissionMessage, type CardSpec } from "./model";
+import { buildReplyMessage, parseCardSpec, parseSubmissionMessage, type CardSpec } from "./model";
 import { loadFixture } from "./fixtures";
 
 type Case = { name: string; valid: boolean; card: unknown };
@@ -128,7 +128,8 @@ describe("interaction", () => {
     const onSubmit = vi.fn();
     render(<GenerativeCard cardId="c" spec={spec(form)} onSubmit={onSubmit} />);
     await user.click(screen.getByRole("button", { name: "Not now" }));
-    expect(onSubmit).toHaveBeenCalledWith("Skip the order.");
+    // A quick reply carries a marker naming its card, then the fixed text.
+    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("c", "nah", "Skip the order."));
   });
 
   it("re-checks the gates at confirmation time", async () => {
@@ -429,10 +430,12 @@ describe("third Codex pass", () => {
     });
     const view = render(<GenerativeCard cardId="qr" spec={s} onSubmit={onSubmit} />);
     await user.click(screen.getByRole("button", { name: "Option A" }));
-    expect(onSubmit).toHaveBeenCalledWith("A please");
+    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("qr", "a", "A please"));
     expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Option B" })).toBeNull();
-    view.rerender(<GenerativeCard cardId="qr" spec={s} repliedAction="a" onSubmit={onSubmit} />);
+    view.rerender(
+      <GenerativeCard cardId="qr" spec={s} reply={{ cardId: "qr", actionId: "a", text: "A please", messageId: 9 }} onSubmit={onSubmit} />,
+    );
     expect(screen.getByTestId("genui-submitted").textContent).toContain("Option A");
     expect(screen.queryByRole("button", { name: "Option B" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit and resend" })).toBeNull();
@@ -481,6 +484,63 @@ describe("third Codex pass", () => {
     render(<GenerativeCard cardId="nest" spec={s} onSubmit={() => {}} />);
     await user.click(screen.getByRole("button", { name: "Go" }));
     expect(await screen.findByLabelText(/Deep/)).toBeTruthy();
+  });
+});
+
+describe("fourth Codex pass", () => {
+  it("keeps a queued submit pending across a remount (virtualized transcript)", async () => {
+    const user = userEvent.setup();
+    const s = spec({ title: "P", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+    const first = render(<GenerativeCard cardId="pend" spec={s} onSubmit={vi.fn().mockResolvedValue(true)} />);
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
+    first.unmount();
+    render(<GenerativeCard cardId="pend" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Yes" })).toBeNull();
+  });
+
+  it("a required disabled field never blocks submit", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const s = spec({
+      title: "D",
+      components: [{ type: "text_input", id: "acct", label: "Account", required: true, disabled: true }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="rd" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("a required toggle must be switched on", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const s = spec({
+      title: "Ack",
+      components: [{ type: "toggle", id: "ok", label: "I confirm", required: true }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="tg" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("switch"));
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("an identical edit-and-resend locks the card again", async () => {
+    const user = userEvent.setup();
+    const s = spec({ ...form, actions: [{ id: "order", label: "Place order" }] });
+    const sub = { cardId: "re", actionId: "order", values: { name: "Ada" }, messageId: 1 };
+    const view = render(<GenerativeCard cardId="re" spec={s} submission={sub} onSubmit={vi.fn().mockResolvedValue(true)} />);
+    await user.click(screen.getByRole("button", { name: "Edit and resend" }));
+    await user.click(screen.getByRole("button", { name: "Place order" }));
+    view.rerender(
+      <GenerativeCard cardId="re" spec={s} submission={{ ...sub, messageId: 2 }} onSubmit={vi.fn().mockResolvedValue(true)} />,
+    );
+    expect(screen.getByTestId("genui-submitted")).toBeTruthy();
+    expect(screen.getByLabelText(/Name/)).toBeDisabled();
   });
 });
 

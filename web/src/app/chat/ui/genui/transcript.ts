@@ -7,18 +7,27 @@
 
 import { createContext } from "react";
 import type { Message, ToolCall } from "../history";
-import { parseCardSpec, parseSubmissionMessage, SHOW_UI_TOOL, walkInputs, type CardSpec, type Submission } from "./model";
+import {
+  parseCardSpec,
+  parseReplyMessage,
+  parseSubmissionMessage,
+  SHOW_UI_TOOL,
+  walkInputs,
+  type CardSpec,
+  type Reply,
+  type Submission,
+} from "./model";
 
 export type GenUiState = {
   cards: Map<string, CardSpec>;
   submissions: Map<string, Submission>;
   superseded: Set<string>;
   /**
-   * cardId → the message action whose fixed text the user then sent (a
-   * quick reply). Matched against the most recent card before that user
-   * message that offers a message action with exactly that text.
+   * cardId → the quick reply ("message" action) sent from it, identified by
+   * the "[UI reply] card=… action=…" marker the button writes — never by
+   * matching text, so typing the same words yourself locks nothing.
    */
-  replies: Map<string, string>;
+  replies: Map<string, Reply>;
 };
 
 export const EMPTY_GENUI_STATE: GenUiState = {
@@ -45,25 +54,16 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
   const cards = new Map<string, CardSpec>();
   const submissions = new Map<string, Submission>();
   const superseded = new Set<string>();
-  const replies = new Map<string, string>();
-  const order: string[] = [];
+  const replies = new Map<string, Reply>();
   for (const m of messages) {
     if (m.role === "user") {
       const sub = parseSubmissionMessage(m.content);
       if (sub) {
-        submissions.set(sub.cardId, sub);
+        submissions.set(sub.cardId, { ...sub, messageId: m.id });
         continue;
       }
-      const text = m.content.trim();
-      for (let i = order.length - 1; i >= 0; i--) {
-        const hit = (cards.get(order[i])?.actions ?? []).find(
-          (a) => a.kind === "message" && typeof a.message === "string" && a.message.trim() === text,
-        );
-        if (hit) {
-          replies.set(order[i], hit.id);
-          break;
-        }
-      }
+      const reply = parseReplyMessage(m.content);
+      if (reply) replies.set(reply.cardId, { ...reply, messageId: m.id });
       continue;
     }
     for (const tc of m.toolCalls ?? []) {
@@ -71,7 +71,6 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
       const spec = parseCardSpec(tc.input);
       if (!spec) continue;
       cards.set(tc.id, spec);
-      order.push(tc.id);
       if (spec.replaces) superseded.add(spec.replaces);
     }
   }

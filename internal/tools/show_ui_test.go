@@ -40,7 +40,8 @@ func TestShowUIDisplayOnlyCardLetsModelContinue(t *testing.T) {
 
 func TestShowUIQuickRepliesAreNotASubmitForm(t *testing.T) {
 	resp := runShowUI(t, `{"title":"Q","components":[{"type":"text","text":"?"}],"actions":[{"id":"a","label":"A","kind":"message","message":"A please"}],"replaces":"call_0"}`)
-	if resp.IsError || strings.Contains(resp.Content, UISubmissionPrefix) || !strings.Contains(resp.Content, "replaces card call_0") {
+	if resp.IsError || strings.Contains(resp.Content, UISubmissionPrefix) || !strings.Contains(resp.Content, "replaces card call_0") ||
+		!strings.Contains(resp.Content, UIReplyPrefix+" card=call_1 action=<action_id>") {
 		t.Fatalf("got %+v", resp)
 	}
 }

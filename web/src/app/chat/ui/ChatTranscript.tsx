@@ -69,8 +69,8 @@ import {
   type TranscriptRow,
 } from "./transcriptRows";
 import { useStickToBottom } from "./stickToBottom";
-import { parseSubmissionMessage } from "./genui/model";
-import { SubmissionBubble } from "./genui/SubmissionBubble";
+import { parseReplyMessage, parseSubmissionMessage } from "./genui/model";
+import { ReplyBubble, SubmissionBubble } from "./genui/SubmissionBubble";
 import { deriveGenUiState, GenUiContext, isRenderableCardCall } from "./genui/transcript";
 // Generative-UI cards (show_ui) carry their own renderer and the markdown
 // pipeline; lazy-loaded like AssistantMarkdown so chats without a card never
@@ -794,7 +794,7 @@ export function ChatTranscript({
                                           cardId={tc.id}
                                           spec={spec}
                                           submission={genUi.submissions.get(tc.id) ?? null}
-                                          repliedAction={genUi.replies.get(tc.id) ?? null}
+                                          reply={genUi.replies.get(tc.id) ?? null}
                                           superseded={genUi.superseded.has(tc.id)}
                                           onSubmit={(text) => submitPrompt(text)}
                                         />
@@ -1137,6 +1137,8 @@ export function UserTurn({
     // reads. No Edit — the card's own "Edit and resend" is the way to amend.
     return <SubmissionBubble submission={submission} raw={message.content} />;
   }
+  const reply = parseReplyMessage(message.content);
+  if (reply) return <ReplyBubble reply={reply} />;
   return (
     <>
       <UserBubble

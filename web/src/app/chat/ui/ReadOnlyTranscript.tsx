@@ -43,8 +43,8 @@
 
 import { useMemo, type ReactNode } from "react";
 import { SUMMARY_BOUNDARY } from "./history";
-import { parseSubmissionMessage } from "./genui/model";
-import { SubmissionBubble } from "./genui/SubmissionBubble";
+import { parseReplyMessage, parseSubmissionMessage } from "./genui/model";
+import { ReplyBubble, SubmissionBubble } from "./genui/SubmissionBubble";
 import { ReadOnlyFilesContext } from "./LockedFiles";
 import {
   redactUnsharedFiles,
@@ -167,9 +167,14 @@ export function ReadOnlyTranscript({
                 // card itself (they carry text only), so the bubble names
                 // the action and lists the submitted values by id.
                 const sub = parseSubmissionMessage(b.text);
+                const reply = sub ? null : parseReplyMessage(b.text);
                 return sub ? (
                   <div className="max-w-[85%]">
                     <SubmissionBubble submission={sub} raw={b.text} />
+                  </div>
+                ) : reply ? (
+                  <div className="max-w-[85%]">
+                    <ReplyBubble reply={reply} />
                   </div>
                 ) : (
                   <div className="max-w-[85%] whitespace-pre-wrap rounded-[1rem] bg-[var(--color-overlay-strong)] px-4 py-2.5 text-[0.9375rem] leading-[1.55]">

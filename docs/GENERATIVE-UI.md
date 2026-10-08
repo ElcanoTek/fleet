@@ -68,6 +68,12 @@ Plus card-level `actions` (`submit` sends the values; `message` sends a fixed
 reply, which serves as quick-reply buttons), `field_errors` (inline errors on
 `id` or `repeater[i].field`), and `replaces` (collapses an older card).
 
+A quick reply is sent as `[UI reply] card=<id> action=<id>` followed by the
+button's text, so the card it answered is known from the marker rather than by
+matching words. Either kind of answer locks its card. While an answer is
+queued behind a running turn, the card's buttons stay held, and that hold
+survives the transcript scrolling the card away.
+
 A `table` with `select: single|multi` is an input that submits its `row_key`
 values; every row must carry a unique, non-empty string under `row_key`.
 A `status_list` item with `field` gets a **Fix** link that jumps to that

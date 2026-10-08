@@ -26,6 +26,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { evaluateSafe, renderTemplate, toText, truthy, type Scope } from "./expr";
 import {
+  buildReplyMessage,
   buildSubmissionMessage,
   children,
   collect,
@@ -41,6 +42,7 @@ import {
   type CardSpec,
   type Component,
   type IncludeExclude,
+  type Reply,
   type Submission,
   type Tone,
   type Values,
@@ -105,7 +107,7 @@ export type GenerativeCardProps = {
   /** The user's submission of this card, found in the transcript. */
   submission?: Submission | null;
   /** The message action (quick reply) the user answered this card with. */
-  repliedAction?: string | null;
+  reply?: Reply | null;
   /** A later card named this one in `replaces`. */
   superseded?: boolean;
   /** Shared / read-only transcripts: render, never submit. */
@@ -138,6 +140,32 @@ function saveDraft(cardId: string, values: Values | null) {
 }
 
 
+const PENDING_PREFIX = "fleet.genui.pending.";
+// A queued message normally echoes within a turn; past this a stale marker
+// (a cancelled queue item, a closed tab) stops holding the card.
+const PENDING_TTL_MS = 30 * 60 * 1000;
+
+function loadPending(cardId: string): string | null {
+  try {
+    const raw = window.localStorage.getItem(PENDING_PREFIX + cardId);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as { action?: unknown; at?: unknown };
+    if (typeof v.action !== "string" || typeof v.at !== "number" || Date.now() - v.at > PENDING_TTL_MS) return null;
+    return v.action;
+  } catch {
+    return null;
+  }
+}
+
+function savePending(cardId: string, action: string | null) {
+  try {
+    if (action) window.localStorage.setItem(PENDING_PREFIX + cardId, JSON.stringify({ action, at: Date.now() }));
+    else window.localStorage.removeItem(PENDING_PREFIX + cardId);
+  } catch {
+    // Convenience only, like drafts.
+  }
+}
+
 export default function GenerativeCard(props: GenerativeCardProps) {
   const { spec, superseded } = props;
   const [expanded, setExpanded] = useState(false);
@@ -162,7 +190,7 @@ export default function GenerativeCard(props: GenerativeCardProps) {
   return <CardBody {...props} />;
 }
 
-function CardBody({ cardId, spec, submission, repliedAction, superseded, readOnly, onSubmit }: GenerativeCardProps) {
+function CardBody({ cardId, spec, submission, reply, superseded, readOnly, onSubmit }: GenerativeCardProps) {
   const [values, setValuesState] = useState<Values>(() =>
     normalizeValues(spec, submission ? submission.values : readOnly ? null : loadDraft(cardId)),
   );
@@ -171,7 +199,17 @@ function CardBody({ cardId, spec, submission, repliedAction, superseded, readOnl
   // An accepted submit that has not reached the transcript yet — a message
   // queued behind a running turn is accepted but not echoed until that turn
   // ends. Actions stay disabled so a second click cannot queue a duplicate.
-  const [awaiting, setAwaiting] = useState<string | null>(null);
+  // Kept in localStorage too: the transcript is virtualized (an off-screen
+  // card unmounts), and a remount must not re-enable a button whose message
+  // is still queued.
+  const [awaiting, setAwaitingState] = useState<string | null>(() => (readOnly ? null : loadPending(cardId)));
+  const setAwaiting = useCallback(
+    (a: string | null) => {
+      setAwaitingState(a);
+      if (!readOnly) savePending(cardId, a);
+    },
+    [cardId, readOnly],
+  );
   const [showErrors, setShowErrors] = useState(false);
   const [confirming, setConfirming] = useState<Action | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -185,18 +223,21 @@ function CardBody({ cardId, spec, submission, repliedAction, superseded, readOnl
   // lands (first send, or an edit resent), adopt its values and drop the
   // draft.
   // A quick reply answers the card as surely as a submit does: both lock it.
-  const submittedAction = submission?.actionId ?? repliedAction ?? null;
+  const submittedAction = submission?.actionId ?? reply?.actionId ?? null;
+  // Keyed by the transcript message, not the payload: resending identical
+  // values is a new submission and must lock the card again.
   const submissionKey = submission
-    ? `${submission.actionId}\u0000${JSON.stringify(submission.values)}`
-    : repliedAction
-      ? `reply\u0000${repliedAction}`
+    ? `s\u0000${submission.messageId ?? ""}\u0000${submission.actionId}\u0000${JSON.stringify(submission.values)}`
+    : reply
+      ? `r\u0000${reply.messageId ?? ""}\u0000${reply.actionId}`
       : "";
   const [seenSubmission, setSeenSubmission] = useState(submissionKey);
   if (seenSubmission !== submissionKey) {
     setSeenSubmission(submissionKey);
-    if (submission || repliedAction) {
+    if (submission || reply) {
       setEditing(false);
       setAwaiting(null);
+      savePending(cardId, null);
     }
     if (submission) {
       setValuesState(normalizeValues(spec, submission.values));
@@ -297,7 +338,7 @@ function CardBody({ cardId, spec, submission, repliedAction, superseded, readOnl
     try {
       const accepted =
         action.kind === "message"
-          ? await onSubmit(str(action.message))
+          ? await onSubmit(buildReplyMessage(cardId, action.id, str(action.message)))
           : await onSubmit(buildSubmissionMessage(cardId, action.id, submitValues));
       if (accepted === false) {
         setNotice("Not sent. Try again.");
@@ -542,7 +583,9 @@ function Section({ c }: { c: Component }) {
   const scope = useScope();
   const collapsible = c.collapsible === true;
   const [open, setOpen] = useState(!(collapsible && c.collapsed === true));
-  const title = str(c.title);
+  // A collapsible section always has a toggle; the validator requires a
+  // title, and the renderer still never strands content behind no header.
+  const title = str(c.title) || (collapsible ? "Details" : "");
   const ref = useRef<HTMLElement | null>(null);
   const owned = useMemo(() => idsUnder(children(c)), [c]);
   useReveal(ref, (path) => {

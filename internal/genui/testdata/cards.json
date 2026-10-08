@@ -1695,6 +1695,90 @@
      }
     ]
    }
+  },
+  {
+   "name": "blank action label",
+   "valid": false,
+   "error_contains": "must be non-blank",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text",
+      "text": "x"
+     }
+    ],
+    "actions": [
+     {
+      "id": "a",
+      "label": "  ",
+      "kind": "message",
+      "message": "m"
+     }
+    ]
+   }
+  },
+  {
+   "name": "untitled collapsible section",
+   "valid": false,
+   "error_contains": "required when collapsible",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "section",
+      "collapsible": true,
+      "collapsed": true,
+      "children": [
+       {
+        "type": "text",
+        "text": "x"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "blank table column key",
+   "valid": false,
+   "error_contains": "column keys must be non-empty",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "table",
+      "columns": [
+       {
+        "key": ""
+       }
+      ],
+      "rows": []
+     }
+    ]
+   }
+  },
+  {
+   "name": "duplicate table column key",
+   "valid": false,
+   "error_contains": "duplicate column key",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "table",
+      "columns": [
+       {
+        "key": "a"
+       },
+       {
+        "key": "a"
+       }
+      ],
+      "rows": []
+     }
+    ]
+   }
   }
  ]
 }
