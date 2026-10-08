@@ -887,3 +887,85 @@ describe("ninth Codex pass", () => {
     expect(keys).not.toContain("fleet.genui.draft.stale");
   });
 });
+
+describe("tenth Codex pass", () => {
+  it("lets an optional radio choice be cleared, but not a required one", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "R",
+      components: [
+        { type: "choice", id: "opt", label: "Optional", variant: "radio", options: ["a", "b"] },
+        { type: "choice", id: "req", label: "Required", variant: "radio", options: ["a", "b"], required: true, value: "a" },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    const onSubmit = vi.fn().mockResolvedValue(true);
+    render(<GenerativeCard cardId="radio" spec={s} onSubmit={onSubmit} />);
+    expect(screen.queryAllByRole("button", { name: "Clear choice" })).toHaveLength(0);
+    const opt = screen.getByRole("radiogroup", { name: "Optional" });
+    await user.click(within(opt).getAllByRole("radio")[1]);
+    await user.click(screen.getByRole("button", { name: "Clear choice" }));
+    expect(within(opt).getAllByRole("radio").every((r) => !(r as HTMLInputElement).checked)).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(parseSubmissionMessage(onSubmit.mock.calls[0][0])?.values).toMatchObject({ opt: "", req: "a" });
+  });
+
+  it("draws a chart whose values span nearly the whole float range", () => {
+    const s = spec({
+      title: "C",
+      components: [{ type: "chart", kind: "line", labels: ["a", "b"], series: [{ name: "s", values: [-1e308, 1e308] }] }],
+    });
+    render(<GenerativeCard cardId="huge" spec={s} />);
+    const svg = document.querySelector("svg") as SVGElement;
+    expect(svg.innerHTML).not.toContain("NaN");
+    expect(svg.querySelectorAll("circle")).toHaveLength(2);
+  });
+
+  it("restores an unsent Edit-and-resend draft, in edit mode, after a remount", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({ title: "E", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    const submission = { cardId: "edit", actionId: "go", values: { n: "Ada" }, messageId: 4 };
+    const first = render(<GenerativeCard cardId="edit" spec={s} submission={submission} onSubmit={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Edit and resend" }));
+    await user.clear(screen.getByLabelText(/Name/));
+    await user.type(screen.getByLabelText(/Name/), "Grace");
+    first.unmount();
+    render(<GenerativeCard cardId="edit" spec={s} submission={submission} onSubmit={() => {}} />);
+    expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("Grace");
+    expect(screen.getByLabelText(/Name/)).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Go" })).toBeTruthy();
+  });
+
+  it("drops a pre-answer draft once that answer reached the transcript while unmounted", () => {
+    window.localStorage.setItem("fleet.genui.draft.done", JSON.stringify({ values: { n: "typed" }, at: Date.now(), after: "" }));
+    const s = spec({ title: "E", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    render(<GenerativeCard cardId="done" spec={s} submission={{ cardId: "done", actionId: "go", values: { n: "sent" } }} onSubmit={() => {}} />);
+    expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("sent");
+    expect(screen.getByLabelText(/Name/)).toBeDisabled();
+    expect(window.localStorage.getItem("fleet.genui.draft.done")).toBeNull();
+  });
+
+  it("makes room for a draft by evicting older drafts when storage is full", async () => {
+    window.localStorage.clear();
+    window.localStorage.setItem("fleet.genui.draft.older", JSON.stringify({ values: { n: "x" }, at: Date.now() - 1000, after: "" }));
+    const realSet = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, k: string, v: string) {
+      // Full while the older draft is still there.
+      if (k === "fleet.genui.draft.big" && this.getItem("fleet.genui.draft.older") !== null) {
+        throw new DOMException("full", "QuotaExceededError");
+      }
+      realSet.call(this, k, v);
+    });
+    try {
+      const user = userEvent.setup();
+      const s = spec({ title: "B", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+      render(<GenerativeCard cardId="big" spec={s} onSubmit={() => {}} />);
+      await user.type(screen.getByLabelText(/Name/), "A");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(window.localStorage.getItem("fleet.genui.draft.older")).toBeNull();
+    expect(window.localStorage.getItem("fleet.genui.draft.big")).toContain('"A"');
+  });
+});

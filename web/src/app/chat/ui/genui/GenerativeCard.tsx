@@ -136,29 +136,35 @@ const DRAFT_PREFIX = "fleet.genui.draft.";
 const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_DRAFTS = 20;
 
-type StoredDraft = { values: Values; at: number };
+// A draft records the answer it edits (`after`, the answer key — "" before
+// the first answer), so "Edit and resend" changes survive a remount too: a
+// draft whose answer is still the transcript's reopens the card for editing,
+// and one whose answer has moved on is spent.
+type StoredDraft = { values: Values; at: number; after: string };
 
 function readDraft(key: string): StoredDraft | null {
   const raw = window.localStorage.getItem(key);
   if (!raw) return null;
   const v = JSON.parse(raw) as Partial<StoredDraft> | null;
   if (!v || typeof v.at !== "number" || !v.values || typeof v.values !== "object" || Array.isArray(v.values)) return null;
-  return { values: v.values, at: v.at };
+  return { values: v.values, at: v.at, after: typeof v.after === "string" ? v.after : "" };
 }
 
-function loadDraft(cardId: string): Values | null {
+function loadDraft(cardId: string, answerKey: string): Values | null {
+  const key = DRAFT_PREFIX + cardId;
   try {
-    const d = readDraft(DRAFT_PREFIX + cardId);
-    if (!d || Date.now() - d.at > DRAFT_TTL_MS) return null;
-    return d.values;
+    const d = readDraft(key);
+    if (d && Date.now() - d.at <= DRAFT_TTL_MS && d.after === answerKey) return d.values;
+    window.localStorage.removeItem(key);
+    return null;
   } catch {
     return null;
   }
 }
 
-/** Drops expired or unreadable drafts, then the oldest past MAX_DRAFTS - 1. */
-function pruneDrafts(keep: string) {
-  const live: { key: string; at: number }[] = [];
+/** Every other draft, newest first; expired or unreadable ones get at -1. */
+function otherDrafts(keep: string): { key: string; at: number }[] {
+  const out: { key: string; at: number }[] = [];
   for (let i = 0; i < window.localStorage.length; i++) {
     const key = window.localStorage.key(i);
     if (!key || !key.startsWith(DRAFT_PREFIX) || key === keep) continue;
@@ -168,30 +174,51 @@ function pruneDrafts(keep: string) {
     } catch {
       d = null;
     }
-    if (!d || Date.now() - d.at > DRAFT_TTL_MS) live.push({ key, at: -1 });
-    else live.push({ key, at: d.at });
+    out.push({ key, at: !d || Date.now() - d.at > DRAFT_TTL_MS ? -1 : d.at });
   }
-  live.sort((a, b) => b.at - a.at);
-  for (const [i, d] of live.entries()) {
+  return out.sort((a, b) => b.at - a.at);
+}
+
+/** Drops expired or unreadable drafts, then the oldest past MAX_DRAFTS - 1. */
+function pruneDrafts(keep: string) {
+  for (const [i, d] of otherDrafts(keep).entries()) {
     if (d.at < 0 || i >= MAX_DRAFTS - 1) window.localStorage.removeItem(d.key);
   }
 }
 
-function saveDraft(cardId: string, values: Values | null) {
+function saveDraft(cardId: string, values: Values | null, after = "") {
   const key = DRAFT_PREFIX + cardId;
   try {
     if (!values) {
       window.localStorage.removeItem(key);
       return;
     }
-    const isNew = window.localStorage.getItem(key) === null;
-    if (isNew) pruneDrafts(key);
-    window.localStorage.setItem(key, JSON.stringify({ values, at: Date.now() }));
+    if (window.localStorage.getItem(key) === null) pruneDrafts(key);
+    const json = JSON.stringify({ values, at: Date.now(), after });
+    // A long pasted list can fill the origin's quota. Make room by dropping
+    // other drafts, least recently edited first, until this one fits.
+    const others = otherDrafts(key);
+    for (;;) {
+      try {
+        window.localStorage.setItem(key, json);
+        return;
+      } catch {
+        const victim = others.pop();
+        if (!victim) return;
+        window.localStorage.removeItem(victim.key);
+      }
+    }
   } catch {
-    // Private mode / quota: a draft is a convenience, never state we rely on.
+    // Private mode: a draft is a convenience, never state we rely on.
   }
 }
 
+/** A transcript answer without its message id (see loadPending, loadDraft). */
+function answerKeyOf(submission: Submission | null | undefined, reply: Reply | null | undefined): string {
+  if (submission) return `s\u0000${submission.actionId}\u0000${JSON.stringify(submission.values)}`;
+  if (reply) return `r\u0000${reply.actionId}`;
+  return "";
+}
 
 const PENDING_PREFIX = "fleet.genui.pending.";
 // A queued message normally echoes within a turn; past this a stale marker
@@ -259,10 +286,13 @@ export default function GenerativeCard(props: GenerativeCardProps) {
 }
 
 function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retired, onSubmit }: GenerativeCardProps) {
+  // An unsent draft wins over the submitted values: it is an edit of that
+  // submission in progress, so the card reopens for editing.
+  const [initialDraft] = useState(() => (readOnly ? null : loadDraft(cardId, answerKeyOf(submission, reply))));
   const [values, setValuesState] = useState<Values>(() =>
-    normalizeValues(spec, submission ? submission.values : readOnly ? null : loadDraft(cardId)),
+    normalizeValues(spec, initialDraft ?? (submission ? submission.values : null)),
   );
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(() => !!submission && initialDraft !== null);
   const [sending, setSending] = useState<string | null>(null);
   const [showErrors, setShowErrors] = useState(false);
   const [confirming, setConfirming] = useState<Action | null>(null);
@@ -285,12 +315,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     : reply
       ? `r\u0000${reply.messageId ?? ""}\u0000${reply.actionId}`
       : "";
-  // The same answer without its message id (see loadPending).
-  const answerKey = submission
-    ? `s\u0000${submission.actionId}\u0000${JSON.stringify(submission.values)}`
-    : reply
-      ? `r\u0000${reply.actionId}`
-      : "";
+  const answerKey = answerKeyOf(submission, reply);
   const answerKeyRef = useRef(answerKey);
   useEffect(() => {
     answerKeyRef.current = answerKey;
@@ -321,22 +346,22 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     if (submission || reply) {
       setEditing(false);
       setAwaitingState(null);
-      if (!readOnly) savePending(cardId, null);
+      if (!readOnly) {
+        savePending(cardId, null);
+        saveDraft(cardId, null);
+      }
     }
     if (submission) {
       setValuesState(normalizeValues(spec, submission.values));
     }
   }
-  useEffect(() => {
-    if (submissionKey && !readOnly) saveDraft(cardId, null);
-  }, [cardId, submissionKey, readOnly]);
   const locked = !!readOnly || !!retired || !!superseded || (submittedAction !== null && !editing);
 
   const setValues = useCallback(
     (fn: (v: Values) => Values) => {
       setValuesState((prev) => {
         const next = fn(prev);
-        if (!readOnly) saveDraft(cardId, next);
+        if (!readOnly) saveDraft(cardId, next, answerKeyRef.current);
         return next;
       });
     },
@@ -1154,14 +1179,16 @@ function Chart({ c }: { c: Component }) {
   const all = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
   const maxV = Math.max(0, ...all);
   const minV = Math.min(0, ...all);
-  const span = maxV - minV || 1;
+  // Halved before subtracting: maxV - minV overflows to Infinity for values
+  // near ±1.7e308, which would turn every coordinate into NaN.
+  const span = maxV / 2 - minV / 2 || 1;
   const W = 600;
   const H = 200;
   const padL = 44;
   const padB = 22;
   const plotW = W - padL - 8;
   const plotH = H - padB - 8;
-  const y = (v: number) => 8 + plotH - ((v - minV) / span) * plotH;
+  const y = (v: number) => 8 + plotH - ((v / 2 - minV / 2) / span) * plotH;
   const n = Math.max(1, labels.length);
   const band = plotW / n;
   const fmt = (v: number) => `${unit === "$" ? "$" : ""}${toText(Number(v.toPrecision(4)))}${unit && unit !== "$" ? ` ${unit}` : ""}`;
@@ -1482,6 +1509,9 @@ function Select({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
 }
 
 function Choice({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
+  const { locked: cardLocked } = useCard();
+  const item = useContext(ItemContext);
+  const locked = cardLocked || c.disabled === true || item?.disabled === true;
   const opts = optionsOf(c);
   const v = typeof value === "string" ? value : "";
   const name = useId();
@@ -1492,6 +1522,7 @@ function Choice({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
     : { "aria-label": str(c.id) || "Choice" };
   if (c.variant === "radio") {
     return (
+      <div className="grid gap-1">
       <div role="radiogroup" {...groupLabel} className="grid gap-1">
         {opts.map((o) => (
           <label key={o.value} className="flex cursor-pointer items-start gap-2">
@@ -1508,6 +1539,18 @@ function Choice({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
             </span>
           </label>
         ))}
+      </div>
+      {/* Native radios can only select; an optional choice needs a way back
+          to "no answer" (the segmented variant toggles off instead). */}
+      {c.required !== true && v !== "" && !locked ? (
+        <button
+          type="button"
+          className="justify-self-start text-[0.72rem] text-[var(--color-text-muted)] underline hover:text-[var(--color-text-primary)]"
+          onClick={() => onChange?.("")}
+        >
+          Clear choice
+        </button>
+      ) : null}
       </div>
     );
   }

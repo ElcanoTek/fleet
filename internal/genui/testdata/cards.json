@@ -2077,6 +2077,99 @@
      }
     ]
    }
+  },
+  {
+   "name": "sole submit gated only on a disabled input",
+   "valid": false,
+   "error_contains": "reads only disabled inputs",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "gate",
+      "disabled": true
+     },
+     {
+      "type": "text_input",
+      "id": "n"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "disabled_if": "empty(gate)"
+     }
+    ]
+   }
+  },
+  {
+   "name": "submit gated on an editable input",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "gate",
+      "disabled": true
+     },
+     {
+      "type": "text_input",
+      "id": "n"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "disabled_if": "empty(gate) && empty(n)"
+     }
+    ]
+   }
+  },
+  {
+   "name": "date default in year zero",
+   "valid": false,
+   "error_contains": "year 0001 or later",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "date",
+      "id": "d",
+      "value": "0000-01-01"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "date default in year one",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "date",
+      "id": "d",
+      "value": "0001-01-01",
+      "min": "0001-01-01"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
   }
  ]
 }

@@ -312,6 +312,8 @@ type field struct {
 	// items is a repeater's item count when the card opens (its value, else
 	// max(1, min_items)) — the indexes a field_error or Fix link can name.
 	items int
+	// fixed: the input is `disabled: true`, so the user can never change it.
+	fixed bool
 }
 
 type validator struct {
@@ -427,8 +429,11 @@ func (v *validator) component(path string, raw any, depth int, repeater string) 
 			}
 		} else {
 			v.declare(path, id, typ, repeater)
-			if f, ok := v.fields[id]; ok && typ == "repeater" {
-				f.items = initialItems(obj)
+			if f, ok := v.fields[id]; ok {
+				if typ == "repeater" {
+					f.items = initialItems(obj)
+				}
+				f.fixed, _ = obj["disabled"].(bool)
 			}
 		}
 	} else if hasID && !idRe.MatchString(id) {
@@ -559,8 +564,8 @@ func (v *validator) checkTextProp(path string, pr prop, val any, repeater string
 			}
 		}
 		if pr.kind == kDate {
-			if _, err := time.Parse("2006-01-02", s); err != nil {
-				v.addf(path, "must be a YYYY-MM-DD date")
+			if !isCalendarDate(s) {
+				v.addf(path, "must be a YYYY-MM-DD date (year 0001 or later)")
 			}
 		}
 	case kNonBlank:
@@ -1024,8 +1029,8 @@ func (v *validator) checkValue(path, typ string, obj map[string]any, val any) {
 		if s, ok := val.(string); !ok {
 			v.addf(path, "must be a YYYY-MM-DD string")
 		} else if s != "" {
-			if _, err := time.Parse("2006-01-02", s); err != nil {
-				v.addf(path, "must be a YYYY-MM-DD string")
+			if !isCalendarDate(s) {
+				v.addf(path, "must be a YYYY-MM-DD string (year 0001 or later)")
 			}
 		}
 	case "number", "slider":
@@ -1246,11 +1251,18 @@ func (v *validator) actions(raw any, hasInput bool) {
 			if !ok {
 				continue
 			}
-			// A condition that names no input never changes, so the button is
-			// always or never available: either the condition is pointless, or
-			// the card can never be answered while the model waits for it.
-			if refs, err := ParseExpr(src); err == nil && len(refs) == 0 {
+			// A condition that names no input the user can change never
+			// changes, so the button is always or never available: either the
+			// condition is pointless, or the card can never be answered while
+			// the model waits for it.
+			refs, err := ParseExpr(src)
+			if err != nil {
+				continue
+			}
+			if len(refs) == 0 {
 				v.addf(ap+"."+cond, "names no input, so it never changes; drop it (an action is shown and enabled by default)")
+			} else if v.allFixed(refs) {
+				v.addf(ap+"."+cond, "reads only disabled inputs, which the user cannot change, so it never changes; drop it or make one of them editable")
 			}
 		}
 		kind, _ := obj["kind"].(string)
@@ -1271,6 +1283,34 @@ func (v *validator) actions(raw any, hasInput bool) {
 	if hasInput && !submit {
 		v.addf("actions", "the card has inputs but no submit action; add one with kind \"submit\"")
 	}
+}
+
+// isCalendarDate: a real YYYY-MM-DD day an HTML date input can hold. The
+// input has no year 0, which time.Parse accepts. Mirrors isCalendarDate in
+// web/src/app/chat/ui/genui/model.ts.
+func isCalendarDate(s string) bool {
+	t, err := time.Parse("2006-01-02", s)
+	return err == nil && t.Year() >= 1
+}
+
+// allFixed reports whether every input id in refs is one the user can never
+// change: disabled itself, or a field of a disabled repeater. An unknown id is
+// not fixed (the expression check reports it).
+func (v *validator) allFixed(refs []string) bool {
+	for _, r := range refs {
+		f, ok := v.fields[r]
+		if !ok {
+			return false
+		}
+		if f.fixed {
+			continue
+		}
+		if rep, ok := v.fields[f.repeater]; ok && f.repeater != "" && rep.fixed {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (v *validator) fieldErrors(raw any) {

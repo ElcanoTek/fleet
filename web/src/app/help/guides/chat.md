@@ -469,6 +469,8 @@ card helps; you can also simply ask for one ("give me a form for this").
   usual approval card.
 - **A sent card locks.** It keeps your answers on screen. **Edit and resend**
   unlocks it to change something and send again.
+- **An optional single choice can be undone.** A list of round options shows
+  **Clear choice** once you pick one, if the question is optional.
 - **Updated cards replace older ones.** When the assistant checks your answers
   and comes back with a corrected version, the earlier card collapses to a
   one-line note (**Show** opens it), with any problems marked on the new card's

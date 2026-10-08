@@ -160,7 +160,10 @@ to change. The loop that replaces a bespoke form:
 - **Drafts are per browser, and bounded.** Unsent answers persist in
   `localStorage` (they survive the virtualized transcript's remounts and
   reloads), not across devices. A draft lasts 7 days, and only the 20 most
-  recently edited cards keep one: an abandoned card has no other cleanup.
+  recently edited cards keep one: an abandoned card has no other cleanup. When
+  the browser's storage is full, older drafts are dropped to make room. An
+  **Edit and resend** draft survives a remount too, reopening the card for
+  editing until the resend lands.
 
 A card send goes through the composer's send path, but it leaves the composer
 alone: the text being typed stays, its pending attachments are not sent with

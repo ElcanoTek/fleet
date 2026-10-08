@@ -200,6 +200,8 @@ describe("calendar dates", () => {
     expect(isCalendarDate("0001-01-01")).toBe(true);
     expect(isCalendarDate("0099-12-31")).toBe(true);
     expect(isCalendarDate("0099-02-30")).toBe(false);
+    // An HTML date input has no year 0.
+    expect(isCalendarDate("0000-01-01")).toBe(false);
     expect(isCalendarDate("2024-02-29")).toBe(true);
     expect(isCalendarDate("2023-02-29")).toBe(false);
   });
