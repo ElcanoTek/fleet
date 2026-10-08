@@ -43,6 +43,8 @@
 
 import { useMemo, type ReactNode } from "react";
 import { SUMMARY_BOUNDARY } from "./history";
+import { parseSubmissionMessage } from "./genui/model";
+import { SubmissionBubble } from "./genui/SubmissionBubble";
 import { ReadOnlyFilesContext } from "./LockedFiles";
 import {
   redactUnsharedFiles,
@@ -159,9 +161,22 @@ export function ReadOnlyTranscript({
         {bubbles.map((b, i) =>
           b.role === "user" ? (
             <div key={i} className="flex justify-end">
-              <div className="max-w-[85%] whitespace-pre-wrap rounded-[1rem] bg-[var(--color-overlay-strong)] px-4 py-2.5 text-[0.9375rem] leading-[1.55]">
-                {b.text}
-              </div>
+              {(() => {
+                // A generative-UI card submission reads as the answers, not
+                // the JSON the model got. Read-only views do not draw the
+                // card itself (they carry text only), so the bubble names
+                // the action and lists the submitted values by id.
+                const sub = parseSubmissionMessage(b.text);
+                return sub ? (
+                  <div className="max-w-[85%]">
+                    <SubmissionBubble submission={sub} raw={b.text} />
+                  </div>
+                ) : (
+                  <div className="max-w-[85%] whitespace-pre-wrap rounded-[1rem] bg-[var(--color-overlay-strong)] px-4 py-2.5 text-[0.9375rem] leading-[1.55]">
+                    {b.text}
+                  </div>
+                );
+              })()}
             </div>
           ) : (
             <div

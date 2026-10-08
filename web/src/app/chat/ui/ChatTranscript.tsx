@@ -69,6 +69,13 @@ import {
   type TranscriptRow,
 } from "./transcriptRows";
 import { useStickToBottom } from "./stickToBottom";
+import { parseSubmissionMessage } from "./genui/model";
+import { SubmissionBubble } from "./genui/SubmissionBubble";
+import { deriveGenUiState, GenUiContext, isRenderableCardCall } from "./genui/transcript";
+// Generative-UI cards (show_ui) carry their own renderer and the markdown
+// pipeline; lazy-loaded like AssistantMarkdown so chats without a card never
+// pay for it.
+const GenerativeCard = lazy(() => import("./genui/GenerativeCard"));
 
 export type ChatTranscriptProps = {
   // Scroll container + bottom sentinel refs (owned by ChatExperience)
@@ -389,6 +396,10 @@ export function ChatTranscript({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minimapEntries, conversationRef]);
 
+  // Card state (spec, submission, replaced) is derived from the transcript
+  // itself — see genui/transcript.ts.
+  const genUi = useMemo(() => deriveGenUiState(messages), [messages]);
+
   const jumpToMessage = (id: number) => {
     const entry = minimapEntries.find((e) => e.id === id);
     if (!entry) return;
@@ -399,6 +410,7 @@ export function ChatTranscript({
   };
 
   return (
+          <GenUiContext.Provider value={genUi}>
           <section
             ref={conversationRef}
             // An aria-labelled <section> already exposes the implicit `region`
@@ -764,6 +776,33 @@ export function ChatTranscript({
                                 <LoadingLogo size={18} className="mt-1 opacity-60" />
                               ) : null}
 
+                              {toolCalls.some(isRenderableCardCall) ? (
+                                <div className="grid min-w-0 gap-2">
+                                  {toolCalls.filter(isRenderableCardCall).map((tc) => {
+                                    const spec = genUi.cards.get(tc.id);
+                                    if (!spec) return null;
+                                    return (
+                                      <Suspense
+                                        key={tc.id}
+                                        fallback={
+                                          <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] px-3 py-2 text-[0.75rem] text-[var(--color-text-muted)]">
+                                            {spec.title}
+                                          </div>
+                                        }
+                                      >
+                                        <GenerativeCard
+                                          cardId={tc.id}
+                                          spec={spec}
+                                          submission={genUi.submissions.get(tc.id) ?? null}
+                                          superseded={genUi.superseded.has(tc.id)}
+                                          onSubmit={(text) => submitPrompt(text)}
+                                        />
+                                      </Suspense>
+                                    );
+                                  })}
+                                </div>
+                              ) : null}
+
                               {message.retrying ? (
                                 <div
                                   className="flex items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]"
@@ -1065,6 +1104,7 @@ export function ChatTranscript({
               )}
             </div>
           </section>
+          </GenUiContext.Provider>
   );
 }
 
@@ -1090,6 +1130,12 @@ export function UserTurn({
   editRequestSignal: number;
   onResend: (edited: string) => void;
 }) {
+  const submission = parseSubmissionMessage(message.content);
+  if (submission) {
+    // A card submission: show the answers by label, not the JSON the model
+    // reads. No Edit — the card's own "Edit and resend" is the way to amend.
+    return <SubmissionBubble submission={submission} raw={message.content} />;
+  }
   return (
     <>
       <UserBubble

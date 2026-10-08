@@ -30,6 +30,11 @@ var interactiveOnlyToolNames = map[string]bool{
 	ManageTasksToolName:          true,
 	SuggestAdvancedModelToolName: true,
 	"propose_memory":             true,
+	// show_ui is not a staging card, but its whole value is a card drawn for a
+	// person at the keyboard and its reply arrives as that person's next
+	// message — a headless run has neither, so offering it there would let a
+	// scheduled model "ask" a form nobody will ever submit.
+	ShowUIToolName: true,
 }
 
 // ExcludeInteractiveOnly returns the tools minus the interactive-staging-card
@@ -76,6 +81,7 @@ func DefaultTools() []fantasy.AgentTool {
 		NewProposeMemoryTool(),
 		NewRunPythonTool(nil),
 		NewGenerateImageTool(nil),
+		NewShowUITool(),
 	}
 }
 
@@ -110,6 +116,7 @@ func NewTurnTools(sb *sandbox.Sandbox, browserbaseKey BrowserbaseKeyFunc) TurnTo
 		NewProposeMemoryTool(),
 		NewRunPythonTool(sb),
 		NewGenerateImageTool(sb),
+		NewShowUITool(),
 	}
 	if t := NewBrowserbaseLiveViewTool(browserbaseKey); t != nil {
 		turn = append(turn, t)

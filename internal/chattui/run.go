@@ -190,7 +190,9 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 			visible.Reset()
 			visible.WriteString(ev.Str("text"))
 		case "tool.call":
-			if n := ev.Str("name"); n != "" {
+			if n := ev.Str("name"); n == showUITool {
+				fmt.Fprintln(errOut, "▸ "+n+" (interactive card — open this chat on the web to use it)")
+			} else if n != "" {
 				fmt.Fprintln(errOut, "▸ "+n)
 			}
 		case "tool.approval_required":
@@ -226,3 +228,8 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 	}
 	return 0
 }
+
+// showUITool is the generative-UI card tool (internal/tools.ShowUIToolName,
+// not imported to keep the client free of the server's tool package). The
+// terminal cannot draw its card, so both renderers point at the web chat.
+const showUITool = "show_ui"
