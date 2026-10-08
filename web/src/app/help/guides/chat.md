@@ -97,18 +97,20 @@ sent before pressing the card's run button.
 ### ACP clients (Buzz, Zed, JetBrains)
 
 `fleet acp` lets an Agent Client Protocol client talk to fleet. The client
-launches it (for Buzz: `BUZZ_ACP_AGENT_COMMAND=fleet`, `BUZZ_ACP_AGENT_ARGS=acp`),
-and each message becomes a normal fleet chat turn as the user named by
+launches it, and each message becomes a normal fleet chat turn as the user named by
 `--email` or `FLEET_USER_EMAIL`. The conversation appears in the web chat like
 any other. Replies, reasoning and tool steps stream to the client. If a step
 needs approval, the reply ends with a link or a `fleet chat --approve` command,
 because approvals are settled in fleet, not in the client. Images and audio are
 not accepted.
 
-Buzz is the exception: an @mention runs a fleet turn, but fleet's reply does
-not appear in the Buzz channel, because Buzz expects an agent to post its
-replies itself. The conversation, answer included, is in fleet's web chat,
-under the user `fleet acp` runs as.
+In Buzz, fleet is an agent your operator adds to the workspace; you
+@mention it. Its reply comes once its turn ends, in the thread of your message,
+and @mentions you: nothing appears while it works, and replies are not
+streamed or edited. If you send fleet another message while it works, it
+answers both in one reply. Files attached in Buzz cannot be read by fleet,
+and Buzz's agent instructions and memories do not reach it. The conversation
+is also in fleet's web chat, under the user the agent runs as.
 
 MCP servers you set up in your editor are not used by fleet. fleet's tools and
 connectors are the ones your operator set up, and they run on the fleet server.

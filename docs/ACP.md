@@ -57,18 +57,8 @@ or `--token-file`. It is never accepted on argv. The email is the fleet user
 every ACP turn runs as, so it is the identity in the audit trail. Provision a
 dedicated bot user for it (`fleet chat user add acp-bot@example.com --password -`).
 
-Buzz's `buzz-acp` can launch it:
-
-```sh
-export BUZZ_ACP_AGENT_COMMAND=fleet
-export BUZZ_ACP_AGENT_ARGS=acp
-export FLEET_USER_EMAIL=acp-bot@example.com
-# plus the usual BUZZ_PRIVATE_KEY / BUZZ_RELAY_URL
-buzz-acp
-```
-
-That runs a fleet turn for each @mention, but fleet's reply does not reach
-Buzz: see "Buzz" below.
+Buzz needs an adapter between its `buzz-acp` harness and `fleet acp`, because
+`buzz-acp` expects an agent to post its own replies: see "Buzz" below.
 
 Flags: `--email`, `--server`, `--token-file`, `--env-file`, `--model`
 (the model a new session's conversation starts on; the workspace default otherwise. It is never re-sent on later prompts, so a model switch made in the web UI sticks), `--persona`, `--public-url`
@@ -394,48 +384,184 @@ records what `fleet acp` writes to stderr.
 
 ### Buzz
 
-Checked live on 2026-10-08 with Buzz's `buzz-acp` (block/buzz at `70d2ca7`), a
-hosted Buzz relay and a real `fleet serve`, both through the recipe under
-"Using it" and through Buzz Desktop's custom runtime. An @mention reaches fleet
-and runs a governed turn as the configured user, whose web chat shows the
-conversation, but **fleet's reply never appears in Buzz**. `buzz-acp`
-expects the agent to post its own reply with the Buzz CLI
-(`buzz messages send`): the text an agent streams back over ACP is only written
-to `buzz-acp`'s log (`handle_session_update` in its `crates/buzz-acp/src/acp.rs`).
-Its prompt says so too: about 20 KB of instructions, on a session's first
-prompt, tell the agent to reply with that CLI. fleet's model follows them and
-runs `buzz` in fleet's sandbox, where there is no Buzz CLI and, by design, no
-Buzz key, then writes its answer, which `buzz-acp` logs. So Buzz is not
-supported out of the box: the answer is only in the configured user's web
-chat.
+Buzz runs agents with its `buzz-acp` harness. An @mention becomes an ACP
+prompt, and the agent is expected to post its reply itself, with the Buzz CLI
+(`buzz messages send`). The text an agent streams back over ACP is only
+written to `buzz-acp`'s log (`handle_session_update` in its
+`crates/buzz-acp/src/acp.rs`). fleet cannot post that way, by design: its
+model's tools run in fleet's sandbox, which has no Buzz CLI and never holds a
+credential such as the agent's Buzz key. Pointed straight at `fleet acp`,
+`buzz-acp` runs a fleet turn for each @mention, and the answer only ever
+appears in fleet's web chat.
 
-What fixes it is an adapter between `buzz-acp` and `fleet acp`: it starts
-`fleet acp`, hands it the messages without Buzz's CLI instructions, and when the
-turn ends posts fleet's answer to the thread with `buzz messages send`, as the
-agent's own Buzz identity, keeping Buzz's key out of `fleet acp`'s
-environment. One was built and checked live on 2026-10-08 (an @mention got
-fleet's answer as a reply in its thread). It is not part of fleet and is not
-published.
+`fleet-buzz-bridge` closes that gap. It is the agent `buzz-acp` starts; it
+starts `fleet acp` itself and:
 
-Setting up an agent for `buzz-acp` (checked live on 2026-10-08):
+- hands fleet the message (or messages) and the thread's earlier messages,
+  without Buzz's 20 KB or so of instructions to use a CLI fleet does not have;
+- when the turn ends, posts fleet's answer with `buzz messages send`, as the
+  agent's own Buzz identity, in the thread `buzz-acp` named, @mentioning
+  whoever asked;
+- keeps Buzz's credentials out of `fleet acp`'s environment, so the agent's
+  Buzz key stays on the machine that runs the agent and never reaches the
+  fleet server, its sandbox or the model.
 
-- The agent needs its own Nostr identity (`buzz-admin generate-key`, or let
-  Buzz Desktop create one), not a person's. That identity must be a member of
-  the workspace, not only of a channel: otherwise `buzz-acp` stops with "Auth
-  failed: restricted: not a relay member".
-- `buzz-acp` answers only the agent's registered owner by default, and drops
-  every mention until an owner is set. An agent run from the command line may
-  need `BUZZ_ACP_RESPOND_TO=allowlist` and
-  `BUZZ_ACP_RESPOND_TO_ALLOWLIST=<hex public keys>` to admit the people who
-  mention it.
-- Buzz Desktop runs `fleet acp` as a custom runtime: a JSON file (`id`,
-  `label`, `command`, `args`, `env`) in its `custom_harnesses/` folder, or,
-  per Buzz's source, its "Add custom harness…" form. Its "import agent"
-  expects an exported agent instead, and refuses such a file. Its model picker lists no models, because fleet advertises none.
-  Any custom model ID is harmless: `buzz-acp` finds no match and keeps fleet's
-  model, which is `--model` or the workspace default.
-- `buzz-acp` puts `BUZZ_PRIVATE_KEY` in the agent's environment. `fleet acp`
-  sends the server only the prompt, so no Buzz key reached fleet in these runs.
+It is not part of fleet. It lives in `ElcanoTek/fleet-buzz-bridge`, a private
+repository (ask a fleet maintainer for access), whose README has its details.
+
+Checked live on 2026-10-08 with Buzz Desktop on macOS and its bundled
+`buzz-acp`, `buzz-acp` built from block/buzz `70d2ca7`, a hosted Buzz relay,
+and a real `fleet serve` in a local VM.
+
+#### Where the agent runs
+
+People in the workspace run nothing: they @mention fleet from any Buzz app.
+The agent (`buzz-acp`, the bridge and `fleet acp`) runs in one place, which
+holds its Buzz key:
+
+| Where the agent runs | Available | Shows in Buzz as |
+| --- | --- | --- |
+| One person's computer, run by Buzz Desktop | While that computer and Buzz Desktop are on | An agent, "Managed by" that person |
+| The fleet server, as a service | Always | A regular user: Buzz Desktop signs an agent's owner attestation only for the agents it runs |
+
+`fleet acp` has to reach fleet's chat API, which a standard install binds to
+the server's loopback and does not expose: Caddy proxies only the public API
+(ADR-0053). On the fleet server that needs nothing more. On another computer:
+
+- **fleet in a local VM:** forward the VM's port 8080 (and 3000, for links to
+  the web UI) to the computer. Lima forwards them by default.
+- **fleet on a hosted server:** keep an SSH tunnel open while the agent runs:
+  `ssh -N -L 8080:127.0.0.1:8080 you@fleet.example.com`. Not checked live yet.
+
+That computer also holds fleet's shared server token, which can act as any
+fleet user, so keep the agent to computers an operator controls.
+
+#### Add fleet in Buzz Desktop
+
+On the computer that runs Buzz Desktop, you need:
+
+1. **`fleet`, built for that computer.** fleet's releases carry no binaries.
+   With Go 1.27, in a clone: `go build -o ~/bin/fleet ./cmd/fleet`. Or build
+   on another machine (`GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o
+   fleet ./cmd/fleet` for an Apple-silicon Mac) and copy it over.
+2. **`fleet-buzz-bridge`,** from its repository, next to `fleet`.
+3. **A fleet user for the agent.** On the fleet server:
+   `fleet chat user add buzz-bot@example.com --password -`. Every turn runs as
+   this user, whoever asked in Buzz.
+4. **The shared server token,** in a file only you can read, copied without
+   printing it. It is `FLEET_SERVER_TOKEN` in the server's env file
+   (`/etc/fleet/fleet.env` on a standard install):
+
+   ```sh
+   mkdir -p ~/.config/fleet
+   (umask 077; ssh you@fleet.example.com \
+     "sudo sed -n 's/^FLEET_SERVER_TOKEN=//p' /etc/fleet/fleet.env" > ~/.config/fleet/acp-token)
+   ```
+
+5. **The way to the chat API,** as above.
+
+Then, in Buzz Desktop:
+
+1. **Add the runtime.** Start a new agent, open its runtime list and choose
+   **Add custom harness…** (Settings → Agent runtimes has the same form, as
+   **+ Custom harness**). Fill it in with full paths, one argument per entry
+   (Buzz refuses an argument that contains a comma):
+
+   | Field | Value |
+   | --- | --- |
+   | Name | `fleet` |
+   | Command | the bridge, e.g. `/Users/you/bin/fleet-buzz-bridge` |
+   | Arguments | `/Users/you/bin/fleet`, `acp`, `--email`, `buzz-bot@example.com`, `--server`, `http://localhost:8080`, `--public-url`, fleet's web address (e.g. `https://fleet.example.com`), `--token-file`, `/Users/you/.config/fleet/acp-token` |
+   | Env vars | none |
+
+   The form saves a JSON file in Buzz Desktop's `custom_harnesses/` folder
+   (`~/Library/Application Support/xyz.block.buzz.app/custom_harnesses/` on
+   macOS). Writing that file and restarting Buzz Desktop does the same:
+
+   ```json
+   {
+     "id": "fleet",
+     "label": "fleet",
+     "command": "/Users/you/bin/fleet-buzz-bridge",
+     "args": ["/Users/you/bin/fleet", "acp",
+              "--email", "buzz-bot@example.com",
+              "--server", "http://localhost:8080",
+              "--public-url", "https://fleet.example.com",
+              "--token-file", "/Users/you/.config/fleet/acp-token"],
+     "env": {}
+   }
+   ```
+
+   The file was checked live; the form, per Buzz's source, writes the same
+   file, but was not checked live yet. "Import agent" expects an exported
+   agent and refuses this file.
+2. **Create the agent** with the `fleet` runtime. Leave the model empty:
+   fleet lists none, and an ID typed there is ignored (the model is
+   `--model`, or the workspace default). Buzz Desktop creates the agent's own
+   Buzz key and signs it as yours, so it shows as an agent you manage, and your
+   other agents take its mentions.
+3. **Who can send instructions:** **Only me (default)** admits you and your
+   other agents. For a team, choose **Selected people** or **Anyone**.
+4. **Add the agent to channels** and @mention it.
+
+#### Run it on the fleet server
+
+The agent needs its own identity (`buzz-admin generate-key`), added to the
+workspace, not only to a channel: otherwise `buzz-acp` stops with "Auth
+failed: restricted: not a relay member". On the server, with `buzz-acp`, the
+`buzz` CLI (both built from block/buzz) and the bridge on `PATH`:
+
+```sh
+export BUZZ_PRIVATE_KEY=…  BUZZ_RELAY_URL=wss://…   # the agent's identity
+export BUZZ_ACP_AGENT_COMMAND=fleet-buzz-bridge
+export BUZZ_ACP_AGENT_ARGS=fleet,acp
+export FLEET_USER_EMAIL=buzz-bot@example.com
+export BUZZ_ACP_RESPOND_TO=allowlist
+export BUZZ_ACP_RESPOND_TO_ALLOWLIST=<hex public keys>   # who may mention it
+buzz-acp
+```
+
+`fleet acp` finds the token in the server's env file, as under "Using it".
+`buzz-acp` answers only the agent's owner by default and drops every mention
+until an owner is set (`BUZZ_ACP_AGENT_OWNER`), hence the allowlist. Such an
+agent shows as a regular user, and agents left on **Only me (default)** ignore
+its mentions, since they admit only agents their owner has signed. Checked live
+in a terminal on 2026-10-08, not as a service.
+
+#### What to expect
+
+- One reply per turn, posted when the turn ends, in the thread of the message
+  it answers, @mentioning each person or agent who asked. After three
+  mentioned replies to the same asker in one thread within ten minutes,
+  replies there stop mentioning them, so two agents cannot keep waking each
+  other.
+- `buzz-acp` reacts to the message while fleet works; nothing of the answer
+  appears until the turn ends.
+- An error is posted as `fleet could not answer: <reason>`, including a
+  session fleet refuses (a wrong token, a user that is not in fleet, a
+  viewer).
+- A message sent to fleet while it works: `buzz-acp` stops the turn and sends
+  both requests as one, and fleet answers both in one reply. That needs a
+  `fleet` with prompt and cancel order kept (see `session/cancel`); an older
+  one can miss the stop, and `buzz-acp` then restarts it after 5 s.
+- A step that needs approval ends the reply with fleet's approval link.
+
+Limits:
+
+- Nothing streams into Buzz while fleet works, and replies are never edited.
+- Buzz's agent instructions and memories do not reach fleet: `buzz-acp` sends
+  them in a session's first prompt, which the bridge replaces. fleet's own
+  settings and `--persona` apply.
+- Files attached in Buzz cannot be read: the relay's `/media/` links need a
+  Buzz login. fleet is told so.
+- A message fleet queues behind a turn already running in its conversation
+  (from the web chat) gets only fleet's "queued" note in Buzz; the answer
+  stays in the web chat.
+- A force-killed `buzz-acp` drops the mention it was handling, and Buzz does
+  not deliver it again.
+- The bridge reads `buzz-acp`'s prompt format, checked against block/buzz
+  `70d2ca7`. If Buzz changes it, prompts pass through unchanged, replies are
+  not posted, and the bridge says so on stderr.
 
 ## Protocol mapping
 
