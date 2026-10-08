@@ -313,8 +313,6 @@ type field struct {
 	// items is a repeater's item count when the card opens (its value, else
 	// max(1, min_items)) — the indexes a field_error or Fix link can name.
 	items int
-	// fixed: the input is `disabled: true`, so the user can never change it.
-	fixed bool
 }
 
 type validator struct {
@@ -328,6 +326,8 @@ type validator struct {
 	// component visible_if / disabled_if references, checked once every
 	// input is declared (a condition may read an input declared later).
 	conds []condRef
+	// reach: input ids the user can ever edit (reachableInputs).
+	reach map[string]bool
 }
 
 type condRef struct {
@@ -381,9 +381,10 @@ func Validate(raw []byte) (Card, []Issue) {
 		v.component(fmt.Sprintf("components[%d]", i), comp, 1, "")
 	}
 
+	v.reach = reachableInputs(comps)
 	for _, c := range v.conds {
-		if v.allFixed(c.refs) {
-			v.addf(c.path, "reads only disabled inputs, which the user cannot change, so it never changes; drop it or make one of them editable")
+		if v.unreachable(c.refs) {
+			v.addf(c.path, "%s", unreachableMsg)
 		}
 	}
 	v.actions(top["actions"], len(v.fields) > 0)
@@ -443,11 +444,8 @@ func (v *validator) component(path string, raw any, depth int, repeater string) 
 			}
 		} else {
 			v.declare(path, id, typ, repeater)
-			if f, ok := v.fields[id]; ok {
-				if typ == "repeater" {
-					f.items = initialItems(obj)
-				}
-				f.fixed, _ = obj["disabled"].(bool)
+			if f, ok := v.fields[id]; ok && typ == "repeater" {
+				f.items = initialItems(obj)
 			}
 		}
 	} else if hasID && !idRe.MatchString(id) {
@@ -814,23 +812,6 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 			continue
 		}
 		v.conds = append(v.conds, condRef{path: path + "." + cond, refs: refs})
-		// A visible_if that reads only inputs it hides itself (the component,
-		// or inputs inside it) locks itself: once hidden, nothing the user can
-		// reach changes it, and a hidden input is left out of the submission.
-		if cond == "visible_if" {
-			owned := map[string]map[string]any{}
-			collectInputs([]any{obj}, owned)
-			self := true
-			for _, r := range refs {
-				if _, ok := owned[r]; !ok {
-					self = false
-					break
-				}
-			}
-			if self {
-				v.addf(path+".visible_if", "reads only inputs it hides, so once hidden it can never be shown again; gate it on another input")
-			}
-		}
 	}
 }
 
@@ -970,6 +951,26 @@ func (v *validator) tableRules(path string, obj map[string]any) {
 			}
 		}
 	}
+	// A cell under a key no column declares is never drawn: report it, so a
+	// mistyped key is fixed rather than shown as a blank.
+	if rows, ok := obj["rows"].([]any); ok && len(keys) > 0 {
+		for i, r := range rows {
+			m, ok := r.(map[string]any)
+			if !ok {
+				continue
+			}
+			cells := make([]string, 0, len(m))
+			for k := range m {
+				cells = append(cells, k)
+			}
+			sort.Strings(cells)
+			for _, k := range cells {
+				if !keys[k] {
+					v.addf(fmt.Sprintf("%s.rows[%d].%s", path, i, k), "no column has key %q; add the column or fix the key", k)
+				}
+			}
+		}
+	}
 	sel, _ := obj["select"].(string)
 	if sel == "single" || sel == "multi" {
 		if _, ok := obj["id"].(string); !ok {
@@ -1091,8 +1092,8 @@ func (v *validator) checkValue(path, typ string, obj map[string]any, val any) {
 		if !ok && val != nil {
 			v.addf(path, "must be a number")
 		}
-		if ok && typ == "slider" {
-			v.sliderValue(path, obj, n)
+		if ok {
+			v.numberValue(path, obj, n)
 		}
 	case "toggle":
 		if _, ok := val.(bool); !ok {
@@ -1318,8 +1319,8 @@ func (v *validator) actions(raw any, hasInput bool) {
 			}
 			if len(refs) == 0 {
 				v.addf(ap+"."+cond, "names no input, so it never changes; drop it (an action is shown and enabled by default)")
-			} else if v.allFixed(refs) {
-				v.addf(ap+"."+cond, "reads only disabled inputs, which the user cannot change, so it never changes; drop it or make one of them editable")
+			} else if v.unreachable(refs) {
+				v.addf(ap+"."+cond, "%s", unreachableMsg)
 			}
 		}
 		kind, _ := obj["kind"].(string)
@@ -1342,14 +1343,15 @@ func (v *validator) actions(raw any, hasInput bool) {
 	}
 }
 
-// sliderValue refuses a slider default the native range control would coerce
-// (outside [min, max], or off the step grid from min): the thumb would show
-// one number while the card holds and submits another.
-func (v *validator) sliderValue(path string, obj map[string]any, n float64) {
+// numberValue refuses a number / slider default outside its own [min, max] or
+// off the step grid from min. A slider's native range control would coerce it
+// (the thumb shows one number, the card submits another); a disabled number
+// skips the browser's own check yet still submits the value.
+func (v *validator) numberValue(path string, obj map[string]any, n float64) {
 	minV, hasMin := obj["min"].(float64)
 	maxV, hasMax := obj["max"].(float64)
 	if (hasMin && n < minV) || (hasMax && n > maxV) {
-		v.addf(path, "%v is outside the slider's min..max", n)
+		v.addf(path, "%v is outside min..max", n)
 		return
 	}
 	if step, ok := obj["step"].(float64); ok && step > 0 {
@@ -1359,7 +1361,7 @@ func (v *validator) sliderValue(path string, obj map[string]any, n float64) {
 		}
 		q := (n - base) / step
 		if math.Abs(q-math.Round(q)) > 1e-9 {
-			v.addf(path, "%v is not on the slider's step grid (min + k × step)", n)
+			v.addf(path, "%v is not on the step grid (min + k × step)", n)
 		}
 	}
 }
@@ -1372,24 +1374,117 @@ func isCalendarDate(s string) bool {
 	return err == nil && t.Year() >= 1
 }
 
-// allFixed reports whether every input id in refs is one the user can never
-// change: disabled itself, or a field of a disabled repeater. An unknown id is
-// not fixed (the expression check reports it).
-func (v *validator) allFixed(refs []string) bool {
+const unreachableMsg = "reads only inputs the user can never reach (disabled, or hidden behind conditions that never open, this one included), so it never changes; gate it on an input the user can edit"
+
+// unreachable reports whether a condition's input references are all inputs
+// the user can never reach (see reachableInputs). A reference that is not an
+// input (index, or an unknown id the expression check reports) leaves the
+// condition alone.
+func (v *validator) unreachable(refs []string) bool {
+	inputs := 0
 	for _, r := range refs {
-		f, ok := v.fields[r]
-		if !ok {
+		if _, ok := v.fields[r]; !ok {
 			return false
 		}
-		if f.fixed {
-			continue
+		if v.reach[r] {
+			return false
 		}
-		if rep, ok := v.fields[f.repeater]; ok && f.repeater != "" && rep.fixed {
-			continue
-		}
-		return false
+		inputs++
 	}
-	return true
+	return inputs > 0
+}
+
+// gated is one input as reachableInputs sees it: the conditions on the path
+// to it (its own visible_if / disabled_if and every enclosing component's)
+// and whether it, or an enclosing repeater, is disabled.
+type gated struct {
+	gates [][]string
+	fixed bool
+}
+
+// reachableInputs computes which inputs the user can ever get to edit. An
+// input is reachable when it is not disabled and every condition on its path
+// reads at least one reachable input — a fixed point, so a gate on a disabled
+// input, a gate on the input itself, and a cycle of gates (a shown by b, b by
+// a) all come out unreachable. Conditions that read no input are refused
+// elsewhere and do not gate here.
+func reachableInputs(comps []any) map[string]bool {
+	info := map[string]gated{}
+	var walk func(list []any, gates [][]string, fixed bool)
+	walk = func(list []any, gates [][]string, fixed bool) {
+		for _, k := range list {
+			m, ok := k.(map[string]any)
+			if !ok {
+				continue
+			}
+			own := gates
+			for _, cond := range []string{"visible_if", "disabled_if"} {
+				if src, ok := m[cond].(string); ok {
+					if refs, err := ParseExpr(src); err == nil && len(refs) > 0 {
+						own = append(append([][]string{}, own...), refs)
+					}
+				}
+			}
+			f := fixed
+			if d, _ := m["disabled"].(bool); d {
+				f = true
+			}
+			typ, _ := m["type"].(string)
+			if spec, ok := components[typ]; ok && (spec.input || typ == "table") {
+				if id, ok := m["id"].(string); ok {
+					info[id] = gated{gates: own, fixed: f}
+				}
+			}
+			if c, ok := m["children"].([]any); ok {
+				walk(c, own, f)
+			}
+			if c, ok := m["fields"].([]any); ok {
+				walk(c, own, f)
+			}
+			if tabs, ok := m["tabs"].([]any); ok {
+				for _, t := range tabs {
+					if tm, ok := t.(map[string]any); ok {
+						if c, ok := tm["children"].([]any); ok {
+							walk(c, own, f)
+						}
+					}
+				}
+			}
+		}
+	}
+	walk(comps, nil, false)
+	reach := map[string]bool{}
+	for changed := true; changed; {
+		changed = false
+		for id, g := range info {
+			if reach[id] || g.fixed {
+				continue
+			}
+			ok := true
+			for _, refs := range g.gates {
+				if !opens(refs, info, reach) {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				reach[id] = true
+				changed = true
+			}
+		}
+	}
+	return reach
+}
+
+// opens: a gate can change if it reads a reachable input, or anything that is
+// not an input at all (index, or an id the expression check reports).
+func opens(refs []string, info map[string]gated, reach map[string]bool) bool {
+	for _, r := range refs {
+		if _, isInput := info[r]; !isInput || reach[r] {
+			return true
+		}
+	}
+	return false
 }
 
 func (v *validator) fieldErrors(raw any) {

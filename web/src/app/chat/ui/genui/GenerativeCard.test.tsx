@@ -1126,3 +1126,45 @@ describe("thirteenth Codex pass", () => {
     expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
   });
 });
+
+describe("fourteenth Codex pass", () => {
+  it("treats a whitespace-only label as no label (the id still names the control)", () => {
+    const s = spec({ title: "W", components: [{ type: "text_input", id: "company", label: "   " }], actions: [{ id: "go", label: "Go" }] });
+    render(<GenerativeCard cardId="ws" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByLabelText("company")).toBeTruthy();
+  });
+
+  it("ties help and errors to the control for assistive technology", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "A",
+      components: [{ type: "text_input", id: "n", label: "Name", help: "As on the contract", required: true }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="aria" spec={s} onSubmit={() => {}} />);
+    const input = screen.getByLabelText(/Name/);
+    expect(input).toHaveAccessibleDescription("As on the contract");
+    expect(input).not.toHaveAttribute("aria-invalid");
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(input).toHaveAccessibleDescription(/As on the contract.*Required/);
+  });
+
+  it("restores the edited values when a resend is refused and withdrawn", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({ title: "E", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    const first = { cardId: "rs", actionId: "go", values: { n: "Ada" }, messageId: 2 };
+    const onSubmit = vi.fn().mockResolvedValue(false);
+    const view = render(<GenerativeCard cardId="rs" spec={s} submission={first} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Edit and resend" }));
+    await user.clear(screen.getByLabelText(/Name/));
+    await user.type(screen.getByLabelText(/Name/), "Grace");
+    // The optimistic resend shows up, then is refused and withdrawn.
+    view.rerender(<GenerativeCard cardId="rs" spec={s} submission={{ ...first, values: { n: "Grace" }, messageId: 4 }} onSubmit={onSubmit} />);
+    view.rerender(<GenerativeCard cardId="rs" spec={s} submission={first} onSubmit={onSubmit} />);
+    expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("Grace");
+    expect(screen.getByLabelText(/Name/)).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Go" })).toBeTruthy();
+  });
+});

@@ -173,6 +173,16 @@ function loadDraft(cardId: string, answerKey: string): StoredDraft | null {
   }
 }
 
+/** The stored draft, without dropping a stale one (see loadDraft). */
+function peekDraft(storeId: string): StoredDraft | null {
+  try {
+    const d = readDraft(DRAFT_PREFIX + storeId);
+    return d && Date.now() - d.at <= DRAFT_TTL_MS ? d : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Every other draft, newest first; expired or unreadable ones get at -1. */
 function otherDrafts(keep: string): { key: string; at: number }[] {
   const out: { key: string; at: number }[] = [];
@@ -321,6 +331,9 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
   const [clearedServerErrors, setClearedServerErrors] = useState<Set<string>>(() => new Set(initialDraft?.cleared ?? []));
   // The same set, readable when a draft is saved (setField updates both).
   const clearedRef = useRef(clearedServerErrors);
+  useEffect(() => {
+    clearedRef.current = clearedServerErrors;
+  }, [clearedServerErrors]);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   // The card locks on the TRANSCRIPT's submission, never optimistically: a
@@ -374,7 +387,17 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
       // the next load finds it stale and drops it.
       if (!readOnly) savePending(storeId, null);
     }
-    if (submission) {
+    // The transcript can move BACK to an earlier answer: a resend from
+    // "Edit and resend" was refused and its optimistic message withdrawn. If
+    // the stored draft was typed against the answer now current, it is that
+    // unsent edit — restore it and reopen editing, so the changes are not
+    // replaced by the older values.
+    const edit = submission && !readOnly ? peekDraft(storeId) : null;
+    if (edit && edit.after === answerKey) {
+      setValuesState(normalizeValues(spec, edit.values));
+      setEditing(true);
+      setClearedServerErrors(new Set(edit.cleared ?? []));
+    } else if (submission) {
       setValuesState(normalizeValues(spec, submission.values));
     }
   }
@@ -987,7 +1010,7 @@ function Stat({ c }: { c: Component }) {
   const t = TONE[tone(c.tone)];
   return (
     <div className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2">
-      <div className="text-[0.72rem] text-[var(--color-text-muted)]">{str(c.label)}</div>
+      <div className="text-[0.72rem] text-[var(--color-text-muted)]">{str(c.label).trim()}</div>
       <div
         className="truncate text-[1.25rem] font-semibold tabular-nums"
         style={tone(c.tone) === "neutral" ? undefined : { color: t.fg }}
@@ -1054,7 +1077,7 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const group = wrapped && inputId ? { role: "group", id: inputId, tabIndex: -1, "aria-labelledby": `${inputId}-label` } : {};
   return (
     <div className="grid min-w-0 gap-1" {...group}>
-      {!wrapped && c.label ? <div className="text-[0.78rem] font-medium">{str(c.label)}</div> : null}
+      {!wrapped && c.label ? <div className="text-[0.78rem] font-medium">{str(c.label).trim()}</div> : null}
       <div className="max-h-[22rem] min-w-0 overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)]">
         <table className="w-full border-collapse text-[0.78rem]">
           <thead className="sticky top-0 bg-[var(--color-bg)]">
@@ -1171,7 +1194,7 @@ function Progress({ c }: { c: Component }) {
   return (
     <div className="grid gap-1">
       <div className="flex items-center justify-between text-[0.75rem] text-[var(--color-text-muted)]">
-        <span>{str(c.label)}</span>
+        <span>{str(c.label).trim()}</span>
         <span className="tabular-nums">
           {toText(v)} / {toText(max)}
         </span>
@@ -1183,7 +1206,7 @@ function Progress({ c }: { c: Component }) {
         aria-valuemax={max}
         // The bar and its ARIA value stay in range; the label shows the raw value.
         aria-valuenow={max > 0 ? Math.max(0, Math.min(max, v)) : 0}
-        aria-label={str(c.label) || "Progress"}
+        aria-label={str(c.label).trim() || "Progress"}
       >
         <div className="h-full rounded-full bg-[var(--color-accent)]" style={{ width: `${pct}%` }} />
       </div>
@@ -1358,9 +1381,9 @@ function Divider() {
 
 // ───────────────────────── inputs ─────────────────────────
 
-function FieldError({ text }: { text: string }) {
+function FieldError({ text, id }: { text: string; id?: string }) {
   return (
-    <div className="text-[0.72rem] text-[var(--color-danger)]" role="alert">
+    <div id={id} className="text-[0.72rem] text-[var(--color-danger)]" role="alert">
       {text}
     </div>
   );
@@ -1377,7 +1400,21 @@ function InputField({ c, Render }: { c: Component; Render: Renderer }) {
   const value = item ? item.item[id] : values[id];
   const onChange = (v: unknown) => setField(id, v, item ?? undefined);
   const err = errors[path];
-  const label = str(c.label);
+  const label = str(c.label).trim();
+  const help = c.help ? renderTemplate(str(c.help), scope) : "";
+  // Tie the help text and the error to the control (or its group) itself, so
+  // a screen reader hears them on the field, not only as stray text below.
+  // Every renderer puts inputId on its control; set the attributes on it
+  // directly rather than threading them through each renderer.
+  useEffect(() => {
+    const el = document.getElementById(inputId);
+    if (!el) return;
+    const described = [help ? `${inputId}-help` : "", err ? `${inputId}-error` : ""].filter(Boolean).join(" ");
+    if (described) el.setAttribute("aria-describedby", described);
+    else el.removeAttribute("aria-describedby");
+    if (err) el.setAttribute("aria-invalid", "true");
+    else el.removeAttribute("aria-invalid");
+  });
   return (
     <div className="grid min-w-0 content-start gap-1" data-genui-field={path} data-invalid={err ? "true" : undefined}>
       {!label && c.type !== "toggle" ? (
@@ -1412,8 +1449,12 @@ function InputField({ c, Render }: { c: Component; Render: Renderer }) {
           <Render c={c} value={value} onChange={onChange} inputId={inputId} />
         </fieldset>
       )}
-      {c.help ? <div className="text-[0.72rem] text-[var(--color-text-muted)]">{renderTemplate(str(c.help), scope)}</div> : null}
-      {err ? <FieldError text={err} /> : null}
+      {help ? (
+        <div id={`${inputId}-help`} className="text-[0.72rem] text-[var(--color-text-muted)]">
+          {help}
+        </div>
+      ) : null}
+      {err ? <FieldError text={err} id={`${inputId}-error`} /> : null}
     </div>
   );
 }
@@ -1534,7 +1575,7 @@ function Select({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const desc = opts.find((o) => o.value === v)?.description;
   return (
     <div className="grid min-w-0 gap-0.5">
-      {opts.length > FILTER_AT ? <Filter value={q} onChange={setQ} label={`Filter ${str(c.label) || "options"}`} /> : null}
+      {opts.length > FILTER_AT ? <Filter value={q} onChange={setQ} label={`Filter ${str(c.label).trim() || "options"}`} /> : null}
       <select id={inputId} className={inputClass} value={v} onChange={(e) => onChange?.(e.target.value)}>
         <option value="">{str(c.placeholder) || "Choose…"}</option>
         {shown.map((o) => (
@@ -1557,13 +1598,13 @@ function Choice({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const name = useId();
   // A radiogroup is not labelable by <label for>; name it from the field's
   // visible label (InputField gives it this id), or the id as a fallback.
-  const groupLabel = str(c.label)
+  const groupLabel = str(c.label).trim()
     ? { "aria-labelledby": `${inputId}-label` }
     : { "aria-label": str(c.id) || "Choice" };
   if (c.variant === "radio") {
     return (
       <div className="grid gap-1">
-      <div role="radiogroup" {...groupLabel} className="grid gap-1">
+      <div role="radiogroup" id={inputId} {...groupLabel} className="grid gap-1">
         {opts.map((o) => (
           <label key={o.value} className="flex cursor-pointer items-start gap-2">
             <input
@@ -1725,7 +1766,7 @@ function Toggle({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         type="button"
         role="switch"
         aria-checked={on}
-        aria-label={`${str(c.label) || str(c.id) || "Toggle"}${c.required === true ? " (required)" : ""}`}
+        aria-label={`${str(c.label).trim() || str(c.id) || "Toggle"}${c.required === true ? " (required)" : ""}`}
         onClick={() => onChange?.(!on)}
         className={[
           "relative h-5 w-9 shrink-0 rounded-full transition disabled:opacity-60",
@@ -1734,7 +1775,7 @@ function Toggle({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
       >
         <span className={["absolute top-0.5 size-4 rounded-full bg-[var(--color-white)] transition-all", on ? "left-[1.125rem]" : "left-0.5"].join(" ")} />
       </button>
-      <span className="text-[0.8125rem]">{str(c.label)}</span>
+      <span className="text-[0.8125rem]">{str(c.label).trim()}</span>
     </label>
   );
 }

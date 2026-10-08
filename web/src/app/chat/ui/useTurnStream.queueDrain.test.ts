@@ -689,7 +689,7 @@ describe("a submission whose acknowledgement was lost", () => {
 });
 
 describe("a card answer queued behind a running turn", () => {
-  const refusedQueue = async (text: string) => {
+  const refusedQueue = async (text: string, fromCard = false) => {
     const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
     const harnessFetch = globalThis.fetch;
     vi.stubGlobal(
@@ -701,13 +701,18 @@ describe("a card answer queued behind a running turn", () => {
     const setPromptForKey = vi.fn();
     const deps = { ...h.deps, setPromptForKey, streamingConvsRef: { current: new Set([CONV]) } };
     const { result } = renderHook(() => useTurnStream(deps));
-    expect(await result.current.submitPrompt(text)).toBe(false);
+    expect(await result.current.submitPrompt(text, { fromCard })).toBe(false);
     return setPromptForKey;
   };
 
   it("never writes its marker text into the composer when refused", async () => {
-    const setPromptForKey = await refusedQueue("[UI submission] card=c1 action=go\n{}");
+    const setPromptForKey = await refusedQueue("[UI submission] card=c1 action=go\n{}", true);
     expect(setPromptForKey).not.toHaveBeenCalled();
+  });
+
+  it("treats typed text that merely looks like a card marker as composer text", async () => {
+    const setPromptForKey = await refusedQueue("[UI submission] means the card was sent");
+    expect(setPromptForKey).toHaveBeenLastCalledWith(CONV, "[UI submission] means the card was sent");
   });
 
   it("still gives typed text back to the composer when refused", async () => {
@@ -765,9 +770,21 @@ describe("a lost-ack submission while another submission's turn runs", () => {
 });
 
 describe("a queued (busy-conversation) submission whose response was lost", () => {
-  const run = async (queueHasOurs: boolean) => {
+  const run = async (queueHasOurs: boolean, persistedHasOurs = false) => {
     let ours = "";
-    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    const h = makeHarness({
+      initial: answeredTranscript(),
+      persisted: persistedHasOurs
+        ? [
+            { role: "user", type: "text", content: { text: "run the analysis" } },
+            { role: "assistant", type: "text", content: { text: "Here is the analysis." } },
+            { role: "user", type: "text", content: { text: "keep it short" } },
+            { role: "assistant", type: "text", content: { text: "Done." } },
+          ]
+        : [],
+      queue: [[]],
+      inflight: [{ inflight: false }],
+    });
     const harnessFetch = globalThis.fetch;
     vi.stubGlobal(
       "fetch",
@@ -796,6 +813,12 @@ describe("a queued (busy-conversation) submission whose response was lost", () =
   it("is reported sent when the queue holds its row", async () => {
     const { sent, ours, setPromptForKey } = await run(true);
     expect(ours).not.toBe("");
+    expect(sent).toBe(true);
+    expect(setPromptForKey).not.toHaveBeenCalledWith(CONV, "keep it short");
+  });
+
+  it("is reported sent when it already drained and completed (persisted, no longer queued)", async () => {
+    const { sent, setPromptForKey } = await run(false, true);
     expect(sent).toBe(true);
     expect(setPromptForKey).not.toHaveBeenCalledWith(CONV, "keep it short");
   });

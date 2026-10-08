@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSubmissionMessage,
-  buildReplyMessage,
-  isCardMessage,
   checkField,
   MAX_LIST_ITEMS,
+  MAX_REPEATER_ITEMS,
   collect,
   initialValues,
   normalizeValues,
@@ -207,10 +206,15 @@ describe("calendar dates", () => {
   });
 });
 
-describe("isCardMessage", () => {
-  it("recognizes card submissions and quick replies only", () => {
-    expect(isCardMessage(buildSubmissionMessage("c", "go", {}))).toBe(true);
-    expect(isCardMessage(buildReplyMessage("c", "a", "yes"))).toBe(true);
-    expect(isCardMessage("hello")).toBe(false);
+
+describe("restored repeater values", () => {
+  it("are capped at the protocol limit", () => {
+    const spec = parseCardSpec(JSON.stringify({
+      title: "R",
+      components: [{ type: "repeater", id: "lines", fields: [{ type: "number", id: "n" }] }],
+      actions: [{ id: "go", label: "Go" }],
+    }));
+    const restored = normalizeValues(spec!, { lines: Array.from({ length: 5000 }, () => ({})) });
+    expect((restored.lines as unknown[]).length).toBe(MAX_REPEATER_ITEMS);
   });
 });

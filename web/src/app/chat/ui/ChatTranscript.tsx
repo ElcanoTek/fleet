@@ -92,7 +92,7 @@ export type ChatTranscriptProps = {
   pills: ProtocolPill[];
   activePillId: string | null;
   setActivePillId: Dispatch<SetStateAction<string | null>>;
-  submitPrompt: (submittedPrompt: string) => void | Promise<void | boolean>;
+  submitPrompt: (submittedPrompt: string, opts?: { fromCard?: boolean }) => void | Promise<void | boolean>;
   setPrompt: Dispatch<SetStateAction<string>>;
 
   // Compaction / summarize
@@ -798,7 +798,7 @@ export function ChatTranscript({
                                           superseded={genUi.superseded.has(tc.id)}
                                           retired={isPreSummary}
                                           storageScope={realConvId(currentConvKey) ?? currentConvKey}
-                                          onSubmit={(text) => submitPrompt(text)}
+                                          onSubmit={(text) => submitPrompt(text, { fromCard: true })}
                                         />
                                       </Suspense>
                                     );

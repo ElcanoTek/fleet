@@ -2081,7 +2081,7 @@
   {
    "name": "sole submit gated only on a disabled input",
    "valid": false,
-   "error_contains": "reads only disabled inputs",
+   "error_contains": "reads only inputs the user can never reach",
    "card": {
     "title": "x",
     "components": [
@@ -2200,7 +2200,7 @@
   {
    "name": "slider default above max",
    "valid": false,
-   "error_contains": "outside the slider's min..max",
+   "error_contains": "outside min..max",
    "card": {
     "title": "x",
     "components": [
@@ -2270,7 +2270,7 @@
   {
    "name": "input whose visibility reads only itself",
    "valid": false,
-   "error_contains": "reads only inputs it hides",
+   "error_contains": "reads only inputs the user can never reach",
    "card": {
     "title": "x",
     "components": [
@@ -2292,7 +2292,7 @@
   {
    "name": "section whose visibility reads only an input inside it",
    "valid": false,
-   "error_contains": "reads only inputs it hides",
+   "error_contains": "reads only inputs the user can never reach",
    "card": {
     "title": "x",
     "components": [
@@ -2350,7 +2350,7 @@
   {
    "name": "input shown only by a disabled toggle",
    "valid": false,
-   "error_contains": "reads only disabled inputs",
+   "error_contains": "reads only inputs the user can never reach",
    "card": {
     "title": "x",
     "components": [
@@ -2403,6 +2403,116 @@
           "text": "b"
          }
         ]
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "inputs shown only by each other (a cycle)",
+   "valid": false,
+   "error_contains": "reads only inputs the user can never reach",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "a",
+      "label": "A",
+      "visible_if": "b"
+     },
+     {
+      "type": "toggle",
+      "id": "b",
+      "label": "B",
+      "visible_if": "a"
+     },
+     {
+      "type": "text_input",
+      "id": "n"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "chain of gates that opens from an editable input",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "a",
+      "label": "A"
+     },
+     {
+      "type": "toggle",
+      "id": "b",
+      "label": "B",
+      "visible_if": "a"
+     },
+     {
+      "type": "text_input",
+      "id": "n",
+      "visible_if": "b"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "number default above max",
+   "valid": false,
+   "error_contains": "outside min..max",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "number",
+      "id": "q",
+      "min": 0,
+      "max": 100,
+      "value": 200,
+      "disabled": true
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "table cell under an undeclared column",
+   "valid": false,
+   "error_contains": "no column has key \"nmea\"",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "table",
+      "columns": [
+       {
+        "key": "name"
+       }
+      ],
+      "rows": [
+       {
+        "nmea": "Acme"
        }
       ]
      }

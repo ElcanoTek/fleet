@@ -35,7 +35,6 @@ import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { mcpAccountOverrides } from "./mcpAccounts";
 import { allocMessageIds } from "./messageIds";
-import { isCardMessage } from "./genui/model";
 import { enabledOptionalMcpServerNames } from "./mcpSelection";
 import {
   createRecoveryElection,
@@ -587,7 +586,7 @@ export interface UseTurnStream {
   // checkStreamLiveness across every attached conversation, not just the
   // active one. No-op while the tab is hidden.
   sweepStreamLiveness: (opts?: { force?: boolean }) => Promise<void>;
-  submitPrompt: (submittedPrompt: string) => Promise<boolean>;
+  submitPrompt: (submittedPrompt: string, opts?: { fromCard?: boolean }) => Promise<boolean>;
   regenerateLastAssistant: () => Promise<void>;
   resendUserMessage: (
     userMessageId: number,
@@ -925,6 +924,33 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // The server did not answer — the caller must NOT read this as "no
       // answer exists". It leaves the slot mid-flight and re-asks later.
       return "unreachable";
+    }
+  };
+
+  // submissionLanded answers, for a submission whose POST response was lost:
+  // does the server hold it? A queue row with its submission id says yes.
+  // So does a persisted copy beyond the ones this client already accounts
+  // for — a queued input can drain and complete before the queue is read,
+  // and a completed row is no longer listed. Unknown (an unreachable server)
+  // is no.
+  const submissionLanded = async (convId: string, text: string, submissionId: string): Promise<boolean> => {
+    const queued = await refreshQueue(convId);
+    if (queued?.some((q) => q.submission_id === submissionId)) return true;
+    const url = conversationApiUrl(convId);
+    if (!url) return false;
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) return false;
+      const data = (await res.json()) as { history?: HistoryEntry[] | null };
+      const persisted = (data.history ?? []).filter(
+        (e) => e.role === "user" && (e.content as { text?: unknown } | undefined)?.text === text,
+      ).length;
+      const known = (messagesByConvRef.current.get(convId) ?? []).filter(
+        (m) => m.role === "user" && m.content === text && !m.notSent,
+      ).length;
+      return persisted > known;
+    } catch {
+      return false;
     }
   };
 
@@ -3741,7 +3767,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
   };
 
-  const submitPrompt = async (submittedPrompt: string): Promise<boolean> => {
+  // `fromCard`: a generative-UI card is sending its answer. Said by the
+  // caller, never inferred from the text — a user may type anything.
+  const submitPrompt = async (submittedPrompt: string, opts?: { fromCard?: boolean }): Promise<boolean> => {
     const value = submittedPrompt.trim();
     // composerKey is the slot the user was typing into (real conv id or
     // the PENDING singleton for the empty new-chat view). All the
@@ -3755,7 +3783,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // A generative-UI card's answer is not composer text: it neither clears
     // nor restores what the user is typing, and never takes the composer's
     // pending attachments with it.
-    const fromCard = isCardMessage(value);
+    const fromCard = opts?.fromCard === true;
     const clearComposer = () => {
       if (!fromCard) setPromptForKey(composerKey, "");
     };
@@ -3850,8 +3878,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // have queued the input. Report it sent only if the queue holds a
         // row with this submission's id — otherwise a card would offer a
         // resend and queue a duplicate.
-        const queued = await refreshQueue(convId);
-        if (queued?.some((q) => q.submission_id === queueSubmissionId)) return true;
+        if (await submissionLanded(convId, value, queueSubmissionId)) return true;
         restoreComposer();
         return false;
       }
@@ -4091,14 +4118,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           attachedConvIdsRef.current.delete(target);
           scheduleRecoveryRetry(target, assistantId, false);
           // The input is queued server-side; show its chip while it waits.
-          const queued = await refreshQueue(target);
+          const landed = await submissionLanded(target, value, submissionId);
           // A live turn for another submission proves only that the turn is
           // not ours — another tab may have started it while our POST never
-          // arrived. Only a queue row carrying our submission id proves the
-          // server holds this input. Then it is accepted, as on the direct
+          // arrived. Only a queue row carrying our submission id, or a
+          // persisted copy of it (submissionLanded), proves the server holds
+          // this input. Then it is accepted, as on the direct
           // path's queued ack: undo the notSent mark so a generative-UI card
           // holds instead of offering a resend that would queue a duplicate.
-          if (!accepted.value && queued?.some((q) => q.submission_id === submissionId)) {
+          if (!accepted.value && landed) {
             accepted.value = true;
             setConvMessages(target, (current) =>
               current.map((m) => (m.id === baseId && m.notSent ? { ...m, notSent: false } : m)),

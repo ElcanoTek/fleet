@@ -10,6 +10,8 @@ import { evaluateSafe, truthy, type Scope } from "./expr";
 export const SHOW_UI_TOOL = "show_ui";
 /** Must match genui.MaxListItems in internal/genui/spec.go. */
 export const MAX_LIST_ITEMS = 20000;
+/** Must match genui.MaxRepeaterItems in internal/genui/spec.go. */
+export const MAX_REPEATER_ITEMS = 200;
 /**
  * The largest card message (as it appears JSON-escaped in the POST body) a
  * card will send. /api/chat refuses bodies over 1 MiB (maxJSONBodyBytes in
@@ -258,8 +260,13 @@ export function defaultValue(c: Component): unknown {
     case "repeater": {
       const fields = children(c, "fields");
       if (Array.isArray(v)) {
+        // A transcript answer can come from anywhere (an older build, another
+        // client, the composer); the control never holds more than the
+        // protocol cap, so neither does a restored value — thousands of items
+        // would each become DOM.
         return v
           .filter((x) => x && typeof x === "object" && !Array.isArray(x))
+          .slice(0, MAX_REPEATER_ITEMS)
           .map((x) => ({ ...newItem(fields), ...pickKnown(fields, x as Values) }));
       }
       const n = typeof c.min_items === "number" ? Math.max(1, c.min_items) : 1;
@@ -464,16 +471,6 @@ export function buildReplyMessage(cardId: string, actionId: string, text: string
 }
 
 const REPLY_RE = /^\[UI reply\] card=(\S+) action=(\S+)\n([\s\S]*)$/;
-
-/**
- * Whether a message was written by a card (a submission or a quick reply),
- * not typed in the composer. Such a send must leave the composer alone: its
- * text, its attachments, and — when the send is refused — no marker text
- * restored into it.
- */
-export function isCardMessage(text: string): boolean {
-  return text.startsWith(UI_SUBMISSION_PREFIX) || text.startsWith(UI_REPLY_PREFIX);
-}
 
 export function parseReplyMessage(text: string): Reply | null {
   if (!text.startsWith(UI_REPLY_PREFIX)) return null;
