@@ -155,7 +155,8 @@ var components = map[string]compSpec{
 	"tabs": {props: map[string]prop{
 		"variant": enum("tabs", "steps"),
 		"tabs": reqObjects(map[string]prop{
-			"label": req(kString), "children": req(kChildren),
+			// The tab button's only name: blank would draw an unnamed tab.
+			"label": req(kNonBlank), "children": req(kChildren),
 		}),
 	}},
 	"divider": {props: map[string]prop{}},
@@ -324,6 +325,14 @@ type validator struct {
 	// ids are known.
 	exprs      []exprRef
 	fieldPaths []pathRef
+	// component visible_if / disabled_if references, checked once every
+	// input is declared (a condition may read an input declared later).
+	conds []condRef
+}
+
+type condRef struct {
+	path string
+	refs []string
 }
 
 type pathRef struct{ path, target string }
@@ -372,6 +381,11 @@ func Validate(raw []byte) (Card, []Issue) {
 		v.component(fmt.Sprintf("components[%d]", i), comp, 1, "")
 	}
 
+	for _, c := range v.conds {
+		if v.allFixed(c.refs) {
+			v.addf(c.path, "reads only disabled inputs, which the user cannot change, so it never changes; drop it or make one of them editable")
+		}
+	}
 	v.actions(top["actions"], len(v.fields) > 0)
 	if r, ok := top["replaces"]; ok {
 		if s, isStr := r.(string); !isStr || strings.TrimSpace(s) == "" {
@@ -799,6 +813,7 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 			v.addf(path+"."+cond, "names no input, so it never changes; drop it (a component is shown and enabled by default)")
 			continue
 		}
+		v.conds = append(v.conds, condRef{path: path + "." + cond, refs: refs})
 		// A visible_if that reads only inputs it hides itself (the component,
 		// or inputs inside it) locks itself: once hidden, nothing the user can
 		// reach changes it, and a hidden input is left out of the submission.

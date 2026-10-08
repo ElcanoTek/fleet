@@ -139,3 +139,25 @@ describe("one answer per card", () => {
     expect(t.submissions.get("c1")?.values).toEqual({ a: 2 });
   });
 });
+
+describe("an unconfirmed card answer", () => {
+  it("does not lock the card while recovery is still settling it", () => {
+    const streaming = { id: 3, role: "assistant", content: "", state: "streaming" } as unknown as Message;
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "c1", input: card("One"), resultText: "UI_DISPLAYED card_id=c1" }]),
+      { ...user(2, buildSubmissionMessage("c1", "go", { a: 1 })), notSent: true },
+      streaming,
+    ]);
+    expect(s.submissions.has("c1")).toBe(false);
+  });
+
+  it("locks the card once a finished reply shows the server took it", () => {
+    const done = { id: 3, role: "assistant", content: "Thanks, creating them now.", state: "done" } as unknown as Message;
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "c1", input: card("One"), resultText: "UI_DISPLAYED card_id=c1" }]),
+      { ...user(2, buildSubmissionMessage("c1", "go", { a: 1 })), notSent: true },
+      done,
+    ]);
+    expect(s.submissions.get("c1")?.actionId).toBe("go");
+  });
+});

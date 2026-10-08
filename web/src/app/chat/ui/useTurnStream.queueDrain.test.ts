@@ -763,3 +763,46 @@ describe("a lost-ack submission while another submission's turn runs", () => {
     expect(bubble?.notSent).toBe(true);
   });
 });
+
+describe("a queued (busy-conversation) submission whose response was lost", () => {
+  const run = async (queueHasOurs: boolean) => {
+    let ours = "";
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    const harnessFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/chat") {
+          const body = JSON.parse(String(init?.body)) as { submission_id?: string; mode?: string };
+          expect(body.mode).toBe("queue");
+          ours = body.submission_id ?? "";
+          throw new TypeError("network error");
+        }
+        if (url.includes("/queue")) {
+          const items = queueHasOurs ? [{ ...queuedRow("q1"), submission_id: ours }] : [];
+          return new Response(JSON.stringify({ items }), { status: 200, headers: { "content-type": "application/json" } });
+        }
+        return harnessFetch(input, init);
+      }),
+    );
+    const setPromptForKey = vi.fn();
+    const deps = { ...h.deps, setPromptForKey, streamingConvsRef: { current: new Set([CONV]) } };
+    const { result } = renderHook(() => useTurnStream(deps));
+    const sent = await result.current.submitPrompt("keep it short");
+    return { sent, ours, setPromptForKey };
+  };
+
+  it("is reported sent when the queue holds its row", async () => {
+    const { sent, ours, setPromptForKey } = await run(true);
+    expect(ours).not.toBe("");
+    expect(sent).toBe(true);
+    expect(setPromptForKey).not.toHaveBeenCalledWith(CONV, "keep it short");
+  });
+
+  it("is reported not sent, text given back, when the queue does not", async () => {
+    const { sent, setPromptForKey } = await run(false);
+    expect(sent).toBe(false);
+    expect(setPromptForKey).toHaveBeenLastCalledWith(CONV, "keep it short");
+  });
+});

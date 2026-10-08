@@ -65,6 +65,8 @@ type CardCtx = {
   setField: (id: string, v: unknown, item?: ItemCtx) => void;
   setValues: (fn: (v: Values) => Values) => void;
   focusField: (path: string) => void;
+  /** Paths of inputs currently shown and enabled — the ones Fix can reach. */
+  visible: Set<string>;
 };
 
 const Ctx = createContext<CardCtx | null>(null);
@@ -366,10 +368,11 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     if (submission || reply) {
       setEditing(false);
       setAwaitingState(null);
-      if (!readOnly) {
-        savePending(storeId, null);
-        saveDraft(storeId, null);
-      }
+      // The draft is NOT deleted here: an optimistic answer can still be
+      // refused and vanish, and the user's values must survive that. A draft
+      // records the answer it was typed against, so once this answer holds,
+      // the next load finds it stale and drops it.
+      if (!readOnly) savePending(storeId, null);
     }
     if (submission) {
       setValuesState(normalizeValues(spec, submission.values));
@@ -461,8 +464,8 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
   }, []);
 
   const ctx = useMemo<CardCtx>(
-    () => ({ cardId, values, locked, errors, setField, setValues, focusField }),
-    [cardId, values, locked, errors, setField, setValues, focusField],
+    () => ({ cardId, values, locked, errors, setField, setValues, focusField, visible }),
+    [cardId, values, locked, errors, setField, setValues, focusField, visible],
   );
 
   const scope = scopeFor(values);
@@ -555,6 +558,8 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
   // A confirmation whose action has since become hidden (its visible_if no
   // longer holds) closes rather than offering a Yes for an unavailable action.
   const confirmingVisible = confirming && isVisible(confirming, scope) ? confirming : null;
+  // Discard it outright, so it does not silently return if the action shows again.
+  if (confirming && !confirmingVisible) setConfirming(null);
   const sentLabel = submittedAction
     ? (spec.actions ?? []).find((a) => a.id === submittedAction)?.label ?? submittedAction
     : null;
@@ -1124,7 +1129,7 @@ const STATUS_GLYPH: Record<string, { glyph: string; color: string; label: string
 
 function StatusList({ c }: { c: Component }) {
   const scope = useScope();
-  const { focusField, locked } = useCard();
+  const { focusField, locked, visible } = useCard();
   return (
     <ul className="m-0 grid list-none gap-1 p-0">
       {objs(c.items).map((it, i) => {
@@ -1143,7 +1148,9 @@ function StatusList({ c }: { c: Component }) {
               <div className="break-words">{renderTemplate(str(it.label), scope)}</div>
               {it.detail ? <div className="text-[0.75rem] text-[var(--color-text-muted)]">{renderTemplate(str(it.detail), scope)}</div> : null}
             </div>
-            {field && !locked ? (
+            {/* Only where Fix can land: a field hidden by visible_if,
+                disabled, or in a removed repeater item cannot be focused. */}
+            {field && !locked && visible.has(field) ? (
               <button type="button" className="shrink-0 text-[0.72rem] text-[var(--color-accent)] underline" onClick={() => focusField(field)}>
                 Fix
               </button>

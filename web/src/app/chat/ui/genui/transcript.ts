@@ -58,22 +58,19 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
   for (let idx = 0; idx < messages.length; idx++) {
     const m = messages[idx];
     if (m.role === "user") {
-      // A card message the server refused (its POST was rejected, never
-      // arrived, or was stopped before the server took it — the optimistic
-      // bubble stays behind, followed by a failed or cancelled assistant
-      // slot) must not lock the card: nothing was answered. An
-      // ACCEPTED message whose turn then failed is different — the server
-      // holds it and the card reported it sent — so it still locks.
+      // A card message the server has not been shown to hold (notSent: its
+      // POST was refused, never arrived, or was stopped first) is not an
+      // answer — whether its slot has failed or recovery is still working
+      // out what happened. The card stays editable and its sender reported
+      // it unsent. Only a turn that went on to answer it — tool calls, or a
+      // finished written reply — proves the server took it after all.
       const next = messages[idx + 1];
-      if (
-        m.notSent &&
-        next &&
+      const answered =
+        !!next &&
         next.role === "assistant" &&
-        (next.failed || next.modelRequired || next.cancelled) &&
-        !(next.toolCalls ?? []).length
-      ) {
-        continue;
-      }
+        ((next.toolCalls ?? []).length > 0 ||
+          (next.state === "done" && !next.failed && !next.cancelled && !next.modelRequired && next.content.trim() !== ""));
+      if (m.notSent && !answered) continue;
       // A card has ONE answer: the latest, whether a submission or a quick
       // reply (a submit, Edit and resend, then a quick reply ends on the
       // reply). Each kind replaces the other.

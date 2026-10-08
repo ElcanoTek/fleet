@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, cleanup as cleanupRender, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import GenerativeCard, { RENDERERS, parseListText } from "./GenerativeCard";
 import { buildReplyMessage, parseCardSpec, parseSubmissionMessage, type CardSpec } from "./model";
@@ -115,11 +115,20 @@ describe("interaction", () => {
     expect(screen.queryByTestId("genui-submitted")).toBeNull();
     expect(screen.getByLabelText(/Name/)).toBeEnabled();
     expect(window.localStorage.getItem("fleet.genui.draft.lock_card")).toContain("Ada");
-    // The user message lands: the card locks and the draft is dropped.
+    // The user message lands: the card locks. The draft stays stored (the
+    // optimistic answer may still be refused) but is stale against it.
     const submission = parseSubmissionMessage(onSubmit.mock.calls[0][0]);
     view.rerender(<GenerativeCard cardId="lock_card" spec={s} submission={submission} onSubmit={onSubmit} />);
     expect(await screen.findByTestId("genui-submitted")).toBeTruthy();
     expect(screen.getByLabelText(/Name/)).toBeDisabled();
+    // A refused optimistic answer vanishes: the draft is still there to reopen.
+    view.rerender(<GenerativeCard cardId="lock_card" spec={s} submission={null} onSubmit={onSubmit} />);
+    view.unmount();
+    render(<GenerativeCard cardId="lock_card" spec={s} onSubmit={onSubmit} />);
+    expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("Ada");
+    // Once the answer holds, a remount finds the draft stale and drops it.
+    cleanupRender();
+    render(<GenerativeCard cardId="lock_card" spec={s} submission={submission} onSubmit={onSubmit} />);
     expect(window.localStorage.getItem("fleet.genui.draft.lock_card")).toBeNull();
   });
 
@@ -1073,5 +1082,47 @@ describe("twelfth Codex pass", () => {
     expect(screen.getByRole("radiogroup", { name: /^Channel\s*\(required\)$/ })).toBeTruthy();
     expect(screen.getByRole("switch", { name: "I agree (required)" })).toBeTruthy();
     expect(screen.getByLabelText("Start")).toBeTruthy();
+  });
+});
+
+describe("thirteenth Codex pass", () => {
+  it("offers Fix only for a field the user can currently reach", () => {
+    const s = spec({
+      title: "F",
+      components: [
+        { type: "toggle", id: "more", label: "More" },
+        { type: "text_input", id: "shown", label: "Shown" },
+        { type: "text_input", id: "hidden", label: "Hidden", visible_if: "more" },
+        { type: "text_input", id: "locked", label: "Locked", disabled: true },
+        {
+          type: "status_list",
+          items: [
+            { status: "fail", label: "a", field: "shown" },
+            { status: "fail", label: "b", field: "hidden" },
+            { status: "fail", label: "c", field: "locked" },
+          ],
+        },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="fix" spec={s} onSubmit={() => {}} />);
+    expect(screen.getAllByRole("button", { name: "Fix" })).toHaveLength(1);
+  });
+
+  it("discards a confirmation whose action was hidden, so it does not come back", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "C",
+      components: [{ type: "toggle", id: "armed", label: "Armed", value: true }],
+      actions: [{ id: "del", label: "Delete", style: "danger", confirm: "Really delete?", visible_if: "armed" }],
+    });
+    render(<GenerativeCard cardId="conf" spec={s} onSubmit={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    expect(screen.getByText("Really delete?")).toBeTruthy();
+    await user.click(screen.getByRole("switch", { name: "Armed" }));
+    expect(screen.queryByText("Really delete?")).toBeNull();
+    await user.click(screen.getByRole("switch", { name: "Armed" }));
+    expect(screen.queryByText("Really delete?")).toBeNull();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
   });
 });

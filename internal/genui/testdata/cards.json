@@ -2346,6 +2346,68 @@
      }
     ]
    }
+  },
+  {
+   "name": "input shown only by a disabled toggle",
+   "valid": false,
+   "error_contains": "reads only disabled inputs",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "gate",
+      "label": "Gate",
+      "disabled": true,
+      "value": false
+     },
+     {
+      "type": "text_input",
+      "id": "n",
+      "required": true,
+      "visible_if": "gate"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "blank tab label",
+   "valid": false,
+   "error_contains": "tabs[0].label",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "tabs",
+      "tabs": [
+       {
+        "label": " ",
+        "children": [
+         {
+          "type": "text",
+          "text": "a"
+         }
+        ]
+       },
+       {
+        "label": "B",
+        "children": [
+         {
+          "type": "text",
+          "text": "b"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
   }
  ]
 }

@@ -3767,6 +3767,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // clears; the chip strip under it tracks the queued input's lifecycle.
     if (convId && streamingConvsRef.current.has(convId)) {
       clearComposer();
+      // This submission's identity (#1592), stored on the queue row: if the
+      // response is lost, the queue snapshot is how we learn it was taken.
+      const queueSubmissionId = crypto.randomUUID();
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -3775,6 +3778,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             message: value,
             conversation_id: convId,
             input_id: crypto.randomUUID(),
+            submission_id: queueSubmissionId,
             mode: "queue",
           }),
         });
@@ -3842,6 +3846,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           return true;
         }
       } catch {
+        // The response never arrived, which is not a refusal: the server may
+        // have queued the input. Report it sent only if the queue holds a
+        // row with this submission's id — otherwise a card would offer a
+        // resend and queue a duplicate.
+        const queued = await refreshQueue(convId);
+        if (queued?.some((q) => q.submission_id === queueSubmissionId)) return true;
         restoreComposer();
         return false;
       }
