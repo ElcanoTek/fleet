@@ -4080,6 +4080,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           scheduleRecoveryRetry(target, assistantId, false);
           // The input is queued server-side; show its chip while it waits.
           void refreshQueue(target);
+          // Queued is accepted, as on the direct path's queued ack: undo the
+          // notSent mark so a generative-UI card holds instead of offering a
+          // resend that would queue a duplicate.
+          if (!accepted.value) {
+            accepted.value = true;
+            setConvMessages(target, (current) =>
+              current.map((m) => (m.id === baseId && m.notSent ? { ...m, notSent: false } : m)),
+            );
+          }
         } else if (probe.inflight || (accepted.value && probe.turnID)) {
           if (!accepted.value && answersOurSubmission(probe, submissionId) === true) {
             // The POST's response was lost, but /inflight names this

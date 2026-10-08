@@ -48,7 +48,7 @@ HOW IT FLOWS
 - To refine (e.g. after validating the answers against a live system), call show_ui again with replaces=<old card_id>, the user's values prefilled via "value", and field_errors for what needs fixing.
 - NEVER invent option values that come from an external system (ids, accounts, catalog names). Fetch them with your tools first, then offer them as options; if you cannot fetch them, use a text_input and say so.
 
-COMPONENTS — every component is {"type": ..., ...props}; any component may also take "visible_if": "<expr>".
+COMPONENTS — every component is {"type": ..., ...props}; any component may also take "visible_if": "<expr>" (a condition must read an editable input; a constant one is refused).
 Layout: section {title?, description?, children, collapsible?, collapsed?} · columns {children (2-4, one per column)} · tabs {tabs:[{label, children}], variant?: tabs|steps} · divider {}
 Display: heading {text} · text {text, markdown?, tone?: default|muted} · callout {text, title?, tone?: neutral|info|success|warning|danger} · badges {items:[{text, tone?}]} · stat {label, value, caption?, tone?} · facts {items:[{label, value}]} · table {columns:[{key, label?, align?}], rows:[{<key>: string|number|bool|null}], select?: none|single|multi, row_key?, id?, value?} · status_list {items:[{status: pass|fail|warn|info|pending, label, detail?, field?}]} · progress {value (expr), max?, label?} · chart {kind: bar|line, labels:[...], series:[{name, values:[numbers]}], title?, unit?} · diff {rows:[{label, before?, after?}], title?} · code {text, language?} · link {text, url (https)}
 Inputs (all take id (required, unique), label?, help?, required?, disabled?, value? = default):

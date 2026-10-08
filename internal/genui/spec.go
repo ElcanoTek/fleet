@@ -782,7 +782,23 @@ func (v *validator) options(path string, val any) {
 
 // componentRules holds the cross-property checks a flat prop table cannot
 // express.
+// constantConditions refuses a visible_if / disabled_if that names no input:
+// it never changes, so it is either pointless or hides / disables its target
+// for good — an input the user can never reach while the model waits.
+func (v *validator) constantConditions(path string, obj map[string]any) {
+	for _, cond := range []string{"visible_if", "disabled_if"} {
+		src, ok := obj[cond].(string)
+		if !ok {
+			continue
+		}
+		if refs, err := ParseExpr(src); err == nil && len(refs) == 0 {
+			v.addf(path+"."+cond, "names no input, so it never changes; drop it (a component is shown and enabled by default)")
+		}
+	}
+}
+
 func (v *validator) componentRules(path, typ string, obj map[string]any) {
+	v.constantConditions(path, obj)
 	num := func(k string) (float64, bool) { f, ok := obj[k].(float64); return f, ok }
 	// A required input must have room for an answer: a zero cap on a
 	// required field can never be satisfied.
@@ -1034,8 +1050,12 @@ func (v *validator) checkValue(path, typ string, obj map[string]any, val any) {
 			}
 		}
 	case "number", "slider":
-		if _, ok := val.(float64); !ok && val != nil {
+		n, ok := val.(float64)
+		if !ok && val != nil {
 			v.addf(path, "must be a number")
+		}
+		if ok && typ == "slider" {
+			v.sliderValue(path, obj, n)
 		}
 	case "toggle":
 		if _, ok := val.(bool); !ok {
@@ -1282,6 +1302,28 @@ func (v *validator) actions(raw any, hasInput bool) {
 	}
 	if hasInput && !submit {
 		v.addf("actions", "the card has inputs but no submit action; add one with kind \"submit\"")
+	}
+}
+
+// sliderValue refuses a slider default the native range control would coerce
+// (outside [min, max], or off the step grid from min): the thumb would show
+// one number while the card holds and submits another.
+func (v *validator) sliderValue(path string, obj map[string]any, n float64) {
+	minV, hasMin := obj["min"].(float64)
+	maxV, hasMax := obj["max"].(float64)
+	if (hasMin && n < minV) || (hasMax && n > maxV) {
+		v.addf(path, "%v is outside the slider's min..max", n)
+		return
+	}
+	if step, ok := obj["step"].(float64); ok && step > 0 {
+		base := 0.0
+		if hasMin {
+			base = minV
+		}
+		q := (n - base) / step
+		if math.Abs(q-math.Round(q)) > 1e-9 {
+			v.addf(path, "%v is not on the slider's step grid (min + k × step)", n)
+		}
 	}
 }
 

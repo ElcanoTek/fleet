@@ -2170,6 +2170,102 @@
      }
     ]
    }
+  },
+  {
+   "name": "input hidden by a constant condition",
+   "valid": false,
+   "error_contains": "visible_if: names no input",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "gate",
+      "visible_if": "false"
+     },
+     {
+      "type": "text_input",
+      "id": "n"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "disabled_if": "empty(gate)"
+     }
+    ]
+   }
+  },
+  {
+   "name": "slider default above max",
+   "valid": false,
+   "error_contains": "outside the slider's min..max",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "slider",
+      "id": "s",
+      "min": 0,
+      "max": 100,
+      "value": 200
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "slider default off the step grid",
+   "valid": false,
+   "error_contains": "step grid",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "slider",
+      "id": "s",
+      "min": 0,
+      "max": 100,
+      "step": 10,
+      "value": 15
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "slider default on the step grid",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "slider",
+      "id": "s",
+      "min": 5,
+      "max": 100,
+      "step": 0.5,
+      "value": 12.5
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
   }
  ]
 }

@@ -969,3 +969,56 @@ describe("tenth Codex pass", () => {
     expect(window.localStorage.getItem("fleet.genui.draft.big")).toContain('"A"');
   });
 });
+
+describe("eleventh Codex pass", () => {
+  it("names a selectable table's group by its field label", () => {
+    const table = (id: string, label: string) => ({
+      type: "table",
+      id,
+      label,
+      select: "single",
+      row_key: "id",
+      columns: [{ key: "id" }],
+      rows: [{ id: "acct_1" }],
+    });
+    const s = spec({ title: "T", components: [table("from", "Move from"), table("to", "Move to")], actions: [{ id: "go", label: "Go" }] });
+    render(<GenerativeCard cardId="tbl" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByRole("group", { name: "Move from" })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Move to" })).toBeTruthy();
+  });
+
+  it("keeps a server error the user answered cleared across a remount", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({
+      title: "F",
+      components: [{ type: "text_input", id: "n", label: "Name", value: "bad" }],
+      actions: [{ id: "go", label: "Go" }],
+      field_errors: [{ field: "n", message: "Not allowed" }],
+    });
+    const first = render(<GenerativeCard cardId="fe" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByText("Not allowed")).toBeTruthy();
+    await user.clear(screen.getByLabelText(/Name/));
+    await user.type(screen.getByLabelText(/Name/), "good");
+    expect(screen.queryByText("Not allowed")).toBeNull();
+    first.unmount();
+    render(<GenerativeCard cardId="fe" spec={s} onSubmit={() => {}} />);
+    expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("good");
+    expect(screen.queryByText("Not allowed")).toBeNull();
+  });
+
+  it("does not scan other drafts on an ordinary edit", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({ title: "S", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    render(<GenerativeCard cardId="scan" spec={s} onSubmit={() => {}} />);
+    await user.type(screen.getByLabelText(/Name/), "a");
+    const keySpy = vi.spyOn(Storage.prototype, "key");
+    try {
+      await user.type(screen.getByLabelText(/Name/), "bcd");
+      expect(keySpy).not.toHaveBeenCalled();
+    } finally {
+      keySpy.mockRestore();
+    }
+  });
+});

@@ -140,21 +140,24 @@ const MAX_DRAFTS = 20;
 // the first answer), so "Edit and resend" changes survive a remount too: a
 // draft whose answer is still the transcript's reopens the card for editing,
 // and one whose answer has moved on is spent.
-type StoredDraft = { values: Values; at: number; after: string };
+type StoredDraft = { values: Values; at: number; after: string; cleared?: string[] };
 
 function readDraft(key: string): StoredDraft | null {
   const raw = window.localStorage.getItem(key);
   if (!raw) return null;
   const v = JSON.parse(raw) as Partial<StoredDraft> | null;
   if (!v || typeof v.at !== "number" || !v.values || typeof v.values !== "object" || Array.isArray(v.values)) return null;
-  return { values: v.values, at: v.at, after: typeof v.after === "string" ? v.after : "" };
+  const cleared = Array.isArray(v.cleared) ? v.cleared.filter((x): x is string => typeof x === "string") : [];
+  return { values: v.values, at: v.at, after: typeof v.after === "string" ? v.after : "", cleared };
 }
 
-function loadDraft(cardId: string, answerKey: string): Values | null {
+// The draft's values, and the server field_errors the user already answered
+// by editing (so a remount does not bring those errors back).
+function loadDraft(cardId: string, answerKey: string): StoredDraft | null {
   const key = DRAFT_PREFIX + cardId;
   try {
     const d = readDraft(key);
-    if (d && Date.now() - d.at <= DRAFT_TTL_MS && d.after === answerKey) return d.values;
+    if (d && Date.now() - d.at <= DRAFT_TTL_MS && d.after === answerKey) return d;
     window.localStorage.removeItem(key);
     return null;
   } catch {
@@ -186,26 +189,33 @@ function pruneDrafts(keep: string) {
   }
 }
 
-function saveDraft(cardId: string, values: Values | null, after = "") {
+function saveDraft(cardId: string, values: Values | null, after = "", cleared: Iterable<string> = []) {
   const key = DRAFT_PREFIX + cardId;
   try {
     if (!values) {
       window.localStorage.removeItem(key);
       return;
     }
+    // Pruning scans every draft: only when this card starts one, not per edit.
     if (window.localStorage.getItem(key) === null) pruneDrafts(key);
-    const json = JSON.stringify({ values, at: Date.now(), after });
-    // A long pasted list can fill the origin's quota. Make room by dropping
-    // other drafts, least recently edited first, until this one fits.
+    const json = JSON.stringify({ values, at: Date.now(), after, cleared: [...cleared] });
+    try {
+      window.localStorage.setItem(key, json);
+      return;
+    } catch {
+      // A long pasted list can fill the origin's quota. Only now, make room
+      // by dropping other drafts, least recently edited first, until it fits.
+    }
     const others = otherDrafts(key);
     for (;;) {
+      const victim = others.pop();
+      if (!victim) return;
+      window.localStorage.removeItem(victim.key);
       try {
         window.localStorage.setItem(key, json);
         return;
       } catch {
-        const victim = others.pop();
-        if (!victim) return;
-        window.localStorage.removeItem(victim.key);
+        // still full: drop the next one
       }
     }
   } catch {
@@ -290,7 +300,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
   // submission in progress, so the card reopens for editing.
   const [initialDraft] = useState(() => (readOnly ? null : loadDraft(cardId, answerKeyOf(submission, reply))));
   const [values, setValuesState] = useState<Values>(() =>
-    normalizeValues(spec, initialDraft ?? (submission ? submission.values : null)),
+    normalizeValues(spec, initialDraft?.values ?? (submission ? submission.values : null)),
   );
   const [editing, setEditing] = useState(() => !!submission && initialDraft !== null);
   const [sending, setSending] = useState<string | null>(null);
@@ -298,7 +308,9 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
   const [confirming, setConfirming] = useState<Action | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // Server-sent field_errors stay until the user edits that field.
-  const [clearedServerErrors, setClearedServerErrors] = useState<Set<string>>(() => new Set());
+  const [clearedServerErrors, setClearedServerErrors] = useState<Set<string>>(() => new Set(initialDraft?.cleared ?? []));
+  // The same set, readable when a draft is saved (setField updates both).
+  const clearedRef = useRef(clearedServerErrors);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   // The card locks on the TRANSCRIPT's submission, never optimistically: a
@@ -361,7 +373,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     (fn: (v: Values) => Values) => {
       setValuesState((prev) => {
         const next = fn(prev);
-        if (!readOnly) saveDraft(cardId, next, answerKeyRef.current);
+        if (!readOnly) saveDraft(cardId, next, answerKeyRef.current, clearedRef.current);
         return next;
       });
     },
@@ -372,14 +384,13 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     (id: string, v: unknown, item?: ItemCtx) => {
       const path = item ? `${item.repeater}[${item.index}].${id}` : id;
       setNotice(null);
-      setClearedServerErrors((s) => {
-        const n = new Set(s).add(path);
-        // Editing an item also answers an error on the repeater as a whole
-        // ("lines"), which a fixed-size repeater could otherwise never clear.
-        // A separate key, so sibling items' errors stay.
-        if (item) n.add(`${item.repeater}\u0000root`);
-        return n;
-      });
+      const n = new Set(clearedRef.current).add(path);
+      // Editing an item also answers an error on the repeater as a whole
+      // ("lines"), which a fixed-size repeater could otherwise never clear.
+      // A separate key, so sibling items' errors stay.
+      if (item) n.add(`${item.repeater}\u0000root`);
+      clearedRef.current = n;
+      setClearedServerErrors(n);
       setValues((prev) => {
         if (!item) return { ...prev, [id]: v };
         const arr = Array.isArray(prev[item.repeater]) ? [...(prev[item.repeater] as Values[])] : [];
@@ -994,7 +1005,7 @@ function cellText(v: unknown): string {
   return String(v);
 }
 
-function Table({ c, value, onChange }: Parameters<Renderer>[0]) {
+function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   // A selectable table is an input: InputField wraps it and binds value /
   // onChange (to the card, or to the current repeater item) and draws its
   // label and errors. A display-only table renders bare.
@@ -1021,8 +1032,12 @@ function Table({ c, value, onChange }: Parameters<Renderer>[0]) {
       onChange?.(cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]);
     }
   };
+  // A selectable table is one question: name the group by the field's label
+  // (InputField draws it), so its row checkboxes are told apart from another
+  // table's rows with the same keys.
+  const group = wrapped && inputId ? { role: "group", id: inputId, tabIndex: -1, "aria-labelledby": `${inputId}-label` } : {};
   return (
-    <div className="grid min-w-0 gap-1">
+    <div className="grid min-w-0 gap-1" {...group}>
       {!wrapped && c.label ? <div className="text-[0.78rem] font-medium">{str(c.label)}</div> : null}
       <div className="max-h-[22rem] min-w-0 overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)]">
         <table className="w-full border-collapse text-[0.78rem]">
