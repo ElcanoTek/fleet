@@ -42,6 +42,11 @@ on:
         required: false
         type: boolean
         default: false
+      strict_smoke:
+        description: 'Fail the smoke job on a vendor outage (5xx but 501, 429, timeout) too'
+        required: false
+        type: boolean
+        default: false
 
 # `issues: write` is held by the alarm job alone (see govulncheck-scheduled.yml
 # for why it must not sit at workflow scope next to jobs that talk to ~300
@@ -107,8 +112,14 @@ jobs:
         # Same build tag as scripts/go-test.sh so the test tree matches CI's.
         # The key variables are empty when the secret is not configured, and
         # the fixture then skips itself — configure a secret to arm it.
+        # A vendor outage that outlasts the connect retry (5xx, 429, timeout,
+        # refused connection) skips its entry with a VENDOR OUTAGE warning
+        # instead of failing the job — one third-party service having a bad
+        # night is not catalog rot, and an alarm that cries wolf gets ignored
+        # (#1683). strict_smoke turns those warnings into failures.
         env:
           FLEET_CATALOG_LIVE: '1'
+          FLEET_CATALOG_STRICT: ${{ inputs.strict_smoke == true && '1' || '' }}
           FLEET_CATALOG_KEY_TAVILY: ${{ secrets.FLEET_CATALOG_KEY_TAVILY }}
           FLEET_CATALOG_KEY_PAGERDUTY: ${{ secrets.FLEET_CATALOG_KEY_PAGERDUTY }}
           FLEET_CATALOG_KEY_PAGERDUTY_EU: ${{ secrets.FLEET_CATALOG_KEY_PAGERDUTY_EU }}
@@ -122,11 +133,24 @@ jobs:
           set -uo pipefail
           rc=0
           go test -tags fleet_host_executor -count=1 -v -run 'TestCatalogLive' ./internal/remotemcp/ 2>&1 | tee catalog-smoke.log || rc=$?
+          # Each outage warning becomes a run annotation, so it is visible on
+          # the run page without opening the log. The marker is
+          # vendorOutageMarker in catalog_live_test.go.
+          outages="$(grep -E 'VENDOR OUTAGE' catalog-smoke.log | sed -E 's/^[[:space:]]*catalog_live_test\.go:[0-9]+: //' || true)"
+          while IFS= read -r line; do
+            [ -n "$line" ] && echo "::warning title=MCP catalog vendor outage::$line"
+          done <<< "$outages"
           {
             echo "### Live catalog handshake (go test exit $rc)"
             echo '```'
             grep -E '^\s*--- (PASS|FAIL|SKIP)' catalog-smoke.log || true
             echo '```'
+            if [ -n "$outages" ]; then
+              echo "#### Vendor outages (warnings, not failures)"
+              echo '```'
+              echo "$outages"
+              echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
 

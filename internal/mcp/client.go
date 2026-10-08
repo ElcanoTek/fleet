@@ -150,6 +150,11 @@ type RPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Raw     string `json:"-"` // Original JSON for debugging
+	// HTTPStatus is the non-2xx status the error arrived under, 0 when it
+	// came on a 2xx (or over stdio). The JSON-RPC error is what callers
+	// branch on; the status is kept so a classifier can still tell a 503
+	// whose body happens to be a JSON-RPC error from a server's own refusal.
+	HTTPStatus int `json:"-"`
 }
 
 // HTTPStatusError is what the HTTP transport returns when a server answers a
@@ -207,7 +212,16 @@ func (t *HTTPTransport) httpStatusResponse(resp *http.Response, wantID int) (jso
 		// has and which must stay an HTTPStatusError with its own text.
 		if env, derr := decodeJSONRPCEnvelope(br); derr == nil && (env.JSONRPC != "" || env.ID.matchesInt(wantID)) {
 			t.noteStatusBodyMismatch(resp.StatusCode, env)
-			return interpretJSONRPC(env, wantID)
+			result, ierr := interpretJSONRPC(env, wantID)
+			var rpcErr *RPCError
+			var unattributed *UnattributedResponseError
+			switch {
+			case errors.As(ierr, &rpcErr):
+				rpcErr.HTTPStatus = resp.StatusCode
+			case errors.As(ierr, &unattributed):
+				unattributed.HTTPStatus = resp.StatusCode
+			}
+			return result, ierr
 		}
 	}
 	// The head holds only what the peek or the decoder pulled through the tee
@@ -1439,10 +1453,16 @@ func (t *HTTPTransport) Notify(ctx context.Context, method string, params interf
 	t.captureSessionID(resp.Header)
 	// A notification has no response body; drain (bounded — the bytes are
 	// discarded, but time inside the client timeout shouldn't be burned on a
-	// server streaming garbage past the response cap).
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, int64(httpResponseCaptureCap)))
+	// server streaming garbage past the response cap). The head is kept so a
+	// refusal can quote its reason.
+	head := &headCapture{max: httpStatusBodyCap}
+	_, _ = io.Copy(io.Discard, io.TeeReader(io.LimitReader(resp.Body, int64(httpResponseCaptureCap)), head))
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("notification %s: unexpected status %d", method, resp.StatusCode)
+		// Typed like a refused request, so a 503 here is transient to
+		// IsTransientConnectError (and retried) and a 401 is Unauthorized. A
+		// plain error hid both: one vendor 503 on notifications/initialized
+		// failed a registration that a retry would have completed (#1683).
+		return fmt.Errorf("notification %s: %w", method, &HTTPStatusError{StatusCode: resp.StatusCode, Body: firstLine(bytes.TrimSpace(head.buf))})
 	}
 	return nil
 }

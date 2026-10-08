@@ -89,6 +89,9 @@ MAINT_TIMER="fleet-maintenance.timer"
 . "$SCRIPT_DIR/lib/caddyfile.sh"
 # shellcheck source=lib/bundle.sh
 . "$SCRIPT_DIR/lib/bundle.sh"
+# Idempotent safe.directory trust for the root-run git calls below.
+# shellcheck source=lib/git.sh
+. "$SCRIPT_DIR/lib/git.sh"
 NODE_FLOOR="$(fleet_node_major_want "$SRC_DIR" || true)"
 if [[ -z "$NODE_FLOOR" ]]; then
   # No silent default. A hardcoded fallback would point at whatever major was
@@ -1597,12 +1600,20 @@ check_bundle_residue() {
   dir="$(env_get FLEET_CLIENT_CONFIG_DIR)"
   [[ -n "$dir" && -e "$dir/.git" ]] || return 0
   command -v git >/dev/null 2>&1 || return 0
-  git config --global --add safe.directory "$dir" 2>/dev/null || true
+  # Read-only, and it must stay that way: doctor runs as root, and a plain
+  # `git status` opportunistically rewrites .git/index to refresh its stat
+  # cache — leaving a root-owned index that the ownership check above then
+  # flags (rootless :z relabel refused) on the NEXT doctor run, a problem
+  # doctor itself created. GIT_OPTIONAL_LOCKS=0 is git's documented switch for
+  # "don't write the index from a read-only command". safe.directory goes on
+  # the command line (a protected scope git honours) rather than
+  # `git config --global --add`, which appended a duplicate line to root's
+  # ~/.gitconfig on every run.
   # -uall lists files inside untracked dirs, so a single `reports/` holding 300
   # CSVs reads as 300 rather than 1. --ignored is deliberately NOT passed: a
   # bundle that has taken the .gitignore safety net would otherwise report clean
   # while still filling the disk.
-  mapfile -t _residue < <(git -C "$dir" status --porcelain -uall --ignored=no 2>/dev/null | awk '$1=="??"{sub(/^\?\? /,""); print}')
+  mapfile -t _residue < <(GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$dir" -C "$dir" status --porcelain -uall --ignored=no 2>/dev/null | awk '$1=="??"{sub(/^\?\? /,""); print}')
   count="${#_residue[@]}"
   if (( count == 0 )); then
     pass "client bundle checkout is clean (${dir})"
@@ -1705,7 +1716,7 @@ step "9/9  Source freshness + build identity"
 # Report-only in every mode: pulling and rebuilding is `fleet update`'s job,
 # and doctor silently kicking off a deploy would be a surprise.
 if [[ -e "$SRC_DIR/.git" ]]; then
-  git config --global --add safe.directory "$SRC_DIR" 2>/dev/null || true
+  git_trust_dir "$SRC_DIR"
   # --tags because the build stamps its version from the release tags
   # (docs/VERSIONING.md): a checkout holding the commits but not the tag would
   # build — and the identity check below would compare against — `dev+g<sha>`.
