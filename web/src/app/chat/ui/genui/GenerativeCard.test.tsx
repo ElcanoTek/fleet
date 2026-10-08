@@ -1442,6 +1442,40 @@ describe("repeater values replaced from outside", () => {
   });
 });
 
+describe("answers arriving and being withdrawn", () => {
+  it("restores the edits when a card's first quick reply is refused and withdrawn", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({
+      title: "Q",
+      components: [{ type: "text_input", id: "n", label: "Name", value: "orig" }],
+      actions: [
+        { id: "go", label: "Go" },
+        { id: "nah", label: "Never mind", kind: "message", message: "skip" },
+      ],
+    });
+    const view = render(<GenerativeCard cardId="wq" spec={s} onSubmit={() => {}} />);
+    const box = screen.getByLabelText(/Name/);
+    await user.clear(box);
+    await user.type(box, "edited");
+    // The optimistic reply appears, then is refused and withdrawn.
+    view.rerender(<GenerativeCard cardId="wq" spec={s} reply={{ cardId: "wq", actionId: "nah", text: "skip", messageId: 3 }} onSubmit={() => {}} />);
+    view.rerender(<GenerativeCard cardId="wq" spec={s} onSubmit={() => {}} />);
+    expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("edited");
+    expect(screen.getByLabelText(/Name/)).toBeEnabled();
+  });
+
+  it("clears an old Not sent notice when an answer lands", async () => {
+    const user = userEvent.setup();
+    const s = spec({ title: "N", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+    const view = render(<GenerativeCard cardId="nn" spec={s} onSubmit={vi.fn().mockResolvedValue(false)} />);
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    expect(screen.getByText("Not sent. Try again.")).toBeTruthy();
+    view.rerender(<GenerativeCard cardId="nn" spec={s} reply={{ cardId: "nn", actionId: "a", text: "yes", messageId: 2 }} onSubmit={() => {}} />);
+    expect(screen.queryByText("Not sent. Try again.")).toBeNull();
+  });
+});
+
 describe("identical resend", () => {
   it("does not reopen the editor on remount once the identical resend is accepted", async () => {
     window.localStorage.clear();

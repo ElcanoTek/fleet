@@ -42,10 +42,13 @@ import (
 // one tool call can cost in context; they are not operator knobs, because a
 // card valid on one fleet must render on another.
 const (
-	MaxSpecBytes       = 256 << 10
-	MaxNodes           = 800
-	MaxDepth           = 12
-	MaxOptions         = 2000
+	MaxSpecBytes = 256 << 10
+	MaxNodes     = 800
+	MaxDepth     = 12
+	MaxOptions   = 2000
+	// MaxChoiceItems bounds a multi_select / include_exclude value (one chip
+	// each): no more than the options there can be, custom entries included.
+	MaxChoiceItems     = MaxOptions
 	MaxTableRows       = 500
 	MaxTableColumns    = 20
 	MaxChartSeries     = 8
@@ -189,6 +192,7 @@ var components = map[string]compSpec{
 		"row_key":  p(kString),
 		"value":    p(kValue),
 		"required": p(kBool),
+		"disabled": p(kBool),
 	}},
 	"status_list": {props: map[string]prop{"items": reqObjects(map[string]prop{
 		"status": {kind: kEnum, required: true, enum: []string{"pass", "fail", "warn", "info", "pending"}},
@@ -205,7 +209,8 @@ var components = map[string]compSpec{
 		}),
 	}},
 	"code": {props: map[string]prop{"text": req(kString), "language": p(kString)}},
-	"link": {props: map[string]prop{"text": req(kString), "url": req(kURL)}},
+	// The text is the link's only name, visible and accessible.
+	"link": {props: map[string]prop{"text": req(kNonBlank), "url": req(kURL)}},
 	"diff": {props: map[string]prop{
 		"title": p(kString),
 		"rows": reqObjects(map[string]prop{
@@ -921,6 +926,9 @@ func (v *validator) componentRules(path, typ string, obj map[string]any) {
 			v.addf(path+".step", "must be greater than 0")
 		}
 	case "multi_select", "include_exclude":
+		if hi, ok := num("max_items"); ok && hi > MaxChoiceItems {
+			v.addf(path+".max_items", "at most %d", MaxChoiceItems)
+		}
 		_, hasOpts := obj["options"]
 		custom, _ := obj["allow_custom"].(bool)
 		if !hasOpts && !custom {
@@ -1037,6 +1045,13 @@ func (v *validator) noNestedRepeater(path string, kids []any) {
 }
 
 func (v *validator) tableRules(path string, obj map[string]any) {
+	if sel, _ := obj["select"].(string); sel == "" || sel == "none" {
+		for _, k := range []string{"disabled", "required"} {
+			if _, has := obj[k]; has {
+				v.addf(path+"."+k, "only a selectable table (select: single or multi) is an input")
+			}
+		}
+	}
 	cols, _ := obj["columns"].([]any)
 	if len(cols) > MaxTableColumns {
 		v.addf(path+".columns", "at most %d columns", MaxTableColumns)
@@ -1253,6 +1268,9 @@ func (v *validator) checkCollectionValue(path, typ string, obj map[string]any, v
 			}
 		}
 		v.itemCount(path, obj, listCount(typ, obj, val.([]any)))
+		if typ == "multi_select" && len(val.([]any)) > MaxChoiceItems {
+			v.addf(path, "at most %d items", MaxChoiceItems)
+		}
 	case "include_exclude":
 		m, ok := val.(map[string]any)
 		if !ok {
@@ -1269,6 +1287,11 @@ func (v *validator) checkCollectionValue(path, typ string, obj map[string]any, v
 			}
 		}
 		v.includeExcludeEntries(path, obj, m, inOptions)
+		inc, _ := m["include"].([]any)
+		exc, _ := m["exclude"].([]any)
+		if len(inc)+len(exc) > MaxChoiceItems {
+			v.addf(path, "at most %d entries across include and exclude", MaxChoiceItems)
+		}
 	case "table":
 		sel, _ := obj["select"].(string)
 		switch sel {

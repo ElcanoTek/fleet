@@ -4,6 +4,7 @@ import {
   checkField,
   MAX_LIST_ITEMS,
   MAX_REPEATER_ITEMS,
+  MAX_CHOICE_ITEMS,
   collect,
   initialValues,
   normalizeValues,
@@ -232,4 +233,23 @@ describe("disabled defaults (shared with internal/genui TestDisabledDefaultsFixt
       expect(checkField(comp, values[String(comp.id)]) === "").toBe(c.valid);
     });
   }
+});
+
+describe("restored chip collections", () => {
+  it("are capped at the protocol limit, quickly", () => {
+    const many = Array.from({ length: 30000 }, (_, i) => `v${i}`);
+    const spec = {
+      title: "x",
+      components: [
+        { type: "multi_select", id: "m", allow_custom: true },
+        { type: "include_exclude", id: "ie", allow_custom: true },
+      ],
+    } as unknown as CardSpec;
+    const t0 = performance.now();
+    const v = normalizeValues(spec, { m: many, ie: { include: many, exclude: many.slice(0, 15000).map((x) => x + "x") } });
+    expect(performance.now() - t0).toBeLessThan(1000);
+    expect((v.m as string[]).length).toBe(MAX_CHOICE_ITEMS);
+    const ie = v.ie as { include: string[]; exclude: string[] };
+    expect(ie.include.length + ie.exclude.length).toBe(MAX_CHOICE_ITEMS);
+  });
 });

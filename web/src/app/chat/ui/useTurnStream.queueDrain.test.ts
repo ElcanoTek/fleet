@@ -1058,3 +1058,41 @@ describe("a queued card answer removed from the queue", () => {
     await vi.waitFor(() => expect(onUnsent).toHaveBeenCalledTimes(1));
   });
 });
+
+describe("a queued card answer whose ack was lost, later removed", () => {
+  it("is still watched, so its removal releases the card", async () => {
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    let sid = "";
+    let removed = false;
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/chat") {
+          sid = (JSON.parse(String(init?.body)) as { submission_id: string }).submission_id;
+          // The server queued it, but the response never arrived.
+          throw new TypeError("network error");
+        }
+        if (url.includes("/queue/") && init?.method === "DELETE") {
+          removed = true;
+          return json({});
+        }
+        if (url.includes("/queue")) return json({ items: removed ? [] : [{ ...queuedRow("q1"), submission_id: sid }] });
+        if (url.includes("/api/conversations/")) return json({ history: [] });
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    const deps = { ...h.deps, streamingConvsRef: { current: new Set([CONV]) } };
+    const { result } = renderHook(() => useTurnStream(deps));
+    const onUnsent = vi.fn();
+    await act(async () => {
+      expect(await result.current.submitPrompt("[UI submission] card=c1 action=go\n{}", { fromCard: true, onUnsent })).toBe(true);
+    });
+    await act(async () => {
+      await result.current.removeQueuedInput(CONV, "q1");
+    });
+    await vi.waitFor(() => expect(onUnsent).toHaveBeenCalledTimes(1));
+  });
+});

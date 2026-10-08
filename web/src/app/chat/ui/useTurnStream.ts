@@ -3960,7 +3960,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // row with this submission's id — otherwise a card would offer a
         // resend and queue a duplicate.
         const landed = await submissionLanded(convId, value, queueSubmissionId);
-        if (landed === "yes") return true;
+        if (landed === "yes") {
+          // Held like any queued card answer: watched until it leaves the queue.
+          if (fromCard && opts?.onUnsent) watchQueuedCardSend(convId, value, queueSubmissionId, opts.onUnsent);
+          return true;
+        }
         // Unknown is not refused. A card treats its answer as possibly sent
         // (it holds, with Unlock, instead of offering a duplicate resend);
         // typed text goes back to the composer either way, so it is not lost.

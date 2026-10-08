@@ -34,6 +34,7 @@ import {
   normalizeValues,
   isInput,
   isVisible,
+  MAX_CHOICE_ITEMS,
   MAX_SUBMISSION_BYTES,
   submissionBytes,
   newItem,
@@ -505,8 +506,10 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
       setEditing(false);
       setAwaitingState(null);
       // A confirmation opened before this answer arrived (from another tab,
-      // say) belongs to an edit session that is over.
+      // say) belongs to an edit session that is over; so does a "Not sent"
+      // notice from an earlier attempt — the answer is in now.
       setConfirming(null);
+      setNotice(null);
       // The draft is NOT deleted here: an optimistic answer can still be
       // refused and vanish, and the user's values must survive that. A draft
       // records the answer it was typed against, so once this answer holds,
@@ -520,15 +523,20 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     // the stored draft was typed against the answer now current, it is that
     // unsent edit — restore it and reopen editing, so the changes are not
     // replaced by the older values.
+    // A card's first answer withdrawn (no answer left at all) is a rollback
+    // too: the edits typed before it was sent must come back.
+    const withdrawn = !submission && !reply && seenSubmission !== "";
     const rolledBack =
-      !!submission && submission.messageId !== undefined && seenMessageId !== null && submission.messageId < seenMessageId;
+      withdrawn ||
+      (!!submission && submission.messageId !== undefined && seenMessageId !== null && submission.messageId < seenMessageId);
     // Either kind of answer counts: a refused quick reply withdrawn over an
     // older submission is a rollback too.
     setSeenMessageId(submission?.messageId ?? reply?.messageId ?? null);
     const edit = rolledBack && !readOnly ? peekDraft(storeId) : null;
     if (edit && edit.after === answerKey && draftSent(storeId, edit) !== answerKey) {
       replaceValues(normalizeValues(spec, edit.values));
-      setEditing(true);
+      // Editing is a mode of an answered card; with none left it is just open.
+      setEditing(!!submission || !!reply);
       setClearedServerErrors(new Set(edit.cleared ?? []));
     } else if (submission) {
       replaceValues(normalizeValues(spec, submission.values));
@@ -2043,7 +2051,8 @@ function labelFor(c: Component, v: string): string {
 function MultiSelect({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const v = Array.isArray(value) ? (value as string[]) : [];
   const { locked } = useCard();
-  const max = numOr(c.max_items);
+  // The protocol cap applies even when the card sets no max_items.
+  const max = Math.min(numOr(c.max_items) ?? MAX_CHOICE_ITEMS, MAX_CHOICE_ITEMS);
   // The adder disappears at max_items, so the field's id, label, help and
   // error state live on this always-rendered group instead.
   const labelId = inputId ? `${inputId}-label` : undefined;
@@ -2056,7 +2065,7 @@ function MultiSelect({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
           ))}
         </div>
       ) : null}
-      {max === undefined || v.length < max ? (
+      {v.length < max ? (
         <Adder
           c={c}
           taken={new Set(v)}
@@ -2206,7 +2215,7 @@ function IncludeExcludeInput({ c, value, onChange, inputId }: Parameters<Rendere
         {lane("include")}
         {lane("exclude")}
       </div>
-      {!locked ? (
+      {!locked && taken.size < MAX_CHOICE_ITEMS ? (
         <div className="grid min-w-0 gap-1">
           <div className="flex items-center gap-1 text-[0.72rem] text-[var(--color-text-muted)]">
             Add to

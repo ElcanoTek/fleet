@@ -12,6 +12,8 @@ export const SHOW_UI_TOOL = "show_ui";
 export const MAX_LIST_ITEMS = 20000;
 /** Must match genui.MaxRepeaterItems in internal/genui/spec.go. */
 export const MAX_REPEATER_ITEMS = 200;
+/** Must match genui.MaxChoiceItems: chips in a multi_select / include_exclude. */
+export const MAX_CHOICE_ITEMS = 2000;
 /**
  * The largest card message (as it appears JSON-escaped in the POST body) a
  * card will send. /api/chat refuses bodies over 1 MiB (maxJSONBodyBytes in
@@ -237,7 +239,11 @@ export function defaultValue(c: Component): unknown {
       // A blank entry is nothing the adder can produce (it trims and skips
       // empty input), so a default carrying one is dropped, not rendered as
       // an empty chip that answers a required question.
-      return Array.from(new Set(strArr(v))).filter((x) => opts.has(x) || (custom && x.trim() !== ""));
+      // A restored answer can come from anywhere; the control never holds more
+      // than the protocol cap, so neither does a restored value (each is a chip).
+      return Array.from(new Set(strArr(v)))
+        .filter((x) => opts.has(x) || (custom && x.trim() !== ""))
+        .slice(0, MAX_CHOICE_ITEMS);
     }
     case "list_input":
       // Same split / trim / drop-blank / dedupe the textarea applies to typed
@@ -250,9 +256,13 @@ export function defaultValue(c: Component): unknown {
       const o = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
       const opts = optionSet();
       const ok = (x: string) => opts.has(x) || (custom && x.trim() !== "");
-      const include = Array.from(new Set(strArr(o.include))).filter(ok);
-      // An entry cannot sit in both lanes; include wins.
-      const exclude = Array.from(new Set(strArr(o.exclude))).filter((x) => ok(x) && !include.includes(x));
+      const include = Array.from(new Set(strArr(o.include))).filter(ok).slice(0, MAX_CHOICE_ITEMS);
+      // An entry cannot sit in both lanes; include wins. Both lanes together
+      // stay within the protocol cap (one chip each).
+      const inc = new Set(include);
+      const exclude = Array.from(new Set(strArr(o.exclude)))
+        .filter((x) => ok(x) && !inc.has(x))
+        .slice(0, MAX_CHOICE_ITEMS - include.length);
       return { include, exclude } satisfies IncludeExclude;
     }
     case "table": {
