@@ -72,7 +72,10 @@ A quick reply is sent as `[UI reply] card=<id> action=<id>` followed by the
 button's text, so the card it answered is known from the marker rather than by
 matching words. Either kind of answer locks its card. While an answer is
 queued behind a running turn, the card's buttons stay held, and that hold
-survives the transcript scrolling the card away.
+survives the transcript scrolling the card away. A send whose response was lost
+while the server could not be reached is held the same way (a resend could
+duplicate it); once the connection recovers and the server shows it never
+received the answer, the hold is released with "Not sent. Try again."
 
 A `table` with `select: single|multi` is an input that submits its `row_key`
 values; every row must carry a unique, non-empty string under `row_key`.

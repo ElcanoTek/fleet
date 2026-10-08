@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Message } from "../history";
 import { buildReplyMessage, buildSubmissionMessage } from "./model";
-import { deriveGenUiState, isRenderableCardCall, summarizeValue } from "./transcript";
+import { deriveGenUiState, fieldLabels, isRenderableCardCall, summarizeValue } from "./transcript";
 
 const card = (title: string, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ title, components: [{ type: "text", text: "x" }], ...extra });
@@ -168,5 +168,21 @@ describe("summarizeValue", () => {
     expect(summarizeValue(long).length).toBeLessThanOrEqual(121);
     expect(summarizeValue([long]).length).toBeLessThanOrEqual(121);
     expect(summarizeValue("short")).toBe("short");
+  });
+});
+
+describe("fieldLabels", () => {
+  it("falls back to the id for a blank label, and trims the rest", () => {
+    const labels = fieldLabels({
+      title: "x",
+      components: [
+        { type: "text_input", id: "a", label: " " },
+        { type: "text_input", id: "b", label: "  Name " },
+        { type: "repeater", id: "r", label: "R", fields: [{ type: "text_input", id: "f", label: "\t" }] },
+      ],
+    } as never);
+    expect(labels.get("a")).toBe("a");
+    expect(labels.get("b")).toBe("Name");
+    expect(labels.get("f")).toBe("f");
   });
 });

@@ -139,7 +139,7 @@ describe("interaction", () => {
     render(<GenerativeCard cardId="c" spec={spec(form)} onSubmit={onSubmit} />);
     await user.click(screen.getByRole("button", { name: "Not now" }));
     // A quick reply carries a marker naming its card, then the fixed text.
-    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("c", "nah", "Skip the order."));
+    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("c", "nah", "Skip the order."), expect.any(Function));
   });
 
   it("re-checks the gates at confirmation time", async () => {
@@ -440,7 +440,7 @@ describe("third Codex pass", () => {
     });
     const view = render(<GenerativeCard cardId="qr" spec={s} onSubmit={onSubmit} />);
     await user.click(screen.getByRole("button", { name: "Option A" }));
-    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("qr", "a", "A please"));
+    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("qr", "a", "A please"), expect.any(Function));
     expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Option B" })).toBeNull();
     view.rerender(
@@ -492,6 +492,20 @@ describe("third Codex pass", () => {
       actions: [{ id: "go", label: "Go" }],
     });
     render(<GenerativeCard cardId="nest" spec={s} onSubmit={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(await screen.findByLabelText(/Deep/)).toBeTruthy();
+  });
+});
+
+describe("reveal depth", () => {
+  it("reveals a required field behind ten collapsed sections", async () => {
+    const user = userEvent.setup();
+    let inner: Record<string, unknown> = { type: "text_input", id: "deep", label: "Deep", required: true };
+    for (let i = 0; i < 10; i++) {
+      inner = { type: "section", title: `S${i}`, collapsible: true, collapsed: true, children: [inner] };
+    }
+    const s = spec({ title: "N", components: [inner], actions: [{ id: "go", label: "Go" }] });
+    render(<GenerativeCard cardId="deep10" spec={s} onSubmit={() => {}} />);
     await user.click(screen.getByRole("button", { name: "Go" }));
     expect(await screen.findByLabelText(/Deep/)).toBeTruthy();
   });
@@ -1030,6 +1044,55 @@ describe("eleventh Codex pass", () => {
     } finally {
       keySpy.mockRestore();
     }
+  });
+});
+
+describe("a held send proven unsent", () => {
+  it("releases the hold, mounted or remounted", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({ title: "U", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+    let unsent: (() => void) | undefined;
+    const onSubmit = vi.fn(async (_m: string, cb?: () => void) => {
+      unsent = cb;
+      return true;
+    });
+    const first = render(<GenerativeCard cardId="un" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
+    act(() => unsent?.());
+    expect(screen.queryByTestId("genui-awaiting")).toBeNull();
+    expect(screen.getByText("Not sent. Try again.")).toBeTruthy();
+    // Unmounted while held: the stored hold is cleared too.
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
+    first.unmount();
+    act(() => unsent?.());
+    render(<GenerativeCard cardId="un" spec={s} onSubmit={onSubmit} />);
+    expect(screen.queryByTestId("genui-awaiting")).toBeNull();
+    expect(screen.getByRole("button", { name: "Yes" })).toBeTruthy();
+  });
+});
+
+describe("identical resend", () => {
+  it("does not reopen the editor on remount once the identical resend is accepted", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({ title: "I", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    const first = { cardId: "ir", actionId: "go", values: { n: "a" }, messageId: 1 };
+    const view = render(<GenerativeCard cardId="ir" spec={s} submission={first} onSubmit={vi.fn().mockResolvedValue(true)} />);
+    await user.click(screen.getByRole("button", { name: "Edit and resend" }));
+    const box = screen.getByLabelText(/Name/);
+    await user.type(box, "b");
+    await user.type(box, "{Backspace}");
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    const second = { ...first, messageId: 2 };
+    view.rerender(<GenerativeCard cardId="ir" spec={s} submission={second} onSubmit={() => {}} />);
+    expect(screen.getByRole("button", { name: "Edit and resend" })).toBeTruthy();
+    view.unmount();
+    render(<GenerativeCard cardId="ir" spec={s} submission={second} onSubmit={() => {}} />);
+    expect(screen.getByRole("button", { name: "Edit and resend" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Cancel edit" })).toBeNull();
   });
 });
 

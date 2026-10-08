@@ -878,3 +878,53 @@ describe("a direct card send whose response is lost while the server is unreacha
     expect(await sending).toBe(true);
   });
 });
+
+describe("a held card send that recovery later proves absent", () => {
+  const run = async (landed: boolean) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/chat") throw new TypeError("network error");
+        return new Response("upstream down", { status: 503 });
+      }),
+    );
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const onUnsent = vi.fn();
+    const sending = result.current.submitPrompt("[UI submission] card=c1 action=go\n{}", { fromCard: true, onUnsent });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await sending).toBe(true);
+    expect(onUnsent).not.toHaveBeenCalled();
+    // The server comes back: no turn, nothing queued, nothing persisted.
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/queue")) return json({ items: [] });
+        if (url.includes("/inflight")) return json({ inflight: false, turn_id: "" });
+        if (url.includes("/api/conversations/"))
+          return json({
+            history: [
+              { role: "user", type: "text", content: { text: "run the analysis" } },
+              { role: "assistant", type: "text", content: { text: "Here is the analysis." } },
+              ...(landed ? [{ role: "user", type: "text", content: { text: "[UI submission] card=c1 action=go\n{}" } }] : []),
+            ],
+          });
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(120_000);
+    return onUnsent;
+  };
+
+  it("tells the card, so its hold is released", async () => {
+    expect(await run(false)).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the hold when the server does hold the submission", async () => {
+    expect(await run(true)).not.toHaveBeenCalled();
+  });
+});

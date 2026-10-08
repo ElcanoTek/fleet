@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -914,6 +915,47 @@ func (v *validator) repeaterRules(path string, obj map[string]any, num func(stri
 	}
 	if kids, ok := obj["fields"].([]any); ok {
 		v.noNestedRepeater(path+".fields", kids)
+		if dis, _ := obj["disabled"].(bool); dis {
+			v.disabledItems(path, obj, kids)
+		}
+	}
+}
+
+// disabledItems: a disabled repeater disables every field in its items, and
+// a disabled field is submitted without being validated, so each required
+// field must already be answered in every item the browser will render (the
+// value's items over the field defaults, or the min_items fresh items). A
+// field gated by visible_if is left alone: hidden, it is not submitted.
+func (v *validator) disabledItems(path string, obj map[string]any, kids []any) {
+	fields := map[string]map[string]any{}
+	collectInputs(kids, fields)
+	var items []map[string]any
+	if arr, ok := obj["value"].([]any); ok {
+		for _, x := range arr {
+			if m, ok := x.(map[string]any); ok {
+				items = append(items, m)
+			}
+		}
+	} else {
+		items = make([]map[string]any, initialItems(obj))
+	}
+	for _, id := range sortedCompKeys(fields) {
+		f := fields[id]
+		req, _ := f["required"].(bool)
+		if _, gated := f["visible_if"]; !req || gated {
+			continue
+		}
+		typ, _ := f["type"].(string)
+		for i, item := range items {
+			val, has := item[id]
+			if !has {
+				val = f["value"]
+			}
+			if !answered(typ, val) {
+				v.addf(fmt.Sprintf("%s.value[%d].%s", path, i, id), "the repeater is disabled, so required field %q needs an answer in every item (the user cannot fill it in); give it one, or drop required or disabled", id)
+				break
+			}
+		}
 	}
 }
 
@@ -1092,8 +1134,10 @@ func (v *validator) checkValue(path, typ string, obj map[string]any, val any) {
 	}
 	switch typ {
 	case "text_input":
-		if _, ok := val.(string); !ok {
+		if s, ok := val.(string); !ok {
 			v.addf(path, "must be a string")
+		} else if strings.TrimSpace(s) != "" {
+			v.textValue(path, obj, s)
 		}
 	case "date":
 		if s, ok := val.(string); !ok {
@@ -1345,6 +1389,13 @@ func (v *validator) actions(raw any, hasInput bool) {
 				v.addf(ap+"."+cond, "%s", unreachableMsg)
 			}
 		}
+		// Shown only while the condition holds and disabled whenever it does:
+		// the button can never be pressed.
+		if vis, ok := obj["visible_if"].(string); ok {
+			if dis, ok := obj["disabled_if"].(string); ok && strings.Join(strings.Fields(vis), "") == strings.Join(strings.Fields(dis), "") {
+				v.addf(ap+".disabled_if", "is the same condition as visible_if, so the button is disabled whenever it is shown; drop one")
+			}
+		}
 		kind, _ := obj["kind"].(string)
 		if kind == "" {
 			kind = "submit"
@@ -1428,6 +1479,37 @@ func (v *validator) numberValue(path string, obj map[string]any, n float64) {
 		}
 	}
 }
+
+// textValue checks a text default against the input's own rules, as
+// checkField does in the browser: a disabled field is never validated there
+// but still submitted, so an invalid default would reach the model.
+func (v *validator) textValue(path string, obj map[string]any, s string) {
+	// The browser measures String.length: UTF-16 code units.
+	n := len(utf16.Encode([]rune(s)))
+	if lo, ok := obj["min_length"].(float64); ok && float64(n) < lo {
+		v.addf(path, "is shorter than min_length %v", lo)
+	}
+	if hi, ok := obj["max_length"].(float64); ok && float64(n) > hi {
+		v.addf(path, "is longer than max_length %v", hi)
+	}
+	t := strings.TrimSpace(s)
+	switch obj["format"] {
+	case "email":
+		if !emailRe.MatchString(t) {
+			v.addf(path, "is not an email address (format \"email\")")
+		}
+	case "url":
+		if u, err := url.Parse(t); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+			v.addf(path, "is not an absolute http(s) URL (format \"url\")")
+		}
+	}
+}
+
+// emailRe mirrors EMAIL_RE in web/src/app/chat/ui/genui/model.ts: the HTML
+// spec's valid email address, plus a dot in the domain.
+var emailRe = regexp.MustCompile("^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@" + emailLabel + "(?:\\." + emailLabel + ")+$")
+
+const emailLabel = "[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
 
 // isCalendarDate: a real YYYY-MM-DD day an HTML date input can hold. The
 // input has no year 0, which time.Parse accepts. Mirrors isCalendarDate in

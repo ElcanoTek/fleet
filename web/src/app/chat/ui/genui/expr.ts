@@ -338,7 +338,11 @@ function numbers(args: Value[]): number[] {
 
 function roundTo(n: number, digits: number): number {
   const f = 10 ** Math.max(0, Math.min(10, Math.trunc(digits)));
-  return Math.round((n + Number.EPSILON * Math.sign(n)) * f) / f;
+  // A huge input overflows when scaled; it has no fractional digits to
+  // round anyway (every double above 2^53 is an integer).
+  const scaled = (n + Number.EPSILON * Math.sign(n)) * f;
+  if (!Number.isFinite(scaled)) return n;
+  return Math.round(scaled) / f;
 }
 
 function equal(a: Value, b: Value): boolean {

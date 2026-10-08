@@ -2648,6 +2648,256 @@
      }
     ]
    }
+  },
+  {
+   "name": "disabled text default not an email",
+   "valid": false,
+   "error_contains": "is not an email address",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "e",
+      "label": "E",
+      "format": "email",
+      "disabled": true,
+      "value": "not-an-email"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "text default longer than max_length",
+   "valid": false,
+   "error_contains": "longer than max_length",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "e",
+      "label": "E",
+      "max_length": 3,
+      "value": "abcd"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "text default shorter than min_length",
+   "valid": false,
+   "error_contains": "shorter than min_length",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "e",
+      "label": "E",
+      "min_length": 5,
+      "value": "abc"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "text default not a web url",
+   "valid": false,
+   "error_contains": "not an absolute http(s) URL",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "u",
+      "label": "U",
+      "format": "url",
+      "value": "ftp://example.com"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "valid email and url defaults",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "e",
+      "label": "E",
+      "format": "email",
+      "value": "a@example.com"
+     },
+     {
+      "type": "text_input",
+      "id": "u",
+      "label": "U",
+      "format": "url",
+      "value": "https://example.com/x"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "disabled repeater with an unanswered required field",
+   "valid": false,
+   "error_contains": "the repeater is disabled",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "r",
+      "label": "R",
+      "disabled": true,
+      "fields": [
+       {
+        "type": "text_input",
+        "id": "n",
+        "label": "N",
+        "required": true
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "disabled repeater whose items answer required fields",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "r",
+      "label": "R",
+      "disabled": true,
+      "value": [
+       {
+        "n": "a"
+       },
+       {
+        "n": "b"
+       }
+      ],
+      "fields": [
+       {
+        "type": "text_input",
+        "id": "n",
+        "label": "N",
+        "required": true
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "disabled repeater item missing a required answer",
+   "valid": false,
+   "error_contains": "the repeater is disabled",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "r",
+      "label": "R",
+      "disabled": true,
+      "value": [
+       {
+        "n": "a"
+       },
+       {
+        "n": " "
+       }
+      ],
+      "fields": [
+       {
+        "type": "text_input",
+        "id": "n",
+        "label": "N",
+        "required": true
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "action shown and disabled on the same condition",
+   "valid": false,
+   "error_contains": "same condition as visible_if",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "gate",
+      "label": "Gate"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "visible_if": "gate",
+      "disabled_if": " gate "
+     }
+    ]
+   }
   }
  ]
 }

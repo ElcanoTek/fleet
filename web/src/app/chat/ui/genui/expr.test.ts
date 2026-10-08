@@ -81,4 +81,10 @@ describe("aggregates near the float limit", () => {
     expect(evaluate("sum(xs)", { xs: [1e308, 1e308] })).toBeNull();
     expect(evaluate("sum(xs)", { xs: [1, 2] })).toBe(3);
   });
+
+  it("round a huge value without overflowing to Infinity", () => {
+    expect(evaluate("round(x, 2)", { x: 1e308 })).toBe(1e308);
+    expect(evaluate("round(x, 2)", { x: -1e308 })).toBe(-1e308);
+    expect(evaluate("round(x, 2)", { x: 1.005 })).toBe(1.01);
+  });
 });

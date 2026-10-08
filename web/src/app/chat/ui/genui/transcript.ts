@@ -106,7 +106,7 @@ export function fieldLabels(spec: CardSpec | undefined): Map<string, string> {
   if (!spec) return out;
   const visit = (list: CardSpec["components"]) =>
     walkInputs(list, (c) => {
-      if (c.id) out.set(c.id, typeof c.label === "string" && c.label ? c.label : c.id);
+      if (c.id) out.set(c.id, typeof c.label === "string" && c.label.trim() ? c.label.trim() : c.id);
       if (c.type === "repeater" && Array.isArray(c.fields)) visit(c.fields as CardSpec["components"]);
     });
   visit(spec.components);

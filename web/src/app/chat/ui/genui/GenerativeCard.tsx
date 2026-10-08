@@ -132,7 +132,9 @@ export type GenerativeCardProps = {
   retired?: boolean;
   /** Sends a user turn (the submission message or a quick reply). */
   // Resolves false when the message was refused (nothing was sent).
-  onSubmit?: (message: string) => void | Promise<void | boolean>;
+  // onUnsent: called later if a send reported as held turns out never to
+  // have reached the server (see submitPrompt), so the hold is released.
+  onSubmit?: (message: string, onUnsent?: () => void) => void | Promise<void | boolean>;
 };
 
 const DRAFT_PREFIX = "fleet.genui.draft.";
@@ -147,8 +149,11 @@ const MAX_DRAFTS = 20;
 // A draft records the answer it edits (`after`, the answer key — "" before
 // the first answer), so "Edit and resend" changes survive a remount too: a
 // draft whose answer is still the transcript's reopens the card for editing,
-// and one whose answer has moved on is spent.
-type StoredDraft = { values: Values; at: number; after: string; cleared?: string[] };
+// and one whose answer has moved on is spent. `sent` is the answer key of
+// the resend made from it: once the transcript's answer is that one, the
+// draft is spent even though resending identical values leaves `after`
+// matching too.
+type StoredDraft = { values: Values; at: number; after: string; cleared?: string[]; sent?: string };
 
 function readDraft(key: string): StoredDraft | null {
   const raw = window.localStorage.getItem(key);
@@ -156,7 +161,8 @@ function readDraft(key: string): StoredDraft | null {
   const v = JSON.parse(raw) as Partial<StoredDraft> | null;
   if (!v || typeof v.at !== "number" || !v.values || typeof v.values !== "object" || Array.isArray(v.values)) return null;
   const cleared = Array.isArray(v.cleared) ? v.cleared.filter((x): x is string => typeof x === "string") : [];
-  return { values: v.values, at: v.at, after: typeof v.after === "string" ? v.after : "", cleared };
+  const sent = typeof v.sent === "string" && v.sent ? v.sent : undefined;
+  return { values: v.values, at: v.at, after: typeof v.after === "string" ? v.after : "", cleared, sent };
 }
 
 // The draft's values, and the server field_errors the user already answered
@@ -165,7 +171,7 @@ function loadDraft(cardId: string, answerKey: string): StoredDraft | null {
   const key = DRAFT_PREFIX + cardId;
   try {
     const d = readDraft(key);
-    if (d && Date.now() - d.at <= DRAFT_TTL_MS && d.after === answerKey) return d;
+    if (d && Date.now() - d.at <= DRAFT_TTL_MS && d.after === answerKey && d.sent !== answerKey) return d;
     window.localStorage.removeItem(key);
     return null;
   } catch {
@@ -241,6 +247,18 @@ function saveDraft(cardId: string, values: Values | null, after = "", cleared: I
   }
 }
 
+/** Records (or, with "", clears) the answer key a draft was resent as. */
+function markDraftSent(storeId: string, sent: string) {
+  const key = DRAFT_PREFIX + storeId;
+  try {
+    const d = readDraft(key);
+    if (!d) return;
+    window.localStorage.setItem(key, JSON.stringify({ ...d, sent: sent || undefined }));
+  } catch {
+    // A draft is a convenience.
+  }
+}
+
 /** A transcript answer without its message id (see loadPending, loadDraft). */
 function answerKeyOf(submission: Submission | null | undefined, reply: Reply | null | undefined): string {
   if (submission) return `s\u0000${submission.actionId}\u0000${JSON.stringify(submission.values)}`;
@@ -305,6 +323,15 @@ function savePending(cardId: string, action: string | null, after = "") {
     // Convenience only, like drafts.
   }
 }
+
+// How many frames focusField keeps revealing before it gives up: every
+// container layer (the validator allows nesting 12 deep, MaxDepth in
+// internal/genui/spec.go) mounts only after the one around it opens, and a
+// layer can take a frame to commit and another to open.
+const REVEAL_FRAMES = 2 * 12 + 2;
+
+// A held send that never reached the server (detail: the card's store id).
+const UNSENT_EVENT = "genui:unsent";
 
 export default function GenerativeCard(props: GenerativeCardProps) {
   const { spec, superseded } = props;
@@ -418,7 +445,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     // older submission is a rollback too.
     setSeenMessageId(submission?.messageId ?? reply?.messageId ?? null);
     const edit = rolledBack && !readOnly ? peekDraft(storeId) : null;
-    if (edit && edit.after === answerKey) {
+    if (edit && edit.after === answerKey && edit.sent !== answerKey) {
       setValuesState(normalizeValues(spec, edit.values));
       setEditing(true);
       setClearedServerErrors(new Set(edit.cleared ?? []));
@@ -427,6 +454,17 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     }
   }
   const locked = !!readOnly || !!retired || !!superseded || (submittedAction !== null && !editing);
+
+  useEffect(() => {
+    if (!awaiting) return;
+    const onUnsent = (e: Event) => {
+      if ((e as CustomEvent<string>).detail !== storeId) return;
+      setAwaitingState(null);
+      setNotice("Not sent. Try again.");
+    };
+    window.addEventListener(UNSENT_EVENT, onUnsent);
+    return () => window.removeEventListener(UNSENT_EVENT, onUnsent);
+  }, [awaiting, storeId]);
 
   const setValues = useCallback(
     (fn: (v: Values) => Values) => {
@@ -499,7 +537,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     const find = () => {
       const el = root.querySelector<HTMLElement>(sel);
       if (!el) {
-        if (++tries < 8) {
+        if (++tries < REVEAL_FRAMES) {
           reveal();
           window.requestAnimationFrame(find);
         }
@@ -539,8 +577,22 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
         );
         return;
       }
-      const accepted = await onSubmit(message);
+      const sentKey =
+        action.kind === "message"
+          ? answerKeyOf(null, { cardId, actionId: action.id, text: "" })
+          : answerKeyOf({ cardId, actionId: action.id, values: submitValues }, null);
+      if (!readOnly) markDraftSent(storeId, sentKey);
+      const accepted = await onSubmit(message, () => {
+        // This instance may have unmounted (virtualized transcript): clear
+        // the stored hold, and tell whichever instance is mounted now.
+        if (!readOnly) {
+          savePending(storeId, null);
+          markDraftSent(storeId, "");
+        }
+        window.dispatchEvent(new CustomEvent(UNSENT_EVENT, { detail: storeId }));
+      });
       if (accepted === false) {
+        if (!readOnly) markDraftSent(storeId, "");
         setNotice("Not sent. Try again.");
       } else if (submissionKeyRef.current === keyAtClick) {
         // Hold the actions until the message reaches the transcript (a
@@ -549,6 +601,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
         setAwaiting(action.id);
       }
     } catch {
+      if (!readOnly) markDraftSent(storeId, "");
       setNotice("Could not send. Try again.");
     } finally {
       setSending(null);

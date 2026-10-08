@@ -586,7 +586,7 @@ export interface UseTurnStream {
   // checkStreamLiveness across every attached conversation, not just the
   // active one. No-op while the tab is hidden.
   sweepStreamLiveness: (opts?: { force?: boolean }) => Promise<void>;
-  submitPrompt: (submittedPrompt: string, opts?: { fromCard?: boolean }) => Promise<boolean>;
+  submitPrompt: (submittedPrompt: string, opts?: { fromCard?: boolean; onUnsent?: () => void }) => Promise<boolean>;
   regenerateLastAssistant: () => Promise<void>;
   resendUserMessage: (
     userMessageId: number,
@@ -1161,6 +1161,23 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (owned && !attachedConvIdsRef.current.has(convId)) {
       markConvIdle(convId);
     }
+    if (owned) {
+      const waiters = recoveryWaitersRef.current.get(convId);
+      recoveryWaitersRef.current.delete(convId);
+      for (const w of waiters ?? []) w();
+    }
+  };
+
+  // Callers waiting for a conversation's recovery to end (a card send whose
+  // outcome the chain owns): released with the chain, never on a timer.
+  const recoveryWaitersRef = useRef(new Map<string, (() => void)[]>());
+  const recoveryReleased = (convId: string): Promise<void> => {
+    if (!recoveryOwns(convId)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const list = recoveryWaitersRef.current.get(convId) ?? [];
+      list.push(resolve);
+      recoveryWaitersRef.current.set(convId, list);
+    });
   };
 
   // recoveryDelayFor is the backoff, then a steady beat that itself lengthens
@@ -3775,7 +3792,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
   // `fromCard`: a generative-UI card is sending its answer. Said by the
   // caller, never inferred from the text — a user may type anything.
-  const submitPrompt = async (submittedPrompt: string, opts?: { fromCard?: boolean }): Promise<boolean> => {
+  const submitPrompt = async (
+    submittedPrompt: string,
+    // onUnsent: a card send reported as held (uncertain) whose absence the
+    // server later proves — the card releases its hold.
+    opts?: { fromCard?: boolean; onUnsent?: () => void },
+  ): Promise<boolean> => {
     const value = submittedPrompt.trim();
     // composerKey is the slot the user was typing into (real conv id or
     // the PENDING singleton for the empty new-chat view). All the
@@ -4332,7 +4354,24 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // uncertain too, unless the server definitively said it holds nothing:
     // the card holds instead of inviting a retry that could duplicate it.
     if (!accepted.value && !absent && recoveryOwns(resolveTarget())) uncertain = true;
-    return accepted.value || (uncertain && fromCard);
+    const held = !accepted.value && uncertain && fromCard;
+    if (held && opts?.onUnsent) {
+      // The card now holds. Once recovery lets go of the conversation, ask
+      // the server once more; a definitive "not there" releases the hold
+      // (an "unknown" keeps it: a resend could duplicate the input).
+      const onUnsent = opts.onUnsent;
+      void (async () => {
+        await recoveryReleased(resolveTarget());
+        if (recoveryUnmountedRef.current) return;
+        const target = resolveTarget();
+        if ((await submissionLanded(target, value, submissionId)) !== "no") return;
+        setConvMessages(target, (current) =>
+          current.map((m) => (m.id === baseId && m.role === "user" ? { ...m, notSent: true } : m)),
+        );
+        onUnsent();
+      })();
+    }
+    return accepted.value || held;
   };
 
   return {
