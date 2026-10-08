@@ -477,8 +477,10 @@ card helps; you can also simply ask for one ("give me a form for this").
   you send them.
 
 Interactive cards appear only in Chat in the web app. Scheduled tasks never show
-them, the terminal and editor clients name the card and point you to the web
-chat, and a shared or read-only view shows the answers you sent but not the card.
+them. Terminal chat names the card and points you to the web chat; editor
+clients connected over ACP show only the raw tool call, so open the
+conversation in the web app to use the card. A shared or read-only view shows
+the answers you sent but not the card.
 
 ## 7. Memory and projects
 

@@ -137,7 +137,7 @@ to change. The loop that replaces a bespoke form:
   user wants to supply goes through the composer's attachments as before.
 - **Web chat only.** The terminal client (`fleet chat`) and ACP editors see the
   tool call. The TUI prints a line pointing to the web chat, and the user can
-  reply in text. Shared and read-only transcripts carry text only, so they show
+  reply in text. ACP clients get no such pointer: they show the raw tool call. Shared and read-only transcripts carry text only, so they show
   the submitted-answers bubble but not the card.
 - **No per-deployment switch.** The tool is part of the interactive roster for
   every deployment. An operator who wants it off has no setting yet.

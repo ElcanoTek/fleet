@@ -1597,6 +1597,104 @@
      }
     ]
    }
+  },
+  {
+   "name": "parenthesized member typo",
+   "valid": false,
+   "error_contains": "\"cpm_typo\" is not a field of repeater",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "lines",
+      "fields": [
+       {
+        "type": "number",
+        "id": "cpm"
+       },
+       {
+        "type": "include_exclude",
+        "id": "geo",
+        "allow_custom": true
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": "{{ sum((lines).cpm_typo) }}"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "parenthesized member that exists",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "lines",
+      "fields": [
+       {
+        "type": "number",
+        "id": "cpm"
+       },
+       {
+        "type": "include_exclude",
+        "id": "geo",
+        "allow_custom": true
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": "{{ sum((lines).cpm) }} {{ len(((lines).geo)) }}"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "required selectable table with no rows",
+   "valid": false,
+   "error_contains": "no rows",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "table",
+      "id": "t",
+      "select": "single",
+      "row_key": "id",
+      "required": true,
+      "columns": [
+       {
+        "key": "id"
+       }
+      ],
+      "rows": []
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
   }
  ]
 }

@@ -794,6 +794,7 @@ export function ChatTranscript({
                                           cardId={tc.id}
                                           spec={spec}
                                           submission={genUi.submissions.get(tc.id) ?? null}
+                                          repliedAction={genUi.replies.get(tc.id) ?? null}
                                           superseded={genUi.superseded.has(tc.id)}
                                           onSubmit={(text) => submitPrompt(text)}
                                         />

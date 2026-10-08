@@ -165,6 +165,10 @@ type exprParser struct {
 	// ("lines.cpm" → ["lines", "cpm"]), so the validator can check members
 	// too, not just roots.
 	paths [][]string
+	// vpath is the field path of the value the last complete operand
+	// produced ("lines" for `lines` or `(lines)`, nil for `a + b`, a call or
+	// a literal), so `(lines).cpm` is checked like `lines.cpm`.
+	vpath []string
 	depth int
 }
 
@@ -219,7 +223,9 @@ func (p *exprParser) expr() error {
 		if err := p.expect(":"); err != nil {
 			return err
 		}
-		return p.expr()
+		err := p.expr()
+		p.vpath = nil
+		return err
 	}
 	return nil
 }
@@ -250,6 +256,7 @@ func (p *exprParser) binary(level int) error {
 		if err := p.binary(level + 1); err != nil {
 			return err
 		}
+		p.vpath = nil // an operator's result is not a field
 	}
 }
 
@@ -261,21 +268,21 @@ func (p *exprParser) unary() error {
 		if p.depth > maxExprDepth {
 			return p.errf("expression nested too deeply")
 		}
-		return p.unary()
+		err := p.unary()
+		p.vpath = nil
+		return err
 	}
 	return p.postfix()
 }
 
 func (p *exprParser) postfix() error {
-	before := len(p.refs)
 	if err := p.primary(); err != nil {
 		return err
 	}
-	// A bare field reference (not a call, literal or parenthesized value)
-	// starts a member path.
+	// primary left vpath at the field path of its value, if it has one.
 	var path []string
-	if len(p.refs) == before+1 && p.toks[p.pos-1].kind == tIdent {
-		path = []string{p.refs[before]}
+	if p.vpath != nil {
+		path = append([]string(nil), p.vpath...)
 	}
 	for p.isOp(".") {
 		p.next()
@@ -287,9 +294,10 @@ func (p *exprParser) postfix() error {
 		}
 		p.next()
 	}
-	if path != nil {
+	if len(path) > 1 {
 		p.paths = append(p.paths, path)
 	}
+	p.vpath = path
 	return nil
 }
 
@@ -298,9 +306,11 @@ func (p *exprParser) primary() error {
 	switch t.kind {
 	case tNum, tStr:
 		p.next()
+		p.vpath = nil
 		return nil
 	case tIdent:
 		p.next()
+		p.vpath = nil
 		switch t.text {
 		case "true", "false", "null":
 			return nil
@@ -331,15 +341,19 @@ func (p *exprParser) primary() error {
 			if n < arity[0] || (arity[1] >= 0 && n > arity[1]) {
 				return fmt.Errorf("%s() takes %s, got %d", t.text, arityText(arity), n)
 			}
+			p.vpath = nil // a call's result is not a field
 			return nil
 		}
 		p.refs = append(p.refs, t.text)
+		p.vpath = []string{t.text}
 		return nil
 	case tEOF:
 		return p.errf("expected a value")
 	case tOp:
 		if t.text == "(" {
 			p.next()
+			// The inner expression leaves vpath at its own field path, so a
+			// parenthesized field keeps it.
 			if err := p.expr(); err != nil {
 				return err
 			}

@@ -140,29 +140,59 @@ export function walkInputs(list: Component[], visit: (c: Component) => void): vo
 const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
 /** The empty / default value an input starts with. */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The value an input starts with: its `value` when that is something the
+ * control could have produced, else the empty value. "Could have produced"
+ * covers meaning, not just shape — an option the input does not offer, a
+ * malformed date or an unknown table row is dropped — because the same
+ * function normalizes drafts and transcript submissions, which the server
+ * never validated.
+ */
 export function defaultValue(c: Component): unknown {
   const v = c.value;
+  const optionSet = () => new Set(optionsOf(c).map((o) => o.value));
+  const custom = c.allow_custom === true;
   switch (c.type) {
     case "text_input":
+      return typeof v === "string" ? v : "";
     case "date":
+      return typeof v === "string" && DATE_RE.test(v) ? v : "";
     case "select":
     case "choice":
-      return typeof v === "string" ? v : "";
+      return typeof v === "string" && optionSet().has(v) ? v : "";
     case "number":
       return typeof v === "number" ? v : null;
     case "slider":
       return typeof v === "number" ? v : typeof c.min === "number" ? c.min : 0;
     case "toggle":
       return v === true;
-    case "multi_select":
+    case "multi_select": {
+      const opts = optionSet();
+      return Array.from(new Set(strArr(v))).filter((x) => custom || opts.has(x));
+    }
     case "list_input":
       return strArr(v);
     case "include_exclude": {
       const o = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
-      return { include: strArr(o.include), exclude: strArr(o.exclude) } satisfies IncludeExclude;
+      const opts = optionSet();
+      const ok = (x: string) => custom || opts.has(x);
+      const include = Array.from(new Set(strArr(o.include))).filter(ok);
+      // An entry cannot sit in both lanes; include wins.
+      const exclude = Array.from(new Set(strArr(o.exclude))).filter((x) => ok(x) && !include.includes(x));
+      return { include, exclude } satisfies IncludeExclude;
     }
-    case "table":
-      return c.select === "multi" ? strArr(v) : typeof v === "string" ? v : "";
+    case "table": {
+      const key = typeof c.row_key === "string" ? c.row_key : "";
+      const rowKeys = new Set(
+        (Array.isArray(c.rows) ? c.rows : [])
+          .map((r) => (r && typeof r === "object" ? (r as Record<string, unknown>)[key] : undefined))
+          .filter((k): k is string => typeof k === "string"),
+      );
+      if (c.select === "multi") return Array.from(new Set(strArr(v))).filter((k) => rowKeys.has(k));
+      return typeof v === "string" && rowKeys.has(v) ? v : "";
+    }
     case "repeater": {
       const fields = children(c, "fields");
       if (Array.isArray(v)) {
@@ -268,6 +298,14 @@ export function checkField(c: Component, v: unknown): string {
       if (!Number.isFinite(n)) return "Enter a number";
       if (typeof c.min === "number" && n < c.min) return `Must be at least ${c.min}`;
       if (typeof c.max === "number" && n > c.max) return `Must be at most ${c.max}`;
+      // The card does not submit through HTML form validation, so the
+      // input's step rule (based at min, like the native control) is
+      // enforced here.
+      if (typeof c.step === "number" && c.step > 0) {
+        const base = typeof c.min === "number" ? c.min : 0;
+        const k = (n - base) / c.step;
+        if (Math.abs(k - Math.round(k)) > 1e-9) return `Must be in steps of ${c.step}${base ? ` from ${base}` : ""}`;
+      }
       return "";
     }
     case "multi_select":
@@ -306,16 +344,19 @@ export function collect(
 ): { values: Values; errors: Record<string, string>; visible: Set<string> } {
   const out: Values = {};
   const errors: Record<string, string> = {};
-  // Every currently visible input's path — what a server field_error may
-  // still block on (a hidden or removed field cannot be fixed by the user).
+  // Every currently visible, enabled input's path — what a server
+  // field_error may still block on (a hidden, removed or disabled field
+  // cannot be fixed by the user).
   const visible = new Set<string>();
   // read: where this level's values live (the card, or one repeater item);
   // write: where the submitted copy goes; prefix: the error-path prefix.
-  const visit = (list: Component[], scope: Scope, read: Values, write: Values, prefix: string) => {
+  const visit = (list: Component[], scope: Scope, read: Values, write: Values, prefix: string, disabled = false) => {
     for (const c of list) {
       if (!isVisible(c, scope)) continue;
       if (isInput(c) && c.id) {
-        visible.add(prefix + c.id);
+        // Only an input the user can change can clear an error on it.
+        const off = disabled || c.disabled === true;
+        if (!off) visible.add(prefix + c.id);
         const v = read[c.id];
         if (c.type === "repeater") {
           const fields = children(c, "fields");
@@ -324,7 +365,7 @@ export function collect(
             : [];
           write[c.id] = items.map((item, i) => {
             const w: Values = {};
-            visit(fields, scopeFor(values, item, i), item, w, `${c.id}[${i}].`);
+            visit(fields, scopeFor(values, item, i), item, w, `${c.id}[${i}].`, off);
             return w;
           });
           const err = checkField(c, items);
@@ -335,8 +376,8 @@ export function collect(
         if (err) errors[prefix + c.id] = err;
         write[c.id] = v;
       }
-      visit(children(c), scope, read, write, prefix);
-      for (const t of tabsOf(c)) visit(t.children, scope, read, write, prefix);
+      visit(children(c), scope, read, write, prefix, disabled);
+      for (const t of tabsOf(c)) visit(t.children, scope, read, write, prefix, disabled);
     }
   };
   visit(spec.components, scopeFor(values), values, out, "");

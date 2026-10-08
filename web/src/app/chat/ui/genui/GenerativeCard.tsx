@@ -104,6 +104,8 @@ export type GenerativeCardProps = {
   spec: CardSpec;
   /** The user's submission of this card, found in the transcript. */
   submission?: Submission | null;
+  /** The message action (quick reply) the user answered this card with. */
+  repliedAction?: string | null;
   /** A later card named this one in `replaces`. */
   superseded?: boolean;
   /** Shared / read-only transcripts: render, never submit. */
@@ -160,7 +162,7 @@ export default function GenerativeCard(props: GenerativeCardProps) {
   return <CardBody {...props} />;
 }
 
-function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: GenerativeCardProps) {
+function CardBody({ cardId, spec, submission, repliedAction, superseded, readOnly, onSubmit }: GenerativeCardProps) {
   const [values, setValuesState] = useState<Values>(() =>
     normalizeValues(spec, submission ? submission.values : readOnly ? null : loadDraft(cardId)),
   );
@@ -182,14 +184,21 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
   // leave the card editable and its draft intact. When a new submission
   // lands (first send, or an edit resent), adopt its values and drop the
   // draft.
-  const submittedAction = submission?.actionId ?? null;
-  const submissionKey = submission ? `${submission.actionId}\u0000${JSON.stringify(submission.values)}` : "";
+  // A quick reply answers the card as surely as a submit does: both lock it.
+  const submittedAction = submission?.actionId ?? repliedAction ?? null;
+  const submissionKey = submission
+    ? `${submission.actionId}\u0000${JSON.stringify(submission.values)}`
+    : repliedAction
+      ? `reply\u0000${repliedAction}`
+      : "";
   const [seenSubmission, setSeenSubmission] = useState(submissionKey);
   if (seenSubmission !== submissionKey) {
     setSeenSubmission(submissionKey);
-    if (submission) {
+    if (submission || repliedAction) {
       setEditing(false);
       setAwaiting(null);
+    }
+    if (submission) {
       setValuesState(normalizeValues(spec, submission.values));
     }
   }
@@ -252,13 +261,19 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
     const sel = `[data-genui-field="${CSS.escape(path)}"]`;
     // A field inside an inactive tab is not mounted; ask the tabs to reveal it.
     // Tabs, collapsed sections and closed repeater items listen and open.
-    root.dispatchEvent(new CustomEvent("genui:reveal", { detail: path }));
-    // The revealed field mounts on a later render; look for a few frames.
+    // Containers can nest (a collapsed section inside an inactive tab): the
+    // inner one only mounts after the outer opens, so the event is sent
+    // again each frame until the field is in the DOM.
+    const reveal = () => root.dispatchEvent(new CustomEvent("genui:reveal", { detail: path }));
+    reveal();
     let tries = 0;
     const find = () => {
       const el = root.querySelector<HTMLElement>(sel);
       if (!el) {
-        if (++tries < 4) window.requestAnimationFrame(find);
+        if (++tries < 8) {
+          reveal();
+          window.requestAnimationFrame(find);
+        }
         return;
       }
       el.scrollIntoView?.({ block: "center", behavior: "smooth" });
@@ -286,7 +301,10 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
           : await onSubmit(buildSubmissionMessage(cardId, action.id, submitValues));
       if (accepted === false) {
         setNotice("Not sent. Try again.");
-      } else if (action.kind !== "message") {
+      } else {
+        // Hold the actions until the message reaches the transcript (a
+        // queued message is accepted long before it is echoed), so a second
+        // click cannot queue a duplicate — quick replies included.
         setAwaiting(action.id);
       }
     } catch {
@@ -377,7 +395,7 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
             {locked && sentLabel && !superseded ? (
               <div className="flex flex-wrap items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]">
                 <span data-testid="genui-submitted">Sent · {sentLabel}</span>
-                {!readOnly && onSubmit && (spec.actions ?? []).some((a) => a.kind !== "message") ? (
+                {!readOnly && onSubmit && submission && (spec.actions ?? []).some((a) => a.kind !== "message") ? (
                   <button type="button" className="underline hover:text-[var(--color-text-primary)]" onClick={() => setEditing(true)}>
                     Edit and resend
                   </button>
@@ -791,6 +809,7 @@ function Table({ c, value, onChange }: Parameters<Renderer>[0]) {
   // onChange (to the card, or to the current repeater item) and draws its
   // label and errors. A display-only table renders bare.
   const { locked } = useCard();
+  const item = useContext(ItemContext);
   const wrapped = onChange !== undefined;
   const cols = objs(c.columns).map((col) => ({
     key: str(col.key),
@@ -803,7 +822,9 @@ function Table({ c, value, onChange }: Parameters<Renderer>[0]) {
   const selected = wrapped ? value : undefined;
   const isSel = (k: string) => (mode === "multi" ? Array.isArray(selected) && selected.includes(k) : selected === k);
   const toggle = (k: string) => {
-    if (!wrapped || locked || c.disabled === true) return;
+    // The row is clickable markup, not a form control, so the disabled
+    // fieldset around it does not stop it: check every disabling source.
+    if (!wrapped || locked || c.disabled === true || item?.disabled === true) return;
     if (mode === "single") onChange?.(selected === k ? "" : k);
     else {
       const cur = Array.isArray(selected) ? (selected as string[]) : [];
@@ -1134,7 +1155,7 @@ function InputField({ c, Render }: { c: Component; Render: Renderer }) {
   return (
     <div className="grid min-w-0 content-start gap-1" data-genui-field={path} data-invalid={err ? "true" : undefined}>
       {label && c.type !== "toggle" ? (
-        <label htmlFor={inputId} className="text-[0.78rem] font-medium text-[var(--color-text-secondary)]">
+        <label id={`${inputId}-label`} htmlFor={inputId} className="text-[0.78rem] font-medium text-[var(--color-text-secondary)]">
           {label}
           {c.required === true ? (
             <span className="ml-0.5 text-[var(--color-danger)]" aria-hidden>
@@ -1287,9 +1308,14 @@ function Choice({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const opts = optionsOf(c);
   const v = typeof value === "string" ? value : "";
   const name = useId();
+  // A radiogroup is not labelable by <label for>; name it from the field's
+  // visible label (InputField gives it this id), or the id as a fallback.
+  const groupLabel = str(c.label)
+    ? { "aria-labelledby": `${inputId}-label` }
+    : { "aria-label": str(c.id) || "Choice" };
   if (c.variant === "radio") {
     return (
-      <div role="radiogroup" aria-labelledby={inputId} className="grid gap-1">
+      <div role="radiogroup" {...groupLabel} className="grid gap-1">
         {opts.map((o) => (
           <label key={o.value} className="flex cursor-pointer items-start gap-2">
             <input
@@ -1309,7 +1335,7 @@ function Choice({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
     );
   }
   return (
-    <div role="radiogroup" id={inputId} className="flex min-w-0 flex-wrap gap-1">
+    <div role="radiogroup" id={inputId} {...groupLabel} className="flex min-w-0 flex-wrap gap-1">
       {opts.map((o) => {
         const on = v === o.value;
         return (

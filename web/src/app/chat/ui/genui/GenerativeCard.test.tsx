@@ -364,6 +364,126 @@ describe("second Codex pass", () => {
   });
 });
 
+describe("third Codex pass", () => {
+  it("enforces a number input's step before submitting", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const s = spec({
+      title: "Q",
+      components: [{ type: "number", id: "n", label: "Pairs", min: 0, step: 2 }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="st" spec={s} onSubmit={onSubmit} />);
+    await user.type(screen.getByLabelText("Pairs"), "3");
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByText("Must be in steps of 2")).toBeTruthy();
+  });
+
+  it("a server error on a disabled field does not block submit", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const s = spec({
+      title: "D",
+      components: [{ type: "text_input", id: "acct", label: "Account", disabled: true, value: "x" }],
+      actions: [{ id: "go", label: "Go" }],
+      field_errors: [{ field: "acct", message: "Not found" }],
+    });
+    render(<GenerativeCard cardId="dis" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("a row click cannot change a table inside a disabled repeater", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "T",
+      components: [
+        {
+          type: "repeater",
+          id: "lines",
+          disabled: true,
+          value: [{}],
+          fields: [
+            { type: "table", id: "seat", label: "Seat", select: "single", row_key: "id", columns: [{ key: "id" }], rows: [{ id: "s1" }] },
+          ],
+        },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="tr" spec={s} onSubmit={() => {}} />);
+    await user.click(screen.getByText("s1"));
+    expect((screen.getByRole("radio", { name: "Select s1" }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("quick replies hold while pending and the card locks once the reply is in the transcript", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(true);
+    const s = spec({
+      title: "Pick",
+      components: [{ type: "text", text: "?" }],
+      actions: [
+        { id: "a", label: "Option A", kind: "message", message: "A please" },
+        { id: "b", label: "Option B", kind: "message", message: "B please" },
+      ],
+    });
+    const view = render(<GenerativeCard cardId="qr" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Option A" }));
+    expect(onSubmit).toHaveBeenCalledWith("A please");
+    expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Option B" })).toBeNull();
+    view.rerender(<GenerativeCard cardId="qr" spec={s} repliedAction="a" onSubmit={onSubmit} />);
+    expect(screen.getByTestId("genui-submitted").textContent).toContain("Option A");
+    expect(screen.queryByRole("button", { name: "Option B" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit and resend" })).toBeNull();
+  });
+
+  it("names radio and segmented choice groups after the field label", () => {
+    const s = spec({
+      title: "C",
+      components: [
+        { type: "choice", id: "a", label: "Channel", options: ["X", "Y"], variant: "radio" },
+        { type: "choice", id: "b", label: "Format", options: ["P", "Q"] },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="ch" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByRole("radiogroup", { name: "Channel" })).toBeTruthy();
+    expect(screen.getByRole("radiogroup", { name: "Format" })).toBeTruthy();
+  });
+
+  it("reveals a field behind a collapsed section inside an inactive tab", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "N",
+      components: [
+        {
+          type: "tabs",
+          tabs: [
+            { label: "First", children: [{ type: "text", text: "hello" }] },
+            {
+              label: "Second",
+              children: [
+                {
+                  type: "section",
+                  title: "Advanced",
+                  collapsible: true,
+                  collapsed: true,
+                  children: [{ type: "text_input", id: "deep", label: "Deep", required: true }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="nest" spec={s} onSubmit={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(await screen.findByLabelText(/Deep/)).toBeTruthy();
+  });
+});
+
 describe("tables and disabled repeaters", () => {
   it("binds a selectable table inside a repeater to its own item", async () => {
     const user = userEvent.setup();

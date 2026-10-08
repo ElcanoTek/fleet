@@ -58,3 +58,22 @@ describe("summarizeValue", () => {
     expect(summarizeValue(Array.from({ length: 10 }, (_, i) => `d${i}`))).toBe("d0, d1, d2, d3, d4, d5, d6, d7 +2 more");
   });
 });
+
+describe("quick replies", () => {
+  it("attribute a matching user message to the most recent card offering it", () => {
+    const quick = (title: string) =>
+      JSON.stringify({
+        title,
+        components: [{ type: "text", text: "?" }],
+        actions: [{ id: "yes", label: "Yes", kind: "message", message: "Yes, go ahead" }],
+      });
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "c1", input: quick("One"), resultText: "UI_DISPLAYED card_id=c1" }]),
+      assistant(2, [{ id: "c2", input: quick("Two"), resultText: "UI_DISPLAYED card_id=c2" }]),
+      user(3, "  Yes, go ahead "),
+      user(4, "something else"),
+    ]);
+    expect(s.replies.get("c2")).toBe("yes");
+    expect(s.replies.has("c1")).toBe(false);
+  });
+});

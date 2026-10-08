@@ -5,6 +5,7 @@ import {
   MAX_LIST_ITEMS,
   collect,
   initialValues,
+  normalizeValues,
   parseCardSpec,
   parseSubmissionMessage,
   UI_SUBMISSION_PREFIX,
@@ -115,5 +116,29 @@ describe("list_input protocol cap", () => {
     expect(checkField({ type: "list_input", id: "l" }, big)).toContain("At most");
     expect(checkField({ type: "list_input", id: "l", max_items: MAX_LIST_ITEMS * 2 }, big)).toContain("At most");
     expect(checkField({ type: "list_input", id: "l" }, big.slice(0, MAX_LIST_ITEMS))).toBe("");
+  });
+});
+
+describe("normalizeValues", () => {
+  it("drops saved values the inputs could not have produced", () => {
+    const s: CardSpec = {
+      title: "N",
+      components: [
+        { type: "select", id: "region", options: ["US", "CA"] },
+        { type: "multi_select", id: "tags", options: ["a", "b"] },
+        { type: "date", id: "day" },
+        { type: "include_exclude", id: "geo", options: ["US", "CA"] },
+        { type: "table", id: "row", select: "single", row_key: "id", columns: [{ key: "id" }], rows: [{ id: "r1" }] },
+      ],
+    };
+    const v = normalizeValues(s, {
+      region: "MX",
+      tags: ["a", "zzz", "a"],
+      day: "next tuesday",
+      geo: { include: ["US", "MX"], exclude: ["US", "CA"] },
+      row: "r9",
+      unknown: 1,
+    });
+    expect(v).toEqual({ region: "", tags: ["a"], day: "", geo: { include: ["US"], exclude: ["CA"] }, row: "" });
   });
 });

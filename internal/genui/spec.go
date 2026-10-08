@@ -892,6 +892,9 @@ func (v *validator) tableRules(path string, obj map[string]any) {
 // default selection to name existing rows.
 func (v *validator) selectableRowKeys(path, rk string, obj map[string]any) {
 	rows, _ := obj["rows"].([]any)
+	if req, _ := obj["required"].(bool); req && len(rows) == 0 {
+		v.addf(path+".rows", "a required selectable table has no rows to pick from; add rows or drop required")
+	}
 	seen := map[string]bool{}
 	for i, r := range rows {
 		m, ok := r.(map[string]any)

@@ -13,9 +13,20 @@ export type GenUiState = {
   cards: Map<string, CardSpec>;
   submissions: Map<string, Submission>;
   superseded: Set<string>;
+  /**
+   * cardId → the message action whose fixed text the user then sent (a
+   * quick reply). Matched against the most recent card before that user
+   * message that offers a message action with exactly that text.
+   */
+  replies: Map<string, string>;
 };
 
-export const EMPTY_GENUI_STATE: GenUiState = { cards: new Map(), submissions: new Map(), superseded: new Set() };
+export const EMPTY_GENUI_STATE: GenUiState = {
+  cards: new Map(),
+  submissions: new Map(),
+  superseded: new Set(),
+  replies: new Map(),
+};
 
 /**
  * Whether a tool call should draw a card: a show_ui call the server accepted.
@@ -34,10 +45,25 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
   const cards = new Map<string, CardSpec>();
   const submissions = new Map<string, Submission>();
   const superseded = new Set<string>();
+  const replies = new Map<string, string>();
+  const order: string[] = [];
   for (const m of messages) {
     if (m.role === "user") {
       const sub = parseSubmissionMessage(m.content);
-      if (sub) submissions.set(sub.cardId, sub);
+      if (sub) {
+        submissions.set(sub.cardId, sub);
+        continue;
+      }
+      const text = m.content.trim();
+      for (let i = order.length - 1; i >= 0; i--) {
+        const hit = (cards.get(order[i])?.actions ?? []).find(
+          (a) => a.kind === "message" && typeof a.message === "string" && a.message.trim() === text,
+        );
+        if (hit) {
+          replies.set(order[i], hit.id);
+          break;
+        }
+      }
       continue;
     }
     for (const tc of m.toolCalls ?? []) {
@@ -45,10 +71,11 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
       const spec = parseCardSpec(tc.input);
       if (!spec) continue;
       cards.set(tc.id, spec);
+      order.push(tc.id);
       if (spec.replaces) superseded.add(spec.replaces);
     }
   }
-  return { cards, submissions, superseded };
+  return { cards, submissions, superseded, replies };
 }
 
 export const GenUiContext = createContext<GenUiState>(EMPTY_GENUI_STATE);
