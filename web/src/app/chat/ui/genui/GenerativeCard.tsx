@@ -471,6 +471,9 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     if (submission || reply) {
       setEditing(false);
       setAwaitingState(null);
+      // A confirmation opened before this answer arrived (from another tab,
+      // say) belongs to an edit session that is over.
+      setConfirming(null);
       // The draft is NOT deleted here: an optimistic answer can still be
       // refused and vanish, and the user's values must survive that. A draft
       // records the answer it was typed against, so once this answer holds,
@@ -497,6 +500,21 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     }
   }
   const locked = !!readOnly || !!retired || !!superseded || (submittedAction !== null && !editing);
+
+  // Another tab holding (or releasing) this card: storage events reach every
+  // other tab, so the same card open twice cannot queue the same answer twice.
+  useEffect(() => {
+    if (readOnly) return;
+    const key = PENDING_PREFIX + storeId;
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== key && e.key !== null) return;
+      // This tab's in-memory copy is stale once another tab wrote the key.
+      pendingMemory.delete(storeId);
+      setAwaitingState(loadPending(storeId, answerKeyRef.current));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [storeId, readOnly]);
 
   useEffect(() => {
     if (!awaiting) return;
@@ -936,7 +954,7 @@ function Section({ c }: { c: Component }) {
   const [open, setOpen] = useState(!(collapsible && c.collapsed === true));
   // A collapsible section always has a toggle; the validator requires a
   // title, and the renderer still never strands content behind no header.
-  const title = str(c.title) || (collapsible ? "Details" : "");
+  const title = str(c.title).trim() || (collapsible ? "Details" : "");
   const ref = useRef<HTMLElement | null>(null);
   const owned = useMemo(() => idsUnder(children(c)), [c]);
   const item = useContext(ItemContext);
@@ -1206,7 +1224,7 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const wrapped = onChange !== undefined;
   const cols = objs(c.columns).map((col) => ({
     key: str(col.key),
-    label: str(col.label) || str(col.key),
+    label: str(col.label).trim() || str(col.key),
     align: col.align === "right" || col.align === "center" ? (col.align as string) : "left",
   }));
   const rows = objs(c.rows);
@@ -1394,8 +1412,8 @@ const SERIES_COLORS = [
 
 function Chart({ c }: { c: Component }) {
   const labels = Array.isArray(c.labels) ? c.labels.map((l) => String(l)) : [];
-  const series = objs(c.series).map((s) => ({
-    name: str(s.name),
+  const series = objs(c.series).map((s, si) => ({
+    name: str(s.name).trim() || `Series ${si + 1}`,
     values: Array.isArray(s.values) ? s.values.map((v) => (typeof v === "number" && Number.isFinite(v) ? v : null)) : [],
   }));
   const unit = str(c.unit);
@@ -1485,13 +1503,13 @@ function Chart({ c }: { c: Component }) {
             })}
       </svg>
       <table className="sr-only">
-        <caption>{str(c.title) || "Chart"}</caption>
+        <caption>{str(c.title).trim() || "Chart"}</caption>
         <thead>
           <tr>
             <th scope="col">Label</th>
             {series.map((s, si) => (
               <th key={si} scope="col">
-                {s.name || `Series ${si + 1}`}
+                {s.name}
               </th>
             ))}
           </tr>
@@ -1546,19 +1564,37 @@ function LinkNode({ c }: { c: Component }) {
 }
 
 function Diff({ c }: { c: Component }) {
+  // Before / after are told apart by color and strikethrough on screen; the
+  // visually hidden header row and "none" text say it to assistive tech.
+  const empty = (
+    <>
+      <span aria-hidden>—</span>
+      <span className="sr-only">none</span>
+    </>
+  );
+  const title = str(c.title).trim();
   return (
     <div className="grid min-w-0 gap-1">
-      {c.title ? <div className="text-[0.78rem] font-medium">{str(c.title)}</div> : null}
+      {title ? <div className="text-[0.78rem] font-medium">{title}</div> : null}
       <div className="overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)]">
-        <table className="w-full border-collapse text-[0.78rem]" aria-label={str(c.title).trim() || "Changes"}>
+        <table className="w-full border-collapse text-[0.78rem]" aria-label={title || "Changes"}>
+          <thead className="sr-only">
+            <tr>
+              <th scope="col">Field</th>
+              <th scope="col">Before</th>
+              <th scope="col">After</th>
+            </tr>
+          </thead>
           <tbody>
             {objs(c.rows).map((r, i) => (
               <tr key={i} className="border-b border-[var(--color-border)] last:border-b-0">
-                <td className="px-2 py-1.5 text-[var(--color-text-muted)]">{str(r.label)}</td>
+                <th scope="row" className="px-2 py-1.5 text-left font-normal text-[var(--color-text-muted)]">
+                  {str(r.label)}
+                </th>
                 <td className="px-2 py-1.5 text-[var(--color-danger)] line-through decoration-[var(--color-danger)]/60">
-                  {r.before === undefined || r.before === "" ? <span className="no-underline">—</span> : str(r.before)}
+                  {r.before === undefined || r.before === "" ? <span className="no-underline">{empty}</span> : str(r.before)}
                 </td>
-                <td className="px-2 py-1.5 text-[var(--color-success)]">{r.after === undefined || r.after === "" ? "—" : str(r.after)}</td>
+                <td className="px-2 py-1.5 text-[var(--color-success)]">{r.after === undefined || r.after === "" ? empty : str(r.after)}</td>
               </tr>
             ))}
           </tbody>

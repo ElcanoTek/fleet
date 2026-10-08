@@ -781,11 +781,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   };
   const refreshQueue = async (
     convId: string,
+    signal?: AbortSignal,
   ): Promise<QueuedInput[] | null> => {
     const url = conversationApiUrl(convId, "/queue");
     if (!url) return null;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, signal ? { signal } : undefined);
       if (!res.ok) return null;
       const body = (await res.json()) as { items?: QueuedInput[] };
       const items = body.items ?? [];
@@ -939,12 +940,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     text: string,
     submissionId: string,
   ): Promise<"yes" | "no" | "unknown"> => {
-    const queued = await refreshQueue(convId);
+    // Both reads are bounded like recovery's own: a connection accepted and
+    // then blackholed would otherwise hang the card in Sending… for good. A
+    // timeout is "could not ask", so it reads as unknown.
+    const queued = await refreshQueue(convId, recoveryRequestSignal());
     if (queued?.some((q) => q.submission_id === submissionId)) return "yes";
     const url = conversationApiUrl(convId);
     if (!url) return queued ? "no" : "unknown";
     try {
-      const res = await fetch(url, { cache: "no-store" });
+      const res = await fetch(url, { cache: "no-store", signal: recoveryRequestSignal() });
       if (!res.ok) return "unknown";
       const data = (await res.json()) as { history?: HistoryEntry[] | null };
       const persisted = (data.history ?? []).filter(
@@ -3802,13 +3806,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     onUnsent: () => void,
     attempt = 0,
     now = false,
+    onLanded?: () => void,
   ) => {
     const ask = async () => {
       if (recoveryUnmountedRef.current) return;
       const landed = await submissionLanded(convId, text, submissionId);
       if (recoveryUnmountedRef.current) return;
       if (landed === "no") onUnsent();
-      else if (landed === "unknown") recheckHeldSend(convId, text, submissionId, onUnsent, attempt + 1);
+      else if (landed === "yes") onLanded?.();
+      else recheckHeldSend(convId, text, submissionId, onUnsent, attempt + 1, false, onLanded);
     };
     if (now) void ask();
     else window.setTimeout(() => void ask(), recoveryDelayFor(attempt));
@@ -4405,6 +4411,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           },
           0,
           true,
+          // The server has it: the optimistic row stops reading as refused,
+          // so the card counts it as its answer and locks.
+          () =>
+            setConvMessages(target, (current) =>
+              current.map((m) => (m.id === baseId && m.notSent ? { ...m, notSent: false } : m)),
+            ),
         );
       })();
     }

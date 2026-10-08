@@ -513,9 +513,12 @@ function ev(n: Node, scope: Scope): Value {
         }
         default: {
           // < <= > >= : numeric when both sides are numeric, else text order.
+          // null (a blank number) is a scalar 0 here as in arithmetic; only
+          // lists and objects are never numeric.
           const ln = num(l);
           const rn = num(r);
-          const numeric = Number.isFinite(ln) && Number.isFinite(rn) && typeof l !== "object" && typeof r !== "object";
+          const scalar = (v: Value) => v === null || typeof v !== "object";
+          const numeric = Number.isFinite(ln) && Number.isFinite(rn) && scalar(l) && scalar(r);
           const [x, y] = numeric ? [ln, rn] : [toText(l), toText(r)];
           if (n.op === "<") return x < y;
           if (n.op === "<=") return x <= y;

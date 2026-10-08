@@ -1847,7 +1847,7 @@
   {
    "name": "required multi_select capped at zero",
    "valid": false,
-   "error_contains": "cannot have max_items 0",
+   "error_contains": "max_items 0 leaves the input nothing to hold",
    "card": {
     "title": "x",
     "components": [
@@ -1872,7 +1872,7 @@
   {
    "name": "required list_input capped at zero",
    "valid": false,
-   "error_contains": "cannot have max_items 0",
+   "error_contains": "max_items 0 leaves the input nothing to hold",
    "card": {
     "title": "x",
     "components": [
@@ -1894,7 +1894,7 @@
   {
    "name": "required text capped at zero length",
    "valid": false,
-   "error_contains": "cannot have max_length 0",
+   "error_contains": "max_length 0 leaves the input nothing to hold",
    "card": {
     "title": "x",
     "components": [
@@ -3162,6 +3162,138 @@
       "label": "Go",
       "visible_if": "gate",
       "disabled_if": "!gate || block"
+     }
+    ]
+   }
+  },
+  {
+   "name": "custom multi_select default with a blank entry",
+   "valid": false,
+   "error_contains": "blank entry",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "multi_select",
+      "id": "m",
+      "label": "M",
+      "allow_custom": true,
+      "value": [
+       "a",
+       " "
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "custom include_exclude default with a blank entry",
+   "valid": false,
+   "error_contains": "blank entry",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "include_exclude",
+      "id": "ie",
+      "label": "IE",
+      "allow_custom": true,
+      "value": {
+       "include": [
+        ""
+       ],
+       "exclude": []
+      }
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "optional multi_select capped at zero",
+   "valid": false,
+   "error_contains": "max_items 0 leaves the input nothing to hold",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "multi_select",
+      "id": "tags",
+      "label": "Tags",
+      "allow_custom": true,
+      "max_items": 0
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "submit gated on a slider with min equal to max",
+   "valid": false,
+   "error_contains": "never",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "slider",
+      "id": "s",
+      "label": "S",
+      "min": 5,
+      "max": 5,
+      "value": 5
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "disabled_if": "s > 1"
+     }
+    ]
+   }
+  },
+  {
+   "name": "submit gated on a selectable table with no rows",
+   "valid": false,
+   "error_contains": "never",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "table",
+      "id": "t",
+      "label": "T",
+      "select": "single",
+      "row_key": "k",
+      "columns": [
+       {
+        "key": "k"
+       }
+      ],
+      "rows": []
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "disabled_if": "empty(t)"
      }
     ]
    }

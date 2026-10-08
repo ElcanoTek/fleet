@@ -234,7 +234,10 @@ export function defaultValue(c: Component): unknown {
       return v === true;
     case "multi_select": {
       const opts = optionSet();
-      return Array.from(new Set(strArr(v))).filter((x) => custom || opts.has(x));
+      // A blank entry is nothing the adder can produce (it trims and skips
+      // empty input), so a default carrying one is dropped, not rendered as
+      // an empty chip that answers a required question.
+      return Array.from(new Set(strArr(v))).filter((x) => opts.has(x) || (custom && x.trim() !== ""));
     }
     case "list_input":
       // Same trim / drop-blank / dedupe the textarea applies to typed text.
@@ -242,7 +245,7 @@ export function defaultValue(c: Component): unknown {
     case "include_exclude": {
       const o = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
       const opts = optionSet();
-      const ok = (x: string) => custom || opts.has(x);
+      const ok = (x: string) => opts.has(x) || (custom && x.trim() !== "");
       const include = Array.from(new Set(strArr(o.include))).filter(ok);
       // An entry cannot sit in both lanes; include wins.
       const exclude = Array.from(new Set(strArr(o.exclude))).filter((x) => ok(x) && !include.includes(x));

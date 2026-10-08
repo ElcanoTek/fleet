@@ -847,6 +847,13 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 func (v *validator) componentRules(path, typ string, obj map[string]any) {
 	v.constantConditions(path, obj)
 	num := func(k string) (float64, bool) { f, ok := obj[k].(float64); return f, ok }
+	// A zero cap leaves the input nothing to hold: never answerable if
+	// required, never changeable otherwise.
+	for _, k := range []string{"max_items", "max_length"} {
+		if hi, ok := num(k); ok && hi == 0 {
+			v.addf(path+"."+k, "%s 0 leaves the input nothing to hold; raise it or drop the input", k)
+		}
+	}
 	v.requiredRules(path, typ, obj)
 	switch typ {
 	case "section":
@@ -1190,12 +1197,17 @@ func (v *validator) checkCollectionValue(path, typ string, obj map[string]any, v
 			return
 		}
 		if typ == "multi_select" {
-			if custom, _ := obj["allow_custom"].(bool); !custom {
-				for _, e := range val.([]any) {
-					if !inOptions(e.(string)) {
-						v.addf(path, "%q is not one of the options (set allow_custom: true to permit free entry)", e)
-						return
-					}
+			custom, _ := obj["allow_custom"].(bool)
+			for _, e := range val.([]any) {
+				switch s := e.(string); {
+				case strings.TrimSpace(s) == "" && !inOptionsStrict(obj, s):
+					// The adder trims and skips empty input: a blank entry is
+					// not an answer the user could have given.
+					v.addf(path, "has a blank entry")
+					return
+				case !custom && !inOptions(s):
+					v.addf(path, "%q is not one of the options (set allow_custom: true to permit free entry)", e)
+					return
 				}
 			}
 		}
@@ -1330,7 +1342,9 @@ func (v *validator) includeExcludeEntries(path string, obj, m map[string]any, in
 			if !ok {
 				continue
 			}
-			if !custom && !inOptions(s) {
+			if strings.TrimSpace(s) == "" && !inOptionsStrict(obj, s) {
+				v.addf(path+"."+k, "has a blank entry")
+			} else if !custom && !inOptions(s) {
 				v.addf(path+"."+k, "%q is not one of the options (set allow_custom: true to permit free entry)", s)
 			}
 			if other, dup := seen[s]; dup && other != k {
@@ -1339,6 +1353,12 @@ func (v *validator) includeExcludeEntries(path string, obj, m map[string]any, in
 			seen[s] = k
 		}
 	}
+}
+
+// inOptionsStrict: s is literally one of the declared option values.
+func inOptionsStrict(obj map[string]any, s string) bool {
+	opts, ok := optionValues(obj["options"])
+	return ok && containsStr(opts, s)
 }
 
 // collectInputs gathers the input components under a component list by id,
@@ -1468,17 +1488,33 @@ func (v *validator) actions(raw any, hasInput bool) {
 	}
 }
 
+// immutable: an enabled input whose own shape leaves the user nothing to
+// change, so a condition on it is as fixed as one on a disabled input. (A
+// zero max_items / max_length is refused outright in componentRules.)
+func immutable(typ string, m map[string]any) bool {
+	custom, _ := m["allow_custom"].(bool)
+	switch typ {
+	case "slider":
+		lo, okLo := m["min"].(float64)
+		hi, okHi := m["max"].(float64)
+		return okLo && okHi && lo == hi
+	case "multi_select", "include_exclude":
+		opts, _ := optionValues(m["options"])
+		return !custom && len(opts) == 0
+	case "table":
+		rows, _ := m["rows"].([]any)
+		sel, _ := m["select"].(string)
+		return sel != "" && len(rows) == 0
+	}
+	return false
+}
+
 // requiredRules: a required input must be answerable. A zero cap can never be
 // satisfied, and a disabled field is never validated in the browser but is
 // still submitted, so required + disabled needs an answer already in place.
 func (v *validator) requiredRules(path, typ string, obj map[string]any) {
 	if req, _ := obj["required"].(bool); !req {
 		return
-	}
-	for _, k := range []string{"max_items", "max_length"} {
-		if hi, ok := obj[k].(float64); ok && hi == 0 {
-			v.addf(path+"."+k, "a required field cannot have %s 0", k)
-		}
 	}
 	if dis, _ := obj["disabled"].(bool); dis && !answered(typ, obj["value"]) {
 		v.addf(path+".required", "a disabled required field needs a value that answers it (the user cannot fill it in); give it one, or drop required or disabled")
@@ -1638,11 +1674,11 @@ func reachableInputs(comps []any) (map[string]bool, map[string]gated) {
 					}
 				}
 			}
-			f := fixed
+			typ, _ := m["type"].(string)
+			f := fixed || immutable(typ, m)
 			if d, _ := m["disabled"].(bool); d {
 				f = true
 			}
-			typ, _ := m["type"].(string)
 			if spec, ok := components[typ]; ok && (spec.input || typ == "table") {
 				if id, ok := m["id"].(string); ok {
 					info[id] = gated{gates: own, shows: ownShows, fixed: f}

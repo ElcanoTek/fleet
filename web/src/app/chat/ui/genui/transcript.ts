@@ -50,6 +50,28 @@ export function isRenderableCardCall(tc: ToolCall): boolean {
   return typeof tc.resultText === "string" && tc.resultText.startsWith("UI_DISPLAYED");
 }
 
+// Parses are cached per message / tool-call object. Derivation runs on every
+// streamed delta (each one replaces the messages array), while the user's
+// card answers (up to ~1 MiB each) and finished card specs never change: the
+// objects carrying them are reused, so each is parsed once. The cached entry
+// remembers its source text, so an object whose text did change is reparsed.
+type Parsed<T> = { src: string; value: T };
+const answerCache = new WeakMap<object, Parsed<{ sub: Submission | null; reply: Reply | null }>>();
+const specCache = new WeakMap<object, Parsed<CardSpec | null>>();
+
+function cached<T>(cache: WeakMap<object, Parsed<T>>, key: object, src: string, parse: (s: string) => T): T {
+  const hit = cache.get(key);
+  if (hit && hit.src === src) return hit.value;
+  const value = parse(src);
+  cache.set(key, { src, value });
+  return value;
+}
+
+function parseAnswer(content: string): { sub: Submission | null; reply: Reply | null } {
+  const sub = parseSubmissionMessage(content);
+  return { sub, reply: sub ? null : parseReplyMessage(content) };
+}
+
 export function deriveGenUiState(messages: Message[]): GenUiState {
   const cards = new Map<string, CardSpec>();
   const submissions = new Map<string, Submission>();
@@ -74,13 +96,12 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
       // A card has ONE answer: the latest, whether a submission or a quick
       // reply (a submit, Edit and resend, then a quick reply ends on the
       // reply). Each kind replaces the other.
-      const sub = parseSubmissionMessage(m.content);
+      const { sub, reply } = cached(answerCache, m, m.content, parseAnswer);
       if (sub) {
         submissions.set(sub.cardId, { ...sub, messageId: m.id });
         replies.delete(sub.cardId);
         continue;
       }
-      const reply = parseReplyMessage(m.content);
       if (reply) {
         replies.set(reply.cardId, { ...reply, messageId: m.id });
         submissions.delete(reply.cardId);
@@ -89,7 +110,7 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
     }
     for (const tc of m.toolCalls ?? []) {
       if (!isRenderableCardCall(tc)) continue;
-      const spec = parseCardSpec(tc.input);
+      const spec = cached(specCache, tc, tc.input, parseCardSpec);
       if (!spec) continue;
       cards.set(tc.id, spec);
       if (spec.replaces) superseded.add(spec.replaces);

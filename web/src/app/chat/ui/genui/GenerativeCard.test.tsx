@@ -1192,6 +1192,69 @@ describe("required toggle", () => {
   });
 });
 
+describe("whitespace labels", () => {
+  it("fall back to the key or a default for table columns, sections and charts", () => {
+    const s = spec({
+      title: "W",
+      components: [
+        { type: "table", columns: [{ key: "account", label: " " }], rows: [{ account: "A1" }] },
+        { type: "section", title: " ", collapsible: true, children: [{ type: "text", text: "x" }] },
+        { type: "chart", kind: "bar", title: " ", labels: ["a"], series: [{ name: " ", values: [1] }] },
+      ],
+    });
+    render(<GenerativeCard cardId="ws" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByRole("columnheader", { name: "account" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Details/ })).toBeTruthy();
+    const chart = screen.getByRole("table", { name: "Chart" });
+    expect(within(chart).getByRole("columnheader", { name: "Series 1" })).toBeTruthy();
+  });
+});
+
+describe("an answer arriving while a confirmation is open", () => {
+  it("closes the confirmation, so Edit and resend starts clean", async () => {
+    const user = userEvent.setup();
+    const s = spec({ title: "C", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Send", confirm: "Sure?" }] });
+    const view = render(<GenerativeCard cardId="cx2" spec={s} onSubmit={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    const answer = { cardId: "cx2", actionId: "go", values: { n: "from another tab" }, messageId: 5 };
+    view.rerender(<GenerativeCard cardId="cx2" spec={s} submission={answer} onSubmit={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Edit and resend" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+  });
+});
+
+describe("diff accessibility", () => {
+  it("names the before and after columns and each row's field", () => {
+    const s = spec({ title: "D", components: [{ type: "diff", title: "Proposed", rows: [{ label: "CPM", before: "10", after: "12" }, { label: "Geo", after: "US" }] }] });
+    render(<GenerativeCard cardId="df" spec={s} onSubmit={() => {}} />);
+    const table = screen.getByRole("table", { name: "Proposed" });
+    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Field", "Before", "After"]);
+    expect(within(table).getByRole("rowheader", { name: "CPM" })).toBeTruthy();
+    expect(within(table).getByRole("row", { name: /Geo/ }).textContent).toContain("none");
+  });
+});
+
+describe("a hold set in another tab", () => {
+  it("locks and unlocks this tab's copy of the card", () => {
+    window.localStorage.clear();
+    const s = spec({ title: "X", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+    render(<GenerativeCard cardId="xt" spec={s} onSubmit={() => {}} />);
+    expect(screen.queryByTestId("genui-awaiting")).toBeNull();
+    const key = "fleet.genui.pending.xt";
+    const held = JSON.stringify({ action: "a", at: Date.now(), after: "", send: "other-tab-1" });
+    window.localStorage.setItem(key, held);
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key, newValue: held })));
+    expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Yes" })).toBeNull();
+    window.localStorage.removeItem(key);
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key, newValue: null })));
+    expect(screen.queryByTestId("genui-awaiting")).toBeNull();
+    expect(screen.getByRole("button", { name: "Yes" })).toBeTruthy();
+  });
+});
+
 describe("identical resend", () => {
   it("does not reopen the editor on remount once the identical resend is accepted", async () => {
     window.localStorage.clear();

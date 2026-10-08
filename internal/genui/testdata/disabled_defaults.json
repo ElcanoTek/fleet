@@ -708,6 +708,37 @@
     ]
    },
    "valid": true
+  },
+  {
+   "name": "multi custom required only a blank entry",
+   "component": {
+    "type": "multi_select",
+    "id": "f",
+    "label": "F",
+    "allow_custom": true,
+    "required": true,
+    "value": [
+     " "
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "include_exclude custom required only blank",
+   "component": {
+    "type": "include_exclude",
+    "id": "f",
+    "label": "F",
+    "allow_custom": true,
+    "required": true,
+    "value": {
+     "include": [
+      " "
+     ],
+     "exclude": []
+    }
+   },
+   "valid": false
   }
  ]
 }

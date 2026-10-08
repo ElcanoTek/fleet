@@ -920,8 +920,10 @@ describe("a held card send that recovery later proves absent", () => {
       }),
     );
     await vi.advanceTimersByTimeAsync(120_000);
+    held = convSlot(h, CONV).filter((m) => m.role === "user" && m.content === "[UI submission] card=c1 action=go\n{}");
     return onUnsent;
   };
+  let held: Message[] = [];
 
   it("tells the card, so its hold is released", async () => {
     expect(await run(false)).toHaveBeenCalledTimes(1);
@@ -929,6 +931,8 @@ describe("a held card send that recovery later proves absent", () => {
 
   it("leaves the hold when the server does hold the submission", async () => {
     expect(await run(true)).not.toHaveBeenCalled();
+    // ...and the answer stops reading as refused, so the card locks on it.
+    expect(held.some((m) => m.notSent)).toBe(false);
   });
 
   it("keeps asking when the answer is still unknown after recovery", async () => {
@@ -977,5 +981,42 @@ describe("a held queued card send", () => {
 
   it("keeps the hold when the server has it", async () => {
     expect(await run(true)).not.toHaveBeenCalled();
+  });
+});
+
+describe("a lost queued card response whose presence probes hang", () => {
+  it("times the probes out instead of leaving the card sending for good", async () => {
+    vi.useFakeTimers();
+    // AbortSignal.timeout runs on the platform's own timers; route it through
+    // the faked ones so the bound can be observed.
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      const c = new AbortController();
+      setTimeout(() => c.abort(new DOMException("timed out", "TimeoutError")), ms);
+      return c.signal;
+    });
+    try {
+      const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+          if (String(input) === "/api/chat") return Promise.reject(new TypeError("network error"));
+          // Accepted, then blackholed: only the abort ends it.
+          return new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+          });
+        }),
+      );
+      const deps = { ...h.deps, streamingConvsRef: { current: new Set([CONV]) } };
+      const { result } = renderHook(() => useTurnStream(deps));
+      let settled: boolean | undefined;
+      void result.current.submitPrompt("[UI submission] card=c1 action=go\n{}", { fromCard: true }).then((v) => {
+        settled = v;
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+      // Unknown, so the card holds (true) rather than hanging in Sending…
+      expect(settled).toBe(true);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 });

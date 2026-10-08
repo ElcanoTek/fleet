@@ -186,3 +186,19 @@ describe("fieldLabels", () => {
     expect(labels.get("f")).toBe("f");
   });
 });
+
+describe("derivation cost", () => {
+  it("parses each answer and card once, not on every streamed update", () => {
+    const sub = user(2, buildSubmissionMessage("c1", "go", { n: "x".repeat(1000) }));
+    const shown = assistant(1, [{ id: "c1", input: card("Big"), resultText: "UI_DISPLAYED" }]);
+    const first = deriveGenUiState([shown, sub]);
+    // A streamed delta replaces the array (and the streaming message), not
+    // the finished ones.
+    const second = deriveGenUiState([shown, sub, assistant(3, [])]);
+    expect(second.submissions.get("c1")?.values).toBe(first.submissions.get("c1")?.values);
+    expect(second.cards.get("c1")).toBe(first.cards.get("c1"));
+    // A message whose text changed is parsed afresh.
+    const edited = { ...sub, content: buildSubmissionMessage("c1", "go", { n: "y" }) } as Message;
+    expect(deriveGenUiState([shown, edited]).submissions.get("c1")?.values).toEqual({ n: "y" });
+  });
+});

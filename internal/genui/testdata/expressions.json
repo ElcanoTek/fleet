@@ -558,6 +558,39 @@
   {
    "expr": "١ + 1",
    "valid": false
+  },
+  {
+   "expr": "budget < 0",
+   "valid": true,
+   "refs": [
+    "budget"
+   ],
+   "scope": {
+    "budget": null
+   },
+   "want": false
+  },
+  {
+   "expr": "budget >= 0",
+   "valid": true,
+   "refs": [
+    "budget"
+   ],
+   "scope": {
+    "budget": null
+   },
+   "want": true
+  },
+  {
+   "expr": "budget < 1",
+   "valid": true,
+   "refs": [
+    "budget"
+   ],
+   "scope": {
+    "budget": null
+   },
+   "want": true
   }
  ]
 }
