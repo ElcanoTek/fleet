@@ -37,6 +37,8 @@ prose.
 `fleet acp` is the same client with a protocol in front of it: an Agent Client
 Protocol agent on stdin/stdout, for ACP clients such as `buzz-acp`, Zed or
 JetBrains to launch (`BUZZ_ACP_AGENT_COMMAND=fleet BUZZ_ACP_AGENT_ARGS=acp`).
+With Buzz, fleet's replies do not reach the channel yet: `buzz-acp` expects the
+agent to post them itself (see "Buzz" in [`docs/ACP.md`](ACP.md)).
 It resolves the token and `--email` exactly like `fleet chat`, and each prompt
 is one turn on the running server. Give it a dedicated bot user, because every
 ACP turn runs as that identity. Details: [`docs/ACP.md`](ACP.md).

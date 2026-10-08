@@ -105,6 +105,11 @@ needs approval, the reply ends with a link or a `fleet chat --approve` command,
 because approvals are settled in fleet, not in the client. Images and audio are
 not accepted.
 
+Buzz is the exception: an @mention runs a fleet turn, but fleet's reply does
+not appear in the Buzz channel, because Buzz expects an agent to post its
+replies itself. The conversation, answer included, is in fleet's web chat,
+under the user `fleet acp` runs as.
+
 MCP servers you set up in your editor are not used by fleet. fleet's tools and
 connectors are the ones your operator set up, and they run on the fleet server.
 The first reply in a session says so, naming the servers your editor sent.

@@ -5,8 +5,10 @@
 protocol, not IBM's older Agent Communication Protocol that merged into A2A)
 (#984). An ACP client launches `fleet acp` as a subprocess and drives it with
 JSON-RPC over stdio. Each prompt becomes one governed fleet turn, and the reply
-streams back. Buzz (via `buzz-acp`), Zed, JetBrains and any other ACP client
-can use it the same way.
+streams back. Zed, JetBrains, Neovim (CodeCompanion.nvim), Emacs (agent-shell)
+and any other ACP client that shows the agent's reply can use it the same way.
+Buzz's `buzz-acp` runs fleet turns too, but does not post fleet's replies to
+Buzz (see "Buzz").
 
 ## Shape: a translation, not a new seam
 
@@ -55,7 +57,7 @@ or `--token-file`. It is never accepted on argv. The email is the fleet user
 every ACP turn runs as, so it is the identity in the audit trail. Provision a
 dedicated bot user for it (`fleet chat user add acp-bot@example.com --password -`).
 
-For Buzz, point `buzz-acp` at it:
+Buzz's `buzz-acp` can launch it:
 
 ```sh
 export BUZZ_ACP_AGENT_COMMAND=fleet
@@ -64,6 +66,9 @@ export FLEET_USER_EMAIL=acp-bot@example.com
 # plus the usual BUZZ_PRIVATE_KEY / BUZZ_RELAY_URL
 buzz-acp
 ```
+
+That runs a fleet turn for each @mention, but fleet's reply does not reach
+Buzz: see "Buzz" below.
 
 Flags: `--email`, `--server`, `--token-file`, `--env-file`, `--model`
 (the model a new session's conversation starts on; the workspace default otherwise. It is never re-sent on later prompts, so a model switch made in the web UI sticks), `--persona`, `--public-url`
@@ -387,6 +392,51 @@ with a button to copy them. Read it before sharing: it holds every prompt and
 the full text of each file you mentioned. Zed's own log (`zed: open log`) also
 records what `fleet acp` writes to stderr.
 
+### Buzz
+
+Checked live on 2026-10-08 with Buzz's `buzz-acp` (block/buzz at `70d2ca7`), a
+hosted Buzz relay and a real `fleet serve`, both through the recipe under
+"Using it" and through Buzz Desktop's custom runtime. An @mention reaches fleet
+and runs a governed turn as the configured user, whose web chat shows the
+conversation, but **fleet's reply never appears in Buzz**. `buzz-acp`
+expects the agent to post its own reply with the Buzz CLI
+(`buzz messages send`): the text an agent streams back over ACP is only written
+to `buzz-acp`'s log (`handle_session_update` in its `crates/buzz-acp/src/acp.rs`).
+Its prompt says so too: about 20 KB of instructions, on a session's first
+prompt, tell the agent to reply with that CLI. fleet's model follows them and
+runs `buzz` in fleet's sandbox, where there is no Buzz CLI and, by design, no
+Buzz key, then writes its answer, which `buzz-acp` logs. So Buzz is not
+supported out of the box: the answer is only in the configured user's web
+chat.
+
+What fixes it is an adapter between `buzz-acp` and `fleet acp`: it starts
+`fleet acp`, hands it the messages without Buzz's CLI instructions, and when the
+turn ends posts fleet's answer to the thread with `buzz messages send`, as the
+agent's own Buzz identity, keeping Buzz's key out of `fleet acp`'s
+environment. One was built and checked live on 2026-10-08 (an @mention got
+fleet's answer as a reply in its thread). It is not part of fleet and is not
+published.
+
+Setting up an agent for `buzz-acp` (checked live on 2026-10-08):
+
+- The agent needs its own Nostr identity (`buzz-admin generate-key`, or let
+  Buzz Desktop create one), not a person's. That identity must be a member of
+  the workspace, not only of a channel: otherwise `buzz-acp` stops with "Auth
+  failed: restricted: not a relay member".
+- `buzz-acp` answers only the agent's registered owner by default, and drops
+  every mention until an owner is set. An agent run from the command line may
+  need `BUZZ_ACP_RESPOND_TO=allowlist` and
+  `BUZZ_ACP_RESPOND_TO_ALLOWLIST=<hex public keys>` to admit the people who
+  mention it.
+- Buzz Desktop runs `fleet acp` as a custom runtime: a JSON file (`id`,
+  `label`, `command`, `args`, `env`) in its `custom_harnesses/` folder, or,
+  per Buzz's source, its "Add custom harness…" form. Its "import agent"
+  expects an exported agent instead, and refuses such a file. Its model picker lists no models, because fleet advertises none.
+  Any custom model ID is harmless: `buzz-acp` finds no match and keeps fleet's
+  model, which is `--model` or the workspace default.
+- `buzz-acp` puts `BUZZ_PRIVATE_KEY` in the agent's environment. `fleet acp`
+  sends the server only the prompt, so no Buzz key reached fleet in these runs.
+
 ## Protocol mapping
 
 | ACP | fleet |
@@ -600,6 +650,12 @@ What shipped:
   session opens; `--timeout` and an over-size request show their reason, with
   no `data`; an unreachable server opens the session and the first prompt
   reports it; and MCP servers sent by the editor get the note once.
+- Checked live against a real `fleet serve` with Buzz on 2026-10-08
+  (`buzz-acp` at block/buzz `70d2ca7`, a hosted relay): the recipe under
+  "Using it" and Buzz Desktop's custom runtime each ran a fleet turn for an
+  @mention, and in each case the answer reached only `buzz-acp`'s log; with an
+  adapter between `buzz-acp` and `fleet acp` that posts the answer, it appeared
+  as a reply in its thread. No Buzz key reached fleet.
 
 Deviations and limits:
 
@@ -662,6 +718,10 @@ Deviations and limits:
   adapter does not guess `max_tokens` / `max_turn_requests` from it.
 - **One identity per process.** Every turn runs as the configured fleet user.
   Per-Buzz-user mapping is out of scope.
+- **Buzz does not show fleet's replies.** `buzz-acp` expects an agent to post
+  its own reply with the Buzz CLI, and only logs what the agent streams back,
+  so with `buzz-acp` launching `fleet acp` a turn runs and its answer stays in
+  the configured user's web chat (checked live on 2026-10-08; see "Buzz").
 - **A force-killed `fleet acp` cannot stop its turn.** `SIGKILL` (`kill -9`,
   or a client that kills its agent outright) ends the process before it can
   send a Stop, and so does a client that kills it before a slow fleet has
@@ -674,6 +734,8 @@ Deviations and limits:
   turn kept running (checked live on 2026-10-06); quitting Emacs instead stops
   the turn (see "Emacs (agent-shell)").
 
-Deferred: a Buzz Desktop catalog entry (a custom command works today),
+Deferred: posting fleet's replies in Buzz, and a Buzz Desktop catalog entry
+(Desktop can already run `fleet acp` as a custom runtime, with the same missing
+replies; see "Buzz"),
 `session/load`, and an ACP *client* in fleet (launching other ACP agents is a
 different feature).
