@@ -7,6 +7,7 @@ import {
   initialValues,
   normalizeValues,
   isCalendarDate,
+  isWebUrl,
   parseCardSpec,
   parseSubmissionMessage,
   UI_SUBMISSION_PREFIX,
@@ -158,5 +159,22 @@ describe("list_input defaults", () => {
   it("are trimmed, blank-free and deduped like typed text", () => {
     const s: CardSpec = { title: "L", components: [{ type: "list_input", id: "d" }, { type: "list_input", id: "k", dedupe: false }] };
     expect(normalizeValues(s, { d: [" a.com", "a.com", "", "b.com "], k: ["x", "x"] })).toEqual({ d: ["a.com", "b.com"], k: ["x", "x"] });
+  });
+});
+
+describe("url inputs", () => {
+  it("need a real http(s) URL with a host", () => {
+    expect(isWebUrl("https://example.com/x")).toBe(true);
+    expect(isWebUrl("https://?")).toBe(false);
+    expect(isWebUrl("https://#")).toBe(false);
+    expect(isWebUrl("ftp://example.com")).toBe(false);
+    expect(checkField({ type: "text_input", id: "u", format: "url" }, "https://?")).toContain("URL");
+  });
+});
+
+describe("parseCardSpec cache", () => {
+  it("parses a given input once and returns the same spec", () => {
+    const input = JSON.stringify({ title: "c", components: [{ type: "text", text: "x" }] });
+    expect(parseCardSpec(input)).toBe(parseCardSpec(input));
   });
 });

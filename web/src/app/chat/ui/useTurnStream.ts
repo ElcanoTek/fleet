@@ -3537,6 +3537,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             !(m.id === assistantId - 1 && m.role === "user"),
         ),
       );
+      // Queued is accepted: the server holds this submission and will run it
+      // (callers such as a generative-UI card must not offer to resend it).
+      if (accepted) accepted.value = true;
       return;
     }
 

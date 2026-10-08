@@ -87,14 +87,16 @@ func lex(src string) ([]token, error) {
 		switch {
 		case unicode.IsSpace(c):
 			i++
-		case unicode.IsDigit(c) || (c == '.' && i+1 < len(rs) && unicode.IsDigit(rs[i+1])):
+		// Number literals are ASCII digits only, exactly like the browser's
+		// lexer (expr.ts): a literal one side accepts the other must too.
+		case isASCIIDigit(c) || (c == '.' && i+1 < len(rs) && isASCIIDigit(rs[i+1])):
 			start := i
 			seenDot := false
-			for i < len(rs) && (unicode.IsDigit(rs[i]) || (rs[i] == '.' && !seenDot)) {
+			for i < len(rs) && (isASCIIDigit(rs[i]) || (rs[i] == '.' && !seenDot)) {
 				if rs[i] == '.' {
 					// "a.b" member access after a number is not a thing; a
 					// second dot ends the literal.
-					if i+1 >= len(rs) || !unicode.IsDigit(rs[i+1]) {
+					if i+1 >= len(rs) || !isASCIIDigit(rs[i+1]) {
 						break
 					}
 					seenDot = true
@@ -423,3 +425,5 @@ func TemplateExprs(s string) ([]string, error) {
 		rest = rest[i+2+j+2:]
 	}
 }
+
+func isASCIIDigit(c rune) bool { return c >= '0' && c <= '9' }

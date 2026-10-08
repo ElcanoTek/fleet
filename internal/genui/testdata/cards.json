@@ -1847,7 +1847,7 @@
   {
    "name": "required multi_select capped at zero",
    "valid": false,
-   "error_contains": "at least one item",
+   "error_contains": "cannot have max_items 0",
    "card": {
     "title": "x",
     "components": [
@@ -1865,6 +1865,119 @@
      {
       "id": "go",
       "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "required list_input capped at zero",
+   "valid": false,
+   "error_contains": "cannot have max_items 0",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "list_input",
+      "id": "l",
+      "required": true,
+      "max_items": 0
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "required text capped at zero length",
+   "valid": false,
+   "error_contains": "cannot have max_length 0",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "t",
+      "required": true,
+      "max_length": 0
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "field error on a repeater item that does not exist",
+   "valid": false,
+   "error_contains": "there is no item 9",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "lines",
+      "value": [
+       {
+        "n": 1
+       }
+      ],
+      "fields": [
+       {
+        "type": "number",
+        "id": "n"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ],
+    "field_errors": [
+     {
+      "field": "lines[9].n",
+      "message": "bad"
+     }
+    ]
+   }
+  },
+  {
+   "name": "field error on an existing repeater item",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "lines",
+      "min_items": 2,
+      "fields": [
+       {
+        "type": "number",
+        "id": "n"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ],
+    "field_errors": [
+     {
+      "field": "lines[1].n",
+      "message": "bad"
      }
     ]
    }

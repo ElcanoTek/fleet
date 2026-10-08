@@ -268,7 +268,14 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, onSub
     (id: string, v: unknown, item?: ItemCtx) => {
       const path = item ? `${item.repeater}[${item.index}].${id}` : id;
       setNotice(null);
-      setClearedServerErrors((s) => (s.has(path) ? s : new Set(s).add(path)));
+      setClearedServerErrors((s) => {
+        const n = new Set(s).add(path);
+        // Editing an item also answers an error on the repeater as a whole
+        // ("lines"), which a fixed-size repeater could otherwise never clear.
+        // A separate key, so sibling items' errors stay.
+        if (item) n.add(`${item.repeater}\u0000root`);
+        return n;
+      });
       setValues((prev) => {
         if (!item) return { ...prev, [id]: v };
         const arr = Array.isArray(prev[item.repeater]) ? [...(prev[item.repeater] as Values[])] : [];
@@ -286,7 +293,9 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, onSub
   // remove re-index the items, so "lines[2].cpm" no longer names the row
   // the agent meant).
   const serverErrorCleared = useCallback(
-    (field: string) => clearedServerErrors.has(field) || (field.includes("[") && clearedServerErrors.has(field.split("[")[0])),
+    (field: string) =>
+      clearedServerErrors.has(field) ||
+      (field.includes("[") ? clearedServerErrors.has(field.split("[")[0]) : clearedServerErrors.has(`${field}\u0000root`)),
     [clearedServerErrors],
   );
 

@@ -1135,10 +1135,24 @@ export function UserTurn({
   if (submission) {
     // A card submission: show the answers by label, not the JSON the model
     // reads. No Edit — the card's own "Edit and resend" is the way to amend.
-    return <SubmissionBubble submission={submission} raw={message.content} />;
+    // Attachments staged in the composer ride along on a card answer too, so
+    // their receipt note is shown here exactly as under a typed message.
+    return (
+      <>
+        <SubmissionBubble submission={submission} raw={message.content} />
+        <InjectedContextNote text={message.injectedContext} />
+      </>
+    );
   }
   const reply = parseReplyMessage(message.content);
-  if (reply) return <ReplyBubble reply={reply} />;
+  if (reply) {
+    return (
+      <>
+        <ReplyBubble reply={reply} />
+        <InjectedContextNote text={message.injectedContext} />
+      </>
+    );
+  }
   return (
     <>
       <UserBubble

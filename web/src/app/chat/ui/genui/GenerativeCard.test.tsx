@@ -571,6 +571,44 @@ describe("fifth Codex pass", () => {
   });
 });
 
+describe("sixth Codex pass", () => {
+  it("a disabled required repeater never blocks submit", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const s = spec({
+      title: "R",
+      components: [{ type: "repeater", id: "lines", disabled: true, required: true, value: [], fields: [{ type: "number", id: "n" }] }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="dr" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("editing an item clears a server error on the repeater as a whole, not its siblings'", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const s = spec({
+      title: "F",
+      components: [
+        { type: "repeater", id: "lines", min_items: 2, max_items: 2, value: [{ n: 1 }, { n: 2 }], fields: [{ type: "number", id: "n", label: "N" }] },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+      field_errors: [
+        { field: "lines", message: "Totals must add to 10" },
+        { field: "lines[1].n", message: "Too high" },
+      ],
+    });
+    render(<GenerativeCard cardId="root" spec={s} onSubmit={onSubmit} />);
+    const first = document.querySelector('[data-repeater-item="0"]') as HTMLElement;
+    await user.type(within(first).getByLabelText("N"), "0");
+    expect(screen.queryByText("Totals must add to 10")).toBeNull();
+    // Item 2's own error stays until item 2 is edited.
+    await user.click(screen.getByRole("button", { name: /Item 2/ }));
+    expect(screen.getByText("Too high")).toBeTruthy();
+  });
+});
+
 describe("tables and disabled repeaters", () => {
   it("binds a selectable table inside a repeater to its own item", async () => {
     const user = userEvent.setup();

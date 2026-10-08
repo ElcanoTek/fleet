@@ -60,7 +60,22 @@ export function isInput(c: Component): boolean {
 }
 
 /** Parse a show_ui tool call's raw input. null when it is not a usable spec. */
+// Parsed specs by raw input. The transcript re-derives card state on every
+// streamed token, and a spec can be large; a tool call's input never changes
+// once recorded, so each is parsed once.
+const specCache = new Map<string, CardSpec | null>();
+const SPEC_CACHE_MAX = 200;
+
 export function parseCardSpec(input: string): CardSpec | null {
+  const hit = specCache.get(input);
+  if (hit !== undefined) return hit;
+  const spec = parseCardSpecUncached(input);
+  if (specCache.size >= SPEC_CACHE_MAX) specCache.delete(specCache.keys().next().value as string);
+  specCache.set(input, spec);
+  return spec;
+}
+
+function parseCardSpecUncached(input: string): CardSpec | null {
   let v: unknown;
   try {
     v = JSON.parse(input);
@@ -148,6 +163,16 @@ export function parseListText(text: string, dedupe: boolean): string[] {
 export function normalizeList(items: string[], dedupe: boolean): string[] {
   const lines = items.map((l) => l.trim()).filter((l) => l !== "");
   return dedupe ? Array.from(new Set(lines)) : lines;
+}
+
+/** An absolute http(s) URL with a host — what format: "url" promises. */
+export function isWebUrl(s: string): boolean {
+  try {
+    const u = new URL(s);
+    return (u.protocol === "http:" || u.protocol === "https:") && u.hostname !== "";
+  } catch {
+    return false;
+  }
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -310,7 +335,7 @@ export function checkField(c: Component, v: unknown): string {
       if (typeof c.min_length === "number" && s.length < c.min_length) return `At least ${c.min_length} characters`;
       if (typeof c.max_length === "number" && s.length > c.max_length) return `At most ${c.max_length} characters`;
       if (c.format === "email" && !EMAIL_RE.test(s.trim())) return "Enter an email address";
-      if (c.format === "url" && !/^https?:\/\/\S+$/i.test(s.trim())) return "Enter a URL (https://…)";
+      if (c.format === "url" && !isWebUrl(s.trim())) return "Enter a URL (https://…)";
       return "";
     }
     case "number":
@@ -389,7 +414,7 @@ export function collect(
             visit(fields, scopeFor(values, item, i), item, w, `${c.id}[${i}].`, off);
             return w;
           });
-          const err = checkField(c, items);
+          const err = off ? "" : checkField(c, items);
           if (err) errors[prefix + c.id] = err;
           continue;
         }

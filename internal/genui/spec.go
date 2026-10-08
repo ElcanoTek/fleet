@@ -31,6 +31,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -308,6 +309,9 @@ type field struct {
 	typ      string
 	path     string
 	repeater string // enclosing repeater id, "" at card scope
+	// items is a repeater's item count when the card opens (its value, else
+	// max(1, min_items)) — the indexes a field_error or Fix link can name.
+	items int
 }
 
 type validator struct {
@@ -423,6 +427,9 @@ func (v *validator) component(path string, raw any, depth int, repeater string) 
 			}
 		} else {
 			v.declare(path, id, typ, repeater)
+			if f, ok := v.fields[id]; ok && typ == "repeater" {
+				f.items = initialItems(obj)
+			}
 		}
 	} else if hasID && !idRe.MatchString(id) {
 		v.addf(path+".id", "ids must match %s", idRe.String())
@@ -772,6 +779,15 @@ func (v *validator) options(path string, val any) {
 // express.
 func (v *validator) componentRules(path, typ string, obj map[string]any) {
 	num := func(k string) (float64, bool) { f, ok := obj[k].(float64); return f, ok }
+	// A required input must have room for an answer: a zero cap on a
+	// required field can never be satisfied.
+	if req, _ := obj["required"].(bool); req {
+		for _, k := range []string{"max_items", "max_length"} {
+			if hi, ok := num(k); ok && hi == 0 {
+				v.addf(path+"."+k, "a required field cannot have %s 0", k)
+			}
+		}
+	}
 	switch typ {
 	case "section":
 		// A collapsed section's header is its only way open; it needs a name.
@@ -806,11 +822,6 @@ func (v *validator) componentRules(path, typ string, obj map[string]any) {
 		custom, _ := obj["allow_custom"].(bool)
 		if !hasOpts && !custom {
 			v.addf(path, "needs options, or allow_custom: true for free entry")
-		}
-		if req, _ := obj["required"].(bool); req {
-			if hi, ok := num("max_items"); ok && hi == 0 {
-				v.addf(path+".max_items", "a required field must allow at least one item")
-			}
 		}
 	case "progress":
 		if hi, ok := num("max"); ok && hi <= 0 {
@@ -1307,7 +1318,23 @@ func (v *validator) checkFieldPath(path string) string {
 	if !ok || inner.repeater != m[1] {
 		return fmt.Sprintf("%q is not a field of repeater %q", m[3], m[1])
 	}
+	if idx, err := strconv.Atoi(m[2]); err != nil || idx >= root.items {
+		return fmt.Sprintf("repeater %q opens with %d item(s); there is no item %s", m[1], root.items, m[2])
+	}
 	return ""
+}
+
+// initialItems is how many items a repeater shows when the card opens:
+// its value's length, else max(1, min_items) — mirroring defaultValue in
+// web/src/app/chat/ui/genui/model.ts.
+func initialItems(obj map[string]any) int {
+	if arr, ok := obj["value"].([]any); ok {
+		return len(arr)
+	}
+	if lo, ok := obj["min_items"].(float64); ok && lo > 1 {
+		return int(lo)
+	}
+	return 1
 }
 
 // resolveExprs parses every collected expression and checks each name it
