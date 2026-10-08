@@ -1176,6 +1176,174 @@
      }
     ]
    }
+  },
+  {
+   "name": "repeater min_items above the protocol limit",
+   "valid": false,
+   "error_contains": "min_items",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "r",
+      "min_items": 10000000,
+      "fields": [
+       {
+        "type": "number",
+        "id": "n"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "list_input max_items above the protocol limit",
+   "valid": false,
+   "error_contains": "max_items",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "list_input",
+      "id": "l",
+      "max_items": 50000
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "empty action id",
+   "valid": false,
+   "error_contains": "ids must match",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text",
+      "text": "x"
+     }
+    ],
+    "actions": [
+     {
+      "id": "",
+      "label": "Go",
+      "kind": "message",
+      "message": "go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "empty option value",
+   "valid": false,
+   "error_contains": "non-empty",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "select",
+      "id": "s",
+      "options": [
+       "a",
+       {
+        "value": "",
+        "label": "None"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "repeater default with a wrongly typed field value",
+   "valid": false,
+   "error_contains": "value[0].cpm: must be a number",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "lines",
+      "fields": [
+       {
+        "type": "number",
+        "id": "cpm"
+       }
+      ],
+      "value": [
+       {
+        "cpm": "twelve"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "repeater default with an unknown option",
+   "valid": false,
+   "error_contains": "not one of the options",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "lines",
+      "fields": [
+       {
+        "type": "section",
+        "children": [
+         {
+          "type": "choice",
+          "id": "ch",
+          "options": [
+           "A",
+           "B"
+          ]
+         }
+        ]
+       }
+      ],
+      "value": [
+       {
+        "ch": "C"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
   }
  ]
 }

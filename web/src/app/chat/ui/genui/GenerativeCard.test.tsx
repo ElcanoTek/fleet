@@ -131,6 +131,37 @@ describe("interaction", () => {
     expect(onSubmit).toHaveBeenCalledWith("Skip the order.");
   });
 
+  it("re-checks the gates at confirmation time", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<GenerativeCard cardId="c" spec={spec(form)} onSubmit={onSubmit} />);
+    await user.type(screen.getByLabelText(/Name/), "Ada");
+    await user.click(screen.getByRole("button", { name: "Place order" }));
+    // The card is still editable while the confirmation is open.
+    await user.clear(screen.getByLabelText(/Name/));
+    await user.click(screen.getByRole("button", { name: "Yes, place order" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByText("Required")).toBeTruthy();
+  });
+
+  it("an unedited server field error blocks submit until the user changes that field", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const s = spec({
+      ...form,
+      components: form.components.map((c) => (c.id === "name" ? { ...c, value: "Taken" } : c)),
+      actions: [{ id: "order", label: "Place order" }],
+      field_errors: [{ field: "name", message: "That name is taken" }],
+    });
+    render(<GenerativeCard cardId="c" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Place order" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toContain("Fix 1 field");
+    await user.type(screen.getByLabelText(/Name/), "2");
+    await user.click(screen.getByRole("button", { name: "Place order" }));
+    expect(parseSubmissionMessage(onSubmit.mock.calls[0][0])?.values.name).toBe("Taken2");
+  });
+
   it("server field_errors show until that field is edited", async () => {
     const user = userEvent.setup();
     const s = spec({ ...form, field_errors: [{ field: "name", message: "That name is taken" }] });

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSubmissionMessage,
+  checkField,
+  MAX_LIST_ITEMS,
   collect,
   initialValues,
   parseCardSpec,
@@ -104,5 +106,14 @@ describe("parseCardSpec", () => {
     expect(parseCardSpec('{"title":1,"components":[]}')).toBeNull();
     const s = parseCardSpec('{"title":"t","components":[{"type":"text","text":"a"}, 3, null, {"no":"type"}]}');
     expect(s?.components).toEqual([{ type: "text", text: "a" }]);
+  });
+});
+
+describe("list_input protocol cap", () => {
+  it("applies even when the card sets no max_items, and max_items cannot raise it", () => {
+    const big = Array.from({ length: MAX_LIST_ITEMS + 1 }, (_, i) => `d${i}.com`);
+    expect(checkField({ type: "list_input", id: "l" }, big)).toContain("At most");
+    expect(checkField({ type: "list_input", id: "l", max_items: MAX_LIST_ITEMS * 2 }, big)).toContain("At most");
+    expect(checkField({ type: "list_input", id: "l" }, big.slice(0, MAX_LIST_ITEMS))).toBe("");
   });
 });

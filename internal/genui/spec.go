@@ -744,6 +744,11 @@ func (v *validator) options(path string, val any) {
 			v.addf(ep, "must be a string or {value, label, description}")
 			continue
 		}
+		if strings.TrimSpace(value) == "" {
+			// "" is the "nothing chosen" value of select / choice and fails
+			// required — an option with it could never be a real answer.
+			v.addf(ep, "option values must be non-empty")
+		}
 		if seen[value] {
 			v.addf(ep, "duplicate option value %q", value)
 		}
@@ -771,6 +776,13 @@ func (v *validator) componentRules(path, typ string, obj map[string]any) {
 		if !hasOpts && !custom {
 			v.addf(path, "needs options, or allow_custom: true for free entry")
 		}
+	case "list_input":
+		// A paste can be enormous; the card-level max_items may narrow the
+		// protocol cap but never raise it (the browser enforces the cap even
+		// when max_items is absent).
+		if hi, ok := num("max_items"); ok && hi > MaxListItems {
+			v.addf(path+".max_items", "at most %d", MaxListItems)
+		}
 	case "repeater":
 		v.repeaterRules(path, obj, num)
 	case "table":
@@ -785,6 +797,11 @@ func (v *validator) repeaterRules(path string, obj map[string]any, num func(stri
 	hi, okHi := num("max_items")
 	if okHi && hi > MaxRepeaterItems {
 		v.addf(path+".max_items", "at most %d", MaxRepeaterItems)
+	}
+	// min_items is materialized eagerly by the browser (one empty item each),
+	// so it is bounded by the same protocol limit.
+	if okLo && lo > MaxRepeaterItems {
+		v.addf(path+".min_items", "at most %d", MaxRepeaterItems)
 	}
 	if okLo && okHi && lo > hi {
 		v.addf(path, "min_items must not exceed max_items")
@@ -1026,9 +1043,9 @@ func (v *validator) checkCollectionValue(path, typ string, obj map[string]any, v
 		if len(arr) > MaxRepeaterItems {
 			v.addf(path, "at most %d items", MaxRepeaterItems)
 		}
-		allowed := map[string]bool{}
+		fields := map[string]map[string]any{}
 		if kids, ok := obj["fields"].([]any); ok {
-			collectInputIDs(kids, allowed)
+			collectInputs(kids, fields)
 		}
 		for i, item := range arr {
 			m, ok := item.(map[string]any)
@@ -1036,10 +1053,16 @@ func (v *validator) checkCollectionValue(path, typ string, obj map[string]any, v
 				v.addf(fmt.Sprintf("%s[%d]", path, i), "must be an object")
 				continue
 			}
-			for k := range m {
-				if !allowed[k] {
-					v.addf(fmt.Sprintf("%s[%d].%s", path, i, k), "not a field of this repeater (fields: %s)", strings.Join(sortedBoolKeys(allowed), ", "))
+			for k, fv := range m {
+				ip := fmt.Sprintf("%s[%d].%s", path, i, k)
+				f, known := fields[k]
+				if !known {
+					v.addf(ip, "not a field of this repeater (fields: %s)", strings.Join(sortedCompKeys(fields), ", "))
+					continue
 				}
+				// Each item value is checked exactly like a top-level default.
+				ft, _ := f["type"].(string)
+				v.checkValue(ip, ft, f, fv)
 			}
 		}
 	default:
@@ -1047,9 +1070,10 @@ func (v *validator) checkCollectionValue(path, typ string, obj map[string]any, v
 	}
 }
 
-// collectInputIDs gathers input ids under a component list, descending
-// through layout containers (but not into a nested repeater's fields).
-func collectInputIDs(kids []any, into map[string]bool) {
+// collectInputs gathers the input components under a component list by id,
+// descending through layout containers (but not into a nested repeater's
+// fields).
+func collectInputs(kids []any, into map[string]map[string]any) {
 	for _, k := range kids {
 		m, ok := k.(map[string]any)
 		if !ok {
@@ -1058,20 +1082,20 @@ func collectInputIDs(kids []any, into map[string]bool) {
 		typ, _ := m["type"].(string)
 		if spec, ok := components[typ]; ok && (spec.input || typ == "table") {
 			if id, ok := m["id"].(string); ok {
-				into[id] = true
+				into[id] = m
 			}
 		}
 		if typ == "repeater" {
 			continue
 		}
 		if c, ok := m["children"].([]any); ok {
-			collectInputIDs(c, into)
+			collectInputs(c, into)
 		}
 		if tabs, ok := m["tabs"].([]any); ok {
 			for _, t := range tabs {
 				if tm, ok := t.(map[string]any); ok {
 					if c, ok := tm["children"].([]any); ok {
-						collectInputIDs(c, into)
+						collectInputs(c, into)
 					}
 				}
 			}
@@ -1117,7 +1141,7 @@ func (v *validator) actions(raw any, hasInput bool) {
 			}
 		}
 		id, _ := obj["id"].(string)
-		if id != "" && !idRe.MatchString(id) {
+		if !idRe.MatchString(id) {
 			v.addf(ap+".id", "ids must match %s", idRe.String())
 		}
 		if seen[id] {
@@ -1277,7 +1301,7 @@ func sortedKeys(m map[string]prop) []string {
 	return out
 }
 
-func sortedBoolKeys(m map[string]bool) []string {
+func sortedCompKeys(m map[string]map[string]any) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)

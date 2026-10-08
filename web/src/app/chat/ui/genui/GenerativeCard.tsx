@@ -280,19 +280,46 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
     }
   };
 
-  const onAction = (action: Action) => {
-    const isSubmit = action.kind !== "message";
-    if (isSubmit && action.validate !== false) {
-      const paths = Object.keys(liveErrors);
+  // Every path that blocks a validated submit: the live checks, plus server
+  // field_errors the user has not edited yet (a value the agent just reported
+  // as failing a live-system check must be changed before it is resent).
+  const blockingPaths = () => {
+    const paths = Object.keys(liveErrors);
+    for (const fe of spec.field_errors ?? []) {
+      if (!clearedServerErrors.has(fe.field) && !paths.includes(fe.field)) paths.push(fe.field);
+    }
+    return paths;
+  };
+
+  /** Runs the action's gates; true when it may proceed. */
+  const passesGates = (action: Action): boolean => {
+    if (typeof action.disabled_if === "string" && truthy(evaluateSafe(action.disabled_if, scope, false))) return false;
+    if (action.kind !== "message" && action.validate !== false) {
+      const paths = blockingPaths();
       if (paths.length > 0) {
         setShowErrors(true);
         setNotice(paths.length === 1 ? "Fix 1 field to continue." : `Fix ${paths.length} fields to continue.`);
         focusField(paths[0]);
-        return;
+        return false;
       }
     }
+    return true;
+  };
+
+  const onAction = (action: Action) => {
+    if (!passesGates(action)) return;
     if (action.confirm) {
       setConfirming(action);
+      return;
+    }
+    void send(action);
+  };
+
+  // The card stays editable while the confirmation is open, so the gates run
+  // again on the values actually being sent.
+  const onConfirm = (action: Action) => {
+    if (!passesGates(action)) {
+      setConfirming(null);
       return;
     }
     void send(action);
@@ -342,7 +369,7 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
                 <button
                   type="button"
                   className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] hover:opacity-90"
-                  onClick={() => void send(confirming)}
+                  onClick={() => onConfirm(confirming)}
                 >
                   Yes, {confirming.label.toLowerCase()}
                 </button>

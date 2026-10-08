@@ -8,6 +8,8 @@
 import { evaluateSafe, truthy, type Scope } from "./expr";
 
 export const SHOW_UI_TOOL = "show_ui";
+/** Must match genui.MaxListItems in internal/genui/spec.go. */
+export const MAX_LIST_ITEMS = 20000;
 /** Must match tools.UISubmissionPrefix in internal/tools/show_ui.go. */
 export const UI_SUBMISSION_PREFIX = "[UI submission]";
 
@@ -250,9 +252,15 @@ export function checkField(c: Component, v: unknown): string {
       return "";
     }
     case "multi_select":
-    case "list_input":
       if (typeof c.max_items === "number" && Array.isArray(v) && v.length > c.max_items) return `At most ${c.max_items} items`;
       return "";
+    case "list_input": {
+      // The protocol cap applies even when the card sets no max_items: a
+      // paste must not become an unbounded user turn.
+      const cap = Math.min(typeof c.max_items === "number" ? c.max_items : MAX_LIST_ITEMS, MAX_LIST_ITEMS);
+      if (Array.isArray(v) && v.length > cap) return `At most ${cap.toLocaleString()} items`;
+      return "";
+    }
     case "date":
       if (typeof c.min === "string" && String(v) < c.min) return `On or after ${c.min}`;
       if (typeof c.max === "string" && String(v) > c.max) return `On or before ${c.max}`;
