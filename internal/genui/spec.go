@@ -1236,6 +1236,18 @@ func (v *validator) actions(raw any, hasInput bool) {
 		if lbl, ok := obj["label"].(string); ok && strings.TrimSpace(lbl) == "" {
 			v.addf(ap+".label", "must be non-blank: it is the button's only name")
 		}
+		for _, cond := range []string{"visible_if", "disabled_if"} {
+			src, ok := obj[cond].(string)
+			if !ok {
+				continue
+			}
+			// A condition that names no input never changes, so the button is
+			// always or never available: either the condition is pointless, or
+			// the card can never be answered while the model waits for it.
+			if refs, err := ParseExpr(src); err == nil && len(refs) == 0 {
+				v.addf(ap+"."+cond, "names no input, so it never changes; drop it (an action is shown and enabled by default)")
+			}
+		}
 		kind, _ := obj["kind"].(string)
 		if kind == "" {
 			kind = "submit"

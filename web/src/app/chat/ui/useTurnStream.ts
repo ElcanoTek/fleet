@@ -4068,6 +4068,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // The input is queued server-side; show its chip while it waits.
           void refreshQueue(target);
         } else if (probe.inflight || (accepted.value && probe.turnID)) {
+          if (!accepted.value && answersOurSubmission(probe, submissionId) === true) {
+            // The POST's response was lost, but /inflight names this
+            // submission: the server took it. Undo the notSent mark above so
+            // a generative-UI card counts the answer (and is told it was sent).
+            accepted.value = true;
+            setConvMessages(target, (current) =>
+              current.map((m) => (m.id === baseId && m.notSent ? { ...m, notSent: false } : m)),
+            );
+          }
           patchAssistantMessage(target, assistantId, (m) => ({
             ...m,
             state: "streaming",

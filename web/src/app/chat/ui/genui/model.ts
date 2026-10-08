@@ -335,7 +335,11 @@ function isEmpty(c: Component, v: unknown): boolean {
   return false;
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// The HTML spec's "valid email address" (what <input type="email"> checks),
+// plus a dot in the domain: actions skip native form validation, so this is
+// the check that counts. Rejects "a@.com" and "a@b..com".
+const EMAIL_LABEL = "[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?";
+const EMAIL_RE = new RegExp(`^[a-zA-Z0-9.!#$%&'*+/=?^_\`{|}~-]+@${EMAIL_LABEL}(?:\\.${EMAIL_LABEL})+$`);
 
 /** One input's own problem, or "" (required-ness included). */
 export function checkField(c: Component, v: unknown): string {

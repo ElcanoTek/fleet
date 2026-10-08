@@ -1981,6 +1981,68 @@
      }
     ]
    }
+  },
+  {
+   "name": "sole submit action never shown",
+   "valid": false,
+   "error_contains": "visible_if: names no input",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "n"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "visible_if": "false"
+     }
+    ]
+   }
+  },
+  {
+   "name": "submit action always disabled",
+   "valid": false,
+   "error_contains": "disabled_if: names no input",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "n"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "disabled_if": "1 == 1"
+     }
+    ]
+   }
+  },
+  {
+   "name": "action condition that reads an input",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "n"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "disabled_if": "empty(n)"
+     }
+    ]
+   }
   }
  ]
 }

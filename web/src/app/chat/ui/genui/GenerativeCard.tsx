@@ -1341,7 +1341,11 @@ function NumberInput({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const [seen, setSeen] = useState(value);
   if (seen !== value) {
     setSeen(value);
-    if (!(typeof value === "number" && Number(text) === value)) setText(typeof value === "number" ? String(value) : "");
+    // Keep the user's own spelling ("1.50") of the same number, but never a
+    // blank box over a real value: Number("") is 0.
+    if (!(typeof value === "number" && text.trim() !== "" && Number(text) === value)) {
+      setText(typeof value === "number" ? String(value) : "");
+    }
   }
   return (
     <Adorned prefix={str(c.prefix) || undefined} suffix={str(c.suffix) || undefined}>
@@ -1594,7 +1598,7 @@ function Toggle({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         type="button"
         role="switch"
         aria-checked={on}
-        aria-label={str(c.label) || "Toggle"}
+        aria-label={str(c.label) || str(c.id) || "Toggle"}
         onClick={() => onChange?.(!on)}
         className={[
           "relative h-5 w-9 shrink-0 rounded-full transition disabled:opacity-60",

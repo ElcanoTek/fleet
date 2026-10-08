@@ -178,3 +178,17 @@ describe("parseCardSpec cache", () => {
     expect(parseCardSpec(input)).toBe(parseCardSpec(input));
   });
 });
+
+describe("email format", () => {
+  const email = { type: "text_input", id: "e", format: "email" } as const;
+  it("rejects what the browser's email control rejects", () => {
+    for (const bad of ["a@.com", "a@b..com", "a@-b.com", "a b@c.com", "a@b"]) {
+      expect(checkField(email, bad)).toBe("Enter an email address");
+    }
+  });
+  it("accepts ordinary addresses", () => {
+    for (const ok of ["a@b.com", "first.last+tag@sub.example.co.uk", " a@b.io "]) {
+      expect(checkField(email, ok)).toBe("");
+    }
+  });
+});

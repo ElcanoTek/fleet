@@ -817,3 +817,36 @@ describe("submission size", () => {
     expect(screen.getByRole("status").textContent).toMatch(/Too large to send/);
   });
 });
+
+describe("eighth Codex pass", () => {
+  it("names an unlabeled toggle by its id", () => {
+    const s = spec({
+      title: "T",
+      components: [
+        { type: "toggle", id: "accept_terms" },
+        { type: "toggle", id: "enable_alerts" },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="tog" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByRole("switch", { name: "accept_terms" })).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "enable_alerts" })).toBeTruthy();
+  });
+
+  it("shows a 0 that replaces a blank number field", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "Z",
+      components: [{ type: "repeater", id: "lines", value: [{}, { n: 0 }], fields: [{ type: "number", id: "n", label: "N" }] }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="zero" spec={s} onSubmit={() => {}} />);
+    // Open the second item, then remove the first: item 0's input now shows item 1's 0.
+    const toggles = document.querySelectorAll("[data-repeater-item] button[aria-expanded]");
+    await user.click(toggles[1] as HTMLElement);
+    await user.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+    const inputs = screen.getAllByLabelText(/^N/) as HTMLInputElement[];
+    expect(inputs.map((i) => i.value)).toContain("0");
+    expect(inputs.every((i) => i.value === "0")).toBe(true);
+  });
+});

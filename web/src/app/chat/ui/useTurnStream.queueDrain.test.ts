@@ -642,3 +642,48 @@ describe("a submission the server refused", () => {
     expect(bubble?.notSent).toBe(true);
   });
 });
+
+describe("a submission whose acknowledgement was lost", () => {
+  it("is cleared of notSent once /inflight names it, and reported as sent", async () => {
+    let ours = "";
+    const h = makeHarness({
+      initial: answeredTranscript(),
+      persisted: drainedHistory(),
+      queue: [[]],
+      inflight: [{ inflight: true, turn_id: "t2" }],
+      streamBodies: [
+        () =>
+          closedStream([
+            sse(1, "turn.started", { turn_id: "t2" }),
+            sse(2, "text.delta", { text: "Got it." }),
+            sse(3, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+    });
+    const harnessFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/chat") {
+          ours = (JSON.parse(String(init?.body)) as { submission_id: string }).submission_id;
+          // The server took it; the response never arrived.
+          throw new TypeError("network error");
+        }
+        if (url.includes("/inflight")) {
+          return new Response(JSON.stringify({ inflight: true, turn_id: "t2", submission_id: ours }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return harnessFetch(input, init);
+      }),
+    );
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const sent = await result.current.submitPrompt("[UI submission] card=c1 action=go\n{}");
+    expect(sent).toBe(true);
+    const bubble = convSlot(h, CONV).find((m) => m.role === "user" && m.content.startsWith("[UI submission]"));
+    expect(bubble).toBeDefined();
+    expect(bubble?.notSent).toBeFalsy();
+  });
+});
