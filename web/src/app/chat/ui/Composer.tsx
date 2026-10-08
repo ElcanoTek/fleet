@@ -175,7 +175,7 @@ export type ComposerProps = {
   setPrompt: Dispatch<SetStateAction<string>>;
   promptPlaceholder: string;
   promptRef: RefObject<HTMLTextAreaElement | null>;
-  submitPrompt: (submittedPrompt: string) => void | Promise<void>;
+  submitPrompt: (submittedPrompt: string) => void | Promise<void | boolean>;
 
   // Sealed (lockdown) view: accent-mixed border + the explainer strip along
   // the composer's top edge. True for an active lockdown conversation, a

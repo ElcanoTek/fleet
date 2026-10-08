@@ -198,6 +198,25 @@ export function newItem(fields: Component[]): Values {
   return item;
 }
 
+/**
+ * The card's values with `saved` (a submission from the transcript, or a
+ * local draft) laid over the defaults — each saved value normalized through
+ * its own input exactly like a default (unknown ids dropped, wrong shapes
+ * reset, repeater items filtered to objects). A transcript message only
+ * LOOKS like buildSubmissionMessage output; it may come from the composer,
+ * another client or an older build, so it is never adopted raw.
+ */
+export function normalizeValues(spec: CardSpec, saved: Values | null | undefined): Values {
+  const out = initialValues(spec);
+  if (!saved || typeof saved !== "object") return out;
+  walkInputs(spec.components, (c) => {
+    if (c.id && Object.prototype.hasOwnProperty.call(saved, c.id)) {
+      out[c.id] = defaultValue({ ...c, value: saved[c.id] });
+    }
+  });
+  return out;
+}
+
 export function initialValues(spec: CardSpec): Values {
   const values: Values = {};
   walkInputs(spec.components, (c) => {
@@ -281,19 +300,28 @@ export function checkField(c: Component, v: unknown): string {
  * stale value would read as an answer the user never saw), plus every
  * visible field's validation error keyed by path ("id" or "rep[i].field").
  */
-export function collect(spec: CardSpec, values: Values): { values: Values; errors: Record<string, string> } {
+export function collect(
+  spec: CardSpec,
+  values: Values,
+): { values: Values; errors: Record<string, string>; visible: Set<string> } {
   const out: Values = {};
   const errors: Record<string, string> = {};
+  // Every currently visible input's path — what a server field_error may
+  // still block on (a hidden or removed field cannot be fixed by the user).
+  const visible = new Set<string>();
   // read: where this level's values live (the card, or one repeater item);
   // write: where the submitted copy goes; prefix: the error-path prefix.
   const visit = (list: Component[], scope: Scope, read: Values, write: Values, prefix: string) => {
     for (const c of list) {
       if (!isVisible(c, scope)) continue;
       if (isInput(c) && c.id) {
+        visible.add(prefix + c.id);
         const v = read[c.id];
         if (c.type === "repeater") {
           const fields = children(c, "fields");
-          const items = Array.isArray(v) ? (v as Values[]) : [];
+          const items = Array.isArray(v)
+            ? (v as unknown[]).map((x) => (x && typeof x === "object" && !Array.isArray(x) ? (x as Values) : {}))
+            : [];
           write[c.id] = items.map((item, i) => {
             const w: Values = {};
             visit(fields, scopeFor(values, item, i), item, w, `${c.id}[${i}].`);
@@ -312,7 +340,7 @@ export function collect(spec: CardSpec, values: Values): { values: Values; error
     }
   };
   visit(spec.components, scopeFor(values), values, out, "");
-  return { values: out, errors };
+  return { values: out, errors, visible };
 }
 
 export function buildSubmissionMessage(cardId: string, actionId: string, values: Values): string {

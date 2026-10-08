@@ -158,9 +158,13 @@ func lex(src string) ([]token, error) {
 // exprParser is a recursive-descent recognizer. It builds no tree — the Go
 // side only needs "does it parse" and "which root names does it read".
 type exprParser struct {
-	toks  []token
-	pos   int
-	refs  []string
+	toks []token
+	pos  int
+	refs []string
+	// paths holds each field reference with the member names read off it
+	// ("lines.cpm" → ["lines", "cpm"]), so the validator can check members
+	// too, not just roots.
+	paths [][]string
 	depth int
 }
 
@@ -263,15 +267,28 @@ func (p *exprParser) unary() error {
 }
 
 func (p *exprParser) postfix() error {
+	before := len(p.refs)
 	if err := p.primary(); err != nil {
 		return err
+	}
+	// A bare field reference (not a call, literal or parenthesized value)
+	// starts a member path.
+	var path []string
+	if len(p.refs) == before+1 && p.toks[p.pos-1].kind == tIdent {
+		path = []string{p.refs[before]}
 	}
 	for p.isOp(".") {
 		p.next()
 		if p.peek().kind != tIdent {
 			return p.errf("expected a field name after '.'")
 		}
+		if path != nil {
+			path = append(path, p.peek().text)
+		}
 		p.next()
+	}
+	if path != nil {
+		p.paths = append(p.paths, path)
 	}
 	return nil
 }
@@ -346,24 +363,30 @@ func arityText(a [2]int) string {
 // ParseExpr checks one expression and returns the root names it reads (field
 // ids, or a repeater's per-item names) in source order, duplicates kept.
 func ParseExpr(src string) ([]string, error) {
+	refs, _, err := parseExprPaths(src)
+	return refs, err
+}
+
+// parseExprPaths is ParseExpr plus the member path of every field reference.
+func parseExprPaths(src string) ([]string, [][]string, error) {
 	if strings.TrimSpace(src) == "" {
-		return nil, fmt.Errorf("empty expression")
+		return nil, nil, fmt.Errorf("empty expression")
 	}
 	if len(src) > MaxExprLen {
-		return nil, fmt.Errorf("expression longer than %d characters", MaxExprLen)
+		return nil, nil, fmt.Errorf("expression longer than %d characters", MaxExprLen)
 	}
 	toks, err := lex(src)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	p := &exprParser{toks: toks}
 	if err := p.expr(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if p.peek().kind != tEOF {
-		return nil, p.errf("unexpected trailing input")
+		return nil, nil, p.errf("unexpected trailing input")
 	}
-	return p.refs, nil
+	return p.refs, p.paths, nil
 }
 
 // TemplateExprs splits a display string into its {{ expr }} holes. A string

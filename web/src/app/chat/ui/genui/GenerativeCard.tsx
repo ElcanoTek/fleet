@@ -29,7 +29,7 @@ import {
   buildSubmissionMessage,
   children,
   collect,
-  initialValues,
+  normalizeValues,
   isInput,
   isVisible,
   newItem,
@@ -109,7 +109,8 @@ export type GenerativeCardProps = {
   /** Shared / read-only transcripts: render, never submit. */
   readOnly?: boolean;
   /** Sends a user turn (the submission message or a quick reply). */
-  onSubmit?: (message: string) => void | Promise<void>;
+  // Resolves false when the message was refused (nothing was sent).
+  onSubmit?: (message: string) => void | Promise<void | boolean>;
 };
 
 const DRAFT_PREFIX = "fleet.genui.draft.";
@@ -134,15 +135,6 @@ function saveDraft(cardId: string, values: Values | null) {
   }
 }
 
-/** Overlay saved values onto the defaults, keeping only known input ids. */
-function overlay(base: Values, saved: Values | null | undefined): Values {
-  if (!saved) return base;
-  const out = { ...base };
-  for (const k of Object.keys(base)) {
-    if (Object.prototype.hasOwnProperty.call(saved, k)) out[k] = saved[k];
-  }
-  return out;
-}
 
 export default function GenerativeCard(props: GenerativeCardProps) {
   const { spec, superseded } = props;
@@ -169,12 +161,15 @@ export default function GenerativeCard(props: GenerativeCardProps) {
 }
 
 function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: GenerativeCardProps) {
-  const defaults = useMemo(() => initialValues(spec), [spec]);
   const [values, setValuesState] = useState<Values>(() =>
-    overlay(defaults, submission ? submission.values : readOnly ? null : loadDraft(cardId)),
+    normalizeValues(spec, submission ? submission.values : readOnly ? null : loadDraft(cardId)),
   );
   const [editing, setEditing] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
+  // An accepted submit that has not reached the transcript yet — a message
+  // queued behind a running turn is accepted but not echoed until that turn
+  // ends. Actions stay disabled so a second click cannot queue a duplicate.
+  const [awaiting, setAwaiting] = useState<string | null>(null);
   const [showErrors, setShowErrors] = useState(false);
   const [confirming, setConfirming] = useState<Action | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -194,7 +189,8 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
     setSeenSubmission(submissionKey);
     if (submission) {
       setEditing(false);
-      setValuesState(overlay(defaults, submission.values));
+      setAwaiting(null);
+      setValuesState(normalizeValues(spec, submission.values));
     }
   }
   useEffect(() => {
@@ -228,31 +224,47 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
     [setValues],
   );
 
-  const { values: submitValues, errors: liveErrors } = useMemo(() => collect(spec, values), [spec, values]);
+  const { values: submitValues, errors: liveErrors, visible } = useMemo(() => collect(spec, values), [spec, values]);
+
+  // A server error clears when its field is edited, or — for a repeater
+  // field — when the repeater itself changes shape (add / duplicate /
+  // remove re-index the items, so "lines[2].cpm" no longer names the row
+  // the agent meant).
+  const serverErrorCleared = useCallback(
+    (field: string) => clearedServerErrors.has(field) || (field.includes("[") && clearedServerErrors.has(field.split("[")[0])),
+    [clearedServerErrors],
+  );
 
   const errors = useMemo(() => {
     const out: Record<string, string> = {};
     if (!locked) {
       for (const fe of spec.field_errors ?? []) {
-        if (!clearedServerErrors.has(fe.field) && typeof fe.message === "string") out[fe.field] = fe.message;
+        if (!serverErrorCleared(fe.field) && typeof fe.message === "string") out[fe.field] = fe.message;
       }
     }
     if (showErrors && !locked) Object.assign(out, liveErrors);
     return out;
-  }, [spec.field_errors, clearedServerErrors, showErrors, liveErrors, locked]);
+  }, [spec.field_errors, serverErrorCleared, showErrors, liveErrors, locked]);
 
   const focusField = useCallback((path: string) => {
     const root = rootRef.current;
     if (!root) return;
     const sel = `[data-genui-field="${CSS.escape(path)}"]`;
     // A field inside an inactive tab is not mounted; ask the tabs to reveal it.
+    // Tabs, collapsed sections and closed repeater items listen and open.
     root.dispatchEvent(new CustomEvent("genui:reveal", { detail: path }));
-    window.requestAnimationFrame(() => {
+    // The revealed field mounts on a later render; look for a few frames.
+    let tries = 0;
+    const find = () => {
       const el = root.querySelector<HTMLElement>(sel);
-      if (!el) return;
+      if (!el) {
+        if (++tries < 4) window.requestAnimationFrame(find);
+        return;
+      }
       el.scrollIntoView?.({ block: "center", behavior: "smooth" });
       el.querySelector<HTMLElement>("input,select,textarea,button")?.focus({ preventScroll: true });
-    });
+    };
+    window.requestAnimationFrame(find);
   }, []);
 
   const ctx = useMemo<CardCtx>(
@@ -268,10 +280,14 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
     setNotice(null);
     setSending(action.id);
     try {
-      if (action.kind === "message") {
-        await onSubmit(str(action.message));
-      } else {
-        await onSubmit(buildSubmissionMessage(cardId, action.id, submitValues));
+      const accepted =
+        action.kind === "message"
+          ? await onSubmit(str(action.message))
+          : await onSubmit(buildSubmissionMessage(cardId, action.id, submitValues));
+      if (accepted === false) {
+        setNotice("Not sent. Try again.");
+      } else if (action.kind !== "message") {
+        setAwaiting(action.id);
       }
     } catch {
       setNotice("Could not send. Try again.");
@@ -286,13 +302,15 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
   const blockingPaths = () => {
     const paths = Object.keys(liveErrors);
     for (const fe of spec.field_errors ?? []) {
-      if (!clearedServerErrors.has(fe.field) && !paths.includes(fe.field)) paths.push(fe.field);
+      // Only a field the user can still see and fix may block.
+      if (visible.has(fe.field) && !serverErrorCleared(fe.field) && !paths.includes(fe.field)) paths.push(fe.field);
     }
     return paths;
   };
 
   /** Runs the action's gates; true when it may proceed. */
   const passesGates = (action: Action): boolean => {
+    if (!isVisible(action, scope)) return false;
     if (typeof action.disabled_if === "string" && truthy(evaluateSafe(action.disabled_if, scope, false))) return false;
     if (action.kind !== "message" && action.validate !== false) {
       const paths = blockingPaths();
@@ -326,6 +344,9 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
   };
 
   const actions = (spec.actions ?? []).filter((a) => isVisible(a, scope));
+  // A confirmation whose action has since become hidden (its visible_if no
+  // longer holds) closes rather than offering a Yes for an unavailable action.
+  const confirmingVisible = confirming && isVisible(confirming, scope) ? confirming : null;
   const sentLabel = submittedAction
     ? (spec.actions ?? []).find((a) => a.id === submittedAction)?.label ?? submittedAction
     : null;
@@ -363,22 +384,33 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
                 ) : null}
               </div>
             ) : null}
-            {!locked && confirming ? (
+            {!locked && awaiting ? (
+              <div className="flex flex-wrap items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]" role="status">
+                <span data-testid="genui-awaiting">
+                  Sent · {(spec.actions ?? []).find((a) => a.id === awaiting)?.label ?? awaiting} — it will reach the
+                  assistant after the current reply
+                </span>
+                <button type="button" className="underline hover:text-[var(--color-text-primary)]" onClick={() => setAwaiting(null)}>
+                  Unlock
+                </button>
+              </div>
+            ) : null}
+            {!locked && confirmingVisible ? (
               <div className="flex flex-wrap items-center gap-2" role="alertdialog" aria-label="Confirm">
-                <span className="text-[0.78rem]">{confirming.confirm}</span>
+                <span className="text-[0.78rem]">{confirmingVisible.confirm}</span>
                 <button
                   type="button"
                   className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] hover:opacity-90"
-                  onClick={() => onConfirm(confirming)}
+                  onClick={() => onConfirm(confirmingVisible)}
                 >
-                  Yes, {confirming.label.toLowerCase()}
+                  Yes, {confirmingVisible.label.toLowerCase()}
                 </button>
                 <button type="button" className={chipButton} onClick={() => setConfirming(null)}>
                   Back
                 </button>
               </div>
             ) : null}
-            {!locked && !confirming && actions.length > 0 ? (
+            {!locked && !confirmingVisible && !awaiting && actions.length > 0 ? (
               <div className="flex flex-wrap items-center gap-2">
                 {actions.map((a) => {
                   const disabled =
@@ -411,7 +443,7 @@ function CardBody({ cardId, spec, submission, superseded, readOnly, onSubmit }: 
                       // sit under the "Sent" label.
                       setEditing(false);
                       setShowErrors(false);
-                      setValuesState(overlay(defaults, submission?.values));
+                      setValuesState(normalizeValues(spec, submission?.values));
                       saveDraft(cardId, null);
                     }}>
                     Cancel edit
@@ -456,13 +488,50 @@ type Renderer = (p: { c: Component; value?: unknown; onChange?: (v: unknown) => 
 
 // ───────────────────────── layout ─────────────────────────
 
+/** The input id a field path starts with ("lines[2].cpm" → "lines"). */
+const rootOfPath = (path: string) => path.split(/[[.]/)[0];
+
+/**
+ * Subscribe a container to the card's "genui:reveal" event (dispatched by
+ * focusField with the target field path) so collapsed content opens before
+ * the field is looked up.
+ */
+function useReveal(ref: { current: HTMLElement | null }, onReveal: (path: string) => void) {
+  const handler = useRef(onReveal);
+  useEffect(() => {
+    handler.current = onReveal;
+  });
+  useEffect(() => {
+    const card = ref.current?.closest("[data-testid='genui-card']");
+    if (!card) return;
+    const listener = (e: Event) => handler.current((e as CustomEvent<string>).detail);
+    card.addEventListener("genui:reveal", listener);
+    return () => card.removeEventListener("genui:reveal", listener);
+  }, [ref]);
+}
+
+/** Every input id under a component list, repeater fields included. */
+function idsUnder(list: Component[]): Set<string> {
+  const ids = new Set<string>();
+  walkInputs(list, (f) => {
+    if (f.id) ids.add(f.id);
+    if (f.type === "repeater") walkInputs(children(f, "fields"), (g) => g.id && ids.add(g.id));
+  });
+  return ids;
+}
+
 function Section({ c }: { c: Component }) {
   const scope = useScope();
   const collapsible = c.collapsible === true;
   const [open, setOpen] = useState(!(collapsible && c.collapsed === true));
   const title = str(c.title);
+  const ref = useRef<HTMLElement | null>(null);
+  const owned = useMemo(() => idsUnder(children(c)), [c]);
+  useReveal(ref, (path) => {
+    if (owned.has(rootOfPath(path))) setOpen(true);
+  });
   return (
-    <section className="grid min-w-0 gap-2.5 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
+    <section ref={ref} className="grid min-w-0 gap-2.5 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
       {title || c.description ? (
         <div>
           {collapsible ? (
@@ -1542,8 +1611,15 @@ function Repeater({ c, value, onChange }: Parameters<Renderer>[0]) {
     if (open !== undefined) setOpenIdx((s) => new Set(s).add(open));
   };
   const labelTpl = str(c.item_label);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useReveal(ref, (path) => {
+    // Paths into this repeater read "<id>[<index>].<field>".
+    if (!path.startsWith(`${id}[`)) return;
+    const i = Number.parseInt(path.slice(id.length + 1), 10);
+    if (Number.isInteger(i)) setOpenIdx((s) => new Set(s).add(i));
+  });
   return (
-    <div className="grid min-w-0 gap-1.5">
+    <div ref={ref} className="grid min-w-0 gap-1.5">
       {items.map((item, i) => {
         const scope = scopeFor(values, item, i);
         const label = labelTpl ? renderTemplate(labelTpl, scope) : `Item ${i + 1}`;

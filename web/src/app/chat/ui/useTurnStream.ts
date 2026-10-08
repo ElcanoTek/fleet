@@ -584,7 +584,7 @@ export interface UseTurnStream {
   // checkStreamLiveness across every attached conversation, not just the
   // active one. No-op while the tab is hidden.
   sweepStreamLiveness: (opts?: { force?: boolean }) => Promise<void>;
-  submitPrompt: (submittedPrompt: string) => Promise<void>;
+  submitPrompt: (submittedPrompt: string) => Promise<boolean>;
   regenerateLastAssistant: () => Promise<void>;
   resendUserMessage: (
     userMessageId: number,
@@ -3735,7 +3735,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
   };
 
-  const submitPrompt = async (submittedPrompt: string) => {
+  const submitPrompt = async (submittedPrompt: string): Promise<boolean> => {
     const value = submittedPrompt.trim();
     // composerKey is the slot the user was typing into (real conv id or
     // the PENDING singleton for the empty new-chat view). All the
@@ -3744,8 +3744,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // Submit.
     const convId = activeConversationIdRef.current;
     const composerKey = convId ?? PENDING_CONV_KEY;
-    if (!value || !userEmail) return;
-    if (modelError) return;
+    if (!value || !userEmail) return false;
+    if (modelError) return false;
     // Busy conversation (#785): the submission QUEUES server-side instead of
     // being dropped (and instead of the old implicit cancel). The composer
     // clears; the chip strip under it tracks the queued input's lifecycle.
@@ -3765,7 +3765,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         const kind = classifyQueueSubmitResponse(res);
         if (kind === "error") {
           setPromptForKey(composerKey, value); // give the text back
-          return;
+          return false;
         }
         if (kind === "stream") {
           // Stale busy flag (#824): the turn we thought was running had
@@ -3806,7 +3806,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             // and the old timer then found the slot settled, released, and
             // never followed the turn this submission had just started.
             const after = recoveryOwnedRef.current.get(convId);
-            if (after && after.gen !== owned.gen) return;
+            if (after && after.gen !== owned.gen) return true;
             releaseRecovery(convId);
           }
           // A chase is running, and it is BOUND to the turn it discovered —
@@ -3820,17 +3820,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
               pendingDirectHandoffRef.current.set(convId, value);
               bumpRecoveryEpoch(convId);
             }
-            return;
+            return true;
           }
           await reattachToConv(convId);
-          return;
+          return true;
         }
       } catch {
         setPromptForKey(composerKey, value);
-        return;
+        return false;
       }
       void refreshQueue(convId);
-      return;
+      return true;
     }
 
     // Upload any pending attachments FIRST. If it fails, we bail out with
@@ -3845,7 +3845,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           composerKey,
           err instanceof Error ? err.message : "Upload failed.",
         );
-        return;
+        return false;
       }
     }
 
@@ -3988,7 +3988,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // the turn is still running and someone else is reading it now.
         // Leave the slot, the attach handle and the streaming flag alone —
         // the `finally` below makes the same check.
-        return;
+        return true;
       }
       if (abortController.signal.aborted) {
         // User clicked Stop. Mark the turn cancelled — the server's
@@ -4216,6 +4216,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         void followQueueDrain(finalTarget);
       }
     }
+    // Reaching the end means the turn was posted (its own failure, if any,
+    // is reported on the turn). The boolean lets callers that are not the
+    // composer — a generative-UI card — tell "accepted" from "refused".
+    return true;
   };
 
   return {

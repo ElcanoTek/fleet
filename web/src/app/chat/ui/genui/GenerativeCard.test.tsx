@@ -255,6 +255,115 @@ describe("repeater", () => {
   });
 });
 
+describe("second Codex pass", () => {
+  it("an accepted submit waits for the transcript with actions disabled; a refused one says so", async () => {
+    const user = userEvent.setup();
+    const accepted = vi.fn().mockResolvedValue(true);
+    const s = spec({ ...form, actions: [{ id: "order", label: "Place order" }] });
+    const view = render(<GenerativeCard cardId="q" spec={s} onSubmit={accepted} />);
+    await user.type(screen.getByLabelText(/Name/), "Ada");
+    await user.click(screen.getByRole("button", { name: "Place order" }));
+    expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Place order" })).toBeNull();
+    view.unmount();
+
+    const refused = vi.fn().mockResolvedValue(false);
+    render(<GenerativeCard cardId="q2" spec={s} onSubmit={refused} />);
+    await user.type(screen.getByLabelText(/Name/), "Ada");
+    await user.click(screen.getByRole("button", { name: "Place order" }));
+    expect(await screen.findByText("Not sent. Try again.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Place order" })).toBeEnabled();
+  });
+
+  it("a server error on a field the user hid does not block submit", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const s = spec({
+      ...form,
+      components: form.components.map((c) => (c.id === "name" ? { ...c, value: "Ada" } : c)),
+      actions: [{ id: "order", label: "Place order" }],
+      field_errors: [{ field: "note", message: "Too long" }],
+    });
+    render(<GenerativeCard cardId="h" spec={s} onSubmit={onSubmit} />);
+    // gift is off, so the note is hidden: its stale error must not block.
+    await user.click(screen.getByRole("button", { name: "Place order" }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("removing a repeater item clears server errors keyed by item index", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const s = spec({
+      title: "L",
+      components: [
+        { type: "repeater", id: "lines", value: [{ n: 1 }, { n: 2 }], fields: [{ type: "number", id: "n", label: "N" }] },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+      field_errors: [{ field: "lines[1].n", message: "Bad" }],
+    });
+    render(<GenerativeCard cardId="r2" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getAllByRole("button", { name: "Remove" })[1]);
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(parseSubmissionMessage(onSubmit.mock.calls[0][0])?.values).toEqual({ lines: [{ n: 1 }] });
+  });
+
+  it("closes a confirmation whose action became hidden", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const s = spec({
+      title: "D",
+      components: [{ type: "toggle", id: "armed", label: "Armed", value: true }],
+      actions: [{ id: "del", label: "Delete", style: "danger", confirm: "Really?", visible_if: "armed" }],
+    });
+    render(<GenerativeCard cardId="v" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    expect(screen.getByText("Really?")).toBeTruthy();
+    await user.click(screen.getByRole("switch"));
+    expect(screen.queryByText("Really?")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Yes/ })).toBeNull();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("normalizes a malformed transcript submission instead of crashing", () => {
+    const s = spec({
+      title: "L",
+      components: [{ type: "repeater", id: "lines", fields: [{ type: "number", id: "n", label: "N" }] }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(
+      <GenerativeCard
+        cardId="m"
+        spec={s}
+        submission={{ cardId: "m", actionId: "go", values: { lines: [null, "x", { n: "oops" }], junk: 1 } }}
+      />,
+    );
+    expect(screen.getByTestId("genui-card")).toBeTruthy();
+  });
+
+  it("opens a collapsed section to show the field that blocks submit", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const s = spec({
+      title: "S",
+      components: [
+        {
+          type: "section",
+          title: "More",
+          collapsible: true,
+          collapsed: true,
+          children: [{ type: "text_input", id: "code", label: "Code", required: true }],
+        },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="sec" spec={s} onSubmit={onSubmit} />);
+    expect(screen.queryByLabelText(/Code/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(await screen.findByLabelText(/Code/)).toBeTruthy();
+    expect(screen.getByText("Required")).toBeTruthy();
+  });
+});
+
 describe("tables and disabled repeaters", () => {
   it("binds a selectable table inside a repeater to its own item", async () => {
     const user = userEvent.setup();

@@ -290,7 +290,11 @@ var idRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 // repeater's per-item index, or function names (an id shadowing a function
 // would make "len(len)" legal and baffling).
 var reservedNames = func() map[string]bool {
-	m := map[string]bool{"true": true, "false": true, "null": true, "index": true}
+	// __proto__ / constructor / prototype would hit JavaScript's legacy
+	// prototype setters when the browser assigns values[id], silently
+	// dropping the input from drafts and submissions.
+	m := map[string]bool{"true": true, "false": true, "null": true, "index": true,
+		"__proto__": true, "constructor": true, "prototype": true}
 	for f := range exprFuncs {
 		m[f] = true
 	}
@@ -761,6 +765,18 @@ func (v *validator) options(path string, val any) {
 func (v *validator) componentRules(path, typ string, obj map[string]any) {
 	num := func(k string) (float64, bool) { f, ok := obj[k].(float64); return f, ok }
 	switch typ {
+	case "text_input":
+		lo, okLo := num("min_length")
+		hi, okHi := num("max_length")
+		if okLo && okHi && lo > hi {
+			v.addf(path, "min_length must not exceed max_length")
+		}
+	case "date":
+		lo, _ := obj["min"].(string)
+		hi, _ := obj["max"].(string)
+		if lo != "" && hi != "" && lo > hi {
+			v.addf(path, "min must not be after max")
+		}
 	case "slider", "number":
 		lo, okLo := num("min")
 		hi, okHi := num("max")
@@ -1020,6 +1036,7 @@ func (v *validator) checkCollectionValue(path, typ string, obj map[string]any, v
 				v.addf(path+"."+k, "must be an array of strings")
 			}
 		}
+		v.includeExcludeEntries(path, obj, m, inOptions)
 	case "table":
 		sel, _ := obj["select"].(string)
 		switch sel {
@@ -1067,6 +1084,29 @@ func (v *validator) checkCollectionValue(path, typ string, obj map[string]any, v
 		}
 	default:
 		v.addf(path, "%s does not take a value", typ)
+	}
+}
+
+// includeExcludeEntries refuses a default the user could not have built: an
+// entry outside the options (unless allow_custom), or one in both lanes.
+func (v *validator) includeExcludeEntries(path string, obj, m map[string]any, inOptions func(string) bool) {
+	custom, _ := obj["allow_custom"].(bool)
+	seen := map[string]string{}
+	for _, k := range []string{"include", "exclude"} {
+		side, _ := m[k].([]any)
+		for _, e := range side {
+			s, ok := e.(string)
+			if !ok {
+				continue
+			}
+			if !custom && !inOptions(s) {
+				v.addf(path+"."+k, "%q is not one of the options (set allow_custom: true to permit free entry)", s)
+			}
+			if other, dup := seen[s]; dup && other != k {
+				v.addf(path, "%q is in both include and exclude", s)
+			}
+			seen[s] = k
+		}
 	}
 }
 
@@ -1239,7 +1279,7 @@ func (v *validator) checkFieldPath(path string) string {
 // its repeater is refused with the aggregate spelling that works.
 func (v *validator) resolveExprs() {
 	for _, e := range v.exprs {
-		refs, err := ParseExpr(e.src)
+		refs, paths, err := parseExprPaths(e.src)
 		if err != nil {
 			v.addf(e.path, "expression %q: %v", truncateRunes(e.src, 120), err)
 			continue
@@ -1260,12 +1300,58 @@ func (v *validator) resolveExprs() {
 				v.addf(e.path, "expression %q reads %q, a field of repeater %q; outside that repeater use %s.%s (an array) with sum/count/join", truncateRunes(e.src, 120), r, f.repeater, f.repeater, r)
 			}
 		}
+		for _, mp := range paths {
+			if f, ok := v.fields[mp[0]]; ok && len(mp) > 1 {
+				if msg := v.memberError(f, mp[1:]); msg != "" {
+					v.addf(e.path, "expression %q reads %s: %s", truncateRunes(e.src, 120), strings.Join(mp, "."), msg)
+				}
+			}
+		}
 	}
 	for _, fp := range v.fieldPaths {
 		if msg := v.checkFieldPath(fp.target); msg != "" {
 			v.addf(fp.path, "%s", msg)
 		}
 	}
+}
+
+// memberError checks the member names read off a field: a repeater exposes
+// its own fields (each an array across items), an include_exclude its two
+// lanes, and nothing else has members. A typo here would otherwise evaluate
+// to null in the browser and silently zero a total or flip a condition.
+func (v *validator) memberError(f *field, members []string) string {
+	switch f.typ {
+	case "repeater":
+		inner, ok := v.fields[members[0]]
+		if !ok || inner.repeater != f.id {
+			return fmt.Sprintf("%q is not a field of repeater %q (fields: %s)", members[0], f.id, v.repeaterFieldNames(f.id))
+		}
+		if len(members) > 1 {
+			return v.memberError(inner, members[1:])
+		}
+		return ""
+	case "include_exclude":
+		if members[0] != "include" && members[0] != "exclude" {
+			return fmt.Sprintf("an include_exclude value has only .include and .exclude, not %q", members[0])
+		}
+		if len(members) > 1 {
+			return "include / exclude are lists of strings and have no fields"
+		}
+		return ""
+	default:
+		return fmt.Sprintf("%q is a %s input and has no fields", f.id, f.typ)
+	}
+}
+
+func (v *validator) repeaterFieldNames(rep string) string {
+	var names []string
+	for id, f := range v.fields {
+		if f.repeater == rep {
+			names = append(names, id)
+		}
+	}
+	sortStrings(names)
+	return strings.Join(names, ", ")
 }
 
 func (v *validator) inputNames() string {

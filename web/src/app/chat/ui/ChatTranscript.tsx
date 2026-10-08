@@ -92,7 +92,7 @@ export type ChatTranscriptProps = {
   pills: ProtocolPill[];
   activePillId: string | null;
   setActivePillId: Dispatch<SetStateAction<string | null>>;
-  submitPrompt: (submittedPrompt: string) => void | Promise<void>;
+  submitPrompt: (submittedPrompt: string) => void | Promise<void | boolean>;
   setPrompt: Dispatch<SetStateAction<string>>;
 
   // Compaction / summarize

@@ -1344,6 +1344,259 @@
      }
     ]
    }
+  },
+  {
+   "name": "expression reads a repeater member that does not exist",
+   "valid": false,
+   "error_contains": "\"cpm_typo\" is not a field of repeater",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "lines",
+      "fields": [
+       {
+        "type": "number",
+        "id": "cpm"
+       },
+       {
+        "type": "include_exclude",
+        "id": "geo",
+        "allow_custom": true
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": "{{ sum(lines.cpm_typo) }}"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "expression reads a member of a scalar input",
+   "valid": false,
+   "error_contains": "has no fields",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "number",
+      "id": "n"
+     },
+     {
+      "type": "text",
+      "text": "{{ n.value }}"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "expression reads include_exclude lanes through a repeater",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "lines",
+      "fields": [
+       {
+        "type": "number",
+        "id": "cpm"
+       },
+       {
+        "type": "include_exclude",
+        "id": "geo",
+        "allow_custom": true
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": "{{ len(lines.geo) }} {{ count(lines.cpm) }}"
+     },
+     {
+      "type": "include_exclude",
+      "id": "top",
+      "allow_custom": true
+     },
+     {
+      "type": "text",
+      "text": "{{ len(top.include) }}"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "expression reads a bad include_exclude member",
+   "valid": false,
+   "error_contains": "only .include and .exclude",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "include_exclude",
+      "id": "top",
+      "allow_custom": true
+     },
+     {
+      "type": "text",
+      "text": "{{ len(top.allow) }}"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "__proto__ input id",
+   "valid": false,
+   "error_contains": "reserved",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "__proto__"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "include_exclude default outside its options",
+   "valid": false,
+   "error_contains": "not one of the options",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "include_exclude",
+      "id": "g",
+      "options": [
+       "US",
+       "CA"
+      ],
+      "value": {
+       "include": [
+        "MX"
+       ],
+       "exclude": []
+      }
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "include_exclude default in both lanes",
+   "valid": false,
+   "error_contains": "in both include and exclude",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "include_exclude",
+      "id": "g",
+      "options": [
+       "US",
+       "CA"
+      ],
+      "value": {
+       "include": [
+        "US"
+       ],
+       "exclude": [
+        "US"
+       ]
+      }
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "text min_length above max_length",
+   "valid": false,
+   "error_contains": "min_length must not exceed max_length",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "t",
+      "min_length": 10,
+      "max_length": 5
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "date min after max",
+   "valid": false,
+   "error_contains": "min must not be after max",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "date",
+      "id": "d",
+      "min": "2026-12-01",
+      "max": "2026-01-01"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
   }
  ]
 }
