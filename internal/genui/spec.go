@@ -334,6 +334,7 @@ type validator struct {
 type condRef struct {
 	path string
 	refs []string
+	src  string
 }
 
 type pathRef struct{ path, target string }
@@ -391,8 +392,12 @@ func Validate(raw []byte) (Card, []Issue) {
 			}
 		}
 	}
+	kinds := v.inputKinds()
 	for _, c := range v.conds {
-		if v.unreachable(c.refs) {
+		switch {
+		case neverTrue(c.src, kinds):
+			v.addf(c.path, "can never be true whatever the inputs are (it contradicts itself), so it never changes; fix the logic or drop it")
+		case v.unreachable(c.refs):
 			v.addf(c.path, "%s", unreachableMsg)
 		}
 	}
@@ -467,12 +472,20 @@ func (v *validator) component(path string, raw any, depth int, repeater string) 
 	}
 }
 
-// toggles: the declared toggle ids, whose values are always booleans.
-func (v *validator) toggles() map[string]bool {
-	out := map[string]bool{}
+// inputKinds: the inputs whose values the satisfiability check (satisfy.go)
+// can reason about, by kind. Ids are unique across the card, so within one
+// condition a name always means one value (a repeater field's, inside its
+// item).
+func (v *validator) inputKinds() map[string]string {
+	out := map[string]string{}
 	for id, f := range v.fields {
-		if f.typ == "toggle" {
-			out[id] = true
+		switch f.typ {
+		case "toggle":
+			out[id] = kindBool
+		case "number":
+			out[id] = kindNumber
+		case "slider":
+			out[id] = kindSlider
 		}
 	}
 	return out
@@ -831,11 +844,7 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 			v.addf(path+"."+cond, "names no input, so it never changes; drop it (a component is shown and enabled by default)")
 			continue
 		}
-		v.conds = append(v.conds, condRef{path: path + "." + cond, refs: refs})
-		if neverTrue(src, v.toggles()) {
-			v.addf(path+"."+cond, "can never be true whatever the inputs are (it contradicts itself), so it never changes; fix the logic or drop it")
-			continue
-		}
+		v.conds = append(v.conds, condRef{path: path + "." + cond, refs: refs, src: src})
 		// A visible_if that reads any input it hides (the component itself,
 		// or an input inside it) can lock that input away for good: "gate &&
 		// !empty(name)" on name never opens once name is empty and hidden.
@@ -1316,6 +1325,8 @@ func (v *validator) itemCount(path string, obj map[string]any, n int) {
 	}
 }
 
+var lineBreaks = regexp.MustCompile(`[\r\n]+`)
+
 // listCount is how many entries the browser keeps from a list default: a
 // list_input drops blank lines (and repeats, with dedupe), like normalizeList
 // in web/src/app/chat/ui/genui/model.ts.
@@ -1331,12 +1342,15 @@ func listCount(typ string, obj map[string]any, arr []any) int {
 	seen := map[string]bool{}
 	n := 0
 	for _, e := range arr {
-		s := strings.TrimSpace(e.(string))
-		if s == "" || (dedupe && seen[s]) {
-			continue
+		// An entry with a line break in it is that many entries.
+		for _, line := range lineBreaks.Split(e.(string), -1) {
+			s := strings.TrimSpace(line)
+			if s == "" || (dedupe && seen[s]) {
+				continue
+			}
+			seen[s] = true
+			n++
 		}
-		seen[s] = true
-		n++
 	}
 	return n
 }
@@ -1476,7 +1490,7 @@ func (v *validator) actions(raw any, hasInput bool) {
 		// can never be pressed; see satisfy.go for what is decided.
 		vis, _ := obj["visible_if"].(string)
 		dis, _ := obj["disabled_if"].(string)
-		if (vis != "" || dis != "") && neverUsable(vis, dis, v.toggles()) {
+		if (vis != "" || dis != "") && neverUsable(vis, dis, v.inputKinds()) {
 			v.addf(ap, "can never be pressed: whatever the inputs are, it is hidden or disabled (check visible_if and disabled_if together)")
 		}
 		kind, _ := obj["kind"].(string)
@@ -1927,6 +1941,20 @@ func (v *validator) resolveExprs() {
 	for _, fp := range v.fieldPaths {
 		if msg := v.checkFieldPath(fp.target); msg != "" {
 			v.addf(fp.path, "%s", msg)
+			continue
+		}
+		// A field error blocks submit until the user edits that field, so it
+		// must name one they can edit. (A status_list Fix link on such a
+		// field just does not render.)
+		if strings.HasPrefix(fp.path, "field_errors") {
+			m := fieldPathRe.FindStringSubmatch(fp.target)
+			leaf := m[1]
+			if m[3] != "" {
+				leaf = m[3]
+			}
+			if !v.reach[leaf] {
+				v.addf(fp.path, "%q is an input the user can never change (disabled, or never shown), so an error on it could never be fixed; report it in the card text instead", fp.target)
+			}
 		}
 	}
 }

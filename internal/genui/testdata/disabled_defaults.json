@@ -763,6 +763,32 @@
     "value": 3
    },
    "valid": true
+  },
+  {
+   "name": "list entry with a line break counts as two",
+   "component": {
+    "type": "list_input",
+    "id": "f",
+    "label": "F",
+    "max_items": 1,
+    "value": [
+     "a\nb"
+    ]
+   },
+   "valid": false
+  },
+  {
+   "name": "list entry with a line break within max",
+   "component": {
+    "type": "list_input",
+    "id": "f",
+    "label": "F",
+    "max_items": 2,
+    "value": [
+     "a\r\nb"
+    ]
+   },
+   "valid": true
   }
  ]
 }

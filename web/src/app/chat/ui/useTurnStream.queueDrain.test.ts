@@ -1,4 +1,4 @@
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   hasPendingQueueWork,
@@ -1018,5 +1018,43 @@ describe("a lost queued card response whose presence probes hang", () => {
     } finally {
       timeoutSpy.mockRestore();
     }
+  });
+});
+
+describe("a queued card answer removed from the queue", () => {
+  it("releases the card's hold once the server no longer has it", async () => {
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    let sid = "";
+    let removed = false;
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/chat") {
+          sid = (JSON.parse(String(init?.body)) as { submission_id: string }).submission_id;
+          return json({ queued: true, input: { id: "q1", client_input_id: "c-q1", mode: "queued", state: "queued", position: 1 }, conversation_id: CONV }, 202);
+        }
+        if (url.includes("/queue/") && init?.method === "DELETE") {
+          removed = true;
+          return json({});
+        }
+        if (url.includes("/queue")) return json({ items: removed ? [] : [{ ...queuedRow("q1"), submission_id: sid }] });
+        if (url.includes("/api/conversations/")) return json({ history: [] });
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    const deps = { ...h.deps, streamingConvsRef: { current: new Set([CONV]) } };
+    const { result } = renderHook(() => useTurnStream(deps));
+    const onUnsent = vi.fn();
+    await act(async () => {
+      expect(await result.current.submitPrompt("[UI submission] card=c1 action=go\n{}", { fromCard: true, onUnsent })).toBe(true);
+    });
+    expect(onUnsent).not.toHaveBeenCalled();
+    await act(async () => {
+      await result.current.removeQueuedInput(CONV, "q1");
+    });
+    await vi.waitFor(() => expect(onUnsent).toHaveBeenCalledTimes(1));
   });
 });

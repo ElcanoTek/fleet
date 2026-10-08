@@ -1326,6 +1326,51 @@ describe("a quick reply after editing fields", () => {
   });
 });
 
+describe("repeater item identity", () => {
+  it("keeps an item's own UI state with it when an earlier item is removed", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "R",
+      components: [
+        {
+          type: "repeater",
+          id: "lines",
+          label: "Lines",
+          item_label: "{{ name }}",
+          value: [{ name: "A" }, { name: "B" }],
+          fields: [
+            { type: "text_input", id: "name", label: "Name" },
+            { type: "include_exclude", id: "geo", label: "Geo", options: ["US", "CA"] },
+          ],
+        },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="rk" spec={s} onSubmit={() => {}} />);
+    // Open B and pick its Exclude lane; close A.
+    await user.click(screen.getByRole("button", { name: "B" }));
+    await user.click(screen.getByRole("button", { name: "A" }));
+    const bItem = document.querySelector('[data-repeater-item="1"]') as HTMLElement;
+    await user.click(within(bItem).getByRole("button", { name: "Exclude" }));
+    // Remove A: B moves to the first slot and keeps its own state.
+    const aItem = document.querySelector('[data-repeater-item="0"]') as HTMLElement;
+    await user.click(within(aItem).getByRole("button", { name: "Remove" }));
+    const only = document.querySelector('[data-repeater-item="0"]') as HTMLElement;
+    expect(within(only).getByRole("button", { name: "B" }).getAttribute("aria-expanded")).toBe("true");
+    expect(within(only).getByRole("button", { name: "Exclude" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("falls back to Item N when the item label renders blank", () => {
+    const s = spec({
+      title: "R",
+      components: [{ type: "repeater", id: "lines", label: "Lines", item_label: "{{ name }}", value: [{ name: "" }], fields: [{ type: "text_input", id: "name", label: "Name" }] }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="rb" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByRole("button", { name: /Item 1/ })).toBeTruthy();
+  });
+});
+
 describe("identical resend", () => {
   it("does not reopen the editor on remount once the identical resend is accepted", async () => {
     window.localStorage.clear();

@@ -53,7 +53,7 @@ func TestNeverUsable(t *testing.T) {
 }
 
 func TestBooleanComparisons(t *testing.T) {
-	bools := map[string]bool{"gate": true}
+	bools := map[string]string{"gate": kindBool}
 	cases := []struct {
 		vis, dis string
 		want     bool
@@ -72,5 +72,37 @@ func TestBooleanComparisons(t *testing.T) {
 		if got := neverUsable(c.vis, c.dis, bools); got != c.want {
 			t.Errorf("neverUsable(%q, %q) = %v, want %v", c.vis, c.dis, got, c.want)
 		}
+	}
+}
+
+func TestNumberComparisons(t *testing.T) {
+	kinds := map[string]string{"n": kindNumber, "s": kindSlider}
+	cases := []struct {
+		vis, dis string
+		want     bool
+	}{
+		{"n > 0", "n >= 0", true},
+		{"n > 5", "n > 3", true},
+		{"0 < n", "n > 0", true},
+		{"n == 3", "n > 2", true},
+		{"n >= 10", "n < 0 || n > 5", true},
+		{"n > 0", "n > 5", false},  // n = 3
+		{"n < 0", "n >= 0", false}, // n = -1
+		{"n != 3", "n > 2", false}, // blank: != holds, ordering reads 0
+		{"!n", "n == 0", false},    // blank n is falsy, and blank never == 0
+		{"s == 0", "!s", true},     // a slider is never blank
+		{"n", "n != 0", true},      // truthy n is a non-zero number
+		{"n > -2", "n >= -2", true},
+		// Not judged: arithmetic, or comparing two inputs.
+		{"n + 1 > 3", "n > 2", false},
+		{"n > s", "n >= s", false},
+	}
+	for _, c := range cases {
+		if got := neverUsable(c.vis, c.dis, kinds); got != c.want {
+			t.Errorf("neverUsable(%q, %q) = %v, want %v", c.vis, c.dis, got, c.want)
+		}
+	}
+	if !neverTrue("n > 5 && n < 3", kinds) || neverTrue("n > 3 && n < 5", kinds) {
+		t.Error("contradictory and satisfiable ranges")
 	}
 }

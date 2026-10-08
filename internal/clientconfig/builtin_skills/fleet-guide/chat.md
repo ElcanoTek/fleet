@@ -475,10 +475,11 @@ card helps; you can also simply ask for one ("give me a form for this").
   what you sent.
 - **A card waits for its answer to arrive.** If the assistant is still
   replying, or the connection dropped as you pressed the button, the card
-  shows **Sent · … — waiting to reach the assistant** and keeps its buttons off
-  so you do not send twice. **Unlock** frees them if you want to send again
-  anyway. If the connection recovers and your answer never arrived, the card
-  unlocks by itself and says **Not sent. Try again.**
+  shows **Sent · … — waiting to reach the assistant** and keeps its buttons and
+  fields off so you do not send twice. **Unlock** frees them if you want to
+  send again anyway. If your answer never arrives (the connection recovers and
+  it is not there, or you remove it from the queue under the message box), the
+  card unlocks by itself and says **Not sent. Try again.**
 - **An optional single choice can be undone.** A list of round options shows
   **Clear choice** once you pick one, and a table you pick one row from shows
   **Clear selection**, if the question is optional.

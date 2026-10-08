@@ -3320,6 +3320,146 @@
      }
     ]
    }
+  },
+  {
+   "name": "action shown on n > 0 but disabled on n >= 0",
+   "valid": false,
+   "error_contains": "can never be pressed",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "number",
+      "id": "n",
+      "label": "N"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "visible_if": "n > 0",
+      "disabled_if": "n >= 0"
+     }
+    ]
+   }
+  },
+  {
+   "name": "section shown on a contradictory range",
+   "valid": false,
+   "error_contains": "can never be true",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "number",
+      "id": "n",
+      "label": "N"
+     },
+     {
+      "type": "text",
+      "text": "hi",
+      "visible_if": "n > 5 && n < 3"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "action enabled on part of its range",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "number",
+      "id": "n",
+      "label": "N"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "visible_if": "n > 0",
+      "disabled_if": "n > 5"
+     }
+    ]
+   }
+  },
+  {
+   "name": "field error on a disabled input",
+   "valid": false,
+   "error_contains": "never change",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "acct",
+      "label": "Account",
+      "disabled": true,
+      "value": "A1"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ],
+    "field_errors": [
+     {
+      "field": "acct",
+      "message": "Not found"
+     }
+    ]
+   }
+  },
+  {
+   "name": "field error on a field of a disabled repeater",
+   "valid": false,
+   "error_contains": "never change",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "r",
+      "label": "R",
+      "disabled": true,
+      "value": [
+       {
+        "n": "a"
+       }
+      ],
+      "fields": [
+       {
+        "type": "text_input",
+        "id": "n",
+        "label": "N"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ],
+    "field_errors": [
+     {
+      "field": "r[0].n",
+      "message": "Bad"
+     }
+    ]
+   }
   }
  ]
 }

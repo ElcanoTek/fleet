@@ -3509,7 +3509,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // for the recovery chain to recover and attaching to whatever /inflight
     // reports (a previous turn still inside its retain window, say) would
     // replay the wrong turn into this slot (#1584).
-    accepted?: { value: boolean },
+    accepted?: { value: boolean; queued?: boolean },
     // Set on the one resend a lockdown model refusal is allowed to trigger
     // (#1588), so a server that refuses the very slug it just named cannot
     // bounce the turn between us forever.
@@ -3595,7 +3595,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       );
       // Queued is accepted: the server holds this submission and will run it
       // (callers such as a generative-UI card must not offer to resend it).
-      if (accepted) accepted.value = true;
+      if (accepted) {
+        accepted.value = true;
+        accepted.queued = true;
+      }
       return;
     }
 
@@ -3796,6 +3799,28 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
   // `fromCard`: a generative-UI card is sending its answer. Said by the
   // caller, never inferred from the text — a user may type anything.
+  // A card answer accepted into the queue holds its card until it reaches the
+  // transcript. If its row leaves the queue some other way (Remove from
+  // queue, a Stop that cancels queued input), nothing would ever release
+  // that hold: so each queued card answer is watched, and when a snapshot no
+  // longer lists it the server is asked once whether it landed.
+  const queuedCardSendsRef = useRef(new Map<string, { convId: string; text: string; onUnsent: () => void }>());
+  const watchQueuedCardSend = (convId: string, text: string, submissionId: string, onUnsent: () => void) => {
+    queuedCardSendsRef.current.set(submissionId, { convId, text, onUnsent });
+  };
+  useEffect(() => {
+    for (const [sid, w] of queuedCardSendsRef.current) {
+      const items = queuedInputs.get(w.convId);
+      if (!items || items.some((q) => q.submission_id === sid)) continue;
+      queuedCardSendsRef.current.delete(sid);
+      // "yes" (it drained into a turn) leaves the card to the transcript;
+      // "no" releases it; unknown keeps asking.
+      recheckHeldSend(w.convId, w.text, sid, w.onUnsent, 0, true);
+    }
+    // recheckHeldSend is stable in behavior; the effect is about snapshots.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queuedInputs]);
+
   // recheckHeldSend: a card send held as "possibly sent" that no recovery
   // chain will settle. Re-asks the server until it answers; "no" calls
   // onUnsent, "yes" ends quietly, and an unmount stops it.
@@ -3949,6 +3974,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         restoreComposer();
         return false;
       }
+      if (fromCard && opts?.onUnsent) watchQueuedCardSend(convId, value, queueSubmissionId, opts.onUnsent);
       void refreshQueue(convId);
       return true;
     }
@@ -4089,7 +4115,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return initialTarget;
     };
     // Whether the server took this submission (see streamTurn's parameter).
-    const accepted = { value: false };
+    const accepted: { value: boolean; queued?: boolean } = { value: false };
     // The response was lost and the server could not be asked whether it
     // holds the submission: a card holds rather than offering a resend.
     let uncertain = false;
@@ -4388,6 +4414,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // uncertain too, unless the server definitively said it holds nothing:
     // the card holds instead of inviting a retry that could duplicate it.
     if (!accepted.value && !absent && recoveryOwns(resolveTarget())) uncertain = true;
+    // A direct send the server queued instead (it knew a turn was running).
+    if (accepted.queued && fromCard && opts?.onUnsent) {
+      watchQueuedCardSend(resolveTarget(), value, submissionId, opts.onUnsent);
+    }
     const held = !accepted.value && uncertain && fromCard;
     if (held && opts?.onUnsent) {
       // The card now holds. Once recovery lets go of the conversation, ask

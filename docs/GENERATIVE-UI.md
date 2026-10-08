@@ -85,6 +85,16 @@ field, revealing it if it sits in another tab. Inputs hidden by `visible_if`
 are neither validated nor submitted, so a stale hidden value never reads as an
 answer the user gave.
 
+Conditions are checked for logic that can never work. Each `visible_if` /
+`disabled_if` is reduced to its `&&` / `||` / `!` structure and every
+possible state is tried: a condition that can never be true, or an action that
+is hidden or disabled in every state, is refused. A toggle compared with
+`true` / `false` is the toggle itself, and a number or slider input compared
+with number literals (`n > 0`, `n >= 0`, a bare `n`) is tried at concrete
+values covering every range those literals separate, blank included. Anything
+else (arithmetic, two inputs compared, text and lists) is treated as unknown,
+so the check never refuses a card that could work (`internal/genui/satisfy.go`).
+
 A disabled input is submitted without being validated (the user cannot fix
 it), so the validator refuses any default the browser would reject as an
 answer: a required field left blank, a value off its length, format, range,

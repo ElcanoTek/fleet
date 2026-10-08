@@ -2,23 +2,37 @@ package genui
 
 import (
 	"fmt"
+	"math"
+	"sort"
+	"strconv"
 	"strings"
 )
 
-// Propositional satisfiability over conditions. A visible_if / disabled_if
-// is reduced to its boolean skeleton: &&, || and ! stay operators, true and
-// false (and null) are constants, and every other operand (a field, a
-// comparison, a call, a ternary...) becomes an opaque atom, the same atom
-// wherever its tokens are the same. Atoms are treated as independent, which
-// can only find MORE satisfying states than really exist, so "never true"
-// here is never a false alarm: it holds whatever the inputs are. It catches
-// what a model can actually write by mistake — "gate && !gate", a button
-// disabled by "gate || !gate", or shown on "gate" but disabled on
-// "gate || block" — without an evaluator for the value domain.
+// Satisfiability over conditions. A visible_if / disabled_if is reduced to
+// its boolean skeleton: &&, || and ! stay operators, true and false (and
+// null) are constants, and every other operand becomes an atom, the same atom
+// wherever its tokens are the same. Two kinds of atom are understood:
+//
+//   - A comparison between one number input (number or slider) and a number
+//     literal ("n > 0", "5 <= n", "n == 3"), or a bare number input read for
+//     truthiness, is a fact about that input's value. Such atoms are
+//     evaluated together by giving the input concrete values: every literal
+//     it is compared with, a point between each pair and beyond both ends,
+//     and (for a number input, which can be blank) null. That set meets
+//     every region the comparisons can tell apart, so "n > 0" shown and
+//     "n >= 0" disabled is caught.
+//   - Everything else (a toggle compared with true/false aside, which shares
+//     the toggle's atom) is opaque and free: any truth value, independent of
+//     the rest.
+//
+// Free atoms can only find MORE satisfying states than really exist, so a
+// "never" verdict is never a false alarm: it holds whatever the inputs are.
+// What is deliberately not judged: arithmetic ("a + b > 3"), comparisons
+// between two inputs, text and list values.
 
-// maxSatAtoms bounds the brute-force check (2^n states); a condition with
-// more distinct atoms is not judged.
-const maxSatAtoms = 12
+// maxSatStates bounds the brute-force check; a condition set with more
+// states than this is not judged.
+const maxSatStates = 1 << 12
 
 type bnode struct {
 	op   byte // 'o' or, 'a' and, 'n' not, 'v' atom, 'c' constant
@@ -27,14 +41,24 @@ type bnode struct {
 	val  bool
 }
 
+// numAtom is an atom that is a fact about one number input's value.
+type numAtom struct {
+	field string
+	op    string // < <= > >= == != , or "truthy" for a bare read
+	c     float64
+}
+
+// Input kinds the check understands (see validator.inputKinds).
+const (
+	kindBool   = "bool"   // toggle: always true or false
+	kindNumber = "number" // number input: a number, or null when blank
+	kindSlider = "slider" // slider: always a number
+)
+
 type skelParser struct {
-	toks  []token
-	pos   int
-	atoms map[string]int
-	// bools: input ids whose value is always a boolean (toggles). For those,
-	// "x == true" IS x and "x == false" IS !x, so the comparison shares x's
-	// atom instead of floating free of it.
-	bools map[string]bool
+	toks []token
+	pos  int
+	sk   *skeleton
 }
 
 func (p *skelParser) peek() token { return p.toks[p.pos] }
@@ -52,21 +76,15 @@ func (p *skelParser) isOp(s string) bool {
 
 // atomOf names the tokens from start up to the current position.
 func (p *skelParser) atomOf(start int) *bnode {
-	return p.atomFor(p.toks[start:p.pos])
+	return p.sk.atom(tokenKey(p.toks[start:p.pos]), nil)
 }
 
-func (p *skelParser) atomFor(toks []token) *bnode {
+func tokenKey(toks []token) string {
 	var b strings.Builder
 	for _, t := range toks {
 		fmt.Fprintf(&b, "%d:%s ", t.kind, t.text)
 	}
-	key := b.String()
-	id, ok := p.atoms[key]
-	if !ok {
-		id = len(p.atoms)
-		p.atoms[key] = id
-	}
-	return &bnode{op: 'v', atom: id}
+	return b.String()
 }
 
 func (p *skelParser) expr() *bnode {
@@ -117,35 +135,82 @@ func (p *skelParser) operand() *bnode {
 		p.next()
 		p.unary()
 	}
-	if chained {
-		if b := p.boolCompare(start); b != nil {
-			return b
-		}
-		return p.atomOf(start)
+	if !chained {
+		return n
 	}
-	return n
+	if b := p.compare(p.toks[start:p.pos]); b != nil {
+		return b
+	}
+	return p.atomOf(start)
 }
 
-// boolCompare reduces "x == true", "x != false", "false == x"... on a
-// boolean input x to x or !x. Anything else is left to be an opaque atom.
-func (p *skelParser) boolCompare(start int) *bnode {
-	t := p.toks[start:p.pos]
-	if len(t) != 3 || t[1].kind != tOp || (t[1].text != "==" && t[1].text != "!=") {
+// compare understands one comparison between an input and a literal:
+// a toggle against true/false, or a number input against a number.
+func (p *skelParser) compare(t []token) *bnode {
+	// field OP literal, or literal OP field (a literal may be negative).
+	var field token
+	var op string
+	var lit []token
+	known := func(k token) bool { return k.kind == tIdent && p.sk.kinds[k.text] != "" }
+	switch {
+	case len(t) >= 3 && known(t[0]) && t[1].kind == tOp:
+		field, op, lit = t[0], t[1].text, t[2:]
+	case len(t) >= 3 && known(t[len(t)-1]) && t[len(t)-2].kind == tOp:
+		field, op, lit = t[len(t)-1], flipOp(t[len(t)-2].text), t[:len(t)-2]
+	default:
 		return nil
 	}
-	isLit := func(k token) bool { return k.kind == tIdent && (k.text == "true" || k.text == "false") }
-	field, lit := t[0], t[2]
-	if isLit(field) {
-		field, lit = lit, field
+	switch p.sk.kinds[field.text] {
+	case kindBool:
+		if len(lit) != 1 || lit[0].kind != tIdent || (lit[0].text != "true" && lit[0].text != "false") || (op != "==" && op != "!=") {
+			return nil
+		}
+		n := p.sk.atom(tokenKey([]token{field}), nil)
+		if (lit[0].text == "true") != (op == "==") {
+			return &bnode{op: 'n', l: n}
+		}
+		return n
+	case kindNumber, kindSlider:
+		c, ok := numberLiteral(lit)
+		if !ok || !containsStr([]string{"<", "<=", ">", ">=", "==", "!="}, op) {
+			return nil
+		}
+		return p.sk.atom(fmt.Sprintf("num:%s %s %v", field.text, op, c), &numAtom{field: field.text, op: op, c: c})
 	}
-	if !isLit(lit) || field.kind != tIdent || !p.bools[field.text] {
-		return nil
+	return nil
+}
+
+// flipOp turns "c OP x" into "x OP' c".
+func flipOp(op string) string {
+	switch op {
+	case "<":
+		return ">"
+	case "<=":
+		return ">="
+	case ">":
+		return "<"
+	case ">=":
+		return "<="
 	}
-	n := p.atomFor([]token{field})
-	if (lit.text == "true") != (t[1].text == "==") {
-		return &bnode{op: 'n', l: n}
+	return op
+}
+
+func numberLiteral(t []token) (float64, bool) {
+	neg := false
+	if len(t) == 2 && t[0].kind == tOp && t[0].text == "-" {
+		neg, t = true, t[1:]
 	}
-	return n
+	if len(t) != 1 || t[0].kind != tNum {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(t[0].text, 64)
+	if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+		return 0, false
+	}
+	if neg {
+		f = -f
+	}
+	return f, true
 }
 
 func isValueOp(s string) bool {
@@ -197,6 +262,11 @@ func (p *skelParser) primary() *bnode {
 				}
 			}
 			p.next()
+			return p.atomOf(start)
+		}
+		// A bare number input read for truthiness: a fact about its value.
+		if k := p.sk.kinds[t.text]; k == kindNumber || k == kindSlider {
+			return p.sk.atom("num:"+t.text+" truthy", &numAtom{field: t.text, op: "truthy"})
 		}
 		return p.atomOf(start)
 	case t.kind == tOp && t.text == "(":
@@ -210,27 +280,27 @@ func (p *skelParser) primary() *bnode {
 	}
 }
 
-func (n *bnode) eval(state uint) bool {
-	switch n.op {
-	case 'o':
-		return n.l.eval(state) || n.r.eval(state)
-	case 'a':
-		return n.l.eval(state) && n.r.eval(state)
-	case 'n':
-		return !n.l.eval(state)
-	case 'v':
-		return state&(1<<uint(n.atom)) != 0
-	default:
-		return n.val
-	}
-}
-
 // skeleton parses conditions that already passed ParseExpr into one shared
 // atom space. A source that fails to lex yields nil (the validator reports
 // the parse error elsewhere).
 type skeleton struct {
-	atoms map[string]int
-	bools map[string]bool
+	keys  map[string]int
+	nums  []*numAtom // by atom id; nil for a free atom
+	kinds map[string]string
+}
+
+func newSkeleton(kinds map[string]string) *skeleton {
+	return &skeleton{keys: map[string]int{}, kinds: kinds}
+}
+
+func (s *skeleton) atom(key string, num *numAtom) *bnode {
+	id, ok := s.keys[key]
+	if !ok {
+		id = len(s.nums)
+		s.keys[key] = id
+		s.nums = append(s.nums, num)
+	}
+	return &bnode{op: 'v', atom: id}
 }
 
 func (s *skeleton) parse(src string) *bnode {
@@ -238,26 +308,142 @@ func (s *skeleton) parse(src string) *bnode {
 	if err != nil {
 		return nil
 	}
-	p := &skelParser{toks: toks, atoms: s.atoms, bools: s.bools}
+	p := &skelParser{toks: toks, sk: s}
 	return p.expr()
 }
 
-// satisfiable reports whether some assignment of the atoms makes every
-// `want` true and every `deny` false. Too many atoms counts as satisfiable.
-func satisfiable(atoms int, want, deny []*bnode) bool {
-	if atoms > maxSatAtoms {
+// value is a number input's value in one state: a number, or blank (null).
+type value struct {
+	null bool
+	n    float64
+}
+
+// candidates are the values worth trying for a number input: each literal
+// it is compared with, the points between and beyond them, and blank.
+func (s *skeleton) candidates(field string) []value {
+	var cs []float64
+	for _, a := range s.nums {
+		if a != nil && a.field == field && a.op != "truthy" {
+			cs = append(cs, a.c)
+		}
+	}
+	cs = append(cs, 0) // truthiness turns on zero
+	sort.Float64s(cs)
+	var out []value
+	for i, c := range cs {
+		if i > 0 && c == cs[i-1] {
+			continue
+		}
+		if i == 0 {
+			out = append(out, value{n: c - 1})
+		} else {
+			out = append(out, value{n: (cs[i-1] + c) / 2})
+		}
+		out = append(out, value{n: c})
+	}
+	out = append(out, value{n: cs[len(cs)-1] + 1})
+	if s.kinds[field] == kindNumber {
+		out = append(out, value{null: true})
+	}
+	return out
+}
+
+// holds evaluates a number atom the way expr.ts does: ordering treats a
+// blank (null) as 0, equality never matches it, and blank is falsy.
+func (a *numAtom) holds(v value) bool {
+	if a.op == "truthy" {
+		return !v.null && v.n != 0
+	}
+	if v.null && (a.op == "==" || a.op == "!=") {
+		return a.op == "!="
+	}
+	x := v.n
+	if v.null {
+		x = 0
+	}
+	switch a.op {
+	case "<":
+		return x < a.c
+	case "<=":
+		return x <= a.c
+	case ">":
+		return x > a.c
+	case ">=":
+		return x >= a.c
+	case "==":
+		return x == a.c
+	default:
+		return x != a.c
+	}
+}
+
+func (n *bnode) eval(truth []bool) bool {
+	switch n.op {
+	case 'o':
+		return n.l.eval(truth) || n.r.eval(truth)
+	case 'a':
+		return n.l.eval(truth) && n.r.eval(truth)
+	case 'n':
+		return !n.l.eval(truth)
+	case 'v':
+		return truth[n.atom]
+	default:
+		return n.val
+	}
+}
+
+// satisfiable reports whether some state makes every `want` true and every
+// `deny` false. A state assigns each free atom a truth value and each number
+// input one of its candidate values. Too many states counts as satisfiable.
+func (s *skeleton) satisfiable(want, deny []*bnode) bool {
+	var free []int
+	var fields []string
+	cands := map[string][]value{}
+	for id, a := range s.nums {
+		if a == nil {
+			free = append(free, id)
+		} else if _, seen := cands[a.field]; !seen {
+			cands[a.field] = s.candidates(a.field)
+			fields = append(fields, a.field)
+		}
+	}
+	states := 1 << len(free)
+	for _, f := range fields {
+		states *= len(cands[f])
+		if states > maxSatStates {
+			return true
+		}
+	}
+	if len(free) > 12 || states > maxSatStates {
 		return true
 	}
-	for state := uint(0); state < 1<<uint(atoms); state++ {
+	truth := make([]bool, len(s.nums))
+	vals := map[string]value{}
+	for st := 0; st < states; st++ {
+		rest := st
+		for _, id := range free {
+			truth[id] = rest&1 != 0
+			rest >>= 1
+		}
+		for _, f := range fields {
+			c := cands[f]
+			vals[f] = c[rest%len(c)]
+			rest /= len(c)
+		}
+		for id, a := range s.nums {
+			if a != nil {
+				truth[id] = a.holds(vals[a.field])
+			}
+		}
 		ok := true
 		for _, w := range want {
-			if w != nil && !w.eval(state) {
+			if w != nil && !w.eval(truth) {
 				ok = false
 				break
 			}
 		}
 		for _, d := range deny {
-			if ok && d != nil && d.eval(state) {
+			if ok && d != nil && d.eval(truth) {
 				ok = false
 			}
 		}
@@ -268,17 +454,17 @@ func satisfiable(atoms int, want, deny []*bnode) bool {
 	return false
 }
 
-// neverTrue: a condition that holds in no state at all. bools names the
-// boolean-valued inputs (see skelParser.bools); nil is allowed.
-func neverTrue(src string, bools map[string]bool) bool {
-	s := &skeleton{atoms: map[string]int{}, bools: bools}
+// neverTrue: a condition that holds in no state at all. kinds names the
+// inputs the check understands (see the constants above); nil is allowed.
+func neverTrue(src string, kinds map[string]string) bool {
+	s := newSkeleton(kinds)
 	n := s.parse(src)
-	return n != nil && !satisfiable(len(s.atoms), []*bnode{n}, nil)
+	return n != nil && !s.satisfiable([]*bnode{n}, nil)
 }
 
 // neverUsable: an action that is disabled in every state where it is shown.
-func neverUsable(visibleIf, disabledIf string, bools map[string]bool) bool {
-	s := &skeleton{atoms: map[string]int{}, bools: bools}
+func neverUsable(visibleIf, disabledIf string, kinds map[string]string) bool {
+	s := newSkeleton(kinds)
 	var want, deny []*bnode
 	if visibleIf != "" {
 		want = append(want, s.parse(visibleIf))
@@ -286,5 +472,5 @@ func neverUsable(visibleIf, disabledIf string, bools map[string]bool) bool {
 	if disabledIf != "" {
 		deny = append(deny, s.parse(disabledIf))
 	}
-	return !satisfiable(len(s.atoms), want, deny)
+	return !s.satisfiable(want, deny)
 }

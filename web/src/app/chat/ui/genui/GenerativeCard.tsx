@@ -2191,6 +2191,15 @@ function IncludeExcludeInput({ c, value, onChange, inputId }: Parameters<Rendere
   );
 }
 
+// Repeater items get client-side identities for React keys and open state:
+// keyed by position, an item's stateful controls (an adder's half-typed
+// query, an include/exclude lane choice) would move to the next item after a
+// remove or duplicate.
+let itemKeySeq = 0;
+function freshKeys(n: number): number[] {
+  return Array.from({ length: n }, () => ++itemKeySeq);
+}
+
 function Repeater({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const { values, locked: cardLocked } = useCard();
   // A disabled repeater (or one nested in a disabled scope) keeps its expand
@@ -2202,38 +2211,57 @@ function Repeater({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const id = str(c.id);
   const min = numOr(c.min_items) ?? 0;
   const max = numOr(c.max_items) ?? 200;
-  const [openIdx, setOpenIdx] = useState<Set<number>>(() => new Set([0]));
-  const toggleOpen = (i: number) =>
-    setOpenIdx((s) => {
+  const [keys, setKeys] = useState<number[]>(() => freshKeys(items.length));
+  // The first item starts open.
+  const [openKeys, setOpenKeys] = useState<Set<number>>(() => new Set(keys.slice(0, 1)));
+  // The value changed from outside (a restored draft, an adopted answer):
+  // identities can no longer be matched, so the items start afresh.
+  let itemKeys = keys;
+  if (keys.length !== items.length) {
+    itemKeys = freshKeys(items.length);
+    setKeys(itemKeys);
+    setOpenKeys(new Set(itemKeys.slice(0, 1)));
+  }
+  const toggleOpen = (k: number) =>
+    setOpenKeys((s) => {
       const n = new Set(s);
-      if (n.has(i)) n.delete(i);
-      else n.add(i);
+      if (n.has(k)) n.delete(k);
+      else n.add(k);
       return n;
     });
-  const update = (next: Values[], open?: number) => {
+  const update = (next: Values[], nextKeys: number[], open?: number) => {
+    setKeys(nextKeys);
+    if (open !== undefined) setOpenKeys((s) => new Set(s).add(open));
     onChange?.(next);
-    if (open !== undefined) setOpenIdx((s) => new Set(s).add(open));
   };
   const labelTpl = str(c.item_label);
   const ref = useRef<HTMLDivElement | null>(null);
+  const keysRef = useRef(itemKeys);
+  useEffect(() => {
+    keysRef.current = itemKeys;
+  });
   useReveal(ref, (path) => {
     // Paths into this repeater read "<id>[<index>].<field>".
     if (!path.startsWith(`${id}[`)) return;
     const i = Number.parseInt(path.slice(id.length + 1), 10);
-    if (Number.isInteger(i)) setOpenIdx((s) => new Set(s).add(i));
+    const k = Number.isInteger(i) ? keysRef.current[i] : undefined;
+    if (k !== undefined) setOpenKeys((s) => new Set(s).add(k));
   });
   return (
     // One labelled group: the field label names it, and InputField ties the
     // help, error and required state to it.
     <div ref={ref} className="grid min-w-0 gap-1.5" role="group" id={inputId} aria-labelledby={inputId ? `${inputId}-label` : undefined}>
       {items.map((item, i) => {
+        const k = itemKeys[i];
         const scope = scopeFor(values, item, i);
-        const label = labelTpl ? renderTemplate(labelTpl, scope) : `Item ${i + 1}`;
-        const open = openIdx.has(i);
+        // A template can render blank (an empty field it reads): fall back
+        // so the expand button keeps a name.
+        const label = (labelTpl ? renderTemplate(labelTpl, scope).trim() : "") || `Item ${i + 1}`;
+        const open = openKeys.has(k);
         return (
-          <div key={i} className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border)]" data-repeater-item={i}>
+          <div key={k} className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border)]" data-repeater-item={i}>
             <div className="flex min-w-0 items-center gap-2 px-2.5 py-1.5">
-              <button type="button" aria-expanded={open} onClick={() => toggleOpen(i)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+              <button type="button" aria-expanded={open} onClick={() => toggleOpen(k)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
                 <span aria-hidden className="text-[0.7rem] text-[var(--color-text-muted)]">
                   {open ? "▾" : "▸"}
                 </span>
@@ -2245,7 +2273,14 @@ function Repeater({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
                     <button
                       type="button"
                       className="text-[0.72rem] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                      onClick={() => update([...items.slice(0, i + 1), { ...item }, ...items.slice(i + 1)], i + 1)}
+                      onClick={() => {
+                        const [dup] = freshKeys(1);
+                        update(
+                          [...items.slice(0, i + 1), { ...item }, ...items.slice(i + 1)],
+                          [...itemKeys.slice(0, i + 1), dup, ...itemKeys.slice(i + 1)],
+                          dup,
+                        );
+                      }}
                     >
                       Duplicate
                     </button>
@@ -2254,10 +2289,12 @@ function Repeater({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
                     <button
                       type="button"
                       className="text-[0.72rem] text-[var(--color-text-muted)] hover:text-[var(--color-danger)]"
-                      onClick={() => {
-                        update(items.filter((_, j) => j !== i));
-                        setOpenIdx((s) => new Set([...s].filter((j) => j !== i).map((j) => (j > i ? j - 1 : j))));
-                      }}
+                      onClick={() =>
+                        update(
+                          items.filter((_, j) => j !== i),
+                          itemKeys.filter((_, j) => j !== i),
+                        )
+                      }
                     >
                       Remove
                     </button>
@@ -2277,8 +2314,15 @@ function Repeater({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
       })}
       {!locked && items.length < max ? (
         <div>
-          <button type="button" className={chipButton} onClick={() => update([...items, newItem(fields)], items.length)}>
-            + {str(c.add_label) || "Add"}
+          <button
+            type="button"
+            className={chipButton}
+            onClick={() => {
+              const [added] = freshKeys(1);
+              update([...items, newItem(fields)], [...itemKeys, added], added);
+            }}
+          >
+            + {str(c.add_label).trim() || "Add"}
           </button>
         </div>
       ) : null}

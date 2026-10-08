@@ -240,8 +240,12 @@ export function defaultValue(c: Component): unknown {
       return Array.from(new Set(strArr(v))).filter((x) => opts.has(x) || (custom && x.trim() !== ""));
     }
     case "list_input":
-      // Same trim / drop-blank / dedupe the textarea applies to typed text.
-      return normalizeList(strArr(v), c.dedupe !== false);
+      // Same split / trim / drop-blank / dedupe the textarea applies to typed
+      // text: an entry with a line break in it is that many entries.
+      return normalizeList(
+        strArr(v).flatMap((x) => x.split(/[\r\n]+/)),
+        c.dedupe !== false,
+      );
     case "include_exclude": {
       const o = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
       const opts = optionSet();
