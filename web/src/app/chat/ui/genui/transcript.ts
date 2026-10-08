@@ -74,13 +74,20 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
       ) {
         continue;
       }
+      // A card has ONE answer: the latest, whether a submission or a quick
+      // reply (a submit, Edit and resend, then a quick reply ends on the
+      // reply). Each kind replaces the other.
       const sub = parseSubmissionMessage(m.content);
       if (sub) {
         submissions.set(sub.cardId, { ...sub, messageId: m.id });
+        replies.delete(sub.cardId);
         continue;
       }
       const reply = parseReplyMessage(m.content);
-      if (reply) replies.set(reply.cardId, { ...reply, messageId: m.id });
+      if (reply) {
+        replies.set(reply.cardId, { ...reply, messageId: m.id });
+        submissions.delete(reply.cardId);
+      }
       continue;
     }
     for (const tc of m.toolCalls ?? []) {

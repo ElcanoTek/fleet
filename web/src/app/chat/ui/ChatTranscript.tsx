@@ -797,6 +797,7 @@ export function ChatTranscript({
                                           reply={genUi.replies.get(tc.id) ?? null}
                                           superseded={genUi.superseded.has(tc.id)}
                                           retired={isPreSummary}
+                                          storageScope={realConvId(currentConvKey) ?? currentConvKey}
                                           onSubmit={(text) => submitPrompt(text)}
                                         />
                                       </Suspense>

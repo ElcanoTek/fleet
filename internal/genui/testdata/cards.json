@@ -2266,6 +2266,86 @@
      }
     ]
    }
+  },
+  {
+   "name": "input whose visibility reads only itself",
+   "valid": false,
+   "error_contains": "reads only inputs it hides",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "name",
+      "required": true,
+      "visible_if": "!empty(name)"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "section whose visibility reads only an input inside it",
+   "valid": false,
+   "error_contains": "reads only inputs it hides",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "section",
+      "title": "S",
+      "visible_if": "empty(n)",
+      "children": [
+       {
+        "type": "text_input",
+        "id": "n"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "section gated on an input outside it",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "more",
+      "label": "More"
+     },
+     {
+      "type": "section",
+      "title": "S",
+      "visible_if": "more",
+      "children": [
+       {
+        "type": "text_input",
+        "id": "n"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
   }
  ]
 }

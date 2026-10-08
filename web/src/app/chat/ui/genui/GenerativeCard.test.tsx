@@ -1022,3 +1022,56 @@ describe("eleventh Codex pass", () => {
     }
   });
 });
+
+describe("twelfth Codex pass", () => {
+  it("brings server errors back when an edit is cancelled", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({
+      title: "F",
+      components: [{ type: "text_input", id: "n", label: "Name" }],
+      actions: [{ id: "go", label: "Go" }],
+      field_errors: [{ field: "n", message: "Not allowed" }],
+    });
+    render(<GenerativeCard cardId="cx" spec={s} submission={{ cardId: "cx", actionId: "go", values: { n: "bad" } }} onSubmit={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Edit and resend" }));
+    await user.type(screen.getByLabelText(/Name/), "x");
+    expect(screen.queryByText("Not allowed")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Cancel edit" }));
+    await user.click(screen.getByRole("button", { name: "Edit and resend" }));
+    expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("bad");
+    expect(screen.getByText("Not allowed")).toBeTruthy();
+  });
+
+  it("keeps drafts apart between conversations that share a card id (branches)", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({ title: "B", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });
+    const first = render(<GenerativeCard cardId="same" storageScope="conv-a" spec={s} onSubmit={() => {}} />);
+    await user.type(screen.getByLabelText(/Name/), "typed in A");
+    first.unmount();
+    const other = render(<GenerativeCard cardId="same" storageScope="conv-b" spec={s} onSubmit={() => {}} />);
+    expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("");
+    other.unmount();
+    render(<GenerativeCard cardId="same" storageScope="conv-a" spec={s} onSubmit={() => {}} />);
+    expect((screen.getByLabelText(/Name/) as HTMLInputElement).value).toBe("typed in A");
+  });
+
+  it("tells assistive technology which fields are required", () => {
+    const s = spec({
+      title: "R",
+      components: [
+        { type: "select", id: "region", label: "Region", options: ["US", "CA"], required: true },
+        { type: "choice", id: "ch", label: "Channel", options: ["A", "B"], required: true },
+        { type: "toggle", id: "ok", label: "I agree", required: true },
+        { type: "date", id: "d", label: "Start" },
+      ],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="req" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByRole("combobox", { name: /^Region\s*\(required\)$/ })).toBeTruthy();
+    expect(screen.getByRole("radiogroup", { name: /^Channel\s*\(required\)$/ })).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "I agree (required)" })).toBeTruthy();
+    expect(screen.getByLabelText("Start")).toBeTruthy();
+  });
+});

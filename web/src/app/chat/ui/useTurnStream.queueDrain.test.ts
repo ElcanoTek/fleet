@@ -716,25 +716,27 @@ describe("a card answer queued behind a running turn", () => {
   });
 });
 
-describe("a lost-ack submission the server queued behind another turn", () => {
-  it("is reported as sent and cleared of notSent", async () => {
+describe("a lost-ack submission while another submission's turn runs", () => {
+  const run = async (queueHasOurs: boolean) => {
     let ours = "";
-    const h = makeHarness({ initial: answeredTranscript(), persisted: drainedHistory(), queue: [[queuedRow("q1")]], inflight: [{ inflight: true, turn_id: "t9" }] });
+    const h = makeHarness({ initial: answeredTranscript(), persisted: drainedHistory(), queue: [[]], inflight: [{ inflight: true, turn_id: "t9" }] });
     const harnessFetch = globalThis.fetch;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        const json = (body: unknown) =>
+          new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
         if (url === "/api/chat") {
           ours = (JSON.parse(String(init?.body)) as { submission_id: string }).submission_id;
           throw new TypeError("network error");
         }
         if (url.includes("/inflight")) {
-          // A turn for SOMEONE ELSE's submission is running: ours was queued.
-          return new Response(JSON.stringify({ inflight: true, turn_id: "t9", submission_id: `not-${ours}` }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
+          // A turn for SOMEONE ELSE's submission is running.
+          return json({ inflight: true, turn_id: "t9", submission_id: `not-${ours}` });
+        }
+        if (url.includes("/queue")) {
+          return json({ items: queueHasOurs ? [{ ...queuedRow("q1"), submission_id: ours }] : [queuedRow("q2")] });
         }
         return harnessFetch(input, init);
       }),
@@ -743,9 +745,21 @@ describe("a lost-ack submission the server queued behind another turn", () => {
     const { result } = renderHook(() => useTurnStream(h.deps));
     const sending = result.current.submitPrompt("[UI submission] card=c1 action=go\n{}");
     await vi.advanceTimersByTimeAsync(10);
-    expect(await sending).toBe(true);
+    const sent = await sending;
     const bubble = convSlot(h, CONV).find((m) => m.role === "user" && m.content.startsWith("[UI submission]"));
+    return { sent, bubble };
+  };
+
+  it("is reported as sent once the queue holds a row with its submission id", async () => {
+    const { sent, bubble } = await run(true);
+    expect(sent).toBe(true);
     expect(bubble).toBeDefined();
     expect(bubble?.notSent).toBeFalsy();
+  });
+
+  it("stays not sent when no queue row is its own (another tab's turn)", async () => {
+    const { sent, bubble } = await run(false);
+    expect(sent).toBe(false);
+    expect(bubble?.notSent).toBe(true);
   });
 });

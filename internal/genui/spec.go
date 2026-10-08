@@ -791,8 +791,30 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 		if !ok {
 			continue
 		}
-		if refs, err := ParseExpr(src); err == nil && len(refs) == 0 {
+		refs, err := ParseExpr(src)
+		if err != nil {
+			continue
+		}
+		if len(refs) == 0 {
 			v.addf(path+"."+cond, "names no input, so it never changes; drop it (a component is shown and enabled by default)")
+			continue
+		}
+		// A visible_if that reads only inputs it hides itself (the component,
+		// or inputs inside it) locks itself: once hidden, nothing the user can
+		// reach changes it, and a hidden input is left out of the submission.
+		if cond == "visible_if" {
+			owned := map[string]map[string]any{}
+			collectInputs([]any{obj}, owned)
+			self := true
+			for _, r := range refs {
+				if _, ok := owned[r]; !ok {
+					self = false
+					break
+				}
+			}
+			if self {
+				v.addf(path+".visible_if", "reads only inputs it hides, so once hidden it can never be shown again; gate it on another input")
+			}
 		}
 	}
 }

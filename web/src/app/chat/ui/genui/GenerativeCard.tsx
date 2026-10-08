@@ -116,6 +116,12 @@ export type GenerativeCardProps = {
   /** Shared / read-only transcripts: render, never submit. */
   readOnly?: boolean;
   /**
+   * Namespaces this card's browser-stored draft and pending hold, normally by
+   * conversation id. A branched conversation copies the tool call — card id
+   * included — so without it a draft typed in one would appear in the other.
+   */
+  storageScope?: string;
+  /**
    * The card predates the conversation's summary (shown only when the user
    * expands compacted history). The model no longer has its definition in
    * context, so an answer would arrive as ids and values it cannot read: the
@@ -295,10 +301,12 @@ export default function GenerativeCard(props: GenerativeCardProps) {
   return <CardBody {...props} />;
 }
 
-function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retired, onSubmit }: GenerativeCardProps) {
+function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retired, storageScope, onSubmit }: GenerativeCardProps) {
+  // The key this card's draft and pending hold are stored under.
+  const storeId = storageScope ? `${storageScope}:${cardId}` : cardId;
   // An unsent draft wins over the submitted values: it is an edit of that
   // submission in progress, so the card reopens for editing.
-  const [initialDraft] = useState(() => (readOnly ? null : loadDraft(cardId, answerKeyOf(submission, reply))));
+  const [initialDraft] = useState(() => (readOnly ? null : loadDraft(storeId, answerKeyOf(submission, reply))));
   const [values, setValuesState] = useState<Values>(() =>
     normalizeValues(spec, initialDraft?.values ?? (submission ? submission.values : null)),
   );
@@ -344,14 +352,14 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
   // card unmounts), and a remount must not re-enable a button whose message
   // is still queued.
   const [awaiting, setAwaitingState] = useState<string | null>(() =>
-    readOnly ? null : loadPending(cardId, answerKey),
+    readOnly ? null : loadPending(storeId, answerKey),
   );
   const setAwaiting = useCallback(
     (a: string | null) => {
       setAwaitingState(a);
-      if (!readOnly) savePending(cardId, a, answerKeyRef.current);
+      if (!readOnly) savePending(storeId, a, answerKeyRef.current);
     },
-    [cardId, readOnly],
+    [storeId, readOnly],
   );
   if (seenSubmission !== submissionKey) {
     setSeenSubmission(submissionKey);
@@ -359,8 +367,8 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
       setEditing(false);
       setAwaitingState(null);
       if (!readOnly) {
-        savePending(cardId, null);
-        saveDraft(cardId, null);
+        savePending(storeId, null);
+        saveDraft(storeId, null);
       }
     }
     if (submission) {
@@ -373,11 +381,11 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     (fn: (v: Values) => Values) => {
       setValuesState((prev) => {
         const next = fn(prev);
-        if (!readOnly) saveDraft(cardId, next, answerKeyRef.current, clearedRef.current);
+        if (!readOnly) saveDraft(storeId, next, answerKeyRef.current, clearedRef.current);
         return next;
       });
     },
-    [cardId, readOnly],
+    [storeId, readOnly],
   );
 
   const setField = useCallback(
@@ -649,7 +657,10 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
                       setEditing(false);
                       setShowErrors(false);
                       setValuesState(normalizeValues(spec, submission?.values));
-                      saveDraft(cardId, null);
+                      saveDraft(storeId, null);
+                      // The sent values are back, so are their server errors.
+                      clearedRef.current = new Set();
+                      setClearedServerErrors(clearedRef.current);
                     }}>
                     Cancel edit
                   </button>
@@ -1367,15 +1378,22 @@ function InputField({ c, Render }: { c: Component; Render: Renderer }) {
         // assistive technology (the validator allows label-less inputs).
         <label id={`${inputId}-label`} htmlFor={inputId} className="sr-only">
           {id}
+          {c.required === true ? " (required)" : null}
         </label>
       ) : null}
       {label && c.type !== "toggle" ? (
         <label id={`${inputId}-label`} htmlFor={inputId} className="text-[0.78rem] font-medium text-[var(--color-text-secondary)]">
           {label}
           {c.required === true ? (
-            <span className="ml-0.5 text-[var(--color-danger)]" aria-hidden>
-              *
-            </span>
+            <>
+              <span className="ml-0.5 text-[var(--color-danger)]" aria-hidden>
+                *
+              </span>
+              {/* The asterisk is visual only. Every control and group is named
+                  by this label, so this is how a screen reader hears that the
+                  field is required, whatever the control type. */}
+              <span className="sr-only"> (required)</span>
+            </>
           ) : null}
         </label>
       ) : null}
@@ -1700,7 +1718,7 @@ function Toggle({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         type="button"
         role="switch"
         aria-checked={on}
-        aria-label={str(c.label) || str(c.id) || "Toggle"}
+        aria-label={`${str(c.label) || str(c.id) || "Toggle"}${c.required === true ? " (required)" : ""}`}
         onClick={() => onChange?.(!on)}
         className={[
           "relative h-5 w-9 shrink-0 rounded-full transition disabled:opacity-60",

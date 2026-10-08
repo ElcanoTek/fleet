@@ -120,3 +120,22 @@ describe("refused card messages", () => {
     }
   });
 });
+
+describe("one answer per card", () => {
+  it("is the latest, across submissions and quick replies", () => {
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "c1", input: card("One"), resultText: "UI_DISPLAYED card_id=c1" }]),
+      user(2, buildSubmissionMessage("c1", "go", { a: 1 })),
+      user(3, buildReplyMessage("c1", "cancel", "Never mind")),
+    ]);
+    expect(s.submissions.has("c1")).toBe(false);
+    expect(s.replies.get("c1")?.actionId).toBe("cancel");
+    const t = deriveGenUiState([
+      assistant(1, [{ id: "c1", input: card("One"), resultText: "UI_DISPLAYED card_id=c1" }]),
+      user(2, buildReplyMessage("c1", "cancel", "Never mind")),
+      user(3, buildSubmissionMessage("c1", "go", { a: 2 })),
+    ]);
+    expect(t.replies.has("c1")).toBe(false);
+    expect(t.submissions.get("c1")?.values).toEqual({ a: 2 });
+  });
+});

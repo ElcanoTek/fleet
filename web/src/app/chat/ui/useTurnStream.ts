@@ -52,6 +52,8 @@ export type QueuedInput = {
   position: number;
   message_preview: string;
   has_attachments: boolean;
+  /** The submitting client's identity for the row (#1592); "" if none. */
+  submission_id?: string;
 };
 import { formatBytes } from "./formatters";
 import type { ConversationSummary, MCPServerInfo } from "./chat-experience";
@@ -4079,11 +4081,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           attachedConvIdsRef.current.delete(target);
           scheduleRecoveryRetry(target, assistantId, false);
           // The input is queued server-side; show its chip while it waits.
-          void refreshQueue(target);
-          // Queued is accepted, as on the direct path's queued ack: undo the
-          // notSent mark so a generative-UI card holds instead of offering a
-          // resend that would queue a duplicate.
-          if (!accepted.value) {
+          const queued = await refreshQueue(target);
+          // A live turn for another submission proves only that the turn is
+          // not ours — another tab may have started it while our POST never
+          // arrived. Only a queue row carrying our submission id proves the
+          // server holds this input. Then it is accepted, as on the direct
+          // path's queued ack: undo the notSent mark so a generative-UI card
+          // holds instead of offering a resend that would queue a duplicate.
+          if (!accepted.value && queued?.some((q) => q.submission_id === submissionId)) {
             accepted.value = true;
             setConvMessages(target, (current) =>
               current.map((m) => (m.id === baseId && m.notSent ? { ...m, notSent: false } : m)),
