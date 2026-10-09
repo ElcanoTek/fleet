@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, cleanup as cleanupRender, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import GenerativeCard, { RENDERERS, parseListText, resetPendingHolds } from "./GenerativeCard";
-import { buildReplyMessage, parseCardSpec, parseSubmissionMessage, type CardSpec } from "./model";
+import { buildReplyMessage, parseCardSpec, parseSubmissionMessage, RESEND_EVENT, type CardSpec, type ResendDetail } from "./model";
 import { loadFixture } from "./fixtures";
 
 type Case = { name: string; valid: boolean; card: unknown };
@@ -1515,6 +1515,27 @@ describe("holds and other tabs", () => {
     expect(radios).toHaveLength(2);
     expect(radios[0].name).not.toBe("");
     expect(radios[0].name).toBe(radios[1].name);
+  });
+
+  it("sends a retried answer itself, under its own hold", async () => {
+    window.localStorage.clear();
+    const s = spec({ title: "R", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+    const onSubmit = vi.fn(async () => true);
+    render(<GenerativeCard cardId="rt" spec={s} onSubmit={onSubmit} />);
+    const message = buildReplyMessage("rt", "a", "yes");
+    const detail: ResendDetail = { cardId: "rt", actionId: "a", message };
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(RESEND_EVENT, { detail }));
+      await detail.done;
+    });
+    expect(detail.handled).toBe(true);
+    expect(onSubmit).toHaveBeenCalledWith(message, expect.any(Function), expect.any(Function));
+    // Held like a click: a second press cannot queue a duplicate.
+    expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
+    // Another card's retry is not this card's to take.
+    const other: ResendDetail = { cardId: "elsewhere", actionId: "a", message };
+    window.dispatchEvent(new CustomEvent(RESEND_EVENT, { detail: other }));
+    expect(other.handled).toBeUndefined();
   });
 
   it("labels a chart value near the largest double as finite", () => {

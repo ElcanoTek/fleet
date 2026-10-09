@@ -123,7 +123,10 @@ unique, both as first shown and after a submit shows its errors.
 ## Expressions
 
 The one logic surface is a small, side-effect-free expression language. It is
-used in `{{ }}` templates (titles, text, stat values, item labels) and in
+used in `{{ }}` templates (text, headings, callout and badge text, stat
+values and captions, fact values, status-list labels and details,
+descriptions, help and repeater item labels; titles and input labels are
+plain text) and in
 `visible_if`, `disabled_if` and `progress.value`. It supports literals, input ids
 (in a repeater, the item's own fields and `index`; from outside, `rep.field` as
 an array), `+ - * / % == != < <= > >= && || ! ?:`, member access on an input

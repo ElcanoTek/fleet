@@ -38,6 +38,8 @@ import {
   isVisible,
   MAX_CHOICE_ITEMS,
   MAX_SUBMISSION_BYTES,
+  RESEND_EVENT,
+  type ResendDetail,
   submissionBytes,
   newItem,
   optionsOf,
@@ -522,6 +524,7 @@ const REVEAL_FRAMES = 2 * 12 + 2;
 // A held send that never reached the server (detail: the card's store id).
 const UNSENT_EVENT = "genui:unsent";
 
+
 /** The server proved a held send never arrived: release that send's hold. */
 function releaseHeld(storeId: string, send: string) {
   // Only this send's own hold: one the user unlocked (and perhaps replaced
@@ -846,8 +849,6 @@ function CardBody({
     setConfirming(null);
     setNotice(null);
     setSending(action.id);
-    // Takes back the hold this send published, if it is still this send's.
-    let release = () => {};
     try {
       const message =
         action.kind === "message"
@@ -865,15 +866,30 @@ function CardBody({
           ? answerKeyOf(null, { cardId, actionId: action.id, text: "" })
           : answerKeyOf({ cardId, actionId: action.id, values: submitValues }, null);
       if (!readOnly) markDraftSent(storeId, sentKey);
-      const sendId = nextSendId();
-      // Publish the hold before the send, not after: a direct send resolves
-      // only once its whole turn has run, and the same card open in another
-      // tab must lock now (storage events reach it), or a click there could
-      // queue a duplicate. Refused, it is taken back below.
-      if (!readOnly) savePending(storeId, action.id, answerKeyRef.current, sendId);
-      release = () => {
-        if (!readOnly && pendingSend(storeId) === sendId) savePending(storeId, null);
-      };
+      await deliver(message, action.id, keyAtClick);
+    } catch {
+      if (!readOnly) markDraftSent(storeId, "");
+      setNotice("Could not send. Try again.");
+    } finally {
+      setSending(null);
+    }
+  };
+
+  // Sends a built message under a hold, and returns how to take that hold
+  // back. Shared by a click and by a Retry of this card's answer (RESEND_EVENT),
+  // so a retried answer holds the card exactly as the original did.
+  const deliver = async (message: string, actionId: string, keyAtClick: string): Promise<void> => {
+    if (!onSubmit) return;
+    const sendId = nextSendId();
+    // Publish the hold before the send, not after: a direct send resolves
+    // only once its whole turn has run, and the same card open in another
+    // tab must lock now (storage events reach it), or a click there could
+    // queue a duplicate. Refused (or thrown), it is taken back below.
+    if (!readOnly) savePending(storeId, actionId, answerKeyRef.current, sendId);
+    const release = () => {
+      if (!readOnly && pendingSend(storeId) === sendId) savePending(storeId, null);
+    };
+    try {
       const accepted = await onSubmit(
         message,
         () => {
@@ -891,16 +907,36 @@ function CardBody({
         // Hold the actions until the message reaches the transcript (a
         // queued message is accepted long before it is echoed), so a second
         // click cannot queue a duplicate — quick replies included.
-        setAwaiting(action.id, sendId);
+        setAwaiting(actionId, sendId);
       }
-    } catch {
+    } catch (err) {
       release();
-      if (!readOnly) markDraftSent(storeId, "");
-      setNotice("Could not send. Try again.");
-    } finally {
-      setSending(null);
+      throw err;
     }
   };
+
+
+  // Retry on this card's failed answer: the chat hands the message back here
+  // so it is sent with this card's hold and queue watch (a Retry the server
+  // queues must not leave the card open for a duplicate). Only the card that
+  // owns the id answers (an older, read-only occurrence never does).
+  const deliverRef = useRef(deliver);
+  useEffect(() => {
+    deliverRef.current = deliver;
+  });
+  useEffect(() => {
+    if (readOnly) return;
+    const onResend = (e: Event) => {
+      const d = (e as CustomEvent<ResendDetail>).detail;
+      if (!d || d.handled || d.cardId !== cardId) return;
+      d.handled = true;
+      d.done = deliverRef.current(d.message, d.actionId, submissionKeyRef.current).catch(() => {
+        setNotice("Could not send. Try again.");
+      });
+    };
+    window.addEventListener(RESEND_EVENT, onResend);
+    return () => window.removeEventListener(RESEND_EVENT, onResend);
+  }, [cardId, readOnly]);
 
   // Every path that blocks a validated submit: the live checks, plus server
   // field_errors the user has not edited yet (a value the agent just reported

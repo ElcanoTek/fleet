@@ -698,3 +698,13 @@ export function parseSubmissionMessage(text: string): Submission | null {
     return null;
   }
 }
+
+/**
+ * Retry of a card answer's failed turn, offered to the card that owns it (a
+ * window event): the card sets `handled` and `done` — its own send of the
+ * message, under its hold and queue watch — when it takes it. Lives here,
+ * not in the lazily loaded card, so the chat can raise it without loading
+ * the renderer.
+ */
+export const RESEND_EVENT = "genui:resend";
+export type ResendDetail = { cardId: string; actionId: string; message: string; handled?: boolean; done?: Promise<void> };

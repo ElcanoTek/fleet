@@ -35,7 +35,7 @@ import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { mcpAccountOverrides } from "./mcpAccounts";
 import { allocMessageIds } from "./messageIds";
-import { parseReplyMessage, parseSubmissionMessage } from "./genui/model";
+import { parseReplyMessage, parseSubmissionMessage, RESEND_EVENT, type ResendDetail } from "./genui/model";
 import { enabledOptionalMcpServerNames } from "./mcpSelection";
 import {
   createRecoveryElection,
@@ -3784,10 +3784,24 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
 
     // A card's answer is retried as a card send: it leaves the composer's
-    // text and pending attachments alone, like the original click did. (The
-    // retried bubble is the card's answer again, so the card stays locked.)
-    const fromCard = parseSubmissionMessage(lastUser.content) !== null || parseReplyMessage(lastUser.content) !== null;
-    await submitPrompt(lastUser.content, fromCard ? { fromCard } : undefined);
+    // text and pending attachments alone, like the original click did. The
+    // card that owns it sends it itself when it is mounted, so the retry
+    // holds the card (and watches its queue row) exactly like a click; a
+    // card scrolled out of the virtualized transcript falls back to a plain
+    // card send.
+    const answer = parseSubmissionMessage(lastUser.content) ?? parseReplyMessage(lastUser.content);
+    if (answer && typeof window !== "undefined") {
+      // Let the transcript drop the retried bubble first, so the card holds
+      // against the answer it will show without it.
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      const detail: ResendDetail = { cardId: answer.cardId, actionId: answer.actionId, message: lastUser.content };
+      window.dispatchEvent(new CustomEvent(RESEND_EVENT, { detail }));
+      if (detail.handled) {
+        await detail.done;
+        return;
+      }
+    }
+    await submitPrompt(lastUser.content, answer ? { fromCard: true } : undefined);
   };
 
   const uploadPendingAttachments = async (
