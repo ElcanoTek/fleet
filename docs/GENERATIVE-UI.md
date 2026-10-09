@@ -173,6 +173,11 @@ One limit is the web card's, not the spec's: a single answer may be at most
 it has to leave room in the model's context window, not just fit
 `/api/chat`'s 1 MiB request body. 20,000 long `list_input` lines can pass
 that; the card then says the answer is too large before sending anything.
+The cap is fixed, not derived from the model: on a model with a small context
+window (32K tokens, say) an answer under it can still overrun what is left,
+and that turn fails with the context-budget error. The answer stays in the
+transcript, so **Edit and resend** with less (or a larger-context model) is
+the way out.
 
 A card from before the conversation's summary (visible only when the user
 expands compacted history) renders locked, with a note to ask for it again:
@@ -218,8 +223,9 @@ to change. The loop that replaces a bespoke form:
   the submitted-answers bubble but not the card.
 - **The card leaves the model's context like any other tool call.** A card
   fits the size the agent loop replays verbatim, but when a long conversation
-  forces context reduction, an old card's definition can be summarized away
-  like any other tool payload while the card stays live in the browser. Its
+  forces context reduction, a card's definition — the newest one included —
+  can be replaced by a short envelope like any other large tool payload while
+  the card stays live in the browser. Its
   answer still names the card and keys every value by field id; the model
   sees the labels again only if it re-shows the card.
 - **No per-deployment switch.** The tool is part of the interactive roster for

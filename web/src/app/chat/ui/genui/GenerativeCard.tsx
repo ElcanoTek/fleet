@@ -152,7 +152,12 @@ export type GenerativeCardProps = {
    * in-page watcher did not survive it): onUnsent releases the hold if the
    * queue row turns out to be gone without reaching the transcript.
    */
-  onResumeHeld?: (convId: string, text: string, submissionId: string, onUnsent: () => void) => void;
+  onResumeHeld?: (
+    convId: string,
+    matches: (text: string) => boolean,
+    submissionId: string,
+    onUnsent: () => void,
+  ) => void;
 };
 
 const DRAFT_PREFIX = "fleet.genui.draft.";
@@ -367,9 +372,11 @@ const PENDING_TTL_MS = 6 * 60 * 60 * 1000;
 // `send` names the send that set the hold, so a late verdict about an older
 // send (one the user unlocked and replaced) cannot release a newer hold.
 // `watch` (set once the chat reports the send held) names the conversation,
-// queue row and message text, so a reloaded page can ask the server about
-// that row again instead of holding the card until the TTL.
-type PendingWatch = { conv: string; sid: string; text: string };
+// queue row and a digest of the message, so a reloaded page can ask the
+// server about that row again instead of holding the card until the TTL.
+// A digest, not the text: an answer can be 256 KiB, and several held answers
+// must not fill the storage quota (and so lose their watches).
+type PendingWatch = { conv: string; sid: string; digest: string };
 const pendingMemory = new Map<
   string,
   { action: string; at: number; after: string; send?: string; watch?: PendingWatch }
@@ -451,7 +458,7 @@ function pendingWatch(cardId: string): { send: string; watch: PendingWatch } | n
     !!w &&
     typeof (w as PendingWatch).conv === "string" &&
     typeof (w as PendingWatch).sid === "string" &&
-    typeof (w as PendingWatch).text === "string";
+    typeof (w as PendingWatch).digest === "string";
   const mem = pendingMemory.get(cardId);
   if (mem) return mem.send && ok(mem.watch) ? { send: mem.send, watch: mem.watch } : null;
   try {
@@ -687,7 +694,7 @@ function CardBody({
     const held = pendingWatch(storeId);
     if (!held || held.send.startsWith(`${PAGE_LOAD}-`)) return;
     const { send, watch } = held;
-    onResumeHeld(watch.conv, watch.text, watch.sid, () => releaseHeld(storeId, send));
+    onResumeHeld(watch.conv, (text) => keyDigest(text) === watch.digest, watch.sid, () => releaseHeld(storeId, send));
     // The resume is keyed by the held send; onResumeHeld is re-created
     // every render and dedupes by queue row itself.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -854,7 +861,7 @@ function CardBody({
           if (!readOnly) releaseHeld(storeId, sendId);
         },
         (conv, sid) => {
-          if (!readOnly) notePendingWatch(storeId, sendId, { conv, sid, text: message });
+          if (!readOnly) notePendingWatch(storeId, sendId, { conv, sid, digest: keyDigest(message) });
         },
       );
       if (accepted === false) {

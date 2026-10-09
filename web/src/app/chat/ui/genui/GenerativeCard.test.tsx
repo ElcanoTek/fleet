@@ -1423,18 +1423,24 @@ describe("holds and other tabs", () => {
     expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
     const stored = JSON.parse(window.localStorage.getItem("fleet.genui.pending.w") ?? "{}");
     expect(stored.watch).toMatchObject({ conv: "conv1", sid: "sub-9" });
+    // A digest of the answer, never the answer itself.
+    expect(stored.watch.text).toBeUndefined();
+    expect(typeof stored.watch.digest).toBe("string");
     cleanupRender();
 
     // A reload: the hold comes back from storage, set by an earlier page load.
     resetPendingHolds();
     window.localStorage.setItem("fleet.genui.pending.w", JSON.stringify({ ...stored, send: "earlier-1" }));
     let release: () => void = () => {};
-    const onResumeHeld = vi.fn((_c: string, _t: string, _sid: string, onUnsent: () => void) => {
+    const onResumeHeld = vi.fn((_c: string, _m: (t: string) => boolean, _sid: string, onUnsent: () => void) => {
       release = onUnsent;
     });
     render(<GenerativeCard cardId="w" spec={s} onSubmit={() => {}} onResumeHeld={onResumeHeld} />);
     expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
-    expect(onResumeHeld).toHaveBeenCalledWith("conv1", stored.watch.text, "sub-9", expect.any(Function));
+    expect(onResumeHeld).toHaveBeenCalledWith("conv1", expect.any(Function), "sub-9", expect.any(Function));
+    const matches = onResumeHeld.mock.calls[0][1] as (t: string) => boolean;
+    expect(matches(onSubmit.mock.calls[0][0])).toBe(true);
+    expect(matches("something else")).toBe(false);
     // The server says the row is gone: the card is released.
     await act(async () => release());
     expect(screen.queryByTestId("genui-awaiting")).toBeNull();

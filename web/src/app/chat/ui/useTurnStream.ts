@@ -41,6 +41,17 @@ import {
   type RecoveryElection,
 } from "./recoveryElection";
 
+/**
+ * A sent message as a held card answer names it: the text itself, or (for a
+ * hold restored from browser storage, which keeps only a digest so several
+ * large answers cannot fill the quota) a test that matches it.
+ */
+export type SentText = string | ((text: string) => boolean);
+
+function isSentText(candidate: string, sent: SentText): boolean {
+  return typeof sent === "string" ? candidate === sent : sent(candidate);
+}
+
 // One pending input in a conversation's #785 queue (wire shape of
 // queue.updated / GET /queue items).
 export type QueuedInput = {
@@ -595,7 +606,7 @@ export interface UseTurnStream {
    * hold names the queue row, and this asks the server (and watches the
    * queue) until the row lands or is gone, releasing the hold if it is gone.
    */
-  resumeHeldCardSend: (convId: string, text: string, submissionId: string, onUnsent: () => void) => void;
+  resumeHeldCardSend: (convId: string, text: SentText, submissionId: string, onUnsent: () => void) => void;
   regenerateLastAssistant: () => Promise<void>;
   resendUserMessage: (
     userMessageId: number,
@@ -946,7 +957,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // server may well hold the input, and a retry would duplicate it.
   const submissionLanded = async (
     convId: string,
-    text: string,
+    text: SentText,
     submissionId: string,
   ): Promise<"yes" | "no" | "unknown"> => {
     // Both reads are bounded like recovery's own: a connection accepted and
@@ -961,10 +972,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       if (!res.ok) return "unknown";
       const data = (await res.json()) as { history?: HistoryEntry[] | null };
       const persisted = (data.history ?? []).filter(
-        (e) => e.role === "user" && (e.content as { text?: unknown } | undefined)?.text === text,
+        (e) => {
+          const t = (e.content as { text?: unknown } | undefined)?.text;
+          return e.role === "user" && typeof t === "string" && isSentText(t, text);
+        },
       ).length;
       const known = (messagesByConvRef.current.get(convId) ?? []).filter(
-        (m) => m.role === "user" && m.content === text && !m.notSent,
+        (m) => m.role === "user" && isSentText(m.content, text) && !m.notSent,
       ).length;
       if (persisted > known) return "yes";
       return queued ? "no" : "unknown";
@@ -3813,8 +3827,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // queue, a Stop that cancels queued input), nothing would ever release
   // that hold: so each queued card answer is watched, and when a snapshot no
   // longer lists it the server is asked once whether it landed.
-  const queuedCardSendsRef = useRef(new Map<string, { convId: string; text: string; onUnsent: () => void }>());
-  const watchQueuedCardSend = (convId: string, text: string, submissionId: string, onUnsent: () => void) => {
+  const queuedCardSendsRef = useRef(new Map<string, { convId: string; text: SentText; onUnsent: () => void }>());
+  const watchQueuedCardSend = (convId: string, text: SentText, submissionId: string, onUnsent: () => void) => {
     queuedCardSendsRef.current.set(submissionId, { convId, text, onUnsent });
   };
   useEffect(() => {
@@ -3831,7 +3845,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   }, [queuedInputs]);
 
   const resumedHeldSendsRef = useRef(new Set<string>());
-  const resumeHeldCardSend = (convId: string, text: string, submissionId: string, onUnsent: () => void) => {
+  const resumeHeldCardSend = (convId: string, text: SentText, submissionId: string, onUnsent: () => void) => {
     // Once per row: every remount of the card (a virtualized transcript)
     // would otherwise start another chain of server checks.
     if (resumedHeldSendsRef.current.has(submissionId)) return;
@@ -3849,7 +3863,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // onUnsent, "yes" ends quietly, and an unmount stops it.
   const recheckHeldSend = (
     convId: string,
-    text: string,
+    text: SentText,
     submissionId: string,
     onUnsent: () => void,
     attempt = 0,

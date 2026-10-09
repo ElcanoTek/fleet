@@ -21,7 +21,9 @@ export const MAX_CHOICE_ITEMS = 2000;
  * card will send. The bound is the model's context, not the HTTP body
  * (/api/chat takes 1 MiB): the answer is one user turn the agent loop cannot
  * shrink, so it must leave room in the context window for the system
- * prompt, tools and history. 256 KiB is about 65,000 tokens. A list at
+ * prompt, tools and history. 256 KiB is about 65,000 tokens: room to spare on
+ * the large-context models chat runs on, but fixed, so a small-context model
+ * can still be overrun (docs/GENERATIVE-UI.md, honest scope). A list at
  * MAX_LIST_ITEMS of long entries can exceed this, so the card checks the
  * serialized size before sending rather than failing as "Not sent".
  */

@@ -96,7 +96,12 @@ export type ChatTranscriptProps = {
     opts?: { fromCard?: boolean; onUnsent?: () => void; onHeld?: (convId: string, submissionId: string) => void },
   ) => void | Promise<void | boolean>;
   /** Resumes the watch on a card answer held across a page load. */
-  resumeHeldCardSend?: (convId: string, text: string, submissionId: string, onUnsent: () => void) => void;
+  resumeHeldCardSend?: (
+    convId: string,
+    text: string | ((text: string) => boolean),
+    submissionId: string,
+    onUnsent: () => void,
+  ) => void;
   setPrompt: Dispatch<SetStateAction<string>>;
 
   // Compaction / summarize
