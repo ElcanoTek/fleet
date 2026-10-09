@@ -1,6 +1,6 @@
 module github.com/ElcanoTek/fleet
 
-go 1.27.0
+go 1.27.2
 
 require (
 	charm.land/bubbles/v2 v2.2.1
@@ -28,7 +28,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
 	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1

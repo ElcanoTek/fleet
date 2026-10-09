@@ -602,6 +602,23 @@ messages do not supersede, move Progress items forward, keep exact paths and
 error messages — so early facts stop eroding a little further on every
 compaction round.
 
+**The summary never outranks the task prompt.** The summarizer sees only the
+droppable middle; the pinned opening message (a scheduled run's task prompt)
+stays in front of the agent but is never shown to the summarizer. Its prompt
+therefore forbids reporting on that unseen request — no "recipient missing",
+"not confirmed" or "not authorized" because something does not appear in the
+middle — and a scheduled summary is inserted behind a one-line preamble that
+says the task prompt still governs where the two conflict. Both exist because
+a summary that called a task prompt's own recipient list "not confirmed" made
+a scheduled report (TWC, 2026-10-08) skip its mandatory send. Chat summaries
+carry no preamble: a later user turn may legitimately overrule the first.
+
+**Every summary is in the stored transcript.** Each compaction path writes the
+summary it inserted into the session log as a user-role message with
+`message_type: "compaction_summary"`, after the `[context_compacted]`
+breadcrumb when the path writes one, so an operator can read exactly what the
+run continued from.
+
 **The task plan is re-announced after compaction (#990).** The `task_tracker`
 plan is host-side state — it survives the compaction that just rewrote the
 history, and `checkFinishEnforcement` keeps enforcing it — but the summary may

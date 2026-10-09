@@ -11,6 +11,7 @@ import {
   scheduleLabel,
   scheduleTitle,
   slaBadge,
+  promptName,
   taskRunLabel,
   TaskSlaBadge,
   TaskStatusBadge,
@@ -382,9 +383,11 @@ export function TasksTable({
                       <code>{task.id.slice(0, 8)}...</code>
                     </td>
                     <td className="prompt-cell" title={task.prompt ?? ""}>
-                      {task.title?.trim() ? (
+                      {task.title?.trim() || promptName(task.prompt ?? "") ? (
                         <>
-                          <span className="task-title-line">{task.title.trim()}</span>
+                          <span className="task-title-line">
+                            {task.title?.trim() || promptName(task.prompt ?? "")}
+                          </span>
                           <span className="task-prompt-line">
                             {truncate((task.prompt ?? "").trim(), 80)}
                           </span>
@@ -529,8 +532,10 @@ export function TasksTable({
                       </span>
                     ) : null}
                   </span>
-                  {task.title?.trim() ? (
-                    <span className="task-card-title">{task.title.trim()}</span>
+                  {task.title?.trim() || promptName(task.prompt ?? "") ? (
+                    <span className="task-card-title">
+                      {task.title?.trim() || promptName(task.prompt ?? "")}
+                    </span>
                   ) : null}
                   <span className="task-card-prompt">{truncate((task.prompt ?? "").trim(), 120)}</span>
                   <span className="task-card-meta">

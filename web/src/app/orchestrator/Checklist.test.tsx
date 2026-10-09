@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { Checklist, parseTaskTrackerOutput, type ChecklistState } from "./Checklist";
 import { LogViewer } from "./LogViewer";
 import type { Task, TaskStreamFrame } from "@/app/shared/lib/orchestratorApi";
@@ -131,7 +131,8 @@ describe("LiveTaskView checklist wiring", () => {
     });
 
     expect(screen.getAllByTestId("live-tool-entry")).toHaveLength(1);
-    expect(screen.getByText("mcp_fast_io_download")).toBeTruthy();
+    // The card names the unwrapped tool (server badge + action, full name on hover).
+    expect(screen.getByTitle("mcp_fast_io_download")).toBeTruthy();
     expect(screen.getByText("Failed · 2 attempts")).toBeTruthy();
     expect(screen.getByText("Invalid tool arguments: Fleet expected a JSON object but received an array.")).toBeTruthy();
   });
@@ -166,7 +167,11 @@ describe("stored task tool activity", () => {
     const task = { id: "t3", status: "failed" } as unknown as Task;
     render(<LogViewer task={task} onClose={() => {}} />);
 
-    expect(await screen.findAllByText("mcp_fast_io_download")).toHaveLength(2);
+    // The step card and its filter chip both name the unwrapped tool.
+    expect(await screen.findByTitle("mcp_fast_io_download")).toBeTruthy();
+    expect(
+      within(screen.getByTestId("log-filters")).getByRole("button", { name: /mcp_fast_io_download/ }),
+    ).toBeTruthy();
     expect(screen.getByText("Invalid tool arguments: Fleet expected a JSON object but received an array.")).toBeTruthy();
   });
 

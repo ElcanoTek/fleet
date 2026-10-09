@@ -96,13 +96,13 @@ Re-request the reviewer after pushing for a changes-requested review.
   does the same for `FLEET_TEST_DATABASE_URL`. `ci.yml`'s `go` job sets both
   against a Postgres service; set them the same way locally. At least two past
   sessions reported green suites that had not run.
-- **golangci-lint**: CI pins **v2.13.1**, and a binary built with an older Go
+- **golangci-lint**: CI pins **v2.14.0**, and a binary built with an older Go
   refuses this `go.mod` ("the Go language version used to build golangci-lint
   is lower than the targeted Go version"). Build it with the toolchain the
   module targets:
 
   ```sh
-  GOTOOLCHAIN=go1.27.0 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+  GOTOOLCHAIN=go1.27.2 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
   ```
 
 - **gitleaks**: CI pins **8.30.1**. Its rule set differs from older builds, so

@@ -68,6 +68,45 @@ func TestBuildScheduledCompactionSummarizer_UsesTheModelWithTheUnattendedAddendu
 	}
 }
 
+// The summarizer never sees the pinned task prompt, so it must not report on
+// it — and the agent must read the summary as subordinate to it. TWC task
+// b50b6d78 (2026-10-08) skipped its mandatory send because a summary called the
+// prompt's own recipient list "not confirmed".
+func TestScheduledCompactionSummary_CannotOverrideTheTaskPrompt(t *testing.T) {
+	model := &promptCapturingModel{itMockModel: itMockModel{generateText: "## Progress\nreport validated"}}
+	in := agentcore.CompactionSummarizeInput{Droppable: []fantasy.Message{fantasy.NewUserMessage("a"), fantasy.NewUserMessage("b")}}
+	text := msgTextOf(buildScheduledCompactionSummarizer(model)(context.Background(), in))
+
+	preamble := strings.Index(text, scheduledSummaryPreamble)
+	body := strings.Index(text, "report validated")
+	if !strings.HasPrefix(text, compactionSummaryPrefix) || preamble < 0 || body < preamble {
+		t.Fatalf("summary message = %q, want the tag, then the task-prompt preamble, then the summary", text)
+	}
+
+	model.pmu.Lock()
+	defer model.pmu.Unlock()
+	sys := model.systems[0]
+	for _, want := range []string{
+		"you are not shown it",
+		"never write that an input, recipient, approval, permission or instruction is missing, unknown, unconfirmed or unauthorized",
+		"do not restate, doubt or mark any part of it as pending confirmation",
+	} {
+		if !strings.Contains(sys, want) {
+			t.Errorf("scheduled summarizer system prompt lacks %q", want)
+		}
+	}
+}
+
+// Chat keeps the summary unranked: a later user turn may overrule the first.
+func TestInteractiveCompactionSummary_HasNoTaskPromptPreamble(t *testing.T) {
+	model := &promptCapturingModel{itMockModel: itMockModel{generateText: "condensed"}}
+	in := agentcore.CompactionSummarizeInput{Droppable: []fantasy.Message{fantasy.NewUserMessage("a"), fantasy.NewUserMessage("b")}}
+	text := msgTextOf(buildInteractiveCompactionSummarizer(TurnConfig{Model: model})(context.Background(), in))
+	if strings.Contains(text, scheduledSummaryPreamble) {
+		t.Fatalf("interactive summary = %q, must not carry the scheduled preamble", text)
+	}
+}
+
 func TestBuildScheduledCompactionSummarizer_NilModelDegradesToPlaceholder(t *testing.T) {
 	in := agentcore.CompactionSummarizeInput{Droppable: []fantasy.Message{fantasy.NewUserMessage("a"), fantasy.NewUserMessage("b")}}
 	text := msgTextOf(buildScheduledCompactionSummarizer(nil)(context.Background(), in))

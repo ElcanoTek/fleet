@@ -1,8 +1,6 @@
 "use client";
 
 import {
-  lazy,
-  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -11,7 +9,6 @@ import {
   type ReactNode,
 } from "react";
 import type {
-  LogMessage,
   LogSession,
   Task,
   TaskStreamFrame,
@@ -38,14 +35,15 @@ import {
   parseTaskTrackerOutput,
   type ChecklistState,
 } from "./Checklist";
+import { ToolStepCard, TranscriptTimeline } from "./LogTimeline";
+import { formatDuration, unwrapDeferredCall } from "./logTimeline";
 
-// The ReactMarkdown pipeline (micromark + remark-gfm, ~43 KiB transfer) and
-// the workspace img/a rewrites live in LogMarkdown, lazy-loaded so the
-// initial /orchestrator bundle doesn't pay for them — the modal is the only
-// consumer and it opens on user action. Until the chunk arrives the log shows
-// raw text with preserved whitespace, then upgrades in place. Same split as
-// chat's AssistantContent (#757).
-const LogMarkdown = lazy(() => import("./LogMarkdown"));
+// The transcript itself — tool steps, events, the prompt, filters — renders in
+// LogTimeline.tsx; this file owns the modal around it. The ReactMarkdown
+// pipeline (micromark + remark-gfm, ~43 KiB transfer) and the workspace img/a
+// rewrites live in LogMarkdown, which LogTimeline lazy-loads so the initial
+// /orchestrator bundle doesn't pay for them (same split as chat's
+// AssistantContent, #757).
 
 // LogViewer — the task log modal. React port of moc modals.js openLogModal().
 // moc rendered logs with marked + DOMPurify + highlight.js; per the migration
@@ -197,9 +195,19 @@ function TaskSummary({ task }: { task: Task }) {
 function SessionMetrics({ session }: { session: LogSession }) {
   const num = (n: number | undefined) =>
     typeof n === "number" ? n.toLocaleString() : undefined;
+  const toolCalls = (session.messages ?? []).reduce(
+    (n, m) => n + (m.tool_calls?.length ?? 0),
+    0,
+  );
+  const span =
+    session.created_at && session.updated_at && session.updated_at > session.created_at
+      ? formatDuration(session.updated_at - session.created_at)
+      : undefined;
   const tiles: Array<{ label: string; value: string | undefined }> = [
     { label: "Session", value: session.title || undefined },
+    { label: "Duration", value: span },
     { label: "Messages", value: num(session.messages?.length) },
+    { label: "Tool calls", value: toolCalls > 0 ? num(toolCalls) : undefined },
     { label: "Prompt tokens", value: num(session.prompt_tokens) },
     { label: "Completion tokens", value: num(session.completion_tokens) },
     { label: "Cached tokens", value: num(session.cached_tokens) },
@@ -221,242 +229,6 @@ function SessionMetrics({ session }: { session: LogSession }) {
           <span className="log-metric-value">{t.value}</span>
         </div>
       ))}
-    </div>
-  );
-}
-
-function deferredToolDisplay(name: string | undefined, input: string | undefined) {
-  const fallback = { name: name || "tool", input: input ?? "" };
-  if (name !== "tool_call" || !input) return fallback;
-  try {
-    const envelope = JSON.parse(input) as { name?: unknown; arguments?: unknown };
-    if (typeof envelope.name !== "string" || !envelope.name) return fallback;
-    let args = envelope.arguments;
-    // Calls emitted from the old incorrect schema wrapped the argument object
-    // in a singleton array. Display the nested call as it will be repaired by
-    // the server during a rolling deployment.
-    if (Array.isArray(args) && args.length === 1 && args[0] && typeof args[0] === "object") {
-      args = args[0];
-    }
-    return { name: envelope.name, input: JSON.stringify(args ?? {}, null, 2) };
-  } catch {
-    return fallback;
-  }
-}
-
-function readableToolError(raw: string) {
-  if (/cannot unmarshal array into Go value of type map\[string\]interface/i.test(raw)) {
-    return "Invalid tool arguments: Fleet expected a JSON object but received an array.";
-  }
-  return raw;
-}
-
-// ── interaction filters ──────────────────────────────────────────────────────
-// Chip taxonomy computed once per session: highlight kinds, tool names,
-// models, providers. Selecting chips narrows the transcript to messages
-// matching ANY selected chip (union); no selection shows everything.
-
-type FilterChip = { key: string; label: string; count: number };
-type FilterGroups = Array<{ title: string; chips: FilterChip[] }>;
-
-function buildFilterIndex(messages: LogMessage[]): {
-  tags: Array<Set<string>>;
-  groups: FilterGroups;
-  toolNames: Map<number, string>;
-} {
-  // Resolve a tool-result message's tool name through the assistant tool_call
-  // it answers (LogMessage carries only tool_call_id).
-  const callName = new Map<string, string>();
-  for (const m of messages) {
-    for (const tc of m.tool_calls ?? []) {
-      if (tc.id && tc.name) {
-        callName.set(tc.id, deferredToolDisplay(tc.name, tc.arguments).name);
-      }
-    }
-  }
-  const toolNames = new Map<number, string>();
-  const tags = messages.map((m, i) => {
-    const t = new Set<string>();
-    const role = m.role ?? "";
-    if ((m.reasoning ?? "").trim()) t.add("hl:reasoning");
-    if (role === "assistant" && (m.content ?? "").trim()) t.add("hl:responses");
-    if ((m.tool_calls?.length ?? 0) > 0) t.add("hl:tool-calls");
-    if (role === "tool") t.add("hl:tool-results");
-    const names = new Set<string>();
-    for (const tc of m.tool_calls ?? []) {
-      if (tc.name) names.add(deferredToolDisplay(tc.name, tc.arguments).name);
-    }
-    if (role === "tool") {
-      const n = (m.tool_call_id ? callName.get(m.tool_call_id) : undefined) || m.tool_name;
-      if (n) {
-        names.add(n);
-        toolNames.set(i, n);
-      }
-    }
-    for (const n of names) {
-      t.add(`tool:${n}`);
-      if (n === "task_tracker") t.add("hl:task-tracker");
-    }
-    if (m.model) t.add(`model:${m.model}`);
-    if (m.provider) t.add(`provider:${m.provider}`);
-    return t;
-  });
-
-  const count = (key: string) => tags.filter((t) => t.has(key)).length;
-  const collect = (prefix: string) => {
-    const keys = new Set<string>();
-    for (const t of tags)
-      for (const k of t) if (k.startsWith(prefix)) keys.add(k);
-    return [...keys]
-      .sort()
-      .map((k) => ({ key: k, label: k.slice(prefix.length), count: count(k) }));
-  };
-  const highlights: FilterChip[] = [
-    { key: "hl:reasoning", label: "Reasoning", count: count("hl:reasoning") },
-    { key: "hl:responses", label: "Responses", count: count("hl:responses") },
-    { key: "hl:tool-calls", label: "Tool calls", count: count("hl:tool-calls") },
-    { key: "hl:tool-results", label: "Tool results", count: count("hl:tool-results") },
-    { key: "hl:task-tracker", label: "Task tracker", count: count("hl:task-tracker") },
-  ].filter((c) => c.count > 0);
-  const groups: FilterGroups = [
-    { title: "Highlights", chips: highlights },
-    { title: "Tool types", chips: collect("tool:") },
-    { title: "Models", chips: collect("model:") },
-    { title: "Providers", chips: collect("provider:") },
-  ].filter((g) => g.chips.length > 0);
-  return { tags, groups, toolNames };
-}
-
-function LogFilters({
-  groups,
-  selected,
-  onToggle,
-  onClear,
-  shown,
-  total,
-}: {
-  groups: FilterGroups;
-  selected: Set<string>;
-  onToggle: (key: string) => void;
-  onClear: () => void;
-  shown: number;
-  total: number;
-}) {
-  if (groups.length === 0) return null;
-  return (
-    <div className="log-filters" data-testid="log-filters">
-      <div className="log-filters-head">
-        <span className="log-filters-title">Interaction filters</span>
-        {selected.size > 0 ? (
-          <button type="button" className="btn btn-small" onClick={onClear}>
-            Clear all
-          </button>
-        ) : null}
-      </div>
-      {groups.map((g) => (
-        <div key={g.title} className="log-filter-group">
-          <span className="log-filter-group-title">{g.title}</span>
-          <div className="log-filter-chips">
-            {g.chips.map((c) => (
-              <button
-                key={c.key}
-                type="button"
-                className={`log-chip${selected.has(c.key) ? " log-chip--active" : ""}`}
-                aria-pressed={selected.has(c.key)}
-                onClick={() => onToggle(c.key)}
-              >
-                {c.label} <span className="log-chip-count">{c.count}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
-      <div className="log-filters-shown">
-        {selected.size === 0
-          ? `Showing all ${total} messages`
-          : `Showing ${shown} of ${total} messages`}
-      </div>
-    </div>
-  );
-}
-
-// LogMessageCard — one transcript entry, moc-style: a role-tinted header bar
-// (avatar initial, role, model, timestamp) over the rendered content.
-// Reasoning and tool arguments sit behind disclosures; tool OUTPUT renders as
-// preformatted text (it is machine output, not markdown).
-function LogMessageCard({
-  msg,
-  taskId,
-  toolName,
-}: {
-  msg: LogMessage;
-  taskId: string;
-  toolName?: string;
-}) {
-  const role = msg.role ?? "unknown";
-  const ts = msg.created_at
-    ? new Date(msg.created_at * 1000).toLocaleTimeString()
-    : null;
-  const initial =
-    role === "user" ? "U" : role === "assistant" ? "A" : role === "tool" ? "T" : "?";
-  const roleLabel =
-    role === "tool" && toolName ? `tool · ${toolName}` : role;
-  const content = stripAnsiCodes(msg.content ?? "");
-  return (
-    <div className={`log-message log-message--${role}`}>
-      <div className="log-message-head">
-        <span className={`log-avatar log-avatar--${role}`} aria-hidden="true">
-          {initial}
-        </span>
-        <span className="log-message-role">{roleLabel}</span>
-        {msg.model ? <span className="log-message-model">{msg.model}</span> : null}
-        {ts ? <span className="log-message-time">{ts}</span> : null}
-      </div>
-      <div className="log-message-content">
-        {(msg.reasoning ?? "").trim() ? (
-          <details className="log-reasoning">
-            <summary>Reasoning</summary>
-            <pre className="log-pre">{stripAnsiCodes(msg.reasoning ?? "")}</pre>
-          </details>
-        ) : null}
-        {(msg.tool_calls?.length ?? 0) > 0 ? (
-          <div className="log-tool-calls">
-            {msg.tool_calls!.map((tc, i) => {
-              const display = deferredToolDisplay(tc.name, tc.arguments);
-              return (
-                <details key={tc.id ?? i} className="log-tool-call" data-testid="stored-tool-call">
-                  <summary>{display.name}</summary>
-                  <pre className="log-pre">{display.input}</pre>
-                </details>
-              );
-            })}
-          </div>
-        ) : null}
-        {content ? (
-          role === "tool" ? (
-            msg.is_error ? (
-              <p className="log-tool-error" data-testid="stored-tool-result">
-                {readableToolError(content)}
-              </p>
-            ) : content.length > 1200 ? (
-              <details className="log-tool-output">
-                <summary>
-                  Tool output ({content.length.toLocaleString()} characters)
-                </summary>
-                <pre className="log-pre">{content}</pre>
-              </details>
-            ) : (
-              <pre className="log-pre">{content}</pre>
-            )
-          ) : (
-            <Suspense
-              fallback={<div className="whitespace-pre-wrap">{content}</div>}
-            >
-              <LogMarkdown content={content} taskId={taskId} />
-            </Suspense>
-          )
-        ) : null}
-      </div>
     </div>
   );
 }
@@ -614,11 +386,11 @@ function SubagentTranscript({
         <p className="subagent-card-transcript-note">Transcript unavailable: {error}</p>
       ) : null}
       {state === "loaded" && session ? (
-        <div className="log-session">
-          {(session.messages ?? []).map((m, i) => (
-            <LogMessageCard key={m.id ?? i} msg={m} taskId={taskId} toolName={m.tool_name} />
-          ))}
-        </div>
+        <TranscriptTimeline
+          messages={session.messages ?? []}
+          taskId={taskId}
+          withFilters={false}
+        />
       ) : null}
     </details>
   );
@@ -728,6 +500,23 @@ function LiveTaskView({
   canStop: boolean;
 }) {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
+  // Which live step cards are open, and each tool entry's 1-based step number.
+  const [openEntries, setOpenEntries] = useState<Set<string>>(new Set());
+  const toggleEntry = useCallback(
+    (key: string) =>
+      setOpenEntries((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      }),
+    [],
+  );
+  const toolSteps = useMemo(() => {
+    const steps = new Map<string, number>();
+    for (const e of entries) if (e.kind === "tool") steps.set(e.key, steps.size + 1);
+    return steps;
+  }, [entries]);
   // checklist holds the LATEST task_tracker plan (#518) for the live progress
   // panel; it updates each time the agent revises its plan mid-run.
   const [checklist, setChecklist] = useState<ChecklistState | null>(null);
@@ -797,7 +586,7 @@ function LiveTaskView({
       } else if (frame.type === "tool_call") {
         // task_tracker is represented once by the dedicated progress panel.
         if (frame.name === "task_tracker") return;
-        const display = deferredToolDisplay(frame.name, frame.input);
+        const display = unwrapDeferredCall(frame.name, frame.input);
         const entry: ActivityEntry = {
           key: `e${seq.current++}`,
           kind: "tool",
@@ -1015,29 +804,24 @@ function LiveTaskView({
                   }
                 />
               ) : (
-                <article
+                // The same step card the finished transcript uses, so a live
+                // run and its stored log read alike.
+                <ToolStepCard
                   key={e.key}
-                  className={`live-tool-entry${e.isError ? " live-tool-entry--error" : ""}`}
-                  data-testid="live-tool-entry"
-                >
-                  <div className="live-tool-heading">
-                    <code>{e.name ?? "tool"}</code>
-                    <span className={`live-tool-status${e.isError ? " live-tool-status--error" : ""}`}>
-                      {e.pending ? "Running…" : e.isError ? "Failed" : "Done"}
-                      {(e.repeats ?? 1) > 1 ? ` · ${e.repeats} attempts` : ""}
-                    </span>
-                  </div>
-                  {e.isError && e.result ? (
-                    <p className="live-tool-error">{readableToolError(e.result)}</p>
-                  ) : null}
-                  {e.text || (!e.isError && e.result) ? (
-                    <details className="live-tool-details">
-                      <summary>Details</summary>
-                      {e.text ? <pre>{e.text}</pre> : null}
-                      {!e.isError && e.result ? <pre>{e.result}</pre> : null}
-                    </details>
-                  ) : null}
-                </article>
+                  testId="live-tool-entry"
+                  open={openEntries.has(e.key)}
+                  onToggle={toggleEntry}
+                  tool={{
+                    key: e.key,
+                    step: toolSteps.get(e.key) ?? 0,
+                    name: e.name ?? "tool",
+                    argsRaw: e.text,
+                    resultRaw: e.pending ? undefined : (e.result ?? ""),
+                    isError: !!e.isError,
+                    pending: e.pending,
+                    repeats: e.repeats,
+                  }}
+                />
               ))}
               <div ref={bottomRef} />
             </div>
@@ -1119,31 +903,7 @@ function LogViewerBody({
   const attempts = attemptHistory?.entries ?? [];
   const { showToast } = useToast();
   const [resubmitting, setResubmitting] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-
   const messages = useMemo(() => session?.messages ?? [], [session]);
-  const { tags, groups, toolNames } = useMemo(
-    () => buildFilterIndex(messages),
-    [messages],
-  );
-  const visibleIdx = useMemo(
-    () =>
-      messages
-        .map((_, i) => i)
-        .filter(
-          (i) =>
-            selected.size === 0 || [...selected].some((k) => tags[i].has(k)),
-        ),
-    [messages, tags, selected],
-  );
-
-  const toggleChip = (key: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
 
   // hasRun distinguishes the two shapes of the same action: a finished task is
   // RESUBMITTED, a not-yet-run one is kicked off NOW. Both post the same
@@ -1398,38 +1158,17 @@ function LogViewerBody({
             // would leak the denied case the server deliberately hides.
             <div className="table-empty">No transcript available for this task.</div>
           ) : (
-            <>
-              <LogFilters
-                groups={groups}
-                selected={selected}
-                onToggle={toggleChip}
-                onClear={() => setSelected(new Set())}
-                shown={visibleIdx.length}
-                total={messages.length}
-              />
-              <div className="log-session">
-                {visibleIdx.map((i) => {
-                  // Sub-agent linkage entries (#1043) render as child cards,
-                  // not raw JSON tool messages.
-                  if (messages[i].message_type === "subagent_spawned") {
-                    const info = parseSubagentPayload(messages[i].content);
-                    if (info) {
-                      return (
-                        <SubagentCard key={messages[i].id ?? i} info={info} taskId={task.id} />
-                      );
-                    }
-                  }
-                  return (
-                    <LogMessageCard
-                      key={messages[i].id ?? i}
-                      msg={messages[i]}
-                      taskId={task.id}
-                      toolName={toolNames.get(i)}
-                    />
-                  );
-                })}
-              </div>
-            </>
+            <TranscriptTimeline
+              key={attemptId ?? "latest"}
+              messages={messages}
+              taskId={task.id}
+              renderSubagent={(msg) => {
+                // Sub-agent linkage entries (#1043) render as child cards,
+                // not raw JSON tool messages.
+                const info = parseSubagentPayload(msg.content);
+                return info ? <SubagentCard info={info} taskId={task.id} /> : null;
+              }}
+            />
           )}
         </div>
       </div>

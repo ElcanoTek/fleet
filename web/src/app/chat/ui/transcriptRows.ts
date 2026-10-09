@@ -7,6 +7,7 @@
 // renders nothing there).
 
 import type { Message } from "./history";
+import { isRenderableCardCall } from "./genui/transcript";
 
 export type TranscriptRow =
   // Live compaction progress card (only while summarizing).
@@ -69,7 +70,9 @@ export function showsEmptyReplyNotice(message: Message): boolean {
     !message.modelRequired &&
     !message.retrying &&
     !(message.approvals && message.approvals.length) &&
-    !(message.memoryProposals && message.memoryProposals.length)
+    !(message.memoryProposals && message.memoryProposals.length) &&
+    // A turn that ends on an interactive card has answered with the card.
+    !(message.toolCalls ?? []).some(isRenderableCardCall)
   );
 }
 

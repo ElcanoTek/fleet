@@ -5,7 +5,12 @@ import (
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/redact"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
+
+// show_ui validates the card the browser will draw, which is the redacted
+// tool input (see onToolCall).
+func init() { tools.ShowUIRedactor = func(s string) string { return toolRedactor().Redact(s) } }
 
 // toolRedactor returns the process-wide secret scrubber applied to tool output
 // (in the tool wrappers + stream sink) and to the persisted session log. Built

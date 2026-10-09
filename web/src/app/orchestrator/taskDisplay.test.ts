@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 
-import { blockedReason, scheduleLabel, scheduleStoppedReason, scheduleTitle } from "./taskDisplay";
+import { blockedReason, promptName, scheduleLabel, scheduleStoppedReason, scheduleTitle, taskRunLabel } from "./taskDisplay";
 
 const recurring: Task = { id: "t1", recurrence: "0 9 * * 6,0" };
 
@@ -53,5 +53,24 @@ describe("blocked runs (completion.blocked_when)", () => {
     expect(blockedReason({ id: "t5", status: "success" })).toBeNull();
     expect(blockedReason({ id: "t6", status: "dead_lettered", run_outcome: "connector_unavailable" })).toBeNull();
     expect(blockedReason({ id: "t7", status: "error", run_outcome: "blocked" })).toBeNull();
+  });
+});
+
+describe("task labels from a workflow's own name", () => {
+  // Scheduled prompts often open with a shared preamble heading, so the first
+  // line names every one of them the same; the YAML name: tells them apart.
+  const prompt = '## Unattended run contract (read first)\n\nNo human is present.\n\n---\nname: "TWC Campaign Health Scan"\nversion: "4.3"\n';
+
+  it("reads a top-level name: line, quoted or not", () => {
+    expect(promptName(prompt)).toBe("TWC Campaign Health Scan");
+    expect(promptName("name: Weekly scan\nsteps: []")).toBe("Weekly scan");
+    expect(promptName("agent:\n  name: Victoria\n")).toBe("");
+    expect(promptName("Pull yesterday's deal report")).toBe("");
+  });
+
+  it("labels an untitled task by it, after an explicit title", () => {
+    expect(taskRunLabel({ id: "b50b6d78-0000", prompt } as Task)).toBe("TWC Campaign Health Scan");
+    expect(taskRunLabel({ id: "b50b6d78-0000", prompt, title: "TWC weekly" } as Task)).toBe("TWC weekly");
+    expect(taskRunLabel({ id: "b50b6d78-0000", prompt: "Run the optimization protocol" } as Task)).toBe("Run the optimization protocol");
   });
 });
