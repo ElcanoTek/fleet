@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -187,9 +188,17 @@ func TestOpenStableMCPWorkspaceRefusesSymlinks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "real.jsonl"), []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A FIFO planted beside it (it would block the start-of-run ledger read).
+	fifo := filepath.Join(dir, "emails.jsonl")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	openStable(t, "task-abc")
 	if _, err := os.Lstat(planted); !os.IsNotExist(err) {
 		t.Fatalf("planted symlink must be removed: %v", err)
+	}
+	if _, err := os.Lstat(fifo); !os.IsNotExist(err) {
+		t.Fatalf("planted FIFO must be removed: %v", err)
 	}
 	if b, err := os.ReadFile(victimFile); err != nil || string(b) != "host" {
 		t.Fatalf("symlink target touched: %q, %v", b, err)

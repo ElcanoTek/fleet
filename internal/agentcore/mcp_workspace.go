@@ -235,9 +235,9 @@ func SharedMCPWorkspaceDir() string {
 // operation here therefore goes through an os.Root opened at the workspace root
 // (nothing resolves outside it), the mcp-runs base and the run dir must be real
 // directories — a symlink or file squatting on either fails the setup closed
-// rather than being mounted — and any symlink planted at the top of the run dir
-// (e.g. creates.jsonl -> a host file) is removed before a connector is spawned
-// on it. Writes through the returned root cannot leave the run dir.
+// rather than being mounted — and any symlink, FIFO, socket or device planted
+// at the top of the run dir (e.g. creates.jsonl -> a host file, or a FIFO that
+// would hang the ledger read) is removed before a connector is spawned on it. Writes through the returned root cannot leave the run dir.
 //
 // The directory is deliberately NOT cleaned up here: it holds the run ledger,
 // which is post-run evidence of the critical actions the run recorded, and
@@ -286,7 +286,7 @@ func OpenStableMCPWorkspace(key string) (string, *os.Root, error) {
 		}
 	}
 	if err == nil {
-		err = removeTopLevelSymlinks(run)
+		err = removeTopLevelSpecialFiles(run)
 	}
 	if err != nil {
 		_ = run.Close()
@@ -312,11 +312,13 @@ func mkdirNoFollow(root *os.Root, name string, perm fs.FileMode) error {
 	return nil
 }
 
-// removeTopLevelSymlinks unlinks every symlink directly inside the run dir.
-// Fleet and the connectors only ever create regular files and directories
-// there, so a symlink is something the sandbox planted to redirect a
-// host-side write (a connector appending its ledger, Fleet staging inputs).
-func removeTopLevelSymlinks(run *os.Root) error {
+// removeTopLevelSpecialFiles unlinks every entry directly inside the run dir
+// that is neither a regular file nor a directory. Fleet and the connectors
+// only ever create those two there, so anything else was planted by the
+// sandbox: a symlink to redirect a host-side write (a connector appending its
+// ledger, Fleet staging inputs), or a FIFO/socket/device that would block or
+// misdirect a host-side read such as the start-of-run ledger reconciliation.
+func removeTopLevelSpecialFiles(run *os.Root) error {
 	dir, err := run.Open(".")
 	if err != nil {
 		return err
@@ -327,13 +329,13 @@ func removeTopLevelSymlinks(run *os.Root) error {
 		return err
 	}
 	for _, e := range entries {
-		if e.Type()&fs.ModeSymlink == 0 {
+		if t := e.Type(); t.IsRegular() || t.IsDir() {
 			continue
 		}
 		if err := run.Remove(e.Name()); err != nil {
-			return fmt.Errorf("remove planted symlink %s: %w", e.Name(), err)
+			return fmt.Errorf("remove planted %s %s: %w", e.Type(), e.Name(), err)
 		}
-		log.Printf("mcp workspace: removed planted symlink %s from %s", e.Name(), run.Name())
+		log.Printf("mcp workspace: removed planted %s %s from %s", e.Type(), e.Name(), run.Name())
 	}
 	return nil
 }
