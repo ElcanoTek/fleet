@@ -180,6 +180,12 @@ func (o *orchestrationState) registerCommittedActions(declared []string) {
 			// discharge ledger left over from a prior batch on the same suffix.
 			delete(o.dischargedDeals, criticalAliasClassOf(suffix))
 			o.committedCriticalActions[suffix]++
+			// Declaring email-last work makes the run email-last work, as a
+			// typed declaration does (restateUnboundEntry): an abort before
+			// the first attempt still owes the failure-summary email.
+			if isEmailLastSuffix(suffix) {
+				o.emailLastAttempted = true
+			}
 			log.Printf("Enforcement: registered committed critical action %q (from %q); %d outstanding",
 				suffix, decl, o.committedCriticalActions[suffix])
 			registered++
@@ -305,6 +311,12 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 	if isEmailTool(toolName) {
 		fp := emailDedupKey(rawInput)
 		if _, dup := o.sentEmailFingerprints[fp]; dup {
+			// Email-last ordering first: a payload sent BEFORE the batch is
+			// not "already done" while batch work is unsettled — it would
+			// stand as a stale summary (audit_email_last.go).
+			if blocked, msg := o.checkSummaryEmailOrder(toolName); blocked {
+				return true, msg
+			}
 			// This is the one guard whose block means "already done" rather
 			// than "not done": the fingerprint is recorded exclusively on a
 			// successful send, so an identical payload here has provably
@@ -320,6 +332,9 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 				o.selfAuditRequested = true
 			}
 			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput), "")
+			// Once batch work is settled, the delivered payload stands as the
+			// summary email: no email-last write may follow it.
+			o.noteSummaryEmailSent()
 			if o.allCommitmentsExhausted() {
 				o.auditConfirmed = false
 			}

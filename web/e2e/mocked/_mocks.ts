@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import type { Page, Route } from "@playwright/test";
 
 // Shared route-mock helpers for the mocked suite. Each spec composes these to
@@ -29,6 +31,37 @@ export function fulfillSse(route: Route, frames: Array<{ event: string; data: un
     status: 200,
     headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" },
     body: sse(frames),
+  });
+}
+
+// ── Recorded producer streams ──────────────────────────────────────────────
+// Serves one of testdata/contracts/chat-stream/*.sse — a turn RECORDED from the
+// real Go producer (internal/agent TestChatStreamContract) — verbatim as the
+// /api/chat response. Prefer it to hand-written frames wherever a spec only
+// needs "a realistic turn": a hand-written stream drifts from what the server
+// sends, a recording is regenerated with it. The new conversation's id rides
+// the X-Fleet-Conversation-Id header, exactly as the chat server sends it
+// (#1591), so no frame is invented.
+const CONTRACT_DIR = path.resolve(__dirname, "../../../testdata/contracts/chat-stream");
+
+// The stream the chat server really sends: its recorded preamble (the
+// fleet.capabilities frame), then the turn.
+export function recordedTurn(name: string): string {
+  return (
+    readFileSync(path.join(CONTRACT_DIR, "..", "chat-stream-preamble.sse"), "utf8") +
+    readFileSync(path.join(CONTRACT_DIR, `${name}.sse`), "utf8")
+  );
+}
+
+export function fulfillRecordedTurn(route: Route, name: string, conversationId: string) {
+  return route.fulfill({
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache",
+      "X-Fleet-Conversation-Id": conversationId,
+    },
+    body: recordedTurn(name),
   });
 }
 

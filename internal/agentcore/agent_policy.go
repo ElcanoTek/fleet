@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // AgentPolicy carries the client-bundle-configurable tool-behavior lists:
@@ -73,6 +74,13 @@ type AgentPolicy struct {
 	// email has gone out. Each member is implicitly an email-last suffix too.
 	// Empty = a failed create keeps its commitment open, as before.
 	SettleableCreateToolSuffixes []string
+	// BatchSecondsPerDeal maps a manifest MCP server name to its per-record
+	// budget, in seconds, for a deal_ids batch call (the bundle's
+	// mcp_servers[].batch_seconds_per_deal). A registered named-account
+	// variant <server>_<account> resolves to its base server's entry through
+	// the one server-name keying rule (longestServerKey). Unlisted servers get
+	// batchToolCallTimeoutPerDeal. Non-positive values are ignored.
+	BatchSecondsPerDeal map[string]int
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -134,6 +142,10 @@ var (
 	// suffix is email-last and no failure settles anything.
 	activeEmailLastSuffixes        = map[string]bool{}
 	activeSettleableCreateSuffixes = map[string]bool{}
+	// activeBatchPerDeal maps a manifest server name to its declared per-record
+	// deal_ids batch budget. Empty by default: every server gets
+	// batchToolCallTimeoutPerDeal.
+	activeBatchPerDeal = map[string]time.Duration{}
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -233,6 +245,27 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		}
 	}
 	activeCriticalUndoHints = hints
+
+	perDeal := make(map[string]time.Duration, len(p.BatchSecondsPerDeal))
+	for server, secs := range p.BatchSecondsPerDeal {
+		if server = strings.TrimSpace(server); server != "" && secs > 0 {
+			perDeal[server] = time.Duration(secs) * time.Second
+		}
+	}
+	activeBatchPerDeal = perDeal
+}
+
+// batchPerDealFor returns the per-record deal_ids batch budget for a
+// REGISTERED server name: the bundle-declared value of the server (or, for a
+// named-account variant without its own entry, of its base server), else
+// batchToolCallTimeoutPerDeal.
+func batchPerDealFor(registered string) time.Duration {
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	if key, ok := longestServerKey(registered, activeBatchPerDeal, true, nil); ok {
+		return activeBatchPerDeal[key]
+	}
+	return batchToolCallTimeoutPerDeal
 }
 
 // CriticalToolAliasProblems reports what ConfigureAgentPolicy would ignore in

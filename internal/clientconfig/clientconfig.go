@@ -365,6 +365,11 @@ type AgentPolicy struct {
 	//	  email_last_tools: [update_deal, merge_geo]
 	//	  settleable_create_tools: [execute_deal_from_prompt_inputs, create_deal]
 	SettleableCreateTools []string `yaml:"settleable_create_tools"`
+	// BatchSecondsPerDeal is DERIVED, never read from agent_policy: Bundle.AgentPolicy
+	// collects each mcp_servers[].batch_seconds_per_deal into it, keyed by
+	// server name, so the per-record batch budget reaches agentcore on the same
+	// path as the rest of the tool-behavior policy.
+	BatchSecondsPerDeal map[string]int `yaml:"-"`
 }
 
 // PersonaToolPermissions is the per-persona tool policy declared in the
@@ -787,6 +792,17 @@ type ServerDef struct {
 	// label. Optional; an absent list keeps the overrides>0 guard only.
 	IdentityEnv []string `yaml:"identity_env"`
 
+	// BatchSecondsPerDeal is this server's per-record budget, in seconds, for a
+	// tool call whose input carries a non-empty deal_ids array (a server-side
+	// sequential batch). Fleet gives such a call this many seconds per listed
+	// record, floored at the ordinary 5-minute MCP call timeout and capped at
+	// 30 minutes; 0 (absent) keeps the engine default of 20 s per record. A
+	// connector whose upstream paces requests (a per-minute rate limit makes
+	// every record slower) declares its own pace here instead of the engine
+	// knowing it by name. It governs the server's named-account variants too
+	// (<server>_<account>). See docs/BATCH-CALLS.md.
+	BatchSecondsPerDeal int `yaml:"batch_seconds_per_deal"`
+
 	// Optional marks a server users must opt into per conversation (chat's
 	// Optional-server semantics). DisplayName/Description/Beta/EnabledByDefault
 	// drive the settings-UI catalog rendering.
@@ -825,6 +841,11 @@ type ServerDef struct {
 	literalEnv bool
 	plugin     string
 }
+
+// MaxBatchSecondsPerDeal is the largest batch_seconds_per_deal a manifest may
+// declare: the engine caps a whole deal_ids batch call at 30 minutes, so a
+// single record's budget can never usefully exceed it.
+const MaxBatchSecondsPerDeal = 1800
 
 // ProbeDef is one declared read-only canary call for `fleet mcp test --deep`.
 // Assertions are deliberately minimal — the call must succeed and not be
@@ -1723,21 +1744,11 @@ func (b *Bundle) validate() error {
 		if err := validateServerTLS(s.Name, s.Type, s.URL, s.TLS); err != nil {
 			return err
 		}
-		// identity_env entries must name keys of THIS server's env map (and the
-		// account overlay is stdio-only): a typo'd identity var would otherwise
-		// silently never guard anything — for a wrong-seat/wrong-revenue guard
-		// that is the dangerous direction, so fail loud at startup instead.
-		for _, v := range s.IdentityEnv {
-			trimmed := strings.TrimSpace(v)
-			if trimmed == "" {
-				return fmt.Errorf("mcp_servers[%q]: identity_env entries must be non-empty", s.Name)
-			}
-			if s.Type != "stdio" {
-				return fmt.Errorf("mcp_servers[%q]: identity_env is only valid on a stdio server (accounts are env-suffixed; http servers reject account variants)", s.Name)
-			}
-			if _, ok := s.Env[trimmed]; !ok {
-				return fmt.Errorf("mcp_servers[%q]: identity_env var %q is not a key of the server's env map", s.Name, trimmed)
-			}
+		if err := validateIdentityEnv(s); err != nil {
+			return err
+		}
+		if err := validateBatchSecondsPerDeal(s); err != nil {
+			return err
 		}
 		// The account-suffix convention is purely lexical, so its base vars
 		// must not be underscore-prefixes of one another — fail the load
@@ -1803,6 +1814,38 @@ func (b *Bundle) validate() error {
 // case-insensitive, mirroring creds.AccountsFor. Scope is per server — the
 // set one ApplyClientSuffix/AccountsFor call actually operates over; http
 // servers reject account variants outright and are skipped.
+// validateIdentityEnv checks a server's identity_env: entries must name keys
+// of THIS server's env map (and the account overlay is stdio-only). A typo'd
+// identity var would otherwise silently never guard anything — for a
+// wrong-seat/wrong-revenue guard that is the dangerous direction, so fail loud
+// at startup instead.
+func validateIdentityEnv(s *ServerDef) error {
+	for _, v := range s.IdentityEnv {
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return fmt.Errorf("mcp_servers[%q]: identity_env entries must be non-empty", s.Name)
+		}
+		if s.Type != "stdio" {
+			return fmt.Errorf("mcp_servers[%q]: identity_env is only valid on a stdio server (accounts are env-suffixed; http servers reject account variants)", s.Name)
+		}
+		if _, ok := s.Env[trimmed]; !ok {
+			return fmt.Errorf("mcp_servers[%q]: identity_env var %q is not a key of the server's env map", s.Name, trimmed)
+		}
+	}
+	return nil
+}
+
+// validateBatchSecondsPerDeal checks a server's per-record deal_ids batch
+// budget. It is seconds per record and the whole call is capped at 30
+// minutes, so a value above MaxBatchSecondsPerDeal (most likely milliseconds
+// typed as seconds) could never apply; a negative one is meaningless.
+func validateBatchSecondsPerDeal(s *ServerDef) error {
+	if s.BatchSecondsPerDeal < 0 || s.BatchSecondsPerDeal > MaxBatchSecondsPerDeal {
+		return fmt.Errorf("mcp_servers[%q]: batch_seconds_per_deal must be between 1 and %d seconds (or omitted for the default), got %d", s.Name, MaxBatchSecondsPerDeal, s.BatchSecondsPerDeal)
+	}
+	return nil
+}
+
 func validateAccountSuffixBases(s *ServerDef) error {
 	if s.Type != "stdio" {
 		return nil
@@ -2718,6 +2761,17 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		p.CriticalToolAliases = make(map[string][]string, len(b.AgentPolicyConfig.CriticalToolAliases))
 		for k, v := range b.AgentPolicyConfig.CriticalToolAliases {
 			p.CriticalToolAliases[k] = append([]string(nil), v...)
+		}
+	}
+	// A server's declared per-record batch budget (mcp_servers[].
+	// batch_seconds_per_deal) is server behavior the engine must not know by
+	// name; it rides the policy keyed by the manifest server name.
+	for i := range b.MCPCatalog {
+		if secs := b.MCPCatalog[i].BatchSecondsPerDeal; secs > 0 {
+			if p.BatchSecondsPerDeal == nil {
+				p.BatchSecondsPerDeal = map[string]int{}
+			}
+			p.BatchSecondsPerDeal[b.MCPCatalog[i].Name] = secs
 		}
 	}
 	return p

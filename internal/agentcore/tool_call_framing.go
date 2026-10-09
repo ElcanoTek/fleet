@@ -107,7 +107,7 @@ func runGovernedToolCall(ctx context.Context, f toolCallFraming, params fantasy.
 	// post_tool_use hooks (#788) fire on success AND failure, and the
 	// fragment joins BEFORE the model-output boundary and the outcome records
 	// below so the policy, the durable journal, the session log, and the
-	// model all see identical bytes — and so a hook fragment can never push a
+	// model all see the fragment — and so a hook fragment can never push a
 	// response past the model-visible ceiling.
 	out.resp.Content = appendGovernedPostHook(ctx, f.hooks, f.name, params.ID, params.Input, out.resp.Content, out.failed)
 	// Bound every response, including media and Fleet-generated
@@ -130,7 +130,18 @@ func runGovernedToolCall(ctx context.Context, f toolCallFraming, params fantasy.
 	// built-in MCP tools. Without this the scheduled task-tracker finish gate
 	// (latestTaskTracker.Seen) never fired in production. A transport error
 	// or an is-error response counts as a failed call. Nil-safe on policy.
-	recordPolicyToolResult(ctx, f.policy, f.name, params.Input, resp.Content, !out.failed)
+	//
+	// A successful call's policy record is the governed but UNBOUNDED text
+	// (policyResultText): a large batch results[] (a 200-deal merge runs well
+	// past the model-visible ceiling) would otherwise reach the policy as a
+	// truncation envelope that is neither parsed nor discharged. A failed
+	// call's outcome is already decided, so it records the exact bounded bytes
+	// the model, journal and log carry (#793).
+	policyText := resp.Content
+	if !out.failed {
+		policyText = policyResultText(out.resp, resp)
+	}
+	recordPolicyToolResult(ctx, f.policy, f.name, params.Input, policyText, !out.failed)
 	if out.cause != nil {
 		// Fantasy persists a non-nil Go error as the model-visible tool
 		// result. The typed wrapper carries the exact bounded bytes and
@@ -181,4 +192,21 @@ func appendHookContext(content, frag string) string {
 		return frag
 	}
 	return content + "\n\n" + frag
+}
+
+// policyResultText returns the text the policy records for a call: the
+// governed (redacted, screened, hook-appended) response before the
+// model-visible boundary cut it. A media response keeps the bounded text, whose
+// payload the boundary replaced. Text past maxDealOutcomesBytes is cut to
+// maxDealOutcomesBytes+1 bytes: still over every result parser's cap, so a
+// per-record envelope that large fails closed (malformedDealOutcomes) rather
+// than being parsed whole.
+func policyResultText(governed, bounded fantasy.ToolResponse) string {
+	if len(governed.Data) > 0 || governed.Type == "image" || governed.Type == "media" {
+		return bounded.Content
+	}
+	if len(governed.Content) > maxDealOutcomesBytes {
+		return governed.Content[:maxDealOutcomesBytes+1]
+	}
+	return governed.Content
 }

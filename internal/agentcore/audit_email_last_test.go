@@ -507,3 +507,83 @@ func TestEmailLast_TemplateEmailIsOrdered(t *testing.T) {
 		t.Fatal("a failed template send must not count as the summary email")
 	}
 }
+
+// A settleable create whose retry comes back with malformed per-record
+// results (#1712's fail-closed branch) proves nothing about what was written:
+// its earlier settled failure is put back to unsettled, so the email waits.
+func TestEmailLast_MalformedCreateResultUnsettles(t *testing.T) {
+	withEmailLastPolicy(t)
+	o := newOrchStateForTest()
+	registerTyped(t, o, criticalActionStruct{Tool: elIXCreate}, criticalActionStruct{Tool: elEmail})
+	mustNotBlock(t, o, elIXCreate, elName("A"), elDefinitive)
+	if got := o.settledFailedSuffixes(); len(got) != 1 {
+		t.Fatalf("the definitive failure must settle the unit, got %v", got)
+	}
+	mustNotBlock(t, o, elIXCreate, `{"name":"A","dsp":"ttd","floor":3}`, `{"results":[{"deal_id":"D-1"}]}`)
+	if got := o.settledFailedSuffixes(); len(got) != 0 {
+		t.Fatalf("a malformed result must unsettle the record's unit, still settled: %v", got)
+	}
+	mustBlock(t, o, elEmail, elEmailArgs, "still unsettled")
+}
+
+// A LEGACY (free-text) audit that declares an email-last tool makes the run
+// email-last work just as a typed one does, so an abort before the first
+// attempt still owes — and may send — the failure-summary email (Codex P1 on
+// #1710).
+func TestEmailLast_LegacyDeclarationMarksEmailLastWork(t *testing.T) {
+	withEmailLastPolicy(t)
+	o := newOrchStateForTest()
+	if resp := confirmAudit(t, o, nil, []string{"update_deal: deal 5", "send_email: results"}); resp.IsError {
+		t.Fatalf("legacy audit refused: %s", resp.Content)
+	}
+	confirmAuditAbort(t, o, "seat missing; nothing booked")
+	if ok, _ := elFinish(t, o); ok {
+		t.Fatal("finish must demand the failure-summary email after the abort")
+	}
+	mustNotBlock(t, o, elEmail, elEmailArgs, elEmailOK)
+	if ok, msgs := elFinish(t, o); !ok {
+		t.Fatalf("finish must be allowed once the failure summary is sent, got %v", msgs)
+	}
+}
+
+// A create blocked before the audit and then completed through a same-server
+// critical_tool_substitutes target is done: its pending entry must not hold
+// the summary email back forever (Codex P1 on #1710).
+func TestEmailLast_SubstituteCompletesPendingCreate(t *testing.T) {
+	withEmailLastPolicy(t)
+	const ixCreateDeal = "mcp_indexexchange_mcp_ix_create_deal"
+	o := newOrchStateForTest()
+	if blocked, _ := o.checkCriticalTool(elIXCreate, "", elName("A")); !blocked {
+		t.Fatal("an unaudited create must be blocked (and recorded pending)")
+	}
+	confirmAudit(t, o, []criticalActionStruct{{Tool: elIXCreate}, {Tool: elEmail}}, nil)
+	mustNotBlock(t, o, ixCreateDeal, elName("A"), elCreateOK)
+	if len(o.pendingCriticalActions) != 0 {
+		t.Fatalf("the substitute's success must retire the pending create, got %v", o.pendingCriticalActions)
+	}
+	mustNotBlock(t, o, elEmail, elEmailArgs, elEmailOK)
+}
+
+// The duplicate-send guard runs after the email-last ordering: an email
+// identical to one sent BEFORE the batch is not let through as "already
+// done" while batch work is unsettled, and once it is let through it counts
+// as the summary email, so no write may follow (Codex P1 on #1710).
+func TestEmailLast_DuplicateSendRespectsOrdering(t *testing.T) {
+	withEmailLastPolicy(t)
+	o := newOrchStateForTest()
+	confirmAudit(t, o, []criticalActionStruct{{Tool: elEmail}}, nil)
+	mustNotBlock(t, o, elEmail, elEmailArgs, elEmailOK)
+	if o.summaryEmailSent {
+		t.Fatal("an email before any batch work is not the summary email")
+	}
+
+	confirmAudit(t, o, []criticalActionStruct{{Tool: elIXCreate}, {Tool: elEmail}}, nil)
+	mustBlock(t, o, elEmail, elEmailArgs, "still unsettled")
+	mustNotBlock(t, o, elIXCreate, elName("A"), elCreateOK)
+	mustBlock(t, o, elEmail, elEmailArgs, DuplicateSendSuppressedPrefix)
+	if !o.summaryEmailSent {
+		t.Fatal("the suppressed duplicate stands as the summary email once the batch settled")
+	}
+	confirmAudit(t, o, []criticalActionStruct{{Tool: elIXCreate}}, nil)
+	mustBlock(t, o, elIXCreate, elName("B"), "summary email has already been sent")
+}

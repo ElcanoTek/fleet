@@ -1272,6 +1272,10 @@ func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool,
 				"re-audit with the correct values_digest.", toolName)
 		}
 	}
+	if blocked, msg := o.checkBatchCanary(toolName, rawInput, dealIDs); blocked {
+		log.Printf("Enforcement: Blocking batch %s — no successful single-record canary for this action+shape yet", toolName)
+		return true, msg
+	}
 	return false, ""
 }
 
@@ -1356,9 +1360,11 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 					"values_digest batch commitment; only the whole-batch call (deal_ids + matching "+
 					"values_sha256) may discharge it", toolName, singleID)
 				return false, fmt.Sprintf("BLOCKED: '%s' targeting record %q is part of a values_digest-bound "+
-					"batch commitment. A single-record call cannot prove the approved values, so it is refused. "+
-					"Discharge it by issuing the whole-batch call carrying deal_ids and the matching values_sha256.",
-					toolName, singleID)
+					"batch commitment, so a bare single-record call cannot prove the approved values. To CANARY "+
+					"this record, call it as a ONE-record batch instead — deal_ids=[%q] with the matching "+
+					"values_sha256 — which IS accepted as the canary (no re-audit needed). Inspect its read-back, "+
+					"then issue the full batch (all deal_ids + the same values_sha256).",
+					toolName, singleID, singleID)
 			}
 			continue
 		}

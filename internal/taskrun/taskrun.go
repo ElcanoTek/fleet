@@ -132,6 +132,7 @@ func run(argv []string, progName string) error {
 		CriticalToolAliases:          bp.CriticalToolAliases,
 		EmailLastToolSuffixes:        bp.EmailLastTools,
 		SettleableCreateToolSuffixes: bp.SettleableCreateTools,
+		BatchSecondsPerDeal:          bp.BatchSecondsPerDeal,
 	})
 
 	// Install the bundle's custom model-pricing overrides (#297) before any turn

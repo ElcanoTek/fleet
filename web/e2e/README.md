@@ -64,6 +64,12 @@ unless `E2E_PROD=1` is set. The Next server boots with the throwaway test env
   shell's mount calls) and `sse()`/`fulfillSse()` (server-sent-event framing
   matching chat-server's wire format). Each spec layers its scenario-specific
   routes (the chat stream, the orchestrator task list, …) on top.
+  `fulfillRecordedTurn()` serves a turn **recorded from the real Go producer**
+  (`testdata/contracts/chat-stream/*.sse`, see
+  [`docs/TESTING-STRATEGY.md`](../../docs/TESTING-STRATEGY.md)) — prefer it to
+  hand-written `fulfillSse()` frames whenever a spec just needs a realistic turn,
+  because a recording is regenerated when the protocol changes and a
+  hand-written stream is not.
 
 ### Specs
 

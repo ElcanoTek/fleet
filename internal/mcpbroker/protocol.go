@@ -206,6 +206,14 @@ type request struct {
 	Server string         `json:"server,omitempty"`
 	Tool   string         `json:"tool,omitempty"`
 	Args   map[string]any `json:"args,omitempty"`
+	// CallTimeoutMs is the methodCall's per-call budget in milliseconds
+	// (mcp.WithCallTimeout), 0 = none. A context value does not cross this
+	// pipe, so the parent sends the budget here and the child re-attaches it
+	// to the call's context; mcp.Server.callTool then starts it once the call
+	// holds the server mutex. Without it a scaled deal_ids batch budget would
+	// be dropped at the boundary and every call would run on the parent's
+	// outer backstop deadline instead.
+	CallTimeoutMs int64 `json:"callTimeoutMs,omitempty"`
 	// Scope is an opaque broker-issued per-run scope ID. It is set on scoped calls
 	// and scope_close; scope_open carries ScopeSpec instead.
 	Scope     string    `json:"scope,omitempty"`

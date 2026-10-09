@@ -43,8 +43,16 @@ A **definitive** failure means the tool ran, its result reported failure
 anywhere in the result. The markers are `ambiguous_transport`,
 `outcome_unknown`, `deal_already_created`, `write_state: "unknown"`,
 `written: true`, `deal_created: true`, a `*_create_call_failed` code without
-4xx/rejection evidence, and fleet's MCP transport texts. A transport error or
-an is-error result never settles.
+4xx/rejection evidence, and fleet's MCP transport texts. A transport error,
+an is-error result or a malformed per-record `results[]` never settles, and
+puts the record's settled unit back.
+
+A run becomes email-last work when it declares an email-last tool (typed or
+legacy free-text) or attempts one. A call blocked before the audit and then
+completed through a same-server alias or substitute is retired, so it cannot
+hold the email back. The duplicate-send guard runs after the email-last
+ordering: an identical earlier payload is not "already done" while batch work
+is unsettled, and once let through it stands as the summary email.
 
 Attempts tie to units by record identity, which is the call's
 `name` / `deal_name` / `display_name` (top level, `payload`, `payload.deal`,

@@ -408,6 +408,7 @@ func run() error {
 		CriticalToolAliases:          bundlePolicy.CriticalToolAliases,
 		EmailLastToolSuffixes:        bundlePolicy.EmailLastTools,
 		SettleableCreateToolSuffixes: bundlePolicy.SettleableCreateTools,
+		BatchSecondsPerDeal:          bundlePolicy.BatchSecondsPerDeal,
 	})
 
 	// Connector credentials cross exactly one process boundary at boot: the child

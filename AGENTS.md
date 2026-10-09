@@ -274,7 +274,9 @@ note, runbook and ADR, by question. The entry points an agent needs most:
 - **Documentation for the people USING fleet** (the `/help` guides, the
   `fleet-guide` skill, and what to update when a surface changes):
   [`docs/USER-GUIDES.md`](docs/USER-GUIDES.md).
-- **Testing strategy and the scanning stack:** [`docs/TESTING.md`](docs/TESTING.md),
+- **Testing strategy and the scanning stack:** where a new test belongs and
+  the chat-stream contract: [`docs/TESTING-STRATEGY.md`](docs/TESTING-STRATEGY.md);
+  the CI lanes: [`docs/TESTING.md`](docs/TESTING.md);
   [`docs/SCANNING.md`](docs/SCANNING.md).
 - **Reporting a vulnerability:** [`SECURITY.md`](SECURITY.md).
 
