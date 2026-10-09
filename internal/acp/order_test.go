@@ -217,6 +217,11 @@ func TestOrderedInputKeepsItsCountsWhenAWaitReachesItsBound(t *testing.T) {
 	send(promptLine(2, "s", "next") + "\n" + cancelLine("s") + "\n")
 	expect(promptLine(2, "s", "next"))
 	expect(cancelLine("s"))
+	// The note is written off the reader's goroutine (await), so give it a
+	// moment to land.
+	for deadline := time.Now().Add(5 * time.Second); strings.Count(diag.String(), boundNote) < 2 && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
 	if n := strings.Count(diag.String(), boundNote); n != 2 {
 		t.Errorf("stderr noted %d waits that reached the bound, want 2: the second cancel must wait for the second prompt, not take the first one's late arrival for it:\n%s", n, diag)
 	}
@@ -289,6 +294,58 @@ func TestOrderedInputPassesALongLineOnAsItComes(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the line was held back waiting for its end")
+	}
+}
+
+// A line that stalls at exactly maxLine bytes is handed on: the SDK's scanner
+// refuses it there and closes the connection, so waiting for one more byte
+// would leave fleet acp hung on a client that never sends it.
+func TestOrderedInputHandsOnALineStalledAtMaxLine(t *testing.T) {
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	go func() { _, _ = pw.Write(bytes.Repeat([]byte("x"), maxLine)) }() // then nothing, stdin left open
+	o := newOrderedInput(pr, NewAgent(nil, nil, "", 0, "test"))
+	got := make(chan int, 1)
+	go func() {
+		n := 0
+		buf := make([]byte, 64<<10)
+		for n < maxLine {
+			m, err := o.Read(buf)
+			if err != nil {
+				break
+			}
+			n += m
+		}
+		got <- n
+	}()
+	select {
+	case n := <-got:
+		if n != maxLine {
+			t.Errorf("read %d bytes, want maxLine (%d)", n, maxLine)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a line stalled at maxLine was held back waiting for one more byte")
+	}
+}
+
+// A wait that reaches its bound hands its line on at the bound, even when
+// stderr is not being drained: the note about it must not hold the line for
+// stderrWait on top.
+func TestOrderedInputBoundIsNotStretchedByAStuckStderr(t *testing.T) {
+	prev := orderWait
+	orderWait = 50 * time.Millisecond
+	t.Cleanup(func() { orderWait = prev })
+	ag := NewAgent(nil, nil, "", 0, "test")
+	stuckR, stuckW := io.Pipe() // nobody reads stuckR
+	t.Cleanup(func() { _ = stuckR.Close() })
+	ag.diag = boundedWriter{w: stuckW}
+	in := promptLine(1, "s", "never arrives") + "\n" + cancelLine("s") + "\n"
+	sc := bufio.NewScanner(newOrderedInput(strings.NewReader(in), ag))
+	start := time.Now()
+	for sc.Scan() {
+	}
+	if took := time.Since(start); took >= stderrWait/2 {
+		t.Errorf("handing the cancel on took %s; the stuck stderr held it past the %s bound", took, orderWait)
 	}
 }
 

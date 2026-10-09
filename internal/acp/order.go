@@ -99,7 +99,9 @@ func (o *orderedInput) next() {
 		chunk, err := o.r.ReadSlice('\n')
 		line = append(line, chunk...)
 		if errors.Is(err, bufio.ErrBufferFull) {
-			if len(line) > maxLine {
+			// At maxLine the SDK's scanner already refuses the line, so hand
+			// it on now: a client that stalls there must not hang us.
+			if len(line) >= maxLine {
 				o.long = true
 				o.pending = line
 				return
@@ -134,14 +136,17 @@ func (o *orderedInput) hold(line []byte) {
 // await waits (awaitOrder) for prompts prompts to have arrived and cancels
 // cancels to have been handled, for at most orderWait. A wait that reaches
 // the bound says so on stderr; the counts are left as they are (see
-// orderedInput).
+// orderedInput). The note is written off this goroutine: a stderr nobody
+// drains can hold a write for stderrWait, and that must not stretch the
+// bound the held line has already reached.
 func (o *orderedInput) await(method string, prompts, cancels uint64) {
 	arrived, handled, caughtUp := o.agent.awaitOrder(prompts, cancels, orderWait)
 	if caughtUp {
 		return
 	}
-	fmt.Fprintf(o.agent.diag, "fleet acp: %d session/prompt and %d session/cancel sent before a %s had not reached fleet acp within %s; handing it on without them\n",
+	note := fmt.Sprintf("fleet acp: %d session/prompt and %d session/cancel sent before a %s had not reached fleet acp within %s; handing it on without them\n",
 		prompts-min(arrived, prompts), cancels-min(handled, cancels), method, orderWait)
+	go func() { _, _ = io.WriteString(o.agent.diag, note) }()
 }
 
 // sdkDelivers is line's method when line is a session/prompt or
