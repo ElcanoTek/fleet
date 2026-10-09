@@ -188,13 +188,15 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	for _, problem := range emailLastProblems {
 		log.Printf("agent_policy: %s", problem)
 	}
-	activeEmailLastSuffixes, activeSettleableCreateSuffixes = emailLast, settleable
 
 	subs := make(map[string][]string, len(p.CriticalToolSubstitutes))
 	for k, v := range p.CriticalToolSubstitutes {
 		subs[k] = append([]string(nil), v...)
 	}
 	activeCriticalSubstitutes = subs
+
+	closeEmailLastOverEquivalents(emailLast, classes, subs, seen)
+	activeEmailLastSuffixes, activeSettleableCreateSuffixes = emailLast, settleable
 
 	timeouts := make(map[string]int, len(p.CriticalToolTimeouts))
 	for k, v := range p.CriticalToolTimeouts {
@@ -309,6 +311,47 @@ func buildEmailLastSets(p AgentPolicy, critical map[string]bool) (emailLast, set
 		}
 	}
 	return emailLast, settleable, problems
+}
+
+// closeEmailLastOverEquivalents widens the email-last set to every critical
+// suffix that can carry the same logical write as a member: its
+// critical_tool_aliases twins (either direction) and the
+// critical_tool_substitutes targets listed under it — exactly the executed
+// names typedCommitment.nameMatches lets authorize or discharge a commitment
+// on a member. Without this, a write after the summary email could run under
+// the twin's name, and a commitment declared on the twin would not hold the
+// email back. Iterates to a fixpoint (a substitute's own alias class joins
+// too); email suffixes and non-critical names never join. Settleable
+// membership is NOT widened: a settle only releases the email, so leaving an
+// equivalent unsettleable is the safe direction.
+func closeEmailLastOverEquivalents(emailLast map[string]bool, aliasClass map[string]string,
+	subs map[string][]string, critical map[string]bool) {
+	join := func(s, via string) bool {
+		s = strings.TrimSpace(s)
+		if s == "" || emailLast[s] || !critical[s] || isEmailTool(s) || s == "send_template_email" {
+			return false
+		}
+		emailLast[s] = true
+		log.Printf("agent_policy: %q is email-last as an equivalent of %q (critical_tool_aliases / critical_tool_substitutes)", s, via)
+		return true
+	}
+	for changed := true; changed; {
+		changed = false
+		for member := range emailLast {
+			if class, ok := aliasClass[member]; ok {
+				for s, c := range aliasClass {
+					if c == class && join(s, member) {
+						changed = true
+					}
+				}
+			}
+			for _, s := range subs[member] {
+				if join(s, member) {
+					changed = true
+				}
+			}
+		}
+	}
 }
 
 // buildCriticalAliasClasses turns the bundle's critical_tool_aliases into

@@ -239,9 +239,19 @@ func (o *orchestrationState) attemptIdentity(rawInput string) string {
 }
 
 // namedCreateRefusal is commitmentAuthorizes' BLOCKED text for a create whose
-// record name matches none of the open NAMED units it could ride.
+// record name matches none of the open NAMED units it could ride. dealName ""
+// means the call named no readable record at all.
 func namedCreateRefusal(toolName, dealName string, names []string) string {
 	sort.Strings(names)
+	if dealName == "" {
+		log.Printf("Enforcement: Blocking %s — it names no readable record, and the audit binds this tool's open "+
+			"create units to record names %v (create_deal_name_not_declared)", toolName, names)
+		return fmt.Sprintf("BLOCKED [create_deal_name_not_declared]: '%s' names no record this gate can read — no "+
+			"name / deal_name / display_name (top level or in payload / deal / overrides), and no prepared_deal_id "+
+			"returned by a successful prepare step in this run — but this audit's open %s units are bound to these "+
+			"deal_name values: %s. Pass the record's declared name on the call (or create from the handle its "+
+			"prepare step returned); never create a declared record through a call that cannot show its name.", toolName, criticalSuffixFor(toolName), strings.Join(names, "; "))
+	}
 	log.Printf("Enforcement: Blocking %s creating record %q — the audit binds this tool's open create units to "+
 		"other record names %v (create_deal_name_not_declared)", toolName, dealName, names)
 	return fmt.Sprintf("BLOCKED [create_deal_name_not_declared]: '%s' would create %q, but this audit's open %s "+

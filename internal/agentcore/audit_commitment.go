@@ -1287,12 +1287,22 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 	batchIDs, isBatch := batchDealIDs(rawInput)
 	singleID := callDealID(rawInput)
 	digest := valuesDigestArg(rawInput)
-	// Name-bound creates: a create carrying a readable record name may ride
-	// only the unit declared with that name (or, when the name is not
-	// declared, an unnamed unit). No readable name keeps the old behavior.
+	// Name-bound creates: a NAMED unit is ridden only by a single-record call
+	// whose readable record name is exactly its deal_name — whatever the
+	// executed member of the family (a same-server substitute or alias twin
+	// included), and never by a call that names no record (no name key, or a
+	// prepared_deal_id no prepare step returned): that call cannot prove it
+	// targets the audited record, and markTypedExecuted would then refuse to
+	// discharge the unit after the write. Unnamed units keep the count-based
+	// behavior, except that a settleable create under a DECLARED name never
+	// rides one (it must ride its own unit).
+	attemptedName := ""
+	if !isBatch {
+		attemptedName = o.attemptDealName(rawInput)
+	}
 	dealName := ""
-	if !isBatch && isSettleableCreateSuffix(criticalSuffixFor(toolName)) {
-		dealName = o.attemptDealName(rawInput)
+	if isSettleableCreateSuffix(criticalSuffixFor(toolName)) {
+		dealName = attemptedName
 	}
 	declared := o.declaredDealName(toolName, dealName)
 	var namedRefused []string
@@ -1308,10 +1318,11 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 		if c.remaining <= 0 || !c.nameMatches(toolName) {
 			continue
 		}
-		if dealName != "" && c.dealName != dealName && (c.dealName != "" || declared) {
-			if c.dealName != "" {
-				namedRefused = append(namedRefused, c.dealName)
-			}
+		if c.dealName != "" && !isBatch && c.dealName != attemptedName {
+			namedRefused = append(namedRefused, c.dealName)
+			continue
+		}
+		if c.dealName == "" && declared {
 			continue
 		}
 		if isBatch {
@@ -1361,7 +1372,7 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 		return true, ""
 	}
 	if len(namedRefused) > 0 {
-		return false, namedCreateRefusal(toolName, dealName, namedRefused)
+		return false, namedCreateRefusal(toolName, attemptedName, namedRefused)
 	}
 
 	refused := []string{singleID}

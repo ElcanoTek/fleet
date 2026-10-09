@@ -408,3 +408,72 @@ func TestEmailLastPolicyProblems(t *testing.T) {
 		t.Errorf("want exactly 3 problems, got %v", problems)
 	}
 }
+
+// A create that names no readable record — no name key at all, or a
+// prepared_deal_id handle no prepare step returned — cannot ride a NAMED unit:
+// it never proves it targets the audited record, and markTypedExecuted would
+// then refuse to discharge the unit after the write already happened (Codex
+// P1 on #1710). A same-server substitute of a different family (which never
+// went through the settleable name read) is bound the same way.
+func TestEmailLast_NamelessCreateCannotRideNamedUnit(t *testing.T) {
+	withEmailLastPolicy(t)
+	o := newOrchStateForTest()
+	registerTyped(t, o,
+		criticalActionStruct{Tool: elIXCreate, DealName: "Acme OLV"},
+		criticalActionStruct{Tool: elOXPrepared, DealName: "OX One"})
+
+	mustBlock(t, o, elIXCreate, `{"dsp":"ttd"}`, "create_deal_name_not_declared")
+	mustBlock(t, o, elOXPrepared, `{"prepared_deal_id":"never-prepared"}`, "create_deal_name_not_declared")
+	// create_marketplace_deal stands in for execute_deal_from_prompt_inputs
+	// on the same server but is not itself settleable.
+	ixMarketplace := "mcp_indexexchange_mcp_ix_create_marketplace_deal"
+	mustBlock(t, o, ixMarketplace, elName("Other"), "create_deal_name_not_declared")
+	mustBlock(t, o, ixMarketplace, `{"dsp":"ttd"}`, "create_deal_name_not_declared")
+	if got := len(o.unexecutedCommitments()); got != 2 {
+		t.Fatalf("nothing may have run or discharged, got %d outstanding", got)
+	}
+
+	// The declared names still go through, by either route.
+	mustNotBlock(t, o, ixMarketplace, elName("acme olv"), elCreateOK)
+	o.recordToolResult(elOXPrepare, `{"name":"OX One"}`, `{"success":true,"prepared_deal_id":"p-1"}`, true)
+	mustNotBlock(t, o, elOXPrepared, `{"prepared_deal_id":"p-1"}`, elCreateOK)
+	if missing := o.unexecutedCommitments(); len(missing) != 0 {
+		t.Fatalf("both named units must be discharged, got %v", missing)
+	}
+
+	// An unnamed unit still admits a nameless create (count-based, as before).
+	o2 := newOrchStateForTest()
+	registerTyped(t, o2, criticalActionStruct{Tool: elIXCreate, DealName: "A"}, criticalActionStruct{Tool: elIXCreate})
+	mustNotBlock(t, o2, elIXCreate, `{"dsp":"ttd"}`, elCreateOK)
+	mustBlock(t, o2, elIXCreate, `{"dsp":"ttd"}`, "create_deal_name_not_declared")
+}
+
+// An email-last tool's critical_tool_aliases twin and its
+// critical_tool_substitutes targets are the same logical write, so they are
+// email-last too: refused after the summary email even when the bundle lists
+// only the original suffix (Codex P1 on #1710), and a commitment declared on
+// one holds the summary email back.
+func TestEmailLast_EquivalentToolsAreEmailLast(t *testing.T) {
+	p := testFixturePolicy()
+	p.CriticalToolSuffixes = append(p.CriticalToolSuffixes, "update_deal", "update_deal_upload", "patch_deal")
+	p.CriticalToolAliases = map[string][]string{"update_deal": {"update_deal_upload"}}
+	p.CriticalToolSubstitutes["update_deal"] = []string{"patch_deal"}
+	p.EmailLastToolSuffixes = []string{"update_deal"}
+	ConfigureAgentPolicy(p)
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+
+	const upload = "mcp_magnite_mcp_magnite_update_deal_upload"
+	const patch = "mcp_magnite_mcp_magnite_patch_deal"
+	o := newOrchStateForTest()
+	confirmAudit(t, o, []criticalActionStruct{{Tool: upload, DealID: "4"}, {Tool: elEmail}}, nil)
+	mustBlock(t, o, elEmail, elEmailArgs, "still unsettled")
+	mustNotBlock(t, o, upload, `{"deal_id":"4"}`, `{"success":true}`)
+	mustNotBlock(t, o, elEmail, elEmailArgs, elEmailOK)
+
+	if resp := confirmAudit(t, o, []criticalActionStruct{{Tool: elUpdate, DealID: "6"}, {Tool: elUpdate, DealID: "7"}}, nil); resp.IsError {
+		t.Fatalf("re-audit refused: %s", resp.Content)
+	}
+	mustBlock(t, o, upload, `{"deal_id":"6"}`, "summary email has already been sent")
+	mustBlock(t, o, patch, `{"deal_id":"7"}`, "summary email has already been sent")
+	mustBlock(t, o, elUpdate, `{"deal_id":"6"}`, "summary email has already been sent")
+}

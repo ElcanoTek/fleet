@@ -20,7 +20,11 @@ agent_policy:
 Every member must also be in `critical_tools`, and no member may be an email
 tool. `fleet validate-config` reports a violation as `agent_policy=fail`, and
 boot logs it and ignores the member. Settleable members are email-last
-members too. Neither list set means no change.
+members too. So is every critical suffix that can carry the same write as a
+member: its `critical_tool_aliases` twins and the `critical_tool_substitutes`
+targets listed under it (closed to a fixpoint at boot), since the audit gate
+lets those names authorize and discharge the member's commitments. Neither
+list set means no change.
 
 ## What shipped (`internal/agentcore/audit_email_last.go`)
 
@@ -45,7 +49,11 @@ an is-error result never settles.
 Attempts tie to units by record identity, which is the call's
 `name` / `deal_name` / `display_name` (top level, `payload`, `payload.deal`,
 `deal` or `overrides`), else its `prepared_deal_id`'s prepare-step name, else
-its record id. A corrected retry discharges its own record's settled unit.
+its record id. A unit declared with `deal_name` is ridden only by a call
+whose readable name is exactly that name, whichever member of the tool family
+runs it; a call with no readable name (no name key, or a `prepared_deal_id` no
+prepare step returned) is refused against it, never let through on trust.
+A corrected retry discharges its own record's settled unit.
 Another record's success prefers an unsettled unit, so it never makes a
 never-attempted record look settled.
 
