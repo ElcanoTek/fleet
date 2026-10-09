@@ -148,11 +148,13 @@ func TestCriticalToolAliases_BatchBindingCarriesOver(t *testing.T) {
 		{"unapproved record", `{"deal_ids":["a","c"],"values_sha256":"d1"}`},
 		{"wrong digest", `{"deal_ids":["a","b"],"values_sha256":"d2"}`},
 	} {
+		o.creditCanary(aliasUploadTool, tc.args) // the binding, not the canary gate, must refuse it
 		if blocked, _ := o.checkCriticalTool(aliasUploadTool, "", tc.args); !blocked {
 			t.Fatalf("%s: the alias must not escape the batch binding", tc.name)
 		}
 	}
 	args := `{"deal_ids":["a","b"],"values_sha256":"d1"}`
+	o.creditCanary(aliasUploadTool, args) // batch_canary.go: pin the binding, not the canary gate
 	if blocked, msg := o.checkCriticalTool(aliasUploadTool, "", args); blocked {
 		t.Fatalf("the approved batch through the alias must ride: %s", msg)
 	}
@@ -276,6 +278,8 @@ func TestConfigureAgentPolicy_CriticalToolAliasClasses(t *testing.T) {
 func TestBatchApprovalsKeepEveryDeclaredDigest(t *testing.T) {
 	check := func(t *testing.T, o *orchestrationState, tool, args string, wantBlocked bool) {
 		t.Helper()
+		// Prove the canary (batch_canary.go) so the binding alone decides.
+		o.creditCanary(tool, args)
 		if blocked, msg := o.checkCriticalTool(tool, "", args); blocked != wantBlocked {
 			t.Fatalf("%s %s: blocked=%t (%s), want %t", tool, args, blocked, msg, wantBlocked)
 		}
@@ -370,6 +374,11 @@ func TestCriticalToolAliases_DigestRequirementScopedPerBatch(t *testing.T) {
 	registerTyped(t, o,
 		criticalActionStruct{Tool: aliasInlineTool, DealIDs: []string{"a", "b"}},
 		criticalActionStruct{Tool: aliasUploadTool, DealIDs: []string{"c", "d"}, ValuesDigest: "D2"})
+	// Prove each shape's canary (batch_canary.go) so the binding alone decides.
+	for _, args := range []string{`{"deal_ids":["c","d"]}`, `{"deal_ids":["c","d"],"values_sha256":"d9"}`, `{"deal_ids":["c","d"],"values_sha256":"d2"}`} {
+		o.creditCanary(aliasUploadTool, args)
+	}
+	o.creditCanary(aliasInlineTool, `{"deal_ids":["a","b"]}`)
 	if blocked, msg := o.checkCriticalTool(aliasInlineTool, "", `{"deal_ids":["a","b"]}`); blocked {
 		t.Fatalf("the undigested batch was refused by the twin's digest: %s", msg)
 	}
@@ -460,6 +469,7 @@ func TestCriticalToolAliases_PartialSupersedeKeepsUncoveredRecords(t *testing.T)
 		t.Fatalf("re-audit should pass: %s", resp.Content)
 	}
 	args := `{"deal_ids":["a","c"]}`
+	o.creditCanary(aliasUploadTool, args) // batch_canary.go: pin the supersede, not the canary gate
 	if blocked, msg := o.checkCriticalTool(aliasUploadTool, "", args); blocked {
 		t.Fatalf("the re-audited batch must ride: %s", msg)
 	}

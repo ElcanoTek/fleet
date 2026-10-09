@@ -130,6 +130,7 @@ func run(argv []string, progName string) error {
 		CriticalToolSuffixes:    bp.CriticalToolSuffixes,
 		CriticalToolSubstitutes: bp.CriticalToolSubstitutes,
 		CriticalToolAliases:     bp.CriticalToolAliases,
+		BatchSecondsPerDeal:     bp.BatchSecondsPerDeal,
 	})
 
 	// Install the bundle's custom model-pricing overrides (#297) before any turn

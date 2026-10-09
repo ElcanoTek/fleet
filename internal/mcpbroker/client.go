@@ -68,14 +68,20 @@ func (c *Client) CallMCP(ctx context.Context, server, tool string, args map[stri
 }
 
 func (c *Client) callMCP(ctx context.Context, scope, server, tool string, args map[string]any) (string, bool, error) {
-	resp, err := c.roundtrip(ctx, request{
+	req := request{
 		ID:     c.nextID.Add(1),
 		Method: methodCall,
 		Scope:  scope,
 		Server: server,
 		Tool:   tool,
 		Args:   args,
-	})
+	}
+	// The per-call budget rides the context in-process; carry it on the wire
+	// so the child's mcp.Server.callTool still applies it (CallTimeoutMs).
+	if d, ok := mcp.CallTimeout(ctx); ok {
+		req.CallTimeoutMs = max(d.Milliseconds(), 1)
+	}
+	resp, err := c.roundtrip(ctx, req)
 	if err != nil {
 		return "", false, err
 	}

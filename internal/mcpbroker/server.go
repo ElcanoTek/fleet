@@ -166,13 +166,16 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				if req.Args == nil {
 					req.Args = map[string]any{}
 				}
+				// Re-attach the parent's per-call budget (request.CallTimeoutMs):
+				// mcp.Server.callTool starts it once it holds the server mutex.
+				runCtx := mcp.WithCallTimeout(callCtx, time.Duration(req.CallTimeoutMs)*time.Millisecond)
 				var text string
 				var isErr bool
 				var err error
 				if req.Scope == "" {
-					text, isErr, err = s.backend.CallMCP(callCtx, req.Server, req.Tool, req.Args)
+					text, isErr, err = s.backend.CallMCP(runCtx, req.Server, req.Tool, req.Args)
 				} else if scoped, ok := s.backend.(ScopedBackend); ok {
-					text, isErr, err = scoped.CallMCPInScope(callCtx, req.Scope, req.Server, req.Tool, req.Args)
+					text, isErr, err = scoped.CallMCPInScope(runCtx, req.Scope, req.Server, req.Tool, req.Args)
 				} else {
 					write(response{ID: req.ID, Err: "mcpbroker: backend does not support scoped sessions"})
 					return
