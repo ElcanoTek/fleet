@@ -44,8 +44,13 @@ export function fulfillSse(route: Route, frames: Array<{ event: string; data: un
 // (#1591), so no frame is invented.
 const CONTRACT_DIR = path.resolve(__dirname, "../../../testdata/contracts/chat-stream");
 
+// The stream the chat server really sends: its recorded preamble (the
+// fleet.capabilities frame), then the turn.
 export function recordedTurn(name: string): string {
-  return readFileSync(path.join(CONTRACT_DIR, `${name}.sse`), "utf8");
+  return (
+    readFileSync(path.join(CONTRACT_DIR, "..", "chat-stream-preamble.sse"), "utf8") +
+    readFileSync(path.join(CONTRACT_DIR, `${name}.sse`), "utf8")
+  );
 }
 
 export function fulfillRecordedTurn(route: Route, name: string, conversationId: string) {

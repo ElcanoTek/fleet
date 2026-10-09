@@ -11,15 +11,15 @@ data: {"id":"call_contract_ok","input":"{\"command\":\"echo CONTRACT_TOOL_OK\"}"
 
 id: 3
 event: tool.result
-data: {"id":"call_contract_ok","is_err":false,"name":"bash","text":"{\"exit_code\":0,\"stdout\":\"CONTRACT_TOOL_OK\\n\",\"stderr\":\"\",\"command\":\"echo CONTRACT_TOOL_OK\",\"working_directory\":\"<workspace>\",\"execution_time_ms\":0}"}
+data: {"id":"call_contract_ok","is_err":false,"name":"bash","text":"{\"exit_code\":0,\"stdout\":\"CONTRACT_TOOL_OK\\n\",\"stderr\":\"\",\"command\":\"echo CONTRACT_TOOL_OK\",\"working_directory\":\"WORKSPACE\",\"execution_time_ms\":0}"}
 
 id: 4
 event: tool.call
-data: {"id":"call_contract_exit","input":"{\"command\":\"ls /contract-path-that-does-not-exist\"}","name":"bash"}
+data: {"id":"call_contract_exit","input":"{\"command\":\"test -e contract-path-that-does-not-exist\"}","name":"bash"}
 
 id: 5
 event: tool.result
-data: {"id":"call_contract_exit","is_err":false,"name":"bash","text":"{\"exit_code\":2,\"stdout\":\"\",\"stderr\":\"ls: cannot access '/contract-path-that-does-not-exist': No such file or directory\\n\",\"command\":\"ls /contract-path-that-does-not-exist\",\"working_directory\":\"<workspace>\",\"execution_time_ms\":0,\"error\":\"exit status 2\"}"}
+data: {"id":"call_contract_exit","is_err":false,"name":"bash","text":"{\"exit_code\":1,\"stdout\":\"\",\"stderr\":\"\",\"command\":\"test -e contract-path-that-does-not-exist\",\"working_directory\":\"WORKSPACE\",\"execution_time_ms\":0,\"error\":\"exit status 1\"}"}
 
 id: 6
 event: tool.call

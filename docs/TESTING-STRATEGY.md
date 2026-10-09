@@ -61,22 +61,35 @@ A contract replaces the hand-written copies with **one recording of the real
 producer**, replayed by every consumer:
 
 ```
-            internal/agent TestChatStreamContract
-            (real Manager.RunTurn, scripted fake LLM)
-                           │ records (-update)
-                           ▼
-        testdata/contracts/chat-stream/*.sse  ← exact wire framing
-          │             │              │                 │
-  web useTurnStream   chattui       acp translator    mocked Playwright
-  (vitest replay)    Client.Stream   (Go replay)       chat.spec
+   internal/agent TestChatStreamContract     internal/httpapi TestChatStreamWireFraming
+   (real Manager.RunTurn, scripted fake LLM)  (real turnBuffer + Attach)
+                  │ records (-update)               │ records the preamble (-update) and
+                  ▼                                 │ checks each turn goes on the wire
+   testdata/contracts/chat-stream/*.sse  ◄──────────┘ byte for byte
+   testdata/contracts/chat-stream-preamble.sse
+                  │  consumers replay preamble + turn
+     ┌────────────┼──────────────┬─────────────────┐
+  web useTurnStream  chattui       acp translator    mocked Playwright
+  (vitest replay)   Client.Stream  (Go replay)       chat.spec
 ```
 
 - **Producer side.** `internal/agent/stream_contract_test.go` runs each
   scripted turn (an answer, a tool loop with a success, a non-zero exit and a
   tool error, a provider refusal, a cancelled turn) through the real
   `Manager.RunTurn` and compares the stream byte for byte with the recording.
-  Only run-to-run noise is normalized (durations and the workspace path). Any
-  other change fails, and the failure shows the diff.
+  Only run-to-run noise is normalized (durations and the workspace path),
+  with placeholders the producer could really emit. Any other change fails,
+  and the failure shows the diff. Scripts avoid platform-dependent output (a
+  failing command is `test -e`, which prints nothing, not an `ls` error in the
+  host's locale).
+- **Wire side.** `internal/httpapi/stream_contract_test.go` pushes every
+  recording through the real `turnBuffer` and `Attach` and requires the bytes
+  on the wire to be exactly the recorded preamble followed by the recording.
+  The preamble (the synthetic `fleet.capabilities` frame `Attach` writes ahead
+  of every turn) is itself recorded from the real writer. So what consumers
+  replay is what production sends, not what the recorder thinks it sends:
+  this test is how an HTML-escaping difference in an early normalization was
+  caught.
 - **Consumer side.** Every consumer replays every recording and checks what it
   shows against an oracle derived from the recording itself
   (`internal/contracttest.Expect`, and its TypeScript twin in
@@ -91,9 +104,13 @@ producer**, replayed by every consumer:
 
 **Changing the protocol**, in order:
 
-1. Change the producer. `TestChatStreamContract` fails with the new stream.
+1. Change the producer. `TestChatStreamContract` (or, for the stream
+   preamble, `TestChatStreamWireFraming`) fails with the new stream.
 2. Regenerate:
-   `go test -tags fleet_host_executor ./internal/agent -run TestChatStreamContract -update`.
+   `go test -tags fleet_host_executor ./internal/agent -run TestChatStreamContract -update`
+   (and `./internal/httpapi -run TestChatStreamWireFraming -update` for the
+   preamble). The package goes before `-update`: `go test` cannot tell the
+   flag is boolean and would take the next word as its value.
 3. Run the consumers (`make test`, `cd web && npx vitest run`). The replays
    that fail are the consumers that need updating. Update each one, and the
    web `CONSUMED` list.
@@ -105,10 +122,11 @@ consumer picks it up automatically. A recording with no scenario fails the
 producer test, so recordings cannot outlive their source.
 
 **Not covered yet.** The `httpapi` envelope frames (`conversation`,
-`user.message`, `history.persisted`) are written by the chat server around the
-recorded turn. Consumers get the conversation id from the
-`X-Fleet-Conversation-Id` header instead, so the recordings start at
-`turn.started`. Recording them needs a Postgres-backed `httpapi` harness. Turns
+`user.message`, `history.persisted`) are emitted by the chat handler into the
+same buffer, around the recorded turn, and are not in the recordings; the
+replays give consumers the conversation id through the
+`X-Fleet-Conversation-Id` header, as production also does. Recording them
+needs a Postgres-backed `httpapi` harness. Turns
 with approvals, sub-agents or reasoning need fake-LLM scripting that does not
 exist yet. Until then those frames are still hand-written in the specs that
 need them. The orchestrator HTTP API has its own contract: `cmd/fleet`'s

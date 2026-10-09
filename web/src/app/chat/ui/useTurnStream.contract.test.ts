@@ -28,8 +28,13 @@ type Frame = { id: number; event: string; data: Record<string, unknown> };
 
 // An independent reading of the recording (not the app's own parser, which
 // is under test): frames are blank-line separated; ":" lines are comments.
+// What the chat server writes ahead of every turn on an attached stream (the
+// synthetic fleet.capabilities frame), recorded from the real writer by
+// internal/httpapi TestChatStreamWireFraming. A client sees it first, always.
+const PREAMBLE = readFileSync(path.join(CONTRACT_DIR, "..", "chat-stream-preamble.sse"), "utf8");
+
 function readRecording(name: string): { raw: string; frames: Frame[] } {
-  const raw = readFileSync(path.join(CONTRACT_DIR, name), "utf8");
+  const raw = PREAMBLE + readFileSync(path.join(CONTRACT_DIR, name), "utf8");
   const frames = raw
     .split("\n\n")
     .map((block) => block.split("\n").filter((l) => l && !l.startsWith(":")))
@@ -51,6 +56,9 @@ function readRecording(name: string): { raw: string; frames: Frame[] } {
 // deliberately ignored with an empty field list and a reason).
 type JsonType = "string" | "number" | "boolean";
 const CONSUMED: Record<string, Record<string, JsonType>> = {
+  // Received first on every stream and deliberately ignored: the hook takes
+  // the heartbeat cadence from the X-Fleet-Heartbeat-Interval-Ms header.
+  "fleet.capabilities": {},
   "turn.started": {}, // marks the turn live; the hook reads no payload field
   "text.delta": { text: "string" },
   "text.replace": { text: "string" },

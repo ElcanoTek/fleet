@@ -64,7 +64,9 @@ func contractScenarios() []contractScenario {
 				fakellm.BashStep("call_contract_ok", "echo CONTRACT_TOOL_OK"),
 				// A non-zero exit is a RESULT (is_err:false, exit_code in the
 				// envelope); a tool that cannot run at all is an ERROR (is_err:true).
-				fakellm.BashStep("call_contract_exit", "ls /contract-path-that-does-not-exist"),
+				// `test -e` prints nothing, so the recording cannot depend on the
+				// locale or the coreutils build (an `ls` error message would).
+				fakellm.BashStep("call_contract_exit", "test -e contract-path-that-does-not-exist"),
 				fakellm.ToolStep(fakellm.ToolCall{ID: "call_contract_err", Name: "view_file",
 					Arguments: `{"path":"contract-file-that-does-not-exist.txt"}`}),
 				fakellm.TextStep("All three tools reported back."),
@@ -189,13 +191,15 @@ func recordContractTurn(t *testing.T, sc contractScenario) []byte {
 // are part of the contract, their values are not. The substitution runs on the
 // raw bytes, so the recording stays byte-for-byte what the wire carries
 // everywhere else — including inside a tool result's JSON envelope, which is
-// itself a JSON string (hence the optional backslash before each quote).
+// itself a JSON string (hence the optional backslash before each quote). The
+// placeholders use no character json.Marshal escapes (it writes < and > as
+// \u003c and \u003e), so they are bytes the producer could really emit.
 var contractVolatile = []struct {
 	re   *regexp.Regexp
 	with string
 }{
 	{regexp.MustCompile(`(\\?"(?:duration_ms|execution_time_ms)\\?":)\d+`), "${1}0"},
-	{regexp.MustCompile(`(\\?"working_directory\\?":\\?")[^"\\]*`), "${1}<workspace>"},
+	{regexp.MustCompile(`(\\?"working_directory\\?":\\?")[^"\\]*`), "${1}WORKSPACE"},
 }
 
 func normalizeContractJSON(data []byte) []byte {
