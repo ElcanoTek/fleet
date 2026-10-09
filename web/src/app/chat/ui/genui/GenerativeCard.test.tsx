@@ -1416,8 +1416,9 @@ describe("holds and other tabs", () => {
       window.localStorage.clear();
       const s = spec({ title: "E", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
       const key = "fleet.genui.pending.exp";
-      // Set by an earlier page load 29 minutes ago; its sender is gone.
-      window.localStorage.setItem(key, JSON.stringify({ action: "a", at: Date.now() - 29 * 60 * 1000, after: "", send: "old" }));
+      // Set by an earlier page load just under six hours ago (the hold
+      // outlasts any turn); its sender is gone.
+      window.localStorage.setItem(key, JSON.stringify({ action: "a", at: Date.now() - (6 * 60 - 1) * 60 * 1000, after: "", send: "old" }));
       render(<GenerativeCard cardId="exp" spec={s} onSubmit={() => {}} />);
       expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
       await act(async () => {

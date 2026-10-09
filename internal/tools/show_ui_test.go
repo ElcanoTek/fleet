@@ -111,3 +111,18 @@ func TestShowUIAcknowledgementIsSmall(t *testing.T) {
 		t.Fatal("over-long replaces accepted")
 	}
 }
+
+// A card whose input the loop would redact is refused: the browser draws the
+// redacted copy, where distinct secret-like values collapse to one.
+func TestShowUIRefusesRedactedCards(t *testing.T) {
+	prev := ShowUIRedactor
+	ShowUIRedactor = func(s string) string { return strings.ReplaceAll(s, "sk-secret", "[REDACTED]") }
+	t.Cleanup(func() { ShowUIRedactor = prev })
+	resp := runShowUI(t, `{"title":"Key","components":[{"type":"select","id":"k","options":["sk-secret1","sk-secret2"]}],"actions":[{"id":"go","label":"Go"}]}`)
+	if !resp.IsError || !strings.Contains(resp.Content, "looks like a secret") {
+		t.Fatalf("got %+v", resp)
+	}
+	if resp := runShowUI(t, `{"title":"Key","components":[{"type":"select","id":"k","options":["a","b"]}],"actions":[{"id":"go","label":"Go"}]}`); resp.IsError {
+		t.Fatalf("clean card refused: %s", resp.Content)
+	}
+}

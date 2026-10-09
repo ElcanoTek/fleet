@@ -321,9 +321,10 @@ export function toText(v: Value): string {
   if (v === null) return "";
   if (typeof v === "number") {
     if (Number.isInteger(v)) return String(v);
-    // Twelve significant digits drop float noise (0.1 + 0.2 shows 0.3)
-    // without rounding small values away (1e-11 stays 1e-11).
-    return String(Number(v.toPrecision(12)));
+    // Fifteen significant digits (what a double always holds exactly) drop
+    // float noise (0.1 + 0.2 shows 0.3) without rounding small values away
+    // (1e-11 stays 1e-11) or large ones (1234567890123.5 stays as is).
+    return String(Number(v.toPrecision(15)));
   }
   if (typeof v === "boolean") return v ? "true" : "false";
   if (typeof v === "string") return v;
@@ -399,14 +400,17 @@ function uniqueValues(items: Value[]): Value[] {
   return out;
 }
 
-const joined = new WeakMap<object, Map<string, string>>();
+// The last join of each list, per separator: the string, and whether it was
+// cut short for display (see displaying).
+const joined = new WeakMap<object, { glue: string; out: string; clipped: boolean }>();
 
-/**
- * The longest string join builds: twice the protocol's longest input
- * (20,000 list lines of up to 20,000 characters can't all show anyway).
- * Only the most recent separator per list is cached.
- */
-export const MAX_JOIN_CHARS = 1_000_000;
+/** The longest join a displayed template builds (it shows far less). */
+export const MAX_DISPLAY_JOIN_CHARS = 1_000_000;
+
+// True while renderTemplate evaluates a hole. Evaluation is synchronous, so
+// the flag cannot leak into a condition: conditions and computed values
+// always get the whole joined string.
+let displaying = false;
 
 const FUNCS: Record<string, (args: Value[]) => Value> = {
   len: ([v]) => (typeof v === "string" ? Array.from(v).length : list(v).length),
@@ -458,26 +462,27 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
     // A list is one array object for as long as it is unchanged, and many
     // templates may join the same one (up to 20,000 pasted lines): build
     // each joined string once, not once per template per render.
-    const cache = Array.isArray(v) ? joined.get(v) : undefined;
-    const hit = cache?.get(glue);
-    if (hit !== undefined) return hit;
-    // Bounded as it is built: a long separator times a long list could
-    // otherwise build hundreds of MB before any display clipping.
+    const hit = Array.isArray(v) ? joined.get(v) : undefined;
+    if (hit && hit.glue === glue && (!hit.clipped || displaying)) return hit.out;
+    // While a display template renders, the result is bounded as it is
+    // built: a long separator times a long list could otherwise build
+    // hundreds of MB, which display clips to MAX_TEMPLATE_CHARS anyway.
+    const cap = displaying ? MAX_DISPLAY_JOIN_CHARS : Infinity;
     let out = "";
+    let clipped = false;
     for (const x of list(v)) {
       const t = toText(x);
       if (t === "") continue;
       out = out === "" ? t : out + glue + t;
-      if (out.length > MAX_JOIN_CHARS) {
-        out = out.slice(0, MAX_JOIN_CHARS);
+      if (out.length > cap) {
+        out = out.slice(0, cap);
+        clipped = true;
         break;
       }
     }
-    if (Array.isArray(v)) {
-      // One entry per list: a separator the user is typing would otherwise
-      // pile up a result per keystroke.
-      joined.set(v, new Map([[glue, out]]));
-    }
+    // One entry per list: a separator the user is typing would otherwise
+    // pile up a result per keystroke.
+    if (Array.isArray(v)) joined.set(v, { glue, out, clipped });
     return out;
   },
   contains: ([hay, needle]) => {
@@ -601,10 +606,13 @@ export function renderTemplate(s: string | undefined, scope: Scope): string {
   let left = MAX_TEMPLATE_CHARS;
   return s.replace(/\{\{([\s\S]*?)\}\}/g, (_, src: string) => {
     let t: string;
+    displaying = true;
     try {
       t = toText(evaluate(src, scope));
     } catch {
       return "⚠";
+    } finally {
+      displaying = false;
     }
     if (t.length > left) t = `${t.slice(0, Math.max(0, left))}…`;
     left -= t.length;

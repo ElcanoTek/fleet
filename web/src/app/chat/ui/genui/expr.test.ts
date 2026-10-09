@@ -123,15 +123,19 @@ describe("bounded display", () => {
     expect(evaluate('join(lines, "|")', { lines })).toBe(lines.join("|"));
   });
 
-  it("bounds join output however long the separator", () => {
+  it("bounds a displayed join however long the separator, but not a computed one", () => {
     const lines = Array.from({ length: 20000 }, () => "x");
-    const out = evaluate("join(lines, sep)", { lines, sep: "y".repeat(20000) }) as string;
-    expect(out.length).toBeLessThanOrEqual(1_000_000);
+    const shown = renderTemplate("{{ join(lines, sep) }}", { lines, sep: "y".repeat(20000) });
+    expect(shown.length).toBeLessThanOrEqual(MAX_TEMPLATE_CHARS + 2);
+    const few = Array.from({ length: 100 }, () => "x");
+    expect(evaluate("len(join(lines, sep)) > 1500000", { lines: few, sep: "y".repeat(20000) })).toBe(true);
   });
 
   it("shows small values instead of rounding them to zero", () => {
     expect(renderTemplate("{{ n }}", { n: 1e-11 })).toBe("1e-11");
     expect(renderTemplate("{{ a + b }}", { a: 0.1, b: 0.2 })).toBe("0.3");
+    expect(renderTemplate("{{ n }}", { n: 1234567890123.5 })).toBe("1234567890123.5");
+    expect(renderTemplate("{{ n }}", { n: 999999999999.5 })).toBe("999999999999.5");
   });
 
   it("averages huge values without overflowing", () => {

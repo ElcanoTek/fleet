@@ -983,6 +983,10 @@ func (v *validator) requiredMinBytes() int {
 			if m, ok := rep.obj["min_items"].(float64); ok && m > 0 {
 				n = int(min(m, MaxRepeaterItems))
 			}
+			// A required repeater needs at least one item to send.
+			if req, _ := rep.obj["required"].(bool); req {
+				n = max(n, 1)
+			}
 			// A disabled repeater's items cannot be removed: all are sent.
 			if dis, _ := rep.obj["disabled"].(bool); dis {
 				n = max(n, rep.items)

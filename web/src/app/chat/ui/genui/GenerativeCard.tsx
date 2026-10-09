@@ -334,8 +334,11 @@ function answerKeyOf(submission: Submission | null | undefined, reply: Reply | n
 
 const PENDING_PREFIX = "fleet.genui.pending.";
 // A queued message normally echoes within a turn; past this a stale marker
-// (a cancelled queue item, a closed tab) stops holding the card.
-const PENDING_TTL_MS = 30 * 60 * 1000;
+// (a cancelled queue item, a closed tab) stops holding the card. It must
+// outlast the longest turn an operator can configure (the per-turn limit is
+// 30 minutes by default), or another tab could re-enable a card whose answer
+// is still being processed; a hold that is truly stale has Unlock.
+const PENDING_TTL_MS = 6 * 60 * 60 * 1000;
 
 // A hold records the transcript answer it was armed after (`after`: that
 // answer's action and values, "" for a first answer — message ids are not

@@ -73,8 +73,22 @@ func NewShowUITool() fantasy.AgentTool {
 		})
 }
 
+// ShowUIRedactor is the secret scrubber the agent loop applies to every tool
+// call's input before it reaches the stream, the transcript and the model
+// replay (set by internal/agentcore; nil in tests that do not need it).
+var ShowUIRedactor func(string) string
+
 // ShowUIResult builds the tool response for one call. Exported for tests.
 func ShowUIResult(callID string, input []byte) fantasy.ToolResponse {
+	// The browser draws the card from the REDACTED input: a value that
+	// matches a secret pattern becomes "[REDACTED]" there, so two such
+	// options would collapse into one and the answer could not say which was
+	// picked. Refuse such a card rather than validate what nobody sees.
+	if ShowUIRedactor != nil {
+		if s := string(input); ShowUIRedactor(s) != s {
+			return fantasy.NewTextErrorResponse("UI_INVALID: the card was NOT shown — it contains a value that looks like a secret (an API key or token), which is redacted before the user sees the card. Do not put secrets in a card; use a label or an id that is not a credential, and call " + ShowUIToolName + " again.")
+		}
+	}
 	card, issues := genui.Validate(input)
 	if len(issues) > 0 {
 		var b strings.Builder
