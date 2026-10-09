@@ -39,6 +39,7 @@ import {
   MAX_CHOICE_ITEMS,
   MAX_SUBMISSION_BYTES,
   RESEND_EVENT,
+  takeRetryHold,
   type ResendDetail,
   submissionBytes,
   newItem,
@@ -150,10 +151,13 @@ export type GenerativeCardProps = {
   // have reached the server (see submitPrompt), so the hold is released.
   // onHeld: the conversation and queue row the held send is watched by; the
   // card stores them with its hold so a reload can resume the watch.
+  // stillHeld: whether this card still holds the send (false once the user
+  // pressed Unlock), so server checks for it stop.
   onSubmit?: (
     message: string,
     onUnsent?: () => void,
     onHeld?: (convId: string, submissionId: string) => void,
+    stillHeld?: () => boolean,
   ) => void | Promise<void | boolean>;
   /**
    * Resumes the server watch on a hold restored after a page load (the
@@ -165,6 +169,7 @@ export type GenerativeCardProps = {
     matches: (text: string) => boolean,
     submissionId: string,
     onUnsent: () => void,
+    stillHeld?: () => boolean,
   ) => void;
 };
 
@@ -716,11 +721,40 @@ function CardBody({
     const held = pendingWatch(storeId);
     if (!held || held.send.startsWith(`${PAGE_LOAD}-`)) return;
     const { send, watch } = held;
-    onResumeHeld(watch.conv, (text) => keyDigest(text) === watch.digest, watch.sid, () => releaseHeld(storeId, send));
+    onResumeHeld(
+      watch.conv,
+      (text) => keyDigest(text) === watch.digest,
+      watch.sid,
+      () => releaseHeld(storeId, send),
+      () => pendingSend(storeId) === send,
+    );
     // The resume is keyed by the held send; onResumeHeld is re-created
     // every render and dedupes by queue row itself.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [awaiting, storeId, readOnly]);
+
+  // A Retry of this card's answer sent while the card was scrolled out of
+  // the transcript left its hold with the chat; the card takes it over now,
+  // so its actions stay held (and watched) until the retried answer lands.
+  useEffect(() => {
+    if (readOnly) return;
+    const r = takeRetryHold(cardId);
+    if (!r) return;
+    const send = nextSendId();
+    savePending(storeId, r.actionId, answerKeyRef.current, send);
+    const digest = keyDigest(r.message);
+    notePendingWatch(storeId, send, { conv: r.conv, sid: r.sid, digest });
+    setAwaitingState(r.actionId);
+    onResumeHeld?.(
+      r.conv,
+      (text) => keyDigest(text) === digest,
+      r.sid,
+      () => releaseHeld(storeId, send),
+      () => pendingSend(storeId) === send,
+    );
+    // Once per mount; the hold is then the card's own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardId, readOnly]);
 
   // A hold lasts PENDING_TTL_MS. Checked only on load, one that expired while
   // the card stayed mounted (its sender gone after a reload, the answer lost)
@@ -898,6 +932,7 @@ function CardBody({
         (conv, sid) => {
           if (!readOnly) notePendingWatch(storeId, sendId, { conv, sid, digest: keyDigest(message) });
         },
+        () => !readOnly && pendingSend(storeId) === sendId,
       );
       if (accepted === false) {
         release();

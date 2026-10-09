@@ -93,7 +93,12 @@ export type ChatTranscriptProps = {
   setActivePillId: Dispatch<SetStateAction<string | null>>;
   submitPrompt: (
     submittedPrompt: string,
-    opts?: { fromCard?: boolean; onUnsent?: () => void; onHeld?: (convId: string, submissionId: string) => void },
+    opts?: {
+      fromCard?: boolean;
+      onUnsent?: () => void;
+      onHeld?: (convId: string, submissionId: string) => void;
+      stillHeld?: () => boolean;
+    },
   ) => void | Promise<void | boolean>;
   /** Resumes the watch on a card answer held across a page load. */
   resumeHeldCardSend?: (
@@ -101,6 +106,7 @@ export type ChatTranscriptProps = {
     text: string | ((text: string) => boolean),
     submissionId: string,
     onUnsent: () => void,
+    stillHeld?: () => boolean,
   ) => void;
   setPrompt: Dispatch<SetStateAction<string>>;
 
@@ -813,8 +819,8 @@ export function ChatTranscript({
                                           occurrence={genUi.occurrences.get(tc) ?? 0}
                                           retired={isPreSummary}
                                           storageScope={realConvId(currentConvKey) ?? currentConvKey}
-                                          onSubmit={(text, onUnsent, onHeld) =>
-                                            submitPrompt(text, { fromCard: true, onUnsent, onHeld })
+                                          onSubmit={(text, onUnsent, onHeld, stillHeld) =>
+                                            submitPrompt(text, { fromCard: true, onUnsent, onHeld, stillHeld })
                                           }
                                           onResumeHeld={resumeHeldCardSend}
                                         />

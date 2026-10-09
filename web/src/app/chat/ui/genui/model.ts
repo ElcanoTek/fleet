@@ -708,3 +708,32 @@ export function parseSubmissionMessage(text: string): Submission | null {
  */
 export const RESEND_EVENT = "genui:resend";
 export type ResendDetail = { cardId: string; actionId: string; message: string; handled?: boolean; done?: Promise<void> };
+
+/**
+ * A Retry the server queued while its card was scrolled out of the
+ * (virtualized) transcript: the hold the card would have set, kept here until
+ * the card mounts and takes it over (takeRetryHold). Per page, by card id.
+ */
+export type RetryHold = { conv: string; sid: string; actionId: string; message: string };
+const retryHolds = new Map<string, RetryHold>();
+
+export function noteRetryHold(cardId: string, hold: RetryHold): void {
+  retryHolds.set(cardId, hold);
+}
+
+/** Whether the retry with this queue row is still waiting for its card. */
+export function retryHoldPending(cardId: string, sid: string): boolean {
+  return retryHolds.get(cardId)?.sid === sid;
+}
+
+/** Drops the retry's hold: its row turned out never to reach the server. */
+export function dropRetryHold(cardId: string, sid: string): void {
+  if (retryHolds.get(cardId)?.sid === sid) retryHolds.delete(cardId);
+}
+
+/** The retry hold for this card, removed: the card holds it from now on. */
+export function takeRetryHold(cardId: string): RetryHold | undefined {
+  const hold = retryHolds.get(cardId);
+  retryHolds.delete(cardId);
+  return hold;
+}

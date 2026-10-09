@@ -2,7 +2,16 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, cleanup as cleanupRender, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import GenerativeCard, { RENDERERS, parseListText, resetPendingHolds } from "./GenerativeCard";
-import { buildReplyMessage, parseCardSpec, parseSubmissionMessage, RESEND_EVENT, type CardSpec, type ResendDetail } from "./model";
+import {
+  buildReplyMessage,
+  noteRetryHold,
+  parseCardSpec,
+  parseSubmissionMessage,
+  RESEND_EVENT,
+  retryHoldPending,
+  type CardSpec,
+  type ResendDetail,
+} from "./model";
 import { loadFixture } from "./fixtures";
 
 type Case = { name: string; valid: boolean; card: unknown };
@@ -142,7 +151,7 @@ describe("interaction", () => {
     render(<GenerativeCard cardId="c" spec={spec(form)} onSubmit={onSubmit} />);
     await user.click(screen.getByRole("button", { name: "Not now" }));
     // A quick reply carries a marker naming its card, then the fixed text.
-    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("c", "nah", "Skip the order."), expect.any(Function), expect.any(Function));
+    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("c", "nah", "Skip the order."), expect.any(Function), expect.any(Function), expect.any(Function));
   });
 
   it("re-checks the gates at confirmation time", async () => {
@@ -443,7 +452,7 @@ describe("third Codex pass", () => {
     });
     const view = render(<GenerativeCard cardId="qr" spec={s} onSubmit={onSubmit} />);
     await user.click(screen.getByRole("button", { name: "Option A" }));
-    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("qr", "a", "A please"), expect.any(Function), expect.any(Function));
+    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("qr", "a", "A please"), expect.any(Function), expect.any(Function), expect.any(Function));
     expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Option B" })).toBeNull();
     view.rerender(
@@ -1437,7 +1446,7 @@ describe("holds and other tabs", () => {
     });
     render(<GenerativeCard cardId="w" spec={s} onSubmit={() => {}} onResumeHeld={onResumeHeld} />);
     expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
-    expect(onResumeHeld).toHaveBeenCalledWith("conv1", expect.any(Function), "sub-9", expect.any(Function));
+    expect(onResumeHeld).toHaveBeenCalledWith("conv1", expect.any(Function), "sub-9", expect.any(Function), expect.any(Function));
     const matches = onResumeHeld.mock.calls[0][1] as (t: string) => boolean;
     expect(matches(onSubmit.mock.calls[0][0])).toBe(true);
     expect(matches("something else")).toBe(false);
@@ -1517,6 +1526,35 @@ describe("holds and other tabs", () => {
     expect(radios[0].name).toBe(radios[1].name);
   });
 
+  it("takes over a retry's hold when it scrolls back into view", () => {
+    window.localStorage.clear();
+    const s = spec({ title: "R", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+    noteRetryHold("off", { conv: "c1", sid: "s9", actionId: "a", message: buildReplyMessage("off", "a", "yes") });
+    const onResumeHeld = vi.fn();
+    render(<GenerativeCard cardId="off" spec={s} onSubmit={() => {}} onResumeHeld={onResumeHeld} />);
+    expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
+    expect(onResumeHeld).toHaveBeenCalledWith("c1", expect.any(Function), "s9", expect.any(Function), expect.any(Function));
+    // Taken: the chat no longer holds it.
+    expect(retryHoldPending("off", "s9")).toBe(false);
+  });
+
+  it("tells the chat when the user lets go of a held send", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({ title: "U", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+    let stillHeld: (() => boolean) | undefined;
+    const onSubmit = vi.fn(async (_m: string, _u?: () => void, _h?: (c: string, s: string) => void, held?: () => boolean) => {
+      stillHeld = held;
+      return true;
+    });
+    render(<GenerativeCard cardId="ul" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
+    expect(stillHeld?.()).toBe(true);
+    await user.click(screen.getByRole("button", { name: /unlock/i }));
+    expect(stillHeld?.()).toBe(false);
+  });
+
   it("sends a retried answer itself, under its own hold", async () => {
     window.localStorage.clear();
     const s = spec({ title: "R", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
@@ -1529,7 +1567,7 @@ describe("holds and other tabs", () => {
       await detail.done;
     });
     expect(detail.handled).toBe(true);
-    expect(onSubmit).toHaveBeenCalledWith(message, expect.any(Function), expect.any(Function));
+    expect(onSubmit).toHaveBeenCalledWith(message, expect.any(Function), expect.any(Function), expect.any(Function));
     // Held like a click: a second press cannot queue a duplicate.
     expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
     // Another card's retry is not this card's to take.
