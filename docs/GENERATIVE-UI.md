@@ -154,8 +154,10 @@ These are protocol constants in `internal/genui/spec.go`, not operator knobs:
   browser, which says "Too large to send" instead of sending
 
 One limit is the web card's, not the spec's: a single answer may be at most
-960 KiB once JSON-escaped (`MAX_SUBMISSION_BYTES` in `genui/model.ts`), so it
-fits `/api/chat`'s 1 MiB request body. 20,000 long `list_input` lines can pass
+256 KiB once JSON-escaped (`MAX_SUBMISSION_BYTES` in `genui/model.ts`, about
+65,000 tokens). The answer is one user turn the agent loop cannot shrink, so
+it has to leave room in the model's context window, not just fit
+`/api/chat`'s 1 MiB request body. 20,000 long `list_input` lines can pass
 that; the card then says the answer is too large before sending anything.
 
 A card from before the conversation's summary (visible only when the user

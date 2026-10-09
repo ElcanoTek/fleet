@@ -49,7 +49,7 @@ const (
 	MaxSpecBytes = 128 << 10
 	// MaxSubmissionBytes mirrors MAX_SUBMISSION_BYTES in
 	// web/src/app/chat/ui/genui/model.ts: the largest answer a card sends.
-	MaxSubmissionBytes = 960 << 10
+	MaxSubmissionBytes = 256 << 10
 	MaxNodes           = 800
 	MaxDepth           = 12
 	MaxOptions         = 2000

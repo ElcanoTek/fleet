@@ -268,6 +268,28 @@ describe("restored repeater items across the card", () => {
     expect((restored.r as unknown[]).length).toBe(1);
   });
 
+  it("count a disabled repeater's own items", () => {
+    const dividers = (n: number) => Array.from({ length: n }, () => ({ type: "divider" }));
+    const card = (lockedFields: number) =>
+      parseCardSpec(
+        JSON.stringify({
+          title: "R",
+          components: [
+            { type: "repeater", id: "d", label: "D", disabled: true, value: Array.from({ length: 200 }, () => ({})), fields: dividers(lockedFields) },
+            { type: "repeater", id: "r", label: "R", max_items: 200, fields: dividers(1) },
+          ],
+          actions: [{ id: "go", label: "Go" }],
+        }),
+      )!;
+    const saved = { d: [], r: Array.from({ length: 200 }, () => ({})) };
+    // The disabled repeater keeps its 200 items: 200 × 9 = 1,800 rows leaves 200.
+    const nine = normalizeValues(card(9), saved);
+    expect((nine.d as unknown[]).length).toBe(200);
+    expect((nine.r as unknown[]).length).toBe(200);
+    // 200 × 10 = 2,000 rows leaves none.
+    expect((normalizeValues(card(10), saved).r as unknown[]).length).toBe(0);
+  });
+
   it("leave room for the card's table rows", () => {
     const rows = Array.from({ length: 1900 }, (_, i) => ({ k: String(i) }));
     const reps = Array.from({ length: 10 }, (_, i) => ({ type: "repeater", id: `r${i}`, label: "R", max_items: 200, fields: [{ type: "divider" }] }));

@@ -123,6 +123,17 @@ describe("bounded display", () => {
     expect(evaluate('join(lines, "|")', { lines })).toBe(lines.join("|"));
   });
 
+  it("bounds join output however long the separator", () => {
+    const lines = Array.from({ length: 20000 }, () => "x");
+    const out = evaluate("join(lines, sep)", { lines, sep: "y".repeat(20000) }) as string;
+    expect(out.length).toBeLessThanOrEqual(1_000_000);
+  });
+
+  it("shows small values instead of rounding them to zero", () => {
+    expect(renderTemplate("{{ n }}", { n: 1e-11 })).toBe("1e-11");
+    expect(renderTemplate("{{ a + b }}", { a: 0.1, b: 0.2 })).toBe("0.3");
+  });
+
   it("averages huge values without overflowing", () => {
     expect(evaluate("avg(xs)", { xs: [Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE] })).toBe(Number.MAX_VALUE);
     expect(evaluate("avg(xs)", { xs: [1, 2, 3, 4] })).toBe(2.5);

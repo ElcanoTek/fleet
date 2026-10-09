@@ -321,7 +321,9 @@ export function toText(v: Value): string {
   if (v === null) return "";
   if (typeof v === "number") {
     if (Number.isInteger(v)) return String(v);
-    return String(Number(v.toFixed(10)));
+    // Twelve significant digits drop float noise (0.1 + 0.2 shows 0.3)
+    // without rounding small values away (1e-11 stays 1e-11).
+    return String(Number(v.toPrecision(12)));
   }
   if (typeof v === "boolean") return v ? "true" : "false";
   if (typeof v === "string") return v;
@@ -399,6 +401,13 @@ function uniqueValues(items: Value[]): Value[] {
 
 const joined = new WeakMap<object, Map<string, string>>();
 
+/**
+ * The longest string join builds: twice the protocol's longest input
+ * (20,000 list lines of up to 20,000 characters can't all show anyway).
+ * Only the most recent separator per list is cached.
+ */
+export const MAX_JOIN_CHARS = 1_000_000;
+
 const FUNCS: Record<string, (args: Value[]) => Value> = {
   len: ([v]) => (typeof v === "string" ? Array.from(v).length : list(v).length),
   count: ([v]) => list(v).length,
@@ -452,14 +461,22 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
     const cache = Array.isArray(v) ? joined.get(v) : undefined;
     const hit = cache?.get(glue);
     if (hit !== undefined) return hit;
-    const out = list(v)
-      .map(toText)
-      .filter((s) => s !== "")
-      .join(glue);
+    // Bounded as it is built: a long separator times a long list could
+    // otherwise build hundreds of MB before any display clipping.
+    let out = "";
+    for (const x of list(v)) {
+      const t = toText(x);
+      if (t === "") continue;
+      out = out === "" ? t : out + glue + t;
+      if (out.length > MAX_JOIN_CHARS) {
+        out = out.slice(0, MAX_JOIN_CHARS);
+        break;
+      }
+    }
     if (Array.isArray(v)) {
-      const m = cache ?? new Map<string, string>();
-      m.set(glue, out);
-      joined.set(v, m);
+      // One entry per list: a separator the user is typing would otherwise
+      // pile up a result per keystroke.
+      joined.set(v, new Map([[glue, out]]));
     }
     return out;
   },

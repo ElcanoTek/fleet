@@ -18,12 +18,14 @@ export const MAX_CARD_ROWS = 2000;
 export const MAX_CHOICE_ITEMS = 2000;
 /**
  * The largest card message (as it appears JSON-escaped in the POST body) a
- * card will send. /api/chat refuses bodies over 1 MiB (maxJSONBodyBytes in
- * internal/httpapi/routes.go); the rest is left for the other request fields.
- * A list at MAX_LIST_ITEMS of long entries can exceed this, so the card checks
- * the serialized size before sending rather than failing as "Not sent".
+ * card will send. The bound is the model's context, not the HTTP body
+ * (/api/chat takes 1 MiB): the answer is one user turn the agent loop cannot
+ * shrink, so it must leave room in the context window for the system
+ * prompt, tools and history. 256 KiB is about 65,000 tokens. A list at
+ * MAX_LIST_ITEMS of long entries can exceed this, so the card checks the
+ * serialized size before sending rather than failing as "Not sent".
  */
-export const MAX_SUBMISSION_BYTES = 960 * 1024;
+export const MAX_SUBMISSION_BYTES = 256 * 1024;
 
 /** The message's size as it travels in the JSON request body, in bytes. */
 export function submissionBytes(message: string): number {
@@ -345,6 +347,12 @@ export function normalizeValues(spec: CardSpec, saved: Values | null | undefined
       // built: each item copies its fields' defaults, which can be long.
       if (weight && Array.isArray(raw) && c.disabled !== true) {
         pending.push({ c, raw, weight, perItem: defaultEntries(fields) });
+        return;
+      }
+      // A disabled repeater keeps its own items (restoredValue never adopts
+      // a saved value for a disabled input), which still take their rows.
+      if (weight && c.disabled === true && Array.isArray(out[c.id])) {
+        rowsLeft -= (out[c.id] as unknown[]).length * weight;
         return;
       }
       const v = restoredValue(c, raw);
