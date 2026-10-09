@@ -118,7 +118,12 @@ the problem.
 
 A message sent from the client while an earlier one is still running does not
 stop it. It waits, and messages on the same session run one at a time, in the
-order `fleet acp` received them. Up to 20 can wait behind the one running. A
+order the client sent them. A cancel from the client stops the reply running
+and the messages sent before the cancel that are still waiting; a message sent
+right after the cancel still runs. `fleet acp` waits up to 2 seconds for a
+message that is slow to reach it to keep that order, then goes on without it,
+so in that rare case a cancel can miss the message sent just before it. Up to
+20 can wait behind the one running. A
 21st is refused straight away with an error saying the session already has a
 prompt running and 20 waiting. It is not sent to fleet, so send it again once
 the earlier ones have been answered, or cancel them from the client.
