@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -681,6 +682,17 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	if err := os.MkdirAll(sharedFilesDir, 0o755); err != nil { //nolint:gosec // same — readable by the rootless container user via bind mount
 		return nil, fmt.Errorf("ensure shared files dir %s: %w", sharedFilesDir, err)
 	}
+	// The per-occurrence MCP run dirs (${FLEET_WORKSPACE} for a scheduled
+	// task's dedicated client: mcp-runs/task-<id>, holding its ledger and
+	// staged inputs) get the same read-only overlay, so no sandbox can swap a
+	// run dir for a symlink, plant a FIFO over a ledger, or edit one — the
+	// host-side connectors write there by pathname for the whole run. Created
+	// here for the same kubelet subPath reason, and because the podman backend
+	// silently skips a read-only mount whose source is missing.
+	mcpRunsDir, err := ensureMCPRunsDir(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
 
 	// Normalize the OCI runtime name to what podman understands ("libkrun" →
 	// "krun") so the --runtime flag, the preflight, and the probe binary mapping
@@ -700,7 +712,7 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		// below is what keeps the default sufficient after an image update.
 		StartTimeout:   time.Duration(cfg.SandboxStartTimeoutSeconds) * time.Second,
 		BridgeDir:      filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
-		ReadOnlyMounts: sandboxReadOnlyMounts(cfg, personasDir, protocolsDir, systemPromptsDir, skillsDir, sharedFilesDir),
+		ReadOnlyMounts: append(sandboxReadOnlyMounts(cfg, personasDir, protocolsDir, systemPromptsDir, skillsDir, sharedFilesDir), mcpRunsDir),
 	}
 	// Kubernetes backend (#989): sandboxes are ephemeral pods in a cluster
 	// instead of co-located podman containers. All podman-specific boot work
@@ -1101,6 +1113,26 @@ func sandboxReadOnlyMounts(cfg *config.Config, personasDir, protocolsDir, system
 		kept = append(kept, m)
 	}
 	return kept
+}
+
+// ensureMCPRunsDir creates the MCP run-dir base
+// (agentcore.PerRunMCPWorkspaceBase) before any sandbox exists and returns it
+// for the read-only mount set. A symlink or non-directory squatting on the
+// name (a leftover from before the overlay existed) fails boot: mounting it
+// would overlay its target, and the per-run opener refuses it anyway.
+func ensureMCPRunsDir(workspaceRoot string) (string, error) {
+	dir := agentcore.PerRunMCPWorkspaceBase(workspaceRoot)
+	if err := os.Mkdir(dir, 0o750); err != nil && !errors.Is(err, fs.ErrExist) {
+		return "", fmt.Errorf("ensure MCP run dir base %s: %w", dir, err)
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return "", fmt.Errorf("ensure MCP run dir base %s: %w", dir, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
+		return "", fmt.Errorf("MCP run dir base %s exists and is not a directory (%s); remove it so it can be recreated and mounted read-only in sandboxes", dir, info.Mode().Type())
+	}
+	return dir, nil
 }
 
 // pathIsWithin reports whether path is root or sits underneath it. Lexical on

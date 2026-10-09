@@ -52,7 +52,7 @@ subprocess-launch time:
 | Spawn path | Substituted value |
 |---|---|
 | Boot-time catalog (`agent.BuildMCPClient`), the `fleet mcp-broker` process, hot reload, load-on-demand onto a shared client | `SharedMCPWorkspaceDir()` — one stable `<workspace-root>/mcp-shared` dir per deployment |
-| A scheduled task with an explicit `mcp_selection` (dedicated per-run client) | a fresh `<workspace-root>/mcp-runs/task-<id>-*` dir per run |
+| A scheduled task with an explicit `mcp_selection` (dedicated per-run client) | `<workspace-root>/mcp-runs/task-<id>` — one stable dir per task occurrence (row id): every retry of that occurrence re-mounts it and its ledger; a recurring successor, re-run or clone gets its own. Not pruned; creation failure fails the run's MCP setup (no shared-dir fallback). Every sandbox (podman and kubernetes) mounts `mcp-runs/` **read-only** over the read-write workspace mount, so a sandbox can read a run dir but never write, rename or plant anything in one, even while a connector is writing to it. As defense in depth, Fleet also resolves the run dir through an `os.Root`, refuses a symlinked `mcp-runs/` or run dir, unlinks any symlink, FIFO, socket or device planted at its top level (the start-of-run ledger read is also `O_NOFOLLOW`/`O_NONBLOCK`, regular-file-only and size-bounded), and rebuilds `inputs/` from the task's current attachments every attempt (the ledger beside it is kept) |
 
 `<workspace-root>` is `FLEET_WORKSPACE_ROOT` (legacy `CHAT_`/`CUTLASS_`
 aliases honored), else `./workspace`. A spawn path with no directory to offer
@@ -64,7 +64,7 @@ documented inert posture) — never a literal token, never an empty string.
 `${FLEET_WORKSPACE}` is the connector's *ledger* directory. It is not the
 directory the run's files live in: a scheduled run's sandbox works at the
 workspace root (`task.workspace_path`, the same `<workspace-root>` above), and
-the per-run `mcp-runs/task-<id>-<random>/` dir is minted with a suffix the
+the per-run `mcp-runs/task-<id>/` dir is named by a task UUID the
 model cannot know from inside the sandbox. A connector that allowlists the
 files it may read — the SES sender's `content_file` / `attachments`
 (`CUTLASS_ALLOWED_DIRS`) — therefore rejected every path the model could name:

@@ -1,8 +1,10 @@
 package agentcore
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -85,9 +87,9 @@ func TestEnvReferencesTaskID(t *testing.T) {
 }
 
 // TestWorkspaceDirs pins the directory layout the substitution offers: both
-// the shared per-deployment dir and minted per-run dirs live under the
+// the shared per-deployment dir and per-run dirs live under the
 // (FLEET_WORKSPACE_ROOT-configurable) workspace root, and per-run dirs are
-// unique per mint.
+// stable per key.
 func TestWorkspaceDirs(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("FLEET_WORKSPACE_ROOT", root)
@@ -100,28 +102,151 @@ func TestWorkspaceDirs(t *testing.T) {
 		t.Errorf("shared dir must be stable across calls: %q vs %q", again, shared)
 	}
 
-	run1 := PerRunMCPWorkspaceDir("task-abc-")
-	run2 := PerRunMCPWorkspaceDir("task-abc-")
+	run1 := openStable(t, "task-abc")
+	run2 := openStable(t, "task-def")
 	if run1 == run2 {
-		t.Errorf("per-run dirs must be unique, both %q", run1)
+		t.Errorf("distinct occurrences must get distinct dirs, both %q", run1)
 	}
 	base := filepath.Join(root, "mcp-runs") + string(filepath.Separator)
 	if !strings.HasPrefix(run1, base) {
 		t.Errorf("per-run dir %q not under %q", run1, base)
 	}
-	if !strings.Contains(filepath.Base(run1), "task-abc-") {
-		t.Errorf("per-run dir %q should carry the run prefix", run1)
+	if filepath.Base(run1) != "task-abc" {
+		t.Errorf("per-run dir %q should be named by the run key", run1)
 	}
 }
 
-// TestSanitizeWorkdirPrefix pins that a hostile/odd prefix cannot escape the
-// per-run base directory via separators or blow up MkdirTemp.
-func TestSanitizeWorkdirPrefix(t *testing.T) {
-	if got := sanitizeWorkdirPrefix("../weird/name "); strings.ContainsAny(got, "/\\ ") {
-		t.Errorf("sanitized prefix %q still contains separators/spaces", got)
+// openStable opens a stable run dir and closes its root at test end.
+func openStable(t *testing.T, key string) string {
+	t.Helper()
+	dir, run, err := OpenStableMCPWorkspace(key)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := sanitizeWorkdirPrefix("  "); got != "run-" {
-		t.Errorf("empty prefix should default to run-, got %q", got)
+	t.Cleanup(func() { _ = run.Close() })
+	return dir
+}
+
+// TestStableMCPWorkspaceDir pins the retry contract: the same key re-mounts the
+// same directory with its ledger intact, and unsafe keys are refused rather
+// than folded onto another occurrence's directory.
+func TestStableMCPWorkspaceDir(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+
+	first := openStable(t, "task-abc")
+	ledger := filepath.Join(first, "creates.jsonl")
+	if err := os.WriteFile(ledger, []byte("{\"deal\":1}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second := openStable(t, "task-abc")
+	if first != second {
+		t.Fatalf("same key must reuse the dir: %q vs %q", first, second)
+	}
+	if got, err := os.ReadFile(ledger); err != nil || string(got) != "{\"deal\":1}\n" {
+		t.Fatalf("ledger must survive re-mount: %q, %v", got, err)
+	}
+	if fi, err := os.Stat(first); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("dir mode = %v, %v; want 0700", fi.Mode().Perm(), err)
+	}
+	for _, bad := range []string{"", ".", "..", "../x", "a/b", "a b", "task-é"} {
+		if _, run, err := OpenStableMCPWorkspace(bad); err == nil {
+			_ = run.Close()
+			t.Errorf("key %q must be rejected", bad)
+		}
+	}
+}
+
+// TestOpenStableMCPWorkspaceRefusesSymlinks pins Codex P1 on #1709: the run dir
+// lives in the sandbox-writable workspace mount, so a symlink the sandbox
+// planted in place of the mcp-runs base or the run dir is refused (never
+// followed), a symlink planted inside the run dir (e.g. over the ledger name)
+// is unlinked without touching its target, and the returned root cannot
+// write outside the run dir.
+func TestOpenStableMCPWorkspaceRefusesSymlinks(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	victim := t.TempDir()
+	victimFile := filepath.Join(victim, "host.txt")
+	if err := os.WriteFile(victimFile, []byte("host"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir, run, err := OpenStableMCPWorkspace("task-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.OpenFile("../escape", os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+		t.Error("the run root must not resolve outside the run dir")
+	}
+	_ = run.Close()
+
+	// A symlink planted over the ledger name is removed, its target untouched.
+	planted := filepath.Join(dir, "creates.jsonl")
+	if err := os.Symlink(victimFile, planted); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "real.jsonl"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A FIFO planted beside it (it would block the start-of-run ledger read).
+	fifo := filepath.Join(dir, "emails.jsonl")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	openStable(t, "task-abc")
+	if _, err := os.Lstat(planted); !os.IsNotExist(err) {
+		t.Fatalf("planted symlink must be removed: %v", err)
+	}
+	if _, err := os.Lstat(fifo); !os.IsNotExist(err) {
+		t.Fatalf("planted FIFO must be removed: %v", err)
+	}
+	if b, err := os.ReadFile(victimFile); err != nil || string(b) != "host" {
+		t.Fatalf("symlink target touched: %q, %v", b, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "real.jsonl")); err != nil || string(b) != "keep" {
+		t.Fatalf("regular ledger file must survive: %q, %v", b, err)
+	}
+
+	// The run dir itself replaced by a symlink: refused.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, run, err := OpenStableMCPWorkspace("task-abc"); err == nil {
+		_ = run.Close()
+		t.Fatal("symlinked run dir must be refused")
+	}
+
+	// The mcp-runs base replaced by a symlink: refused, nothing created there.
+	base := filepath.Join(root, "mcp-runs")
+	if err := os.RemoveAll(base); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, run, err := OpenStableMCPWorkspace("task-new"); err == nil {
+		_ = run.Close()
+		t.Fatal("symlinked mcp-runs base must be refused")
+	}
+	if _, err := os.Lstat(filepath.Join(victim, "task-new")); !os.IsNotExist(err) {
+		t.Fatalf("run dir created through the symlinked base: %v", err)
+	}
+}
+
+// TestStableMCPWorkspaceDirFailsLoud pins that a creation failure is an error,
+// never a silent fallback to the unscoped shared dir.
+func TestStableMCPWorkspaceDirFailsLoud(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	if err := os.WriteFile(filepath.Join(root, "mcp-runs"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if dir, run, err := OpenStableMCPWorkspace("task-abc"); err == nil {
+		_ = run.Close()
+		t.Fatalf("expected error, got dir %q", dir)
 	}
 }
 
