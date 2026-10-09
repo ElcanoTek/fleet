@@ -477,3 +477,33 @@ func TestEmailLast_EquivalentToolsAreEmailLast(t *testing.T) {
 	mustBlock(t, o, patch, `{"deal_id":"7"}`, "summary email has already been sent")
 	mustBlock(t, o, elUpdate, `{"deal_id":"6"}`, "summary email has already been sent")
 }
+
+// send_template_email is the other base outbound-email tool: it is held back
+// while email-last work is unsettled like send_email, and a successful one is
+// the batch's summary email, so no email-last write may follow it (Codex P1 on
+// #1710). The abort allowance stays send_email-only.
+func TestEmailLast_TemplateEmailIsOrdered(t *testing.T) {
+	withEmailLastPolicy(t)
+	const tmpl = "mcp_sendgrid_send_template_email"
+	const tmplArgs = `{"to":["trader@example.com"],"template_id":"d-batch","data":{"rows":1}}`
+	o := newOrchStateForTest()
+	confirmAudit(t, o, []criticalActionStruct{{Tool: elUpdate, DealID: "5"}, {Tool: tmpl}}, nil)
+	mustBlock(t, o, tmpl, tmplArgs, "still unsettled")
+	mustNotBlock(t, o, elUpdate, `{"deal_id":"5"}`, `{"success":true}`)
+	mustNotBlock(t, o, tmpl, tmplArgs, elEmailOK)
+
+	if resp := confirmAudit(t, o, []criticalActionStruct{{Tool: elUpdate, DealID: "6"}}, nil); resp.IsError {
+		t.Fatalf("re-audit refused: %s", resp.Content)
+	}
+	mustBlock(t, o, elUpdate, `{"deal_id":"6"}`, "summary email has already been sent")
+
+	// A failed template send is not the summary email.
+	o2 := newOrchStateForTest()
+	confirmAudit(t, o2, []criticalActionStruct{{Tool: elUpdate, DealID: "5"}, {Tool: tmpl}, {Tool: elUpdate, DealID: "6"}}, nil)
+	mustNotBlock(t, o2, elUpdate, `{"deal_id":"5"}`, `{"success":true}`)
+	mustNotBlock(t, o2, elUpdate, `{"deal_id":"6"}`, `{"success":true}`)
+	mustNotBlock(t, o2, tmpl, tmplArgs, `{"success":false,"error":"template not found"}`)
+	if o2.summaryEmailSent {
+		t.Fatal("a failed template send must not count as the summary email")
+	}
+}

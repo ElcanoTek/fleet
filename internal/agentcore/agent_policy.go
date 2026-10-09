@@ -293,7 +293,7 @@ func buildEmailLastSets(p AgentPolicy, critical map[string]bool) (emailLast, set
 		case !critical[s]:
 			problems = append(problems, fmt.Sprintf("ignoring %s member %q — it is not in critical_tools, so the audit gate never sees that tool", field, s))
 			return false
-		case isEmailTool(s) || s == "send_template_email":
+		case isSummaryEmailTool(s):
 			problems = append(problems, fmt.Sprintf("ignoring %s member %q — an email tool cannot be held behind the summary email", field, s))
 			return false
 		}
@@ -328,7 +328,7 @@ func closeEmailLastOverEquivalents(emailLast map[string]bool, aliasClass map[str
 	subs map[string][]string, critical map[string]bool) {
 	join := func(s, via string) bool {
 		s = strings.TrimSpace(s)
-		if s == "" || emailLast[s] || !critical[s] || isEmailTool(s) || s == "send_template_email" {
+		if s == "" || emailLast[s] || !critical[s] || isSummaryEmailTool(s) {
 			return false
 		}
 		emailLast[s] = true

@@ -30,11 +30,11 @@ list set means no change.
 
 | Rule | Where |
 |---|---|
-| `send_email` refused while an email-last obligation is unsettled | `checkSummaryEmailOrder` |
+| `send_email` / `send_template_email` refused while an email-last obligation is unsettled; a successful one of either is the summary email | `checkSummaryEmailOrder`, `noteTemplateEmailResult` |
 | email-last calls refused after the summary email | `checkEmailLastOrder` |
 | a definitive create failure settles one unit; an ambiguous one never does | `noteCreateFailure` |
 | after the email, settled-failed units no longer block finish | `finishOwed` |
-| abort: one email passes without an audit; finish nudged ≤ 3 times until sent | `abortEmailAllowed`, `abortNotifyFinishNudge` |
+| abort: one `send_email` passes without an audit; finish nudged ≤ 3 times until sent | `abortEmailAllowed`, `abortNotifyFinishNudge` |
 | typed `deal_name` binds a create unit to one record; prepared handles map back | `commitmentAuthorizes`, `markTypedExecuted`, `recordPreparedDeal` |
 | re-audit restates unbound creates by count / name | `restateUnboundEntry` |
 

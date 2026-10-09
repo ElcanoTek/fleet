@@ -46,6 +46,19 @@ import (
 // budget.
 const maxAbortNotifyNudges = 3
 
+// templateEmailToolSuffix is the other base outbound-email suffix
+// (baseCriticalToolSuffixes). isEmailTool matches only send_email.
+const templateEmailToolSuffix = "send_template_email"
+
+// isSummaryEmailTool reports whether toolName is an outbound email that can be
+// a batch's summary email: send_email or send_template_email. Both are held
+// back while email-last work is unsettled, and a successful one of either
+// marks the summary as sent.
+func isSummaryEmailTool(toolName string) bool {
+	return isEmailTool(toolName) || toolName == templateEmailToolSuffix ||
+		strings.HasSuffix(toolName, "_"+templateEmailToolSuffix)
+}
+
 func isEmailLastSuffix(suffix string) bool {
 	policyMu.RLock()
 	defer policyMu.RUnlock()
@@ -634,7 +647,7 @@ func (o *orchestrationState) unsettledEmailLastWork() []string {
 // the stale report). The all-failed path cannot deadlock: the abort allowance
 // still admits the single failure-summary email. Callers must hold o.mu.
 func (o *orchestrationState) checkSummaryEmailOrder(toolName string) (bool, string) {
-	if !isEmailTool(toolName) {
+	if !isSummaryEmailTool(toolName) {
 		return false, ""
 	}
 	missing := o.unsettledEmailLastWork()
@@ -651,6 +664,16 @@ func (o *orchestrationState) checkSummaryEmailOrder(toolName string) (bool, stri
 		"tool before any re-create. If an action cannot be settled, call confirm_audit(success=false, "+
 		"user_visible_summary=...) to abort; an aborted run may still send its single failure-summary email.",
 		toolName, strings.Join(missing, "; "))
+}
+
+// noteTemplateEmailResult marks the summary email as sent when a
+// send_template_email succeeded (ran, and reported no failure) after
+// email-last work began; send_email goes through recordToolResult's send
+// accounting instead. Callers must hold o.mu.
+func (o *orchestrationState) noteTemplateEmailResult(toolName string, succeeded bool) {
+	if succeeded && !isEmailTool(toolName) && isSummaryEmailTool(toolName) {
+		o.noteSummaryEmailSent()
+	}
 }
 
 // noteSummaryEmailSent marks the summary email as sent when a send_email
