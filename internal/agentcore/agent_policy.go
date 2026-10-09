@@ -57,6 +57,22 @@ type AgentPolicy struct {
 	// same server/variant. Members must be critical suffixes; see
 	// buildCriticalAliasClasses. Empty = exact-name binding only, as before.
 	CriticalToolAliases map[string][]string
+	// EmailLastToolSuffixes are critical suffixes whose run reports by ONE
+	// summary email sent as its LAST outward step — a batch of record writes
+	// followed by the sheet that lists every outcome (see audit_email_last.go).
+	// Once a run attempts or declares one: send_email is refused while a
+	// commitment on one is unsettled, every such call is refused after the
+	// summary email has gone out, and an abort still owes (and is allowed) the
+	// single failure-summary email. Members must be critical, non-email
+	// suffixes. Empty = none of this applies, as before.
+	EmailLastToolSuffixes []string
+	// SettleableCreateToolSuffixes are the record-CREATE suffixes whose
+	// UNBOUND commitment is settled by a definitive failure (the tool ran and
+	// reported success=false with no ambiguous-outcome marker): it no longer
+	// holds the summary email back, and no longer blocks finish once that
+	// email has gone out. Each member is implicitly an email-last suffix too.
+	// Empty = a failed create keeps its commitment open, as before.
+	SettleableCreateToolSuffixes []string
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -112,6 +128,12 @@ var (
 	// class key (#1604). Empty by default: a suffix with no entry is aliased to
 	// nothing, and every lookup falls back to the suffix itself.
 	activeCriticalAliasClass = map[string]string{}
+
+	// activeEmailLastSuffixes / activeSettleableCreateSuffixes back the
+	// email-last batch rules (audit_email_last.go). Empty by default: no
+	// suffix is email-last and no failure settles anything.
+	activeEmailLastSuffixes        = map[string]bool{}
+	activeSettleableCreateSuffixes = map[string]bool{}
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -162,6 +184,11 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		log.Printf("agent_policy: %s", problem)
 	}
 	activeCriticalAliasClass = classes
+	emailLast, settleable, emailLastProblems := buildEmailLastSets(p, seen)
+	for _, problem := range emailLastProblems {
+		log.Printf("agent_policy: %s", problem)
+	}
+	activeEmailLastSuffixes, activeSettleableCreateSuffixes = emailLast, settleable
 
 	subs := make(map[string][]string, len(p.CriticalToolSubstitutes))
 	for k, v := range p.CriticalToolSubstitutes {
@@ -225,6 +252,63 @@ func CriticalToolAliasProblems(p AgentPolicy) []string {
 	}
 	_, problems := buildCriticalAliasClasses(p.CriticalToolAliases, critical)
 	return problems
+}
+
+// EmailLastPolicyProblems reports what ConfigureAgentPolicy would ignore in
+// p.EmailLastToolSuffixes / p.SettleableCreateToolSuffixes: a member that is
+// not a critical suffix (the same merged list the gate uses) or is an email
+// suffix. The preflight face of buildEmailLastSets, like
+// CriticalToolAliasProblems: at boot each is one log line, and a misspelled
+// member silently leaves that tool outside the email-last rules.
+func EmailLastPolicyProblems(p AgentPolicy) []string {
+	critical := make(map[string]bool, len(baseCriticalToolSuffixes)+len(p.CriticalToolSuffixes))
+	for _, s := range baseCriticalToolSuffixes {
+		critical[s] = true
+	}
+	for _, s := range p.CriticalToolSuffixes {
+		if s != "" {
+			critical[s] = true
+		}
+	}
+	_, _, problems := buildEmailLastSets(p, critical)
+	return problems
+}
+
+// buildEmailLastSets resolves the bundle's email_last_tools and
+// settleable_create_tools into suffix sets. Every member must be a critical
+// suffix (the gate never sees any other tool, so a settle or an email-last
+// rule on one would be inert or a typo) and must not be an email suffix (the
+// summary email cannot wait on itself). Settleable members join the email-last
+// set: settling exists only to release the summary email. Dropped members are
+// returned as problems for the caller to log (boot) or report (preflight).
+func buildEmailLastSets(p AgentPolicy, critical map[string]bool) (emailLast, settleable map[string]bool, problems []string) {
+	emailLast, settleable = map[string]bool{}, map[string]bool{}
+	admit := func(field, s string) bool {
+		s = strings.TrimSpace(s)
+		switch {
+		case s == "":
+			return false
+		case !critical[s]:
+			problems = append(problems, fmt.Sprintf("ignoring %s member %q — it is not in critical_tools, so the audit gate never sees that tool", field, s))
+			return false
+		case isEmailTool(s) || s == "send_template_email":
+			problems = append(problems, fmt.Sprintf("ignoring %s member %q — an email tool cannot be held behind the summary email", field, s))
+			return false
+		}
+		return true
+	}
+	for _, s := range p.EmailLastToolSuffixes {
+		if admit("email_last_tools", s) {
+			emailLast[strings.TrimSpace(s)] = true
+		}
+	}
+	for _, s := range p.SettleableCreateToolSuffixes {
+		if admit("settleable_create_tools", s) {
+			s = strings.TrimSpace(s)
+			settleable[s], emailLast[s] = true, true
+		}
+	}
+	return emailLast, settleable, problems
 }
 
 // buildCriticalAliasClasses turns the bundle's critical_tool_aliases into

@@ -89,6 +89,33 @@ type orchestrationState struct {
 	// keeps the one-shot semantics.
 	typedAuditActive bool
 
+	// ── email-last batch rules (audit_email_last.go) ──
+
+	// emailLastAttempted records that the run declared or attempted a tool in
+	// the bundle's email_last_tools / settleable_create_tools. It obligates
+	// the batch's summary email on a later abort (abortEmailAllowed,
+	// abortNotifyFinishNudge).
+	emailLastAttempted bool
+	// summaryEmailSent records that a send_email succeeded AFTER email-last
+	// work began — the batch's summary email. From then on every email-last
+	// call is refused (checkEmailLastOrder), and settled-failed creates no
+	// longer block finish (finishOwed).
+	summaryEmailSent bool
+	// abortNotifyNudges counts finish refusals issued after an abort to demand
+	// the failure-summary email; bounded by maxAbortNotifyNudges.
+	abortNotifyNudges int
+	// unboundBatchUnits counts, per FULL tool name, the unbound create units
+	// the CURRENT batch declared (open, failed or done) — the batch being the
+	// span since the commitment ledger was last empty. A re-audit restates
+	// against it instead of stacking or replacing (restateUnboundEntry).
+	unboundBatchUnits map[string]int
+	// namedBatchUnits records, per FULL tool name, the record names the
+	// current batch's NAMED create units were declared with (deal_name).
+	namedBatchUnits map[string]map[string]bool
+	// preparedDealNames maps a prepared_deal_id handle to the record name its
+	// prepare step carried, so a create from the handle ties to its record.
+	preparedDealNames map[string]string
+
 	// narrowedMCPRoster is the set of MCP tool names a NARROWED run registered
 	// (RunConfig.MCPRosterNarrowing, #1603), refreshed on every tool rebuild;
 	// nil when the run's roster is not narrowed. While set, confirm_audit
@@ -1044,9 +1071,14 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 		if sendEmailSucceeded(strings.TrimSpace(resultText)) {
 			o.sendEmailSuccessCount++
 			o.sentEmailFingerprints[emailDedupKey(rawInput)] = struct{}{}
+			o.noteSummaryEmailSent()
 			log.Printf("send_email queued successfully (%d/%d)", o.sendEmailSuccessCount, maxSendEmailCallsPerTask)
 		}
 	}
+
+	// Remember which record each prepared_deal_id handle stands for, so a
+	// two-step create ties to its declared deal_name (audit_email_last.go).
+	o.recordPreparedDeal(rawInput, resultText, effectiveSucceeded)
 
 	if isCriticalTool(toolName) {
 		argsHash := hashString(rawInput)
@@ -1114,7 +1146,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 				switch {
 				case oc.success && !done[dischargedDealKey(toolName, oc.dealID)]:
 					done[dischargedDealKey(toolName, oc.dealID)] = true
-					o.markCommittedExecuted(toolName, oc.dealID, callDigest)
+					o.markCommittedExecuted(toolName, oc.dealID, callDigest, "")
 					newly++
 				case !oc.success:
 					failed++
@@ -1142,7 +1174,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 				o.selfAuditRequested = true
 			}
 			log.Printf("Critical action succeeded: %s", toolName)
-			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput))
+			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput), o.attemptIdentity(rawInput))
 		} else {
 			// Ran but reported failure (transport-level, resp.IsError, or a
 			// payload-level failure per mcpReportedFailure) → counts against
@@ -1150,6 +1182,10 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			o.criticalToolFailureAttempts[key]++
 			log.Printf("Critical action failed: %s (attempt %d/%d for these args)",
 				toolName, o.criticalToolFailureAttempts[key], maxAttemptsPerCriticalAction)
+			// A settleable create's definitive failure settles its unit for
+			// the summary email; an ambiguous or transport-level one keeps (or
+			// puts back) the unit unsettled.
+			o.noteCreateFailure(toolName, rawInput, resultText, argsHash, succeeded)
 		}
 
 		// Consume the audit token only when no committed work remains. With no

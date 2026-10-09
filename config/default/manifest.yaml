@@ -345,6 +345,14 @@ remote_mcp_catalog: []
 #                               must also be in critical_tools. Example:
 #                                 critical_tool_aliases:
 #                                   update_page_data: [update_page_data_upload]
+#   email_last_tools:           OPTIONAL critical suffixes whose run reports by
+#                               ONE summary email sent last: send_email waits
+#                               until they settle, none may run after it, and an
+#                               abort still sends that one email (ADR-0081).
+#   settleable_create_tools:    OPTIONAL create suffixes (implicitly email-last)
+#                               whose definitive failure settles the commitment
+#                               for the summary email; ambiguous outcomes never
+#                               settle. See docs/EMAIL-LAST-BATCHES.md.
 #   critical_tool_timeouts:     OPTIONAL per-tool approval default-deny window
 #                               (#225), keyed by the same bare tool-name suffix
 #                               as critical_tools, in seconds. Highest-priority

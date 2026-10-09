@@ -423,6 +423,10 @@ with no aliases reports `ok`. It is **not** part of the forced floor, because
 a fleet checkout without the check would then fail every caller. A bundle that
 declares aliases should add it to `gate_checks`.
 
+The same check reports `agent_policy.email_last_tools` /
+`settleable_create_tools` members that are not critical suffixes or are email
+tools (`agentcore.EmailLastPolicyProblems`, ADR-0081).
+
 ## Gating on `ok`, not on "not `fail`"
 
 The first version of the gate selected checks whose status was `fail`. That was

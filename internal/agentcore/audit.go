@@ -213,9 +213,12 @@ func (o *orchestrationState) registerCommittedActions(declared []string) {
 //     lower-level create fallback) or a declared critical_tool_aliases twin
 //     (#1604), again within legacy headroom; same-server typed substitutes and
 //     aliases are handled in pass 1.
-func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest string) {
+//
+// identity is a create attempt's record identity (attemptIdentity), "" for
+// every other call; it binds named create units (markTypedExecuted).
+func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest, identity string) {
 	// Pass 1: typed full-name-bound commitments.
-	if o.markTypedExecuted(toolName, dealID, callDigest) {
+	if o.markTypedExecuted(toolName, dealID, callDigest, identity) {
 		return
 	}
 	executedSuffix := criticalSuffixFor(toolName)
@@ -316,12 +319,19 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 			if len(o.pendingCriticalActions) == 0 {
 				o.selfAuditRequested = true
 			}
-			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput))
+			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput), "")
 			if o.allCommitmentsExhausted() {
 				o.auditConfirmed = false
 			}
 			return true, DuplicateSendSuppressedPrefix + " an identical payload was already sent successfully by this run, so this send is complete and its commitment is discharged. Do NOT send it again and do NOT alter the content to make it look different; report the send as done and move on."
 		}
+	}
+
+	// Email-last, enforced from the write side: no email-last call may follow
+	// the batch's summary email (and any attempt marks the run as email-last
+	// work). See audit_email_last.go.
+	if blocked, msg := o.checkEmailLastOrder(toolName); blocked {
+		return true, msg
 	}
 
 	if isCriticalTool(toolName) {
@@ -336,7 +346,10 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 		}
 	}
 
-	if isCriticalTool(toolName) && !o.auditConfirmed {
+	// An aborted email-last run's single failure-summary email passes with no
+	// live audit (abortEmailAllowed): the abort cleared auditConfirmed, and
+	// without the allowance a failed batch reached its reader as silence.
+	if isCriticalTool(toolName) && !o.auditConfirmed && !o.abortEmailAllowed(toolName) {
 		log.Printf("Enforcement: Blocking %s — audit not confirmed", toolName)
 		argsHash := hashString(rawInput)
 		alreadyPending := false
@@ -360,6 +373,11 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 	}
 
 	if isCriticalTool(toolName) && o.auditConfirmed {
+		// Email-last, enforced from the email side: the summary email waits
+		// until every email-last obligation is settled.
+		if blocked, msg := o.checkSummaryEmailOrder(toolName); blocked {
+			return true, msg
+		}
 		// Batch binding (#715): a call carrying deal_ids may only target the
 		// records (and, when declared, the exact value-set digest) the audit
 		// approved. Legacy audits never register batch approvals, so under
@@ -476,6 +494,11 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 	}
 
 	if o.auditTerminalFailure {
+		// An aborted email-last run still owes its reader the single
+		// failure-summary email (bounded nudges; the abort stays the verdict).
+		if allowed, msgs := o.abortNotifyFinishNudge(); !allowed {
+			return false, msgs
+		}
 		log.Println("Task ended with terminal audit failure")
 		return true, nil
 	}
@@ -495,8 +518,9 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 		return false, []string{fmt.Sprintf("Audit passed. Execute pending action(s): %v. Then finish.", names)}
 	}
 
-	if missing := o.unexecutedCommitments(); len(missing) > 0 {
-		outstanding := o.outstandingCommitmentSummary()
+	// finishOwed drops settled-failed creates once the summary email has
+	// recorded them (audit_email_last.go).
+	if missing, outstanding := o.finishOwed(); len(missing) > 0 {
 		log.Printf("Enforcement: %d committed critical action(s) not yet executed: %v. Rejecting finish.", len(missing), outstanding)
 		if o.typedAuditActive && len(outstanding) > 0 {
 			// A typed declaration carries the full tool name and its record
@@ -532,6 +556,7 @@ type criticalActionStruct struct {
 	Tool         string   `json:"tool" description:"Literal MCP tool name being unblocked, e.g. \"mcp_myserver_create_record\". Copy verbatim from the tool list — a bare suffix or paraphrased name is refused. Execution is BOUND to this exact name (server and client-variant prefix included): a same-suffix call on a different server or variant is blocked and cannot discharge this commitment."`
 	Identifier   string   `json:"identifier,omitempty" description:"Optional human-readable tag distinguishing this action (record name, recipient address, etc.). Used only for audit logging — not for matching; bind a single-record mutation with deal_id instead."`
 	DealID       string   `json:"deal_id,omitempty" description:"For a SINGLE-record mutation on one existing record: the exact record id this audit authorizes — the value the call will pass as its record-id argument (deal_id or a sibling key). The orchestration BINDS the unblocked call to it — a same-tool call targeting any other record is blocked and discharges nothing. Omit it ENTIRELY for creation tools and for actions that name no record (sending an email, publishing a report) — never write a placeholder such as n/a or none, which is treated as no record; use deal_ids for server-side batches."`
+	DealName     string   `json:"deal_name,omitempty" description:"For a record CREATE entry with no deal_id: the exact name of the record this unit will create — the value the call passes as name / deal_name / display_name. Optional; when given, the unit is BOUND to that record: only an attempt carrying that exact name (case and spacing ignored) discharges or settles it, and a re-audit that repeats the name restates the same unit. Ignored on any other entry."`
 	DealIDs      []string `json:"deal_ids,omitempty" description:"For a server-side BATCH mutation (a tool call that carries a deal_ids array): the EXACT record ids this audit authorizes, as strings. The orchestration registers one commitment per id and BINDS the batch — a call targeting any unlisted record is blocked. Omit for single-record actions."`
 	ValuesDigest string   `json:"values_digest,omitempty" description:"For a by-reference batch mutation: the sha256 of the value file (sha256sum output). When supplied, a batch call whose values_sha256 differs is blocked — proving the audit approved this exact value list."`
 }
@@ -653,8 +678,8 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 					standIns := orch.standInClause()
 					return fantasy.NewTextResponse(fmt.Sprintf("Audit Confirmed: \"%s\".\n%s\n"+
 						"Declared and not yet executed: %s. Execute exactly those call(s) now — the same tool "+
-						"name(s) and record(s) as declared — then finish.%s",
-						input.Reasoning, evidence, strings.Join(outstanding, ", "), standIns)), nil
+						"name(s) and record(s) as declared — then finish.%s%s",
+						input.Reasoning, evidence, strings.Join(outstanding, ", "), standIns, orch.settledFailedNote())), nil
 				}
 				return fantasy.NewTextResponse(fmt.Sprintf("Audit Confirmed: \"%s\".\n%s\n"+
 					"All %d critical actions executed. Finish now.",
@@ -707,8 +732,14 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 					"another way, re-run confirm_audit declaring the tool you will actually call, then execute it; "+
 					"otherwise finish and report the blocker.", strings.Join(retired, ", "))
 			}
-			return fantasy.NewTextResponse(fmt.Sprintf("Audit Failed Terminally.\n%s\nSummary: %s%s",
-				evidence, strings.TrimSpace(input.UserVisibleSummary), retiredNote)), nil
+			notifyNote := ""
+			if orch.emailLastAttempted && !orch.summaryEmailSent {
+				notifyNote = "\nThis run attempted batch work and its reader has not been told: send_email is unlocked " +
+					"for ONE failure-summary email listing every item's outcome (no new audit needed) — send it, " +
+					"then finish."
+			}
+			return fantasy.NewTextResponse(fmt.Sprintf("Audit Failed Terminally.\n%s\nSummary: %s%s%s",
+				evidence, strings.TrimSpace(input.UserVisibleSummary), retiredNote, notifyNote)), nil
 		},
 	)
 }
@@ -898,6 +929,9 @@ func criticalActionFingerprints(args map[string]interface{}) []string {
 		}
 		if d := strings.TrimSpace(fmt.Sprint(obj["values_digest"])); d != "" && d != nilStringValue {
 			entry += "#digest:" + strings.ToLower(d)
+		}
+		if n, ok := obj["deal_name"].(string); ok && normalizeDealName(n) != "" {
+			entry += "#name:" + normalizeDealName(n)
 		}
 		result = append(result, entry)
 	}

@@ -343,6 +343,28 @@ type AgentPolicy struct {
 	//	    update_page_data: [update_page_data_upload]
 	//	    deploy_page: [deploy_page_upload]
 	CriticalToolAliases map[string][]string `yaml:"critical_tool_aliases"`
+	// EmailLastTools is an OPTIONAL list of critical suffixes whose run
+	// reports by ONE summary email sent as its LAST outward step — a batch of
+	// record writes followed by the email listing every outcome. Once a run
+	// declares or attempts one, send_email is refused while a commitment on
+	// one is unsettled, every such call is refused after that email has gone
+	// out, and an abort (confirm_audit success=false) still owes — and may
+	// send — the single failure-summary email. Members must be in
+	// critical_tools and must not be email tools; agentcore logs and ignores
+	// any that are not.
+	EmailLastTools []string `yaml:"email_last_tools"`
+	// SettleableCreateTools is an OPTIONAL list of record-CREATE suffixes
+	// whose unbound commitment is SETTLED by a definitive failure (the tool
+	// ran and reported success=false with no ambiguous-outcome marker): it no
+	// longer holds the summary email back, and no longer blocks finish once
+	// that email has gone out. Each member is implicitly an email_last_tools
+	// member. Typed critical_actions entries for these tools may carry
+	// deal_name to bind each unit to one record.
+	//
+	//	agent_policy:
+	//	  email_last_tools: [update_deal, merge_geo]
+	//	  settleable_create_tools: [execute_deal_from_prompt_inputs, create_deal]
+	SettleableCreateTools []string `yaml:"settleable_create_tools"`
 }
 
 // PersonaToolPermissions is the per-persona tool policy declared in the

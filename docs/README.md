@@ -234,6 +234,7 @@ above fails otherwise.
 - [`DEPLOYMENT.md`](DEPLOYMENT.md) — Deploying fleet
 - [`DISCUSS-RUN.md`](DISCUSS-RUN.md) — Discuss this run
 - [`DOCTOR.md`](DOCTOR.md) — Doctor — box-level diagnose + repair (`fleet doctor` + Settings → Admin → Doctor)
+- [`EMAIL-LAST-BATCHES.md`](EMAIL-LAST-BATCHES.md) — Email-last batches: definitive create failures settle, an abort still sends the one summary email (ADR-0081)
 - [`ENV-CLI.md`](ENV-CLI.md) — `fleet env` — inspect + edit the deployment env files
 - [`EVALS.md`](EVALS.md) — Self-hosted evals & regression gating
 - [`EVENT-TRIGGERS.md`](EVENT-TRIGGERS.md) — Event-driven triggers — email ingress (#511)
