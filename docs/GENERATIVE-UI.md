@@ -126,7 +126,9 @@ The one logic surface is a small, side-effect-free expression language. It is
 used in `{{ }}` templates (titles, text, stat values, item labels) and in
 `visible_if`, `disabled_if` and `progress.value`. It supports literals, input ids
 (in a repeater, the item's own fields and `index`; from outside, `rep.field` as
-an array), `+ - * / % == != < <= > >= && || ! ?:`, member access, and a fixed
+an array), `+ - * / % == != < <= > >= && || ! ?:`, member access on an input
+name (`rows.cpm`, never on a call's result: `unique(rows.cpm)`, not
+`unique(rows).cpm`, so every member is checked), and a fixed
 function whitelist: `len count sum avg min max abs floor ceil round fixed number
 string upper lower join contains empty unique`.
 
