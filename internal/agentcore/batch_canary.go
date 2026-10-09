@@ -83,19 +83,15 @@ func canaryShape(rawInput string) string {
 	inlineDigest := false
 	if digest == "" {
 		if vals, ok := args["values"].([]any); ok && len(vals) > 0 {
-			norm := make([]string, 0, len(vals))
-			for _, v := range vals {
-				norm = append(norm, strings.ToLower(strings.TrimSpace(fmt.Sprint(v))))
-			}
-			sort.Strings(norm)
-			sum := sha256.Sum256([]byte(strings.Join(norm, "\n")))
-			digest = "inline:" + hex.EncodeToString(sum[:])
+			digest = "inline:" + inlineValuesDigest(vals)
 			inlineDigest = true
 		}
 	}
 	shape := make(map[string]any, len(args))
 	for k, v := range args {
-		if v == nil || canaryRecordArgs[k] {
+		// An explicit null stays in the shape: a tool may read null as
+		// "clear" and omission as "keep" (Codex on #1712).
+		if canaryRecordArgs[k] {
 			continue
 		}
 		// The value set is bound by the digest when there is one: a
@@ -119,6 +115,29 @@ func canaryShape(rawInput string) string {
 		}
 	}
 	return b.String()
+}
+
+// inlineValuesDigest is the order- and case-insensitive digest of an inline
+// values list: each element is trimmed and lowercased when it is a string,
+// JSON-encoded (so its type and boundaries survive — "1" is not 1, and an
+// element containing a newline cannot split into two), the encodings sorted,
+// and the sorted list JSON-encoded again before hashing.
+func inlineValuesDigest(vals []any) string {
+	norm := make([]string, 0, len(vals))
+	for _, v := range vals {
+		if str, ok := v.(string); ok {
+			v = strings.ToLower(strings.TrimSpace(str))
+		}
+		enc, err := json.Marshal(v)
+		if err != nil {
+			enc = []byte(fmt.Sprintf("%q", fmt.Sprint(v)))
+		}
+		norm = append(norm, string(enc))
+	}
+	sort.Strings(norm)
+	list, _ := json.Marshal(norm)
+	sum := sha256.Sum256(list)
+	return hex.EncodeToString(sum[:])
 }
 
 // creditCanary records a proven single-record application of this call's

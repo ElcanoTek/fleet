@@ -151,6 +151,24 @@ func TestBatchCanary_Gate(t *testing.T) {
 			blocked: true, wantText: "CANARY",
 		},
 		{
+			name:   "inline values cannot shift across an embedded newline",
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["a\nb","c"]}`, successRows("1")}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values":["a","b\nc"]}`,
+			blocked: true, wantText: "CANARY",
+		},
+		{
+			name:   "an inline string value is not the same as a number",
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["1"]}`, successRows("1")}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values":[1]}`,
+			blocked: true, wantText: "CANARY",
+		},
+		{
+			name:   "an explicit null is not an omitted argument",
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `"}`, successRows("1")}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","filter":null}`,
+			blocked: true, wantText: "CANARY",
+		},
+		{
 			name:   "a different seat argument needs its own canary",
 			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","member_id":101}`, successRows("1")}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","member_id":202}`,
