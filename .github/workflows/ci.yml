@@ -404,6 +404,9 @@ jobs:
       FLEET_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
       CHAT_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
       DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable
+      # internal/httpapi gets a database of its own so it runs alongside
+      # internal/store instead of queuing behind it (scripts/go-test.sh).
+      HTTPAPI_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_httpapi_test?sslmode=disable
       # The clientconfig tests self-resolve config/default, but point the binaries at
       # the in-repo bundle explicitly for any code path that reads it.
       FLEET_CLIENT_CONFIG_DIR: ${{ github.workspace }}/config/default
@@ -418,11 +421,33 @@ jobs:
           # Read from go.mod so the toolchain is declared once.
           go-version-file: go.mod
           check-latest: true
+          # The build cache is per lane — see the restore step below.
+          cache: false
+
+      - name: Restore the Go build cache (cover lane)
+        # setup-go's own cache (disabled above) is ONE entry keyed on go.sum,
+        # shared by every Go job and written once by whichever job finishes
+        # first, so this lane's instrumented objects were almost never in it
+        # and every run compiled the whole graph cold — measured at more than
+        # half of the -race lane. Each lane now keeps its own GOCACHE (and the
+        # module cache): pushes to main save it (see the save step at the end
+        # of this job), PRs restore the newest main entry and never write one.
+        # A stale entry is only a slower build: Go keys its cache on content.
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-cover-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-cover-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-build-cover-${{ runner.os }}-
 
       - name: Prefetch Go modules (retried — the proxy is not always up)
-        # setup-go's module cache is keyed on go.sum, so every dependency bump
-        # is a cold cache and this job's first `go` command pulls the whole
-        # module graph from the proxy. A single `read: connection reset by peer`
+        # A dependency bump misses the exact-key module cache, and a cold cache
+        # (first run, eviction) has none at all, so this job's first `go`
+        # command can pull much of the module graph from the proxy. A single
+        # `read: connection reset by peer`
         # there fails the job for a reason that has nothing to do with the change
         # under test — which is exactly how the CI run on main went red after the
         # #1395 bumps landed. Do the download HERE, retried, so the
@@ -512,7 +537,8 @@ jobs:
         run: |
           PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
             -c 'CREATE DATABASE fleet_chat_test;' \
-            -c 'CREATE DATABASE fleet_sched_test;'
+            -c 'CREATE DATABASE fleet_sched_test;' \
+            -c 'CREATE DATABASE fleet_httpapi_test;'
 
       - name: Disable podman so container sandbox tests self-skip
         # GitHub's ubuntu-latest runner ships podman, but building the ~1.3GB
@@ -631,6 +657,15 @@ jobs:
         # on a schedule instead of ambushing the next unrelated PR.
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+      - name: Save the Go build cache (cover lane, main only)
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-cover-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+
   go-race:
     # Sibling of the `go` job: the race detector is the gate for fleet's
     # in-process coordination (worker pool, SSE fan-out, single-owner DB leases,
@@ -663,6 +698,9 @@ jobs:
       FLEET_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
       CHAT_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
       DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable
+      # internal/httpapi gets a database of its own so it runs alongside
+      # internal/store instead of queuing behind it (scripts/go-test.sh).
+      HTTPAPI_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_httpapi_test?sslmode=disable
       FLEET_CLIENT_CONFIG_DIR: ${{ github.workspace }}/config/default
 
     steps:
@@ -674,6 +712,26 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
+          cache: false
+
+      - name: Restore the Go build cache (race lane)
+        # setup-go's own cache (disabled above) is ONE entry keyed on go.sum,
+        # shared by every Go job and written once by whichever job finishes
+        # first, so this lane's instrumented objects were almost never in it
+        # and every run compiled the whole graph cold — measured at more than
+        # half of the -race lane. Each lane now keeps its own GOCACHE (and the
+        # module cache): pushes to main save it (see the save step at the end
+        # of this job), PRs restore the newest main entry and never write one.
+        # A stale entry is only a slower build: Go keys its cache on content.
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-race-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-race-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-build-race-${{ runner.os }}-
 
       - name: Prefetch Go modules (retried — the proxy is not always up)
         run: |
@@ -723,7 +781,8 @@ jobs:
         run: |
           PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
             -c 'CREATE DATABASE fleet_chat_test;' \
-            -c 'CREATE DATABASE fleet_sched_test;'
+            -c 'CREATE DATABASE fleet_sched_test;' \
+            -c 'CREATE DATABASE fleet_httpapi_test;'
 
       - name: Disable podman so container sandbox tests self-skip
         run: |
@@ -738,6 +797,15 @@ jobs:
 
       - name: go test -race
         run: scripts/go-test.sh --race --count=1
+
+      - name: Save the Go build cache (race lane, main only)
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-race-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
 
   python:
     name: Python lint (ruff)
@@ -1134,10 +1202,13 @@ jobs:
     name: Container image vulnerability scan (Grype)
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    needs: [e2e-live]  # runs after e2e-live succeeds (which already builds the image)
-    # When e2e-live is skipped for a docs-only change, this job is skipped too
-    # (a job that `needs` a skipped job is itself skipped); the `CI gate` job
-    # treats a skip as a pass, so docs-only PRs are not blocked.
+    # Runs in parallel with e2e-live, not after it. It used to `need` e2e-live
+    # "because e2e-live already builds the image", but this job rebuilds the
+    # image on its own runner anyway, so the edge only appended this job's ~3
+    # minutes to e2e-live's on the critical path. Skipped for a docs-only
+    # change like every other heavy job; the `CI gate` treats that as a pass.
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     permissions:
       # Least-privilege: only this job can write SARIF to the Security tab.
       contents: read

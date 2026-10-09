@@ -53,6 +53,38 @@ func registerLiveScenarios(s *fakellm.Server) {
 		fakellm.TextStep("Sandbox run complete: bash said FAKELLM_BASH_OK and python computed FAKELLM_PY_RESULT 42."),
 	}})
 
+	// file-tools: the sandboxed file tools and bash share ONE workspace, both
+	// ways (#784 — write_file/view_file run through the sandbox FileOp seam,
+	// not on the host). turn 0 → write_file a relative path, turn 1 → bash
+	// reads that file back and writes a second one, turn 2 → view_file reads
+	// the file bash wrote, turn 3 → final text. A host-side file tool, or a
+	// FileOp workspace that is not bash's cwd, breaks one of the two reads.
+	s.Scenario("file-tools", fakellm.Scenario{Steps: []fakellm.Step{
+		fakellm.ToolStep(fakellm.ToolCall{ID: "call_ft_write", Name: "write_file",
+			Arguments: `{"path":"e2e-files/from-write-file.txt","content":"FAKELLM_WRITE_FILE_OK"}`}),
+		fakellm.BashStep("call_ft_bash",
+			"cat e2e-files/from-write-file.txt && printf 'FAKELLM_BASH_WROTE_' > e2e-files/from-bash.txt && expr 6 '*' 7 >> e2e-files/from-bash.txt"),
+		fakellm.ToolStep(fakellm.ToolCall{ID: "call_ft_view", Name: "view_file",
+			Arguments: `{"path":"e2e-files/from-bash.txt"}`}),
+		fakellm.TextStep("File tools round trip complete."),
+	}})
+
+	// stop-turn: the model accepts the request and then says nothing for
+	// minutes, so the turn is still running when the user presses Stop. The
+	// delay is cut short by the request context (sleepCtx), so a stop that
+	// really cancels the provider call frees the fake at once; a stop that only
+	// hid the spinner would leave the turn holding the conversation.
+	s.Scenario("stop-turn", fakellm.Scenario{Steps: []fakellm.Step{
+		{Kind: fakellm.StepText, Text: "FAKELLM_STOP_TURN_SHOULD_NEVER_RENDER", Delay: 10 * time.Minute},
+	}})
+
+	// provider-error: the provider rejects every request with a non-retryable
+	// 400, so the turn must fail fast and say so instead of retrying or hanging.
+	s.Scenario("provider-error", fakellm.Scenario{Steps: []fakellm.Step{
+		{Kind: fakellm.StepStatus, Status: 400,
+			StatusBody: `{"error":{"code":400,"message":"FAKELLM_PROVIDER_REJECTED: scripted bad request"}}`},
+	}})
+
 	// sched-task: drives a scheduled task through the worker pool + sandbox to
 	// SUCCESS. The worker path runs the same provider + sandbox as chat, but
 	// scheduled mode adds a ScheduledPolicy that refuses to finish until the
