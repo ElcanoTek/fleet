@@ -447,7 +447,9 @@ the server's loopback and does not expose: Caddy proxies only the public API
 - **fleet in a local VM:** forward the VM's port 8080 (and 3000, for links to
   the web UI) to the computer. Lima forwards them by default.
 - **fleet on a hosted server:** keep an SSH tunnel open while the agent runs:
-  `ssh -N -L 8080:127.0.0.1:8080 you@fleet.example.com`. Not checked live yet.
+  `ssh -N -L 8080:127.0.0.1:8080 you@fleet.example.com`. Checked live on
+  2026-10-09: `fleet acp` through such a tunnel passed the identity check and
+  answered a prompt on a hosted fleet, whose web chat showed the conversation.
 
 That computer also holds fleet's shared server token, which can act as any
 fleet user, so keep the agent to computers an operator controls.
@@ -518,6 +520,19 @@ Then, in Buzz Desktop:
 3. **Who can send instructions:** **Only me (default)** admits you and your
    other agents. For a team, choose **Selected people** or **Anyone**.
 4. **Add the agent to channels** and @mention it.
+
+On other operating systems:
+
+- **Linux:** the same steps, with Linux paths (for example
+  `go build -o ~/.local/bin/fleet ./cmd/fleet`, and the bridge next to it).
+  Add the runtime with the form; the JSON file would be in Buzz Desktop's
+  app-data folder, `~/.local/share/xyz.block.buzz.app/custom_harnesses/` by
+  the Tauri convention Buzz Desktop follows. `fleet` and the bridge build for
+  linux/amd64 and linux/arm64, and Buzz publishes Linux packages, but this
+  route was not checked live on Linux.
+- **Windows:** not available. `fleet` does not build for Windows (its disk
+  guard uses Unix-only calls), so `fleet acp` cannot run there. People on
+  Windows use fleet through an agent run elsewhere: they only @mention it.
 
 #### Run it on Kubernetes from Buzz Desktop
 
@@ -645,12 +660,72 @@ export BUZZ_ACP_RESPOND_TO_ALLOWLIST=<hex public keys>   # who may mention it
 buzz-acp
 ```
 
-`fleet acp` finds the token in the server's env file, as under "Using it".
-`buzz-acp` answers only the agent's owner by default and drops every mention
-until an owner is set (`BUZZ_ACP_AGENT_OWNER`), hence the allowlist. Such an
-agent shows as a regular user, and agents left on **Only me (default)** ignore
-its mentions, since they admit only agents their owner has signed. Checked live
-in a terminal on 2026-10-08, and as a systemd service on 2026-10-09.
+Run as root, `fleet acp` finds the token in the server's env file, as under
+"Using it". `buzz-acp` answers only the agent's owner by default and drops
+every mention until an owner is set (`BUZZ_ACP_AGENT_OWNER`), hence the
+allowlist. Such an agent shows as a regular user, and agents left on **Only
+me (default)** ignore its mentions, since they admit only agents their owner
+has signed.
+
+As a service, run it as its own unprivileged user. fleet's env file is root
+0600 and holds every fleet secret, so the agent gets only the server token,
+as a systemd credential, and its Buzz key from a file systemd reads:
+
+```sh
+useradd --system --home-dir /var/lib/fleet-buzz --no-create-home --shell /usr/sbin/nologin fleet-buzz
+install -d -m 0700 /etc/fleet-buzz
+( umask 077
+  sed -n 's/^FLEET_SERVER_TOKEN=//p' /etc/fleet/fleet.env > /etc/fleet-buzz/fleet-token
+  printf 'BUZZ_PRIVATE_KEY=%s\n' "$(cat /path/to/agent.nsec)" > /etc/fleet-buzz/agent.env )
+```
+
+```ini
+# /etc/systemd/system/fleet-buzz-agent.service
+[Unit]
+Description=fleet in Buzz (buzz-acp + fleet-buzz-bridge + fleet acp)
+Wants=network-online.target
+After=network-online.target fleet.service
+
+[Service]
+User=fleet-buzz
+Group=fleet-buzz
+StateDirectory=fleet-buzz
+WorkingDirectory=/var/lib/fleet-buzz
+Environment=HOME=/var/lib/fleet-buzz
+EnvironmentFile=/etc/fleet-buzz/agent.env
+LoadCredential=fleet-token:/etc/fleet-buzz/fleet-token
+Environment=BUZZ_RELAY_URL=wss://<your workspace relay>
+Environment=BUZZ_ACP_AGENT_COMMAND=/opt/fleet-buzz-agent/bin/fleet-buzz-bridge
+Environment=BUZZ_ACP_AGENT_ARGS=/usr/local/bin/fleet,acp,--email,buzz-bot@example.com,--server,http://127.0.0.1:8080,--public-url,https://fleet.example.com,--token-file,/run/credentials/fleet-buzz-agent.service/fleet-token
+Environment=BUZZ_ACP_RESPOND_TO=allowlist
+Environment=BUZZ_ACP_RESPOND_TO_ALLOWLIST=<hex public keys>
+Environment=FLEET_BUZZ_CLI=/opt/buzz/bin/buzz
+Environment=PATH=/opt/buzz/bin:/usr/local/bin:/usr/bin
+ExecStart=/opt/buzz/bin/buzz-acp
+# Only buzz-acp gets the SIGTERM: it lets the turn in flight finish and
+# answer, then stops its children. An owner's !shutdown (a clean exit) stays
+# down; a crash restarts.
+KillMode=mixed
+TimeoutStopSec=300
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target
+```
+
+The paths are examples: `buzz-acp` and the `buzz` CLI taken from Buzz's Linux
+package into `/opt/buzz/bin`, and the bridge in `/opt/fleet-buzz-agent/bin`.
+The list-valued settings are comma-separated, so none of their values may
+contain a comma.
+
+Checked live in a terminal on 2026-10-08, and as this unit on 2026-10-09 (on
+Fedora 44, SELinux enforcing, with an identity Buzz Desktop had created, so
+with that identity's owner attestation and without the allowlist).
 
 #### What to expect
 
