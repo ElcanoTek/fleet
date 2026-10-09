@@ -34,6 +34,10 @@ workflow files themselves:
 If a command here ever disagrees with those files, the workflow wins — please
 fix this doc (and the `make` targets) to match.
 
+Which layer a new test belongs in, the recorded contracts, and the rules a
+test has to meet to be able to fail are in
+[`TESTING-STRATEGY.md`](TESTING-STRATEGY.md).
+
 ## The lanes at a glance
 
 | Lane | CI job | What it gates | Local |

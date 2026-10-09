@@ -1106,7 +1106,23 @@ jobs:
         # sandbox.image in its manifest — that path is out of scope for core CI.
         run: |
           set -euo pipefail
-          IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
+          # One retry: the build downloads ~300 RPMs, and a single stalled
+          # mirror fails it with "All mirrors were tried" (seen on the
+          # single-mirror codecs.fedoraproject.org openh264 repo). The same
+          # pattern as the Go module prefetch above. podman reuses the layers
+          # that finished, so a retry repeats only the failed step; a real
+          # Containerfile error fails twice and stops.
+          for attempt in 1 2; do
+            if IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"; then
+              break
+            fi
+            if [ "$attempt" = 2 ]; then
+              echo "::error::the sandbox image build failed twice"
+              exit 1
+            fi
+            echo "::warning::sandbox image build failed (attempt ${attempt}/2); retrying in 20s"
+            sleep 20
+          done
           echo "image=$SANDBOX_IMAGE_LOCAL" >> "$GITHUB_OUTPUT"
 
       - name: Assert sandbox isolation invariants (always-on, real rootless podman)
@@ -1274,7 +1290,23 @@ jobs:
         # surface is what this scan covers.
         run: |
           set -euo pipefail
-          IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
+          # One retry: the build downloads ~300 RPMs, and a single stalled
+          # mirror fails it with "All mirrors were tried" (seen on the
+          # single-mirror codecs.fedoraproject.org openh264 repo). The same
+          # pattern as the Go module prefetch above. podman reuses the layers
+          # that finished, so a retry repeats only the failed step; a real
+          # Containerfile error fails twice and stops.
+          for attempt in 1 2; do
+            if IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"; then
+              break
+            fi
+            if [ "$attempt" = 2 ]; then
+              echo "::error::the sandbox image build failed twice"
+              exit 1
+            fi
+            echo "::warning::sandbox image build failed (attempt ${attempt}/2); retrying in 20s"
+            sleep 20
+          done
           podman save --format docker-archive -o sandbox-image.tar "$SANDBOX_IMAGE_LOCAL"
 
       - name: Scan the sandbox image (report all findings)
