@@ -350,14 +350,21 @@ function restoredValue(c: Component, raw: unknown): unknown {
   if (!keepsRestored(c, v)) return undefined;
   if (c.type === "repeater" && Array.isArray(v)) {
     // Items have no fixed default to fall back to, so a field the user could
-    // not fix in a restored item takes the field's own default instead.
+    // not fix in a restored item takes the field's own default instead. A
+    // disabled field keeps only a value the card itself put in an item (the
+    // field default, or one of the card's own items): anything else could
+    // not have come from the user.
     const fields = children(c, "fields");
     const fresh = newItem(fields);
+    const cardItems = defaultValue(c) as Values[];
+    const allowed = (id: string) =>
+      new Set([fresh, ...cardItems].map((it) => JSON.stringify(it[id] ?? null)));
     return v.map((item: Values) => {
       const out = { ...item };
       walkInputs(fields, (f) => {
         if (!f.id) return;
-        const stuck = f.disabled === true ? checkField(f, out[f.id]) !== "" : !keepsRestored(f, out[f.id]);
+        const stuck =
+          f.disabled === true ? !allowed(f.id).has(JSON.stringify(out[f.id] ?? null)) : !keepsRestored(f, out[f.id]);
         if (stuck) out[f.id] = fresh[f.id];
       });
       return out;

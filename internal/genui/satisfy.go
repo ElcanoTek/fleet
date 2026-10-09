@@ -419,6 +419,22 @@ func (s *skeleton) candidates(field string) []value {
 	return out
 }
 
+// gridPoint is the k-th grid position from base as the browser reports it: a
+// short decimal (0.3, not 0.30000000000000004) when that is still on the grid
+// by checkField's own test, else the exact float (a grid finer than the
+// rounding would be pushed off it).
+func gridPoint(base, k, step float64) float64 {
+	n := base + k*step
+	r := math.Round(n*1e9) / 1e9
+	if math.IsInf(r, 0) || math.IsNaN(r) {
+		return n
+	}
+	if q := (r - base) / step; math.Abs(q-math.Round(q)) <= 1e-9 {
+		return r
+	}
+	return n
+}
+
 // gridCandidates: for a domain with a step grid the scan above cannot walk
 // (a missing bound, or too many positions), the grid points around each
 // breakpoint. The first grid point above a breakpoint is the smallest the
@@ -435,10 +451,7 @@ func gridCandidates(cs []float64, d *numDomain) []value {
 		lo, hi := math.Floor(k+1e-9), math.Ceil(k-1e-9)
 		for _, j := range []float64{lo - 1, lo, hi, hi + 1} {
 			// Rounded like the browser's short decimals (see domainCandidates).
-			n := base + j*d.step
-			if r := math.Round(n*1e9) / 1e9; !math.IsInf(r, 0) {
-				n = r
-			}
+			n := gridPoint(base, j, d.step)
 			if !seen[n] && !math.IsInf(n, 0) && !math.IsNaN(n) {
 				seen[n] = true
 				out = append(out, value{n: n})
@@ -463,7 +476,7 @@ func (s *skeleton) domainCandidates(field string, d *numDomain) []value {
 	for k := 0; k <= n; k++ {
 		// The browser reports a position as a short decimal (0.3, not
 		// 0.30000000000000004), so round away float noise before comparing.
-		v := value{n: math.Round((d.min+float64(k)*d.step)*1e9) / 1e9}
+		v := value{n: gridPoint(d.min, float64(k), d.step)}
 		sig := make([]byte, len(mine))
 		for i, a := range mine {
 			sig[i] = '0'

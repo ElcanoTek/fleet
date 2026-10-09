@@ -159,6 +159,8 @@ func TestNumberDomainForValidatingActions(t *testing.T) {
 		{"step only", &numDomain{step: 0.5}, "n > 0.1 && n < 0.4", "", true},
 		{"step only, decimals", &numDomain{step: 0.1}, "n == 0.3", "", false},
 		{"step grid, too fine to scan", &numDomain{min: 0, max: 1e9, hasMin: true, hasMax: true, step: 2}, "n == 7", "", true},
+		{"step finer than the rounding", &numDomain{min: 0, hasMin: true, step: 0.0000000007}, "n == 0.000000001", "", true},
+		{"step finer than the rounding, on grid", &numDomain{min: 0, hasMin: true, step: 0.0000000007}, "n > 0.000000001 && n < 0.0000000015", "", false},
 		{"step grid, too fine to scan, beyond literals", &numDomain{min: 0, max: 1e9, hasMin: true, hasMax: true, step: 2}, "n > 7", "n == 8", false},
 	}
 	for _, c := range cases {

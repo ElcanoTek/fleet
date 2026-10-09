@@ -48,8 +48,11 @@ const (
 	MaxOptions   = 2000
 	// MaxChoiceItems bounds a multi_select / include_exclude value (one chip
 	// each): no more than the options there can be, custom entries included.
-	MaxChoiceItems     = MaxOptions
-	MaxTableRows       = 500
+	MaxChoiceItems = MaxOptions
+	MaxTableRows   = 500
+	// MaxDisplayItems bounds the other object lists (badges, facts,
+	// status_list items, diff rows): each entry is DOM, like a table row.
+	MaxDisplayItems    = 500
 	MaxTableColumns    = 20
 	MaxChartSeries     = 8
 	MaxChartPoints     = 200
@@ -752,6 +755,10 @@ func (v *validator) checkListProp(path string, pr prop, val any, repeater string
 		arr, ok := val.([]any)
 		if !ok || len(arr) == 0 {
 			v.addf(path, "must be a non-empty array of objects")
+			return
+		}
+		if len(arr) > MaxDisplayItems {
+			v.addf(path, "at most %d entries; summarize or paginate across cards", MaxDisplayItems)
 			return
 		}
 		for i, e := range arr {

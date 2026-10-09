@@ -1786,3 +1786,22 @@ describe("structural accessibility of every valid fixture card", () => {
     });
   }
 });
+
+describe("table cells", () => {
+  it("read only the row's own properties", () => {
+    const s = spec({
+      title: "T",
+      components: [
+        {
+          type: "table",
+          columns: [{ key: "name" }, { key: "constructor" }, { key: "toString" }],
+          rows: [{ name: "a" }],
+        },
+      ],
+    });
+    render(<GenerativeCard cardId="cells" spec={s} onSubmit={() => {}} />);
+    const card = screen.getByTestId("genui-card");
+    expect(card.textContent).not.toContain("function");
+    expect(card.textContent).not.toContain("native code");
+  });
+});

@@ -1376,7 +1376,7 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
                       className="border-b border-[var(--color-border)] px-2 py-1.5 tabular-nums"
                       style={{ textAlign: col.align as "left" | "right" | "center" }}
                     >
-                      {cellText(r[col.key])}
+                      {cellText(Object.prototype.hasOwnProperty.call(r, col.key) ? r[col.key] : undefined)}
                     </td>
                   ))}
                 </tr>

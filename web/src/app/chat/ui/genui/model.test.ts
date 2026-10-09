@@ -263,8 +263,25 @@ describe("restored values the user could not fix", () => {
     const items = normalizeValues(spec, { r: [{ ok: false, q: 50, t: "a" }, { ok: true, q: 7, t: "b" }] }).r as Record<string, unknown>[];
     expect(items).toEqual([
       { ok: true, q: 1, t: "a" },
-      { ok: true, q: 7, t: "b" },
+      { ok: true, q: 1, t: "b" },
     ]);
+  });
+
+  it("a disabled field in a restored repeater item keeps only values the card put there", () => {
+    const spec = card([
+      {
+        type: "repeater",
+        id: "r",
+        label: "R",
+        value: [{ q: 3 }, { q: 4 }],
+        fields: [
+          { type: "number", id: "q", label: "Q", disabled: true, value: 5 },
+          { type: "text_input", id: "t", label: "T" },
+        ],
+      },
+    ]);
+    const items = normalizeValues(spec, { r: [{ q: 4, t: "a" }, { q: 6, t: "b" }, { q: 5, t: "c" }] }).r as Record<string, unknown>[];
+    expect(items.map((it) => it.q)).toEqual([4, 5, 5]);
   });
 });
 

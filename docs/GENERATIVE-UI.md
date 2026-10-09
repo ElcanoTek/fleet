@@ -135,7 +135,8 @@ These are protocol constants in `internal/genui/spec.go`, not operator knobs:
 
 - 256 KiB per card, 800 components, 12 levels of nesting
 - 2,000 options per input, and 2,000 chosen entries per `multi_select` /
-  `include_exclude` (custom entries included); 500 table rows, 20 columns
+  `include_exclude` (custom entries included); 500 table rows, 20 columns;
+  500 entries per `badges` / `facts` / `status_list` / `diff` list
 - 8 chart series of 200 points, 6 actions
 - 200 repeater items, 20,000 `list_input` lines
 - 500-character expressions
