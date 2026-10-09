@@ -36,7 +36,7 @@ type ShowUIParams struct {
 	Components  []any  `json:"components" description:"The card body: an array of component objects, each with a \"type\" from the catalog in the tool description."`
 	Actions     []any  `json:"actions,omitempty" description:"Footer buttons: [{id, label, kind: submit|message, style: primary|secondary|danger, message, validate, confirm, visible_if, disabled_if}]. Required (with at least one kind=submit) when the card has inputs."`
 	Replaces    string `json:"replaces,omitempty" description:"card_id of an earlier card this one updates. The old card collapses to a 'replaced' note so only the newest version is interactive."`
-	FieldErrors []any  `json:"field_errors,omitempty" description:"Inline errors to show next to inputs: [{field: \"id\" or \"repeater_id[i].field_id\", message}], where i is the item's 0-based position in the repeater's array (the first item is [0], unlike the 1-based index in expressions). Use when re-showing a card after checking the user's answers."`
+	FieldErrors []any  `json:"field_errors,omitempty" description:"Inline errors to show next to inputs: [{field: \"id\" or \"repeater_id[i].field_id\", message}], where i is the item's 0-based position in the repeater's array (the first item is [0], unlike the 1-based index in expressions). Use when re-showing a card after checking the user's answers; the field must be editable (not disabled)."`
 }
 
 const showUIDescription = `Show the user an interactive card inline in the chat — a form, a picker, a multi-item editor, a comparison, a checklist, a small calculator or a chart — built on the fly from a fixed component catalog. Use it when a visual or interactive answer serves the user better than prose: collecting several related values at once (instead of asking one question per message), letting them choose among options you fetched, editing a list of items, reviewing proposed changes, or showing numbers they will want to compare or tweak. Plain questions still get plain text.
@@ -88,7 +88,10 @@ func ShowUIResult(callID string, input []byte) fantasy.ToolResponse {
 	}
 	interactive := hasSubmitAction(card.Actions)
 	var b strings.Builder
-	fmt.Fprintf(&b, "UI_DISPLAYED card_id=%s: the user can now see the card %q.", callID, card.Title)
+	// The acknowledgement stays small whatever the card holds: a result over
+	// the tool-output ceiling is replaced by an envelope, and the browser
+	// draws a card only when its result starts with UI_DISPLAYED.
+	fmt.Fprintf(&b, "UI_DISPLAYED card_id=%s: the user can now see the card %q.", callID, genui.TruncateRunes(card.Title, 120))
 	if card.Replaces != "" {
 		fmt.Fprintf(&b, " It replaces card %s, which is now collapsed.", card.Replaces)
 	}

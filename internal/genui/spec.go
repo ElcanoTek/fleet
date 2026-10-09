@@ -78,6 +78,8 @@ const (
 	MaxTabs            = 12
 	MaxFieldErrors     = 200
 	maxIssuesReported  = 25
+	// maxCardIDLen bounds replaces: a card_id is a tool call id.
+	maxCardIDLen       = 256
 	maxNamesInHintText = 30
 )
 
@@ -444,6 +446,8 @@ func Validate(raw []byte) (Card, []Issue) {
 	if r, ok := top["replaces"]; ok {
 		if s, isStr := r.(string); !isStr || strings.TrimSpace(s) == "" {
 			v.addf("replaces", "must be the card_id string of an earlier card")
+		} else if len(s) > maxCardIDLen {
+			v.addf("replaces", "must be a card_id (at most %d characters)", maxCardIDLen)
 		} else if s != strings.TrimSpace(s) {
 			// The browser matches the id exactly; padding would leave the
 			// old card live while the model is told it collapsed.
@@ -994,9 +998,9 @@ func (v *validator) requiredMinBytes() int {
 			case "select", "choice":
 				// The shortest option the answer can be.
 				if opts, ok := optionValues(f.obj["options"]); ok && len(opts) > 0 {
-					short := len(opts[0])
+					short := wireLen(opts[0])
 					for _, o := range opts[1:] {
-						short = min(short, len(o))
+						short = min(short, wireLen(o))
 					}
 					size += short
 				}
@@ -1005,6 +1009,15 @@ func (v *validator) requiredMinBytes() int {
 		total += size * n
 	}
 	return total
+}
+
+// wireLen is a string value's size as the browser measures an answer: JSON
+// inside the message, and the message JSON-escaped again (quotes excluded,
+// they are counted with the key).
+func wireLen(s string) int {
+	once, _ := json.Marshal(s)
+	twice, _ := json.Marshal(string(once[1 : len(once)-1]))
+	return len(twice) - 2
 }
 
 // defaultEntries counts the entries in the collection defaults of the inputs
@@ -1024,6 +1037,51 @@ func defaultEntries(list []any) int {
 		}
 	}
 	return n
+}
+
+// nestedDisplay totals the table rows and display-list entries, and the chart
+// points × series, of the components in a list, nested ones included.
+func nestedDisplay(list []any) (rows, points int) {
+	walkComponents(list, func(m map[string]any) {
+		switch m["type"] {
+		case "table", "diff":
+			r, _ := m["rows"].([]any)
+			rows += len(r)
+		case "badges", "facts", "status_list":
+			it, _ := m["items"].([]any)
+			rows += len(it)
+		case "chart":
+			labels, _ := m["labels"].([]any)
+			series, _ := m["series"].([]any)
+			points += len(labels) * max(1, len(series))
+		}
+	})
+	return rows, points
+}
+
+// walkComponents visits every component in a list, nested ones included.
+func walkComponents(list []any, visit func(map[string]any)) {
+	for _, x := range list {
+		m, ok := x.(map[string]any)
+		if !ok {
+			continue
+		}
+		visit(m)
+		for _, k := range []string{"children", "fields"} {
+			if kids, ok := m[k].([]any); ok {
+				walkComponents(kids, visit)
+			}
+		}
+		if tabs, ok := m["tabs"].([]any); ok {
+			for _, t := range tabs {
+				if tm, ok := t.(map[string]any); ok {
+					if kids, ok := tm["children"].([]any); ok {
+						walkComponents(kids, visit)
+					}
+				}
+			}
+		}
+	}
 }
 
 // countComponents counts the components in a list, nested ones included.
@@ -1051,6 +1109,16 @@ func countComponents(list []any) int {
 		}
 	}
 	return n
+}
+
+// countPoints adds chart marks to the card-wide budget, reporting where it
+// first goes over.
+func (v *validator) countPoints(path string, n int) {
+	before := v.points
+	v.points += n
+	if before <= MaxCardChartPoints && v.points > MaxCardChartPoints {
+		v.addf(path, "the card's charts draw more than %d points in all (points × series); summarize or split it across cards", MaxCardChartPoints)
+	}
 }
 
 // countRows adds a list's entries to the card-wide budget, reporting the
@@ -1159,8 +1227,12 @@ func (v *validator) repeaterRules(path string, obj map[string]any, num func(stri
 	if kids, ok := obj["fields"].([]any); ok {
 		// Every starting item renders all of the repeater's fields, and
 		// copies each field's default: list defaults count once per item.
+		// A table, display list or chart among the fields renders once per
+		// item too, so its rows and points count per item.
 		items := initialItems(obj)
-		v.countRows(path, items*max(1, countComponents(kids)))
+		rows, points := nestedDisplay(kids)
+		v.countRows(path, items*(max(1, countComponents(kids))+rows))
+		v.countPoints(path, items*points)
 		if n := items * defaultEntries(kids); n > MaxListItems {
 			v.addf(path, "its field defaults hold %d list entries across its %d starting items, more than %d; shorten the defaults or start with fewer items", n, items, MaxListItems)
 		}
@@ -1374,11 +1446,7 @@ func (v *validator) chartRules(path string, obj map[string]any) {
 	if len(series) > MaxChartSeries {
 		v.addf(path+".series", "at most %d series", MaxChartSeries)
 	}
-	before := v.points
-	v.points += len(labels) * max(1, len(series))
-	if before <= MaxCardChartPoints && v.points > MaxCardChartPoints {
-		v.addf(path, "the card's charts draw more than %d points in all (points × series); summarize or split it across cards", MaxCardChartPoints)
-	}
+	v.countPoints(path, len(labels)*max(1, len(series)))
 	for i, s := range series {
 		if m, ok := s.(map[string]any); ok {
 			if vals, ok := m["values"].([]any); ok && len(vals) != len(labels) {
@@ -2148,7 +2216,7 @@ func (v *validator) checkFieldPath(path string) string {
 		if root.repeater != "" {
 			return fmt.Sprintf("%q is a field of repeater %q; address it as %s[index].%s", m[1], root.repeater, root.repeater, m[1])
 		}
-		return ""
+		return disabledTarget(root)
 	}
 	if root.typ != "repeater" {
 		return fmt.Sprintf("%q is not a repeater", m[1])
@@ -2159,6 +2227,20 @@ func (v *validator) checkFieldPath(path string) string {
 	}
 	if idx, err := strconv.Atoi(m[2]); err != nil || idx >= root.items {
 		return fmt.Sprintf("repeater %q opens with %d item(s); there is no item %s", m[1], root.items, m[2])
+	}
+	if msg := disabledTarget(root); msg != "" {
+		return msg
+	}
+	return disabledTarget(inner)
+}
+
+// disabledTarget refuses a field error on a disabled input: the user cannot
+// edit it to clear the error, and a disabled input is submitted unvalidated,
+// so the card would resend the rejected value. Re-show the card with the
+// input editable instead.
+func disabledTarget(f *field) string {
+	if dis, _ := f.obj["disabled"].(bool); dis {
+		return fmt.Sprintf("%q is disabled, so the user cannot fix it; make it editable in this card or drop the error", f.id)
 	}
 	return ""
 }
@@ -2316,6 +2398,9 @@ func sortedCompKeys(m map[string]map[string]any) []string {
 }
 
 func sortStrings(s []string) { sort.Strings(s) }
+
+// TruncateRunes cuts s to n runes, marking the cut with "…".
+func TruncateRunes(s string, n int) string { return truncateRunes(s, n) }
 
 func truncateRunes(s string, n int) string {
 	r := []rune(s)

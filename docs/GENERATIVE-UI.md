@@ -139,7 +139,8 @@ These are protocol constants in `internal/genui/spec.go`, not operator knobs:
   `include_exclude` (custom entries included); 500 table rows, 20 columns;
   500 entries per `badges` / `facts` / `status_list` / `diff` list, and
   2,000 table rows, list entries and repeater item fields (each starting
-  item times its fields) across the whole card
+  item times its fields, a table or list among them counted per item too)
+  across the whole card
 - 8 chart series of 200 points, and 3,200 points × series across the card;
   6 actions
 - 200 repeater items, 20,000 `list_input` lines, and 20,000 collection-default

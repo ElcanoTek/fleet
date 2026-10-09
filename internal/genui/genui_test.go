@@ -260,6 +260,21 @@ func TestRepeaterDefaultEntriesCap(t *testing.T) {
 	}
 }
 
+func TestRepeaterNestedDisplayCountsPerItem(t *testing.T) {
+	rows := strings.TrimSuffix(strings.Repeat(`{"a":"x"},`, 20), ",")
+	card := func(items int) string {
+		return fmt.Sprintf(`{"title":"x","components":[{"type":"repeater","id":"r","label":"R","min_items":%d,"fields":[{"type":"text_input","id":"n","label":"N"},{"type":"table","columns":[{"key":"a"}],"rows":[%s]}]}],"actions":[{"id":"go","label":"Go"}]}`, items, rows)
+	}
+	// Each item renders its two components and the table's 20 rows: 22.
+	if _, issues := Validate([]byte(card(MaxCardRows / 22))); len(issues) != 0 {
+		t.Fatalf("within the budget: %v", issues)
+	}
+	_, issues := Validate([]byte(card(MaxCardRows/22 + 2)))
+	if len(issues) == 0 || !strings.Contains(issues[0].Message, "more than") {
+		t.Fatalf("over the budget: %v", issues)
+	}
+}
+
 // A list default is capped by the entries the browser keeps from it: one
 // string splits on its line breaks (listCount), so it can carry more than
 // MaxListItems entries in a single element.

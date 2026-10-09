@@ -333,9 +333,12 @@ export function normalizeValues(spec: CardSpec, saved: Values | null | undefined
   // Repeaters the answer leaves at their defaults keep their items, so the
   // budget is what remains after them.
   const restored: { c: Component; v: unknown[]; weight: number }[] = [];
-  let rowsLeft = MAX_CARD_ROWS - displayRows(spec.components);
+  // Display rows outside repeaters; those inside are part of each item.
+  let rowsLeft = MAX_CARD_ROWS - displayRows(spec.components, false);
   walkInputs(spec.components, (c) => {
-    const weight = c.type === "repeater" ? Math.max(1, countComponents(children(c, "fields"))) : 0;
+    // An item renders its fields, and any table or display list among them.
+    const fields = children(c, "fields");
+    const weight = c.type === "repeater" ? Math.max(1, countComponents(fields)) + displayRows(fields) : 0;
     if (c.id && Object.prototype.hasOwnProperty.call(saved, c.id)) {
       const v = restoredValue(c, saved[c.id]);
       if (weight && Array.isArray(v)) restored.push({ c, v, weight });
@@ -356,14 +359,15 @@ export function normalizeValues(spec: CardSpec, saved: Values | null | undefined
  * The card's table rows and display-list entries (badges, facts,
  * status_list, diff): the rest of the row budget (countRows in spec.go).
  */
-function displayRows(list: Component[]): number {
+function displayRows(list: Component[], intoRepeaters = true): number {
   let n = 0;
   for (const c of list) {
     if (c.type === "table" && Array.isArray(c.rows)) n += c.rows.length;
     if (["badges", "facts", "status_list"].includes(c.type) && Array.isArray(c.items)) n += c.items.length;
     if (c.type === "diff" && Array.isArray(c.rows)) n += c.rows.length;
-    n += displayRows(children(c)) + displayRows(children(c, "fields"));
-    for (const t of tabsOf(c)) n += displayRows(t.children);
+    n += displayRows(children(c), intoRepeaters);
+    if (intoRepeaters) n += displayRows(children(c, "fields"));
+    for (const t of tabsOf(c)) n += displayRows(t.children, intoRepeaters);
   }
   return n;
 }

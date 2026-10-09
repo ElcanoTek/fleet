@@ -93,3 +93,21 @@ func mustRead(t *testing.T, path string) []byte {
 	}
 	return b
 }
+
+// The acknowledgement stays far below any tool-output ceiling: a result
+// replaced by the truncation envelope would no longer start with
+// UI_DISPLAYED, and the browser would draw no card.
+func TestShowUIAcknowledgementIsSmall(t *testing.T) {
+	title := strings.Repeat("t", 20000)
+	replaces := strings.Repeat("r", 256)
+	resp := runShowUI(t, `{"title":"`+title+`","replaces":"`+replaces+`","components":[{"type":"text","text":"x"}]}`)
+	if resp.IsError {
+		t.Fatalf("valid card refused: %s", resp.Content)
+	}
+	if !strings.HasPrefix(resp.Content, "UI_DISPLAYED") || len(resp.Content) > 2048 {
+		t.Fatalf("acknowledgement is %d bytes: %.120q", len(resp.Content), resp.Content)
+	}
+	if resp := runShowUI(t, `{"title":"x","replaces":"`+strings.Repeat("r", 257)+`","components":[{"type":"text","text":"x"}]}`); !resp.IsError {
+		t.Fatal("over-long replaces accepted")
+	}
+}
