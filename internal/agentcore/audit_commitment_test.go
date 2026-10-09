@@ -151,6 +151,8 @@ func TestTypedCommitment_BatchBindingAndDigest(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			o := newBatchState(t)
+			// Prove the canary (batch_canary.go) so the binding alone decides.
+			o.creditCanary(typedCreateToolA, tc.args)
 			blocked, msg := o.checkCriticalTool(typedCreateToolA, "", tc.args)
 			if blocked != tc.blocked {
 				t.Fatalf("blocked=%v, want %v (msg: %s)", blocked, tc.blocked, msg)
