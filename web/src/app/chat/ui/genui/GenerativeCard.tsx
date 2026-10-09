@@ -821,6 +821,14 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
   // The card stays editable while the confirmation is open, so the gates run
   // again on the values actually being sent.
   const onConfirm = (action: Action) => {
+    // Another tab may have sent from this card while the confirmation was
+    // open: its hold turns the buttons off here too, Yes included.
+    const held = awaiting ?? (readOnly ? null : loadPending(storeId, answerKeyRef.current));
+    if (held) {
+      setAwaitingState(held);
+      setConfirming(null);
+      return;
+    }
     if (!passesGates(action)) {
       setConfirming(null);
       return;
@@ -831,7 +839,8 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
   const actions = (spec.actions ?? []).filter((a) => isVisible(a, scope));
   // A confirmation whose action has since become hidden (its visible_if no
   // longer holds) closes rather than offering a Yes for an unavailable action.
-  const confirmingVisible = confirming && isVisible(confirming, scope) ? confirming : null;
+  // So does one opened before another tab's send put this card on hold.
+  const confirmingVisible = confirming && !awaiting && isVisible(confirming, scope) ? confirming : null;
   // Discard it outright, so it does not silently return if the action shows again.
   if (confirming && !confirmingVisible) setConfirming(null);
   // Keyboard focus follows the confirmation: the action row it replaces

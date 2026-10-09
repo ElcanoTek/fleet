@@ -243,6 +243,23 @@ func TestCardRowBudgetCountsRepeaterItems(t *testing.T) {
 	}
 }
 
+func TestRepeaterDefaultEntriesCap(t *testing.T) {
+	lines := make([]string, 200)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("%q", strconv.Itoa(i))
+	}
+	card := func(items int) string {
+		return fmt.Sprintf(`{"title":"x","components":[{"type":"repeater","id":"r","label":"R","min_items":%d,"fields":[{"type":"list_input","id":"l","label":"L","value":[%s]}]}],"actions":[{"id":"go","label":"Go"}]}`, items, strings.Join(lines, ","))
+	}
+	if _, issues := Validate([]byte(card(MaxListItems / 200))); len(issues) != 0 {
+		t.Fatalf("at the cap: %v", issues)
+	}
+	_, issues := Validate([]byte(card(MaxListItems/200 + 1)))
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, "list entries across its") {
+		t.Fatalf("over the cap: %v", issues)
+	}
+}
+
 // A list default is capped by the entries the browser keeps from it: one
 // string splits on its line breaks (listCount), so it can carry more than
 // MaxListItems entries in a single element.

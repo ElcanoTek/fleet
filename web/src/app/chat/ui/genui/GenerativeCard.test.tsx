@@ -1259,6 +1259,25 @@ describe("a hold set in another tab", () => {
   });
 });
 
+describe("a confirmation open when another tab sends", () => {
+  it("closes, so Yes cannot send a second copy", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const s = spec({ title: "X", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Go", kind: "message", message: "go", confirm: "Sure?" }] });
+    render(<GenerativeCard cardId="xc" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    const key = "fleet.genui.pending.xc";
+    const held = JSON.stringify({ action: "a", at: Date.now(), after: "", send: "other-tab-2" });
+    window.localStorage.setItem(key, held);
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key, newValue: held })));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
+
 describe("render cost of a large answer", () => {
   it("serializes the answer's values once, not on every render", () => {
     const s = spec({ title: "L", components: [{ type: "text_input", id: "n", label: "Name" }], actions: [{ id: "go", label: "Go" }] });

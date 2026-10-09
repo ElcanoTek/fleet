@@ -142,12 +142,15 @@ These are protocol constants in `internal/genui/spec.go`, not operator knobs:
   item times its fields) across the whole card
 - 8 chart series of 200 points, and 3,200 points × series across the card;
   6 actions
-- 200 repeater items, 20,000 `list_input` lines
+- 200 repeater items, 20,000 `list_input` lines, and 20,000 collection-default
+  entries across a repeater's starting items (each item copies its fields' defaults)
 - 500-character expressions, and 2,000 characters of `{{ }}` output per
   displayed template (longer results are clipped with "…"; conditions see
   them whole); `min_length` at most 20,000, and the required
-  fields' `min_length` (all of them, shown or not), plus every input's key
-  and quoting, must add up to an answer that can be sent
+  fields' `min_length` and shortest required option (all of them, shown or
+  not), plus every input's key and quoting, must add up to an answer that can
+  be sent; anything else that makes an answer too large is caught in the
+  browser, which says "Too large to send" instead of sending
 
 One limit is the web card's, not the spec's: a single answer may be at most
 960 KiB once JSON-escaped (`MAX_SUBMISSION_BYTES` in `genui/model.ts`), so it

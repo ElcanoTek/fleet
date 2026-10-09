@@ -985,14 +985,45 @@ func (v *validator) requiredMinBytes() int {
 		// \"id\":\"\", — the key and an empty value with every quote
 		// escaped, and a comma: id + 12.
 		size := len(id) + 12
-		if req, _ := f.obj["required"].(bool); req && f.typ == "text_input" {
-			if lo, _ := f.obj["min_length"].(float64); lo > 0 {
-				size += int(min(lo, MaxStringLen))
+		if req, _ := f.obj["required"].(bool); req {
+			switch f.typ {
+			case "text_input":
+				if lo, _ := f.obj["min_length"].(float64); lo > 0 {
+					size += int(min(lo, MaxStringLen))
+				}
+			case "select", "choice":
+				// The shortest option the answer can be.
+				if opts, ok := optionValues(f.obj["options"]); ok && len(opts) > 0 {
+					short := len(opts[0])
+					for _, o := range opts[1:] {
+						short = min(short, len(o))
+					}
+					size += short
+				}
 			}
 		}
 		total += size * n
 	}
 	return total
+}
+
+// defaultEntries counts the entries in the collection defaults of the inputs
+// in a list (list, choice and include/exclude values).
+func defaultEntries(list []any) int {
+	fields := map[string]map[string]any{}
+	collectInputs(list, fields)
+	n := 0
+	for _, f := range fields {
+		switch val := f["value"].(type) {
+		case []any:
+			n += len(val)
+		case map[string]any:
+			inc, _ := val["include"].([]any)
+			exc, _ := val["exclude"].([]any)
+			n += len(inc) + len(exc)
+		}
+	}
+	return n
 }
 
 // countComponents counts the components in a list, nested ones included.
@@ -1126,8 +1157,13 @@ func (v *validator) repeaterRules(path string, obj map[string]any, num func(stri
 		v.addf(path, "min_items must not exceed max_items")
 	}
 	if kids, ok := obj["fields"].([]any); ok {
-		// Every starting item renders all of the repeater's fields.
-		v.countRows(path, initialItems(obj)*max(1, countComponents(kids)))
+		// Every starting item renders all of the repeater's fields, and
+		// copies each field's default: list defaults count once per item.
+		items := initialItems(obj)
+		v.countRows(path, items*max(1, countComponents(kids)))
+		if n := items * defaultEntries(kids); n > MaxListItems {
+			v.addf(path, "its field defaults hold %d list entries across its %d starting items, more than %d; shorten the defaults or start with fewer items", n, items, MaxListItems)
+		}
 		v.noNestedRepeater(path+".fields", kids)
 		v.disabledItems(path, obj, kids)
 	}

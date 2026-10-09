@@ -333,7 +333,7 @@ export function normalizeValues(spec: CardSpec, saved: Values | null | undefined
   // Repeaters the answer leaves at their defaults keep their items, so the
   // budget is what remains after them.
   const restored: { c: Component; v: unknown[]; weight: number }[] = [];
-  let rowsLeft = MAX_CARD_ROWS;
+  let rowsLeft = MAX_CARD_ROWS - displayRows(spec.components);
   walkInputs(spec.components, (c) => {
     const weight = c.type === "repeater" ? Math.max(1, countComponents(children(c, "fields"))) : 0;
     if (c.id && Object.prototype.hasOwnProperty.call(saved, c.id)) {
@@ -350,6 +350,22 @@ export function normalizeValues(spec: CardSpec, saved: Values | null | undefined
     out[c.id!] = kept;
   }
   return out;
+}
+
+/**
+ * The card's table rows and display-list entries (badges, facts,
+ * status_list, diff): the rest of the row budget (countRows in spec.go).
+ */
+function displayRows(list: Component[]): number {
+  let n = 0;
+  for (const c of list) {
+    if (c.type === "table" && Array.isArray(c.rows)) n += c.rows.length;
+    if (["badges", "facts", "status_list"].includes(c.type) && Array.isArray(c.items)) n += c.items.length;
+    if (c.type === "diff" && Array.isArray(c.rows)) n += c.rows.length;
+    n += displayRows(children(c)) + displayRows(children(c, "fields"));
+    for (const t of tabsOf(c)) n += displayRows(t.children);
+  }
+  return n;
 }
 
 /** Components in a list, nested ones included (countComponents in spec.go). */
