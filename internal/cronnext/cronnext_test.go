@@ -118,8 +118,16 @@ func TestNext_MatchesBruteForceAroundTransitions(t *testing.T) {
 			s := mustParse(t, e)
 			spec := s.(*cron.SpecSchedule)
 			for _, tr := range transitions {
+				// The samples are ascending, so the previous brute-force answer
+				// stays the answer while it is still ahead of this sample's
+				// first candidate minute: the walk that found it already
+				// rejected every minute before it. Re-walking up to 40 days per
+				// sample made this one test ~150s under -race in CI.
+				var want time.Time
 				for from := tr.Add(-30 * time.Hour); from.Before(tr.Add(30 * time.Hour)); from = from.Add(29 * time.Minute) {
-					want := bruteNext(spec, from, loc)
+					if start := from.Truncate(time.Minute).Add(time.Minute); want.IsZero() || want.Before(start) {
+						want = bruteNext(spec, from, loc)
+					}
 					got := Next(s, from.In(loc)).UTC()
 					if !got.Equal(want) {
 						t.Fatalf("%s %q from %s: Next = %s, brute force = %s", z, e, from, got, want)

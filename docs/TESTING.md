@@ -34,6 +34,10 @@ workflow files themselves:
 If a command here ever disagrees with those files, the workflow wins — please
 fix this doc (and the `make` targets) to match.
 
+Which layer a new test belongs in, the recorded contracts, and the rules a
+test has to meet to be able to fail are in
+[`TESTING-STRATEGY.md`](TESTING-STRATEGY.md).
+
 ## The lanes at a glance
 
 | Lane | CI job | What it gates | Local |
@@ -327,7 +331,13 @@ PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
    for packages that share a Postgres DSN (chat TRUNCATE vs sched advisory
    lock) and runs everything else at Go's default package parallelism. The
    chat-serial and sched-serial groups overlap: they point at different
-   databases (ADR-0005). CI also adds `-count=1` to defeat the test cache and
+   databases (ADR-0005). The serial groups' test binaries are compiled first,
+   at full parallelism (`go test -c`), because `-p 1` serializes the build as
+   well as the runs; and when `HTTPAPI_TEST_DATABASE_URL` names a third
+   database (CI sets it), `internal/httpapi` runs on it alongside
+   `internal/store` instead of after it. Each Go CI lane (`go`, `go-race`)
+   keeps its own build cache, saved from `main` and restored by PRs, so a PR
+   compiles only what changed. CI also adds `-count=1` to defeat the test cache and
    instruments this step with `-coverprofile=coverage.out -covermode=atomic`
    (issue #249); the sibling `go-race` job is intentionally NOT instrumented —
    the non-race profile is enough for trend tracking, and `-coverprofile`
@@ -549,8 +559,9 @@ make ci-e2e-mocked
 packages they ship) the sandbox image installs via `microdnf` from
 `config/default/sandbox/Containerfile` (Python 3, the scientific Python stack,
 ImageMagick, pandoc, git, …). That large image attack surface is what this scan
-covers. The job runs after `e2e-live` (which already builds the image), rebuilds
-the same default-bundle sandbox image, `podman save`s it to a docker-archive
+covers. The job runs in parallel with `e2e-live` (it used to wait for it, which
+only lengthened the critical path: it never reused that job's image), builds
+the default-bundle sandbox image on its own runner, `podman save`s it to a docker-archive
 tarball, and scans the tarball — so the scan is self-contained and needs no
 running container daemon or socket.
 

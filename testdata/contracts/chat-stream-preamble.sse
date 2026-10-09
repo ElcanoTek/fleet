@@ -1,0 +1,3 @@
+event: fleet.capabilities
+data: {"type":"fleet.capabilities","supported":["text","reasoning","tool_calls","tool_results","approval_cards"],"heartbeat_ms":15000}
+

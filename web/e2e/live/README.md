@@ -43,6 +43,7 @@ trap. It is also what `playwright.config.ts` launches as the live `webServer`.
 | `chat-sandbox.spec.ts` | the fake LLM drives a real `bash` + `run_python` loop in the **real Podman sandbox**; the real tool stdout streams over SSE and renders in the execution trail. |
 | `scheduled-task.spec.ts` | a task created in the orchestrator UI is leased by the **real worker pool** and run to `success` through the same sandbox (the fake calls `confirm_audit` to clear scheduled-mode enforcement); logs are retrievable. |
 | `cross-view.spec.ts` | one real session navigates `/chat` ↔ `/orchestrator` without re-login (the single middleware gates both). |
+| `turn-lifecycle.spec.ts` | `write_file` → `bash` → `view_file` share one **sandbox** workspace both ways (the file tools run through the sandbox FileOp seam, #784); **Stop** ends a stalled turn server-side, so a follow-up message gets its reply instead of queuing; a provider that rejects the request (HTTP 400) fails the turn visibly instead of spinning. |
 
 ## Required / notable env (all defaulted by the boot script)
 

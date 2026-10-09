@@ -9,6 +9,7 @@ import {
   type TurnStreamDeps,
 } from "./useTurnStream";
 import type { HistoryEntry, Message } from "./history";
+import { closedStream, createTurnStreamHarness, type TranscriptStore } from "./turnStreamTestHarness";
 
 // Following a queued follow-up to the screen (#785 queue, the "my queued
 // message never sent" report).
@@ -30,10 +31,7 @@ import type { HistoryEntry, Message } from "./history";
 
 const CONV = "conv-1";
 
-// The component's messagesByConvRef is a Map (a conv id is server-issued,
-// so it must not be used as an object property name — CodeQL
-// js/remote-property-injection). The harness mirrors that shape.
-type Store = Map<string, Message[]>;
+type Store = TranscriptStore;
 
 // Read one conversation's slot out of the Map-backed store.
 const convSlot = (h: Harness, convId: string): Message[] =>
@@ -42,20 +40,6 @@ type InflightInfo = { inflight: boolean; turn_id?: string; last_event_id?: numbe
 
 const sse = (id: number, event: string, data: unknown) =>
   `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-
-const closedStream = (frames: string[]) => {
-  const encoder = new TextEncoder();
-  let i = 0;
-  return new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (i < frames.length) {
-        controller.enqueue(encoder.encode(frames[i++]));
-        return;
-      }
-      controller.close();
-    },
-  });
-};
 
 const queuedRow = (id: string, state = "queued"): QueuedInput => ({
   id,
@@ -101,38 +85,14 @@ const makeHarness = (opts: {
   inflight: InflightInfo[];
   streamBodies?: Array<() => ReadableStream<Uint8Array>>;
 }): Harness => {
-  const store: Store = new Map([[CONV, opts.initial]]);
-  const messagesByConvRef = { current: store };
-  const loadConversationCalls: string[] = [];
-  const streaming = new Set<string>();
+  const base = createTurnStreamHarness({
+    conversationId: CONV,
+    initial: opts.initial,
+    persisted: opts.persisted,
+  });
   let queueReads = 0;
   let probes = 0;
   let attaches = 0;
-
-  const setConvMessages = (
-    convId: string,
-    updater: Message[] | ((prev: Message[]) => Message[]),
-  ) => {
-    const prev = store.get(convId) ?? [];
-    store.set(convId, typeof updater === "function" ? updater(prev) : updater);
-  };
-
-  const patchAssistantMessage = (
-    convId: string,
-    assistantId: number,
-    updater: (m: Message) => Message,
-  ) => {
-    store.set(
-      convId,
-      (store.get(convId) ?? []).map((m) => (m.id === assistantId ? updater(m) : m)),
-    );
-  };
-
-  const loadConversation = async (convId: string) => {
-    loadConversationCalls.push(convId);
-    const { historyToMessages } = await import("./history");
-    store.set(convId, historyToMessages(opts.persisted));
-  };
 
   const nth = <T,>(list: T[], i: number): T => list[Math.min(i, list.length - 1)];
 
@@ -182,71 +142,10 @@ const makeHarness = (opts: {
     }),
   );
 
-  const noop = () => {};
-  const asyncNoop = async () => {};
-
-  const deps: TurnStreamDeps = {
-    setConvMessages,
-    getConvMessages: (convId: string) => store.get(convId) ?? [],
-    renameConvKey: noop,
-    patchAssistantMessage,
-    startThinkingCrossfade: noop,
-    refreshConversations: asyncNoop,
-    loadConversation,
-    loadMemories: asyncNoop,
-    loadRankedModels: asyncNoop,
-    loadCatalogModels: asyncNoop,
-    nextPendingKey: () => "__pending__:1",
-    isPendingKey: (key: string | null) => !!key && key.startsWith("__pending__"),
-    setPromptForKey: noop,
-    setPendingAttachmentsForKey: noop,
-    setAttachmentErrorForKey: noop,
-    markConvUploading: noop,
-    markConvUploadDone: noop,
-    getPendingAttachmentsForKey: () => [],
-    promoteComposerKey: noop,
-    setMessagesByConv: (updater) => {
-      const next = typeof updater === "function" ? updater(store) : updater;
-      for (const [convId, messages] of next) store.set(convId, messages);
-    },
-    setConversations: noop,
-    setActiveConversationId: noop,
-    setSelectedPersona: noop,
-    setSelectedModel: noop,
-    setModelPickerOpen: noop,
-    setModelSearchQuery: noop,
-    setPendingLockdown: noop,
-    setSidebarOpen: noop,
-    setSpreadsheetNudgeDismissed: noop,
-    activeConversationIdRef: { current: CONV },
-    messagesByConvRef,
-    pendingApprovalScrollRef: { current: null },
-    selectedModel: "test-model",
-    selectedPersona: "default",
-    mcpServers: [],
-    pendingLockdown: false,
-    userEmail: "tester@example.com",
-    modelError: null,
-    markConvStreaming: (k: string) => streaming.add(k),
-    markConvIdle: (k: string) => streaming.delete(k),
-    abortControllersRef: { current: new Map() },
-    attachedConvIdsRef: { current: new Set<string>() },
-    lastEventIdByConvRef: { current: new Map() },
-    currentTurnIdByConvRef: { current: new Map() },
-    reattachInFlightRef: { current: new Set<string>() },
-    streamPulseRef: { current: new Map() },
-    serverHeartbeatMsRef: { current: 0 },
-    supersededStreamsRef: { current: new WeakSet<AbortController>() },
-    livenessInFlightRef: { current: new Set<string>() },
-    promoteStreamKey: noop,
-    streamingConvsRef: { current: new Set<string>() },
-    isStreaming: false,
-  };
-
   return {
-    deps,
-    store,
-    loadConversationCalls,
+    deps: base.deps,
+    store: base.store,
+    loadConversationCalls: base.loadConversationCalls,
     get queueReads() {
       return queueReads;
     },

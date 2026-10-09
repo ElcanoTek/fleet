@@ -530,10 +530,15 @@ func TestAddServerAndRotationSendTheEntrySchemePrefix(t *testing.T) {
 	if _, err := svc.SetAPIKey(context.Background(), "u@x.com", server.ID, "u+rotated"); err != nil {
 		t.Fatalf("SetAPIKey with the stored prefix: %v", err)
 	}
+	// Snapshot under the lock and release it: the AddServer calls below hit
+	// the same handler, which takes mu. Holding it (a deferred Unlock) here
+	// deadlocked those requests until the client's 30s timeout, so the "raw
+	// key is refused" check below passed on a timeout, not on a refusal.
 	mu.Lock()
-	defer mu.Unlock()
+	headers := append([]string(nil), seen...)
+	mu.Unlock()
 	var sawInvalid, sawRotated bool
-	for _, v := range seen {
+	for _, v := range headers {
 		switch v {
 		case "Token token=u+good":
 		case "Token token=u+rotated":
@@ -558,6 +563,8 @@ func TestAddServerAndRotationSendTheEntrySchemePrefix(t *testing.T) {
 		APIKey: "u+good", APIKeyHeader: "Authorization",
 	}); err == nil {
 		t.Fatal("the raw key without the scheme was accepted")
+	} else if !strings.Contains(err.Error(), "did not accept this API key") {
+		t.Fatalf("the raw key failed for another reason than a refusal: %v", err)
 	}
 
 	// A prefix needs a named header; the default bearer shape takes none.

@@ -83,9 +83,12 @@ func TestMCPFinalBoundaryParity_DirectDeferredAndConcurrent(t *testing.T) {
 
 	// Exercise the same wrappers concurrently; this test is intentionally useful
 	// under -race because MCP routes and artifact metrics are process-shared.
+	// Eight callers per route is enough concurrency for the race detector to
+	// see an unsynchronized shared write; twenty made this the slowest -race
+	// test in the package (each call bounds a ~144 KiB payload).
 	var wg sync.WaitGroup
-	errCh := make(chan error, 40)
-	for i := 0; i < 20; i++ {
+	errCh := make(chan error, 16)
+	for i := 0; i < 8; i++ {
 		wg.Add(2)
 		go func(i int) {
 			defer wg.Done()
@@ -149,9 +152,11 @@ func TestFinalBoundary_ConcurrentConversationArtifacts(t *testing.T) {
 			return fantasy.NewTextResponse(payload), nil
 		}))
 
+	// Eight concurrent calls exercise the shared artifact/metric paths under
+	// -race; more only multiplies the instrumented copying of the payload.
 	var wg sync.WaitGroup
-	errCh := make(chan error, 32)
-	for i := 0; i < 32; i++ {
+	errCh := make(chan error, 8)
+	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
