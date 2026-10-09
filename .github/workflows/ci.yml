@@ -382,7 +382,11 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18
+        # Pulled through Google's Docker Hub mirror, not docker.io: an anonymous
+        # Docker Hub pull limit (`toomanyrequests`) once failed every job with a
+        # Postgres service before any step ran, on a run and on its re-run.
+        # mirror.gcr.io serves Docker Hub's official images unchanged.
+        image: mirror.gcr.io/library/postgres:18
         env:
           POSTGRES_USER: fleet
           POSTGRES_PASSWORD: fleet
@@ -681,7 +685,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18
+        image: mirror.gcr.io/library/postgres:18  # see the go job's service
         env:
           POSTGRES_USER: fleet
           POSTGRES_PASSWORD: fleet
@@ -1003,7 +1007,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18
+        image: mirror.gcr.io/library/postgres:18  # see the go job's service
         env:
           POSTGRES_USER: fleet
           POSTGRES_PASSWORD: fleet
