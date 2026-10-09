@@ -70,6 +70,41 @@ type typedCommitment struct {
 	// of those records — the binding the model actually tried — supersedes
 	// this commitment when nothing has executed under it (#1535).
 	refusedRecords map[string]bool
+	// settledFailed marks an UNBOUND settleable-create commitment whose latest
+	// attempt came back as a DEFINITIVE failure (audit_email_last.go): it
+	// stays outstanding — a corrected retry may still discharge it — but no
+	// longer holds the summary email back and, once that email has gone out,
+	// no longer blocks finish. An ambiguous later attempt clears it again.
+	settledFailed bool
+	// failedIdentity is the record identity (name, else record id;
+	// normalized) whose failed attempt settled this commitment, so a later
+	// attempt for the SAME record updates this commitment rather than a
+	// sibling's. "" when the call named none.
+	failedIdentity string
+	// dealName is the normalized record name an unbound create entry declared
+	// (critical_actions[].deal_name). A named unit is bound to that record:
+	// only an attempt carrying that name authorizes, discharges, settles or
+	// unsettles it, and a re-audit restates it by name. "" = count-based.
+	dealName string
+}
+
+// dischargePreference ranks this commitment, among equal-rank candidates, for
+// a successful create attempt carrying identity: the unit declared with the
+// record's name (3), the record's own settled-failed unit — its corrected retry
+// (2), an unsettled unit (1), a sibling's settled failure (0). A fresh record's
+// success therefore never erases a sibling's recorded failure, which would
+// leave a never-attempted record's unit looking settled.
+func (c *typedCommitment) dischargePreference(identity string) int {
+	switch {
+	case c.dealName != "":
+		return 3
+	case !c.settledFailed:
+		return 1
+	case identity != "" && c.failedIdentity == identity:
+		return 2
+	default:
+		return 0
+	}
 }
 
 // neverExecuted reports whether nothing has ever discharged any unit of this
@@ -194,8 +229,26 @@ func (c *typedCommitment) sameDealSet(other *typedCommitment) bool {
 	return c.dealID == other.dealID
 }
 
+// supersedesSameShape reports whether this fresh commitment retires old (a
+// prior-envelope commitment for the same or an aliased tool) under the
+// same-shape re-audit rule: both unbound, or both bound to the identical
+// record set. An unbound settleable create never does: its re-declaration was
+// already restated (restateUnboundEntry), so a fresh one is NEW work beyond
+// what the batch holds, and retiring the batch's open (or settled-failed)
+// units for it would drop real obligations.
+func (c *typedCommitment) supersedesSameShape(old *typedCommitment) bool {
+	if !c.hasDealBinding() && isSettleableCreateSuffix(c.suffix) {
+		return false
+	}
+	return old.hasDealBinding() == c.hasDealBinding() && (!c.hasDealBinding() || old.sameDealSet(c))
+}
+
 // describe renders the commitment for enforcement messages and logs.
 func (c *typedCommitment) describe() string {
+	settled := ""
+	if c.settledFailed {
+		settled = " [failed definitively; settled]"
+	}
 	switch {
 	case len(c.dealIDs) > 0:
 		ids := make([]string, 0, len(c.dealIDs))
@@ -208,8 +261,10 @@ func (c *typedCommitment) describe() string {
 		return fmt.Sprintf("%s (records %s)", c.tool, strings.Join(ids, ","))
 	case c.dealID != "":
 		return fmt.Sprintf("%s (record %s)", c.tool, c.dealID)
+	case c.dealName != "":
+		return fmt.Sprintf("%s (deal name %q)%s", c.tool, c.dealName, settled)
 	default:
-		return fmt.Sprintf("%s x%d", c.tool, c.remaining)
+		return fmt.Sprintf("%s x%d%s", c.tool, c.remaining, settled)
 	}
 }
 
@@ -303,6 +358,17 @@ func sameAliasedTool(a, b string) bool {
 		return true
 	}
 	return criticalAliasesEquivalent(criticalSuffixFor(a), criticalSuffixFor(b)) && sameToolServer(a, b)
+}
+
+// sameOrStandInTool reports whether executed may complete a call blocked
+// under pending: the same name, a declared alias twin, or a bundle-approved
+// substitute — the latter two on the same server/variant only, exactly the
+// names typedCommitment.nameMatches lets discharge pending's commitment.
+func sameOrStandInTool(pending, executed string) bool {
+	if sameAliasedTool(pending, executed) {
+		return true
+	}
+	return substituteSatisfies(criticalSuffixFor(pending), criticalSuffixFor(executed)) && sameToolServer(pending, executed)
 }
 
 // unmarshalArgs decodes a tool call's JSON arguments with UseNumber so numeric
@@ -817,9 +883,11 @@ func unregisteredActionsRefusal(field string, tools []string) string {
 // tool names, so a bare/fuzzy typed entry is a malformed or injected
 // declaration.
 //
-// Returns the number of commitment units registered (0 means the whole typed
-// declaration was unusable — the caller MUST refuse to grant the audit token).
-// Callers must hold o.mu.
+// Returns the number of commitment units the declaration accounted for —
+// newly registered plus restated (an unbound create entry a re-audit
+// re-declared, see restateUnboundEntry). 0 means the whole typed declaration
+// was unusable — the caller MUST refuse to grant the audit token. Callers must
+// hold o.mu.
 func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalActionStruct) int {
 	if o.committedCriticalActions == nil {
 		o.committedCriticalActions = make(map[string]int)
@@ -840,7 +908,12 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 	// register several unbound same-tool commitments at once without them
 	// cannibalising each other.
 	preExisting := len(o.typedCommitments)
-	registered := 0
+	// Unbound create re-declarations RESTATE rather than append or replace
+	// (restateUnboundEntry): the returned count is registered + restated, so
+	// an audit made only of restated entries is still accepted.
+	unnamedLimit := o.batchRestateLimits(actions)
+	declaredUnbound := make(map[string]int)
+	registered, restated := 0, 0
 	for _, a := range actions {
 		tool := strings.TrimSpace(a.Tool)
 		if tool == "" {
@@ -861,7 +934,7 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		// First entry that will register → this audit is ACCEPTED, so wipe the
 		// prior envelope's batch approvals exactly once (lazy reset; a
 		// rejected/zero-registering audit never reaches here).
-		if registered == 0 {
+		if registered+restated == 0 {
 			o.resetBatchApprovals()
 		}
 		// Fresh audit envelope for this suffix → clear any per-record
@@ -871,6 +944,11 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		// record set approved here binds a batch sent through an alias.
 		batchKey := criticalAliasClassOf(suffix)
 		delete(o.dischargedDeals, batchKey)
+		dealName, restate := o.restateUnboundEntry(a, tool, suffix, unnamedLimit, declaredUnbound)
+		if restate {
+			restated++
+			continue
+		}
 		// Placeholder record ids ("n/a", "none", …) name no record: the entry
 		// registers unbound rather than bound to an id no call can carry.
 		dealIDs := declaredDealIDs(a.DealIDs)
@@ -910,6 +988,7 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 			suffix:    suffix,
 			remaining: n,
 			initial:   n,
+			dealName:  dealName,
 		}
 		if len(dealIDs) > 0 {
 			tc.dealIDs = make(map[string]bool, len(dealIDs))
@@ -978,12 +1057,15 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		// correcting the transport of ONE action, and stacking the two would
 		// leave the one the run did not use owed forever — the exact shape the
 		// aliases exist to end.
+		//
+		// An unbound settleable create is the exception to the same-shape
+		// rule (supersedesSameShape).
 		for i := 0; i < preExisting; i++ {
 			old := o.typedCommitments[i]
 			if old.remaining <= 0 || !sameAliasedTool(old.tool, tc.tool) {
 				continue
 			}
-			sameShape := old.hasDealBinding() == tc.hasDealBinding() && (!tc.hasDealBinding() || old.sameDealSet(tc))
+			sameShape := tc.supersedesSameShape(old)
 			corrects := old.correctsRefusal(tc) && tc.coversOutstanding(old)
 			if !sameShape && !corrects {
 				continue
@@ -1010,12 +1092,12 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		log.Printf("Enforcement: registered committed critical action %q (from %q); %d outstanding",
 			suffix, tool, o.committedCriticalActions[suffix])
 	}
-	if len(actions) > 0 && registered == 0 {
+	if len(actions) > 0 && registered+restated == 0 {
 		log.Printf("WARNING: confirm_audit supplied %d typed critical_actions but NONE resolved to a full "+
 			"server-qualified critical tool — the audit will be REFUSED (fail closed). Use the literal MCP tool "+
 			"name in each entry's `tool` field.%s", len(actions), o.auditProtocolClause())
 	}
-	return registered
+	return registered + restated
 }
 
 // markTypedExecuted discharges the best-matching outstanding typed commitment
@@ -1031,12 +1113,23 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 // then the freshest (latest-registered) commitment — re-audit superseding
 // already retires a stale same-family commitment at registration, so a live
 // tie should not arise; this keeps discharge correct even if one ever did.
-func (o *orchestrationState) markTypedExecuted(toolName, dealID, callDigest string) bool {
+//
+// identity is a create attempt's record identity (attemptIdentity; "" for
+// every other call). A NAMED create unit is discharged only by an attempt
+// carrying its name, and an attempt under a declared name never consumes
+// another unit; between equal-rank unnamed units, dischargePreference picks
+// the record's own settled-failed unit (its corrected retry) or an unsettled
+// one before a sibling's settled failure.
+func (o *orchestrationState) markTypedExecuted(toolName, dealID, callDigest, identity string) bool {
+	declared := o.declaredDealName(toolName, identity)
 	var chosen *typedCommitment
-	chosenIdx, best := -1, 0
+	chosenIdx, best, chosenPref := -1, 0, 0
 	chosenDigestMatch := false
 	for i, c := range o.typedCommitments {
 		if c.remaining <= 0 || !c.nameMatches(toolName) || !c.allowsDeal(dealID) {
+			continue
+		}
+		if c.dealName != identity && (c.dealName != "" || declared) {
 			continue
 		}
 		// A values_digest-bound batch commitment is discharged only by a call
@@ -1061,17 +1154,20 @@ func (o *orchestrationState) markTypedExecuted(toolName, dealID, callDigest stri
 			rank = 2
 		}
 		digestMatch := c.digest != "" && c.digest == callDigest
+		pref := c.dischargePreference(identity)
 		better := false
 		switch {
 		case rank != best:
 			better = rank > best
+		case pref != chosenPref:
+			better = pref > chosenPref
 		case digestMatch != chosenDigestMatch:
 			better = digestMatch // digest-matching commitment wins the tie
 		default:
 			better = i > chosenIdx // else the freshest (latest) wins
 		}
 		if chosen == nil || better {
-			best, chosen, chosenIdx, chosenDigestMatch = rank, c, i, digestMatch
+			best, chosen, chosenIdx, chosenDigestMatch, chosenPref = rank, c, i, digestMatch, pref
 		}
 	}
 	if chosen == nil {
@@ -1084,6 +1180,9 @@ func (o *orchestrationState) markTypedExecuted(toolName, dealID, callDigest stri
 		chosen.discharged[dealID] = true
 	}
 	chosen.remaining--
+	if chosen.remaining <= 0 {
+		chosen.settledFailed, chosen.failedIdentity = false, ""
+	}
 	if o.committedCriticalActions[chosen.suffix] > 0 {
 		o.committedCriticalActions[chosen.suffix]--
 	}
@@ -1203,13 +1302,42 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 	batchIDs, isBatch := batchDealIDs(rawInput)
 	singleID := callDealID(rawInput)
 	digest := valuesDigestArg(rawInput)
+	// Name-bound creates: a NAMED unit is ridden only by a single-record call
+	// whose readable record name is exactly its deal_name — whatever the
+	// executed member of the family (a same-server substitute or alias twin
+	// included), and never by a call that names no record (no name key, or a
+	// prepared_deal_id no prepare step returned): that call cannot prove it
+	// targets the audited record, and markTypedExecuted would then refuse to
+	// discharge the unit after the write. Unnamed units keep the count-based
+	// behavior, except that a settleable create under a DECLARED name never
+	// rides one (it must ride its own unit).
+	attemptedName := ""
+	if !isBatch {
+		attemptedName = o.attemptDealName(rawInput)
+	}
+	dealName := ""
+	if isSettleableCreateSuffix(criticalSuffixFor(toolName)) {
+		dealName = attemptedName
+	}
+	declared := o.declaredDealName(toolName, dealName)
+	var namedRefused []string
 
 	// Same-tool commitments whose binding refused this call. Noted only if
 	// the call ends BLOCKED (no commitment authorized it): a re-audit of the
 	// same tool declaring the refused binding may then supersede them (#1535).
+	// A name-bound refusal is deliberately NOT noted: #1535's unbound
+	// correction would let a re-audit naming one record retire every named
+	// unit the call collided with.
 	var refusedBy []*typedCommitment
 	for _, c := range o.typedCommitments {
 		if c.remaining <= 0 || !c.nameMatches(toolName) {
+			continue
+		}
+		if c.dealName != "" && !isBatch && c.dealName != attemptedName {
+			namedRefused = append(namedRefused, c.dealName)
+			continue
+		}
+		if c.dealName == "" && declared {
 			continue
 		}
 		if isBatch {
@@ -1259,6 +1387,9 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 
 	if !isBatch && o.legacySuffixAuthorized(criticalSuffixFor(toolName)) {
 		return true, ""
+	}
+	if len(namedRefused) > 0 {
+		return false, namedCreateRefusal(toolName, attemptedName, namedRefused)
 	}
 
 	refused := []string{singleID}

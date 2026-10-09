@@ -43,7 +43,7 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0015](0015-remote-mcp-tls-pinning-mtls.md) | TLS pinning and mTLS for remote MCP servers | Accepted |
 | [0032](0032-host-side-ingress-guardrails.md) | Host-side untrusted-ingress guardrails | Accepted |
 | [0033](0033-cross-provider-failover.md) | Cross-provider failover before stream commitment | Accepted |
-| [0034](0034-audit-gate-commitment-binding.md) | Audit-gate commitment binding, payload-level failure, and create reconciliation | Accepted; amended by ADR-0071 |
+| [0034](0034-audit-gate-commitment-binding.md) | Audit-gate commitment binding, payload-level failure, and create reconciliation | Accepted; amended by ADR-0071, ADR-0081 |
 | [0035](0035-side-effect-gated-stream-recovery.md) | Side-effect-gated recovery after stream commitment | Accepted |
 | [0036](0036-sandboxed-file-tools-and-host-io-exceptions.md) | Sandboxed file tools, and the host-side I/O exception classes | Accepted |
 | [0037](0037-agent-tool-panic-containment.md) | Contain panics at the AgentTool dispatch boundary | Accepted |
@@ -89,3 +89,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0078](0078-track-the-latest-node-major.md) | Track the latest node major (retires "LTS, never Current"); install the signed nodejs.org build when the distro has no `nodejs<major>` stream | Accepted |
 | [0079](0079-a-team-share-carries-the-chats-outputs.md) | A team share carries the chat's outputs (files the agent presented, minus the owner's exclusions), served through a per-request gated, no-symlink team-files route; a teammate's branch copies them; archive unshares (supersedes ADR-0057's transcript-only rule) | Accepted |
 | [0080](0080-generative-ui-cards-are-declarative-data.md) | Generative-UI cards (`show_ui`) are declarative data over a fixed component catalog, validated server-side and rendered by fleet; a card never acts — its submit is an ordinary user turn, so every resulting action passes the governed loop; interactive chat only | Accepted |
+| [0081](0081-email-last-batches-settle-definitive-create-failures.md) | Bundle-declared email-last batches: a definitive create failure settles its commitment for the summary email (and for finish after it), an ambiguous one never does, and an abort still sends the single summary email (amends ADR-0034) | Accepted |

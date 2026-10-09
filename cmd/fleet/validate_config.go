@@ -1116,6 +1116,13 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolSuffixes: p.CriticalToolSuffixes,
 		CriticalToolAliases:  p.CriticalToolAliases,
 	})
+	// email_last_tools / settleable_create_tools members are held to the same
+	// "must be a critical suffix" rule, by the same code the boot install runs.
+	problems = append(problems, agentcore.EmailLastPolicyProblems(agentcore.AgentPolicy{
+		CriticalToolSuffixes:         p.CriticalToolSuffixes,
+		EmailLastToolSuffixes:        p.EmailLastTools,
+		SettleableCreateToolSuffixes: p.SettleableCreateTools,
+	})...)
 	if len(problems) > 0 {
 		res.Status = statusFail
 		res.Detail = strings.Join(problems, "; ")

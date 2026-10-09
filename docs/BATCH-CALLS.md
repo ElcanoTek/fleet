@@ -183,8 +183,9 @@ three gaps at once:
 - HTTP MCP transports keep an `http.Client.Timeout` of 2 minutes, which caps an
   HTTP-served batch below its scaled budget. The SSP bundle servers are stdio,
   so this does not affect them today.
-- The malformed-results branch does not touch create-commitment settlement.
-  If the concurrent settled-failed-create work adds an
-  `unsettleCreateFailure`, Cutlass also calls it from that branch.
+- The malformed-results branch puts a settleable create's unit back to
+  unsettled (`noteCreateFailure` → `unsettleCreateFailure`, as Cutlass does):
+  a malformed result proves nothing about what was written, so it never
+  releases the summary email (see `docs/EMAIL-LAST-BATCHES.md`).
 - `parseDealOutcomes` still uses its own `8*1024*1024` literal instead of
   `maxDealOutcomesBytes`.
