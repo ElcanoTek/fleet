@@ -2,11 +2,16 @@ package agentcore
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // Start-of-run create reconciliation (#717, ported from the v1 engine).
@@ -34,6 +39,42 @@ import (
 // contract (run_ledger's CREATES_FILENAME).
 const createLedgerFilename = "creates.jsonl"
 
+// maxCreateLedgerBytes bounds the start-of-run ledger read. Records are a few
+// hundred bytes (key + flags), so this is orders of magnitude above any real
+// ledger; past it the read is refused rather than buffered.
+const maxCreateLedgerBytes = 32 << 20
+
+// readCreateLedger reads the ledger defensively: it sits in the
+// sandbox-writable workspace mount, so a prior attempt may have replaced it.
+// O_NOFOLLOW refuses a symlink to a host file, O_NONBLOCK keeps a planted FIFO
+// from blocking the open (and with it a scheduler worker), the opened handle
+// must be a regular file, and the read is bounded.
+func readCreateLedger(path string) ([]byte, error) {
+	// #nosec G304 -- path is the fixed ledger basename inside the
+	// fleet-managed MCP workspace dir (mcp_workspace.go); its content is
+	// parsed as untrusted JSON.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file (%s)", createLedgerFilename, info.Mode().Type())
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxCreateLedgerBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxCreateLedgerBytes {
+		return nil, fmt.Errorf("%s exceeds %d bytes", createLedgerFilename, maxCreateLedgerBytes)
+	}
+	return raw, nil
+}
+
 // createLedgerRecord is one JSONL line of the bundle servers' create ledger.
 // Field names are the ledger wire contract; "ssp" and "deal_name" are the
 // record's composite key (fleet treats both as opaque strings).
@@ -59,11 +100,11 @@ func AugmentTaskWithCreateReconciliation(task, workdir string) string {
 	if workdir == "" {
 		return task
 	}
-	// #nosec G304 -- workdir is the fleet-managed MCP workspace dir
-	// (mcp_workspace.go); the fixed basename cannot escape it and the file is
-	// parsed as untrusted JSON.
-	raw, err := os.ReadFile(filepath.Join(workdir, createLedgerFilename))
+	raw, err := readCreateLedger(filepath.Join(workdir, createLedgerFilename))
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			log.Printf("create reconciliation: ledger in %s not read: %v", workdir, err)
+		}
 		return task
 	}
 	unresolved := make(map[string]createLedgerRecord)

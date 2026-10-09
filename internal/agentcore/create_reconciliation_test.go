@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func writeLedger(t *testing.T, dir, content string) {
@@ -108,4 +110,53 @@ func TestAugmentTaskWithCreateReconciliation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCreateReconciliationRefusesSpecialLedger pins Codex P1 on #1709: the
+// ledger lives in the sandbox-writable mount, so a prior attempt can leave a
+// FIFO (which would block a plain read forever, pinning a scheduler worker) or
+// a symlink to a host file in its place. Neither is read; the task is
+// returned unchanged, promptly.
+func TestCreateReconciliationRefusesSpecialLedger(t *testing.T) {
+	const task = "Create this week's PG records."
+	unresolved := `{"ssp":"PubMatic","deal_name":"X","submitted":true}` + "\n"
+
+	t.Run("fifo", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := syscall.Mkfifo(filepath.Join(dir, createLedgerFilename), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan string, 1)
+		go func() { done <- AugmentTaskWithCreateReconciliation(task, dir) }()
+		select {
+		case got := <-done:
+			if got != task {
+				t.Fatalf("FIFO ledger must leave the task unchanged, got %q", got)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("reading a FIFO ledger blocked")
+		}
+	})
+
+	t.Run("symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(t.TempDir(), "host.jsonl")
+		if err := os.WriteFile(target, []byte(unresolved), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(dir, createLedgerFilename)); err != nil {
+			t.Fatal(err)
+		}
+		if got := AugmentTaskWithCreateReconciliation(task, dir); got != task {
+			t.Fatalf("symlinked ledger must not be followed, got %q", got)
+		}
+	})
+
+	t.Run("regular file still read", func(t *testing.T) {
+		dir := t.TempDir()
+		writeLedger(t, dir, unresolved)
+		if got := AugmentTaskWithCreateReconciliation(task, dir); !strings.Contains(got, `deal="X"`) {
+			t.Fatalf("regular ledger must still be reconciled, got %q", got)
+		}
+	})
 }
