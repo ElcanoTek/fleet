@@ -803,10 +803,8 @@ contain a comma.
 Checked live: the recipe in a terminal on 2026-10-08, with a key of its own
 and the allowlist; and this unit on Fedora 44 (SELinux enforcing) on
 2026-10-09, first with an identity Buzz Desktop had created (so with its
-owner attestation and without the allowlist), where it answered mentions,
-then exactly as written, with a key of its own and the allowlist, where it
-started, connected and subscribed to its channel, but answering a mention was
-not checked.
+owner attestation and without the allowlist), then exactly as written, with a
+key of its own and the allowlist. Both answered mentions in their threads.
 
 #### What to expect
 
