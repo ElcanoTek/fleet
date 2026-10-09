@@ -60,9 +60,9 @@ const (
 	// MaxDisplayItems bounds the other object lists (badges, facts,
 	// status_list items, diff rows): each entry is DOM, like a table row.
 	MaxDisplayItems = 500
-	// MaxCardRows bounds the rows and display entries a whole card renders
-	// (table rows plus every badges / facts / status_list / diff entry), so
-	// many capped lists cannot add up to a frozen tab.
+	// MaxCardRows bounds the rows a whole card renders: table rows, every
+	// badges / facts / status_list / diff entry, and each starting repeater
+	// item's fields, so many capped lists cannot add up to a frozen tab.
 	MaxCardRows = 2000
 	// MaxCardChartPoints bounds chart marks across the card (points ×
 	// series, each drawn and listed in the chart's data table).
@@ -956,19 +956,21 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 	}
 }
 
-// requiredMinChars is the least text a validating submit must carry: the
-// min_length of every required text input that is always shown, times the
-// items its repeater starts with (the user can remove items only down to
-// min_items).
+// requiredMinChars bounds the text a validating submit may have to carry:
+// the min_length of every required text input, times the items its repeater
+// starts with (the user can remove items only down to min_items). Inputs
+// behind visible_if count too: which of them a send must answer depends on
+// the state the action is pressed in, so the sum is a protocol limit on the
+// card rather than a judgement of any one state.
 func (v *validator) requiredMinChars() int {
 	total := 0
-	for id, f := range v.fields {
+	for _, f := range v.fields {
 		if f.typ != "text_input" || f.obj == nil {
 			continue
 		}
 		req, _ := f.obj["required"].(bool)
 		lo, _ := f.obj["min_length"].(float64)
-		if !req || lo <= 0 || len(v.gates[id].shows) > 0 {
+		if !req || lo <= 0 {
 			continue
 		}
 		n := 1
@@ -983,13 +985,40 @@ func (v *validator) requiredMinChars() int {
 	return total
 }
 
+// countComponents counts the components in a list, nested ones included.
+func countComponents(list []any) int {
+	n := 0
+	for _, x := range list {
+		m, ok := x.(map[string]any)
+		if !ok {
+			continue
+		}
+		n++
+		for _, k := range []string{"children", "fields"} {
+			if kids, ok := m[k].([]any); ok {
+				n += countComponents(kids)
+			}
+		}
+		if tabs, ok := m["tabs"].([]any); ok {
+			for _, t := range tabs {
+				if tm, ok := t.(map[string]any); ok {
+					if kids, ok := tm["children"].([]any); ok {
+						n += countComponents(kids)
+					}
+				}
+			}
+		}
+	}
+	return n
+}
+
 // countRows adds a list's entries to the card-wide budget, reporting the
 // list that first goes over it.
 func (v *validator) countRows(path string, n int) {
 	before := v.rows
 	v.rows += n
 	if before <= MaxCardRows && v.rows > MaxCardRows {
-		v.addf(path, "the card renders more than %d table rows and list entries in all; summarize or split it across cards", MaxCardRows)
+		v.addf(path, "the card renders more than %d table rows, list entries and repeater item fields in all; summarize or split it across cards", MaxCardRows)
 	}
 }
 
@@ -1087,6 +1116,8 @@ func (v *validator) repeaterRules(path string, obj map[string]any, num func(stri
 		v.addf(path, "min_items must not exceed max_items")
 	}
 	if kids, ok := obj["fields"].([]any); ok {
+		// Every starting item renders all of the repeater's fields.
+		v.countRows(path, initialItems(obj)*max(1, countComponents(kids)))
 		v.noNestedRepeater(path+".fields", kids)
 		v.disabledItems(path, obj, kids)
 	}
@@ -1671,7 +1702,7 @@ func (v *validator) actions(raw any, hasInput bool) {
 			v.addf(ap, "can never be pressed: whatever the inputs are, it is hidden or disabled (check visible_if and disabled_if together)")
 		}
 		if n := v.requiredMinChars(); validating && n > MaxSubmissionBytes {
-			v.addf(ap, "can never send: the required fields' min_length add up to %d characters, more than one answer carries (%d bytes); lower them or split the card", n, MaxSubmissionBytes)
+			v.addf(ap, "the required fields' min_length add up to %d characters across the card, more than one answer carries (%d bytes); lower them or split the card", n, MaxSubmissionBytes)
 		}
 		kind, _ := obj["kind"].(string)
 		if kind == "" {

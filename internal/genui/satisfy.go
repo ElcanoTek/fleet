@@ -390,13 +390,13 @@ func (s *skeleton) candidates(field string) []value {
 			continue
 		}
 		if i == 0 {
-			out = append(out, value{n: c - 1})
+			out = append(out, value{n: beyond(c, math.Inf(-1))})
 		} else {
-			out = append(out, value{n: (cs[i-1] + c) / 2})
+			out = append(out, value{n: between(cs[i-1], c)})
 		}
 		out = append(out, value{n: c})
 	}
-	out = append(out, value{n: cs[len(cs)-1] + 1})
+	out = append(out, value{n: beyond(cs[len(cs)-1], math.Inf(1))})
 	if d != nil && d.step > 0 {
 		out = gridCandidates(cs, d)
 	}
@@ -417,6 +417,26 @@ func (s *skeleton) candidates(field string) []value {
 		out = append(out, value{null: true})
 	}
 	return out
+}
+
+// beyond is a number past c toward dir: c ± 1, or the next float where 1 is
+// below c's precision (c + 1 == c for c near the float limit).
+func beyond(c, dir float64) float64 {
+	n := c + math.Copysign(1, dir)
+	if n == c || math.IsInf(n, 0) {
+		n = math.Nextafter(c, dir)
+	}
+	return n
+}
+
+// between is a number strictly between a < b when one exists: the midpoint,
+// computed without overflowing (a/2 + b/2), else the float next to a.
+func between(a, b float64) float64 {
+	m := a/2 + b/2
+	if m <= a || m >= b {
+		m = math.Nextafter(a, b)
+	}
+	return m
 }
 
 // gridPoint is the k-th grid position from base as the browser reports it: a

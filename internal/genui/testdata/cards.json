@@ -5937,7 +5937,7 @@
   {
    "name": "required min_length that add up past one answer",
    "valid": false,
-   "error_contains": "can never send",
+   "error_contains": "min_length add up",
    "card": {
     "title": "x",
     "components": [
@@ -6591,6 +6591,428 @@
      {
       "id": "go",
       "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "gated required min_length that add up past one answer",
+   "valid": false,
+   "error_contains": "min_length add up",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "gate",
+      "label": "Gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t0",
+      "label": "T0",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t1",
+      "label": "T1",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t2",
+      "label": "T2",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t3",
+      "label": "T3",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t4",
+      "label": "T4",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t5",
+      "label": "T5",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t6",
+      "label": "T6",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t7",
+      "label": "T7",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t8",
+      "label": "T8",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t9",
+      "label": "T9",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t10",
+      "label": "T10",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t11",
+      "label": "T11",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t12",
+      "label": "T12",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t13",
+      "label": "T13",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t14",
+      "label": "T14",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t15",
+      "label": "T15",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t16",
+      "label": "T16",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t17",
+      "label": "T17",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t18",
+      "label": "T18",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t19",
+      "label": "T19",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t20",
+      "label": "T20",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t21",
+      "label": "T21",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t22",
+      "label": "T22",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t23",
+      "label": "T23",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t24",
+      "label": "T24",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t25",
+      "label": "T25",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t26",
+      "label": "T26",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t27",
+      "label": "T27",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t28",
+      "label": "T28",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t29",
+      "label": "T29",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t30",
+      "label": "T30",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t31",
+      "label": "T31",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t32",
+      "label": "T32",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t33",
+      "label": "T33",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t34",
+      "label": "T34",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t35",
+      "label": "T35",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t36",
+      "label": "T36",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t37",
+      "label": "T37",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t38",
+      "label": "T38",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t39",
+      "label": "T39",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t40",
+      "label": "T40",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t41",
+      "label": "T41",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t42",
+      "label": "T42",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t43",
+      "label": "T43",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t44",
+      "label": "T44",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t45",
+      "label": "T45",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t46",
+      "label": "T46",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t47",
+      "label": "T47",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t48",
+      "label": "T48",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     },
+     {
+      "type": "text_input",
+      "id": "t49",
+      "label": "T49",
+      "required": true,
+      "min_length": 20000,
+      "visible_if": "gate"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "visible_if": "gate"
      }
     ]
    }

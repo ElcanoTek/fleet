@@ -225,6 +225,24 @@ func TestCardChartPointBudget(t *testing.T) {
 	}
 }
 
+func TestCardRowBudgetCountsRepeaterItems(t *testing.T) {
+	items := strings.TrimSuffix(strings.Repeat(`{},`, MaxRepeaterItems), ",")
+	reps := func(n int) string {
+		rs := make([]string, n)
+		for i := range rs {
+			rs[i] = fmt.Sprintf(`{"type":"repeater","id":"r%d","label":"R","value":[%s],"fields":[{"type":"divider"}]}`, i, items)
+		}
+		return `{"title":"x","components":[` + strings.Join(rs, ",") + `],"actions":[{"id":"go","label":"Go"}]}`
+	}
+	if _, issues := Validate([]byte(reps(MaxCardRows / MaxRepeaterItems))); len(issues) != 0 {
+		t.Fatalf("at the budget: %v", issues)
+	}
+	_, issues := Validate([]byte(reps(MaxCardRows/MaxRepeaterItems + 1)))
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, "repeater item fields") {
+		t.Fatalf("over the budget: %v", issues)
+	}
+}
+
 // A list default is capped by the entries the browser keeps from it: one
 // string splits on its line breaks (listCount), so it can carry more than
 // MaxListItems entries in a single element.
