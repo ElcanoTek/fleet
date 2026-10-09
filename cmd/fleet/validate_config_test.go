@@ -1662,3 +1662,39 @@ func TestCheckAgentPolicy(t *testing.T) {
 		})
 	}
 }
+
+// validate-config sees the email-last lists of a REAL loaded manifest (Codex
+// P1 on #1710: Bundle.AgentPolicy() dropped them, so a typo'd member could
+// never be reported), and a well-formed pair passes.
+func TestCheckAgentPolicy_EmailLastListsFromManifest(t *testing.T) {
+	load := func(body string) *clientconfig.Bundle {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		b, err := clientconfig.Load(dir)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		return b
+	}
+	bad := load(`
+agent_policy:
+  critical_tools: [create_deal, update_deal]
+  email_last_tools: [updat_deal]
+  settleable_create_tools: [create_deal]
+`)
+	if res := checkAgentPolicy(bad, nil); res.Status != statusFail || !strings.Contains(res.Detail, `"updat_deal"`) {
+		t.Fatalf("a typo'd email_last_tools member must fail agent_policy, got %q: %s", res.Status, res.Detail)
+	}
+	good := load(`
+agent_policy:
+  critical_tools: [create_deal, update_deal]
+  email_last_tools: [update_deal]
+  settleable_create_tools: [create_deal]
+`)
+	if res := checkAgentPolicy(good, nil); res.Status == statusFail {
+		t.Fatalf("well-formed email-last lists must not fail agent_policy: %s", res.Detail)
+	}
+}

@@ -2662,6 +2662,10 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 	p := AgentPolicy{
 		ParallelSafeTools:    append([]string(nil), b.AgentPolicyConfig.ParallelSafeTools...),
 		CriticalToolSuffixes: append([]string(nil), b.AgentPolicyConfig.CriticalToolSuffixes...),
+		// The email-last lists (audit_email_last.go): without these copies the
+		// boot paths and validate-config see nil and the gate is inert.
+		EmailLastTools:        append([]string(nil), b.AgentPolicyConfig.EmailLastTools...),
+		SettleableCreateTools: append([]string(nil), b.AgentPolicyConfig.SettleableCreateTools...),
 	}
 	// An http_tool flagged `critical: true` opts into the SAME critical-tool audit
 	// gate as the manifest's critical_tools suffixes. The tool is registered as
