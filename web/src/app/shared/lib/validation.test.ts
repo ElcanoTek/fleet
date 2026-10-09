@@ -84,7 +84,10 @@ describe("validatePrompt", () => {
     expect(validatePrompt("").valid).toBe(false);
     expect(validatePrompt("  ").valid).toBe(false);
     expect(validatePrompt("hi").valid).toBe(false);
-    expect(validatePrompt("a".repeat(100001)).valid).toBe(false);
+    expect(validatePrompt("a".repeat(250000)).valid).toBe(true);
+    expect(validatePrompt("a".repeat(250001)).valid).toBe(false);
+    // The server limit is bytes: 125001 two-byte characters is over it.
+    expect(validatePrompt("é".repeat(125001)).valid).toBe(false);
   });
 });
 
