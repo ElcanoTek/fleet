@@ -53,6 +53,9 @@ type numAtom struct {
 type inputKind struct {
 	kind   string
 	domain *numDomain
+	// on: a toggle that can only be on in the state being judged (a
+	// required toggle, as a validating action sees it).
+	on bool
 }
 
 // numDomain is the values a number input can hold in the state being
@@ -167,6 +170,14 @@ func (p *skelParser) operand() *bnode {
 	return p.atomOf(start)
 }
 
+// toggle is a toggle's atom, or the constant true when it can only be on.
+func (p *skelParser) toggle(field token) *bnode {
+	if p.sk.kinds[field.text].on {
+		return &bnode{op: 'c', val: true}
+	}
+	return p.sk.atom(tokenKey([]token{field}), nil)
+}
+
 // compare understands one comparison between an input and a literal:
 // a toggle against true/false, or a number input against a number.
 func (p *skelParser) compare(t []token) *bnode {
@@ -188,7 +199,7 @@ func (p *skelParser) compare(t []token) *bnode {
 		if len(lit) != 1 || lit[0].kind != tIdent || (lit[0].text != "true" && lit[0].text != "false") || (op != "==" && op != "!=") {
 			return nil
 		}
-		n := p.sk.atom(tokenKey([]token{field}), nil)
+		n := p.toggle(field)
 		if (lit[0].text == "true") != (op == "==") {
 			return &bnode{op: 'n', l: n}
 		}
@@ -290,6 +301,9 @@ func (p *skelParser) primary() *bnode {
 		// A bare number input read for truthiness: a fact about its value.
 		if k := p.sk.kinds[t.text].kind; k == kindNumber || k == kindSlider {
 			return p.sk.atom("num:"+t.text+" truthy", &numAtom{field: t.text, op: "truthy"})
+		}
+		if p.sk.kinds[t.text].kind == kindBool {
+			return p.toggle(t)
 		}
 		return p.atomOf(start)
 	case t.kind == tOp && t.text == "(":

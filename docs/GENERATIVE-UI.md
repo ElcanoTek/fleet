@@ -94,7 +94,8 @@ with number literals (`n > 0`, `n >= 0`, a bare `n`) is tried at concrete
 values covering every range those literals separate, blank included (a slider
 only at positions its range and step allow; for an action that validates, an
 always-shown number input only at values its own `min` / `max` / `step` /
-`required` accept, since nothing else can be submitted). Anything
+`required` accept, and an always-shown required toggle only on, since
+nothing else can be submitted). Anything
 else (arithmetic, two inputs compared, text and lists) is treated as unknown,
 so the check never refuses a card that could work (`internal/genui/satisfy.go`).
 

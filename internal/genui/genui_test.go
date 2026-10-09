@@ -2,8 +2,10 @@ package genui
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -140,6 +142,27 @@ func TestLimits(t *testing.T) {
 	}
 	if _, issues := Validate([]byte(`[]`)); len(issues) == 0 {
 		t.Error("non-object accepted")
+	}
+}
+
+// A list default is capped by the entries the browser keeps from it: one
+// string splits on its line breaks (listCount), so it can carry more than
+// MaxListItems entries in a single element.
+func TestListCapCountsSplitLines(t *testing.T) {
+	lines := make([]string, MaxListItems+1)
+	for i := range lines {
+		lines[i] = strconv.FormatInt(int64(i), 36)
+	}
+	val, _ := json.Marshal([]string{strings.Join(lines, "\n")})
+	card := `{"title":"x","components":[{"type":"list_input","id":"l","label":"L","disabled":true,"value":` + string(val) + `}],"actions":[{"id":"go","label":"Go"}]}`
+	_, issues := Validate([]byte(card))
+	if len(issues) == 0 || !strings.Contains(issues[0].Message, fmt.Sprintf("at most %d items", MaxListItems)) {
+		t.Fatalf("issues: %v", issues)
+	}
+	val, _ = json.Marshal([]string{strings.Join(lines[:MaxListItems], "\n")})
+	card = `{"title":"x","components":[{"type":"list_input","id":"l","label":"L","disabled":true,"value":` + string(val) + `}],"actions":[{"id":"go","label":"Go"}]}`
+	if _, issues := Validate([]byte(card)); len(issues) != 0 {
+		t.Fatalf("at the cap: %v", issues)
 	}
 }
 

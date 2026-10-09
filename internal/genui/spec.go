@@ -499,7 +499,13 @@ func (v *validator) inputKinds(validating bool) map[string]inputKind {
 	for id, f := range v.fields {
 		switch f.typ {
 		case "toggle":
-			out[id] = inputKind{kind: kindBool}
+			k := inputKind{kind: kindBool}
+			// Likewise a required toggle that is always shown and editable
+			// must be on before a validating action can submit.
+			if g := v.gates[id]; validating && len(g.shows) == 0 && !g.fixed && f.repeater == "" {
+				k.on, _ = f.obj["required"].(bool)
+			}
+			out[id] = k
 		case "number":
 			k := inputKind{kind: kindNumber}
 			// A validating action submits only while each visible input
@@ -997,17 +1003,17 @@ func (v *validator) repeaterRules(path string, obj map[string]any, num func(stri
 	}
 	if kids, ok := obj["fields"].([]any); ok {
 		v.noNestedRepeater(path+".fields", kids)
-		if dis, _ := obj["disabled"].(bool); dis {
-			v.disabledItems(path, obj, kids)
-		}
+		v.disabledItems(path, obj, kids)
 	}
 }
 
 // disabledItems: a disabled repeater disables every field in its items, and
 // a disabled field is submitted without being validated, so each required
-// field must already be answered in every item the browser will render (the
-// value's items over the field defaults, or the min_items fresh items).
+// field that is disabled (on its own or with the repeater) must already be
+// answered in every item the browser will render (the value's items over the
+// field defaults, or the min_items fresh items).
 func (v *validator) disabledItems(path string, obj map[string]any, kids []any) {
+	repDisabled, _ := obj["disabled"].(bool)
 	fields := map[string]map[string]any{}
 	collectInputs(kids, fields)
 	var items []map[string]any
@@ -1027,14 +1033,26 @@ func (v *validator) disabledItems(path string, obj map[string]any, kids []any) {
 		if req, _ := f["required"].(bool); !req {
 			continue
 		}
+		fieldDisabled, _ := f["disabled"].(bool)
+		if !repDisabled && !fieldDisabled {
+			continue
+		}
 		typ, _ := f["type"].(string)
 		for i, item := range items {
 			val, has := item[id]
 			if !has {
+				if !repDisabled {
+					// The field's own default: requiredRules judges it.
+					continue
+				}
 				val = f["value"]
 			}
 			if !answered(typ, val) {
-				v.addf(fmt.Sprintf("%s.value[%d].%s", path, i, id), "the repeater is disabled, so required field %q needs an answer in every item (the user cannot fill it in); give it one, or drop required or disabled", id)
+				what := "the repeater is disabled"
+				if !repDisabled {
+					what = fmt.Sprintf("field %q is disabled", id)
+				}
+				v.addf(fmt.Sprintf("%s.value[%d].%s", path, i, id), "%s, so required field %q needs an answer in every item (the user cannot fill it in); give it one, or drop required or disabled", what, id)
 				break
 			}
 		}
@@ -1289,12 +1307,13 @@ func (v *validator) checkCollectionValue(path, typ string, obj map[string]any, v
 				}
 			}
 		}
-		if typ == "list_input" {
-			if len(val.([]any)) > MaxListItems {
-				v.addf(path, "at most %d items", MaxListItems)
-			}
+		n := listCount(typ, obj, val.([]any))
+		// The cap binds both the default as written and the entries the
+		// browser keeps from it (a string can split into many lines).
+		if typ == "list_input" && max(len(val.([]any)), n) > MaxListItems {
+			v.addf(path, "at most %d items", MaxListItems)
 		}
-		v.itemCount(path, obj, listCount(typ, obj, val.([]any)))
+		v.itemCount(path, obj, n)
 		if typ == "multi_select" && len(val.([]any)) > MaxChoiceItems {
 			v.addf(path, "at most %d items", MaxChoiceItems)
 		}

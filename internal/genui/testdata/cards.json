@@ -5783,6 +5783,133 @@
      }
     ]
    }
+  },
+  {
+   "name": "repeater item overrides a disabled required toggle with false",
+   "valid": false,
+   "error_contains": "field \"ok\" is disabled",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "r",
+      "label": "R",
+      "value": [
+       {
+        "ok": true
+       },
+       {
+        "ok": false
+       }
+      ],
+      "fields": [
+       {
+        "type": "toggle",
+        "id": "ok",
+        "label": "OK",
+        "required": true,
+        "disabled": true,
+        "value": true
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "repeater items keep a disabled required field answered",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "repeater",
+      "id": "r",
+      "label": "R",
+      "value": [
+       {
+        "ok": true
+       },
+       {
+        "n": "a"
+       }
+      ],
+      "fields": [
+       {
+        "type": "toggle",
+        "id": "ok",
+        "label": "OK",
+        "required": true,
+        "disabled": true,
+        "value": true
+       },
+       {
+        "type": "text_input",
+        "id": "n",
+        "label": "N"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "sole submit shown only while a required toggle is off",
+   "valid": false,
+   "error_contains": "can never",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "gate",
+      "label": "Gate",
+      "required": true
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "visible_if": "!gate"
+     }
+    ]
+   }
+  },
+  {
+   "name": "submit shown once a required toggle is on",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "gate",
+      "label": "Gate",
+      "required": true
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "visible_if": "gate == true"
+     }
+    ]
+   }
   }
  ]
 }
