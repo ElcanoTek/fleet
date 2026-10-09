@@ -1061,7 +1061,9 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			o.criticalToolFailureAttempts = make(map[string]int)
 		}
 
-		if outcomes, ok := parseDealOutcomes(resultText); ok {
+		outcomes, ok := parseDealOutcomes(resultText)
+		switch {
+		case ok:
 			// Batch result: discharge one commitment per SUCCEEDED record,
 			// idempotently. dischargedDeals dedups by record id, so a resume
 			// that idempotently skips already-done records (reporting them
@@ -1140,7 +1142,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 				log.Printf("Critical batch %s made no forward progress (%d failed); attempt %d/%d",
 					toolName, failed, o.criticalToolFailureAttempts[key], maxAttemptsPerCriticalAction)
 			}
-		} else if malformedDealOutcomes(resultText) {
+		case malformedDealOutcomes(resultText):
 			// A per-record results[] that failed validation (or a result too
 			// large to inspect): fail closed — no discharge, no canary credit,
 			// counts against the retry budget. Falling through to the
@@ -1148,7 +1150,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			o.criticalToolFailureAttempts[key]++
 			log.Printf("Critical batch %s returned malformed per-record results; treating as failed (attempt %d/%d)",
 				toolName, o.criticalToolFailureAttempts[key], maxAttemptsPerCriticalAction)
-		} else if effectiveSucceeded {
+		case effectiveSucceeded:
 			// Single-call critical tool (no per-record results[]).
 			o.criticalExecutedCount++
 			delete(o.criticalToolFailureAttempts, key)
@@ -1159,7 +1161,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			log.Printf("Critical action succeeded: %s", toolName)
 			o.creditSingleRecordCanary(toolName, rawInput)
 			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput))
-		} else {
+		default:
 			// Ran but reported failure (transport-level, resp.IsError, or a
 			// payload-level failure per mcpReportedFailure) → counts against
 			// the per-(tool,args) retry budget and discharges NOTHING.
