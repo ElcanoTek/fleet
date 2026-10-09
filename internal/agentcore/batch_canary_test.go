@@ -53,6 +53,7 @@ func TestBatchCanary_Gate(t *testing.T) {
 
 	type step struct {
 		tool, args, result string // a recorded call (result "" = not executed)
+		failed             bool   // the call itself failed (transport error / isError)
 	}
 	cases := []struct {
 		name     string
@@ -70,136 +71,142 @@ func TestBatchCanary_Gate(t *testing.T) {
 		},
 		{
 			name: "allowed after a one-record batch succeeded with the same digest", digest: canaryDigest,
-			canary: []step{{canaryMergeTool, batchArgs(canaryDigest, "1"), successRows("1")}},
+			canary: []step{{canaryMergeTool, batchArgs(canaryDigest, "1"), successRows("1"), false}},
 			tool:   canaryMergeTool, batch: batchArgs(canaryDigest, "1", "2", "3"),
 		},
 		{
 			name:   "a different digest needs its own canary",
-			canary: []step{{canaryMergeTool, batchArgs(canaryDigest, "1"), successRows("1")}},
+			canary: []step{{canaryMergeTool, batchArgs(canaryDigest, "1"), successRows("1"), false}},
 			tool:   canaryMergeTool, batch: batchArgs(canaryOtherDigest, "1", "2", "3"),
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name: "a failed canary grants nothing", digest: canaryDigest,
-			canary: []step{{canaryMergeTool, batchArgs(canaryDigest, "1"), `{"results":[{"deal_id":"1","success":false}]}`}},
+			canary: []step{{canaryMergeTool, batchArgs(canaryDigest, "1"), `{"results":[{"deal_id":"1","success":false}]}`, false}},
+			tool:   canaryMergeTool, batch: batchArgs(canaryDigest, "1", "2", "3"),
+			blocked: true, wantText: "CANARY",
+		},
+		{
+			name: "an isError canary grants nothing even with a success row", digest: canaryDigest,
+			canary: []step{{tool: canaryMergeTool, args: batchArgs(canaryDigest, "1"), result: successRows("1"), failed: true}},
 			tool:   canaryMergeTool, batch: batchArgs(canaryDigest, "1", "2", "3"),
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name: "a success row for a different record grants nothing", digest: canaryDigest,
-			canary: []step{{canaryMergeTool, batchArgs(canaryDigest, "1"), successRows("2")}},
+			canary: []step{{canaryMergeTool, batchArgs(canaryDigest, "1"), successRows("2"), false}},
 			tool:   canaryMergeTool, batch: batchArgs(canaryDigest, "1", "2", "3"),
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name: "a malformed canary result grants nothing", digest: canaryDigest,
-			canary: []step{{canaryMergeTool, batchArgs(canaryDigest, "1"), `{"results":[{"deal_id":"1"}]}`}},
+			canary: []step{{canaryMergeTool, batchArgs(canaryDigest, "1"), `{"results":[{"deal_id":"1"}]}`, false}},
 			tool:   canaryMergeTool, batch: batchArgs(canaryDigest, "1", "2", "3"),
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name: "canary through the alias twin covers the batch", digest: canaryDigest,
-			canary: []step{{canaryMergeUploadTool, batchArgs(canaryDigest, "1"), successRows("1")}},
+			canary: []step{{canaryMergeUploadTool, batchArgs(canaryDigest, "1"), successRows("1"), false}},
 			tool:   canaryMergeTool, batch: batchArgs(canaryDigest, "1", "2", "3"),
 		},
 		{
 			name:   "a different operation shape needs its own canary",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","list_type":"allowlist"}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","list_type":"allowlist"}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","list_type":"blocklist"}`,
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "different inline values need their own canary",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["safe.example"]}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["safe.example"]}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values":["other.example"]}`,
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "the same inline values in any order ride the canary",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["b.example"," a.example"]}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["b.example"," a.example"]}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values":["a.example","b.example"]}`,
 		},
 		{
 			name:   "re-cased inline values need their own canary",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["TenantA"]}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["TenantA"]}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values":["tenanta"]}`,
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "a successful single-record call is a canary",
-			canary: []step{{canaryMergeTool, `{"deal_id":"1"}`, `{"success":true}`}},
+			canary: []step{{canaryMergeTool, `{"deal_id":"1"}`, `{"success":true}`, false}},
 			tool:   canaryMergeTool, batch: batchArgs("", "1", "2", "3"),
 		},
 		// The shape is every argument but record addressing and value
 		// transport, so a connector's own mode words bind too (Codex on #1712).
 		{
 			name:   "a dry-run canary does not unlock the real write",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","dry_run":true}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","dry_run":true}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `"}`,
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "a connector-specific mode argument needs its own canary",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","is_excluded":false}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","is_excluded":false}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","is_excluded":true}`,
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "a case-sensitive argument keeps its case",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","namespace":"TenantA"}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","namespace":"TenantA"}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","namespace":"tenanta"}`,
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "large integer arguments keep their exact literal",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","member_id":9007199254740992}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","member_id":9007199254740992}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","member_id":9007199254740993}`,
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "inline values cannot shift across an embedded newline",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["a\nb","c"]}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["a\nb","c"]}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values":["a","b\nc"]}`,
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "an inline string value is not the same as a number",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["1"]}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["1"]}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values":[1]}`,
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "an explicit null is not an omitted argument",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `"}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `"}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","filter":null}`,
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "a different seat argument needs its own canary",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","member_id":101}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","member_id":101}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","member_id":202}`,
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "different per-dimension inline lists need their own canary",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"countries_include":["US"]}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"countries_include":["US"]}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"countries_exclude":["CA"]}`,
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "a different values_file without a digest needs its own canary",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_file":"a.txt"}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_file":"a.txt"}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_file":"b.txt"}`,
 			blocked: true, wantText: "CANARY",
 		},
 		{
 			name: "record addressing, output verbosity and etag ride the canary", digest: canaryDigest,
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","values_file":"canary.txt","verbose":true,"etag":"e1","merge_mode":"add","member_id":101}`, successRows("1")}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","values_file":"canary.txt","verbose":true,"etag":"e1","merge_mode":"add","member_id":101}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","values_file":"batch.txt","verbose":false,"merge_mode":"add","member_id":101}`,
 		},
 		{
 			name:   "a single-record call carrying the same mode arguments is a canary",
-			canary: []step{{canaryMergeTool, `{"internal_deal_id":"1","merge_mode":"add","operator":"exclude"}`, `{"success":true}`}},
+			canary: []step{{canaryMergeTool, `{"internal_deal_id":"1","merge_mode":"add","operator":"exclude"}`, `{"success":true}`, false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"merge_mode":"add","operator":"exclude"}`,
 		},
 		{
@@ -215,7 +222,7 @@ func TestBatchCanary_Gate(t *testing.T) {
 				if blocked, msg := o.checkCriticalTool(s.tool, "", s.args); blocked {
 					t.Fatalf("canary call %s %s blocked: %s", s.tool, s.args, msg)
 				}
-				o.recordToolResult(s.tool, s.args, s.result, true)
+				o.recordToolResult(s.tool, s.args, s.result, !s.failed)
 			}
 			blocked, msg := o.checkCriticalTool(tc.tool, "", tc.batch)
 			if blocked != tc.blocked {

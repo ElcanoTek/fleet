@@ -1128,7 +1128,12 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 					failed++
 				}
 			}
-			o.creditBatchCanary(toolName, rawInput, outcomes)
+			// A canary must be a SUCCESSFUL call: a transport error or an
+			// isError response is no proof of the operation, even when its
+			// body still carries a success row for the requested record.
+			if succeeded {
+				o.creditBatchCanary(toolName, rawInput, outcomes)
+			}
 			if newly > 0 {
 				o.criticalExecutedCount++
 				delete(o.criticalToolFailureAttempts, key)

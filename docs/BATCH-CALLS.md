@@ -52,7 +52,11 @@ three gaps at once:
   `agentcore.ConfigureAgentPolicy` installs them. A registered named-account
   variant (`<server>_<account>`) resolves to its base server's value through
   the one server-name keying rule (`longestServerKey`), and its own entry wins
-  when it has one. The engine matches no server by name.
+  when it has one. The engine matches no server by name. Like every other
+  `agent_policy` value (for example `critical_tools` and
+  `critical_tool_aliases`), the pace is installed at boot. An MCP catalog
+  reload (SIGHUP or `/admin/mcp-servers/reload`) does not refresh it, so a
+  change takes effect at the next Fleet restart (see "Deferred").
 - **The budget starts once the call holds the server mutex.** `mcpTool` attaches
   the budget to the call's context with `mcp.WithCallTimeout`, and
   `mcp.Server.callTool` starts it only after taking the server's mutex, so
@@ -155,6 +159,12 @@ three gaps at once:
   batch still reaches the policy raw.
 
 ## Deferred
+
+- **Hot reload of `batch_seconds_per_deal`.** The MCP reload refreshes the
+  catalog, allowlists and Optional gating, but not the boot-installed agent
+  policy. To refresh the pace on reload, the value would have to travel in the
+  broker's `ServerDescriptor` and the parent would have to re-install it when
+  the catalog swap succeeds. Until then, a pace change needs a restart.
 
 - **The canary gate in interactive chat.** Interactive critical calls skip
   `checkBatchBinding`, so they skip the canary too. Whether a chat batch that
