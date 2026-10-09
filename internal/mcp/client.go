@@ -769,7 +769,12 @@ func WithCallTimeout(ctx context.Context, d time.Duration) context.Context {
 	return context.WithValue(ctx, callTimeoutKey{}, d)
 }
 
-func callTimeoutFrom(ctx context.Context) (time.Duration, bool) {
+// CallTimeout returns the per-call budget WithCallTimeout attached to ctx, if
+// any. A context value does not cross a process boundary, so a transport that
+// forwards the call elsewhere (the out-of-process MCP broker) reads it here,
+// carries it on its own wire, and re-attaches it with WithCallTimeout on the
+// side that reaches Server.callTool.
+func CallTimeout(ctx context.Context) (time.Duration, bool) {
 	d, ok := ctx.Value(callTimeoutKey{}).(time.Duration)
 	return d, ok && d > 0
 }
@@ -787,7 +792,7 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("MCP server %s: %s was not sent; the call's deadline expired while it waited for the server's previous call: %w", s.name, name, err)
 	}
-	if d, ok := callTimeoutFrom(ctx); ok {
+	if d, ok := CallTimeout(ctx); ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, d)
 		defer cancel()

@@ -30,6 +30,10 @@ type fakeBroker struct {
 	lastTool   string
 	lastArgs   map[string]any
 	ctxErr     error
+	// lastBudget / lastHasBudget record the mcp.CallTimeout the last call's
+	// context carried.
+	lastBudget    time.Duration
+	lastHasBudget bool
 
 	text  string
 	isErr bool
@@ -147,6 +151,7 @@ func (b *fakeBroker) CallMCP(ctx context.Context, server, tool string, args map[
 	b.mu.Lock()
 	b.calls++
 	b.lastServer, b.lastTool, b.lastArgs = server, tool, args
+	b.lastBudget, b.lastHasBudget = mcp.CallTimeout(ctx)
 	b.mu.Unlock()
 
 	if b.started != nil {
@@ -166,6 +171,12 @@ func (b *fakeBroker) CallMCP(ctx context.Context, server, tool string, args map[
 		return fmt.Sprint(args["tag"]), b.isErr, b.err
 	}
 	return b.text, b.isErr, b.err
+}
+
+func (b *fakeBroker) observedCallTimeout() (time.Duration, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lastBudget, b.lastHasBudget
 }
 
 func (b *fakeBroker) observedCtxErr() error {
@@ -1458,5 +1469,40 @@ func TestServe_PanicResponseIsWrittenBeforeDrainReturns(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestClientServer_CallBudgetCrossesTheWire: the per-call budget the parent
+// attaches with mcp.WithCallTimeout rides request.CallTimeoutMs and is
+// re-attached to the child's call context, for base and scoped calls alike. A
+// call without one carries none.
+func TestClientServer_CallBudgetCrossesTheWire(t *testing.T) {
+	fake := &fakeScopedBroker{fakeBroker: &fakeBroker{text: "ok"}, scopeID: "scope-1"}
+	client := loopback(t, fake)
+	ctx := mcp.WithCallTimeout(context.Background(), 17*time.Minute)
+
+	if _, _, err := client.CallMCP(ctx, "openx_mcp", "merge", nil); err != nil {
+		t.Fatal(err)
+	}
+	if d, ok := fake.observedCallTimeout(); !ok || d != 17*time.Minute {
+		t.Fatalf("base call: child saw budget (%v, %v), want 17m", d, ok)
+	}
+
+	scope, err := client.OpenScope(context.Background(), ScopeSpec{Selection: []ScopeChoice{{Server: "openx_mcp"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := scope.CallMCP(mcp.WithCallTimeout(context.Background(), 1500*time.Millisecond), "openx_mcp", "merge", nil); err != nil {
+		t.Fatal(err)
+	}
+	if d, ok := fake.observedCallTimeout(); !ok || d != 1500*time.Millisecond {
+		t.Fatalf("scoped call: child saw budget (%v, %v), want 1.5s", d, ok)
+	}
+
+	if _, _, err := scope.CallMCP(context.Background(), "openx_mcp", "merge", nil); err != nil {
+		t.Fatal(err)
+	}
+	if d, ok := fake.observedCallTimeout(); ok {
+		t.Fatalf("call without a budget: child saw %v, want none", d)
 	}
 }
