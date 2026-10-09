@@ -145,6 +145,12 @@ func TestBatchCanary_Gate(t *testing.T) {
 			blocked: true, wantText: "CANARY",
 		},
 		{
+			name:   "large integer arguments keep their exact literal",
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","member_id":9007199254740992}`, successRows("1")}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","member_id":9007199254740993}`,
+			blocked: true, wantText: "CANARY",
+		},
+		{
 			name:   "a different seat argument needs its own canary",
 			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","member_id":101}`, successRows("1")}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","member_id":202}`,

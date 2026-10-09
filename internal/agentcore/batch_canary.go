@@ -72,8 +72,11 @@ func canaryKey(toolName, rawInput string) string {
 // different inline values (cutlass#1081 pass 2).
 func canaryShape(rawInput string) string {
 	digest := valuesDigestArg(rawInput)
-	var args map[string]any
-	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
+	// unmarshalArgs decodes numbers as json.Number, so a large integer
+	// argument (a member_id above 2^53) keeps its exact literal in the shape
+	// instead of collapsing onto a neighbour through float64.
+	args, err := unmarshalArgs(rawInput)
+	if err != nil {
 		return digest
 	}
 	fileDigest := digest != ""

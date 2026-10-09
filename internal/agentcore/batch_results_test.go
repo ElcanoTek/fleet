@@ -57,6 +57,10 @@ func TestMalformedBatchResultFailsClosed(t *testing.T) {
 		`{"results":[{"deal_id":"1"},{"deal_id":"2"}]}`,
 		`{"results":"ok"}`,
 		`{"results":[]}`,
+		// No usable rows at all: a whole-call success is not a batch result.
+		`{"success":true}`,
+		`{"results":null}`,
+		`done`,
 	} {
 		t.Run(result, func(t *testing.T) {
 			o := newOrchStateForTest()

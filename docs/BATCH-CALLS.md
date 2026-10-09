@@ -76,6 +76,12 @@ three gaps at once:
 `creditBatchCanary` and the `checkBatchBinding` tail (cutlass#740.7, 3d1546bf,
 9c532cee, #1081).
 
+- **Scope: scheduled runs.** The gate sits in `checkBatchBinding`, which only
+  the scheduled policy (`checkCriticalTool`) runs. Interactive chat authorizes
+  a critical call through its approval card (`checkCriticalToolApproval`), as
+  it already did for batch binding, so a chat batch is not canary-gated. Those
+  cards cover the per-call card, session pre-approval and notify mode. See
+  "Deferred".
 - A `deal_ids` batch of more than one record is refused until a one-record
   application of the same critical action has succeeded this run. The
   one-record application must use the same value set and operation shape.
@@ -109,6 +115,10 @@ three gaps at once:
   discharges nothing, earns no canary credit, and is charged to the retry
   budget. The rule covers a `deal_ids` batch, and any call whose `results[]`
   is clearly a per-record envelope (a row carrying `deal_id` or `success`).
+  A `deal_ids` batch whose response has no usable per-record rows also fails
+  closed: no `results` key, `results: null`, or text that is not JSON. A
+  whole-call success discharges no record, and crediting it would reset the
+  retry budget.
   A non-batch critical tool whose own `results[]` is empty or some other list
   keeps the single-call accounting (`failClosedDealOutcomes`). Cutlass applies
   the rule to every critical tool.
@@ -142,6 +152,12 @@ three gaps at once:
   batch still reaches the policy raw.
 
 ## Deferred
+
+- **The canary gate in interactive chat.** Interactive critical calls skip
+  `checkBatchBinding`, so they skip the canary too. Whether a chat batch that
+  a human approved should also need a one-record canary is a product decision
+  for the maintainers. It changes the chat approval flow, and it would apply
+  under session pre-approval and notify mode as well.
 
 - **Nexxen's pace in the bundle.** elcano-config (and every other bundle that
   ships a Nexxen server) should add `batch_seconds_per_deal: 45` to its

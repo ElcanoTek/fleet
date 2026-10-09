@@ -80,16 +80,20 @@ func malformedResultRows(v json.RawMessage) bool {
 	return false
 }
 
-// failClosedDealOutcomes reports whether a critical call's result must be
-// recorded as FAILED because it carries a per-record results envelope that
-// parseDealOutcomes refused (malformedDealOutcomes). The fail-closed reading
-// applies to a deal_ids batch call — whose records the single-call path would
-// otherwise credit — and to any call whose results[] is unmistakably per-record
-// (dealOutcomeShaped). A non-batch tool whose own results[] is some other list,
-// or empty, keeps the single-call accounting (Codex on #1712).
+// failClosedDealOutcomes reports whether a critical call whose result
+// parseDealOutcomes REJECTED must be recorded as failed rather than take the
+// single-call path. A deal_ids batch always must: the batch contract is a
+// per-record results[], and a whole-call success with no usable rows (no
+// results key, results null, a malformed envelope) discharges no record — so
+// crediting it as a single-call success would clear the retry budget and let
+// the same batch repeat without bound. Any other call fails closed only when
+// its results[] is unmistakably a per-record envelope that failed validation
+// (dealOutcomeShaped + malformedDealOutcomes); a non-batch tool whose own
+// results[] is empty or some other list keeps the single-call accounting
+// (Codex on #1712). Callers must have already tried parseDealOutcomes.
 func failClosedDealOutcomes(rawInput, resultText string) bool {
 	if _, batch := batchDealIDs(rawInput); batch {
-		return malformedDealOutcomes(resultText)
+		return true
 	}
 	return dealOutcomeShaped(resultText) && malformedDealOutcomes(resultText)
 }
