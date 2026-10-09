@@ -1089,7 +1089,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 	}
 
 	// A successful templated send is a summary email too (audit_email_last.go).
-	o.noteTemplateEmailResult(toolName, effectiveSucceeded)
+	o.noteTemplateEmailResult(toolName, succeeded && sendEmailSucceeded(resultText))
 
 	// Remember which record each prepared_deal_id handle stands for, so a
 	// two-step create ties to its declared deal_name (audit_email_last.go).

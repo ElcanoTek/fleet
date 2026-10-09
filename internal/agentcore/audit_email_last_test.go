@@ -506,6 +506,17 @@ func TestEmailLast_TemplateEmailIsOrdered(t *testing.T) {
 	if o2.summaryEmailSent {
 		t.Fatal("a failed template send must not count as the summary email")
 	}
+	// A provider status failure over a clean transport is no delivery either
+	// (Codex P1 on #1710): the same 202 check as send_email applies.
+	for _, result := range []string{`{"status_code":500}`, `{"status_code":400,"body":"bad template"}`, `queued?`} {
+		o3 := newOrchStateForTest()
+		confirmAudit(t, o3, []criticalActionStruct{{Tool: elUpdate, DealID: "5"}, {Tool: tmpl}}, nil)
+		mustNotBlock(t, o3, elUpdate, `{"deal_id":"5"}`, `{"success":true}`)
+		mustNotBlock(t, o3, tmpl, tmplArgs, result)
+		if o3.summaryEmailSent {
+			t.Fatalf("template result %s must not count as the summary email", result)
+		}
+	}
 }
 
 // A settleable create whose retry comes back with malformed per-record

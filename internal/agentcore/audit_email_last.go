@@ -686,8 +686,11 @@ func (o *orchestrationState) checkPreBatchDuplicate(toolName string) (bool, stri
 }
 
 // noteTemplateEmailResult marks the summary email as sent when a
-// send_template_email succeeded (ran, and reported no failure) after
-// email-last work began; send_email goes through recordToolResult's send
+// send_template_email was DELIVERED after email-last work began — the caller
+// passes the same check send_email's accounting uses (a clean transport and
+// sendEmailSucceeded's provider 202), so a status failure such as
+// {"status_code":500} over a clean transport never records a summary the
+// reader did not get. send_email goes through recordToolResult's send
 // accounting instead. Callers must hold o.mu.
 func (o *orchestrationState) noteTemplateEmailResult(toolName string, succeeded bool) {
 	if succeeded && !isEmailTool(toolName) && isSummaryEmailTool(toolName) {
