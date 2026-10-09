@@ -302,6 +302,7 @@ above fails otherwise.
 - [`SKILLS.md`](SKILLS.md) — Skills (#513, phase 1)
 - [`STRUCTURED-OUTPUT.md`](STRUCTURED-OUTPUT.md) — Structured output contracts
 - [`SUBAGENTS.md`](SUBAGENTS.md) — Sub-agents: default-on, parent decides, typed children (#1043)
+- [`TASK-PROMPT-CAP.md`](TASK-PROMPT-CAP.md) — Task prompt size cap (250,000 bytes)
 - [`TASK-SCHEDULE-UX.md`](TASK-SCHEDULE-UX.md) — Create Task schedule controls
 - [`TASK-SEARCH.md`](TASK-SEARCH.md) — Recent Tasks search (any-order words, tags, description, creator) and the one scheduled filter
 - [`TASK-SERIALIZATION.md`](TASK-SERIALIZATION.md) — Task serialization — opaque `serialization_key` mutual exclusion (#709)

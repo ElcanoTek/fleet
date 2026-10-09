@@ -1658,7 +1658,6 @@ export function TaskCreateModal({
                   }`}
                   required
                   rows={3}
-                  maxLength={100000}
                   placeholder="Pull yesterday's sales report, compare it to the plan, and email a pacing summary…"
                   aria-describedby={errors.prompt ? "prompt-error prompt-help" : "prompt-help"}
                   value={prompt}
