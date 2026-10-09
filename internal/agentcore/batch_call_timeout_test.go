@@ -22,9 +22,19 @@ func dealIDsInput(n int) string {
 
 // TestToolCallTimeoutFor pins the batch timeout scaling ported from cutlass
 // toolCallTimeoutForServer (cutlass#1067): deal_ids × per-deal pace, floored at
-// toolCallTimeout and capped at maxBatchToolCallTimeout, with the Nexxen pace
-// for nexxen_mcp and its client variants.
+// toolCallTimeout and capped at maxBatchToolCallTimeout. The pace is the
+// engine default unless the bundle declares the server's own
+// (batch_seconds_per_deal), which also governs that server's named-account
+// variants — and no server is paced by its name alone.
 func TestToolCallTimeoutFor(t *testing.T) {
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+	ConfigureAgentPolicy(AgentPolicy{BatchSecondsPerDeal: map[string]int{
+		"paced_mcp":      45,
+		"paced_mcp_slow": 90,
+		"ignored_mcp":    0,
+		"negative_mcp":   -5,
+	}})
+	const paced = 45 * time.Second
 	cases := []struct {
 		name, server, input string
 		want                time.Duration
@@ -37,12 +47,16 @@ func TestToolCallTimeoutFor(t *testing.T) {
 		{"scaled: 59 deals", "openx_mcp", dealIDsInput(59), 59 * batchToolCallTimeoutPerDeal},
 		{"scaled: variant server", "openx_mcp_tunnl", dealIDsInput(59), 59 * batchToolCallTimeoutPerDeal},
 		{"cap: 200 deals", "openx_mcp", dealIDsInput(200), maxBatchToolCallTimeout},
-		{"nexxen pace", "nexxen_mcp", dealIDsInput(12), 12 * nexxenBatchToolCallTimeoutPerDeal},
-		{"nexxen variant pace", "nexxen_mcp_reklaim", dealIDsInput(12), 12 * nexxenBatchToolCallTimeoutPerDeal},
-		{"nexxen floor", "nexxen_mcp", dealIDsInput(2), toolCallTimeout},
-		{"nexxen cap", "nexxen_mcp", dealIDsInput(60), maxBatchToolCallTimeout},
-		{"nexxen no deal_ids", "nexxen_mcp", `{"internal_deal_id":1}`, toolCallTimeout},
-		{"nexxen-like name is not nexxen", "nexxen_mcpx", dealIDsInput(12), toolCallTimeout},
+		{"declared pace", "paced_mcp", dealIDsInput(12), 12 * paced},
+		{"declared pace: variant inherits base", "paced_mcp_reklaim", dealIDsInput(12), 12 * paced},
+		{"declared pace: variant's own key wins", "paced_mcp_slow", dealIDsInput(12), 12 * 90 * time.Second},
+		{"declared pace: floor", "paced_mcp", dealIDsInput(2), toolCallTimeout},
+		{"declared pace: cap", "paced_mcp", dealIDsInput(60), maxBatchToolCallTimeout},
+		{"declared pace: no deal_ids", "paced_mcp", `{"internal_deal_id":1}`, toolCallTimeout},
+		{"declared pace: look-alike name is not governed", "paced_mcpx", dealIDsInput(59), 59 * batchToolCallTimeoutPerDeal},
+		{"zero pace ignored", "ignored_mcp", dealIDsInput(59), 59 * batchToolCallTimeoutPerDeal},
+		{"negative pace ignored", "negative_mcp", dealIDsInput(59), 59 * batchToolCallTimeoutPerDeal},
+		{"no name-based pacing: nexxen without a declaration", "nexxen_mcp", dealIDsInput(59), 59 * batchToolCallTimeoutPerDeal},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

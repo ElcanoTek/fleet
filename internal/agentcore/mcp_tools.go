@@ -48,32 +48,28 @@ var toolCallTimeout = 5 * time.Minute
 // trip (~7-10 s on OpenX with a 4k-value list). A flat toolCallTimeout killed a
 // 59-deal batch on the Tunnl ELC07362 run (2026-09-30): the server was
 // restarted mid-batch and the agent re-ran the remainder in chunks. A batch
-// call gets batchToolCallTimeoutPerDeal per targeted record, never less than
+// call gets a per-record budget for each targeted record, never less than
 // toolCallTimeout and never more than maxBatchToolCallTimeout (ported from
-// cutlass toolCallTimeoutForServer, cutlass#1067).
+// cutlass toolCallTimeoutForServer, cutlass#1067). The per-record budget is
+// batchToolCallTimeoutPerDeal unless the bundle declares the server's own pace
+// (mcp_servers[].batch_seconds_per_deal, e.g. a rate-limited upstream): which
+// connector is slow is bundle data, not engine knowledge.
 const (
 	batchToolCallTimeoutPerDeal = 20 * time.Second
-	// Nexxen's Deals API allows 20 requests/minute per API user and each
-	// batched deal costs ~5 calls, so a deal takes ~17-25 s of pacing alone.
-	nexxenBatchToolCallTimeoutPerDeal = 45 * time.Second
-	maxBatchToolCallTimeout           = 30 * time.Minute
+	maxBatchToolCallTimeout     = 30 * time.Minute
 )
 
 // toolCallTimeoutFor returns the per-call budget for an MCP call on the
 // registered server serverName: toolCallTimeout, scaled up for a call whose
 // input carries a non-empty deal_ids array so a long but healthy sequential
-// batch is not killed mid-run. A Nexxen server (nexxen_mcp or any client
-// variant nexxen_mcp_<account>) gets the longer per-deal pace.
+// batch is not killed mid-run. The per-record pace is the server's
+// bundle-declared batch_seconds_per_deal (batchPerDealFor).
 func toolCallTimeoutFor(serverName, rawInput string) time.Duration {
 	ids, ok := batchDealIDs(rawInput)
 	if !ok {
 		return toolCallTimeout
 	}
-	perDeal := batchToolCallTimeoutPerDeal
-	if serverName == "nexxen_mcp" || strings.HasPrefix(serverName, "nexxen_mcp_") {
-		perDeal = nexxenBatchToolCallTimeoutPerDeal
-	}
-	t := time.Duration(len(ids)) * perDeal
+	t := time.Duration(len(ids)) * batchPerDealFor(serverName)
 	if t < toolCallTimeout {
 		return toolCallTimeout
 	}
