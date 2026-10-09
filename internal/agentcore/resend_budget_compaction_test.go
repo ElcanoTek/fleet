@@ -7,6 +7,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"charm.land/fantasy"
 )
 
 // payloadObserver keeps every event's payload so a test can assert WHY a
@@ -146,5 +148,52 @@ func TestContextResendBudgetTokensKnob(t *testing.T) {
 	t.Setenv("CHAT_CONTEXT_RESEND_BUDGET_TOKENS", "12345")
 	if got := contextResendBudgetTokens(p); got != 12345 {
 		t.Fatalf("legacy alias must be honoured, got %d", got)
+	}
+}
+
+// The summary a run continues from replaces history nobody can see any more,
+// so the session log keeps a copy right after the breadcrumb — tagged, so the
+// transcript viewer can show it as the run's own memory rather than a user turn.
+func TestCheckContextPressure_LogsTheCompactionSummary(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "1000")
+	slug := "ctx-summary-logged"
+	recordContextMax(slug, testContextWindow)
+	model := &namedMockModel{name: slug}
+	e := newMockEngine(t, model)
+	e.requireCompactionOptIn = true
+	e.compactionSummarizer = func(context.Context, CompactionSummarizeInput) fantasy.Message {
+		return fantasy.NewUserMessage(compactionSummaryPrefix + "] ## Progress\nwrote /w/report.csv")
+	}
+	e.logSession.LastStepPromptTokens = 6_000
+	e.checkContextPressure(context.Background(), fillerMessages(6, 4_000), model, newStreamSink(&payloadObserver{}), false)
+
+	msgs := e.logSession.SnapshotMessages()
+	crumb := -1
+	for i, m := range msgs {
+		if strings.HasPrefix(m.Content, "[context_compacted]") {
+			crumb = i
+		}
+	}
+	if crumb < 0 || crumb+1 >= len(msgs) {
+		t.Fatalf("want a breadcrumb followed by the summary, got %d messages", len(msgs))
+	}
+	got := msgs[crumb+1]
+	if got.MessageType == nil || *got.MessageType != compactionSummaryMessageType || !strings.Contains(got.Content, "wrote /w/report.csv") {
+		t.Fatalf("message after the breadcrumb = %+v, want the tagged summary", got)
+	}
+}
+
+// The reactive path (the provider rejected the prompt size) logs its summary too.
+func TestForceCompactMessageHistory_LogsTheSummary(t *testing.T) {
+	e := newMockEngine(t, &namedMockModel{name: "ctx-summary-force"})
+	e.forceCompactMessageHistory(context.Background(), fillerMessages(compactionKeepTail+6, 20))
+	var tagged int
+	for _, m := range e.logSession.SnapshotMessages() {
+		if m.MessageType != nil && *m.MessageType == compactionSummaryMessageType && strings.HasPrefix(m.Content, compactionSummaryPrefix) {
+			tagged++
+		}
+	}
+	if tagged != 1 {
+		t.Fatalf("logged %d tagged summaries, want 1", tagged)
 	}
 }
