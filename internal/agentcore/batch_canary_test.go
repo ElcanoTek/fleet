@@ -115,9 +115,15 @@ func TestBatchCanary_Gate(t *testing.T) {
 			blocked: true, wantText: "CANARY",
 		},
 		{
-			name:   "the same inline values (any order/case) ride the canary",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["b.example","A.example"]}`, successRows("1")}},
+			name:   "the same inline values in any order ride the canary",
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["b.example"," a.example"]}`, successRows("1")}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values":["a.example","b.example"]}`,
+		},
+		{
+			name:   "re-cased inline values need their own canary",
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["TenantA"]}`, successRows("1")}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values":["tenanta"]}`,
+			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "a successful single-record call is a canary",

@@ -117,16 +117,19 @@ func canaryShape(rawInput string) string {
 	return b.String()
 }
 
-// inlineValuesDigest is the order- and case-insensitive digest of an inline
-// values list: each element is trimmed and lowercased when it is a string,
-// JSON-encoded (so its type and boundaries survive — "1" is not 1, and an
-// element containing a newline cannot split into two), the encodings sorted,
-// and the sorted list JSON-encoded again before hashing.
+// inlineValuesDigest is the order-insensitive digest of an inline values list:
+// each element is trimmed when it is a string and JSON-encoded (so its type
+// and boundaries survive — "1" is not 1, and an element containing a newline
+// cannot split into two), the encodings sorted, and the sorted list
+// JSON-encoded again before hashing. Case is kept: a bundle's values (app
+// bundle ids, segment names) may be case-sensitive, so a re-cased set needs
+// its own canary — the fail-closed direction, and a deliberate deviation from
+// Cutlass's case-folding (#1712).
 func inlineValuesDigest(vals []any) string {
 	norm := make([]string, 0, len(vals))
 	for _, v := range vals {
 		if str, ok := v.(string); ok {
-			v = strings.ToLower(strings.TrimSpace(str))
+			v = strings.TrimSpace(str)
 		}
 		enc, err := json.Marshal(v)
 		if err != nil {

@@ -137,8 +137,11 @@ three gaps at once:
   Under the fixed list, a canary of one operation could unlock a batch of
   another. Fleet binds every argument except a short engine-owned exclusion
   list, so an unknown argument fails closed. Case is kept, because a bundle
-  argument may be case-sensitive. Only an inline `values` list is compared
-  without regard to order or case, as in Cutlass.
+  argument may be case-sensitive. That includes an inline `values` list,
+  which is compared without regard to order but with case kept. Cutlass
+  folds case on inline values. Fleet does not, because app bundle ids and
+  segment names can be case-sensitive, so a re-cased value set needs its
+  own canary.
 - **The budget starts after the server mutex** and travels across the broker
   wire. Cutlass has neither the per-server mutex queue nor the
   process-separated broker.
