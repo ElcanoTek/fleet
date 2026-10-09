@@ -81,7 +81,12 @@ three gaps at once:
   one-record application must use the same value set and operation shape.
   - **Same value set** means the same `values_sha256`, or a canonical digest of
     the inline `values`.
-  - **Same operation shape** means the same `merge_mode`, `list_type`, … arguments.
+  - **Same operation shape** means the same value for **every other argument**,
+    except record addressing (`deal_ids`, the single-record id keys,
+    `deal_references`), value transport already bound by the digest, `verbose`
+    and a per-record `etag`. An argument the engine does not recognize, such
+    as `dry_run`, `is_excluded`, a seat like `member_id`, or a per-dimension
+    `countries_include` list, therefore needs its own canary.
 - Credit comes from a one-record batch whose **requested** record reported
   success, or from a successful single-record call.
 - The key is `CriticalActionKey`, which is the server/variant prefix plus the
@@ -111,6 +116,13 @@ three gaps at once:
   the engine/bundle doctrine in `AGENTS.md`. Until a bundle declares it, a
   Nexxen batch gets the 20 s default. The 5-minute floor still covers up to 15
   records.
+- **The canary shape is an exclusion list.** Cutlass binds only a fixed
+  list of mode words (`merge_mode`, `list_type`, …). The bundle servers carry
+  operation-changing arguments outside that list, such as `is_excluded`,
+  `member_id`, `logged_in_owner_id` and per-dimension include/exclude lists.
+  Under the fixed list, a canary of one operation could unlock a batch of
+  another. Fleet binds every argument except a short engine-owned exclusion
+  list, so an unknown argument fails closed.
 - **The budget starts after the server mutex** and travels across the broker
   wire. Cutlass has neither the per-server mutex queue nor the
   process-separated broker.

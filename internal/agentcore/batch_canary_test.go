@@ -124,6 +124,48 @@ func TestBatchCanary_Gate(t *testing.T) {
 			canary: []step{{canaryMergeTool, `{"deal_id":"1"}`, `{"success":true}`}},
 			tool:   canaryMergeTool, batch: batchArgs("", "1", "2", "3"),
 		},
+		// The shape is every argument but record addressing and value
+		// transport, so a connector's own mode words bind too (Codex on #1712).
+		{
+			name:   "a dry-run canary does not unlock the real write",
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","dry_run":true}`, successRows("1")}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `"}`,
+			blocked: true, wantText: "CANARY",
+		},
+		{
+			name:   "a connector-specific mode argument needs its own canary",
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","is_excluded":false}`, successRows("1")}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","is_excluded":true}`,
+			blocked: true, wantText: "CANARY",
+		},
+		{
+			name:   "a different seat argument needs its own canary",
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","member_id":101}`, successRows("1")}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","member_id":202}`,
+			blocked: true, wantText: "CANARY",
+		},
+		{
+			name:   "different per-dimension inline lists need their own canary",
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"countries_include":["US"]}`, successRows("1")}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"countries_exclude":["CA"]}`,
+			blocked: true, wantText: "CANARY",
+		},
+		{
+			name:   "a different values_file without a digest needs its own canary",
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_file":"a.txt"}`, successRows("1")}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_file":"b.txt"}`,
+			blocked: true, wantText: "CANARY",
+		},
+		{
+			name: "record addressing, output verbosity and etag ride the canary", digest: canaryDigest,
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","values_file":"canary.txt","verbose":true,"etag":"e1","merge_mode":"add","member_id":101}`, successRows("1")}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","values_file":"batch.txt","verbose":false,"merge_mode":"add","member_id":101}`,
+		},
+		{
+			name:   "a single-record call carrying the same mode arguments is a canary",
+			canary: []step{{canaryMergeTool, `{"internal_deal_id":"1","merge_mode":"add","operator":"exclude"}`, `{"success":true}`}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"merge_mode":"add","operator":"exclude"}`,
+		},
 		{
 			name: "a batch of one needs no canary", digest: canaryDigest,
 			tool: canaryMergeTool, batch: batchArgs(canaryDigest, "2"),

@@ -23,18 +23,33 @@ import (
 // re-prove its canary (the merge tools are idempotent RMW, so re-applying the
 // canary record is a no-op).
 
-// canaryOpShapeArgs are the call arguments that change WHAT a merge does (the
-// operation's direction / side / mode / dimension), as opposed to which
-// records or which values it touches. They join the canary key so a batch
-// whose operation differs from its proven canary — e.g. a canary run as
-// list_type=allowlist, merge_mode=add then a batch as blocklist/remove with
-// the same values_sha256 — needs its own canary (cutlass#1081). Cross-SSP:
-// absent keys contribute nothing.
-var canaryOpShapeArgs = []string{
-	"merge_mode", "mode", "operation", "operator", "action", "list_type", "direction", "exclude",
-	"include", "side", "segment_type", "level", "dimension", "kind", "group_index", "add_group",
-	"remove_group", "switch_geo_type", "media_lists",
-}
+// canaryRecordArgs are the call arguments that only say WHICH records a call
+// touches, or how it reports or transports its work, so a one-record canary
+// and the multi-record batch it proves legitimately differ in them: the record
+// addressing (deal_ids, every callRecordIDKeys key, IX deal_references), the
+// value set (values_sha256, and an inline values list or a digest-bound
+// values_file, all bound separately by canaryShape's digest), the output verbosity,
+// and a per-record optimistic-concurrency etag. EVERY other argument is part
+// of the operation's shape. The shape is an exclusion list, not an allowlist
+// of operation words: a connector's own mode argument (is_excluded, a seat
+// such as member_id or logged_in_owner_id, dry_run, a per-dimension
+// countries_include list) must never let a canary of one operation unlock a
+// batch of another (Codex on #1712; Cutlass enumerates mode words instead).
+// The engine cannot know every bundle's vocabulary, so an unknown argument
+// fails closed: it needs its own canary.
+var canaryRecordArgs = func() map[string]bool {
+	m := map[string]bool{
+		"deal_ids":        true,
+		"deal_references": true,
+		"values_sha256":   true,
+		"verbose":         true,
+		"etag":            true,
+	}
+	for _, k := range callRecordIDKeys {
+		m[k] = true
+	}
+	return m
+}()
 
 // canaryKey is the canarySucceeded key: the call's critical action
 // (CriticalActionKey — server/variant prefix + alias class, so alias twins on
@@ -49,8 +64,9 @@ func canaryKey(toolName, rawInput string) string {
 	return action.Prefix + "\x00" + action.Class + "\x00" + canaryShape(rawInput)
 }
 
-// canaryShape returns the call's values digest plus a canonical encoding of its
-// operation-shape arguments — the canary binding for a batch call. With no
+// canaryShape returns the call's values digest plus a canonical encoding of
+// every argument that is not record addressing or value transport
+// (canaryRecordArgs) — the canary binding for a batch call. With no
 // values_sha256, inline values bind by a canonical digest of the value set
 // itself, so a canary proven on ["safe.example"] cannot clear a batch carrying
 // different inline values (cutlass#1081 pass 2).
@@ -60,6 +76,8 @@ func canaryShape(rawInput string) string {
 	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
 		return digest
 	}
+	fileDigest := digest != ""
+	inlineDigest := false
 	if digest == "" {
 		if vals, ok := args["values"].([]any); ok && len(vals) > 0 {
 			norm := make([]string, 0, len(vals))
@@ -69,23 +87,30 @@ func canaryShape(rawInput string) string {
 			sort.Strings(norm)
 			sum := sha256.Sum256([]byte(strings.Join(norm, "\n")))
 			digest = "inline:" + hex.EncodeToString(sum[:])
+			inlineDigest = true
 		}
+	}
+	shape := make(map[string]any, len(args))
+	for k, v := range args {
+		if v == nil || canaryRecordArgs[k] {
+			continue
+		}
+		// The value set is bound by the digest when there is one: a
+		// values_file by its values_sha256, an inline values list by its
+		// canonical digest. Otherwise the argument itself is the binding.
+		if (k == "values_file" && fileDigest) || (k == "values" && inlineDigest) {
+			continue
+		}
+		shape[k] = v
 	}
 	var b strings.Builder
 	b.WriteString(digest)
-	for _, k := range canaryOpShapeArgs {
-		v, ok := args[k]
-		if !ok || v == nil {
-			continue
+	if len(shape) > 0 {
+		// json.Marshal writes map keys sorted, so the encoding is canonical.
+		if enc, err := json.Marshal(shape); err == nil {
+			b.WriteString("\x00")
+			b.WriteString(strings.ToLower(string(enc)))
 		}
-		enc, err := json.Marshal(v)
-		if err != nil {
-			continue
-		}
-		b.WriteString("\x00")
-		b.WriteString(k)
-		b.WriteString("=")
-		b.WriteString(strings.ToLower(string(enc)))
 	}
 	return b.String()
 }
