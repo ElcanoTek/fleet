@@ -187,9 +187,10 @@ func run(argv []string, in io.Reader, out, errOut io.Writer, listen func() <-cha
 	// The SDK starts reading as soon as the connection is built, so stdin is
 	// held shut until the logger and the agent's connection are wired — a
 	// client that writes initialize immediately must not reach a half-built
-	// agent.
+	// agent. Behind the gate, orderedInput hands the SDK prompts and cancels
+	// in the order the client sent them.
 	ready := make(chan struct{})
-	conn := acpsdk.NewAgentSideConnection(agent, clientOut{w: out, gone: agent.lifetime, lost: lose}, gatedReader{r: in, ready: ready})
+	conn := acpsdk.NewAgentSideConnection(agent, clientOut{w: out, gone: agent.lifetime, lost: lose}, gatedReader{r: newOrderedInput(in, agent), ready: ready})
 	conn.SetLogger(slog.New(slog.NewTextHandler(errOut, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	agent.SetConnection(conn)
 	var stop <-chan os.Signal // nil: never
