@@ -208,6 +208,7 @@ above fails otherwise.
 - [`ATTACHMENT-SCOPING.md`](ATTACHMENT-SCOPING.md) — Attachment scoping, and where a turn's injected context lives
 - [`AUX-MODEL-CALL-METERING.md`](AUX-MODEL-CALL-METERING.md) — Auxiliary model-call metering (#1118)
 - [`BACKUP_RESTORE.md`](BACKUP_RESTORE.md) — Backup & restore (disaster recovery)
+- [`BATCH-CALLS.md`](BATCH-CALLS.md) — Batch MCP calls: timeout scaling, the single-record canary, and raw results (#1712)
 - [`BENTO-PDF-EXPORT.md`](BENTO-PDF-EXPORT.md) — Bento PDF export — what shipped, and what it is not
 - [`BENTO-STARTERS.md`](BENTO-STARTERS.md) — Bundle-provided default Bento themes and layouts, with custom and blank-deck overrides
 - [`BRANDING.md`](BRANDING.md) — White-labeling fleet from a bundle
