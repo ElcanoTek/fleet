@@ -125,4 +125,10 @@ func TestShowUIRefusesRedactedCards(t *testing.T) {
 	if resp := runShowUI(t, `{"title":"Key","components":[{"type":"select","id":"k","options":["a","b"]}],"actions":[{"id":"go","label":"Go"}]}`); resp.IsError {
 		t.Fatalf("clean card refused: %s", resp.Content)
 	}
+	// A JSON escape hides the secret from the wire text, not from the
+	// browser, which shows the decoded value.
+	escaped := runShowUI(t, `{"title":"Key","components":[{"type":"select","id":"k","options":["sk\u002dsecret1","b"]}],"actions":[{"id":"go","label":"Go"}]}`)
+	if !escaped.IsError || !strings.Contains(escaped.Content, "looks like a secret") {
+		t.Fatalf("escaped secret: %+v", escaped)
+	}
 }

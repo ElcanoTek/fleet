@@ -7,6 +7,7 @@
 // hidden from the person who sent it.
 
 import { useContext, useState } from "react";
+import type { Message } from "../history";
 import type { Reply, Submission } from "./model";
 import { fieldLabels, GenUiContext, summarizeValue } from "./transcript";
 
@@ -20,9 +21,20 @@ function NotSentNote() {
   );
 }
 
-export function SubmissionBubble({ submission, raw, notSent }: { submission: Submission; raw: string; notSent?: boolean }) {
-  const { cards } = useContext(GenUiContext);
-  const spec = cards.get(submission.cardId);
+export function SubmissionBubble({
+  submission,
+  raw,
+  notSent,
+  message,
+}: {
+  submission: Submission;
+  raw: string;
+  notSent?: boolean;
+  /** The answer's message: labels come from the card it answered. */
+  message?: Message;
+}) {
+  const { cards, answerSpecs } = useContext(GenUiContext);
+  const spec = (message && answerSpecs.get(message)) ?? cards.get(submission.cardId);
   const labels = fieldLabels(spec);
   const action = spec?.actions?.find((a) => a.id === submission.actionId)?.label ?? submission.actionId;
   const [showRaw, setShowRaw] = useState(false);
@@ -77,9 +89,9 @@ export function SubmissionBubble({ submission, raw, notSent }: { submission: Sub
  * with the card it answered named underneath (the marker line is for the
  * model and the transcript, not for reading).
  */
-export function ReplyBubble({ reply, notSent }: { reply: Reply; notSent?: boolean }) {
-  const { cards } = useContext(GenUiContext);
-  const spec = cards.get(reply.cardId);
+export function ReplyBubble({ reply, notSent, message }: { reply: Reply; notSent?: boolean; message?: Message }) {
+  const { cards, answerSpecs } = useContext(GenUiContext);
+  const spec = (message && answerSpecs.get(message)) ?? cards.get(reply.cardId);
   const action = spec?.actions?.find((a) => a.id === reply.actionId)?.label ?? reply.actionId;
   return (
     <div

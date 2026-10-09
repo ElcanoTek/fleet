@@ -31,6 +31,12 @@ export type GenUiState = {
   owners: Map<string, ToolCall>;
   /** Each card tool call's occurrence of its id: 0 for the first use. */
   occurrences: Map<ToolCall, number>;
+  /**
+   * Each answer message → the card it answered: the newest card with its id
+   * at that point in the transcript, so a reused id never relabels an
+   * earlier answer with a later card's title and fields.
+   */
+  answerSpecs: Map<Message, CardSpec>;
   submissions: Map<string, Submission>;
   superseded: Set<string>;
   /**
@@ -45,6 +51,7 @@ export const EMPTY_GENUI_STATE: GenUiState = {
   cards: new Map(),
   owners: new Map(),
   occurrences: new Map(),
+  answerSpecs: new Map(),
   submissions: new Map(),
   superseded: new Set(),
   replies: new Map(),
@@ -103,6 +110,7 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
   const cards = new Map<string, CardSpec>();
   const owners = new Map<string, ToolCall>();
   const occurrences = new Map<ToolCall, number>();
+  const answerSpecs = new Map<Message, CardSpec>();
   const seen = new Map<string, number>();
   const submissions = new Map<string, Submission>();
   const superseded = new Set<string>();
@@ -122,11 +130,15 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
         next.role === "assistant" &&
         ((next.toolCalls ?? []).length > 0 ||
           (next.state === "done" && !next.failed && !next.cancelled && !next.modelRequired && next.content.trim() !== ""));
+      // The card an answer belongs to is the newest with its id so far
+      // (recorded for an unsent answer too: its bubble still shows labels).
+      const { sub, reply } = cached(answerCache, m, m.content, parseAnswer);
+      const target = cards.get((sub ?? reply)?.cardId ?? "");
+      if (target) answerSpecs.set(m, target);
       if (m.notSent && !answered) continue;
       // A card has ONE answer: the latest, whether a submission or a quick
       // reply (a submit, Edit and resend, then a quick reply ends on the
       // reply). Each kind replaces the other.
-      const { sub, reply } = cached(answerCache, m, m.content, parseAnswer);
       if (sub) {
         submissions.set(sub.cardId, { ...sub, messageId: m.id });
         replies.delete(sub.cardId);
@@ -159,7 +171,7 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
       if (spec.replaces && spec.replaces !== tc.id) superseded.add(spec.replaces);
     }
   }
-  return { cards, owners, occurrences, submissions, superseded, replies };
+  return { cards, owners, occurrences, answerSpecs, submissions, superseded, replies };
 }
 
 export const GenUiContext = createContext<GenUiState>(EMPTY_GENUI_STATE);

@@ -394,17 +394,28 @@ export function resetPendingHolds() {
   sentMemory.clear();
 }
 
+// A hold that names its queue row (`watch`) ends when the server says the
+// row is gone (the queue watcher, or the check a reloaded card runs), not on
+// the clock: a long queue can hold an answer past PENDING_TTL_MS, and an
+// expired hold would invite a duplicate the original row then also runs.
+// WATCHED_HOLD_TTL_MS only bounds what an abandoned hold leaves in storage.
+const WATCHED_HOLD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function holdTTL(watch: unknown): number {
+  return watch ? WATCHED_HOLD_TTL_MS : PENDING_TTL_MS;
+}
+
 function loadPending(cardId: string, currentKey: string): string | null {
   const mem = pendingMemory.get(cardId);
   if (mem) {
-    if (Date.now() - mem.at <= PENDING_TTL_MS && mem.after === keyDigest(currentKey)) return mem.action;
+    if (Date.now() - mem.at <= holdTTL(mem.watch) && mem.after === keyDigest(currentKey)) return mem.action;
     pendingMemory.delete(cardId);
   }
   try {
     const raw = window.localStorage.getItem(PENDING_PREFIX + cardId);
     if (!raw) return null;
-    const v = JSON.parse(raw) as { action?: unknown; at?: unknown; after?: unknown };
-    if (typeof v.action !== "string" || typeof v.at !== "number" || Date.now() - v.at > PENDING_TTL_MS) {
+    const v = JSON.parse(raw) as { action?: unknown; at?: unknown; after?: unknown; watch?: unknown };
+    if (typeof v.action !== "string" || typeof v.at !== "number" || Date.now() - v.at > holdTTL(v.watch)) {
       window.localStorage.removeItem(PENDING_PREFIX + cardId);
       return null;
     }
@@ -479,11 +490,11 @@ function pendingWatch(cardId: string): { send: string; watch: PendingWatch } | n
 /** When the card's current hold expires (ms since epoch), if it has one. */
 function pendingExpiry(cardId: string): number | null {
   const mem = pendingMemory.get(cardId);
-  if (mem) return mem.at + PENDING_TTL_MS;
+  if (mem) return mem.at + holdTTL(mem.watch);
   try {
     const raw = window.localStorage.getItem(PENDING_PREFIX + cardId);
-    const v = raw ? (JSON.parse(raw) as { at?: unknown }) : null;
-    return typeof v?.at === "number" ? v.at + PENDING_TTL_MS : null;
+    const v = raw ? (JSON.parse(raw) as { at?: unknown; watch?: unknown }) : null;
+    return typeof v?.at === "number" ? v.at + holdTTL(v.watch) : null;
   } catch {
     return null;
   }
@@ -1337,7 +1348,16 @@ function Tabs({ c }: { c: Component }) {
           );
         })}
       </div>
-      <div role="tabpanel" id={`${baseId}-panel`} aria-labelledby={`${baseId}-tab-${active}`} className="grid min-w-0 gap-3">
+      {/* Keyed by tab: each tab's subtree is its own, so a section opened
+          in one tab never carries over to the same-shaped section in the
+          next. */}
+      <div
+        key={Math.min(active, tabs.length - 1)}
+        role="tabpanel"
+        id={`${baseId}-panel`}
+        aria-labelledby={`${baseId}-tab-${Math.min(active, tabs.length - 1)}`}
+        className="grid min-w-0 gap-3"
+      >
         <Nodes list={current.children} />
       </div>
       {steps && tabs.length > 1 ? (
@@ -1697,7 +1717,13 @@ function Chart({ c }: { c: Component }) {
   const y = (v: number) => 8 + plotH - ((v / 2 - minV / 2) / span) * plotH;
   const n = Math.max(1, labels.length);
   const band = plotW / n;
-  const fmt = (v: number) => `${unit === "$" ? "$" : ""}${toText(Number(v.toPrecision(4)))}${unit && unit !== "$" ? ` ${unit}` : ""}`;
+  // Four significant digits for axis and tooltip labels; a value near the
+  // largest double can round past it, and then keeps its own finite form.
+  const short = (v: number) => {
+    const r = Number(v.toPrecision(4));
+    return toText(Number.isFinite(r) ? r : v);
+  };
+  const fmt = (v: number) => `${unit === "$" ? "$" : ""}${short(v)}${unit && unit !== "$" ? ` ${unit}` : ""}`;
   const labelEvery = Math.ceil(n / 12);
   return (
     <figure className="m-0 grid min-w-0 gap-1">

@@ -1159,7 +1159,7 @@ export function UserTurn({
     // their receipt note is shown here exactly as under a typed message.
     return (
       <>
-        <SubmissionBubble submission={submission} raw={message.content} notSent={message.notSent} />
+        <SubmissionBubble submission={submission} raw={message.content} notSent={message.notSent} message={message} />
         <InjectedContextNote text={message.injectedContext} />
       </>
     );
@@ -1167,7 +1167,7 @@ export function UserTurn({
   if (reply) {
     return (
       <>
-        <ReplyBubble reply={reply} notSent={message.notSent} />
+        <ReplyBubble reply={reply} notSent={message.notSent} message={message} />
         <InjectedContextNote text={message.injectedContext} />
       </>
     );

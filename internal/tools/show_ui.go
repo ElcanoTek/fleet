@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -78,6 +79,36 @@ func NewShowUITool() fantasy.AgentTool {
 // replay (set by internal/agentcore; nil in tests that do not need it).
 var ShowUIRedactor func(string) string
 
+// decodedRedacted reports whether redaction would alter any string the card
+// decodes to — a key or a value, at any depth.
+func decodedRedacted(input []byte, redact func(string) string) bool {
+	var v any
+	if json.Unmarshal(input, &v) != nil {
+		return false // not JSON: Validate refuses it
+	}
+	var walk func(any) bool
+	walk = func(x any) bool {
+		switch t := x.(type) {
+		case string:
+			return redact(t) != t
+		case []any:
+			for _, e := range t {
+				if walk(e) {
+					return true
+				}
+			}
+		case map[string]any:
+			for k, e := range t {
+				if redact(k) != k || walk(e) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(v)
+}
+
 // ShowUIResult builds the tool response for one call. Exported for tests.
 func ShowUIResult(callID string, input []byte) fantasy.ToolResponse {
 	// The browser draws the card from the REDACTED input: a value that
@@ -85,7 +116,10 @@ func ShowUIResult(callID string, input []byte) fantasy.ToolResponse {
 	// options would collapse into one and the answer could not say which was
 	// picked. Refuse such a card rather than validate what nobody sees.
 	if ShowUIRedactor != nil {
-		if s := string(input); ShowUIRedactor(s) != s {
+		// The wire text and every decoded string: JSON escapes (sk\u002d…)
+		// hide a secret from a scan of the raw text, but the browser shows
+		// the decoded value.
+		if s := string(input); ShowUIRedactor(s) != s || decodedRedacted(input, ShowUIRedactor) {
 			return fantasy.NewTextErrorResponse("UI_INVALID: the card was NOT shown — it contains a value that looks like a secret (an API key or token), which is redacted before the user sees the card. Do not put secrets in a card; use a label or an id that is not a credential, and call " + ShowUIToolName + " again.")
 		}
 	}

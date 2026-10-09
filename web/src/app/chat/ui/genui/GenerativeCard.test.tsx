@@ -1517,6 +1517,48 @@ describe("holds and other tabs", () => {
     expect(radios[0].name).toBe(radios[1].name);
   });
 
+  it("labels a chart value near the largest double as finite", () => {
+    const s = spec({
+      title: "C",
+      components: [{ type: "chart", kind: "bar", labels: ["a"], series: [{ name: "s", values: [Number.MAX_VALUE] }] }],
+    });
+    const { container } = render(<GenerativeCard cardId="mx" spec={s} onSubmit={() => {}} />);
+    expect(container.textContent).not.toContain("Infinity");
+  });
+
+  it("keeps a hold that names its queue row past the plain hold's lifetime", () => {
+    window.localStorage.clear();
+    const s = spec({ title: "L", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+    // Ten hours old: a plain hold would be gone, a watched one still holds.
+    window.localStorage.setItem(
+      "fleet.genui.pending.long",
+      JSON.stringify({ action: "a", at: Date.now() - 10 * 60 * 60 * 1000, after: "", send: "old", watch: { conv: "c", sid: "s", digest: "d" } }),
+    );
+    render(<GenerativeCard cardId="long" spec={s} onSubmit={() => {}} />);
+    expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
+  });
+
+  it("gives each tab its own subtree, so state does not carry between tabs", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "T",
+      components: [
+        {
+          type: "tabs",
+          tabs: [
+            { label: "One", children: [{ type: "section", title: "S1", collapsible: true, collapsed: true, children: [{ type: "text", text: "inside one" }] }] },
+            { label: "Two", children: [{ type: "section", title: "S2", collapsible: true, collapsed: true, children: [{ type: "text", text: "inside two" }] }] },
+          ],
+        },
+      ],
+    });
+    render(<GenerativeCard cardId="tk" spec={s} onSubmit={() => {}} />);
+    await user.click(screen.getByText("S1"));
+    expect(screen.getByText("inside one")).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Two" }));
+    expect(screen.queryByText("inside two")).toBeNull();
+  });
+
   it("expires a hold while the card stays mounted", async () => {
     vi.useFakeTimers();
     try {
