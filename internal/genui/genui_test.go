@@ -400,3 +400,71 @@ func TestDisabledDefaultsFixture(t *testing.T) {
 		})
 	}
 }
+
+// Codex round 41: repeater budgets charge what the browser can actually
+// render, no more and no less.
+func TestRepeaterBudgetEdges(t *testing.T) {
+	act := `],"actions":[{"id":"go","label":"Go"}]}`
+	// A disabled repeater cannot grow: it is budgeted at its opening items.
+	fields := strings.TrimSuffix(strings.Repeat(`{"type":"divider"},`, 11), ",")
+	dis := `{"title":"x","components":[{"type":"repeater","id":"r","label":"R","disabled":true,"fields":[` + fields + `]}` + act
+	if _, issues := Validate([]byte(dis)); len(issues) != 0 {
+		t.Fatalf("disabled repeater: %v", issues)
+	}
+	// A nested chart is charged once per reachable item, not once extra:
+	// two items × 8 series × 200 points is exactly the card budget.
+	labels := strings.TrimSuffix(strings.Repeat(`"l",`, 200), ",")
+	vals := strings.TrimSuffix(strings.Repeat(`1,`, 200), ",")
+	series := strings.TrimSuffix(strings.Repeat(`{"name":"s","values":[`+vals+`]},`, 8), ",")
+	chart := `{"title":"x","components":[{"type":"repeater","id":"c","label":"C","max_items":2,"fields":[{"type":"chart","kind":"line","labels":[` + labels + `],"series":[` + series + `]}]}` + act
+	if _, issues := Validate([]byte(chart)); len(issues) != 0 {
+		t.Fatalf("chart at the budget: %v", issues)
+	}
+	// Each item renders every choice option as a button.
+	opts := make([]string, 20)
+	for i := range opts {
+		opts[i] = strconv.Quote(strconv.Itoa(i))
+	}
+	choice := func(maxItems int) string {
+		return fmt.Sprintf(`{"title":"x","components":[{"type":"repeater","id":"r","label":"R","max_items":%d,"fields":[{"type":"choice","id":"c","label":"C","options":[%s]}]}`+act, maxItems, strings.Join(opts, ","))
+	}
+	// 21 rows per item (the choice and its 20 options).
+	if _, issues := Validate([]byte(choice(MaxCardRows / 21))); len(issues) != 0 {
+		t.Fatalf("choice within the budget: %v", issues)
+	}
+	if _, issues := Validate([]byte(choice(MaxCardRows/21 + 1))); len(issues) == 0 {
+		t.Fatal("choice options over the budget accepted")
+	}
+	// A list_input default is counted by the lines it splits into.
+	lines := make([]string, 200)
+	for i := range lines {
+		lines[i] = strconv.Itoa(i)
+	}
+	one, _ := json.Marshal([]string{strings.Join(lines, "\n")})
+	list := func(items int) string {
+		return fmt.Sprintf(`{"title":"x","components":[{"type":"repeater","id":"r","label":"R","max_items":%d,"fields":[{"type":"list_input","id":"l","label":"L","value":%s}]}`+act, items, one)
+	}
+	if _, issues := Validate([]byte(list(MaxListItems / 200))); len(issues) != 0 {
+		t.Fatalf("split list within the cap: %v", issues)
+	}
+	if _, issues := Validate([]byte(list(MaxListItems/200 + 1))); len(issues) == 0 || !strings.Contains(issues[0].Message, "list entries across the") {
+		t.Fatalf("split list over the cap: %v", issues)
+	}
+}
+
+// A required multi_select or include_exclude without free entry must send at
+// least one of its options, so the shortest one counts toward the answer.
+func TestRequiredCollectionChoiceCountsInAnswer(t *testing.T) {
+	long := strings.Repeat("a", 2000)
+	card := func(typ, extra string) string {
+		return `{"title":"x","components":[{"type":"repeater","id":"r","label":"R","min_items":200,"fields":[{"type":"` + typ + `","id":"m","label":"M","required":true` + extra + `,"options":["` + long + `"]}]}],"actions":[{"id":"go","label":"Go"}]}`
+	}
+	for _, typ := range []string{"multi_select", "include_exclude"} {
+		if _, issues := Validate([]byte(card(typ, ""))); len(issues) == 0 || !strings.Contains(fmt.Sprint(issues), "more than one answer carries") {
+			t.Fatalf("%s: %v", typ, issues)
+		}
+		if _, issues := Validate([]byte(card(typ, `,"allow_custom":true`))); len(issues) != 0 {
+			t.Fatalf("%s with allow_custom: %v", typ, issues)
+		}
+	}
+}

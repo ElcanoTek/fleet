@@ -9,6 +9,8 @@ import {
   initialValues,
   normalizeValues,
   parseListText,
+  scanListText,
+  MAX_LIST_TEXT,
   isCalendarDate,
   isWebUrl,
   parseCardSpec,
@@ -221,12 +223,47 @@ describe("restored repeater values", () => {
     const restored = normalizeValues(spec!, { lines: Array.from({ length: 5000 }, () => ({})) });
     expect((restored.lines as unknown[]).length).toBe(MAX_REPEATER_ITEMS);
   });
+
+  it("are capped at the repeater's own max_items", () => {
+    const spec = parseCardSpec(JSON.stringify({
+      title: "R",
+      components: [{ type: "repeater", id: "lines", max_items: 1, fields: [{ type: "number", id: "n" }] }],
+      actions: [{ id: "go", label: "Go" }],
+    }));
+    const restored = normalizeValues(spec!, { lines: Array.from({ length: 200 }, () => ({})) });
+    expect((restored.lines as unknown[]).length).toBe(1);
+  });
+
+  it("count each choice option against the row budget", () => {
+    const spec = parseCardSpec(JSON.stringify({
+      title: "R",
+      components: [{
+        type: "repeater",
+        id: "lines",
+        fields: [{ type: "choice", id: "c", options: Array.from({ length: 99 }, (_, i) => `o${i}`) }],
+      }],
+      actions: [{ id: "go", label: "Go" }],
+    }));
+    // 100 rows an item (the choice and its 99 options).
+    const restored = normalizeValues(spec!, { lines: Array.from({ length: 200 }, () => ({})) });
+    expect((restored.lines as unknown[]).length).toBe(20);
+  });
 });
 
 describe("pasted list text", () => {
   it("keeps one entry past the cap, not the whole paste", () => {
     const text = Array.from({ length: 30000 }, (_, i) => `l${i}`).join("\n");
     expect(parseListText(text, true)).toHaveLength(MAX_LIST_ITEMS + 1);
+  });
+
+  it("reports where it stopped so the field keeps only that prefix", () => {
+    const text = Array.from({ length: 30000 }, (_, i) => `l${i}`).join("\n");
+    const { items, end } = scanListText(text, true);
+    expect(items).toHaveLength(MAX_LIST_ITEMS + 1);
+    expect(parseListText(text.slice(0, end), true)).toEqual(items);
+    expect(end).toBeLessThan(text.length);
+    expect(scanListText("a\r\n\nb", true)).toEqual({ items: ["a", "b"], end: 5 });
+    expect(scanListText("x".repeat(MAX_LIST_TEXT + 10), true).end).toBe(MAX_LIST_TEXT);
   });
 });
 

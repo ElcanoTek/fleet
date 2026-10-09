@@ -347,6 +347,21 @@ function bounded(s: string): string {
   return s.length > MAX_EXPR_STRING ? s.slice(0, MAX_EXPR_STRING) : s;
 }
 
+// The last case conversion each way. Many templates may upper() or lower()
+// the same long text (a joined list is one cached string), and Unicode case
+// mapping can grow it, so each conversion is done once and stored bounded
+// rather than rebuilt per template per render.
+const caseCache: { upper?: [string, string]; lower?: [string, string] } = {};
+
+function convertCase(s: string, upper: boolean): string {
+  const key = upper ? "upper" : "lower";
+  const hit = caseCache[key];
+  if (hit && hit[0] === s) return hit[1];
+  const out = bounded(upper ? s.toUpperCase() : s.toLowerCase());
+  caseCache[key] = [s, out];
+  return out;
+}
+
 // The last join of each list: many templates may join (or show) the same
 // list, which is one array object for as long as it is unchanged, so each
 // joined string is built once, not once per template per render. One entry
@@ -482,8 +497,8 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
   number: ([v]) => numOrNull(num(v)),
   string: ([v]) => toText(v),
   // Case mapping can lengthen text (ß becomes SS): bounded like any string.
-  upper: ([v]) => bounded(toText(v).toUpperCase()),
-  lower: ([v]) => bounded(toText(v).toLowerCase()),
+  upper: ([v]) => convertCase(toText(v), true),
+  lower: ([v]) => convertCase(toText(v), false),
   join: ([v, sep]) => joinList(list(v), sep === undefined ? ", " : toText(sep)),
   contains: ([hay, needle]) => {
     if (typeof hay === "string") return hay.includes(toText(needle));

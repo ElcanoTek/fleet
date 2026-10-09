@@ -138,17 +138,19 @@ These are protocol constants in `internal/genui/spec.go`, not operator knobs:
 - 2,000 options per input, and 2,000 chosen entries per `multi_select` /
   `include_exclude` (custom entries included); 500 table rows, 20 columns;
   500 entries per `badges` / `facts` / `status_list` / `diff` list, and
-  2,000 table rows, list entries and repeater item fields (each starting
-  item times its fields, a table or list among them counted per item too)
-  across the whole card, with each repeater counted at the most items it can
-  grow to (`max_items`, 200 when unset), its charts' points and copied field
-  defaults too, since the user can add items up to it
+  2,000 table rows, list entries and repeater item fields (each item times
+  its fields and its `choice` options' buttons, a table or list among them
+  counted per item too) across the whole card, with each repeater counted at
+  the most items it can grow to (`max_items`, 200 when unset; a disabled
+  repeater at the items it opens with, since it cannot grow), its charts'
+  points and copied field defaults (a `list_input` default by its lines) too,
+  since the user can add items up to it
 - 8 chart series of 200 points, and 3,200 points × series across the card;
   6 actions
 - 200 repeater items, 20,000 `list_input` lines, and 20,000 collection-default
   entries across a repeater's starting items (each item copies its fields' defaults)
 - 500-character expressions; a string an expression builds (`join`, a list
-  shown as text, `+`) is cut at 1,000,000 characters in every context; a
+  shown as text, `+`, `upper`, `lower`) is cut at 1,000,000 characters in every context; a
   displayed template shows at most 2,000 characters of `{{ }}` output
   (longer results are clipped with "…"); `min_length` at most 20,000, and the required
   fields' `min_length` and shortest required option (all of them, shown or
@@ -223,7 +225,9 @@ to change. The loop that replaces a bespoke form:
   a draft) never puts a value the user cannot fix into a disabled input: a
   disabled input keeps the card's default (in a repeater item, a value the
   card itself set), a slider keeps only a value its range can hold, and
-  restored repeater items stay within the card-wide row budget.
+  restored repeater items stay within the repeater's `max_items` and the
+  card-wide row budget. A `list_input` keeps at most 1,000,000 characters of a
+  paste, and stops reading it one line past the 20,000-line cap.
 
 A card send goes through the composer's send path, but it leaves the composer
 alone: the text being typed stays, its pending attachments are not sent with

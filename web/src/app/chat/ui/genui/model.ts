@@ -177,25 +177,42 @@ export function walkInputs(list: Component[], visit: (c: Component) => void): vo
 
 const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
-/** The empty / default value an input starts with. */
-/** A pasted list: one item per line, trimmed, blanks dropped, deduped by default. */
 /**
- * The entries a pasted text holds. Collection stops one past MAX_LIST_ITEMS:
- * that is enough for the "At most 20,000 items" error, and a paste of
- * hundreds of thousands of lines is never kept, deduplicated or handed to
- * expressions in full.
+ * The most text a list input keeps. A list that long is already far past
+ * what one answer can send (MAX_SUBMISSION_BYTES), so the field shows its
+ * error either way; a bigger paste is cut here instead of being held and
+ * re-scanned on every edit.
  */
-export function parseListText(text: string, dedupe: boolean): string[] {
+export const MAX_LIST_TEXT = 1_000_000;
+
+/**
+ * The entries a pasted text holds, and how much of the text they came from.
+ * Scanning stops one entry past MAX_LIST_ITEMS: that is enough for the "At
+ * most 20,000 items" error, and a paste of hundreds of thousands of lines is
+ * never split, kept, deduplicated or handed to expressions in full. `end` is
+ * where the scan stopped, so the field can keep just that prefix.
+ */
+export function scanListText(text: string, dedupe: boolean): { items: string[]; end: number } {
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const line of text.split(/[\r\n]+/)) {
-    const t = line.trim();
+  const limit = Math.min(text.length, MAX_LIST_TEXT);
+  let start = 0;
+  while (start < limit) {
+    let stop = start;
+    while (stop < limit && text[stop] !== "\n" && text[stop] !== "\r") stop++;
+    const t = text.slice(start, stop).trim();
+    start = stop + 1;
     if (t === "" || (dedupe && seen.has(t))) continue;
     seen.add(t);
     out.push(t);
-    if (out.length > MAX_LIST_ITEMS) break;
+    if (out.length > MAX_LIST_ITEMS) return { items: out, end: Math.min(stop, limit) };
   }
-  return out;
+  return { items: out, end: limit };
+}
+
+/** A pasted list: one item per line, trimmed, blanks dropped, deduped by default. */
+export function parseListText(text: string, dedupe: boolean): string[] {
+  return scanListText(text, dedupe).items;
 }
 
 export function normalizeList(items: string[], dedupe: boolean): string[] {
@@ -355,7 +372,7 @@ export function normalizeValues(spec: CardSpec, saved: Values | null | undefined
   walkInputs(spec.components, (c) => {
     // An item renders its fields, and any table or display list among them.
     const fields = children(c, "fields");
-    const weight = c.type === "repeater" ? Math.max(1, countComponents(fields)) + displayRows(fields) : 0;
+    const weight = c.type === "repeater" ? Math.max(1, countComponents(fields)) + choiceOptions(fields) + displayRows(fields) : 0;
     if (c.id && Object.prototype.hasOwnProperty.call(saved, c.id)) {
       const raw = saved[c.id];
       // Restored repeaters are cut to the budget BEFORE their items are
@@ -379,7 +396,14 @@ export function normalizeValues(spec: CardSpec, saved: Values | null | undefined
   for (const { c, raw, weight, perItem } of pending) {
     // Rows, and (like the server's cap on starting items) at most
     // MAX_LIST_ITEMS default entries copied across the items.
-    const fit = Math.min(Math.floor(Math.max(0, rowsLeft) / weight), perItem ? Math.floor(MAX_LIST_ITEMS / perItem) : Infinity);
+    // And never more than the repeater's own max_items, which the server
+    // budgeted the card by.
+    const cap = typeof c.max_items === "number" ? Math.max(0, c.max_items) : MAX_REPEATER_ITEMS;
+    const fit = Math.min(
+      Math.floor(Math.max(0, rowsLeft) / weight),
+      perItem ? Math.floor(MAX_LIST_ITEMS / perItem) : Infinity,
+      cap,
+    );
     const v = restoredValue(c, raw.slice(0, fit));
     if (!Array.isArray(v)) continue;
     rowsLeft -= v.length * weight;
@@ -393,7 +417,10 @@ function defaultEntries(fields: Component[]): number {
   let n = 0;
   walkInputs(fields, (f) => {
     const v = f.value;
-    if (Array.isArray(v)) n += v.length;
+    // A list_input default becomes its normalized lines (listCount in spec.go).
+    if (Array.isArray(v) && f.type === "list_input" && v.every((x) => typeof x === "string"))
+      n += normalizeList(v.flatMap((x: string) => x.split(/[\r\n]+/)), f.dedupe !== false).length;
+    else if (Array.isArray(v)) n += v.length;
     else if (v && typeof v === "object") {
       const o = v as Record<string, unknown>;
       n += (Array.isArray(o.include) ? o.include.length : 0) + (Array.isArray(o.exclude) ? o.exclude.length : 0);
@@ -420,6 +447,15 @@ function displayRows(list: Component[], intoRepeaters = true): number {
 }
 
 /** Components in a list, nested ones included (countComponents in spec.go). */
+/** Option buttons the choice inputs in a list render (choiceOptions in spec.go). */
+function choiceOptions(list: Component[]): number {
+  let n = 0;
+  walkInputs(list, (f) => {
+    if (f.type === "choice" && Array.isArray(f.options)) n += f.options.length;
+  });
+  return n;
+}
+
 function countComponents(list: Component[]): number {
   let n = 0;
   for (const c of list) {

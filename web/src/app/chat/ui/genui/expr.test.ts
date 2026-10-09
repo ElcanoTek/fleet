@@ -134,6 +134,17 @@ describe("bounded display", () => {
     expect(evaluate("len(join(few, sep))", { few: ["a", "b"], sep: "y".repeat(20000) })).toBe(20002);
   });
 
+  it("converts case once per text and keeps the result bounded", () => {
+    // "ß" upper-cases to "SS": the conversion can outgrow its input.
+    const lines = Array.from({ length: 20000 }, () => "ß".repeat(30));
+    const scope = { lines };
+    const up = evaluate("upper(join(lines))", scope) as string;
+    expect(up.length).toBe(MAX_EXPR_STRING);
+    expect(evaluate("upper(join(lines))", scope)).toBe(up);
+    expect(evaluate('lower("AbC")', {})).toBe("abc");
+    expect(evaluate('upper("aBc")', {})).toBe("ABC");
+  });
+
   it("shows small values instead of rounding them to zero", () => {
     expect(renderTemplate("{{ n }}", { n: 1e-11 })).toBe("1e-11");
     expect(renderTemplate("{{ a + b }}", { a: 0.1, b: 0.2 })).toBe("0.3");

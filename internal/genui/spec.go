@@ -965,7 +965,8 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 // measured as the browser measures it (submissionBytes in model.ts: the
 // message JSON-escaped). Every input a send can carry costs its key, quoting
 // and smallest value (collect sends visible inputs even when empty), and a
-// required text input its min_length on top; a repeater's fields count once
+// required text input its min_length (a required option input its shortest
+// option) on top; a repeater's fields count once
 // per item it starts with (the user can remove items only down to
 // min_items). Inputs behind visible_if count too: which of them a send
 // carries depends on the state the action is pressed in, so the sum is a
@@ -1017,8 +1018,13 @@ func (v *validator) requiredMinBytes() int {
 				if lo, _ := f.obj["min_length"].(float64); lo > 0 {
 					size += int(min(lo, MaxStringLen))
 				}
-			case "select", "choice":
-				// The shortest option the answer can be.
+			case "select", "choice", "multi_select", "include_exclude":
+				// The shortest option the answer can be (a required
+				// collection holds at least one entry; free entry can be
+				// as short as one character, so it adds nothing here).
+				if custom, _ := f.obj["allow_custom"].(bool); custom {
+					break
+				}
 				if opts, ok := optionValues(f.obj["options"]); ok && len(opts) > 0 {
 					short := wireLen(opts[0])
 					for _, o := range opts[1:] {
@@ -1051,13 +1057,43 @@ func defaultEntries(list []any) int {
 	for _, f := range fields {
 		switch val := f["value"].(type) {
 		case []any:
-			n += len(val)
+			// A list_input default splits on line breaks in the browser;
+			// count what it becomes, not the array length.
+			typ, _ := f["type"].(string)
+			if allStrings(val) {
+				n += listCount(typ, f, val)
+			} else {
+				n += len(val)
+			}
 		case map[string]any:
 			inc, _ := val["include"].([]any)
 			exc, _ := val["exclude"].([]any)
 			n += len(inc) + len(exc)
 		}
 	}
+	return n
+}
+
+func allStrings(arr []any) bool {
+	for _, e := range arr {
+		if _, ok := e.(string); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// choiceOptions counts the option buttons the choice inputs in a list render
+// (a choice renders every option as a radio or segmented button).
+func choiceOptions(list []any) int {
+	n := 0
+	walkComponents(list, func(m map[string]any) {
+		if m["type"] == "choice" {
+			if opts, ok := m["options"].([]any); ok {
+				n += len(opts)
+			}
+		}
+	})
 	return n
 }
 
@@ -1260,10 +1296,18 @@ func (v *validator) repeaterRules(path string, obj map[string]any, num func(stri
 		if okHi {
 			most = max(initialItems(obj), int(min(hi, MaxRepeaterItems)))
 		}
+		// A disabled repeater hides add, duplicate and remove: it renders
+		// exactly the items it opens with.
+		if dis, _ := obj["disabled"].(bool); dis {
+			most = initialItems(obj)
+		}
+		// Walking the fields already charged one item's tables, lists and
+		// charts; the other items add the rest. Every item renders its
+		// components and each choice's option buttons.
 		rows, points := nestedDisplay(kids)
-		weight := max(1, countComponents(kids)) + rows
-		v.countRows(path, most*weight)
-		v.countPoints(path, most*points)
+		weight := max(1, countComponents(kids)) + choiceOptions(kids)
+		v.countRows(path, most*weight+max(most-1, 0)*rows)
+		v.countPoints(path, max(most-1, 0)*points)
 		if n := most * defaultEntries(kids); n > MaxListItems {
 			v.addf(path, "its field defaults hold %d list entries across the %d items it can reach, more than %d; shorten the defaults or lower max_items", n, most, MaxListItems)
 		}
@@ -1847,7 +1891,7 @@ func (v *validator) actions(raw any, hasInput bool) {
 			v.addf(ap, "can never be pressed: whatever the inputs are, it is hidden or disabled (check visible_if and disabled_if together)")
 		}
 		if n := v.requiredMinBytes(); validating && n > MaxSubmissionBytes {
-			v.addf(ap, "the card's inputs (each key, and the required fields' min_length) add up to an answer of at least %d bytes, more than one answer carries (%d bytes); lower min_length or split the card", n, MaxSubmissionBytes)
+			v.addf(ap, "the card's inputs (each key, the required fields' min_length and shortest options) add up to an answer of at least %d bytes, more than one answer carries (%d bytes); lower min_length, shorten the options or split the card", n, MaxSubmissionBytes)
 		}
 		kind, _ := obj["kind"].(string)
 		if kind == "" {

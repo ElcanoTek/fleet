@@ -28,6 +28,7 @@ import { evaluateSafe, renderTemplate, toText, truthy, type Scope } from "./expr
 import {
   buildReplyMessage,
   parseListText,
+  scanListText,
   buildSubmissionMessage,
   children,
   collect,
@@ -2205,8 +2206,11 @@ function ListInput({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         placeholder={str(c.placeholder) || "One per line"}
         value={text}
         onChange={(e) => {
-          setText(e.target.value);
-          onChange?.(parseListText(e.target.value, dedupe));
+          // Keep only the text the entries came from: a paste far past
+          // the item cap is cut where scanning stopped, not held whole.
+          const { items, end } = scanListText(e.target.value, dedupe);
+          setText(end < e.target.value.length ? e.target.value.slice(0, end) : e.target.value);
+          onChange?.(items);
         }}
       />
       <div className="text-[0.72rem] text-[var(--color-text-muted)]">
