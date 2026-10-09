@@ -69,6 +69,12 @@ import {
   type TranscriptRow,
 } from "./transcriptRows";
 import { useStickToBottom } from "./stickToBottom";
+import { ReplyBubble, SubmissionBubble } from "./genui/SubmissionBubble";
+import { answerOf, cardSpecOf, deriveGenUiState, GenUiContext, isRenderableCardCall } from "./genui/transcript";
+// Generative-UI cards (show_ui) carry their own renderer and the markdown
+// pipeline; lazy-loaded like AssistantMarkdown so chats without a card never
+// pay for it.
+const GenerativeCard = lazy(() => import("./genui/GenerativeCard"));
 
 export type ChatTranscriptProps = {
   // Scroll container + bottom sentinel refs (owned by ChatExperience)
@@ -85,7 +91,23 @@ export type ChatTranscriptProps = {
   pills: ProtocolPill[];
   activePillId: string | null;
   setActivePillId: Dispatch<SetStateAction<string | null>>;
-  submitPrompt: (submittedPrompt: string) => void | Promise<void>;
+  submitPrompt: (
+    submittedPrompt: string,
+    opts?: {
+      fromCard?: boolean;
+      onUnsent?: () => void;
+      onHeld?: (convId: string, submissionId: string) => void;
+      stillHeld?: () => boolean;
+    },
+  ) => void | Promise<void | boolean>;
+  /** Resumes the watch on a card answer held across a page load. */
+  resumeHeldCardSend?: (
+    convId: string,
+    text: string | ((text: string) => boolean),
+    submissionId: string,
+    onUnsent: () => void,
+    stillHeld?: () => boolean,
+  ) => void;
   setPrompt: Dispatch<SetStateAction<string>>;
 
   // Compaction / summarize
@@ -212,6 +234,7 @@ export function ChatTranscript({
   activePillId,
   setActivePillId,
   submitPrompt,
+  resumeHeldCardSend,
   setPrompt,
   isSummarizing,
   summarizeStartedAt,
@@ -389,6 +412,10 @@ export function ChatTranscript({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minimapEntries, conversationRef]);
 
+  // Card state (spec, submission, replaced) is derived from the transcript
+  // itself — see genui/transcript.ts.
+  const genUi = useMemo(() => deriveGenUiState(messages), [messages]);
+
   const jumpToMessage = (id: number) => {
     const entry = minimapEntries.find((e) => e.id === id);
     if (!entry) return;
@@ -399,6 +426,7 @@ export function ChatTranscript({
   };
 
   return (
+          <GenUiContext.Provider value={genUi}>
           <section
             ref={conversationRef}
             // An aria-labelled <section> already exposes the implicit `region`
@@ -764,6 +792,44 @@ export function ChatTranscript({
                                 <LoadingLogo size={18} className="mt-1 opacity-60" />
                               ) : null}
 
+                              {toolCalls.some(isRenderableCardCall) ? (
+                                <div className="grid min-w-0 gap-2">
+                                  {toolCalls.filter(isRenderableCardCall).map((tc) => {
+                                    // A reused tool-call id belongs to the newest card;
+                                    // an older card with it shows as replaced.
+                                    const owns = genUi.owners.get(tc.id) === tc;
+                                    const spec = owns ? genUi.cards.get(tc.id) : cardSpecOf(tc);
+                                    if (!spec) return null;
+                                    return (
+                                      <Suspense
+                                        key={tc.id}
+                                        fallback={
+                                          <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] px-3 py-2 text-[0.75rem] text-[var(--color-text-muted)]">
+                                            {spec.title}
+                                          </div>
+                                        }
+                                      >
+                                        <GenerativeCard
+                                          cardId={tc.id}
+                                          spec={spec}
+                                          submission={owns ? (genUi.submissions.get(tc.id) ?? null) : null}
+                                          reply={owns ? (genUi.replies.get(tc.id) ?? null) : null}
+                                          superseded={!owns || genUi.superseded.has(tc.id)}
+                                          readOnly={!owns || undefined}
+                                          occurrence={genUi.occurrences.get(tc) ?? 0}
+                                          retired={isPreSummary}
+                                          storageScope={realConvId(currentConvKey) ?? currentConvKey}
+                                          onSubmit={(text, onUnsent, onHeld, stillHeld) =>
+                                            submitPrompt(text, { fromCard: true, onUnsent, onHeld, stillHeld })
+                                          }
+                                          onResumeHeld={resumeHeldCardSend}
+                                        />
+                                      </Suspense>
+                                    );
+                                  })}
+                                </div>
+                              ) : null}
+
                               {message.retrying ? (
                                 <div
                                   className="flex items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]"
@@ -1065,6 +1131,7 @@ export function ChatTranscript({
               )}
             </div>
           </section>
+          </GenUiContext.Provider>
   );
 }
 
@@ -1090,6 +1157,27 @@ export function UserTurn({
   editRequestSignal: number;
   onResend: (edited: string) => void;
 }) {
+  const { sub: submission, reply } = answerOf(message);
+  if (submission) {
+    // A card submission: show the answers by label, not the JSON the model
+    // reads. No Edit — the card's own "Edit and resend" is the way to amend.
+    // Attachments staged in the composer ride along on a card answer too, so
+    // their receipt note is shown here exactly as under a typed message.
+    return (
+      <>
+        <SubmissionBubble submission={submission} raw={message.content} notSent={message.notSent} message={message} />
+        <InjectedContextNote text={message.injectedContext} />
+      </>
+    );
+  }
+  if (reply) {
+    return (
+      <>
+        <ReplyBubble reply={reply} notSent={message.notSent} message={message} />
+        <InjectedContextNote text={message.injectedContext} />
+      </>
+    );
+  }
   return (
     <>
       <UserBubble

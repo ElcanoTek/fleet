@@ -105,6 +105,10 @@ func queueItemsPayload(items []store.InputQueueRow) []map[string]any {
 		out = append(out, map[string]any{
 			"id":              it.ID,
 			"client_input_id": it.ClientInputID,
+			// The submitting client's own identity for the row (#1592), so a
+			// browser whose POST response was lost can confirm its input was
+			// queued before reporting it sent.
+			"submission_id":   it.SubmissionID,
 			"mode":            it.Mode,
 			"state":           it.State,
 			"position":        it.Position,

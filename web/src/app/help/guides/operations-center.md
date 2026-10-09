@@ -260,8 +260,27 @@ cover reading it, so it says "available" rather than claiming none was ever
 written. The
 record carries its own action strip, so **Edit**, **Resubmit**, **Delete**,
 **History**, **Discuss in chat**, and **Download logs** are all reachable from
-here without returning to the board. For a **running** task the same view
-attaches live, streaming each step as it happens. When the run maintains a plan,
+here without returning to the board.
+
+The transcript reads as a timeline. Each tool call is one row with its result
+folded in. The row shows a step number, an icon and colour for the kind of tool
+(Python, shell, files, email, outbound send, audit, plan, other connectors),
+a one-line summary, and Done or Failed. Click a row to open it. Python and
+shell steps show their code highlighted and their output as terminal text.
+Other tools show their arguments as labelled rows and their result as
+formatted JSON. A failed step shows its error line even when it is closed. Long code
+and output show their first lines with **Show all**. The task prompt is clipped
+behind **Show full prompt**. The runtime's own notes appear as slim rows between
+steps: a context checkpoint, or history compacted. Where the run recorded it,
+the summary the run continued from after a compaction appears too. A run that
+aborted ends with a red banner saying why. Above the
+timeline, a strip with one tick per step shows the whole run at a glance, with
+failures in red. Click a tick to jump to that step. The search box and the
+filter chips (**Errors**, each tool, each model) narrow the timeline, and
+**Expand all** / **Collapse all** open or close every step.
+
+For a **running** task the same view attaches live, streaming each step as it
+happens, in the same step rows. When the run maintains a plan,
 the live view shows it as a checklist ticking from to-do to done. A **Stop run**
 button is there if a live run needs halting; the record will note who stopped it.
 
@@ -306,7 +325,9 @@ row. It is a convenience, not a guarantee — a deployment can switch it off, an
 generating it is best-effort — so if the row has no analysis, move straight on
 to the transcript rather than hunting for it.
 
-**3 · Read the transcript.** The log shows every step the run took. If the task
+**3 · Read the transcript.** The log shows every step the run took. Start
+with the **Errors** chip or the red ticks in the overview strip, then read the
+step before each failure. If the task
 retried, the record keeps each attempt; a picker in the log view switches between
 the latest transcript and superseded ones, so an earlier failure is never papered
 over by a later retry.

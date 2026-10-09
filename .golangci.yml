@@ -1,8 +1,8 @@
 # golangci-lint v2 configuration
 # https://golangci-lint.run/docs/configuration/
 #
-# CI pins golangci-lint to v2.13.1 (see .github/workflows/ci.yml:
-# golangci/golangci-lint-action `version: v2.13.1`). Keep these in sync so a
+# CI pins golangci-lint to v2.14.0 (see .github/workflows/ci.yml:
+# golangci/golangci-lint-action `version: v2.14.0`). Keep these in sync so a
 # local `golangci-lint run` matches CI exactly — drifting the binary version
 # can surface or hide findings and make the full-gate flap.
 #
@@ -12,6 +12,9 @@
 # golangci-lint is lower than the targeted Go version (1.27.0)"). Upstream
 # keeps its own module minimum at latest-1 and ships the release that supports
 # a new Go days after that Go lands, so bumping go.mod means bumping this too.
+# Even a patch release can need it: go1.27.2 raised the compiler's export
+# data version, which v2.13.x cannot read ("export data version 5 is greater
+# than maximum supported version 4"); v2.14.0 can.
 version: "2"
 
 linters:

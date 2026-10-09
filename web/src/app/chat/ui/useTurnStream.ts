@@ -35,11 +35,31 @@ import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { mcpAccountOverrides } from "./mcpAccounts";
 import { allocMessageIds } from "./messageIds";
+import {
+  dropRetryHold,
+  noteRetryHold,
+  parseReplyMessage,
+  parseSubmissionMessage,
+  RESEND_EVENT,
+  retryHoldPending,
+  type ResendDetail,
+} from "./genui/model";
 import { enabledOptionalMcpServerNames } from "./mcpSelection";
 import {
   createRecoveryElection,
   type RecoveryElection,
 } from "./recoveryElection";
+
+/**
+ * A sent message as a held card answer names it: the text itself, or (for a
+ * hold restored from browser storage, which keeps only a digest so several
+ * large answers cannot fill the quota) a test that matches it.
+ */
+export type SentText = string | ((text: string) => boolean);
+
+function isSentText(candidate: string, sent: SentText): boolean {
+  return typeof sent === "string" ? candidate === sent : sent(candidate);
+}
 
 // One pending input in a conversation's #785 queue (wire shape of
 // queue.updated / GET /queue items).
@@ -51,6 +71,8 @@ export type QueuedInput = {
   position: number;
   message_preview: string;
   has_attachments: boolean;
+  /** The submitting client's identity for the row (#1592); "" if none. */
+  submission_id?: string;
 };
 import { formatBytes } from "./formatters";
 import type { ConversationSummary, MCPServerInfo } from "./chat-experience";
@@ -584,7 +606,29 @@ export interface UseTurnStream {
   // checkStreamLiveness across every attached conversation, not just the
   // active one. No-op while the tab is hidden.
   sweepStreamLiveness: (opts?: { force?: boolean }) => Promise<void>;
-  submitPrompt: (submittedPrompt: string) => Promise<void>;
+  submitPrompt: (
+    submittedPrompt: string,
+    opts?: {
+      fromCard?: boolean;
+      onUnsent?: () => void;
+      onHeld?: (convId: string, submissionId: string) => void;
+      // Whether the card still holds this send: once it does not (the user
+      // pressed Unlock), the server checks for it stop.
+      stillHeld?: () => boolean;
+    },
+  ) => Promise<boolean>;
+  /**
+   * Re-arms the watch on a card answer held across a page load: the stored
+   * hold names the queue row, and this asks the server (and watches the
+   * queue) until the row lands or is gone, releasing the hold if it is gone.
+   */
+  resumeHeldCardSend: (
+    convId: string,
+    text: SentText,
+    submissionId: string,
+    onUnsent: () => void,
+    stillHeld?: () => boolean,
+  ) => void;
   regenerateLastAssistant: () => Promise<void>;
   resendUserMessage: (
     userMessageId: number,
@@ -779,11 +823,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   };
   const refreshQueue = async (
     convId: string,
+    signal?: AbortSignal,
   ): Promise<QueuedInput[] | null> => {
     const url = conversationApiUrl(convId, "/queue");
     if (!url) return null;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, signal ? { signal } : undefined);
       if (!res.ok) return null;
       const body = (await res.json()) as { items?: QueuedInput[] };
       const items = body.items ?? [];
@@ -922,6 +967,45 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // The server did not answer — the caller must NOT read this as "no
       // answer exists". It leaves the slot mid-flight and re-asks later.
       return "unreachable";
+    }
+  };
+
+  // submissionLanded answers, for a submission whose POST response was lost:
+  // does the server hold it? A queue row with its submission id says "yes".
+  // So does a persisted copy beyond the ones this client already accounts
+  // for — a queued input can drain and complete before the queue is read,
+  // and a completed row is no longer listed. "no" needs both reads to have
+  // answered; a read that could not be made is "unknown", never "no" — the
+  // server may well hold the input, and a retry would duplicate it.
+  const submissionLanded = async (
+    convId: string,
+    text: SentText,
+    submissionId: string,
+  ): Promise<"yes" | "no" | "unknown"> => {
+    // Both reads are bounded like recovery's own: a connection accepted and
+    // then blackholed would otherwise hang the card in Sending… for good. A
+    // timeout is "could not ask", so it reads as unknown.
+    const queued = await refreshQueue(convId, recoveryRequestSignal());
+    if (queued?.some((q) => q.submission_id === submissionId)) return "yes";
+    const url = conversationApiUrl(convId);
+    if (!url) return queued ? "no" : "unknown";
+    try {
+      const res = await fetch(url, { cache: "no-store", signal: recoveryRequestSignal() });
+      if (!res.ok) return "unknown";
+      const data = (await res.json()) as { history?: HistoryEntry[] | null };
+      const persisted = (data.history ?? []).filter(
+        (e) => {
+          const t = (e.content as { text?: unknown } | undefined)?.text;
+          return e.role === "user" && typeof t === "string" && isSentText(t, text);
+        },
+      ).length;
+      const known = (messagesByConvRef.current.get(convId) ?? []).filter(
+        (m) => m.role === "user" && isSentText(m.content, text) && !m.notSent,
+      ).length;
+      if (persisted > known) return "yes";
+      return queued ? "no" : "unknown";
+    } catch {
+      return "unknown";
     }
   };
 
@@ -1126,6 +1210,23 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (owned && !attachedConvIdsRef.current.has(convId)) {
       markConvIdle(convId);
     }
+    if (owned) {
+      const waiters = recoveryWaitersRef.current.get(convId);
+      recoveryWaitersRef.current.delete(convId);
+      for (const w of waiters ?? []) w();
+    }
+  };
+
+  // Callers waiting for a conversation's recovery to end (a card send whose
+  // outcome the chain owns): released with the chain, never on a timer.
+  const recoveryWaitersRef = useRef(new Map<string, (() => void)[]>());
+  const recoveryReleased = (convId: string): Promise<void> => {
+    if (!recoveryOwns(convId)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const list = recoveryWaitersRef.current.get(convId) ?? [];
+      list.push(resolve);
+      recoveryWaitersRef.current.set(convId, list);
+    });
   };
 
   // recoveryDelayFor is the backoff, then a steady beat that itself lengthens
@@ -3453,7 +3554,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // for the recovery chain to recover and attaching to whatever /inflight
     // reports (a previous turn still inside its retain window, say) would
     // replay the wrong turn into this slot (#1584).
-    accepted?: { value: boolean },
+    accepted?: { value: boolean; queued?: boolean },
     // Set on the one resend a lockdown model refusal is allowed to trigger
     // (#1588), so a server that refuses the very slug it just named cannot
     // bounce the turn between us forever.
@@ -3537,6 +3638,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             !(m.id === assistantId - 1 && m.role === "user"),
         ),
       );
+      // Queued is accepted: the server holds this submission and will run it
+      // (callers such as a generative-UI card must not offer to resend it).
+      if (accepted) {
+        accepted.value = true;
+        accepted.queued = true;
+      }
       return;
     }
 
@@ -3697,7 +3804,40 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
     }
 
-    await submitPrompt(lastUser.content);
+    // A card's answer is retried as a card send: it leaves the composer's
+    // text and pending attachments alone, like the original click did. The
+    // card that owns it sends it itself when it is mounted, so the retry
+    // holds the card (and watches its queue row) exactly like a click; a
+    // card scrolled out of the virtualized transcript falls back to a plain
+    // card send.
+    const answer = parseSubmissionMessage(lastUser.content) ?? parseReplyMessage(lastUser.content);
+    if (answer && typeof window !== "undefined") {
+      // Let the transcript drop the retried bubble first, so the card holds
+      // against the answer it will show without it.
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      const detail: ResendDetail = { cardId: answer.cardId, actionId: answer.actionId, message: lastUser.content };
+      window.dispatchEvent(new CustomEvent(RESEND_EVENT, { detail }));
+      if (detail.handled) {
+        await detail.done;
+        return;
+      }
+    }
+    if (!answer) {
+      await submitPrompt(lastUser.content);
+      return;
+    }
+    // No mounted card took it: the hold the card would set is kept for it
+    // to take over when it scrolls back into view (takeRetryHold).
+    let sid = "";
+    await submitPrompt(lastUser.content, {
+      fromCard: true,
+      onHeld: (conv, submissionId) => {
+        sid = submissionId;
+        noteRetryHold(answer.cardId, { conv, sid, actionId: answer.actionId, message: lastUser.content });
+      },
+      onUnsent: () => dropRetryHold(answer.cardId, sid),
+      stillHeld: () => retryHoldPending(answer.cardId, sid),
+    });
   };
 
   const uploadPendingAttachments = async (
@@ -3735,7 +3875,112 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
   };
 
-  const submitPrompt = async (submittedPrompt: string) => {
+  // `fromCard`: a generative-UI card is sending its answer. Said by the
+  // caller, never inferred from the text — a user may type anything.
+  // A card answer accepted into the queue holds its card until it reaches the
+  // transcript. If its row leaves the queue some other way (Remove from
+  // queue, a Stop that cancels queued input), nothing would ever release
+  // that hold: so each queued card answer is watched, and when a snapshot no
+  // longer lists it the server is asked once whether it landed.
+  const queuedCardSendsRef = useRef(
+    new Map<string, { convId: string; text: SentText; onUnsent: () => void; stillHeld?: () => boolean }>(),
+  );
+  const watchQueuedCardSend = (
+    convId: string,
+    text: SentText,
+    submissionId: string,
+    onUnsent: () => void,
+    stillHeld?: () => boolean,
+  ) => {
+    queuedCardSendsRef.current.set(submissionId, { convId, text, onUnsent, stillHeld });
+  };
+  useEffect(() => {
+    for (const [sid, w] of queuedCardSendsRef.current) {
+      // An unlocked card is no longer waiting: stop watching for it.
+      if (w.stillHeld && !w.stillHeld()) {
+        queuedCardSendsRef.current.delete(sid);
+        continue;
+      }
+      const items = queuedInputs.get(w.convId);
+      if (!items || items.some((q) => q.submission_id === sid)) continue;
+      queuedCardSendsRef.current.delete(sid);
+      // "yes" (it drained into a turn) leaves the card to the transcript;
+      // "no" releases it; unknown keeps asking.
+      recheckHeldSend(w.convId, w.text, sid, w.onUnsent, 0, true, undefined, w.stillHeld);
+    }
+    // recheckHeldSend is stable in behavior; the effect is about snapshots.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queuedInputs]);
+
+  const resumedHeldSendsRef = useRef(new Set<string>());
+  const resumeHeldCardSend = (
+    convId: string,
+    text: SentText,
+    submissionId: string,
+    onUnsent: () => void,
+    stillHeld?: () => boolean,
+  ) => {
+    // Once per row: every remount of the card (a virtualized transcript)
+    // would otherwise start another chain of server checks.
+    if (resumedHeldSendsRef.current.has(submissionId)) return;
+    resumedHeldSendsRef.current.add(submissionId);
+    // Asked about now (the snapshot this page loaded may already lack the
+    // row); while the server still has it, watched against later snapshots
+    // like any queued card answer.
+    recheckHeldSend(
+      convId,
+      text,
+      submissionId,
+      onUnsent,
+      0,
+      true,
+      () => watchQueuedCardSend(convId, text, submissionId, onUnsent, stillHeld),
+      stillHeld,
+    );
+  };
+
+  // recheckHeldSend: a card send held as "possibly sent" that no recovery
+  // chain will settle. Re-asks the server until it answers; "no" calls
+  // onUnsent, "yes" ends quietly, and an unmount — or the card letting go of
+  // the send (stillHeld false: the user pressed Unlock) — stops it.
+  const recheckHeldSend = (
+    convId: string,
+    text: SentText,
+    submissionId: string,
+    onUnsent: () => void,
+    attempt = 0,
+    now = false,
+    onLanded?: () => void,
+    stillHeld?: () => boolean,
+  ) => {
+    const ask = async () => {
+      if (recoveryUnmountedRef.current || (stillHeld && !stillHeld())) return;
+      const landed = await submissionLanded(convId, text, submissionId);
+      if (recoveryUnmountedRef.current) return;
+      if (landed === "no") onUnsent();
+      else if (landed === "yes") onLanded?.();
+      else recheckHeldSend(convId, text, submissionId, onUnsent, attempt + 1, false, onLanded, stillHeld);
+    };
+    if (now) void ask();
+    else window.setTimeout(() => void ask(), recoveryDelayFor(attempt));
+  };
+
+  const submitPrompt = async (
+    submittedPrompt: string,
+    // onUnsent: a card send reported as held (uncertain) whose absence the
+    // server later proves — the card releases its hold.
+    // onHeld: the conversation and queue row a held card send is watched
+    // by, so the card can store them with its hold and resume the watch
+    // after a page load (resumeHeldCardSend).
+    opts?: {
+      fromCard?: boolean;
+      onUnsent?: () => void;
+      onHeld?: (convId: string, submissionId: string) => void;
+      // Whether the card still holds this send: once it does not (the user
+      // pressed Unlock), the server checks for it stop.
+      stillHeld?: () => boolean;
+    },
+  ): Promise<boolean> => {
     const value = submittedPrompt.trim();
     // composerKey is the slot the user was typing into (real conv id or
     // the PENDING singleton for the empty new-chat view). All the
@@ -3744,13 +3989,26 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // Submit.
     const convId = activeConversationIdRef.current;
     const composerKey = convId ?? PENDING_CONV_KEY;
-    if (!value || !userEmail) return;
-    if (modelError) return;
+    if (!value || !userEmail) return false;
+    if (modelError) return false;
+    // A generative-UI card's answer is not composer text: it neither clears
+    // nor restores what the user is typing, and never takes the composer's
+    // pending attachments with it.
+    const fromCard = opts?.fromCard === true;
+    const clearComposer = () => {
+      if (!fromCard) setPromptForKey(composerKey, "");
+    };
+    const restoreComposer = () => {
+      if (!fromCard) setPromptForKey(composerKey, value);
+    };
     // Busy conversation (#785): the submission QUEUES server-side instead of
     // being dropped (and instead of the old implicit cancel). The composer
     // clears; the chip strip under it tracks the queued input's lifecycle.
     if (convId && streamingConvsRef.current.has(convId)) {
-      setPromptForKey(composerKey, "");
+      clearComposer();
+      // This submission's identity (#1592), stored on the queue row: if the
+      // response is lost, the queue snapshot is how we learn it was taken.
+      const queueSubmissionId = crypto.randomUUID();
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -3759,13 +4017,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             message: value,
             conversation_id: convId,
             input_id: crypto.randomUUID(),
+            submission_id: queueSubmissionId,
             mode: "queue",
           }),
         });
         const kind = classifyQueueSubmitResponse(res);
         if (kind === "error") {
-          setPromptForKey(composerKey, value); // give the text back
-          return;
+          restoreComposer(); // give the text back
+          return false;
         }
         if (kind === "stream") {
           // Stale busy flag (#824): the turn we thought was running had
@@ -3806,7 +4065,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             // and the old timer then found the slot settled, released, and
             // never followed the turn this submission had just started.
             const after = recoveryOwnedRef.current.get(convId);
-            if (after && after.gen !== owned.gen) return;
+            if (after && after.gen !== owned.gen) return true;
             releaseRecovery(convId);
           }
           // A chase is running, and it is BOUND to the turn it discovered —
@@ -3820,24 +4079,54 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
               pendingDirectHandoffRef.current.set(convId, value);
               bumpRecoveryEpoch(convId);
             }
-            return;
+            return true;
           }
           await reattachToConv(convId);
-          return;
+          return true;
         }
       } catch {
-        setPromptForKey(composerKey, value);
-        return;
+        // The response never arrived, which is not a refusal: the server may
+        // have queued the input. Report it sent only if the queue holds a
+        // row with this submission's id — otherwise a card would offer a
+        // resend and queue a duplicate.
+        const landed = await submissionLanded(convId, value, queueSubmissionId);
+        if (landed === "yes") {
+          // Held like any queued card answer: watched until it leaves the queue.
+          if (fromCard && opts?.onUnsent) {
+            watchQueuedCardSend(convId, value, queueSubmissionId, opts.onUnsent, opts.stillHeld);
+            opts.onHeld?.(convId, queueSubmissionId);
+          }
+          return true;
+        }
+        // Unknown is not refused. A card treats its answer as possibly sent
+        // (it holds, with Unlock, instead of offering a duplicate resend);
+        // typed text goes back to the composer either way, so it is not lost.
+        if (landed === "unknown" && fromCard) {
+          // No recovery chain follows a queued send, so keep asking (on the
+          // recovery backoff) until the server answers either way; a
+          // definitive "not there" releases the card's hold.
+          if (opts?.onUnsent) {
+            recheckHeldSend(convId, value, queueSubmissionId, opts.onUnsent, 0, false, undefined, opts.stillHeld);
+            opts.onHeld?.(convId, queueSubmissionId);
+          }
+          return true;
+        }
+        restoreComposer();
+        return false;
+      }
+      if (fromCard && opts?.onUnsent) {
+        watchQueuedCardSend(convId, value, queueSubmissionId, opts.onUnsent, opts.stillHeld);
+        opts.onHeld?.(convId, queueSubmissionId);
       }
       void refreshQueue(convId);
-      return;
+      return true;
     }
 
     // Upload any pending attachments FIRST. If it fails, we bail out with
     // the text still in the composer so the user can retry without losing
     // their message. Empty list → no-op, fast path unchanged.
     let uploadedAttachments: UploadedAttachmentMeta[] = [];
-    if (getPendingAttachmentsForKey(composerKey).length > 0) {
+    if (!fromCard && getPendingAttachmentsForKey(composerKey).length > 0) {
       try {
         uploadedAttachments = await uploadPendingAttachments(composerKey);
       } catch (err) {
@@ -3845,16 +4134,18 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           composerKey,
           err instanceof Error ? err.message : "Upload failed.",
         );
-        return;
+        return false;
       }
     }
 
-    setPromptForKey(composerKey, "");
-    setPendingAttachmentsForKey(composerKey, []);
-    setAttachmentErrorForKey(composerKey, null);
-    // Composer just emptied — re-arm the spreadsheet nudge for the next
-    // upload (formerly handled by a pendingAttachments.length effect).
-    setSpreadsheetNudgeDismissed(false);
+    if (!fromCard) {
+      setPromptForKey(composerKey, "");
+      setPendingAttachmentsForKey(composerKey, []);
+      setAttachmentErrorForKey(composerKey, null);
+      // Composer just emptied — re-arm the spreadsheet nudge for the next
+      // upload (formerly handled by a pendingAttachments.length effect).
+      setSpreadsheetNudgeDismissed(false);
+    }
 
     const baseId = allocMessageIds(2);
     const assistantId = baseId + 1;
@@ -3967,7 +4258,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return initialTarget;
     };
     // Whether the server took this submission (see streamTurn's parameter).
-    const accepted = { value: false };
+    const accepted: { value: boolean; queued?: boolean } = { value: false };
+    // The response was lost and the server could not be asked whether it
+    // holds the submission: a card holds rather than offering a resend.
+    let uncertain = false;
+    // The server answered that it holds no copy of this submission.
+    let absent = false;
 
     try {
       await streamTurn(
@@ -3981,6 +4277,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       void loadMemories();
     } catch (error) {
       const target = resolveTarget();
+      if (!accepted.value) {
+        // The server never took this submission: say so on its bubble, so a
+        // generative-UI card does not count it as an answer (#1700). The
+        // recovery below may still find a turn the server started for it —
+        // the card then sees that turn's tool calls and keeps the answer.
+        setConvMessages(target, (current) =>
+          current.map((m) => (m.id === baseId && m.role === "user" ? { ...m, notSent: true } : m)),
+        );
+      }
       if (supersededStreamsRef.current.has(abortController)) {
         // We aborted this POST ourselves because its socket was dead and a
         // replacement stream has taken over the conversation
@@ -3988,7 +4293,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // the turn is still running and someone else is reading it now.
         // Leave the slot, the attach handle and the streaming flag alone —
         // the `finally` below makes the same check.
-        return;
+        return true;
       }
       if (abortController.signal.aborted) {
         // User clicked Stop. Mark the turn cancelled — the server's
@@ -4054,8 +4359,32 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           attachedConvIdsRef.current.delete(target);
           scheduleRecoveryRetry(target, assistantId, false);
           // The input is queued server-side; show its chip while it waits.
-          void refreshQueue(target);
+          const landed = await submissionLanded(target, value, submissionId);
+          // A live turn for another submission proves only that the turn is
+          // not ours — another tab may have started it while our POST never
+          // arrived. Only a queue row carrying our submission id, or a
+          // persisted copy of it (submissionLanded), proves the server holds
+          // this input. Then it is accepted, as on the direct
+          // path's queued ack: undo the notSent mark so a generative-UI card
+          // holds instead of offering a resend that would queue a duplicate.
+          if (landed === "unknown" && !accepted.value) uncertain = true;
+          if (landed === "no") absent = true;
+          if (!accepted.value && landed === "yes") {
+            accepted.value = true;
+            setConvMessages(target, (current) =>
+              current.map((m) => (m.id === baseId && m.notSent ? { ...m, notSent: false } : m)),
+            );
+          }
         } else if (probe.inflight || (accepted.value && probe.turnID)) {
+          if (!accepted.value && answersOurSubmission(probe, submissionId) === true) {
+            // The POST's response was lost, but /inflight names this
+            // submission: the server took it. Undo the notSent mark above so
+            // a generative-UI card counts the answer (and is told it was sent).
+            accepted.value = true;
+            setConvMessages(target, (current) =>
+              current.map((m) => (m.id === baseId && m.notSent ? { ...m, notSent: false } : m)),
+            );
+          }
           patchAssistantMessage(target, assistantId, (m) => ({
             ...m,
             state: "streaming",
@@ -4216,6 +4545,59 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         void followQueueDrain(finalTarget);
       }
     }
+    // True only when the server accepted the POST (streamTurn flips
+    // `accepted` on the response headers). A request refused before that — a
+    // 429, a 5xx, a network failure — reports false, so callers that are not
+    // the composer (a generative-UI card) never treat it as sent. A turn that
+    // was accepted and then failed still counts as sent: its failure is shown
+    // on the turn, with Retry.
+    //
+    // A card send whose outcome recovery still owns (the response was lost
+    // and the server could not yet be asked, or is still being asked) is
+    // uncertain too, unless the server definitively said it holds nothing:
+    // the card holds instead of inviting a retry that could duplicate it.
+    if (!accepted.value && !absent && recoveryOwns(resolveTarget())) uncertain = true;
+    // A direct send the server queued instead (it knew a turn was running).
+    if (accepted.queued && fromCard && opts?.onUnsent) {
+      watchQueuedCardSend(resolveTarget(), value, submissionId, opts.onUnsent, opts.stillHeld);
+      opts.onHeld?.(resolveTarget(), submissionId);
+    }
+    const held = !accepted.value && uncertain && fromCard;
+    if (held && opts?.onUnsent) {
+      opts.onHeld?.(resolveTarget(), submissionId);
+      // The card now holds. Once recovery lets go of the conversation, ask
+      // the server once more; a definitive "not there" releases the hold
+      // (an "unknown" keeps it: a resend could duplicate the input).
+      const onUnsent = opts.onUnsent;
+      const stillHeld = opts.stillHeld;
+      void (async () => {
+        await recoveryReleased(resolveTarget());
+        if (recoveryUnmountedRef.current) return;
+        const target = resolveTarget();
+        // Still unknown after recovery: keep asking, as for a queued send.
+        recheckHeldSend(
+          target,
+          value,
+          submissionId,
+          () => {
+            setConvMessages(target, (current) =>
+              current.map((m) => (m.id === baseId && m.role === "user" ? { ...m, notSent: true } : m)),
+            );
+            onUnsent();
+          },
+          0,
+          true,
+          // The server has it: the optimistic row stops reading as refused,
+          // so the card counts it as its answer and locks.
+          () =>
+            setConvMessages(target, (current) =>
+              current.map((m) => (m.id === baseId && m.notSent ? { ...m, notSent: false } : m)),
+            ),
+          stillHeld,
+        );
+      })();
+    }
+    return accepted.value || held;
   };
 
   return {
@@ -4240,6 +4622,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     checkStreamLiveness,
     sweepStreamLiveness,
     submitPrompt,
+    resumeHeldCardSend,
     regenerateLastAssistant,
     resendUserMessage,
     retryLastUserMessage,

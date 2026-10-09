@@ -659,6 +659,13 @@ export type Message = {
    * blocks are still inside `content`), and turns with nothing injected.
    */
   injectedContext?: string;
+  /**
+   * Client-only: this user message's POST was refused (or never arrived), so
+   * the server never took it. Never set on a history row — a refused message
+   * is not persisted. Lets a generative-UI card tell a refused answer (stays
+   * editable) from an accepted one whose turn then failed (stays answered).
+   */
+  notSent?: boolean;
   state: MessageState;
   reasoning?: string;
   toolCalls?: ToolCall[];

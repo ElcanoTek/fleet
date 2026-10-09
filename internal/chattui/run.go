@@ -193,6 +193,12 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 			if n := ev.Str("name"); n != "" {
 				fmt.Fprintln(errOut, "▸ "+n)
 			}
+		case "tool.result":
+			// Point to the web chat only for a card the server accepted: a
+			// refused spec (UI_INVALID) draws nothing anywhere.
+			if ev.Str("name") == showUITool && strings.HasPrefix(ev.Str("text"), "UI_DISPLAYED") {
+				fmt.Fprintln(errOut, "  ◧ interactive card shown — open this chat on the web to use it")
+			}
 		case "tool.approval_required":
 			// Critical tool staged for human review. One-shot has no card to
 			// click, so say exactly how to settle it from the shell.
@@ -226,3 +232,8 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 	}
 	return 0
 }
+
+// showUITool is the generative-UI card tool (internal/tools.ShowUIToolName,
+// not imported to keep the client free of the server's tool package). The
+// terminal cannot draw its card, so both renderers point at the web chat.
+const showUITool = "show_ui"

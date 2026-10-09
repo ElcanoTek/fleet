@@ -125,7 +125,12 @@ the problem.
 
 A message sent from the client while an earlier one is still running does not
 stop it. It waits, and messages on the same session run one at a time, in the
-order `fleet acp` received them. Up to 20 can wait behind the one running. A
+order the client sent them. A cancel from the client stops the reply running
+and the messages sent before the cancel that are still waiting; a message sent
+right after the cancel still runs. `fleet acp` waits up to 2 seconds for a
+message that is slow to reach it to keep that order, then goes on without it,
+so in that rare case a cancel can miss the message sent just before it. Up to
+20 can wait behind the one running. A
 21st is refused straight away with an error saying the session already has a
 prompt running and 20 waiting. It is not sent to fleet, so send it again once
 the earlier ones have been answered, or cancel them from the client.
@@ -218,6 +223,7 @@ your eye lands on the answer and then on anything that needs you:
 | Execution trail | A row of chips, one per tool the assistant used: a file it read, a connector it called, code it ran. Click a chip to see exactly what went in and what came back. This is how you check the work. Shown only when **Show details** is on. |
 | Reasoning | The assistant's narrated thinking. Also shown only when **Show details** is on. |
 | The answer | Text, tables, charts, and images. Code and data come in copyable blocks. When the assistant produces an HTML report, it renders as an **HTML preview** with a **Show source** toggle. |
+| Interactive cards | A form, picker, checklist, comparison, chart or small calculator the assistant built for this answer. Fill it in and press its button; your answers go back as your next message. See [Interactive cards](#interactive-cards). |
 | Status | Banners for anything unusual about the turn: retrying, cancelled, failed. See [When a turn goes wrong](#11-when-a-turn-goes-wrong). |
 | Cards | Anything asking for your decision: an approval, a proposed memory, a suggested model switch. See [Cards that ask for a decision](#6-cards-that-ask-for-a-decision). |
 | Footer | Five actions on a finished reply: **Copy**, **Regenerate**, **Branch**, **Save as workflow**, and **Save** (the answer, as a memory). Each is covered where it belongs later in the guide. |
@@ -454,6 +460,62 @@ preselected and you can flip it. See [Memory and projects](#7-memory-and-project
 **Model suggestions.** When a question is heavier than the current model handles
 well, a card offers **Switch & retry**, **Just switch**, or **Dismiss**.
 Declining costs nothing.
+
+### Interactive cards
+
+When a visual answer works better than prose, the assistant can build a card on
+the spot: a form that collects several details at once, a list of items you can
+add to, duplicate and remove, options it fetched from a connected system, a
+checklist of what passed and what needs fixing, a table to pick rows from, a
+chart, or a small calculator whose totals update as you type. It decides when a
+card helps; you can also simply ask for one ("give me a form for this").
+
+- **Fill it in, then press its button.** Fields marked with a red asterisk are
+  required; the card says how many need fixing and takes you to the first. A
+  **Fix** link next to a checklist line jumps to the field it is about.
+- **Your answers become your next message.** Pressing a button sends what you
+  entered as an ordinary message, shown as a compact summary of the card's name,
+  the button you pressed and your answers (**Show what was sent** reveals the
+  exact text); if it could not be sent, the summary says **Not sent** and the
+  card stays open to try again. The card itself never acts: the assistant reads your answers and
+  carries on, and anything it then does that needs approval still shows its
+  usual approval card.
+- **Some buttons ask first.** A button that asks a question before sending
+  shows **Yes** and **Back** in its place; **Back** (or `Escape`) returns
+  without sending.
+- **A sent card locks.** It keeps your answers on screen. **Edit and resend**
+  unlocks it to change something and send again; **Cancel edit** puts back
+  what you sent.
+- **A card waits for its answer to arrive.** If the assistant is still
+  replying, or the connection dropped as you pressed the button, the card
+  shows **Sent · … — waiting to reach the assistant** and keeps its buttons and
+  fields off so you do not send twice. **Unlock** frees them if you want to
+  send again anyway. If your answer never arrives (the connection recovers and
+  it is not there, or you remove it from the queue under the message box), the
+  card unlocks by itself and says **Not sent. Try again.**
+- **An optional single choice can be undone.** A list of round options shows
+  **Clear choice** once you pick one, and a table you pick one row from shows
+  **Clear selection**, if the question is optional.
+- **Updated cards replace older ones.** When the assistant checks your answers
+  and comes back with a corrected version, the earlier card collapses to a
+  one-line note (**Show** opens it), with any problems marked on the new card's
+  fields.
+- **Unsent answers are kept in this browser** while you scroll or reload, until
+  you send them, for up to 7 days and for the 20 cards you edited most recently.
+  Sending from a card leaves whatever you are typing in the message box alone.
+- **Very large answers are not sent.** If your answers (usually a long pasted
+  list) are too big for one message, the card says so and sends nothing.
+  Shorten the list and press the button again.
+- **Cards from before a compaction are read-only.** Once a conversation is
+  compacted (see [Long conversations](#long-conversations)), a card from the
+  summarized part can't be answered, because the assistant no longer has that
+  card's details. Ask it to show the card again.
+
+Interactive cards appear only in Chat in the web app. Scheduled tasks never show
+them. Terminal chat names the card and points you to the web chat; editor
+clients connected over ACP show only the raw tool call, so open the
+conversation in the web app to use the card. A shared or read-only view shows
+the answers you sent but not the card.
 
 ## 7. Memory and projects
 

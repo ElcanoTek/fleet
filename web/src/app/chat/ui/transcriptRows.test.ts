@@ -166,6 +166,14 @@ describe("showsEmptyReplyNotice", () => {
     ).toBe(false);
   });
 
+  it("stays quiet when the turn answered with an interactive card", () => {
+    const card = { id: "c1", name: "show_ui", input: "{}", state: "done", resultText: "UI_DISPLAYED card_id=c1" };
+    expect(showsEmptyReplyNotice({ ...assistantMsg(1, ""), toolCalls: [card] } as Message)).toBe(false);
+    // A refused card drew nothing, so the notice still explains the blank turn.
+    const refused = { ...card, resultText: "UI_INVALID: bad spec" };
+    expect(showsEmptyReplyNotice({ ...assistantMsg(1, ""), toolCalls: [refused] } as Message)).toBe(true);
+  });
+
   it("defers to approval and memory cards, which own the turn", () => {
     expect(
       showsEmptyReplyNotice({

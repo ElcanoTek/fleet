@@ -1,0 +1,739 @@
+// Pure model for generative-UI cards (show_ui): spec types, default values,
+// visibility-aware validation, and the submission message. No React here so
+// it unit-tests without jsdom. The renderer is GenerativeCard.tsx; the spec
+// is validated server-side by internal/genui before a card ever reaches us,
+// but everything here still treats the spec as untrusted input — unknown
+// shapes degrade to "nothing rendered", never to a throw.
+
+import { evaluateSafe, truthy, type Scope } from "./expr";
+
+export const SHOW_UI_TOOL = "show_ui";
+/** Must match genui.MaxListItems in internal/genui/spec.go. */
+export const MAX_LIST_ITEMS = 20000;
+/** Must match genui.MaxRepeaterItems in internal/genui/spec.go. */
+export const MAX_REPEATER_ITEMS = 200;
+/** Mirrors MaxCardRows (internal/genui/spec.go): rows a whole card renders. */
+export const MAX_CARD_ROWS = 2000;
+/** Must match genui.MaxChoiceItems: chips in a multi_select / include_exclude. */
+export const MAX_CHOICE_ITEMS = 2000;
+/**
+ * The largest card message (as it appears JSON-escaped in the POST body) a
+ * card will send. The bound is the model's context, not the HTTP body
+ * (/api/chat takes 1 MiB): the answer is one user turn the agent loop cannot
+ * shrink, so it must leave room in the context window for the system
+ * prompt, tools and history. 256 KiB is about 65,000 tokens: room to spare on
+ * the large-context models chat runs on, but fixed, so a small-context model
+ * can still be overrun (docs/GENERATIVE-UI.md, honest scope). A list at
+ * MAX_LIST_ITEMS of long entries can exceed this, so the card checks the
+ * serialized size before sending rather than failing as "Not sent".
+ */
+export const MAX_SUBMISSION_BYTES = 256 * 1024;
+
+/** The message's size as it travels in the JSON request body, in bytes. */
+export function submissionBytes(message: string): number {
+  return new TextEncoder().encode(JSON.stringify(message)).length;
+}
+
+/** Must match tools.UISubmissionPrefix in internal/tools/show_ui.go. */
+export const UI_SUBMISSION_PREFIX = "[UI submission]";
+
+export type Tone = "neutral" | "info" | "success" | "warning" | "danger";
+export type Option = string | { value: string; label?: string; description?: string };
+
+/** A component node. Props are read defensively by the renderer. */
+export type Component = { type: string; id?: string; visible_if?: string } & Record<string, unknown>;
+
+export type Action = {
+  id: string;
+  label: string;
+  kind?: "submit" | "message";
+  style?: "primary" | "secondary" | "danger";
+  message?: string;
+  validate?: boolean;
+  confirm?: string;
+  visible_if?: string;
+  disabled_if?: string;
+};
+
+export type CardSpec = {
+  title: string;
+  description?: string;
+  components: Component[];
+  actions?: Action[];
+  replaces?: string;
+  field_errors?: { field: string; message: string }[];
+};
+
+export const INPUT_TYPES = new Set([
+  "text_input",
+  "number",
+  "slider",
+  "select",
+  "choice",
+  "multi_select",
+  "toggle",
+  "date",
+  "list_input",
+  "include_exclude",
+  "repeater",
+]);
+
+export function isInput(c: Component): boolean {
+  if (INPUT_TYPES.has(c.type)) return true;
+  return c.type === "table" && (c.select === "single" || c.select === "multi") && typeof c.id === "string";
+}
+
+/** Parse a show_ui tool call's raw input. null when it is not a usable spec. */
+// Parsed specs by raw input. The transcript re-derives card state on every
+// streamed token, and a spec can be large; a tool call's input never changes
+// once recorded, so each is parsed once.
+const specCache = new Map<string, CardSpec | null>();
+const SPEC_CACHE_MAX = 200;
+
+export function parseCardSpec(input: string): CardSpec | null {
+  const hit = specCache.get(input);
+  if (hit !== undefined) return hit;
+  const spec = parseCardSpecUncached(input);
+  if (specCache.size >= SPEC_CACHE_MAX) specCache.delete(specCache.keys().next().value as string);
+  specCache.set(input, spec);
+  return spec;
+}
+
+function parseCardSpecUncached(input: string): CardSpec | null {
+  let v: unknown;
+  try {
+    v = JSON.parse(input);
+  } catch {
+    return null;
+  }
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.title !== "string" || !Array.isArray(o.components)) return null;
+  return {
+    title: o.title,
+    description: typeof o.description === "string" ? o.description : undefined,
+    components: o.components.filter(isComponent),
+    actions: Array.isArray(o.actions) ? (o.actions.filter((a) => a && typeof a === "object" && typeof (a as Action).id === "string") as Action[]) : [],
+    replaces: typeof o.replaces === "string" ? o.replaces : undefined,
+    field_errors: Array.isArray(o.field_errors)
+      ? (o.field_errors.filter(
+          (e) => e && typeof e === "object" && typeof (e as { field?: unknown }).field === "string",
+        ) as { field: string; message: string }[])
+      : [],
+  };
+}
+
+export function isComponent(v: unknown): v is Component {
+  return !!v && typeof v === "object" && !Array.isArray(v) && typeof (v as Component).type === "string";
+}
+
+export function children(c: Component, key = "children"): Component[] {
+  const v = c[key];
+  return Array.isArray(v) ? v.filter(isComponent) : [];
+}
+
+export function tabsOf(c: Component): { label: string; children: Component[] }[] {
+  const v = c.tabs;
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((t) => t && typeof t === "object")
+    .map((t) => ({
+      label: String((t as { label?: unknown }).label ?? ""),
+      children: Array.isArray((t as { children?: unknown }).children)
+        ? ((t as { children: unknown[] }).children.filter(isComponent) as Component[])
+        : [],
+    }));
+}
+
+export function optionsOf(c: Component): { value: string; label: string; description?: string }[] {
+  const v = c.options;
+  if (!Array.isArray(v)) return [];
+  const out: { value: string; label: string; description?: string }[] = [];
+  for (const o of v) {
+    if (typeof o === "string") out.push({ value: o, label: o });
+    else if (o && typeof o === "object" && typeof (o as { value?: unknown }).value === "string") {
+      const ob = o as { value: string; label?: unknown; description?: unknown };
+      out.push({
+        value: ob.value,
+        // A blank label would draw an unnamed option: fall back to the value.
+        label: typeof ob.label === "string" && ob.label.trim() ? ob.label : ob.value,
+        description: typeof ob.description === "string" ? ob.description : undefined,
+      });
+    }
+  }
+  return out;
+}
+
+export type Values = Record<string, unknown>;
+export type IncludeExclude = { include: string[]; exclude: string[] };
+
+/** Every input directly under a component list, through layout containers. */
+export function walkInputs(list: Component[], visit: (c: Component) => void): void {
+  for (const c of list) {
+    if (isInput(c)) visit(c);
+    if (c.type === "repeater") continue;
+    walkInputs(children(c), visit);
+    for (const t of tabsOf(c)) walkInputs(t.children, visit);
+  }
+}
+
+const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
+/**
+ * The most text a list input keeps. A list that long is already far past
+ * what one answer can send (MAX_SUBMISSION_BYTES), so the field shows its
+ * error either way; a bigger paste is cut here instead of being held and
+ * re-scanned on every edit.
+ */
+export const MAX_LIST_TEXT = 1_000_000;
+
+/**
+ * The entries a pasted text holds, and how much of the text they came from.
+ * Scanning stops one entry past MAX_LIST_ITEMS: that is enough for the "At
+ * most 20,000 items" error, and a paste of hundreds of thousands of lines is
+ * never split, kept, deduplicated or handed to expressions in full. `end` is
+ * where the scan stopped, so the field can keep just that prefix.
+ */
+export function scanListText(text: string, dedupe: boolean): { items: string[]; end: number } {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const limit = Math.min(text.length, MAX_LIST_TEXT);
+  let start = 0;
+  while (start < limit) {
+    let stop = start;
+    while (stop < limit && text[stop] !== "\n" && text[stop] !== "\r") stop++;
+    const t = text.slice(start, stop).trim();
+    start = stop + 1;
+    if (t === "" || (dedupe && seen.has(t))) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length > MAX_LIST_ITEMS) return { items: out, end: Math.min(stop, limit) };
+  }
+  return { items: out, end: limit };
+}
+
+/** A pasted list: one item per line, trimmed, blanks dropped, deduped by default. */
+export function parseListText(text: string, dedupe: boolean): string[] {
+  return scanListText(text, dedupe).items;
+}
+
+export function normalizeList(items: string[], dedupe: boolean): string[] {
+  const lines = items.map((l) => l.trim()).filter((l) => l !== "");
+  return dedupe ? Array.from(new Set(lines)) : lines;
+}
+
+/** An absolute http(s) URL with a host — what format: "url" promises. */
+export function isWebUrl(s: string): boolean {
+  try {
+    const u = new URL(s);
+    return (u.protocol === "http:" || u.protocol === "https:") && u.hostname !== "";
+  } catch {
+    return false;
+  }
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A real calendar date in YYYY-MM-DD (rejects 2026-02-31), like Go's time.Parse. */
+export function isCalendarDate(s: string): boolean {
+  if (!DATE_RE.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  // An HTML date input has no year 0 (it would show the value as blank).
+  if (y < 1) return false;
+  // setUTCFullYear, not Date.UTC: Date.UTC maps years 0–99 to 1900–1999.
+  const dt = new Date(0);
+  dt.setUTCFullYear(y, m - 1, d);
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+/**
+ * The value an input starts with: its `value` when that is something the
+ * control could have produced, else the empty value. "Could have produced"
+ * covers meaning, not just shape — an option the input does not offer, a
+ * malformed date or an unknown table row is dropped — because the same
+ * function normalizes drafts and transcript submissions, which the server
+ * never validated.
+ */
+export function defaultValue(c: Component): unknown {
+  const v = c.value;
+  const optionSet = () => new Set(optionsOf(c).map((o) => o.value));
+  const custom = c.allow_custom === true;
+  switch (c.type) {
+    case "text_input":
+      return typeof v === "string" ? v : "";
+    case "date":
+      return typeof v === "string" && isCalendarDate(v) ? v : "";
+    case "select":
+    case "choice":
+      return typeof v === "string" && optionSet().has(v) ? v : "";
+    case "number":
+      return typeof v === "number" ? v : null;
+    case "slider":
+      return typeof v === "number" ? v : typeof c.min === "number" ? c.min : 0;
+    case "toggle":
+      return v === true;
+    case "multi_select": {
+      const opts = optionSet();
+      // A blank entry is nothing the adder can produce (it trims and skips
+      // empty input), so a default carrying one is dropped, not rendered as
+      // an empty chip that answers a required question.
+      // A restored answer can come from anywhere; the control never holds more
+      // than the protocol cap, so neither does a restored value (each is a chip).
+      return Array.from(new Set(strArr(v)))
+        .filter((x) => opts.has(x) || (custom && x.trim() !== ""))
+        .slice(0, MAX_CHOICE_ITEMS);
+    }
+    case "list_input":
+      // Same split / trim / drop-blank / dedupe the textarea applies to typed
+      // text: an entry with a line break in it is that many entries. A
+      // restored answer is untrusted, so it goes through the same bounded
+      // scan as a paste (one entry past the cap, at most MAX_LIST_TEXT read).
+      return scanListText(strArr(v).join("\n"), c.dedupe !== false).items;
+    case "include_exclude": {
+      const o = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+      const opts = optionSet();
+      const ok = (x: string) => opts.has(x) || (custom && x.trim() !== "");
+      const include = Array.from(new Set(strArr(o.include))).filter(ok).slice(0, MAX_CHOICE_ITEMS);
+      // An entry cannot sit in both lanes; include wins. Both lanes together
+      // stay within the protocol cap (one chip each).
+      const inc = new Set(include);
+      const exclude = Array.from(new Set(strArr(o.exclude)))
+        .filter((x) => ok(x) && !inc.has(x))
+        .slice(0, MAX_CHOICE_ITEMS - include.length);
+      return { include, exclude } satisfies IncludeExclude;
+    }
+    case "table": {
+      const key = typeof c.row_key === "string" ? c.row_key : "";
+      const rowKeys = new Set(
+        (Array.isArray(c.rows) ? c.rows : [])
+          .map((r) => (r && typeof r === "object" ? (r as Record<string, unknown>)[key] : undefined))
+          .filter((k): k is string => typeof k === "string"),
+      );
+      if (c.select === "multi") return Array.from(new Set(strArr(v))).filter((k) => rowKeys.has(k));
+      return typeof v === "string" && rowKeys.has(v) ? v : "";
+    }
+    case "repeater": {
+      const fields = children(c, "fields");
+      if (Array.isArray(v)) {
+        // A transcript answer can come from anywhere (an older build, another
+        // client, the composer); the control never holds more than the
+        // protocol cap, so neither does a restored value — thousands of items
+        // would each become DOM.
+        return v
+          .filter((x) => x && typeof x === "object" && !Array.isArray(x))
+          .slice(0, MAX_REPEATER_ITEMS)
+          .map((x) => ({ ...newItem(fields), ...pickKnown(fields, x as Values) }));
+      }
+      const n = typeof c.min_items === "number" ? Math.min(MAX_REPEATER_ITEMS, Math.max(1, c.min_items)) : 1;
+      return Array.from({ length: n }, () => newItem(fields));
+    }
+    default:
+      return null;
+  }
+}
+
+function pickKnown(fields: Component[], item: Values): Values {
+  const out: Values = {};
+  walkInputs(fields, (f) => {
+    if (f.id && Object.prototype.hasOwnProperty.call(item, f.id)) {
+      const probe = { ...f, value: item[f.id] };
+      out[f.id] = defaultValue(probe);
+    }
+  });
+  return out;
+}
+
+/** A fresh repeater item with every field at its default. */
+export function newItem(fields: Component[]): Values {
+  const item: Values = {};
+  walkInputs(fields, (f) => {
+    if (f.id) item[f.id] = defaultValue(f);
+  });
+  return item;
+}
+
+/**
+ * The card's values with `saved` (a submission from the transcript, or a
+ * local draft) laid over the defaults — each saved value normalized through
+ * its own input exactly like a default (unknown ids dropped, wrong shapes
+ * reset, repeater items filtered to objects). A transcript message only
+ * LOOKS like buildSubmissionMessage output; it may come from the composer,
+ * another client or an older build, so it is never adopted raw.
+ */
+export function normalizeValues(spec: CardSpec, saved: Values | null | undefined): Values {
+  const out = initialValues(spec);
+  if (!saved || typeof saved !== "object") return out;
+  // Restored repeater items share the card-wide row budget the server holds
+  // the card's own items to: each item renders every field of its repeater.
+  // Repeaters the answer leaves at their defaults keep their items, so the
+  // budget is what remains after them.
+  // Display rows outside repeaters; those inside are part of each item.
+  let rowsLeft = MAX_CARD_ROWS - displayRows(spec.components, false);
+  const pending: { c: Component; raw: unknown[]; weight: number; perItem: number }[] = [];
+  walkInputs(spec.components, (c) => {
+    // An item renders its fields, and any table or display list among them.
+    const fields = children(c, "fields");
+    const weight = c.type === "repeater" ? Math.max(1, countComponents(fields)) + choiceOptions(fields) + displayRows(fields) : 0;
+    if (c.id && Object.prototype.hasOwnProperty.call(saved, c.id)) {
+      const raw = saved[c.id];
+      // Restored repeaters are cut to the budget BEFORE their items are
+      // built: each item copies its fields' defaults, which can be long.
+      if (weight && Array.isArray(raw) && c.disabled !== true) {
+        pending.push({ c, raw, weight, perItem: defaultEntries(fields) });
+        return;
+      }
+      // A disabled repeater keeps its own items (restoredValue never adopts
+      // a saved value for a disabled input), which still take their rows.
+      if (weight && c.disabled === true && Array.isArray(out[c.id])) {
+        rowsLeft -= (out[c.id] as unknown[]).length * weight;
+        return;
+      }
+      const v = restoredValue(c, raw);
+      if (v !== undefined) out[c.id] = v;
+      return;
+    }
+    if (weight && c.id && Array.isArray(out[c.id])) rowsLeft -= (out[c.id] as unknown[]).length * weight;
+  });
+  for (const { c, raw, weight, perItem } of pending) {
+    // Rows, and (like the server's cap on starting items) at most
+    // MAX_LIST_ITEMS default entries copied across the items.
+    // And never more than the repeater's own max_items, which the server
+    // budgeted the card by.
+    const cap = typeof c.max_items === "number" ? Math.max(0, c.max_items) : MAX_REPEATER_ITEMS;
+    const fit = Math.min(
+      Math.floor(Math.max(0, rowsLeft) / weight),
+      perItem ? Math.floor(MAX_LIST_ITEMS / perItem) : Infinity,
+      cap,
+    );
+    const v = restoredValue(c, raw.slice(0, fit));
+    if (!Array.isArray(v)) continue;
+    rowsLeft -= v.length * weight;
+    out[c.id!] = v;
+  }
+  return out;
+}
+
+/** Entries in the collection defaults of a repeater's fields (defaultEntries in spec.go). */
+function defaultEntries(fields: Component[]): number {
+  let n = 0;
+  walkInputs(fields, (f) => {
+    const v = f.value;
+    // A list_input default becomes its normalized lines (listCount in spec.go).
+    if (Array.isArray(v) && f.type === "list_input" && v.every((x) => typeof x === "string"))
+      n += normalizeList(v.flatMap((x: string) => x.split(/[\r\n]+/)), f.dedupe !== false).length;
+    else if (Array.isArray(v)) n += v.length;
+    else if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      n += (Array.isArray(o.include) ? o.include.length : 0) + (Array.isArray(o.exclude) ? o.exclude.length : 0);
+    }
+  });
+  return n;
+}
+
+/**
+ * The card's table rows and display-list entries (badges, facts,
+ * status_list, diff): the rest of the row budget (countRows in spec.go).
+ */
+function displayRows(list: Component[], intoRepeaters = true): number {
+  let n = 0;
+  for (const c of list) {
+    if (c.type === "table" && Array.isArray(c.rows)) n += c.rows.length;
+    if (["badges", "facts", "status_list"].includes(c.type) && Array.isArray(c.items)) n += c.items.length;
+    if (c.type === "diff" && Array.isArray(c.rows)) n += c.rows.length;
+    n += displayRows(children(c), intoRepeaters);
+    if (intoRepeaters) n += displayRows(children(c, "fields"));
+    for (const t of tabsOf(c)) n += displayRows(t.children, intoRepeaters);
+  }
+  return n;
+}
+
+/** Components in a list, nested ones included (countComponents in spec.go). */
+/** Option elements the choice and select inputs in a list render (choiceOptions in spec.go). */
+function choiceOptions(list: Component[]): number {
+  let n = 0;
+  walkInputs(list, (f) => {
+    if ((f.type === "choice" || f.type === "select") && Array.isArray(f.options)) n += f.options.length;
+  });
+  return n;
+}
+
+function countComponents(list: Component[]): number {
+  let n = 0;
+  for (const c of list) {
+    n += 1 + countComponents(children(c)) + countComponents(children(c, "fields"));
+    for (const t of tabsOf(c)) n += countComponents(t.children);
+  }
+  return n;
+}
+
+/**
+ * A saved value for one input, normalized like a default, or undefined to
+ * keep the card's own default. A disabled input never takes a saved value:
+ * the user could not have changed it, and collect submits it unvalidated, so
+ * a value from elsewhere would be stuck in the next submission. A slider
+ * (whose range control would show a clamped thumb over the unclamped value)
+ * keeps only a value that passes its own checks.
+ */
+function restoredValue(c: Component, raw: unknown): unknown {
+  if (c.disabled === true) return undefined;
+  const v = defaultValue({ ...c, value: raw });
+  if (!keepsRestored(c, v)) return undefined;
+  if (c.type === "repeater" && Array.isArray(v)) {
+    // Items have no fixed default to fall back to, so a field the user could
+    // not fix in a restored item takes the field's own default instead. A
+    // disabled field keeps only a value the card itself put in an item (the
+    // field default, or one of the card's own items): anything else could
+    // not have come from the user.
+    const fields = children(c, "fields");
+    const fresh = newItem(fields);
+    const cardItems = defaultValue(c) as Values[];
+    const allowed = (id: string) =>
+      new Set([fresh, ...cardItems].map((it) => JSON.stringify(it[id] ?? null)));
+    return v.map((item: Values) => {
+      const out = { ...item };
+      walkInputs(fields, (f) => {
+        if (!f.id) return;
+        const stuck =
+          f.disabled === true ? !allowed(f.id).has(JSON.stringify(out[f.id] ?? null)) : !keepsRestored(f, out[f.id]);
+        if (stuck) out[f.id] = fresh[f.id];
+      });
+      return out;
+    });
+  }
+  return v;
+}
+
+function keepsRestored(c: Component, v: unknown): boolean {
+  if (c.type !== "slider") return true;
+  return isEmpty(c, v) || checkField(c, v) === "";
+}
+
+export function initialValues(spec: CardSpec): Values {
+  const values: Values = {};
+  walkInputs(spec.components, (c) => {
+    if (c.id) values[c.id] = defaultValue(c);
+  });
+  return values;
+}
+
+/** The expression scope at card level, or inside one repeater item. */
+export function scopeFor(values: Values, item?: Values, index?: number): Scope {
+  if (!item) return values;
+  return { ...values, ...item, index: (index ?? 0) + 1 };
+}
+
+export function isVisible(c: { visible_if?: unknown }, scope: Scope): boolean {
+  if (typeof c.visible_if !== "string" || !c.visible_if.trim()) return true;
+  return truthy(evaluateSafe(c.visible_if, scope, true));
+}
+
+function isEmpty(c: Component, v: unknown): boolean {
+  if (v === null || v === undefined) return true;
+  if (typeof v === "string") return v.trim() === "";
+  if (Array.isArray(v)) return v.length === 0;
+  if (c.type === "include_exclude") {
+    const ie = v as IncludeExclude;
+    return ie.include.length === 0 && ie.exclude.length === 0;
+  }
+  return false;
+}
+
+// The HTML spec's "valid email address" (what <input type="email"> checks),
+// plus a dot in the domain: actions skip native form validation, so this is
+// the check that counts. Rejects "a@.com" and "a@b..com".
+const EMAIL_LABEL = "[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?";
+const EMAIL_RE = new RegExp(`^[a-zA-Z0-9.!#$%&'*+/=?^_\`{|}~-]+@${EMAIL_LABEL}(?:\\.${EMAIL_LABEL})+$`);
+
+/** One input's own problem, or "" (required-ness included). */
+export function checkField(c: Component, v: unknown): string {
+  // A required toggle is an acknowledgement: it must be switched on.
+  if (c.required === true && c.type === "toggle") return v === true ? "" : "Required";
+  if (c.required === true && isEmpty(c, v)) return "Required";
+  if (isEmpty(c, v)) return "";
+  switch (c.type) {
+    case "text_input": {
+      const s = String(v);
+      if (typeof c.min_length === "number" && s.length < c.min_length) return `At least ${c.min_length} characters`;
+      if (typeof c.max_length === "number" && s.length > c.max_length) return `At most ${c.max_length} characters`;
+      if (c.format === "email" && !EMAIL_RE.test(s.trim())) return "Enter an email address";
+      if (c.format === "url" && !isWebUrl(s.trim())) return "Enter a URL (https://…)";
+      return "";
+    }
+    case "number":
+    case "slider": {
+      const n = typeof v === "number" ? v : Number(v);
+      if (!Number.isFinite(n)) return "Enter a number";
+      if (typeof c.min === "number" && n < c.min) return `Must be at least ${c.min}`;
+      if (typeof c.max === "number" && n > c.max) return `Must be at most ${c.max}`;
+      // The card does not submit through HTML form validation, so the
+      // input's step rule (based at min, like the native control) is
+      // enforced here.
+      // A slider with no step steps by 1, like the range control it renders.
+      const step = typeof c.step === "number" ? c.step : c.type === "slider" ? 1 : undefined;
+      if (step !== undefined && step > 0) {
+        const base = typeof c.min === "number" ? c.min : 0;
+        const k = (n - base) / step;
+        if (Math.abs(k - Math.round(k)) > 1e-9) return `Must be in steps of ${step}${base ? ` from ${base}` : ""}`;
+      }
+      return "";
+    }
+    case "multi_select":
+      if (typeof c.max_items === "number" && Array.isArray(v) && v.length > c.max_items) return `At most ${c.max_items} items`;
+      return "";
+    case "list_input": {
+      // The protocol cap applies even when the card sets no max_items: a
+      // paste must not become an unbounded user turn.
+      const cap = Math.min(typeof c.max_items === "number" ? c.max_items : MAX_LIST_ITEMS, MAX_LIST_ITEMS);
+      if (Array.isArray(v) && v.length > cap) return `At most ${cap.toLocaleString()} items`;
+      return "";
+    }
+    case "date":
+      if (typeof c.min === "string" && String(v) < c.min) return `On or after ${c.min}`;
+      if (typeof c.max === "string" && String(v) > c.max) return `On or before ${c.max}`;
+      return "";
+    case "repeater": {
+      const n = Array.isArray(v) ? v.length : 0;
+      if (typeof c.min_items === "number" && n < c.min_items) return `Add at least ${c.min_items}`;
+      if (typeof c.max_items === "number" && n > c.max_items) return `At most ${c.max_items}`;
+      return "";
+    }
+    default:
+      return "";
+  }
+}
+
+/**
+ * The submitted payload: only VISIBLE inputs, keyed by id (a hidden field's
+ * stale value would read as an answer the user never saw), plus every
+ * visible field's validation error keyed by path ("id" or "rep[i].field").
+ */
+export function collect(
+  spec: CardSpec,
+  values: Values,
+): { values: Values; errors: Record<string, string>; visible: Set<string> } {
+  const out: Values = {};
+  const errors: Record<string, string> = {};
+  // Every currently visible, enabled input's path — what a server
+  // field_error may still block on (a hidden, removed or disabled field
+  // cannot be fixed by the user).
+  const visible = new Set<string>();
+  // read: where this level's values live (the card, or one repeater item);
+  // write: where the submitted copy goes; prefix: the error-path prefix.
+  const visit = (list: Component[], scope: Scope, read: Values, write: Values, prefix: string, disabled = false) => {
+    for (const c of list) {
+      if (!isVisible(c, scope)) continue;
+      if (isInput(c) && c.id) {
+        // Only an input the user can change can clear an error on it.
+        const off = disabled || c.disabled === true;
+        if (!off) visible.add(prefix + c.id);
+        const v = read[c.id];
+        if (c.type === "repeater") {
+          const fields = children(c, "fields");
+          const items = Array.isArray(v)
+            ? (v as unknown[]).map((x) => (x && typeof x === "object" && !Array.isArray(x) ? (x as Values) : {}))
+            : [];
+          write[c.id] = items.map((item, i) => {
+            const w: Values = {};
+            visit(fields, scopeFor(values, item, i), item, w, `${c.id}[${i}].`, off);
+            return w;
+          });
+          const err = off ? "" : checkField(c, items);
+          if (err) errors[prefix + c.id] = err;
+          continue;
+        }
+        // A disabled field cannot be fixed by the user, so it never blocks.
+        const err = off ? "" : checkField(c, v);
+        if (err) errors[prefix + c.id] = err;
+        write[c.id] = v;
+      }
+      visit(children(c), scope, read, write, prefix, disabled);
+      for (const t of tabsOf(c)) visit(t.children, scope, read, write, prefix, disabled);
+    }
+  };
+  visit(spec.components, scopeFor(values), values, out, "");
+  return { values: out, errors, visible };
+}
+
+/** Must match tools.UIReplyPrefix in internal/tools/show_ui.go. */
+export const UI_REPLY_PREFIX = "[UI reply]";
+
+export type Reply = { cardId: string; actionId: string; text: string; messageId?: number };
+
+/** A quick-reply button's message: a marker line naming the card, then its text. */
+export function buildReplyMessage(cardId: string, actionId: string, text: string): string {
+  return `${UI_REPLY_PREFIX} card=${cardId} action=${actionId}\n${text}`;
+}
+
+const REPLY_RE = /^\[UI reply\] card=(\S+) action=(\S+)\n([\s\S]*)$/;
+
+export function parseReplyMessage(text: string): Reply | null {
+  if (!text.startsWith(UI_REPLY_PREFIX)) return null;
+  const m = REPLY_RE.exec(text);
+  return m ? { cardId: m[1], actionId: m[2], text: m[3] } : null;
+}
+
+export function buildSubmissionMessage(cardId: string, actionId: string, values: Values): string {
+  return `${UI_SUBMISSION_PREFIX} card=${cardId} action=${actionId}\n\`\`\`json\n${JSON.stringify(values)}\n\`\`\``;
+}
+
+export type Submission = {
+  cardId: string;
+  actionId: string;
+  values: Values;
+  /** The transcript message it came from — two identical resends differ here. */
+  messageId?: number;
+};
+
+const SUBMISSION_RE = /^\[UI submission\] card=(\S+) action=(\S+)\n```json\n([\s\S]*)\n```\s*$/;
+
+export function parseSubmissionMessage(text: string): Submission | null {
+  if (!text.startsWith(UI_SUBMISSION_PREFIX)) return null;
+  const m = SUBMISSION_RE.exec(text);
+  if (!m) return null;
+  try {
+    const v = JSON.parse(m[3]);
+    if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+    return { cardId: m[1], actionId: m[2], values: v as Values };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Retry of a card answer's failed turn, offered to the card that owns it (a
+ * window event): the card sets `handled` and `done` — its own send of the
+ * message, under its hold and queue watch — when it takes it. Lives here,
+ * not in the lazily loaded card, so the chat can raise it without loading
+ * the renderer.
+ */
+export const RESEND_EVENT = "genui:resend";
+export type ResendDetail = { cardId: string; actionId: string; message: string; handled?: boolean; done?: Promise<void> };
+
+/**
+ * A Retry the server queued while its card was scrolled out of the
+ * (virtualized) transcript: the hold the card would have set, kept here until
+ * the card mounts and takes it over (takeRetryHold). Per page, by card id.
+ */
+export type RetryHold = { conv: string; sid: string; actionId: string; message: string };
+const retryHolds = new Map<string, RetryHold>();
+
+export function noteRetryHold(cardId: string, hold: RetryHold): void {
+  retryHolds.set(cardId, hold);
+}
+
+/** Whether the retry with this queue row is still waiting for its card. */
+export function retryHoldPending(cardId: string, sid: string): boolean {
+  return retryHolds.get(cardId)?.sid === sid;
+}
+
+/** Drops the retry's hold: its row turned out never to reach the server. */
+export function dropRetryHold(cardId: string, sid: string): void {
+  if (retryHolds.get(cardId)?.sid === sid) retryHolds.delete(cardId);
+}
+
+/** The retry hold for this card, removed: the card holds it from now on. */
+export function takeRetryHold(cardId: string): RetryHold | undefined {
+  const hold = retryHolds.get(cardId);
+  retryHolds.delete(cardId);
+  return hold;
+}

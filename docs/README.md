@@ -240,6 +240,7 @@ above fails otherwise.
 - [`FEATURE-NOTES.md`](FEATURE-NOTES.md) — Feature design notes
 - [`FILE-EDIT-SAFETY.md`](FILE-EDIT-SAFETY.md) — File-edit safety (#787)
 - [`generating-demo-gif.md`](generating-demo-gif.md) — Generating the demo GIFs (TUI + web)
+- [`GENERATIVE-UI.md`](GENERATIVE-UI.md) — Generative UI: interactive cards the agent builds in chat (`show_ui`)
 - [`GUARDRAILS.md`](GUARDRAILS.md) — Prompt-injection guardrails (#702)
 - [`HOOKS.md`](HOOKS.md) — Governed lifecycle hooks (#788)
 - [`HOSTED-CONNECTORS-RUNBOOK.md`](HOSTED-CONNECTORS-RUNBOOK.md) — Hosted MCP connectors — operator runbook
@@ -269,6 +270,7 @@ above fails otherwise.
 - [`NOTIFICATIONS.md`](NOTIFICATIONS.md) — Task notifications (email + webhook) & admin management
 - [`OPEN-REMOTE-MCP.md`](OPEN-REMOTE-MCP.md) — Open-access remote MCP connections
 - [`OPERATORS.md`](OPERATORS.md) — Operating fleet
+- [`OPS-CENTER-LOG-TIMELINE.md`](OPS-CENTER-LOG-TIMELINE.md) — Operations Center log timeline — one readable step per tool call
 - [`OPS-CONNECTOR-DEFAULTS.md`](OPS-CONNECTOR-DEFAULTS.md) — Operations connector defaults
 - [`PII-REDACTION.md`](PII-REDACTION.md) — Optional PII redaction (#450); the
   Rampart ML engine was removed in

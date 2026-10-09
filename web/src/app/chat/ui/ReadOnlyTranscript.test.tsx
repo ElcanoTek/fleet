@@ -489,3 +489,18 @@ describe("a locked image inside an external link", () => {
     );
   });
 });
+
+describe("toBubbles and card messages", () => {
+  it("never merges a card answer into the request before it", () => {
+    const bubbles = toBubbles([
+      { role: "user", type: "text", content: { text: "set up deals" } },
+      { role: "user", type: "text", content: { text: '[UI submission] card=c1 action=go\n```json\n{"a":1}\n```' } },
+      { role: "user", type: "text", content: { text: "[UI reply] card=c1 action=no\nNot now" } },
+    ]);
+    expect(bubbles.map((b) => b.text.split("\n")[0])).toEqual([
+      "set up deals",
+      "[UI submission] card=c1 action=go",
+      "[UI reply] card=c1 action=no",
+    ]);
+  });
+});
