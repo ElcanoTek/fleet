@@ -202,6 +202,19 @@ func mcpWorkspaceRoot() string {
 	return "workspace"
 }
 
+// PerRunMCPWorkspaceBase returns <workspaceRoot>/mcp-runs, the parent of every
+// per-occurrence run dir OpenStableMCPWorkspace hands out as
+// ${FLEET_WORKSPACE}. It sits in the tree every sandbox bind-mounts
+// read-write, so the sandbox pool overlays it READ-ONLY in every sandbox
+// (agent.buildSandboxPool, the same nested mount the shared file library
+// uses). That is what keeps a sandbox from renaming, symlinking or planting
+// files in a run dir at any point — between attempts, during setup, or while
+// a host-side connector is writing its ledger through the pathname it was
+// given.
+func PerRunMCPWorkspaceBase(workspaceRoot string) string {
+	return filepath.Join(workspaceRoot, perRunMCPWorkspaceSubdir)
+}
+
 // SharedMCPWorkspaceDir returns the stable per-deployment directory substituted
 // for ${FLEET_WORKSPACE} on shared (process-lifetime) MCP spawns, creating it
 // best-effort. Creation failure is logged and the path still returned: the
@@ -230,8 +243,10 @@ func SharedMCPWorkspaceDir() string {
 // booked. A different key (the next recurring occurrence, a re-run, a clone)
 // gets its own directory, so one occurrence's ledger never leaks into another.
 //
-// The directory lives under the workspace root, which the sandbox mounts
-// read-write, so an earlier attempt may have tampered with it. Every host-side
+// The directory lives under the workspace root. Sandboxes see mcp-runs/
+// read-only (PerRunMCPWorkspaceBase), so none can mutate it; the checks below are
+// defense in depth for a deployment where that overlay is missing (e.g. a
+// tree left over from before it existed). Every host-side
 // operation here therefore goes through an os.Root opened at the workspace root
 // (nothing resolves outside it), the mcp-runs base and the run dir must be real
 // directories — a symlink or file squatting on either fails the setup closed

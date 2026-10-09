@@ -305,7 +305,8 @@ bundle's absolute paths, so `bash`/`run_python` reads fail too, as not-found.
 The exception is a read-only root that lives *inside* the claim: the shared
 file library's staged tree (`<workspace>/shared`,
 [SHARED-FILES.md](SHARED-FILES.md)) and the staged skills tree
-(`<workspace>/skills`, below) reach every pod by construction, and the pod
+(`<workspace>/skills`, below), as well as the scheduled tasks' MCP run dirs
+(`<workspace>/mcp-runs`, [MCP-BUNDLE-ENV.md](MCP-BUNDLE-ENV.md)), reach every pod by construction, and the pod
 spec re-mounts each subPath of the same claim read-only, so they are
 readable — and only readable — with no image rebuild and no host bind.
 
