@@ -502,13 +502,13 @@ describe("TaskCreateModal — create path", () => {
   });
 
   it("surfaces the server's reason when the cost estimate is rejected", async () => {
-    estimateTask.mockRejectedValue(new Error("prompt cannot exceed 100000 characters"));
+    estimateTask.mockRejectedValue(new Error("prompt cannot exceed 250000 bytes"));
     renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "A very big protocol" } });
     fireEvent.click(screen.getByRole("button", { name: "Estimate cost" }));
 
     expect(
-      await screen.findByText("Estimate failed: prompt cannot exceed 100000 characters"),
+      await screen.findByText("Estimate failed: prompt cannot exceed 250000 bytes"),
     ).toBeInTheDocument();
   });
 

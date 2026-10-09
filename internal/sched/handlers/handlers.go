@@ -357,7 +357,12 @@ type rateLimiter struct {
 
 const (
 	taskPromptMinLength = 3
-	taskPromptMaxLength = 100000
+	// taskPromptMaxLength bounds a task prompt in BYTES (len(), not runes).
+	// 250000 matches the MOC cap so a 90-deal Manifest create batch (~234 KB)
+	// fits. Keep internal/admincli replayPromptMaxLength and the web
+	// validatePrompt bound in step. A 250 KB prompt still fits the 1 MiB JSON
+	// body cap (MaxJSONBodySize) with room for JSON escaping.
+	taskPromptMaxLength = 250000
 	// maxTaskDescriptionChars caps the optional operator documentation field (#281)
 	// at 10k runes — generous for a runbook, bounded so it can't bloat the row.
 	maxTaskDescriptionChars = 10000
@@ -1007,7 +1012,7 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error { //nolint:go
 		return fmt.Errorf("prompt must be at least %d characters", taskPromptMinLength)
 	}
 	if len(tc.Prompt) > taskPromptMaxLength {
-		return fmt.Errorf("prompt cannot exceed %d characters", taskPromptMaxLength)
+		return fmt.Errorf("prompt cannot exceed %d bytes", taskPromptMaxLength)
 	}
 	// A malformed EXECUTION REQUIREMENTS line fails every run at dispatch
 	// (#1601): refuse it while the author is still looking at the request,

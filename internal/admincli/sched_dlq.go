@@ -184,7 +184,7 @@ const maxReplayPromptBytes = 1 << 20
 // (handlers.taskPromptMaxLength). A corrected prompt is copied verbatim onto
 // every successor, so one the HTTP path would refuse must not enter here
 // either: the task would become one that cannot be edited or cloned.
-const replayPromptMaxLength = 100000
+const replayPromptMaxLength = 250000
 
 // replayPromptMinLength is the matching lower bound (handlers.taskPromptMinLength).
 // It applies only to a replacement: a legacy task's own short prompt still
@@ -218,7 +218,7 @@ func readReplayPrompt(path string) (string, error) {
 		return "", fmt.Errorf("--prompt-file prompt must be at least %d characters, the same limit as creating or editing a task", replayPromptMinLength)
 	}
 	if len(prompt) > replayPromptMaxLength {
-		return "", fmt.Errorf("--prompt-file prompt cannot exceed %d characters, the same limit as creating or editing a task", replayPromptMaxLength)
+		return "", fmt.Errorf("--prompt-file prompt cannot exceed %d bytes, the same limit as creating or editing a task", replayPromptMaxLength)
 	}
 	return prompt, nil
 }

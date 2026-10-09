@@ -1240,7 +1240,7 @@ export function TaskCreateModal({
       setEstimateKey(currentEstimateKey);
     } catch (err) {
       // Surface the server's reason inline: a validation rejection ("prompt
-      // cannot exceed 100000 characters", "persona X is not in the loaded
+      // cannot exceed 250000 bytes", "persona X is not in the loaded
       // client bundle", …) is actionable, and hiding it behind a generic
       // "try again" sent operators bug-hunting for what was a clear 400.
       const detail = (err as Error).message;

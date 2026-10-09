@@ -151,8 +151,8 @@ export function validatePrompt(prompt: unknown): ValidationResult {
   const trimmed = prompt.trim();
   if (trimmed.length === 0) return { valid: false, message: "Prompt cannot be empty" };
   if (trimmed.length < 3) return { valid: false, message: "Prompt must be at least 3 characters" };
-  if (trimmed.length > 100000) {
-    return { valid: false, message: "Prompt is too long (max 100,000 characters)" };
+  if (new TextEncoder().encode(trimmed).length > 250000) {
+    return { valid: false, message: "Prompt is too long (max 250,000 bytes)" };
   }
   return { valid: true, message: "" };
 }
