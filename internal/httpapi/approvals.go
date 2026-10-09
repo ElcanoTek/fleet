@@ -1185,6 +1185,13 @@ func expandCidImagesToDataURLs(html string, args map[string]any, convID string) 
 	if err != nil {
 		return html
 	}
+	// Every read goes through an os.Root on the workspace dir: it refuses any
+	// path that resolves outside it, whatever the agent supplied.
+	root, err := os.OpenRoot(wsDir)
+	if err != nil {
+		return html
+	}
+	defer func() { _ = root.Close() }()
 	const maxAttachmentBytes = 4 << 20
 
 	cidMap := make(map[string]string)
@@ -1221,16 +1228,17 @@ func expandCidImagesToDataURLs(html string, args map[string]any, convID string) 
 		// recognizes: Rel's nil-error result sanitizes resolvedAbs, and IsLocal
 		// rejects a "../" escape that Rel would otherwise return with a nil error.
 		// This keeps a hostile agent from getting /etc/passwd inlined into the
-		// preview card and clears the os.Stat / os.ReadFile below on rescan.
+		// preview card; the root.Stat / root.ReadFile below are confined again by
+		// the os.Root.
 		rel, relErr := filepath.Rel(wsDir, resolvedAbs)
 		if relErr != nil || !filepath.IsLocal(rel) {
 			continue
 		}
-		info, err := os.Stat(resolvedAbs)
+		info, err := root.Stat(rel)
 		if err != nil || info.IsDir() || info.Size() > maxAttachmentBytes {
 			continue
 		}
-		data, err := os.ReadFile(resolvedAbs) //nolint:gosec // resolvedAbs confined to wsDir by filepath.Rel + filepath.IsLocal above
+		data, err := root.ReadFile(rel)
 		if err != nil {
 			continue
 		}

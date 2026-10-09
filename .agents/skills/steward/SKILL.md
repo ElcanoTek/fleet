@@ -86,7 +86,7 @@ not the event that woke you. Events arrive late and out of order.
 - **A two-second green Go run is a skipped run.** Set `DATABASE_URL` and
   `FLEET_TEST_DATABASE_URL` to a real Postgres and confirm with `-v` that the
   tests you care about print `PASS`, not `SKIP`.
-- golangci-lint **v2.13.1 built with Go 1.27**; gitleaks **8.30.1**. The
+- golangci-lint **v2.14.0 built with Go 1.27**; gitleaks **8.30.1**. The
   distro binaries lie. Install commands are in the reference page.
 - For a CI fix: reproduce the failure first, then show the same check passing.
   A speed-dependent test may need a forced parameter to reproduce; say which.
