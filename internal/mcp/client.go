@@ -753,11 +753,45 @@ func (s *Server) toolsSnapshot() []Tool {
 	return s.tools
 }
 
+// callTimeoutKey carries a per-call budget that starts when the call holds the
+// server mutex (WithCallTimeout).
+type callTimeoutKey struct{}
+
+// WithCallTimeout attaches a per-call budget that Server.callTool applies only
+// once it holds the server mutex. The mutex is held for a whole call, so a
+// deadline set by the caller BEFORE the call also spends whatever time the call
+// waits behind another call on the same server; this budget is what the
+// transport call itself gets. A non-positive d attaches nothing.
+func WithCallTimeout(ctx context.Context, d time.Duration) context.Context {
+	if d <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, callTimeoutKey{}, d)
+}
+
+func callTimeoutFrom(ctx context.Context) (time.Duration, bool) {
+	d, ok := ctx.Value(callTimeoutKey{}).(time.Duration)
+	return d, ok && d > 0
+}
+
 func (s *Server) callTool(ctx context.Context, name string, arguments map[string]interface{}) (*ToolResult, error) {
 	// Hold the server mutex for the entire call+restart sequence to prevent
 	// concurrent callers from using a half-restarted transport.
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// The caller's deadline may have run out while this call waited for the
+	// mutex. Refuse before writing anything: a request sent on a dead context
+	// can reach a stdio server in a write/cancel race (and marks the transport
+	// broken), so a deal write could land with the caller already gone.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("MCP server %s: %s was not sent; the call's deadline expired while it waited for the server's previous call: %w", s.name, name, err)
+	}
+	if d, ok := callTimeoutFrom(ctx); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
+	}
 
 	// A reload (#218) or Client.Close (#1108) may have retired this server
 	// (closed its transport, removed it from service) between a caller capturing

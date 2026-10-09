@@ -43,6 +43,46 @@ const maxToolsPerRequest = 128
 // governance survives an expired callCtx.
 var toolCallTimeout = 5 * time.Minute
 
+// Server-side deal_ids batches (the bundle servers' *_merge_deal_* family)
+// process records sequentially, each a GET -> merge -> PUT -> re-GET round
+// trip (~7-10 s on OpenX with a 4k-value list). A flat toolCallTimeout killed a
+// 59-deal batch on the Tunnl ELC07362 run (2026-09-30): the server was
+// restarted mid-batch and the agent re-ran the remainder in chunks. A batch
+// call gets batchToolCallTimeoutPerDeal per targeted record, never less than
+// toolCallTimeout and never more than maxBatchToolCallTimeout (ported from
+// cutlass toolCallTimeoutForServer, cutlass#1067).
+const (
+	batchToolCallTimeoutPerDeal = 20 * time.Second
+	// Nexxen's Deals API allows 20 requests/minute per API user and each
+	// batched deal costs ~5 calls, so a deal takes ~17-25 s of pacing alone.
+	nexxenBatchToolCallTimeoutPerDeal = 45 * time.Second
+	maxBatchToolCallTimeout           = 30 * time.Minute
+)
+
+// toolCallTimeoutFor returns the per-call budget for an MCP call on the
+// registered server serverName: toolCallTimeout, scaled up for a call whose
+// input carries a non-empty deal_ids array so a long but healthy sequential
+// batch is not killed mid-run. A Nexxen server (nexxen_mcp or any client
+// variant nexxen_mcp_<account>) gets the longer per-deal pace.
+func toolCallTimeoutFor(serverName, rawInput string) time.Duration {
+	ids, ok := batchDealIDs(rawInput)
+	if !ok {
+		return toolCallTimeout
+	}
+	perDeal := batchToolCallTimeoutPerDeal
+	if serverName == "nexxen_mcp" || strings.HasPrefix(serverName, "nexxen_mcp_") {
+		perDeal = nexxenBatchToolCallTimeoutPerDeal
+	}
+	t := time.Duration(len(ids)) * perDeal
+	if t < toolCallTimeout {
+		return toolCallTimeout
+	}
+	if t > maxBatchToolCallTimeout {
+		return maxBatchToolCallTimeout
+	}
+	return t
+}
+
 // ── THE ONE SERVER-NAME KEYING RULE (#1272) ──────────────────────────────────
 //
 // Every server-keyed MCP gate faces the same gap: the gate map is keyed by
@@ -643,7 +683,13 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 		message, _ := governToolOutput(ctx, toolName, err.Error())
 		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(message), failed: true}
 	}
-	callCtx, cancel := context.WithTimeout(ctx, toolCallTimeout)
+	// The budget starts once the call holds the server's mutex
+	// (mcp.WithCallTimeout), so time spent queued behind another call on the
+	// same server does not eat a long batch's budget. The outer deadline is
+	// the backstop for brokers that never reach an mcp.Server (and for the
+	// queue itself): the budget plus one default call's worth of waiting.
+	timeout := toolCallTimeoutFor(m.serverName, params.Input)
+	callCtx, cancel := context.WithTimeout(mcp.WithCallTimeout(ctx, timeout), timeout+toolCallTimeout)
 	defer cancel()
 	// Sentry breadcrumb (#193): a trail of every MCP call so a captured
 	// exception's Sentry event shows the agent's tool history. Tool ARGS are
