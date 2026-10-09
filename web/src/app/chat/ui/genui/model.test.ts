@@ -8,6 +8,7 @@ import {
   collect,
   initialValues,
   normalizeValues,
+  parseListText,
   isCalendarDate,
   isWebUrl,
   parseCardSpec,
@@ -219,6 +220,13 @@ describe("restored repeater values", () => {
     }));
     const restored = normalizeValues(spec!, { lines: Array.from({ length: 5000 }, () => ({})) });
     expect((restored.lines as unknown[]).length).toBe(MAX_REPEATER_ITEMS);
+  });
+});
+
+describe("pasted list text", () => {
+  it("keeps one entry past the cap, not the whole paste", () => {
+    const text = Array.from({ length: 30000 }, (_, i) => `l${i}`).join("\n");
+    expect(parseListText(text, true)).toHaveLength(MAX_LIST_ITEMS + 1);
   });
 });
 

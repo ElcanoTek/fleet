@@ -1828,3 +1828,20 @@ describe("table cells", () => {
     expect(card.textContent).not.toContain("native code");
   });
 });
+
+describe("a confirmation and Escape", () => {
+  it("backs out even while a field has focus", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "C",
+      components: [{ type: "text_input", id: "n", label: "Name" }],
+      actions: [{ id: "go", label: "Go", confirm: "Sure?" }],
+    });
+    render(<GenerativeCard cardId="esc" spec={s} onSubmit={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    await user.click(screen.getByLabelText(/Name/));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+});

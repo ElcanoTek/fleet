@@ -865,12 +865,25 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     refocusRef.current = confirming?.id ?? null;
     setConfirming(null);
   };
-  const escapeBacksOut = (e: { key: string; preventDefault: () => void }) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      backOut();
-    }
-  };
+  // Escape backs out from anywhere in the card while the confirmation is
+  // open: the fields stay editable, so focus may be in one of them.
+  const backOutRef = useRef(backOut);
+  useEffect(() => {
+    backOutRef.current = backOut;
+  });
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!confirmId || !root) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented) {
+        e.preventDefault();
+        backOutRef.current();
+      }
+    };
+    root.addEventListener("keydown", onKey);
+    return () => root.removeEventListener("keydown", onKey);
+  }, [confirmId]);
+
   const sentLabel = submittedAction
     ? (spec.actions ?? []).find((a) => a.id === submittedAction)?.label ?? submittedAction
     : null;
@@ -935,11 +948,10 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
                   type="button"
                   className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] hover:opacity-90"
                   onClick={() => onConfirm(confirmingVisible)}
-                  onKeyDown={escapeBacksOut}
                 >
                   Yes, {confirmingVisible.label.toLowerCase()}
                 </button>
-                <button type="button" className={chipButton} onClick={backOut} onKeyDown={escapeBacksOut}>
+                <button type="button" className={chipButton} onClick={backOut}>
                   Back
                 </button>
               </div>
@@ -2181,8 +2193,9 @@ function ListInput({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
     setSeen(value);
     if (parseListText(text, dedupe).join("\n") !== v.join("\n")) setText(v.join("\n"));
   }
-  const parsed = parseListText(text, dedupe);
-  const raw = text.split(/[\r\n]+/).filter((l) => l.trim() !== "").length;
+  // Parsed once per edit, not on every render of the card.
+  const parsed = useMemo(() => parseListText(text, dedupe), [text, dedupe]);
+  const raw = useMemo(() => (dedupe ? parseListText(text, false).length : parsed.length), [text, dedupe, parsed]);
   return (
     <div className="grid min-w-0 gap-1">
       <textarea

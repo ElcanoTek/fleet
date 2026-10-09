@@ -998,7 +998,14 @@ func (v *validator) requiredMinBytes() int {
 		// \"id\":\"\", — the key and an empty value with every quote
 		// escaped, and a comma: id + 12.
 		size := len(id) + 12
-		if dis, _ := f.obj["disabled"].(bool); dis {
+		dis, _ := f.obj["disabled"].(bool)
+		if rep, ok := v.fields[f.repeater]; ok && rep.obj != nil {
+			// A disabled repeater disables every field in its items.
+			if rd, _ := rep.obj["disabled"].(bool); rd {
+				dis = true
+			}
+		}
+		if dis {
 			// A disabled input sends its default, whatever it holds.
 			if val, ok := f.obj["value"]; ok {
 				raw, _ := json.Marshal(val)
@@ -1142,7 +1149,7 @@ func (v *validator) countRows(path string, n int) {
 	before := v.rows
 	v.rows += n
 	if before <= MaxCardRows && v.rows > MaxCardRows {
-		v.addf(path, "the card renders more than %d table rows, list entries and repeater item fields in all; summarize or split it across cards", MaxCardRows)
+		v.addf(path, "the card renders more than %d table rows, list entries and repeater item fields in all (a repeater counts every item it can grow to, so set max_items); summarize or split it across cards", MaxCardRows)
 	}
 }
 
@@ -1244,23 +1251,21 @@ func (v *validator) repeaterRules(path string, obj map[string]any, num func(stri
 		// copies each field's default: list defaults count once per item.
 		// A table, display list or chart among the fields renders once per
 		// item too, so its rows and points count per item.
-		items := initialItems(obj)
+		// The budgets count the most items the repeater can reach, not the
+		// ones it starts with: the user can add (or duplicate) items up to
+		// max_items (200 when unset), and each new item renders every field,
+		// any table, list or chart among them, and a copy of every field
+		// default. Counted card-wide like everything else.
+		most := max(initialItems(obj), MaxRepeaterItems)
+		if okHi {
+			most = max(initialItems(obj), int(min(hi, MaxRepeaterItems)))
+		}
 		rows, points := nestedDisplay(kids)
 		weight := max(1, countComponents(kids)) + rows
-		v.countRows(path, items*weight)
-		// The user can add items up to max_items (200 when unset): each
-		// renders all of the fields, so the most the repeater can grow to
-		// must fit the card-wide row budget on its own.
-		most := float64(MaxRepeaterItems)
-		if okHi {
-			most = min(hi, most)
-		}
-		if int(most)*weight > MaxCardRows {
-			v.addf(path+".max_items", "items render %d components each, so at most %d fit the card (%d); set max_items to %d or fewer, or use fewer fields", weight, MaxCardRows/weight, MaxCardRows, MaxCardRows/weight)
-		}
-		v.countPoints(path, items*points)
-		if n := items * defaultEntries(kids); n > MaxListItems {
-			v.addf(path, "its field defaults hold %d list entries across its %d starting items, more than %d; shorten the defaults or start with fewer items", n, items, MaxListItems)
+		v.countRows(path, most*weight)
+		v.countPoints(path, most*points)
+		if n := most * defaultEntries(kids); n > MaxListItems {
+			v.addf(path, "its field defaults hold %d list entries across the %d items it can reach, more than %d; shorten the defaults or lower max_items", n, most, MaxListItems)
 		}
 		v.noNestedRepeater(path+".fields", kids)
 		v.disabledItems(path, obj, kids)

@@ -179,8 +179,23 @@ const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is 
 
 /** The empty / default value an input starts with. */
 /** A pasted list: one item per line, trimmed, blanks dropped, deduped by default. */
+/**
+ * The entries a pasted text holds. Collection stops one past MAX_LIST_ITEMS:
+ * that is enough for the "At most 20,000 items" error, and a paste of
+ * hundreds of thousands of lines is never kept, deduplicated or handed to
+ * expressions in full.
+ */
 export function parseListText(text: string, dedupe: boolean): string[] {
-  return normalizeList(text.split(/[\r\n]+/), dedupe);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const line of text.split(/[\r\n]+/)) {
+    const t = line.trim();
+    if (t === "" || (dedupe && seen.has(t))) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length > MAX_LIST_ITEMS) break;
+  }
+  return out;
 }
 
 export function normalizeList(items: string[], dedupe: boolean): string[] {

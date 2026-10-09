@@ -249,13 +249,13 @@ func TestRepeaterDefaultEntriesCap(t *testing.T) {
 		lines[i] = fmt.Sprintf("%q", strconv.Itoa(i))
 	}
 	card := func(items int) string {
-		return fmt.Sprintf(`{"title":"x","components":[{"type":"repeater","id":"r","label":"R","min_items":%d,"fields":[{"type":"list_input","id":"l","label":"L","value":[%s]}]}],"actions":[{"id":"go","label":"Go"}]}`, items, strings.Join(lines, ","))
+		return fmt.Sprintf(`{"title":"x","components":[{"type":"repeater","id":"r","label":"R","min_items":%d,"max_items":%d,"fields":[{"type":"list_input","id":"l","label":"L","value":[%s]}]}],"actions":[{"id":"go","label":"Go"}]}`, items, items, strings.Join(lines, ","))
 	}
 	if _, issues := Validate([]byte(card(MaxListItems / 200))); len(issues) != 0 {
 		t.Fatalf("at the cap: %v", issues)
 	}
 	_, issues := Validate([]byte(card(MaxListItems/200 + 1)))
-	if len(issues) != 1 || !strings.Contains(issues[0].Message, "list entries across its") {
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, "list entries across the") {
 		t.Fatalf("over the cap: %v", issues)
 	}
 }
@@ -282,11 +282,32 @@ func TestRepeaterMaxItemsFitsRowBudget(t *testing.T) {
 	card := func(maxItems string) string {
 		return `{"title":"x","components":[{"type":"repeater","id":"r","label":"R"` + maxItems + `,"fields":[` + fields + `]}],"actions":[{"id":"go","label":"Go"}]}`
 	}
-	if _, issues := Validate([]byte(card(""))); len(issues) == 0 || !strings.Contains(issues[0].Message, "set max_items to 100") {
+	if _, issues := Validate([]byte(card(""))); len(issues) == 0 || !strings.Contains(issues[0].Message, "set max_items") {
 		t.Fatalf("default max_items: %v", issues)
 	}
 	if _, issues := Validate([]byte(card(`,"max_items":100`))); len(issues) != 0 {
 		t.Fatalf("max_items 100: %v", issues)
+	}
+}
+
+// Repeaters are budgeted at the items they can grow to, card-wide: two
+// ten-field repeaters at the default 200 items cannot share 2,000 rows.
+func TestRepeaterGrowthIsBudgetedCardWide(t *testing.T) {
+	fields := strings.TrimSuffix(strings.Repeat(`{"type":"divider"},`, 10), ",")
+	rep := func(id, maxItems string) string {
+		return `{"type":"repeater","id":"` + id + `","label":"R"` + maxItems + `,"fields":[` + fields + `]}`
+	}
+	two := `{"title":"x","components":[` + rep("a", "") + `,` + rep("b", "") + `],"actions":[{"id":"go","label":"Go"}]}`
+	if _, issues := Validate([]byte(two)); len(issues) == 0 {
+		t.Fatal("two 200-item repeaters accepted")
+	}
+	fit := `{"title":"x","components":[` + rep("a", `,"max_items":100`) + `,` + rep("b", `,"max_items":100`) + `],"actions":[{"id":"go","label":"Go"}]}`
+	if _, issues := Validate([]byte(fit)); len(issues) != 0 {
+		t.Fatalf("two 100-item repeaters: %v", issues)
+	}
+	chart := `{"title":"x","components":[{"type":"repeater","id":"c","label":"C","fields":[{"type":"chart","kind":"bar","labels":[` + strings.TrimSuffix(strings.Repeat(`"l",`, 200), ",") + `],"series":[{"name":"s","values":[` + strings.TrimSuffix(strings.Repeat(`1,`, 200), ",") + `]}]}]}],"actions":[{"id":"go","label":"Go"}]}`
+	if _, issues := Validate([]byte(chart)); len(issues) == 0 {
+		t.Fatal("a chart in a 200-item repeater accepted")
 	}
 }
 

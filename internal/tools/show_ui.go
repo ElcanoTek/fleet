@@ -59,7 +59,7 @@ EXPRESSIONS — used in {{ }} templates (text, heading, callout, stat value/capt
 
 ACTIONS — {id, label, kind: "submit" (default; sends the values) | "message" (sends the fixed "message" text as the user's reply, after a "` + UIReplyPrefix + ` card=<card_id> action=<action_id>" line — use for quick-reply buttons), style?, validate? (default true: required fields must be filled), confirm? (a confirmation question), visible_if?, disabled_if?}; a button hidden or disabled in every state is refused. At most 6.
 
-The spec is validated: a mistake comes back as a tool error naming the path — fix it and call again. Keep cards focused (one task per card); limits: 128 KiB per card, 800 components, 500 table rows (and 500 entries per badges / facts / status_list / diff list; 2000 rows, entries and repeater item fields across the card, and a repeater's max_items (200 when unset) times its fields within 2000; 3200 chart points × series), 2000 options per input.`
+The spec is validated: a mistake comes back as a tool error naming the path — fix it and call again. Keep cards focused (one task per card); limits: 128 KiB per card, 800 components, 500 table rows (and 500 entries per badges / facts / status_list / diff list; 2000 rows, entries and repeater item fields across the card, each repeater counted at its max_items (200 when unset); 3200 chart points × series), 2000 options per input.`
 
 // NewShowUITool returns the show_ui tool. Its Run validates the spec and
 // reports the outcome to the model; the card itself is drawn by the web

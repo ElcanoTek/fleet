@@ -481,8 +481,9 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
   },
   number: ([v]) => numOrNull(num(v)),
   string: ([v]) => toText(v),
-  upper: ([v]) => toText(v).toUpperCase(),
-  lower: ([v]) => toText(v).toLowerCase(),
+  // Case mapping can lengthen text (ß becomes SS): bounded like any string.
+  upper: ([v]) => bounded(toText(v).toUpperCase()),
+  lower: ([v]) => bounded(toText(v).toLowerCase()),
   join: ([v, sep]) => joinList(list(v), sep === undefined ? ", " : toText(sep)),
   contains: ([hay, needle]) => {
     if (typeof hay === "string") return hay.includes(toText(needle));
