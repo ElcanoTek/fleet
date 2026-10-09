@@ -26,11 +26,26 @@ export function createdByLabel(task: Task): string {
 export function taskRunLabel(task: Task, maxLength = 60): string {
   const title = (task.title ?? "").trim();
   if (title) return truncate(title, maxLength);
+  const named = promptName(task.prompt ?? "");
+  if (named) return truncate(named, maxLength);
   const firstLine = (task.prompt ?? "")
     .split("\n")
     .map((line) => line.trim())
     .find((line) => line !== "");
   return firstLine ? truncate(firstLine, maxLength) : task.id.slice(0, 8);
+}
+
+// promptName is the name a workflow prompt gives itself: a top-level YAML
+// `name:` line near the start ("name: \"Weekly Health Scan\""). Scheduled
+// prompts often open with a shared preamble heading, so their first line is the
+// same for every task; the workflow's own name is what tells them apart.
+export function promptName(prompt: string): string {
+  const head = prompt.split("\n", 200);
+  for (const line of head) {
+    const m = /^name:\s*(["']?)(.+?)\1\s*$/.exec(line);
+    if (m && m[2].trim()) return m[2].trim();
+  }
+  return "";
 }
 
 // blockedReason is why a run finished Blocked — a success whose declared

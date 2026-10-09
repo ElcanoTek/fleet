@@ -299,7 +299,7 @@ describe("LogViewer task-detail modal", () => {
     const filters = await screen.findByTestId("log-filters");
     expect(filters).toHaveTextContent("Showing all 4 messages");
     // tool chip resolves the tool-result's name via tool_call_id
-    const chip = screen.getByRole("button", { name: /run_python/ });
+    const chip = within(filters).getByRole("button", { name: /run_python/ });
     fireEvent.click(chip);
     await waitFor(() =>
       expect(screen.getByTestId("log-filters")).toHaveTextContent(
@@ -307,7 +307,7 @@ describe("LogViewer task-detail modal", () => {
       ),
     );
     // union with responses highlight widens the selection
-    fireEvent.click(screen.getByRole("button", { name: /^Responses/ }));
+    fireEvent.click(within(screen.getByTestId("log-filters")).getByRole("button", { name: /^Responses/ }));
     await waitFor(() =>
       expect(screen.getByTestId("log-filters")).toHaveTextContent(
         "Showing 3 of 4 messages",
@@ -666,5 +666,133 @@ describe("LogViewer transcript-absent 404 handling", () => {
 
     expect(await screen.findByText("No transcript available for this task.")).toBeTruthy();
     expect(screen.queryByText(/Failed to load logs/)).toBeNull();
+  });
+});
+
+// ── the transcript timeline (LogTimeline.tsx) ──────────────────────────────────
+
+const TIMELINE_SESSION: LogSession = {
+  id: "sess-t",
+  messages: [
+    {
+      id: "u1",
+      role: "user",
+      content: Array.from({ length: 30 }, (_, i) => `line ${i + 1} of the task prompt`).join("\n"),
+      created_at: 1752500000,
+    },
+    {
+      id: "a1",
+      role: "assistant",
+      content: "",
+      created_at: 1752500001,
+      tool_calls: [
+        { id: "c1", name: "run_python", arguments: JSON.stringify({ code: "# Count the rows\nprint(len(rows))" }) },
+        { id: "c2", name: "bash", arguments: JSON.stringify({ command: "ls sources" }) },
+        { id: "c3", name: "run_python", arguments: JSON.stringify({ code: "rows['spend']" }) },
+      ],
+    },
+    {
+      id: "t1",
+      role: "tool",
+      tool_call_id: "c1",
+      content: JSON.stringify({ status: "success", output: "1293", stdout: "1293\n", stderr: "", error: "", execution_time_ms: 7 }),
+      created_at: 1752500002,
+    },
+    {
+      id: "t2",
+      role: "tool",
+      tool_call_id: "c2",
+      content: JSON.stringify({ command: "ls sources", exit_code: 0, stdout: "magnite.csv\n", stderr: "" }),
+      created_at: 1752500003,
+    },
+    {
+      id: "t3",
+      role: "tool",
+      tool_call_id: "c3",
+      content: JSON.stringify({ status: "error", stdout: "", stderr: "", error: "Traceback (most recent call last):\nKeyError: 'spend'" }),
+      created_at: 1752500004,
+    },
+    {
+      id: "e1",
+      role: "user",
+      content: "[context_compacted] trigger=resend_budget used=187766 budget=80000 removed_turns=30 — the oldest half of the history was summarized",
+      created_at: 1752500005,
+    },
+    { id: "s1", role: "user", message_type: "compaction_summary", content: "[context compaction] ## Progress\nCounted 1293 rows.", created_at: 1752500005 },
+    { id: "a2", role: "assistant", content: "Report built.", created_at: 1752500006 },
+    { id: "f1", role: "user", message_type: "error", content: "[fatal] run aborted by its own self-audit: no send", created_at: 1752500007 },
+  ],
+};
+
+describe("LogViewer transcript timeline", () => {
+  it("folds each call and its result into one step, with code and terminal output instead of JSON", async () => {
+    mockSession(TIMELINE_SESSION);
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    const steps = await screen.findAllByTestId("log-tool-step");
+    expect(steps).toHaveLength(3);
+    // Collapsed: the comment line summarizes the cell; nothing raw shows.
+    expect(steps[0]).toHaveTextContent("Count the rows");
+    expect(screen.queryByText(/"stdout"/)).toBeNull();
+
+    fireEvent.click(within(steps[0]).getAllByRole("button")[0]);
+    await waitFor(() => expect(steps[0]).toHaveTextContent("print(len(rows))"));
+    expect(steps[0]).toHaveTextContent("1293");
+    expect(steps[0]).toHaveTextContent("7 ms");
+    expect(steps[0]).not.toHaveTextContent('"execution_time_ms"');
+  });
+
+  it("shows a failed step's last traceback line without opening it", async () => {
+    mockSession(TIMELINE_SESSION);
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    const steps = await screen.findAllByTestId("log-tool-step");
+    expect(steps[2]).toHaveTextContent("Failed");
+    expect(steps[2]).toHaveTextContent("KeyError: 'spend'");
+    expect(steps[1]).toHaveTextContent("$ ls sources");
+  });
+
+  it("renders runtime breadcrumbs as events, the summary on demand, and an abort as a banner", async () => {
+    mockSession(TIMELINE_SESSION);
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    const events = await screen.findAllByTestId("log-event");
+    expect(events[0]).toHaveTextContent("History compacted");
+    expect(events[0]).toHaveTextContent("30 turns summarized");
+    expect(screen.getByTestId("log-compaction-summary")).toHaveTextContent("Compaction summary");
+    expect(screen.getByRole("alert")).toHaveTextContent("Run aborted");
+    expect(screen.getByRole("alert")).toHaveTextContent("run aborted by its own self-audit: no send");
+    expect(screen.getByTestId("log-assistant")).toHaveTextContent("Final answer");
+  });
+
+  it("clamps a long task prompt behind a toggle", async () => {
+    mockSession(TIMELINE_SESSION);
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    const prompt = await screen.findByTestId("log-task-prompt");
+    const toggle = within(prompt).getByRole("button", { name: "Show full prompt" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(within(prompt).getByRole("button", { name: "Collapse" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("searches the run and filters to errors", async () => {
+    mockSession(TIMELINE_SESSION);
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    const search = await screen.findByRole("searchbox", { name: "Search the transcript" });
+    fireEvent.change(search, { target: { value: "magnite.csv" } });
+    await waitFor(() => expect(screen.getAllByTestId("log-tool-step")).toHaveLength(1));
+    expect(screen.getByTestId("log-filters")).toHaveTextContent("Showing 2 of 9 messages");
+
+    fireEvent.click(within(screen.getByTestId("log-filters")).getByRole("button", { name: "Clear all" }));
+    fireEvent.click(within(screen.getByTestId("log-filters")).getByRole("button", { name: /^Errors/ }));
+    await waitFor(() => expect(screen.getAllByTestId("log-tool-step")).toHaveLength(1));
+    expect(screen.getByTestId("log-tool-step")).toHaveTextContent("KeyError");
+  });
+
+  it("jumps to a step from the overview strip", async () => {
+    mockSession(TIMELINE_SESSION);
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    const strip = await screen.findByTestId("log-step-strip");
+    fireEvent.click(within(strip).getByRole("button", { name: "Step 2: bash" }));
+    await waitFor(() =>
+      expect(screen.getAllByTestId("log-tool-step")[1]).toHaveTextContent("magnite.csv"),
+    );
   });
 });

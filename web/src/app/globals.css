@@ -108,6 +108,21 @@
   --color-syntax-builtin: #7fc7ff;
   --color-syntax-operator: #d2d9de;
   --color-syntax-punctuation: #beb6cd;
+  /* Operations Center log: one hue per tool family (orchestrator/
+     LogTimeline.tsx — step accents, overview ticks, filter dots). Derived from
+     the syntax and status palettes, which the light block redefines, so both
+     themes get tuned values without a second list. */
+  --color-tool-python: var(--color-syntax-builtin);
+  --color-tool-shell: var(--color-syntax-string);
+  --color-tool-files: var(--color-syntax-function);
+  --color-tool-email: var(--color-syntax-keyword);
+  --color-tool-send: var(--color-status-running-fg);
+  --color-tool-audit: var(--color-syntax-number);
+  --color-tool-web: var(--color-accent);
+  --color-tool-pages: color-mix(in srgb, var(--color-syntax-string) 50%, var(--color-syntax-builtin));
+  --color-tool-delegate: var(--color-status-leased-fg);
+  --color-tool-plan: var(--color-text-muted);
+  --color-tool-mcp: var(--color-text-secondary);
   /* Per-status badge triplets (fg on tinted bg with a matching border),
      ported from the MOC dashboard / flag design system so the Operations
      Center task lifecycle reads at a glance by hue: gray=pending,
@@ -2859,22 +2874,6 @@ tr.sla-row-fail {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-.live-tool-entry {
-  overflow: hidden;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-2);
-}
-.live-tool-entry--error {
-  border-color: var(--color-danger-border);
-}
-.live-tool-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.6rem 0.75rem;
-}
 
 /* Sub-agent child cards (#1043) — one per spawned child, stored + live. */
 .subagent-card {
@@ -2970,55 +2969,6 @@ tr.sla-row-fail {
 }
 .subagent-card-transcript .log-session {
   margin-top: 0.5rem;
-}
-.live-tool-heading code {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--color-text-primary);
-  font-size: 0.78rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.live-tool-status {
-  flex: 0 0 auto;
-  color: var(--color-text-muted);
-  font-size: 0.72rem;
-  font-weight: 600;
-}
-.live-tool-status--error,
-.live-tool-error,
-.log-tool-error {
-  color: var(--color-danger);
-}
-.live-tool-error,
-.log-tool-error {
-  margin: 0;
-  padding: 0 0.75rem 0.7rem;
-  font-size: 0.8rem;
-  line-height: 1.45;
-}
-.log-tool-error {
-  padding: 0;
-}
-.live-tool-details {
-  border-top: 1px solid var(--color-border-subtle);
-}
-.live-tool-details summary {
-  padding: 0.45rem 0.75rem;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  font-size: 0.72rem;
-}
-.live-tool-details pre {
-  max-height: 12rem;
-  margin: 0;
-  overflow: auto;
-  padding: 0 0.75rem 0.7rem;
-  color: var(--color-text-secondary);
-  font-size: 0.72rem;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 /* Filters + pagination — the Recent Tasks filter/search row matches the design
@@ -5344,6 +5294,7 @@ select.mcp-server-picker__account-select {
 }
 .log-filters-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
@@ -5408,83 +5359,10 @@ select.mcp-server-picker__account-select {
   color: var(--color-text-muted);
 }
 
-/* Transcript messages: role-tinted header bar over the content card. */
+/* Transcript container (the timeline's cards are the .lt-* rules below). */
 .log-session {
   display: grid;
   gap: 0.6rem;
-}
-.log-message {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  background: var(--color-overlay-soft, rgba(0, 0, 0, 0.15));
-}
-.log-message-head {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.75rem;
-  background: var(--color-surface-2);
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-.log-message--user .log-message-head {
-  background: color-mix(
-    in srgb,
-    var(--color-primary) 22%,
-    var(--color-surface-2)
-  );
-}
-.log-message--tool .log-message-head {
-  background: color-mix(in srgb, var(--color-accent) 14%, var(--color-surface-2));
-}
-.log-avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.35rem;
-  height: 1.35rem;
-  border-radius: 999rem;
-  font-size: 0.7rem;
-  font-weight: 700;
-  color: var(--color-white);
-  background: var(--color-secondary);
-  flex: 0 0 auto;
-}
-.log-avatar--user {
-  background: var(--color-primary);
-  color: var(--color-on-primary);
-}
-.log-avatar--assistant {
-  background: var(--color-secondary);
-}
-.log-avatar--tool {
-  background: var(--color-accent);
-}
-.log-message-role {
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-text-secondary);
-}
-.log-message-model {
-  font-size: 0.68rem;
-  font-family: var(--font-code);
-  color: var(--color-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-.log-message-time {
-  margin-left: auto;
-  font-size: 0.7rem;
-  color: var(--color-text-muted);
-  font-variant-numeric: tabular-nums;
-  flex: 0 0 auto;
-}
-.log-message-content {
-  padding: 0.6rem 0.75rem;
 }
 .log-pre {
   white-space: pre-wrap;
@@ -5492,28 +5370,840 @@ select.mcp-server-picker__account-select {
   margin: 0.35rem 0 0;
   font-size: 0.78rem;
 }
-.log-reasoning summary,
-.log-tool-call summary,
-.log-tool-output summary {
+/* ── Task-log timeline (orchestrator/LogTimeline.tsx) ─────────────────────
+   One card per tool call with its result folded in, tinted by tool family
+   (--lt-hue, set by the .lt-cat--* classes below); events as slim rows; the
+   prompt clamped. Everything keys off tokens so both themes work. */
+.lt-cat--python { --lt-hue: var(--color-tool-python); }
+.lt-cat--shell { --lt-hue: var(--color-tool-shell); }
+.lt-cat--files { --lt-hue: var(--color-tool-files); }
+.lt-cat--email { --lt-hue: var(--color-tool-email); }
+.lt-cat--send { --lt-hue: var(--color-tool-send); }
+.lt-cat--audit { --lt-hue: var(--color-tool-audit); }
+.lt-cat--web { --lt-hue: var(--color-tool-web); }
+.lt-cat--pages { --lt-hue: var(--color-tool-pages); }
+.lt-cat--delegate { --lt-hue: var(--color-tool-delegate); }
+.lt-cat--plan { --lt-hue: var(--color-tool-plan); }
+.lt-cat--mcp,
+.lt-cat--other { --lt-hue: var(--color-tool-mcp); }
+
+.lt-timeline {
+  gap: 0.45rem;
+}
+
+/* Tool step card */
+.lt-step {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--lt-hue) 4%, var(--color-surface-1));
+  box-shadow: inset 3px 0 0 var(--lt-hue);
+  overflow: hidden;
+  min-width: 0;
+}
+.lt-step--open {
+  border-color: color-mix(in srgb, var(--lt-hue) 45%, var(--color-border));
+}
+.lt-step--error {
+  border-color: var(--color-danger-border);
+  box-shadow: inset 3px 0 0 var(--color-danger);
+}
+.lt-step-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.45rem 0.75rem 0.45rem 0.9rem;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  text-align: left;
   cursor: pointer;
-  font-size: 0.75rem;
+  transition: background var(--transition-fast);
+}
+.lt-step-head:hover {
+  background: color-mix(in srgb, var(--lt-hue) 9%, transparent);
+}
+.lt-step-head:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.lt-step-num {
+  flex: 0 0 2.1rem;
+  font-family: var(--font-code);
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  text-align: right;
+}
+.lt-step-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 0.45rem;
+  font-size: 0.85rem;
+  color: var(--lt-hue);
+  background: color-mix(in srgb, var(--lt-hue) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lt-hue) 35%, transparent);
+}
+.lt-step-name {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 40%;
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--lt-hue);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.lt-step-server {
+  padding: 0 0.4rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.66rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--lt-hue) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lt-hue) 30%, transparent);
+}
+.lt-step-action {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lt-step-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+}
+.lt-step-meta {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.lt-chevron {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  transition: transform var(--transition-fast);
+}
+.lt-step--open .lt-chevron {
+  transform: rotate(90deg);
+}
+.lt-step-error {
+  margin: 0;
+  padding: 0 0.85rem 0.5rem 4.95rem;
+  font-family: var(--font-code);
+  font-size: 0.74rem;
+  color: var(--color-danger);
+  overflow-wrap: anywhere;
+}
+.lt-step-body {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.6rem 0.85rem 0.85rem 0.9rem;
+  border-top: 1px solid var(--color-border-subtle);
+  min-width: 0;
+}
+@media (max-width: 720px) {
+  .lt-step-head {
+    flex-wrap: wrap;
+    row-gap: 0.25rem;
+  }
+  .lt-step-num {
+    flex-basis: auto;
+  }
+  .lt-step-name {
+    max-width: 70%;
+  }
+  .lt-step-summary {
+    flex-basis: 100%;
+    order: 5;
+  }
+  .lt-step-error {
+    padding-left: 0.9rem;
+  }
+}
+
+/* Sections inside a step */
+.lt-section {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.lt-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.lt-section-label {
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--color-text-muted);
 }
-.log-reasoning,
-.log-tool-call {
-  margin-bottom: 0.35rem;
+.lt-section-aside {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  font-family: var(--font-code);
+  font-size: 0.7rem;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.log-tool-calls {
+
+/* Code, terminal output, plain text */
+.lt-code,
+.lt-text,
+.lt-terminal {
+  min-width: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 0.5rem;
+  background: var(--color-overlay-soft);
+}
+.lt-code-scroll {
+  overflow-x: auto;
+  padding: 0.5rem 0.65rem;
+}
+.lt-code-plain {
+  margin: 0;
+  font-family: var(--font-code);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--color-text-primary);
+  white-space: pre;
+}
+.lt-code-plain--wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lt-terminal {
+  background: var(--color-overlay-strong);
+  padding: 0.5rem 0.65rem;
+  overflow-x: auto;
+}
+.lt-terminal pre {
+  margin: 0;
+  font-family: var(--font-code);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  white-space: pre;
+}
+.lt-terminal-out {
+  color: var(--color-text-primary);
+}
+.lt-terminal-err {
+  color: var(--color-danger);
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere;
+}
+.lt-terminal-out + .lt-terminal-err,
+.lt-clamp-toggle + .lt-terminal-err {
+  margin-top: 0.4rem !important;
+  padding-top: 0.4rem;
+  border-top: 1px dashed var(--color-danger-border);
+}
+.lt-terminal--empty {
+  font-size: 0.74rem;
+  color: var(--color-text-muted);
+}
+.lt-text {
+  padding: 0.5rem 0.65rem;
+}
+.lt-text pre {
+  margin: 0;
+  font-family: var(--font-code);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+}
+.lt-clamp-toggle {
+  display: block;
+  margin: 0.15rem 0.65rem 0.45rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 0.72rem;
+  color: var(--color-accent);
+  cursor: pointer;
+}
+.lt-terminal .lt-clamp-toggle,
+.lt-text .lt-clamp-toggle {
+  margin: 0.35rem 0 0;
+}
+.lt-clamp-toggle:hover {
+  text-decoration: underline;
+}
+.lt-note {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  padding: 0.35rem 0.6rem;
+  border-left: 2px solid var(--color-warning-border);
+  background: color-mix(in srgb, var(--color-warning-strong) 7%, transparent);
+  border-radius: 0 0.4rem 0.4rem 0;
+  overflow-wrap: anywhere;
+}
+.lt-waiting {
+  font-size: 0.74rem;
+  color: var(--color-text-muted);
+}
+
+/* Argument rows */
+.lt-args {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  min-width: 0;
+}
+.lt-arg {
+  display: grid;
+  grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: baseline;
+  min-width: 0;
+}
+.lt-arg dt {
+  font-family: var(--font-code);
+  font-size: 0.72rem;
+  color: var(--color-syntax-builtin);
+}
+.lt-arg dd {
+  margin: 0;
+  min-width: 0;
+}
+.lt-arg-str,
+.lt-arg-num,
+.lt-arg-null {
+  font-family: var(--font-code);
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+.lt-arg-str {
+  color: var(--color-syntax-string);
+}
+.lt-arg-num {
+  color: var(--color-syntax-number);
+}
+.lt-arg-null {
+  color: var(--color-text-muted);
+}
+.lt-arg-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.6rem;
+}
+@media (max-width: 720px) {
+  .lt-arg {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.1rem;
+  }
+}
+
+/* Edits */
+.lt-diff {
+  display: grid;
+  gap: 0.25rem;
+}
+.lt-diff pre {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.4rem;
+  font-family: var(--font-code);
+  font-size: 0.76rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lt-diff-del {
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger-strong) 9%, transparent);
+}
+.lt-diff-add {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success-strong) 9%, transparent);
+}
+
+/* Status pills */
+.lt-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.05rem 0.5rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  max-width: 28rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lt-pill--ok {
+  color: var(--color-success-soft);
+  border-color: color-mix(in srgb, var(--color-success-strong) 50%, transparent);
+  background: color-mix(in srgb, var(--color-success-strong) 12%, transparent);
+}
+.lt-pill--error {
+  color: var(--color-danger-soft);
+  border-color: color-mix(in srgb, var(--color-danger-strong) 55%, transparent);
+  background: color-mix(in srgb, var(--color-danger-strong) 14%, transparent);
+}
+.lt-pill--warn {
+  color: var(--color-warning-soft);
+  border-color: color-mix(in srgb, var(--color-warning-strong) 50%, transparent);
+  background: color-mix(in srgb, var(--color-warning-strong) 12%, transparent);
+}
+.lt-pill--running {
+  color: var(--color-status-running-fg);
+  border-color: var(--color-status-running-border);
+  background: var(--color-status-running-bg);
+}
+.lt-pill--neutral {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+/* Plan (task_tracker) */
+.lt-plan {
   display: grid;
   gap: 0.2rem;
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  list-style: none;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 0.5rem;
+  background: var(--color-overlay-soft);
 }
-/* Fenced code in the react-markdown log falls through to the browser-default
-   <pre> — scroll long lines inside the block instead of clipping them at the
-   modal edge (same treatment as chat's .assistant-markdown-pre). */
-.log-message-content pre {
+.lt-plan-item {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.8rem;
+}
+.lt-plan-glyph {
+  flex: 0 0 1rem;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+.lt-plan-item--done .lt-plan-glyph,
+.lt-plan-item--done .lt-plan-title {
+  color: var(--color-success);
+}
+.lt-plan-item--in_progress .lt-plan-glyph,
+.lt-plan-item--in_progress .lt-plan-title {
+  color: var(--color-accent);
+}
+.lt-plan-copy {
+  display: grid;
+  min-width: 0;
+}
+.lt-plan-notes {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+/* Audit */
+.lt-audit {
+  display: grid;
+  gap: 0.5rem;
+}
+.lt-audit-verdict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--color-text-primary);
+}
+.lt-audit-reasoning {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+/* Prompt */
+.lt-prompt {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-primary) 7%, var(--color-surface-1));
+  overflow: hidden;
+}
+.lt-prompt-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.85rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.lt-prompt-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+.lt-prompt-meta {
+  flex: 1 1 auto;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+.lt-prompt-body {
+  padding: 0.6rem 0.85rem;
+}
+.lt-prompt-body pre {
+  margin: 0;
+  font-family: var(--font-code);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+}
+.lt-prompt-body--clamped {
+  max-height: 15rem;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 65%, transparent);
+  mask-image: linear-gradient(to bottom, #000 65%, transparent);
+}
+
+/* Assistant turns */
+.lt-assistant {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-1);
+  box-shadow: inset 3px 0 0 var(--color-accent);
+  overflow: hidden;
+}
+.lt-assistant--final {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 7%, var(--color-surface-1));
+}
+.lt-assistant-head,
+.lt-user-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+.lt-assistant--final .lt-assistant-title {
+  color: var(--color-accent);
+}
+.lt-assistant-model {
+  font-family: var(--font-code);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--color-text-muted);
+}
+.lt-assistant-time {
+  margin-left: auto;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.lt-assistant-body,
+.lt-user-body {
+  padding: 0 0.85rem 0.7rem;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  min-width: 0;
+}
+.lt-assistant-body pre,
+.lt-user-body pre,
+.lt-summary-body pre {
   overflow-x: auto;
   max-width: 100%;
 }
+.lt-reasoning {
+  margin: 0 0.85rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.lt-reasoning summary {
+  cursor: pointer;
+}
+.lt-reasoning pre {
+  margin: 0.35rem 0 0;
+  font-style: italic;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lt-user {
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+/* Markdown inside the log (assistant answers, summaries, user turns). The
+   base layer resets lists and headings, so restore a readable prose style. */
+.lt-md > :first-child {
+  margin-top: 0;
+}
+.lt-md > :last-child {
+  margin-bottom: 0;
+}
+.lt-md p,
+.lt-md ul,
+.lt-md ol,
+.lt-md pre,
+.lt-md table,
+.lt-md blockquote {
+  margin: 0 0 0.6rem;
+}
+.lt-md ul,
+.lt-md ol {
+  padding-left: 1.3rem;
+}
+.lt-md ul {
+  list-style: disc;
+}
+.lt-md ol {
+  list-style: decimal;
+}
+.lt-md li + li {
+  margin-top: 0.15rem;
+}
+.lt-md h1,
+.lt-md h2,
+.lt-md h3,
+.lt-md h4 {
+  margin: 0.9rem 0 0.4rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.lt-md h1 { font-size: 1.05rem; }
+.lt-md h2 { font-size: 0.98rem; }
+.lt-md h3,
+.lt-md h4 { font-size: 0.9rem; }
+.lt-md a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.lt-md code {
+  font-family: var(--font-code);
+  font-size: 0.82em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.3rem;
+  background: var(--color-overlay-soft);
+}
+.lt-md pre {
+  padding: 0.5rem 0.65rem;
+  border-radius: 0.5rem;
+  background: var(--color-overlay-soft);
+  border: 1px solid var(--color-border-subtle);
+}
+.lt-md pre code {
+  padding: 0;
+  background: transparent;
+}
+.lt-md table {
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  display: block;
+  overflow-x: auto;
+}
+.lt-md th,
+.lt-md td {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--color-border);
+  text-align: left;
+}
+.lt-md th {
+  background: var(--color-overlay-soft);
+}
+.lt-md blockquote {
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--color-border-strong);
+  color: var(--color-text-secondary);
+}
+
+/* Runtime events */
+.lt-event {
+  display: grid;
+  gap: 0.3rem;
+  justify-items: center;
+}
+.lt-event-pill {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.25rem 0.6rem;
+  max-width: 100%;
+  padding: 0.2rem 0.85rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.lt-event-pill:hover {
+  background: var(--color-overlay-soft);
+}
+.lt-event-title {
+  font-weight: 600;
+}
+.lt-event-facts,
+.lt-event-time {
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.lt-event--warn .lt-event-pill {
+  border-color: var(--color-warning-border);
+  color: var(--color-warning-soft);
+}
+.lt-event-detail {
+  margin: 0;
+  max-width: 52rem;
+  font-family: var(--font-code);
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+.lt-event-banner {
+  padding: 0.65rem 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--color-danger-strong) 60%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-danger-strong) 12%, transparent);
+  color: var(--color-text-primary);
+}
+.lt-event-banner-title {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-danger-soft);
+}
+.lt-event-banner p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+/* Compaction summary */
+.lt-summary {
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: 0.4rem 0.85rem;
+}
+.lt-summary > summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.6rem;
+  align-items: baseline;
+  cursor: pointer;
+}
+.lt-summary-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+}
+.lt-summary-hint {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+.lt-summary-body {
+  padding-top: 0.5rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+/* Overview strip */
+.lt-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 0.55rem 0.65rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.lt-strip-tick {
+  width: 9px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: var(--lt-hue);
+  opacity: 0.75;
+  cursor: pointer;
+}
+.lt-strip-tick:hover,
+.lt-strip-tick:focus-visible {
+  opacity: 1;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-text-primary);
+}
+.lt-strip-tick--error {
+  background: var(--color-danger);
+  opacity: 1;
+  box-shadow: 0 0 0 1px var(--color-danger);
+}
+.lt-strip-gap {
+  width: 2px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--color-border-strong);
+}
+
+/* Filter bar additions */
+.lt-search {
+  flex: 1 1 16rem;
+  min-width: 0;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 0.8rem;
+  outline: none;
+}
+.lt-search:focus {
+  border-color: var(--color-accent);
+}
+.lt-filter-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.log-chip-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--lt-hue);
+}
+.log-chip--errors {
+  color: var(--color-danger-soft);
+  border-color: color-mix(in srgb, var(--color-danger-strong) 45%, transparent);
+}
+
 /* Inline agent-generated images in the task log (#271). */
 .log-image {
   display: block;

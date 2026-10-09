@@ -21,11 +21,15 @@ import pythonGrammar from "react-syntax-highlighter/dist/esm/languages/prism/pyt
 import bashGrammar from "react-syntax-highlighter/dist/esm/languages/prism/bash";
 import jsonGrammar from "react-syntax-highlighter/dist/esm/languages/prism/json";
 import yamlGrammar from "react-syntax-highlighter/dist/esm/languages/prism/yaml";
+import markupGrammar from "react-syntax-highlighter/dist/esm/languages/prism/markup";
 SyntaxHighlighter.registerLanguage("python", pythonGrammar);
 SyntaxHighlighter.registerLanguage("bash", bashGrammar);
 SyntaxHighlighter.registerLanguage("shell", bashGrammar);
 SyntaxHighlighter.registerLanguage("json", jsonGrammar);
 SyntaxHighlighter.registerLanguage("yaml", yamlGrammar);
+// HTML/XML: the Operations Center log shows email bodies and files an agent
+// viewed or wrote (orchestrator/LogTimeline.tsx).
+SyntaxHighlighter.registerLanguage("markup", markupGrammar);
 
 // syntaxStyle is a react-syntax-highlighter style object: keys are
 // Prism token classes, values are CSS-in-JS objects. We use CSS var
@@ -80,12 +84,21 @@ const syntaxStyle: Record<string, React.CSSProperties> = {
 
 // Default export so ToolChips can `React.lazy(() => import("./CodeHighlight"))`
 // without an intermediate `.then`.
+// The optional props serve the Operations Center log, which shows whole
+// scripts: a larger type step, a line-number gutter, and wrapping for prose-like
+// payloads. Chat's tool chips pass none of them and render exactly as before.
 export default function HighlightedCode({
   code,
   language,
+  fontSize = "0.72rem",
+  showLineNumbers = false,
+  wrapLongLines = false,
 }: {
   code: string;
   language: string;
+  fontSize?: string;
+  showLineNumbers?: boolean;
+  wrapLongLines?: boolean;
 }) {
   return (
     <SyntaxHighlighter
@@ -93,12 +106,20 @@ export default function HighlightedCode({
       style={syntaxStyle}
       PreTag="pre"
       CodeTag="code"
-      wrapLongLines={false}
+      wrapLongLines={wrapLongLines}
+      showLineNumbers={showLineNumbers}
+      lineNumberStyle={{
+        minWidth: "2.25em",
+        paddingRight: "0.9em",
+        textAlign: "right",
+        color: "var(--color-text-disabled)",
+        userSelect: "none",
+      }}
       customStyle={{
         background: "transparent",
         padding: 0,
         margin: 0,
-        fontSize: "0.72rem",
+        fontSize,
         lineHeight: 1.4,
         fontFamily: "var(--font-code)",
       }}
