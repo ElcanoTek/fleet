@@ -195,7 +195,10 @@ to change. The loop that replaces a bespoke form:
   recently edited cards keep one: an abandoned card has no other cleanup. When
   the browser's storage is full, older drafts are dropped to make room. An
   **Edit and resend** draft survives a remount too, reopening the card for
-  editing until the resend lands.
+  editing until the resend lands. A restored answer (from the transcript or
+  a draft) never puts a value the user cannot fix into a disabled input: a
+  disabled input keeps the card's default, and a slider or an input with
+  `disabled_if` keeps only a value that passes its own checks.
 
 A card send goes through the composer's send path, but it leaves the composer
 alone: the text being typed stays, its pending attachments are not sent with

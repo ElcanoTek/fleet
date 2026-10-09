@@ -151,6 +151,15 @@ func TestNumberDomainForValidatingActions(t *testing.T) {
 		{"only max", &numDomain{max: 10, hasMax: true}, "n > 10", "", true},
 		{"step grid", &numDomain{min: 0, max: 10, hasMin: true, hasMax: true, step: 2}, "n == 3", "", true},
 		{"no domain", nil, "n > 10", "", false},
+		// A grid with one bound, none, or too many positions to scan.
+		{"step grid, min only", &numDomain{min: 0, hasMin: true, step: 2}, "n == 1", "", true},
+		{"step grid, min only, on grid", &numDomain{min: 0, hasMin: true, step: 2}, "n == 4", "", false},
+		{"step grid, min only, region", &numDomain{min: 0, hasMin: true, step: 2}, "n > 1 && n < 3", "", false},
+		{"step grid, min only, empty region", &numDomain{min: 1, hasMin: true, step: 2}, "n > 1 && n < 3", "", true},
+		{"step only", &numDomain{step: 0.5}, "n > 0.1 && n < 0.4", "", true},
+		{"step only, decimals", &numDomain{step: 0.1}, "n == 0.3", "", false},
+		{"step grid, too fine to scan", &numDomain{min: 0, max: 1e9, hasMin: true, hasMax: true, step: 2}, "n == 7", "", true},
+		{"step grid, too fine to scan, beyond literals", &numDomain{min: 0, max: 1e9, hasMin: true, hasMax: true, step: 2}, "n > 7", "n == 8", false},
 	}
 	for _, c := range cases {
 		if got := neverUsable(c.vis, c.dis, in(c.d)); got != c.want {

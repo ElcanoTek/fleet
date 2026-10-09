@@ -2001,7 +2001,9 @@ func initialItems(obj map[string]any) int {
 		return len(arr)
 	}
 	if lo, ok := obj["min_items"].(float64); ok && lo > 1 {
-		return int(lo)
+		// Over the cap is refused (repeaterRules); clamp first so a huge
+		// min_items never sizes an allocation or overflows int.
+		return int(min(lo, MaxRepeaterItems))
 	}
 	return 1
 }

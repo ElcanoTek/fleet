@@ -287,7 +287,7 @@ export function defaultValue(c: Component): unknown {
           .slice(0, MAX_REPEATER_ITEMS)
           .map((x) => ({ ...newItem(fields), ...pickKnown(fields, x as Values) }));
       }
-      const n = typeof c.min_items === "number" ? Math.max(1, c.min_items) : 1;
+      const n = typeof c.min_items === "number" ? Math.min(MAX_REPEATER_ITEMS, Math.max(1, c.min_items)) : 1;
       return Array.from({ length: n }, () => newItem(fields));
     }
     default:
@@ -328,10 +328,47 @@ export function normalizeValues(spec: CardSpec, saved: Values | null | undefined
   if (!saved || typeof saved !== "object") return out;
   walkInputs(spec.components, (c) => {
     if (c.id && Object.prototype.hasOwnProperty.call(saved, c.id)) {
-      out[c.id] = defaultValue({ ...c, value: saved[c.id] });
+      const v = restoredValue(c, saved[c.id]);
+      if (v !== undefined) out[c.id] = v;
     }
   });
   return out;
+}
+
+/**
+ * A saved value for one input, normalized like a default, or undefined to
+ * keep the card's own default. A disabled input never takes a saved value:
+ * the user could not have changed it, and collect submits it unvalidated, so
+ * a value from elsewhere would be stuck in the next submission. An input that
+ * can become disabled (disabled_if) or a slider (whose range control would
+ * show a clamped thumb over the unclamped value) keeps only a value that
+ * passes its own checks.
+ */
+function restoredValue(c: Component, raw: unknown): unknown {
+  if (c.disabled === true) return undefined;
+  const v = defaultValue({ ...c, value: raw });
+  if (!keepsRestored(c, v)) return undefined;
+  if (c.type === "repeater" && Array.isArray(v)) {
+    // Items have no fixed default to fall back to, so a field the user could
+    // not fix in a restored item takes the field's own default instead.
+    const fields = children(c, "fields");
+    const fresh = newItem(fields);
+    return v.map((item: Values) => {
+      const out = { ...item };
+      walkInputs(fields, (f) => {
+        if (!f.id) return;
+        const stuck = f.disabled === true ? checkField(f, out[f.id]) !== "" : !keepsRestored(f, out[f.id]);
+        if (stuck) out[f.id] = fresh[f.id];
+      });
+      return out;
+    });
+  }
+  return v;
+}
+
+function keepsRestored(c: Component, v: unknown): boolean {
+  if (typeof c.disabled_if !== "string" && c.type !== "slider") return true;
+  return isEmpty(c, v) || checkField(c, v) === "";
 }
 
 export function initialValues(spec: CardSpec): Values {

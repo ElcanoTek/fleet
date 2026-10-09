@@ -222,6 +222,52 @@ describe("restored repeater values", () => {
   });
 });
 
+describe("restored values the user could not fix", () => {
+  const card = (components: unknown[]) =>
+    parseCardSpec(JSON.stringify({ title: "R", components, actions: [{ id: "go", label: "Go" }] }))!;
+
+  it("a disabled input keeps the card default", () => {
+    const spec = card([{ type: "number", id: "n", label: "N", disabled: true, min: 0, max: 10, value: 5 }]);
+    expect(normalizeValues(spec, { n: 100 }).n).toBe(5);
+  });
+
+  it("an input that can be disabled keeps only a valid value", () => {
+    const spec = card([
+      { type: "toggle", id: "lock", label: "Lock" },
+      { type: "number", id: "n", label: "N", disabled_if: "lock", min: 0, max: 10, step: 2, value: 4 },
+    ]);
+    expect(normalizeValues(spec, { n: 100 }).n).toBe(4);
+    expect(normalizeValues(spec, { n: 3 }).n).toBe(4);
+    expect(normalizeValues(spec, { n: 8 }).n).toBe(8);
+  });
+
+  it("a slider keeps only a value its range control can hold", () => {
+    const spec = card([{ type: "slider", id: "s", label: "S", min: 0, max: 10, value: 3 }]);
+    expect(normalizeValues(spec, { s: 100 }).s).toBe(3);
+    expect(normalizeValues(spec, { s: 7 }).s).toBe(7);
+  });
+
+  it("a disabled field in a restored repeater item falls back to the field default", () => {
+    const spec = card([
+      {
+        type: "repeater",
+        id: "r",
+        label: "R",
+        fields: [
+          { type: "toggle", id: "ok", label: "OK", required: true, disabled: true, value: true },
+          { type: "number", id: "q", label: "Q", disabled: true, min: 0, max: 10, value: 1 },
+          { type: "text_input", id: "t", label: "T" },
+        ],
+      },
+    ]);
+    const items = normalizeValues(spec, { r: [{ ok: false, q: 50, t: "a" }, { ok: true, q: 7, t: "b" }] }).r as Record<string, unknown>[];
+    expect(items).toEqual([
+      { ok: true, q: 1, t: "a" },
+      { ok: true, q: 7, t: "b" },
+    ]);
+  });
+});
+
 describe("disabled defaults (shared with internal/genui TestDisabledDefaultsFixture)", () => {
   type DCase = { name: string; component: Record<string, unknown>; valid: boolean };
   const { cases } = loadFixture<{ cases: DCase[] }>("disabled_defaults.json");

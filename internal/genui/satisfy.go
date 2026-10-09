@@ -397,6 +397,9 @@ func (s *skeleton) candidates(field string) []value {
 		out = append(out, value{n: c})
 	}
 	out = append(out, value{n: cs[len(cs)-1] + 1})
+	if d != nil && d.step > 0 {
+		out = gridCandidates(cs, d)
+	}
 	if d != nil {
 		kept := out[:0]
 		for _, v := range out {
@@ -412,6 +415,35 @@ func (s *skeleton) candidates(field string) []value {
 	}
 	if s.kinds[field].kind == kindNumber {
 		out = append(out, value{null: true})
+	}
+	return out
+}
+
+// gridCandidates: for a domain with a step grid the scan above cannot walk
+// (a missing bound, or too many positions), the grid points around each
+// breakpoint. The first grid point above a breakpoint is the smallest the
+// next region can hold, so every region that holds a grid point keeps one.
+func gridCandidates(cs []float64, d *numDomain) []value {
+	base := 0.0
+	if d.hasMin {
+		base = d.min
+	}
+	seen := map[float64]bool{}
+	var out []value
+	for _, c := range cs {
+		k := (c - base) / d.step
+		lo, hi := math.Floor(k+1e-9), math.Ceil(k-1e-9)
+		for _, j := range []float64{lo - 1, lo, hi, hi + 1} {
+			// Rounded like the browser's short decimals (see domainCandidates).
+			n := base + j*d.step
+			if r := math.Round(n*1e9) / 1e9; !math.IsInf(r, 0) {
+				n = r
+			}
+			if !seen[n] && !math.IsInf(n, 0) && !math.IsNaN(n) {
+				seen[n] = true
+				out = append(out, value{n: n})
+			}
+		}
 	}
 	return out
 }

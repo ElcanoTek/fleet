@@ -145,6 +145,22 @@ func TestLimits(t *testing.T) {
 	}
 }
 
+// A huge min_items is refused without sizing anything by it: the browser
+// materializes min_items items, and the validator models them too.
+func TestHugeMinItemsIsRefusedCheaply(t *testing.T) {
+	for _, n := range []string{"1000000000", "1e300"} {
+		card := `{"title":"x","components":[{"type":"repeater","id":"r","label":"R","min_items":` + n + `,"fields":[{"type":"toggle","id":"ok","label":"OK","required":true,"disabled":true}]}],"actions":[{"id":"go","label":"Go"}]}`
+		_, issues := Validate([]byte(card))
+		found := false
+		for _, is := range issues {
+			found = found || strings.Contains(is.Message, fmt.Sprintf("at most %d", MaxRepeaterItems))
+		}
+		if !found {
+			t.Errorf("min_items %s: %v", n, issues)
+		}
+	}
+}
+
 // A list default is capped by the entries the browser keeps from it: one
 // string splits on its line breaks (listCount), so it can carry more than
 // MaxListItems entries in a single element.
