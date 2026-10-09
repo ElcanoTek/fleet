@@ -14,7 +14,7 @@ Buzz (see "Buzz").
 
 ```
 ACP client ──JSON-RPC stdio──► fleet acp ──POST /chat (loopback)──► fleet serve ──► agentcore.Run
-(buzz-acp, Zed, …)             (ACP agent)                          (running daemon)   (one governed loop)
+(Zed, Emacs, …)                (ACP agent)                          (running daemon)   (one governed loop)
 ```
 
 `fleet acp` never runs an agent in-process. Each `session/prompt` is one
@@ -409,9 +409,10 @@ starts `fleet acp` itself and:
   the agent's Buzz key in its environment) before `session/new` reaches
   `fleet acp`, which would not use it.
 
-It is not part of fleet. It lives in its own private repository (ask a fleet
-maintainer for access), whose README has its details, together with
-`fleet-buzz-gateway` (see "Run it on Kubernetes from Buzz Desktop").
+It is not part of fleet, and it is not published: it lives in a separate,
+private repository, together with `fleet-buzz-gateway` (see "Run it on
+Kubernetes from Buzz Desktop"), and that repository's README is the reference
+for both. The setups below need access to it.
 
 Checked live on 2026-10-08 with Buzz Desktop on macOS and its bundled
 `buzz-acp`, `buzz-acp` built from block/buzz `70d2ca7`, a hosted Buzz relay,
@@ -427,11 +428,14 @@ holds its Buzz key:
 | Where the agent runs | Available | Shows in Buzz as |
 | --- | --- | --- |
 | One person's computer, run by Buzz Desktop | While that computer and Buzz Desktop are on | An agent, "Managed by" that person |
-| A Kubernetes cluster, deployed by Buzz Desktop (**Run on: kubernetes**) | Always, within the limits under "Run it on Kubernetes from Buzz Desktop" | An agent, "Managed by" the person who deployed it |
+| A Kubernetes cluster, deployed by Buzz Desktop (**Run on: kubernetes**) | Until it stops when idle or crashes; its owner's next @mention from Buzz Desktop deploys it again | An agent, "Managed by" the person who deployed it |
 | The fleet server, as a service | Always | A regular user: Buzz Desktop signs an agent's owner attestation only for the agents it runs |
 
-For a team, the Kubernetes route is the one to use: always on, Desktop-managed,
-and with the cluster on the fleet server, fleet's chat API stays private.
+For a team, weigh the last two. The Kubernetes route keeps the agent
+Desktop-managed, so other people's agents accept its mentions, but it stops
+when idle or after a crash until its owner mentions it. The server service
+restarts itself after a crash, but shows as a regular user. With either on
+the fleet server, fleet's chat API stays private.
 
 Run each agent identity in one place only. Buzz Desktop starts a stopped agent
 it runs on the computer whenever its owner @mentions it, so an identity Desktop
@@ -459,9 +463,12 @@ fleet user, so keep the agent to computers an operator controls.
 On the computer that runs Buzz Desktop, you need:
 
 1. **`fleet`, built for that computer.** fleet's releases carry no binaries.
-   With Go 1.27, in a clone: `go build -o ~/bin/fleet ./cmd/fleet`. Or build
-   on another machine (`GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o
-   fleet ./cmd/fleet` for an Apple-silicon Mac) and copy it over.
+   With Go 1.27, in a clone: `make bins` builds `./fleet` with its version
+   stamped (a plain `go build ./cmd/fleet` works too, but `fleet version`
+   then says `dev`). Or build on another machine (`GOOS=darwin GOARCH=arm64
+   CGO_ENABLED=0 go build -o fleet ./cmd/fleet` for an Apple-silicon Mac) and
+   copy it over. Prompt and cancel order, which Buzz relies on (see "What to
+   expect"), needs v2026.10.09.5 or later.
 2. **`fleet-buzz-bridge`,** from its repository, next to `fleet`.
 3. **A fleet user for the agent.** On the fleet server:
    `fleet chat user add buzz-bot@example.com --password -`. Every turn runs as
@@ -472,9 +479,14 @@ On the computer that runs Buzz Desktop, you need:
 
    ```sh
    mkdir -p ~/.config/fleet
-   (umask 077; ssh you@fleet.example.com \
-     "sudo sed -n 's/^FLEET_SERVER_TOKEN=//p' /etc/fleet/fleet.env" > ~/.config/fleet/acp-token)
+   (umask 077; ssh root@fleet.example.com \
+     "sed -n 's/^FLEET_SERVER_TOKEN=//p' /etc/fleet/fleet.env" > ~/.config/fleet/acp-token)
    ```
+
+   It needs a root login, or `sudo` that does not ask for a password: without
+   a terminal a password prompt fails, and the file ends up empty, which
+   `fleet acp` later reports only as a missing token. Otherwise read the value
+   on the server and paste it into the file yourself.
 
 5. **The way to the chat API,** as above.
 
@@ -519,6 +531,8 @@ Then, in Buzz Desktop:
    other agents take its mentions.
 3. **Who can send instructions:** **Only me (default)** admits you and your
    other agents. For a team, choose **Selected people** or **Anyone**.
+   Everyone admitted runs turns as the bot user, with its tools and
+   connectors.
 4. **Add the agent to channels** and @mention it.
 
 On other operating systems:
@@ -530,9 +544,10 @@ On other operating systems:
   the Tauri convention Buzz Desktop follows. `fleet` and the bridge build for
   linux/amd64 and linux/arm64, and Buzz publishes Linux packages, but this
   route was not checked live on Linux.
-- **Windows:** not available. `fleet` does not build for Windows (its disk
-  guard uses Unix-only calls), so `fleet acp` cannot run there. People on
-  Windows use fleet through an agent run elsewhere: they only @mention it.
+- **Windows:** not available. `fleet` does not build for Windows (several
+  packages use Unix-only system calls), so `fleet acp` cannot run there.
+  People on Windows use fleet through an agent run elsewhere: they only
+  @mention it.
 
 #### Run it on Kubernetes from Buzz Desktop
 
@@ -552,27 +567,49 @@ On the fleet server:
 
    ```sh
    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --disable traefik \
-     --disable servicelb --selinux --tls-san <the server's IP>" sh -
+     --disable servicelb --selinux --tls-san <server-ip>" sh -
    ```
 
-   Pods reach the host at the cluster bridge address, `10.42.0.1` on k3s.
+   Pods reach the host at the cluster bridge address, `10.42.0.1` on k3s. If
+   firewalld runs, trust the cluster networks, as k3s documents
+   (`firewall-cmd --permanent --zone=trusted --add-source=10.42.0.0/16` and
+   `--add-source=10.43.0.0/16`); on the server checked it was not running.
+   With k3s installed, `fleet doctor`, sandbox smoke test included, still
+   passed; fleet's sandbox egress sealing was not rechecked on its own.
 2. **`fleet-buzz-gateway`,** from the bridge's repository. fleet's chat API
    stays on loopback. The gateway listens on the cluster bridge address only,
    adds fleet's server token, read from a file only it can read, pins every
    request to one fleet user, and forwards only what `fleet acp` calls
    (`POST /chat`, `GET /me`, `POST /conversations/{id}/cancel`,
    `GET /client-config`, `GET /healthz`). The pod then holds no fleet secret,
-   and whatever runs in it can act only as that user. As a systemd service,
-   with the server token copied into `/etc/fleet-buzz/fleet-token` (root,
-   0600):
+   and whatever runs in it can act only as that user. The other side of that:
+   anything on the server or in the cluster that can reach that address can
+   act as that user without a token, so keep the cluster to this agent. It
+   binds with `IP_FREEBIND`, so it can start before k3s has created the
+   address. As a systemd service, with the server token copied into
+   `/etc/fleet-buzz/fleet-token` (root, 0600):
 
    ```ini
+   # /etc/systemd/system/fleet-buzz-gateway.service
+   [Unit]
+   Description=fleet-buzz-gateway (fleet's chat API for the Buzz agent pod)
+   Wants=network-online.target
+   After=network-online.target fleet.service k3s.service
+
    [Service]
    DynamicUser=yes
    LoadCredential=fleet-token:/etc/fleet-buzz/fleet-token
    ExecStart=/opt/fleet-buzz-agent/bin/fleet-buzz-gateway -listen 10.42.0.1:8081 \
      -upstream http://127.0.0.1:8080 -token-file %d/fleet-token -email buzz-bot@example.com
    Restart=always
+   RestartSec=3
+   NoNewPrivileges=yes
+   ProtectSystem=strict
+   ProtectHome=yes
+   PrivateTmp=yes
+
+   [Install]
+   WantedBy=multi-user.target
    ```
 
 3. **An agent image:** Buzz's agent image plus `fleet` and the bridge.
@@ -593,12 +630,50 @@ On the fleet server:
      is posted.
 4. **A registry the cluster pulls from.** Buzz requires the image pinned by
    digest, and k3s does not find an image imported with `ctr` by its digest.
-   A registry on the fleet server bound to `127.0.0.1:5000`, with
-   `/etc/rancher/k3s/registries.yaml` mapping `localhost:5000` to
-   `http://127.0.0.1:5000`, works.
+   A registry on the fleet server, bound to `127.0.0.1:5000`, works:
+
+   ```ini
+   # /etc/containers/systemd/fleet-buzz-registry.container (then: systemctl daemon-reload; systemctl start fleet-buzz-registry)
+   [Container]
+   Image=docker.io/library/registry:2
+   PublishPort=127.0.0.1:5000:5000
+   Volume=/var/lib/fleet-buzz-registry:/var/lib/registry:Z
+
+   [Service]
+   Restart=always
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   ```yaml
+   # /etc/rancher/k3s/registries.yaml (then: systemctl restart k3s)
+   mirrors:
+     "localhost:5000":
+       endpoint:
+         - "http://127.0.0.1:5000"
+   ```
+
+   Build the image and push it there; the digest it writes is the one Buzz
+   Desktop needs:
+
+   ```sh
+   podman build -t localhost/fleet-buzz-agent:<tag> <build-dir>
+   podman push --tls-verify=false --digestfile digest \
+     localhost/fleet-buzz-agent:<tag> localhost:5000/fleet-buzz-agent:<tag>
+   echo "localhost:5000/fleet-buzz-agent@$(cat digest)"
+   ```
+
 5. **A kubeconfig for Buzz Desktop:** k3s's `/etc/rancher/k3s/k3s.yaml` with
    the server address changed to the fleet server's, saved as `~/.kube/config`
-   on the computer running Buzz Desktop. It is a cluster-admin credential.
+   on the computer running Buzz Desktop (merge it in if that file already
+   exists). It is cluster-admin on a cluster that runs on the fleet server,
+   which makes it as good as root there: a cluster admin can start a
+   privileged pod and read fleet's env file and every credential on the
+   server. Keep it on the operator's own computer. Buzz Desktop has to reach
+   the cluster's API (port 6443); on the server checked it was reachable from
+   the internet, protected only by k3s's client certificates. Restrict it to
+   the computers that deploy if you can.
 
 Then, in Buzz Desktop:
 
@@ -614,9 +689,11 @@ Then, in Buzz Desktop:
 
    Buzz Desktop lists a runtime as "not installed" when its command is not on
    the computer running Desktop, even for an agent that runs in a cluster;
-   it sends the command as written. With the bare name, a link to the bridge
-   in `~/.local/bin` on that computer satisfies the check, and the pod finds
-   the bridge on its own `PATH`.
+   it sends the command as written. With the bare name, any executable named
+   `fleet-buzz-bridge` in `~/.local/bin` on that computer satisfies the check
+   (for example the bridge built for that computer, or a link to it; Desktop
+   only checks that it is there), and the pod finds the bridge on its own
+   `PATH`.
 2. **Create the agent** with that runtime and **Run on: kubernetes**:
 
    | Field | Value |
@@ -656,7 +733,7 @@ export BUZZ_ACP_AGENT_COMMAND=fleet-buzz-bridge
 export BUZZ_ACP_AGENT_ARGS=fleet,acp
 export FLEET_USER_EMAIL=buzz-bot@example.com
 export BUZZ_ACP_RESPOND_TO=allowlist
-export BUZZ_ACP_RESPOND_TO_ALLOWLIST=<hex public keys>   # who may mention it
+export BUZZ_ACP_RESPOND_TO_ALLOWLIST=<hexkey>,<hexkey>   # who may mention it
 buzz-acp
 ```
 
@@ -669,7 +746,7 @@ has signed.
 
 As a service, run it as its own unprivileged user. fleet's env file is root
 0600 and holds every fleet secret, so the agent gets only the server token,
-as a systemd credential, and its Buzz key from a file systemd reads:
+as a systemd credential, and its Buzz key from a file systemd reads. As root:
 
 ```sh
 useradd --system --home-dir /var/lib/fleet-buzz --no-create-home --shell /usr/sbin/nologin fleet-buzz
@@ -694,11 +771,11 @@ WorkingDirectory=/var/lib/fleet-buzz
 Environment=HOME=/var/lib/fleet-buzz
 EnvironmentFile=/etc/fleet-buzz/agent.env
 LoadCredential=fleet-token:/etc/fleet-buzz/fleet-token
-Environment=BUZZ_RELAY_URL=wss://<your workspace relay>
+Environment=BUZZ_RELAY_URL=<relay-url>
 Environment=BUZZ_ACP_AGENT_COMMAND=/opt/fleet-buzz-agent/bin/fleet-buzz-bridge
 Environment=BUZZ_ACP_AGENT_ARGS=/usr/local/bin/fleet,acp,--email,buzz-bot@example.com,--server,http://127.0.0.1:8080,--public-url,https://fleet.example.com,--token-file,/run/credentials/fleet-buzz-agent.service/fleet-token
 Environment=BUZZ_ACP_RESPOND_TO=allowlist
-Environment=BUZZ_ACP_RESPOND_TO_ALLOWLIST=<hex public keys>
+Environment=BUZZ_ACP_RESPOND_TO_ALLOWLIST=<hexkey>,<hexkey>
 Environment=FLEET_BUZZ_CLI=/opt/buzz/bin/buzz
 Environment=PATH=/opt/buzz/bin:/usr/local/bin:/usr/bin
 ExecStart=/opt/buzz/bin/buzz-acp
@@ -723,17 +800,20 @@ package into `/opt/buzz/bin`, and the bridge in `/opt/fleet-buzz-agent/bin`.
 The list-valued settings are comma-separated, so none of their values may
 contain a comma.
 
-Checked live in a terminal on 2026-10-08, and as this unit on 2026-10-09 (on
-Fedora 44, SELinux enforcing, with an identity Buzz Desktop had created, so
-with that identity's owner attestation and without the allowlist).
+Checked live: the recipe in a terminal on 2026-10-08, with a key of its own
+and the allowlist; and this unit on Fedora 44 (SELinux enforcing) on
+2026-10-09, first with an identity Buzz Desktop had created (so with its
+owner attestation and without the allowlist), where it answered mentions,
+then exactly as written, with a key of its own and the allowlist, where it
+started, connected and subscribed to its channel, but answering a mention was
+not checked.
 
 #### What to expect
 
 - One reply per turn, posted when the turn ends, in the thread of the message
-  it answers, @mentioning each person or agent who asked. After three
-  mentioned replies to the same asker in one thread within ten minutes,
-  replies there stop mentioning them, so two agents cannot keep waking each
-  other.
+  it answers, @mentioning each person or agent who asked. When one asker
+  keeps asking in a thread, replies there stop mentioning them for a while,
+  so two agents cannot keep waking each other.
 - `buzz-acp` reacts to the message while fleet works; nothing of the answer
   appears until the turn ends.
 - An error is posted as `fleet could not answer: <reason>`, including a
@@ -741,8 +821,9 @@ with that identity's owner attestation and without the allowlist).
   viewer).
 - A message sent to fleet while it works: `buzz-acp` stops the turn and sends
   both requests as one, and fleet answers both in one reply. That needs a
-  `fleet` that keeps prompt and cancel order (see `session/cancel`); an
-  older one can miss the stop, and `buzz-acp` then restarts it after 5 s. A
+  `fleet` that keeps prompt and cancel order (v2026.10.09.5 or later; see
+  `session/cancel`); an older one can miss the stop, and `buzz-acp` then
+  restarts it after 5 s. A
   request that arrives after fleet has answered is a turn of its own: asking
   another agent to ask fleet, in a message that also @mentions fleet, gets
   two replies when fleet answers before the other agent asks.
@@ -996,8 +1077,8 @@ What shipped:
   no `data`; an unreachable server opens the session and the first prompt
   reports it; and MCP servers sent by the editor get the note once.
 - Checked live against a real `fleet serve` with Buzz on 2026-10-08
-  (`buzz-acp` at block/buzz `70d2ca7`, a hosted relay): the recipe under
-  "Using it" and Buzz Desktop's custom runtime each ran a fleet turn for an
+  (`buzz-acp` at block/buzz `70d2ca7`, a hosted relay): `buzz-acp` pointed
+  straight at `fleet acp` and Buzz Desktop's custom runtime each ran a fleet turn for an
   @mention, and in each case the answer reached only `buzz-acp`'s log; with an
   adapter between `buzz-acp` and `fleet acp` that posts the answer, it appeared
   as a reply in its thread. No Buzz key reached fleet.
@@ -1046,7 +1127,8 @@ Deviations and limits:
   does this by default; the configuration under "Neovim (CodeCompanion.nvim)"
   works around it. Emacs's agent-shell does it for a file over its embed limit
   (100 KB by default); "Emacs (agent-shell)" says how to raise it. Zed sends
-  only the first 1 KB of a file over about 16 KB (see "Zed").
+  only the first 1 KB of a larger file (in the check, a 20 KB file was cut
+  and a 15 KB one went whole; see "Zed").
 - **The client's MCP servers are not used.** ACP's
   [session setup](https://agentclientprotocol.com/protocol/session-setup)
   says "All Agents **MUST** support connecting to MCP servers via stdio" and
@@ -1076,10 +1158,11 @@ Deviations and limits:
   adapter does not guess `max_tokens` / `max_turn_requests` from it.
 - **One identity per process.** Every turn runs as the configured fleet user.
   Per-Buzz-user mapping is out of scope.
-- **Buzz does not show fleet's replies.** `buzz-acp` expects an agent to post
-  its own reply with the Buzz CLI, and only logs what the agent streams back,
-  so with `buzz-acp` launching `fleet acp` a turn runs and its answer stays in
-  the configured user's web chat (checked live on 2026-10-08; see "Buzz").
+- **Buzz needs an adapter to show fleet's replies.** `buzz-acp` expects an
+  agent to post its own reply with the Buzz CLI, and only logs what the agent
+  streams back, so with `buzz-acp` launching `fleet acp` directly a turn runs
+  and its answer stays in the configured user's web chat (checked live on
+  2026-10-08). The separate `fleet-buzz-bridge` posts it (see "Buzz").
 - **A force-killed `fleet acp` cannot stop its turn.** `SIGKILL` (`kill -9`,
   or a client that kills its agent outright) ends the process before it can
   send a Stop, and so does a client that kills it before a slow fleet has
@@ -1088,12 +1171,11 @@ Deviations and limits:
   stopped there. Zed kills `fleet acp` with `SIGKILL` when it quits, without a
   `SIGTERM` or closing stdin first, so quitting Zed with a reply running leaves
   that turn running (checked live with Zed 1.22.0 on 2026-10-07; see "Zed").
-  Killing an Emacs agent-shell buffer does send `SIGKILL`, and its
+  Killing an Emacs agent-shell buffer also sends `SIGKILL`, and its
   turn kept running (checked live on 2026-10-06); quitting Emacs instead stops
   the turn (see "Emacs (agent-shell)").
 
-Deferred: posting fleet's replies in Buzz, and a Buzz Desktop catalog entry
-(Desktop can already run `fleet acp` as a custom runtime, with the same missing
-replies; see "Buzz"),
+Deferred: posting fleet's replies in Buzz from fleet itself (the separate
+`fleet-buzz-bridge` does it today; see "Buzz"), a Buzz Desktop catalog entry,
 `session/load`, and an ACP *client* in fleet (launching other ACP agents is a
 different feature).
