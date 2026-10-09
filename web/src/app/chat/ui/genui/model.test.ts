@@ -237,6 +237,23 @@ describe("restored repeater items across the card", () => {
     const total = components.reduce((n, c) => n + (restored[c.id] as unknown[]).length, 0);
     expect(total).toBe(2000);
   });
+
+  it("leave room for the repeaters kept at their defaults", () => {
+    const components = Array.from({ length: 100 }, (_, i) => ({
+      type: "repeater",
+      id: `r${i}`,
+      label: "R",
+      max_items: 200,
+      min_items: 20,
+      fields: [{ type: "divider" }],
+    }));
+    const spec = parseCardSpec(JSON.stringify({ title: "R", components, actions: [{ id: "go", label: "Go" }] }))!;
+    const saved = Object.fromEntries(components.slice(0, 10).map((c) => [c.id, Array.from({ length: 200 }, () => ({}))]));
+    const restored = normalizeValues(spec, saved);
+    const total = components.reduce((n, c) => n + (restored[c.id] as unknown[]).length, 0);
+    expect(total).toBe(2000);
+    expect((restored.r99 as unknown[]).length).toBe(20);
+  });
 });
 
 describe("restored values the user could not fix", () => {

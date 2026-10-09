@@ -330,18 +330,25 @@ export function normalizeValues(spec: CardSpec, saved: Values | null | undefined
   if (!saved || typeof saved !== "object") return out;
   // Restored repeater items share the card-wide row budget the server holds
   // the card's own items to: each item renders every field of its repeater.
+  // Repeaters the answer leaves at their defaults keep their items, so the
+  // budget is what remains after them.
+  const restored: { c: Component; v: unknown[]; weight: number }[] = [];
   let rowsLeft = MAX_CARD_ROWS;
   walkInputs(spec.components, (c) => {
+    const weight = c.type === "repeater" ? Math.max(1, countComponents(children(c, "fields"))) : 0;
     if (c.id && Object.prototype.hasOwnProperty.call(saved, c.id)) {
-      let v = restoredValue(c, saved[c.id]);
-      if (c.type === "repeater" && Array.isArray(v)) {
-        const weight = Math.max(1, countComponents(children(c, "fields")));
-        v = v.slice(0, Math.floor(rowsLeft / weight));
-        rowsLeft -= (v as unknown[]).length * weight;
-      }
-      if (v !== undefined) out[c.id] = v;
+      const v = restoredValue(c, saved[c.id]);
+      if (weight && Array.isArray(v)) restored.push({ c, v, weight });
+      else if (v !== undefined) out[c.id] = v;
+      return;
     }
+    if (weight && c.id && Array.isArray(out[c.id])) rowsLeft -= (out[c.id] as unknown[]).length * weight;
   });
+  for (const { c, v, weight } of restored) {
+    const kept = v.slice(0, Math.max(0, Math.floor(rowsLeft / weight)));
+    rowsLeft -= kept.length * weight;
+    out[c.id!] = kept;
+  }
   return out;
 }
 

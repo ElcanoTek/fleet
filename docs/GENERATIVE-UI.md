@@ -146,8 +146,8 @@ These are protocol constants in `internal/genui/spec.go`, not operator knobs:
 - 500-character expressions, and 2,000 characters of `{{ }}` output per
   displayed template (longer results are clipped with "…"; conditions see
   them whole); `min_length` at most 20,000, and the required
-  fields' `min_length` (all of them, shown or not), with each value's key and
-  quoting, must add up to an answer that can be sent
+  fields' `min_length` (all of them, shown or not), plus every input's key
+  and quoting, must add up to an answer that can be sent
 
 One limit is the web card's, not the spec's: a single answer may be at most
 960 KiB once JSON-escaped (`MAX_SUBMISSION_BYTES` in `genui/model.ts`), so it

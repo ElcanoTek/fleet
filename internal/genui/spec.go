@@ -958,24 +958,19 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 
 // requiredMinBytes bounds the answer a validating submit may have to send,
 // measured as the browser measures it (submissionBytes in model.ts: the
-// message JSON-escaped): the min_length of every required text input, times
-// the items its repeater starts with (the user can remove items only down to
-// min_items), plus each value's key and quoting and the message's own
-// header. Inputs behind visible_if count too: which of them a send must
-// answer depends on the state the action is pressed in, so the sum is a
+// message JSON-escaped). Every input a send can carry costs its key, quoting
+// and smallest value (collect sends visible inputs even when empty), and a
+// required text input its min_length on top; a repeater's fields count once
+// per item it starts with (the user can remove items only down to
+// min_items). Inputs behind visible_if count too: which of them a send
+// carries depends on the state the action is pressed in, so the sum is a
 // protocol limit on the card rather than a judgement of any one state.
 func (v *validator) requiredMinBytes() int {
 	// The "[UI submission] card=<id> action=<id>" header, code fence and
 	// outer quotes, with room for the longest card and action ids.
 	total := 256
-	reps := map[string]int{}
 	for id, f := range v.fields {
-		if f.typ != "text_input" || f.obj == nil {
-			continue
-		}
-		req, _ := f.obj["required"].(bool)
-		lo, _ := f.obj["min_length"].(float64)
-		if !req || lo <= 0 {
+		if f.obj == nil {
 			continue
 		}
 		n := 1
@@ -984,14 +979,18 @@ func (v *validator) requiredMinBytes() int {
 			if m, ok := rep.obj["min_items"].(float64); ok && m > 0 {
 				n = int(min(m, MaxRepeaterItems))
 			}
-			reps[f.repeater] = n
+			// Each item's braces and comma.
+			total += 3 * n
 		}
-		// "id":"value", with each quote escaped (\") and a comma: id + 10.
-		total += (int(min(lo, MaxStringLen)) + len(id) + 10) * n
-	}
-	for id, n := range reps {
-		// "rep":[{…},{…}] — key, brackets, and braces plus comma per item.
-		total += len(id) + 10 + 3*n
+		// \"id\":\"\", — the key and an empty value with every quote
+		// escaped, and a comma: id + 12.
+		size := len(id) + 12
+		if req, _ := f.obj["required"].(bool); req && f.typ == "text_input" {
+			if lo, _ := f.obj["min_length"].(float64); lo > 0 {
+				size += int(min(lo, MaxStringLen))
+			}
+		}
+		total += size * n
 	}
 	return total
 }
@@ -1713,7 +1712,7 @@ func (v *validator) actions(raw any, hasInput bool) {
 			v.addf(ap, "can never be pressed: whatever the inputs are, it is hidden or disabled (check visible_if and disabled_if together)")
 		}
 		if n := v.requiredMinBytes(); validating && n > MaxSubmissionBytes {
-			v.addf(ap, "the required fields' min_length add up to an answer of at least %d bytes across the card, more than one answer carries (%d bytes); lower them or split the card", n, MaxSubmissionBytes)
+			v.addf(ap, "the card's inputs (each key, and the required fields' min_length) add up to an answer of at least %d bytes, more than one answer carries (%d bytes); lower min_length or split the card", n, MaxSubmissionBytes)
 		}
 		kind, _ := obj["kind"].(string)
 		if kind == "" {
