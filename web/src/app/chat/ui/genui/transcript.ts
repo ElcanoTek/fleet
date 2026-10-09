@@ -137,9 +137,18 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
       if (!isRenderableCardCall(tc)) continue;
       const spec = cardSpecOf(tc);
       if (!spec) continue;
+      // A reused id starts over: answers and replacements recorded so far
+      // belonged to the earlier card with this id, not to this one.
+      if (owners.has(tc.id)) {
+        submissions.delete(tc.id);
+        replies.delete(tc.id);
+        superseded.delete(tc.id);
+      }
       cards.set(tc.id, spec);
       owners.set(tc.id, tc);
-      if (spec.replaces) superseded.add(spec.replaces);
+      // A card never replaces itself (a refinement whose reused id equals
+      // the one it names).
+      if (spec.replaces && spec.replaces !== tc.id) superseded.add(spec.replaces);
     }
   }
   return { cards, owners, submissions, superseded, replies };

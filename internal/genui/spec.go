@@ -1106,12 +1106,13 @@ func allStrings(arr []any) bool {
 	return true
 }
 
-// choiceOptions counts the option buttons the choice inputs in a list render
-// (a choice renders every option as a radio or segmented button).
+// choiceOptions counts the option elements the choice and select inputs in a
+// list render (a choice renders every option as a radio or segmented button,
+// a select every option as an <option>).
 func choiceOptions(list []any) int {
 	n := 0
 	walkComponents(list, func(m map[string]any) {
-		if m["type"] == "choice" {
+		if m["type"] == "choice" || m["type"] == "select" {
 			if opts, ok := m["options"].([]any); ok {
 				n += len(opts)
 			}

@@ -1441,6 +1441,36 @@ describe("holds and other tabs", () => {
     expect(window.localStorage.getItem("fleet.genui.pending.w")).toBeNull();
   });
 
+  it("moves between tabs with the arrow, Home and End keys", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "T",
+      components: [
+        {
+          type: "tabs",
+          tabs: [
+            { label: "One", children: [{ type: "text", text: "first" }] },
+            { label: "Two", children: [{ type: "text", text: "second" }] },
+            { label: "Three", children: [{ type: "text", text: "third" }] },
+          ],
+        },
+      ],
+    });
+    render(<GenerativeCard cardId="kt" spec={s} onSubmit={() => {}} />);
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((t) => t.tabIndex)).toEqual([0, -1, -1]);
+    tabs[0].focus();
+    await user.keyboard("{ArrowRight}");
+    expect(document.activeElement).toBe(screen.getAllByRole("tab")[1]);
+    expect(screen.getByText("second")).toBeTruthy();
+    await user.keyboard("{End}");
+    expect(screen.getAllByRole("tab")[2].getAttribute("aria-selected")).toBe("true");
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getAllByRole("tab")[0].getAttribute("aria-selected")).toBe("true");
+    await user.keyboard("{ArrowLeft}{Home}");
+    expect(document.activeElement).toBe(screen.getAllByRole("tab")[0]);
+  });
+
   it("groups a single-select table's radios", () => {
     const s = spec({
       title: "T",

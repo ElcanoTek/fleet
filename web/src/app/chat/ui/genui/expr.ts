@@ -362,30 +362,37 @@ function bounded(s: string): string {
   return s.length > MAX_EXPR_STRING ? s.slice(0, MAX_EXPR_STRING) : s;
 }
 
-// The last case conversion each way. Many templates may upper() or lower()
+// Recent case conversions each way. Many templates may upper() or lower()
 // the same long text (a joined list is one cached string), and Unicode case
 // mapping can grow it, so each conversion is done once and stored bounded
-// rather than rebuilt per template per render.
-const caseCache: { upper?: [string, string]; lower?: [string, string] } = {};
+// rather than rebuilt per template per render. A few texts are kept each
+// way (oldest dropped first), so templates alternating between texts hit.
+const CASE_CACHE_ENTRIES = 4;
+const caseCache = { upper: new Map<string, string>(), lower: new Map<string, string>() };
 
 function convertCase(s: string, upper: boolean): string {
-  const key = upper ? "upper" : "lower";
-  const hit = caseCache[key];
-  if (hit && hit[0] === s) return hit[1];
+  const cache = upper ? caseCache.upper : caseCache.lower;
+  const hit = cache.get(s);
+  if (hit !== undefined) return hit;
   const out = bounded(upper ? s.toUpperCase() : s.toLowerCase());
-  caseCache[key] = [s, out];
+  if (cache.size >= CASE_CACHE_ENTRIES) cache.delete(cache.keys().next().value as string);
+  cache.set(s, out);
   return out;
 }
 
-// The last join of each list: many templates may join (or show) the same
+// The latest joins of each list: many templates may join (or show) the same
 // list, which is one array object for as long as it is unchanged, so each
-// joined string is built once, not once per template per render. One entry
-// per list: a separator the user is typing would otherwise pile up results.
-const joined = new WeakMap<object, { glue: string; out: string }>();
+// joined string is built once, not once per template per render. A few
+// separators are kept per list, so templates alternating between them do
+// not rebuild it each time; the oldest goes first, so a separator the user
+// is typing cannot pile up results.
+const JOIN_CACHE_SEPARATORS = 8;
+const joined = new WeakMap<object, Map<string, string>>();
 
 function joinList(v: Value[], glue: string): string {
-  const hit = joined.get(v);
-  if (hit && hit.glue === glue) return hit.out;
+  let byGlue = joined.get(v);
+  const hit = byGlue?.get(glue);
+  if (hit !== undefined) return hit;
   let out = "";
   for (const x of v) {
     const t = toText(x);
@@ -396,7 +403,9 @@ function joinList(v: Value[], glue: string): string {
       break;
     }
   }
-  joined.set(v, { glue, out });
+  if (!byGlue) joined.set(v, (byGlue = new Map()));
+  if (byGlue.size >= JOIN_CACHE_SEPARATORS) byGlue.delete(byGlue.keys().next().value as string);
+  byGlue.set(glue, out);
   return out;
 }
 

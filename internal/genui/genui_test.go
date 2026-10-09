@@ -482,3 +482,22 @@ func TestRequiredTableSelectionCountsInAnswer(t *testing.T) {
 		t.Fatalf("optional: %v", issues)
 	}
 }
+
+// A select renders every option as an <option> in each repeater item, so its
+// options count toward the item's rows like a choice's buttons.
+func TestRepeaterBudgetCountsSelectOptions(t *testing.T) {
+	opts := make([]string, 99)
+	for i := range opts {
+		opts[i] = strconv.Quote(strconv.Itoa(i))
+	}
+	card := func(maxItems int) string {
+		return fmt.Sprintf(`{"title":"x","components":[{"type":"repeater","id":"r","label":"R","max_items":%d,"fields":[{"type":"select","id":"s","label":"S","options":[%s]}]}],"actions":[{"id":"go","label":"Go"}]}`, maxItems, strings.Join(opts, ","))
+	}
+	// 100 rows an item (the select and its 99 options).
+	if _, issues := Validate([]byte(card(MaxCardRows / 100))); len(issues) != 0 {
+		t.Fatalf("within the budget: %v", issues)
+	}
+	if _, issues := Validate([]byte(card(MaxCardRows/100 + 1))); len(issues) == 0 {
+		t.Fatal("select options over the budget accepted")
+	}
+}

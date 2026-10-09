@@ -283,11 +283,10 @@ export function defaultValue(c: Component): unknown {
     }
     case "list_input":
       // Same split / trim / drop-blank / dedupe the textarea applies to typed
-      // text: an entry with a line break in it is that many entries.
-      return normalizeList(
-        strArr(v).flatMap((x) => x.split(/[\r\n]+/)),
-        c.dedupe !== false,
-      );
+      // text: an entry with a line break in it is that many entries. A
+      // restored answer is untrusted, so it goes through the same bounded
+      // scan as a paste (one entry past the cap, at most MAX_LIST_TEXT read).
+      return scanListText(strArr(v).join("\n"), c.dedupe !== false).items;
     case "include_exclude": {
       const o = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
       const opts = optionSet();
@@ -447,11 +446,11 @@ function displayRows(list: Component[], intoRepeaters = true): number {
 }
 
 /** Components in a list, nested ones included (countComponents in spec.go). */
-/** Option buttons the choice inputs in a list render (choiceOptions in spec.go). */
+/** Option elements the choice and select inputs in a list render (choiceOptions in spec.go). */
 function choiceOptions(list: Component[]): number {
   let n = 0;
   walkInputs(list, (f) => {
-    if (f.type === "choice" && Array.isArray(f.options)) n += f.options.length;
+    if ((f.type === "choice" || f.type === "select") && Array.isArray(f.options)) n += f.options.length;
   });
   return n;
 }

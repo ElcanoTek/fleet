@@ -49,6 +49,21 @@ describe("deriveGenUiState", () => {
     expect(cardSpecOf(older)?.title).toBe("First");
   });
 
+  it("keeps an earlier card's answer and replacement off a newer card that reuses its id", () => {
+    const msgs = [
+      assistant(1, [{ id: "call_0", input: card("First"), resultText: "UI_DISPLAYED card_id=call_0" }]),
+      user(2, buildSubmissionMessage("call_0", "go", { a: 1 })),
+      assistant(3, [{ id: "call_0", input: card("Second", { replaces: "call_0" }), resultText: "UI_DISPLAYED card_id=call_0" }]),
+    ];
+    const s = deriveGenUiState(msgs);
+    expect(s.cards.get("call_0")?.title).toBe("Second");
+    expect(s.submissions.has("call_0")).toBe(false);
+    expect(s.superseded.has("call_0")).toBe(false);
+    // An answer after the newer card is its own.
+    const later = deriveGenUiState([...msgs, user(4, buildSubmissionMessage("call_0", "go", { a: 2 }))]);
+    expect(later.submissions.get("call_0")?.values).toEqual({ a: 2 });
+  });
+
   it("does not draw a refused or still-pending spec", () => {
     const refused = { id: "x", name: "show_ui", input: card("Bad"), resultText: "UI_INVALID: …", state: "done" as const };
     expect(isRenderableCardCall(refused)).toBe(false);

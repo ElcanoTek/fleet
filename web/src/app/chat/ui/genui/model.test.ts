@@ -250,6 +250,18 @@ describe("restored repeater values", () => {
   });
 });
 
+describe("restored list values", () => {
+  it("are scanned like a paste: one entry past the cap, never the whole answer", () => {
+    const spec = parseCardSpec(JSON.stringify({
+      title: "L",
+      components: [{ type: "list_input", id: "l" }],
+      actions: [{ id: "go", label: "Go" }],
+    }));
+    const restored = normalizeValues(spec!, { l: [Array.from({ length: 30000 }, (_, i) => `x${i}`).join("\n")] });
+    expect((restored.l as string[]).length).toBe(MAX_LIST_ITEMS + 1);
+  });
+});
+
 describe("pasted list text", () => {
   it("keeps one entry past the cap, not the whole paste", () => {
     const text = Array.from({ length: 30000 }, (_, i) => `l${i}`).join("\n");

@@ -20,6 +20,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import ReactMarkdown from "react-markdown";
@@ -1262,6 +1263,24 @@ function Tabs({ c }: { c: Component }) {
     if (i !== undefined) setActive(i);
   });
 
+  // The tab-widget keys: arrows move (wrapping), Home / End jump; focus and
+  // selection move together. Only the selected tab is in the page's Tab
+  // order (roving tabIndex).
+  const onTabKey = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const last = tabs.length - 1;
+    const shown = Math.min(active, last);
+    const to =
+      e.key === "ArrowRight" ? (shown + 1) % tabs.length
+      : e.key === "ArrowLeft" ? (shown - 1 + tabs.length) % tabs.length
+      : e.key === "Home" ? 0
+      : e.key === "End" ? last
+      : null;
+    if (to === null) return;
+    e.preventDefault();
+    setActive(to);
+    document.getElementById(`${baseId}-tab-${to}`)?.focus();
+  };
+
   const current = tabs[Math.min(active, tabs.length - 1)];
   if (!current) return null;
   return (
@@ -1269,7 +1288,7 @@ function Tabs({ c }: { c: Component }) {
       <div role="tablist" className="flex min-w-0 flex-wrap gap-1 border-b border-[var(--color-border)]">
         {tabs.map((t, i) => {
           const n = errCount(i);
-          const selected = i === active;
+          const selected = i === Math.min(active, tabs.length - 1);
           return (
             <button
               key={i}
@@ -1278,6 +1297,8 @@ function Tabs({ c }: { c: Component }) {
               id={`${baseId}-tab-${i}`}
               aria-selected={selected}
               aria-controls={`${baseId}-panel`}
+              tabIndex={selected ? 0 : -1}
+              onKeyDown={onTabKey}
               onClick={() => setActive(i)}
               className={[
                 "-mb-px flex items-center gap-1.5 border-b-2 px-2.5 py-1.5 text-[0.78rem] transition",
