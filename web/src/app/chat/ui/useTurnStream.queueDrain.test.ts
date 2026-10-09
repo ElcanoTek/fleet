@@ -1,3 +1,4 @@
+import { buildSubmissionMessage } from "./genui/model";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1133,5 +1134,34 @@ describe("a queued card answer held across a page load", () => {
     const onUnsent = vi.fn();
     act(() => second.result.current.resumeHeldCardSend(CONV, text, sid, onUnsent));
     await vi.waitFor(() => expect(onUnsent).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("retrying a card answer's failed turn", () => {
+  it("resends it as a card send: the composer's text is left alone", async () => {
+    const card = buildSubmissionMessage("c1", "go", { a: 1 });
+    const h = makeHarness({
+      initial: [
+        { id: 1, role: "user", content: card, state: "done" },
+        { id: 2, role: "assistant", content: "", state: "done", failed: true },
+      ] as Message[],
+      persisted: [],
+      queue: [[]],
+      inflight: [{ inflight: false }],
+    });
+    const harnessFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+        String(input) === "/api/chat" ? new Response("boom", { status: 500 }) : harnessFetch(input, init),
+      ),
+    );
+    const setPromptForKey = vi.fn();
+    const deps = { ...h.deps, setPromptForKey };
+    const { result } = renderHook(() => useTurnStream(deps));
+    await act(async () => {
+      await result.current.retryLastUserMessage();
+    });
+    expect(setPromptForKey).not.toHaveBeenCalled();
   });
 });

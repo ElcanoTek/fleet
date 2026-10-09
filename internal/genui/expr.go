@@ -295,13 +295,17 @@ func (p *exprParser) postfix() error {
 		path = append([]string(nil), p.vpath...)
 	}
 	for p.isOp(".") {
+		// Only a name's value has fields the validator can check
+		// (rows.cpm, (rows).cpm); a member of a call's or literal's result
+		// could name a field that does not exist and render blank.
+		if path == nil {
+			return p.errf("'.' can follow only an input name (rows.cpm), not a function call or literal; apply the function to the member instead (unique(rows.cpm))")
+		}
 		p.next()
 		if p.peek().kind != tIdent {
 			return p.errf("expected a field name after '.'")
 		}
-		if path != nil {
-			path = append(path, p.peek().text)
-		}
+		path = append(path, p.peek().text)
 		p.next()
 	}
 	if len(path) > 1 {

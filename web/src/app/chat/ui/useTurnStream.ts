@@ -35,6 +35,7 @@ import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { mcpAccountOverrides } from "./mcpAccounts";
 import { allocMessageIds } from "./messageIds";
+import { parseReplyMessage, parseSubmissionMessage } from "./genui/model";
 import { enabledOptionalMcpServerNames } from "./mcpSelection";
 import {
   createRecoveryElection,
@@ -3782,7 +3783,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
     }
 
-    await submitPrompt(lastUser.content);
+    // A card's answer is retried as a card send: it leaves the composer's
+    // text and pending attachments alone, like the original click did. (The
+    // retried bubble is the card's answer again, so the card stays locked.)
+    const fromCard = parseSubmissionMessage(lastUser.content) !== null || parseReplyMessage(lastUser.content) !== null;
+    await submitPrompt(lastUser.content, fromCard ? { fromCard } : undefined);
   };
 
   const uploadPendingAttachments = async (

@@ -146,6 +146,14 @@ describe("bounded display", () => {
     expect(evaluate("sum(5)", {})).toBe(5);
   });
 
+  it("projects a list's member once, so later functions reuse their results", () => {
+    const rows = [{ note: "a" }, { note: "b" }];
+    const first = evaluate("rows.note", { rows });
+    expect(first).toEqual(["a", "b"]);
+    expect(evaluate("rows.note", { rows })).toBe(first);
+    expect(evaluate("unique(rows.note)", { rows })).toBe(evaluate("unique(rows.note)", { rows }));
+  });
+
   it("deduplicates a list once, however many templates read it", () => {
     const lines = ["a", "b", "a"];
     const u = evaluate("unique(lines)", { lines });

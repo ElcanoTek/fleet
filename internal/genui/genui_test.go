@@ -514,3 +514,20 @@ func TestMinimumAnswerCountsStructuredValues(t *testing.T) {
 		t.Fatalf("issues: %v", issues)
 	}
 }
+
+// A member can follow only an input name, whose fields the validator checks:
+// on a call's result a misspelt field would render blank instead of failing.
+func TestMemberAfterCallRefused(t *testing.T) {
+	card := func(expr string) string {
+		return `{"title":"x","components":[{"type":"repeater","id":"rows","label":"R","fields":[{"type":"number","id":"cpm","label":"C"}],"max_items":5},{"type":"text","text":"{{ ` + expr + ` }}"}],"actions":[{"id":"go","label":"Go"}]}`
+	}
+	if _, issues := Validate([]byte(card("unique(rows).cpn"))); len(issues) == 0 || !strings.Contains(fmt.Sprint(issues), "can follow only an input name") {
+		t.Fatalf("call member: %v", issues)
+	}
+	if _, issues := Validate([]byte(card("sum(unique(rows.cpm))"))); len(issues) != 0 {
+		t.Fatalf("member then call: %v", issues)
+	}
+	if _, issues := Validate([]byte(card("sum((rows).cpm)"))); len(issues) != 0 {
+		t.Fatalf("parenthesized name: %v", issues)
+	}
+}

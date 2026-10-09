@@ -1487,6 +1487,23 @@ describe("holds and other tabs", () => {
     expect(screen.getByRole("button", { name: "Yes" })).toBeTruthy();
   });
 
+  it("moves a segmented choice with the radio-group keys, one Tab stop", async () => {
+    const user = userEvent.setup();
+    const s = spec({ title: "C", components: [{ type: "choice", id: "c", label: "C", options: ["a", "b", "c"] }], actions: [{ id: "go", label: "Go" }] });
+    render(<GenerativeCard cardId="seg" spec={s} onSubmit={() => {}} />);
+    const radios = () => screen.getAllByRole("radio");
+    expect(radios().map((r) => r.tabIndex)).toEqual([0, -1, -1]);
+    radios()[0].focus();
+    await user.keyboard("{ArrowRight}");
+    expect(radios()[1].getAttribute("aria-checked")).toBe("true");
+    expect(document.activeElement).toBe(radios()[1]);
+    expect(radios().map((r) => r.tabIndex)).toEqual([-1, 0, -1]);
+    await user.keyboard("{End}");
+    expect(radios()[2].getAttribute("aria-checked")).toBe("true");
+    await user.keyboard("{ArrowRight}");
+    expect(radios()[0].getAttribute("aria-checked")).toBe("true");
+  });
+
   it("groups a single-select table's radios", () => {
     const s = spec({
       title: "T",

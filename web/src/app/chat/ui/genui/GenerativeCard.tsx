@@ -2131,9 +2131,27 @@ function Choice({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
       </div>
     );
   }
+  // Radio-group keys: arrows move selection and focus (wrapping), Home /
+  // End jump; only the selected option (else the first) is in the page's
+  // Tab order, so a long list is one Tab stop.
+  const current = opts.findIndex((o) => o.value === v);
+  const onKey = (e: ReactKeyboardEvent<HTMLButtonElement>, i: number) => {
+    if (locked || opts.length === 0) return;
+    const last = opts.length - 1;
+    const to =
+      e.key === "ArrowRight" || e.key === "ArrowDown" ? (i + 1) % opts.length
+      : e.key === "ArrowLeft" || e.key === "ArrowUp" ? (i - 1 + opts.length) % opts.length
+      : e.key === "Home" ? 0
+      : e.key === "End" ? last
+      : null;
+    if (to === null) return;
+    e.preventDefault();
+    onChange?.(opts[to].value);
+    (e.currentTarget.parentElement?.children[to] as HTMLElement | undefined)?.focus();
+  };
   return (
     <div role="radiogroup" id={inputId} {...groupLabel} className="flex min-w-0 flex-wrap gap-1">
-      {opts.map((o) => {
+      {opts.map((o, i) => {
         const on = v === o.value;
         return (
           <button
@@ -2141,7 +2159,9 @@ function Choice({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
             type="button"
             role="radio"
             aria-checked={on}
+            tabIndex={i === (current >= 0 ? current : 0) ? 0 : -1}
             title={o.description}
+            onKeyDown={(e) => onKey(e, i)}
             onClick={() => onChange?.(on && c.required !== true ? "" : o.value)}
             className={[
               "rounded-[var(--radius-md)] border px-2.5 py-1 text-[0.78rem] transition disabled:opacity-60",

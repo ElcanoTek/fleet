@@ -571,8 +571,22 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
   unique: ([v]) => uniqueOf(list(v)),
 };
 
+// A list's member projection (rows.note), once per list and name: the list
+// is one array object for as long as it is unchanged, and keeping the
+// projection one array too lets the join / unique / aggregate caches hit
+// across every template that reads it.
+const members = new WeakMap<object, Map<string, Value[]>>();
+
 function member(obj: Value, name: string): Value {
-  if (Array.isArray(obj)) return obj.map((x) => member(x, name));
+  if (Array.isArray(obj)) {
+    let byName = members.get(obj);
+    const hit = byName?.get(name);
+    if (hit) return hit;
+    const out = obj.map((x) => member(x, name));
+    if (!byName) members.set(obj, (byName = new Map()));
+    byName.set(name, out);
+    return out;
+  }
   if (obj !== null && typeof obj === "object") {
     return Object.prototype.hasOwnProperty.call(obj, name) ? norm(obj[name]) : null;
   }
