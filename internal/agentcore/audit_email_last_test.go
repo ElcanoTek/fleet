@@ -580,10 +580,41 @@ func TestEmailLast_DuplicateSendRespectsOrdering(t *testing.T) {
 	confirmAudit(t, o, []criticalActionStruct{{Tool: elIXCreate}, {Tool: elEmail}}, nil)
 	mustBlock(t, o, elEmail, elEmailArgs, "still unsettled")
 	mustNotBlock(t, o, elIXCreate, elName("A"), elCreateOK)
-	mustBlock(t, o, elEmail, elEmailArgs, DuplicateSendSuppressedPrefix)
-	if !o.summaryEmailSent {
-		t.Fatal("the suppressed duplicate stands as the summary email once the batch settled")
+	// Settled now, but the only delivery of this payload PRE-dates the work:
+	// it is not the summary, and it does not discharge the summary email.
+	mustBlock(t, o, elEmail, elEmailArgs, "sent before this run's batch work")
+	if o.summaryEmailSent {
+		t.Fatal("a pre-batch delivery must never be recorded as the summary email")
 	}
+	const summary = `{"to":["trader@example.com"],"subject":"Batch results","body":"A booked"}`
+	mustNotBlock(t, o, elEmail, summary, elEmailOK)
+	if !o.summaryEmailSent {
+		t.Fatal("the post-work send is the summary email")
+	}
+	// A duplicate of the real summary is suppressed as done, as before.
+	mustBlock(t, o, elEmail, summary, DuplicateSendSuppressedPrefix)
 	confirmAudit(t, o, []criticalActionStruct{{Tool: elIXCreate}}, nil)
 	mustBlock(t, o, elIXCreate, elName("B"), "summary email has already been sent")
+}
+
+// A create blocked before the audit and then attempted through a same-server
+// substitute that fails DEFINITIVELY is settled — and its pending entry is
+// retired with it, or it holds the summary email back forever (Codex P1 on
+// #1710).
+func TestEmailLast_SubstituteDefinitiveFailureRetiresPending(t *testing.T) {
+	withEmailLastPolicy(t)
+	const ixCreateDeal = "mcp_indexexchange_mcp_ix_create_deal"
+	o := newOrchStateForTest()
+	if blocked, _ := o.checkCriticalTool(elIXCreate, "", elName("A")); !blocked {
+		t.Fatal("an unaudited create must be blocked (and recorded pending)")
+	}
+	confirmAudit(t, o, []criticalActionStruct{{Tool: elIXCreate}, {Tool: elEmail}}, nil)
+	mustNotBlock(t, o, ixCreateDeal, elName("A"), elDefinitive)
+	if got := o.settledFailedSuffixes(); len(got) != 1 {
+		t.Fatalf("the substitute's definitive failure must settle the unit, got %v", got)
+	}
+	if len(o.pendingCriticalActions) != 0 {
+		t.Fatalf("the settled create's pending entry must be retired, got %v", o.pendingCriticalActions)
+	}
+	mustNotBlock(t, o, elEmail, elEmailArgs, elEmailOK)
 }

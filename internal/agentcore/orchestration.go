@@ -1043,9 +1043,7 @@ func (o *orchestrationState) markPendingCriticalDone(toolName, rawInput string) 
 	// forever (audit_email_last.go).
 	record := pendingRecordKey(rawInput)
 	for i, p := range o.pendingCriticalActions {
-		substitute := substituteSatisfies(criticalSuffixFor(p.toolName), criticalSuffixFor(toolName)) &&
-			sameToolServer(p.toolName, toolName)
-		if (sameAliasedTool(p.toolName, toolName) || substitute) && p.record == record && record != unbindableRecordKey {
+		if sameOrStandInTool(p.toolName, toolName) && p.record == record && record != unbindableRecordKey {
 			log.Printf("Enforcement: discharging pending %s via its declared alias or substitute %s", p.toolName, toolName)
 			o.dischargePendingCriticalAt(i)
 			return

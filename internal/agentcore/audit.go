@@ -317,6 +317,9 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 			if blocked, msg := o.checkSummaryEmailOrder(toolName); blocked {
 				return true, msg
 			}
+			if blocked, msg := o.checkPreBatchDuplicate(toolName); blocked {
+				return true, msg
+			}
 			// This is the one guard whose block means "already done" rather
 			// than "not done": the fingerprint is recorded exclusively on a
 			// successful send, so an identical payload here has provably
@@ -332,9 +335,6 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 				o.selfAuditRequested = true
 			}
 			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput), "")
-			// Once batch work is settled, the delivered payload stands as the
-			// summary email: no email-last write may follow it.
-			o.noteSummaryEmailSent()
 			if o.allCommitmentsExhausted() {
 				o.auditConfirmed = false
 			}

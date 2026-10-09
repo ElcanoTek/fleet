@@ -383,16 +383,18 @@ func (o *orchestrationState) settleCreateFailure(toolName, argsHash, identity st
 
 // retirePendingCreate drops the pre-audit pending entry a definitive create
 // failure acted on — the exact (tool, args) entry, else the oldest record-less
-// entry of the same tool — so a create blocked before the audit and then
+// entry of the same tool or one it stands in for (sameOrStandInTool: a
+// same-server alias twin or approved substitute, which is how the failure
+// settled that tool's unit) — so a create blocked before the audit and then
 // attempted after it cannot hold the summary email back (markPendingCriticalDone
 // covers the success side). Not recorded as completed. Callers must hold o.mu.
 func (o *orchestrationState) retirePendingCreate(toolName, argsHash string) {
 	idx := -1
 	for i, p := range o.pendingCriticalActions {
-		if p.toolName != toolName {
+		if !sameOrStandInTool(p.toolName, toolName) {
 			continue
 		}
-		if p.argsHash == argsHash {
+		if p.toolName == toolName && p.argsHash == argsHash {
 			idx = i
 			break
 		}
@@ -664,6 +666,23 @@ func (o *orchestrationState) checkSummaryEmailOrder(toolName string) (bool, stri
 		"tool before any re-create. If an action cannot be settled, call confirm_audit(success=false, "+
 		"user_visible_summary=...) to abort; an aborted run may still send its single failure-summary email.",
 		toolName, strings.Join(missing, "; "))
+}
+
+// checkPreBatchDuplicate refuses to treat a duplicate email as "already
+// done" when that delivery PRE-dates the run's email-last work: while no
+// summary email has been recorded, every stored fingerprint was sent before
+// the work began (a successful send after it sets summaryEmailSent), so the
+// reader got that message before the outcomes existed. The summary email
+// stays owed and must be sent fresh. Callers must hold o.mu.
+func (o *orchestrationState) checkPreBatchDuplicate(toolName string) (bool, string) {
+	if !isSummaryEmailTool(toolName) || !o.emailLastAttempted || o.summaryEmailSent {
+		return false, ""
+	}
+	log.Printf("Enforcement: Blocking %s — an identical payload was sent before this run's batch work; it is not the summary email", toolName)
+	return true, fmt.Sprintf("BLOCKED: '%s' — an identical payload was sent before this run's batch work began, so it "+
+		"cannot stand as the batch's summary email and does not discharge it. Send the summary email now, built "+
+		"from the batch's final outcomes (each item and its result); it is necessarily a different message from "+
+		"the earlier one.", toolName)
 }
 
 // noteTemplateEmailResult marks the summary email as sent when a

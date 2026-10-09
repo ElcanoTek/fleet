@@ -360,6 +360,17 @@ func sameAliasedTool(a, b string) bool {
 	return criticalAliasesEquivalent(criticalSuffixFor(a), criticalSuffixFor(b)) && sameToolServer(a, b)
 }
 
+// sameOrStandInTool reports whether executed may complete a call blocked
+// under pending: the same name, a declared alias twin, or a bundle-approved
+// substitute — the latter two on the same server/variant only, exactly the
+// names typedCommitment.nameMatches lets discharge pending's commitment.
+func sameOrStandInTool(pending, executed string) bool {
+	if sameAliasedTool(pending, executed) {
+		return true
+	}
+	return substituteSatisfies(criticalSuffixFor(pending), criticalSuffixFor(executed)) && sameToolServer(pending, executed)
+}
+
 // unmarshalArgs decodes a tool call's JSON arguments with UseNumber so numeric
 // record ids keep their exact digits. Plain json.Unmarshal decodes every
 // number to float64, which silently rounds integers above 2^53 — a large

@@ -49,10 +49,11 @@ puts the record's settled unit back.
 
 A run becomes email-last work when it declares an email-last tool (typed or
 legacy free-text) or attempts one. A call blocked before the audit and then
-completed through a same-server alias or substitute is retired, so it cannot
-hold the email back. The duplicate-send guard runs after the email-last
-ordering: an identical earlier payload is not "already done" while batch work
-is unsettled, and once let through it stands as the summary email.
+completed, or definitively failed, through a same-server alias or substitute
+is retired, so it cannot hold the email back. The duplicate-send guard runs
+after the email-last ordering, and a payload first delivered before the batch
+work began is never "already done": it cannot stand as the summary email,
+which must be sent fresh from the final outcomes.
 
 Attempts tie to units by record identity, which is the call's
 `name` / `deal_name` / `display_name` (top level, `payload`, `payload.deal`,
