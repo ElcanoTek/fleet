@@ -94,16 +94,25 @@ Text fields keep spaces as you type; larger text boxes accept several lines.
 The prompt preview preserves those line breaks so you can check what will be
 sent before pressing the card's run button.
 
-### ACP clients (Buzz, Zed, JetBrains)
+### ACP clients (Zed, Neovim, Emacs, JetBrains, Buzz)
 
 `fleet acp` lets an Agent Client Protocol client talk to fleet. The client
-launches it (for Buzz: `BUZZ_ACP_AGENT_COMMAND=fleet`, `BUZZ_ACP_AGENT_ARGS=acp`),
-and each message becomes a normal fleet chat turn as the user named by
+launches it, and each message becomes a normal fleet chat turn as the user named by
 `--email` or `FLEET_USER_EMAIL`. The conversation appears in the web chat like
 any other. Replies, reasoning and tool steps stream to the client. If a step
 needs approval, the reply ends with a link or a `fleet chat --approve` command,
 because approvals are settled in fleet, not in the client. Images and audio are
 not accepted.
+
+If your operator has added fleet to your Buzz workspace, you @mention it
+there. By default only the person who set it up, and their own agents, can
+instruct it; your operator can let others too. Its reply comes once its turn
+ends, in the thread of your message,
+and @mentions you: nothing appears while it works, and replies are not
+streamed or edited. If you send fleet another message while it works, it
+answers both in one reply. Files attached in Buzz cannot be read by fleet,
+and Buzz's agent instructions and memories do not reach it. The conversation
+is also in fleet's web chat, under the user the agent runs as.
 
 MCP servers you set up in your editor are not used by fleet. fleet's tools and
 connectors are the ones your operator set up, and they run on the fleet server.
@@ -133,7 +142,9 @@ the editor lets the agent shut down (Neovim's CodeCompanion.nvim does), that
 turn is stopped in fleet too. Messages from the client still waiting behind it
 are dropped: they never reach fleet. A message fleet itself had already queued
 (behind a turn started from the web chat, say) still runs. An editor that
-force-kills its agent leaves the turn running: stop it from the web chat.
+force-kills its agent leaves the turn running: stop it from the web chat. Zed
+does that when it quits; in Emacs, quitting Emacs stops the turn, but killing
+the agent-shell buffer does not.
 
 ### What happens when you ask
 

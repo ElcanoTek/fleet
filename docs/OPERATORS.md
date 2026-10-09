@@ -35,8 +35,10 @@ success. One-shot mode prints the conversation id to stderr (`conversation:
 prose.
 
 `fleet acp` is the same client with a protocol in front of it: an Agent Client
-Protocol agent on stdin/stdout, for ACP clients such as `buzz-acp`, Zed or
-JetBrains to launch (`BUZZ_ACP_AGENT_COMMAND=fleet BUZZ_ACP_AGENT_ARGS=acp`).
+Protocol agent on stdin/stdout, for ACP clients such as Zed or JetBrains to
+launch. Buzz's `buzz-acp` expects an agent to post its own replies, so it
+launches `fleet acp` through `fleet-buzz-bridge`, a separate, private adapter
+that is not part of fleet (see "Buzz" in [`docs/ACP.md`](ACP.md)).
 It resolves the token and `--email` exactly like `fleet chat`, and each prompt
 is one turn on the running server. Give it a dedicated bot user, because every
 ACP turn runs as that identity. Details: [`docs/ACP.md`](ACP.md).
