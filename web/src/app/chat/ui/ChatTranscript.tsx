@@ -69,9 +69,8 @@ import {
   type TranscriptRow,
 } from "./transcriptRows";
 import { useStickToBottom } from "./stickToBottom";
-import { parseReplyMessage, parseSubmissionMessage } from "./genui/model";
 import { ReplyBubble, SubmissionBubble } from "./genui/SubmissionBubble";
-import { deriveGenUiState, GenUiContext, isRenderableCardCall } from "./genui/transcript";
+import { answerOf, deriveGenUiState, GenUiContext, isRenderableCardCall } from "./genui/transcript";
 // Generative-UI cards (show_ui) carry their own renderer and the markdown
 // pipeline; lazy-loaded like AssistantMarkdown so chats without a card never
 // pay for it.
@@ -1133,7 +1132,7 @@ export function UserTurn({
   editRequestSignal: number;
   onResend: (edited: string) => void;
 }) {
-  const submission = parseSubmissionMessage(message.content);
+  const { sub: submission, reply } = answerOf(message);
   if (submission) {
     // A card submission: show the answers by label, not the JSON the model
     // reads. No Edit — the card's own "Edit and resend" is the way to amend.
@@ -1146,7 +1145,6 @@ export function UserTurn({
       </>
     );
   }
-  const reply = parseReplyMessage(message.content);
   if (reply) {
     return (
       <>

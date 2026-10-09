@@ -12,6 +12,8 @@ export const SHOW_UI_TOOL = "show_ui";
 export const MAX_LIST_ITEMS = 20000;
 /** Must match genui.MaxRepeaterItems in internal/genui/spec.go. */
 export const MAX_REPEATER_ITEMS = 200;
+/** Mirrors MaxCardRows (internal/genui/spec.go): rows a whole card renders. */
+export const MAX_CARD_ROWS = 2000;
 /** Must match genui.MaxChoiceItems: chips in a multi_select / include_exclude. */
 export const MAX_CHOICE_ITEMS = 2000;
 /**
@@ -326,13 +328,31 @@ export function newItem(fields: Component[]): Values {
 export function normalizeValues(spec: CardSpec, saved: Values | null | undefined): Values {
   const out = initialValues(spec);
   if (!saved || typeof saved !== "object") return out;
+  // Restored repeater items share the card-wide row budget the server holds
+  // the card's own items to: each item renders every field of its repeater.
+  let rowsLeft = MAX_CARD_ROWS;
   walkInputs(spec.components, (c) => {
     if (c.id && Object.prototype.hasOwnProperty.call(saved, c.id)) {
-      const v = restoredValue(c, saved[c.id]);
+      let v = restoredValue(c, saved[c.id]);
+      if (c.type === "repeater" && Array.isArray(v)) {
+        const weight = Math.max(1, countComponents(children(c, "fields")));
+        v = v.slice(0, Math.floor(rowsLeft / weight));
+        rowsLeft -= (v as unknown[]).length * weight;
+      }
       if (v !== undefined) out[c.id] = v;
     }
   });
   return out;
+}
+
+/** Components in a list, nested ones included (countComponents in spec.go). */
+function countComponents(list: Component[]): number {
+  let n = 0;
+  for (const c of list) {
+    n += 1 + countComponents(children(c)) + countComponents(children(c, "fields"));
+    for (const t of tabsOf(c)) n += countComponents(t.children);
+  }
+  return n;
 }
 
 /**

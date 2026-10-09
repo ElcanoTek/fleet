@@ -72,6 +72,15 @@ function parseAnswer(content: string): { sub: Submission | null; reply: Reply | 
   return { sub, reply: sub ? null : parseReplyMessage(content) };
 }
 
+/**
+ * A user message's card answer, parsed once per message object (the same
+ * cache deriveGenUiState reads): the bubble rerenders on every streamed token
+ * of the reply below it, and an answer can be near 1 MiB.
+ */
+export function answerOf(m: Message): { sub: Submission | null; reply: Reply | null } {
+  return cached(answerCache, m, m.content, parseAnswer);
+}
+
 export function deriveGenUiState(messages: Message[]): GenUiState {
   const cards = new Map<string, CardSpec>();
   const submissions = new Map<string, Submission>();

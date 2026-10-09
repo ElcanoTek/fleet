@@ -397,6 +397,13 @@ func (s *skeleton) candidates(field string) []value {
 		out = append(out, value{n: c})
 	}
 	out = append(out, value{n: beyond(cs[len(cs)-1], math.Inf(1))})
+	finite := out[:0]
+	for _, v := range out {
+		if !math.IsInf(v.n, 0) {
+			finite = append(finite, v)
+		}
+	}
+	out = finite
 	if d != nil && d.step > 0 {
 		out = gridCandidates(cs, d)
 	}
@@ -420,7 +427,9 @@ func (s *skeleton) candidates(field string) []value {
 }
 
 // beyond is a number past c toward dir: c ± 1, or the next float where 1 is
-// below c's precision (c + 1 == c for c near the float limit).
+// below c's precision (c + 1 == c for c near the float limit). Past the
+// largest float there is none: the result is then infinite, and candidates
+// drops it (an input holds only finite numbers).
 func beyond(c, dir float64) float64 {
 	n := c + math.Copysign(1, dir)
 	if n == c || math.IsInf(n, 0) {

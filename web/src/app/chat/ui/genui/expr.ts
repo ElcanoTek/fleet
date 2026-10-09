@@ -401,12 +401,22 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
   len: ([v]) => (typeof v === "string" ? Array.from(v).length : list(v).length),
   count: ([v]) => list(v).length,
   // Results stay finite like every other value (norm): an overflowing sum is
-  // null, and the mean is taken as a sum of shares, which cannot overflow
-  // when the inputs are finite.
+  // null, and the mean is a running mean — each step a weighted average of
+  // the mean so far and the next value, so it never exceeds the largest
+  // input when the inputs are finite.
   sum: (a) => numOrNull(numbers(a).reduce((s, n) => s + n, 0)),
   avg: (a) => {
     const ns = numbers(a);
-    return ns.length ? numOrNull(ns.reduce((s, n) => s + n / ns.length, 0)) : null;
+    return ns.length
+      ? numOrNull(
+          ns.reduce((m, n, i) => {
+            const d = n - m;
+            // n - m overflows only when the two have opposite signs and are
+            // both huge; weigh them separately then.
+            return Number.isFinite(d) ? m + d / (i + 1) : m - m / (i + 1) + n / (i + 1);
+          }, 0),
+        )
+      : null;
   },
   min: (a) => {
     const ns = numbers(a);
@@ -555,11 +565,24 @@ export function evaluateSafe(src: string, scope: Scope, fallback: Value = null):
  */
 export function renderTemplate(s: string | undefined, scope: Scope): string {
   if (!s || !s.includes("{{")) return s ?? "";
+  let left = MAX_TEMPLATE_CHARS;
   return s.replace(/\{\{([\s\S]*?)\}\}/g, (_, src: string) => {
+    let t: string;
     try {
-      return toText(evaluate(src, scope));
+      t = toText(evaluate(src, scope));
     } catch {
       return "⚠";
     }
+    if (t.length > left) t = `${t.slice(0, Math.max(0, left))}…`;
+    left -= t.length;
+    return t;
   });
 }
+
+/**
+ * The most text one template's holes add. A hole can expand an input far
+ * past the spec's own size (join over a 20,000-line list), and a card can
+ * repeat it in hundreds of components; displayed hole text is clipped, while
+ * conditions and computed values still see the whole result.
+ */
+export const MAX_TEMPLATE_CHARS = 2000;

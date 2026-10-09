@@ -222,6 +222,23 @@ describe("restored repeater values", () => {
   });
 });
 
+describe("restored repeater items across the card", () => {
+  it("share the card-wide row budget", () => {
+    const components = Array.from({ length: 100 }, (_, i) => ({
+      type: "repeater",
+      id: `r${i}`,
+      label: "R",
+      max_items: 200,
+      fields: [{ type: "divider" }],
+    }));
+    const spec = parseCardSpec(JSON.stringify({ title: "R", components, actions: [{ id: "go", label: "Go" }] }))!;
+    const saved = Object.fromEntries(components.map((c) => [c.id, Array.from({ length: 200 }, () => ({}))]));
+    const restored = normalizeValues(spec, saved);
+    const total = components.reduce((n, c) => n + (restored[c.id] as unknown[]).length, 0);
+    expect(total).toBe(2000);
+  });
+});
+
 describe("restored values the user could not fix", () => {
   const card = (components: unknown[]) =>
     parseCardSpec(JSON.stringify({ title: "R", components, actions: [{ id: "go", label: "Go" }] }))!;

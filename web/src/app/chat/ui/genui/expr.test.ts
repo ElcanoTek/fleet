@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluate, evaluateSafe, parseExpr, renderTemplate, ExprError } from "./expr";
+import { evaluate, evaluateSafe, parseExpr, renderTemplate, ExprError, MAX_TEMPLATE_CHARS } from "./expr";
 import { loadFixture } from "./fixtures";
 
 type Case = { expr: string; valid: boolean; scope?: Record<string, unknown>; want?: unknown };
@@ -103,5 +103,22 @@ describe("every function stays finite", () => {
         }
       }
     }
+  });
+});
+
+describe("bounded display", () => {
+  it("clips the text a template's holes add, not the template's own text", () => {
+    const lines = Array.from({ length: 20000 }, () => "x");
+    const out = renderTemplate("Lines: {{ join(lines) }} and {{ join(lines) }}", { lines });
+    expect(out.length).toBeLessThanOrEqual("Lines:  and ".length + MAX_TEMPLATE_CHARS + 2);
+    expect(out.startsWith("Lines: x, x")).toBe(true);
+    const long = "a".repeat(5000);
+    expect(renderTemplate(`${long} {{ n }}`, { n: 1 })).toBe(`${long} 1`);
+  });
+
+  it("averages huge values without overflowing", () => {
+    expect(evaluate("avg(xs)", { xs: [Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE] })).toBe(Number.MAX_VALUE);
+    expect(evaluate("avg(xs)", { xs: [1, 2, 3, 4] })).toBe(2.5);
+    expect(evaluate("avg(xs)", { xs: [Number.MAX_VALUE, -Number.MAX_VALUE] })).toBe(0);
   });
 });
