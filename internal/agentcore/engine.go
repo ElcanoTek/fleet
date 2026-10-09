@@ -379,6 +379,7 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 			compactionSummaryPrefix, len(middle)))
 	}
 
+	e.logCompactionSummary(summary)
 	tail = dropPlanReannounceMessages(tail)
 	out := make([]fantasy.Message, 0, len(head)+2+len(tail))
 	out = append(out, head...)
@@ -449,9 +450,10 @@ func firstPart(m fantasy.Message) fantasy.MessagePart {
 // emit a fleet.context_compacted event with the right metadata.
 type proactiveCompactResult struct {
 	messages      []fantasy.Message
-	removedTurns  int  // how many old messages were summarized away
-	summaryTokens int  // estimated token size of the inserted summary
-	compacted     bool // false when there was nothing worth compacting
+	removedTurns  int             // how many old messages were summarized away
+	summaryTokens int             // estimated token size of the inserted summary
+	summary       fantasy.Message // the inserted summary, for the session log
+	compacted     bool            // false when there was nothing worth compacting
 }
 
 // proactiveCompact summarizes the OLDEST HALF of the conversation history BEFORE
@@ -515,8 +517,28 @@ func (e *engine) proactiveCompact(ctx context.Context, messages []fantasy.Messag
 		messages:      out,
 		removedTurns:  len(droppable),
 		summaryTokens: estimateMessageTokens(summary),
+		summary:       summary,
 		compacted:     true,
 	}
+}
+
+// compactionSummaryMessageType tags the session-log copy of a compaction
+// summary. The summary stands in for history the model no longer sees, so a
+// stored transcript without it cannot explain what the run continued from:
+// TWC task b50b6d78 refused a send over "unconfirmed recipients" that no tool
+// output mentioned, and only the unlogged summary could have said so.
+const compactionSummaryMessageType = "compaction_summary"
+
+// logCompactionSummary appends the summary the model will continue from to the
+// session log, after the compaction breadcrumb (when the path writes one).
+// Nil-safe through AddMessageWithMetadata, like every other log write here.
+func (e *engine) logCompactionSummary(summary fantasy.Message) {
+	text := strings.TrimSpace(messageText(summary))
+	if text == "" {
+		return
+	}
+	mt := compactionSummaryMessageType
+	e.logSession.AddMessageWithMetadata(roleUser, text, nil, nil, &mt, nil, nil, "")
 }
 
 // estimateMessageTokens gives a rough token count for a message by summing its
@@ -612,6 +634,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 				e.logSession.AddMessage(roleUser, fmt.Sprintf(
 					"[context_compacted] trigger=resend_budget used=%d budget=%d%s removed_turns=%d — the resent prompt exceeded %s_CONTEXT_RESEND_BUDGET_TOKENS; the oldest half of the history was summarized to cut per-call cost",
 					used, budget, e.resendFloorCrumb(budget), res.removedTurns, e.envPrefix.normalize()), nil, nil)
+				e.logCompactionSummary(res.summary)
 				sink.emit(evtContextCompacted, e.withResendFloorFields(map[string]any{
 					evtFieldRemovedTurns:  res.removedTurns,
 					evtFieldSummaryTokens: res.summaryTokens,
@@ -650,6 +673,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 		if res := e.proactiveCompact(ctx, messages); res.compacted {
 			out.messages = res.messages
 			out.warned = false
+			e.logCompactionSummary(res.summary)
 			sink.emit(evtContextCompacted, map[string]any{
 				evtFieldRemovedTurns:  res.removedTurns,
 				evtFieldSummaryTokens: res.summaryTokens,

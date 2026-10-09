@@ -519,9 +519,19 @@ func summarizeDroppedMiddle(ctx context.Context, tc TurnConfig, in agentcore.Com
 func buildScheduledCompactionSummarizer(model fantasy.LanguageModel) func(context.Context, agentcore.CompactionSummarizeInput) fantasy.Message {
 	return func(ctx context.Context, in agentcore.CompactionSummarizeInput) fantasy.Message {
 		summary := summarizeDroppedMiddleWith(ctx, summarizerModel(in, model), in, compactionSummarizeScheduledAddendum)
-		return fantasy.NewUserMessage(compactionSummaryPrefix + "] " + summary)
+		return fantasy.NewUserMessage(compactionSummaryPrefix + "] " + scheduledSummaryPreamble + "\n\n" + summary)
 	}
 }
+
+// scheduledSummaryPreamble ranks the summary below the task prompt. A
+// scheduled run has exactly one instruction — the pinned task prompt — while
+// the summary is a lossy note written by a call that never saw that prompt.
+// Without this line a model read the summary as "the explicit run context":
+// TWC task b50b6d78 (2026-10-08) built and validated its report, then refused
+// the mandatory send because a summary said its recipients were unconfirmed,
+// though the task prompt lists them. Scheduled-only: in chat a later user turn
+// can legitimately override the first one.
+const scheduledSummaryPreamble = "Notes on this run's earlier steps, written without sight of the task prompt. The task prompt above still governs: where these notes conflict with it, or call something in it missing or unconfirmed, follow the task prompt."
 
 // summarizeDroppedMiddleWith produces the compaction summary for the dropped
 // messages with model, appending extraPrompt (may be empty) to the summarizer's
@@ -654,6 +664,8 @@ Concrete follow-ups, in order.
 ## Critical Context
 Exact file paths, function names, identifiers, URLs, error messages, and numbers needed to continue. The agent's sandbox workspace (files it wrote) and any persistent Python session keep their state through this summarization — the messages that created them will no longer be visible, so record the paths and variable names worth remembering.
 
+You are shown only the middle of the conversation. Its opening message — the user's original request — stays in front of the agent verbatim, ahead of your summary, and you are not shown it. Summarize what these messages show and nothing about that request: never write that an input, recipient, approval, permission or instruction is missing, unknown, unconfirmed or unauthorized just because it does not appear here. The agent treats your summary as fact, so a guess about the request becomes a false constraint.
+
 Be specific and do not speculate. Preserve exact file paths, function names, and error messages verbatim. Aim for 300–800 words. Do NOT continue the conversation — return only the summary text, no preamble.`
 
 // compactionSummarizeUpdateAddendum is appended for repeat compactions: the
@@ -666,7 +678,7 @@ Be specific and do not speculate. Preserve exact file paths, function names, and
 // must survive verbatim or the agent redoes (and re-pays for) them.
 const compactionSummarizeScheduledAddendum = `
 
-This conversation is an UNATTENDED scheduled task: no user will answer questions, and the agent continues from this summary plus the files in its workspace. Under "Progress / Done" list every completed step WITH its concrete result (numbers computed, files written and their paths, page versions or message ids returned, checks that passed) so nothing is redone. Under "Critical Context" keep every identifier the task still needs: slugs, deal ids, dates and date ranges, expected_version values, upload ids, SHA-256 hashes, recipient addresses, and the exact wording of any error still unresolved. Record which tool calls succeeded so the agent does not repeat a write.`
+This conversation is an UNATTENDED scheduled task: no user will answer questions, and the agent continues from this summary plus the files in its workspace. Under "Progress / Done" list every completed step WITH its concrete result (numbers computed, files written and their paths, page versions or message ids returned, checks that passed) so nothing is redone. Under "Critical Context" keep every identifier the task still needs that these messages produced: slugs, deal ids, dates and date ranges, expected_version values, upload ids, SHA-256 hashes, recipient addresses a tool looked up, and the exact wording of any error still unresolved. The task prompt itself — its recipients, targets and required actions — is the unseen opening message: it still governs the run, so do not restate, doubt or mark any part of it as pending confirmation. Record which tool calls succeeded so the agent does not repeat a write.`
 
 const compactionSummarizeUpdateAddendum = `
 
