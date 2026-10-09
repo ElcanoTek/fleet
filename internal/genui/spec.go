@@ -42,10 +42,17 @@ import (
 // one tool call can cost in context; they are not operator knobs, because a
 // card valid on one fleet must render on another.
 const (
-	MaxSpecBytes = 256 << 10
-	MaxNodes     = 800
-	MaxDepth     = 12
-	MaxOptions   = 2000
+	// MaxSpecBytes keeps a card's tool call within the size the agent loop
+	// replays to the model verbatim (agentcore.HardMaxToolOutputBytes; a
+	// larger input is replaced by a short envelope, and the model would lose
+	// the card it is waiting on). Pinned by a test in internal/agentcore.
+	MaxSpecBytes = 128 << 10
+	// MaxSubmissionBytes mirrors MAX_SUBMISSION_BYTES in
+	// web/src/app/chat/ui/genui/model.ts: the largest answer a card sends.
+	MaxSubmissionBytes = 960 << 10
+	MaxNodes           = 800
+	MaxDepth           = 12
+	MaxOptions         = 2000
 	// MaxChoiceItems bounds a multi_select / include_exclude value (one chip
 	// each): no more than the options there can be, custom entries included.
 	MaxChoiceItems = MaxOptions
@@ -56,7 +63,10 @@ const (
 	// MaxCardRows bounds the rows and display entries a whole card renders
 	// (table rows plus every badges / facts / status_list / diff entry), so
 	// many capped lists cannot add up to a frozen tab.
-	MaxCardRows        = 2000
+	MaxCardRows = 2000
+	// MaxCardChartPoints bounds chart marks across the card (points ×
+	// series, each drawn and listed in the chart's data table).
+	MaxCardChartPoints = 2 * MaxChartSeries * MaxChartPoints
 	MaxTableColumns    = 20
 	MaxChartSeries     = 8
 	MaxChartPoints     = 200
@@ -354,8 +364,9 @@ type validator struct {
 	// gates on the path to each input.
 	reach map[string]bool
 	gates map[string]gated
-	// rows counts the card's table rows and display entries (MaxCardRows).
-	rows int
+	// rows counts the card's table rows and display entries (MaxCardRows);
+	// points its chart marks (MaxCardChartPoints).
+	rows, points int
 }
 
 type condRef struct {
@@ -945,6 +956,33 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 	}
 }
 
+// requiredMinChars is the least text a validating submit must carry: the
+// min_length of every required text input that is always shown, times the
+// items its repeater starts with (the user can remove items only down to
+// min_items).
+func (v *validator) requiredMinChars() int {
+	total := 0
+	for id, f := range v.fields {
+		if f.typ != "text_input" || f.obj == nil {
+			continue
+		}
+		req, _ := f.obj["required"].(bool)
+		lo, _ := f.obj["min_length"].(float64)
+		if !req || lo <= 0 || len(v.gates[id].shows) > 0 {
+			continue
+		}
+		n := 1
+		if rep, ok := v.fields[f.repeater]; ok && rep.obj != nil {
+			n = 0
+			if m, ok := rep.obj["min_items"].(float64); ok && m > 0 {
+				n = int(min(m, MaxRepeaterItems))
+			}
+		}
+		total += int(min(lo, MaxStringLen)) * n
+	}
+	return total
+}
+
 // countRows adds a list's entries to the card-wide budget, reporting the
 // list that first goes over it.
 func (v *validator) countRows(path string, n int) {
@@ -1258,6 +1296,11 @@ func (v *validator) chartRules(path string, obj map[string]any) {
 	series, _ := obj["series"].([]any)
 	if len(series) > MaxChartSeries {
 		v.addf(path+".series", "at most %d series", MaxChartSeries)
+	}
+	before := v.points
+	v.points += len(labels) * max(1, len(series))
+	if before <= MaxCardChartPoints && v.points > MaxCardChartPoints {
+		v.addf(path, "the card's charts draw more than %d points in all (points × series); summarize or split it across cards", MaxCardChartPoints)
 	}
 	for i, s := range series {
 		if m, ok := s.(map[string]any); ok {
@@ -1626,6 +1669,9 @@ func (v *validator) actions(raw any, hasInput bool) {
 		validating := actKind != "message" && obj["validate"] != false
 		if (vis != "" || dis != "") && neverUsable(vis, dis, v.inputKinds(validating)) {
 			v.addf(ap, "can never be pressed: whatever the inputs are, it is hidden or disabled (check visible_if and disabled_if together)")
+		}
+		if n := v.requiredMinChars(); validating && n > MaxSubmissionBytes {
+			v.addf(ap, "can never send: the required fields' min_length add up to %d characters, more than one answer carries (%d bytes); lower them or split the card", n, MaxSubmissionBytes)
 		}
 		kind, _ := obj["kind"].(string)
 		if kind == "" {

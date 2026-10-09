@@ -157,7 +157,34 @@ const MAX_DRAFTS = 20;
 // the resend made from it: once the transcript's answer is that one, the
 // draft is spent even though resending identical values leaves `after`
 // matching too.
+// `after` and `sent` are stored as digests (keyDigest), not the answer keys
+// themselves: an answer key embeds the whole answer, so a near-limit answer
+// would otherwise be stored two or three times over in one draft.
 type StoredDraft = { values: Values; at: number; after: string; cleared?: string[]; sent?: string };
+
+// keyDigest stands in for an answer key in storage: its length and a 53-bit
+// hash (cyrb53). "" (no answer yet) stays "". Recent digests are memoized:
+// a key is hashed once, not on every render that compares it.
+const digests = new Map<string, string>();
+export function keyDigest(key: string): string {
+  if (key === "") return "";
+  let d = digests.get(key);
+  if (d === undefined) {
+    let h1 = 0xdeadbeef;
+    let h2 = 0x41c6ce57;
+    for (let i = 0; i < key.length; i++) {
+      const c = key.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 2654435761);
+      h2 = Math.imul(h2 ^ c, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    d = `${key.length}:${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)}`;
+    if (digests.size >= 64) digests.delete(digests.keys().next().value as string);
+    digests.set(key, d);
+  }
+  return d;
+}
 
 function readDraft(key: string): StoredDraft | null {
   const raw = window.localStorage.getItem(key);
@@ -175,7 +202,8 @@ function loadDraft(cardId: string, answerKey: string): StoredDraft | null {
   const key = DRAFT_PREFIX + cardId;
   try {
     const d = readDraft(key);
-    if (d && Date.now() - d.at <= DRAFT_TTL_MS && d.after === answerKey && draftSent(cardId, d) !== answerKey) return d;
+    const k = keyDigest(answerKey);
+    if (d && Date.now() - d.at <= DRAFT_TTL_MS && d.after === k && draftSent(cardId, d) !== k) return d;
     window.localStorage.removeItem(key);
     return null;
   } catch {
@@ -228,20 +256,21 @@ function saveDraft(cardId: string, values: Values | null, after = "", cleared: I
     // Pruning scans every draft: only when this card starts one, not per edit.
     if (window.localStorage.getItem(key) === null) pruneDrafts(key);
     sentMemory.delete(cardId);
-    putDraft(key, JSON.stringify({ values, at: Date.now(), after, cleared: [...cleared] }));
+    putDraft(key, JSON.stringify({ values, at: Date.now(), after: keyDigest(after), cleared: [...cleared] }));
   } catch {
     // Private mode: a draft is a convenience, never state we rely on.
   }
 }
 
-/** Writes a draft; true once stored. */
+/** Writes a draft (or a hold); true once stored. */
 function putDraft(key: string, json: string): boolean {
   try {
     window.localStorage.setItem(key, json);
     return true;
   } catch {
     // A long pasted list can fill the origin's quota. Only now, make room
-    // by dropping other drafts, least recently edited first, until it fits.
+    // by dropping other drafts, least recently edited first,
+    // until it fits.
   }
   const others = otherDrafts(key);
   for (;;) {
@@ -263,8 +292,9 @@ function putDraft(key: string, json: string): boolean {
 const sentMemory = new Map<string, string>();
 
 /** Records (or, with "", clears) the answer key a draft was resent as. */
-function markDraftSent(storeId: string, sent: string) {
+function markDraftSent(storeId: string, sentKey: string) {
   const key = DRAFT_PREFIX + storeId;
+  const sent = keyDigest(sentKey);
   if (sent) sentMemory.set(storeId, sent);
   else sentMemory.delete(storeId);
   try {
@@ -276,7 +306,7 @@ function markDraftSent(storeId: string, sent: string) {
   }
 }
 
-/** The answer key a draft was resent as (stored, or kept in memory). */
+/** The digest of the answer a draft was resent as (stored, or in memory). */
 function draftSent(storeId: string, d: StoredDraft): string | undefined {
   return d.sent ?? sentMemory.get(storeId);
 }
@@ -330,7 +360,7 @@ export function resetPendingHolds() {
 function loadPending(cardId: string, currentKey: string): string | null {
   const mem = pendingMemory.get(cardId);
   if (mem) {
-    if (Date.now() - mem.at <= PENDING_TTL_MS && mem.after === currentKey) return mem.action;
+    if (Date.now() - mem.at <= PENDING_TTL_MS && mem.after === keyDigest(currentKey)) return mem.action;
     pendingMemory.delete(cardId);
   }
   try {
@@ -344,17 +374,20 @@ function loadPending(cardId: string, currentKey: string): string | null {
     // A hold typed against another answer is not this tab's: its answer has
     // moved on here. It is left in place (not removed) for a tab whose
     // transcript has not caught up yet; the TTL clears it.
-    return v.after === currentKey ? v.action : null;
+    return v.after === keyDigest(currentKey) ? v.action : null;
   } catch {
     return null;
   }
 }
 
-function savePending(cardId: string, action: string | null, after = "", send?: string) {
+function savePending(cardId: string, action: string | null, afterKey = "", send?: string) {
+  const after = keyDigest(afterKey);
   if (action) pendingMemory.set(cardId, { action, at: Date.now(), after, send });
   else pendingMemory.delete(cardId);
   try {
-    if (action) window.localStorage.setItem(PENDING_PREFIX + cardId, JSON.stringify({ action, at: Date.now(), after, send }));
+    // A hold is small, but a full quota would still refuse it and leave
+    // other tabs unaware of the send: make room by dropping drafts.
+    if (action) putDraft(PENDING_PREFIX + cardId, JSON.stringify({ action, at: Date.now(), after, send }));
     else window.localStorage.removeItem(PENDING_PREFIX + cardId);
   } catch {
     // Convenience only, like drafts.
@@ -533,7 +566,7 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     // older submission is a rollback too.
     setSeenMessageId(submission?.messageId ?? reply?.messageId ?? null);
     const edit = rolledBack && !readOnly ? peekDraft(storeId) : null;
-    if (edit && edit.after === answerKey && draftSent(storeId, edit) !== answerKey) {
+    if (edit && edit.after === keyDigest(answerKey) && draftSent(storeId, edit) !== keyDigest(answerKey)) {
       replaceValues(normalizeValues(spec, edit.values));
       // Editing is a mode of an answered card; with none left it is just open.
       setEditing(!!submission || !!reply);

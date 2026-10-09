@@ -196,6 +196,35 @@ func TestCardRowBudget(t *testing.T) {
 	}
 }
 
+func TestCardChartPointBudget(t *testing.T) {
+	labels := make([]string, MaxChartPoints)
+	vals := make([]string, MaxChartPoints)
+	for i := range labels {
+		labels[i] = `"l"`
+		vals[i] = "0"
+	}
+	series := make([]string, MaxChartSeries)
+	for i := range series {
+		series[i] = `{"name":"s","values":[` + strings.Join(vals, ",") + `]}`
+	}
+	chart := `{"type":"chart","kind":"bar","labels":[` + strings.Join(labels, ",") + `],"series":[` + strings.Join(series, ",") + `]}`
+	charts := func(n int) string {
+		cs := make([]string, n)
+		for i := range cs {
+			cs[i] = chart
+		}
+		return `{"title":"x","components":[` + strings.Join(cs, ",") + `]}`
+	}
+	full := MaxCardChartPoints / (MaxChartSeries * MaxChartPoints)
+	if _, issues := Validate([]byte(charts(full))); len(issues) != 0 {
+		t.Fatalf("at the budget: %v", issues)
+	}
+	_, issues := Validate([]byte(charts(full + 1)))
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, "points in all") {
+		t.Fatalf("over the budget: %v", issues)
+	}
+}
+
 // A list default is capped by the entries the browser keeps from it: one
 // string splits on its line breaks (listCount), so it can carry more than
 // MaxListItems entries in a single element.

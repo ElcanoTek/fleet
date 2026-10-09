@@ -133,14 +133,17 @@ operator or function becomes `null`. Both run `internal/genui/testdata/expressio
 
 These are protocol constants in `internal/genui/spec.go`, not operator knobs:
 
-- 256 KiB per card, 800 components, 12 levels of nesting
+- 128 KiB per card (the size the agent loop replays to the model verbatim,
+  `agentcore.HardMaxToolOutputBytes`), 800 components, 12 levels of nesting
 - 2,000 options per input, and 2,000 chosen entries per `multi_select` /
   `include_exclude` (custom entries included); 500 table rows, 20 columns;
   500 entries per `badges` / `facts` / `status_list` / `diff` list, and
   2,000 table rows and list entries across the whole card
-- 8 chart series of 200 points, 6 actions
+- 8 chart series of 200 points, and 3,200 points × series across the card;
+  6 actions
 - 200 repeater items, 20,000 `list_input` lines
-- 500-character expressions; `min_length` at most 20,000
+- 500-character expressions; `min_length` at most 20,000, and the required
+  fields' `min_length` must add up to an answer that can be sent
 
 One limit is the web card's, not the spec's: a single answer may be at most
 960 KiB once JSON-escaped (`MAX_SUBMISSION_BYTES` in `genui/model.ts`), so it
@@ -189,6 +192,12 @@ to change. The loop that replaces a bespoke form:
   tool call. The TUI prints a line pointing to the web chat, and the user can
   reply in text. ACP clients get no such pointer: they show the raw tool call. Shared and read-only transcripts carry text only, so they show
   the submitted-answers bubble but not the card.
+- **The card leaves the model's context like any other tool call.** A card
+  fits the size the agent loop replays verbatim, but when a long conversation
+  forces context reduction, an old card's definition can be summarized away
+  like any other tool payload while the card stays live in the browser. Its
+  answer still names the card and keys every value by field id; the model
+  sees the labels again only if it re-shows the card.
 - **No per-deployment switch.** The tool is part of the interactive roster for
   every deployment. An operator who wants it off has no setting yet.
 - **Drafts are per browser, and bounded.** Unsent answers persist in

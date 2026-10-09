@@ -116,6 +116,9 @@ describe("interaction", () => {
     expect(screen.queryByTestId("genui-submitted")).toBeNull();
     expect(screen.getByLabelText(/Name/)).toBeEnabled();
     expect(window.localStorage.getItem("fleet.genui.draft.lock_card")).toContain("Ada");
+    // The answer it was sent as is stored as a digest, not a second copy of
+    // the values (a near-limit answer would otherwise fill the quota).
+    expect(window.localStorage.getItem("fleet.genui.draft.lock_card")!.split("Ada")).toHaveLength(2);
     // The user message lands: the card locks. The draft stays stored (the
     // optimistic answer may still be refused) but is stale against it.
     const submission = parseSubmissionMessage(onSubmit.mock.calls[0][0]);
