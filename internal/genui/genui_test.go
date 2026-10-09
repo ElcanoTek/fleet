@@ -468,3 +468,17 @@ func TestRequiredCollectionChoiceCountsInAnswer(t *testing.T) {
 		}
 	}
 }
+
+// A required selectable table sends at least one row key per item.
+func TestRequiredTableSelectionCountsInAnswer(t *testing.T) {
+	long := strings.Repeat("k", 2000)
+	card := func(req string) string {
+		return `{"title":"x","components":[{"type":"repeater","id":"r","label":"R","min_items":200,"max_items":200,"fields":[{"type":"table","id":"t","label":"T","select":"single"` + req + `,"row_key":"id","columns":[{"key":"id"}],"rows":[{"id":"` + long + `"}]}]}],"actions":[{"id":"go","label":"Go"}]}`
+	}
+	if _, issues := Validate([]byte(card(`,"required":true`))); len(issues) == 0 || !strings.Contains(fmt.Sprint(issues), "more than one answer carries") {
+		t.Fatalf("required: %v", issues)
+	}
+	if _, issues := Validate([]byte(card(""))); len(issues) != 0 {
+		t.Fatalf("optional: %v", issues)
+	}
+}

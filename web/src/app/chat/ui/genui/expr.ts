@@ -283,11 +283,23 @@ export function parseExpr(src: string): Node {
 // ── evaluation ──
 
 /** Normalize arbitrary card data into the Value domain (drops functions etc.). */
+// A scope list is normalized once per array: card values are replaced, never
+// mutated, so the same array always normalizes to the same result — and
+// keeping that result one array lets the join and unique caches below hit
+// across every template that reads the list.
+const normCache = new WeakMap<unknown[], Value[]>();
+
 function norm(v: unknown): Value {
   if (v === null || v === undefined) return null;
   if (typeof v === "boolean" || typeof v === "string") return v;
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
-  if (Array.isArray(v)) return v.map(norm);
+  if (Array.isArray(v)) {
+    const hit = normCache.get(v);
+    if (hit) return hit;
+    const out = v.map(norm);
+    normCache.set(v, out);
+    return out;
+  }
   if (typeof v === "object") return v as { [k: string]: Value };
   return null;
 }
@@ -324,7 +336,10 @@ export function toText(v: Value): string {
     // Arithmetic noise (0.1 + 0.2 = 0.30000000000000004) sits within a few
     // units in the last place of a 15-digit value; show that value then.
     // Any other number keeps its shortest exact form, so 1e-11 and
-    // 1.234567890123456 are shown as they are.
+    // 1.234567890123456 are shown as they are. From 1e13 up a 15-digit
+    // value keeps under two decimals, and a few units in the last place are
+    // a real fraction (1000000000000000.1), so large values are always exact.
+    if (Math.abs(v) >= 1e13) return String(v);
     const short = Number(v.toPrecision(15));
     return String(Math.abs(short - v) <= 4 * Number.EPSILON * Math.abs(v) ? short : v);
   }
@@ -425,6 +440,19 @@ function equal(a: Value, b: Value): boolean {
 // of that value, and to true/false as 1/0; any other string or boolean only
 // to itself; null to null; an object or list to nothing. Each set below
 // indexes one of those cases.
+// One result per source list: many templates may unique() the same list,
+// which is one array object for as long as it is unchanged, so it is
+// deduplicated once and the result (also one array) reaches joinList's cache.
+const uniqueCache = new WeakMap<Value[], Value[]>();
+
+function uniqueOf(items: Value[]): Value[] {
+  const hit = uniqueCache.get(items);
+  if (hit) return hit;
+  const out = uniqueValues(items);
+  uniqueCache.set(items, out);
+  return out;
+}
+
 function uniqueValues(items: Value[]): Value[] {
   const out: Value[] = [];
   let sawNull = false;
@@ -511,7 +539,7 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
     if (typeof v === "object") return Object.values(v).every((x) => Array.isArray(x) && x.length === 0);
     return false;
   },
-  unique: ([v]) => uniqueValues(list(v)),
+  unique: ([v]) => uniqueOf(list(v)),
 };
 
 function member(obj: Value, name: string): Value {

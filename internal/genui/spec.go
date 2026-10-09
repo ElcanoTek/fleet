@@ -965,8 +965,8 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 // measured as the browser measures it (submissionBytes in model.ts: the
 // message JSON-escaped). Every input a send can carry costs its key, quoting
 // and smallest value (collect sends visible inputs even when empty), and a
-// required text input its min_length (a required option input its shortest
-// option) on top; a repeater's fields count once
+// required text input its min_length (a required option input or selectable
+// table its shortest option or row key) on top; a repeater's fields count once
 // per item it starts with (the user can remove items only down to
 // min_items). Inputs behind visible_if count too: which of them a send
 // carries depends on the state the action is pressed in, so the sum is a
@@ -1018,6 +1018,11 @@ func (v *validator) requiredMinBytes() int {
 				if lo, _ := f.obj["min_length"].(float64); lo > 0 {
 					size += int(min(lo, MaxStringLen))
 				}
+			case "table":
+				// A required selectable table sends at least one row key.
+				if short, ok := shortestRowKey(f.obj); ok {
+					size += short
+				}
 			case "select", "choice", "multi_select", "include_exclude":
 				// The shortest option the answer can be (a required
 				// collection holds at least one entry; free entry can be
@@ -1037,6 +1042,24 @@ func (v *validator) requiredMinBytes() int {
 		total += size * n
 	}
 	return total
+}
+
+// shortestRowKey is the wire size of a selectable table's shortest row key.
+func shortestRowKey(obj map[string]any) (int, bool) {
+	key, _ := obj["row_key"].(string)
+	rows, _ := obj["rows"].([]any)
+	short, found := 0, false
+	for _, r := range rows {
+		m, _ := r.(map[string]any)
+		k, ok := m[key].(string)
+		if !ok {
+			continue
+		}
+		if n := wireLen(k); !found || n < short {
+			short, found = n, true
+		}
+	}
+	return short, found
 }
 
 // wireLen is a string value's size as the browser measures an answer: JSON

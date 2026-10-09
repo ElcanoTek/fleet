@@ -134,6 +134,13 @@ describe("bounded display", () => {
     expect(evaluate("len(join(few, sep))", { few: ["a", "b"], sep: "y".repeat(20000) })).toBe(20002);
   });
 
+  it("deduplicates a list once, however many templates read it", () => {
+    const lines = ["a", "b", "a"];
+    const u = evaluate("unique(lines)", { lines });
+    expect(u).toEqual(["a", "b"]);
+    expect(evaluate("unique(lines)", { lines })).toBe(u);
+  });
+
   it("converts case once per text and keeps the result bounded", () => {
     // "ß" upper-cases to "SS": the conversion can outgrow its input.
     const lines = Array.from({ length: 20000 }, () => "ß".repeat(30));
@@ -151,6 +158,8 @@ describe("bounded display", () => {
     expect(renderTemplate("{{ n }}", { n: 1234567890123.5 })).toBe("1234567890123.5");
     expect(renderTemplate("{{ n }}", { n: 999999999999.5 })).toBe("999999999999.5");
     expect(renderTemplate("{{ n }}", { n: 1.234567890123456 })).toBe("1.234567890123456");
+    expect(renderTemplate("{{ n }}", { n: 1000000000000000.1 })).toBe("1000000000000000.1");
+    expect(renderTemplate("{{ n }}", { n: 12345678901234.5 })).toBe("12345678901234.5");
   });
 
   it("averages huge values without overflowing", () => {
