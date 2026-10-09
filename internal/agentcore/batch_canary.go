@@ -118,19 +118,16 @@ func canaryShape(rawInput string) string {
 }
 
 // inlineValuesDigest is the order-insensitive digest of an inline values list:
-// each element is trimmed when it is a string and JSON-encoded (so its type
-// and boundaries survive — "1" is not 1, and an element containing a newline
-// cannot split into two), the encodings sorted, and the sorted list
-// JSON-encoded again before hashing. Case is kept: a bundle's values (app
-// bundle ids, segment names) may be case-sensitive, so a re-cased set needs
-// its own canary — the fail-closed direction, and a deliberate deviation from
-// Cutlass's case-folding (#1712).
+// each element is JSON-encoded exactly as sent (so its type and boundaries
+// survive — "1" is not 1, and an element containing a newline cannot split
+// into two), the encodings sorted, and the sorted list JSON-encoded again
+// before hashing. Neither case nor surrounding whitespace is normalized: a
+// bundle's values (app bundle ids, segment names, labels) may treat either as
+// data, so a re-cased or re-spaced set needs its own canary — the fail-closed
+// direction, and a deliberate deviation from Cutlass's trim + case-fold (#1712).
 func inlineValuesDigest(vals []any) string {
 	norm := make([]string, 0, len(vals))
 	for _, v := range vals {
-		if str, ok := v.(string); ok {
-			v = strings.TrimSpace(str)
-		}
 		enc, err := json.Marshal(v)
 		if err != nil {
 			enc = []byte(fmt.Sprintf("%q", fmt.Sprint(v)))

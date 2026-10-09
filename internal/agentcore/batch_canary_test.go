@@ -123,8 +123,14 @@ func TestBatchCanary_Gate(t *testing.T) {
 		},
 		{
 			name:   "the same inline values in any order ride the canary",
-			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["b.example"," a.example"]}`, successRows("1"), false}},
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":["b.example","a.example"]}`, successRows("1"), false}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values":["a.example","b.example"]}`,
+		},
+		{
+			name:   "re-spaced inline values need their own canary",
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values":[" foo"]}`, successRows("1"), false}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values":["foo"]}`,
+			blocked: true, wantText: "CANARY",
 		},
 		{
 			name:   "re-cased inline values need their own canary",
