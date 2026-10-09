@@ -789,6 +789,18 @@
     ]
    },
    "valid": true
+  },
+  {
+   "name": "required slider without value starts at min",
+   "component": {
+    "type": "slider",
+    "id": "f",
+    "label": "F",
+    "min": 2,
+    "max": 10,
+    "required": true
+   },
+   "valid": true
   }
  ]
 }

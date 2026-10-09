@@ -5623,6 +5623,166 @@
      }
     ]
    }
+  },
+  {
+   "name": "disabled required slider answered by its min",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "slider",
+      "id": "s",
+      "label": "S",
+      "min": 0,
+      "max": 10,
+      "required": true,
+      "disabled": true
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "replaces with surrounding spaces",
+   "valid": false,
+   "error_contains": "without surrounding spaces",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text",
+      "text": "hi"
+     }
+    ],
+    "replaces": "call_1 "
+   }
+  },
+  {
+   "name": "link url with a port but no host",
+   "valid": false,
+   "error_contains": "with a host",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "link",
+      "text": "Open",
+      "url": "https://:443"
+     }
+    ]
+   }
+  },
+  {
+   "name": "link url with an out-of-range port",
+   "valid": false,
+   "error_contains": "with a host",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "link",
+      "text": "Open",
+      "url": "https://example.com:70000"
+     }
+    ]
+   }
+  },
+  {
+   "name": "link url with a host and port",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "link",
+      "text": "Open",
+      "url": "https://example.com:8443/x"
+     }
+    ]
+   }
+  },
+  {
+   "name": "validating submit shown only past a number's max",
+   "valid": false,
+   "error_contains": "can never be pressed",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "number",
+      "id": "n",
+      "label": "N",
+      "min": 0,
+      "max": 10
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "visible_if": "n > 10"
+     }
+    ]
+   }
+  },
+  {
+   "name": "non-validating submit past a number's max is allowed",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "number",
+      "id": "n",
+      "label": "N",
+      "min": 0,
+      "max": 10
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "validate": false,
+      "visible_if": "n > 10"
+     }
+    ]
+   }
+  },
+  {
+   "name": "number that can be hidden is not bound by its range",
+   "valid": true,
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "g",
+      "label": "G"
+     },
+     {
+      "type": "number",
+      "id": "n",
+      "label": "N",
+      "min": 0,
+      "max": 10,
+      "visible_if": "g"
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go",
+      "visible_if": "n > 10"
+     }
+    ]
+   }
   }
  ]
 }

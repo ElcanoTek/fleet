@@ -48,17 +48,27 @@ type numAtom struct {
 	c     float64
 }
 
-// inputKind is what the check knows about one input: its kind and, for a
-// slider, the values its range control can actually hold.
+// inputKind is what the check knows about one input: its kind and, when
+// known, the values it can take (see numDomain).
 type inputKind struct {
 	kind   string
-	domain *sliderDomain
+	domain *numDomain
 }
 
-type sliderDomain struct{ min, max, step float64 }
+// numDomain is the values a number input can hold in the state being
+// judged: a slider's range control (min..max on its step grid), or a number
+// input that a validating action requires to pass its own min / max / step
+// (blank allowed unless required). Absent bounds are unbounded; step 0 is
+// no grid.
+type numDomain struct {
+	min, max       float64
+	hasMin, hasMax bool
+	step           float64
+	blank          bool
+}
 
-// maxDomainPoints bounds the slider positions scanned for representatives;
-// a finer slider is treated as any number (less precise, never wrong).
+// maxDomainPoints bounds the grid positions scanned for representatives;
+// a finer grid is treated as any number in range (less precise, never wrong).
 const maxDomainPoints = 100000
 
 // Input kinds the check understands (see validator.inputKinds).
@@ -343,10 +353,23 @@ func (s *skeleton) candidates(field string) []value {
 		}
 	}
 	cs = append(cs, 0) // truthiness turns on zero
-	sort.Float64s(cs)
-	if d := s.kinds[field].domain; d != nil && (d.max-d.min)/d.step < maxDomainPoints {
-		return s.domainCandidates(field, d)
+	d := s.kinds[field].domain
+	if d != nil && d.hasMin && d.hasMax && d.step > 0 && (d.max-d.min)/d.step < maxDomainPoints {
+		out := s.domainCandidates(field, d)
+		if d.blank {
+			out = append(out, value{null: true})
+		}
+		return out
 	}
+	// The bounds are breakpoints too, so every region that meets the range
+	// keeps a representative inside it when out-of-range values are dropped.
+	if d != nil && d.hasMin {
+		cs = append(cs, d.min)
+	}
+	if d != nil && d.hasMax {
+		cs = append(cs, d.max)
+	}
+	sort.Float64s(cs)
 	var out []value
 	for i, c := range cs {
 		if i > 0 && c == cs[i-1] {
@@ -360,6 +383,19 @@ func (s *skeleton) candidates(field string) []value {
 		out = append(out, value{n: c})
 	}
 	out = append(out, value{n: cs[len(cs)-1] + 1})
+	if d != nil {
+		kept := out[:0]
+		for _, v := range out {
+			if (!d.hasMin || v.n >= d.min) && (!d.hasMax || v.n <= d.max) {
+				kept = append(kept, v)
+			}
+		}
+		out = kept
+		if d.blank {
+			out = append(out, value{null: true})
+		}
+		return out
+	}
 	if s.kinds[field].kind == kindNumber {
 		out = append(out, value{null: true})
 	}
@@ -368,7 +404,7 @@ func (s *skeleton) candidates(field string) []value {
 
 // domainCandidates picks, among a slider's positions, one per distinct
 // truth assignment of the field's atoms.
-func (s *skeleton) domainCandidates(field string, d *sliderDomain) []value {
+func (s *skeleton) domainCandidates(field string, d *numDomain) []value {
 	var mine []*numAtom
 	for _, a := range s.nums {
 		if a != nil && a.field == field {

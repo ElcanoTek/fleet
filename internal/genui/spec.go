@@ -333,8 +333,10 @@ type validator struct {
 	// component visible_if / disabled_if references, checked once every
 	// input is declared (a condition may read an input declared later).
 	conds []condRef
-	// reach: input ids the user can ever edit (reachableInputs).
+	// reach: input ids the user can ever edit (reachableInputs), and the
+	// gates on the path to each input.
 	reach map[string]bool
+	gates map[string]gated
 }
 
 type condRef struct {
@@ -391,6 +393,7 @@ func Validate(raw []byte) (Card, []Issue) {
 
 	var gates map[string]gated
 	v.reach, gates = reachableInputs(comps)
+	v.gates = gates
 	if cyc := visibilityCycles(gates); len(cyc) > 0 {
 		for _, id := range cyc {
 			if f, ok := v.fields[id]; ok {
@@ -398,7 +401,7 @@ func Validate(raw []byte) (Card, []Issue) {
 			}
 		}
 	}
-	kinds := v.inputKinds()
+	kinds := v.inputKinds(false)
 	for _, c := range v.conds {
 		switch {
 		case neverTrue(c.src, kinds):
@@ -411,6 +414,10 @@ func Validate(raw []byte) (Card, []Issue) {
 	if r, ok := top["replaces"]; ok {
 		if s, isStr := r.(string); !isStr || strings.TrimSpace(s) == "" {
 			v.addf("replaces", "must be the card_id string of an earlier card")
+		} else if s != strings.TrimSpace(s) {
+			// The browser matches the id exactly; padding would leave the
+			// old card live while the model is told it collapsed.
+			v.addf("replaces", "must be the card_id exactly, without surrounding spaces")
 		}
 	}
 	v.fieldErrors(top["field_errors"])
@@ -485,14 +492,31 @@ func (v *validator) component(path string, raw any, depth int, repeater string) 
 // can reason about, by kind. Ids are unique across the card, so within one
 // condition a name always means one value (a repeater field's, inside its
 // item).
-func (v *validator) inputKinds() map[string]inputKind {
+// validating: the kinds as a validating submit action sees them, where a
+// number input must also pass its own checks to be submitted (below).
+func (v *validator) inputKinds(validating bool) map[string]inputKind {
 	out := map[string]inputKind{}
 	for id, f := range v.fields {
 		switch f.typ {
 		case "toggle":
 			out[id] = inputKind{kind: kindBool}
 		case "number":
-			out[id] = inputKind{kind: kindNumber}
+			k := inputKind{kind: kindNumber}
+			// A validating action submits only while each visible input
+			// passes checkField, so a number it reads must then lie within
+			// its min / max on its step grid. That binds only an input that
+			// is always shown and editable: a hidden one is not validated,
+			// so it could hold any value it was given before it was hidden.
+			if g := v.gates[id]; validating && len(g.shows) == 0 && !g.fixed && f.repeater == "" {
+				lo, okLo := f.obj["min"].(float64)
+				hi, okHi := f.obj["max"].(float64)
+				step, _ := f.obj["step"].(float64)
+				req, _ := f.obj["required"].(bool)
+				if okLo || okHi || step > 0 {
+					k.domain = &numDomain{min: lo, max: hi, hasMin: okLo, hasMax: okHi, step: step, blank: !req}
+				}
+			}
+			out[id] = k
 		case "slider":
 			// A range control can only hold min + k*step within [min, max]
 			// (step 1 when unset, as it renders).
@@ -504,7 +528,7 @@ func (v *validator) inputKinds() map[string]inputKind {
 				step, okStep = 1, true
 			}
 			if okLo && okHi && okStep && step > 0 && hi >= lo {
-				k.domain = &sliderDomain{min: lo, max: hi, step: step}
+				k.domain = &numDomain{min: lo, max: hi, hasMin: true, hasMax: true, step: step}
 			}
 			out[id] = k
 		}
@@ -625,8 +649,11 @@ func (v *validator) checkTextProp(path string, pr prop, val any, repeater string
 		v.checkString(path, s)
 		if pr.kind == kURL {
 			u, err := url.Parse(s)
-			if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
-				v.addf(path, "must be an absolute https:// URL")
+			// A host is required (not just a port: "https://:443" has a Host
+			// but no hostname, and browsers reject it), and any port must be
+			// a real one.
+			if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || !portOK(u.Port(), 1) {
+				v.addf(path, "must be an absolute https:// URL with a host")
 			}
 		}
 		if pr.kind == kDate {
@@ -1529,7 +1556,9 @@ func (v *validator) actions(raw any, hasInput bool) {
 		// can never be pressed; see satisfy.go for what is decided.
 		vis, _ := obj["visible_if"].(string)
 		dis, _ := obj["disabled_if"].(string)
-		if (vis != "" || dis != "") && neverUsable(vis, dis, v.inputKinds()) {
+		actKind, _ := obj["kind"].(string)
+		validating := actKind != "message" && obj["validate"] != false
+		if (vis != "" || dis != "") && neverUsable(vis, dis, v.inputKinds(validating)) {
 			v.addf(ap, "can never be pressed: whatever the inputs are, it is hidden or disabled (check visible_if and disabled_if together)")
 		}
 		kind, _ := obj["kind"].(string)
@@ -1580,7 +1609,13 @@ func (v *validator) requiredRules(path, typ string, obj map[string]any) {
 	if req, _ := obj["required"].(bool); !req {
 		return
 	}
-	if dis, _ := obj["disabled"].(bool); dis && !answered(typ, obj["value"]) {
+	val := obj["value"]
+	if _, has := obj["value"]; !has && typ == "slider" {
+		// A slider with no value starts at min (defaultValue in model.ts),
+		// which is a real answer.
+		val = obj["min"]
+	}
+	if dis, _ := obj["disabled"].(bool); dis && !answered(typ, val) {
 		v.addf(path+".required", "a disabled required field needs a value that answers it (the user cannot fill it in); give it one, or drop required or disabled")
 	}
 }
@@ -1666,10 +1701,20 @@ func (v *validator) textValue(path string, obj map[string]any, s string) {
 			v.addf(path, "is not an email address (format \"email\")")
 		}
 	case "url":
-		if u, err := url.Parse(t); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		if u, err := url.Parse(t); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || !portOK(u.Port(), 0) {
 			v.addf(path, "is not an absolute http(s) URL (format \"url\")")
 		}
 	}
+}
+
+// portOK: no port, or a number in [lo, 65535] (the browser's URL parser
+// refuses anything above).
+func portOK(port string, lo int) bool {
+	if port == "" {
+		return true
+	}
+	n, err := strconv.Atoi(port)
+	return err == nil && n >= lo && n <= 65535
 }
 
 // emailRe mirrors EMAIL_RE in web/src/app/chat/ui/genui/model.ts: the HTML

@@ -108,7 +108,7 @@ func TestNumberComparisons(t *testing.T) {
 }
 
 func TestSliderDomain(t *testing.T) {
-	kinds := map[string]inputKind{"s": {kind: kindSlider, domain: &sliderDomain{min: 0, max: 10, step: 1}}}
+	kinds := map[string]inputKind{"s": {kind: kindSlider, domain: &numDomain{min: 0, max: 10, hasMin: true, hasMax: true, step: 1}}}
 	cases := []struct {
 		vis, dis string
 		want     bool
@@ -128,8 +128,33 @@ func TestSliderDomain(t *testing.T) {
 }
 
 func TestSliderDomainDecimals(t *testing.T) {
-	kinds := map[string]inputKind{"s": {kind: kindSlider, domain: &sliderDomain{min: 0, max: 1, step: 0.1}}}
+	kinds := map[string]inputKind{"s": {kind: kindSlider, domain: &numDomain{min: 0, max: 1, hasMin: true, hasMax: true, step: 0.1}}}
 	if neverUsable("s == 0.3", "", kinds) {
 		t.Error("0.3 is a position of a 0..1 slider stepping by 0.1")
+	}
+}
+
+func TestNumberDomainForValidatingActions(t *testing.T) {
+	in := func(d *numDomain) map[string]inputKind {
+		return map[string]inputKind{"n": {kind: kindNumber, domain: d}}
+	}
+	cases := []struct {
+		name     string
+		d        *numDomain
+		vis, dis string
+		want     bool
+	}{
+		{"past max", &numDomain{min: 0, max: 10, hasMin: true, hasMax: true}, "n > 10", "", true},
+		{"below min, blank allowed", &numDomain{min: 0, hasMin: true, blank: true}, "n < 0", "", true}, // blank orders as 0
+		{"below min, required", &numDomain{min: 0, hasMin: true}, "n < 0", "", true},
+		{"within range", &numDomain{min: 0, max: 10, hasMin: true, hasMax: true}, "n > 9", "", false},
+		{"only max", &numDomain{max: 10, hasMax: true}, "n > 10", "", true},
+		{"step grid", &numDomain{min: 0, max: 10, hasMin: true, hasMax: true, step: 2}, "n == 3", "", true},
+		{"no domain", nil, "n > 10", "", false},
+	}
+	for _, c := range cases {
+		if got := neverUsable(c.vis, c.dis, in(c.d)); got != c.want {
+			t.Errorf("%s: neverUsable(%q, %q) = %v, want %v", c.name, c.vis, c.dis, got, c.want)
+		}
 	}
 }
