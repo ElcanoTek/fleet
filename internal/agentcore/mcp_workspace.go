@@ -1,6 +1,9 @@
 package agentcore
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -29,8 +32,10 @@ import (
 //     means run-ledger entries persist across runs/restarts — a dedupe window,
 //     not a per-run ledger.
 //   - Per-run spawns (a scheduled task with an explicit mcp_selection, which
-//     gets its own MCP client) substitute a fresh PerRunMCPWorkspaceDir, giving
-//     cutlass-parity per-run ledger semantics.
+//     gets its own MCP client) substitute StableMCPWorkspaceDir("task-<id>"):
+//     one directory per task occurrence, re-mounted by every retry of that
+//     occurrence (cutlass-parity ledger semantics) and never shared with
+//     another occurrence.
 //
 // A spawn path that has NO directory to offer (workdir == "") DROPS every env
 // key whose value still references the token, so the server sees the var as
@@ -39,13 +44,13 @@ import (
 //
 // ${FLEET_WORKSPACE_ROOT} is the third reserved token: the deployment's
 // workspace root itself — the directory a scheduled run's sandbox works in and
-// the parent of both mcp-shared/ and the minted mcp-runs/ dirs. EVERY spawn
+// the parent of both mcp-shared/ and the per-occurrence mcp-runs/ dirs. EVERY spawn
 // path substitutes it (shared, per-run, broker scope, probe) because there is
 // always exactly one root, so unlike ${FLEET_WORKSPACE} it is never dropped
 // and it creates nothing on disk. A connector that allowlists the files it may
 // read — an outbound mailer's content_file / attachments — declares it so a
 // report the run wrote at the workspace root is admissible: the per-run dir's
-// random suffix is not knowable from inside the sandbox, so pointing such an
+// name is not knowable from inside the sandbox, so pointing such an
 // allowlist at ${FLEET_WORKSPACE} alone leaves the model no path it can name.
 const (
 	// WorkspaceEnvToken is the reserved token as it appears in a manifest env
@@ -213,44 +218,66 @@ func SharedMCPWorkspaceDir() string {
 	return dir
 }
 
-// PerRunMCPWorkspaceDir mints a fresh writable directory for one run's
-// dedicated MCP client (prefix names the run, e.g. "task-<id>-"). The directory
-// is deliberately NOT cleaned up at run end: it holds the run ledger, which is
-// post-run evidence of the critical actions the run recorded (mirroring the
-// cutlass per-run workdir contract). On failure it falls back to the shared
-// per-deployment dir so the spawn still gets managed-run semantics.
-func PerRunMCPWorkspaceDir(prefix string) string {
+// StableMCPWorkspaceDir returns the writable directory for one run's dedicated
+// MCP client, keyed by a caller-supplied occurrence identity (e.g.
+// "task-<uuid>"): <workspace-root>/mcp-runs/<key>. The SAME key always yields
+// the SAME directory, created idempotently, so every attempt of one occurrence
+// (a max_retries retry, a connector-unavailable infra retry, a lease recovery)
+// re-mounts the ledger the earlier attempt wrote. That is the cutlass
+// contract, and it is what lets Fleet's start-of-run create reconciliation
+// tell a retry which deals/emails the previous attempt already booked. A
+// different key (the next recurring occurrence, a re-run, a clone) gets its own
+// directory, so one occurrence's ledger never leaks into another.
+//
+// The directory is deliberately NOT cleaned up here: it holds the run ledger,
+// which is post-run evidence of the critical actions the run recorded, and
+// nothing in Fleet prunes mcp-runs/ today (run-history retention only deletes
+// DB rows). There is NO fallback to the shared per-deployment dir on failure:
+// that dir has no task scoping, so using it would silently mix this task's
+// ledger with every other task's. The error is returned and the run's MCP
+// setup fails loudly instead.
+func StableMCPWorkspaceDir(key string) (string, error) {
+	if err := validateWorkdirKey(key); err != nil {
+		return "", err
+	}
 	base := filepath.Join(mcpWorkspaceRoot(), perRunMCPWorkspaceSubdir)
 	if abs, err := filepath.Abs(base); err == nil {
 		base = abs
 	}
 	if err := os.MkdirAll(base, 0o750); err != nil {
-		log.Printf("mcp workspace: could not create per-run base %s (falling back to shared): %v", base, err)
-		return SharedMCPWorkspaceDir()
+		return "", fmt.Errorf("mcp workspace: create per-run base %s: %w", base, err)
 	}
-	dir, err := os.MkdirTemp(base, sanitizeWorkdirPrefix(prefix))
+	dir := filepath.Join(base, key)
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return "", fmt.Errorf("mcp workspace: create run dir %s: %w", dir, err)
+	}
+	// Mkdir reporting ErrExist is the retry path, but only a real directory
+	// qualifies (a file or symlink squatting on the name must not be mounted).
+	info, err := os.Lstat(dir)
 	if err != nil {
-		log.Printf("mcp workspace: could not mint per-run dir under %s (falling back to shared): %v", base, err)
-		return SharedMCPWorkspaceDir()
+		return "", fmt.Errorf("mcp workspace: stat run dir %s: %w", dir, err)
 	}
-	return dir
+	if !info.IsDir() {
+		return "", fmt.Errorf("mcp workspace: %s exists and is not a directory", dir)
+	}
+	return dir, nil
 }
 
-// sanitizeWorkdirPrefix bounds a caller-supplied per-run prefix to a safe
-// single-segment MkdirTemp pattern (path separators folded, empty defaulted).
-func sanitizeWorkdirPrefix(prefix string) string {
-	prefix = strings.Map(func(r rune) rune {
+// validateWorkdirKey rejects keys that are not a single safe path segment.
+// Unlike a MkdirTemp prefix, a stable key cannot be sanitized by folding
+// characters: two distinct identities must never collapse to one directory.
+func validateWorkdirKey(key string) error {
+	if key == "" || key == "." || key == ".." || len(key) > 200 {
+		return fmt.Errorf("mcp workspace: invalid run key %q", key)
+	}
+	for _, r := range key {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
-			return r
 		default:
-			return '_'
+			return fmt.Errorf("mcp workspace: invalid run key %q", key)
 		}
-	}, strings.TrimSpace(prefix))
-	if prefix == "" {
-		prefix = "run-"
 	}
-	return prefix
+	return nil
 }
 
 // StdioCwd decides the working directory a stdio MCP subprocess launches in.

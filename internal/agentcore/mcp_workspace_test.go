@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -85,9 +86,9 @@ func TestEnvReferencesTaskID(t *testing.T) {
 }
 
 // TestWorkspaceDirs pins the directory layout the substitution offers: both
-// the shared per-deployment dir and minted per-run dirs live under the
+// the shared per-deployment dir and per-run dirs live under the
 // (FLEET_WORKSPACE_ROOT-configurable) workspace root, and per-run dirs are
-// unique per mint.
+// stable per key.
 func TestWorkspaceDirs(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("FLEET_WORKSPACE_ROOT", root)
@@ -100,28 +101,70 @@ func TestWorkspaceDirs(t *testing.T) {
 		t.Errorf("shared dir must be stable across calls: %q vs %q", again, shared)
 	}
 
-	run1 := PerRunMCPWorkspaceDir("task-abc-")
-	run2 := PerRunMCPWorkspaceDir("task-abc-")
+	run1, err := StableMCPWorkspaceDir("task-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run2, err := StableMCPWorkspaceDir("task-def")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if run1 == run2 {
-		t.Errorf("per-run dirs must be unique, both %q", run1)
+		t.Errorf("distinct occurrences must get distinct dirs, both %q", run1)
 	}
 	base := filepath.Join(root, "mcp-runs") + string(filepath.Separator)
 	if !strings.HasPrefix(run1, base) {
 		t.Errorf("per-run dir %q not under %q", run1, base)
 	}
-	if !strings.Contains(filepath.Base(run1), "task-abc-") {
-		t.Errorf("per-run dir %q should carry the run prefix", run1)
+	if filepath.Base(run1) != "task-abc" {
+		t.Errorf("per-run dir %q should be named by the run key", run1)
 	}
 }
 
-// TestSanitizeWorkdirPrefix pins that a hostile/odd prefix cannot escape the
-// per-run base directory via separators or blow up MkdirTemp.
-func TestSanitizeWorkdirPrefix(t *testing.T) {
-	if got := sanitizeWorkdirPrefix("../weird/name "); strings.ContainsAny(got, "/\\ ") {
-		t.Errorf("sanitized prefix %q still contains separators/spaces", got)
+// TestStableMCPWorkspaceDir pins the retry contract: the same key re-mounts the
+// same directory with its ledger intact, and unsafe keys are refused rather
+// than folded onto another occurrence's directory.
+func TestStableMCPWorkspaceDir(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+
+	first, err := StableMCPWorkspaceDir("task-abc")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := sanitizeWorkdirPrefix("  "); got != "run-" {
-		t.Errorf("empty prefix should default to run-, got %q", got)
+	ledger := filepath.Join(first, "creates.jsonl")
+	if err := os.WriteFile(ledger, []byte("{\"deal\":1}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := StableMCPWorkspaceDir("task-abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("same key must reuse the dir: %q vs %q", first, second)
+	}
+	if got, err := os.ReadFile(ledger); err != nil || string(got) != "{\"deal\":1}\n" {
+		t.Fatalf("ledger must survive re-mount: %q, %v", got, err)
+	}
+	if fi, err := os.Stat(first); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("dir mode = %v, %v; want 0700", fi.Mode().Perm(), err)
+	}
+	for _, bad := range []string{"", ".", "..", "../x", "a/b", "a b", "task-é"} {
+		if _, err := StableMCPWorkspaceDir(bad); err == nil {
+			t.Errorf("key %q must be rejected", bad)
+		}
+	}
+}
+
+// TestStableMCPWorkspaceDirFailsLoud pins that a creation failure is an error,
+// never a silent fallback to the unscoped shared dir.
+func TestStableMCPWorkspaceDirFailsLoud(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	if err := os.WriteFile(filepath.Join(root, "mcp-runs"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if dir, err := StableMCPWorkspaceDir("task-abc"); err == nil {
+		t.Fatalf("expected error, got dir %q", dir)
 	}
 }
 

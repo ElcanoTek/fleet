@@ -1430,11 +1430,7 @@ func (r *Runner) prepareTaskMCPWorkspace(task *models.Task, selection agentcore.
 		inventory := r.taskMCPServerInventory()
 		for _, choice := range selection {
 			if inventory[choice.Server].UsesWorkspace {
-				workdir := agentcore.PerRunMCPWorkspaceDir("task-" + task.ID.String() + "-")
-				if err := r.stageTaskInputs(task, filepath.Join(workdir, "inputs")); err != nil {
-					return "", fmt.Errorf("stage task inputs: %w", err)
-				}
-				return workdir, nil
+				return r.stableTaskWorkdir(task)
 			}
 		}
 		return "", nil
@@ -1442,14 +1438,34 @@ func (r *Runner) prepareTaskMCPWorkspace(task *models.Task, selection agentcore.
 	bases := r.mcpBases()
 	for _, choice := range selection {
 		if base, ok := bases[choice.Server]; ok && agentcore.EnvReferencesWorkspace(base.BaseEnv) {
-			workdir := agentcore.PerRunMCPWorkspaceDir("task-" + task.ID.String() + "-")
-			if err := r.stageTaskInputs(task, filepath.Join(workdir, "inputs")); err != nil {
-				return "", fmt.Errorf("stage task inputs: %w", err)
-			}
-			return workdir, nil
+			return r.stableTaskWorkdir(task)
 		}
 	}
 	return "", nil
+}
+
+// stableTaskWorkdir resolves the ${FLEET_WORKSPACE} directory for a task's
+// dedicated MCP client and stages its inputs into it. The directory is keyed by
+// the task row id, which is the occurrence identity: a max_retries retry, an
+// infra retry and a lease recovery all re-run the SAME row, so they re-mount
+// the same ledger (what create reconciliation reads), while a recurring
+// successor, re-run or clone is a new row and gets its own directory. A
+// failure to create it fails the run's MCP setup rather than falling back to
+// the unscoped shared dir.
+//
+// Two attempts of one row never overlap: the row is claimed under a lease and
+// a retry is only queued after the failing attempt returned. A stalled worker
+// whose lease expired and was recovered is the one residual overlap, and it
+// already shares every other side effect of the run.
+func (r *Runner) stableTaskWorkdir(task *models.Task) (string, error) {
+	workdir, err := agentcore.StableMCPWorkspaceDir("task-" + task.ID.String())
+	if err != nil {
+		return "", err
+	}
+	if err := r.stageTaskInputs(task, filepath.Join(workdir, "inputs")); err != nil {
+		return "", fmt.Errorf("stage task inputs: %w", err)
+	}
+	return workdir, nil
 }
 
 func (r *Runner) taskMCPServerInventory() map[string]TaskMCPServerInfo {
@@ -1531,8 +1547,9 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 	}
 
 	// ${FLEET_WORKSPACE} (the reserved manifest-env token): a run with its OWN
-	// client gets a fresh per-run workdir — cutlass-parity managed-run semantics
-	// (per-run ledger, managed-run detection). Minted lazily: a catalog that
+	// client gets a per-task-occurrence workdir that every retry of that
+	// occurrence re-mounts — cutlass-parity managed-run semantics (cross-attempt
+	// ledger, managed-run detection). Minted lazily: a catalog that
 	// never uses the token creates nothing on disk.
 	bases := r.mcpBases()
 	for name, base := range bases {
@@ -1578,6 +1595,11 @@ func (r *Runner) stageTaskInputs(task *models.Task, inputDir string) error {
 	if err := os.MkdirAll(inputDir, 0o750); err != nil {
 		return err
 	}
+	if stale, _ := filepath.Glob(filepath.Join(inputDir, stagingTempPrefix+"*")); len(stale) > 0 {
+		for _, p := range stale {
+			_ = os.Remove(p)
+		}
+	}
 	for i, stored := range task.Files {
 		logical := stored
 		if len(task.FileNames) > 0 {
@@ -1591,23 +1613,44 @@ func (r *Runner) stageTaskInputs(task *models.Task, inputDir string) error {
 		if err != nil {
 			return fmt.Errorf("open %s: %w", stored, err)
 		}
-		dstPath := filepath.Join(inputDir, logical)
-		dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // logical is a validated local basename.
-		if err != nil {
-			_ = src.Close()
-			return fmt.Errorf("create %s: %w", logical, err)
-		}
-		_, copyErr := io.Copy(dst, src)
-		closeErr := errors.Join(src.Close(), dst.Close())
-		if copyErr != nil {
-			return fmt.Errorf("copy %s: %w", logical, copyErr)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("close %s: %w", logical, closeErr)
+		if err := stageInputFile(src, filepath.Join(inputDir, logical), logical); err != nil {
+			return err
 		}
 	}
 	return nil
 }
+
+// stageInputFile copies src to dstPath atomically: the bytes land in a 0o600
+// temp file beside the destination and are renamed over it, so a retry that
+// re-stages the same occurrence's inputs overwrites cleanly and a crash can
+// never leave a half-written file under the logical name. src is closed.
+func stageInputFile(src *os.File, dstPath, logical string) error {
+	defer func() { _ = src.Close() }()
+	tmp, err := os.CreateTemp(filepath.Dir(dstPath), stagingTempPrefix+"*")
+	if err != nil {
+		return fmt.Errorf("create %s: %w", logical, err)
+	}
+	tmpPath := tmp.Name()
+	_, copyErr := io.Copy(tmp, src)
+	closeErr := tmp.Close()
+	if copyErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("copy %s: %w", logical, copyErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close %s: %w", logical, closeErr)
+	}
+	if err := os.Rename(tmpPath, dstPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("stage %s: %w", logical, err)
+	}
+	return nil
+}
+
+// stagingTempPrefix names in-flight staging files; leftovers from a crashed
+// attempt are swept at the start of the next staging pass.
+const stagingTempPrefix = ".stage-"
 
 // mcpBases maps each configured server name to the spawn spec + base env the
 // binder needs. Account overlays are applied by agentcore.BindMCPSelection via
