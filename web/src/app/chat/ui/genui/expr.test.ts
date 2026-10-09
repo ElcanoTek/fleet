@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluate, evaluateSafe, parseExpr, renderTemplate, ExprError, MAX_TEMPLATE_CHARS } from "./expr";
+import { evaluate, evaluateSafe, parseExpr, renderTemplate, ExprError, MAX_EXPR_STRING, MAX_TEMPLATE_CHARS } from "./expr";
 import { loadFixture } from "./fixtures";
 
 type Case = { expr: string; valid: boolean; scope?: Record<string, unknown>; want?: unknown };
@@ -123,12 +123,15 @@ describe("bounded display", () => {
     expect(evaluate('join(lines, "|")', { lines })).toBe(lines.join("|"));
   });
 
-  it("bounds a displayed join however long the separator, but not a computed one", () => {
+  it("bounds every string an expression builds, the same in every context", () => {
     const lines = Array.from({ length: 20000 }, () => "x");
-    const shown = renderTemplate("{{ join(lines, sep) }}", { lines, sep: "y".repeat(20000) });
+    const scope = { lines, sep: "y".repeat(20000) };
+    const shown = renderTemplate("{{ join(lines, sep) }}", scope);
     expect(shown.length).toBeLessThanOrEqual(MAX_TEMPLATE_CHARS + 2);
-    const few = Array.from({ length: 100 }, () => "x");
-    expect(evaluate("len(join(lines, sep)) > 1500000", { lines: few, sep: "y".repeat(20000) })).toBe(true);
+    expect(evaluate("len(join(lines, sep))", scope)).toBe(MAX_EXPR_STRING);
+    expect((evaluate("lines + sep", scope) as string).length).toBeLessThanOrEqual(MAX_EXPR_STRING);
+    // A short join is exact.
+    expect(evaluate("len(join(few, sep))", { few: ["a", "b"], sep: "y".repeat(20000) })).toBe(20002);
   });
 
   it("shows small values instead of rounding them to zero", () => {
@@ -136,6 +139,7 @@ describe("bounded display", () => {
     expect(renderTemplate("{{ a + b }}", { a: 0.1, b: 0.2 })).toBe("0.3");
     expect(renderTemplate("{{ n }}", { n: 1234567890123.5 })).toBe("1234567890123.5");
     expect(renderTemplate("{{ n }}", { n: 999999999999.5 })).toBe("999999999999.5");
+    expect(renderTemplate("{{ n }}", { n: 1.234567890123456 })).toBe("1.234567890123456");
   });
 
   it("averages huge values without overflowing", () => {

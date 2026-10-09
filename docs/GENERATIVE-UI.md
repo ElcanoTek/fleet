@@ -140,14 +140,16 @@ These are protocol constants in `internal/genui/spec.go`, not operator knobs:
   500 entries per `badges` / `facts` / `status_list` / `diff` list, and
   2,000 table rows, list entries and repeater item fields (each starting
   item times its fields, a table or list among them counted per item too)
-  across the whole card
+  across the whole card; a repeater's `max_items` (200 when unset) times its
+  components must fit that budget too, since the user can add items up to it
 - 8 chart series of 200 points, and 3,200 points × series across the card;
   6 actions
 - 200 repeater items, 20,000 `list_input` lines, and 20,000 collection-default
   entries across a repeater's starting items (each item copies its fields' defaults)
-- 500-character expressions, and 2,000 characters of `{{ }}` output per
-  displayed template (longer results are clipped with "…"; conditions see
-  them whole); `min_length` at most 20,000, and the required
+- 500-character expressions; a string an expression builds (`join`, a list
+  shown as text, `+`) is cut at 1,000,000 characters in every context; a
+  displayed template shows at most 2,000 characters of `{{ }}` output
+  (longer results are clipped with "…"); `min_length` at most 20,000, and the required
   fields' `min_length` and shortest required option (all of them, shown or
   not), plus every input's key and quoting, must add up to an answer that can
   be sent; anything else that makes an answer too large is caught in the

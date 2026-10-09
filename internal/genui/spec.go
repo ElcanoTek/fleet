@@ -552,7 +552,8 @@ func (v *validator) inputKinds(validating bool) map[string]inputKind {
 				hi, okHi := f.obj["max"].(float64)
 				step, _ := f.obj["step"].(float64)
 				req, _ := f.obj["required"].(bool)
-				if okLo || okHi || step > 0 {
+				// required alone constrains it too: a blank cannot be sent.
+				if okLo || okHi || step > 0 || req {
 					k.domain = &numDomain{min: lo, max: hi, hasMin: okLo, hasMax: okHi, step: step, blank: !req}
 				}
 			}
@@ -997,7 +998,13 @@ func (v *validator) requiredMinBytes() int {
 		// \"id\":\"\", — the key and an empty value with every quote
 		// escaped, and a comma: id + 12.
 		size := len(id) + 12
-		if req, _ := f.obj["required"].(bool); req {
+		if dis, _ := f.obj["disabled"].(bool); dis {
+			// A disabled input sends its default, whatever it holds.
+			if val, ok := f.obj["value"]; ok {
+				raw, _ := json.Marshal(val)
+				size += wireLen(string(raw))
+			}
+		} else if req, _ := f.obj["required"].(bool); req {
 			switch f.typ {
 			case "text_input":
 				if lo, _ := f.obj["min_length"].(float64); lo > 0 {
@@ -1239,7 +1246,18 @@ func (v *validator) repeaterRules(path string, obj map[string]any, num func(stri
 		// item too, so its rows and points count per item.
 		items := initialItems(obj)
 		rows, points := nestedDisplay(kids)
-		v.countRows(path, items*(max(1, countComponents(kids))+rows))
+		weight := max(1, countComponents(kids)) + rows
+		v.countRows(path, items*weight)
+		// The user can add items up to max_items (200 when unset): each
+		// renders all of the fields, so the most the repeater can grow to
+		// must fit the card-wide row budget on its own.
+		most := float64(MaxRepeaterItems)
+		if okHi {
+			most = min(hi, most)
+		}
+		if int(most)*weight > MaxCardRows {
+			v.addf(path+".max_items", "items render %d components each, so at most %d fit the card (%d); set max_items to %d or fewer, or use fewer fields", weight, MaxCardRows/weight, MaxCardRows, MaxCardRows/weight)
+		}
 		v.countPoints(path, items*points)
 		if n := items * defaultEntries(kids); n > MaxListItems {
 			v.addf(path, "its field defaults hold %d list entries across its %d starting items, more than %d; shorten the defaults or start with fewer items", n, items, MaxListItems)

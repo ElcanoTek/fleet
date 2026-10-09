@@ -263,7 +263,7 @@ func TestRepeaterDefaultEntriesCap(t *testing.T) {
 func TestRepeaterNestedDisplayCountsPerItem(t *testing.T) {
 	rows := strings.TrimSuffix(strings.Repeat(`{"a":"x"},`, 20), ",")
 	card := func(items int) string {
-		return fmt.Sprintf(`{"title":"x","components":[{"type":"repeater","id":"r","label":"R","min_items":%d,"fields":[{"type":"text_input","id":"n","label":"N"},{"type":"table","columns":[{"key":"a"}],"rows":[%s]}]}],"actions":[{"id":"go","label":"Go"}]}`, items, rows)
+		return fmt.Sprintf(`{"title":"x","components":[{"type":"repeater","id":"r","label":"R","min_items":%d,"max_items":%d,"fields":[{"type":"text_input","id":"n","label":"N"},{"type":"table","columns":[{"key":"a"}],"rows":[%s]}]}],"actions":[{"id":"go","label":"Go"}]}`, items, items, rows)
 	}
 	// Each item renders its two components and the table's 20 rows: 22.
 	if _, issues := Validate([]byte(card(MaxCardRows / 22))); len(issues) != 0 {
@@ -272,6 +272,21 @@ func TestRepeaterNestedDisplayCountsPerItem(t *testing.T) {
 	_, issues := Validate([]byte(card(MaxCardRows/22 + 2)))
 	if len(issues) == 0 || !strings.Contains(issues[0].Message, "more than") {
 		t.Fatalf("over the budget: %v", issues)
+	}
+}
+
+// A repeater's items can grow to max_items (200 when unset), so the most it
+// can render must fit the card-wide row budget.
+func TestRepeaterMaxItemsFitsRowBudget(t *testing.T) {
+	fields := strings.TrimSuffix(strings.Repeat(`{"type":"divider"},`, 20), ",")
+	card := func(maxItems string) string {
+		return `{"title":"x","components":[{"type":"repeater","id":"r","label":"R"` + maxItems + `,"fields":[` + fields + `]}],"actions":[{"id":"go","label":"Go"}]}`
+	}
+	if _, issues := Validate([]byte(card(""))); len(issues) == 0 || !strings.Contains(issues[0].Message, "set max_items to 100") {
+		t.Fatalf("default max_items: %v", issues)
+	}
+	if _, issues := Validate([]byte(card(`,"max_items":100`))); len(issues) != 0 {
+		t.Fatalf("max_items 100: %v", issues)
 	}
 }
 

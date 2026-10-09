@@ -321,15 +321,53 @@ export function toText(v: Value): string {
   if (v === null) return "";
   if (typeof v === "number") {
     if (Number.isInteger(v)) return String(v);
-    // Fifteen significant digits (what a double always holds exactly) drop
-    // float noise (0.1 + 0.2 shows 0.3) without rounding small values away
-    // (1e-11 stays 1e-11) or large ones (1234567890123.5 stays as is).
-    return String(Number(v.toPrecision(15)));
+    // Arithmetic noise (0.1 + 0.2 = 0.30000000000000004) sits within a few
+    // units in the last place of a 15-digit value; show that value then.
+    // Any other number keeps its shortest exact form, so 1e-11 and
+    // 1.234567890123456 are shown as they are.
+    const short = Number(v.toPrecision(15));
+    return String(Math.abs(short - v) <= 4 * Number.EPSILON * Math.abs(v) ? short : v);
   }
   if (typeof v === "boolean") return v ? "true" : "false";
   if (typeof v === "string") return v;
-  if (Array.isArray(v)) return v.map(toText).filter((s) => s !== "").join(", ");
+  if (Array.isArray(v)) return joinList(v, ", ");
   return "";
+}
+
+/**
+ * The longest string an expression produces (join, a list shown as text,
+ * text concatenation). A list can hold 20,000 lines and a separator 20,000
+ * characters; without a bound one evaluation could build hundreds of MB.
+ * Every context (display, conditions, computed values) sees the same
+ * bounded value, so they cannot disagree.
+ */
+export const MAX_EXPR_STRING = 1_000_000;
+
+function bounded(s: string): string {
+  return s.length > MAX_EXPR_STRING ? s.slice(0, MAX_EXPR_STRING) : s;
+}
+
+// The last join of each list: many templates may join (or show) the same
+// list, which is one array object for as long as it is unchanged, so each
+// joined string is built once, not once per template per render. One entry
+// per list: a separator the user is typing would otherwise pile up results.
+const joined = new WeakMap<object, { glue: string; out: string }>();
+
+function joinList(v: Value[], glue: string): string {
+  const hit = joined.get(v);
+  if (hit && hit.glue === glue) return hit.out;
+  let out = "";
+  for (const x of v) {
+    const t = toText(x);
+    if (t === "") continue;
+    out = out === "" ? t : out + glue + t;
+    if (out.length > MAX_EXPR_STRING) {
+      out = out.slice(0, MAX_EXPR_STRING);
+      break;
+    }
+  }
+  joined.set(v, { glue, out });
+  return out;
 }
 
 function list(v: Value): Value[] {
@@ -400,18 +438,6 @@ function uniqueValues(items: Value[]): Value[] {
   return out;
 }
 
-// The last join of each list, per separator: the string, and whether it was
-// cut short for display (see displaying).
-const joined = new WeakMap<object, { glue: string; out: string; clipped: boolean }>();
-
-/** The longest join a displayed template builds (it shows far less). */
-export const MAX_DISPLAY_JOIN_CHARS = 1_000_000;
-
-// True while renderTemplate evaluates a hole. Evaluation is synchronous, so
-// the flag cannot leak into a condition: conditions and computed values
-// always get the whole joined string.
-let displaying = false;
-
 const FUNCS: Record<string, (args: Value[]) => Value> = {
   len: ([v]) => (typeof v === "string" ? Array.from(v).length : list(v).length),
   count: ([v]) => list(v).length,
@@ -457,34 +483,7 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
   string: ([v]) => toText(v),
   upper: ([v]) => toText(v).toUpperCase(),
   lower: ([v]) => toText(v).toLowerCase(),
-  join: ([v, sep]) => {
-    const glue = sep === undefined ? ", " : toText(sep);
-    // A list is one array object for as long as it is unchanged, and many
-    // templates may join the same one (up to 20,000 pasted lines): build
-    // each joined string once, not once per template per render.
-    const hit = Array.isArray(v) ? joined.get(v) : undefined;
-    if (hit && hit.glue === glue && (!hit.clipped || displaying)) return hit.out;
-    // While a display template renders, the result is bounded as it is
-    // built: a long separator times a long list could otherwise build
-    // hundreds of MB, which display clips to MAX_TEMPLATE_CHARS anyway.
-    const cap = displaying ? MAX_DISPLAY_JOIN_CHARS : Infinity;
-    let out = "";
-    let clipped = false;
-    for (const x of list(v)) {
-      const t = toText(x);
-      if (t === "") continue;
-      out = out === "" ? t : out + glue + t;
-      if (out.length > cap) {
-        out = out.slice(0, cap);
-        clipped = true;
-        break;
-      }
-    }
-    // One entry per list: a separator the user is typing would otherwise
-    // pile up a result per keystroke.
-    if (Array.isArray(v)) joined.set(v, { glue, out, clipped });
-    return out;
-  },
+  join: ([v, sep]) => joinList(list(v), sep === undefined ? ", " : toText(sep)),
   contains: ([hay, needle]) => {
     if (typeof hay === "string") return hay.includes(toText(needle));
     return list(hay).some((x) => equal(x, needle));
@@ -543,11 +542,11 @@ function ev(n: Node, scope: Scope): Value {
           // is numeric (a text input holding "3") and joins otherwise.
           const ls = typeof l === "string";
           const rs = typeof r === "string";
-          if (ls && rs) return l + r;
+          if (ls && rs) return bounded(l + r);
           if (ls || rs) {
             const s = (ls ? l : r) as string;
             const numeric = s.trim() !== "" && Number.isFinite(num(s)) && Number.isFinite(num(ls ? r : l));
-            if (!numeric) return toText(l) + toText(r);
+            if (!numeric) return bounded(toText(l) + toText(r));
           }
           return numOrNull(num(l) + num(r));
         }
@@ -606,13 +605,10 @@ export function renderTemplate(s: string | undefined, scope: Scope): string {
   let left = MAX_TEMPLATE_CHARS;
   return s.replace(/\{\{([\s\S]*?)\}\}/g, (_, src: string) => {
     let t: string;
-    displaying = true;
     try {
       t = toText(evaluate(src, scope));
     } catch {
       return "⚠";
-    } finally {
-      displaying = false;
     }
     if (t.length > left) t = `${t.slice(0, Math.max(0, left))}…`;
     left -= t.length;
