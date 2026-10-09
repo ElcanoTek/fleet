@@ -136,10 +136,11 @@ These are protocol constants in `internal/genui/spec.go`, not operator knobs:
 - 256 KiB per card, 800 components, 12 levels of nesting
 - 2,000 options per input, and 2,000 chosen entries per `multi_select` /
   `include_exclude` (custom entries included); 500 table rows, 20 columns;
-  500 entries per `badges` / `facts` / `status_list` / `diff` list
+  500 entries per `badges` / `facts` / `status_list` / `diff` list, and
+  2,000 table rows and list entries across the whole card
 - 8 chart series of 200 points, 6 actions
 - 200 repeater items, 20,000 `list_input` lines
-- 500-character expressions
+- 500-character expressions; `min_length` at most 20,000
 
 One limit is the web card's, not the spec's: a single answer may be at most
 960 KiB once JSON-escaped (`MAX_SUBMISSION_BYTES` in `genui/model.ts`), so it
@@ -198,8 +199,8 @@ to change. The loop that replaces a bespoke form:
   **Edit and resend** draft survives a remount too, reopening the card for
   editing until the resend lands. A restored answer (from the transcript or
   a draft) never puts a value the user cannot fix into a disabled input: a
-  disabled input keeps the card's default, and a slider or an input with
-  `disabled_if` keeps only a value that passes its own checks.
+  disabled input keeps the card's default (in a repeater item, a value the
+  card itself set), and a slider keeps only a value its range can hold.
 
 A card send goes through the composer's send path, but it leaves the composer
 alone: the text being typed stays, its pending attachments are not sent with

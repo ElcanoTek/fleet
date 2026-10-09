@@ -231,16 +231,6 @@ describe("restored values the user could not fix", () => {
     expect(normalizeValues(spec, { n: 100 }).n).toBe(5);
   });
 
-  it("an input that can be disabled keeps only a valid value", () => {
-    const spec = card([
-      { type: "toggle", id: "lock", label: "Lock" },
-      { type: "number", id: "n", label: "N", disabled_if: "lock", min: 0, max: 10, step: 2, value: 4 },
-    ]);
-    expect(normalizeValues(spec, { n: 100 }).n).toBe(4);
-    expect(normalizeValues(spec, { n: 3 }).n).toBe(4);
-    expect(normalizeValues(spec, { n: 8 }).n).toBe(8);
-  });
-
   it("a slider keeps only a value its range control can hold", () => {
     const spec = card([{ type: "slider", id: "s", label: "S", min: 0, max: 10, value: 3 }]);
     expect(normalizeValues(spec, { s: 100 }).s).toBe(3);

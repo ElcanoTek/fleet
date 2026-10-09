@@ -339,10 +339,9 @@ export function normalizeValues(spec: CardSpec, saved: Values | null | undefined
  * A saved value for one input, normalized like a default, or undefined to
  * keep the card's own default. A disabled input never takes a saved value:
  * the user could not have changed it, and collect submits it unvalidated, so
- * a value from elsewhere would be stuck in the next submission. An input that
- * can become disabled (disabled_if) or a slider (whose range control would
- * show a clamped thumb over the unclamped value) keeps only a value that
- * passes its own checks.
+ * a value from elsewhere would be stuck in the next submission. A slider
+ * (whose range control would show a clamped thumb over the unclamped value)
+ * keeps only a value that passes its own checks.
  */
 function restoredValue(c: Component, raw: unknown): unknown {
   if (c.disabled === true) return undefined;
@@ -374,7 +373,7 @@ function restoredValue(c: Component, raw: unknown): unknown {
 }
 
 function keepsRestored(c: Component, v: unknown): boolean {
-  if (typeof c.disabled_if !== "string" && c.type !== "slider") return true;
+  if (c.type !== "slider") return true;
   return isEmpty(c, v) || checkField(c, v) === "";
 }
 

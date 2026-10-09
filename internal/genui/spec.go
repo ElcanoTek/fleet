@@ -52,7 +52,11 @@ const (
 	MaxTableRows   = 500
 	// MaxDisplayItems bounds the other object lists (badges, facts,
 	// status_list items, diff rows): each entry is DOM, like a table row.
-	MaxDisplayItems    = 500
+	MaxDisplayItems = 500
+	// MaxCardRows bounds the rows and display entries a whole card renders
+	// (table rows plus every badges / facts / status_list / diff entry), so
+	// many capped lists cannot add up to a frozen tab.
+	MaxCardRows        = 2000
 	MaxTableColumns    = 20
 	MaxChartSeries     = 8
 	MaxChartPoints     = 200
@@ -121,6 +125,9 @@ type prop struct {
 	required bool
 	enum     []string
 	items    map[string]prop // for kObjects
+	// entries: a kObjects list rendered one row each (badges, facts,
+	// status_list, diff), counted toward MaxCardRows.
+	entries bool
 }
 
 func p(k kind) prop            { return prop{kind: k} }
@@ -128,6 +135,13 @@ func req(k kind) prop          { return prop{kind: k, required: true} }
 func enum(vals ...string) prop { return prop{kind: kEnum, enum: vals} }
 func reqObjects(items map[string]prop) prop {
 	return prop{kind: kObjects, items: items, required: true}
+}
+
+// entryList is a display list of objects, one rendered row per entry.
+func entryList(items map[string]prop) prop {
+	pr := reqObjects(items)
+	pr.entries = true
+	return pr
 }
 
 var tones = []string{"neutral", "info", "success", "warning", "danger"}
@@ -176,13 +190,13 @@ var components = map[string]compSpec{
 	"callout": {props: map[string]prop{
 		"tone": enum(tones...), "title": p(kString), "text": req(kTemplate),
 	}},
-	"badges": {props: map[string]prop{"items": reqObjects(map[string]prop{
+	"badges": {props: map[string]prop{"items": entryList(map[string]prop{
 		"text": req(kTemplate), "tone": enum(tones...),
 	})}},
 	"stat": {props: map[string]prop{
 		"label": req(kString), "value": req(kTemplate), "caption": p(kTemplate), "tone": enum(tones...),
 	}},
-	"facts": {props: map[string]prop{"items": reqObjects(map[string]prop{
+	"facts": {props: map[string]prop{"items": entryList(map[string]prop{
 		"label": req(kString), "value": req(kTemplate),
 	})}},
 	"table": {props: map[string]prop{
@@ -197,7 +211,7 @@ var components = map[string]compSpec{
 		"required": p(kBool),
 		"disabled": p(kBool),
 	}},
-	"status_list": {props: map[string]prop{"items": reqObjects(map[string]prop{
+	"status_list": {props: map[string]prop{"items": entryList(map[string]prop{
 		"status": {kind: kEnum, required: true, enum: []string{"pass", "fail", "warn", "info", "pending"}},
 		"label":  req(kTemplate), "detail": p(kTemplate), "field": p(kFieldPath),
 	})}},
@@ -216,7 +230,7 @@ var components = map[string]compSpec{
 	"link": {props: map[string]prop{"text": req(kNonBlank), "url": req(kURL)}},
 	"diff": {props: map[string]prop{
 		"title": p(kString),
-		"rows": reqObjects(map[string]prop{
+		"rows": entryList(map[string]prop{
 			"label": req(kString), "before": p(kString), "after": p(kString),
 		}),
 	}},
@@ -340,6 +354,8 @@ type validator struct {
 	// gates on the path to each input.
 	reach map[string]bool
 	gates map[string]gated
+	// rows counts the card's table rows and display entries (MaxCardRows).
+	rows int
 }
 
 type condRef struct {
@@ -761,6 +777,9 @@ func (v *validator) checkListProp(path string, pr prop, val any, repeater string
 			v.addf(path, "at most %d entries; summarize or paginate across cards", MaxDisplayItems)
 			return
 		}
+		if pr.entries {
+			v.countRows(path, len(arr))
+		}
 		for i, e := range arr {
 			ep := fmt.Sprintf("%s[%d]", path, i)
 			obj, ok := e.(map[string]any)
@@ -791,6 +810,7 @@ func (v *validator) checkListProp(path string, pr prop, val any, repeater string
 		if len(arr) > MaxTableRows {
 			v.addf(path, "at most %d rows; summarize or paginate across cards", MaxTableRows)
 		}
+		v.countRows(path, len(arr))
 		for i, e := range arr {
 			obj, ok := e.(map[string]any)
 			if !ok {
@@ -925,6 +945,30 @@ func (v *validator) constantConditions(path string, obj map[string]any) {
 	}
 }
 
+// countRows adds a list's entries to the card-wide budget, reporting the
+// list that first goes over it.
+func (v *validator) countRows(path string, n int) {
+	before := v.rows
+	v.rows += n
+	if before <= MaxCardRows && v.rows > MaxCardRows {
+		v.addf(path, "the card renders more than %d table rows and list entries in all; summarize or split it across cards", MaxCardRows)
+	}
+}
+
+// lengthRules: a text input's min_length must be reachable, within its own
+// max_length and within what one answer can carry (a minimum longer than any
+// string the card takes from the model can never be sent).
+func (v *validator) lengthRules(path string, num func(string) (float64, bool)) {
+	lo, okLo := num("min_length")
+	hi, okHi := num("max_length")
+	if okLo && okHi && lo > hi {
+		v.addf(path, "min_length must not exceed max_length")
+	}
+	if okLo && lo > MaxStringLen {
+		v.addf(path+".min_length", "at most %d", MaxStringLen)
+	}
+}
+
 func (v *validator) componentRules(path, typ string, obj map[string]any) {
 	v.constantConditions(path, obj)
 	num := func(k string) (float64, bool) { f, ok := obj[k].(float64); return f, ok }
@@ -945,11 +989,7 @@ func (v *validator) componentRules(path, typ string, obj map[string]any) {
 			}
 		}
 	case "text_input":
-		lo, okLo := num("min_length")
-		hi, okHi := num("max_length")
-		if okLo && okHi && lo > hi {
-			v.addf(path, "min_length must not exceed max_length")
-		}
+		v.lengthRules(path, num)
 	case "date":
 		lo, _ := obj["min"].(string)
 		hi, _ := obj["max"].(string)

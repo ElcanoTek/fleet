@@ -5910,6 +5910,29 @@
      }
     ]
    }
+  },
+  {
+   "name": "min_length longer than any answer",
+   "valid": false,
+   "error_contains": "min_length",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text_input",
+      "id": "t",
+      "label": "T",
+      "required": true,
+      "min_length": 1e+100
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
   }
  ]
 }

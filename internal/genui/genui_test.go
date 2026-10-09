@@ -177,6 +177,25 @@ func TestDisplayListCap(t *testing.T) {
 	}
 }
 
+func TestCardRowBudget(t *testing.T) {
+	rows := strings.TrimSuffix(strings.Repeat(`{},`, MaxTableRows), ",")
+	table := `{"type":"table","columns":[{"key":"a"}],"rows":[` + rows + `]}`
+	tables := func(n int) string {
+		ts := make([]string, n)
+		for i := range ts {
+			ts[i] = table
+		}
+		return `{"title":"x","components":[` + strings.Join(ts, ",") + `]}`
+	}
+	if _, issues := Validate([]byte(tables(MaxCardRows / MaxTableRows))); len(issues) != 0 {
+		t.Fatalf("at the budget: %v", issues)
+	}
+	_, issues := Validate([]byte(tables(MaxCardRows/MaxTableRows + 1)))
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, fmt.Sprintf("more than %d table rows", MaxCardRows)) {
+		t.Fatalf("over the budget: %v", issues)
+	}
+}
+
 // A list default is capped by the entries the browser keeps from it: one
 // string splits on its line breaks (listCount), so it can carry more than
 // MaxListItems entries in a single element.
