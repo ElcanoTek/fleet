@@ -29,6 +29,8 @@ export type GenUiState = {
    * answers, drafts or holds.
    */
   owners: Map<string, ToolCall>;
+  /** Each card tool call's occurrence of its id: 0 for the first use. */
+  occurrences: Map<ToolCall, number>;
   submissions: Map<string, Submission>;
   superseded: Set<string>;
   /**
@@ -42,6 +44,7 @@ export type GenUiState = {
 export const EMPTY_GENUI_STATE: GenUiState = {
   cards: new Map(),
   owners: new Map(),
+  occurrences: new Map(),
   submissions: new Map(),
   superseded: new Set(),
   replies: new Map(),
@@ -99,6 +102,8 @@ export function cardSpecOf(tc: ToolCall): CardSpec | null {
 export function deriveGenUiState(messages: Message[]): GenUiState {
   const cards = new Map<string, CardSpec>();
   const owners = new Map<string, ToolCall>();
+  const occurrences = new Map<ToolCall, number>();
+  const seen = new Map<string, number>();
   const submissions = new Map<string, Submission>();
   const superseded = new Set<string>();
   const replies = new Map<string, Reply>();
@@ -146,12 +151,15 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
       }
       cards.set(tc.id, spec);
       owners.set(tc.id, tc);
+      const n = seen.get(tc.id) ?? 0;
+      occurrences.set(tc, n);
+      seen.set(tc.id, n + 1);
       // A card never replaces itself (a refinement whose reused id equals
       // the one it names).
       if (spec.replaces && spec.replaces !== tc.id) superseded.add(spec.replaces);
     }
   }
-  return { cards, owners, submissions, superseded, replies };
+  return { cards, owners, occurrences, submissions, superseded, replies };
 }
 
 export const GenUiContext = createContext<GenUiState>(EMPTY_GENUI_STATE);

@@ -1477,6 +1477,16 @@ describe("holds and other tabs", () => {
     expect(document.activeElement).toBe(screen.getAllByRole("tab")[0]);
   });
 
+  it("keeps a reused card id's later occurrence clear of the earlier card's hold", () => {
+    window.localStorage.clear();
+    const s = spec({ title: "O", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+    // The first card with this id left a hold behind.
+    window.localStorage.setItem("fleet.genui.pending.conv:call_0", JSON.stringify({ action: "a", at: Date.now(), after: "", send: "old" }));
+    render(<GenerativeCard cardId="call_0" storageScope="conv" occurrence={1} spec={s} onSubmit={() => {}} />);
+    expect(screen.queryByTestId("genui-awaiting")).toBeNull();
+    expect(screen.getByRole("button", { name: "Yes" })).toBeTruthy();
+  });
+
   it("groups a single-select table's radios", () => {
     const s = spec({
       title: "T",

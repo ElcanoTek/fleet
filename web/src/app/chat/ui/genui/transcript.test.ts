@@ -47,6 +47,9 @@ describe("deriveGenUiState", () => {
     expect(s.cards.get("call_0")?.title).toBe("Second");
     expect(s.owners.get("call_0")).not.toBe(older);
     expect(cardSpecOf(older)?.title).toBe("First");
+    // Each occurrence keeps its browser state under its own key.
+    expect(s.occurrences.get(older)).toBe(0);
+    expect(s.occurrences.get(newer)).toBe(1);
   });
 
   it("keeps an earlier card's answer and replacement off a newer card that reuses its id", () => {

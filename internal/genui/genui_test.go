@@ -501,3 +501,16 @@ func TestRepeaterBudgetCountsSelectOptions(t *testing.T) {
 		t.Fatal("select options over the budget accepted")
 	}
 }
+
+// The minimum answer counts each input's real empty value: an
+// include/exclude pair is an object with two lists, not "".
+func TestMinimumAnswerCountsStructuredValues(t *testing.T) {
+	long := strings.Repeat("a", 1260)
+	card := `{"title":"x","components":[{"type":"repeater","id":"r","label":"R","min_items":200,"max_items":200,"fields":[` +
+		`{"type":"select","id":"s","label":"S","required":true,"options":["` + long + `"]},` +
+		`{"type":"include_exclude","id":"g","label":"G","required":true,"allow_custom":true}` +
+		`]}],"actions":[{"id":"go","label":"Go"}]}`
+	if _, issues := Validate([]byte(card)); len(issues) == 0 || !strings.Contains(fmt.Sprint(issues), "more than one answer carries") {
+		t.Fatalf("issues: %v", issues)
+	}
+}

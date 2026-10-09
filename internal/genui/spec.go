@@ -996,9 +996,9 @@ func (v *validator) requiredMinBytes() int {
 			// Each item's braces and comma.
 			total += 3 * n
 		}
-		// \"id\":\"\", — the key and an empty value with every quote
-		// escaped, and a comma: id + 12.
-		size := len(id) + 12
+		// \"id\": and a comma — the key with its quotes escaped (the answer
+		// is JSON inside a JSON-escaped message) — then the value.
+		size := len(id) + 6
 		dis, _ := f.obj["disabled"].(bool)
 		if rep, ok := v.fields[f.repeater]; ok && rep.obj != nil {
 			// A disabled repeater disables every field in its items.
@@ -1006,38 +1006,13 @@ func (v *validator) requiredMinBytes() int {
 				dis = true
 			}
 		}
-		if dis {
+		req, _ := f.obj["required"].(bool)
+		if val, ok := f.obj["value"]; ok && dis {
 			// A disabled input sends its default, whatever it holds.
-			if val, ok := f.obj["value"]; ok {
-				raw, _ := json.Marshal(val)
-				size += wireLen(string(raw))
-			}
-		} else if req, _ := f.obj["required"].(bool); req {
-			switch f.typ {
-			case "text_input":
-				if lo, _ := f.obj["min_length"].(float64); lo > 0 {
-					size += int(min(lo, MaxStringLen))
-				}
-			case "table":
-				// A required selectable table sends at least one row key.
-				if short, ok := shortestRowKey(f.obj); ok {
-					size += short
-				}
-			case "select", "choice", "multi_select", "include_exclude":
-				// The shortest option the answer can be (a required
-				// collection holds at least one entry; free entry can be
-				// as short as one character, so it adds nothing here).
-				if custom, _ := f.obj["allow_custom"].(bool); custom {
-					break
-				}
-				if opts, ok := optionValues(f.obj["options"]); ok && len(opts) > 0 {
-					short := wireLen(opts[0])
-					for _, o := range opts[1:] {
-						short = min(short, wireLen(o))
-					}
-					size += short
-				}
-			}
+			raw, _ := json.Marshal(val)
+			size += wireLen(string(raw))
+		} else {
+			size += minValueWire(f.typ, f.obj, req && !dis)
 		}
 		total += size * n
 	}
@@ -1060,6 +1035,82 @@ func shortestRowKey(obj map[string]any) (int, bool) {
 		}
 	}
 	return short, found
+}
+
+// minValueWire is the smallest value an input can send, as the browser
+// measures it (quotes escaped): an empty string, list or include/exclude
+// pair; for a required input, also the smallest entry it must hold — its
+// min_length, its shortest option or row key, or one typed character where
+// free entry is allowed.
+func minValueWire(typ string, obj map[string]any, required bool) int {
+	shortestOption := func() int {
+		opts, ok := optionValues(obj["options"])
+		if !ok || len(opts) == 0 {
+			return 0
+		}
+		short := wireLen(opts[0])
+		for _, o := range opts[1:] {
+			short = min(short, wireLen(o))
+		}
+		return short
+	}
+	custom, _ := obj["allow_custom"].(bool)
+	// One entry inside a list: its escaped quotes and content.
+	entry := func() int {
+		if custom {
+			return 4 + 1
+		}
+		return 4 + shortestOption()
+	}
+	switch typ {
+	case "multi_select":
+		if required {
+			return 2 + entry()
+		}
+		return 2
+	case "list_input":
+		if required {
+			return 2 + 4 + 1
+		}
+		return 2
+	case "include_exclude":
+		// {\"include\":[],\"exclude\":[]}
+		const empty = 31
+		if required {
+			return empty + entry()
+		}
+		return empty
+	case "repeater":
+		return 2
+	case "table":
+		multi := obj["select"] == "multi"
+		base := 4
+		if multi {
+			base = 2
+		}
+		if !required {
+			return base
+		}
+		short, _ := shortestRowKey(obj)
+		if multi {
+			return base + 4 + short
+		}
+		return base + short
+	}
+	// A scalar: an empty string's escaped quotes.
+	size := 4
+	if !required {
+		return size
+	}
+	switch typ {
+	case "text_input":
+		if lo, _ := obj["min_length"].(float64); lo > 0 {
+			size += int(min(lo, MaxStringLen))
+		}
+	case "select", "choice":
+		size += shortestOption()
+	}
+	return size
 }
 
 // wireLen is a string value's size as the browser measures an answer: JSON

@@ -810,6 +810,7 @@ export function ChatTranscript({
                                           reply={owns ? (genUi.replies.get(tc.id) ?? null) : null}
                                           superseded={!owns || genUi.superseded.has(tc.id)}
                                           readOnly={!owns || undefined}
+                                          occurrence={genUi.occurrences.get(tc) ?? 0}
                                           retired={isPreSummary}
                                           storageScope={realConvId(currentConvKey) ?? currentConvKey}
                                           onSubmit={(text, onUnsent, onHeld) =>

@@ -415,6 +415,26 @@ function list(v: Value): Value[] {
   return [v];
 }
 
+// sum / avg / min / max of one list, once per list: many templates may
+// aggregate the same list, which is one array object for as long as it is
+// unchanged, so each result is computed once, not once per template per
+// render. A single non-list value (sum(5)) is just computed.
+const aggregates = new WeakMap<object, Map<string, Value>>();
+
+function aggregate(name: string, f: (args: Value[]) => Value): (args: Value[]) => Value {
+  return (args) => {
+    if (args.length !== 1 || !Array.isArray(args[0])) return f(args);
+    const src = args[0];
+    let byName = aggregates.get(src);
+    const hit = byName?.get(name);
+    if (hit !== undefined) return hit;
+    const out = f(args);
+    if (!byName) aggregates.set(src, (byName = new Map()));
+    byName.set(name, out);
+    return out;
+  };
+}
+
 function numbers(args: Value[]): number[] {
   const flat = args.length === 1 ? list(args[0]) : args;
   return flat.filter((x) => x !== null && x !== "").map(num).filter((n) => Number.isFinite(n));
@@ -497,8 +517,8 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
   // null, and the mean is a running mean — each step a weighted average of
   // the mean so far and the next value, so it never exceeds the largest
   // input when the inputs are finite.
-  sum: (a) => numOrNull(numbers(a).reduce((s, n) => s + n, 0)),
-  avg: (a) => {
+  sum: aggregate("sum", (a) => numOrNull(numbers(a).reduce((s, n) => s + n, 0))),
+  avg: aggregate("avg", (a) => {
     const ns = numbers(a);
     return ns.length
       ? numOrNull(
@@ -510,15 +530,15 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
           }, 0),
         )
       : null;
-  },
-  min: (a) => {
+  }),
+  min: aggregate("min", (a) => {
     const ns = numbers(a);
     return ns.length ? Math.min(...ns) : null;
-  },
-  max: (a) => {
+  }),
+  max: aggregate("max", (a) => {
     const ns = numbers(a);
     return ns.length ? Math.max(...ns) : null;
-  },
+  }),
   abs: ([v]) => numOrNull(Math.abs(num(v))),
   floor: ([v]) => numOrNull(Math.floor(num(v))),
   ceil: ([v]) => numOrNull(Math.ceil(num(v))),

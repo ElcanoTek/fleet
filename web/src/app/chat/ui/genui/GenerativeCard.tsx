@@ -121,6 +121,12 @@ export type GenerativeCardProps = {
   reply?: Reply | null;
   /** A later card named this one in `replaces`. */
   superseded?: boolean;
+  /**
+   * How many earlier cards in the conversation used this card id (a
+   * provider can reuse tool-call ids). A later occurrence keeps its draft
+   * and pending hold under its own key, never an earlier card's.
+   */
+  occurrence?: number;
   /** Shared / read-only transcripts: render, never submit. */
   readOnly?: boolean;
   /**
@@ -550,11 +556,13 @@ function CardBody({
   readOnly,
   retired,
   storageScope,
+  occurrence,
   onSubmit,
   onResumeHeld,
 }: GenerativeCardProps) {
   // The key this card's draft and pending hold are stored under.
-  const storeId = storageScope ? `${storageScope}:${cardId}` : cardId;
+  const occId = occurrence ? `${cardId}#${occurrence}` : cardId;
+  const storeId = storageScope ? `${storageScope}:${occId}` : occId;
   // An unsent draft wins over the submitted values: it is an edit of that
   // submission in progress, so the card reopens for editing.
   const [initialDraft] = useState(() => (readOnly ? null : loadDraft(storeId, answerKeyOf(submission, reply))));

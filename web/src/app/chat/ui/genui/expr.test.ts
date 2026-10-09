@@ -134,6 +134,18 @@ describe("bounded display", () => {
     expect(evaluate("len(join(few, sep))", { few: ["a", "b"], sep: "y".repeat(20000) })).toBe(20002);
   });
 
+  it("aggregates a list once, however many templates read it", () => {
+    const lines = ["1", "2", "x", "3"];
+    expect(evaluate("sum(lines)", { lines })).toBe(6);
+    expect(evaluate("sum(lines)", { lines })).toBe(6);
+    // A changed list is a new array, so it is aggregated afresh.
+    expect(evaluate("sum(lines)", { lines: [...lines, "4"] })).toBe(10);
+    expect(evaluate("avg(lines)", { lines })).toBe(2);
+    expect(evaluate("max(lines)", { lines })).toBe(3);
+    expect(evaluate("min(lines)", { lines })).toBe(1);
+    expect(evaluate("sum(5)", {})).toBe(5);
+  });
+
   it("deduplicates a list once, however many templates read it", () => {
     const lines = ["a", "b", "a"];
     const u = evaluate("unique(lines)", { lines });
