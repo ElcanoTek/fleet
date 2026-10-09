@@ -586,7 +586,16 @@ export interface UseTurnStream {
   // checkStreamLiveness across every attached conversation, not just the
   // active one. No-op while the tab is hidden.
   sweepStreamLiveness: (opts?: { force?: boolean }) => Promise<void>;
-  submitPrompt: (submittedPrompt: string, opts?: { fromCard?: boolean; onUnsent?: () => void }) => Promise<boolean>;
+  submitPrompt: (
+    submittedPrompt: string,
+    opts?: { fromCard?: boolean; onUnsent?: () => void; onHeld?: (convId: string, submissionId: string) => void },
+  ) => Promise<boolean>;
+  /**
+   * Re-arms the watch on a card answer held across a page load: the stored
+   * hold names the queue row, and this asks the server (and watches the
+   * queue) until the row lands or is gone, releasing the hold if it is gone.
+   */
+  resumeHeldCardSend: (convId: string, text: string, submissionId: string, onUnsent: () => void) => void;
   regenerateLastAssistant: () => Promise<void>;
   resendUserMessage: (
     userMessageId: number,
@@ -3821,6 +3830,20 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queuedInputs]);
 
+  const resumedHeldSendsRef = useRef(new Set<string>());
+  const resumeHeldCardSend = (convId: string, text: string, submissionId: string, onUnsent: () => void) => {
+    // Once per row: every remount of the card (a virtualized transcript)
+    // would otherwise start another chain of server checks.
+    if (resumedHeldSendsRef.current.has(submissionId)) return;
+    resumedHeldSendsRef.current.add(submissionId);
+    // Asked about now (the snapshot this page loaded may already lack the
+    // row); while the server still has it, watched against later snapshots
+    // like any queued card answer.
+    recheckHeldSend(convId, text, submissionId, onUnsent, 0, true, () =>
+      watchQueuedCardSend(convId, text, submissionId, onUnsent),
+    );
+  };
+
   // recheckHeldSend: a card send held as "possibly sent" that no recovery
   // chain will settle. Re-asks the server until it answers; "no" calls
   // onUnsent, "yes" ends quietly, and an unmount stops it.
@@ -3849,7 +3872,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     submittedPrompt: string,
     // onUnsent: a card send reported as held (uncertain) whose absence the
     // server later proves — the card releases its hold.
-    opts?: { fromCard?: boolean; onUnsent?: () => void },
+    // onHeld: the conversation and queue row a held card send is watched
+    // by, so the card can store them with its hold and resume the watch
+    // after a page load (resumeHeldCardSend).
+    opts?: { fromCard?: boolean; onUnsent?: () => void; onHeld?: (convId: string, submissionId: string) => void },
   ): Promise<boolean> => {
     const value = submittedPrompt.trim();
     // composerKey is the slot the user was typing into (real conv id or
@@ -3962,7 +3988,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         const landed = await submissionLanded(convId, value, queueSubmissionId);
         if (landed === "yes") {
           // Held like any queued card answer: watched until it leaves the queue.
-          if (fromCard && opts?.onUnsent) watchQueuedCardSend(convId, value, queueSubmissionId, opts.onUnsent);
+          if (fromCard && opts?.onUnsent) {
+            watchQueuedCardSend(convId, value, queueSubmissionId, opts.onUnsent);
+            opts.onHeld?.(convId, queueSubmissionId);
+          }
           return true;
         }
         // Unknown is not refused. A card treats its answer as possibly sent
@@ -3972,13 +4001,19 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // No recovery chain follows a queued send, so keep asking (on the
           // recovery backoff) until the server answers either way; a
           // definitive "not there" releases the card's hold.
-          if (opts?.onUnsent) recheckHeldSend(convId, value, queueSubmissionId, opts.onUnsent);
+          if (opts?.onUnsent) {
+            recheckHeldSend(convId, value, queueSubmissionId, opts.onUnsent);
+            opts.onHeld?.(convId, queueSubmissionId);
+          }
           return true;
         }
         restoreComposer();
         return false;
       }
-      if (fromCard && opts?.onUnsent) watchQueuedCardSend(convId, value, queueSubmissionId, opts.onUnsent);
+      if (fromCard && opts?.onUnsent) {
+        watchQueuedCardSend(convId, value, queueSubmissionId, opts.onUnsent);
+        opts.onHeld?.(convId, queueSubmissionId);
+      }
       void refreshQueue(convId);
       return true;
     }
@@ -4421,9 +4456,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // A direct send the server queued instead (it knew a turn was running).
     if (accepted.queued && fromCard && opts?.onUnsent) {
       watchQueuedCardSend(resolveTarget(), value, submissionId, opts.onUnsent);
+      opts.onHeld?.(resolveTarget(), submissionId);
     }
     const held = !accepted.value && uncertain && fromCard;
     if (held && opts?.onUnsent) {
+      opts.onHeld?.(resolveTarget(), submissionId);
       // The card now holds. Once recovery lets go of the conversation, ask
       // the server once more; a definitive "not there" releases the hold
       // (an "unknown" keeps it: a resend could duplicate the input).
@@ -4479,6 +4516,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     checkStreamLiveness,
     sweepStreamLiveness,
     submitPrompt,
+    resumeHeldCardSend,
     regenerateLastAssistant,
     resendUserMessage,
     retryLastUserMessage,

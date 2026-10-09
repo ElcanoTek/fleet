@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Message } from "../history";
 import { buildReplyMessage, buildSubmissionMessage } from "./model";
-import { deriveGenUiState, fieldLabels, isRenderableCardCall, summarizeValue } from "./transcript";
+import { cardSpecOf, deriveGenUiState, fieldLabels, isRenderableCardCall, summarizeValue } from "./transcript";
 
 const card = (title: string, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ title, components: [{ type: "text", text: "x" }], ...extra });
@@ -34,6 +34,19 @@ describe("deriveGenUiState", () => {
     expect(s.superseded.has("c1")).toBe(true);
     expect(s.submissions.get("c2")?.actionId).toBe("create");
     expect(s.submissions.get("c1")?.values).toEqual({ a: 1 });
+  });
+
+  it("gives a reused tool-call id to the newest card; the older keeps its own spec", () => {
+    const msgs = [
+      assistant(1, [{ id: "call_0", input: card("First"), resultText: "UI_DISPLAYED card_id=call_0" }]),
+      assistant(2, [{ id: "call_0", input: card("Second"), resultText: "UI_DISPLAYED card_id=call_0" }]),
+    ];
+    const s = deriveGenUiState(msgs);
+    const [older, newer] = [msgs[0].toolCalls![0], msgs[1].toolCalls![0]];
+    expect(s.owners.get("call_0")).toBe(newer);
+    expect(s.cards.get("call_0")?.title).toBe("Second");
+    expect(s.owners.get("call_0")).not.toBe(older);
+    expect(cardSpecOf(older)?.title).toBe("First");
   });
 
   it("does not draw a refused or still-pending spec", () => {

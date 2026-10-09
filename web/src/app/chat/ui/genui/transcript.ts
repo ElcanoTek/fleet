@@ -20,6 +20,15 @@ import {
 
 export type GenUiState = {
   cards: Map<string, CardSpec>;
+  /**
+   * cardId → the tool call that owns it: the latest one with that id. Card
+   * ids are the provider's tool-call ids, which are only promised to pair a
+   * call with its result; if a later call reuses one, the newer card owns
+   * the id (it is the card_id the model was last told about), and the older
+   * card renders as replaced from its own spec, never the newer card's spec,
+   * answers, drafts or holds.
+   */
+  owners: Map<string, ToolCall>;
   submissions: Map<string, Submission>;
   superseded: Set<string>;
   /**
@@ -32,6 +41,7 @@ export type GenUiState = {
 
 export const EMPTY_GENUI_STATE: GenUiState = {
   cards: new Map(),
+  owners: new Map(),
   submissions: new Map(),
   superseded: new Set(),
   replies: new Map(),
@@ -81,8 +91,14 @@ export function answerOf(m: Message): { sub: Submission | null; reply: Reply | n
   return cached(answerCache, m, m.content, parseAnswer);
 }
 
+/** A card tool call's own spec (parsed once per tool-call object). */
+export function cardSpecOf(tc: ToolCall): CardSpec | null {
+  return cached(specCache, tc, tc.input, parseCardSpec);
+}
+
 export function deriveGenUiState(messages: Message[]): GenUiState {
   const cards = new Map<string, CardSpec>();
+  const owners = new Map<string, ToolCall>();
   const submissions = new Map<string, Submission>();
   const superseded = new Set<string>();
   const replies = new Map<string, Reply>();
@@ -119,13 +135,14 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
     }
     for (const tc of m.toolCalls ?? []) {
       if (!isRenderableCardCall(tc)) continue;
-      const spec = cached(specCache, tc, tc.input, parseCardSpec);
+      const spec = cardSpecOf(tc);
       if (!spec) continue;
       cards.set(tc.id, spec);
+      owners.set(tc.id, tc);
       if (spec.replaces) superseded.add(spec.replaces);
     }
   }
-  return { cards, submissions, superseded, replies };
+  return { cards, owners, submissions, superseded, replies };
 }
 
 export const GenUiContext = createContext<GenUiState>(EMPTY_GENUI_STATE);

@@ -139,7 +139,19 @@ export type GenerativeCardProps = {
   // Resolves false when the message was refused (nothing was sent).
   // onUnsent: called later if a send reported as held turns out never to
   // have reached the server (see submitPrompt), so the hold is released.
-  onSubmit?: (message: string, onUnsent?: () => void) => void | Promise<void | boolean>;
+  // onHeld: the conversation and queue row the held send is watched by; the
+  // card stores them with its hold so a reload can resume the watch.
+  onSubmit?: (
+    message: string,
+    onUnsent?: () => void,
+    onHeld?: (convId: string, submissionId: string) => void,
+  ) => void | Promise<void | boolean>;
+  /**
+   * Resumes the server watch on a hold restored after a page load (the
+   * in-page watcher did not survive it): onUnsent releases the hold if the
+   * queue row turns out to be gone without reaching the transcript.
+   */
+  onResumeHeld?: (convId: string, text: string, submissionId: string, onUnsent: () => void) => void;
 };
 
 const DRAFT_PREFIX = "fleet.genui.draft.";
@@ -353,7 +365,14 @@ const PENDING_TTL_MS = 6 * 60 * 60 * 1000;
 // full or blocked (localStorage then only carries it across a reload).
 // `send` names the send that set the hold, so a late verdict about an older
 // send (one the user unlocked and replaced) cannot release a newer hold.
-const pendingMemory = new Map<string, { action: string; at: number; after: string; send?: string }>();
+// `watch` (set once the chat reports the send held) names the conversation,
+// queue row and message text, so a reloaded page can ask the server about
+// that row again instead of holding the card until the TTL.
+type PendingWatch = { conv: string; sid: string; text: string };
+const pendingMemory = new Map<
+  string,
+  { action: string; at: number; after: string; send?: string; watch?: PendingWatch }
+>();
 
 /** Forgets in-memory holds (tests; the page itself never needs to). */
 export function resetPendingHolds() {
@@ -386,12 +405,15 @@ function loadPending(cardId: string, currentKey: string): string | null {
 
 function savePending(cardId: string, action: string | null, afterKey = "", send?: string) {
   const after = keyDigest(afterKey);
-  if (action) pendingMemory.set(cardId, { action, at: Date.now(), after, send });
+  // Re-saving the same send's hold keeps the server watch it was given.
+  const prev = send ? pendingWatch(cardId) : null;
+  const watch = prev && prev.send === send ? prev.watch : undefined;
+  if (action) pendingMemory.set(cardId, { action, at: Date.now(), after, send, watch });
   else pendingMemory.delete(cardId);
   try {
     // A hold is small, but a full quota would still refuse it and leave
     // other tabs unaware of the send: make room by dropping drafts.
-    if (action) putDraft(PENDING_PREFIX + cardId, JSON.stringify({ action, at: Date.now(), after, send }));
+    if (action) putDraft(PENDING_PREFIX + cardId, JSON.stringify({ action, at: Date.now(), after, send, watch }));
     else window.localStorage.removeItem(PENDING_PREFIX + cardId);
   } catch {
     // Convenience only, like drafts.
@@ -405,6 +427,39 @@ let sendSeq = 0;
 function nextSendId(): string {
   sendSeq += 1;
   return `${PAGE_LOAD}-${sendSeq}`;
+}
+
+/** Adds the server watch to the hold `send` set, if that hold is current. */
+function notePendingWatch(cardId: string, send: string, watch: PendingWatch) {
+  const mem = pendingMemory.get(cardId);
+  if (mem && mem.send === send) pendingMemory.set(cardId, { ...mem, watch });
+  try {
+    const raw = window.localStorage.getItem(PENDING_PREFIX + cardId);
+    if (!raw) return;
+    const v = JSON.parse(raw) as { send?: unknown };
+    if (v.send !== send) return;
+    putDraft(PENDING_PREFIX + cardId, JSON.stringify({ ...v, watch }));
+  } catch {
+    // Convenience only: without it a reload holds the card until the TTL.
+  }
+}
+
+/** The stored hold's send id and server watch, if it has one. */
+function pendingWatch(cardId: string): { send: string; watch: PendingWatch } | null {
+  const ok = (w: unknown): w is PendingWatch =>
+    !!w &&
+    typeof (w as PendingWatch).conv === "string" &&
+    typeof (w as PendingWatch).sid === "string" &&
+    typeof (w as PendingWatch).text === "string";
+  const mem = pendingMemory.get(cardId);
+  if (mem) return mem.send && ok(mem.watch) ? { send: mem.send, watch: mem.watch } : null;
+  try {
+    const raw = window.localStorage.getItem(PENDING_PREFIX + cardId);
+    const v = raw ? (JSON.parse(raw) as { send?: unknown; watch?: unknown }) : null;
+    return typeof v?.send === "string" && ok(v.watch) ? { send: v.send, watch: v.watch } : null;
+  } catch {
+    return null;
+  }
 }
 
 /** When the card's current hold expires (ms since epoch), if it has one. */
@@ -442,6 +497,18 @@ const REVEAL_FRAMES = 2 * 12 + 2;
 // A held send that never reached the server (detail: the card's store id).
 const UNSENT_EVENT = "genui:unsent";
 
+/** The server proved a held send never arrived: release that send's hold. */
+function releaseHeld(storeId: string, send: string) {
+  // Only this send's own hold: one the user unlocked (and perhaps replaced
+  // with a newer send) is not this verdict's to release.
+  if (pendingSend(storeId) !== send) return;
+  // The instance that sent may have unmounted (virtualized transcript):
+  // clear the stored hold, and tell whichever instance is mounted now.
+  savePending(storeId, null);
+  markDraftSent(storeId, "");
+  window.dispatchEvent(new CustomEvent(UNSENT_EVENT, { detail: storeId }));
+}
+
 export default function GenerativeCard(props: GenerativeCardProps) {
   const { spec, superseded } = props;
   const [expanded, setExpanded] = useState(false);
@@ -466,7 +533,18 @@ export default function GenerativeCard(props: GenerativeCardProps) {
   return <CardBody {...props} />;
 }
 
-function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retired, storageScope, onSubmit }: GenerativeCardProps) {
+function CardBody({
+  cardId,
+  spec,
+  submission,
+  reply,
+  superseded,
+  readOnly,
+  retired,
+  storageScope,
+  onSubmit,
+  onResumeHeld,
+}: GenerativeCardProps) {
   // The key this card's draft and pending hold are stored under.
   const storeId = storageScope ? `${storageScope}:${cardId}` : cardId;
   // An unsent draft wins over the submitted values: it is an edit of that
@@ -600,6 +678,19 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, [storeId, readOnly]);
+
+  // A hold restored from an earlier page load lost the in-page watcher that
+  // would release it if its queue row were removed: resume that watch.
+  useEffect(() => {
+    if (!awaiting || readOnly || !onResumeHeld) return;
+    const held = pendingWatch(storeId);
+    if (!held || held.send.startsWith(`${PAGE_LOAD}-`)) return;
+    const { send, watch } = held;
+    onResumeHeld(watch.conv, watch.text, watch.sid, () => releaseHeld(storeId, send));
+    // The resume is keyed by the held send; onResumeHeld is re-created
+    // every render and dedupes by queue row itself.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [awaiting, storeId, readOnly]);
 
   // A hold lasts PENDING_TTL_MS. Checked only on load, one that expired while
   // the card stayed mounted (its sender gone after a reload, the answer lost)
@@ -756,16 +847,15 @@ function CardBody({ cardId, spec, submission, reply, superseded, readOnly, retir
       release = () => {
         if (!readOnly && pendingSend(storeId) === sendId) savePending(storeId, null);
       };
-      const accepted = await onSubmit(message, () => {
-        // Only this send's own hold: one the user unlocked (and perhaps
-        // replaced with a newer send) is not this verdict's to release.
-        if (readOnly || pendingSend(storeId) !== sendId) return;
-        // This instance may have unmounted (virtualized transcript): clear
-        // the stored hold, and tell whichever instance is mounted now.
-        savePending(storeId, null);
-        markDraftSent(storeId, "");
-        window.dispatchEvent(new CustomEvent(UNSENT_EVENT, { detail: storeId }));
-      });
+      const accepted = await onSubmit(
+        message,
+        () => {
+          if (!readOnly) releaseHeld(storeId, sendId);
+        },
+        (conv, sid) => {
+          if (!readOnly) notePendingWatch(storeId, sendId, { conv, sid, text: message });
+        },
+      );
       if (accepted === false) {
         release();
         if (!readOnly) markDraftSent(storeId, "");
@@ -1355,6 +1445,9 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   // onChange (to the card, or to the current repeater item) and draws its
   // label and errors. A display-only table renders bare.
   const { locked } = useCard();
+  // One radio group per single-select table, so arrow keys move between rows
+  // and assistive technology announces the rows as one exclusive choice.
+  const groupName = useId();
   const item = useContext(ItemContext);
   const wrapped = onChange !== undefined;
   const cols = objs(c.columns).map((col) => ({
@@ -1420,6 +1513,7 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
                     <td className="border-b border-[var(--color-border)] px-2 text-center">
                       <input
                         type={mode === "single" ? "radio" : "checkbox"}
+                        name={mode === "single" ? groupName : undefined}
                         checked={on}
                         aria-label={`Select ${k}`}
                         onChange={() => toggle(k)}

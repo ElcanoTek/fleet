@@ -1096,3 +1096,42 @@ describe("a queued card answer whose ack was lost, later removed", () => {
     await vi.waitFor(() => expect(onUnsent).toHaveBeenCalledTimes(1));
   });
 });
+
+describe("a queued card answer held across a page load", () => {
+  it("names its queue row, and a later page resumes the watch and releases the card once the row is gone", async () => {
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    let sid = "";
+    let removed = false;
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/chat") {
+          sid = (JSON.parse(String(init?.body)) as { submission_id: string }).submission_id;
+          return json({ queued: true, input: { id: "q1", client_input_id: "c-q1", mode: "queued", state: "queued", position: 1 }, conversation_id: CONV }, 202);
+        }
+        if (url.includes("/queue")) return json({ items: removed ? [] : [{ ...queuedRow("q1"), submission_id: sid }] });
+        if (url.includes("/api/conversations/")) return json({ history: [] });
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    const deps = { ...h.deps, streamingConvsRef: { current: new Set([CONV]) } };
+    const text = "[UI submission] card=c1 action=go\n{}";
+    const first = renderHook(() => useTurnStream(deps));
+    const onHeld = vi.fn();
+    await act(async () => {
+      expect(await first.result.current.submitPrompt(text, { fromCard: true, onUnsent: vi.fn(), onHeld })).toBe(true);
+    });
+    expect(onHeld).toHaveBeenCalledWith(CONV, sid);
+    first.unmount();
+
+    // A new page load: the in-page watcher is gone; the row is removed.
+    removed = true;
+    const second = renderHook(() => useTurnStream(deps));
+    const onUnsent = vi.fn();
+    act(() => second.result.current.resumeHeldCardSend(CONV, text, sid, onUnsent));
+    await vi.waitFor(() => expect(onUnsent).toHaveBeenCalledTimes(1));
+  });
+});

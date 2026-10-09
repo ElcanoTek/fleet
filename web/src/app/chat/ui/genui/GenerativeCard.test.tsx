@@ -142,7 +142,7 @@ describe("interaction", () => {
     render(<GenerativeCard cardId="c" spec={spec(form)} onSubmit={onSubmit} />);
     await user.click(screen.getByRole("button", { name: "Not now" }));
     // A quick reply carries a marker naming its card, then the fixed text.
-    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("c", "nah", "Skip the order."), expect.any(Function));
+    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("c", "nah", "Skip the order."), expect.any(Function), expect.any(Function));
   });
 
   it("re-checks the gates at confirmation time", async () => {
@@ -443,7 +443,7 @@ describe("third Codex pass", () => {
     });
     const view = render(<GenerativeCard cardId="qr" spec={s} onSubmit={onSubmit} />);
     await user.click(screen.getByRole("button", { name: "Option A" }));
-    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("qr", "a", "A please"), expect.any(Function));
+    expect(onSubmit).toHaveBeenCalledWith(buildReplyMessage("qr", "a", "A please"), expect.any(Function), expect.any(Function));
     expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Option B" })).toBeNull();
     view.rerender(
@@ -1408,6 +1408,50 @@ describe("holds and other tabs", () => {
     await act(async () => finish(false));
     // Refused: taken back.
     expect(window.localStorage.getItem("fleet.genui.pending.pub")).toBeNull();
+  });
+
+  it("records the queue row a held send is watched by, and resumes that watch after a reload", async () => {
+    window.localStorage.clear();
+    const user = userEvent.setup();
+    const s = spec({ title: "W", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+    const onSubmit = vi.fn(async (_m: string, _u?: () => void, onHeld?: (c: string, sid: string) => void) => {
+      onHeld?.("conv1", "sub-9");
+      return true;
+    });
+    render(<GenerativeCard cardId="w" spec={s} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    expect(await screen.findByTestId("genui-awaiting")).toBeTruthy();
+    const stored = JSON.parse(window.localStorage.getItem("fleet.genui.pending.w") ?? "{}");
+    expect(stored.watch).toMatchObject({ conv: "conv1", sid: "sub-9" });
+    cleanupRender();
+
+    // A reload: the hold comes back from storage, set by an earlier page load.
+    resetPendingHolds();
+    window.localStorage.setItem("fleet.genui.pending.w", JSON.stringify({ ...stored, send: "earlier-1" }));
+    let release: () => void = () => {};
+    const onResumeHeld = vi.fn((_c: string, _t: string, _sid: string, onUnsent: () => void) => {
+      release = onUnsent;
+    });
+    render(<GenerativeCard cardId="w" spec={s} onSubmit={() => {}} onResumeHeld={onResumeHeld} />);
+    expect(screen.getByTestId("genui-awaiting")).toBeTruthy();
+    expect(onResumeHeld).toHaveBeenCalledWith("conv1", stored.watch.text, "sub-9", expect.any(Function));
+    // The server says the row is gone: the card is released.
+    await act(async () => release());
+    expect(screen.queryByTestId("genui-awaiting")).toBeNull();
+    expect(window.localStorage.getItem("fleet.genui.pending.w")).toBeNull();
+  });
+
+  it("groups a single-select table's radios", () => {
+    const s = spec({
+      title: "T",
+      components: [{ type: "table", id: "t", label: "T", select: "single", row_key: "id", columns: [{ key: "id" }], rows: [{ id: "a" }, { id: "b" }] }],
+      actions: [{ id: "go", label: "Go" }],
+    });
+    render(<GenerativeCard cardId="tr" spec={s} onSubmit={() => {}} />);
+    const radios = screen.getAllByRole("radio") as HTMLInputElement[];
+    expect(radios).toHaveLength(2);
+    expect(radios[0].name).not.toBe("");
+    expect(radios[0].name).toBe(radios[1].name);
   });
 
   it("expires a hold while the card stays mounted", async () => {

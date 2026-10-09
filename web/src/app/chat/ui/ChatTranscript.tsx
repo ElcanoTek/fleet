@@ -70,7 +70,7 @@ import {
 } from "./transcriptRows";
 import { useStickToBottom } from "./stickToBottom";
 import { ReplyBubble, SubmissionBubble } from "./genui/SubmissionBubble";
-import { answerOf, deriveGenUiState, GenUiContext, isRenderableCardCall } from "./genui/transcript";
+import { answerOf, cardSpecOf, deriveGenUiState, GenUiContext, isRenderableCardCall } from "./genui/transcript";
 // Generative-UI cards (show_ui) carry their own renderer and the markdown
 // pipeline; lazy-loaded like AssistantMarkdown so chats without a card never
 // pay for it.
@@ -91,7 +91,12 @@ export type ChatTranscriptProps = {
   pills: ProtocolPill[];
   activePillId: string | null;
   setActivePillId: Dispatch<SetStateAction<string | null>>;
-  submitPrompt: (submittedPrompt: string, opts?: { fromCard?: boolean; onUnsent?: () => void }) => void | Promise<void | boolean>;
+  submitPrompt: (
+    submittedPrompt: string,
+    opts?: { fromCard?: boolean; onUnsent?: () => void; onHeld?: (convId: string, submissionId: string) => void },
+  ) => void | Promise<void | boolean>;
+  /** Resumes the watch on a card answer held across a page load. */
+  resumeHeldCardSend?: (convId: string, text: string, submissionId: string, onUnsent: () => void) => void;
   setPrompt: Dispatch<SetStateAction<string>>;
 
   // Compaction / summarize
@@ -218,6 +223,7 @@ export function ChatTranscript({
   activePillId,
   setActivePillId,
   submitPrompt,
+  resumeHeldCardSend,
   setPrompt,
   isSummarizing,
   summarizeStartedAt,
@@ -778,7 +784,10 @@ export function ChatTranscript({
                               {toolCalls.some(isRenderableCardCall) ? (
                                 <div className="grid min-w-0 gap-2">
                                   {toolCalls.filter(isRenderableCardCall).map((tc) => {
-                                    const spec = genUi.cards.get(tc.id);
+                                    // A reused tool-call id belongs to the newest card;
+                                    // an older card with it shows as replaced.
+                                    const owns = genUi.owners.get(tc.id) === tc;
+                                    const spec = owns ? genUi.cards.get(tc.id) : cardSpecOf(tc);
                                     if (!spec) return null;
                                     return (
                                       <Suspense
@@ -792,12 +801,16 @@ export function ChatTranscript({
                                         <GenerativeCard
                                           cardId={tc.id}
                                           spec={spec}
-                                          submission={genUi.submissions.get(tc.id) ?? null}
-                                          reply={genUi.replies.get(tc.id) ?? null}
-                                          superseded={genUi.superseded.has(tc.id)}
+                                          submission={owns ? (genUi.submissions.get(tc.id) ?? null) : null}
+                                          reply={owns ? (genUi.replies.get(tc.id) ?? null) : null}
+                                          superseded={!owns || genUi.superseded.has(tc.id)}
+                                          readOnly={!owns || undefined}
                                           retired={isPreSummary}
                                           storageScope={realConvId(currentConvKey) ?? currentConvKey}
-                                          onSubmit={(text, onUnsent) => submitPrompt(text, { fromCard: true, onUnsent })}
+                                          onSubmit={(text, onUnsent, onHeld) =>
+                                            submitPrompt(text, { fromCard: true, onUnsent, onHeld })
+                                          }
+                                          onResumeHeld={resumeHeldCardSend}
                                         />
                                       </Suspense>
                                     );

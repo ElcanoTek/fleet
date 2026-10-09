@@ -76,7 +76,16 @@ queued behind a running turn, the card's buttons stay held, and that hold
 survives the transcript scrolling the card away. A send whose response was lost
 while the server could not be reached is held the same way (a resend could
 duplicate it); once the connection recovers and the server shows it never
-received the answer, the hold is released with "Not sent. Try again."
+received the answer, the hold is released with "Not sent. Try again." A held
+answer's queue row is stored with the hold, so after a page reload the card
+asks the server again and is released if the row was removed without reaching
+the transcript (without browser storage it holds until it expires or the user
+unlocks it).
+
+A card's id is the provider's tool-call id. Those ids are only promised to
+pair a call with its result; if a later card reuses one, the newest card owns
+the id (it is the one the model was last told about) and the older card shows
+as replaced, from its own spec.
 
 A `table` with `select: single|multi` is an input that submits its `row_key`
 values; every row must carry a unique, non-empty string under `row_key`.
