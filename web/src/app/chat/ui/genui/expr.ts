@@ -397,6 +397,8 @@ function uniqueValues(items: Value[]): Value[] {
   return out;
 }
 
+const joined = new WeakMap<object, Map<string, string>>();
+
 const FUNCS: Record<string, (args: Value[]) => Value> = {
   len: ([v]) => (typeof v === "string" ? Array.from(v).length : list(v).length),
   count: ([v]) => list(v).length,
@@ -442,11 +444,25 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
   string: ([v]) => toText(v),
   upper: ([v]) => toText(v).toUpperCase(),
   lower: ([v]) => toText(v).toLowerCase(),
-  join: ([v, sep]) =>
-    list(v)
+  join: ([v, sep]) => {
+    const glue = sep === undefined ? ", " : toText(sep);
+    // A list is one array object for as long as it is unchanged, and many
+    // templates may join the same one (up to 20,000 pasted lines): build
+    // each joined string once, not once per template per render.
+    const cache = Array.isArray(v) ? joined.get(v) : undefined;
+    const hit = cache?.get(glue);
+    if (hit !== undefined) return hit;
+    const out = list(v)
       .map(toText)
       .filter((s) => s !== "")
-      .join(sep === undefined ? ", " : toText(sep)),
+      .join(glue);
+    if (Array.isArray(v)) {
+      const m = cache ?? new Map<string, string>();
+      m.set(glue, out);
+      joined.set(v, m);
+    }
+    return out;
+  },
   contains: ([hay, needle]) => {
     if (typeof hay === "string") return hay.includes(toText(needle));
     return list(hay).some((x) => equal(x, needle));

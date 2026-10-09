@@ -332,27 +332,51 @@ export function normalizeValues(spec: CardSpec, saved: Values | null | undefined
   // the card's own items to: each item renders every field of its repeater.
   // Repeaters the answer leaves at their defaults keep their items, so the
   // budget is what remains after them.
-  const restored: { c: Component; v: unknown[]; weight: number }[] = [];
   // Display rows outside repeaters; those inside are part of each item.
   let rowsLeft = MAX_CARD_ROWS - displayRows(spec.components, false);
+  const pending: { c: Component; raw: unknown[]; weight: number; perItem: number }[] = [];
   walkInputs(spec.components, (c) => {
     // An item renders its fields, and any table or display list among them.
     const fields = children(c, "fields");
     const weight = c.type === "repeater" ? Math.max(1, countComponents(fields)) + displayRows(fields) : 0;
     if (c.id && Object.prototype.hasOwnProperty.call(saved, c.id)) {
-      const v = restoredValue(c, saved[c.id]);
-      if (weight && Array.isArray(v)) restored.push({ c, v, weight });
-      else if (v !== undefined) out[c.id] = v;
+      const raw = saved[c.id];
+      // Restored repeaters are cut to the budget BEFORE their items are
+      // built: each item copies its fields' defaults, which can be long.
+      if (weight && Array.isArray(raw) && c.disabled !== true) {
+        pending.push({ c, raw, weight, perItem: defaultEntries(fields) });
+        return;
+      }
+      const v = restoredValue(c, raw);
+      if (v !== undefined) out[c.id] = v;
       return;
     }
     if (weight && c.id && Array.isArray(out[c.id])) rowsLeft -= (out[c.id] as unknown[]).length * weight;
   });
-  for (const { c, v, weight } of restored) {
-    const kept = v.slice(0, Math.max(0, Math.floor(rowsLeft / weight)));
-    rowsLeft -= kept.length * weight;
-    out[c.id!] = kept;
+  for (const { c, raw, weight, perItem } of pending) {
+    // Rows, and (like the server's cap on starting items) at most
+    // MAX_LIST_ITEMS default entries copied across the items.
+    const fit = Math.min(Math.floor(Math.max(0, rowsLeft) / weight), perItem ? Math.floor(MAX_LIST_ITEMS / perItem) : Infinity);
+    const v = restoredValue(c, raw.slice(0, fit));
+    if (!Array.isArray(v)) continue;
+    rowsLeft -= v.length * weight;
+    out[c.id!] = v;
   }
   return out;
+}
+
+/** Entries in the collection defaults of a repeater's fields (defaultEntries in spec.go). */
+function defaultEntries(fields: Component[]): number {
+  let n = 0;
+  walkInputs(fields, (f) => {
+    const v = f.value;
+    if (Array.isArray(v)) n += v.length;
+    else if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      n += (Array.isArray(o.include) ? o.include.length : 0) + (Array.isArray(o.exclude) ? o.exclude.length : 0);
+    }
+  });
+  return n;
 }
 
 /**

@@ -255,6 +255,19 @@ describe("restored repeater items across the card", () => {
     expect((restored.r99 as unknown[]).length).toBe(20);
   });
 
+  it("copy at most the list cap of field defaults", () => {
+    const lines = Array.from({ length: 20000 }, (_, i) => `l${i}`);
+    const spec = parseCardSpec(
+      JSON.stringify({
+        title: "R",
+        components: [{ type: "repeater", id: "r", label: "R", max_items: 200, fields: [{ type: "list_input", id: "l", label: "L", value: lines }] }],
+        actions: [{ id: "go", label: "Go" }],
+      }),
+    )!;
+    const restored = normalizeValues(spec, { r: Array.from({ length: 200 }, () => ({})) });
+    expect((restored.r as unknown[]).length).toBe(1);
+  });
+
   it("leave room for the card's table rows", () => {
     const rows = Array.from({ length: 1900 }, (_, i) => ({ k: String(i) }));
     const reps = Array.from({ length: 10 }, (_, i) => ({ type: "repeater", id: `r${i}`, label: "R", max_items: 200, fields: [{ type: "divider" }] }));

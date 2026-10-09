@@ -116,6 +116,13 @@ describe("bounded display", () => {
     expect(renderTemplate(`${long} {{ n }}`, { n: 1 })).toBe(`${long} 1`);
   });
 
+  it("joins one list once however many templates show it", () => {
+    const lines = Array.from({ length: 1000 }, (_, i) => `l${i}`);
+    const a = evaluate("join(lines)", { lines });
+    expect(evaluate("join(lines)", { lines })).toBe(a);
+    expect(evaluate('join(lines, "|")', { lines })).toBe(lines.join("|"));
+  });
+
   it("averages huge values without overflowing", () => {
     expect(evaluate("avg(xs)", { xs: [Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE] })).toBe(Number.MAX_VALUE);
     expect(evaluate("avg(xs)", { xs: [1, 2, 3, 4] })).toBe(2.5);
