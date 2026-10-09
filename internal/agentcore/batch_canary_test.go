@@ -139,6 +139,12 @@ func TestBatchCanary_Gate(t *testing.T) {
 			blocked: true, wantText: "CANARY",
 		},
 		{
+			name:   "a case-sensitive argument keeps its case",
+			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","namespace":"TenantA"}`, successRows("1")}},
+			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","namespace":"tenanta"}`,
+			blocked: true, wantText: "CANARY",
+		},
+		{
 			name:   "a different seat argument needs its own canary",
 			canary: []step{{canaryMergeTool, `{"deal_ids":["1"],"values_sha256":"` + canaryDigest + `","member_id":101}`, successRows("1")}},
 			tool:   canaryMergeTool, batch: `{"deal_ids":["1","2","3"],"values_sha256":"` + canaryDigest + `","member_id":202}`,

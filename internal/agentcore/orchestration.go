@@ -1142,11 +1142,12 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 				log.Printf("Critical batch %s made no forward progress (%d failed); attempt %d/%d",
 					toolName, failed, o.criticalToolFailureAttempts[key], maxAttemptsPerCriticalAction)
 			}
-		case malformedDealOutcomes(resultText):
-			// A per-record results[] that failed validation (or a result too
-			// large to inspect): fail closed — no discharge, no canary credit,
-			// counts against the retry budget. Falling through to the
-			// single-call branch would credit the input's records as done.
+		case failClosedDealOutcomes(rawInput, resultText):
+			// A per-record results[] that failed validation (or, for a deal_ids
+			// batch, a result too large to inspect): fail closed — no
+			// discharge, no canary credit, counts against the retry budget.
+			// Falling through to the single-call branch would credit the
+			// input's records as done.
 			o.criticalToolFailureAttempts[key]++
 			log.Printf("Critical batch %s returned malformed per-record results; treating as failed (attempt %d/%d)",
 				toolName, o.criticalToolFailureAttempts[key], maxAttemptsPerCriticalAction)

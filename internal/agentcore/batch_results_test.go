@@ -80,6 +80,38 @@ func TestMalformedBatchResultFailsClosed(t *testing.T) {
 	}
 }
 
+// TestMalformedResultsFailClosedOnlyForPerRecordCalls: a NON-batch critical
+// call keeps single-call accounting when its own results[] is empty or some
+// other list — only a deal_ids batch, or a results[] that is unmistakably a
+// per-record envelope, fails closed (Codex on #1712).
+func TestMalformedResultsFailClosedOnlyForPerRecordCalls(t *testing.T) {
+	withMergePolicy(t)
+	const args = `{"deal_id":"1"}`
+	cases := []struct {
+		result string
+		failed bool
+	}{
+		{`{"results":[]}`, false},
+		{`{"results":"ok"}`, false},
+		{`{"results":[{"deal_id":"1"}]}`, true},
+		{`{"results":[{"success":true}]}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.result, func(t *testing.T) {
+			o := newOrchStateForTest()
+			registerTyped(t, o, criticalActionStruct{Tool: canaryMergeTool, DealID: "1"})
+			o.recordToolResult(canaryMergeTool, args, tc.result, true)
+			attempts := o.criticalToolFailureAttempts[retryBudgetKey(canaryMergeTool, hashString(args))]
+			if failed := attempts > 0; failed != tc.failed {
+				t.Fatalf("recorded failed=%v (attempts=%d, executed=%d), want failed=%v", failed, attempts, o.criticalExecutedCount, tc.failed)
+			}
+			if !tc.failed && o.criticalExecutedCount != 1 {
+				t.Fatalf("single-call success not credited: executed=%d", o.criticalExecutedCount)
+			}
+		})
+	}
+}
+
 // TestLargeBatchResultReachesPolicyRaw is the clipped-vs-raw regression: a
 // 200-record results[] runs past the model-visible ceiling, so the model gets a
 // truncation envelope — but the policy must parse the full governed text and

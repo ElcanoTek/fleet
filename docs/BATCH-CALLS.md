@@ -107,7 +107,11 @@ three gaps at once:
   the same name) makes a call **failed** when its `results[]` is present but
   malformed, or when its body is too large or cannot be decoded. A failed call
   discharges nothing, earns no canary credit, and is charged to the retry
-  budget.
+  budget. The rule covers a `deal_ids` batch, and any call whose `results[]`
+  is clearly a per-record envelope (a row carrying `deal_id` or `success`).
+  A non-batch critical tool whose own `results[]` is empty or some other list
+  keeps the single-call accounting (`failClosedDealOutcomes`). Cutlass applies
+  the rule to every critical tool.
 
 ## Deviations from Cutlass
 
@@ -122,7 +126,9 @@ three gaps at once:
   `member_id`, `logged_in_owner_id` and per-dimension include/exclude lists.
   Under the fixed list, a canary of one operation could unlock a batch of
   another. Fleet binds every argument except a short engine-owned exclusion
-  list, so an unknown argument fails closed.
+  list, so an unknown argument fails closed. Case is kept, because a bundle
+  argument may be case-sensitive. Only an inline `values` list is compared
+  without regard to order or case, as in Cutlass.
 - **The budget starts after the server mutex** and travels across the broker
   wire. Cutlass has neither the per-server mutex queue nor the
   process-separated broker.

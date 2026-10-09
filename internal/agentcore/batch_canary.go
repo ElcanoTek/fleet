@@ -107,9 +107,12 @@ func canaryShape(rawInput string) string {
 	b.WriteString(digest)
 	if len(shape) > 0 {
 		// json.Marshal writes map keys sorted, so the encoding is canonical.
+		// Keys and values keep their case: a bundle argument may be
+		// case-sensitive ("TenantA" vs "tenanta"), and folding it would let
+		// one operation's canary clear another's batch (Codex on #1712).
 		if enc, err := json.Marshal(shape); err == nil {
 			b.WriteString("\x00")
-			b.WriteString(strings.ToLower(string(enc)))
+			b.Write(enc)
 		}
 	}
 	return b.String()

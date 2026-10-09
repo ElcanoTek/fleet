@@ -79,3 +79,52 @@ func malformedResultRows(v json.RawMessage) bool {
 	}
 	return false
 }
+
+// failClosedDealOutcomes reports whether a critical call's result must be
+// recorded as FAILED because it carries a per-record results envelope that
+// parseDealOutcomes refused (malformedDealOutcomes). The fail-closed reading
+// applies to a deal_ids batch call — whose records the single-call path would
+// otherwise credit — and to any call whose results[] is unmistakably per-record
+// (dealOutcomeShaped). A non-batch tool whose own results[] is some other list,
+// or empty, keeps the single-call accounting (Codex on #1712).
+func failClosedDealOutcomes(rawInput, resultText string) bool {
+	if _, batch := batchDealIDs(rawInput); batch {
+		return malformedDealOutcomes(resultText)
+	}
+	return dealOutcomeShaped(resultText) && malformedDealOutcomes(resultText)
+}
+
+// dealOutcomeShaped reports a JSON object whose top-level results (matched
+// case-insensitively) is an array with at least one object row carrying a
+// deal_id or success key — the per-record envelope shape.
+func dealOutcomeShaped(resultText string) bool {
+	s := strings.TrimSpace(resultText)
+	if s == "" || s[0] != '{' {
+		return false
+	}
+	var top map[string]json.RawMessage
+	if json.NewDecoder(strings.NewReader(s)).Decode(&top) != nil {
+		return false
+	}
+	for k, v := range top {
+		if !strings.EqualFold(k, "results") {
+			continue
+		}
+		var rows []json.RawMessage
+		if json.Unmarshal(v, &rows) != nil {
+			continue
+		}
+		for _, raw := range rows {
+			var row map[string]json.RawMessage
+			if json.Unmarshal(raw, &row) != nil {
+				continue
+			}
+			for rk := range row {
+				if strings.EqualFold(rk, "deal_id") || strings.EqualFold(rk, "success") {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
