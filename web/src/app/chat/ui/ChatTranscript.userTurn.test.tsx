@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { UserTurn } from "./ChatTranscript";
 import type { Message } from "./history";
+import { buildReplyMessage, buildSubmissionMessage } from "./genui/model";
 
 // QA finding #6. The injected "Shared file library (files your administrator
 // published…)" block used to render inside the user's own bubble, so the
@@ -68,5 +69,21 @@ describe("UserTurn", () => {
     expect(
       screen.queryByRole("button", { name: /Context fleet added/ }),
     ).toBeNull();
+  });
+});
+
+describe("UserTurn for a card answer the server refused", () => {
+  it("says it was not sent instead of reading as submitted", () => {
+    const sub = buildSubmissionMessage("c1", "go", { n: "x" });
+    const view = renderTurn(turn({ content: sub, notSent: true }));
+    expect(screen.getByTestId("genui-not-sent")).toBeTruthy();
+    view.unmount();
+    renderTurn(turn({ content: sub }));
+    expect(screen.queryByTestId("genui-not-sent")).toBeNull();
+  });
+
+  it("marks a refused quick reply too", () => {
+    renderTurn(turn({ content: buildReplyMessage("c1", "nah", "Never mind"), notSent: true }));
+    expect(screen.getByTestId("genui-not-sent")).toBeTruthy();
   });
 });

@@ -452,6 +452,10 @@ func (m *model) applyEvent(ev Event) {
 			// died when it is actually waiting on them.
 			if strings.HasPrefix(ev.Str("text"), "APPROVAL_REQUIRED:") {
 				m.toolLines[n-1] = styleTool.Render("⏸ "+name) + styleDim.Render(" awaiting approval")
+			} else if name == showUITool && strings.HasPrefix(ev.Str("text"), "UI_DISPLAYED") {
+				// The card is drawn by the web chat; the terminal has no
+				// renderer for it, so say where it is rather than "done".
+				m.toolLines[n-1] = styleToolOK.Render("◧ "+name) + styleDim.Render(" interactive card · open this chat on the web to use it, or reply here")
 			} else if isErr, _ := ev.Data["is_err"].(bool); isErr {
 				m.toolLines[n-1] = styleToolErr.Render("✗ "+name) + styleDim.Render(" failed")
 			} else {

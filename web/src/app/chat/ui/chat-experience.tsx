@@ -4724,6 +4724,7 @@ export function ChatExperience({
     cancelRecovery,
     sweepStreamLiveness,
     submitPrompt,
+    resumeHeldCardSend,
     regenerateLastAssistant,
     resendUserMessage,
     retryLastUserMessage,
@@ -6473,6 +6474,7 @@ export function ChatExperience({
               activePillId={activePillId}
               setActivePillId={setActivePillId}
               submitPrompt={submitPrompt}
+              resumeHeldCardSend={resumeHeldCardSend}
               setPrompt={setPrompt}
               isSummarizing={isSummarizing}
               summarizeStartedAt={summarizeStartedAt}

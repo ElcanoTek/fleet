@@ -43,6 +43,8 @@
 
 import { useMemo, type ReactNode } from "react";
 import { SUMMARY_BOUNDARY } from "./history";
+import { parseReplyMessage, parseSubmissionMessage, UI_REPLY_PREFIX, UI_SUBMISSION_PREFIX } from "./genui/model";
+import { ReplyBubble, SubmissionBubble } from "./genui/SubmissionBubble";
 import { ReadOnlyFilesContext } from "./LockedFiles";
 import {
   redactUnsharedFiles,
@@ -88,7 +90,12 @@ export function toBubbles(entries: RawEntry[]): Bubble[] {
     const text = String((e.content as { text?: string } | null)?.text ?? "");
     if (!text) continue;
     const last = out[out.length - 1];
-    const merge = !split && last && last.role === e.role;
+    // A card answer ([UI submission] / [UI reply]) is always its own bubble:
+    // snapshots drop the tool calls between turns, so a card answer can sit
+    // right after the request that produced the card, and merging the two
+    // would hide the marker the bubble is parsed from.
+    const cardMessage = (t: string) => t.startsWith(UI_SUBMISSION_PREFIX) || t.startsWith(UI_REPLY_PREFIX);
+    const merge = !split && last && last.role === e.role && !cardMessage(text) && !cardMessage(last.text);
     split = false;
     if (merge) {
       last.text += text;
@@ -159,9 +166,27 @@ export function ReadOnlyTranscript({
         {bubbles.map((b, i) =>
           b.role === "user" ? (
             <div key={i} className="flex justify-end">
-              <div className="max-w-[85%] whitespace-pre-wrap rounded-[1rem] bg-[var(--color-overlay-strong)] px-4 py-2.5 text-[0.9375rem] leading-[1.55]">
-                {b.text}
-              </div>
+              {(() => {
+                // A generative-UI card submission reads as the answers, not
+                // the JSON the model got. Read-only views do not draw the
+                // card itself (they carry text only), so the bubble names
+                // the action and lists the submitted values by id.
+                const sub = parseSubmissionMessage(b.text);
+                const reply = sub ? null : parseReplyMessage(b.text);
+                return sub ? (
+                  <div className="max-w-[85%]">
+                    <SubmissionBubble submission={sub} raw={b.text} />
+                  </div>
+                ) : reply ? (
+                  <div className="max-w-[85%]">
+                    <ReplyBubble reply={reply} />
+                  </div>
+                ) : (
+                  <div className="max-w-[85%] whitespace-pre-wrap rounded-[1rem] bg-[var(--color-overlay-strong)] px-4 py-2.5 text-[0.9375rem] leading-[1.55]">
+                    {b.text}
+                  </div>
+                );
+              })()}
             </div>
           ) : (
             <div

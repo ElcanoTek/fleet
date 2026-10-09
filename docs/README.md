@@ -240,6 +240,7 @@ above fails otherwise.
 - [`FEATURE-NOTES.md`](FEATURE-NOTES.md) — Feature design notes
 - [`FILE-EDIT-SAFETY.md`](FILE-EDIT-SAFETY.md) — File-edit safety (#787)
 - [`generating-demo-gif.md`](generating-demo-gif.md) — Generating the demo GIFs (TUI + web)
+- [`GENERATIVE-UI.md`](GENERATIVE-UI.md) — Generative UI: interactive cards the agent builds in chat (`show_ui`)
 - [`GUARDRAILS.md`](GUARDRAILS.md) — Prompt-injection guardrails (#702)
 - [`HOOKS.md`](HOOKS.md) — Governed lifecycle hooks (#788)
 - [`HOSTED-CONNECTORS-RUNBOOK.md`](HOSTED-CONNECTORS-RUNBOOK.md) — Hosted MCP connectors — operator runbook

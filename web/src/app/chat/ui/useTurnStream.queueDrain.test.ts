@@ -1,4 +1,5 @@
-import { renderHook } from "@testing-library/react";
+import { buildSubmissionMessage } from "./genui/model";
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   hasPendingQueueWork,
@@ -604,4 +605,563 @@ describe("a direct submission the server queued instead of running", () => {
     expect(msgs[3].content).toBe("Rewritten for the client.");
     expect(msgs.some((m) => m.state === "thinking" || m.state === "streaming")).toBe(false);
   }, 20_000);
+});
+
+// A generative-UI card counts a refused message as unanswered and an accepted
+// one as answered, even when its turn then fails (#1700). The bubble of a
+// message the server never took carries notSent so the two can be told apart.
+describe("a submission the server refused", () => {
+  it("is marked notSent and reported as not sent", async () => {
+    const h = makeHarness({
+      initial: answeredTranscript(),
+      persisted: [
+        { role: "user", type: "text", content: { text: "run the analysis" } },
+        { role: "assistant", type: "text", content: { text: "Here is the analysis." } },
+      ],
+      queue: [[]],
+      inflight: [{ inflight: false }],
+    });
+    const harnessFetch = globalThis.fetch;
+    const seen: Message[][] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/chat") {
+          return new Response("slow down", { status: 429, headers: { "Retry-After": "5" } });
+        }
+        seen.push([...(h.store.get(CONV) ?? [])]);
+        return harnessFetch(input, init);
+      }),
+    );
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const sent = await result.current.submitPrompt("[UI submission] card=c1 action=go\n{}");
+    expect(sent).toBe(false);
+    // While the bubble is on screen it says the server never took it.
+    const bubble = seen
+      .flat()
+      .find((m) => m.role === "user" && m.content.startsWith("[UI submission]"));
+    expect(bubble?.notSent).toBe(true);
+  });
+});
+
+describe("a submission whose acknowledgement was lost", () => {
+  it("is cleared of notSent once /inflight names it, and reported as sent", async () => {
+    let ours = "";
+    const h = makeHarness({
+      initial: answeredTranscript(),
+      persisted: drainedHistory(),
+      queue: [[]],
+      inflight: [{ inflight: true, turn_id: "t2" }],
+      streamBodies: [
+        () =>
+          closedStream([
+            sse(1, "turn.started", { turn_id: "t2" }),
+            sse(2, "text.delta", { text: "Got it." }),
+            sse(3, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+    });
+    const harnessFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/chat") {
+          ours = (JSON.parse(String(init?.body)) as { submission_id: string }).submission_id;
+          // The server took it; the response never arrived.
+          throw new TypeError("network error");
+        }
+        if (url.includes("/inflight")) {
+          return new Response(JSON.stringify({ inflight: true, turn_id: "t2", submission_id: ours }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return harnessFetch(input, init);
+      }),
+    );
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const sent = await result.current.submitPrompt("[UI submission] card=c1 action=go\n{}");
+    expect(sent).toBe(true);
+    const bubble = convSlot(h, CONV).find((m) => m.role === "user" && m.content.startsWith("[UI submission]"));
+    expect(bubble).toBeDefined();
+    expect(bubble?.notSent).toBeFalsy();
+  });
+});
+
+describe("a card answer queued behind a running turn", () => {
+  const refusedQueue = async (text: string, fromCard = false) => {
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    const harnessFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+        String(input) === "/api/chat" ? new Response("boom", { status: 500 }) : harnessFetch(input, init),
+      ),
+    );
+    const setPromptForKey = vi.fn();
+    const deps = { ...h.deps, setPromptForKey, streamingConvsRef: { current: new Set([CONV]) } };
+    const { result } = renderHook(() => useTurnStream(deps));
+    expect(await result.current.submitPrompt(text, { fromCard })).toBe(false);
+    return setPromptForKey;
+  };
+
+  it("never writes its marker text into the composer when refused", async () => {
+    const setPromptForKey = await refusedQueue("[UI submission] card=c1 action=go\n{}", true);
+    expect(setPromptForKey).not.toHaveBeenCalled();
+  });
+
+  it("treats typed text that merely looks like a card marker as composer text", async () => {
+    const setPromptForKey = await refusedQueue("[UI submission] means the card was sent");
+    expect(setPromptForKey).toHaveBeenLastCalledWith(CONV, "[UI submission] means the card was sent");
+  });
+
+  it("still gives typed text back to the composer when refused", async () => {
+    const setPromptForKey = await refusedQueue("keep it short");
+    expect(setPromptForKey).toHaveBeenLastCalledWith(CONV, "keep it short");
+  });
+});
+
+describe("a lost-ack submission while another submission's turn runs", () => {
+  const run = async (queueHasOurs: boolean) => {
+    let ours = "";
+    const h = makeHarness({ initial: answeredTranscript(), persisted: drainedHistory(), queue: [[]], inflight: [{ inflight: true, turn_id: "t9" }] });
+    const harnessFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const json = (body: unknown) =>
+          new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+        if (url === "/api/chat") {
+          ours = (JSON.parse(String(init?.body)) as { submission_id: string }).submission_id;
+          throw new TypeError("network error");
+        }
+        if (url.includes("/inflight")) {
+          // A turn for SOMEONE ELSE's submission is running.
+          return json({ inflight: true, turn_id: "t9", submission_id: `not-${ours}` });
+        }
+        if (url.includes("/queue")) {
+          return json({ items: queueHasOurs ? [{ ...queuedRow("q1"), submission_id: ours }] : [queuedRow("q2")] });
+        }
+        return harnessFetch(input, init);
+      }),
+    );
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const sending = result.current.submitPrompt("[UI submission] card=c1 action=go\n{}");
+    await vi.advanceTimersByTimeAsync(10);
+    const sent = await sending;
+    const bubble = convSlot(h, CONV).find((m) => m.role === "user" && m.content.startsWith("[UI submission]"));
+    return { sent, bubble };
+  };
+
+  it("is reported as sent once the queue holds a row with its submission id", async () => {
+    const { sent, bubble } = await run(true);
+    expect(sent).toBe(true);
+    expect(bubble).toBeDefined();
+    expect(bubble?.notSent).toBeFalsy();
+  });
+
+  it("stays not sent when no queue row is its own (another tab's turn)", async () => {
+    const { sent, bubble } = await run(false);
+    expect(sent).toBe(false);
+    expect(bubble?.notSent).toBe(true);
+  });
+});
+
+describe("a queued (busy-conversation) submission whose response was lost", () => {
+  const run = async (queueHasOurs: boolean, persistedHasOurs = false) => {
+    let ours = "";
+    const h = makeHarness({
+      initial: answeredTranscript(),
+      persisted: persistedHasOurs
+        ? [
+            { role: "user", type: "text", content: { text: "run the analysis" } },
+            { role: "assistant", type: "text", content: { text: "Here is the analysis." } },
+            { role: "user", type: "text", content: { text: "keep it short" } },
+            { role: "assistant", type: "text", content: { text: "Done." } },
+          ]
+        : [],
+      queue: [[]],
+      inflight: [{ inflight: false }],
+    });
+    const harnessFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/chat") {
+          const body = JSON.parse(String(init?.body)) as { submission_id?: string; mode?: string };
+          expect(body.mode).toBe("queue");
+          ours = body.submission_id ?? "";
+          throw new TypeError("network error");
+        }
+        if (url.includes("/queue")) {
+          const items = queueHasOurs ? [{ ...queuedRow("q1"), submission_id: ours }] : [];
+          return new Response(JSON.stringify({ items }), { status: 200, headers: { "content-type": "application/json" } });
+        }
+        return harnessFetch(input, init);
+      }),
+    );
+    const setPromptForKey = vi.fn();
+    const deps = { ...h.deps, setPromptForKey, streamingConvsRef: { current: new Set([CONV]) } };
+    const { result } = renderHook(() => useTurnStream(deps));
+    const sent = await result.current.submitPrompt("keep it short");
+    return { sent, ours, setPromptForKey };
+  };
+
+  it("is reported sent when the queue holds its row", async () => {
+    const { sent, ours, setPromptForKey } = await run(true);
+    expect(ours).not.toBe("");
+    expect(sent).toBe(true);
+    expect(setPromptForKey).not.toHaveBeenCalledWith(CONV, "keep it short");
+  });
+
+  it("is reported sent when it already drained and completed (persisted, no longer queued)", async () => {
+    const { sent, setPromptForKey } = await run(false, true);
+    expect(sent).toBe(true);
+    expect(setPromptForKey).not.toHaveBeenCalledWith(CONV, "keep it short");
+  });
+
+  it("is reported not sent, text given back, when the queue does not", async () => {
+    const { sent, setPromptForKey } = await run(false);
+    expect(sent).toBe(false);
+    expect(setPromptForKey).toHaveBeenLastCalledWith(CONV, "keep it short");
+  });
+});
+
+describe("a lost queued response when the server cannot be asked", () => {
+  const run = async (fromCard: boolean) => {
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/chat") throw new TypeError("network error");
+        // Every follow-up read fails too: the outcome is unknown.
+        return new Response("upstream down", { status: 503 });
+      }),
+    );
+    const setPromptForKey = vi.fn();
+    const deps = { ...h.deps, setPromptForKey, streamingConvsRef: { current: new Set([CONV]) } };
+    const { result } = renderHook(() => useTurnStream(deps));
+    const sent = await result.current.submitPrompt("[UI submission] card=c1 action=go\n{}", { fromCard });
+    return { sent, setPromptForKey };
+  };
+
+  it("holds a card answer as possibly sent rather than inviting a duplicate", async () => {
+    const { sent, setPromptForKey } = await run(true);
+    expect(sent).toBe(true);
+    expect(setPromptForKey).not.toHaveBeenCalled();
+  });
+
+  it("gives typed text back so it is not lost", async () => {
+    const { sent, setPromptForKey } = await run(false);
+    expect(sent).toBe(false);
+    expect(setPromptForKey).toHaveBeenLastCalledWith(CONV, "[UI submission] card=c1 action=go\n{}");
+  });
+});
+
+describe("a direct card send whose response is lost while the server is unreachable", () => {
+  it("is held as possibly sent while recovery owns the outcome", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/chat") throw new TypeError("network error");
+        return new Response("upstream down", { status: 503 });
+      }),
+    );
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const sending = result.current.submitPrompt("[UI submission] card=c1 action=go\n{}", { fromCard: true });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await sending).toBe(true);
+  });
+});
+
+describe("a held card send that recovery later proves absent", () => {
+  const run = async (landed: boolean, queueFailures = 0) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/chat") throw new TypeError("network error");
+        return new Response("upstream down", { status: 503 });
+      }),
+    );
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const onUnsent = vi.fn();
+    const sending = result.current.submitPrompt("[UI submission] card=c1 action=go\n{}", { fromCard: true, onUnsent });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await sending).toBe(true);
+    expect(onUnsent).not.toHaveBeenCalled();
+    // The server comes back: no turn, nothing queued, nothing persisted.
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/queue")) {
+          if (queueFailures-- > 0) return new Response("upstream down", { status: 503 });
+          return json({ items: [] });
+        }
+        if (url.includes("/inflight")) return json({ inflight: false, turn_id: "" });
+        if (url.includes("/api/conversations/"))
+          return json({
+            history: [
+              { role: "user", type: "text", content: { text: "run the analysis" } },
+              { role: "assistant", type: "text", content: { text: "Here is the analysis." } },
+              ...(landed ? [{ role: "user", type: "text", content: { text: "[UI submission] card=c1 action=go\n{}" } }] : []),
+            ],
+          });
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(120_000);
+    held = convSlot(h, CONV).filter((m) => m.role === "user" && m.content === "[UI submission] card=c1 action=go\n{}");
+    return onUnsent;
+  };
+  let held: Message[] = [];
+
+  it("tells the card, so its hold is released", async () => {
+    expect(await run(false)).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the hold when the server does hold the submission", async () => {
+    expect(await run(true)).not.toHaveBeenCalled();
+    // ...and the answer stops reading as refused, so the card locks on it.
+    expect(held.some((m) => m.notSent)).toBe(false);
+  });
+
+  it("keeps asking when the answer is still unknown after recovery", async () => {
+    expect(await run(false, 3)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a held queued card send", () => {
+  const run = async (landed: boolean) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/chat") throw new TypeError("network error");
+        return new Response("upstream down", { status: 503 });
+      }),
+    );
+    const deps = { ...h.deps, streamingConvsRef: { current: new Set([CONV]) } };
+    const { result } = renderHook(() => useTurnStream(deps));
+    const onUnsent = vi.fn();
+    const text = "[UI submission] card=c1 action=go\n{}";
+    const sending = result.current.submitPrompt(text, { fromCard: true, onUnsent });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await sending).toBe(true);
+    // The server comes back.
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/queue")) return json({ items: [] });
+        if (url.includes("/api/conversations/"))
+          return json({ history: landed ? [{ role: "user", type: "text", content: { text } }] : [] });
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(120_000);
+    return onUnsent;
+  };
+
+  it("releases the hold once the server shows it never arrived", async () => {
+    expect(await run(false)).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the hold when the server has it", async () => {
+    expect(await run(true)).not.toHaveBeenCalled();
+  });
+});
+
+describe("a lost queued card response whose presence probes hang", () => {
+  it("times the probes out instead of leaving the card sending for good", async () => {
+    vi.useFakeTimers();
+    // AbortSignal.timeout runs on the platform's own timers; route it through
+    // the faked ones so the bound can be observed.
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      const c = new AbortController();
+      setTimeout(() => c.abort(new DOMException("timed out", "TimeoutError")), ms);
+      return c.signal;
+    });
+    try {
+      const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+          if (String(input) === "/api/chat") return Promise.reject(new TypeError("network error"));
+          // Accepted, then blackholed: only the abort ends it.
+          return new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+          });
+        }),
+      );
+      const deps = { ...h.deps, streamingConvsRef: { current: new Set([CONV]) } };
+      const { result } = renderHook(() => useTurnStream(deps));
+      let settled: boolean | undefined;
+      void result.current.submitPrompt("[UI submission] card=c1 action=go\n{}", { fromCard: true }).then((v) => {
+        settled = v;
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+      // Unknown, so the card holds (true) rather than hanging in Sending…
+      expect(settled).toBe(true);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+});
+
+describe("a queued card answer removed from the queue", () => {
+  it("releases the card's hold once the server no longer has it", async () => {
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    let sid = "";
+    let removed = false;
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/chat") {
+          sid = (JSON.parse(String(init?.body)) as { submission_id: string }).submission_id;
+          return json({ queued: true, input: { id: "q1", client_input_id: "c-q1", mode: "queued", state: "queued", position: 1 }, conversation_id: CONV }, 202);
+        }
+        if (url.includes("/queue/") && init?.method === "DELETE") {
+          removed = true;
+          return json({});
+        }
+        if (url.includes("/queue")) return json({ items: removed ? [] : [{ ...queuedRow("q1"), submission_id: sid }] });
+        if (url.includes("/api/conversations/")) return json({ history: [] });
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    const deps = { ...h.deps, streamingConvsRef: { current: new Set([CONV]) } };
+    const { result } = renderHook(() => useTurnStream(deps));
+    const onUnsent = vi.fn();
+    await act(async () => {
+      expect(await result.current.submitPrompt("[UI submission] card=c1 action=go\n{}", { fromCard: true, onUnsent })).toBe(true);
+    });
+    expect(onUnsent).not.toHaveBeenCalled();
+    await act(async () => {
+      await result.current.removeQueuedInput(CONV, "q1");
+    });
+    await vi.waitFor(() => expect(onUnsent).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("a queued card answer whose ack was lost, later removed", () => {
+  it("is still watched, so its removal releases the card", async () => {
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    let sid = "";
+    let removed = false;
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/chat") {
+          sid = (JSON.parse(String(init?.body)) as { submission_id: string }).submission_id;
+          // The server queued it, but the response never arrived.
+          throw new TypeError("network error");
+        }
+        if (url.includes("/queue/") && init?.method === "DELETE") {
+          removed = true;
+          return json({});
+        }
+        if (url.includes("/queue")) return json({ items: removed ? [] : [{ ...queuedRow("q1"), submission_id: sid }] });
+        if (url.includes("/api/conversations/")) return json({ history: [] });
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    const deps = { ...h.deps, streamingConvsRef: { current: new Set([CONV]) } };
+    const { result } = renderHook(() => useTurnStream(deps));
+    const onUnsent = vi.fn();
+    await act(async () => {
+      expect(await result.current.submitPrompt("[UI submission] card=c1 action=go\n{}", { fromCard: true, onUnsent })).toBe(true);
+    });
+    await act(async () => {
+      await result.current.removeQueuedInput(CONV, "q1");
+    });
+    await vi.waitFor(() => expect(onUnsent).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("a queued card answer held across a page load", () => {
+  it("names its queue row, and a later page resumes the watch and releases the card once the row is gone", async () => {
+    const h = makeHarness({ initial: answeredTranscript(), persisted: [], queue: [[]], inflight: [{ inflight: false }] });
+    let sid = "";
+    let removed = false;
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/chat") {
+          sid = (JSON.parse(String(init?.body)) as { submission_id: string }).submission_id;
+          return json({ queued: true, input: { id: "q1", client_input_id: "c-q1", mode: "queued", state: "queued", position: 1 }, conversation_id: CONV }, 202);
+        }
+        if (url.includes("/queue")) return json({ items: removed ? [] : [{ ...queuedRow("q1"), submission_id: sid }] });
+        if (url.includes("/api/conversations/")) return json({ history: [] });
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    const deps = { ...h.deps, streamingConvsRef: { current: new Set([CONV]) } };
+    const text = "[UI submission] card=c1 action=go\n{}";
+    const first = renderHook(() => useTurnStream(deps));
+    const onHeld = vi.fn();
+    await act(async () => {
+      expect(await first.result.current.submitPrompt(text, { fromCard: true, onUnsent: vi.fn(), onHeld })).toBe(true);
+    });
+    expect(onHeld).toHaveBeenCalledWith(CONV, sid);
+    first.unmount();
+
+    // A new page load: the in-page watcher is gone; the row is removed.
+    removed = true;
+    const second = renderHook(() => useTurnStream(deps));
+    const onUnsent = vi.fn();
+    act(() => second.result.current.resumeHeldCardSend(CONV, text, sid, onUnsent));
+    await vi.waitFor(() => expect(onUnsent).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("retrying a card answer's failed turn", () => {
+  it("resends it as a card send: the composer's text is left alone", async () => {
+    const card = buildSubmissionMessage("c1", "go", { a: 1 });
+    const h = makeHarness({
+      initial: [
+        { id: 1, role: "user", content: card, state: "done" },
+        { id: 2, role: "assistant", content: "", state: "done", failed: true },
+      ] as Message[],
+      persisted: [],
+      queue: [[]],
+      inflight: [{ inflight: false }],
+    });
+    const harnessFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+        String(input) === "/api/chat" ? new Response("boom", { status: 500 }) : harnessFetch(input, init),
+      ),
+    );
+    const setPromptForKey = vi.fn();
+    const deps = { ...h.deps, setPromptForKey };
+    const { result } = renderHook(() => useTurnStream(deps));
+    await act(async () => {
+      await result.current.retryLastUserMessage();
+    });
+    expect(setPromptForKey).not.toHaveBeenCalled();
+  });
 });
