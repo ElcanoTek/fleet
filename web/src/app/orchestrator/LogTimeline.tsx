@@ -853,7 +853,7 @@ export function TranscriptTimeline({
     setOpen((prev) => new Set(prev).add(key));
     // After the opened card renders.
     window.requestAnimationFrame(() =>
-      document.getElementById(`lt-${key}`)?.scrollIntoView({ block: "start", behavior: "smooth" }),
+      document.getElementById(`lt-${key}`)?.scrollIntoView?.({ block: "start", behavior: "smooth" }),
     );
   }, []);
 
