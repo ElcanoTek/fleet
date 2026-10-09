@@ -32,7 +32,7 @@ import (
 //     means run-ledger entries persist across runs/restarts — a dedupe window,
 //     not a per-run ledger.
 //   - Per-run spawns (a scheduled task with an explicit mcp_selection, which
-//     gets its own MCP client) substitute StableMCPWorkspaceDir("task-<id>"):
+//     gets its own MCP client) substitute OpenStableMCPWorkspace("task-<id>"):
 //     one directory per task occurrence, re-mounted by every retry of that
 //     occurrence (cutlass-parity ledger semantics) and never shared with
 //     another occurrence.
@@ -164,7 +164,7 @@ func EnvReferencesWorkspaceRoot(env map[string]string) bool {
 // WorkspaceRootDir returns the absolute workspace root every spawn path
 // substitutes for ${FLEET_WORKSPACE_ROOT}: FLEET_WORKSPACE_ROOT (legacy
 // CHAT_/CUTLASS_ aliases honored), else ./workspace resolved against the
-// process cwd — the same root SharedMCPWorkspaceDir and PerRunMCPWorkspaceDir
+// process cwd — the same root SharedMCPWorkspaceDir and OpenStableMCPWorkspace
 // nest under. It creates nothing on disk.
 func WorkspaceRootDir() string {
 	root := mcpWorkspaceRoot()
@@ -218,16 +218,26 @@ func SharedMCPWorkspaceDir() string {
 	return dir
 }
 
-// StableMCPWorkspaceDir returns the writable directory for one run's dedicated
-// MCP client, keyed by a caller-supplied occurrence identity (e.g.
-// "task-<uuid>"): <workspace-root>/mcp-runs/<key>. The SAME key always yields
-// the SAME directory, created idempotently, so every attempt of one occurrence
-// (a max_retries retry, a connector-unavailable infra retry, a lease recovery)
-// re-mounts the ledger the earlier attempt wrote. That is the cutlass
-// contract, and it is what lets Fleet's start-of-run create reconciliation
-// tell a retry which deals/emails the previous attempt already booked. A
-// different key (the next recurring occurrence, a re-run, a clone) gets its own
-// directory, so one occurrence's ledger never leaks into another.
+// OpenStableMCPWorkspace returns the writable directory for one run's
+// dedicated MCP client, keyed by a caller-supplied occurrence identity (e.g.
+// "task-<uuid>"): <workspace-root>/mcp-runs/<key>, plus an *os.Root anchored at
+// it for the caller's own host-side writes (the caller closes it). The SAME key
+// always yields the SAME directory, created idempotently, so every attempt of
+// one occurrence (a max_retries retry, a connector-unavailable infra retry, a
+// lease recovery) re-mounts the ledger the earlier attempt wrote. That is the
+// cutlass contract, and it is what lets Fleet's start-of-run create
+// reconciliation tell a retry which deals/emails the previous attempt already
+// booked. A different key (the next recurring occurrence, a re-run, a clone)
+// gets its own directory, so one occurrence's ledger never leaks into another.
+//
+// The directory lives under the workspace root, which the sandbox mounts
+// read-write, so an earlier attempt may have tampered with it. Every host-side
+// operation here therefore goes through an os.Root opened at the workspace root
+// (nothing resolves outside it), the mcp-runs base and the run dir must be real
+// directories — a symlink or file squatting on either fails the setup closed
+// rather than being mounted — and any symlink planted at the top of the run dir
+// (e.g. creates.jsonl -> a host file) is removed before a connector is spawned
+// on it. Writes through the returned root cannot leave the run dir.
 //
 // The directory is deliberately NOT cleaned up here: it holds the run ledger,
 // which is post-run evidence of the critical actions the run recorded, and
@@ -236,31 +246,96 @@ func SharedMCPWorkspaceDir() string {
 // that dir has no task scoping, so using it would silently mix this task's
 // ledger with every other task's. The error is returned and the run's MCP
 // setup fails loudly instead.
-func StableMCPWorkspaceDir(key string) (string, error) {
+func OpenStableMCPWorkspace(key string) (string, *os.Root, error) {
 	if err := validateWorkdirKey(key); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	base := filepath.Join(mcpWorkspaceRoot(), perRunMCPWorkspaceSubdir)
-	if abs, err := filepath.Abs(base); err == nil {
-		base = abs
+	rootDir := mcpWorkspaceRoot()
+	if abs, err := filepath.Abs(rootDir); err == nil {
+		rootDir = abs
 	}
-	if err := os.MkdirAll(base, 0o750); err != nil {
-		return "", fmt.Errorf("mcp workspace: create per-run base %s: %w", base, err)
+	// The workspace root itself is operator configuration, not
+	// sandbox-writable (only its contents are mounted), so plain MkdirAll is
+	// fine for it; everything below is resolved through the root.
+	if err := os.MkdirAll(rootDir, 0o750); err != nil {
+		return "", nil, fmt.Errorf("mcp workspace: create workspace root %s: %w", rootDir, err)
 	}
-	dir := filepath.Join(base, key)
-	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-		return "", fmt.Errorf("mcp workspace: create run dir %s: %w", dir, err)
-	}
-	// Mkdir reporting ErrExist is the retry path, but only a real directory
-	// qualifies (a file or symlink squatting on the name must not be mounted).
-	info, err := os.Lstat(dir)
+	ws, err := os.OpenRoot(rootDir)
 	if err != nil {
-		return "", fmt.Errorf("mcp workspace: stat run dir %s: %w", dir, err)
+		return "", nil, fmt.Errorf("mcp workspace: open workspace root %s: %w", rootDir, err)
 	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("mcp workspace: %s exists and is not a directory", dir)
+	defer func() { _ = ws.Close() }()
+	if err := mkdirNoFollow(ws, perRunMCPWorkspaceSubdir, 0o750); err != nil {
+		return "", nil, err
 	}
-	return dir, nil
+	rel := filepath.Join(perRunMCPWorkspaceSubdir, key)
+	if err := mkdirNoFollow(ws, rel, 0o700); err != nil {
+		return "", nil, err
+	}
+	run, err := ws.OpenRoot(rel)
+	if err != nil {
+		return "", nil, fmt.Errorf("mcp workspace: open run dir %s: %w", rel, err)
+	}
+	// Pin the handle to the directory just validated: a swap between the
+	// Lstat and the open would otherwise anchor the root at another directory.
+	opened, err := run.Stat(".")
+	if err == nil {
+		var checked fs.FileInfo
+		if checked, err = ws.Lstat(rel); err == nil && !os.SameFile(opened, checked) {
+			err = errors.New("changed while it was being opened")
+		}
+	}
+	if err == nil {
+		err = removeTopLevelSymlinks(run)
+	}
+	if err != nil {
+		_ = run.Close()
+		return "", nil, fmt.Errorf("mcp workspace: run dir %s: %w", rel, err)
+	}
+	return filepath.Join(rootDir, rel), run, nil
+}
+
+// mkdirNoFollow creates name inside root if absent and requires that what is
+// there is a real directory: a symlink (even one to a directory) or a file is
+// refused, never followed.
+func mkdirNoFollow(root *os.Root, name string, perm fs.FileMode) error {
+	if err := root.Mkdir(name, perm); err != nil && !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("mcp workspace: create %s: %w", name, err)
+	}
+	info, err := root.Lstat(name)
+	if err != nil {
+		return fmt.Errorf("mcp workspace: stat %s: %w", name, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("mcp workspace: %s exists and is not a directory (a symlink is refused, not followed)", name)
+	}
+	return nil
+}
+
+// removeTopLevelSymlinks unlinks every symlink directly inside the run dir.
+// Fleet and the connectors only ever create regular files and directories
+// there, so a symlink is something the sandbox planted to redirect a
+// host-side write (a connector appending its ledger, Fleet staging inputs).
+func removeTopLevelSymlinks(run *os.Root) error {
+	dir, err := run.Open(".")
+	if err != nil {
+		return err
+	}
+	entries, err := dir.ReadDir(-1)
+	_ = dir.Close()
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Type()&fs.ModeSymlink == 0 {
+			continue
+		}
+		if err := run.Remove(e.Name()); err != nil {
+			return fmt.Errorf("remove planted symlink %s: %w", e.Name(), err)
+		}
+		log.Printf("mcp workspace: removed planted symlink %s from %s", e.Name(), run.Name())
+	}
+	return nil
 }
 
 // validateWorkdirKey rejects keys that are not a single safe path segment.
