@@ -132,6 +132,12 @@ type orchestrationState struct {
 	// and its own commitment stayed owed (#1604).
 	dischargedDeals map[string]map[string]bool
 
+	// canarySucceeded records the critical actions (canaryKey: server/variant
+	// prefix + alias class + value set and operation shape) proven on ONE
+	// record this run; checkBatchCanary refuses a multi-record deal_ids batch
+	// until its key is here (batch_canary.go). Lazily allocated.
+	canarySucceeded map[string]bool
+
 	// criticalToolFailureAttempts counts unsuccessful executions per
 	// (toolName + argsHash) so a deterministically-broken critical call can't
 	// loop endlessly under one audit envelope.
@@ -1055,7 +1061,9 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			o.criticalToolFailureAttempts = make(map[string]int)
 		}
 
-		if outcomes, ok := parseDealOutcomes(resultText); ok {
+		outcomes, ok := parseDealOutcomes(resultText)
+		switch {
+		case ok:
 			// Batch result: discharge one commitment per SUCCEEDED record,
 			// idempotently. dischargedDeals dedups by record id, so a resume
 			// that idempotently skips already-done records (reporting them
@@ -1120,6 +1128,12 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 					failed++
 				}
 			}
+			// A canary must be a SUCCESSFUL call: a transport error or an
+			// isError response is no proof of the operation, even when its
+			// body still carries a success row for the requested record.
+			if succeeded {
+				o.creditBatchCanary(toolName, rawInput, outcomes)
+			}
 			if newly > 0 {
 				o.criticalExecutedCount++
 				delete(o.criticalToolFailureAttempts, key)
@@ -1133,7 +1147,16 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 				log.Printf("Critical batch %s made no forward progress (%d failed); attempt %d/%d",
 					toolName, failed, o.criticalToolFailureAttempts[key], maxAttemptsPerCriticalAction)
 			}
-		} else if effectiveSucceeded {
+		case failClosedDealOutcomes(rawInput, resultText):
+			// A deal_ids batch without usable per-record results, or a
+			// per-record results[] that failed validation: fail closed — no
+			// discharge, no canary credit, counts against the retry budget.
+			// Falling through to the single-call branch would credit the
+			// input's records as done and clear the retry budget.
+			o.criticalToolFailureAttempts[key]++
+			log.Printf("Critical batch %s returned malformed per-record results; treating as failed (attempt %d/%d)",
+				toolName, o.criticalToolFailureAttempts[key], maxAttemptsPerCriticalAction)
+		case effectiveSucceeded:
 			// Single-call critical tool (no per-record results[]).
 			o.criticalExecutedCount++
 			delete(o.criticalToolFailureAttempts, key)
@@ -1142,8 +1165,9 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 				o.selfAuditRequested = true
 			}
 			log.Printf("Critical action succeeded: %s", toolName)
+			o.creditSingleRecordCanary(toolName, rawInput)
 			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput))
-		} else {
+		default:
 			// Ran but reported failure (transport-level, resp.IsError, or a
 			// payload-level failure per mcpReportedFailure) → counts against
 			// the per-(tool,args) retry budget and discharges NOTHING.

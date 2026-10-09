@@ -17,6 +17,12 @@
 # package parallelism. admincli and cmd/fleet wait until both serial groups
 # finish, because they share both DSNs.
 #
+# Two things keep the serial groups from dominating wall time (see the comments
+# at each): their test binaries are compiled up front at full parallelism (a
+# `-p 1` group would otherwise compile on one core), and, when
+# HTTPAPI_TEST_DATABASE_URL names a third database, internal/httpapi runs on it
+# alongside internal/store instead of after it.
+#
 # CI and `make test` / `make test-race` / `make test-cover` all call this script
 # so the partition cannot drift between them.
 #
@@ -173,25 +179,82 @@ run_group() {
 
 status_independent=0
 status_chat=0
+status_httpapi=0
 status_sched=0
 status_both=0
 
-# Wave 1: independent packages at default parallelism, overlapping the two
-# DSN-serial groups (they use different databases, ADR-0005).
+# Optional: give internal/httpapi a database of its own. store and httpapi are
+# serialized only because they TRUNCATE the same fleet_chat_test; pointed at
+# separate databases they cannot collide, and the two slowest DSN packages run
+# side by side instead of back to back (~100s each under -race). Unset — the
+# default for `make test` — keeps them in one serial group on the shared DSN.
+# CI creates the extra database and sets this.
+HTTPAPI=()
+if [[ -n "${HTTPAPI_TEST_DATABASE_URL:-}" ]]; then
+  rest=()
+  for pkg in "${CHAT[@]}"; do
+    case "$pkg" in
+      github.com/ElcanoTek/fleet/internal/httpapi|github.com/ElcanoTek/fleet/internal/httpapi/*)
+        HTTPAPI+=("$pkg") ;;
+      *) rest+=("$pkg") ;;
+    esac
+  done
+  CHAT=("${rest[@]}")
+fi
+
+# The independent packages start right away, at default parallelism: they need
+# no database, so nothing below has to finish first. They overlap the prebuild
+# and both DSN-serial groups (which use different databases, ADR-0005).
 run_group independent 0 "$tmp/independent.log" "${INDEPENDENT[@]}" &
 pid_independent=$!
+
+# Compile the DSN-serial groups' test binaries at full parallelism first.
+# `go test -p 1` serializes the BUILD as well as the test runs, so without this
+# each serial group compiled its (race-instrumented) dependency graph on one
+# core: in CI the -race lane spent ~250s of each group's ~400s wall time
+# compiling, not testing. Building here fills the build cache with the same
+# instrumentation the runs below ask for (tags, -race, atomic coverage), so the
+# serial groups only link and run. A compile error fails here, once, loudly.
+SERIAL=("${CHAT[@]}" "${HTTPAPI[@]}" "${SCHED[@]}" "${BOTH[@]}")
+prebuild=()
+if [[ -n "$COVER_OUT" ]]; then
+  prebuild+=(-cover -covermode=atomic)
+fi
+start="$(date +%s)"
+echo "==> prebuilding ${#SERIAL[@]} DSN-serial test binaries at default -p"
+if ! go test "${TAGS[@]}" "${RACE[@]}" "${prebuild[@]}" -c -o "$tmp/prebuild/" "${SERIAL[@]}"; then
+  echo "go test -c (prebuild of the DSN-serial packages) failed" >&2
+  wait "$pid_independent" || true
+  cat "$tmp/independent.log"
+  exit 1
+fi
+echo "==> prebuild finished in $(( $(date +%s) - start ))s"
+
 run_group chat 1 "$tmp/chat.log" "${CHAT[@]}" &
 pid_chat=$!
+pid_httpapi=""
+if (( ${#HTTPAPI[@]} > 0 )); then
+  (
+    export FLEET_TEST_DATABASE_URL="$HTTPAPI_TEST_DATABASE_URL"
+    export CHAT_TEST_DATABASE_URL="$HTTPAPI_TEST_DATABASE_URL"
+    run_group httpapi 1 "$tmp/httpapi.log" "${HTTPAPI[@]}"
+  ) &
+  pid_httpapi=$!
+fi
 run_group sched 1 "$tmp/sched.log" "${SCHED[@]}" &
 pid_sched=$!
 
-wait "$pid_independent" || status_independent=$?
 wait "$pid_chat" || status_chat=$?
+if [[ -n "$pid_httpapi" ]]; then
+  wait "$pid_httpapi" || status_httpapi=$?
+fi
 wait "$pid_sched" || status_sched=$?
 
-# Wave 2: packages that share BOTH DSNs, after the serial groups have released
-# the databases.
+# Packages that share BOTH DSNs, after the serial groups have released the
+# databases (they do not wait for the independent packages).
 run_group both 1 "$tmp/both.log" "${BOTH[@]}" || status_both=$?
+
+wait "$pid_independent" || status_independent=$?
 
 # Replay group logs in a stable order so a failure is readable even when the
 # groups ran concurrently.
@@ -201,6 +264,11 @@ cat "$tmp/independent.log"
 echo
 echo "----- chat-serial packages (FLEET_TEST_DATABASE_URL) -----"
 cat "$tmp/chat.log"
+if [[ -f "$tmp/httpapi.log" ]]; then
+  echo
+  echo "----- httpapi packages (HTTPAPI_TEST_DATABASE_URL) -----"
+  cat "$tmp/httpapi.log"
+fi
 echo
 echo "----- sched-serial packages (DATABASE_URL) -----"
 cat "$tmp/sched.log"
@@ -221,7 +289,7 @@ if [[ -n "$COVER_OUT" ]]; then
 fi
 
 fail=0
-for pair in "independent:${status_independent}" "chat:${status_chat}" "sched:${status_sched}" "both:${status_both}"; do
+for pair in "independent:${status_independent}" "chat:${status_chat}" "httpapi:${status_httpapi}" "sched:${status_sched}" "both:${status_both}"; do
   name="${pair%%:*}"
   st="${pair#*:}"
   if [[ "$st" -ne 0 ]]; then

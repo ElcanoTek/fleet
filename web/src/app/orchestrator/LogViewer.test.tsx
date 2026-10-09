@@ -787,12 +787,22 @@ describe("LogViewer transcript timeline", () => {
   });
 
   it("jumps to a step from the overview strip", async () => {
-    mockSession(TIMELINE_SESSION);
-    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
-    const strip = await screen.findByTestId("log-step-strip");
-    fireEvent.click(within(strip).getByRole("button", { name: "Step 2: bash" }));
-    await waitFor(() =>
-      expect(screen.getAllByTestId("log-tool-step")[1]).toHaveTextContent("magnite.csv"),
-    );
+    // jsdom has no scrollIntoView; the jump scrolls the opened card into view
+    // on the next animation frame, so stub it and assert the scroll lands.
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      mockSession(TIMELINE_SESSION);
+      render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+      const strip = await screen.findByTestId("log-step-strip");
+      fireEvent.click(within(strip).getByRole("button", { name: "Step 2: bash" }));
+      await waitFor(() =>
+        expect(screen.getAllByTestId("log-tool-step")[1]).toHaveTextContent("magnite.csv"),
+      );
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "start", behavior: "smooth" });
+    } finally {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
   });
 });

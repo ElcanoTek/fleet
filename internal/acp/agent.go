@@ -124,12 +124,31 @@ type Agent struct {
 	// other, and Go's mutex does not hand itself over first-come
 	// first-served anyway.
 	line map[acpsdk.SessionId]chan struct{}
+	// arrivals counts the session/prompt requests that have reached Prompt
+	// (tracked, or turned away before that), and cancels the session/cancel
+	// notifications Cancel has handled. Each count closes and replaces
+	// ordered. orderedInput waits on them (awaitOrder) to hand the SDK a
+	// prompt and a cancel only once the agent has handled what the client
+	// sent before it.
+	arrivals, cancels uint64
+	ordered           chan struct{}
 }
 
 // promptTracked runs once a prompt is tracked, before it waits for its
 // turn. A test seam (a no-op in production): it lets a test hold a prompt
 // between the two, where the SDK's scheduling can leave it.
 var promptTracked = func(_ string) {}
+
+// promptReceived runs just before a prompt is tracked, and cancelReceived as
+// a session/cancel reaches Cancel. Test seams (no-ops in production): they
+// stand in for the SDK starting either late, which is what reorders a prompt
+// and a cancel sent close together (see orderedInput). promptReceived sits
+// at the last point before track, so a prompt held there must not count as
+// arrived yet.
+var (
+	promptReceived = func(acpsdk.PromptRequest) {}
+	cancelReceived = func() {}
+)
 
 // maxWaitingPrompts caps how many prompts may wait for one session behind
 // the prompt holding it. A waiting prompt has not reached fleet yet, so the
@@ -292,6 +311,7 @@ func NewAgent(client turnClient, cfgErr error, publicURL string, timeout time.Du
 		inflight:  map[acpsdk.SessionId]map[uint64]context.CancelFunc{},
 		turns:     map[*translator]struct{}{},
 		line:      map[acpsdk.SessionId]chan struct{}{},
+		ordered:   make(chan struct{}),
 	}
 }
 
@@ -414,20 +434,71 @@ func (a *Agent) NewSession(ctx context.Context, p acpsdk.NewSessionRequest) (acp
 // not be stopped at all. inflight keeps one entry per prompt until that
 // prompt is answered, so neither can happen here.
 //
-// It reaches the prompts in flight when it is handled. The SDK runs each
-// request on its own goroutine but queues notifications, so the wire order
-// of a prompt and a session/cancel sent close together is not kept, as
-// under the SDK's own handling. Rarely, a prompt sent right behind the
-// cancel is already tracked and is cancelled with the rest. Or one sent
-// right before it is not tracked yet, escapes the cancel, and runs once the
-// stopped turn has ended.
+// It reaches the prompts in flight when it is handled, which orderedInput
+// makes the client's order: every prompt sent before the cancel has been
+// tracked by then, and none sent after it has. The SDK alone does not keep
+// that order (it runs each request on its own goroutine but queues
+// notifications), so a prompt sent right before a cancel could escape it
+// and run on, and one sent right behind it could be stopped with the rest.
 func (a *Agent) Cancel(_ context.Context, p acpsdk.CancelNotification) error {
+	cancelReceived()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, stop := range a.inflight[p.SessionId] {
 		stop()
 	}
+	a.cancels++
+	a.wakeOrderLocked()
 	return nil
+}
+
+// arrive counts a prompt that reached Prompt but was not tracked (see
+// arrivals).
+func (a *Agent) arrive() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.arrivals++
+	a.wakeOrderLocked()
+}
+
+// wakeOrderLocked wakes awaitOrder's waiters after a count changed. a.mu is
+// held.
+func (a *Agent) wakeOrderLocked() {
+	close(a.ordered)
+	a.ordered = make(chan struct{})
+}
+
+// awaitOrder waits until at least prompts session/prompt requests have
+// reached Prompt and at least cancels session/cancel notifications have been
+// handled, for at most bound. It returns how many had, and whether they
+// caught up. A client that has gone away needs no order kept (no prompt is
+// submitted after a hang-up), so the wait ends then too, as caught up.
+func (a *Agent) awaitOrder(prompts, cancels uint64, bound time.Duration) (arrived, handled uint64, caughtUp bool) {
+	state := func() (uint64, uint64, <-chan struct{}) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.arrivals, a.cancels, a.ordered
+	}
+	arrived, handled, wake := state()
+	if arrived >= prompts && handled >= cancels {
+		return arrived, handled, true
+	}
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	for {
+		select {
+		case <-wake:
+		case <-a.lifetime.Done():
+			return arrived, handled, true
+		case <-timer.C:
+			arrived, handled, _ = state()
+			return arrived, handled, arrived >= prompts && handled >= cancels
+		}
+		arrived, handled, wake = state()
+		if arrived >= prompts && handled >= cancels {
+			return arrived, handled, true
+		}
+	}
 }
 
 // track registers a prompt that has just arrived on session sid until it is
@@ -440,8 +511,13 @@ func (a *Agent) Cancel(_ context.Context, p acpsdk.CancelNotification) error {
 // It also gives the prompt its place in the session's line (see line): it
 // may take the session once prev is closed, and release closes its own turn
 // for the prompt tracked next. "Arrival" order is the order of track calls,
-// not the order on the wire: the SDK starts a goroutine per request, and
-// two prompts sent back to back can reach track in either order.
+// which orderedInput makes the order on the wire: the SDK starts a goroutine
+// per request, so on their own two prompts sent back to back could reach
+// track in either order.
+//
+// A tracked prompt counts as arrived (arrivals) in the same critical section
+// that registers its stop, so a session/cancel orderedInput held back for it
+// finds it.
 func (a *Agent) track(sid acpsdk.SessionId) (stop context.Context, prev <-chan struct{}, release func(), ok bool) {
 	a.mu.Lock()
 	if len(a.inflight[sid]) > maxWaitingPrompts {
@@ -455,6 +531,8 @@ func (a *Agent) track(sid acpsdk.SessionId) (stop context.Context, prev <-chan s
 		a.inflight[sid] = map[uint64]context.CancelFunc{}
 	}
 	a.inflight[sid][id] = cancel
+	a.arrivals++
+	a.wakeOrderLocked()
 	turn := make(chan struct{})
 	prev = a.line[sid] // nil (the session is free): receiving from it would block forever, so see free below
 	if prev == nil {
@@ -573,6 +651,15 @@ func (a *Agent) CloseSession(_ context.Context, p acpsdk.CloseSessionRequest) (a
 // ignore `$/` notifications, and session/cancel is its way to stop a turn
 // (the Go SDK's client sends one along with its `$/cancel_request`).
 func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+	// Every prompt counts as arrived exactly once, for orderedInput: track
+	// counts it as it registers the prompt's stop, and one turned away before
+	// that counts as it leaves.
+	tracked := false
+	defer func() {
+		if !tracked {
+			a.arrive()
+		}
+	}()
 	if a.cfgErr != nil {
 		return acpsdk.PromptResponse{}, reasonError(acpsdk.NewAuthRequired, a.cfgErr.Error())
 	}
@@ -595,6 +682,7 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	// settled by the time this one gets the session; this prompt is still a
 	// resend of the same message, so it keeps that key (idempotencyKey).
 	earlier := sess.peekUnsettled(message)
+	promptReceived(p)
 	// Tracked from arrival, not from when it gets the session, so a
 	// session/cancel also reaches a prompt still waiting for it. The last
 	// arrival step: a tracked prompt has its arrival key.
@@ -605,6 +693,7 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 		return acpsdk.PromptResponse{}, reasonError(acpsdk.NewInternalError, fmt.Sprintf(
 			"this session already has a prompt running and %d waiting for it; wait for them to be answered (or send session/cancel) before sending another", maxWaitingPrompts))
 	}
+	tracked = true
 	defer release()
 	promptTracked(message)
 

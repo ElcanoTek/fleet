@@ -237,7 +237,7 @@ components:
     TaskCreate:
       type: object
       properties:
-        prompt: { type: string }
+        prompt: { type: string, description: "Task prompt, 3 to 250000 bytes (UTF-8 byte length after trimming, not characters)." }
         name: { type: string, description: "Optional, human-readable label; the identity key for the definition import/export endpoints (#238). A non-empty name must be unique across tasks. Never injected into the agent prompt." }
         title: { type: string, description: "Optional short display label shown wherever the task is listed. Unlike name it is NOT unique and IS carried onto every occurrence, re-run and clone, so all the runs of one job share it. Single line, max 120 characters. Never injected into the agent prompt." }
         model: { type: string }

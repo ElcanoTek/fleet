@@ -1,29 +1,21 @@
 import { test, expect } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
 import { loginViaCookie } from "./_session";
-import { mockChatBoot, fulfillSse } from "./_mocks";
+import { mockChatBoot, fulfillSse, fulfillRecordedTurn } from "./_mocks";
 
 // Mocked e2e for the chat view. An authenticated /chat load reaches the empty
-// composer state, and sending a message streams a mocked SSE turn — text deltas,
-// a tool.call, its tool.result, and a final assistant message — that the shell
+// composer state, and sending a message streams a recorded turn — tool calls,
+// their results, text deltas and a final assistant message — that the shell
 // renders. Every /api/* call is intercepted by Playwright (no Go chat-server),
 // so the suite is deterministic. CHAT_MOCK_MODE=1 is set on the server so the
 // same mock contract the live harness relies on stays wired.
 
-// A streaming turn that exercises the full event vocabulary the chat shell
-// handles: conversation (assigns the id), two text deltas, a tool.call + its
-// tool.result, a closing text delta, then turn.completed.
+// A streaming turn RECORDED from the real Go producer (the "tool-loop"
+// contract recording): turn.started, a bash call that succeeds, one that exits
+// non-zero, a view_file that errors, the streamed answer, turn.completed.
+// Recorded, not hand-written, so it cannot drift from what the server sends.
 async function mockStreamingTurn(page: Page) {
-  await page.route("**/api/chat", (r: Route) =>
-    fulfillSse(r, [
-      { event: "conversation", id: 1, data: { id: "conv-1", title: "New chat", persona: "default" } },
-      { event: "text.delta", id: 2, data: { text: "Let me check the weather. " } },
-      { event: "tool.call", id: 3, data: { id: "call-1", name: "get_weather", input: JSON.stringify({ city: "Boston" }) } },
-      { event: "tool.result", id: 4, data: { id: "call-1", name: "get_weather", text: "Boston: 72F and sunny.", is_err: false } },
-      { event: "text.delta", id: 5, data: { text: "It is 72F and sunny in Boston." } },
-      { event: "turn.completed", id: 6, data: { cost_usd: 0.001, model: "anthropic/claude-opus-4.8" } },
-    ]),
-  );
+  await page.route("**/api/chat", (r: Route) => fulfillRecordedTurn(r, "tool-loop", "conv-1"));
 }
 
 test.beforeEach(async ({ context }) => {
@@ -124,15 +116,15 @@ test("a sent turn streams text deltas and a final assistant message", async ({ p
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
   const composer = page.getByRole("textbox").first();
-  await composer.fill("What's the weather in Boston?");
+  await composer.fill("Run the checks");
   await composer.press("Enter");
 
   // The user's message renders inside the conversation (scoped to avoid the
   // conversation-title button, which echoes the same text), then the streamed
   // assistant text (deltas concatenated) lands as the final message.
   const conversation = page.getByRole("region", { name: "Conversation" });
-  await expect(conversation.getByText("What's the weather in Boston?")).toBeVisible();
-  await expect(page.getByText("It is 72F and sunny in Boston.")).toBeVisible({ timeout: 15_000 });
+  await expect(conversation.getByText("Run the checks")).toBeVisible();
+  await expect(conversation.getByText("All three tools reported back.")).toBeVisible({ timeout: 15_000 });
 });
 
 test("the streamed tool.call and tool.result render in the execution trail", async ({ page, context }) => {
@@ -145,19 +137,21 @@ test("the streamed tool.call and tool.result render in the execution trail", asy
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
   const composer = page.getByRole("textbox").first();
-  await composer.fill("What's the weather in Boston?");
+  await composer.fill("Run the checks");
   await composer.press("Enter");
 
-  // The tool.call surfaces as a chip labeled with the tool name.
-  const toolChip = page.getByRole("button", { name: /get_weather/i });
-  await expect(toolChip).toBeVisible({ timeout: 15_000 });
+  // Each tool.call surfaces as a chip labeled with the tool name.
+  const conversation = page.getByRole("region", { name: "Conversation" });
+  const bashChip = page.getByRole("button", { name: /bash/i }).first();
+  await expect(bashChip).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("button", { name: /view_file/i })).toBeVisible();
 
-  // Expanding the chip reveals the tool.result text (the is_err=false branch).
-  await toolChip.click();
-  await expect(page.getByText("Boston: 72F and sunny.")).toBeVisible();
+  // Expanding the first chip reveals its tool.result (the is_err=false branch).
+  await bashChip.click();
+  await expect(conversation.locator("pre", { hasText: "CONTRACT_TOOL_OK" }).first()).toBeVisible();
 
   // And the final assistant message is still present.
-  await expect(page.getByText("It is 72F and sunny in Boston.")).toBeVisible();
+  await expect(conversation.getByText("All three tools reported back.")).toBeVisible();
 });
 
 // A delegation turn: the spawn tool call, the child's live subagent.progress
