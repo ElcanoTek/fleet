@@ -1835,6 +1835,11 @@ agent_policy:
     deploy_page: notify
   critical_tool_group_approval: [deploy_page]
 `, `"deploy_page"`},
+		"handler-only card": {`
+agent_policy:
+  critical_tools: [schedule_task]
+  critical_tool_group_approval: [schedule_task]
+`, `"schedule_task"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if res := checkAgentPolicy(load(tc.body), nil); res.Status != statusFail || !strings.Contains(res.Detail, tc.want) {

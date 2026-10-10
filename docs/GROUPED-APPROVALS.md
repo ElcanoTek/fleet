@@ -33,7 +33,10 @@ agent_policy:
 - Suffix matching exactly like `critical_tools` (the tool name equals the
   suffix or ends in `_<suffix>`, so a named-account variant is covered).
 - A member that is not a critical suffix, or whose `critical_tool_modes` entry
-  is `notify`, stages no card and so could never be grouped: boot drops it
+  is `notify`, stages no card and so could never be grouped, and a
+  handler-only card (`schedule_task`, `manage_tasks`, `preview_email`,
+  `suggest_advanced_model`) is resolved by fleet's own handler and never
+  joins a group: boot drops such a member
   with a log line, and `fleet validate-config` reports it in the
   `agent_policy` floor check (`agentcore.GroupApprovalProblems`, the same
   code).

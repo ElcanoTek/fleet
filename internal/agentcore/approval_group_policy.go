@@ -3,6 +3,8 @@ package agentcore
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // Grouped approvals (docs/GROUPED-APPROVALS.md).
@@ -44,10 +46,24 @@ func buildStagedCardSuffixSet(key string, members []string, modes map[string]str
 		case notify[s] && !nonReversibleSuffixes[s]:
 			problems = append(problems, fmt.Sprintf("ignoring %s member %q: its critical_tool_modes entry is notify, so it runs without an approval card", key, s))
 			continue
+		case handlerOnlyCardTools[s]:
+			problems = append(problems, fmt.Sprintf("ignoring %s member %q: its card is resolved by fleet's own handler (it runs no MCP call and never joins this behaviour), so the entry does nothing", key, s))
+			continue
 		}
 		set[s] = true
 	}
 	return set, problems
+}
+
+// handlerOnlyCardTools are the native cards fleet resolves with its own
+// handler rather than by running a staged call (httpapi handlerOnlyApproval).
+// The grouped-approval and progress behaviours skip them, so a member naming
+// one is reported instead of silently doing nothing.
+var handlerOnlyCardTools = map[string]bool{
+	tools.ScheduleTaskToolName:         true,
+	tools.ManageTasksToolName:          true,
+	toolNamePreviewEmail:               true,
+	tools.SuggestAdvancedModelToolName: true,
 }
 
 // mergedCriticalSuffixes is the critical set the gate uses: the base email

@@ -39,17 +39,18 @@ func TestGroupApprovalProblems(t *testing.T) {
 	p := AgentPolicy{
 		CriticalToolSuffixes:      []string{"execute_plan", "deploy_page"},
 		CriticalToolModes:         map[string]string{"deploy_page": "notify"},
-		CriticalToolGroupApproval: []string{"execute_plan", "send_email", "execute_plans", "deploy_page"},
+		CriticalToolGroupApproval: []string{"execute_plan", "send_email", "execute_plans", "deploy_page", "schedule_task"},
 	}
+	p.CriticalToolSuffixes = append(p.CriticalToolSuffixes, "schedule_task")
 	problems := GroupApprovalProblems(p)
 	joined := strings.Join(problems, "\n")
-	for _, want := range []string{`"execute_plans"`, `"deploy_page"`} {
+	for _, want := range []string{`"execute_plans"`, `"deploy_page"`, `"schedule_task"`} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("problems %q do not name %s", joined, want)
 		}
 	}
-	if len(problems) != 2 {
-		t.Fatalf("problems = %d (%q), want exactly the two bad members", len(problems), joined)
+	if len(problems) != 3 {
+		t.Fatalf("problems = %d (%q), want exactly the three bad members", len(problems), joined)
 	}
 
 	ConfigureAgentPolicy(p)
