@@ -66,7 +66,10 @@ type approvalStager struct {
 	// selection behind it, so a staged card records the seat an approval must
 	// reopen. Populated from the turn scope's own selection.
 	mcpSeats map[string]store.ApprovalSeat
-	// mcpMu guards the three fields above: BindTurnMCPScope runs on the turn
+	// personaPolicy is the turn's persona tool policy (nil = no narrowing),
+	// so a describer call never reaches a tool the persona does not offer.
+	personaPolicy *agentcore.PersonaToolPermissions
+	// mcpMu guards the four fields above: BindTurnMCPScope runs on the turn
 	// goroutine before the loop starts, but Stage can be reached from a
 	// parallel tool dispatch.
 	mcpMu sync.RWMutex
@@ -126,6 +129,7 @@ func (a *approvalStager) BindTurnMCPScope(scope agent.TurnMCPScope) {
 		a.mcpCatalog = scope.Catalog
 	}
 	a.mcpSeats = seats
+	a.personaPolicy = scope.PersonaPolicy
 }
 
 // mcpScope reads the staging-time credential context under the lock.
@@ -382,6 +386,14 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		rawInput = enriched
 	}
 
+	// A bundle-declared describer turns the call into a readable card
+	// (approval_card.go). Bounded and best-effort: any failure leaves the
+	// generic arguments card, and staging goes on either way. It runs BEFORE
+	// the supersede below: that rejects the previous card irreversibly, so a
+	// turn stopped during the describer's few seconds must not leave the user
+	// with neither the old card nor its replacement.
+	cardJSON, cardFallback := a.describeApproval(toolName, rawInput)
+
 	// Supersede any older pending approvals for this same tool in this
 	// conversation. Keeps the UI clean when the agent retries — e.g.
 	// a preview_email that staged with a broken body, then re-staged
@@ -404,6 +416,23 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail, toolName, toolCallID, rawInput, a.expiryUnixFor(toolName), seat)
 	if err != nil {
 		return "", err
+	}
+	if cardJSON != "" {
+		if ok, err := a.store.SetApprovalCard(a.ctx, a.userEmail, approval.ID, cardJSON); err != nil || !ok {
+			log.Printf("approval card: store card for %s: ok=%t err=%v", approval.ID, ok, err)
+			cardFallback = cardFallbackStore
+		} else {
+			approval.CardJSON = cardJSON
+		}
+	}
+	if cardFallback != "" {
+		// Observable without reading server logs: the card a declared
+		// describer should have produced fell back to the generic one.
+		a.sink.Emit("tool.approval_card_fallback", map[string]any{
+			"approval_id": approval.ID,
+			"tool":        toolName,
+			"reason":      cardFallback,
+		})
 	}
 
 	a.sink.Emit("tool.approval_required", approvalRequiredEvent(approval, rawInput, a.conversationID))
@@ -772,7 +801,7 @@ func approvalRequiredEvent(approval *store.Approval, rawInput, convID string) ma
 	ev["expires_at"] = approval.ExpiresAt
 	ev["mcp_server"] = approval.MCPServer
 	ev["mcp_account"] = approval.MCPAccount
-	return ev
+	return withApprovalCard(ev, approval)
 }
 
 // summarizeApprovalInput dispatches on tool name to build a display

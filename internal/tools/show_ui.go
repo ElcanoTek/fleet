@@ -109,19 +109,28 @@ func decodedRedacted(input []byte, redact func(string) string) bool {
 	return walk(v)
 }
 
+// RedactionWouldAlter reports whether the secret redaction the agent loop
+// applies (ShowUIRedactor) would change a JSON card: its wire text or any
+// string it decodes to, key or value, at any depth. JSON escapes (sk\u002d…)
+// hide a secret from a scan of the raw text, but a browser shows the decoded
+// value, so both are checked. False when no redactor is installed. show_ui
+// and the approval-card describer refuse a card for which this is true.
+func RedactionWouldAlter(input []byte) bool {
+	if ShowUIRedactor == nil {
+		return false
+	}
+	s := string(input)
+	return ShowUIRedactor(s) != s || decodedRedacted(input, ShowUIRedactor)
+}
+
 // ShowUIResult builds the tool response for one call. Exported for tests.
 func ShowUIResult(callID string, input []byte) fantasy.ToolResponse {
 	// The browser draws the card from the REDACTED input: a value that
 	// matches a secret pattern becomes "[REDACTED]" there, so two such
 	// options would collapse into one and the answer could not say which was
 	// picked. Refuse such a card rather than validate what nobody sees.
-	if ShowUIRedactor != nil {
-		// The wire text and every decoded string: JSON escapes (sk\u002d…)
-		// hide a secret from a scan of the raw text, but the browser shows
-		// the decoded value.
-		if s := string(input); ShowUIRedactor(s) != s || decodedRedacted(input, ShowUIRedactor) {
-			return fantasy.NewTextErrorResponse("UI_INVALID: the card was NOT shown — it contains a value that looks like a secret (an API key or token), which is redacted before the user sees the card. Do not put secrets in a card; use a label or an id that is not a credential, and call " + ShowUIToolName + " again.")
-		}
+	if RedactionWouldAlter(input) {
+		return fantasy.NewTextErrorResponse("UI_INVALID: the card was NOT shown — it contains a value that looks like a secret (an API key or token), which is redacted before the user sees the card. Do not put secrets in a card; use a label or an id that is not a credential, and call " + ShowUIToolName + " again.")
 	}
 	card, issues := genui.Validate(input)
 	if len(issues) > 0 {

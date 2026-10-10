@@ -43,6 +43,13 @@ happen. The generic card renders instead:
 - the seat badge as "Runs as … on …" (the email card keeps "Sending as"),
 - the same countdown, apply-all (#300) and seat semantics as the email card.
 
+A bundle can also give a critical tool a **readable card**: it declares a
+read-only describer tool, fleet calls it when the call is staged, and the card
+shows a plain-words title, the records with their ids and links, each change
+as before → after, and flags, with the raw arguments under "Details". Any
+describer failure leaves this generic card. See
+[APPROVAL-CARD-DESCRIBERS.md](APPROVAL-CARD-DESCRIBERS.md).
+
 A **notify-mode record** (#1153) renders on the same chrome in an
 informational form: muted border, title "… · ran without asking", no buttons,
 and the persisted record text — including the bundle-authored undo hint — as

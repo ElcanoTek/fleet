@@ -207,6 +207,7 @@ above fails otherwise.
 - [`API-CLIENTS.md`](API-CLIENTS.md) — Machine clients: reaching the fleet API from another system
 - [`api-versioning.md`](api-versioning.md) — HTTP API versioning (#321)
 - [`APPROVAL-CARDS.md`](APPROVAL-CARDS.md) — Approval cards: the human-review surface in chat
+- [`APPROVAL-CARD-DESCRIBERS.md`](APPROVAL-CARD-DESCRIBERS.md) — Approval-card describers: a bundle-declared read turns a critical call into a readable card (ADR-0082)
 - [`APPROVED-CALL-BUDGET.md`](APPROVED-CALL-BUDGET.md) — Approved-call budget: how long an approved card's MCP call may run, and the early "executing" reply
 - [`ASK-NOTIFY.md`](ASK-NOTIFY.md) — ask / notify + paused-awaiting-human run state
 - [`ATTACHMENT-SCOPING.md`](ATTACHMENT-SCOPING.md) — Attachment scoping, and where a turn's injected context lives

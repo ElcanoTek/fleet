@@ -96,6 +96,15 @@ type AgentPolicy struct {
 	// matching tool. Members must be critical suffixes; see
 	// NoSessionApprovalProblems. Empty = every card keeps apply-all, as before.
 	CriticalToolNoSessionApproval []string
+	// CriticalToolCardDescribers maps a critical suffix to a read-only
+	// "describer" tool suffix on the same server. When a matching call is
+	// staged for approval, the stager calls the describer with the same
+	// arguments (bounded, no retries) and renders its structured result as a
+	// readable card, falling back to the generic arguments card on any
+	// failure. The describer must be parallel-safe and must NOT be critical:
+	// it runs outside the audit gate, so an entry whose describer is critical
+	// is dropped (see CardDescriberProblems). Empty = every card is generic.
+	CriticalToolCardDescribers map[string]string
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -168,6 +177,9 @@ var (
 	// activeNoSessionApproval is the set of critical suffixes whose cards take
 	// one decision per call (no apply-all). Empty by default.
 	activeNoSessionApproval = map[string]bool{}
+	// activeCardDescribers maps a critical suffix to its describer suffix.
+	// Empty by default: no card is described.
+	activeCardDescribers = map[string]string{}
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -289,7 +301,120 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		log.Printf("agent_policy: %s", problem)
 	}
 	activeNoSessionApproval = noSession
+
+	describers, describerProblems := buildCardDescribers(p.CriticalToolCardDescribers, critical, parallel)
+	for _, problem := range describerProblems {
+		log.Printf("agent_policy: %s", problem)
+	}
+	activeCardDescribers = describers
 }
+
+// suffixMatches reports whether a tool (or a suffix standing for one) is
+// selected by suffix under the critical_tools rule: equal, or ending in
+// "_<suffix>".
+func suffixMatches(name, suffix string) bool {
+	return name == suffix || strings.HasSuffix(name, "_"+suffix)
+}
+
+// buildCardDescribers resolves critical_tool_card_describers. An entry is
+// kept only when its key is a critical suffix (no card is ever staged for any
+// other tool), and its describer is not critical under the merged suffix list
+// (a describer runs outside the audit gate, so a critical one would be a write
+// with no approval) and matches at least one parallel_safe_tools entry (the
+// bundle's declaration that the tool is a read). Every dropped entry is a
+// problem for the caller to log (boot) or report (validate-config).
+func buildCardDescribers(describers map[string]string, critical []string, parallel map[string]bool) (map[string]string, []string) {
+	out := make(map[string]string, len(describers))
+	var problems []string
+	keys := make([]string, 0, len(describers))
+	for k := range describers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	isCritical := func(name string) bool {
+		for _, s := range critical {
+			if s != "" && suffixMatches(name, s) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, k := range keys {
+		key, desc := strings.TrimSpace(k), strings.TrimSpace(describers[k])
+		switch {
+		case key == "" || desc == "":
+			problems = append(problems, fmt.Sprintf("ignoring critical_tool_card_describers entry %q: both the critical suffix and the describer suffix are required", k))
+			continue
+		case !containsString(critical, key):
+			problems = append(problems, fmt.Sprintf("ignoring critical_tool_card_describers entry %q: it is not in critical_tools, so no approval card is ever staged for it", key))
+			continue
+		case isCritical(desc):
+			problems = append(problems, fmt.Sprintf("ignoring critical_tool_card_describers entry %q: describer %q is a critical tool, and a describer runs without approval", key, desc))
+			continue
+		}
+		safe := false
+		for name := range parallel {
+			if suffixMatches(name, desc) {
+				safe = true
+				break
+			}
+		}
+		if !safe {
+			problems = append(problems, fmt.Sprintf("ignoring critical_tool_card_describers entry %q: describer %q is not in parallel_safe_tools, which is how a bundle declares a read-only tool", key, desc))
+			continue
+		}
+		out[key] = desc
+	}
+	return out, problems
+}
+
+func containsString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// CardDescriberProblems is the preflight face of buildCardDescribers, for
+// `fleet validate-config`: the entries ConfigureAgentPolicy would drop.
+func CardDescriberProblems(p AgentPolicy) []string {
+	critical := append([]string(nil), baseCriticalToolSuffixes...)
+	for _, s := range p.CriticalToolSuffixes {
+		if s != "" {
+			critical = append(critical, s)
+		}
+	}
+	parallel := make(map[string]bool, len(p.ParallelSafeTools))
+	for _, t := range p.ParallelSafeTools {
+		if t != "" {
+			parallel[t] = true
+		}
+	}
+	_, problems := buildCardDescribers(p.CriticalToolCardDescribers, critical, parallel)
+	return problems
+}
+
+// CardDescriberFor returns the describer suffix declared for toolName (the
+// longest matching critical suffix wins, like ApprovalModeForTool), or ""
+// when none is declared.
+func CardDescriberFor(toolName string) string {
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	best, bestLen := "", -1
+	for suffix, desc := range activeCardDescribers {
+		if suffixMatches(toolName, suffix) && len(suffix) > bestLen {
+			best, bestLen = desc, len(suffix)
+		}
+	}
+	return best
+}
+
+// IsParallelSafeTool reports whether a fully-prefixed MCP tool name is listed
+// in the bundle's parallel_safe_tools. Exported for the approval stager, which
+// re-checks a resolved describer before calling it.
+func IsParallelSafeTool(name string) bool { return isParallelSafeTool(name) }
 
 // buildNoSessionApprovalSet resolves critical_tool_no_session_approval into a
 // suffix set. A member that is not a critical suffix is reported: no card is

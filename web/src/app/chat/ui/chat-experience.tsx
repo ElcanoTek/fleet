@@ -46,6 +46,7 @@ import {
 import {
   historyToMessages,
   hydrateResolvedApproval,
+  parseApprovalCardData,
   type Approval,
   type ApprovalStatus,
   type HistoryEntry,
@@ -2373,6 +2374,7 @@ export function ChatExperience({
           mcp_account?: string;
           tool_call_id?: string;
           no_session_approval?: boolean;
+          card?: unknown;
         }>;
         resolved_approvals?: Array<{
           approval_id: string;
@@ -2387,6 +2389,7 @@ export function ChatExperience({
           mcp_account?: string;
           tool_call_id?: string;
           recorded?: boolean;
+          card?: unknown;
         }>;
         pending_memory_proposals?: Array<{
           proposal_id: string;
@@ -2485,6 +2488,7 @@ export function ChatExperience({
             mcpAccount: p.mcp_account,
             toolCallId: p.tool_call_id,
             noSessionApproval: p.no_session_approval === true || undefined,
+            card: parseApprovalCardData(p.card),
           })),
         ];
         const memoryCards: MemoryProposal[] = pendingMemoryProposals.map(

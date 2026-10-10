@@ -2065,6 +2065,12 @@ type Approval struct {
 	// row whose run finished before this column existed. status stays consent
 	// (pending|approved|rejected) even when IsErr is true.
 	IsErr sql.NullBool
+	// CardJSON is the readable approval card a bundle-declared describer
+	// produced when the call was staged (docs/APPROVAL-CARD-DESCRIBERS.md):
+	// canonical JSON, validated before it was stored and again on every read.
+	// Empty when no describer is declared, the describer failed, or the row
+	// predates the column — the client then renders the generic card.
+	CardJSON string
 }
 
 // ListPendingApprovals returns every pending approval for a conversation,
@@ -2076,7 +2082,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err
+		        is_err, COALESCE(card_json, '')
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status = 'pending'
 		 ORDER BY created_at ASC`,
@@ -2091,7 +2097,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2118,7 +2124,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err
+		        is_err, COALESCE(card_json, '')
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status <> 'pending'
 		 ORDER BY created_at DESC
@@ -2134,7 +2140,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2267,6 +2273,21 @@ func (s *Store) CreateApproval(ctx context.Context, convID, userEmail, toolName,
 	}, nil
 }
 
+// SetApprovalCard attaches a describer's card to a still-pending approval the
+// user owns. It reports whether a row was updated: a card for a row that was
+// already resolved (or superseded) in between is dropped, never written onto
+// a settled decision.
+func (s *Store) SetApprovalCard(ctx context.Context, userEmail, approvalID, cardJSON string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE approvals SET card_json = $1 WHERE id = $2 AND user_email = $3 AND status = 'pending'`,
+		cardJSON, approvalID, userEmail)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // ApprovalSeat is the public credential selection a staged MCP call ran under.
 // Both fields are configuration identifiers; no credential value is stored.
 type ApprovalSeat struct {
@@ -2284,14 +2305,14 @@ func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err
+		        is_err, COALESCE(card_json, '')
 		 FROM approvals WHERE id = $1 AND user_email = $2`,
 		approvalID, userEmail,
 	)
 	var a Approval
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-		&a.MCPServer, &a.MCPAccount, &a.IsErr); err != nil {
+		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -2317,7 +2338,7 @@ func (s *Store) ListExpiredApprovals(ctx context.Context, now int64) ([]Approval
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err
+		        is_err, COALESCE(card_json, '')
 		 FROM approvals
 		 WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at > 0 AND expires_at < $1
 		 ORDER BY expires_at ASC
@@ -2333,7 +2354,7 @@ func (s *Store) ListExpiredApprovals(ctx context.Context, now int64) ([]Approval
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2533,7 +2554,7 @@ func (s *Store) LatestApprovalByTool(ctx context.Context, convID, toolName strin
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err
+		        is_err, COALESCE(card_json, '')
 		 FROM approvals
 		 WHERE conversation_id = $1 AND tool_name = $2
 		 ORDER BY created_at DESC
@@ -2543,7 +2564,7 @@ func (s *Store) LatestApprovalByTool(ctx context.Context, convID, toolName strin
 	var a Approval
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-		&a.MCPServer, &a.MCPAccount, &a.IsErr); err != nil {
+		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}

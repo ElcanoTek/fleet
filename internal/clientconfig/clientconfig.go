@@ -374,6 +374,18 @@ type AgentPolicy struct {
 	//	agent_policy:
 	//	  critical_tool_no_session_approval: [create_deal, update_deal]
 	CriticalToolNoSessionApproval []string `yaml:"critical_tool_no_session_approval"`
+	// CriticalToolCardDescribers is an OPTIONAL map from a critical suffix to
+	// a read-only "describer" tool suffix on the same server. When a matching
+	// call is staged for approval, fleet calls the describer with the same
+	// arguments and renders its structured JSON as a readable card (title,
+	// records, before → after, flags), falling back to the generic arguments
+	// card on any failure. The describer must be in parallel_safe_tools and
+	// must not be critical. See docs/APPROVAL-CARD-DESCRIBERS.md.
+	//
+	//	agent_policy:
+	//	  critical_tool_card_describers:
+	//	    update_deal: describe_deal_update
+	CriticalToolCardDescribers map[string]string `yaml:"critical_tool_card_describers"`
 	// BatchSecondsPerDeal is DERIVED, never read from agent_policy: Bundle.AgentPolicy
 	// collects each mcp_servers[].batch_seconds_per_deal into it, keyed by
 	// server name, so the per-record batch budget reaches agentcore on the same
@@ -2802,6 +2814,12 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		p.CriticalToolUndoHints = make(map[string]string, len(b.AgentPolicyConfig.CriticalToolUndoHints))
 		for k, v := range b.AgentPolicyConfig.CriticalToolUndoHints {
 			p.CriticalToolUndoHints[k] = v
+		}
+	}
+	if len(b.AgentPolicyConfig.CriticalToolCardDescribers) > 0 {
+		p.CriticalToolCardDescribers = make(map[string]string, len(b.AgentPolicyConfig.CriticalToolCardDescribers))
+		for k, v := range b.AgentPolicyConfig.CriticalToolCardDescribers {
+			p.CriticalToolCardDescribers[k] = v
 		}
 	}
 	if len(b.AgentPolicyConfig.CriticalToolAliases) > 0 {

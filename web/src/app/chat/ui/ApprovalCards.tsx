@@ -25,6 +25,11 @@ import {
   approvalStatusFromOutcome,
 } from "./history";
 import { EmailSendResult, parseEmailSendPayload } from "./ToolChips";
+import {
+  ApprovalCardDetails,
+  ApprovalCardItems,
+  ApprovalReadableBody,
+} from "./ApprovalReadableCard";
 import { conversationApprovalApiUrl } from "@/app/lib/conversationApiUrl";
 
 // Preview viewport presets for the inline email preview. These mirror the
@@ -780,6 +785,32 @@ export function ApprovalCard({
   );
 }
 
+// readableTitle is a readable card's header line: the describer's plain-words
+// title while the card waits, and a one-line outcome once it has resolved —
+// "Applied", "Not applied", "Declined", "Timed out — not applied", "Outcome
+// not recorded". The tool's own result still renders below, as on every card.
+function readableTitle(
+  approval: Approval,
+  cardTitle: string,
+  executing: boolean,
+  recorded: boolean,
+  timedOut: boolean,
+): string {
+  if (executing) return `Running · ${cardTitle}`;
+  switch (approval.status) {
+    case "pending":
+      return cardTitle;
+    case "approved":
+      return recorded ? `${cardTitle} · ran without asking` : `Applied · ${cardTitle}`;
+    case "rejected":
+      return timedOut ? `Timed out — not applied · ${cardTitle}` : `Declined · ${cardTitle}`;
+    case "execution_unknown":
+      return `Outcome not recorded · ${cardTitle}`;
+    default:
+      return `Not applied · ${cardTitle}`;
+  }
+}
+
 // GenericActionCard renders any critical tool fleet has no tailored card for —
 // bundle-declared suffixes like a pages deploy or a deal write. Two jobs:
 // say honestly what is about to happen (the humanized action, its server, its
@@ -811,9 +842,14 @@ function GenericActionCard({
   const rawArgs = approval.summary.raw ?? "";
   const recorded = approval.recorded === true;
   const timedOut = isTimedOutApproval(approval);
+  // A bundle-declared describer's readable card (docs/APPROVAL-CARD-DESCRIBERS.md):
+  // plain-words title, the records, before → after, flags. Absent = the
+  // generic layout below, unchanged.
+  const readable = approval.card;
 
-  const title =
-    executing
+  const title = readable
+    ? readableTitle(approval, readable.title, executing, recorded, timedOut)
+    : executing
       ? `${action} · running`
       : approval.status === "pending"
       ? `ACTION REQUIRED · Run "${action}"?`
@@ -846,6 +882,34 @@ function GenericActionCard({
             ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
           : { borderColor: "var(--color-accent)", color: "var(--color-text-primary)" };
 
+  // The raw identity and arguments: the whole body of the generic card, and
+  // the collapsed "Details" of a readable one.
+  const toolHeader = server ? (
+    <div className="mb-1 text-[0.72rem] text-[var(--color-text-muted)]">
+      via <span className="font-mono">{server}</span>
+      <span className="mx-1">·</span>
+      <span className="font-mono">{approval.tool}</span>
+    </div>
+  ) : null;
+  const argsBlock =
+    args.length > 0 ? (
+      <div className="grid gap-0.5 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
+        {args.map((row) => (
+          <div key={row.key} className="min-w-0">
+            <span className="text-[var(--color-text-muted)]">{row.key}: </span>
+            <span className="break-all">{row.value}</span>
+          </div>
+        ))}
+      </div>
+    ) : rawArgs ? (
+      <pre
+        className="max-h-40 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.75rem] text-[var(--color-text-primary)]"
+        style={{ fontFamily: "var(--font-code)" }}
+      >
+        {rawArgs}
+      </pre>
+    ) : null;
+
   return (
     <div
       data-approval-id={approval.id}
@@ -854,36 +918,28 @@ function GenericActionCard({
       className="rounded-[var(--radius-lg)] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
       style={statusStyle}
     >
-      <div className="mb-2 flex items-center gap-2">
+      <div className="mb-2 flex min-w-0 items-center gap-2">
         <span aria-hidden>{recorded ? "📓" : "🛠️"}</span>
-        <span className="font-medium">{title}</span>
+        <span data-testid="generic-action-title" className="min-w-0 break-words font-medium">{title}</span>
       </div>
 
-      {server ? (
-        <div className="mb-1 text-[0.72rem] text-[var(--color-text-muted)]">
-          via <span className="font-mono">{server}</span>
-          <span className="mx-1">·</span>
-          <span className="font-mono">{approval.tool}</span>
-        </div>
-      ) : null}
-
-      {args.length > 0 ? (
-        <div className="grid gap-0.5 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
-          {args.map((row) => (
-            <div key={row.key} className="min-w-0">
-              <span className="text-[var(--color-text-muted)]">{row.key}: </span>
-              <span className="break-all">{row.value}</span>
-            </div>
-          ))}
-        </div>
-      ) : rawArgs ? (
-        <pre
-          className="max-h-40 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.75rem] text-[var(--color-text-primary)]"
-          style={{ fontFamily: "var(--font-code)" }}
-        >
-          {rawArgs}
-        </pre>
-      ) : null}
+      {readable ? (
+        <>
+          {/* Pending: the records in plain words. Resolved: the one-line
+              outcome above is the card; the records move into Details. */}
+          {approval.status === "pending" ? <ApprovalReadableBody card={readable} /> : null}
+          <ApprovalCardDetails>
+            {approval.status !== "pending" ? <ApprovalCardItems items={readable.items} /> : null}
+            {toolHeader}
+            {argsBlock}
+          </ApprovalCardDetails>
+        </>
+      ) : (
+        <>
+          {toolHeader}
+          {argsBlock}
+        </>
+      )}
 
       {approval.status === "pending" ? (
         executing ? (

@@ -1129,6 +1129,14 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolSuffixes:          p.CriticalToolSuffixes,
 		CriticalToolNoSessionApproval: p.CriticalToolNoSessionApproval,
 	})...)
+	// critical_tool_card_describers: the key must be critical, the describer
+	// must be parallel-safe and must not be critical (it runs without an
+	// approval). The boot install drops any entry this reports.
+	problems = append(problems, agentcore.CardDescriberProblems(agentcore.AgentPolicy{
+		ParallelSafeTools:          p.ParallelSafeTools,
+		CriticalToolSuffixes:       p.CriticalToolSuffixes,
+		CriticalToolCardDescribers: p.CriticalToolCardDescribers,
+	})...)
 	if len(problems) > 0 {
 		res.Status = statusFail
 		res.Detail = strings.Join(problems, "; ")

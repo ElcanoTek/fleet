@@ -70,6 +70,8 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		// reload places it where the live stream did (last-assistant
 		// fallback when empty — older rows, promote cards).
 		card["tool_call_id"] = a.ToolCallID
+		// The describer's readable card, when one was produced at staging.
+		withApprovalCard(card, &a)
 		approvals = append(approvals, card)
 	}
 	// Resolved approvals re-hydrate too, so the transcript keeps the shape
@@ -114,6 +116,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 			// already ran without asking, not that the user approved it.
 			"recorded": isNotifyRecordResult(a.ResultText),
 		}
+		withApprovalCard(card, &a)
 		// Same executing / is_err / execution_unknown keys as the approval
 		// POST so a reload (and the TUI's resolved_approvals ingest) cannot
 		// green-stamp an in-flight sentinel or a failed run.
@@ -209,6 +212,7 @@ func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Re
 	} else {
 		card := s.approvalClientState(a)
 		card["approval_id"], card["tool"] = a.ID, a.ToolName
+		withApprovalCard(card, a)
 		resolved = append(resolved, card)
 	}
 	writeJSON(w, map[string]any{"pending_approvals": pending, "resolved_approvals": resolved})

@@ -9,6 +9,7 @@ import {
   applyTurnOutcome,
   clearRetryNotice,
   historyToMessages,
+  parseApprovalCardData,
   parsePythonStream,
   type Approval,
   type ApprovalStatus,
@@ -2522,6 +2523,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         mcp_server?: string;
         mcp_account?: string;
         no_session_approval?: boolean;
+        card?: unknown;
       };
       // send_email cards can land below an expanded preview iframe — queue
       // a scroll-into-view so the user sees the action card without
@@ -2543,6 +2545,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             mcpServer: p.mcp_server,
             mcpAccount: p.mcp_account,
             noSessionApproval: p.no_session_approval === true || undefined,
+            card: parseApprovalCardData(p.card),
           },
         ],
       }));

@@ -1752,3 +1752,52 @@ agent_policy:
 		t.Fatalf("critical members (including a base email suffix) must pass: %s", res.Detail)
 	}
 }
+
+// validate-config holds critical_tool_card_describers to its rules: a
+// critical describer (it runs without approval) or one missing from
+// parallel_safe_tools fails the agent_policy check; a well-formed entry passes.
+func TestCheckAgentPolicy_CardDescribers(t *testing.T) {
+	load := func(body string) *clientconfig.Bundle {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		b, err := clientconfig.Load(dir)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		return b
+	}
+	for name, tc := range map[string]struct {
+		body string
+		want string
+	}{
+		"critical describer": {`
+agent_policy:
+  critical_tools: [update_deal, describe_deal_update]
+  parallel_safe_tools: [mcp_deals_describe_deal_update]
+  critical_tool_card_describers: {update_deal: describe_deal_update}
+`, "is a critical tool"},
+		"not parallel-safe": {`
+agent_policy:
+  critical_tools: [update_deal]
+  critical_tool_card_describers: {update_deal: describe_deal_update}
+`, "not in parallel_safe_tools"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if res := checkAgentPolicy(load(tc.body), nil); res.Status != statusFail || !strings.Contains(res.Detail, tc.want) {
+				t.Fatalf("got %q: %s, want a failure naming %q", res.Status, res.Detail, tc.want)
+			}
+		})
+	}
+	good := load(`
+agent_policy:
+  critical_tools: [update_deal]
+  parallel_safe_tools: [mcp_deals_describe_deal_update]
+  critical_tool_card_describers: {update_deal: describe_deal_update}
+`)
+	if res := checkAgentPolicy(good, nil); res.Status == statusFail {
+		t.Fatalf("a well-formed describer must pass: %s", res.Detail)
+	}
+}

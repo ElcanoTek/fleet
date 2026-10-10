@@ -197,6 +197,9 @@ type chatStore interface {
 
 	// Approvals.
 	CreateApproval(ctx context.Context, convID, userEmail, toolName, toolCallID, argsJSON string, expiresAt int64, seat store.ApprovalSeat) (*store.Approval, error)
+	// SetApprovalCard attaches a describer's readable card to a still-pending
+	// approval (docs/APPROVAL-CARD-DESCRIBERS.md); false = no pending row.
+	SetApprovalCard(ctx context.Context, userEmail, approvalID, cardJSON string) (bool, error)
 	GetApproval(ctx context.Context, userEmail, approvalID string) (*store.Approval, error)
 	ClaimApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error)
 	// ClaimApprovalAndSetModel is the suggest_advanced_model resolution: the

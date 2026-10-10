@@ -178,3 +178,83 @@ test("a per-call tool's pending card has no apply-all checkbox; other cards keep
   const batchable = page.locator('[data-approval-id="ap-batchable"]');
   await expect(batchable.getByTestId("approval-apply-all")).toBeVisible();
 });
+
+// A bundle-declared describer's readable card (docs/APPROVAL-CARD-DESCRIBERS.md)
+// re-hydrates from the conversation GET on both the pending and the resolved
+// card: plain-words title, the record with its id, link and flag, before →
+// after, and the raw arguments collapsed under Details. The resolved one
+// collapses to a one-line outcome.
+test("a described card renders in plain words, pending and resolved", async ({ page }) => {
+  const card = {
+    title: "Update 1 deal",
+    subtitle: "Raise the floor",
+    items: [
+      {
+        label: "Q4 Video",
+        id: "PM-123",
+        link: "https://ssp.example.com/deals/123",
+        changes: [{ label: "Floor", before: "$2.00", after: "$2.50" }],
+        flags: [{ code: "deal_active", label: "Deal is Active" }],
+      },
+    ],
+  };
+  await mockChatBoot(page, {
+    conversations: [{ id: "conv-readable", title: "Readable thread" }],
+  });
+  await page.route("**/api/conversations/conv-readable", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation: { id: "conv-readable", title: "Readable thread", persona: "default", model: "test-model", pinned: false },
+        history: [
+          { id: 1, role: "user", type: "text", content: { text: "raise the floor on Q4 Video" } },
+          { id: 2, role: "assistant", type: "text", content: { text: "Here is the change." } },
+        ],
+        pending_approvals: [
+          {
+            approval_id: "ap-readable",
+            tool: "mcp_deals_update_deal",
+            summary: { tool: "mcp_deals_update_deal", args: [{ key: "etag", value: 'W/"77"' }] },
+            card,
+          },
+        ],
+        resolved_approvals: [
+          {
+            approval_id: "ap-readable-done",
+            tool: "mcp_deals_update_deal",
+            summary: { tool: "mcp_deals_update_deal", args: [{ key: "etag", value: 'W/"76"' }] },
+            status: "approved",
+            is_err: false,
+            result_text: '{"updated":1}',
+            card: { ...card, title: "Update 1 deal (earlier)" },
+          },
+        ],
+        pending_memory_proposals: [],
+      },
+    });
+  });
+  await page.goto("/chat");
+  const row = page.locator('[data-conversation-id="conv-readable"]');
+  await row.waitFor({ timeout: 15_000 });
+  await row.click();
+
+  const pending = page.locator('[data-approval-id="ap-readable"]');
+  await expect(pending.getByTestId("generic-action-title")).toHaveText("Update 1 deal");
+  const item = pending.getByTestId("approval-card-item");
+  await expect(item).toContainText("Q4 Video");
+  await expect(item).toContainText("PM-123");
+  await expect(item.getByRole("link", { name: /Open/ })).toHaveAttribute("href", "https://ssp.example.com/deals/123");
+  await expect(item.getByTestId("approval-card-change")).toContainText("$2.50");
+  await expect(item.getByTestId("approval-card-flag")).toHaveText("Deal is Active");
+  // The raw arguments are behind Details, collapsed.
+  const details = pending.getByTestId("approval-card-details");
+  await expect(details.getByText('W/"77"')).toBeHidden();
+  await details.locator("summary").click();
+  await expect(details.getByText('W/"77"')).toBeVisible();
+  await expect(pending.getByRole("button", { name: "Approve & run" })).toBeVisible();
+
+  const done = page.locator('[data-approval-id="ap-readable-done"]');
+  await expect(done.getByTestId("generic-action-title")).toHaveText("Applied · Update 1 deal (earlier)");
+  await expect(done.getByTestId("approval-card-readable")).toHaveCount(0);
+  await expect(done.getByTestId("approval-result")).toContainText('{"updated":1}');
+});
