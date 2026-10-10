@@ -138,13 +138,20 @@ running twice.
   projects it) and is never re-run.
 - A card still pending at boot stays armed: when it is settled in the new
   process it resumes normally.
+- The sweep runs on its own 30 s deadline with one retry, and the guarantee
+  does not depend on it: `launchQueuedTurn` refuses any `resume` row created
+  before this process started (`Server.processStart`), cancels it and writes
+  the same note. A settled armed card the sweep missed is only claimed if a
+  later settlement in the same conversation triggers a decision, and then it
+  joins that person-triggered resume.
 - While the process drains for shutdown, `decideApprovalResume` decides
   nothing, so the cards stay armed for the boot sweep.
 
 ### Clients
 
 - **Web.** The approve/decline answer carries `"resume": true` for an armed
-  card. The card then calls `followApprovalResume`, which probes `/inflight`
+  card, and so does any idempotent replay of it (a lost answer, a second tab,
+  **Check result**) once the card is claimed. The card then calls `followApprovalResume`, which probes `/inflight`
   on a backoff (first look after 2.5 s) and attaches to the turn fleet started,
   which streams like any turn. It follows for 30 s after a settled card, and
   for up to 31 minutes when the answer was `executing` (the approved-call
@@ -160,7 +167,8 @@ running twice.
   follow; they never open a user row, so the recovery code's user-turn counts
   are unchanged.
 - **Exports** label the input "Fleet (continued after approval)" and include
-  notices in the full-detail scope.
+  notices in the full-detail scope. The promote-to-task and save-as-workflow
+  transcripts leave the input out (it is not something the user asked for).
 - **Terminal and ACP clients** see the new turn's frames if they are attached;
   the contract scenario `approval-resume` (below) proves they consume a
   `turn.started` with `input_kind` without change. Neither renders persisted
@@ -192,7 +200,9 @@ running twice.
   forever.
 - **The approve POST is the web's trigger.** Nothing pushes a server-started
   turn to an open tab; the web follows after the POST (or after a reload with
-  an executing card) and otherwise relies on tab return and reload.
+  an executing card) and otherwise relies on tab return and reload. So a turn
+  started because a card **timed out** (the expiry sweep, no POST) appears in
+  an open, idle tab only on tab return or reload; the user guide says so.
 - **The resume input counts as a user message** for the `suggest_advanced_model`
   cooldown (`CountUserMessagesAfterTimestamp`), which counts user-role text
   rows. It is a user-role row by design: the model reads it as the turn's

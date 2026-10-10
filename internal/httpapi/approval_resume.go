@@ -194,11 +194,33 @@ func (a *approvalStager) armApprovalResume(approval *store.Approval) {
 }
 
 // approvalResumeReplyFlag adds "resume": true to an approval POST answer when
-// the card is armed, so the client knows to look for the turn fleet is about
-// to start (or, while the call is still executing, will start once it lands).
+// the card is armed, or already claimed into a resume, so the client knows to
+// look for the turn fleet is about to start, has started, or (while the call
+// is still executing) will start once it lands. Idempotent replays (a lost
+// answer, a second tab, Check result) carry it too: by then the card is often
+// already claimed.
 func approvalResumeReplyFlag(out map[string]any, approval *store.Approval) map[string]any {
-	if approval != nil && approval.ResumeState == store.ApprovalResumeArmed {
+	if approval != nil && (approval.ResumeState == store.ApprovalResumeArmed || approval.ResumeState == store.ApprovalResumeClaimed) {
 		out["resume"] = true
 	}
 	return out
+}
+
+// resumeRowFromEarlierProcess reports a 'resume' queue row created before
+// this process started.
+func (s *Server) resumeRowFromEarlierProcess(row *store.InputQueueRow) bool {
+	return row != nil && row.Mode == store.InputModeResume &&
+		!s.processStart.IsZero() && row.CreatedAt <= s.processStart.Unix()
+}
+
+// noteDroppedResume records, in the conversation, a resume that the launch
+// guard refused because it predates this process.
+func (s *Server) noteDroppedResume(convID, rowID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.store.AppendApprovalResumeDroppedNotice(ctx, convID); err != nil {
+		log.Printf("approval resume (conv=%s): note the dropped resume %s: %v", logSafe(convID), logSafe(rowID), err) //nolint:gosec // G706: logSafe strips CR/LF; both ids are server-generated.
+	}
+	//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
+	log.Printf("audit: approval resume %q in conversation %q predates this process; cancelled, not run", rowID, convID)
 }

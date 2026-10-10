@@ -39,6 +39,11 @@ type Server struct {
 	// approvalResumes debounces resume-after-approval decisions per
 	// conversation (approval_resume.go). Zero value ready.
 	approvalResumes approvalResumeScheduler
+	// processStart is when this process built its Server. A 'resume' queue
+	// row created before it belongs to a previous process and is never
+	// launched (launchQueuedTurn), even if the boot sweep that should have
+	// cancelled it failed. Zero (a test's struct literal) disables the check.
+	processStart time.Time
 	// approvalResumeObserver, when set (tests only), is told every decision
 	// decideApprovalResume made, after it acted on it.
 	approvalResumeObserver func(convID string, res store.ApprovalResumeResult, err error)
@@ -629,6 +634,7 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 		inflight:         make(map[string]inflightEntry),
 		sessionApprovals: NewSessionApprovalRegistry(),
 		sseReconnects:    newReconnectCounter(),
+		processStart:     time.Now(),
 		hostStats:        hoststats.New(),
 		// Per-token cap on the public /shared read endpoint (#226): generous for
 		// real viewers, a hard ceiling against scraping/DDoS amplification of a

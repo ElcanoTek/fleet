@@ -460,7 +460,9 @@ A couple of seconds after you approve, decline, or the card times out — or,
 for an action that was still running, once its result is in — a new turn
 starts on its own. It opens with a muted **Continued automatically after an
 approval — not typed by you** line (**Show** reveals the exact note the
-assistant was given) and streams like any reply. If several such cards are
+assistant was given). After you approve or decline in the open chat it streams
+like any reply; a turn started because a card timed out appears when you come
+back to the tab or reload. If several such cards are
 waiting, it waits until you have decided them all and then continues once. If
 a turn is already running, it waits behind it as an **auto-continue** item in
 the queue under the composer, which you can remove. It never approves anything

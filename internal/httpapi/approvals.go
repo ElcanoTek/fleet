@@ -1941,7 +1941,7 @@ func (s *Server) writeResolvedApprovalState(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "approval already resolved", http.StatusConflict)
 		return
 	}
-	state := s.approvalClientState(latest)
+	state := approvalResumeReplyFlag(s.approvalClientState(latest), latest)
 	if latest.ToolName == "suggest_advanced_model" && latest.Status == "approved" {
 		conv, err := s.store.Get(r.Context(), user, latest.ConversationID)
 		if err != nil || conv == nil {

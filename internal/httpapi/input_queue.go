@@ -489,6 +489,15 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateCancelled)
 		return true
 	}
+	// A turn fleet would start on its own after an approval
+	// (docs/RESUME-AFTER-APPROVAL.md) is never started by a restart. The boot
+	// sweep cancels such rows; this refuses one it missed (the sweep failed,
+	// or ran out of time), so the guarantee does not depend on the sweep.
+	if s.resumeRowFromEarlierProcess(row) {
+		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateCancelled)
+		s.noteDroppedResume(convID, row.ID)
+		return true
+	}
 	// The ROW's owner is authoritative — the drain kick may come from another
 	// actor's request path (e.g. a different session's /cancel bookkeeping).
 	user := row.UserEmail

@@ -73,7 +73,9 @@ func workflowTranscriptFromHistory(history []agent.HistoryEntry) string {
 				continue
 			}
 			var c agent.TextContent
-			if json.Unmarshal(e.Content, &c) != nil {
+			if json.Unmarshal(e.Content, &c) != nil || c.Kind == agent.InputKindApprovalResume {
+				// A resume input is fleet's note that an approval was settled
+				// (docs/RESUME-AFTER-APPROVAL.md), not a user request.
 				continue
 			}
 			text := strings.TrimSpace(c.Text)

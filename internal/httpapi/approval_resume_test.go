@@ -684,3 +684,60 @@ func TestApprovalResume_RestartDropsThePendingResumeWithANote(t *testing.T) {
 		t.Fatalf("last entry = %s %s, want the restart note", last.Type, last.Content)
 	}
 }
+
+// A 'resume' row from an earlier process (the boot sweep that should have
+// cancelled it failed) is never launched: the drain cancels it and notes it.
+// Simulated by a process that started after the row was written.
+func TestApprovalResume_RowFromAnEarlierProcessIsNeverLaunched(t *testing.T) {
+	h := newResumeHarness(t, resumePolicy(0), 30*time.Millisecond)
+	h.s.processStart = time.Now().Add(time.Hour)
+	conv := h.conversation()
+	a := h.stage(conv.ID, resumeToolA, "call_1")
+	h.resolve(conv.ID, a.ID, true)
+	if res := h.decision(); res.Input == nil {
+		t.Fatalf("decision = %+v, want a queued row", res)
+	}
+	h.idle(conv.ID)
+	if n := len(h.rec.requests()); n != 0 {
+		t.Fatalf("%d LLM requests: a resume row from an earlier process ran", n)
+	}
+	hist, _ := h.s.store.LoadHistory(context.Background(), conv.ID)
+	if last := hist[len(hist)-1]; last.Type != agent.EntryTypeNotice || !strings.Contains(string(last.Content), "fleet restarted") {
+		t.Fatalf("last entry = %s %s, want the restart note", last.Type, last.Content)
+	}
+}
+
+// An idempotent replay of the decision (a lost answer, a second tab, Check
+// result) still says resume, though the card is claimed by then.
+func TestApprovalResume_ReplayedAnswerKeepsTheResumeFlag(t *testing.T) {
+	h := newResumeHarness(t, resumePolicy(0), 30*time.Millisecond)
+	conv := h.conversation()
+	a := h.stage(conv.ID, resumeToolA, "call_1")
+	h.resolve(conv.ID, a.ID, false)
+	h.decision()
+	h.idle(conv.ID)
+	if got, _ := h.s.store.GetApproval(context.Background(), resumeTestUser, a.ID); got.ResumeState != store.ApprovalResumeClaimed {
+		t.Fatalf("resume_state = %q, want claimed", got.ResumeState)
+	}
+	if out := h.resolve(conv.ID, a.ID, false); out["status"] != "rejected" || out["resume"] != true {
+		t.Fatalf("replayed answer = %v, want rejected with resume:true", out)
+	}
+}
+
+// Promote-to-task and save-as-workflow transcripts leave fleet's resume input
+// out: it is not something the user asked for.
+func TestApprovalResume_TranscriptsSkipTheResumeInput(t *testing.T) {
+	hist := []agent.HistoryEntry{
+		histEntry("user", "text", agent.TextContent{Text: "update the deal"}),
+		histEntry("user", "text", agent.TextContent{Text: "[Approval resolved] mcp_deals_update_deal approval_id=x outcome=approved.", Kind: agent.InputKindApprovalResume}),
+		histEntry("assistant", "text", agent.TextContent{Text: "Verified."}),
+	}
+	for name, got := range map[string]string{
+		"promote":  transcriptFromHistory(hist),
+		"workflow": workflowTranscriptFromHistory(hist),
+	} {
+		if strings.Contains(got, "Approval resolved") || !strings.Contains(got, "update the deal") || !strings.Contains(got, "Verified.") {
+			t.Errorf("%s transcript = %q, want the user's words and the reply but not the resume input", name, got)
+		}
+	}
+}

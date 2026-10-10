@@ -357,6 +357,21 @@ func ApprovalResumeSkippedNotice(reason string, maxPerHour int) string {
 	}
 }
 
+// AppendApprovalResumeDroppedNotice writes the restart note into one
+// conversation: the chat server's launch guard calls it for a 'resume' row the
+// boot sweep missed.
+func (s *Store) AppendApprovalResumeDroppedNotice(ctx context.Context, convID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.appendNoticeTx(ctx, tx, convID, NoticeApprovalResumeDropped, approvalResumeDroppedNotice); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // approvalResumeDroppedNotice is the conversation note boot recovery writes.
 const approvalResumeDroppedNotice = "Automatic continue was not started because fleet restarted before it could run. Nothing was re-run. Send a message to continue."
 

@@ -3604,8 +3604,12 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	// after both recoveries above: RecoverStrandedApprovals settles the cards
 	// cut off mid-call (as outcome unknown), and RecoverInputQueue returns an
 	// uncommitted resume row to the queue, which this then cancels.
-	if noted, err := chatStore.DropApprovalResumesAtBoot(recCtx); err != nil {
-		log.Printf("approval-resume recovery: %v", err)
+	// On its own bounded context (the shared one may be spent by the
+	// recoveries above), retried once. A failure is not fatal: the chat
+	// server also refuses to launch a 'resume' row from an earlier process.
+	noted, err := dropApprovalResumesAtBoot(chatStore)
+	if err != nil {
+		log.Printf("approval-resume recovery: %v (any stale resume row is still refused at launch)", err)
 	} else if noted > 0 {
 		log.Printf("approval-resume recovery: dropped the pending automatic resume in %d conversation(s), with a note in each", noted) //nolint:gosec // G706: noted is an integer count.
 	}
@@ -3618,6 +3622,22 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	} else if purged > 0 {
 		log.Printf("input-queue startup purge: removed %d terminal row(s)", purged) //nolint:gosec // G706: purged is an integer database row count, never request-authored text.
 	}
+}
+
+// dropApprovalResumesAtBoot runs the boot sweep for resume after approval on
+// its own deadline, with one retry.
+func dropApprovalResumesAtBoot(chatStore *store.Store) (int, error) {
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		var noted int
+		noted, err = chatStore.DropApprovalResumesAtBoot(ctx)
+		cancel()
+		if err == nil {
+			return noted, nil
+		}
+	}
+	return 0, err
 }
 
 // logSafe strips CR/LF from a value before it is interpolated into a log
