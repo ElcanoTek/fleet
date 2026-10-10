@@ -28,11 +28,12 @@ import (
 // Server wires the agent Manager + store + shared-secret auth into an
 // http.Handler that Next.js talks to.
 type Server struct {
-	// approvalRuns counts claimed approvals still executing. An execution can
-	// outlive its POST (a call on a server with a declared approved-call
-	// budget answers "executing" early), so shutdown drains it here
-	// (DrainApprovalRuns) instead of through the HTTP server's handler drain.
-	approvalRuns sync.WaitGroup
+	// approvalRuns admits and counts claimed approvals still executing. An
+	// execution can outlive its POST (a call on a server with a declared
+	// approved-call budget answers "executing" early), so shutdown drains it
+	// here (DrainApprovalRuns) instead of through the HTTP server's handler
+	// drain, and refuses new ones from the moment the drain starts.
+	approvalRuns approvalRunGate
 
 	// A failed durable outcome write must not masquerade as live execution on
 	// retry. Startup recovers the persisted sentinel after this process exits.

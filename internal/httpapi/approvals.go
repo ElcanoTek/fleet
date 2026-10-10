@@ -1545,6 +1545,21 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		return
 	}
 
+	// Admit the execution before claiming: once a shutdown drain has begun,
+	// a new approval is refused while still pending (nothing is claimed or
+	// run), so the drain can never miss an execution that started after it
+	// looked.
+	if !s.approvalRuns.enter() {
+		http.Error(w, "fleet is shutting down; the action was not run. Try again in a moment.", http.StatusServiceUnavailable)
+		return
+	}
+	admitted := true
+	defer func() {
+		if admitted {
+			s.approvalRuns.leave()
+		}
+	}()
+
 	// User clicked Send. Claim the approval BEFORE firing the tool:
 	// the pending→approved flip is the only atomic gate, so executing
 	// first would let two concurrent requests (double-click, mobile
@@ -1565,8 +1580,9 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	// The user already committed to the action, so it runs on the detached
 	// execCtx — a tab close mid-flight must not abandon a claimed approval
 	// half-executed. The execution, the outcome write and the session policy
-	// are one unit (executeClaimedApproval) on its own goroutine, tracked by
-	// s.approvalRuns so a graceful shutdown waits for it within the grace.
+	// are one unit (executeClaimedApproval) on its own goroutine, which owns
+	// the s.approvalRuns admission from here on, so a graceful shutdown waits
+	// for it within the grace.
 	// The request waits for it, as it always has, unless the call runs on a
 	// server that declared an approved-call budget and is still running at
 	// approvalEarlyReplyAfter: then the request answers "executing" (the
@@ -1576,9 +1592,9 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	// the request (and the web proxy in front of it) open for its whole
 	// budget.
 	reply := make(chan map[string]any, 1)
-	s.approvalRuns.Add(1)
+	admitted = false // the goroutine leaves the gate
 	go func() {
-		defer s.approvalRuns.Done()
+		defer s.approvalRuns.leave()
 		defer safe.Recover("httpapi.approval_execute", func(any) {
 			// A panic before the outcome write leaves the sentinel standing:
 			// the action may have run, so the honest answer is "unknown",
@@ -1708,18 +1724,65 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	}
 }
 
-// DrainApprovalRuns blocks until every claimed approval still executing has
-// recorded its outcome, or ctx (the shutdown grace) fires; it reports which.
-// An execution cut off by the process exit leaves its sentinel standing, and
-// the next boot's RecoverStrandedApprovals records it as outcome unknown.
+// DrainApprovalRuns stops admitting approved executions and blocks until
+// every one already admitted has recorded its outcome, or ctx (the shutdown
+// grace) fires; it reports which. From its first call on, a new approve POST
+// is refused before its claim, so the card stays pending. An execution cut
+// off by the process exit leaves its sentinel standing, and the next boot's
+// RecoverStrandedApprovals records it as outcome unknown.
 func (s *Server) DrainApprovalRuns(ctx context.Context) bool {
-	done := make(chan struct{})
-	go func() {
-		s.approvalRuns.Wait()
-		close(done)
-	}()
+	return s.approvalRuns.drain(ctx)
+}
+
+// approvalRunGate admits and counts approved executions for the shutdown
+// drain. A sync.WaitGroup cannot do this job: an Add that races a Wait which
+// has already seen zero breaks its contract, and the approve route stays
+// reachable while the server drains. Admission and drain share one mutex, so
+// once drain has started no execution can begin. The zero value is ready.
+type approvalRunGate struct {
+	mu       sync.Mutex
+	active   int
+	draining bool
+	idle     chan struct{} // closed when draining and active reaches zero
+}
+
+// enter admits one execution, or refuses it once a drain has begun.
+func (g *approvalRunGate) enter() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.draining {
+		return false
+	}
+	g.active++
+	return true
+}
+
+// leave ends one admitted execution.
+func (g *approvalRunGate) leave() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.active--
+	if g.draining && g.active == 0 && g.idle != nil {
+		close(g.idle)
+		g.idle = nil
+	}
+}
+
+// drain refuses further admissions and waits for the admitted ones, or ctx.
+func (g *approvalRunGate) drain(ctx context.Context) bool {
+	g.mu.Lock()
+	g.draining = true
+	if g.active == 0 {
+		g.mu.Unlock()
+		return true
+	}
+	if g.idle == nil {
+		g.idle = make(chan struct{})
+	}
+	idle := g.idle
+	g.mu.Unlock()
 	select {
-	case <-done:
+	case <-idle:
 		return true
 	case <-ctx.Done():
 		return false

@@ -322,6 +322,8 @@ func drainApprovals(t *testing.T, s *Server) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	// A test-only drain on a fresh gate per test: it also closes admission,
+	// which is fine because each test builds its own Server.
 	if !s.DrainApprovalRuns(ctx) {
 		t.Fatal("approved execution never finished")
 	}
@@ -475,4 +477,70 @@ func TestApprovalMayAnswerEarly(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDrainApprovalRunsWaitsAndRefusesNewApprovals: a shutdown drain waits
+// for an execution that already answered "executing", and from the moment it
+// starts a new approve POST is refused while still pending (nothing claimed,
+// nothing run), so no execution can start behind the drain's back.
+func TestDrainApprovalRunsWaitsAndRefusesNewApprovals(t *testing.T) {
+	useApprovedCallPolicy(t)
+	useEarlyReplyAfter(t, 10*time.Millisecond)
+	broker := &budgetBroker{text: "created", entered: make(chan struct{}), release: make(chan struct{})}
+	st := &claimStore{approval: *dealsApproval(`{}`)}
+	s := &Server{store: st, agent: &budgetEngine{fakeEngine: &fakeEngine{}, broker: broker, catalog: dealsApprovalCatalog}}
+
+	if first := postExpectingEarlyReply(t, s, broker); first["executing"] != true {
+		t.Fatalf("first POST = %v, want executing", first)
+	}
+	<-broker.entered
+
+	drained := make(chan bool, 1)
+	go func() { drained <- s.DrainApprovalRuns(context.Background()) }()
+	// The drain must hold while the admitted call runs, and refuse new work.
+	waitDraining(t, &s.approvalRuns)
+	select {
+	case <-drained:
+		t.Fatal("the drain returned while an admitted approval was still executing")
+	default:
+	}
+
+	// A second, still-pending card on the same server.
+	st.mu.Lock()
+	st.approval = *dealsApproval(`{}`)
+	st.mu.Unlock()
+	req := httptest.NewRequest("POST", "/conversations/c1/approvals/ap1", strings.NewReader(`{"approved":true}`))
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@example.com"))
+	rec := httptest.NewRecorder()
+	s.handleApproval(rec, req, "c1", "ap1")
+	if rec.Code != 503 {
+		t.Fatalf("approve during drain = %d %s, want 503 before any claim", rec.Code, rec.Body.String())
+	}
+	if claims, _ := st.counts(); claims != 1 {
+		t.Fatalf("claims = %d, want 1: a refused approval must stay pending", claims)
+	}
+
+	close(broker.release)
+	if !<-drained {
+		t.Fatal("drain reported a timeout with no deadline")
+	}
+	if calls, _, _ := broker.snapshot(); calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
+// waitDraining blocks until g has entered its drain.
+func waitDraining(t *testing.T, g *approvalRunGate) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		g.mu.Lock()
+		d := g.draining
+		g.mu.Unlock()
+		if d {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("DrainApprovalRuns never started draining")
 }
