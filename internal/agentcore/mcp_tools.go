@@ -65,18 +65,53 @@ const (
 // batch is not killed mid-run. The per-record pace is the server's
 // bundle-declared batch_seconds_per_deal (batchPerDealFor).
 func toolCallTimeoutFor(serverName, rawInput string) time.Duration {
-	ids, ok := batchDealIDs(rawInput)
+	t, ok := batchCallBudget(serverName, rawInput)
 	if !ok {
 		return toolCallTimeout
 	}
-	t := time.Duration(len(ids)) * batchPerDealFor(serverName)
-	if t < toolCallTimeout {
-		return toolCallTimeout
+	return min(max(t, toolCallTimeout), maxBatchToolCallTimeout)
+}
+
+// batchCallBudget is the one deal_ids scaling rule both call paths share: the
+// number of records a call's input lists in deal_ids times the server's
+// per-record pace (batchPerDealFor), unfloored and uncapped. ok is false when
+// the input carries no non-empty deal_ids array; each caller then keeps its
+// own default.
+func batchCallBudget(serverName, rawInput string) (time.Duration, bool) {
+	ids, ok := batchDealIDs(rawInput)
+	if !ok {
+		return 0, false
 	}
-	if t > maxBatchToolCallTimeout {
-		return maxBatchToolCallTimeout
+	return time.Duration(len(ids)) * batchPerDealFor(serverName), true
+}
+
+// DefaultApprovedCallBudget is the budget of an approved chat card's MCP call
+// on a server that declares no approved_call_timeout_seconds. It is the flat
+// 60 s the approval path has always used, sized for an email send that
+// usually returns in under a second.
+const DefaultApprovedCallBudget = 60 * time.Second
+
+// ApprovedCallBudget returns the budget for ONE MCP call a person approved on
+// a chat approval card, on the REGISTERED server serverName with the card's
+// frozen input rawInput, and whether the server opted in by declaring
+// approved_call_timeout_seconds in the bundle.
+//
+// A server that did not opt in gets DefaultApprovedCallBudget whatever its
+// input says, exactly as before the budget existed: a deal_ids input does not
+// scale it. A server that opted in gets its declared budget, raised to the
+// deal_ids scaling (batchCallBudget, the same rule and per-record pace the
+// agent loop uses) when the input lists records, and never more than the
+// 30-minute ceiling on any one MCP call. A named-account variant resolves to
+// its base server's declaration through the one server-name keying rule.
+func ApprovedCallBudget(serverName, rawInput string) (time.Duration, bool) {
+	base, declared := approvedCallTimeoutFor(serverName)
+	if !declared {
+		return DefaultApprovedCallBudget, false
 	}
-	return t
+	if scaled, ok := batchCallBudget(serverName, rawInput); ok {
+		base = max(base, scaled)
+	}
+	return min(base, maxBatchToolCallTimeout), true
 }
 
 // ── THE ONE SERVER-NAME KEYING RULE (#1272) ──────────────────────────────────

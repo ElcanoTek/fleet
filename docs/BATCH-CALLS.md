@@ -70,6 +70,10 @@ three gaps at once:
   it back on the call's context before the call reaches `mcp.Server.callTool`.
   `TestBrokerScope_CallBudgetCrossesTheWire` (`cmd/fleet`) drives that whole
   path against a real stdio server.
+- **Approved chat cards** run outside the loop and use a separate budget.
+  A server that declares `approved_call_timeout_seconds` gets the same
+  `deal_ids` scaling on its approved calls, through the same helper
+  (`batchCallBudget`). See [APPROVED-CALL-BUDGET.md](APPROVED-CALL-BUDGET.md).
 - `mcpTool` also keeps an outer deadline of **budget + 5 minutes**. It is the
   backstop for a broker that never reaches an `mcp.Server`, and for the mutex
   queue itself.

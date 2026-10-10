@@ -81,6 +81,13 @@ type AgentPolicy struct {
 	// the one server-name keying rule (longestServerKey). Unlisted servers get
 	// batchToolCallTimeoutPerDeal. Non-positive values are ignored.
 	BatchSecondsPerDeal map[string]int
+	// ApprovedCallTimeoutSeconds maps a manifest MCP server name to its budget,
+	// in seconds, for one call a person approved on a chat approval card (the
+	// bundle's mcp_servers[].approved_call_timeout_seconds). Declaring it opts
+	// the server into ApprovedCallBudget's scaling; an unlisted server keeps
+	// DefaultApprovedCallBudget. Variants resolve to their base server's entry
+	// the same way as BatchSecondsPerDeal. Non-positive values are ignored.
+	ApprovedCallTimeoutSeconds map[string]int
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -146,6 +153,10 @@ var (
 	// deal_ids batch budget. Empty by default: every server gets
 	// batchToolCallTimeoutPerDeal.
 	activeBatchPerDeal = map[string]time.Duration{}
+	// activeApprovedCallTimeout maps a manifest server name to its declared
+	// approved-card call budget. Empty by default: every approved call gets
+	// DefaultApprovedCallBudget.
+	activeApprovedCallTimeout = map[string]time.Duration{}
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -253,6 +264,14 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		}
 	}
 	activeBatchPerDeal = perDeal
+
+	approved := make(map[string]time.Duration, len(p.ApprovedCallTimeoutSeconds))
+	for server, secs := range p.ApprovedCallTimeoutSeconds {
+		if server = strings.TrimSpace(server); server != "" && secs > 0 {
+			approved[server] = time.Duration(secs) * time.Second
+		}
+	}
+	activeApprovedCallTimeout = approved
 }
 
 // batchPerDealFor returns the per-record deal_ids batch budget for a
@@ -266,6 +285,19 @@ func batchPerDealFor(registered string) time.Duration {
 		return activeBatchPerDeal[key]
 	}
 	return batchToolCallTimeoutPerDeal
+}
+
+// approvedCallTimeoutFor returns the bundle-declared approved-card call budget
+// for a REGISTERED server name (the server's own entry, or, for a
+// named-account variant without one, its base server's), and whether one is
+// declared at all.
+func approvedCallTimeoutFor(registered string) (time.Duration, bool) {
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	if key, ok := longestServerKey(registered, activeApprovedCallTimeout, true, nil); ok {
+		return activeApprovedCallTimeout[key], true
+	}
+	return 0, false
 }
 
 // CriticalToolAliasProblems reports what ConfigureAgentPolicy would ignore in

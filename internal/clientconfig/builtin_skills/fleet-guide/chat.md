@@ -443,6 +443,14 @@ result** fetches the outcome without running the action twice. In terminal chat
 the same flags apply: `/approve <id>` on a running card retrieves the result;
 an unknown historical outcome is an error, not success.
 
+By default an approved connector action (a **Run an action** card, or an email
+send) has a minute to finish. A deployment can give a slower connector's actions
+longer (creating or updating a record in an external system, for example), and
+such an action that is still running after about 50 seconds shows as still
+running straight away rather than holding the page: use **Check result** a
+little later to see how it ended. Shell commands and task cards keep their own
+limits.
+
 Some cards carry a checkbox that widens your decision to every later call of the
 same kind in this conversation, turning the button into **Approve + allow all**.
 Leave it unticked unless you know exactly what the rest of the conversation will

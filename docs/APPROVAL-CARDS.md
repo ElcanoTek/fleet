@@ -115,6 +115,15 @@ actions. What changed:
   arguments may be stale, so re-staging — not re-arming — is the only honest
   recovery). Recovery used to require composing that request by hand.
 
+## How long an approved action may run
+
+An approved MCP call runs under a budget: 60 s by default, or what its server
+declares in the bundle (`approved_call_timeout_seconds`, scaled for a
+`deal_ids` batch). A call on a server that declared one and is still running
+after about 50 s answers the approve POST with `executing`, so the card shows
+its still-running state and **Check result** fetches the outcome once it is
+recorded. See [APPROVED-CALL-BUDGET.md](APPROVED-CALL-BUDGET.md).
+
 ## Honest scope / deliberately not done
 
 - **No approvals-table mode column.** Notify records are tagged by their

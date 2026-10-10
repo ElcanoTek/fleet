@@ -37,6 +37,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/croncount"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -1544,6 +1545,21 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		return
 	}
 
+	// Admit the execution before claiming: once a shutdown drain has begun,
+	// a new approval is refused while still pending (nothing is claimed or
+	// run), so the drain can never miss an execution that started after it
+	// looked.
+	if !s.approvalRuns.enter() {
+		http.Error(w, "fleet is shutting down; the action was not run. Try again in a moment.", http.StatusServiceUnavailable)
+		return
+	}
+	admitted := true
+	defer func() {
+		if admitted {
+			s.approvalRuns.leave()
+		}
+	}()
+
 	// User clicked Send. Claim the approval BEFORE firing the tool:
 	// the pending→approved flip is the only atomic gate, so executing
 	// first would let two concurrent requests (double-click, mobile
@@ -1561,23 +1577,116 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		return
 	}
 
-	// Fire the MCP tool. Mock mode short-circuits here so Playwright can
-	// exercise the approval UX without real SendGrid credentials. The
-	// user already committed to the send, so this runs on the detached
-	// execCtx — a tab close mid-flight must not abandon a claimed
-	// approval half-executed (runStagedTool applies its own 60s cap).
+	// The user already committed to the action, so it runs on the detached
+	// execCtx — a tab close mid-flight must not abandon a claimed approval
+	// half-executed. The execution, the outcome write and the session policy
+	// are one unit (executeClaimedApproval) on its own goroutine, which owns
+	// the s.approvalRuns admission from here on, so a graceful shutdown waits
+	// for it within the grace.
+	// The request waits for it, as it always has, unless the call runs on a
+	// server that declared an approved-call budget and is still running at
+	// approvalEarlyReplyAfter: then the request answers "executing" (the
+	// same shape a concurrent loser or a "Check result" re-POST gets while
+	// the sentinel stands) and the execution finishes detached and records
+	// its outcome exactly as it would have. A long deal write must not hold
+	// the request (and the web proxy in front of it) open for its whole
+	// budget.
+	reply := make(chan map[string]any, 1)
+	admitted = false // the goroutine leaves the gate
+	go func() {
+		defer s.approvalRuns.leave()
+		defer safe.Recover("httpapi.approval_execute", func(any) {
+			// A panic before the outcome write leaves the sentinel standing:
+			// the action may have run, so the honest answer is "unknown",
+			// never success or failure, and never a re-run.
+			s.approvalPersistenceFailures.Store(approvalID, true)
+			reply <- map[string]any{
+				"status": "approved", "execution_unknown": true,
+				"result_text": approvalOutcomeUnrecordedText,
+			}
+		})
+		reply <- s.executeClaimedApproval(execCtx, user, convID, approvalID, approval, req)
+	}()
+	if !s.approvalMayAnswerEarly(approval) {
+		writeJSON(w, <-reply)
+		return
+	}
+	early := time.NewTimer(approvalEarlyReplyAfter)
+	defer early.Stop()
+	select {
+	case out := <-reply:
+		writeJSON(w, out)
+	case <-early.C:
+		writeJSON(w, map[string]any{
+			"status":      "approved",
+			"executing":   true,
+			"result_text": approvalExecutingSentinel,
+		})
+	case <-r.Context().Done():
+		// The client is gone; nobody reads a reply. The execution carries on
+		// detached and records its outcome for the next "Check result".
+	}
+}
+
+// approvalEarlyReplyAfter is how long an approval POST for a call on a server
+// with a declared approved-call budget waits for the outcome before it
+// answers "executing" and lets the call finish detached. It sits below every
+// proxy and client timeout in front of the API (the web's Next proxy and
+// browsers allow minutes), and below the 60 s budget a server gets without a
+// declaration. Var, not const: tests shorten it.
+var approvalEarlyReplyAfter = 50 * time.Second
+
+// approvalOutcomeUnrecordedText is the reply when the action was attempted but
+// its outcome could not be durably recorded.
+const approvalOutcomeUnrecordedText = "The action was attempted but its outcome could not be recorded. Verify the external result before taking further action."
+
+// approvalMayAnswerEarly reports whether an approved card's POST may answer
+// "executing" before its call returns: only an MCP call on a server that
+// opted into a longer budget (approved_call_timeout_seconds) does. Every
+// other approval (email on an undeclared server, bash, schedule_task,
+// manage_tasks, preview_email, mock mode) keeps the request open until the
+// outcome is recorded, exactly as before. The server is the card's recorded
+// seat, or, for a legacy row with none, the catalog entry that would run it.
+func (s *Server) approvalMayAnswerEarly(approval *store.Approval) bool {
+	if s.cfg != nil && s.cfg.MockMode {
+		return false
+	}
+	if !strings.HasPrefix(approval.ToolName, "mcp_") || s.agent == nil {
+		return false
+	}
+	server := ""
+	if approval.MCPServer != "" {
+		server = agentcore.RegisteredMCPName(approval.MCPServer, approval.MCPAccount)
+	} else if name, _, err := resolveMCPTool(s.agent.MCPCatalog(), approval.ToolName); err == nil {
+		server = name
+	}
+	if server == "" {
+		return false
+	}
+	_, declared := agentcore.ApprovedCallBudget(server, approval.ArgsJSON)
+	return declared
+}
+
+// executeClaimedApproval runs a claimed approval, records its outcome
+// (SetApprovalResult, which also commits the history breadcrumb) and
+// registers any session policy the click asked for. It returns the POST body
+// for that outcome. It runs on the detached execCtx and never reads the
+// request, so it completes the same way whether or not anyone is still
+// waiting for its reply. Mock mode short-circuits so Playwright can exercise
+// the approval UX without real SendGrid credentials.
+func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, approvalID string, approval *store.Approval, req approvalRequest) map[string]any {
 	var (
 		text    string
 		toolErr error
 	)
 	switch {
-	case s.cfg.MockMode && approval.ToolName == tools.ManageTasksToolName:
+	case s.cfg != nil && s.cfg.MockMode && approval.ToolName == tools.ManageTasksToolName:
 		text = "Scheduled tasks updated (mock mode — nothing persisted)."
-	case s.cfg.MockMode && approval.ToolName == tools.ScheduleTaskToolName:
+	case s.cfg != nil && s.cfg.MockMode && approval.ToolName == tools.ScheduleTaskToolName:
 		// Playwright/mock mode has no real sched store wired; report a canned
 		// success so the approval UX is exercisable without a database.
 		text = "Scheduled task created (mock mode — no task persisted)."
-	case s.cfg.MockMode:
+	case s.cfg != nil && s.cfg.MockMode:
 		text = `{"status_code":202,"message":"mock send ok"}`
 	case approval.ToolName == tools.ScheduleTaskToolName:
 		// schedule_task creates an orchestrator task in-process via the injected
@@ -1601,20 +1710,83 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText, isErr); err != nil {
 		log.Printf("SetApprovalResult: %v", err)
 		s.approvalPersistenceFailures.Store(approvalID, true)
-		writeJSON(w, map[string]any{
+		return map[string]any{
 			"status": "approved", "execution_unknown": true,
-			"result_text": "The action was attempted but its outcome could not be recorded. Verify the external result before taking further action.",
-		})
-		return
+			"result_text": approvalOutcomeUnrecordedText,
+		}
 	}
 	// SetApprovalResult commits the history breadcrumb in the same transaction.
 	s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
-
-	writeJSON(w, map[string]any{
+	return map[string]any{
 		"status":      "approved",
 		"result_text": resultText,
 		"is_err":      isErr,
-	})
+	}
+}
+
+// DrainApprovalRuns stops admitting approved executions and blocks until
+// every one already admitted has recorded its outcome, or ctx (the shutdown
+// grace) fires; it reports which. From its first call on, a new approve POST
+// is refused before its claim, so the card stays pending. An execution cut
+// off by the process exit leaves its sentinel standing, and the next boot's
+// RecoverStrandedApprovals records it as outcome unknown.
+func (s *Server) DrainApprovalRuns(ctx context.Context) bool {
+	return s.approvalRuns.drain(ctx)
+}
+
+// approvalRunGate admits and counts approved executions for the shutdown
+// drain. A sync.WaitGroup cannot do this job: an Add that races a Wait which
+// has already seen zero breaks its contract, and the approve route stays
+// reachable while the server drains. Admission and drain share one mutex, so
+// once drain has started no execution can begin. The zero value is ready.
+type approvalRunGate struct {
+	mu       sync.Mutex
+	active   int
+	draining bool
+	idle     chan struct{} // closed when draining and active reaches zero
+}
+
+// enter admits one execution, or refuses it once a drain has begun.
+func (g *approvalRunGate) enter() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.draining {
+		return false
+	}
+	g.active++
+	return true
+}
+
+// leave ends one admitted execution.
+func (g *approvalRunGate) leave() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.active--
+	if g.draining && g.active == 0 && g.idle != nil {
+		close(g.idle)
+		g.idle = nil
+	}
+}
+
+// drain refuses further admissions and waits for the admitted ones, or ctx.
+func (g *approvalRunGate) drain(ctx context.Context) bool {
+	g.mu.Lock()
+	g.draining = true
+	if g.active == 0 {
+		g.mu.Unlock()
+		return true
+	}
+	if g.idle == nil {
+		g.idle = make(chan struct{})
+	}
+	idle := g.idle
+	g.mu.Unlock()
+	select {
+	case <-idle:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func governApprovalResult(ctx context.Context, approval *store.Approval, text string, isErr bool) (string, bool) {
@@ -1916,17 +2088,18 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	if err := decodeJSONNumbers([]byte(approval.ArgsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
-	// Give the send a generous but bounded timeout — SendGrid is usually
-	// <1s, but we don't want to hold the approval request open forever.
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
 	// Reopen the seat the card was staged under (#167 residual 2). The turn
 	// scope that staged it is long gone, so this is a fresh short-lived scope
 	// carrying the same public {server, account} selection. A revoked account
 	// fails the open and therefore the approval — it never falls back to the
 	// default bundle seat, which would send as the wrong client.
-	broker, catalog, release, err := s.approvalMCPScope(ctx, approval)
+	//
+	// Opening the scope (spawning the seat's server) has its own fixed
+	// allowance, so a slow spawn never eats the call's budget; the close
+	// after the call has its own too (approvalScopeCloseTimeout).
+	openCtx, cancelOpen := context.WithTimeout(ctx, approvalScopeOpenTimeout)
+	broker, catalog, release, err := s.approvalMCPScope(openCtx, approval)
+	cancelOpen()
 	if err != nil {
 		return "", err
 	}
@@ -1936,7 +2109,18 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	if err != nil {
 		return "", err
 	}
-	text, isError, err := broker.CallMCP(ctx, server, tool, args)
+	// The call's budget: the flat 60 s (sized for an email send) unless the
+	// server declares approved_call_timeout_seconds, in which case it is that,
+	// scaled for a deal_ids batch (agentcore.ApprovedCallBudget). The budget
+	// rides the context (mcp.WithCallTimeout) so it crosses the out-of-process
+	// broker as callTimeoutMs and the credential owner applies it too, as the
+	// agent loop's MCP calls do. The approval runs on a fresh per-approval
+	// scope, so no other call queues ahead of it; the outer deadline is the
+	// budget itself.
+	budget, _ := agentcore.ApprovedCallBudget(server, approval.ArgsJSON)
+	callCtx, cancel := context.WithTimeout(mcp.WithCallTimeout(ctx, budget), budget)
+	defer cancel()
+	text, isError, err := broker.CallMCP(callCtx, server, tool, args)
 	if err != nil {
 		return "", err
 	}
@@ -1949,6 +2133,12 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 // approvalScopeCloseTimeout bounds the post-execution scope close so a hung
 // credential owner cannot hold the approval HTTP request open.
 const approvalScopeCloseTimeout = 5 * time.Second
+
+// approvalScopeOpenTimeout bounds reopening the staged seat's scope (spawning
+// its server) before an approved MCP call. It is separate from the call's
+// budget, so a long budget does not also stretch a hung spawn, and a slow
+// spawn does not shorten the call.
+const approvalScopeOpenTimeout = 30 * time.Second
 
 // approvalMCPScope resolves the call seam an approved MCP tool executes on.
 // With a recorded seat and a scope-capable engine it opens a per-approval

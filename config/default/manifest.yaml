@@ -122,6 +122,16 @@ branding:
 #       reporting. Appears once PUBMATIC_ACCESS_TOKEN is set."
 #     #                ^ capability first, in the imperative; then the gating
 #     #                  clause, naming the real enabled_env/enabled_groups vars
+#     approved_call_timeout_seconds: 300
+#     #                ^ OPTIONAL. Budget, in seconds (1-1800), for ONE call of
+#     #                  this server's tools that a person approved on a chat
+#     #                  card. Absent = 60 s (sized for an email send). Setting
+#     #                  it also scales an approved deal_ids batch by the
+#     #                  server's batch pace (batch_seconds_per_deal, default
+#     #                  20 s per record, capped at 30 min), and lets a call
+#     #                  still running after ~50 s answer "executing" while it
+#     #                  finishes. Named-account variants inherit it. Needs a
+#     #                  Fleet that knows the key. See docs/APPROVED-CALL-BUDGET.md.
 mcp_servers: []
 
 # Hosted third-party MCP server directory (#538). Fleet ships a large curated

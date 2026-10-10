@@ -390,6 +390,26 @@ func TestCheckManifestUnknownFieldFailsLikeBoot(t *testing.T) {
 	}
 }
 
+// TestCheckManifestReportsApprovedCallTimeoutOutOfRange: an out-of-range
+// mcp_servers[].approved_call_timeout_seconds fails the bundle load, so
+// validate-config reports it as a blocking manifest failure naming the key,
+// before a restart would crash-loop on it.
+func TestCheckManifestReportsApprovedCallTimeoutOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	manifest := "mcp_servers:\n  - name: deals_mcp\n    command: deals\n    always: true\n    approved_call_timeout_seconds: 1801\n"
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle, bundleErr := clientconfig.Load(dir)
+	res := checkManifest(bundle, bundleErr, nil)
+	if res.Status != statusFail || !res.Blocking {
+		t.Fatalf("manifest check = %s blocking=%v, want a blocking failure", res.Status, res.Blocking)
+	}
+	if !strings.Contains(res.Detail, "approved_call_timeout_seconds") {
+		t.Fatalf("detail should name the key, got %q", res.Detail)
+	}
+}
+
 // personaBundle builds a minimal loadable bundle whose personas/ holds exactly
 // the named files — the shape of a client bundle that calls its persona
 // something other than the loader's built-in assistant default.
