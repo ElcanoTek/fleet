@@ -514,3 +514,29 @@ func TestStage_DescriberHonorsPersonaAndHooks(t *testing.T) {
 		})
 	}
 }
+
+// supersedeOrderStore records whether the describer ran before the previous
+// card was superseded (Codex P2 on #1717).
+type supersedeOrderStore struct {
+	cardStageStore
+	broker           *describerBroker
+	callsAtSupersede int
+}
+
+func (s *supersedeOrderStore) SupersedePendingApprovals(context.Context, string, string) (int64, error) {
+	s.callsAtSupersede = len(s.broker.called())
+	return 1, nil
+}
+
+func TestStage_DescribesBeforeSuperseding(t *testing.T) {
+	describerPolicy(t)
+	broker := &describerBroker{text: goodCard}
+	st := &supersedeOrderStore{broker: broker}
+	a := newDescribingStager(broker, st, &eventSink{})
+	if _, err := a.Stage("mcp_deals_update_deal", "call-1", describedArgs); err != nil {
+		t.Fatal(err)
+	}
+	if st.callsAtSupersede != 1 {
+		t.Fatalf("describer calls when the old card was superseded = %d, want 1 (describe first)", st.callsAtSupersede)
+	}
+}

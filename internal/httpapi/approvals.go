@@ -386,6 +386,14 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		rawInput = enriched
 	}
 
+	// A bundle-declared describer turns the call into a readable card
+	// (approval_card.go). Bounded and best-effort: any failure leaves the
+	// generic arguments card, and staging goes on either way. It runs BEFORE
+	// the supersede below: that rejects the previous card irreversibly, so a
+	// turn stopped during the describer's few seconds must not leave the user
+	// with neither the old card nor its replacement.
+	cardJSON, cardFallback := a.describeApproval(toolName, rawInput)
+
 	// Supersede any older pending approvals for this same tool in this
 	// conversation. Keeps the UI clean when the agent retries — e.g.
 	// a preview_email that staged with a broken body, then re-staged
@@ -403,11 +411,6 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 			"count": n,
 		})
 	}
-
-	// A bundle-declared describer turns the call into a readable card
-	// (approval_card.go). Bounded and best-effort: any failure leaves the
-	// generic arguments card, and staging goes on either way.
-	cardJSON, cardFallback := a.describeApproval(toolName, rawInput)
 
 	seat := a.seatFor(toolName)
 	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail, toolName, toolCallID, rawInput, a.expiryUnixFor(toolName), seat)
