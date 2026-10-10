@@ -43,7 +43,7 @@ func renderConversationMarkdown(conv *store.Conversation, history []agent.Histor
 			if json.Unmarshal(e.Content, &c) != nil {
 				continue
 			}
-			fmt.Fprintf(&b, "\n## %s\n\n%s\n\n---\n", roleHeading(e.Role), c.Text)
+			fmt.Fprintf(&b, "\n## %s\n\n%s\n\n---\n", textEntryHeading(e.Role, c), c.Text)
 		case "reasoning":
 			var c agent.ReasoningContent
 			if json.Unmarshal(e.Content, &c) != nil {
@@ -67,6 +67,12 @@ func renderConversationMarkdown(conv *store.Conversation, history []agent.Histor
 				errMark = " ⚠ error"
 			}
 			fmt.Fprintf(&b, "\n**Output%s:**\n```\n%s\n```\n\n---\n", errMark, c.Text)
+		case agent.EntryTypeNotice:
+			var c agent.NoticeContent
+			if json.Unmarshal(e.Content, &c) != nil || strings.TrimSpace(c.Text) == "" {
+				continue
+			}
+			fmt.Fprintf(&b, "\n> **Fleet:** %s\n\n---\n", c.Text)
 		case "summary":
 			var c agent.SummaryContent
 			if json.Unmarshal(e.Content, &c) != nil {
@@ -87,6 +93,16 @@ func renderConversationMarkdown(conv *store.Conversation, history []agent.Histor
 // entryTypeToolCallMD mirrors the agent package's tool-call entry type string
 // (unexported there); kept local to the renderer's switch.
 const entryTypeToolCallMD = "tool_call"
+
+// textEntryHeading names who wrote a text entry. A turn fleet started itself
+// after an approval card was settled (docs/RESUME-AFTER-APPROVAL.md) has a
+// user-role input the user did not write, so it is not labelled "User".
+func textEntryHeading(role string, c agent.TextContent) string {
+	if c.Kind == agent.InputKindApprovalResume {
+		return "Fleet (continued after approval)"
+	}
+	return roleHeading(role)
+}
 
 // roleHeading title-cases a history entry's role for a Markdown heading.
 func roleHeading(role string) string {

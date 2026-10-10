@@ -71,6 +71,9 @@ export function showsEmptyReplyNotice(message: Message): boolean {
     !message.retrying &&
     !(message.approvals && message.approvals.length) &&
     !(message.memoryProposals && message.memoryProposals.length) &&
+    // A row holding only fleet's notices (an automatic continue that was
+    // skipped, say) is not a turn that finished without a reply.
+    !(message.notices && message.notices.length) &&
     // A turn that ends on an interactive card has answered with the card.
     !(message.toolCalls ?? []).some(isRenderableCardCall)
   );

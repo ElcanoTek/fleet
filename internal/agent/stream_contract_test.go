@@ -46,6 +46,9 @@ type contractScenario struct {
 	about  string
 	steps  []fakellm.Step
 	cancel bool // cancel the turn once the model has stalled
+	// inputKind is TurnInput.InputKind: a turn fleet started itself, whose
+	// input the clients render as a notice rather than the user's words.
+	inputKind string
 }
 
 func contractScenarios() []contractScenario {
@@ -79,6 +82,14 @@ func contractScenarios() []contractScenario {
 				Kind: fakellm.StepStatus, Status: 400,
 				StatusBody: `{"error":{"code":400,"message":"contract fixture: bad request"}}`,
 			}},
+		},
+		{
+			name:      "approval-resume",
+			about:     "fleet starts the turn itself after an approval card is settled (docs/RESUME-AFTER-APPROVAL.md)",
+			inputKind: InputKindApprovalResume,
+			steps: []fakellm.Step{
+				fakellm.TextStep("The approved change is in place; nothing else remains."),
+			},
 		},
 		{
 			name:   "cancelled",
@@ -170,7 +181,7 @@ func recordContractTurn(t *testing.T, sc contractScenario) []byte {
 			cancel()
 		}()
 	}
-	_, _ = mgr.RunTurn(ctx, TurnInput{UserMessage: "contract: " + sc.about, Model: "anthropic/claude-opus-4.8"}, sink)
+	_, _ = mgr.RunTurn(ctx, TurnInput{UserMessage: "contract: " + sc.about, Model: "anthropic/claude-opus-4.8", InputKind: sc.inputKind}, sink)
 
 	var out bytes.Buffer
 	fmt.Fprintf(&out, ": chat-stream contract %q — %s\n", sc.name, sc.about)

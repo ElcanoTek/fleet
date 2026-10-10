@@ -25,6 +25,7 @@ const (
 	nameTasksSkipped          = "fleet_tasks_skipped_total"
 	nameRecurrenceRepaired    = "fleet_sched_recurrences_reconciled_total"
 	nameWebhookTrig           = "fleet_webhook_triggers_total"
+	nameApprovalResumes       = "fleet_approval_resumes_total"
 	nameToolOutputTruncations = "fleet_tool_output_truncations_total"
 	nameToolOutputArtifacts   = "fleet_tool_output_artifacts_total"
 	nameToolContextReductions = "fleet_tool_context_reductions_total"
@@ -192,6 +193,19 @@ func RecordWebhookTrigger(slug, result string) {
 	}
 	incCounter(nameWebhookTrig, "Total inbound webhook-triggered conversation requests, by slug and result.",
 		[]string{"slug", "result"}, []string{slug, result}, 1)
+}
+
+// RecordApprovalResume counts one resume-after-approval decision
+// (docs/RESUME-AFTER-APPROVAL.md) that claimed settled cards, by outcome:
+// "queued" (a resume turn was enqueued), "rate_limited" or "queue_full" (it
+// was skipped and the conversation got a note). Bounded label set; the
+// conversation and approval ids are in the audit log line, not the metric.
+func RecordApprovalResume(outcome string) {
+	if outcome == "" {
+		outcome = "unknown"
+	}
+	incCounter(nameApprovalResumes, "Resume-after-approval decisions that claimed settled approval cards, by outcome.",
+		[]string{"outcome"}, []string{outcome}, 1)
 }
 
 // RecordSLAWarn counts one in-flight task that crossed its SLA warn threshold

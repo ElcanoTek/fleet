@@ -485,6 +485,13 @@ export type Approval = {
    * and always posts scope "once" (the server refuses any other scope).
    */
   noSessionApproval?: boolean;
+  /**
+   * True when the bundle lists this tool in agent_policy.critical_tool_resume:
+   * once the card is settled fleet starts a turn on its own
+   * (docs/RESUME-AFTER-APPROVAL.md), so the client follows the conversation
+   * for it.
+   */
+  resumeAfterApproval?: boolean;
   /** The describer's readable card, when the bundle declares one for the tool. */
   card?: ApprovalCardData;
 };
@@ -544,9 +551,11 @@ export function hydrateResolvedApproval(p: {
   tool_call_id?: string;
   recorded?: boolean;
   card?: unknown;
+  resume_after_approval?: boolean;
 }): Approval {
   const executing = p.executing === true;
   return {
+    resumeAfterApproval: p.resume_after_approval === true || undefined,
     card: parseApprovalCardData(p.card),
     id: p.approval_id,
     tool: p.tool,
@@ -760,9 +769,19 @@ export type Message = {
    * Optional discriminator. Absent (or "text") means a normal turn.
    * "summary" means the message is a compaction marker — the renderer
    * draws a distinct banner and pre-summary messages collapse behind
-   * a "+ N earlier turns" expander.
+   * a "+ N earlier turns" expander. "approval_resume" is a user-role row
+   * fleet wrote itself: the input of a turn it started after an approval
+   * card was settled (docs/RESUME-AFTER-APPROVAL.md). It renders as a
+   * notice, never as the user's bubble, and offers no Edit.
    */
-  kind?: "text" | "summary";
+  kind?: "text" | "summary" | "approval_resume";
+  /**
+   * Notices fleet wrote into the conversation that are not a turn — e.g. an
+   * automatic continue that was skipped or dropped by a restart
+   * (history entries of type "notice"). Attached to the assistant message
+   * they follow and rendered as muted lines under it.
+   */
+  notices?: string[];
   content: string;
   /**
    * Server-injected context for a user turn — everything fleet appended to the
@@ -1027,7 +1046,7 @@ export type HistoryEntry = {
    * be named as a branch point.
    */
   id?: number;
-  role: "user" | "assistant" | "tool";
+  role: "user" | "assistant" | "tool" | "system";
   type:
     | "text"
     | "reasoning"
@@ -1035,6 +1054,7 @@ export type HistoryEntry = {
     | "tool_result"
     | "turn_summary"
     | "summary"
+    | typeof NOTICE_ENTRY_TYPE
     | typeof SUMMARY_BOUNDARY;
   content: Record<string, unknown>;
   /**
@@ -1073,6 +1093,11 @@ export type HistoryEntry = {
  *     as the live `turn.cancelled` event does, so a stopped turn reads as
  *     stopped after a reload.
  */
+/** TextContent.kind of a turn fleet started after an approval card was settled. */
+export const APPROVAL_RESUME_KIND = "approval_resume";
+/** agent.EntryTypeNotice: a UI-only note fleet wrote into the conversation. */
+export const NOTICE_ENTRY_TYPE = "notice";
+
 export function historyToMessages(entries: HistoryEntry[]): Message[] {
   const messages: Message[] = [];
   let current: Message | null = null;
@@ -1105,14 +1130,31 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       // plain truthiness check, and a whitespace-only column value (nothing a
       // reader could learn from) never draws an empty disclosure.
       const injected = String(e.injected_context ?? "");
+      const userContent = e.content as { text?: string; kind?: string };
       messages.push({
         id: nextId++,
         dbId: e.id,
         role: "user",
-        content: String((e.content as { text?: string }).text ?? ""),
+        content: String(userContent.text ?? ""),
         injectedContext: injected.trim() ? injected : undefined,
+        // A turn fleet started itself after an approval card was settled:
+        // the row is fleet's notice, not the user's words.
+        ...(userContent.kind === APPROVAL_RESUME_KIND ? { kind: APPROVAL_RESUME_KIND } : {}),
         state: "done",
       });
+      continue;
+    }
+    if (e.type === NOTICE_ENTRY_TYPE) {
+      // A UI-only note fleet wrote (agent.EntryTypeNotice), e.g. an automatic
+      // continue that was skipped. It is not a turn and not the user's words,
+      // so it never opens a user row: it rides on the assistant message it
+      // follows, which keeps every user-turn count unchanged.
+      const text = String((e.content as { text?: string }).text ?? "").trim();
+      if (!text) continue;
+      if (!current) {
+        current = { id: nextId++, role: "assistant", content: "", state: "done" };
+      }
+      current.notices = [...(current.notices ?? []), text];
       continue;
     }
     if (e.type === "text" && e.role === "assistant") {

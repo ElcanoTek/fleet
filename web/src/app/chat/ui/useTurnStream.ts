@@ -7,6 +7,7 @@ import {
   applyRetryNotice,
   applySubagentProgress,
   applyTurnOutcome,
+  APPROVAL_RESUME_KIND,
   clearRetryNotice,
   historyToMessages,
   parseApprovalCardData,
@@ -67,7 +68,9 @@ function isSentText(candidate: string, sent: SentText): boolean {
 export type QueuedInput = {
   id: string;
   client_input_id: string;
-  mode: "queued" | "steer";
+  // "resume": the turn fleet starts itself after an approval card is settled
+  // (docs/RESUME-AFTER-APPROVAL.md), waiting behind a running turn.
+  mode: "queued" | "steer" | "resume";
   state: string;
   position: number;
   message_preview: string;
@@ -101,6 +104,18 @@ export function hasPendingQueueWork(
 // recovery never auto-drains), and the honest answer then is an accurate chip
 // strip with a send-now button, not an endless poll.
 export const queueDrainFollowDelaysMs = [250, 500, 1000, 2000, 3000, 4000];
+
+// Backoff for following a turn fleet starts on its own after an approval card
+// is settled (docs/RESUME-AFTER-APPROVAL.md). The server waits a short
+// debounce (2 s by default) for other cards to settle before it starts the
+// turn, so the first look is after that; later looks settle at 5 s. How long
+// to keep looking is the caller's: a settled card's turn starts within
+// seconds, a call still executing may take its whole approved budget.
+export const approvalResumeFollowDelaysMs = [2500, 1000, 2000, 3000, 5000];
+// How long to follow after a settled card, and after a card that is still
+// executing (the approved-call budget's ceiling is 30 minutes).
+export const approvalResumeFollowSettledMs = 30_000;
+export const approvalResumeFollowExecutingMs = 31 * 60_000;
 
 // useTurnStream owns the live chat turn/SSE loop that used to sit inline in
 // ChatExperience (issue #401 step 3 / #435). It is the BEHAVIOR half of the
@@ -653,6 +668,10 @@ export interface UseTurnStream {
   // Follow the server-side drain of this conversation's queue to the screen
   // (#785). Call it whenever a turn's stream ends.
   followQueueDrain: (convId: string) => Promise<void>;
+  // Follow the conversation for the turn fleet starts on its own after an
+  // approval card of a critical_tool_resume tool is settled
+  // (docs/RESUME-AFTER-APPROVAL.md). waitMs bounds how long to keep looking.
+  followApprovalResume: (convId: string, waitMs: number) => Promise<void>;
 }
 
 export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
@@ -721,6 +740,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // One drain-follower per conversation (followQueueDrain re-enters itself
   // through the reattach it awaits).
   const queueFollowInFlightRef = useRef<Set<string>>(new Set<string>());
+  // One resume-follower per conversation; a newer request only extends the
+  // deadline of the one already looking.
+  const resumeFollowDeadlineRef = useRef<Map<string, number>>(
+    new Map<string, number>(),
+  );
   // Recovery chain state (#1583/#1584); see "Recovery ownership" below.
   // The pending timer per conversation...
   const recoveryRetriesRef = useRef<Map<string, number>>(
@@ -2264,9 +2288,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         text?: string;
         steered?: boolean;
         injected_context?: string;
+        kind?: string;
       };
       const text = (p.text ?? "").trim();
       if (!text) return;
+      // A turn fleet started itself after an approval card was settled
+      // (docs/RESUME-AFTER-APPROVAL.md): its input is fleet's notice, and the
+      // row renders as one — the same marker the persisted entry carries.
+      const resumeKind =
+        p.kind === APPROVAL_RESUME_KIND ? APPROVAL_RESUME_KIND : undefined;
       // The server-added suffix for this turn, on its own field since
       // migration 056 (docs/ATTACHMENT-SCOPING.md). Carried onto the bubble so
       // a reattach mid-turn shows the collapsed "context fleet added" note the
@@ -2328,6 +2358,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           role: "user",
           content: text,
           injectedContext,
+          ...(resumeKind ? { kind: resumeKind } : {}),
           state: "done",
         };
         const next = current.slice();
@@ -2523,6 +2554,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         mcp_server?: string;
         mcp_account?: string;
         no_session_approval?: boolean;
+        resume_after_approval?: boolean;
         card?: unknown;
       };
       // send_email cards can land below an expanded preview iframe — queue
@@ -2545,6 +2577,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             mcpServer: p.mcp_server,
             mcpAccount: p.mcp_account,
             noSessionApproval: p.no_session_approval === true || undefined,
+            resumeAfterApproval: p.resume_after_approval === true || undefined,
             card: parseApprovalCardData(p.card),
           },
         ],
@@ -3293,6 +3326,60 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
     } finally {
       queueFollowInFlightRef.current.delete(convId);
+    }
+  };
+
+  // ── Following a turn fleet starts on its own ───────────────────────────
+  //
+  // A card of a critical_tool_resume tool (docs/RESUME-AFTER-APPROVAL.md)
+  // makes the server start ONE turn once the conversation's cards are
+  // settled, a couple of seconds after the click — or, for a call that
+  // answered "executing", whenever its result lands. Nothing pushes that turn
+  // to this tab (it opens a buffer the tab never asked for), so after such a
+  // card resolves, look for it the way followQueueDrain looks for a drained
+  // turn: attach to whatever /inflight reports, bounded by waitMs. Three
+  // outcomes:
+  //   - attached → the turn streams like any turn; its stream end runs the
+  //     queue follower as usual;
+  //   - another path attached first (a submission, the queue follower, a
+  //     tab-return reattach) → stop, it is on screen;
+  //   - nothing came within waitMs → adopt the persisted transcript, which
+  //     shows a turn that ran unseen, or the note saying why none started.
+  // A hidden tab keeps waiting without probing: the tab-return handler
+  // reattaches when the user comes back.
+  const followApprovalResume = async (convId: string, waitMs: number) => {
+    if (isPendingKey(convId)) return;
+    const deadline = nowMs() + waitMs;
+    const running = resumeFollowDeadlineRef.current.get(convId);
+    if (running !== undefined) {
+      if (deadline > running) resumeFollowDeadlineRef.current.set(convId, deadline);
+      return;
+    }
+    resumeFollowDeadlineRef.current.set(convId, deadline);
+    let attached = false;
+    try {
+      for (let attempt = 0; ; attempt++) {
+        const delay =
+          approvalResumeFollowDelaysMs[
+            Math.min(attempt, approvalResumeFollowDelaysMs.length - 1)
+          ];
+        const until = resumeFollowDeadlineRef.current.get(convId) ?? deadline;
+        if (nowMs() + delay > until) break;
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+        if (recoveryUnmountedRef.current) return;
+        if (attachedConvIdsRef.current.has(convId)) return;
+        if (recoveryOwns(convId) || chasingSuccessor(convId)) return;
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") continue;
+        if (await reattachToConv(convId)) {
+          attached = true;
+          return;
+        }
+      }
+      if (!attached && !attachedConvIdsRef.current.has(convId)) {
+        await loadConversation(convId, { background: true });
+      }
+    } finally {
+      resumeFollowDeadlineRef.current.delete(convId);
     }
   };
 
@@ -4633,6 +4720,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     retryLastUserMessage,
     queuedInputs,
     followQueueDrain,
+    followApprovalResume,
     refreshQueue,
     removeQueuedInput,
     sendNowQueuedInput,

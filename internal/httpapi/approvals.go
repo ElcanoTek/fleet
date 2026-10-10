@@ -417,6 +417,9 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	if err != nil {
 		return "", err
 	}
+	// A tool in critical_tool_resume: settling this card starts the turn that
+	// carries on (approval_resume.go). Armed before the card is announced.
+	a.armApprovalResume(approval)
 	if cardJSON != "" {
 		if ok, err := a.store.SetApprovalCard(a.ctx, a.userEmail, approval.ID, cardJSON); err != nil || !ok {
 			log.Printf("approval card: store card for %s: ok=%t err=%v", approval.ID, ok, err)
@@ -783,7 +786,7 @@ func approvalClientFields(toolName, rawInput, convID string) map[string]any {
 		// Legacy suggestions did not freeze their target: require a new card.
 		frozen = map[string]any{"complete": false}
 	}
-	return map[string]any{
+	out := map[string]any{
 		"summary":      summarizeApprovalInput(toolName, rawInput, convID),
 		"pattern_args": handlerApprovalPatternArgs(toolName, rawInput),
 		"frozen_args":  frozen,
@@ -792,6 +795,20 @@ func approvalClientFields(toolName, rawInput, convID string) map[string]any {
 		// "apply my choice to all calls", and the POST refuses that scope.
 		"no_session_approval": !agentcore.SessionApprovalAllowed(toolName),
 	}
+	if resumesAfterApproval(toolName) {
+		// critical_tool_resume: once this card is settled fleet starts a turn
+		// on its own (docs/RESUME-AFTER-APPROVAL.md), so the client follows the
+		// conversation for it. Only present when true, so every other card's
+		// payload is unchanged.
+		out["resume_after_approval"] = true
+	}
+	return out
+}
+
+// resumesAfterApproval reports whether a settled card for toolName starts a
+// resume turn under the running policy (handler-only cards never do).
+func resumesAfterApproval(toolName string) bool {
+	return agentcore.ResumeAfterApproval(toolName) && !handlerOnlyApproval(toolName)
 }
 
 func approvalRequiredEvent(approval *store.Approval, rawInput, convID string) map[string]any {
@@ -1557,7 +1574,8 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		if claimed {
 			appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
 				resolutionCallID(approval), resultText)
-			writeJSON(w, map[string]any{"status": "rejected", "result_text": resultText})
+			s.noteApprovalSettled(convID, approval)
+			writeJSON(w, s.resumeReplyFlag(execCtx, map[string]any{"status": "rejected", "result_text": resultText}, approval))
 			return
 		}
 		s.writeResolvedApprovalState(w, r, user, approvalID)
@@ -1592,7 +1610,8 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
 			resolutionCallID(approval), historyMsg)
 		s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
-		writeJSON(w, map[string]any{"status": "rejected"})
+		s.noteApprovalSettled(convID, approval)
+		writeJSON(w, s.resumeReplyFlag(execCtx, map[string]any{"status": "rejected"}, approval))
 		return
 	}
 
@@ -1668,11 +1687,11 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	case out := <-reply:
 		writeJSON(w, out)
 	case <-early.C:
-		writeJSON(w, map[string]any{
+		writeJSON(w, s.resumeReplyFlag(execCtx, map[string]any{
 			"status":      "approved",
 			"executing":   true,
 			"result_text": approvalExecutingSentinel,
-		})
+		}, approval))
 	case <-r.Context().Done():
 		// The client is gone; nobody reads a reply. The execution carries on
 		// detached and records its outcome for the next "Check result".
@@ -1768,11 +1787,14 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	}
 	// SetApprovalResult commits the history breadcrumb in the same transaction.
 	s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
-	return map[string]any{
+	// The outcome is in the conversation now, so a resume turn can read it —
+	// this is also where a long call answered "executing" earlier lands.
+	s.noteApprovalSettled(convID, approval)
+	return s.resumeReplyFlag(execCtx, map[string]any{
 		"status":      "approved",
 		"result_text": resultText,
 		"is_err":      isErr,
-	}
+	}, approval)
 }
 
 // DrainApprovalRuns stops admitting approved executions and blocks until
@@ -1919,7 +1941,7 @@ func (s *Server) writeResolvedApprovalState(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "approval already resolved", http.StatusConflict)
 		return
 	}
-	state := s.approvalClientState(latest)
+	state := s.resumeReplyFlag(r.Context(), s.approvalClientState(latest), latest)
 	if latest.ToolName == "suggest_advanced_model" && latest.Status == "approved" {
 		conv, err := s.store.Get(r.Context(), user, latest.ConversationID)
 		if err != nil || conv == nil {
@@ -1968,6 +1990,8 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 		}
 		appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
 			"User dismissed the model-switch suggestion. Continue working with the current model.")
+		// Not a resume tool, but a deferred resume may be waiting on it.
+		s.noteApprovalSettled(approval.ConversationID, approval)
 		writeJSON(w, map[string]any{
 			"status": "rejected",
 			"action": "dismiss",
@@ -2000,6 +2024,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 	}
 	appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
 		resultText)
+	s.noteApprovalSettled(approval.ConversationID, approval)
 
 	action := req.Action
 	if action == "" {
@@ -2103,6 +2128,10 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 		}
 		appendToolResultToHistory(ctx, s.store, a.ConversationID, a.ToolName,
 			resolutionCallID(&a), resultText)
+		// A timed-out card is settled too: an opted-in one resumes (the model
+		// learns the action was not taken), and any other may release a
+		// resume that was waiting on it.
+		s.noteApprovalSettled(a.ConversationID, &a)
 		denied++
 	}
 	return denied, nil

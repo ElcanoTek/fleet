@@ -85,6 +85,14 @@ type chatRequest struct {
 	// exposes a turn before its user message commits, so the transcript agrees
 	// with both readings. Empty = the caller wants no such echo.
 	SubmissionID string `json:"submission_id,omitempty"`
+
+	// inputKind is set only by the server, never decoded from a request (it
+	// is unexported, so encoding/json cannot fill it): agent.
+	// InputKindApprovalResume when the queue drains a 'resume' row, i.e. a
+	// turn fleet started itself after an approval card was settled
+	// (docs/RESUME-AFTER-APPROVAL.md). Message is then fleet's labelled
+	// notice, not the user's words.
+	inputKind string
 }
 
 // conversationIDHeaderName names the conversation a POST /chat response is
@@ -1056,24 +1064,30 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Announce the cross-chat shared file library (docs/SHARED-FILES.md) the
 	// same way: read-only paths under shared/ the agent can use immediately.
 	injected = s.appendSharedFilesBlock(turnCtx, injected)
+	// The blocks below read the USER's words (handles, a /skill line,
+	// connector hints). A resume turn's input is fleet's own notice, so they
+	// have nothing to read there and are skipped.
+	userWords := req.inputKind == ""
 	// Composer context handles (#517, opt-in): expand any `@url:<url>` /
 	// `@file:"path"` in the user's message into the turn context. A no-op when
 	// disabled; failures degrade to notices so the turn always proceeds.
-	injected = s.applyContextHandles(turnCtx, injected, req.Message, conv.ID)
-	// Explicit skill invocation (#513 phase 1): a message whose first line starts
-	// with "/<skill-name>" (exact match against the bundle roster) gets a block
-	// appended telling the agent to read that skill's SKILL.md now. Because the
-	// block is persisted with the user message (as its injected context), the
-	// transcript still records which skill was invoked. Unknown "/tokens" are
-	// ignored — no block, no error.
-	injected = s.applySkillInvocation(turnCtx, user, injected, req.Message)
-	// Connector auto-recommendation (#512, opt-in): if the message is relevant to
-	// an Optional connector the user hasn't enabled, note it so the agent can
-	// suggest connecting it via /settings/connections (never auto-connecting).
-	// "Enabled" is judged against the conversation's PERSISTED opt-in list —
-	// the set the turn runs with — not only the creation-time request seed,
-	// which later turns never carry.
-	injected = s.applyConnectorRecommendations(injected, req.Message, conv.OptionalMCPServersEnabled, req.EnabledOptional)
+	if userWords {
+		injected = s.applyContextHandles(turnCtx, injected, req.Message, conv.ID)
+		// Explicit skill invocation (#513 phase 1): a message whose first line starts
+		// with "/<skill-name>" (exact match against the bundle roster) gets a block
+		// appended telling the agent to read that skill's SKILL.md now. Because the
+		// block is persisted with the user message (as its injected context), the
+		// transcript still records which skill was invoked. Unknown "/tokens" are
+		// ignored — no block, no error.
+		injected = s.applySkillInvocation(turnCtx, user, injected, req.Message)
+		// Connector auto-recommendation (#512, opt-in): if the message is relevant to
+		// an Optional connector the user hasn't enabled, note it so the agent can
+		// suggest connecting it via /settings/connections (never auto-connecting).
+		// "Enabled" is judged against the conversation's PERSISTED opt-in list —
+		// the set the turn runs with — not only the creation-time request seed,
+		// which later turns never carry.
+		injected = s.applyConnectorRecommendations(injected, req.Message, conv.OptionalMCPServersEnabled, req.EnabledOptional)
+	}
 
 	// Lockdown model migration, at the last moment before the client can be
 	// TOLD about it: every fallible preparation above (history, memories,
@@ -1109,13 +1123,18 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		turnStarted["input_id"] = queueRowID
 		turnStarted["queued"] = true
 	}
-	buf.Emit("turn.started", turnStarted)
+	// A turn fleet started itself (docs/RESUME-AFTER-APPROVAL.md): the client
+	// renders its input as a notice, not as the user's message.
+	buf.Emit("turn.started", withInputKind(turnStarted, "input_kind", req.inputKind))
 	// `text` is what the USER typed; `injected_context` is the server-derived
 	// suffix, carried as its own field so a client renders it outside the user
 	// bubble (or not at all) instead of as words the user wrote. Reload agrees
 	// with the live stream: the conversation GET splits the same two halves.
 	// Omitted when empty so the common turn's frame does not grow.
-	userEvent := map[string]any{"text": req.Message}
+	// Not the user's words when fleet started the turn: the same marker the
+	// persisted entry carries (TextContent.Kind), so a reattach renders the
+	// notice row the reload path renders.
+	userEvent := withInputKind(map[string]any{"text": req.Message}, "kind", req.inputKind)
 	if injected != "" {
 		userEvent["injected_context"] = injected
 	}
@@ -1153,7 +1172,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			s.activeTurns.Done()
 		}()
 		defer releaseOnce()
-		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, injected, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments), steer)
+		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, injected, req.inputKind, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments), steer)
 		// The turn (and its deferred finishTurn) is done: settle this turn's
 		// queue rows against the durable #798 record — the drained row
 		// completes only if its user entry committed (a pre-commit failure
@@ -1201,6 +1220,16 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		}
 	}
 	return true
+}
+
+// withInputKind sets frame[key] to a non-empty input kind
+// (agent.InputKindApprovalResume) and leaves an ordinary turn's frame as it
+// was.
+func withInputKind(frame map[string]any, key, kind string) map[string]any {
+	if kind != "" {
+		frame[key] = kind
+	}
+	return frame
 }
 
 // seedConversationMCP persists a brand-new conversation's pre-chat Tools
@@ -1265,6 +1294,9 @@ func (s *Server) runTurnAsync(
 	// separately all the way into TurnInput: the run loop joins them for the
 	// provider call and persists them in separate columns (ADR-0058).
 	user, userInput, injectedContext string,
+	// inputKind marks a turn fleet started itself (agent.TurnInput.InputKind);
+	// "" for a turn the user typed.
+	inputKind string,
 	history []agent.HistoryEntry,
 	memories []string,
 	projectInstructions string,
@@ -1367,6 +1399,7 @@ func (s *Server) runTurnAsync(
 		CommitUser:     commits.commitUser,
 		CommitTerminal: commits.commitTerminal,
 		SteerSource:    steerSourceOrNil(steer),
+		InputKind:      inputKind,
 	}, buf)
 	if err != nil {
 		log.Printf("RunTurn error (user=%s conv=%s): %s", logSafe(user), logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from email, conv id, and the error text.
@@ -1508,7 +1541,9 @@ func (s *Server) runTurnAsync(
 	// shutdown/Stop force-cancel propagates into the in-flight extraction rather
 	// than pinning the drain. Best-effort: any error is swallowed. Skips
 	// cancelled/empty turns. Off by default (opt-in).
-	if s.cfg.LiveMemoryAutoIndexEnabled() && !res.Cancelled && strings.TrimSpace(res.FinalText) != "" {
+	// A resume turn's input is fleet's notice, not something the user said,
+	// so there is no user exchange to mine.
+	if s.cfg.LiveMemoryAutoIndexEnabled() && inputKind == "" && !res.Cancelled && strings.TrimSpace(res.FinalText) != "" {
 		memCtx, memCancel := context.WithTimeout(turnCtx, 30*time.Second)
 		s.autoIndexMemories(memCtx, buf, conv.ID, user, userInput, res.FinalText)
 		memCancel()

@@ -339,10 +339,15 @@ export function ApprovalCard({
   onModelSwitched,
   onSwitchAndRetry,
   onAskAgain,
+  onResumeExpected,
 }: {
   approval: Approval;
   conversationId: string;
   onResolved: (next: Approval) => void;
+  // The server answered resume: this card's tool resumes after approval
+  // (docs/RESUME-AFTER-APPROVAL.md), so fleet will start a turn on its own —
+  // now (the card settled) or once the still-executing call lands.
+  onResumeExpected?: (executing: boolean) => void;
   // suggest_advanced_model only: callback fired after the server confirms
   // the conversation has been pinned to a new model. Lets the caller sync
   // its local selectedModel state without a refetch.
@@ -426,8 +431,10 @@ export function ApprovalCard({
         is_err?: boolean;
         executing?: boolean;
         execution_unknown?: boolean;
+        resume?: boolean;
       };
       const nextStatus = approvalStatusFromOutcome(data);
+      if (data.resume === true) onResumeExpected?.(nextStatus === null);
       if (nextStatus === null) {
         setHeldExecuting(true);
         onResolved({

@@ -383,6 +383,24 @@ remote_mcp_catalog: []
 #                               docs/APPROVAL-CARD-DESCRIBERS.md. Example:
 #                                 critical_tool_card_describers:
 #                                   update_deal: describe_deal_update
+#   critical_tool_resume:       OPTIONAL critical suffixes (same suffix
+#                               matching as critical_tools) whose approval
+#                               cards, once settled (approved and its result
+#                               recorded, declined, or timed out), start ONE
+#                               new agent turn in the conversation so the agent
+#                               verifies the outcome and carries on without the
+#                               user typing. Cards settled close together
+#                               coalesce into one turn; a running turn queues
+#                               it; nothing starts on its own after a restart.
+#                               Every member must be in critical_tools (and not
+#                               notify mode). Absent = no turn ever starts on
+#                               its own. See docs/RESUME-AFTER-APPROVAL.md.
+#                               Example:
+#                                 critical_tool_resume: [create_deal, update_deal]
+#   critical_tool_resume_max_per_hour:
+#                               OPTIONAL cap on automatic resumes per
+#                               conversation in a rolling hour (1-60; absent =
+#                               10). Past it the chat gets a note instead.
 #   critical_tool_timeouts:     OPTIONAL per-tool approval default-deny window
 #                               (#225), keyed by the same bare tool-name suffix
 #                               as critical_tools, in seconds. Highest-priority

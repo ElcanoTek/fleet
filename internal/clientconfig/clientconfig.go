@@ -386,6 +386,20 @@ type AgentPolicy struct {
 	//	  critical_tool_card_describers:
 	//	    update_deal: describe_deal_update
 	CriticalToolCardDescribers map[string]string `yaml:"critical_tool_card_describers"`
+	// CriticalToolResume is an OPTIONAL list of critical suffixes (same
+	// suffix matching as critical_tools) whose approval cards start one new
+	// agent turn in the conversation once they are settled (approved with its
+	// result recorded, declined, or timed out), so the agent can verify the
+	// outcome and carry on without the user typing. Members must be in
+	// critical_tools. Absent = no turn ever starts on its own, as before. See
+	// docs/RESUME-AFTER-APPROVAL.md.
+	//
+	//	agent_policy:
+	//	  critical_tool_resume: [create_deal, update_deal]
+	CriticalToolResume []string `yaml:"critical_tool_resume"`
+	// CriticalToolResumeMaxPerHour caps the automatic resumes one conversation
+	// may start in a rolling hour (1-60; absent or 0 = 10).
+	CriticalToolResumeMaxPerHour int `yaml:"critical_tool_resume_max_per_hour"`
 	// BatchSecondsPerDeal is DERIVED, never read from agent_policy: Bundle.AgentPolicy
 	// collects each mcp_servers[].batch_seconds_per_deal into it, keyed by
 	// server name, so the per-record batch budget reaches agentcore on the same
@@ -2768,6 +2782,8 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		EmailLastTools:                append([]string(nil), b.AgentPolicyConfig.EmailLastTools...),
 		SettleableCreateTools:         append([]string(nil), b.AgentPolicyConfig.SettleableCreateTools...),
 		CriticalToolNoSessionApproval: append([]string(nil), b.AgentPolicyConfig.CriticalToolNoSessionApproval...),
+		CriticalToolResume:            append([]string(nil), b.AgentPolicyConfig.CriticalToolResume...),
+		CriticalToolResumeMaxPerHour:  b.AgentPolicyConfig.CriticalToolResumeMaxPerHour,
 	}
 	// An http_tool flagged `critical: true` opts into the SAME critical-tool audit
 	// gate as the manifest's critical_tools suffixes. The tool is registered as

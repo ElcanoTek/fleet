@@ -228,6 +228,13 @@ type chatStore interface {
 	ListExpiredApprovals(ctx context.Context, now int64) ([]store.Approval, error)
 	LatestApprovalByTool(ctx context.Context, convID, toolName string) (*store.Approval, error)
 	SupersedePendingApprovals(ctx context.Context, convID, toolName string) (int64, error)
+	// Resume after approval (docs/RESUME-AFTER-APPROVAL.md): arm a staged
+	// card of an opted-in tool, and claim the settled armed cards of a
+	// conversation into one resume queue row (or a recorded skip), atomically.
+	ArmApprovalResume(ctx context.Context, userEmail, approvalID string) (bool, error)
+	ClaimApprovalResume(ctx context.Context, req store.ApprovalResumeRequest) (store.ApprovalResumeResult, error)
+	AppendApprovalResumeDroppedNotice(ctx context.Context, convID string) error
+	HasArmedApprovals(ctx context.Context, convID string) (bool, error)
 	CountUserMessagesAfterTimestamp(ctx context.Context, convID string, ts int64) (int64, error)
 
 	// Browser Web Push subscriptions (#292): the POST /push/subscribe upsert

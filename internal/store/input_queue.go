@@ -24,6 +24,12 @@ const (
 	// listing, drain, sweeps, remove and promote skip it, and recovery
 	// settles it instead of re-queueing it.
 	InputModeDirect = "direct"
+	// InputModeResume marks the turn fleet starts itself after an opted-in
+	// approval card is settled (migration 073, docs/RESUME-AFTER-APPROVAL.md).
+	// It behaves exactly like a queued follow-up (listing, FIFO drain, Stop
+	// sweep, remove, send-now: every query excludes only 'direct'); only the
+	// launch marks its input as fleet's, not the user's.
+	InputModeResume = "resume"
 
 	InputStateQueued    = "queued"
 	InputStateRunning   = "running"
@@ -180,6 +186,25 @@ func (s *Store) SettleDirectInput(ctx context.Context, id, turnID string) error 
 
 // insertInput is the shared insert behind EnqueueInput and ClaimDirectInput.
 func (s *Store) insertInput(ctx context.Context, r InputQueueRow) (InputQueueRow, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return InputQueueRow{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stored, created, err := s.insertInputTx(ctx, tx, r)
+	if err != nil {
+		return InputQueueRow{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return InputQueueRow{}, false, err
+	}
+	return stored, created, nil
+}
+
+// insertInputTx is insertInput's body against a caller-owned transaction, so
+// a multi-statement op (ClaimApprovalResume's claim + enqueue) can make the
+// queue row part of its own atomic unit. The caller commits or rolls back.
+func (s *Store) insertInputTx(ctx context.Context, tx *sql.Tx, r InputQueueRow) (InputQueueRow, bool, error) {
 	now := time.Now().Unix()
 	r.CreatedAt, r.UpdatedAt = now, now
 	// Allocated before the insert, so a Stop that reads the counter after this
@@ -187,11 +212,6 @@ func (s *Store) insertInput(ctx context.Context, r InputQueueRow) (InputQueueRow
 	// yet (the launch gate then refuses what the sweep could not see). A
 	// replayed input_id burns a value on its DO NOTHING path; gaps are fine.
 	r.AcceptedSeq = s.acceptedInputSeq.Add(1)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return InputQueueRow{}, false, err
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	// Position allocation is a read-then-write operation. Serialize it on the
 	// owning conversation row so concurrent submissions cannot choose the same
@@ -223,9 +243,6 @@ func (s *Store) insertInput(ctx context.Context, r InputQueueRow) (InputQueueRow
 		inputQueueSelect+` WHERE conversation_id = $1 AND client_input_id = $2`,
 		r.ConversationID, r.ClientInputID))
 	if err != nil {
-		return InputQueueRow{}, false, err
-	}
-	if err := tx.Commit(); err != nil {
 		return InputQueueRow{}, false, err
 	}
 	return stored, created, nil

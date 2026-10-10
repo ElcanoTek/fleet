@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/truncate"
@@ -488,6 +489,15 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateCancelled)
 		return true
 	}
+	// A turn fleet would start on its own after an approval
+	// (docs/RESUME-AFTER-APPROVAL.md) is never started by a restart. The boot
+	// sweep cancels such rows; this refuses one it missed (the sweep failed,
+	// or ran out of time), so the guarantee does not depend on the sweep.
+	if s.resumeRowFromEarlierProcess(row) {
+		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateCancelled)
+		s.noteDroppedResume(convID, row.ID)
+		return true
+	}
 	// The ROW's owner is authoritative — the drain kick may come from another
 	// actor's request path (e.g. a different session's /cancel bookkeeping).
 	user := row.UserEmail
@@ -537,6 +547,11 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		// client waiting on its queued input could not tell the turn that
 		// finally runs it from any other.
 		SubmissionID: row.SubmissionID,
+	}
+	if row.Mode == store.InputModeResume {
+		// The turn fleet starts after a settled approval card
+		// (approval_resume.go): its input is fleet's notice, not the user's.
+		req.inputKind = agent.InputKindApprovalResume
 	}
 	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen, inputKey: row.ClientInputID}, releaseSlot, nil) {
 		releaseSlot()

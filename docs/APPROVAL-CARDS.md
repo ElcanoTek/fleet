@@ -201,6 +201,19 @@ after about 50 s answers the approve POST with `executing`, so the card shows
 its still-running state and **Check result** fetches the outcome once it is
 recorded. See [APPROVED-CALL-BUDGET.md](APPROVED-CALL-BUDGET.md).
 
+## The agent can carry on once a card is settled
+
+For tools a bundle lists in `agent_policy.critical_tool_resume`, a settled
+card (approved and its result recorded, declined, or timed out) starts one new
+turn in the conversation once no other card there is pending or executing, so
+the agent verifies the outcome and continues without the user typing. The turn
+runs through the input queue (a running turn makes it wait), its input renders
+as a "Continued automatically after an approval" notice, an hourly cap bounds
+it, and a restart drops a due resume with a note instead of running it. The
+approve/decline answer says `"resume": true` for such a card so the web
+follows the conversation for that turn. See
+[RESUME-AFTER-APPROVAL.md](RESUME-AFTER-APPROVAL.md) and ADR-0083.
+
 ## Honest scope / deliberately not done
 
 - **No approvals-table mode column.** Notify records are tagged by their

@@ -412,6 +412,8 @@ func run() error {
 		ApprovedCallTimeoutSeconds:    bundlePolicy.ApprovedCallTimeoutSeconds,
 		CriticalToolNoSessionApproval: bundlePolicy.CriticalToolNoSessionApproval,
 		CriticalToolCardDescribers:    bundlePolicy.CriticalToolCardDescribers,
+		CriticalToolResume:            bundlePolicy.CriticalToolResume,
+		CriticalToolResumeMaxPerHour:  bundlePolicy.CriticalToolResumeMaxPerHour,
 	})
 
 	// Connector credentials cross exactly one process boundary at boot: the child
@@ -3596,6 +3598,21 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	} else if requeued+completed+cancelled > 0 {
 		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed, %d cancelled (post-injection side effects; not re-run)", requeued, completed, cancelled) //nolint:gosec // G706: three int counts — no request input.
 	}
+	// Resume after approval (docs/RESUME-AFTER-APPROVAL.md): a resume that was
+	// due but had not started when the last process stopped is DROPPED, with a
+	// note in its conversation, never started unattended by a restart. It runs
+	// after both recoveries above: RecoverStrandedApprovals settles the cards
+	// cut off mid-call (as outcome unknown), and RecoverInputQueue returns an
+	// uncommitted resume row to the queue, which this then cancels.
+	// On its own bounded context (the shared one may be spent by the
+	// recoveries above), retried once. A failure is not fatal: the chat
+	// server also refuses to launch a 'resume' row from an earlier process.
+	noted, err := dropApprovalResumesAtBoot(chatStore)
+	if err != nil {
+		log.Printf("approval-resume recovery: %v (any stale resume row is still refused at launch)", err)
+	} else if noted > 0 {
+		log.Printf("approval-resume recovery: dropped the pending automatic resume in %d conversation(s), with a note in each", noted) //nolint:gosec // G706: noted is an integer count.
+	}
 	// Reclaim terminal idempotency rows at boot as well as after turns. Recovery
 	// runs first so a stranded non-terminal row is resolved before retention is
 	// considered; non-terminal rows are never eligible for deletion.
@@ -3605,6 +3622,22 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	} else if purged > 0 {
 		log.Printf("input-queue startup purge: removed %d terminal row(s)", purged) //nolint:gosec // G706: purged is an integer database row count, never request-authored text.
 	}
+}
+
+// dropApprovalResumesAtBoot runs the boot sweep for resume after approval on
+// its own deadline, with one retry.
+func dropApprovalResumesAtBoot(chatStore *store.Store) (int, error) {
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		var noted int
+		noted, err = chatStore.DropApprovalResumesAtBoot(ctx)
+		cancel()
+		if err == nil {
+			return noted, nil
+		}
+	}
+	return 0, err
 }
 
 // logSafe strips CR/LF from a value before it is interpolated into a log
