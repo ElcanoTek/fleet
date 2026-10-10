@@ -454,7 +454,8 @@ limits.
 Some cards carry a checkbox that widens your decision to every later call of the
 same kind in this conversation, turning the button into **Approve + allow all**.
 Leave it unticked unless you know exactly what the rest of the conversation will
-do. Cards are not for exploring what an action would change; ask the assistant to
+do. A deployment can turn the checkbox off for actions that need your decision
+every time; their cards have no checkbox, and each call shows its own card. Cards are not for exploring what an action would change; ask the assistant to
 describe the change first, then approve the card once you agree with it.
 
 Which tools are gated and which merely report is set per deployment, not by the

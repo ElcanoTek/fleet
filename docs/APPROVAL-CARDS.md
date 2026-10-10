@@ -14,13 +14,13 @@ MODE"); this page is the card UX.
 
 | Card | Tools | Pending actions |
 | --- | --- | --- |
-| Email send | `send_email`, `*_send_email` | Send / Cancel (+ apply-all) |
+| Email send | `send_email`, `*_send_email` | Send / Cancel (+ apply-all, unless the bundle requires a decision per call) |
 | Email preview | `preview_email` | Dismiss only — display-only by design |
 | Bash | `bash` (risky commands) | Approve & run / Cancel |
 | Schedule | `schedule_task` | Approve & schedule / Edit… / Cancel |
 | Manage tasks | `manage_tasks` | Approve & stop/update / Cancel |
 | Advanced-model nudge | `suggest_advanced_model` | Switch & retry / Just switch / Dismiss |
-| **Generic action** | everything else (bundle critical tools, e.g. a pages deploy) | Approve & run / Cancel (+ apply-all) |
+| **Generic action** | everything else (bundle critical tools, e.g. a pages deploy) | Approve & run / Cancel (+ apply-all, unless the bundle requires a decision per call) |
 
 ### The generic action card (new)
 
@@ -47,6 +47,76 @@ A **notify-mode record** (#1153) renders on the same chrome in an
 informational form: muted border, title "… · ran without asking", no buttons,
 and the persisted record text — including the bundle-authored undo hint — as
 its body. It never masquerades as a past human approval.
+
+## Tools that need a decision per call (no apply-all)
+
+### Why
+
+The email and generic cards carry a small checkbox below the buttons, "Apply
+my choice to all <tool> calls in this chat" (#300). Ticked, the click
+registers an in-memory session policy, and every later call of that tool in
+the conversation skips its card until the process restarts. That is right
+for a run of similar, reversible actions, and wrong for an action where each
+call is a separate commitment (a record create or update in an external
+system, for example): one tick turns every later call into an unreviewed
+one. A bundle needs a way to say "this tool always gets its own card".
+
+### What shipped
+
+```yaml
+agent_policy:
+  critical_tools: [create_deal, update_deal]
+  critical_tool_no_session_approval: [create_deal, update_deal]
+```
+
+- `agent_policy.critical_tool_no_session_approval` is a list of bare
+  suffixes, matched exactly like `critical_tools` (the tool name equals the
+  suffix or ends in `_<suffix>`, so a named-account variant is covered by its
+  base suffix). It rides `Bundle.AgentPolicy()` into
+  `agentcore.ConfigureAgentPolicy` at boot (`cmd/fleet/main.go`; the
+  scheduled `fleet run` path stages no cards and does not install it), and
+  `agentcore.SessionApprovalAllowed(tool)` is the one predicate every layer
+  asks.
+- **The card hides the checkbox.** `approvalClientFields` adds
+  `no_session_approval` (a boolean) to the live `tool.approval_required`
+  event and to every `pending_approvals` row. The web email and generic cards
+  render no apply-all checkbox when it is true, and always post
+  `scope: "once"`. Approve, Cancel, the countdown and the seat badge are
+  unchanged.
+- **The server refuses a wider scope.** `handleApproval` answers a pending
+  card's POST with any scope other than `""`/`"once"` (`session`, `pattern`,
+  `pattern:<arg>=<glob>`, approve or deny) with 400 and "this action needs its
+  own decision for each call …; use scope once", before anything is claimed,
+  so the card stays pending. A settled card still answers its recorded
+  outcome, as before. `maybeRegisterSessionPolicy` also skips such a tool, in
+  case a later caller reaches it without that check. The terminal client
+  shows the 400 text and keeps the card.
+- **Staging ignores a session policy for it.** `approvalStager.Stage` skips
+  the registry for a matching tool, so a policy registered before the rule
+  existed (or by any path that missed the refusal) cannot pre-approve or
+  pre-deny a call: each one stages its own card.
+- **`fleet validate-config` checks the list.** The `agent_policy` floor check
+  reports a member that is not a critical suffix (the same merged list the
+  audit gate uses, base email suffixes included), because no card is ever
+  staged for such a tool and the entry would do nothing. At boot the same
+  problem is one log line, and the member is still installed: refusing a
+  session scope is the safe direction.
+
+### Deviations and deferred
+
+- **Deny-all is refused too.** A session pre-denial is harmless on its own,
+  but the rule is "one decision per call" and the checkbox serves both
+  buttons, so the server refuses every non-`once` scope rather than splitting
+  the two.
+- **`FLEET_AUTO_APPROVE_IN_TEST` is untouched.** It is a test-only escape
+  hatch, not a session policy, and still auto-approves executable tools.
+- **The terminal client does not pre-check the flag.** It sends what the
+  user typed, and the server's 400 is the answer. Hiding `/approve <id>
+  session` locally would need the flag threaded through two TUI event
+  parsers for no change in what is enforced.
+- **Boot-time only**, like every other `agent_policy` value: a change needs a
+  restart. Bundles adopt the key after the release that understands it,
+  because the manifest decoder is strict.
 
 ## The schedule card names the task's connectors
 

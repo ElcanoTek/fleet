@@ -57,7 +57,9 @@ staged approval id to stderr, and `fleet chat --conversation <id> --approve
 refreshes them from the server. `/edit {"name":"...","prompt":"...","cron":"..."}`
 edits the oldest scheduled-task proposal before approval. `/approve [id] session`
 and `/deny [id] session` apply to future calls to that tool in this conversation;
-`pattern arg=glob` narrows that policy. `/resume <conversation-id>` switches
+`pattern arg=glob` narrows that policy; a tool the bundle lists in
+`agent_policy.critical_tool_no_session_approval` refuses both (the server
+answers 400 and the card stays pending). `/resume <conversation-id>` switches
 threads and reloads pending cards. Network failures retain cards for retry;
 expired or failed actions are reported as errors. See
 [Terminal approvals](TERMINAL-APPROVALS.md) for the complete command contract.

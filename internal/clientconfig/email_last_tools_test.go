@@ -41,3 +41,35 @@ agent_policy:
 		t.Errorf("want no email-last lists for a manifest without the keys, got %v / %v", p.EmailLastTools, p.SettleableCreateTools)
 	}
 }
+
+// agent_policy.critical_tool_no_session_approval parses and is carried
+// through Bundle.AgentPolicy() as a defensive copy; absent means none.
+func TestAgentPolicyNoSessionApproval(t *testing.T) {
+	dir := writeManifest(t, `
+agent_policy:
+  critical_tools: [create_deal, update_deal]
+  critical_tool_no_session_approval: [create_deal]
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	p := b.AgentPolicy()
+	if len(p.CriticalToolNoSessionApproval) != 1 || p.CriticalToolNoSessionApproval[0] != "create_deal" {
+		t.Fatalf("CriticalToolNoSessionApproval = %v, want [create_deal]", p.CriticalToolNoSessionApproval)
+	}
+	p.CriticalToolNoSessionApproval[0] = "mutated"
+	if again := b.AgentPolicy(); again.CriticalToolNoSessionApproval[0] != "create_deal" {
+		t.Errorf("AgentPolicy() must return a copy; the bundle now says %v", again.CriticalToolNoSessionApproval)
+	}
+	plain := writeManifest(t, `
+agent_policy:
+  critical_tools: [update_deal]
+`)
+	if b, err = Load(plain); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := b.AgentPolicy().CriticalToolNoSessionApproval; len(got) != 0 {
+		t.Errorf("want none for a manifest without the key, got %v", got)
+	}
+}

@@ -88,6 +88,14 @@ type AgentPolicy struct {
 	// DefaultApprovedCallBudget. Variants resolve to their base server's entry
 	// the same way as BatchSecondsPerDeal. Non-positive values are ignored.
 	ApprovedCallTimeoutSeconds map[string]int
+	// CriticalToolNoSessionApproval lists critical suffixes whose approval
+	// cards never offer "apply my choice to all calls in this chat" (#300):
+	// every call needs its own decision. Matched by suffix exactly like
+	// CriticalToolSuffixes. The web hides the checkbox, the approve POST
+	// refuses a non-"once" scope, and Stage ignores any session policy for a
+	// matching tool. Members must be critical suffixes; see
+	// NoSessionApprovalProblems. Empty = every card keeps apply-all, as before.
+	CriticalToolNoSessionApproval []string
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -157,6 +165,9 @@ var (
 	// approved-card call budget. Empty by default: every approved call gets
 	// DefaultApprovedCallBudget.
 	activeApprovedCallTimeout = map[string]time.Duration{}
+	// activeNoSessionApproval is the set of critical suffixes whose cards take
+	// one decision per call (no apply-all). Empty by default.
+	activeNoSessionApproval = map[string]bool{}
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -272,6 +283,68 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		}
 	}
 	activeApprovedCallTimeout = approved
+
+	noSession, noSessionProblems := buildNoSessionApprovalSet(p.CriticalToolNoSessionApproval, seen)
+	for _, problem := range noSessionProblems {
+		log.Printf("agent_policy: %s", problem)
+	}
+	activeNoSessionApproval = noSession
+}
+
+// buildNoSessionApprovalSet resolves critical_tool_no_session_approval into a
+// suffix set. A member that is not a critical suffix is reported: no card is
+// ever staged for a tool the audit gate does not see, so such an entry is
+// inert, and most likely a typo that leaves the intended tool with apply-all.
+// It is still installed — refusing a session scope is the safe direction, and
+// a later critical_tools fix then takes effect without touching this list.
+func buildNoSessionApprovalSet(members []string, critical map[string]bool) (map[string]bool, []string) {
+	set := make(map[string]bool, len(members))
+	var problems []string
+	for _, s := range members {
+		s = strings.TrimSpace(s)
+		if s == "" || set[s] {
+			continue
+		}
+		if !critical[s] {
+			problems = append(problems, fmt.Sprintf("critical_tool_no_session_approval member %q is not in critical_tools, so no approval card is ever staged for it and the entry does nothing", s))
+		}
+		set[s] = true
+	}
+	return set, problems
+}
+
+// NoSessionApprovalProblems is the preflight face of
+// buildNoSessionApprovalSet, for `fleet validate-config`: members of
+// p.CriticalToolNoSessionApproval that are not critical suffixes (the same
+// merged list the gate uses).
+func NoSessionApprovalProblems(p AgentPolicy) []string {
+	critical := make(map[string]bool, len(baseCriticalToolSuffixes)+len(p.CriticalToolSuffixes))
+	for _, s := range baseCriticalToolSuffixes {
+		critical[s] = true
+	}
+	for _, s := range p.CriticalToolSuffixes {
+		if s != "" {
+			critical[s] = true
+		}
+	}
+	_, problems := buildNoSessionApprovalSet(p.CriticalToolNoSessionApproval, critical)
+	return problems
+}
+
+// SessionApprovalAllowed reports whether a card for toolName may offer, and
+// honor, a decision that applies to every later call of the tool in the
+// conversation (#300). False when the bundle lists a matching suffix in
+// critical_tool_no_session_approval; matching mirrors isCriticalTool (the
+// tool name equals the suffix or ends with "_<suffix>").
+func SessionApprovalAllowed(toolName string) bool {
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	for suffix := range activeNoSessionApproval {
+		if toolName == suffix || strings.HasSuffix(toolName, "_"+suffix) {
+			return false
+		}
+	}
+	return true
 }
 
 // batchPerDealFor returns the per-record deal_ids batch budget for a

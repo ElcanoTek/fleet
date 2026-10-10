@@ -373,6 +373,13 @@ export type Approval = {
    * (the claim already won; default-deny must not fire on the waiting UI).
    */
   executing?: boolean;
+  /**
+   * True when the bundle lists this tool in
+   * agent_policy.critical_tool_no_session_approval: every call needs its own
+   * decision, so the card offers no "apply my choice to all calls" checkbox
+   * and always posts scope "once" (the server refuses any other scope).
+   */
+  noSessionApproval?: boolean;
 };
 
 /**

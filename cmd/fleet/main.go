@@ -399,17 +399,18 @@ func run() error {
 	// turn starts.
 	bundlePolicy := bundle.AgentPolicy()
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
-		ParallelSafeTools:            bundlePolicy.ParallelSafeTools,
-		CriticalToolSuffixes:         bundlePolicy.CriticalToolSuffixes,
-		CriticalToolSubstitutes:      bundlePolicy.CriticalToolSubstitutes,
-		CriticalToolTimeouts:         bundlePolicy.CriticalToolTimeouts,
-		CriticalToolModes:            bundlePolicy.CriticalToolModes,
-		CriticalToolUndoHints:        bundlePolicy.CriticalToolUndoHints,
-		CriticalToolAliases:          bundlePolicy.CriticalToolAliases,
-		EmailLastToolSuffixes:        bundlePolicy.EmailLastTools,
-		SettleableCreateToolSuffixes: bundlePolicy.SettleableCreateTools,
-		BatchSecondsPerDeal:          bundlePolicy.BatchSecondsPerDeal,
-		ApprovedCallTimeoutSeconds:   bundlePolicy.ApprovedCallTimeoutSeconds,
+		ParallelSafeTools:             bundlePolicy.ParallelSafeTools,
+		CriticalToolSuffixes:          bundlePolicy.CriticalToolSuffixes,
+		CriticalToolSubstitutes:       bundlePolicy.CriticalToolSubstitutes,
+		CriticalToolTimeouts:          bundlePolicy.CriticalToolTimeouts,
+		CriticalToolModes:             bundlePolicy.CriticalToolModes,
+		CriticalToolUndoHints:         bundlePolicy.CriticalToolUndoHints,
+		CriticalToolAliases:           bundlePolicy.CriticalToolAliases,
+		EmailLastToolSuffixes:         bundlePolicy.EmailLastTools,
+		SettleableCreateToolSuffixes:  bundlePolicy.SettleableCreateTools,
+		BatchSecondsPerDeal:           bundlePolicy.BatchSecondsPerDeal,
+		ApprovedCallTimeoutSeconds:    bundlePolicy.ApprovedCallTimeoutSeconds,
+		CriticalToolNoSessionApproval: bundlePolicy.CriticalToolNoSessionApproval,
 	})
 
 	// Connector credentials cross exactly one process boundary at boot: the child

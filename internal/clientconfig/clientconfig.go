@@ -365,6 +365,15 @@ type AgentPolicy struct {
 	//	  email_last_tools: [update_deal, merge_geo]
 	//	  settleable_create_tools: [execute_deal_from_prompt_inputs, create_deal]
 	SettleableCreateTools []string `yaml:"settleable_create_tools"`
+	// CriticalToolNoSessionApproval is an OPTIONAL list of critical suffixes
+	// (same suffix matching as critical_tools) whose approval cards take one
+	// decision per call: the web hides "apply my choice to all … calls in this
+	// chat", the approve POST refuses a non-"once" scope, and staging ignores
+	// any session policy for them. Members must be in critical_tools.
+	//
+	//	agent_policy:
+	//	  critical_tool_no_session_approval: [create_deal, update_deal]
+	CriticalToolNoSessionApproval []string `yaml:"critical_tool_no_session_approval"`
 	// BatchSecondsPerDeal is DERIVED, never read from agent_policy: Bundle.AgentPolicy
 	// collects each mcp_servers[].batch_seconds_per_deal into it, keyed by
 	// server name, so the per-record batch budget reaches agentcore on the same
@@ -2744,8 +2753,9 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		CriticalToolSuffixes: append([]string(nil), b.AgentPolicyConfig.CriticalToolSuffixes...),
 		// The email-last lists (audit_email_last.go): without these copies the
 		// boot paths and validate-config see nil and the gate is inert.
-		EmailLastTools:        append([]string(nil), b.AgentPolicyConfig.EmailLastTools...),
-		SettleableCreateTools: append([]string(nil), b.AgentPolicyConfig.SettleableCreateTools...),
+		EmailLastTools:                append([]string(nil), b.AgentPolicyConfig.EmailLastTools...),
+		SettleableCreateTools:         append([]string(nil), b.AgentPolicyConfig.SettleableCreateTools...),
+		CriticalToolNoSessionApproval: append([]string(nil), b.AgentPolicyConfig.CriticalToolNoSessionApproval...),
 	}
 	// An http_tool flagged `critical: true` opts into the SAME critical-tool audit
 	// gate as the manifest's critical_tools suffixes. The tool is registered as

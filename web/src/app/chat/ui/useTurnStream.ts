@@ -2521,6 +2521,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         expires_at?: number;
         mcp_server?: string;
         mcp_account?: string;
+        no_session_approval?: boolean;
       };
       // send_email cards can land below an expanded preview iframe — queue
       // a scroll-into-view so the user sees the action card without
@@ -2541,6 +2542,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             expiresAt: p.expires_at,
             mcpServer: p.mcp_server,
             mcpAccount: p.mcp_account,
+            noSessionApproval: p.no_session_approval === true || undefined,
           },
         ],
       }));

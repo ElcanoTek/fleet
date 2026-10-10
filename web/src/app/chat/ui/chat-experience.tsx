@@ -2372,6 +2372,7 @@ export function ChatExperience({
           mcp_server?: string;
           mcp_account?: string;
           tool_call_id?: string;
+          no_session_approval?: boolean;
         }>;
         resolved_approvals?: Array<{
           approval_id: string;
@@ -2483,6 +2484,7 @@ export function ChatExperience({
             mcpServer: p.mcp_server,
             mcpAccount: p.mcp_account,
             toolCallId: p.tool_call_id,
+            noSessionApproval: p.no_session_approval === true || undefined,
           })),
         ];
         const memoryCards: MemoryProposal[] = pendingMemoryProposals.map(
