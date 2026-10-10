@@ -422,3 +422,28 @@ func TestConversationGet_ApprovalCards(t *testing.T) {
 		t.Errorf("r1 card = %s", body.Resolved[0]["card"])
 	}
 }
+
+// The bounded one-card GET (?approval_id=) carries the card on a pending and
+// on a resolved row alike (Codex P2 on #1717: the resolved branch dropped it).
+func TestConversationApprovalGet_CarriesCard(t *testing.T) {
+	_, canonical, _ := parseApprovalCard([]byte(goodCard))
+	for _, status := range []string{"pending", "rejected"} {
+		t.Run(status, func(t *testing.T) {
+			st := &claimStore{approval: store.Approval{ID: "ap1", ConversationID: "c1", UserEmail: "u@e.com",
+				ToolName: "mcp_deals_update_deal", ArgsJSON: `{}`, Status: status, CardJSON: string(canonical)}}
+			s := &Server{store: st}
+			rec := httptest.NewRecorder()
+			s.handleConversationApprovalGet(rec, httptest.NewRequest(http.MethodGet, "/conversations/c1?approval_id=ap1", nil), "u@e.com", "c1", "ap1")
+			var body map[string][]map[string]json.RawMessage
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("%d %s: %v", rec.Code, rec.Body.String(), err)
+			}
+			var rows []map[string]json.RawMessage
+			rows = append(rows, body["pending_approvals"]...)
+			rows = append(rows, body["resolved_approvals"]...)
+			if len(rows) != 1 || string(rows[0]["card"]) != string(canonical) {
+				t.Fatalf("one-card GET rows = %v, want the card", rows)
+			}
+		})
+	}
+}

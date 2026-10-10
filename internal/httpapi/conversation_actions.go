@@ -212,6 +212,7 @@ func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Re
 	} else {
 		card := s.approvalClientState(a)
 		card["approval_id"], card["tool"] = a.ID, a.ToolName
+		withApprovalCard(card, a)
 		resolved = append(resolved, card)
 	}
 	writeJSON(w, map[string]any{"pending_approvals": pending, "resolved_approvals": resolved})
