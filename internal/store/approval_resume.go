@@ -125,6 +125,9 @@ type ApprovalResumeResult struct {
 	// RecentResumes is how many resume rows the conversation already had in
 	// the rolling hour (the cap's count).
 	RecentResumes int
+	// Owner is the conversation owner's email ("" when the conversation is
+	// gone), so a skipped resume can tell them (docs/APPROVAL-PROGRESS.md).
+	Owner string
 }
 
 // ClaimApprovalResume claims every armed, settled approval of the
@@ -170,6 +173,7 @@ func (s *Store) ClaimApprovalResume(ctx context.Context, req ApprovalResumeReque
 	if err != nil {
 		return out, err
 	}
+	out.Owner = owner
 
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id FROM approvals

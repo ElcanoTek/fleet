@@ -467,7 +467,7 @@ func (a *approvalStager) firePushNotification(toolName string) {
 		// the turn, so the notification should too.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := push.NotifyApprovalRequired(ctx, email, toolName); err != nil {
+		if err := push.NotifyApprovalRequired(ctx, email, convID, toolName); err != nil {
 			log.Printf("push: approval notification (tool=%s conv=%s): %v", toolName, convID, err)
 		}
 	}
@@ -802,6 +802,12 @@ func approvalClientFields(toolName, rawInput, convID string) map[string]any {
 		// critical_tool_no_session_approval: the card must not offer
 		// "apply my choice to all calls", and the POST refuses that scope.
 		"no_session_approval": !agentcore.SessionApprovalAllowed(toolName),
+	}
+	if approvalReportsProgress(toolName) {
+		// critical_tool_progress: once approved and running, the card polls
+		// for the call's progress and outcome (docs/APPROVAL-PROGRESS.md).
+		// Only present when true, so every other card's payload is unchanged.
+		out["progress_updates"] = true
 	}
 	if resumesAfterApproval(toolName) {
 		// critical_tool_resume: once this card is settled fleet starts a turn
@@ -1721,10 +1727,11 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 		})
 		reply <- s.executeClaimedApproval(execCtx, user, convID, approvalID, approval, req)
 	}()
-	if !s.approvalMayAnswerEarly(approval) {
+	wait, early0 := s.approvalEarlyReplyWait(approval)
+	if !early0 {
 		return approvalBody(<-reply)
 	}
-	early := time.NewTimer(approvalEarlyReplyAfter)
+	early := time.NewTimer(wait)
 	defer early.Stop()
 	select {
 	case out := <-reply:
@@ -1781,6 +1788,33 @@ func (s *Server) approvalMayAnswerEarly(approval *store.Approval) bool {
 	return declared
 }
 
+// approvalProgressEarlyReplyAfter is how long the POST waits before it
+// answers "executing" for a call of a tool in critical_tool_progress
+// (docs/APPROVAL-PROGRESS.md): the card only shows the call's progress once it
+// knows the call is running, so a call that reports progress answers early
+// almost at once, whether or not its server declared a budget. Var, not
+// const: tests change it.
+var approvalProgressEarlyReplyAfter = 2 * time.Second
+
+// approvalEarlyReplyWait is how long an approved card's POST waits for the
+// call before it answers "executing", and whether it may at all: an MCP call
+// of a tool that reports progress answers after
+// approvalProgressEarlyReplyAfter; any other call on a server that declared a
+// budget after approvalEarlyReplyAfter (approvalMayAnswerEarly); everything
+// else waits for its outcome, as before.
+func (s *Server) approvalEarlyReplyWait(approval *store.Approval) (time.Duration, bool) {
+	if s.cfg != nil && s.cfg.MockMode {
+		return 0, false
+	}
+	if strings.HasPrefix(approval.ToolName, "mcp_") && approvalReportsProgress(approval.ToolName) {
+		return min(approvalProgressEarlyReplyAfter, approvalEarlyReplyAfter), true
+	}
+	if s.approvalMayAnswerEarly(approval) {
+		return approvalEarlyReplyAfter, true
+	}
+	return 0, false
+}
+
 // executeClaimedApproval runs a claimed approval, records its outcome
 // (SetApprovalResult, which also commits the history breadcrumb) and
 // registers any session policy the click asked for. It returns the POST body
@@ -1831,6 +1865,9 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	}
 	// SetApprovalResult commits the history breadcrumb in the same transaction.
 	s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
+	// A tool in critical_tool_progress: tell the owner it finished, in case
+	// they walked away from the running card (approval_progress.go).
+	s.notifyApprovalFinished(user, convID, approval, isErr)
 	// The outcome is in the conversation now, so a resume turn can read it —
 	// this is also where a long call answered "executing" earlier lands.
 	s.noteApprovalSettled(convID, approval)
@@ -2247,6 +2284,14 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	budget, _ := agentcore.ApprovedCallBudget(server, approval.ArgsJSON)
 	callCtx, cancel := context.WithTimeout(mcp.WithCallTimeout(ctx, budget), budget)
 	defer cancel()
+	// A tool in critical_tool_progress asks its server for progress while it
+	// runs (approval_progress.go); the executing card shows it. Stopped when
+	// the call returns, before its outcome is recorded.
+	if approvalReportsProgress(approval.ToolName) {
+		var stopProgress func()
+		callCtx, stopProgress = s.startApprovalProgress(callCtx, approval)
+		defer stopProgress()
+	}
 	text, isError, err := broker.CallMCP(callCtx, server, tool, args)
 	if err != nil {
 		return "", err

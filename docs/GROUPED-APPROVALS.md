@@ -173,5 +173,5 @@ it on the server, detached from the connection.
   boot; a card is grouped by the policy in force when it was staged.
 - **Bundles adopt the key after this release ships**: the manifest decoder is
   strict, so an older fleet refuses a bundle that carries it.
-- **Progress while a plan runs and a notification when it ends** (R7) is a
-  separate follow-up change.
+- **Progress while a plan runs and a notification when it ends** (R7):
+  see [APPROVAL-PROGRESS.md](APPROVAL-PROGRESS.md).

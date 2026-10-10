@@ -1154,6 +1154,13 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolModes:         p.CriticalToolModes,
 		CriticalToolGroupApproval: p.CriticalToolGroupApproval,
 	})...)
+	// critical_tool_progress: same rule; a typo would quietly leave the
+	// tool's approved calls without progress or a finish notification.
+	problems = append(problems, agentcore.ApprovalProgressProblems(agentcore.AgentPolicy{
+		CriticalToolSuffixes: p.CriticalToolSuffixes,
+		CriticalToolModes:    p.CriticalToolModes,
+		CriticalToolProgress: p.CriticalToolProgress,
+	})...)
 	if len(problems) > 0 {
 		res.Status = statusFail
 		res.Detail = strings.Join(problems, "; ")

@@ -19,11 +19,14 @@ import {
 } from "@/app/lib/modelAliases";
 import {
   type Approval,
+  type ApprovalProgress,
   type ApprovalStatus,
   type MemoryProposal,
   approvalIsExecuting,
+  approvalProgressText,
   approvalStatusFromOutcome,
 } from "./history";
+import { useApprovalProgressPoll } from "./useApprovalProgressPoll";
 import { EmailSendResult, parseEmailSendPayload } from "./ToolChips";
 import {
   ApprovalCardDetails,
@@ -262,16 +265,19 @@ export function ApprovalSubmitError({
 // edit, apply-all, or expiry countdown. "Check result" is the TUI's
 // `/approve <id>` — an idempotent fetch of the outcome.
 function ApprovalExecutingControls({
+  progress,
   submitting,
   submitError,
   onCheck,
 }: {
+  progress?: ApprovalProgress;
   submitting: "send" | "cancel" | null;
   submitError: string | null;
   onCheck: () => void;
 }) {
   return (
     <div className="mt-3 flex flex-col gap-2" data-testid="approval-executing">
+      {progress ? <ApprovalProgressBar progress={progress} /> : null}
       <button
         type="button"
         data-testid="approval-check-result"
@@ -285,6 +291,32 @@ function ApprovalExecutingControls({
         message={submitError}
         running="This action is still running. Check result to see the outcome without running it again."
       />
+    </div>
+  );
+}
+
+// ApprovalProgressBar shows how far a running approved call has got, from the
+// MCP progress its server reported (docs/APPROVAL-PROGRESS.md): a bar when the
+// server knows the total, and "12 of 24 · message". Display only.
+export function ApprovalProgressBar({ progress }: { progress: ApprovalProgress }) {
+  const pct = progress.total ? Math.min(100, Math.round((progress.progress / progress.total) * 100)) : null;
+  return (
+    <div data-testid="approval-progress" className="flex min-w-0 flex-col gap-1">
+      {pct !== null ? (
+        <div
+          role="progressbar"
+          aria-label="Progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={pct}
+          className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-overlay-strong)]"
+        >
+          <div className="h-full rounded-full bg-[var(--color-primary)] transition-[width]" style={{ width: `${pct}%` }} />
+        </div>
+      ) : null}
+      <span data-testid="approval-progress-text" className="min-w-0 break-words text-[0.72rem] text-[var(--color-text-secondary)]">
+        {approvalProgressText(progress)}
+      </span>
     </div>
   );
 }
@@ -391,6 +423,13 @@ export function ApprovalCard({
   // runs its own countdown, and the suggest_advanced_model nudge intentionally
   // shows none.
   const countdown = useApprovalCountdown(approval.expiresAt, approval.status, executing);
+  // A running call of a tool in critical_tool_progress: poll the card for
+  // its progress and outcome (docs/APPROVAL-PROGRESS.md). Called before the
+  // per-kind early returns to satisfy the rules of hooks.
+  useApprovalProgressPoll(card, conversationId, executing && approval.progressUpdates === true, (next) => {
+    if (next.status !== "pending") setHeldExecuting(false);
+    onResolved(next);
+  });
 
   const resolve = async (
     approved: boolean,
@@ -717,6 +756,7 @@ export function ApprovalCard({
       {approval.status === "pending" ? (
         executing ? (
           <ApprovalExecutingControls
+            progress={approval.progress}
             submitting={submitting}
             submitError={submitError}
             onCheck={() => void resolve(true)}
@@ -955,6 +995,7 @@ function GenericActionCard({
       {approval.status === "pending" ? (
         executing ? (
           <ApprovalExecutingControls
+            progress={approval.progress}
             submitting={submitting}
             submitError={submitError}
             onCheck={() => onResolve(true)}
@@ -1078,6 +1119,7 @@ function BashApprovalCard({
       {approval.status === "pending" ? (
         executing ? (
           <ApprovalExecutingControls
+            progress={approval.progress}
             submitting={submitting}
             submitError={submitError}
             onCheck={() => onResolve(true)}
@@ -1315,6 +1357,7 @@ function ScheduleTaskCard({
       {approval.status === "pending" ? (
         executing ? (
           <ApprovalExecutingControls
+            progress={approval.progress}
             submitting={submitting}
             submitError={submitError}
             onCheck={() => onResolve(true)}
@@ -1500,6 +1543,7 @@ function ManageTasksCard({
       {approval.status === "pending" ? (
         executing ? (
           <ApprovalExecutingControls
+            progress={approval.progress}
             submitting={submitting}
             submitError={submitError}
             onCheck={() => onResolve(true)}

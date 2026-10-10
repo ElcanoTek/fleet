@@ -205,7 +205,10 @@ server when an approved card for that conversation executes. Verified on
   caps an HTTP-served server's approved call below a longer declared budget.
   The SSP bundle servers are stdio.
 - **No live push of the outcome.** A card answered `executing` learns the
-  result on **Check result** or on reload. The server does not push it.
+  result on **Check result** or on reload. The server does not push it. For a
+  tool in `agent_policy.critical_tool_progress` the card polls for its progress
+  and outcome, and the owner gets a browser push when it ends
+  ([APPROVAL-PROGRESS.md](APPROVAL-PROGRESS.md)).
 - **Bundles adopt the key after this release ships.** The manifest decoder is
   strict, so an older Fleet refuses a bundle that carries
   `approved_call_timeout_seconds`.

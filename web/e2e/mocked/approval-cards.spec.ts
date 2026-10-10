@@ -354,3 +354,64 @@ test("One at a time falls back to the individual approval cards", async ({ page 
   await expect(page.locator('[data-approval-id="ap-grp-pm"]').getByRole("button", { name: "Approve & run" })).toBeVisible();
   await expect(page.locator('[data-approval-id="ap-grp-mg"]').getByRole("button", { name: "Approve & run" })).toBeVisible();
 });
+
+// Approval progress (docs/APPROVAL-PROGRESS.md): a running approved call of a
+// tool in agent_policy.critical_tool_progress re-hydrates with its latest
+// progress ("12 of 24 · message" and a bar), and the card polls the one-card
+// GET until the call ends, then settles on its outcome by itself.
+test("a running card shows its progress and settles on its own when the call ends", async ({ page }) => {
+  await mockChatBoot(page, {
+    conversations: [{ id: "conv-progress", title: "Plan run" }],
+  });
+  await page.route("**/api/conversations/conv-progress", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation: { id: "conv-progress", title: "Plan run", persona: "default", model: "test-model", pinned: false },
+        history: [
+          { id: 1, role: "user", type: "text", content: { text: "book the plan" } },
+          { id: 2, role: "assistant", type: "text", content: { text: "Booking." } },
+        ],
+        pending_approvals: [],
+        resolved_approvals: [
+          {
+            approval_id: "ap-run",
+            tool: "mcp_pubmatic_execute_plan",
+            summary: { tool: "mcp_pubmatic_execute_plan", args: [{ key: "plan_id", value: "p1" }] },
+            status: "approved",
+            executing: true,
+            result_text: "Approved — executing…",
+            progress_updates: true,
+            progress: { progress: 12, total: 24, message: "creating deal 12", updated_at: 1 },
+            card: { title: "Create 24 deals on PubMatic", items: [] },
+          },
+        ],
+        pending_memory_proposals: [],
+      },
+    });
+  });
+  let polls = 0;
+  await page.route("**/api/conversations/conv-progress/approvals/ap-run", (r: Route) => {
+    polls += 1;
+    return r.fulfill({
+      json: {
+        pending_approvals: [],
+        resolved_approvals: [{ approval_id: "ap-run", tool: "mcp_pubmatic_execute_plan", status: "approved", is_err: false, result_text: "24 deals created" }],
+      },
+    });
+  });
+  await page.goto("/chat");
+  const row = page.locator('[data-conversation-id="conv-progress"]');
+  await row.waitFor({ timeout: 15_000 });
+  await row.click();
+
+  const card = page.locator('[data-approval-id="ap-run"]');
+  await expect(card.getByTestId("generic-action-title")).toHaveText("Running · Create 24 deals on PubMatic");
+  await expect(card.getByTestId("approval-progress-text")).toHaveText("12 of 24 · creating deal 12");
+  await expect(card.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "50");
+
+  // The poll finds the call finished: the card settles without Check result.
+  await expect(card.getByTestId("generic-action-title")).toHaveText("Applied · Create 24 deals on PubMatic", { timeout: 10_000 });
+  await expect(card.getByTestId("approval-result")).toContainText("24 deals created");
+  expect(polls).toBeGreaterThan(0);
+});

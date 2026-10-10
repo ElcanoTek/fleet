@@ -1037,7 +1037,7 @@ func TestParseSSEResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := strings.NewReader(tt.input)
-			result, err := transport.parseSSEResponse(reader, 1)
+			result, err := transport.parseSSEResponse(context.Background(), reader, 1)
 
 			if tt.wantErr {
 				if err == nil {
@@ -1374,7 +1374,7 @@ func TestParseSSEResponseLargePayload(t *testing.T) {
 	payload := `{"jsonrpc":"2.0","id":1,"result":{"data":"` + largeValue + `"}}`
 	sseInput := "event: message\ndata: " + payload + "\n\n"
 
-	result, err := transport.parseSSEResponse(strings.NewReader(sseInput), 1)
+	result, err := transport.parseSSEResponse(context.Background(), strings.NewReader(sseInput), 1)
 	if err != nil {
 		t.Fatalf("parseSSEResponse failed on large payload: %v", err)
 	}
@@ -1429,7 +1429,7 @@ func TestHTTPParse_ResponseBoundedAtCap(t *testing.T) {
 		for sb.Len() < 8*1024 {
 			sb.WriteString("data: " + strings.Repeat("y", 512) + "\n")
 		}
-		_, err := tr.parseSSEResponse(strings.NewReader(sb.String()), 1)
+		_, err := tr.parseSSEResponse(context.Background(), strings.NewReader(sb.String()), 1)
 		if err == nil || !strings.Contains(err.Error(), "exceeded") {
 			t.Fatalf("parseSSEResponse = %v, want an over-cap error", err)
 		}
@@ -1437,7 +1437,7 @@ func TestHTTPParse_ResponseBoundedAtCap(t *testing.T) {
 
 	t.Run("sse under cap parses", func(t *testing.T) {
 		in := "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n"
-		res, err := tr.parseSSEResponse(strings.NewReader(in), 1)
+		res, err := tr.parseSSEResponse(context.Background(), strings.NewReader(in), 1)
 		if err != nil {
 			t.Fatalf("parseSSEResponse under cap: %v", err)
 		}
@@ -1544,7 +1544,7 @@ func TestHTTPTransport_RejectsMismatchedResponseID(t *testing.T) {
 		tr := &HTTPTransport{}
 		in := "data: {\"jsonrpc\":\"2.0\",\"id\":999999,\"result\":{\"stale\":true}}\n\n" +
 			"data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"fresh\":true}}\n\n"
-		res, err := tr.parseSSEResponse(strings.NewReader(in), 1)
+		res, err := tr.parseSSEResponse(context.Background(), strings.NewReader(in), 1)
 		if err != nil {
 			t.Fatalf("parseSSEResponse: %v", err)
 		}
@@ -1556,7 +1556,7 @@ func TestHTTPTransport_RejectsMismatchedResponseID(t *testing.T) {
 	t.Run("sse with only a foreign-id response errors", func(t *testing.T) {
 		tr := &HTTPTransport{}
 		in := "data: {\"jsonrpc\":\"2.0\",\"id\":999999,\"error\":{\"code\":-32000,\"message\":\"someone else's failure\"}}\n\n"
-		_, err := tr.parseSSEResponse(strings.NewReader(in), 1)
+		_, err := tr.parseSSEResponse(context.Background(), strings.NewReader(in), 1)
 		if err == nil {
 			t.Fatal("expected an error for a stream with no matching response")
 		}

@@ -2083,6 +2083,11 @@ type Approval struct {
 	// bundle lists in critical_tool_group_approval. Empty for every other row.
 	// Read by GetApproval, ListPendingApprovals and ListResolvedApprovals.
 	GroupID string
+	// ProgressJSON is the latest progress an approved, still-executing call
+	// reported (migration 076, docs/APPROVAL-PROGRESS.md): canonical JSON
+	// written by SetApprovalProgress. Empty when none. Read by GetApproval,
+	// ListResolvedApprovals and ListExecutingApprovals.
+	ProgressJSON string
 }
 
 // ListPendingApprovals returns every pending approval for a conversation,
@@ -2136,7 +2141,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, ''), COALESCE(group_id, '')
+		        is_err, COALESCE(card_json, ''), COALESCE(group_id, ''), COALESCE(progress_json, '')
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status <> 'pending'
 		 ORDER BY created_at DESC
@@ -2152,7 +2157,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID, &a.ProgressJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2171,7 +2176,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 // completed cards or their argument bodies. Filter before any display limit so
 // an older in-flight execution cannot be hidden by newer completed approvals.
 func (s *Store) ListExecutingApprovals(ctx context.Context, userEmail, convID, sentinel string) ([]Approval, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, tool_name, COALESCE(tool_call_id, ''), COALESCE(mcp_server, ''), COALESCE(mcp_account, '') FROM approvals
+	rows, err := s.db.QueryContext(ctx, `SELECT id, tool_name, COALESCE(tool_call_id, ''), COALESCE(mcp_server, ''), COALESCE(mcp_account, ''), COALESCE(progress_json, '') FROM approvals
 		WHERE conversation_id = $1 AND user_email = $2 AND status = 'approved'
 		AND is_err IS NULL AND result_text = $3 ORDER BY created_at`, convID, userEmail, sentinel)
 	if err != nil {
@@ -2181,7 +2186,7 @@ func (s *Store) ListExecutingApprovals(ctx context.Context, userEmail, convID, s
 	var out []Approval
 	for rows.Next() {
 		a := Approval{Status: "approved", ResultText: sentinel}
-		if err := rows.Scan(&a.ID, &a.ToolName, &a.ToolCallID, &a.MCPServer, &a.MCPAccount); err != nil {
+		if err := rows.Scan(&a.ID, &a.ToolName, &a.ToolCallID, &a.MCPServer, &a.MCPAccount, &a.ProgressJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2315,6 +2320,23 @@ func (s *Store) SetApprovalGroup(ctx context.Context, userEmail, approvalID, gro
 	return n == 1, err
 }
 
+// SetApprovalProgress records the latest progress of an approved call that is
+// still executing (docs/APPROVAL-PROGRESS.md). It reports whether a row was
+// updated: once the call's outcome is written (or the row was never claimed,
+// or belongs to someone else) nothing changes, so a late update can never
+// land on a settled card.
+func (s *Store) SetApprovalProgress(ctx context.Context, userEmail, approvalID, progressJSON string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE approvals SET progress_json = $1
+		 WHERE id = $2 AND user_email = $3 AND status = 'approved' AND is_err IS NULL AND result_text = $4`,
+		progressJSON, approvalID, userEmail, ApprovalExecutingSentinel)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // ApprovalSeat is the public credential selection a staged MCP call ran under.
 // Both fields are configuration identifiers; no credential value is stored.
 type ApprovalSeat struct {
@@ -2332,14 +2354,14 @@ func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, ''), resume_state, COALESCE(group_id, '')
+		        is_err, COALESCE(card_json, ''), resume_state, COALESCE(group_id, ''), COALESCE(progress_json, '')
 		 FROM approvals WHERE id = $1 AND user_email = $2`,
 		approvalID, userEmail,
 	)
 	var a Approval
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState, &a.GroupID); err != nil {
+		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState, &a.GroupID, &a.ProgressJSON); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}

@@ -208,6 +208,7 @@ above fails otherwise.
 - [`api-versioning.md`](api-versioning.md) — HTTP API versioning (#321)
 - [`APPROVAL-CARDS.md`](APPROVAL-CARDS.md) — Approval cards: the human-review surface in chat
 - [`APPROVAL-CARD-DESCRIBERS.md`](APPROVAL-CARD-DESCRIBERS.md) — Approval-card describers: a bundle-declared read turns a critical call into a readable card (ADR-0082)
+- [`APPROVAL-PROGRESS.md`](APPROVAL-PROGRESS.md) — Approval progress: a running approved call shows its MCP progress, and a push says when it ends or the chat waits
 - [`APPROVED-CALL-BUDGET.md`](APPROVED-CALL-BUDGET.md) — Approved-call budget: how long an approved card's MCP call may run, and the early "executing" reply
 - [`ASK-NOTIFY.md`](ASK-NOTIFY.md) — ask / notify + paused-awaiting-human run state
 - [`ATTACHMENT-SCOPING.md`](ATTACHMENT-SCOPING.md) — Attachment scoping, and where a turn's injected context lives

@@ -37,8 +37,11 @@ type Client struct {
 	writeMu sync.Mutex    // serializes frame writes (json.Encoder is not concurrency-safe)
 	nextID  atomic.Uint64 // per-connection request IDs
 
-	mu       sync.Mutex
-	pending  map[uint64]chan response
+	mu      sync.Mutex
+	pending map[uint64]chan response
+	// progress holds the sink of each pending methodCall that asked for
+	// progress frames (mcp.WithProgress on the caller's context).
+	progress map[uint64]func(mcp.ProgressUpdate)
 	closed   bool
 	closeErr error
 }
@@ -50,10 +53,11 @@ var _ agentcore.MCPBroker = (*Client)(nil)
 // down and fails any outstanding/subsequent calls.
 func NewClient(conn io.ReadWriteCloser) *Client {
 	c := &Client{
-		enc:     json.NewEncoder(conn),
-		conn:    conn,
-		done:    make(chan struct{}),
-		pending: make(map[uint64]chan response),
+		enc:      json.NewEncoder(conn),
+		conn:     conn,
+		done:     make(chan struct{}),
+		pending:  make(map[uint64]chan response),
+		progress: make(map[uint64]func(mcp.ProgressUpdate)),
 	}
 	go c.readLoop(conn)
 	return c
@@ -81,6 +85,9 @@ func (c *Client) callMCP(ctx context.Context, scope, server, tool string, args m
 	if d, ok := mcp.CallTimeout(ctx); ok {
 		req.CallTimeoutMs = max(d.Milliseconds(), 1)
 	}
+	// So does a progress sink: the child forwards the call's progress
+	// notifications as intermediate frames, which readLoop hands to it.
+	req.Progress = mcp.ProgressSink(ctx) != nil
 	resp, err := c.roundtrip(ctx, req)
 	if err != nil {
 		return "", false, err
@@ -444,6 +451,9 @@ func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
 		return response{}, err
 	}
 	c.pending[req.ID] = ch
+	if req.Progress {
+		c.progress[req.ID] = mcp.ProgressSink(ctx)
+	}
 	c.mu.Unlock()
 
 	if err := c.send(req); err != nil {
@@ -499,6 +509,7 @@ func (c *Client) send(req request) error {
 func (c *Client) discard(id uint64) {
 	c.mu.Lock()
 	delete(c.pending, id)
+	delete(c.progress, id)
 	c.mu.Unlock()
 }
 
@@ -510,11 +521,24 @@ func (c *Client) readLoop(r io.Reader) {
 			c.fail(err)
 			return
 		}
+		if resp.Progress != nil {
+			// An intermediate progress frame: hand it to the call's sink and
+			// keep the pending slot for the final frame. The sink runs on
+			// this goroutine, so it must not block (mcp.WithProgress).
+			c.mu.Lock()
+			sink := c.progress[resp.ID]
+			c.mu.Unlock()
+			if sink != nil {
+				sink(*resp.Progress)
+			}
+			continue
+		}
 		c.mu.Lock()
 		ch, ok := c.pending[resp.ID]
 		if ok {
 			delete(c.pending, resp.ID)
 		}
+		delete(c.progress, resp.ID)
 		c.mu.Unlock()
 		if ok {
 			ch <- resp // ch is buffered(1) and used once — never blocks

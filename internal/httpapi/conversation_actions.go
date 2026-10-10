@@ -126,6 +126,9 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		for k, v := range s.approvalClientState(&a) {
 			card[k] = v
 		}
+		// An executing call of a tool in critical_tool_progress: its latest
+		// progress, and the flag that makes a reloaded card keep polling.
+		s.withApprovalProgress(card, &a)
 		if card["executing"] == true && resumesAfterApproval(a.ToolName) {
 			// Still running, and fleet will continue the task when it lands
 			// (docs/RESUME-AFTER-APPROVAL.md): a reloaded client keeps
@@ -223,6 +226,7 @@ func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Re
 		card["approval_id"], card["tool"] = a.ID, a.ToolName
 		withApprovalCard(card, a)
 		withApprovalGroup(card, a)
+		s.withApprovalProgress(card, a)
 		resolved = append(resolved, card)
 	}
 	writeJSON(w, map[string]any{"pending_approvals": pending, "resolved_approvals": resolved})

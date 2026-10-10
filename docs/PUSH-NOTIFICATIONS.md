@@ -56,6 +56,8 @@ Without it, clicks open the app origin the subscription was created on.
 | Task terminal: failure (error, retry-exhausted dead-letter, interrupted) | `FLEET_PUSH_ON_TASK_COMPLETE` | `✗ Task failed: <name> (<duration>)` |
 | Task paused for `ask` / mid-run `notify` progress (#510) | `FLEET_PUSH_ON_TASK_COMPLETE` | `⏸ Waiting for your answer: <name>` |
 | Chat approval card staged (#292) | `FLEET_PUSH_ON_APPROVAL_REQUEST` | `⚠ Approval needed: <tool name>` (high urgency) |
+| An approved call of a tool in `agent_policy.critical_tool_progress` finished ([APPROVAL-PROGRESS.md](APPROVAL-PROGRESS.md)) | `FLEET_PUSH_ON_APPROVAL_REQUEST` | `✓ Done: <card title or tool name>` / `✗ Not applied: …` (normal urgency) |
+| The automatic continue after approvals was skipped over its hourly cap or a full queue ([RESUME-AFTER-APPROVAL.md](RESUME-AFTER-APPROVAL.md)) | `FLEET_PUSH_ON_APPROVAL_REQUEST` | `⏸ Waiting for you: the chat did not continue on its own` (high urgency) |
 
 Notes on honest scope:
 
@@ -69,8 +71,11 @@ Notes on honest scope:
 - The approval push fires for approvals staged **by an agent turn**. The
   user-initiated "promote to scheduled task" card does not push — the user is
   looking at it when it appears.
-- Chat has no per-conversation deep link yet, so approval notifications open
-  the app root; the pending card re-hydrates on load.
+- Chat notifications open their conversation: the link is `/chat?c=<id>`
+  (under `FLEET_PUBLIC_URL`, or relative to the app), which the chat page opens
+  on load, and the pending card re-hydrates there. The service worker
+  navigates an open fleet window to it, or opens a new window when it cannot
+  (a window it does not control).
 
 ## HTTP surface (chat server, auth + member gated)
 
@@ -109,7 +114,7 @@ unconfigured. The browser reaches them through the Next.js proxies under
 - A Prometheus `fleet_push_notifications_sent_total` counter and the periodic
   `last_active_at` sweep of stale subscriptions (expired endpoints are
   already reaped on send).
-- Per-conversation / per-run deep links into the exact card (#504/#508
-  follow-ups) and schedule missed/blocked events.
+- Deep links into the exact card or run (#504/#508 follow-ups; chat pushes
+  now open their conversation) and schedule missed/blocked events.
 - Email/Slack/Teams as additional `notify.PushSender`-style per-user
   backends.

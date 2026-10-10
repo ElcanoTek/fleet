@@ -10,6 +10,33 @@ type RouteContext = {
 };
 
 /**
+ * GET /api/conversations/{id}/approvals/{approvalId}
+ *
+ * One approval card's current state (the chat server's one-card read,
+ * /conversations/{id}?approval_id=…): a running card of a tool that reports
+ * progress polls it for the latest progress and its outcome
+ * (docs/APPROVAL-PROGRESS.md).
+ */
+export async function GET(_: NextRequest, context: RouteContext) {
+  const session = await getServerSession();
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const { conversationId, approvalId } = await context.params;
+  const { upstream, error } = await chatServerProxy(
+    session,
+    `/conversations/${encodeURIComponent(conversationId)}?approval_id=${encodeURIComponent(approvalId)}`,
+    { method: "GET" },
+  );
+  if (error) return error;
+  const text = await upstream.text();
+  return new NextResponse(text, {
+    status: upstream.status,
+    headers: { "Content-Type": upstream.headers.get("Content-Type") ?? "application/json" },
+  });
+}
+
+/**
  * POST /api/conversations/{id}/approvals/{approvalId}
  *
  * Approve or reject a staged high-risk tool call (currently send_email).

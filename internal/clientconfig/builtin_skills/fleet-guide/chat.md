@@ -453,6 +453,17 @@ running straight away rather than holding the page: use **Check result** a
 little later to see how it ended. Shell commands and task cards keep their own
 limits.
 
+A deployment can also have chosen actions **report their progress** while
+they run (creating many records in an external system, for example). Their
+running card then shows a bar and a line such as **12 of 24 · creating deal
+12**, refreshed every couple of seconds while the tab is open and still there
+after a reload, and it switches to the outcome by itself when the action ends,
+without **Check result**. If you have turned on browser notifications
+(**Settings → Connections → Browser notifications**), you also get one when
+such an action finishes (**✓ Done** or **✗ Not applied**, named by the card's
+title), and one when the assistant could not carry on by itself after your
+approvals; clicking it opens the conversation.
+
 A deployment can also **group** chosen actions (booking the same plan in
 several external systems, for example): when the assistant asks for two or
 more of them in one reply, they arrive as one card titled **N actions to

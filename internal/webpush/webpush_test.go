@@ -181,7 +181,7 @@ func TestNilServiceIsNoOp(t *testing.T) {
 	if err := svc.SendEvent(context.Background(), notify.Event{Status: notify.StatusSuccess, Audience: "u@x.com"}); err != nil {
 		t.Errorf("nil SendEvent: %v", err)
 	}
-	if err := svc.NotifyApprovalRequired(context.Background(), "u@x.com", "send_email"); err != nil {
+	if err := svc.NotifyApprovalRequired(context.Background(), "u@x.com", "conv-1", "send_email"); err != nil {
 		t.Errorf("nil NotifyApprovalRequired: %v", err)
 	}
 }
@@ -329,7 +329,7 @@ func TestNotifyApprovalRequired(t *testing.T) {
 	if !svc.ApprovalPushEnabled() {
 		t.Fatal("ApprovalPushEnabled must be true for an enabled service")
 	}
-	if err := svc.NotifyApprovalRequired(context.Background(), "u@x.com", "mcp_sendgrid_send_email"); err != nil {
+	if err := svc.NotifyApprovalRequired(context.Background(), "u@x.com", "conv-1", "mcp_sendgrid_send_email"); err != nil {
 		t.Fatalf("NotifyApprovalRequired: %v", err)
 	}
 	if len(relay.requests) != 1 {
@@ -343,7 +343,7 @@ func TestNotifyApprovalRequired(t *testing.T) {
 	if svc.ApprovalPushEnabled() {
 		t.Error("ApprovalPushEnabled must honor the flag")
 	}
-	if err := svc.NotifyApprovalRequired(context.Background(), "u@x.com", "x"); err != nil {
+	if err := svc.NotifyApprovalRequired(context.Background(), "u@x.com", "conv-1", "x"); err != nil {
 		t.Fatalf("NotifyApprovalRequired flag off: %v", err)
 	}
 	if len(relay.requests) != 1 {
@@ -358,5 +358,68 @@ func TestEndpointHost(t *testing.T) {
 	}
 	if got := endpointHost("no-scheme-or-path"); got != "no-scheme-or-path" {
 		t.Errorf("endpointHost fallback = %q", got)
+	}
+}
+
+// The approval-finished and resume-skipped pushes: one send each, the
+// urgency that matches whether the person is blocking anything, and the same
+// FLEET_PUSH_ON_APPROVAL_REQUEST gate.
+func TestNotifyApprovalFinishedAndResumeSkipped(t *testing.T) {
+	st := &fakeStore{subs: []store.PushSubscription{testSubscription(t, "https://relay.example/ep")}}
+	relay := &fakeRelay{}
+	svc := newTestService(t, st, relay)
+
+	if err := svc.NotifyApprovalFinished(context.Background(), "u@x.com", "conv-1", "Create 12 deals on PubMatic", false); err != nil {
+		t.Fatalf("NotifyApprovalFinished: %v", err)
+	}
+	if err := svc.NotifyResumeSkipped(context.Background(), "u@x.com", "conv-1"); err != nil {
+		t.Fatalf("NotifyResumeSkipped: %v", err)
+	}
+	if len(relay.requests) != 2 {
+		t.Fatalf("got %d relay requests, want 2", len(relay.requests))
+	}
+	if u := relay.requests[0].Header.Get("Urgency"); u != "normal" {
+		t.Errorf("finished Urgency = %q, want normal", u)
+	}
+	if u := relay.requests[1].Header.Get("Urgency"); u != "high" {
+		t.Errorf("resume-skipped Urgency = %q, want high", u)
+	}
+
+	svc.cfg.OnApprovalRequest = false
+	_ = svc.NotifyApprovalFinished(context.Background(), "u@x.com", "conv-1", "x", true)
+	_ = svc.NotifyResumeSkipped(context.Background(), "u@x.com", "conv-1")
+	if len(relay.requests) != 2 {
+		t.Error("FLEET_PUSH_ON_APPROVAL_REQUEST=false must suppress both")
+	}
+	var nilSvc *Service
+	if err := nilSvc.NotifyApprovalFinished(context.Background(), "u@x.com", "c", "x", false); err != nil {
+		t.Errorf("nil NotifyApprovalFinished: %v", err)
+	}
+}
+
+func TestApprovalFinishedTitle(t *testing.T) {
+	if got := approvalFinishedTitle("Create 12 deals", false); got != "✓ Done: Create 12 deals" {
+		t.Errorf("success title = %q", got)
+	}
+	if got := approvalFinishedTitle("mcp_x_execute_plan", true); got != "✗ Not applied: mcp_x_execute_plan" {
+		t.Errorf("failure title = %q", got)
+	}
+}
+
+// A chat notification opens its conversation (?c=, which the chat page
+// consumes on load), escaped, under FLEET_PUBLIC_URL or relative to the app.
+func TestConversationLink(t *testing.T) {
+	svc := &Service{cfg: Config{PublicURLBase: "https://fleet.example.com"}}
+	if got := svc.ConversationLink("abc-123"); got != "https://fleet.example.com/chat?c=abc-123" {
+		t.Errorf("link = %q", got)
+	}
+	if got := svc.ConversationLink("a&b c"); got != "https://fleet.example.com/chat?c=a%26b+c" {
+		t.Errorf("escaped link = %q", got)
+	}
+	if got := svc.ConversationLink(""); got != "https://fleet.example.com" {
+		t.Errorf("no conversation = %q, want the app root", got)
+	}
+	if got := (&Service{}).ConversationLink("abc"); got != "/chat?c=abc" {
+		t.Errorf("relative link = %q", got)
 	}
 }

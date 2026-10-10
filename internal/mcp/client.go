@@ -817,10 +817,18 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 		arguments = map[string]interface{}{}
 	}
 
-	result, err := s.transport.Call(ctx, "tools/call", map[string]interface{}{
+	params := map[string]interface{}{
 		jsonRPCFieldName: name,
 		"arguments":      arguments,
-	})
+	}
+	// A caller listening for progress (WithProgress) opts in per the MCP
+	// spec: the request carries _meta.progressToken, and the transport hands
+	// that token's notifications/progress to the caller's sink.
+	if pctx, meta, ok := withProgressToken(ctx); ok {
+		ctx = pctx
+		params["_meta"] = meta
+	}
+	result, err := s.transport.Call(ctx, "tools/call", params)
 	if err != nil {
 		// If this is a stdio server and the error looks like a broken pipe / EOF,
 		// try to restart the server process and retry the call once.
@@ -842,10 +850,7 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 						"before re-issuing it: %w", s.name, name, err)
 			}
 			log.Printf("MCP server %s restarted successfully, retrying tool call (request was never delivered)", s.name)
-			result, err = s.transport.Call(ctx, "tools/call", map[string]interface{}{
-				jsonRPCFieldName: name,
-				"arguments":      arguments,
-			})
+			result, err = s.transport.Call(ctx, "tools/call", params)
 			if err != nil {
 				return nil, fmt.Errorf("tool call failed after server restart: %w", err)
 			}
@@ -1220,8 +1225,10 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 		}
 
 		// Server-initiated notification/request (carries a method, no
-		// matching result/error for us): skip.
+		// matching result/error for us): skip it, after handing a progress
+		// notification for this call to the caller's sink (WithProgress).
 		if response.Method != "" && len(response.Result) == 0 && len(response.Error) == 0 {
+			deliverProgress(ctx, response.Method, response.Params)
 			continue
 		}
 
@@ -1329,6 +1336,7 @@ type stdioResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      JSONRPCID       `json:"id"`
 	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
 	Result  json.RawMessage `json:"result"`
 	Error   json.RawMessage `json:"error"`
 }
@@ -1449,7 +1457,7 @@ func (t *HTTPTransport) Call(ctx context.Context, method string, params interfac
 	// Handle SSE (Server-Sent Events) responses
 	contentType := resp.Header.Get("Content-Type")
 	if strings.Contains(contentType, "text/event-stream") {
-		return t.parseSSEResponse(resp.Body, id)
+		return t.parseSSEResponse(ctx, resp.Body, id)
 	}
 
 	// Handle standard JSON responses
@@ -1625,7 +1633,7 @@ func interpretJSONRPC(response *jsonrpcEnvelope, wantID int) (json.RawMessage, e
 // host memory; a single SSE line is additionally capped at 10MB by the
 // scanner. Responses carrying a different id (an interleaved stale event)
 // are skipped, mirroring the stdio path's id matching.
-func (t *HTTPTransport) parseSSEResponse(body io.Reader, wantID int) (json.RawMessage, error) {
+func (t *HTTPTransport) parseSSEResponse(ctx context.Context, body io.Reader, wantID int) (json.RawMessage, error) {
 	limited := &io.LimitedReader{R: body, N: int64(httpResponseCaptureCap) + 1}
 	scanner := bufio.NewScanner(limited)
 	scanner.Buffer(make([]byte, 64*1024), 10*1024*1024) // allow up to 10MB per SSE line
@@ -1666,7 +1674,10 @@ func (t *HTTPTransport) parseSSEResponse(body io.Reader, wantID int) (json.RawMe
 					return nil, rpcErr
 				}
 				// If parsing failed (not a JSON-RPC response, or a response to a
-				// different request id), continue reading more events
+				// different request id), continue reading more events — after
+				// handing a progress notification for this call to the
+				// caller's sink (WithProgress).
+				deliverProgressJSON(ctx, []byte(jsonData))
 			}
 			// Reset for next event
 			dataBuffer.Reset()

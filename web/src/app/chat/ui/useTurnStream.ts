@@ -2557,6 +2557,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         resume_after_approval?: boolean;
         card?: unknown;
         group_id?: string;
+        progress_updates?: boolean;
       };
       // send_email cards can land below an expanded preview iframe — queue
       // a scroll-into-view so the user sees the action card without
@@ -2581,6 +2582,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             resumeAfterApproval: p.resume_after_approval === true || undefined,
             card: parseApprovalCardData(p.card),
             groupId: p.group_id || undefined,
+            progressUpdates: p.progress_updates === true || undefined,
           },
         ],
       }));

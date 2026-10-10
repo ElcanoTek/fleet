@@ -24,13 +24,24 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = event.notification.data?.url || self.location.origin;
+  const target = new URL(event.notification.data?.url || self.location.origin, self.location.origin).href;
+  // A chat notification links one conversation (/chat?c=<id>, which the chat
+  // page opens on load). Only a same-origin link is ever navigated to.
+  const sameOrigin = target.startsWith(self.location.origin);
+  const deepLink = sameOrigin && new URL(target).searchParams.has("c");
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
       // Focus an existing Fleet window if one is open; otherwise open the
       // notification's deep link (same-origin targets only reach this worker).
       const fleet = list.find((c) => c.url.startsWith(self.location.origin));
-      return fleet ? fleet.focus() : clients.openWindow(target);
+      if (!fleet) return clients.openWindow(target);
+      if (!deepLink) return fleet.focus();
+      // Bring that window to the conversation. navigate() only works on a
+      // window this worker controls; otherwise open the link in a new one.
+      return fleet
+        .focus()
+        .then((c) => c.navigate(target))
+        .catch(() => clients.openWindow(target));
     }),
   );
 });

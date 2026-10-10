@@ -226,6 +226,15 @@ time** (the individual cards) and **Cancel all**. Each call is still decided by
 the same code as its own card, with its own claim and execution. See
 [GROUPED-APPROVALS.md](GROUPED-APPROVALS.md).
 
+## A running call shows its progress
+
+For tools a bundle lists in `agent_policy.critical_tool_progress`, an approved
+call asks its MCP server for progress (`_meta.progressToken`), the running card
+polls for it and shows a bar and "12 of 24 · message", settles on its outcome
+by itself, and the owner gets a browser push when the call finishes or when
+the automatic continue is blocked. See
+[APPROVAL-PROGRESS.md](APPROVAL-PROGRESS.md).
+
 ## Honest scope / deliberately not done
 
 - **No approvals-table mode column.** Notify records are tagged by their

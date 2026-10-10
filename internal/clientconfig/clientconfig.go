@@ -411,6 +411,16 @@ type AgentPolicy struct {
 	//	agent_policy:
 	//	  critical_tool_group_approval: [execute_plan]
 	CriticalToolGroupApproval []string `yaml:"critical_tool_group_approval"`
+	// CriticalToolProgress is an OPTIONAL list of critical suffixes (same
+	// suffix matching as critical_tools) whose approved calls ask their MCP
+	// server for progress notifications, show them on the executing card
+	// ("12 of 24 · message"), and send the conversation owner a browser push
+	// when the call finishes. Members must be in critical_tools and not
+	// notify mode (docs/APPROVAL-PROGRESS.md).
+	//
+	//	agent_policy:
+	//	  critical_tool_progress: [execute_plan]
+	CriticalToolProgress []string `yaml:"critical_tool_progress"`
 	// BatchSecondsPerDeal is DERIVED, never read from agent_policy: Bundle.AgentPolicy
 	// collects each mcp_servers[].batch_seconds_per_deal into it, keyed by
 	// server name, so the per-record batch budget reaches agentcore on the same
@@ -2796,6 +2806,7 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		CriticalToolResume:            append([]string(nil), b.AgentPolicyConfig.CriticalToolResume...),
 		CriticalToolResumeMaxPerHour:  b.AgentPolicyConfig.CriticalToolResumeMaxPerHour,
 		CriticalToolGroupApproval:     append([]string(nil), b.AgentPolicyConfig.CriticalToolGroupApproval...),
+		CriticalToolProgress:          append([]string(nil), b.AgentPolicyConfig.CriticalToolProgress...),
 	}
 	// An http_tool flagged `critical: true` opts into the SAME critical-tool audit
 	// gate as the manifest's critical_tools suffixes. The tool is registered as
