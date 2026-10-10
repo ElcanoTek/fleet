@@ -37,13 +37,17 @@ staged, fleet calls the describer once, under these constraints:
    turn already holds, so the credential-owning child authorizes it against
    its own bundle exactly as it would a model call (ADR-0042). No new broker
    path exists.
-3. **The model's own arguments, nothing more.** The describer receives the
+3. **The loop's per-call gates.** A describer the turn's persona would not
+   offer (Gate-4) is not called, and neither is one any `pre_tool_use` hook
+   matches: the hook cannot run outside the loop, so the call is skipped
+   rather than made without it.
+4. **The model's own arguments, nothing more.** The describer receives the
    staged call's arguments unchanged. Fleet adds no credential, account or
    context.
-4. **Bounded and best-effort.** Five seconds, both as a deadline and as the
+5. **Bounded and best-effort.** Five seconds, both as a deadline and as the
    per-call budget the child applies, and no retries. Any failure leaves the
    generic card. Staging never waits longer and never fails because of it.
-5. **Display data only.** The output never reaches the model, the transcript
+6. **Display data only.** The output never reaches the model, the transcript
    or the tool result. It is validated against a fixed text-only schema,
    refused if the secret redaction would alter it, stored on the approval row
    and rendered as text. It never changes what executes: approval still runs

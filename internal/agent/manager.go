@@ -1768,9 +1768,10 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	// approval it persists carries no seat for execution to reopen.
 	if binder, ok := in.ApprovalStager.(MCPScopeBinder); ok && binder != nil {
 		binder.BindTurnMCPScope(TurnMCPScope{
-			Broker:    turnBroker,
-			Catalog:   turnCatalog,
-			Selection: turnSelection,
+			Broker:        turnBroker,
+			Catalog:       turnCatalog,
+			Selection:     turnSelection,
+			PersonaPolicy: m.personaPolicy(persona),
 		})
 	}
 	turnTools := tools.NewTurnTools(sb, m.browserbaseKeyFunc(ctx, in.UserEmail, in.OptionalMCPServersEnabled))
@@ -1803,9 +1804,10 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		if binder, ok := in.ApprovalStager.(MCPScopeBinder); ok && binder != nil {
 			broker, catalog := overlay.ComposeWith(turnBroker, turnCatalog)
 			binder.BindTurnMCPScope(TurnMCPScope{
-				Broker:    broker,
-				Catalog:   catalog,
-				Selection: append(append(agentcore.MCPSelection(nil), turnSelection...), overlay.SeatSelection()...),
+				Broker:        broker,
+				Catalog:       catalog,
+				Selection:     append(append(agentcore.MCPSelection(nil), turnSelection...), overlay.SeatSelection()...),
+				PersonaPolicy: m.personaPolicy(persona),
 			})
 		}
 	}

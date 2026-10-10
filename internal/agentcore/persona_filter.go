@@ -110,6 +110,18 @@ func personaBlocksTool(policy PersonaToolPermissions, toolName string) (bool, st
 	return false, ""
 }
 
+// PersonaPermitsTool reports whether the persona policy offers toolName (nil
+// or empty = no narrowing). The same Gate-4 decision as the roster filter,
+// exported for a host-side caller that dispatches a tool outside the loop
+// (the approval-card describer) and must not reach one the model could not.
+func PersonaPermitsTool(policy *PersonaToolPermissions, toolName string) bool {
+	if policy == nil || policy.empty() {
+		return true
+	}
+	blocked, _ := personaBlocksTool(*policy, toolName)
+	return !blocked
+}
+
 // emitPersonaToolBlocked records a single suppressed-tool audit event. nil-safe.
 func emitPersonaToolBlocked(obs Observer, persona, tool, reason string) {
 	if obs == nil {

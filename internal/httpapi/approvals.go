@@ -66,7 +66,10 @@ type approvalStager struct {
 	// selection behind it, so a staged card records the seat an approval must
 	// reopen. Populated from the turn scope's own selection.
 	mcpSeats map[string]store.ApprovalSeat
-	// mcpMu guards the three fields above: BindTurnMCPScope runs on the turn
+	// personaPolicy is the turn's persona tool policy (nil = no narrowing),
+	// so a describer call never reaches a tool the persona does not offer.
+	personaPolicy *agentcore.PersonaToolPermissions
+	// mcpMu guards the four fields above: BindTurnMCPScope runs on the turn
 	// goroutine before the loop starts, but Stage can be reached from a
 	// parallel tool dispatch.
 	mcpMu sync.RWMutex
@@ -126,6 +129,7 @@ func (a *approvalStager) BindTurnMCPScope(scope agent.TurnMCPScope) {
 		a.mcpCatalog = scope.Catalog
 	}
 	a.mcpSeats = seats
+	a.personaPolicy = scope.PersonaPolicy
 }
 
 // mcpScope reads the staging-time credential context under the lock.

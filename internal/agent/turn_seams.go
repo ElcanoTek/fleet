@@ -33,6 +33,10 @@ type TurnMCPScope struct {
 	Broker    agentcore.MCPBroker
 	Catalog   []mcp.ServerTool
 	Selection agentcore.MCPSelection
+	// PersonaPolicy is the turn's per-persona tool policy (Gate-4, #294), nil
+	// = no narrowing. A stager that calls a tool itself (an approval-card
+	// describer) must not call one the persona's roster would not offer.
+	PersonaPolicy *agentcore.PersonaToolPermissions
 }
 
 // MCPScopeBinder is the optional half of ApprovalStager. RunTurn calls it once

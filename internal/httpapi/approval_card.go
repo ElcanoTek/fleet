@@ -306,6 +306,7 @@ func cardLink(at, s string) error {
 // did not produce a card. The detail stays in the server log.
 const (
 	cardFallbackUnresolved = "describer_unavailable"
+	cardFallbackGated      = "describer_gated"
 	cardFallbackTimeout    = "timeout"
 	cardFallbackError      = "describer_error"
 	cardFallbackInvalid    = "invalid_card"
@@ -347,6 +348,18 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	if agentcore.IsCriticalTool(full) || !readOnly {
 		log.Printf("approval card: describer %q is critical or not parallel-safe; not called", full)
 		return "", cardFallbackUnresolved
+	}
+	// The loop's other per-call gates apply too. A persona that does not
+	// offer the describer (Gate-4) means the model could not call it either,
+	// and a pre_tool_use hook that matches it would run before the loop
+	// dispatched it — this host-side call cannot run that hook, so it skips
+	// the call rather than bypass it.
+	a.mcpMu.RLock()
+	persona := a.personaPolicy
+	a.mcpMu.RUnlock()
+	if !agentcore.PersonaPermitsTool(persona, full) || agentcore.PreToolUseHookMatches(full) {
+		log.Printf("approval card: describer %q is gated by the persona or a pre_tool_use hook; not called", full)
+		return "", cardFallbackGated
 	}
 	var args map[string]any
 	if err := decodeJSONNumbers([]byte(rawInput), &args); err != nil || args == nil {

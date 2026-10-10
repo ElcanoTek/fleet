@@ -91,6 +91,19 @@ func activeLifecycleHooks() []LifecycleHook {
 	return append([]LifecycleHook(nil), lifecycleHooks...)
 }
 
+// PreToolUseHookMatches reports whether any configured pre_tool_use hook
+// matches toolName. A host-side caller that dispatches a tool outside the loop
+// (the approval-card describer) cannot run the hook the loop would, so it
+// skips the call instead whenever one would apply.
+func PreToolUseHookMatches(toolName string) bool {
+	for _, h := range activeLifecycleHooks() {
+		if h.Event == HookPreToolUse && matchesTool(h.Matcher, toolName) {
+			return true
+		}
+	}
+	return false
+}
+
 // hookEngine runs the configured hooks for a single run. Constructed per run;
 // newHookEngine returns nil when no hooks are configured, so every call site is
 // a nil-safe no-op with zero overhead in the default (no-hooks) deployment.

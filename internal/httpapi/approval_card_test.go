@@ -468,3 +468,49 @@ func TestApprovalCardRefusalIsRedactedForLog(t *testing.T) {
 		t.Fatalf("redactedForLog kept the secret: %q", got)
 	}
 }
+
+// The loop's per-call gates apply to the describer too (Codex P1 on #1717):
+// a persona that does not offer it, or a pre_tool_use hook that matches it
+// (which this host-side call cannot run), skips the call and keeps the
+// generic card. A hook on another tool, or a persona that offers it, does not.
+func TestStage_DescriberHonorsPersonaAndHooks(t *testing.T) {
+	describerPolicy(t)
+	t.Cleanup(func() { agentcore.ConfigureLifecycleHooks(nil) })
+	cases := []struct {
+		name    string
+		persona *agentcore.PersonaToolPermissions
+		hooks   []agentcore.LifecycleHook
+		called  bool
+	}{
+		{"persona denies the describer", &agentcore.PersonaToolPermissions{Deny: []string{"mcp:deals/describe_deal_update"}}, nil, false},
+		{"persona allow-list omits it", &agentcore.PersonaToolPermissions{Allow: []string{"mcp:deals/update_deal"}}, nil, false},
+		{"persona allow-list offers it", &agentcore.PersonaToolPermissions{Allow: []string{"mcp:deals/*"}}, nil, true},
+		{"pre_tool_use hook matches it", nil, []agentcore.LifecycleHook{{ID: "h", Event: agentcore.HookPreToolUse, Matcher: "mcp_deals_*", Command: "true"}}, false},
+		{"hook on another tool", nil, []agentcore.LifecycleHook{{ID: "h", Event: agentcore.HookPreToolUse, Matcher: "bash", Command: "true"}}, true},
+		{"post_tool_use hook only", nil, []agentcore.LifecycleHook{{ID: "h", Event: agentcore.HookPostToolUse, Matcher: "*", Command: "true"}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agentcore.ConfigureLifecycleHooks(tc.hooks)
+			broker := &describerBroker{text: goodCard}
+			sink := &eventSink{}
+			a := &approvalStager{ctx: context.Background(), store: &cardStageStore{}, conversationID: "c1", userEmail: "u@e.com", sink: sink}
+			a.BindTurnMCPScope(agent.TurnMCPScope{
+				Broker: broker, Catalog: describerCatalog,
+				Selection:     agentcore.MCPSelection{{Server: "deals"}},
+				PersonaPolicy: tc.persona,
+			})
+			if _, err := a.Stage("mcp_deals_update_deal", "call-1", describedArgs); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(broker.called()) == 1; got != tc.called {
+				t.Fatalf("describer called = %v, want %v", got, tc.called)
+			}
+			if !tc.called {
+				if fb := eventNamed(sink, "tool.approval_card_fallback"); fb == nil || fb["reason"] != cardFallbackGated {
+					t.Fatalf("fallback = %v, want %q", fb, cardFallbackGated)
+				}
+			}
+		})
+	}
+}

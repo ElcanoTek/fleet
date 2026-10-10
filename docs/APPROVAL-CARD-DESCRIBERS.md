@@ -70,7 +70,12 @@ When `Stage` is about to create the row for a matching MCP call:
    must not be critical (`IsCriticalTool` on the full registered name), and it
    must be parallel-safe under that name or, for a named-account seat, under
    its base server's name.
-3. It calls the describer through the **turn's own MCP scope** (the broker,
+3. It applies the loop's other per-call gates. If the turn's persona policy
+   (Gate-4, #294, handed over with the scope) would not offer the describer,
+   it is not called, and the same holds if any configured `pre_tool_use` hook
+   matches it: this host-side call cannot run that hook, so it skips the call
+   rather than bypass it. Either case falls back with reason `describer_gated`.
+4. It calls the describer through the **turn's own MCP scope** (the broker,
    catalog and seat `BindTurnMCPScope` installed), with the staged arguments
    decoded with `json.Number`, so large integers pass through unchanged. The
    call is bounded by `approvalCardDescriberTimeout` (5 s), as both a context
@@ -78,7 +83,7 @@ When `Stage` is about to create the row for a matching MCP call:
    (`mcp.WithCallTimeout`). There are no retries. The child-side
    authorization (ADR-0042) applies as for any call: a describer missing from
    the server's tool allowlist is refused there and falls back.
-4. It validates the answer strictly (below), checks that the secret
+5. It validates the answer strictly (below), checks that the secret
    redaction would not change it (`tools.RedactionWouldAlter`, the same check
    `show_ui` refuses a card on), and stores the canonical JSON on the new row
    (`SetApprovalCard`, pending rows only).
@@ -90,7 +95,7 @@ countdown are then the generic card's, exactly as before. Describing never
 blocks or fails staging. Each failure is logged with its detail (passed through the secret
 redaction first, since a malformed card's error can echo a value) and emitted
 on the turn stream as `tool.approval_card_fallback`
-`{approval_id, tool, reason}`, with `reason` one of `describer_unavailable`,
+`{approval_id, tool, reason}`, with `reason` one of `describer_unavailable`, `describer_gated`,
 `timeout`, `describer_error`, `invalid_card`, `redacted` or `store_error`.
 
 The describer's output never reaches the model: it is display data on the
