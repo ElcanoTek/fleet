@@ -123,6 +123,12 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		for k, v := range s.approvalClientState(&a) {
 			card[k] = v
 		}
+		if card["executing"] == true && resumesAfterApproval(a.ToolName) {
+			// Still running, and fleet will continue the task when it lands
+			// (docs/RESUME-AFTER-APPROVAL.md): a reloaded client keeps
+			// following the conversation for that turn.
+			card["resume_after_approval"] = true
+		}
 		resolvedCards = append(resolvedCards, card)
 	}
 	if r.URL.Query().Get("approval_index") == "1" {

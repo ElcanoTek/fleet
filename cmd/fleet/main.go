@@ -412,6 +412,8 @@ func run() error {
 		ApprovedCallTimeoutSeconds:    bundlePolicy.ApprovedCallTimeoutSeconds,
 		CriticalToolNoSessionApproval: bundlePolicy.CriticalToolNoSessionApproval,
 		CriticalToolCardDescribers:    bundlePolicy.CriticalToolCardDescribers,
+		CriticalToolResume:            bundlePolicy.CriticalToolResume,
+		CriticalToolResumeMaxPerHour:  bundlePolicy.CriticalToolResumeMaxPerHour,
 	})
 
 	// Connector credentials cross exactly one process boundary at boot: the child
@@ -3595,6 +3597,17 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 		log.Printf("input-queue recovery: %v", qerr)
 	} else if requeued+completed+cancelled > 0 {
 		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed, %d cancelled (post-injection side effects; not re-run)", requeued, completed, cancelled) //nolint:gosec // G706: three int counts — no request input.
+	}
+	// Resume after approval (docs/RESUME-AFTER-APPROVAL.md): a resume that was
+	// due but had not started when the last process stopped is DROPPED, with a
+	// note in its conversation, never started unattended by a restart. It runs
+	// after both recoveries above: RecoverStrandedApprovals settles the cards
+	// cut off mid-call (as outcome unknown), and RecoverInputQueue returns an
+	// uncommitted resume row to the queue, which this then cancels.
+	if noted, err := chatStore.DropApprovalResumesAtBoot(recCtx); err != nil {
+		log.Printf("approval-resume recovery: %v", err)
+	} else if noted > 0 {
+		log.Printf("approval-resume recovery: dropped the pending automatic resume in %d conversation(s), with a note in each", noted) //nolint:gosec // G706: noted is an integer count.
 	}
 	// Reclaim terminal idempotency rows at boot as well as after turns. Recovery
 	// runs first so a stranded non-terminal row is resolved before retention is

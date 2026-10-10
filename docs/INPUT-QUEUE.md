@@ -225,6 +225,14 @@ queued) and deliberately does NOT auto-drain: a restart must not start
 unattended LLM spend — restored inputs are visible in the queue UI and run
 on send-now or the next submission.
 
+A row of mode `resume` (migration 073) is the turn fleet starts on its own
+after an opted-in approval card is settled
+([RESUME-AFTER-APPROVAL.md](RESUME-AFTER-APPROVAL.md)). It behaves like a
+queued follow-up everywhere (listing, drain, Stop, remove, send-now); its
+launch marks the turn's input as fleet's. Unlike a user's input it does not
+survive a restart: after `RecoverInputQueue`, `DropApprovalResumesAtBoot`
+cancels every `resume` row still queued and notes it in the conversation.
+
 Position allocation and send-now promotion serialize on the conversation row,
 and a partial unique index enforces one position per non-terminal item (including
 `running` / `injected` rows that recovery may re-queue). Drain and snapshot

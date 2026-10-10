@@ -147,6 +147,15 @@ type TurnInput struct {
 	// SteerSource feeds mid-turn steer inputs (#785) into the run's
 	// PrepareStep boundary. nil = no steering.
 	SteerSource agentcore.SteerSource
+
+	// InputKind says who wrote UserMessage. Empty: the user typed it.
+	// InputKindApprovalResume: fleet started this turn itself after an
+	// approval card was settled (docs/RESUME-AFTER-APPROVAL.md), and
+	// UserMessage is the server's labelled notice, not the user's words. It is
+	// persisted on the user entry (TextContent.Kind) and announced on
+	// turn.started (input_kind) so every client can render the row as a
+	// notice; the model sees the labelled text either way.
+	InputKind string
 }
 
 // TurnResult is returned after a turn completes.
@@ -1660,7 +1669,7 @@ func assembleTurnMessages(in TurnInput) ([]fantasy.Message, HistoryEntry, error)
 	// entry keeps them apart so the branch copy and the transcript can tell
 	// the user's own words from server-injected context (ADR-0058).
 	messages = append(messages, fantasy.NewUserMessage(ComposeUserMessage(in.UserMessage, in.InjectedContext), imageParts...))
-	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs})
+	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs, Kind: in.InputKind})
 	userEntry.InjectedContext = in.InjectedContext
 	return messages, userEntry, nil
 }
@@ -1832,7 +1841,14 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		}
 	}
 
-	sink.Emit("turn.started", map[string]any{"persona": persona})
+	started := map[string]any{"persona": persona}
+	if in.InputKind != "" {
+		// Not the user's words: the clients render the turn's input as a
+		// notice (docs/RESUME-AFTER-APPROVAL.md). Omitted for an ordinary
+		// turn, so its frame is unchanged.
+		started["input_kind"] = in.InputKind
+	}
+	sink.Emit("turn.started", started)
 
 	maxTokens := m.config.LLMMaxTokens
 	if maxTokens <= 0 {

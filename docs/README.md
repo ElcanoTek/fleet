@@ -293,6 +293,7 @@ above fails otherwise.
 - [`RECURRENCE-END.md`](RECURRENCE-END.md) — Recurrence end conditions + horizon-based Upcoming projection
 - [`RELIABILITY-REVIEW.md`](RELIABILITY-REVIEW.md) — Repository reliability review
 - [`REMOTE-MCP-MULTI-LOGIN.md`](REMOTE-MCP-MULTI-LOGIN.md) — Multiple logins for hosted (official) MCP connections
+- [`RESUME-AFTER-APPROVAL.md`](RESUME-AFTER-APPROVAL.md) — Resume after approval: a settled card of an opted-in tool starts one turn so the agent verifies and carries on (ADR-0083)
 - [`RUN-LOG-HISTORY.md`](RUN-LOG-HISTORY.md) — Per-attempt run log history
 - [`RUNTIME-DATE.md`](RUNTIME-DATE.md) — Runtime date window (#1026)
 - [`SANDBOX-IMAGE-FRESHNESS.md`](SANDBOX-IMAGE-FRESHNESS.md) — Sandbox image freshness — the max-age rebuild backstop

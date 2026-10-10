@@ -75,7 +75,8 @@ producer**, replayed by every consumer:
 
 - **Producer side.** `internal/agent/stream_contract_test.go` runs each
   scripted turn (an answer, a tool loop with a success, a non-zero exit and a
-  tool error, a provider refusal, a cancelled turn) through the real
+  tool error, a provider refusal, a cancelled turn, a turn fleet started
+  itself after an approval card was settled) through the real
   `Manager.RunTurn` and compares the stream byte for byte with the recording.
   Only run-to-run noise is normalized (durations and the workspace path),
   with placeholders the producer could really emit. Any other change fails,

@@ -105,6 +105,19 @@ type AgentPolicy struct {
 	// it runs outside the audit gate, so an entry whose describer is critical
 	// is dropped (see CardDescriberProblems). Empty = every card is generic.
 	CriticalToolCardDescribers map[string]string
+	// CriticalToolResume lists critical suffixes whose approval cards, once
+	// they reach a terminal outcome (approved with its result recorded,
+	// declined, or timed out), start one new agent turn in the conversation
+	// so the agent can verify the outcome and carry on without the user
+	// typing (docs/RESUME-AFTER-APPROVAL.md). Matched by suffix exactly like
+	// CriticalToolSuffixes. Members must be critical suffixes; see
+	// ResumeAfterApprovalProblems. Empty = no turn ever starts on its own, as
+	// before.
+	CriticalToolResume []string
+	// CriticalToolResumeMaxPerHour caps the automatic resumes one conversation
+	// may start in any rolling hour. 0 = DefaultResumeMaxPerHour; the
+	// accepted range is 1..MaxResumeMaxPerHour.
+	CriticalToolResumeMaxPerHour int
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -180,6 +193,11 @@ var (
 	// activeCardDescribers maps a critical suffix to its describer suffix.
 	// Empty by default: no card is described.
 	activeCardDescribers = map[string]string{}
+	// activeResume is the set of critical suffixes whose resolved cards start
+	// a resume turn, and activeResumeMaxPerHour its per-conversation cap.
+	// Empty by default: no turn starts without user input.
+	activeResume           = map[string]bool{}
+	activeResumeMaxPerHour = DefaultResumeMaxPerHour
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -307,6 +325,12 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		log.Printf("agent_policy: %s", problem)
 	}
 	activeCardDescribers = describers
+
+	resume, resumeMax, resumeProblems := buildResumeSet(p, seen)
+	for _, problem := range resumeProblems {
+		log.Printf("agent_policy: %s", problem)
+	}
+	activeResume, activeResumeMaxPerHour = resume, resumeMax
 }
 
 // suffixMatches reports whether a tool (or a suffix standing for one) is

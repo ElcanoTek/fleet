@@ -236,7 +236,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 			s.activeTurns.Done()
 		}()
 		defer releaseSlot()
-		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, prompt, injected, history, memoryContents(memories), "", nil, nil)
+		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, prompt, injected, "", history, memoryContents(memories), "", nil, nil)
 		// Webhook turns participate in the #785 drain loop too: anything
 		// queued behind this turn must not stall until the next submission.
 		s.maybeDrainQueue(conv.ID)

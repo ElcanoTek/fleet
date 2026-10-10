@@ -80,6 +80,30 @@ const EntryTypeSummaryBoundary = "summary_boundary"
 type TextContent struct {
 	Text   string         `json:"text"`
 	Images []ImageRefMeta `json:"images,omitempty"`
+	// Kind marks a user-role entry fleet wrote itself rather than the user
+	// typed: InputKindApprovalResume for the input of a turn fleet started
+	// after an approval card was settled. Empty (and omitted) for everything
+	// else, so existing rows are unchanged. Replay ignores it: the model reads
+	// the entry's labelled text like any user message.
+	Kind string `json:"kind,omitempty"`
+}
+
+// InputKindApprovalResume is TextContent.Kind / TurnInput.InputKind for the
+// synthetic input of a turn fleet starts after an opted-in approval card is
+// settled (agent_policy.critical_tool_resume, docs/RESUME-AFTER-APPROVAL.md).
+const InputKindApprovalResume = "approval_resume"
+
+// EntryTypeNotice is a UI-only history entry fleet writes to tell the reader
+// something happened that is not a turn, e.g. an automatic resume that was
+// skipped or dropped. Its content is NoticeContent; replay never sends it to
+// the model.
+const EntryTypeNotice = "notice"
+
+// NoticeContent for Type=notice.
+type NoticeContent struct {
+	// Kind is a stable machine-readable class, e.g. "approval_resume_skipped".
+	Kind string `json:"kind"`
+	Text string `json:"text"`
 }
 
 // ImageRefMeta is a pointer to an image file the user attached. Path is the
@@ -329,11 +353,12 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 			case "assistant":
 				pendingAssistant = append(pendingAssistant, fantasy.TextPart{Text: c.Text})
 			}
-		case "reasoning", "turn_summary", EntryTypeSummaryBoundary:
+		case "reasoning", "turn_summary", EntryTypeSummaryBoundary, EntryTypeNotice:
 			// UI-facing only; never replayed to the model. Reasoning parts
 			// are rejected by providers outside their originating step,
-			// turn_summary is just our own cost/duration metadata, and a
-			// summary boundary only splits rendered messages.
+			// turn_summary is just our own cost/duration metadata, a
+			// summary boundary only splits rendered messages, and a notice is
+			// written for the reader, not the model.
 			continue
 		case entryTypeToolCall:
 			var c ToolCallContent

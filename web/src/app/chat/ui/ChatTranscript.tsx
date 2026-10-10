@@ -60,7 +60,14 @@ function MessageMarkdown({
     </Suspense>
   );
 }
-import { humanToolLabel, liveSubagentLabel, shortModelName, type Message } from "./history";
+import {
+  APPROVAL_RESUME_KIND,
+  humanToolLabel,
+  liveSubagentLabel,
+  shortModelName,
+  type Message,
+} from "./history";
+import { AutoContinueNotice, FleetNotices } from "./FleetNotices";
 import { InjectedContextNote } from "./InjectedContextNote";
 import {
   buildTranscriptRows,
@@ -144,6 +151,10 @@ export type ChatTranscriptProps = {
   ) => void;
   resendUserMessage: (userMessageId: number, editedContent: string) => void | Promise<void>;
   retryLastUserMessage: () => void | Promise<void>;
+  // An approval card of a critical_tool_resume tool resolved: fleet starts a
+  // turn on its own (docs/RESUME-AFTER-APPROVAL.md). executing = the call is
+  // still running, so that turn starts only when its result lands.
+  followApprovalResume?: (convId: string, executing: boolean) => void;
   regenerateLastAssistant: () => void | Promise<void>;
   // "Save as workflow" under a finished reply — writes the whole chat up as a
   // reusable template (see chat-experience.savePromptFromMessage).
@@ -256,6 +267,7 @@ export function ChatTranscript({
   patchAssistantMessage,
   resendUserMessage,
   retryLastUserMessage,
+  followApprovalResume,
   regenerateLastAssistant,
   savePromptFromMessage,
   branchFromMessage,
@@ -672,7 +684,13 @@ export function ChatTranscript({
                           isPreSummary ? "opacity-60" : "",
                         ].join(" ")}
                       >
-                        <div className={message.role === "user" ? "min-w-0 max-w-[88%] sm:max-w-[72%]" : "min-w-0 flex-1"}>
+                        <div
+                          className={
+                            message.role === "user" && message.kind !== APPROVAL_RESUME_KIND
+                              ? "min-w-0 max-w-[88%] sm:max-w-[72%]"
+                              : "min-w-0 flex-1"
+                          }
+                        >
                           {message.role === "user" ? (
                             <UserTurn
                               message={message}
@@ -1031,12 +1049,18 @@ export function ChatTranscript({
                                         }));
                                       }}
                                       onModelSwitched={(model) => setSelectedModel(model)}
+                                      onResumeExpected={(executing) => {
+                                        const convId = realConvId(currentConvKey);
+                                        if (convId) followApprovalResume?.(convId, executing);
+                                      }}
                                       onSwitchAndRetry={() => retryLastUserMessage()}
                                       onAskAgain={(timedOut) => void submitPrompt(askAgainPrompt(timedOut))}
                                     />
                                   ))}
                                 </div>
                               ) : null}
+
+                              <FleetNotices notices={message.notices} />
 
                               {message.memoryProposals && message.memoryProposals.length > 0 ? (
                                 <div className="grid gap-1.5">
@@ -1157,6 +1181,16 @@ export function UserTurn({
   editRequestSignal: number;
   onResend: (edited: string) => void;
 }) {
+  if (message.kind === APPROVAL_RESUME_KIND) {
+    // fleet's own input for a turn it started after an approval card was
+    // settled: a notice, never the user's bubble, and no Edit.
+    return (
+      <>
+        <AutoContinueNotice text={message.content} />
+        <InjectedContextNote text={message.injectedContext} />
+      </>
+    );
+  }
   const { sub: submission, reply } = answerOf(message);
   if (submission) {
     // A card submission: show the answers by label, not the JSON the model

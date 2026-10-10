@@ -128,7 +128,12 @@ import type { SkillInfo } from "./skillSlash";
 import { ChatTranscript } from "./ChatTranscript";
 import { usePerConvComposerState } from "./usePerConvComposerState";
 import { useTurnStreamState } from "./useTurnStreamState";
-import { useTurnStream, type TurnStreamDeps } from "./useTurnStream";
+import {
+  approvalResumeFollowExecutingMs,
+  approvalResumeFollowSettledMs,
+  useTurnStream,
+  type TurnStreamDeps,
+} from "./useTurnStream";
 import { readChatSession, writeChatSession } from "./chatSessionStore";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
@@ -2326,6 +2331,10 @@ export function ChatExperience({
     // (#1584).
     const recoveryHoldsIt =
       !options.adopt && isRecoveringConvRef.current(conversationId);
+    // A card still executing whose tool resumes after approval
+    // (docs/RESUME-AFTER-APPROVAL.md): fleet starts a turn once its result
+    // lands, so keep following the conversation for it after this load.
+    let followResume = false;
     if (attachedConvIdsRef.current.has(conversationId) || recoveryHoldsIt) {
       setActiveConversationId(conversationId);
       const conv = conversations.find((c) => c.id === conversationId);
@@ -2374,6 +2383,7 @@ export function ChatExperience({
           mcp_account?: string;
           tool_call_id?: string;
           no_session_approval?: boolean;
+          resume_after_approval?: boolean;
           card?: unknown;
         }>;
         resolved_approvals?: Array<{
@@ -2390,6 +2400,7 @@ export function ChatExperience({
           tool_call_id?: string;
           recorded?: boolean;
           card?: unknown;
+          resume_after_approval?: boolean;
         }>;
         pending_memory_proposals?: Array<{
           proposal_id: string;
@@ -2467,6 +2478,9 @@ export function ChatExperience({
       // the last assistant message, the previous behavior.
       const pendingApprovals = data.pending_approvals ?? [];
       const resolvedApprovals = data.resolved_approvals ?? [];
+      followResume = resolvedApprovals.some(
+        (p) => p.executing === true && p.resume_after_approval === true,
+      );
       const pendingMemoryProposals = data.pending_memory_proposals ?? [];
       if (
         pendingApprovals.length > 0 ||
@@ -2488,6 +2502,7 @@ export function ChatExperience({
             mcpAccount: p.mcp_account,
             toolCallId: p.tool_call_id,
             noSessionApproval: p.no_session_approval === true || undefined,
+            resumeAfterApproval: p.resume_after_approval === true || undefined,
             card: parseApprovalCardData(p.card),
           })),
         ];
@@ -2595,6 +2610,9 @@ export function ChatExperience({
     // under the previous turn's prompt (#1584). The recovery caller attaches
     // itself, with the id it means.
     if (!options.adopt) void reattachToConv(conversationId);
+    if (!options.adopt && followResume) {
+      void followApprovalResume(conversationId, approvalResumeFollowExecutingMs);
+    }
   };
 
   // deleteAllUnpinned / bulkDeleteConversations / deleteConversationById are
@@ -4738,6 +4756,7 @@ export function ChatExperience({
     refreshQueue,
     removeQueuedInput,
     sendNowQueuedInput,
+    followApprovalResume,
   } = useTurnStream(turnStreamDeps);
 
   // Latest-callback refs for the two mount-once effects below. reattachToConv
@@ -6502,6 +6521,12 @@ export function ChatExperience({
               patchAssistantMessage={patchAssistantMessage}
               resendUserMessage={resendUserMessage}
               retryLastUserMessage={retryLastUserMessage}
+              followApprovalResume={(convId, executing) =>
+                void followApprovalResume(
+                  convId,
+                  executing ? approvalResumeFollowExecutingMs : approvalResumeFollowSettledMs,
+                )
+              }
               regenerateLastAssistant={regenerateLastAssistant}
               branchFromMessage={branchFromMessage}
               savePromptFromMessage={savePromptFromMessage}

@@ -22,6 +22,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/hoststats"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
+	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/webpush"
 )
 
@@ -34,6 +35,13 @@ type Server struct {
 	// here (DrainApprovalRuns) instead of through the HTTP server's handler
 	// drain, and refuses new ones from the moment the drain starts.
 	approvalRuns approvalRunGate
+
+	// approvalResumes debounces resume-after-approval decisions per
+	// conversation (approval_resume.go). Zero value ready.
+	approvalResumes approvalResumeScheduler
+	// approvalResumeObserver, when set (tests only), is told every decision
+	// decideApprovalResume made, after it acted on it.
+	approvalResumeObserver func(convID string, res store.ApprovalResumeResult, err error)
 
 	// A failed durable outcome write must not masquerade as live execution on
 	// retry. Startup recovers the persisted sentinel after this process exits.

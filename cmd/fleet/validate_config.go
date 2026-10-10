@@ -1137,6 +1137,15 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolSuffixes:       p.CriticalToolSuffixes,
 		CriticalToolCardDescribers: p.CriticalToolCardDescribers,
 	})...)
+	// critical_tool_resume: a member must stage a card (critical, not notify
+	// mode), and the hourly cap must be in range. The boot install drops any
+	// member this reports, so a typo would quietly leave the tool not resuming.
+	problems = append(problems, agentcore.ResumeAfterApprovalProblems(agentcore.AgentPolicy{
+		CriticalToolSuffixes:         p.CriticalToolSuffixes,
+		CriticalToolModes:            p.CriticalToolModes,
+		CriticalToolResume:           p.CriticalToolResume,
+		CriticalToolResumeMaxPerHour: p.CriticalToolResumeMaxPerHour,
+	})...)
 	if len(problems) > 0 {
 		res.Status = statusFail
 		res.Detail = strings.Join(problems, "; ")

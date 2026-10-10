@@ -2071,6 +2071,12 @@ type Approval struct {
 	// Empty when no describer is declared, the describer failed, or the row
 	// predates the column — the client then renders the generic card.
 	CardJSON string
+	// ResumeState is the resume-after-approval bookkeeping (migration 072,
+	// docs/RESUME-AFTER-APPROVAL.md): "" (the tool did not opt in, or the row
+	// predates the column), ApprovalResumeArmed, ApprovalResumeClaimed,
+	// ApprovalResumeSkipped, ApprovalResumeSuperseded or ApprovalResumeDropped.
+	// Read by GetApproval only; other listings leave it empty.
+	ResumeState string
 }
 
 // ListPendingApprovals returns every pending approval for a conversation,
@@ -2305,14 +2311,14 @@ func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, '')
+		        is_err, COALESCE(card_json, ''), resume_state
 		 FROM approvals WHERE id = $1 AND user_email = $2`,
 		approvalID, userEmail,
 	)
 	var a Approval
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON); err != nil {
+		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -2602,7 +2608,11 @@ func (s *Store) SupersedePendingApprovals(ctx context.Context, convID, toolName 
 		`UPDATE approvals
 		   SET status = 'rejected',
 		       result_text = 'Superseded by a newer call to this tool.',
-		       resolved_at = $1
+		       resolved_at = $1,
+		       -- A superseded card was never decided by anyone: it must not
+		       -- start a resume turn (docs/RESUME-AFTER-APPROVAL.md). Its
+		       -- replacement is armed in its own right.
+		       resume_state = CASE WHEN resume_state = 'armed' THEN 'superseded' ELSE resume_state END
 		 WHERE conversation_id = $2
 		   AND tool_name = $3
 		   AND status = 'pending'`,

@@ -8,6 +8,16 @@
 import { Icon } from "./Icon";
 import type { QueuedInput } from "./useTurnStream";
 
+// The chip's badge. A "resume" row is the turn fleet starts on its own after
+// an approval card is settled, waiting behind the running turn; Remove drops
+// it like any queued input.
+export function queuedInputLabel(it: QueuedInput): string {
+  if (it.state === "injected") return "steering";
+  if (it.mode === "steer") return "steer";
+  if (it.mode === "resume") return "auto-continue";
+  return "queued";
+}
+
 export function QueuedInputs({
   items,
   onRemove,
@@ -26,10 +36,14 @@ export function QueuedInputs({
           className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[var(--color-text-muted)]"
         >
           <span className="shrink-0 rounded-[var(--radius-pill)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wide">
-            {it.state === "injected" ? "steering" : it.mode === "steer" ? "steer" : "queued"}
+            {queuedInputLabel(it)}
           </span>
           <span className="min-w-0 flex-1 truncate" title={it.message_preview}>
-            {it.message_preview}
+            {it.mode === "resume"
+              ? // fleet's own input (docs/RESUME-AFTER-APPROVAL.md): say what
+                // it is rather than show its machine-oriented text.
+                "Continue after the approval, once the current turn ends"
+              : it.message_preview}
           </span>
           {it.state === "queued" ? (
             <>

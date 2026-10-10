@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/truncate"
@@ -537,6 +538,11 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		// client waiting on its queued input could not tell the turn that
 		// finally runs it from any other.
 		SubmissionID: row.SubmissionID,
+	}
+	if row.Mode == store.InputModeResume {
+		// The turn fleet starts after a settled approval card
+		// (approval_resume.go): its input is fleet's notice, not the user's.
+		req.inputKind = agent.InputKindApprovalResume
 	}
 	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen, inputKey: row.ClientInputID}, releaseSlot, nil) {
 		releaseSlot()

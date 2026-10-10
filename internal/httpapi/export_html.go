@@ -93,8 +93,19 @@ func renderConversationHTML(conv *store.Conversation, history []agent.HistoryEnt
 			if e.Role == "user" {
 				class = "turn user"
 			}
+			if c.Kind == agent.InputKindApprovalResume {
+				// fleet's own notice, not the user's words: no "what was
+				// asked" tint (docs/RESUME-AFTER-APPROVAL.md).
+				class = "turn assistant"
+			}
 			fmt.Fprintf(&b, "<section class=%q>\n<div class=\"who\">%s</div>\n%s</section>\n",
-				class, html.EscapeString(roleHeading(e.Role)), render(c.Text))
+				class, html.EscapeString(textEntryHeading(e.Role, c)), render(c.Text))
+		case agent.EntryTypeNotice:
+			var c agent.NoticeContent
+			if json.Unmarshal(e.Content, &c) != nil || strings.TrimSpace(c.Text) == "" {
+				continue
+			}
+			fmt.Fprintf(&b, "<p class=\"meta\">Fleet: %s</p>\n", html.EscapeString(c.Text))
 		case "reasoning":
 			var c agent.ReasoningContent
 			if json.Unmarshal(e.Content, &c) != nil {
