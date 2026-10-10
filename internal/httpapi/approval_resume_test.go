@@ -619,9 +619,19 @@ func TestApprovalResume_NotOptedInChangesNothing(t *testing.T) {
 	}
 }
 
-// A conversation deleted before the decision is never resumed.
+// A conversation deleted before the decision is never resumed, whether the
+// deployment hard-deletes (the default) or soft-deletes conversations.
 func TestApprovalResume_DeletedConversationIsNotResumed(t *testing.T) {
+	for _, soft := range []bool{false, true} {
+		t.Run(map[bool]string{false: "hard delete", true: "soft delete"}[soft], func(t *testing.T) {
+			testDeletedConversationIsNotResumed(t, soft)
+		})
+	}
+}
+
+func testDeletedConversationIsNotResumed(t *testing.T, soft bool) {
 	h := newResumeHarness(t, resumePolicy(0), 300*time.Millisecond)
+	h.s.concreteStore(t).SetSoftDelete(soft)
 	conv := h.conversation()
 	a := h.stage(conv.ID, resumeToolA, "call_1")
 	h.resolve(conv.ID, a.ID, true)

@@ -265,7 +265,7 @@ func TestClaimApprovalResume_CapAndQueueFullSkipWithANote(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	for name, tc := range map[string]struct {
-		maxPerHour, maxPending int
+		maxPerHour, maxPending  int
 		seedResumes, seedQueued int
 		want, noteWant          string
 	}{

@@ -1073,23 +1073,19 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// disabled; failures degrade to notices so the turn always proceeds.
 	if userWords {
 		injected = s.applyContextHandles(turnCtx, injected, req.Message, conv.ID)
-	}
-	// Explicit skill invocation (#513 phase 1): a message whose first line starts
-	// with "/<skill-name>" (exact match against the bundle roster) gets a block
-	// appended telling the agent to read that skill's SKILL.md now. Because the
-	// block is persisted with the user message (as its injected context), the
-	// transcript still records which skill was invoked. Unknown "/tokens" are
-	// ignored — no block, no error.
-	if userWords {
+		// Explicit skill invocation (#513 phase 1): a message whose first line starts
+		// with "/<skill-name>" (exact match against the bundle roster) gets a block
+		// appended telling the agent to read that skill's SKILL.md now. Because the
+		// block is persisted with the user message (as its injected context), the
+		// transcript still records which skill was invoked. Unknown "/tokens" are
+		// ignored — no block, no error.
 		injected = s.applySkillInvocation(turnCtx, user, injected, req.Message)
-	}
-	// Connector auto-recommendation (#512, opt-in): if the message is relevant to
-	// an Optional connector the user hasn't enabled, note it so the agent can
-	// suggest connecting it via /settings/connections (never auto-connecting).
-	// "Enabled" is judged against the conversation's PERSISTED opt-in list —
-	// the set the turn runs with — not only the creation-time request seed,
-	// which later turns never carry.
-	if userWords {
+		// Connector auto-recommendation (#512, opt-in): if the message is relevant to
+		// an Optional connector the user hasn't enabled, note it so the agent can
+		// suggest connecting it via /settings/connections (never auto-connecting).
+		// "Enabled" is judged against the conversation's PERSISTED opt-in list —
+		// the set the turn runs with — not only the creation-time request seed,
+		// which later turns never carry.
 		injected = s.applyConnectorRecommendations(injected, req.Message, conv.OptionalMCPServersEnabled, req.EnabledOptional)
 	}
 
@@ -1127,24 +1123,18 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		turnStarted["input_id"] = queueRowID
 		turnStarted["queued"] = true
 	}
-	if req.inputKind != "" {
-		// A turn fleet started itself (docs/RESUME-AFTER-APPROVAL.md): the
-		// client renders its input as a notice, not as the user's message.
-		turnStarted["input_kind"] = req.inputKind
-	}
-	buf.Emit("turn.started", turnStarted)
+	// A turn fleet started itself (docs/RESUME-AFTER-APPROVAL.md): the client
+	// renders its input as a notice, not as the user's message.
+	buf.Emit("turn.started", withInputKind(turnStarted, "input_kind", req.inputKind))
 	// `text` is what the USER typed; `injected_context` is the server-derived
 	// suffix, carried as its own field so a client renders it outside the user
 	// bubble (or not at all) instead of as words the user wrote. Reload agrees
 	// with the live stream: the conversation GET splits the same two halves.
 	// Omitted when empty so the common turn's frame does not grow.
-	userEvent := map[string]any{"text": req.Message}
-	if req.inputKind != "" {
-		// Not the user's words: the same marker the persisted entry carries
-		// (TextContent.Kind), so a reattach renders the notice row the reload
-		// path renders.
-		userEvent["kind"] = req.inputKind
-	}
+	// Not the user's words when fleet started the turn: the same marker the
+	// persisted entry carries (TextContent.Kind), so a reattach renders the
+	// notice row the reload path renders.
+	userEvent := withInputKind(map[string]any{"text": req.Message}, "kind", req.inputKind)
 	if injected != "" {
 		userEvent["injected_context"] = injected
 	}
@@ -1230,6 +1220,16 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		}
 	}
 	return true
+}
+
+// withInputKind sets frame[key] to a non-empty input kind
+// (agent.InputKindApprovalResume) and leaves an ordinary turn's frame as it
+// was.
+func withInputKind(frame map[string]any, key, kind string) map[string]any {
+	if kind != "" {
+		frame[key] = kind
+	}
+	return frame
 }
 
 // seedConversationMCP persists a brand-new conversation's pre-chat Tools
