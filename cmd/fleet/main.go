@@ -409,6 +409,7 @@ func run() error {
 		EmailLastToolSuffixes:        bundlePolicy.EmailLastTools,
 		SettleableCreateToolSuffixes: bundlePolicy.SettleableCreateTools,
 		BatchSecondsPerDeal:          bundlePolicy.BatchSecondsPerDeal,
+		ApprovedCallTimeoutSeconds:   bundlePolicy.ApprovedCallTimeoutSeconds,
 	})
 
 	// Connector credentials cross exactly one process boundary at boot: the child
@@ -1210,6 +1211,15 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 		} else {
 			//nolint:gosec // G706: grace is a time.Duration (digits+unit) and n is an int count — neither can forge a log line; values are operator-config-derived, not request input.
 			log.Printf("fleet: grace period (%s) expired; force-cancelled %d in-flight chat turn(s)", grace, chatSrv.CancelInflightTurns())
+		}
+		// An approved card's call can outlive its POST (a long deal write
+		// answers "executing" and finishes detached), so the HTTP handler
+		// drain no longer covers it. Wait for it within the same grace; one
+		// still running when the process exits keeps its executing sentinel,
+		// which the next boot records as outcome unknown.
+		if !chatSrv.DrainApprovalRuns(graceCtx) {
+			//nolint:gosec // G706: grace is a time.Duration (digits+unit), operator-config-derived, not request input.
+			log.Printf("fleet: grace period (%s) expired with approved actions still executing; their outcome will be recorded as unknown at the next start", grace)
 		}
 		graceStop()
 		// After the turns, not before: a turn's completion tail can schedule a

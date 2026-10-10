@@ -370,6 +370,11 @@ type AgentPolicy struct {
 	// server name, so the per-record batch budget reaches agentcore on the same
 	// path as the rest of the tool-behavior policy.
 	BatchSecondsPerDeal map[string]int `yaml:"-"`
+	// ApprovedCallTimeoutSeconds is DERIVED the same way: Bundle.AgentPolicy
+	// collects each mcp_servers[].approved_call_timeout_seconds into it, keyed
+	// by server name, so the approved-card call budget reaches agentcore on the
+	// same path as batch_seconds_per_deal.
+	ApprovedCallTimeoutSeconds map[string]int `yaml:"-"`
 }
 
 // PersonaToolPermissions is the per-persona tool policy declared in the
@@ -803,6 +808,19 @@ type ServerDef struct {
 	// (<server>_<account>). See docs/BATCH-CALLS.md.
 	BatchSecondsPerDeal int `yaml:"batch_seconds_per_deal"`
 
+	// ApprovedCallTimeoutSeconds is the budget, in seconds, for ONE call of
+	// this server's tools that a person approved on a chat approval card
+	// (the call runs outside the agent loop, after the click). 0 (absent)
+	// keeps the engine default of 60 seconds, sized for an email send. A
+	// server whose approved writes are slower (a deal create that round-trips
+	// a vendor API several times) declares its own budget here; declaring it
+	// also opts the server into deal_ids scaling on approved calls (the
+	// batch_seconds_per_deal pace per listed record, capped at 30 minutes) and
+	// into the early "still running" reply for a call that outlives the
+	// request. It governs the server's named-account variants too
+	// (<server>_<account>). See docs/APPROVED-CALL-BUDGET.md.
+	ApprovedCallTimeoutSeconds int `yaml:"approved_call_timeout_seconds"`
+
 	// Optional marks a server users must opt into per conversation (chat's
 	// Optional-server semantics). DisplayName/Description/Beta/EnabledByDefault
 	// drive the settings-UI catalog rendering.
@@ -846,6 +864,11 @@ type ServerDef struct {
 // declare: the engine caps a whole deal_ids batch call at 30 minutes, so a
 // single record's budget can never usefully exceed it.
 const MaxBatchSecondsPerDeal = 1800
+
+// MaxApprovedCallTimeoutSeconds is the largest approved_call_timeout_seconds a
+// manifest may declare: the same 30-minute ceiling the engine puts on any one
+// MCP call.
+const MaxApprovedCallTimeoutSeconds = 1800
 
 // ProbeDef is one declared read-only canary call for `fleet mcp test --deep`.
 // Assertions are deliberately minimal — the call must succeed and not be
@@ -1750,6 +1773,9 @@ func (b *Bundle) validate() error {
 		if err := validateBatchSecondsPerDeal(s); err != nil {
 			return err
 		}
+		if err := validateApprovedCallTimeout(s); err != nil {
+			return err
+		}
 		// The account-suffix convention is purely lexical, so its base vars
 		// must not be underscore-prefixes of one another — fail the load
 		// loudly rather than cross-wire credentials at spawn time (#1124).
@@ -1842,6 +1868,17 @@ func validateIdentityEnv(s *ServerDef) error {
 func validateBatchSecondsPerDeal(s *ServerDef) error {
 	if s.BatchSecondsPerDeal < 0 || s.BatchSecondsPerDeal > MaxBatchSecondsPerDeal {
 		return fmt.Errorf("mcp_servers[%q]: batch_seconds_per_deal must be between 1 and %d seconds (or omitted for the default), got %d", s.Name, MaxBatchSecondsPerDeal, s.BatchSecondsPerDeal)
+	}
+	return nil
+}
+
+// validateApprovedCallTimeout checks a server's approved-card call budget. It
+// is seconds for one call, capped at 30 minutes, so a value above
+// MaxApprovedCallTimeoutSeconds (most likely milliseconds typed as seconds)
+// could never apply; a negative one is meaningless.
+func validateApprovedCallTimeout(s *ServerDef) error {
+	if s.ApprovedCallTimeoutSeconds < 0 || s.ApprovedCallTimeoutSeconds > MaxApprovedCallTimeoutSeconds {
+		return fmt.Errorf("mcp_servers[%q]: approved_call_timeout_seconds must be between 1 and %d seconds (or omitted for the default), got %d", s.Name, MaxApprovedCallTimeoutSeconds, s.ApprovedCallTimeoutSeconds)
 	}
 	return nil
 }
@@ -2764,14 +2801,21 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		}
 	}
 	// A server's declared per-record batch budget (mcp_servers[].
-	// batch_seconds_per_deal) is server behavior the engine must not know by
-	// name; it rides the policy keyed by the manifest server name.
+	// batch_seconds_per_deal) and approved-card call budget
+	// (approved_call_timeout_seconds) are server behavior the engine must not
+	// know by name; they ride the policy keyed by the manifest server name.
 	for i := range b.MCPCatalog {
 		if secs := b.MCPCatalog[i].BatchSecondsPerDeal; secs > 0 {
 			if p.BatchSecondsPerDeal == nil {
 				p.BatchSecondsPerDeal = map[string]int{}
 			}
 			p.BatchSecondsPerDeal[b.MCPCatalog[i].Name] = secs
+		}
+		if secs := b.MCPCatalog[i].ApprovedCallTimeoutSeconds; secs > 0 {
+			if p.ApprovedCallTimeoutSeconds == nil {
+				p.ApprovedCallTimeoutSeconds = map[string]int{}
+			}
+			p.ApprovedCallTimeoutSeconds[b.MCPCatalog[i].Name] = secs
 		}
 	}
 	return p

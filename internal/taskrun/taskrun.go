@@ -133,6 +133,7 @@ func run(argv []string, progName string) error {
 		EmailLastToolSuffixes:        bp.EmailLastTools,
 		SettleableCreateToolSuffixes: bp.SettleableCreateTools,
 		BatchSecondsPerDeal:          bp.BatchSecondsPerDeal,
+		ApprovedCallTimeoutSeconds:   bp.ApprovedCallTimeoutSeconds,
 	})
 
 	// Install the bundle's custom model-pricing overrides (#297) before any turn
