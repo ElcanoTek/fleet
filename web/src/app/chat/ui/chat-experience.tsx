@@ -2385,6 +2385,7 @@ export function ChatExperience({
           no_session_approval?: boolean;
           resume_after_approval?: boolean;
           card?: unknown;
+          group_id?: string;
         }>;
         resolved_approvals?: Array<{
           approval_id: string;
@@ -2401,6 +2402,7 @@ export function ChatExperience({
           recorded?: boolean;
           card?: unknown;
           resume_after_approval?: boolean;
+          group_id?: string;
         }>;
         pending_memory_proposals?: Array<{
           proposal_id: string;
@@ -2504,6 +2506,7 @@ export function ChatExperience({
             noSessionApproval: p.no_session_approval === true || undefined,
             resumeAfterApproval: p.resume_after_approval === true || undefined,
             card: parseApprovalCardData(p.card),
+            groupId: p.group_id || undefined,
           })),
         ];
         const memoryCards: MemoryProposal[] = pendingMemoryProposals.map(

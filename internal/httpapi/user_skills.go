@@ -149,11 +149,19 @@ func (s *Server) materializeUserSkills(ctx context.Context, user, conversationID
 		})
 	}
 	// Remove stale materializations (renamed/disabled/deleted skills).
+	// os.Root confines each removal to root (d.Name comes from ReadDir of
+	// that root), so no entry can reach outside it. It also keeps the line off
+	// gosec's interprocedural G703 taint path, whose verdict here changed with
+	// unrelated edits elsewhere in the package and left a nolint directive
+	// alternately needed and unused.
 	if dirs, err := os.ReadDir(root); err == nil {
-		for _, d := range dirs {
-			if !want[d.Name()] {
-				_ = os.RemoveAll(filepath.Join(root, d.Name())) //nolint:gosec // G703: root is workspace + server conv UUID; d.Name comes from ReadDir of that root
+		if rootDir, rerr := os.OpenRoot(root); rerr == nil {
+			for _, d := range dirs {
+				if !want[d.Name()] {
+					_ = rootDir.RemoveAll(d.Name())
+				}
 			}
+			_ = rootDir.Close()
 		}
 	}
 	return entries

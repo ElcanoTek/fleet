@@ -102,6 +102,11 @@ type approvalStager struct {
 	// the connectors chat was running with. nil stages the card without a
 	// snapshot (tests, legacy construction).
 	taskConnectors func(context.Context) (chatTaskConnectors, error)
+	// groupID is the approval group a card joins when its tool is listed in
+	// agent_policy.critical_tool_group_approval (approval_group.go): the
+	// staging turn's id, so the cards one turn stages share it. "" (promote
+	// cards, tests) groups nothing.
+	groupID string
 }
 
 var _ agent.MCPScopeBinder = (*approvalStager)(nil)
@@ -420,6 +425,9 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// A tool in critical_tool_resume: settling this card starts the turn that
 	// carries on (approval_resume.go). Armed before the card is announced.
 	a.armApprovalResume(approval)
+	// A tool in critical_tool_group_approval: the card joins this turn's
+	// approval group, so the web can render the turn's cards as one.
+	a.joinApprovalGroup(approval)
 	if cardJSON != "" {
 		if ok, err := a.store.SetApprovalCard(a.ctx, a.userEmail, approval.ID, cardJSON); err != nil || !ok {
 			log.Printf("approval card: store card for %s: ok=%t err=%v", approval.ID, ok, err)
@@ -818,7 +826,7 @@ func approvalRequiredEvent(approval *store.Approval, rawInput, convID string) ma
 	ev["expires_at"] = approval.ExpiresAt
 	ev["mcp_server"] = approval.MCPServer
 	ev["mcp_account"] = approval.MCPAccount
-	return withApprovalCard(ev, approval)
+	return withApprovalGroup(withApprovalCard(ev, approval), approval)
 }
 
 // summarizeApprovalInput dispatches on tool name to build a display
@@ -1516,27 +1524,77 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		return
 	}
 
-	approval, err := s.store.GetApproval(r.Context(), user, approvalID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	d := s.decideApproval(r.Context(), r.Context().Done(), user, convID, approvalID, req)
+	if d.suggest != nil {
+		// suggest_advanced_model has its own resolution shape (three actions
+		// instead of approve/reject) and a side effect that's pure metadata
+		// — flipping conversations.model — rather than firing an MCP tool.
+		s.handleSuggestAdvancedApproval(context.WithoutCancel(r.Context()), w, r, user, d.suggest, req)
 		return
+	}
+	d.write(w)
+}
+
+// approvalDecision is the answer to one approval decision, before it is
+// written: a JSON body, or an HTTP error status with its plain text, or
+// nothing at all when the client went away while a call was still running.
+// decideApproval produces it so the single-card POST and the group decision
+// (approval_group.go) share every check, claim and execution path.
+type approvalDecision struct {
+	body    map[string]any
+	status  int    // an error status; 0 with a body = 200
+	errText string // the error's plain text
+	// suggest is set for a pending suggest_advanced_model card, whose
+	// resolution has its own shape and writes its own answer
+	// (handleSuggestAdvancedApproval).
+	suggest *store.Approval
+	// gone: the client disconnected while the call ran; nobody reads a reply.
+	gone bool
+}
+
+func approvalError(status int, text string) approvalDecision {
+	return approvalDecision{status: status, errText: text}
+}
+
+func approvalBody(body map[string]any) approvalDecision {
+	return approvalDecision{body: body}
+}
+
+// write sends the decision the way handleApproval always answered.
+func (d approvalDecision) write(w http.ResponseWriter) {
+	switch {
+	case d.gone:
+	case d.status != 0:
+		http.Error(w, d.errText, d.status)
+	default:
+		writeJSON(w, d.body)
+	}
+}
+
+// decideApproval applies one person's decision to one approval card and
+// returns the answer: the idempotent recorded state for a settled card, the
+// timed-out resolution for an expired one, the rejection, or the claimed
+// execution's outcome (or "executing" for a long call on a server that
+// declared a budget). ctx is the request's context for reads and claims;
+// every write after a successful claim runs detached from it. done fires
+// when the client goes away while it waits for a running call.
+func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user, convID, approvalID string, req approvalRequest) approvalDecision {
+	approval, err := s.store.GetApproval(ctx, user, approvalID)
+	if err != nil {
+		return approvalError(http.StatusInternalServerError, err.Error())
 	}
 	if approval == nil {
-		http.Error(w, "approval not found", http.StatusNotFound)
-		return
+		return approvalError(http.StatusNotFound, "approval not found")
 	}
 	if approval.ConversationID != convID {
-		http.Error(w, "approval/conversation mismatch", http.StatusBadRequest)
-		return
+		return approvalError(http.StatusBadRequest, "approval/conversation mismatch")
 	}
 	if approval.Status != "pending" {
 		// Idempotent: return the already-resolved state without re-firing.
-		s.writeResolvedApprovalState(w, r, user, approval.ID)
-		return
+		return s.resolvedApprovalDecision(ctx, user, approval.ID)
 	}
 	if handlerOnlyApproval(approval.ToolName) && req.Scope != "" && req.Scope != "once" {
-		http.Error(w, "this tool requires a separate decision for each staged card; use scope once", http.StatusBadRequest)
-		return
+		return approvalError(http.StatusBadRequest, "this tool requires a separate decision for each staged card; use scope once")
 	}
 	// The bundle can require the same for a critical tool
 	// (agent_policy.critical_tool_no_session_approval). The web hides the
@@ -1544,8 +1602,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	// terminal or API client cannot pre-approve the rest of the chat either.
 	// Nothing is claimed: the card stays pending for a per-call decision.
 	if scope := strings.TrimSpace(req.Scope); scope != "" && scope != "once" && !agentcore.SessionApprovalAllowed(approval.ToolName) {
-		http.Error(w, "this action needs its own decision for each call, so it cannot be approved or denied for the rest of the chat; use scope once", http.StatusBadRequest)
-		return
+		return approvalError(http.StatusBadRequest, "this action needs its own decision for each call, so it cannot be approved or denied for the rest of the chat; use scope once")
 	}
 
 	// A click that lands after the default-deny deadline but before the sweep's
@@ -1553,7 +1610,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	// claim and echoing "pending" back — which the card rendered as a silent
 	// reset the user could click forever (#225 follow-up). Same claim primitive
 	// as the sweep, so a concurrent sweep tick can't double-resolve; if we lose
-	// that race the writeResolvedApprovalState fallback below reports whatever
+	// that race the resolvedApprovalDecision fallback below reports whatever
 	// state won. Default-deny stays authoritative either way: nothing executes.
 	// Every write that follows a successful claim runs on execCtx, detached
 	// from the request: once the row is durably resolved, the matching
@@ -1562,46 +1619,37 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	// just declined. A tab closed between the two writes used to do exactly
 	// that on the reject and expired paths (the approve path was already
 	// detached; the asymmetry was the bug).
-	execCtx := context.WithoutCancel(r.Context())
+	execCtx := context.WithoutCancel(ctx)
 
 	if approval.ExpiresAt > 0 && approval.ExpiresAt <= time.Now().Unix() {
 		resultText := timeoutResultTextFor(approval.ToolName)
-		claimed, err := s.store.ClaimExpiredApproval(r.Context(), user, approvalID, "rejected", resultText)
+		claimed, err := s.store.ClaimExpiredApproval(ctx, user, approvalID, "rejected", resultText)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return approvalError(http.StatusInternalServerError, err.Error())
 		}
 		if claimed {
 			appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
 				resolutionCallID(approval), resultText)
 			s.noteApprovalSettled(convID, approval)
-			writeJSON(w, s.resumeReplyFlag(execCtx, map[string]any{"status": "rejected", "result_text": resultText}, approval))
-			return
+			return approvalBody(s.resumeReplyFlag(execCtx, map[string]any{"status": "rejected", "result_text": resultText}, approval))
 		}
-		s.writeResolvedApprovalState(w, r, user, approvalID)
-		return
+		return s.resolvedApprovalDecision(ctx, user, approvalID)
 	}
 
-	// suggest_advanced_model has its own resolution shape (three actions
-	// instead of approve/reject) and a side effect that's pure metadata
-	// — flipping conversations.model — rather than firing an MCP tool.
-	// Branch before the generic Send path so we don't accidentally
-	// route it through runStagedTool.
+	// suggest_advanced_model resolves through its own handler, branched
+	// before the generic Send path so it never routes through runStagedTool.
 	if approval.ToolName == tools.SuggestAdvancedModelToolName {
-		s.handleSuggestAdvancedApproval(execCtx, w, r, user, approval, req)
-		return
+		return approvalDecision{suggest: approval}
 	}
 
 	if !req.Approved {
 		claimMsg, historyMsg := rejectionMessages(approval.ToolName)
-		claimed, err := s.store.ClaimApproval(r.Context(), user, approvalID, "rejected", claimMsg)
+		claimed, err := s.store.ClaimApproval(ctx, user, approvalID, "rejected", claimMsg)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return approvalError(http.StatusInternalServerError, err.Error())
 		}
 		if !claimed {
-			s.writeResolvedApprovalState(w, r, user, approvalID)
-			return
+			return s.resolvedApprovalDecision(ctx, user, approvalID)
 		}
 		// Also write a tool_result into the conversation so the NEXT turn
 		// sees the rejection and the model knows not to retry. Use the
@@ -1611,8 +1659,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 			resolutionCallID(approval), historyMsg)
 		s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
 		s.noteApprovalSettled(convID, approval)
-		writeJSON(w, s.resumeReplyFlag(execCtx, map[string]any{"status": "rejected"}, approval))
-		return
+		return approvalBody(s.resumeReplyFlag(execCtx, map[string]any{"status": "rejected"}, approval))
 	}
 
 	// Admit the execution before claiming: once a shutdown drain has begun,
@@ -1620,8 +1667,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	// run), so the drain can never miss an execution that started after it
 	// looked.
 	if !s.approvalRuns.enter() {
-		http.Error(w, "fleet is shutting down; the action was not run. Try again in a moment.", http.StatusServiceUnavailable)
-		return
+		return approvalError(http.StatusServiceUnavailable, "fleet is shutting down; the action was not run. Try again in a moment.")
 	}
 	admitted := true
 	defer func() {
@@ -1636,15 +1682,13 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	// retry) both send the email and only collide on the status write
 	// afterwards. Losing the claim means someone else is running it —
 	// return their resolved state instead of re-firing.
-	claimed, err := s.store.ClaimApproval(r.Context(), user, approvalID, "approved",
+	claimed, err := s.store.ClaimApproval(ctx, user, approvalID, "approved",
 		approvalExecutingSentinel)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return approvalError(http.StatusInternalServerError, err.Error())
 	}
 	if !claimed {
-		s.writeResolvedApprovalState(w, r, user, approvalID)
-		return
+		return s.resolvedApprovalDecision(ctx, user, approvalID)
 	}
 
 	// The user already committed to the action, so it runs on the detached
@@ -1678,23 +1722,23 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		reply <- s.executeClaimedApproval(execCtx, user, convID, approvalID, approval, req)
 	}()
 	if !s.approvalMayAnswerEarly(approval) {
-		writeJSON(w, <-reply)
-		return
+		return approvalBody(<-reply)
 	}
 	early := time.NewTimer(approvalEarlyReplyAfter)
 	defer early.Stop()
 	select {
 	case out := <-reply:
-		writeJSON(w, out)
+		return approvalBody(out)
 	case <-early.C:
-		writeJSON(w, s.resumeReplyFlag(execCtx, map[string]any{
+		return approvalBody(s.resumeReplyFlag(execCtx, map[string]any{
 			"status":      "approved",
 			"executing":   true,
 			"result_text": approvalExecutingSentinel,
 		}, approval))
-	case <-r.Context().Done():
+	case <-done:
 		// The client is gone; nobody reads a reply. The execution carries on
 		// detached and records its outcome for the next "Check result".
+		return approvalDecision{gone: true}
 	}
 }
 
@@ -1936,21 +1980,24 @@ func (s *Server) approvalClientState(a *store.Approval) map[string]any {
 // (or arrived after resolution) with the current state of the approval,
 // mirroring the idempotent already-resolved response above.
 func (s *Server) writeResolvedApprovalState(w http.ResponseWriter, r *http.Request, user, approvalID string) {
-	latest, err := s.store.GetApproval(r.Context(), user, approvalID)
+	s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w)
+}
+
+// resolvedApprovalDecision is writeResolvedApprovalState before it is written.
+func (s *Server) resolvedApprovalDecision(ctx context.Context, user, approvalID string) approvalDecision {
+	latest, err := s.store.GetApproval(ctx, user, approvalID)
 	if err != nil || latest == nil {
-		http.Error(w, "approval already resolved", http.StatusConflict)
-		return
+		return approvalError(http.StatusConflict, "approval already resolved")
 	}
-	state := s.resumeReplyFlag(r.Context(), s.approvalClientState(latest), latest)
+	state := s.resumeReplyFlag(ctx, s.approvalClientState(latest), latest)
 	if latest.ToolName == "suggest_advanced_model" && latest.Status == "approved" {
-		conv, err := s.store.Get(r.Context(), user, latest.ConversationID)
+		conv, err := s.store.Get(ctx, user, latest.ConversationID)
 		if err != nil || conv == nil {
-			http.Error(w, "could not load conversation model", http.StatusInternalServerError)
-			return
+			return approvalError(http.StatusInternalServerError, "could not load conversation model")
 		}
 		state["model"] = conv.Model
 	}
-	writeJSON(w, state)
+	return approvalBody(state)
 }
 
 // handleSuggestAdvancedApproval resolves a suggest_advanced_model card.

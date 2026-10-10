@@ -1146,6 +1146,14 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolResume:           p.CriticalToolResume,
 		CriticalToolResumeMaxPerHour: p.CriticalToolResumeMaxPerHour,
 	})...)
+	// critical_tool_group_approval: a member must stage a card (critical, not
+	// notify mode). The boot install drops any member this reports, so a typo
+	// would quietly leave the tool's cards ungrouped.
+	problems = append(problems, agentcore.GroupApprovalProblems(agentcore.AgentPolicy{
+		CriticalToolSuffixes:      p.CriticalToolSuffixes,
+		CriticalToolModes:         p.CriticalToolModes,
+		CriticalToolGroupApproval: p.CriticalToolGroupApproval,
+	})...)
 	if len(problems) > 0 {
 		res.Status = statusFail
 		res.Detail = strings.Join(problems, "; ")

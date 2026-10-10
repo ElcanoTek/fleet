@@ -1807,6 +1807,56 @@ agent_policy:
 	}
 }
 
+// validate-config reports a critical_tool_group_approval member that stages no
+// card (not critical, or notify mode); critical members pass.
+func TestCheckAgentPolicy_GroupApproval(t *testing.T) {
+	load := func(body string) *clientconfig.Bundle {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		b, err := clientconfig.Load(dir)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		return b
+	}
+	for name, tc := range map[string]struct{ body, want string }{
+		"not critical": {`
+agent_policy:
+  critical_tools: [execute_plan]
+  critical_tool_group_approval: [execute_plans]
+`, `"execute_plans"`},
+		"notify mode": {`
+agent_policy:
+  critical_tools: [deploy_page]
+  critical_tool_modes:
+    deploy_page: notify
+  critical_tool_group_approval: [deploy_page]
+`, `"deploy_page"`},
+		"handler-only card": {`
+agent_policy:
+  critical_tools: [schedule_task]
+  critical_tool_group_approval: [schedule_task]
+`, `"schedule_task"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if res := checkAgentPolicy(load(tc.body), nil); res.Status != statusFail || !strings.Contains(res.Detail, tc.want) {
+				t.Fatalf("want agent_policy fail naming %s, got %q: %s", tc.want, res.Status, res.Detail)
+			}
+		})
+	}
+	good := load(`
+agent_policy:
+  critical_tools: [execute_plan]
+  critical_tool_group_approval: [execute_plan, send_email]
+`)
+	if res := checkAgentPolicy(good, nil); res.Status == statusFail {
+		t.Fatalf("critical, card-staging members must pass: %s", res.Detail)
+	}
+}
+
 // validate-config holds critical_tool_card_describers to its rules: a
 // critical describer (it runs without approval) or one missing from
 // parallel_safe_tools fails the agent_policy check; a well-formed entry passes.

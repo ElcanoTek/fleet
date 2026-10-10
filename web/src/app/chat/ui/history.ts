@@ -494,6 +494,19 @@ export type Approval = {
   resumeAfterApproval?: boolean;
   /** The describer's readable card, when the bundle declares one for the tool. */
   card?: ApprovalCardData;
+  /**
+   * The approval group the card joined at staging: the staging turn's id, for
+   * a tool the bundle lists in agent_policy.critical_tool_group_approval. Two
+   * or more pending cards that share it render as one grouped card
+   * (docs/GROUPED-APPROVALS.md). Absent for every other card.
+   */
+  groupId?: string;
+  /**
+   * Why a grouped decision could not decide this card (the group endpoint's
+   * per-card error). The card stays pending; its own card shows this once the
+   * group no longer holds it. Client-side only.
+   */
+  decisionError?: string;
 };
 
 /**
@@ -552,9 +565,11 @@ export function hydrateResolvedApproval(p: {
   recorded?: boolean;
   card?: unknown;
   resume_after_approval?: boolean;
+  group_id?: string;
 }): Approval {
   const executing = p.executing === true;
   return {
+    groupId: p.group_id || undefined,
     resumeAfterApproval: p.resume_after_approval === true || undefined,
     card: parseApprovalCardData(p.card),
     id: p.approval_id,

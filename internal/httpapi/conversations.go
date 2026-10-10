@@ -308,6 +308,12 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 		s.handleApproval(w, r, id, subArg)
 		return
 	}
+	// One decision for a turn's grouped approval cards
+	// (docs/GROUPED-APPROVALS.md): /conversations/{id}/approval-groups/{groupId}.
+	if sub == "approval-groups" && subArg != "" {
+		s.handleApprovalGroup(w, r, id, subArg)
+		return
+	}
 
 	// Sub-agent child transcript (#1043) —
 	// GET /conversations/{id}/subagents/{childSessionID}. Same ownership gate

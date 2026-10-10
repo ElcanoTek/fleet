@@ -2556,6 +2556,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         no_session_approval?: boolean;
         resume_after_approval?: boolean;
         card?: unknown;
+        group_id?: string;
       };
       // send_email cards can land below an expanded preview iframe — queue
       // a scroll-into-view so the user sees the action card without
@@ -2579,6 +2580,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             noSessionApproval: p.no_session_approval === true || undefined,
             resumeAfterApproval: p.resume_after_approval === true || undefined,
             card: parseApprovalCardData(p.card),
+            groupId: p.group_id || undefined,
           },
         ],
       }));
