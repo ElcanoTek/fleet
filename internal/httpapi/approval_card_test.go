@@ -61,6 +61,10 @@ func TestParseApprovalCard(t *testing.T) {
 		"relative link":        `{"title":"x","items":[{"label":"a","link":"/deals/1"}]}`,
 		"bad flag code":        `{"title":"x","items":[{"label":"a","flags":[{"code":"Deal Active!","label":"Active"}]}]}`,
 		"control character":    `{"title":"x\u0007","items":[]}`,
+		"null setting value":   `{"title":"x","items":[{"label":"a","settings":[{"label":"Currency","value":null}]}]}`,
+		"null subtitle":        `{"title":"x","subtitle":null,"items":[]}`,
+		"null changes":         `{"title":"x","items":[{"label":"a","changes":null}]}`,
+		"null items":           `{"title":"x","items":null}`,
 		"bidi override":        `{"title":"x\u202e","items":[]}`,
 		"trailing data":        `{"title":"x","items":[]} {"title":"y","items":[]}`,
 		"title over the limit": `{"title":"` + strings.Repeat("a", approvalCardMaxTitle+1) + `","items":[]}`,
@@ -445,5 +449,22 @@ func TestConversationApprovalGet_CarriesCard(t *testing.T) {
 				t.Fatalf("one-card GET rows = %v, want the card", rows)
 			}
 		})
+	}
+}
+
+// A refused card's validation error is logged, and a malformed field may hold
+// a credential: the logged text is redacted (Codex P1 on #1717), and the flag
+// code error no longer echoes the value at all.
+func TestApprovalCardRefusalIsRedactedForLog(t *testing.T) {
+	secret := "ghp_" + strings.Repeat("a1B2", 9)
+	_, _, err := parseApprovalCard([]byte(`{"title":"x","items":[{"label":"a","flags":[{"code":"` + secret + `","label":"l"}]}]}`))
+	if err == nil {
+		t.Fatal("a bad flag code was accepted")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("the error echoes the value: %v", err)
+	}
+	if got := redactedForLog(errors.New("upstream said " + secret)); strings.Contains(got, secret) {
+		t.Fatalf("redactedForLog kept the secret: %q", got)
 	}
 }

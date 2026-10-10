@@ -113,6 +113,12 @@ func parseApprovalCard(raw []byte) (*ApprovalCard, []byte, error) {
 	if !utf8.Valid(raw) {
 		return nil, nil, errors.New("output is not valid UTF-8")
 	}
+	// encoding/json decodes null into a string's or a slice's zero value, so
+	// a null would pass as a blank field. Nothing in the schema is nullable:
+	// refuse any null before the typed decode.
+	if err := refuseJSONNulls(raw); err != nil {
+		return nil, nil, err
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var card ApprovalCard
@@ -133,6 +139,53 @@ func parseApprovalCard(raw []byte) (*ApprovalCard, []byte, error) {
 		return nil, nil, fmt.Errorf("card is %d bytes, over the %d-byte limit", len(canonical), approvalCardMaxBytes)
 	}
 	return &card, canonical, nil
+}
+
+// refuseJSONNulls reports a null anywhere in raw. Malformed JSON passes
+// through here and is refused, with its own error, by the typed decode.
+func refuseJSONNulls(raw []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	decodeErr := dec.Decode(&v)
+	var walk func(any) bool
+	walk = func(x any) bool {
+		switch t := x.(type) {
+		case nil:
+			return true
+		case []any:
+			for _, e := range t {
+				if walk(e) {
+					return true
+				}
+			}
+		case map[string]any:
+			for _, e := range t {
+				if walk(e) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if decodeErr == nil && walk(v) {
+		return errors.New("a field is null; no card field is nullable")
+	}
+	return nil
+}
+
+// redactedForLog passes text that may echo describer output (a validation
+// error naming a field's value, a transport error) through the same secret
+// redaction the loop applies, so a credential in a malformed card never
+// reaches the server log.
+func redactedForLog(err error) string {
+	if err == nil {
+		return ""
+	}
+	if tools.ShowUIRedactor == nil {
+		return err.Error()
+	}
+	return tools.ShowUIRedactor(err.Error())
 }
 
 func validateApprovalCard(c *ApprovalCard) error {
@@ -202,7 +255,7 @@ func validateApprovalCard(c *ApprovalCard) error {
 		for j, f := range it.Flags {
 			fat := fmt.Sprintf("%s.flags[%d]", at, j)
 			if !approvalCardFlagCode.MatchString(f.Code) {
-				return fmt.Errorf("%s.code %q is not a short lowercase code", fat, f.Code)
+				return fmt.Errorf("%s.code is not a short lowercase code", fat)
 			}
 			if err := cardText(fat+".label", f.Label, approvalCardMaxTitle, true); err != nil {
 				return err
@@ -274,7 +327,7 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	}
 	server, _, err := resolveMCPTool(catalog, toolName)
 	if err != nil {
-		log.Printf("approval card: resolve %q: %v", toolName, err)
+		log.Printf("approval card: resolve %q: %s", toolName, redactedForLog(err))
 		return "", cardFallbackUnresolved
 	}
 	describer, ok := resolveDescriber(catalog, server, suffix)
@@ -307,7 +360,7 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 		log.Printf("approval card: describer %q timed out after %s", full, approvalCardDescriberTimeout)
 		return "", cardFallbackTimeout
 	case err != nil:
-		log.Printf("approval card: describer %q: %v", full, err)
+		log.Printf("approval card: describer %q: %s", full, redactedForLog(err))
 		return "", cardFallbackError
 	case isErr:
 		log.Printf("approval card: describer %q reported an error", full)
@@ -315,7 +368,7 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	}
 	_, canonical, err := parseApprovalCard([]byte(strings.TrimSpace(text)))
 	if err != nil {
-		log.Printf("approval card: describer %q output refused: %v", full, err)
+		log.Printf("approval card: describer %q output refused: %s", full, redactedForLog(err))
 		return "", cardFallbackInvalid
 	}
 	if tools.RedactionWouldAlter(canonical) {

@@ -87,7 +87,8 @@ Any failure leaves the card off. That covers no describer on the server, a
 timeout, a transport or tool error, output that is not exactly the schema, a
 secret-like value, or a failed store write. The row, the event and the
 countdown are then the generic card's, exactly as before. Describing never
-blocks or fails staging. Each failure is logged with its detail and emitted
+blocks or fails staging. Each failure is logged with its detail (passed through the secret
+redaction first, since a malformed card's error can echo a value) and emitted
 on the turn stream as `tool.approval_card_fallback`
 `{approval_id, tool, reason}`, with `reason` one of `describer_unavailable`,
 `timeout`, `describer_error`, `invalid_card`, `redacted` or `store_error`.
@@ -119,8 +120,9 @@ approval row. The model's tool result for the staged call is the same
 `parseApprovalCard` (`internal/httpapi/approval_card.go`) decodes it strictly:
 
 - **Strict decoding.** It rejects unknown keys at any level, a value of the
-  wrong type (a number where a string belongs), trailing data, and invalid
-  UTF-8.
+  wrong type (a number where a string belongs), a `null` anywhere (no field
+  is nullable, and Go would otherwise read it as a blank string), trailing
+  data, and invalid UTF-8.
 - **Required fields.** `title`, `items` (it may be empty), and each item's
   `label` are required. Each change needs `label` and `after`. `before` is
   optional: absent means the field had no previous value.
