@@ -292,6 +292,11 @@ func TestClaimApprovalResume_CapAndQueueFullSkipWithANote(t *testing.T) {
 			if err != nil || res.Input != nil || res.Skipped != tc.want || len(res.Claimed) != 1 {
 				t.Fatalf("result = %+v, %v; want skipped %q", res, err, tc.want)
 			}
+			// The owner rides the result so the chat server can tell them the
+			// task now waits for them (docs/APPROVAL-PROGRESS.md).
+			if res.Owner != resumeUser {
+				t.Fatalf("owner = %q, want %q", res.Owner, resumeUser)
+			}
 			if got := resumeState(t, s, a.ID); got != ApprovalResumeSkipped {
 				t.Fatalf("resume_state = %q, want skipped", got)
 			}

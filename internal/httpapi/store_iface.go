@@ -204,6 +204,9 @@ type chatStore interface {
 	// at staging (docs/GROUPED-APPROVALS.md); false when the row is no longer
 	// pending.
 	SetApprovalGroup(ctx context.Context, userEmail, approvalID, groupID string) (bool, error)
+	// SetApprovalProgress records the latest progress of an approved call that
+	// is still executing (docs/APPROVAL-PROGRESS.md); false once it is not.
+	SetApprovalProgress(ctx context.Context, userEmail, approvalID, progressJSON string) (bool, error)
 	GetApproval(ctx context.Context, userEmail, approvalID string) (*store.Approval, error)
 	ClaimApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error)
 	// ClaimApprovalAndSetModel is the suggest_advanced_model resolution: the

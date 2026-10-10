@@ -117,3 +117,24 @@ agent_policy:
 		t.Errorf("AgentPolicy() must return a copy; the bundle now says %v", again.CriticalToolGroupApproval)
 	}
 }
+
+// agent_policy.critical_tool_progress parses and is copied.
+func TestAgentPolicyApprovalProgress(t *testing.T) {
+	dir := writeManifest(t, `
+agent_policy:
+  critical_tools: [execute_plan]
+  critical_tool_progress: [execute_plan]
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	p := b.AgentPolicy()
+	if len(p.CriticalToolProgress) != 1 || p.CriticalToolProgress[0] != "execute_plan" {
+		t.Fatalf("CriticalToolProgress = %v", p.CriticalToolProgress)
+	}
+	p.CriticalToolProgress[0] = "mutated"
+	if again := b.AgentPolicy(); again.CriticalToolProgress[0] != "execute_plan" {
+		t.Errorf("AgentPolicy() must return a copy; the bundle now says %v", again.CriticalToolProgress)
+	}
+}

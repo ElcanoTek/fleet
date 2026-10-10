@@ -413,6 +413,17 @@ remote_mcp_catalog: []
 #                               critical_tools (and not notify mode). See
 #                               docs/GROUPED-APPROVALS.md. Example:
 #                                 critical_tool_group_approval: [execute_plan]
+#   critical_tool_progress:     OPTIONAL critical suffixes (same suffix
+#                               matching as critical_tools) whose APPROVED
+#                               calls ask their MCP server for progress
+#                               notifications (_meta.progressToken), show them
+#                               on the running card ("12 of 24 · message"), and
+#                               send the conversation owner a browser push
+#                               (when Web Push is configured) once the call
+#                               finishes. Every member must be in
+#                               critical_tools (and not notify mode). See
+#                               docs/APPROVAL-PROGRESS.md. Example:
+#                                 critical_tool_progress: [execute_plan]
 #   critical_tool_timeouts:     OPTIONAL per-tool approval default-deny window
 #                               (#225), keyed by the same bare tool-name suffix
 #                               as critical_tools, in seconds. Highest-priority

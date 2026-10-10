@@ -1857,6 +1857,26 @@ agent_policy:
 	}
 }
 
+// validate-config reports a critical_tool_progress member that stages no card.
+func TestCheckAgentPolicy_ApprovalProgress(t *testing.T) {
+	dir := t.TempDir()
+	body := `
+agent_policy:
+  critical_tools: [execute_plan]
+  critical_tool_progress: [execute_plan, execute_plans]
+`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := clientconfig.Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if res := checkAgentPolicy(b, nil); res.Status != statusFail || !strings.Contains(res.Detail, `"execute_plans"`) || strings.Contains(res.Detail, `"execute_plan"`) {
+		t.Fatalf("want agent_policy fail naming only execute_plans, got %q: %s", res.Status, res.Detail)
+	}
+}
+
 // validate-config holds critical_tool_card_describers to its rules: a
 // critical describer (it runs without approval) or one missing from
 // parallel_safe_tools fails the agent_policy check; a well-formed entry passes.

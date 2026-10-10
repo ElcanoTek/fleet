@@ -20,6 +20,8 @@
 // self-delimiting JSON object) read with a streaming json.Decoder.
 package mcpbroker
 
+import "github.com/ElcanoTek/fleet/internal/mcp"
+
 // method names the operation a request carries. The envelope is method-based so
 // further operations the broker will own (tool/account discovery, per-run
 // authorization scoping, credential reload) slot in as new methods WITHOUT a wire
@@ -214,6 +216,11 @@ type request struct {
 	// be dropped at the boundary and every call would run on the parent's
 	// outer backstop deadline instead.
 	CallTimeoutMs int64 `json:"callTimeoutMs,omitempty"`
+	// Progress asks the child to forward the methodCall's MCP progress
+	// notifications (mcp.WithProgress) as intermediate response frames with
+	// this ID before the final one. Off unless the parent's call context
+	// carries a progress sink, so every other call is unchanged.
+	Progress bool `json:"progress,omitempty"`
 	// Scope is an opaque broker-issued per-run scope ID. It is set on scoped calls
 	// and scope_close; scope_open carries ScopeSpec instead.
 	Scope     string    `json:"scope,omitempty"`
@@ -257,6 +264,11 @@ type response struct {
 	ConnectRetrySpentMs int64 `json:"connectRetrySpentMs,omitempty"`
 	// Reload answers methodReload with the diff and refreshed public catalog.
 	Reload *ReloadResult `json:"reload,omitempty"`
+	// Progress marks an INTERMEDIATE frame for a methodCall that asked for
+	// progress (request.Progress): one MCP progress notification. Such a frame
+	// is never the answer; the call's final frame (no Progress) still follows.
+	// Public progress text from the tool's server, like Text.
+	Progress *mcp.ProgressUpdate `json:"progress,omitempty"`
 }
 
 // SkippedServer is one remote server a scope could not mount. Reason is one

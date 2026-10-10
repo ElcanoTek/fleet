@@ -82,6 +82,11 @@ func NewServer(backend Backend) *Server {
 // Serve closes conn when ctx is cancelled (the only way to unblock a parked
 // Decode); it otherwise leaves the conn to the caller. It returns nil on a clean
 // peer hangup (EOF) or ctx cancellation, and the decode error otherwise.
+// progressForwardInterval bounds how often the child forwards one call's
+// progress notifications to the parent: a chatty server cannot flood the
+// connection, and the latest update still arrives (mcp.ThrottleProgress).
+const progressForwardInterval = 250 * time.Millisecond
+
 func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 	dec := json.NewDecoder(conn)
 	// Arguments are consent-bound JSON: never round record IDs through float64.
@@ -169,6 +174,17 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				// Re-attach the parent's per-call budget (request.CallTimeoutMs):
 				// mcp.Server.callTool starts it once it holds the server mutex.
 				runCtx := mcp.WithCallTimeout(callCtx, time.Duration(req.CallTimeoutMs)*time.Millisecond)
+				// The parent listens for progress (request.Progress): forward
+				// the call's progress notifications as intermediate frames,
+				// throttled, and stop before the final frame so none follows it.
+				stopProgress := func() {}
+				if req.Progress {
+					var push func(mcp.ProgressUpdate)
+					push, stopProgress = mcp.ThrottleProgress(progressForwardInterval, func(u mcp.ProgressUpdate) {
+						write(response{ID: req.ID, Progress: &u})
+					})
+					runCtx = mcp.WithProgress(runCtx, push)
+				}
 				var text string
 				var isErr bool
 				var err error
@@ -177,9 +193,11 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				} else if scoped, ok := s.backend.(ScopedBackend); ok {
 					text, isErr, err = scoped.CallMCPInScope(runCtx, req.Scope, req.Server, req.Tool, req.Args)
 				} else {
+					stopProgress()
 					write(response{ID: req.ID, Err: "mcpbroker: backend does not support scoped sessions"})
 					return
 				}
+				stopProgress()
 				resp := response{ID: req.ID}
 				if err != nil {
 					// Operational errors can embed connector stderr, URLs, headers,

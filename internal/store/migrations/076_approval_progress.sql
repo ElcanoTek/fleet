@@ -1,0 +1,12 @@
+-- 076_approval_progress.sql — progress of an approved call while it runs
+-- (agent_policy.critical_tool_progress, docs/APPROVAL-PROGRESS.md).
+--
+-- The latest MCP progress notification of an approved call that is still
+-- executing, as canonical JSON ({"progress", "total", "message",
+-- "updated_at"}), written at most about once a second while the call runs and
+-- only while the row still carries the executing sentinel. NULL is every other
+-- row (a tool that did not opt in, a call that reported nothing, and every row
+-- written before this column existed), which renders the plain "running"
+-- card exactly as before, so a nullable ADD with no backfill is the old
+-- behaviour.
+ALTER TABLE approvals ADD COLUMN progress_json TEXT;

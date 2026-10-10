@@ -502,12 +502,60 @@ export type Approval = {
    */
   groupId?: string;
   /**
+   * True for a tool the bundle lists in agent_policy.critical_tool_progress:
+   * once approved and running, the card polls for the call's progress and
+   * outcome (docs/APPROVAL-PROGRESS.md).
+   */
+  progressUpdates?: boolean;
+  /** The latest progress the running call reported, when it reported any. */
+  progress?: ApprovalProgress;
+  /**
    * Why a grouped decision could not decide this card (the group endpoint's
    * per-card error). The card stays pending; its own card shows this once the
    * group no longer holds it. Client-side only.
    */
   decisionError?: string;
 };
+
+/** One MCP progress update of a running approved call. */
+export type ApprovalProgress = {
+  progress: number;
+  /** 0 / absent when the server does not know the amount of work. */
+  total?: number;
+  message?: string;
+  /** When fleet recorded it, unix seconds. */
+  updatedAt?: number;
+};
+
+/**
+ * Re-checks a progress payload: finite, non-negative numbers and a string
+ * message. Anything else is dropped, so the card shows no progress rather
+ * than a wrong one.
+ */
+export function parseApprovalProgress(value: unknown): ApprovalProgress | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const v = value as Record<string, unknown>;
+  const ok = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
+  if (!ok(v.progress)) return undefined;
+  if (v.total !== undefined && !ok(v.total)) return undefined;
+  if (v.message !== undefined && typeof v.message !== "string") return undefined;
+  return {
+    progress: v.progress,
+    total: typeof v.total === "number" && v.total > 0 ? v.total : undefined,
+    message: typeof v.message === "string" && v.message ? v.message : undefined,
+    updatedAt: ok(v.updated_at) ? v.updated_at : undefined,
+  };
+}
+
+function formatProgressNumber(n: number): string {
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
+/** "12 of 24 · creating deal 12", "12 · step", or just the message. */
+export function approvalProgressText(p: ApprovalProgress): string {
+  const count = p.total ? `${formatProgressNumber(p.progress)} of ${formatProgressNumber(p.total)}` : formatProgressNumber(p.progress);
+  return p.message ? `${count} · ${p.message}` : count;
+}
 
 /**
  * Server fields on the approval POST body and on GET resolved_approvals.
@@ -566,10 +614,14 @@ export function hydrateResolvedApproval(p: {
   card?: unknown;
   resume_after_approval?: boolean;
   group_id?: string;
+  progress_updates?: boolean;
+  progress?: unknown;
 }): Approval {
   const executing = p.executing === true;
   return {
     groupId: p.group_id || undefined,
+    progressUpdates: p.progress_updates === true || undefined,
+    progress: executing ? parseApprovalProgress(p.progress) : undefined,
     resumeAfterApproval: p.resume_after_approval === true || undefined,
     card: parseApprovalCardData(p.card),
     id: p.approval_id,

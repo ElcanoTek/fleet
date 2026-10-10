@@ -158,6 +158,11 @@ func (s *Server) decideApprovalResume(convID string, attempt int) {
 		return
 	case res.Input == nil:
 		metrics.RecordApprovalResume(res.Skipped)
+		if res.Skipped == store.ApprovalResumeSkipRateLimited || res.Skipped == store.ApprovalResumeSkipQueueFull {
+			// The task now waits for the person: tell them, in case they
+			// walked away expecting it to carry on (approval_progress.go).
+			s.notifyResumeSkipped(res.Owner, convID)
+		}
 		//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
 		log.Printf("audit: approval resume skipped for conversation %q (%s; %d in the last hour, cap %d) after %q",
 			convID, res.Skipped, res.RecentResumes, maxPerHour, approvalResumeIDs(res.Claimed))

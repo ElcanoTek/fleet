@@ -126,6 +126,14 @@ type AgentPolicy struct {
 	// not notify mode (see GroupApprovalProblems). Empty = every card stands
 	// alone, as before.
 	CriticalToolGroupApproval []string
+	// CriticalToolProgress lists critical suffixes whose approved calls ask
+	// their MCP server for progress (`_meta.progressToken`), show it on the
+	// executing card, and send the conversation owner a browser push when the
+	// call finishes (docs/APPROVAL-PROGRESS.md). Matched by suffix exactly
+	// like CriticalToolSuffixes; members must be critical and not notify mode
+	// (see ApprovalProgressProblems). Empty = no approved call reports
+	// progress, as before.
+	CriticalToolProgress []string
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -209,6 +217,9 @@ var (
 	// activeGroupApproval is the set of critical suffixes whose cards join
 	// their turn's approval group. Empty by default: every card stands alone.
 	activeGroupApproval = map[string]bool{}
+	// activeProgress is the set of critical suffixes whose approved calls
+	// report progress. Empty by default.
+	activeProgress = map[string]bool{}
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -348,6 +359,12 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		log.Printf("agent_policy: %s", problem)
 	}
 	activeGroupApproval = group
+
+	progress, progressProblems := buildStagedCardSuffixSet("critical_tool_progress", p.CriticalToolProgress, p.CriticalToolModes, seen)
+	for _, problem := range progressProblems {
+		log.Printf("agent_policy: %s", problem)
+	}
+	activeProgress = progress
 }
 
 // suffixMatches reports whether a tool (or a suffix standing for one) is

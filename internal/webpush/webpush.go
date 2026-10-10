@@ -32,6 +32,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -295,15 +296,62 @@ func eventTitle(ev notify.Event) (title string, ok bool) {
 // NotifyApprovalRequired sends the chat-side "approval needed" push to the
 // conversation owner — high urgency, since a staged approval blocks the turn
 // until a human acts (#292). Only the TOOL NAME is included; the staged
-// arguments never enter the payload. Skipped when
-// FLEET_PUSH_ON_APPROVAL_REQUEST is off. nil-safe no-op when disabled.
-func (s *Service) NotifyApprovalRequired(ctx context.Context, userEmail, toolName string) error {
+// arguments never enter the payload. A click opens the conversation, where the
+// pending card re-hydrates. Skipped when FLEET_PUSH_ON_APPROVAL_REQUEST is
+// off. nil-safe no-op when disabled.
+func (s *Service) NotifyApprovalRequired(ctx context.Context, userEmail, conversationID, toolName string) error {
 	if !s.Enabled() || !s.cfg.OnApprovalRequest {
 		return nil
 	}
-	// Deep link to the app root: the chat UI has no per-conversation URL yet
-	// (the pending card re-hydrates on load), so the root is the honest target.
-	return s.sendToUser(ctx, userEmail, "⚠ Approval needed: "+toolName, "", s.cfg.PublicURLBase, webpushgo.UrgencyHigh)
+	return s.sendToUser(ctx, userEmail, "⚠ Approval needed: "+toolName, "", s.ConversationLink(conversationID), webpushgo.UrgencyHigh)
+}
+
+// NotifyApprovalFinished tells the conversation owner that an approved call
+// they may have walked away from has finished (docs/APPROVAL-PROGRESS.md).
+// label is the approval card's plain-words title when the bundle declared a
+// describer, else the tool name; the call's arguments and result never enter
+// the payload. Normal urgency: nothing is blocked on the person. Shares the
+// FLEET_PUSH_ON_APPROVAL_REQUEST gate with the other approval pushes.
+func (s *Service) NotifyApprovalFinished(ctx context.Context, userEmail, conversationID, label string, failed bool) error {
+	if !s.Enabled() || !s.cfg.OnApprovalRequest {
+		return nil
+	}
+	return s.sendToUser(ctx, userEmail, approvalFinishedTitle(label, failed), "", s.ConversationLink(conversationID), webpushgo.UrgencyNormal)
+}
+
+// NotifyResumeSkipped tells the conversation owner that fleet did not carry
+// on by itself after their approvals (the hourly cap, or a full queue), so the
+// task waits for them (docs/RESUME-AFTER-APPROVAL.md). High urgency: nothing
+// happens until they reply. Same gate as the other approval pushes.
+func (s *Service) NotifyResumeSkipped(ctx context.Context, userEmail, conversationID string) error {
+	if !s.Enabled() || !s.cfg.OnApprovalRequest {
+		return nil
+	}
+	return s.sendToUser(ctx, userEmail, "⏸ Waiting for you: the chat did not continue on its own", "", s.ConversationLink(conversationID), webpushgo.UrgencyHigh)
+}
+
+// approvalFinishedTitle renders the finished-call title. Pure, so the exact
+// text contract is unit-testable.
+func approvalFinishedTitle(label string, failed bool) string {
+	if failed {
+		return "✗ Not applied: " + label
+	}
+	return "✓ Done: " + label
+}
+
+// ConversationLink is the deep link a chat notification opens: the chat page
+// with ?c=<conversation id>, which opens that conversation on load. Relative
+// to the app origin when FLEET_PUBLIC_URL is unset (the service worker
+// resolves it against the origin the subscription was created on); the app
+// root when there is no conversation.
+func (s *Service) ConversationLink(conversationID string) string {
+	if s == nil {
+		return ""
+	}
+	if conversationID == "" {
+		return s.cfg.PublicURLBase
+	}
+	return s.cfg.PublicURLBase + "/chat?c=" + url.QueryEscape(conversationID)
 }
 
 // ApprovalPushEnabled reports whether the approval trigger would fire —

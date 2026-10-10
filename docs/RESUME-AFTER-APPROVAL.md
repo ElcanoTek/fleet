@@ -178,6 +178,10 @@ running twice.
 
 ### Observability
 
+- A resume skipped over the hourly cap or a full queue also sends the
+  conversation owner a browser push when Web Push is configured
+  ([APPROVAL-PROGRESS.md](APPROVAL-PROGRESS.md)), so a person who walked away
+  learns the task is waiting for them.
 - Each decision that claimed cards logs an `audit:` line naming the
   conversation, the queue row and every card with its outcome, or why it was
   skipped, and counts `fleet_approval_resumes_total{outcome="queued"|"rate_limited"|"queue_full"}`.
