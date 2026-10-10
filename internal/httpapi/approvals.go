@@ -1574,8 +1574,8 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		if claimed {
 			appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
 				resolutionCallID(approval), resultText)
-			s.noteApprovalSettled(convID)
-			writeJSON(w, approvalResumeReplyFlag(map[string]any{"status": "rejected", "result_text": resultText}, approval))
+			s.noteApprovalSettled(convID, approval)
+			writeJSON(w, s.resumeReplyFlag(execCtx, map[string]any{"status": "rejected", "result_text": resultText}, approval))
 			return
 		}
 		s.writeResolvedApprovalState(w, r, user, approvalID)
@@ -1610,8 +1610,8 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
 			resolutionCallID(approval), historyMsg)
 		s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
-		s.noteApprovalSettled(convID)
-		writeJSON(w, approvalResumeReplyFlag(map[string]any{"status": "rejected"}, approval))
+		s.noteApprovalSettled(convID, approval)
+		writeJSON(w, s.resumeReplyFlag(execCtx, map[string]any{"status": "rejected"}, approval))
 		return
 	}
 
@@ -1687,7 +1687,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	case out := <-reply:
 		writeJSON(w, out)
 	case <-early.C:
-		writeJSON(w, approvalResumeReplyFlag(map[string]any{
+		writeJSON(w, s.resumeReplyFlag(execCtx, map[string]any{
 			"status":      "approved",
 			"executing":   true,
 			"result_text": approvalExecutingSentinel,
@@ -1789,8 +1789,8 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
 	// The outcome is in the conversation now, so a resume turn can read it —
 	// this is also where a long call answered "executing" earlier lands.
-	s.noteApprovalSettled(convID)
-	return approvalResumeReplyFlag(map[string]any{
+	s.noteApprovalSettled(convID, approval)
+	return s.resumeReplyFlag(execCtx, map[string]any{
 		"status":      "approved",
 		"result_text": resultText,
 		"is_err":      isErr,
@@ -1941,7 +1941,7 @@ func (s *Server) writeResolvedApprovalState(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "approval already resolved", http.StatusConflict)
 		return
 	}
-	state := approvalResumeReplyFlag(s.approvalClientState(latest), latest)
+	state := s.resumeReplyFlag(r.Context(), s.approvalClientState(latest), latest)
 	if latest.ToolName == "suggest_advanced_model" && latest.Status == "approved" {
 		conv, err := s.store.Get(r.Context(), user, latest.ConversationID)
 		if err != nil || conv == nil {
@@ -1991,7 +1991,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 		appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
 			"User dismissed the model-switch suggestion. Continue working with the current model.")
 		// Not a resume tool, but a deferred resume may be waiting on it.
-		s.noteApprovalSettled(approval.ConversationID)
+		s.noteApprovalSettled(approval.ConversationID, approval)
 		writeJSON(w, map[string]any{
 			"status": "rejected",
 			"action": "dismiss",
@@ -2024,7 +2024,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 	}
 	appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
 		resultText)
-	s.noteApprovalSettled(approval.ConversationID)
+	s.noteApprovalSettled(approval.ConversationID, approval)
 
 	action := req.Action
 	if action == "" {
@@ -2131,7 +2131,7 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 		// A timed-out card is settled too: an opted-in one resumes (the model
 		// learns the action was not taken), and any other may release a
 		// resume that was waiting on it.
-		s.noteApprovalSettled(a.ConversationID)
+		s.noteApprovalSettled(a.ConversationID, &a)
 		denied++
 	}
 	return denied, nil

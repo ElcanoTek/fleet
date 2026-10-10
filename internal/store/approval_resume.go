@@ -76,6 +76,16 @@ func (s *Store) ArmApprovalResume(ctx context.Context, userEmail, approvalID str
 	return n == 1, err
 }
 
+// HasArmedApprovals reports whether the conversation still has an armed card
+// (pending or settled): a settlement there may release a resume.
+func (s *Store) HasArmedApprovals(ctx context.Context, convID string) (bool, error) {
+	var ok bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM approvals WHERE conversation_id = $1 AND resume_state = 'armed')`,
+		convID).Scan(&ok)
+	return ok, err
+}
+
 // ApprovalResumeItem is one settled card a resume turn reports.
 type ApprovalResumeItem struct {
 	ID       string

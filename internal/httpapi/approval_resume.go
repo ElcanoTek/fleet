@@ -97,9 +97,12 @@ func (r *approvalResumeScheduler) take(convID string, gen uint64) bool {
 // terminal, recorded outcome. A settled card that did not opt in still kicks:
 // it may be the card a deferred resume was waiting for. With no tool opted in
 // it does nothing at all, so a bundle without critical_tool_resume behaves
-// exactly as before.
-func (s *Server) noteApprovalSettled(convID string) {
-	if convID == "" || s.store == nil || !agentcore.ResumeAfterApprovalEnabled() {
+// exactly as before — except for a card that was armed under an earlier
+// policy (the bundle dropped its tool across a restart), which still settles
+// into a decision rather than staying armed for good.
+func (s *Server) noteApprovalSettled(convID string, approval *store.Approval) {
+	armed := approval != nil && approval.ResumeState == store.ApprovalResumeArmed
+	if convID == "" || s.store == nil || (!armed && !agentcore.ResumeAfterApprovalEnabled()) {
 		return
 	}
 	s.scheduleApprovalResume(convID, approvalResumeDebounce, 0)
@@ -191,6 +194,20 @@ func (a *approvalStager) armApprovalResume(approval *store.Approval) {
 		return
 	}
 	approval.ResumeState = store.ApprovalResumeArmed
+}
+
+// resumeReplyFlag is approvalResumeReplyFlag plus the case where this card did
+// not opt in but its settlement may release a resume that was waiting on it:
+// another card of the conversation is still armed.
+func (s *Server) resumeReplyFlag(ctx context.Context, out map[string]any, approval *store.Approval) map[string]any {
+	out = approvalResumeReplyFlag(out, approval)
+	if out["resume"] == true || approval == nil || s.store == nil || !agentcore.ResumeAfterApprovalEnabled() {
+		return out
+	}
+	if armed, err := s.store.HasArmedApprovals(ctx, approval.ConversationID); err == nil && armed {
+		out["resume"] = true
+	}
+	return out
 }
 
 // approvalResumeReplyFlag adds "resume": true to an approval POST answer when

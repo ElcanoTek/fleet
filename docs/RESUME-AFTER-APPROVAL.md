@@ -151,7 +151,9 @@ running twice.
 
 - **Web.** The approve/decline answer carries `"resume": true` for an armed
   card, and so does any idempotent replay of it (a lost answer, a second tab,
-  **Check result**) once the card is claimed. The card then calls `followApprovalResume`, which probes `/inflight`
+  **Check result**) once the card is claimed. It also does for a card that did
+  not opt in while another card of the conversation is still armed, since
+  settling it may release the resume that was waiting on it. The card then calls `followApprovalResume`, which probes `/inflight`
   on a backoff (first look after 2.5 s) and attaches to the turn fleet started,
   which streams like any turn. It follows for 30 s after a settled card, and
   for up to 31 minutes when the answer was `executing` (the approved-call
@@ -216,7 +218,16 @@ running twice.
 - **A live push of the turn to an open tab** (a conversation-level event
   channel) instead of following after the click.
 - **Hot reload.** Like every `agent_policy` value the list is installed at
-  boot; a card is armed by the policy in force when it was staged.
+  boot; a card is armed by the policy in force when it was staged, and a card
+  armed under an earlier policy still settles into a decision (and a resume)
+  after a restart that removed its tool.
+- **Re-checking outstanding cards at the queue head.** The "nothing pending"
+  check is taken when the resume is claimed. If a turn that is running at that
+  moment stages a new card before it ends, the queued resume still starts when
+  that turn ends. Its model sees the new card's APPROVAL_REQUIRED placeholder,
+  and that card's own settlement starts another resume if its tool opted in.
+  Closing the window would need the queue row linked to the cards it claimed,
+  so it can be un-claimed at launch. Follow-up.
 - **Scheduled runs.** `fleet run` stages no cards, so there is nothing to
   resume there.
 - **Bundles adopt the key after this release ships**: the manifest decoder is

@@ -2075,7 +2075,8 @@ type Approval struct {
 	// docs/RESUME-AFTER-APPROVAL.md): "" (the tool did not opt in, or the row
 	// predates the column), ApprovalResumeArmed, ApprovalResumeClaimed,
 	// ApprovalResumeSkipped, ApprovalResumeSuperseded or ApprovalResumeDropped.
-	// Read by GetApproval only; other listings leave it empty.
+	// Read by GetApproval and ListExpiredApprovals; other listings leave it
+	// empty.
 	ResumeState string
 }
 
@@ -2344,7 +2345,7 @@ func (s *Store) ListExpiredApprovals(ctx context.Context, now int64) ([]Approval
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, '')
+		        is_err, COALESCE(card_json, ''), resume_state
 		 FROM approvals
 		 WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at > 0 AND expires_at < $1
 		 ORDER BY expires_at ASC
@@ -2360,7 +2361,7 @@ func (s *Store) ListExpiredApprovals(ctx context.Context, now int64) ([]Approval
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

@@ -741,3 +741,45 @@ func TestApprovalResume_TranscriptsSkipTheResumeInput(t *testing.T) {
 		}
 	}
 }
+
+// A card armed under an earlier policy (the bundle dropped its tool across a
+// restart) still settles into a decision instead of staying armed for good.
+func TestApprovalResume_CardArmedUnderAnEarlierPolicyStillSettles(t *testing.T) {
+	h := newResumeHarness(t, resumePolicy(0), 30*time.Millisecond)
+	conv := h.conversation()
+	a := h.stage(conv.ID, resumeToolA, "call_1")
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{CriticalToolSuffixes: []string{"update_deal"}})
+	if out := h.resolve(conv.ID, a.ID, false); out["resume"] != true {
+		t.Fatalf("answer = %v, want resume:true for the armed card", out)
+	}
+	if res := h.decision(); res.Input == nil || len(res.Claimed) != 1 {
+		t.Fatalf("decision = %+v, want the armed card claimed", res)
+	}
+	h.idle(conv.ID)
+	if got, _ := h.s.store.GetApproval(context.Background(), resumeTestUser, a.ID); got.ResumeState != store.ApprovalResumeClaimed {
+		t.Fatalf("resume_state = %q, want claimed, not stranded armed", got.ResumeState)
+	}
+}
+
+// Settling a card that did not opt in, but that a waiting resume depended
+// on, answers resume too, so the open chat follows the turn it releases.
+func TestApprovalResume_ReleasingBlockerAnswersResume(t *testing.T) {
+	h := newResumeHarness(t, resumePolicy(0), 30*time.Millisecond)
+	conv := h.conversation()
+	a := h.stage(conv.ID, resumeToolA, "call_a")
+	blocker := h.stage(conv.ID, "mcp_deals_archive_deal", "call_b")
+	if blocker.ResumeState != "" {
+		t.Fatalf("blocker resume_state = %q, want not armed", blocker.ResumeState)
+	}
+	h.resolve(conv.ID, a.ID, true)
+	if res := h.decision(); len(res.Outstanding) != 1 {
+		t.Fatalf("first decision = %+v, want deferred on the blocker", res)
+	}
+	if out := h.resolve(conv.ID, blocker.ID, false); out["resume"] != true {
+		t.Fatalf("blocker answer = %v, want resume:true (it releases the waiting resume)", out)
+	}
+	if res := h.decision(); res.Input == nil {
+		t.Fatalf("second decision = %+v, want the released resume", res)
+	}
+	h.idle(conv.ID)
+}

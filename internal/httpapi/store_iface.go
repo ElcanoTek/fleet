@@ -234,6 +234,7 @@ type chatStore interface {
 	ArmApprovalResume(ctx context.Context, userEmail, approvalID string) (bool, error)
 	ClaimApprovalResume(ctx context.Context, req store.ApprovalResumeRequest) (store.ApprovalResumeResult, error)
 	AppendApprovalResumeDroppedNotice(ctx context.Context, convID string) error
+	HasArmedApprovals(ctx context.Context, convID string) (bool, error)
 	CountUserMessagesAfterTimestamp(ctx context.Context, convID string, ts int64) (int64, error)
 
 	// Browser Web Push subscriptions (#292): the POST /push/subscribe upsert
