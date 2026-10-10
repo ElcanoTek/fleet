@@ -153,7 +153,27 @@ describe("ApprovalGroupCard", () => {
 
     fireEvent.click(screen.getByTestId("approval-group-approve"));
     await waitFor(() => expect(screen.getByTestId("approval-submit-error").textContent).toContain("One action was not decided"));
-    expect(props.onResolved).toHaveBeenCalledTimes(1);
+    expect(props.onResolved).toHaveBeenCalledTimes(2);
     expect(props.onResolved).toHaveBeenCalledWith(expect.objectContaining({ id: "ap-mg", status: "approved" }));
+    // The undecided card keeps pending and carries the reason, so its own card
+    // can say why once the group no longer holds it.
+    expect(props.onResolved).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "ap-pm", status: "pending", decisionError: expect.stringContaining("shutting down") }),
+    );
+  });
+});
+
+describe("a card a grouped decision could not decide", () => {
+  it("shows the reason on its own card", async () => {
+    const { ApprovalCard } = await import("./ApprovalCards");
+    render(
+      <ApprovalCard
+        approval={{ ...members()[1], decisionError: "Couldn't submit your decision: fleet is shutting down" }}
+        conversationId="conv_1"
+        onResolved={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("approval-submit-error").textContent).toContain("fleet is shutting down");
+    expect(screen.getByRole("button", { name: "Approve & run" })).toBeEnabled();
   });
 });

@@ -501,6 +501,12 @@ export type Approval = {
    * (docs/GROUPED-APPROVALS.md). Absent for every other card.
    */
   groupId?: string;
+  /**
+   * Why a grouped decision could not decide this card (the group endpoint's
+   * per-card error). The card stays pending; its own card shows this once the
+   * group no longer holds it. Client-side only.
+   */
+  decisionError?: string;
 };
 
 /**

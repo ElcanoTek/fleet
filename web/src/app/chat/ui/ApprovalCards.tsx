@@ -363,7 +363,9 @@ export function ApprovalCard({
   const [submitting, setSubmitting] = useState<"send" | "cancel" | null>(null);
   // Why the last resolve attempt did not reach the server, shown inline under
   // the buttons; cleared on the next attempt. See ApprovalSubmitError.
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  // A grouped decision that could not decide this card hands its reason over
+  // (ApprovalGroupCard), so the card says why it is still pending.
+  const [submitError, setSubmitError] = useState<string | null>(approval.decisionError ?? null);
   // Held locally so a test (or a parent that has not yet patched) still
   // shows the executing chrome after onResolved; the transcript persists
   // it on Approval.executing.
@@ -442,6 +444,7 @@ export function ApprovalCard({
           status: "pending",
           executing: true,
           resultText: data.result_text,
+          decisionError: undefined,
         });
         return;
       }
@@ -451,6 +454,7 @@ export function ApprovalCard({
         status: nextStatus,
         resultText: data.result_text,
         executing: false,
+        decisionError: undefined,
       });
     } catch (err) {
       // Network failure: nothing reached the server, same posture as a non-2xx.

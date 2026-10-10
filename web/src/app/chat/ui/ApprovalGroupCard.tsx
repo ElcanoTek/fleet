@@ -144,8 +144,13 @@ export function ApprovalGroupCard({
         if (!approval) continue;
         if (r.status_code !== 200 || !r.result) {
           // This call was not decided by the request (a shutdown in
-          // progress, say): it stays pending and can be decided again.
-          if (r.error) failures.push(`${rowTitle(approval)}: ${r.error}`);
+          // progress, say): it stays pending and can be decided again. The
+          // reason rides the card too, because once the others settle the
+          // group may no longer hold it and this card unmounts.
+          if (r.error) {
+            failures.push(`${rowTitle(approval)}: ${r.error}`);
+            onResolved({ ...approval, decisionError: `Couldn't submit your decision: ${r.error}` });
+          }
           continue;
         }
         const next = approvalStatusFromOutcome(r.result);
