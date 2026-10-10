@@ -121,12 +121,17 @@ frozen arguments:
   mid-call leaves the sentinel; `RecoverStrandedApprovals` (boot only)
   rewrites it to the outcome-unknown text and appends the history breadcrumb,
   exactly as for a request-bound execution.
-- **Graceful shutdown waits for it.** Executions are counted in
-  `Server.approvalRuns`, and `performShutdown` drains them
-  (`DrainApprovalRuns`) within the same grace as chat turns. One still running
-  when the grace expires is cut off by the exit and recovered as unknown at
-  the next boot. Before this change the HTTP server's handler drain covered
-  the same window.
+- **Graceful shutdown waits for it.** Executions are admitted and counted by
+  `Server.approvalRuns` (`approvalRunGate`), and `performShutdown` drains them
+  (`DrainApprovalRuns`) within the same grace as chat turns. Admission and
+  drain share one mutex: from the moment the drain starts, a new approve POST
+  is refused with 503 **before its claim**, so the card stays pending and can
+  be approved again after the restart, and no execution can start behind the
+  drain's back (a `sync.WaitGroup` could not promise that, because the approve
+  route stays reachable while the server drains). One still running when the
+  grace expires is cut off by the exit and recovered as unknown at the next
+  boot. Before this change the HTTP server's handler drain covered the same
+  window.
 - `SweepExpiredApprovals` only claims `pending` rows, and
   `includeExecutingApprovals` lists sentinel rows, so a detached execution
   appears on reload as executing until its outcome lands.
