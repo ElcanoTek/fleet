@@ -1123,6 +1123,12 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		EmailLastToolSuffixes:        p.EmailLastTools,
 		SettleableCreateToolSuffixes: p.SettleableCreateTools,
 	})...)
+	// critical_tool_no_session_approval members too: a typo there leaves the
+	// intended tool's cards offering apply-all.
+	problems = append(problems, agentcore.NoSessionApprovalProblems(agentcore.AgentPolicy{
+		CriticalToolSuffixes:          p.CriticalToolSuffixes,
+		CriticalToolNoSessionApproval: p.CriticalToolNoSessionApproval,
+	})...)
 	if len(problems) > 0 {
 		res.Status = statusFail
 		res.Detail = strings.Join(problems, "; ")

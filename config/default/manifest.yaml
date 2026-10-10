@@ -363,6 +363,14 @@ remote_mcp_catalog: []
 #                               whose definitive failure settles the commitment
 #                               for the summary email; ambiguous outcomes never
 #                               settle. See docs/EMAIL-LAST-BATCHES.md.
+#   critical_tool_no_session_approval:
+#                               OPTIONAL critical suffixes (same suffix
+#                               matching as critical_tools) whose approval
+#                               cards take one decision per call: no "apply my
+#                               choice to all calls in this chat" checkbox, and
+#                               the approve POST refuses a session scope. Every
+#                               member must be in critical_tools. Example:
+#                                 critical_tool_no_session_approval: [create_deal]
 #   critical_tool_timeouts:     OPTIONAL per-tool approval default-deny window
 #                               (#225), keyed by the same bare tool-name suffix
 #                               as critical_tools, in seconds. Highest-priority

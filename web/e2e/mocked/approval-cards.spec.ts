@@ -128,3 +128,53 @@ test("a timed-out email card re-hydrates and Ask again submits a re-stage turn",
   const req = await chat;
   expect(req.postData() ?? "").toContain("timed out");
 });
+
+// A bundle can require a decision per call for a critical tool
+// (agent_policy.critical_tool_no_session_approval). The pending card arrives
+// with no_session_approval: true on reload and offers no apply-all checkbox;
+// a card for any other tool keeps it.
+test("a per-call tool's pending card has no apply-all checkbox; other cards keep it", async ({ page }) => {
+  await mockChatBoot(page, {
+    conversations: [{ id: "conv-per-call", title: "Per-call thread" }],
+  });
+  await page.route("**/api/conversations/conv-per-call", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation: { id: "conv-per-call", title: "Per-call thread", persona: "default", model: "test-model", pinned: false },
+        history: [
+          { id: 1, role: "user", type: "text", content: { text: "create the deal and publish the page" } },
+          { id: 2, role: "assistant", type: "text", content: { text: "Both need your approval." } },
+        ],
+        pending_approvals: [
+          {
+            approval_id: "ap-per-call",
+            tool: "mcp_deals_create_deal",
+            summary: { tool: "mcp_deals_create_deal", args: [{ key: "deal_name", value: "Q4 Video" }] },
+            no_session_approval: true,
+          },
+          {
+            approval_id: "ap-batchable",
+            tool: "mcp_pages_deploy_page",
+            summary: { tool: "mcp_pages_deploy_page", args: [{ key: "slug", value: "q3-report" }] },
+            no_session_approval: false,
+          },
+        ],
+        resolved_approvals: [],
+        pending_memory_proposals: [],
+      },
+    });
+  });
+  await page.goto("/chat");
+  const row = page.locator('[data-conversation-id="conv-per-call"]');
+  await row.waitFor({ timeout: 15_000 });
+  await row.click();
+
+  const perCall = page.locator('[data-approval-id="ap-per-call"]');
+  await expect(perCall).toBeVisible();
+  await expect(perCall.getByRole("button", { name: "Approve & run" })).toBeVisible();
+  await expect(perCall.getByTestId("approval-apply-all")).toHaveCount(0);
+
+  const batchable = page.locator('[data-approval-id="ap-batchable"]');
+  await expect(batchable.getByTestId("approval-apply-all")).toBeVisible();
+});

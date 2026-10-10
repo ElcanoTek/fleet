@@ -312,7 +312,11 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// sentinel the orchestration gate interprets — pre-approved → run the tool
 	// normally; pre-denied → block it. This runs before staging so a pre-approved
 	// tool never creates an approval row or emits a card.
-	if a.sessionRegistry != nil && !handlerOnlyApproval(toolName) {
+	//
+	// A tool the bundle lists in critical_tool_no_session_approval never takes
+	// a session policy, even one registered before that rule existed or by a
+	// path that skipped the POST refusal: every call stages its own card.
+	if a.sessionRegistry != nil && !handlerOnlyApproval(toolName) && agentcore.SessionApprovalAllowed(toolName) {
 		if p, ok := a.sessionRegistry.Match(a.conversationID, toolName, rawInput); ok {
 			a.sink.Emit("tool.auto_resolved", map[string]any{
 				"tool":    toolName,
@@ -754,6 +758,10 @@ func approvalClientFields(toolName, rawInput, convID string) map[string]any {
 		"summary":      summarizeApprovalInput(toolName, rawInput, convID),
 		"pattern_args": handlerApprovalPatternArgs(toolName, rawInput),
 		"frozen_args":  frozen,
+		// True when the bundle lists the tool in
+		// critical_tool_no_session_approval: the card must not offer
+		// "apply my choice to all calls", and the POST refuses that scope.
+		"no_session_approval": !agentcore.SessionApprovalAllowed(toolName),
 	}
 }
 
@@ -1422,6 +1430,11 @@ func (s *Server) maybeRegisterSessionPolicy(convID, user, toolName string, req a
 	if scope == "" || scope == "once" || s.sessionApprovals == nil {
 		return
 	}
+	// handleApproval already refused this scope for a no-session tool; this
+	// keeps the registry clean if a future caller skips that check.
+	if !agentcore.SessionApprovalAllowed(toolName) {
+		return
+	}
 	mode := "approve"
 	if !req.Approved {
 		mode = "deny"
@@ -1477,6 +1490,15 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	}
 	if handlerOnlyApproval(approval.ToolName) && req.Scope != "" && req.Scope != "once" {
 		http.Error(w, "this tool requires a separate decision for each staged card; use scope once", http.StatusBadRequest)
+		return
+	}
+	// The bundle can require the same for a critical tool
+	// (agent_policy.critical_tool_no_session_approval). The web hides the
+	// apply-all checkbox for it; this is the server's own refusal, so a
+	// terminal or API client cannot pre-approve the rest of the chat either.
+	// Nothing is claimed: the card stays pending for a per-call decision.
+	if scope := strings.TrimSpace(req.Scope); scope != "" && scope != "once" && !agentcore.SessionApprovalAllowed(approval.ToolName) {
+		http.Error(w, "this action needs its own decision for each call, so it cannot be approved or denied for the rest of the chat; use scope once", http.StatusBadRequest)
 		return
 	}
 

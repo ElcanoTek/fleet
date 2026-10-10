@@ -1718,3 +1718,37 @@ agent_policy:
 		t.Fatalf("well-formed email-last lists must not fail agent_policy: %s", res.Detail)
 	}
 }
+
+// validate-config reports a critical_tool_no_session_approval member that is
+// not a critical suffix: at boot it would do nothing, leaving the intended
+// tool's cards with apply-all.
+func TestCheckAgentPolicy_NoSessionApproval(t *testing.T) {
+	load := func(body string) *clientconfig.Bundle {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		b, err := clientconfig.Load(dir)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		return b
+	}
+	bad := load(`
+agent_policy:
+  critical_tools: [create_deal]
+  critical_tool_no_session_approval: [creat_deal]
+`)
+	if res := checkAgentPolicy(bad, nil); res.Status != statusFail || !strings.Contains(res.Detail, `"creat_deal"`) {
+		t.Fatalf("a typo'd member must fail agent_policy, got %q: %s", res.Status, res.Detail)
+	}
+	good := load(`
+agent_policy:
+  critical_tools: [create_deal]
+  critical_tool_no_session_approval: [create_deal, send_email]
+`)
+	if res := checkAgentPolicy(good, nil); res.Status == statusFail {
+		t.Fatalf("critical members (including a base email suffix) must pass: %s", res.Detail)
+	}
+}

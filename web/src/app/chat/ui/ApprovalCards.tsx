@@ -401,7 +401,9 @@ export function ApprovalCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           approved,
-          scope: executing ? "once" : applyAll ? "session" : "once",
+          // A no-session tool never sends a wider scope, whatever state the
+          // (hidden) checkbox is in: the server would refuse it with a 400.
+          scope: executing || approval.noSessionApproval ? "once" : applyAll ? "session" : "once",
           ...(!executing && edits && Object.keys(edits).length > 0 ? { edits } : {}),
         }),
       });
@@ -740,18 +742,21 @@ export function ApprovalCard({
             <ApprovalSubmitError message={submitError} />
             {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
             {/* Batch approval (#300): pre-approve/deny the rest of this tool's
-                calls for the conversation so the agent isn't gated per call. */}
-            <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
-              <input
-                type="checkbox"
-                data-testid="approval-apply-all"
-                checked={applyAll}
-                disabled={submitting !== null}
-                onChange={(e) => setApplyAll(e.target.checked)}
-                className="size-3.5 accent-[var(--color-primary)]"
-              />
-              Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
-            </label>
+                calls for the conversation so the agent isn't gated per call.
+                Withheld when the bundle requires a decision per call. */}
+            {approval.noSessionApproval ? null : (
+              <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
+                <input
+                  type="checkbox"
+                  data-testid="approval-apply-all"
+                  checked={applyAll}
+                  disabled={submitting !== null}
+                  onChange={(e) => setApplyAll(e.target.checked)}
+                  className="size-3.5 accent-[var(--color-primary)]"
+                />
+                Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
+              </label>
+            )}
           </div>
         )
       ) : (
@@ -911,18 +916,21 @@ function GenericActionCard({
           <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
           <ApprovalSubmitError message={submitError} />
           {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
-          {/* Batch approval (#300), same contract as the email card. */}
-          <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
-            <input
-              type="checkbox"
-              data-testid="approval-apply-all"
-              checked={applyAll}
-              disabled={submitting !== null}
-              onChange={(e) => onApplyAllChange(e.target.checked)}
-              className="size-3.5 accent-[var(--color-primary)]"
-            />
-            Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
-          </label>
+          {/* Batch approval (#300), same contract as the email card —
+              withheld when the bundle requires a decision per call. */}
+          {approval.noSessionApproval ? null : (
+            <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
+              <input
+                type="checkbox"
+                data-testid="approval-apply-all"
+                checked={applyAll}
+                disabled={submitting !== null}
+                onChange={(e) => onApplyAllChange(e.target.checked)}
+                className="size-3.5 accent-[var(--color-primary)]"
+              />
+              Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
+            </label>
+          )}
         </div>
         )
       ) : (
