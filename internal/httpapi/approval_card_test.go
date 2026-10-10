@@ -438,7 +438,7 @@ func TestConversationApprovalGet_CarriesCard(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 				t.Fatalf("%d %s: %v", rec.Code, rec.Body.String(), err)
 			}
-			var rows []map[string]json.RawMessage
+			rows := make([]map[string]json.RawMessage, 0, 1)
 			rows = append(rows, body["pending_approvals"]...)
 			rows = append(rows, body["resolved_approvals"]...)
 			if len(rows) != 1 || string(rows[0]["card"]) != string(canonical) {
