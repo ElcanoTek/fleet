@@ -1386,6 +1386,7 @@ func (s *Server) runTurnAsync(
 			push:                 s.push,
 			bg:                   &s.background,
 			taskConnectors:       s.chatTaskConnectorsFor(user, conv.ID),
+			groupID:              buf.turnID,
 		},
 		MemoryProposer: &memoryProposer{
 			ctx:            turnCtx,

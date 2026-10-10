@@ -31,6 +31,8 @@ import {
   type MemoryDestination,
   type MemoryProject,
 } from "./ApprovalCards";
+import { ApprovalGroupCard } from "./ApprovalGroupCard";
+import { approvalRenderItems } from "./approvalGroups";
 import { MessageMinimap, MINIMAP_MAX, type MinimapEntry } from "./MessageMinimap";
 // The assistant markdown pipeline (react-markdown + micromark, ~43 KiB
 // transfer) is lazy-loaded: nothing renders it until a transcript message is
@@ -65,6 +67,7 @@ import {
   humanToolLabel,
   liveSubagentLabel,
   shortModelName,
+  type Approval,
   type Message,
 } from "./history";
 import { AutoContinueNotice, FleetNotices } from "./FleetNotices";
@@ -319,6 +322,12 @@ export function ChatTranscript({
   // the total size include the spacing. Lazy-initialized from the current
   // breakpoint and only updated on media-query changes, so it never sets state
   // during the effect body.
+  // Approval groups the person split with "One at a time"
+  // (docs/GROUPED-APPROVALS.md): their cards render individually from then on.
+  // Held for the page's lifetime; a reload regroups any cards still pending.
+  const [splitApprovalGroups, setSplitApprovalGroups] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [rowGap, setRowGap] = useState(() =>
     typeof window !== "undefined" &&
     window.matchMedia("(min-width: 640px)").matches
@@ -1035,28 +1044,48 @@ export function ChatTranscript({
 
                               {message.approvals && message.approvals.length > 0 ? (
                                 <div className="grid gap-1.5">
-                                  {message.approvals.map((ap) => (
-                                    <ApprovalCard
-                                      key={ap.id}
-                                      approval={ap}
-                                      conversationId={realConvId(currentConvKey) ?? ""}
-                                      onResolved={(next) => {
-                                        patchAssistantMessage(currentConvKey, message.id, (m) => ({
-                                          ...m,
-                                          approvals: (m.approvals ?? []).map((a) =>
-                                            a.id === next.id ? next : a,
-                                          ),
-                                        }));
-                                      }}
-                                      onModelSwitched={(model) => setSelectedModel(model)}
-                                      onResumeExpected={(executing) => {
-                                        const convId = realConvId(currentConvKey);
-                                        if (convId) followApprovalResume?.(convId, executing);
-                                      }}
-                                      onSwitchAndRetry={() => retryLastUserMessage()}
-                                      onAskAgain={(timedOut) => void submitPrompt(askAgainPrompt(timedOut))}
-                                    />
-                                  ))}
+                                  {approvalRenderItems(message.approvals, splitApprovalGroups).map((item) => {
+                                    const onResolved = (next: Approval) => {
+                                      patchAssistantMessage(currentConvKey, message.id, (m) => ({
+                                        ...m,
+                                        approvals: (m.approvals ?? []).map((a) =>
+                                          a.id === next.id ? next : a,
+                                        ),
+                                      }));
+                                    };
+                                    const onResumeExpected = (executing: boolean) => {
+                                      const convId = realConvId(currentConvKey);
+                                      if (convId) followApprovalResume?.(convId, executing);
+                                    };
+                                    if (item.kind === "group") {
+                                      return (
+                                        <ApprovalGroupCard
+                                          key={`group-${item.groupId}`}
+                                          groupId={item.groupId}
+                                          approvals={item.approvals}
+                                          conversationId={realConvId(currentConvKey) ?? ""}
+                                          onResolved={onResolved}
+                                          onResumeExpected={onResumeExpected}
+                                          onOneAtATime={() =>
+                                            setSplitApprovalGroups((prev) => new Set(prev).add(item.groupId))
+                                          }
+                                        />
+                                      );
+                                    }
+                                    const ap = item.approval;
+                                    return (
+                                      <ApprovalCard
+                                        key={ap.id}
+                                        approval={ap}
+                                        conversationId={realConvId(currentConvKey) ?? ""}
+                                        onResolved={onResolved}
+                                        onModelSwitched={(model) => setSelectedModel(model)}
+                                        onResumeExpected={onResumeExpected}
+                                        onSwitchAndRetry={() => retryLastUserMessage()}
+                                        onAskAgain={(timedOut) => void submitPrompt(askAgainPrompt(timedOut))}
+                                      />
+                                    );
+                                  })}
                                 </div>
                               ) : null}
 

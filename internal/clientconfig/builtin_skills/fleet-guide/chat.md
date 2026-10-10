@@ -453,6 +453,17 @@ running straight away rather than holding the page: use **Check result** a
 little later to see how it ended. Shell commands and task cards keep their own
 limits.
 
+A deployment can also **group** chosen actions (booking the same plan in
+several external systems, for example): when the assistant asks for two or
+more of them in one reply, they arrive as one card titled **N actions to
+approve**, one row per action, each with a checkbox, its own plain-words card
+or arguments, and the account it runs as. **Approve all (k)** runs the k checked
+actions and declines the unchecked ones in one decision; **Cancel all**
+declines them all; **One at a time** shows the usual separate cards instead.
+The countdown shows the earliest deadline among them. Once decided, each action
+shows its own outcome card (running, applied, declined), exactly as if you had
+decided it on its own card.
+
 A deployment can also have the assistant **carry on by itself** once you decide
 a card for chosen actions (updating a record in an external system, for
 example), so it can check the result and continue without you typing "done".

@@ -2078,6 +2078,11 @@ type Approval struct {
 	// Read by GetApproval and ListExpiredApprovals; other listings leave it
 	// empty.
 	ResumeState string
+	// GroupID is the approval group the card joined at staging (migration
+	// 075, docs/GROUPED-APPROVALS.md): the staging turn's id, for a tool the
+	// bundle lists in critical_tool_group_approval. Empty for every other row.
+	// Read by GetApproval, ListPendingApprovals and ListResolvedApprovals.
+	GroupID string
 }
 
 // ListPendingApprovals returns every pending approval for a conversation,
@@ -2089,7 +2094,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, '')
+		        is_err, COALESCE(card_json, ''), COALESCE(group_id, '')
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status = 'pending'
 		 ORDER BY created_at ASC`,
@@ -2104,7 +2109,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2131,7 +2136,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, '')
+		        is_err, COALESCE(card_json, ''), COALESCE(group_id, '')
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status <> 'pending'
 		 ORDER BY created_at DESC
@@ -2147,7 +2152,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2295,6 +2300,21 @@ func (s *Store) SetApprovalCard(ctx context.Context, userEmail, approvalID, card
 	return n == 1, err
 }
 
+// SetApprovalGroup records the approval group a still-pending approval the
+// user owns joined at staging (docs/GROUPED-APPROVALS.md). It reports whether
+// a row was updated: a row resolved or superseded in between keeps no group,
+// so it can never be pulled into a later group decision.
+func (s *Store) SetApprovalGroup(ctx context.Context, userEmail, approvalID, groupID string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE approvals SET group_id = $1 WHERE id = $2 AND user_email = $3 AND status = 'pending'`,
+		groupID, approvalID, userEmail)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // ApprovalSeat is the public credential selection a staged MCP call ran under.
 // Both fields are configuration identifiers; no credential value is stored.
 type ApprovalSeat struct {
@@ -2312,14 +2332,14 @@ func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, ''), resume_state
+		        is_err, COALESCE(card_json, ''), resume_state, COALESCE(group_id, '')
 		 FROM approvals WHERE id = $1 AND user_email = $2`,
 		approvalID, userEmail,
 	)
 	var a Approval
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState); err != nil {
+		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState, &a.GroupID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}

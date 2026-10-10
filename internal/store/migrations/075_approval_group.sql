@@ -1,0 +1,11 @@
+-- 075_approval_group.sql — grouped approvals
+-- (agent_policy.critical_tool_group_approval, docs/GROUPED-APPROVALS.md).
+--
+-- The approval group a card joined when it was staged: the id of the turn
+-- that staged it, written only for a tool the bundle opted in. Two or more
+-- pending cards that share it render as one grouped card, and the group
+-- decision endpoint only resolves cards that carry it. NULL is every other
+-- row (a tool that did not opt in, and every row written before this column
+-- existed), which renders as its own card exactly as before, so a nullable
+-- ADD with no backfill is the old behaviour.
+ALTER TABLE approvals ADD COLUMN group_id TEXT;

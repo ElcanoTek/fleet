@@ -96,3 +96,24 @@ agent_policy:
 		t.Error("AgentPolicy() must return a copy")
 	}
 }
+
+// agent_policy.critical_tool_group_approval parses and is copied.
+func TestAgentPolicyGroupApproval(t *testing.T) {
+	dir := writeManifest(t, `
+agent_policy:
+  critical_tools: [execute_plan]
+  critical_tool_group_approval: [execute_plan]
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	p := b.AgentPolicy()
+	if len(p.CriticalToolGroupApproval) != 1 || p.CriticalToolGroupApproval[0] != "execute_plan" {
+		t.Fatalf("CriticalToolGroupApproval = %v, want [execute_plan]", p.CriticalToolGroupApproval)
+	}
+	p.CriticalToolGroupApproval[0] = "mutated"
+	if again := b.AgentPolicy(); again.CriticalToolGroupApproval[0] != "execute_plan" {
+		t.Errorf("AgentPolicy() must return a copy; the bundle now says %v", again.CriticalToolGroupApproval)
+	}
+}

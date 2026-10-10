@@ -214,6 +214,18 @@ approve/decline answer says `"resume": true` for such a card so the web
 follows the conversation for that turn. See
 [RESUME-AFTER-APPROVAL.md](RESUME-AFTER-APPROVAL.md) and ADR-0083.
 
+## One card for the actions one turn stages
+
+For tools a bundle lists in `agent_policy.critical_tool_group_approval`, the
+cards one turn stages carry the turn's `group_id`, and two or more pending ones
+render as one card: **N actions to approve**, a checkbox per call (its readable
+card or arguments, its seat badge), one countdown on the earliest deadline, and
+**Approve all (k)** (the checked calls approved, the unchecked declined, in one
+request to `POST /conversations/{id}/approval-groups/{groupId}`), **One at a
+time** (the individual cards) and **Cancel all**. Each call is still decided by
+the same code as its own card, with its own claim and execution. See
+[GROUPED-APPROVALS.md](GROUPED-APPROVALS.md).
+
 ## Honest scope / deliberately not done
 
 - **No approvals-table mode column.** Notify records are tagged by their

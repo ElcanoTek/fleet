@@ -258,3 +258,99 @@ test("a described card renders in plain words, pending and resolved", async ({ p
   await expect(done.getByTestId("approval-card-readable")).toHaveCount(0);
   await expect(done.getByTestId("approval-result")).toContainText('{"updated":1}');
 });
+
+// Grouped approvals (docs/GROUPED-APPROVALS.md): two pending cards one turn
+// staged for tools in agent_policy.critical_tool_group_approval share a
+// group_id and render as ONE card. Unchecking a row and pressing Approve all
+// sends one group decision (approve the checked, decline the unchecked); the
+// answers settle each call on its own card. "One at a time" falls back to the
+// individual cards.
+async function mockGroupedConversation(page: Page, conv: string) {
+  await mockChatBoot(page, {
+    conversations: [{ id: conv, title: "Plan thread" }],
+  });
+  await page.route(`**/api/conversations/${conv}`, (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation: { id: conv, title: "Plan thread", persona: "default", model: "test-model", pinned: false },
+        history: [
+          { id: 1, role: "user", type: "text", content: { text: "book the plan" } },
+          { id: 2, role: "assistant", type: "text", content: { text: "Two systems need your approval." } },
+        ],
+        pending_approvals: [
+          {
+            approval_id: "ap-grp-pm",
+            tool: "mcp_pubmatic_execute_plan",
+            summary: { tool: "mcp_pubmatic_execute_plan", args: [{ key: "plan_id", value: "p1" }] },
+            group_id: "grp-1",
+            mcp_server: "pubmatic",
+            mcp_account: "client_a",
+            card: { title: "Create 12 deals on PubMatic", items: [{ label: "Q4 Video", id: "PM-1" }] },
+          },
+          {
+            approval_id: "ap-grp-mg",
+            tool: "mcp_magnite_execute_plan",
+            summary: { tool: "mcp_magnite_execute_plan", args: [{ key: "plan_id", value: "p1" }] },
+            group_id: "grp-1",
+          },
+        ],
+        resolved_approvals: [],
+        pending_memory_proposals: [],
+      },
+    });
+  });
+  await page.goto("/chat");
+  const row = page.locator(`[data-conversation-id="${conv}"]`);
+  await row.waitFor({ timeout: 15_000 });
+  await row.click();
+}
+
+test("a turn's grouped cards render as one card and Approve all sends one decision", async ({ page }) => {
+  await mockGroupedConversation(page, "conv-group");
+  let posted: unknown = null;
+  await page.route("**/api/conversations/conv-group/approval-groups/grp-1", (r: Route) => {
+    posted = r.request().postDataJSON();
+    return r.fulfill({
+      json: {
+        group_id: "grp-1",
+        results: [
+          { approval_id: "ap-grp-pm", decision: "approve", status_code: 200, result: { status: "approved", is_err: false, result_text: "12 deals created" } },
+          { approval_id: "ap-grp-mg", decision: "decline", status_code: 200, result: { status: "rejected" } },
+        ],
+      },
+    });
+  });
+
+  const group = page.getByTestId("approval-group-card");
+  await expect(group).toBeVisible();
+  await expect(group.getByTestId("approval-group-title")).toHaveText("2 actions to approve");
+  await expect(group.getByTestId("approval-group-row")).toHaveCount(2);
+  await expect(group).toContainText("Create 12 deals on PubMatic");
+  await expect(group).toContainText("Runs as client_a on pubmatic");
+  // The individual cards are not rendered beside the group.
+  await expect(page.getByTestId("generic-action-card")).toHaveCount(0);
+
+  await group.getByTestId("approval-group-check").nth(1).uncheck();
+  await group.getByRole("button", { name: "Approve all (1)" }).click();
+
+  // Each call now shows its own outcome card.
+  await expect(page.locator('[data-approval-id="ap-grp-pm"]').getByTestId("generic-action-title")).toHaveText(
+    "Applied · Create 12 deals on PubMatic",
+  );
+  await expect(page.locator('[data-approval-id="ap-grp-mg"]').getByTestId("generic-action-title")).toHaveText(
+    "Execute plan · cancelled",
+  );
+  await expect(page.getByTestId("approval-group-card")).toHaveCount(0);
+  expect(posted).toEqual({ approve: ["ap-grp-pm"], decline: ["ap-grp-mg"] });
+});
+
+test("One at a time falls back to the individual approval cards", async ({ page }) => {
+  await mockGroupedConversation(page, "conv-group-split");
+  const group = page.getByTestId("approval-group-card");
+  await expect(group).toBeVisible();
+  await group.getByRole("button", { name: "One at a time" }).click();
+  await expect(page.getByTestId("approval-group-card")).toHaveCount(0);
+  await expect(page.locator('[data-approval-id="ap-grp-pm"]').getByRole("button", { name: "Approve & run" })).toBeVisible();
+  await expect(page.locator('[data-approval-id="ap-grp-mg"]').getByRole("button", { name: "Approve & run" })).toBeVisible();
+});

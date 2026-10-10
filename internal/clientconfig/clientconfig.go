@@ -400,6 +400,17 @@ type AgentPolicy struct {
 	// CriticalToolResumeMaxPerHour caps the automatic resumes one conversation
 	// may start in a rolling hour (1-60; absent or 0 = 10).
 	CriticalToolResumeMaxPerHour int `yaml:"critical_tool_resume_max_per_hour"`
+	// CriticalToolGroupApproval is an OPTIONAL list of critical suffixes (same
+	// suffix matching as critical_tools) whose approval cards, when one turn
+	// stages two or more of them, render as one grouped card with a checkbox
+	// per call: Approve all (the checked calls; the unchecked ones are
+	// declined), One at a time, Cancel all. Each call still resolves through
+	// its own approval row. Members must be in critical_tools and not notify
+	// mode (docs/GROUPED-APPROVALS.md).
+	//
+	//	agent_policy:
+	//	  critical_tool_group_approval: [execute_plan]
+	CriticalToolGroupApproval []string `yaml:"critical_tool_group_approval"`
 	// BatchSecondsPerDeal is DERIVED, never read from agent_policy: Bundle.AgentPolicy
 	// collects each mcp_servers[].batch_seconds_per_deal into it, keyed by
 	// server name, so the per-record batch budget reaches agentcore on the same
@@ -2784,6 +2795,7 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		CriticalToolNoSessionApproval: append([]string(nil), b.AgentPolicyConfig.CriticalToolNoSessionApproval...),
 		CriticalToolResume:            append([]string(nil), b.AgentPolicyConfig.CriticalToolResume...),
 		CriticalToolResumeMaxPerHour:  b.AgentPolicyConfig.CriticalToolResumeMaxPerHour,
+		CriticalToolGroupApproval:     append([]string(nil), b.AgentPolicyConfig.CriticalToolGroupApproval...),
 	}
 	// An http_tool flagged `critical: true` opts into the SAME critical-tool audit
 	// gate as the manifest's critical_tools suffixes. The tool is registered as

@@ -118,6 +118,14 @@ type AgentPolicy struct {
 	// may start in any rolling hour. 0 = DefaultResumeMaxPerHour; the
 	// accepted range is 1..MaxResumeMaxPerHour.
 	CriticalToolResumeMaxPerHour int
+	// CriticalToolGroupApproval lists critical suffixes whose approval cards,
+	// when one turn stages two or more of them, the web renders as ONE card
+	// with a checkbox per call (docs/GROUPED-APPROVALS.md). Each card still
+	// resolves through its own approval row, claim and execution. Matched by
+	// suffix exactly like CriticalToolSuffixes; members must be critical and
+	// not notify mode (see GroupApprovalProblems). Empty = every card stands
+	// alone, as before.
+	CriticalToolGroupApproval []string
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -198,6 +206,9 @@ var (
 	// Empty by default: no turn starts without user input.
 	activeResume           = map[string]bool{}
 	activeResumeMaxPerHour = DefaultResumeMaxPerHour
+	// activeGroupApproval is the set of critical suffixes whose cards join
+	// their turn's approval group. Empty by default: every card stands alone.
+	activeGroupApproval = map[string]bool{}
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -331,6 +342,12 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		log.Printf("agent_policy: %s", problem)
 	}
 	activeResume, activeResumeMaxPerHour = resume, resumeMax
+
+	group, groupProblems := buildStagedCardSuffixSet("critical_tool_group_approval", p.CriticalToolGroupApproval, p.CriticalToolModes, seen)
+	for _, problem := range groupProblems {
+		log.Printf("agent_policy: %s", problem)
+	}
+	activeGroupApproval = group
 }
 
 // suffixMatches reports whether a tool (or a suffix standing for one) is

@@ -401,6 +401,18 @@ remote_mcp_catalog: []
 #                               OPTIONAL cap on automatic resumes per
 #                               conversation in a rolling hour (1-60; absent =
 #                               10). Past it the chat gets a note instead.
+#   critical_tool_group_approval:
+#                               OPTIONAL critical suffixes (same suffix
+#                               matching as critical_tools) whose approval
+#                               cards, when one turn stages two or more of
+#                               them, render as ONE card with a checkbox per
+#                               call: Approve all (the checked calls; the
+#                               unchecked ones are declined), One at a time,
+#                               Cancel all. Each call still runs on its own
+#                               approval. Every member must be in
+#                               critical_tools (and not notify mode). See
+#                               docs/GROUPED-APPROVALS.md. Example:
+#                                 critical_tool_group_approval: [execute_plan]
 #   critical_tool_timeouts:     OPTIONAL per-tool approval default-deny window
 #                               (#225), keyed by the same bare tool-name suffix
 #                               as critical_tools, in seconds. Highest-priority

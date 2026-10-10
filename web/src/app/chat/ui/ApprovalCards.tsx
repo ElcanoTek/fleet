@@ -56,7 +56,7 @@ type PreviewInbox = "light" | "dark";
 // the visual countdown plus an at-expiry disable so the user can't click Send
 // on a card the server is about to auto-deny. expires_at from the server is the
 // ground truth — local clock skew only shifts the displayed mm:ss slightly.
-function useApprovalCountdown(
+export function useApprovalCountdown(
   expiresAt: number | undefined,
   status: ApprovalStatus,
   executing?: boolean,
@@ -95,7 +95,7 @@ function formatCountdown(totalSeconds: number): string {
 // Send. The default seat renders nothing: there is no ambiguity to resolve.
 // The verb defaults to the email card's "Sending as"; the generic action card
 // passes "Runs as" since not every critical tool sends anything.
-function ApprovalSeatBadge({ server, account, verb = "Sending as" }: {
+export function ApprovalSeatBadge({ server, account, verb = "Sending as" }: {
   server?: string;
   account?: string;
   verb?: string;
@@ -134,7 +134,7 @@ function isTimedOutApproval(approval: Approval): boolean {
 // actionLabel splits an mcp_<server>_<tool> name into a humanized action
 // ("Deploy page") and its server ("pages") for the generic card's header.
 // Native tools have no server half and humanize whole.
-function actionLabel(tool: string): { action: string; server?: string } {
+export function actionLabel(tool: string): { action: string; server?: string } {
   const m = /^mcp_([^_]+)_(.+)$/.exec(tool);
   const raw = m ? m[2] : tool;
   const spaced = raw.replace(/_/g, " ").trim();
@@ -176,7 +176,7 @@ function AskAgainButton({ approval, onAskAgain }: {
 // ApprovalCountdown renders the inline "Auto-denying in m:ss" line (or the
 // timed-out notice once the deadline passes). Renders nothing when the approval
 // has no deadline (remaining === null), preserving the prior no-timeout UI.
-function ApprovalCountdown({
+export function ApprovalCountdown({
   remaining,
   expired,
 }: {
@@ -212,7 +212,7 @@ function ApprovalCountdown({
 // card shows. The status is always there; the body is included when it is a
 // short plain sentence (the API's error strings), skipped when it is empty or
 // a page of HTML from a proxy.
-async function describeSubmitFailure(response: Response): Promise<string> {
+export async function describeSubmitFailure(response: Response): Promise<string> {
   let body = "";
   try {
     body = (await response.text()).trim();
@@ -225,7 +225,7 @@ async function describeSubmitFailure(response: Response): Promise<string> {
     : `Couldn't submit your decision (HTTP ${response.status}).`;
 }
 
-function ApprovalSubmitError({
+export function ApprovalSubmitError({
   message,
   running,
 }: {

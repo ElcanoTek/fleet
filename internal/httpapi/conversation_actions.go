@@ -72,6 +72,8 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		card["tool_call_id"] = a.ToolCallID
 		// The describer's readable card, when one was produced at staging.
 		withApprovalCard(card, &a)
+		// The turn's approval group, for a tool in critical_tool_group_approval.
+		withApprovalGroup(card, &a)
 		approvals = append(approvals, card)
 	}
 	// Resolved approvals re-hydrate too, so the transcript keeps the shape
@@ -117,6 +119,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 			"recorded": isNotifyRecordResult(a.ResultText),
 		}
 		withApprovalCard(card, &a)
+		withApprovalGroup(card, &a)
 		// Same executing / is_err / execution_unknown keys as the approval
 		// POST so a reload (and the TUI's resolved_approvals ingest) cannot
 		// green-stamp an in-flight sentinel or a failed run.
@@ -219,6 +222,7 @@ func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Re
 		card := s.approvalClientState(a)
 		card["approval_id"], card["tool"] = a.ID, a.ToolName
 		withApprovalCard(card, a)
+		withApprovalGroup(card, a)
 		resolved = append(resolved, card)
 	}
 	writeJSON(w, map[string]any{"pending_approvals": pending, "resolved_approvals": resolved})
