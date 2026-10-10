@@ -73,3 +73,26 @@ agent_policy:
 		t.Errorf("want none for a manifest without the key, got %v", got)
 	}
 }
+
+// agent_policy.critical_tool_card_describers parses and is copied.
+func TestAgentPolicyCardDescribers(t *testing.T) {
+	dir := writeManifest(t, `
+agent_policy:
+  critical_tools: [update_deal]
+  parallel_safe_tools: [mcp_deals_describe_deal_update]
+  critical_tool_card_describers:
+    update_deal: describe_deal_update
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	p := b.AgentPolicy()
+	if p.CriticalToolCardDescribers["update_deal"] != "describe_deal_update" {
+		t.Fatalf("CriticalToolCardDescribers = %v", p.CriticalToolCardDescribers)
+	}
+	p.CriticalToolCardDescribers["update_deal"] = "mutated"
+	if b.AgentPolicy().CriticalToolCardDescribers["update_deal"] != "describe_deal_update" {
+		t.Error("AgentPolicy() must return a copy")
+	}
+}

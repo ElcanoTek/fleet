@@ -411,6 +411,7 @@ func run() error {
 		BatchSecondsPerDeal:           bundlePolicy.BatchSecondsPerDeal,
 		ApprovedCallTimeoutSeconds:    bundlePolicy.ApprovedCallTimeoutSeconds,
 		CriticalToolNoSessionApproval: bundlePolicy.CriticalToolNoSessionApproval,
+		CriticalToolCardDescribers:    bundlePolicy.CriticalToolCardDescribers,
 	})
 
 	// Connector credentials cross exactly one process boundary at boot: the child

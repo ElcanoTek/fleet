@@ -258,6 +258,111 @@ export type MemoryProposal = {
   savedTo?: string;
 };
 
+/** One record on a readable approval card (docs/APPROVAL-CARD-DESCRIBERS.md). */
+export type ApprovalCardItem = {
+  label: string;
+  /** Buyer-facing id, shown in monospace. */
+  id?: string;
+  /** Absolute https link to the record, opened in a new tab. */
+  link?: string;
+  /** before → after; no `before` means the field had no previous value. */
+  changes?: Array<{ label: string; before?: string; after: string }>;
+  settings?: Array<{ label: string; value: string }>;
+  /** Short warnings shown as badges, e.g. {code: "deal_active", label: "Deal is Active"}. */
+  flags?: Array<{ code: string; label: string }>;
+};
+
+/**
+ * The readable card a bundle-declared describer produced when the call was
+ * staged. Absent = render the generic arguments card.
+ */
+export type ApprovalCardData = {
+  title: string;
+  subtitle?: string;
+  items: ApprovalCardItem[];
+  footer?: string;
+};
+
+function isString(v: unknown): v is string {
+  return typeof v === "string";
+}
+
+function optString(v: unknown): string | undefined | null {
+  if (v === undefined) return undefined;
+  return isString(v) ? v : null; // null = present but not a string: refuse
+}
+
+function httpsLink(v: string): string | null {
+  try {
+    const u = new URL(v);
+    return u.protocol === "https:" && u.host !== "" && !u.username && !u.password ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+// parseApprovalCardData accepts exactly the server's card schema and returns
+// undefined for anything else, so the card falls back to the generic layout.
+// Every string stays text; a link survives only as an absolute https URL.
+export function parseApprovalCardData(value: unknown): ApprovalCardData | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  if (!isString(v.title) || v.title.trim() === "" || !Array.isArray(v.items)) return undefined;
+  const subtitle = optString(v.subtitle);
+  const footer = optString(v.footer);
+  if (subtitle === null || footer === null) return undefined;
+  const items: ApprovalCardItem[] = [];
+  for (const raw of v.items) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+    const it = raw as Record<string, unknown>;
+    if (!isString(it.label)) return undefined;
+    const id = optString(it.id);
+    const link = optString(it.link);
+    if (id === null || link === null) return undefined;
+    const item: ApprovalCardItem = { label: it.label };
+    if (id) item.id = id;
+    if (link) {
+      const safe = httpsLink(link);
+      if (!safe) return undefined;
+      item.link = safe;
+    }
+    if (it.changes !== undefined) {
+      if (!Array.isArray(it.changes)) return undefined;
+      item.changes = [];
+      for (const c of it.changes as unknown[]) {
+        const ch = c as Record<string, unknown> | null;
+        if (!ch || !isString(ch.label) || !isString(ch.after)) return undefined;
+        const before = optString(ch.before);
+        if (before === null) return undefined;
+        item.changes.push(before === undefined ? { label: ch.label, after: ch.after } : { label: ch.label, before, after: ch.after });
+      }
+    }
+    if (it.settings !== undefined) {
+      if (!Array.isArray(it.settings)) return undefined;
+      item.settings = [];
+      for (const s of it.settings as unknown[]) {
+        const st = s as Record<string, unknown> | null;
+        if (!st || !isString(st.label) || !isString(st.value)) return undefined;
+        item.settings.push({ label: st.label, value: st.value });
+      }
+    }
+    if (it.flags !== undefined) {
+      if (!Array.isArray(it.flags)) return undefined;
+      item.flags = [];
+      for (const f of it.flags as unknown[]) {
+        const fl = f as Record<string, unknown> | null;
+        if (!fl || !isString(fl.code) || !isString(fl.label)) return undefined;
+        item.flags.push({ code: fl.code, label: fl.label });
+      }
+    }
+    items.push(item);
+  }
+  const card: ApprovalCardData = { title: v.title, items };
+  if (subtitle) card.subtitle = subtitle;
+  if (footer) card.footer = footer;
+  return card;
+}
+
 export type Approval = {
   id: string;
   tool: string;
@@ -380,6 +485,8 @@ export type Approval = {
    * and always posts scope "once" (the server refuses any other scope).
    */
   noSessionApproval?: boolean;
+  /** The describer's readable card, when the bundle declares one for the tool. */
+  card?: ApprovalCardData;
 };
 
 /**
@@ -436,9 +543,11 @@ export function hydrateResolvedApproval(p: {
   mcp_account?: string;
   tool_call_id?: string;
   recorded?: boolean;
+  card?: unknown;
 }): Approval {
   const executing = p.executing === true;
   return {
+    card: parseApprovalCardData(p.card),
     id: p.approval_id,
     tool: p.tool,
     summary: p.summary,

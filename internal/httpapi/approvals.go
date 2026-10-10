@@ -400,10 +400,32 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		})
 	}
 
+	// A bundle-declared describer turns the call into a readable card
+	// (approval_card.go). Bounded and best-effort: any failure leaves the
+	// generic arguments card, and staging goes on either way.
+	cardJSON, cardFallback := a.describeApproval(toolName, rawInput)
+
 	seat := a.seatFor(toolName)
 	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail, toolName, toolCallID, rawInput, a.expiryUnixFor(toolName), seat)
 	if err != nil {
 		return "", err
+	}
+	if cardJSON != "" {
+		if ok, err := a.store.SetApprovalCard(a.ctx, a.userEmail, approval.ID, cardJSON); err != nil || !ok {
+			log.Printf("approval card: store card for %s: ok=%t err=%v", approval.ID, ok, err)
+			cardFallback = cardFallbackStore
+		} else {
+			approval.CardJSON = cardJSON
+		}
+	}
+	if cardFallback != "" {
+		// Observable without reading server logs: the card a declared
+		// describer should have produced fell back to the generic one.
+		a.sink.Emit("tool.approval_card_fallback", map[string]any{
+			"approval_id": approval.ID,
+			"tool":        toolName,
+			"reason":      cardFallback,
+		})
 	}
 
 	a.sink.Emit("tool.approval_required", approvalRequiredEvent(approval, rawInput, a.conversationID))
@@ -772,7 +794,7 @@ func approvalRequiredEvent(approval *store.Approval, rawInput, convID string) ma
 	ev["expires_at"] = approval.ExpiresAt
 	ev["mcp_server"] = approval.MCPServer
 	ev["mcp_account"] = approval.MCPAccount
-	return ev
+	return withApprovalCard(ev, approval)
 }
 
 // summarizeApprovalInput dispatches on tool name to build a display

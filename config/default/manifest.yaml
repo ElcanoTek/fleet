@@ -371,6 +371,18 @@ remote_mcp_catalog: []
 #                               the approve POST refuses a session scope. Every
 #                               member must be in critical_tools. Example:
 #                                 critical_tool_no_session_approval: [create_deal]
+#   critical_tool_card_describers:
+#                               OPTIONAL map from a critical suffix to a
+#                               read-only "describer" tool suffix on the same
+#                               server. When the call is staged, fleet calls the
+#                               describer with the same arguments (5 s, no
+#                               retries) and renders its JSON as a readable
+#                               card; any failure keeps the generic card. The
+#                               describer must be in parallel_safe_tools and
+#                               must not be critical. See
+#                               docs/APPROVAL-CARD-DESCRIBERS.md. Example:
+#                                 critical_tool_card_describers:
+#                                   update_deal: describe_deal_update
 #   critical_tool_timeouts:     OPTIONAL per-tool approval default-deny window
 #                               (#225), keyed by the same bare tool-name suffix
 #                               as critical_tools, in seconds. Highest-priority
