@@ -245,13 +245,13 @@ above the card asking the person to approve it (seen live on a deal booking,
 2026-10-11). The terminal client already shows such a call as "⏸ awaiting
 approval" (`internal/chattui`).
 
-The web now draws that chip neutral, with the expanded result no longer in the
-error colour, and a muted tag that follows the card: **· awaiting approval**
-while it is pending and not running, **· staged for approval** once it is
-running or decided (the chip keeps the placeholder result until a reload
-brings the real one, so it must not claim the call still waits; the card
-shows the outcome). It does so only when both hold (`isStagedForApproval`,
-`web/src/app/chat/ui/ToolChips.tsx`):
+The web now draws that chip neutral, with a muted **· sent for approval** tag
+and the expanded result no longer in the error colour. The tag claims nothing
+about the card's state: until a reload the chip keeps the placeholder result
+while the card goes on to pending, expired, running or decided, so the card,
+not the chip, says how it went (an earlier "awaiting approval" wording went
+stale after a decision or an expiry; Codex on #1721). The chip is neutral only
+when both hold (`isStagedForApproval`, `web/src/app/chat/ui/ToolChips.tsx`):
 
 - the result is the gate's placeholder: it starts with `APPROVAL_REQUIRED:` and
   names an `approval_id` on its first line. A staging failure ("Could not stage

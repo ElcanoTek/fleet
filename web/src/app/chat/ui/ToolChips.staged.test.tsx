@@ -18,14 +18,10 @@ function call(resultText: string, state: ToolCall["state"] = "error"): ToolCall 
 }
 
 describe("isStagedForApproval", () => {
-  const ids = stagedApprovalIds([{ id: APPROVAL_ID, status: "pending" }]);
+  const ids = stagedApprovalIds([{ id: APPROVAL_ID }]);
 
-  it("names the card's state for the gate's placeholder naming a card of the message", () => {
-    expect(isStagedForApproval(call(STAGED), ids)).toBe("awaiting");
-    // Once the card is running or decided, the chip no longer claims it waits.
-    expect(isStagedForApproval(call(STAGED), stagedApprovalIds([{ id: APPROVAL_ID, status: "pending", executing: true }]))).toBe("staged");
-    expect(isStagedForApproval(call(STAGED), stagedApprovalIds([{ id: APPROVAL_ID, status: "approved" }]))).toBe("staged");
-    expect(isStagedForApproval(call(STAGED), stagedApprovalIds([{ id: APPROVAL_ID, status: "rejected" }]))).toBe("staged");
+  it("is true for the gate's placeholder naming a card of the message", () => {
+    expect(isStagedForApproval(call(STAGED), ids)).toBe(true);
   });
 
   it("covers every gate wording that names an approval id", () => {
@@ -34,46 +30,42 @@ describe("isStagedForApproval", () => {
       `APPROVAL_REQUIRED: risky command — staged for user approval (approval_id=${APPROVAL_ID}). Do NOT retry.`,
       `APPROVAL_REQUIRED: the scheduled task has been staged for explicit user approval (approval_id=${APPROVAL_ID}). Do NOT retry.`,
     ]) {
-      expect(isStagedForApproval(call(text), ids)).toBe("awaiting");
+      expect(isStagedForApproval(call(text), ids)).toBe(true);
     }
   });
 
   it("stays an error when staging failed (no approval id)", () => {
     const failed =
       "APPROVAL_REQUIRED: mcp_x_update_deal is a critical action. Could not stage it for user approval (db down). Ask the user what to do.";
-    expect(isStagedForApproval(call(failed), ids)).toBeNull();
+    expect(isStagedForApproval(call(failed), ids)).toBe(false);
   });
 
   it("stays an error when the id names no card of the message", () => {
-    expect(isStagedForApproval(call(STAGED), stagedApprovalIds([{ id: "another-card" }]))).toBeNull();
-    expect(isStagedForApproval(call(STAGED), stagedApprovalIds(undefined))).toBeNull();
+    expect(isStagedForApproval(call(STAGED), stagedApprovalIds([{ id: "another-card" }]))).toBe(false);
+    expect(isStagedForApproval(call(STAGED), stagedApprovalIds(undefined))).toBe(false);
   });
 
   it("stays an error for a tool's own text that only contains the words", () => {
-    expect(isStagedForApproval(call(`upstream said: ${STAGED}`), ids)).toBeNull();
-    expect(isStagedForApproval(call("APPROVAL_BLOCKED: another write is waiting"), ids)).toBeNull();
+    expect(isStagedForApproval(call(`upstream said: ${STAGED}`), ids)).toBe(false);
+    expect(isStagedForApproval(call("APPROVAL_BLOCKED: another write is waiting"), ids)).toBe(false);
   });
 
   it("only applies to an error chip", () => {
-    expect(isStagedForApproval(call(STAGED, "done"), ids)).toBeNull();
-    expect(isStagedForApproval(call(STAGED, "pending"), ids)).toBeNull();
+    expect(isStagedForApproval(call(STAGED, "done"), ids)).toBe(false);
+    expect(isStagedForApproval(call(STAGED, "pending"), ids)).toBe(false);
   });
 });
 
 describe("ToolChip for a staged call", () => {
-  it("renders neutral, marked awaiting approval, and its result is not shown as an error", () => {
-    render(<ToolChip tc={call(STAGED)} taskTrackerDisplay={null} stagedForApproval="awaiting" />);
+  it("renders neutral, marked sent for approval, and its result is not shown as an error", () => {
+    render(<ToolChip tc={call(STAGED)} taskTrackerDisplay={null} stagedForApproval />);
     const chip = screen.getByRole("button");
     expect(chip.getAttribute("style")).not.toContain("--color-danger");
-    expect(screen.getByTestId("tool-chip-staged").textContent).toContain("awaiting approval");
+    // The tag claims nothing about the card's state (pending, expired,
+    // running, decided): the card says how it went.
+    expect(screen.getByTestId("tool-chip-staged").textContent).toBe("· sent for approval");
     fireEvent.click(chip);
     expect(screen.getByText(/staged for explicit user approval/)).toBeTruthy();
-  });
-
-  it("once its card is decided, stays neutral but no longer says it waits", () => {
-    render(<ToolChip tc={call(STAGED)} taskTrackerDisplay={null} stagedForApproval="staged" />);
-    expect(screen.getByRole("button").getAttribute("style")).not.toContain("--color-danger");
-    expect(screen.getByTestId("tool-chip-staged").textContent).toBe("· staged for approval");
   });
 
   it("keeps the red error chip by default", () => {
