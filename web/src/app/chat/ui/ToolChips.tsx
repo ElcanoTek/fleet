@@ -156,16 +156,44 @@ export function PythonOutput({
 
 // ── Tool chip ────────────────────────────────────────────────────────────
 
+// The placeholder result fleet's approval gates give a call they staged for a
+// person to decide (internal/agentcore: interactive_gates.go and the email
+// gate in orchestration.go). It is an is_err result, so the model treats the
+// call as not run, but the call did not fail: it waits on a card. A staging
+// FAILURE uses the same prefix with no approval id, and stays an error.
+const STAGED_FOR_APPROVAL = /^APPROVAL_REQUIRED:[^\n]*?\(approval_id=([^)\s]+)\)/;
+
+// stagedApprovalIds returns the ids of the approval cards a message carries.
+export function stagedApprovalIds(approvals: ReadonlyArray<{ id: string }> | undefined): ReadonlySet<string> {
+  return new Set((approvals ?? []).map((a) => a.id));
+}
+
+// isStagedForApproval reports whether an error chip is really a call fleet
+// staged for approval: its result is the gate's placeholder AND names an
+// approval card of the same message. The cross-check keeps a tool's own error
+// text that merely starts with the same words red, as before.
+export function isStagedForApproval(tc: ToolCall, approvalIds: ReadonlySet<string>): boolean {
+  if (tc.state !== "error" || !tc.resultText) return false;
+  const m = STAGED_FOR_APPROVAL.exec(tc.resultText);
+  return m !== null && approvalIds.has(m[1]);
+}
+
 export function ToolChip({
   tc,
   taskTrackerDisplay,
   conversationId,
+  stagedForApproval = false,
 }: {
   tc: ToolCall;
   taskTrackerDisplay: TaskTrackerDisplay | null;
   // Threaded so the spawn_subagent result card can fetch the child's own
   // transcript through this conversation's authorized endpoint (#1043).
   conversationId?: string | null;
+  // The call was staged for approval (isStagedForApproval): a neutral chip
+  // tagged "sent for approval", not an error. The tag makes no claim about
+  // the card's state (pending, expired, running or decided): until a reload
+  // the chip keeps the placeholder result, and the card says how it went.
+  stagedForApproval?: boolean;
 }) {
   // A delegation opens by default (#1043 follow-up): it is the one tool call
   // that runs for minutes with the operator otherwise staring at a collapsed
@@ -173,8 +201,9 @@ export function ToolChip({
   // it. Every other tool keeps the click-to-open default.
   const [open, setOpen] = useState(tc.name === "spawn_subagent");
   const label = prettyToolName(tc.name);
+  const isErr = tc.state === "error" && !stagedForApproval;
   const stateStyle: React.CSSProperties =
-    tc.state === "error"
+    isErr
       ? {
           borderColor: "var(--color-danger-border)",
           color: "var(--color-danger)",
@@ -206,6 +235,11 @@ export function ToolChip({
           <span className="text-[var(--color-text-muted)]">
             · {tc.subagent.role || "explore"}
             {tc.subagent.steps > 0 ? ` · ${tc.subagent.steps} steps` : ""}
+          </span>
+        ) : null}
+        {stagedForApproval ? (
+          <span data-testid="tool-chip-staged" className="text-[var(--color-text-muted)]">
+            · sent for approval
           </span>
         ) : null}
         {tc.state === "pending" ? (
@@ -244,7 +278,7 @@ export function ToolChip({
             <ToolResultView
               name={tc.name}
               resultText={tc.resultText}
-              isErr={tc.state === "error"}
+              isErr={isErr}
               taskTrackerDisplay={taskTrackerDisplay}
               conversationId={conversationId}
             />

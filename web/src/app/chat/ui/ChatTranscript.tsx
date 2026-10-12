@@ -21,7 +21,7 @@ import { LoadingLogo } from "./LoadingLogo";
 import { EmptyStatePrompts, ProtocolPillForm } from "./EmptyStatePrompts";
 import { getPill, type ProtocolPill } from "./protocolPills";
 import { Icon } from "./Icon";
-import { PythonOutput, ToolChip, taskTrackerDisplayForMessage } from "./ToolChips";
+import { PythonOutput, ToolChip, isStagedForApproval, stagedApprovalIds, taskTrackerDisplayForMessage } from "./ToolChips";
 import { CopyButton, SummaryBanner, TurnSummaryChip } from "./ChatChips";
 import {
   ApprovalCard,
@@ -616,6 +616,7 @@ export function ChatTranscript({
                             const taskTrackerDisplay = taskTrackerDisplayForMessage(message);
                     const activeTaskTitle = taskTrackerDisplay?.activeTask ?? null;
                     const toolCalls = message.toolCalls ?? [];
+                    const approvalIds = stagedApprovalIds(message.approvals);
                     const pythonStreams = message.pythonStreams ?? [];
                     const hasExecutionTrail = toolCalls.length > 0 || pythonStreams.length > 0;
                     // With "Show details" on, the tool-call pills
@@ -742,6 +743,7 @@ export function ChatTranscript({
                                           tc={tc}
                                           taskTrackerDisplay={taskTrackerDisplay}
                                           conversationId={realConvId(currentConvKey)}
+                                          stagedForApproval={isStagedForApproval(tc, approvalIds)}
                                         />
                                       ))}
                                     </div>
