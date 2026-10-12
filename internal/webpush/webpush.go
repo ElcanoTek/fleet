@@ -241,6 +241,12 @@ func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSub
 		if err := s.store.DeletePushSubscription(ctx, sub.Endpoint); err != nil {
 			s.logf("webpush: delete expired subscription failed: %v", err)
 		}
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		// The relay refused this server's VAPID credentials for the
+		// subscription: almost always one made with an earlier key, after the
+		// operator rotated FLEET_VAPID_*. The row is kept, not deleted — the
+		// browser renews it (POST /push/renew) the next time it loads fleet.
+		s.logf("webpush: relay %s returned status %d: it refused this server's VAPID key, usually a subscription made with an earlier key; the browser renews it the next time it opens fleet", endpointHost(sub.Endpoint), resp.StatusCode)
 	case resp.StatusCode < 200 || resp.StatusCode >= 300:
 		s.logf("webpush: relay %s returned status %d", endpointHost(sub.Endpoint), resp.StatusCode)
 	}

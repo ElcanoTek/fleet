@@ -6,6 +6,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -436,5 +437,27 @@ func TestConversationLink(t *testing.T) {
 	}
 	if got := (&Service{}).ConversationLink("abc"); got != "/chat?c=abc" {
 		t.Errorf("relative link = %q", got)
+	}
+}
+
+// A relay that refuses this server's VAPID credentials (401/403) is the
+// signature of a subscription made with an earlier key. The row is kept —
+// the browser renews it — and the log says what happened.
+func TestSendOne_RefusedVAPIDKeyKeepsTheRowAndSaysWhy(t *testing.T) {
+	refused := testSubscription(t, "https://relay.example/old-key")
+	st := &fakeStore{subs: []store.PushSubscription{refused}}
+	relay := &fakeRelay{status: map[string]int{refused.Endpoint: http.StatusForbidden}}
+	svc := newTestService(t, st, relay)
+	var logged []string
+	svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+
+	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+		t.Fatalf("sendToUser: %v", err)
+	}
+	if len(st.deleted) != 0 {
+		t.Errorf("deleted %v; a refused key must not retire the row", st.deleted)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "status 403") || !strings.Contains(logged[0], "earlier key") {
+		t.Errorf("log = %q, want the refused-key explanation", logged)
 	}
 }

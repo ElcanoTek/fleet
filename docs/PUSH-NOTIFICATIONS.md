@@ -45,6 +45,23 @@ channel consumes.
    menu goes through the one `signOut`) also lets it go and deletes the
    stored row.
 
+**Rotating the keys.** A browser subscription is bound to the VAPID key it
+was made with, so after the operator replaces the `FLEET_VAPID_*` pair every
+existing subscription is refused by the push service (FCM answers `403`).
+fleet keeps those rows and logs `relay … returned status 403: it refused this
+server's VAPID key …` instead of deleting them. Each browser renews its own:
+on any page load (`PushKeyRenewal` in the root layout, and again in the
+settings switch) it compares the key its subscription records with
+`GET /push/vapid-public-key`, and on a mismatch it unsubscribes, subscribes
+with the current key (permission is already granted, so no prompt), and asks
+`POST /push/renew` to move the signed-in user's row to the new subscription.
+The server moves it only if that user held the old row; otherwise the browser
+drops the new subscription, so a renewal never signs up an account that did
+not turn notifications on in that browser. Until a browser next opens fleet,
+its notifications do not arrive, and a browser that never opens fleet again
+leaves a refused row behind (the stale-subscription sweep below is still
+deferred).
+
 **Default OFF.** With any of the three `FLEET_VAPID_*` vars unset, the push
 subsystem does not exist: the `/push/*` endpoints answer `501 Not Implemented`
 with a machine-readable `push_disabled` error, the settings switch is greyed
@@ -102,9 +119,10 @@ Notes on honest scope:
 | `/push/subscribe` | POST | Upsert the caller's `PushSubscription` (endpoint + keys), keyed on the endpoint. 204. |
 | `/push/unsubscribe` | DELETE | Delete the caller's row for the endpoint (owner-scoped). Idempotent 204. |
 | `/push/status` | POST | `{"subscribed": bool}`: whether the caller holds the row for the endpoint (owner-scoped read; the endpoint rides in the body because it is a capability URL). |
+| `/push/renew` | POST | `{old_endpoint, endpoint, keys}` → `{"renewed": bool}`: move the caller's row from the old endpoint to the browser's new subscription after a key rotation. False (nothing changed) unless the caller held the old row; true again if a second tab already moved it. |
 | `/push/vapid-public-key` | GET | `{"key": "<VAPID public key>"}` — non-secret. |
 
-All four return `501` with `{"error":"push_disabled", ...}` when
+All five return `501` with `{"error":"push_disabled", ...}` when
 unconfigured. The browser reaches them through the Next.js proxies under
 `/api/push/*` (session cookie + origin-checked like every mutating route).
 

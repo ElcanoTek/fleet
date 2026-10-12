@@ -144,3 +144,46 @@ func TestPushSubscriptions_HasUser(t *testing.T) {
 		t.Error("ownership did not follow the newest claim")
 	}
 }
+
+// TestPushSubscriptions_Renew moves the owner's row to the browser's new
+// subscription after a VAPID key rotation, refuses any other account, and is
+// idempotent when a second tab already renewed.
+func TestPushSubscriptions_Renew(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const oldEP, newEP = "https://push.example/old-key", "https://push.example/new-key"
+	if err := s.UpsertPushSubscription(ctx, "u@x.com", oldEP, "fake-auth-old", "fake-p256dh-old"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Another account cannot take the row over.
+	renewed, err := s.RenewPushSubscription(ctx, "other@x.com", oldEP, newEP, "fake-auth-new", "fake-p256dh-new")
+	if err != nil || renewed {
+		t.Fatalf("other account renew = %v, %v; want false, nil", renewed, err)
+	}
+	if subs, _ := s.ListPushSubscriptions(ctx, "u@x.com"); len(subs) != 1 || subs[0].Endpoint != oldEP {
+		t.Fatalf("a refused renewal changed the row: %+v", subs)
+	}
+
+	// The owner's renewal moves the row, keys and all.
+	renewed, err = s.RenewPushSubscription(ctx, "U@x.com", oldEP, newEP, "fake-auth-new", "fake-p256dh-new")
+	if err != nil || !renewed {
+		t.Fatalf("owner renew = %v, %v; want true, nil", renewed, err)
+	}
+	subs, _ := s.ListPushSubscriptions(ctx, "u@x.com")
+	if len(subs) != 1 || subs[0].Endpoint != newEP || subs[0].KeysAuth != "fake-auth-new" || subs[0].KeysP256dh != "fake-p256dh-new" {
+		t.Fatalf("row after renew: %+v", subs)
+	}
+
+	// A second tab renewing the same move finds it done.
+	if renewed, err = s.RenewPushSubscription(ctx, "u@x.com", oldEP, newEP, "fake-auth-new", "fake-p256dh-new"); err != nil || !renewed {
+		t.Fatalf("repeated renew = %v, %v; want true, nil", renewed, err)
+	}
+	if renewed, err = s.RenewPushSubscription(ctx, "other@x.com", oldEP, newEP, "fake-auth-new", "fake-p256dh-new"); err != nil || renewed {
+		t.Fatalf("other account after the move = %v, %v; want false, nil", renewed, err)
+	}
+
+	if _, err := s.RenewPushSubscription(ctx, "u@x.com", "", newEP, "a", "p"); err == nil {
+		t.Error("renew without the old endpoint: want an error")
+	}
+}

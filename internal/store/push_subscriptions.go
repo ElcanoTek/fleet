@@ -87,6 +87,40 @@ func (s *Store) HasUserPushSubscription(ctx context.Context, userEmail, endpoint
 	return held, err
 }
 
+// RenewPushSubscription moves userEmail's row from oldEndpoint to the
+// browser's new subscription (endpoint + keys). A browser must subscribe
+// again after the operator rotates the VAPID keys, because a subscription is
+// bound to the key it was made with and the push service refuses every send
+// signed with another; the row has to follow it. Owner-scoped: it changes
+// nothing and reports false unless userEmail holds the row for oldEndpoint, so
+// a renewal can never sign up an account that did not turn notifications on
+// in this browser. Idempotent: when the old row is already gone but userEmail
+// holds the new endpoint (a second tab renewed first), it reports true.
+func (s *Store) RenewPushSubscription(ctx context.Context, userEmail, oldEndpoint, endpoint, keysAuth, keysP256dh string) (bool, error) {
+	userEmail = normalizeEmail(userEmail)
+	if userEmail == "" || oldEndpoint == "" || endpoint == "" || keysAuth == "" || keysP256dh == "" {
+		return false, errors.New("push renewal requires user, both endpoints, and keys")
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE push_subscriptions
+		 SET endpoint = $3, keys_auth = $4, keys_p256dh = $5, last_active_at = $6
+		 WHERE user_email = $1 AND endpoint = $2`,
+		userEmail, oldEndpoint, endpoint, keysAuth, keysP256dh, time.Now().Unix(),
+	)
+	if err != nil {
+		return false, err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 1 {
+		return n == 1, err
+	}
+	var held bool
+	err = s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM push_subscriptions WHERE user_email = $1 AND endpoint = $2)`,
+		userEmail, endpoint,
+	).Scan(&held)
+	return held, err
+}
+
 // DeletePushSubscription removes a subscription by endpoint regardless of
 // owner — the send path's cleanup for endpoints the relay reported expired
 // (404/410). Idempotent: deleting an absent endpoint is a no-op.

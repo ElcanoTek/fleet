@@ -15,6 +15,12 @@
 // disabled.
 
 import { useEffect, useState } from "react";
+import {
+  ensureCurrentPushKey,
+  sameKey,
+  subscriptionKey,
+  urlBase64ToUint8Array,
+} from "@/app/shared/pushKey";
 import { SetRow, SetSwitch } from "./ui/atoms";
 
 type PushState =
@@ -24,16 +30,6 @@ type PushState =
   | "denied" // the user blocked notifications for this site
   | "disabled" // supported + configured, not subscribed
   | "enabled"; // an active subscription is stored
-
-// urlBase64ToUint8Array decodes the base64url VAPID public key into the
-// BufferSource shape pushManager.subscribe expects.
-function urlBase64ToUint8Array(base64: string): Uint8Array {
-  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
-  const raw = window.atob((base64 + padding).replace(/-/g, "+").replace(/_/g, "/"));
-  const out = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-  return out;
-}
 
 function pushSupported(): boolean {
   return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
@@ -77,6 +73,10 @@ export function BrowserNotificationsRow() {
       const key = await fetchVapidKey();
       if (key === null) return "unconfigured" as const;
       if (Notification.permission === "denied") return "denied" as const;
+      // A subscription made with an earlier VAPID key is renewed (or let go)
+      // before the switch reads it; the same once-per-page check the root
+      // layout runs, so the two never renew twice.
+      await ensureCurrentPushKey();
       const reg = await navigator.serviceWorker.getRegistration("/sw.js");
       const sub = await reg?.pushManager.getSubscription();
       if (!sub) return "disabled" as const;
@@ -119,8 +119,22 @@ export function BrowserNotificationsRow() {
       }
       const reg = await navigator.serviceWorker.register("/sw.js");
       await navigator.serviceWorker.ready;
+      let existing = await reg.pushManager.getSubscription();
+      const existingKey = existing ? subscriptionKey(existing) : null;
+      if (existing && existingKey && !sameKey(existingKey, key)) {
+        // Made with an earlier VAPID key: it can receive nothing, and the
+        // browser will not subscribe with the new key while it exists. Its
+        // stored row (if it is this user's) goes too.
+        await fetch("/api/push/unsubscribe", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ endpoint: existing.endpoint }),
+        });
+        await existing.unsubscribe();
+        existing = null;
+      }
       const sub =
-        (await reg.pushManager.getSubscription()) ??
+        existing ??
         (await reg.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(key).buffer as ArrayBuffer,

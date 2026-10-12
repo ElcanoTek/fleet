@@ -25,6 +25,7 @@ func TestPushEndpointsDisabledReturn501(t *testing.T) {
 		{"subscribe", http.MethodPost, "/push/subscribe", s.pushSubscribe},
 		{"unsubscribe", http.MethodDelete, "/push/unsubscribe", s.pushUnsubscribe},
 		{"status", http.MethodPost, "/push/status", s.pushStatus},
+		{"renew", http.MethodPost, "/push/renew", s.pushRenew},
 		{"vapid-key", http.MethodGet, "/push/vapid-public-key", s.pushVAPIDPublicKey},
 	}
 	for _, tc := range cases {
@@ -58,6 +59,7 @@ func TestPushEndpointsWrongMethodIs405EvenWhenDisabled(t *testing.T) {
 		{"subscribe", http.MethodGet, "/push/subscribe", s.pushSubscribe},
 		{"unsubscribe", http.MethodGet, "/push/unsubscribe", s.pushUnsubscribe},
 		{"status", http.MethodGet, "/push/status", s.pushStatus},
+		{"renew", http.MethodGet, "/push/renew", s.pushRenew},
 		{"vapid-key", http.MethodPost, "/push/vapid-public-key", s.pushVAPIDPublicKey},
 	}
 	for _, tc := range cases {
@@ -201,6 +203,41 @@ func TestPushStatus_ViewerCanAsk(t *testing.T) {
 	sub := map[string]any{"endpoint": "https://relay.example/v", "keys": map[string]string{"auth": "a", "p256dh": "p"}}
 	if w := do(t, h, http.MethodPost, "/push/subscribe", sub, "viewer@x.com"); w.Code != http.StatusForbidden {
 		t.Errorf("viewer subscribe: %d, want 403 (the write guard still applies)", w.Code)
+	}
+}
+
+// TestPushRenew is the move a browser makes after a VAPID key rotation: the
+// caller's row follows the new subscription, and a browser holding someone
+// else's subscription cannot hand it to the account signed in now.
+func TestPushRenew(t *testing.T) {
+	s, h := pushFixture(t)
+	st := s.concreteStore(t)
+	keys := map[string]string{"auth": "auth-b64", "p256dh": "p256dh-b64"}
+	if w := do(t, h, http.MethodPost, "/push/subscribe", map[string]any{"endpoint": "https://relay.example/old", "keys": keys}, "u@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("subscribe: %d body=%s", w.Code, w.Body.String())
+	}
+	renew := map[string]any{
+		"old_endpoint": "https://relay.example/old",
+		"endpoint":     "https://relay.example/new",
+		"keys":         map[string]string{"auth": "auth-new", "p256dh": "p256dh-new"},
+	}
+
+	w := do(t, h, http.MethodPost, "/push/renew", renew, "other@x.com")
+	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"renewed":false}` {
+		t.Fatalf("another account: %d %s", w.Code, w.Body.String())
+	}
+	w = do(t, h, http.MethodPost, "/push/renew", renew, "u@x.com")
+	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"renewed":true}` {
+		t.Fatalf("owner: %d %s", w.Code, w.Body.String())
+	}
+	subs, err := st.ListPushSubscriptions(context.Background(), "u@x.com")
+	if err != nil || len(subs) != 1 || subs[0].Endpoint != "https://relay.example/new" || subs[0].KeysAuth != "auth-new" {
+		t.Fatalf("rows after renew: %+v (err %v)", subs, err)
+	}
+
+	delete(renew, "old_endpoint")
+	if w := do(t, h, http.MethodPost, "/push/renew", renew, "u@x.com"); w.Code != http.StatusBadRequest {
+		t.Errorf("missing old_endpoint: %d, want 400", w.Code)
 	}
 }
 
