@@ -37,32 +37,40 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = new URL(event.notification.data?.url || "/", self.location.origin);
-  event.waitUntil(openNotificationTarget(target));
+  event.waitUntil(openNotificationTarget(event.notification.data?.url));
 });
 
 // openNotificationTarget brings the user to a notification's link: a task's
-// record, a chat conversation (/chat?c=<id>), or just Fleet for a link to the
-// app root. The browser grants one window action (focus or open) per click, so
-// the window is chosen BEFORE that action is spent: an open Fleet tab this
-// worker controls is focused and navigated there; with none, the link opens
-// in a new window.
-async function openNotificationTarget(target) {
+// record (/orchestrator/tasks/<id>), a chat conversation (/chat?c=<id>), or
+// just the app for a link to its root.
+//
+// - The link is moved onto this worker's origin. FLEET_PUBLIC_URL can name a
+//   different host than the one this browser uses, but the subscription was
+//   made here, and the session cookie lives here.
+// - Only a tab already in the link's section (the Operations Center for a
+//   task, Chat for a conversation) is navigated: navigating reloads the page,
+//   and taking over a tab elsewhere would throw away whatever the user was
+//   doing in it, such as an unsent chat message. With no such tab the link
+//   opens in a new window.
+// - The browser grants one window action (focus or open) per click, so the
+//   tab is chosen before that action is spent, and navigate() — which needs
+//   no such grant, only a tab this worker controls — runs whether or not the
+//   focus succeeds.
+async function openNotificationTarget(link) {
   const origin = self.location.origin;
-  const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-  const showing = windows.find((c) => c.url === target.href);
-  if (showing) return showing.focus();
-  // A link to another origin (FLEET_PUBLIC_URL naming a different host than
-  // the one this browser uses) is opened, never navigated into from here.
-  if (target.origin !== origin) return self.clients.openWindow(target.href);
-  // The app root names no destination: bring Fleet forward wherever it is.
-  if (target.pathname === "/" && !target.search) {
-    return windows.length ? windows[0].focus() : self.clients.openWindow(target.href);
+  const given = new URL(link || "/", origin);
+  const target = new URL(given.pathname + given.search + given.hash, origin);
+  const section = target.pathname.split("/")[1] || "";
+  if (!section) {
+    // The app root names no destination: bring the app forward wherever it is.
+    const [any] = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    return any ? any.focus() : self.clients.openWindow(target.href);
   }
   // matchAll without includeUncontrolled lists only the windows this worker
   // controls, most recently focused first.
-  const [tab] = await self.clients.matchAll({ type: "window" });
+  const tabs = await self.clients.matchAll({ type: "window" });
+  const tab = tabs.find((c) => new URL(c.url).pathname.split("/")[1] === section);
   if (!tab) return self.clients.openWindow(target.href);
-  const focused = await tab.focus();
-  return focused.navigate(target.href);
+  await tab.focus().catch(() => undefined);
+  return tab.navigate(target.href);
 }

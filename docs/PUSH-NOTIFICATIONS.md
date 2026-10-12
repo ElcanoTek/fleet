@@ -92,17 +92,20 @@ Notes on honest scope:
 - Chat notifications open their conversation: the link is `/chat?c=<id>`
   (under `FLEET_PUBLIC_URL`, or relative to the app), which the chat page opens
   on load, and the pending card re-hydrates there.
-- A click goes to the notification's link, task or chat alike. The service
-  worker focuses the most recently used fleet tab it controls and navigates
-  it there; a tab already showing the link is just focused. With no such tab
-  it opens the link in a new window. The browser grants one window action per
-  click, so the tab is chosen before that action is spent: a tab the worker
-  does not control (a hard reload bypasses it) is never focused only to fail
-  to navigate. The worker claims the tabs already open when it activates, and
-  skips waiting so an update applies without closing every tab. A link to the
-  app root just brings fleet forward, and a link on another origin (a
-  `FLEET_PUBLIC_URL` host other than the one the browser uses) opens in a new
-  window.
+- A click goes to the notification's link, task or chat alike, moved onto
+  the origin the browser subscribed from (`FLEET_PUBLIC_URL` may name another
+  host, but the session cookie lives on this one). The service worker
+  navigates the most recently used fleet tab it controls that is already in
+  the link's part of the app (the Operations Center for a task, Chat for a
+  conversation); navigating reloads that tab. It never takes over a tab
+  elsewhere, where an unsent message would be lost: with no matching tab it
+  opens the link in a new window. The browser grants one window action per
+  click, so the tab is chosen before that action is spent, and the tab is
+  navigated even if focusing it fails. The worker claims the tabs already
+  open when it activates, and skips waiting so an update applies without
+  closing every tab. A link to the app root just brings fleet forward.
+  Deferred: telling an open tab to show the record in place, without a
+  reload.
 
 ## HTTP surface (chat server, auth + member gated)
 

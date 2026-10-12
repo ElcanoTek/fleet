@@ -263,10 +263,11 @@ record carries its own action strip, so **Edit**, **Resubmit**, **Delete**,
 here without returning to the board.
 
 When your deployment puts a link in task notification emails, the link opens
-the same record: the board loads with that task open. If the task has been
-deleted, or your account cannot see it, a message says so instead. Signed out,
-you sign in first and land on your usual start page, so open the task from the
-board from there.
+the same record: the board loads with that task open. Clicking a browser
+notification about a task does the same, in the board's tab if you have one
+open (it reloads) or in a new one. If the task has been deleted, or your
+account cannot see it, a message says so instead. Signed out, you sign in first
+and land on your usual start page, so open the task from the board from there.
 
 The transcript reads as a timeline. Each tool call is one row with its result
 folded in. The row shows a step number, an icon and colour for the kind of tool
