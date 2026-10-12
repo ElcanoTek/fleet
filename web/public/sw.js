@@ -3,6 +3,19 @@
 // sends only { title, body?, url? } (see internal/webpush); anything else is
 // ignored. Registered on demand from the settings notifications card.
 
+// Take effect at once, and take control of the Fleet tabs that were already
+// open when this worker activated (the settings tab that turned notifications
+// on is one): a notification click can only navigate a tab this worker
+// controls. The worker has no fetch handler, so controlling a page changes
+// nothing else about it.
+self.addEventListener("install", () => {
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener("push", (event) => {
   let payload = { title: "Fleet", body: "" };
   try {
@@ -24,24 +37,32 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = new URL(event.notification.data?.url || self.location.origin, self.location.origin).href;
-  // A chat notification links one conversation (/chat?c=<id>, which the chat
-  // page opens on load). Only a same-origin link is ever navigated to.
-  const sameOrigin = target.startsWith(self.location.origin);
-  const deepLink = sameOrigin && new URL(target).searchParams.has("c");
-  event.waitUntil(
-    clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
-      // Focus an existing Fleet window if one is open; otherwise open the
-      // notification's deep link (same-origin targets only reach this worker).
-      const fleet = list.find((c) => c.url.startsWith(self.location.origin));
-      if (!fleet) return clients.openWindow(target);
-      if (!deepLink) return fleet.focus();
-      // Bring that window to the conversation. navigate() only works on a
-      // window this worker controls; otherwise open the link in a new one.
-      return fleet
-        .focus()
-        .then((c) => c.navigate(target))
-        .catch(() => clients.openWindow(target));
-    }),
-  );
+  const target = new URL(event.notification.data?.url || "/", self.location.origin);
+  event.waitUntil(openNotificationTarget(target));
 });
+
+// openNotificationTarget brings the user to a notification's link: a task's
+// record, a chat conversation (/chat?c=<id>), or just Fleet for a link to the
+// app root. The browser grants one window action (focus or open) per click, so
+// the window is chosen BEFORE that action is spent: an open Fleet tab this
+// worker controls is focused and navigated there; with none, the link opens
+// in a new window.
+async function openNotificationTarget(target) {
+  const origin = self.location.origin;
+  const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const showing = windows.find((c) => c.url === target.href);
+  if (showing) return showing.focus();
+  // A link to another origin (FLEET_PUBLIC_URL naming a different host than
+  // the one this browser uses) is opened, never navigated into from here.
+  if (target.origin !== origin) return self.clients.openWindow(target.href);
+  // The app root names no destination: bring Fleet forward wherever it is.
+  if (target.pathname === "/" && !target.search) {
+    return windows.length ? windows[0].focus() : self.clients.openWindow(target.href);
+  }
+  // matchAll without includeUncontrolled lists only the windows this worker
+  // controls, most recently focused first.
+  const [tab] = await self.clients.matchAll({ type: "window" });
+  if (!tab) return self.clients.openWindow(target.href);
+  const focused = await tab.focus();
+  return focused.navigate(target.href);
+}

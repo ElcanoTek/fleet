@@ -91,9 +91,18 @@ Notes on honest scope:
   looking at it when it appears.
 - Chat notifications open their conversation: the link is `/chat?c=<id>`
   (under `FLEET_PUBLIC_URL`, or relative to the app), which the chat page opens
-  on load, and the pending card re-hydrates there. The service worker
-  navigates an open fleet window to it, or opens a new window when it cannot
-  (a window it does not control).
+  on load, and the pending card re-hydrates there.
+- A click goes to the notification's link, task or chat alike. The service
+  worker focuses the most recently used fleet tab it controls and navigates
+  it there; a tab already showing the link is just focused. With no such tab
+  it opens the link in a new window. The browser grants one window action per
+  click, so the tab is chosen before that action is spent: a tab the worker
+  does not control (a hard reload bypasses it) is never focused only to fail
+  to navigate. The worker claims the tabs already open when it activates, and
+  skips waiting so an update applies without closing every tab. A link to the
+  app root just brings fleet forward, and a link on another origin (a
+  `FLEET_PUBLIC_URL` host other than the one the browser uses) opens in a new
+  window.
 
 ## HTTP surface (chat server, auth + member gated)
 
