@@ -117,6 +117,18 @@ const (
 	StatusProgress Status = "progress"
 )
 
+// Kind names what raised an Event when Status alone does not say it. The
+// empty Kind is a task's own event. Only channels that word the event
+// themselves read it (Web Push renders its own title); email and the webhook
+// render Name and Message, which already say what happened.
+type Kind string
+
+// KindBudgetAlert is a soft budget threshold crossed (internal/sched/budget).
+// It travels as a StatusProgress event so the On-list filter and the webhook
+// payload treat it like any other heads-up, but nothing is waiting on an
+// answer, so a channel must not word it as an ask-pause.
+const KindBudgetAlert Kind = "budget_alert"
+
 // Event is the fully-resolved, secret-free outcome of one task run. The runner
 // builds it from the task + the run's LogSession and hands it to Notify; the
 // senders render it into the email body / webhook payload. It deliberately holds
@@ -153,6 +165,9 @@ type Event struct {
 	// task's CreatedBy. Empty = no known owner, so the push channel skips the
 	// event. The deployment-wide email/webhook channels ignore it entirely.
 	Audience string
+	// Kind is what raised the event when it is not the task itself (see
+	// Kind). Empty for every runner event.
+	Kind Kind
 }
 
 // shouldFire reports whether this status is one the config asked to be notified
