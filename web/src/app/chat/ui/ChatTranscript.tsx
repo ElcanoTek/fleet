@@ -1084,7 +1084,11 @@ export function ChatTranscript({
                                         onResumeExpected={onResumeExpected}
                                         onSwitchAndRetry={() => retryLastUserMessage()}
                                         onAskAgain={(timedOut) => void submitPrompt(askAgainPrompt(timedOut))}
-                                        onRetryFailed={(settled, keys) => void submitPrompt(retryFailedPrompt(settled, keys))}
+                                        onRetryFailed={(settled, keys) =>
+                                          // A card's own request: it neither takes nor clears
+                                          // the composer's draft and attachments.
+                                          submitPrompt(retryFailedPrompt(settled, keys), { fromCard: true })
+                                        }
                                       />
                                     );
                                   })}

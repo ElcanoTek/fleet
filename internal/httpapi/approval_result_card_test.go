@@ -416,3 +416,19 @@ func TestRecordActionResult_NeverOffersARetry(t *testing.T) {
 		t.Fatal("an approved call's card with a retry must be served")
 	}
 }
+
+// withoutRetry keeps the 4 MiB scan bound: an oversized result is returned
+// unchanged (and then ignored by extractResultCard), never re-wrapped into a
+// small card that would slip past the bound (Codex on #1722).
+func TestWithoutRetry_KeepsTheScanBound(t *testing.T) {
+	big := `{"pad": "` + strings.Repeat("x", approvalResultMaxScanBytes) + `", "result_card": ` + failedResultCard + `}`
+	if got := withoutRetry(big); got != big {
+		t.Fatal("an oversized result must come back unchanged")
+	}
+	if _, ok, _ := extractResultCard(withoutRetry(big)); ok {
+		t.Fatal("an oversized result must not yield a card")
+	}
+	if out := withoutRetry(envelopeWith(failedResultCard)); strings.Contains(out, `"retry"`) || !strings.Contains(out, "1 of 2 deals created") {
+		t.Fatalf("withoutRetry = %s, want the card without its retry", out)
+	}
+}

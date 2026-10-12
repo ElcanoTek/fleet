@@ -386,7 +386,7 @@ export function ApprovalCard({
   // A result card's "Retry failed (N)" (docs/APPROVAL-RESULT-CARDS.md). The
   // caller submits retryFailedPrompt(approval, keys) as a user turn, so the
   // agent stages the retry for a new approval; nothing runs from the click.
-  onRetryFailed?: (approval: Approval, keys: string[]) => void;
+  onRetryFailed?: (approval: Approval, keys: string[]) => void | Promise<void | boolean>;
   // The server answered resume: this card's tool resumes after approval
   // (docs/RESUME-AFTER-APPROVAL.md), so fleet will start a turn on its own —
   // now (the card settled) or once the still-executing call lands.
@@ -900,7 +900,7 @@ function GenericActionCard({
   applyAll: boolean;
   onApplyAllChange: (v: boolean) => void;
   onAskAgain?: (approval: Approval) => void;
-  onRetryFailed?: (approval: Approval, keys: string[]) => void;
+  onRetryFailed?: (approval: Approval, keys: string[]) => void | Promise<void | boolean>;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsId = useId();

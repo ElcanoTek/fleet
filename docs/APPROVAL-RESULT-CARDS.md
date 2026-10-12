@@ -221,7 +221,10 @@ that carries a result card:
 - **Retry failed (N)** appears when the card names retry keys. It sends
   `retryFailedPrompt` as a user turn: "Retry the N failed items from the
   approved <tool> call (approval_id=…): "k1", …. Retry only these, and stage
-  the retry for my approval." Then it disables itself. Nothing runs from the
+  the retry for my approval." It is sent as a card's own request, so it
+  neither takes nor clears the composer's draft or attachments. It then
+  disables itself, unless the turn was not accepted (a model error, an
+  upload or network failure), in which case it offers itself again. Nothing runs from the
   click: the agent stages a new call, which needs a new approval, the same
   path as **Ask again** on a timed-out card.
 - **Details** (collapsed, on the action row) holds the pending card's records,

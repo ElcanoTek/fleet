@@ -98,7 +98,7 @@ describe("the completed card from a result card", () => {
     expect(screen.queryByTestId("approval-retry-failed")).toBeNull();
   });
 
-  it("names failures plainly and offers Retry failed (N), which hands the keys to the caller once", () => {
+  it("names failures plainly and offers Retry failed (N), which hands the keys to the caller once", async () => {
     const { full, onRetryFailed } = renderCard({ card: pendingCard, resultCard: parseApprovalResultCardData(plan) });
     expect(screen.getByTestId("generic-action-card")).toHaveAttribute("data-result-outcome", "partial");
     const rows = screen.getAllByTestId("approval-result-item");
@@ -111,12 +111,31 @@ describe("the completed card from a result card", () => {
     expect(within(rows[2]).getByTestId("approval-result-note")).toHaveTextContent("Checking whether this deal was created.");
     const retry = screen.getByTestId("approval-retry-failed");
     expect(retry).toHaveTextContent("Retry failed (1)");
-    fireEvent.click(retry);
+    await act(async () => {
+      fireEvent.click(retry);
+    });
     expect(onRetryFailed).toHaveBeenCalledTimes(1);
     expect(onRetryFailed).toHaveBeenCalledWith(expect.objectContaining({ id: full.id }), ["B"]);
     expect(retry).toBeDisabled();
     fireEvent.click(retry);
     expect(onRetryFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Retry failed again when the retry turn was not accepted", async () => {
+    const onRetryFailed = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    renderCard({ resultCard: parseApprovalResultCardData(plan) }, onRetryFailed);
+    const retry = screen.getByTestId("approval-retry-failed");
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    expect(retry).toBeEnabled();
+    expect(retry).toHaveTextContent("Retry failed (1)");
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    expect(onRetryFailed).toHaveBeenCalledTimes(2);
+    expect(retry).toBeDisabled();
+    expect(retry).toHaveTextContent("Retry asked");
   });
 
   it("says the read-back didn't match on a mismatch, in the warning tone", () => {

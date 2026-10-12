@@ -259,10 +259,12 @@ export function ApprovalResultCardView({
   approvedRecords?: ReactNode;
   toolDetails?: ReactNode;
   recorded: boolean;
-  onRetryFailed?: (approval: Approval, keys: string[]) => void;
+  // Resolves false when the retry turn was not accepted (a model error, an
+  // upload or network failure): the button then offers itself again.
+  onRetryFailed?: (approval: Approval, keys: string[]) => void | Promise<void | boolean>;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [retrySent, setRetrySent] = useState(false);
+  const [retry, setRetry] = useState<"idle" | "sending" | "sent">("idle");
   const detailsId = useId();
   // A notify record is information, not a decision: muted chrome, like
   // every record card, whatever the outcome.
@@ -322,14 +324,20 @@ export function ApprovalResultCardView({
             <button
               type="button"
               data-testid="approval-retry-failed"
-              disabled={retrySent}
+              disabled={retry !== "idle"}
               className="rounded-full bg-[var(--color-primary)] px-3.5 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
-              onClick={() => {
-                setRetrySent(true);
-                onRetryFailed(approval, retryKeys);
+              onClick={async () => {
+                setRetry("sending");
+                let accepted: void | boolean = undefined;
+                try {
+                  accepted = await onRetryFailed(approval, retryKeys);
+                } catch {
+                  accepted = false;
+                }
+                setRetry(accepted === false ? "idle" : "sent");
               }}
             >
-              {retrySent ? "Retry asked" : `Retry failed (${retryKeys.length})`}
+              {retry === "sent" ? "Retry asked" : retry === "sending" ? "Asking…" : `Retry failed (${retryKeys.length})`}
             </button>
           ) : null}
           <DetailsToggle open={detailsOpen} onToggle={() => setDetailsOpen((v) => !v)} controls={detailsId} />

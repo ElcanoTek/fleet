@@ -420,6 +420,9 @@ func (a *approvalStager) RecordActionResult(toolName, toolCallID, resultText str
 // approval: a record never offers one. Anything that is not a card with a
 // retry is returned unchanged (and then judged by extractResultCard).
 func withoutRetry(text string) string {
+	if len(text) > approvalResultMaxScanBytes {
+		return text // extractResultCard ignores it; never decode it here either
+	}
 	var top map[string]json.RawMessage
 	if err := json.NewDecoder(strings.NewReader(strings.TrimSpace(text))).Decode(&top); err != nil {
 		return text
