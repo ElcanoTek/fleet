@@ -187,3 +187,41 @@ func TestPushSubscriptions_Renew(t *testing.T) {
 		t.Error("renew without the old endpoint: want an error")
 	}
 }
+
+// TestPushSubscriptions_RenewOntoAStoredEndpoint: when the new endpoint is
+// already stored for the same user (another tab turned notifications on with
+// it) while the old row still exists, the UNIQUE endpoint makes the move
+// impossible. The renewal still succeeds by retiring the old row; for another
+// account's row it changes nothing.
+func TestPushSubscriptions_RenewOntoAStoredEndpoint(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const oldEP, newEP, othersEP = "https://push.example/r-old", "https://push.example/r-new", "https://push.example/r-others"
+	for _, row := range [][2]string{{"u@x.com", oldEP}, {"u@x.com", newEP}, {"other@x.com", othersEP}} {
+		if err := s.UpsertPushSubscription(ctx, row[0], row[1], "fake-auth", "fake-p256dh"); err != nil {
+			t.Fatalf("upsert %v: %v", row, err)
+		}
+	}
+
+	renewed, err := s.RenewPushSubscription(ctx, "u@x.com", oldEP, newEP, "fake-auth-new", "fake-p256dh-new")
+	if err != nil || !renewed {
+		t.Fatalf("renew onto own stored endpoint = %v, %v; want true, nil", renewed, err)
+	}
+	if subs, _ := s.ListPushSubscriptions(ctx, "u@x.com"); len(subs) != 1 || subs[0].Endpoint != newEP {
+		t.Fatalf("rows after renew: %+v, want only the new endpoint", subs)
+	}
+
+	if err := s.UpsertPushSubscription(ctx, "u@x.com", oldEP, "fake-auth", "fake-p256dh"); err != nil {
+		t.Fatalf("re-upsert old: %v", err)
+	}
+	renewed, err = s.RenewPushSubscription(ctx, "u@x.com", oldEP, othersEP, "fake-auth-new", "fake-p256dh-new")
+	if err != nil || renewed {
+		t.Fatalf("renew onto another account's endpoint = %v, %v; want false, nil", renewed, err)
+	}
+	if subs, _ := s.ListPushSubscriptions(ctx, "other@x.com"); len(subs) != 1 || subs[0].Endpoint != othersEP {
+		t.Fatalf("another account's row changed: %+v", subs)
+	}
+	if subs, _ := s.ListPushSubscriptions(ctx, "u@x.com"); len(subs) != 2 {
+		t.Fatalf("a refused renewal removed the caller's rows: %+v", subs)
+	}
+}

@@ -20,6 +20,7 @@ import {
   sameKey,
   subscriptionKey,
   urlBase64ToUint8Array,
+  withPushLock,
 } from "@/app/shared/pushKey";
 import { SetRow, SetSwitch } from "./ui/atoms";
 
@@ -74,8 +75,8 @@ export function BrowserNotificationsRow() {
       if (key === null) return "unconfigured" as const;
       if (Notification.permission === "denied") return "denied" as const;
       // A subscription made with an earlier VAPID key is renewed (or let go)
-      // before the switch reads it; the same once-per-page check the root
-      // layout runs, so the two never renew twice.
+      // before the switch reads it; the same check the root layout runs,
+      // shared while it is running, so the two never renew twice.
       await ensureCurrentPushKey();
       const reg = await navigator.serviceWorker.getRegistration("/sw.js");
       const sub = await reg?.pushManager.getSubscription();
@@ -119,30 +120,34 @@ export function BrowserNotificationsRow() {
       }
       const reg = await navigator.serviceWorker.register("/sw.js");
       await navigator.serviceWorker.ready;
-      let existing = await reg.pushManager.getSubscription();
-      const existingKey = existing ? subscriptionKey(existing) : null;
-      if (existing && existingKey && !sameKey(existingKey, key)) {
-        // Made with an earlier VAPID key: it can receive nothing, and the
-        // browser will not subscribe with the new key while it exists. Its
-        // stored row (if it is this user's) goes too.
-        await fetch("/api/push/unsubscribe", {
-          method: "DELETE",
+      // Under the same lock as the key check, so another tab never replaces
+      // the subscription between this read and the store.
+      const res = await withPushLock(async () => {
+        let existing = await reg.pushManager.getSubscription();
+        const existingKey = existing ? subscriptionKey(existing) : null;
+        if (existing && existingKey && !sameKey(existingKey, key)) {
+          // Made with an earlier VAPID key: it can receive nothing, and the
+          // browser will not subscribe with the new key while it exists. Its
+          // stored row (if it is this user's) goes too.
+          await fetch("/api/push/unsubscribe", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ endpoint: existing.endpoint }),
+          });
+          await existing.unsubscribe();
+          existing = null;
+        }
+        const sub =
+          existing ??
+          (await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(key).buffer as ArrayBuffer,
+          }));
+        return fetch("/api/push/subscribe", {
+          method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ endpoint: existing.endpoint }),
+          body: JSON.stringify(sub.toJSON()),
         });
-        await existing.unsubscribe();
-        existing = null;
-      }
-      const sub =
-        existing ??
-        (await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(key).buffer as ArrayBuffer,
-        }));
-      const res = await fetch("/api/push/subscribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sub.toJSON()),
       });
       if (res.status === 501) {
         setState("unconfigured");

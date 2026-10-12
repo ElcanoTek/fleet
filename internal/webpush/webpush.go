@@ -241,12 +241,16 @@ func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSub
 		if err := s.store.DeletePushSubscription(ctx, sub.Endpoint); err != nil {
 			s.logf("webpush: delete expired subscription failed: %v", err)
 		}
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		// The relay refused this server's VAPID credentials for the
-		// subscription: almost always one made with an earlier key, after the
-		// operator rotated FLEET_VAPID_*. The row is kept, not deleted — the
-		// browser renews it (POST /push/renew) the next time it loads fleet.
-		s.logf("webpush: relay %s returned status %d: it refused this server's VAPID key, usually a subscription made with an earlier key; the browser renews it the next time it opens fleet", endpointHost(sub.Endpoint), resp.StatusCode)
+	case resp.StatusCode == http.StatusForbidden:
+		// RFC 8292: the VAPID key does not match the one the subscription was
+		// made with — almost always a subscription from before the operator
+		// rotated FLEET_VAPID_*. The row is kept, not deleted: the browser
+		// renews it (POST /push/renew) the next time it loads fleet.
+		s.logf("webpush: relay %s returned status 403: the subscription was made with a different VAPID key, usually an earlier one; the browser renews it the next time it opens fleet", endpointHost(sub.Endpoint))
+	case resp.StatusCode == http.StatusUnauthorized:
+		// The VAPID authentication itself was refused: a malformed or expired
+		// JWT. Renewal cannot fix that; the operator's configuration can.
+		s.logf("webpush: relay %s returned status 401: it refused this server's VAPID authentication; check that FLEET_VAPID_PUBLIC_KEY and FLEET_VAPID_PRIVATE_KEY are one pair, FLEET_VAPID_CONTACT is a mailto: or https: address, and the host clock is right", endpointHost(sub.Endpoint))
 	case resp.StatusCode < 200 || resp.StatusCode >= 300:
 		s.logf("webpush: relay %s returned status %d", endpointHost(sub.Endpoint), resp.StatusCode)
 	}

@@ -15,31 +15,48 @@ const b64url = (bytes: Uint8Array) =>
 const OLD_KEY = keyBytes(1);
 const NEW_KEY = keyBytes(2);
 
-function fakeSub(endpoint: string, key: Uint8Array, events: string[]) {
-  return {
+type Browser = { current: ReturnType<typeof fakeSub> | null; events: string[] };
+
+function fakeSub(endpoint: string, key: Uint8Array, browser: Browser) {
+  const sub = {
     endpoint,
     options: { applicationServerKey: key.buffer },
     unsubscribe: vi.fn(async () => {
-      events.push(`unsubscribe ${endpoint}`);
+      browser.events.push(`unsubscribe ${endpoint}`);
+      if (browser.current === sub) browser.current = null;
       return true;
     }),
     toJSON: () => ({ endpoint, keys: { auth: "auth", p256dh: "p256dh" } }),
   };
+  return sub;
 }
 
+// stubBrowser keeps one current subscription the way a browser does:
+// unsubscribe clears it, subscribe replaces it, and subscribing with another
+// key while one exists throws, as PushManager.subscribe does.
 function stubBrowser(opts: {
   permission?: NotificationPermission;
   subKey?: Uint8Array | null;
   serverKey?: Uint8Array;
   vapidStatus?: number;
-  renew?: { renewed: boolean } | "network-error";
+  renew?: { renewed: boolean } | "network-error" | number;
+  subscribeFails?: boolean;
 }) {
-  const events: string[] = [];
-  const old = opts.subKey === null ? null : fakeSub("https://relay.example/old", opts.subKey ?? OLD_KEY, events);
-  const fresh = fakeSub("https://relay.example/new", opts.serverKey ?? NEW_KEY, events);
+  const browser: Browser = { current: null, events: [] };
+  const events = browser.events;
+  const old = opts.subKey === null ? null : fakeSub("https://relay.example/old", opts.subKey ?? OLD_KEY, browser);
+  browser.current = old;
+  let made = 0;
   const subscribe = vi.fn(async (o: { applicationServerKey: ArrayBuffer }) => {
-    events.push(`subscribe ${b64url(new Uint8Array(o.applicationServerKey))}`);
-    return fresh;
+    const key = new Uint8Array(o.applicationServerKey);
+    events.push(`subscribe ${b64url(key)}`);
+    if (opts.subscribeFails) throw new DOMException("push service error", "AbortError");
+    const held = browser.current?.options.applicationServerKey;
+    if (held && !Buffer.from(new Uint8Array(held)).equals(Buffer.from(key))) {
+      throw new DOMException("a subscription with another key exists", "InvalidStateError");
+    }
+    browser.current ??= fakeSub(`https://relay.example/new${made++ || ""}`, key, browser);
+    return browser.current;
   });
   vi.stubGlobal("PushManager", function PushManager() {});
   vi.stubGlobal(
@@ -50,7 +67,7 @@ function stubBrowser(opts: {
     configurable: true,
     value: {
       getRegistration: vi.fn(async () => ({
-        pushManager: { getSubscription: async () => old, subscribe },
+        pushManager: { getSubscription: async () => browser.current, subscribe },
       })),
     },
   });
@@ -63,26 +80,37 @@ function stubBrowser(opts: {
     }
     if (url === "/api/push/renew") {
       if (opts.renew === "network-error") throw new TypeError("network down");
+      if (typeof opts.renew === "number") return new Response("boom", { status: opts.renew });
       return Response.json(opts.renew ?? { renewed: true });
     }
     return new Response(null, { status: 404 });
   });
   vi.stubGlobal("fetch", fetchMock);
-  return { events, old, fresh, subscribe, fetchMock };
+  return { events, browser, old, subscribe, fetchMock };
 }
 
-// A fresh module per test: the check is memoized per page load.
+// A fresh module per test: the check shares a running promise per module.
 async function loadCheck() {
   vi.resetModules();
   return (await import("./pushKey")).ensureCurrentPushKey;
 }
 
+const renewBody = (oldEndpoint: string, endpoint: string) =>
+  `POST /api/push/renew ${JSON.stringify({
+    old_endpoint: oldEndpoint,
+    endpoint,
+    keys: { auth: "auth", p256dh: "p256dh" },
+  })}`;
+
 describe("ensureCurrentPushKey", () => {
   beforeEach(() => {
     vi.resetModules();
+    window.localStorage.clear();
   });
   afterEach(() => {
     Reflect.deleteProperty(navigator, "serviceWorker");
+    Reflect.deleteProperty(navigator, "locks");
+    window.localStorage.clear();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -101,13 +129,9 @@ describe("ensureCurrentPushKey", () => {
       // The old one must go before the browser accepts a new key.
       "unsubscribe https://relay.example/old",
       `subscribe ${b64url(NEW_KEY)}`,
-      `POST /api/push/renew ${JSON.stringify({
-        old_endpoint: "https://relay.example/old",
-        endpoint: "https://relay.example/new",
-        keys: { auth: "auth", p256dh: "p256dh" },
-      })}`,
+      renewBody("https://relay.example/old", "https://relay.example/new"),
     ]);
-    expect(b.fresh.unsubscribe).not.toHaveBeenCalled();
+    expect(b.browser.current?.endpoint).toBe("https://relay.example/new");
   });
 
   it("lets the new subscription go when the old one was not this user's", async () => {
@@ -115,13 +139,35 @@ describe("ensureCurrentPushKey", () => {
     // sign up whoever is signed in now.
     const b = stubBrowser({ renew: { renewed: false } });
     expect(await (await loadCheck())()).toBe("dropped");
-    expect(b.fresh.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(b.browser.current).toBeNull();
   });
 
-  it("lets the new subscription go when the renewal cannot reach the server", async () => {
-    const b = stubBrowser({ renew: "network-error" });
-    expect(await (await loadCheck())()).toBe("dropped");
-    expect(b.fresh.unsubscribe).toHaveBeenCalledTimes(1);
+  it("keeps the new subscription when the server gives no answer, and retries the move next time", async () => {
+    for (const failure of ["network-error", 503] as const) {
+      window.localStorage.clear();
+      const b = stubBrowser({ renew: failure });
+      expect(await (await loadCheck())()).toBe("pending");
+      expect(b.browser.current?.endpoint).toBe("https://relay.example/new");
+
+      // Next load: the subscription is on the current key, but the move the
+      // server never confirmed is retried from the remembered old endpoint.
+      b.events.length = 0;
+      const again = stubBrowser({ subKey: NEW_KEY, renew: { renewed: true } });
+      again.browser.current = b.browser.current;
+      expect(await (await loadCheck())()).toBe("renewed");
+      expect(again.events).toEqual([
+        "GET /api/push/vapid-public-key",
+        renewBody("https://relay.example/old", "https://relay.example/new"),
+      ]);
+      expect(await (await loadCheck())()).toBe("current");
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reports a browser that will not subscribe again instead of hiding it", async () => {
+    const b = stubBrowser({ subscribeFails: true });
+    expect(await (await loadCheck())()).toBe("failed");
+    expect(b.fetchMock.mock.calls.some(([url]) => url === "/api/push/renew")).toBe(false);
   });
 
   it("changes nothing when signed out (no key to compare against)", async () => {
@@ -142,12 +188,30 @@ describe("ensureCurrentPushKey", () => {
     expect(noSub.fetchMock).not.toHaveBeenCalled();
   });
 
-  it("runs once per page load however many callers ask", async () => {
+  it("shares a running check, and checks again once it has finished", async () => {
+    // A tab left open across a rotation must notice on its next check.
     const b = stubBrowser({ renew: { renewed: true } });
     const check = await loadCheck();
     const [first, second] = await Promise.all([check(), check()]);
     expect([first, second]).toEqual(["renewed", "renewed"]);
     expect(b.subscribe).toHaveBeenCalledTimes(1);
-    expect(b.fetchMock.mock.calls.filter(([url]) => url === "/api/push/vapid-public-key")).toHaveLength(1);
+    expect(await check()).toBe("current");
+    expect(b.fetchMock.mock.calls.filter(([url]) => url === "/api/push/vapid-public-key")).toHaveLength(2);
+  });
+
+  it("holds the browser-wide lock while it checks", async () => {
+    const requests: string[] = [];
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: vi.fn(async (name: string, fn: () => Promise<unknown>) => {
+          requests.push(name);
+          return fn();
+        }),
+      },
+    });
+    stubBrowser({ renew: { renewed: true } });
+    expect(await (await loadCheck())()).toBe("renewed");
+    expect(requests).toEqual(["fleet-push-subscription"]);
   });
 });

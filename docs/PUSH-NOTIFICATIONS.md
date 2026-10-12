@@ -48,19 +48,28 @@ channel consumes.
 **Rotating the keys.** A browser subscription is bound to the VAPID key it
 was made with, so after the operator replaces the `FLEET_VAPID_*` pair every
 existing subscription is refused by the push service (FCM answers `403`).
-fleet keeps those rows and logs `relay … returned status 403: it refused this
-server's VAPID key …` instead of deleting them. Each browser renews its own:
-on any page load (`PushKeyRenewal` in the root layout, and again in the
-settings switch) it compares the key its subscription records with
-`GET /push/vapid-public-key`, and on a mismatch it unsubscribes, subscribes
-with the current key (permission is already granted, so no prompt), and asks
-`POST /push/renew` to move the signed-in user's row to the new subscription.
-The server moves it only if that user held the old row; otherwise the browser
-drops the new subscription, so a renewal never signs up an account that did
-not turn notifications on in that browser. Until a browser next opens fleet,
-its notifications do not arrive, and a browser that never opens fleet again
-leaves a refused row behind (the stale-subscription sweep below is still
-deferred).
+fleet keeps those rows and logs `relay … returned status 403: the
+subscription was made with a different VAPID key …` instead of deleting them.
+(A `401` is different: the relay refused the VAPID authentication itself, and
+the log points at the key pair, `FLEET_VAPID_CONTACT` and the host clock;
+renewal cannot fix that.) Each browser renews its own subscription: on a page
+load (`PushKeyRenewal` in the root layout, skipped on `/login` and `/shared`
+pages) and again each time the settings switch loads, it compares the key its
+subscription records with `GET /push/vapid-public-key`. On a mismatch it
+unsubscribes, subscribes with the current key (permission is already granted,
+so no prompt), and asks `POST /push/renew` to move the signed-in user's row to
+the new subscription. The server moves it only if that user held the old row;
+an explicit "not yours" makes the browser drop the new subscription too, so a
+renewal never signs up an account that did not turn notifications on in that
+browser. When the server gives no answer (offline, a 5xx) the new
+subscription is kept and the move is retried on the next check. The check and
+the switch's own replacement run under one browser-wide Web Lock, so two tabs
+never replace the subscription at once. Limits: until a browser next opens
+fleet its notifications do not arrive; a browser that does not report the key
+its subscription was made with is not checked; a browser that refuses to
+subscribe again is left with no subscription and its switch reads off; and a
+browser that never opens fleet again leaves a refused row behind (the
+stale-subscription sweep below is still deferred).
 
 **Default OFF.** With any of the three `FLEET_VAPID_*` vars unset, the push
 subsystem does not exist: the `/push/*` endpoints answer `501 Not Implemented`

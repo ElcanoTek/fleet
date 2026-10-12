@@ -457,7 +457,28 @@ func TestSendOne_RefusedVAPIDKeyKeepsTheRowAndSaysWhy(t *testing.T) {
 	if len(st.deleted) != 0 {
 		t.Errorf("deleted %v; a refused key must not retire the row", st.deleted)
 	}
-	if len(logged) != 1 || !strings.Contains(logged[0], "status 403") || !strings.Contains(logged[0], "earlier key") {
+	if len(logged) != 1 || !strings.Contains(logged[0], "status 403") || !strings.Contains(logged[0], "earlier one") {
 		t.Errorf("log = %q, want the refused-key explanation", logged)
+	}
+}
+
+// A 401 is the VAPID authentication refused outright, which no renewal fixes:
+// the log points the operator at the configuration instead.
+func TestSendOne_RefusedVAPIDAuthPointsAtTheConfig(t *testing.T) {
+	sub := testSubscription(t, "https://relay.example/ep")
+	st := &fakeStore{subs: []store.PushSubscription{sub}}
+	relay := &fakeRelay{status: map[string]int{sub.Endpoint: http.StatusUnauthorized}}
+	svc := newTestService(t, st, relay)
+	var logged []string
+	svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+
+	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+		t.Fatalf("sendToUser: %v", err)
+	}
+	if len(st.deleted) != 0 {
+		t.Errorf("deleted %v; a refused authentication must not retire the row", st.deleted)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "status 401") || !strings.Contains(logged[0], "FLEET_VAPID_PRIVATE_KEY") || strings.Contains(logged[0], "renews") {
+		t.Errorf("log = %q, want the configuration hint and no renewal promise", logged)
 	}
 }
