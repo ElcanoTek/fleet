@@ -134,6 +134,15 @@ type AgentPolicy struct {
 	// (see ApprovalProgressProblems). Empty = no approved call reports
 	// progress, as before.
 	CriticalToolProgress []string
+	// CriticalToolResultCards lists critical suffixes whose result carries a
+	// structured outcome card (`result_card`, docs/APPROVAL-RESULT-CARDS.md):
+	// the approved call's (or notify record's) own result is checked against
+	// a fixed schema and, when it passes, the settled card renders it instead
+	// of "Applied" over the raw result. Matched by suffix exactly like
+	// CriticalToolSuffixes; members must be critical and not a handler-only
+	// card (see ResultCardProblems). Empty = every settled card renders as
+	// before.
+	CriticalToolResultCards []string
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -220,6 +229,9 @@ var (
 	// activeProgress is the set of critical suffixes whose approved calls
 	// report progress. Empty by default.
 	activeProgress = map[string]bool{}
+	// activeResultCards is the set of critical suffixes whose results may
+	// carry an outcome card. Empty by default: no result is read for one.
+	activeResultCards = map[string]bool{}
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -365,6 +377,8 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		log.Printf("agent_policy: %s", problem)
 	}
 	activeProgress = progress
+
+	activeResultCards = installResultCardSet(p.CriticalToolResultCards, seen)
 }
 
 // suffixMatches reports whether a tool (or a suffix standing for one) is

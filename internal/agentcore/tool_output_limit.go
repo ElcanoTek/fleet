@@ -243,11 +243,24 @@ func BoundModelOutputTools(in []fantasy.AgentTool) []fantasy.AgentTool {
 // notably human-approved actions. The returned text is safe to persist/replay;
 // blocked governance decisions are reflected in the returned error flag.
 func GovernAndBoundModelVisibleToolText(ctx context.Context, toolName, toolCallID, content string, isError bool) (string, bool) {
+	bounded, isErr, _ := GovernAndBoundModelVisibleToolTextFull(ctx, toolName, toolCallID, content, isError)
+	return bounded, isErr
+}
+
+// GovernAndBoundModelVisibleToolTextFull is GovernAndBoundModelVisibleToolText
+// that also returns the governed text before the size bound: redaction, PII
+// and guardrail screening applied, a long result not yet cut to the
+// model-visible ceiling. It is the text a display-only reader of the whole
+// result may use (an approval's result card, docs/APPROVAL-RESULT-CARDS.md),
+// the same governed-but-unbounded form a policy's result record gets
+// (policyResultText). Governance runs once.
+func GovernAndBoundModelVisibleToolTextFull(ctx context.Context, toolName, toolCallID, content string, isError bool) (bounded string, isErr bool, governed string) {
 	resp := fantasy.NewTextResponse(content)
 	resp.IsError = isError
 	resp = governFinalToolResponse(ctx, toolName, resp)
+	governed = resp.Content
 	resp = boundModelVisibleToolResponse(ctx, toolName, toolCallID, resp)
-	return resp.Content, resp.IsError
+	return resp.Content, resp.IsError, governed
 }
 
 type toolOutputEnvelope struct {

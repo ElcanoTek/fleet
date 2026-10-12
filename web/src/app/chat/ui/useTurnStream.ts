@@ -11,6 +11,7 @@ import {
   clearRetryNotice,
   historyToMessages,
   parseApprovalCardData,
+  parseApprovalResultCardData,
   parsePythonStream,
   type Approval,
   type ApprovalStatus,
@@ -2623,6 +2624,22 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             mcpAccount: p.mcp_account,
           },
         ],
+      }));
+      return;
+    }
+
+    // The call a notify-mode record announced has returned, and its result
+    // carried an outcome card (docs/APPROVAL-RESULT-CARDS.md): the record
+    // shows it. A card that fails the client check changes nothing.
+    if (event.event === "tool.action_record_card") {
+      const p = payload as { approval_id: string; result_card?: unknown };
+      const resultCard = parseApprovalResultCardData(p.result_card);
+      if (!resultCard) return;
+      patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
+        ...m,
+        approvals: (m.approvals ?? []).map((a) =>
+          a.id === p.approval_id && a.recorded ? { ...a, resultCard } : a,
+        ),
       }));
       return;
     }

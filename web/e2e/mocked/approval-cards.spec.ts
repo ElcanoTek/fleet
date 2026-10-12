@@ -193,6 +193,7 @@ test("a described card renders in plain words, pending and resolved", async ({ p
         label: "Q4 Video",
         id: "PM-123",
         link: "https://ssp.example.com/deals/123",
+        link_label: "Open in PubMatic",
         changes: [{ label: "Floor", before: "$2.00", after: "$2.50" }],
         flags: [{ code: "deal_active", label: "Deal is Active" }],
       },
@@ -239,19 +240,22 @@ test("a described card renders in plain words, pending and resolved", async ({ p
   await row.click();
 
   const pending = page.locator('[data-approval-id="ap-readable"]');
+  await expect(pending.getByTestId("approval-eyebrow")).toHaveText(/approval needed/i);
   await expect(pending.getByTestId("generic-action-title")).toHaveText("Update 1 deal");
   const item = pending.getByTestId("approval-card-item");
   await expect(item).toContainText("Q4 Video");
   await expect(item).toContainText("PM-123");
-  await expect(item.getByRole("link", { name: /Open/ })).toHaveAttribute("href", "https://ssp.example.com/deals/123");
-  await expect(item.getByTestId("approval-card-change")).toContainText("$2.50");
+  await expect(item.getByRole("link", { name: /Open in PubMatic/ })).toHaveAttribute("href", "https://ssp.example.com/deals/123");
   await expect(item.getByTestId("approval-card-flag")).toHaveText("Deal is Active");
-  // The raw arguments are behind Details, collapsed.
+  await expect(pending.getByTestId("approval-card-change")).toContainText("$2.50");
+  // The raw arguments are behind Details, collapsed; the toggle sits on the
+  // action row with Approve and Cancel.
   const details = pending.getByTestId("approval-card-details");
   await expect(details.getByText('W/"77"')).toBeHidden();
-  await details.locator("summary").click();
+  await pending.getByTestId("approval-card-details-toggle").click();
   await expect(details.getByText('W/"77"')).toBeVisible();
-  await expect(pending.getByRole("button", { name: "Approve & run" })).toBeVisible();
+  await expect(pending.getByRole("button", { name: "Approve", exact: true })).toBeVisible();
+  await expect(pending.getByRole("button", { name: "Cancel" })).toBeVisible();
 
   const done = page.locator('[data-approval-id="ap-readable-done"]');
   await expect(done.getByTestId("generic-action-title")).toHaveText("Applied · Update 1 deal (earlier)");
@@ -351,7 +355,7 @@ test("One at a time falls back to the individual approval cards", async ({ page 
   await expect(group).toBeVisible();
   await group.getByRole("button", { name: "One at a time" }).click();
   await expect(page.getByTestId("approval-group-card")).toHaveCount(0);
-  await expect(page.locator('[data-approval-id="ap-grp-pm"]').getByRole("button", { name: "Approve & run" })).toBeVisible();
+  await expect(page.locator('[data-approval-id="ap-grp-pm"]').getByRole("button", { name: "Approve", exact: true })).toBeVisible();
   await expect(page.locator('[data-approval-id="ap-grp-mg"]').getByRole("button", { name: "Approve & run" })).toBeVisible();
 });
 
@@ -463,4 +467,129 @@ test("a call staged for approval shows a neutral chip, a failed call stays red",
   const failedChip = page.getByRole("button", { name: /deals_list_deals/ }).first();
   await expect(failedChip).toHaveAttribute("style", /--color-danger/);
   await expect(failedChip).not.toContainText("approval");
+});
+
+// A tool in critical_tool_result_cards (docs/APPROVAL-RESULT-CARDS.md): the
+// settled card reads the outcome card its own result carried. One created
+// deal reads "Created … · verified" with both ids, its status and its link;
+// a plan with a failure names it plainly and offers Retry failed (N), which
+// sends a user turn naming the failed key (a new approval follows). A
+// settled card of a tool without a result card renders as before.
+test("a settled card reads its result card, and Retry failed sends a user turn", async ({ page }) => {
+  const pendingCard = {
+    title: "Create 1 Index Exchange deal for Elcano",
+    items: [{ label: "Elcano_ChatTest_IX_BidSwitch_Display_US", settings: [{ label: "Floor", value: "$1.00" }] }],
+  };
+  await mockChatBoot(page, { conversations: [{ id: "conv-result", title: "Result thread" }] });
+  await page.route("**/api/conversations/conv-result", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation: { id: "conv-result", title: "Result thread", persona: "default", model: "test-model", pinned: false },
+        history: [
+          { id: 1, role: "user", type: "text", content: { text: "book the deals" } },
+          { id: 2, role: "assistant", type: "text", content: { text: "Booked." } },
+        ],
+        pending_approvals: [],
+        resolved_approvals: [
+          {
+            approval_id: "ap-created",
+            tool: "mcp_indexexchange_mcp_ix_execute_plan",
+            summary: { tool: "mcp_indexexchange_mcp_ix_execute_plan", args: [{ key: "plan_id", value: "dp_1" }] },
+            status: "approved",
+            is_err: false,
+            result_text: '{"success": true, "results": [{"deal_id": "Elcano_ChatTest_IX_BidSwitch_Display_US"}]}',
+            card: pendingCard,
+            result_card: {
+              outcome: "done",
+              title: "Created 1 Index Exchange deal · verified",
+              items: [
+                {
+                  key: "Elcano_ChatTest_IX_BidSwitch_Display_US",
+                  label: "Elcano_ChatTest_IX_BidSwitch_Display_US",
+                  id: "IX151710246087067804",
+                  internal_id: "666624",
+                  link: "https://app.example.com/deals/666624",
+                  link_label: "Open in Index Exchange",
+                  status: "done",
+                },
+              ],
+            },
+          },
+          {
+            approval_id: "ap-plan",
+            tool: "mcp_pubmatic_execute_plan",
+            summary: { tool: "mcp_pubmatic_execute_plan", args: [{ key: "plan_id", value: "dp_2" }] },
+            status: "approved",
+            is_err: false,
+            result_text: '{"success": false}',
+            result_card: {
+              outcome: "partial",
+              title: "1 of 2 PubMatic deals created · 1 failed",
+              items: [
+                { key: "Deal A", label: "Deal A", id: "PM-1", status: "done" },
+                { key: "Deal B", label: "Deal B", status: "failed", note: "PubMatic refused the floor. Nothing was created." },
+              ],
+              retry: { keys: ["Deal B"] },
+            },
+          },
+          {
+            approval_id: "ap-record",
+            tool: "mcp_deal_sheet_next_campaign_id",
+            summary: { tool: "mcp_deal_sheet_next_campaign_id", args: [{ key: "idempotency_key", value: "booking:936155c7" }] },
+            status: "approved",
+            is_err: false,
+            recorded: true,
+            result_text: "Ran without asking: this tool is declared notify-mode in the client bundle. Nothing to undo.",
+            result_card: { outcome: "done", title: "Campaign ID ELC07375 allocated", items: [] },
+          },
+          {
+            approval_id: "ap-plain",
+            tool: "mcp_deals_update_deal",
+            summary: { tool: "mcp_deals_update_deal", args: [] },
+            status: "approved",
+            is_err: false,
+            result_text: '{"updated":1}',
+            card: { title: "Update 1 deal", items: [] },
+          },
+        ],
+        pending_memory_proposals: [],
+      },
+    });
+  });
+  await page.goto("/chat");
+  const row = page.locator('[data-conversation-id="conv-result"]');
+  await row.waitFor({ timeout: 15_000 });
+  await row.click();
+
+  const createdCard = page.locator('[data-approval-id="ap-created"]');
+  await expect(createdCard.getByTestId("generic-action-title")).toHaveText("Created 1 Index Exchange deal · verified");
+  await expect(createdCard.getByTestId("approval-result-approved")).toHaveText("Approved: Create 1 Index Exchange deal for Elcano");
+  await expect(createdCard.getByTestId("approval-result-id")).toHaveText("IX151710246087067804");
+  await expect(createdCard.getByTestId("approval-result-internal-id")).toContainText("666624");
+  await expect(createdCard.getByTestId("approval-result-status")).toHaveText(/Done/);
+  await expect(createdCard.getByRole("link", { name: /Open in Index Exchange/ })).toHaveAttribute("href", "https://app.example.com/deals/666624");
+  // The raw JSON is collapsed under Details.
+  await expect(createdCard.getByTestId("approval-result")).toBeHidden();
+  await createdCard.getByTestId("approval-card-details-toggle").click();
+  await expect(createdCard.getByTestId("approval-result")).toContainText('"success": true');
+
+  const plan = page.locator('[data-approval-id="ap-plan"]');
+  await expect(plan.getByTestId("approval-result-note")).toHaveText("Not applied: PubMatic refused the floor. Nothing was created.");
+  const chat = page.waitForRequest((req) => req.url().includes("/api/chat") && req.method() === "POST");
+  await plan.getByTestId("approval-retry-failed").click();
+  const req = await chat;
+  expect(req.postData() ?? "").toContain("Retry the 1 failed item");
+  expect(req.postData() ?? "").toContain("approval_id=ap-plan");
+
+  // A notify record says what it did, and keeps the raw key under Details.
+  const record = page.locator('[data-approval-id="ap-record"]');
+  await expect(record.getByTestId("generic-action-title")).toHaveText("Campaign ID ELC07375 allocated · ran without asking");
+  await expect(record.getByText("booking:936155c7")).toBeHidden();
+
+  // No result card: today's settled card, unchanged.
+  const plain = page.locator('[data-approval-id="ap-plain"]');
+  await expect(plain.getByTestId("generic-action-title")).toHaveText("Applied · Update 1 deal");
+  await expect(plain.getByTestId("approval-result-card")).toHaveCount(0);
+  await expect(plain.getByTestId("approval-result")).toContainText('{"updated":1}');
 });

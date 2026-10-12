@@ -113,6 +113,7 @@ approval row. The model's tool result for the staged call is the same
       "label": "Q4 Video",
       "id": "PM-123",
       "link": "https://ssp.example.com/deals/123",
+      "link_label": "Open in PubMatic",
       "changes": [{"label": "Floor", "before": "$2.00", "after": "$2.50"}],
       "settings": [{"label": "Currency", "value": "USD"}],
       "flags": [{"code": "deal_active", "label": "Deal is Active"}]
@@ -135,7 +136,10 @@ approval row. The model's tool result for the staged call is the same
   text at most 2000. No string may contain a control character, a
   bidirectional-formatting character or a line/paragraph separator.
 - **Links.** A `link` must be an absolute `https` URL with a host and no
-  credentials.
+  credentials. The optional `link_label` names it ("Open in PubMatic"); it is
+  allowed only with a `link` (added with
+  [APPROVAL-RESULT-CARDS.md](APPROVAL-RESULT-CARDS.md); an older fleet refuses
+  a card that carries it and shows the generic card).
 - **Flags.** A flag `code` is a short lowercase token (`[a-z0-9][a-z0-9_.-]{0,63}`).
 - **Size limits.**
   - 128 KiB of raw output, and the same for the stored card (up to 100 resolved cards ride one conversation GET).
@@ -164,6 +168,14 @@ off-schema card on the wire.
   payload, as the rest of the approval frames are.
 
 ### The web card (`GenericActionCard` + `ApprovalReadableCard.tsx`)
+
+The pending layout below was the first one. A pending, not-yet-running
+readable card now follows the designer's "Card design" (an APPROVAL NEEDED
+eyebrow and the countdown top-right, the record in an inner box with **Open in
+<system> ↗**, changes as label … before → after, **Approve** / **Cancel** with
+**Details** on the same row). See
+[APPROVAL-RESULT-CARDS.md](APPROVAL-RESULT-CARDS.md), "The pending card's
+layout". The running card and a grouped card's rows keep the list below.
 
 - **Pending:**
   - The header is the describer's title, followed by the subtitle.
@@ -195,18 +207,21 @@ off-schema card on the wire.
 
 - **Applied, but the read-back didn't match.** Samantha's resolved states
   include this one, and fleet cannot tell it from the generic outcome: it
-  knows only that the tool ran and whether it reported an error. A bundle tool
-  that verifies its write says so in its result text, which renders under the
-  one-line outcome. A per-tool outcome describer would be the way to make it
-  a first-class state. Deferred.
+  knows only that the tool ran and whether it reported an error. A tool in
+  `agent_policy.critical_tool_result_cards` can now say so as a first-class
+  state, in a `result_card` its result carries
+  ([APPROVAL-RESULT-CARDS.md](APPROVAL-RESULT-CARDS.md), ADR-0084). Without
+  one, the tool's result text renders under the one-line outcome, as before.
 - **`Not applied` carries no reason in the header.** The reason is the tool's
   failure text, shown in full directly below rather than truncated into the
   title.
 - **Only the generic action card renders it.** A describer declared for an
   email tool is called and stored, but the email card keeps its own preview
   layout.
-- **Notify-mode records are not described.** `RecordAction` runs after the
-  call, with no staging step to hang a describer on.
+- **Notify-mode records are not described.** `RecordAction` runs before the
+  call, with no staging step to hang a describer on. A notify tool in
+  `critical_tool_result_cards` gets a card from its call's result instead
+  ([APPROVAL-RESULT-CARDS.md](APPROVAL-RESULT-CARDS.md), "Notify records").
 - **The terminal client ignores `card`.** It still prints the frozen
   arguments before `/approve`, which remains the terminal's review record.
 - **The card is captured once, at staging.** A card left pending for an hour

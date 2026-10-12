@@ -265,6 +265,8 @@ export type ApprovalCardItem = {
   id?: string;
   /** Absolute https link to the record, opened in a new tab. */
   link?: string;
+  /** The link's name, e.g. "Open in Index Exchange"; "Open ↗" without it. */
+  linkLabel?: string;
   /** before → after; no `before` means the field had no previous value. */
   changes?: Array<{ label: string; before?: string; after: string }>;
   settings?: Array<{ label: string; value: string }>;
@@ -301,6 +303,56 @@ function httpsLink(v: string): string | null {
   }
 }
 
+type CardRows = Pick<ApprovalCardItem, "changes" | "settings" | "flags">;
+
+// parseCardRows reads an item's changes, settings and flags, or returns null
+// when any of them is off-schema (the caller then refuses the whole card).
+function parseCardRows(it: Record<string, unknown>): CardRows | null {
+  const out: CardRows = {};
+  if (it.changes !== undefined) {
+    if (!Array.isArray(it.changes)) return null;
+    out.changes = [];
+    for (const c of it.changes as unknown[]) {
+      const ch = c as Record<string, unknown> | null;
+      if (!ch || !isString(ch.label) || !isString(ch.after)) return null;
+      const before = optString(ch.before);
+      if (before === null) return null;
+      out.changes.push(before === undefined ? { label: ch.label, after: ch.after } : { label: ch.label, before, after: ch.after });
+    }
+  }
+  if (it.settings !== undefined) {
+    if (!Array.isArray(it.settings)) return null;
+    out.settings = [];
+    for (const s of it.settings as unknown[]) {
+      const st = s as Record<string, unknown> | null;
+      if (!st || !isString(st.label) || !isString(st.value)) return null;
+      out.settings.push({ label: st.label, value: st.value });
+    }
+  }
+  if (it.flags !== undefined) {
+    if (!Array.isArray(it.flags)) return null;
+    out.flags = [];
+    for (const f of it.flags as unknown[]) {
+      const fl = f as Record<string, unknown> | null;
+      if (!fl || !isString(fl.code) || !isString(fl.label)) return null;
+      out.flags.push({ code: fl.code, label: fl.label });
+    }
+  }
+  return out;
+}
+
+// parseCardLink reads an item's link and link label: undefined when absent,
+// null when off-schema (a non-https link, or a label without a link).
+function parseCardLink(it: Record<string, unknown>): { link?: string; linkLabel?: string } | null {
+  const link = optString(it.link);
+  const linkLabel = optString(it.link_label);
+  if (link === null || linkLabel === null) return null;
+  if (!link) return linkLabel ? null : {};
+  const safe = httpsLink(link);
+  if (!safe) return null;
+  return linkLabel ? { link: safe, linkLabel } : { link: safe };
+}
+
 // parseApprovalCardData accepts exactly the server's card schema and returns
 // undefined for anything else, so the card falls back to the generic layout.
 // Every string stays text; a link survives only as an absolute https URL.
@@ -317,49 +369,114 @@ export function parseApprovalCardData(value: unknown): ApprovalCardData | undefi
     const it = raw as Record<string, unknown>;
     if (!isString(it.label)) return undefined;
     const id = optString(it.id);
-    const link = optString(it.link);
-    if (id === null || link === null) return undefined;
+    if (id === null) return undefined;
+    const link = parseCardLink(it);
+    const rows = parseCardRows(it);
+    if (!link || !rows) return undefined;
     const item: ApprovalCardItem = { label: it.label };
     if (id) item.id = id;
-    if (link) {
-      const safe = httpsLink(link);
-      if (!safe) return undefined;
-      item.link = safe;
-    }
-    if (it.changes !== undefined) {
-      if (!Array.isArray(it.changes)) return undefined;
-      item.changes = [];
-      for (const c of it.changes as unknown[]) {
-        const ch = c as Record<string, unknown> | null;
-        if (!ch || !isString(ch.label) || !isString(ch.after)) return undefined;
-        const before = optString(ch.before);
-        if (before === null) return undefined;
-        item.changes.push(before === undefined ? { label: ch.label, after: ch.after } : { label: ch.label, before, after: ch.after });
-      }
-    }
-    if (it.settings !== undefined) {
-      if (!Array.isArray(it.settings)) return undefined;
-      item.settings = [];
-      for (const s of it.settings as unknown[]) {
-        const st = s as Record<string, unknown> | null;
-        if (!st || !isString(st.label) || !isString(st.value)) return undefined;
-        item.settings.push({ label: st.label, value: st.value });
-      }
-    }
-    if (it.flags !== undefined) {
-      if (!Array.isArray(it.flags)) return undefined;
-      item.flags = [];
-      for (const f of it.flags as unknown[]) {
-        const fl = f as Record<string, unknown> | null;
-        if (!fl || !isString(fl.code) || !isString(fl.label)) return undefined;
-        item.flags.push({ code: fl.code, label: fl.label });
-      }
-    }
+    Object.assign(item, link, rows);
     items.push(item);
   }
   const card: ApprovalCardData = { title: v.title, items };
   if (subtitle) card.subtitle = subtitle;
   if (footer) card.footer = footer;
+  return card;
+}
+
+/** How a record ended, on a result card (docs/APPROVAL-RESULT-CARDS.md). */
+export type ApprovalResultItemStatus = "done" | "failed" | "mismatch" | "unclear" | "skipped" | "not_run";
+/** The card's overall outcome; it sets the tone. */
+export type ApprovalResultOutcome = "done" | "partial" | "failed" | "mismatch" | "unclear";
+
+/** One record on a result card. */
+export type ApprovalResultCardItem = CardRows & {
+  /** The record's key in the call: what a retry names. */
+  key?: string;
+  label: string;
+  /** Buyer-facing id, monospace. */
+  id?: string;
+  /** The system's own id, for later updates. */
+  internalId?: string;
+  link?: string;
+  linkLabel?: string;
+  status: ApprovalResultItemStatus;
+  note?: string;
+};
+
+/**
+ * The outcome card the approved call's own result carried, for a tool the
+ * bundle lists in agent_policy.critical_tool_result_cards. Absent = the
+ * settled card renders as before.
+ */
+export type ApprovalResultCardData = {
+  outcome: ApprovalResultOutcome;
+  title: string;
+  subtitle?: string;
+  items: ApprovalResultCardItem[];
+  footer?: string;
+  /** Keys of failed / never-run records a retry may name ("Retry failed (N)"). */
+  retryKeys?: string[];
+};
+
+const RESULT_OUTCOMES = new Set<string>(["done", "partial", "failed", "mismatch", "unclear"]);
+const RESULT_ITEM_STATUSES = new Set<string>(["done", "failed", "mismatch", "unclear", "skipped", "not_run"]);
+
+// parseApprovalResultCardData accepts exactly the server's result-card schema
+// (approval_result_card.go) and returns undefined for anything else, so the
+// settled card falls back to today's layout. It re-checks the rules that
+// decide what the card claims: the outcome may not contradict the rows, and
+// a retry may only name failed or never-run records of the card.
+export function parseApprovalResultCardData(value: unknown): ApprovalResultCardData | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  if (!isString(v.outcome) || !RESULT_OUTCOMES.has(v.outcome)) return undefined;
+  if (!isString(v.title) || v.title.trim() === "" || !Array.isArray(v.items)) return undefined;
+  const subtitle = optString(v.subtitle);
+  const footer = optString(v.footer);
+  if (subtitle === null || footer === null) return undefined;
+  const items: ApprovalResultCardItem[] = [];
+  const keys = new Map<string, string>();
+  for (const raw of v.items) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+    const it = raw as Record<string, unknown>;
+    if (!isString(it.label) || !isString(it.status) || !RESULT_ITEM_STATUSES.has(it.status)) return undefined;
+    const strs = [optString(it.key), optString(it.id), optString(it.internal_id), optString(it.note)];
+    if (strs.some((x) => x === null)) return undefined;
+    const [key, id, internalId, note] = strs as Array<string | undefined>;
+    const link = parseCardLink(it);
+    const rows = parseCardRows(it);
+    if (!link || !rows) return undefined;
+    const item: ApprovalResultCardItem = { label: it.label, status: it.status as ApprovalResultItemStatus };
+    if (key) {
+      if (keys.has(key)) return undefined;
+      keys.set(key, it.status);
+      item.key = key;
+    }
+    if (id) item.id = id;
+    if (internalId) item.internalId = internalId;
+    if (note) item.note = note;
+    Object.assign(item, link, rows);
+    items.push(item);
+  }
+  const count = (s: string) => items.filter((it) => it.status === s).length;
+  if (v.outcome === "done" && count("failed") + count("mismatch") + count("unclear") > 0) return undefined;
+  if (v.outcome === "failed" && count("done") + count("mismatch") > 0) return undefined;
+  const card: ApprovalResultCardData = { outcome: v.outcome as ApprovalResultOutcome, title: v.title, items };
+  if (subtitle) card.subtitle = subtitle;
+  if (footer) card.footer = footer;
+  if (v.retry !== undefined) {
+    const r = v.retry as Record<string, unknown> | null;
+    if (!r || typeof r !== "object" || !Array.isArray(r.keys) || r.keys.length === 0) return undefined;
+    const seen = new Set<string>();
+    for (const k of r.keys as unknown[]) {
+      if (!isString(k) || seen.has(k)) return undefined;
+      const status = keys.get(k);
+      if (status !== "failed" && status !== "not_run") return undefined;
+      seen.add(k);
+    }
+    card.retryKeys = [...seen];
+  }
   return card;
 }
 
@@ -495,6 +612,12 @@ export type Approval = {
   /** The describer's readable card, when the bundle declares one for the tool. */
   card?: ApprovalCardData;
   /**
+   * The outcome card the call's own result carried, on a settled success of
+   * a tool in agent_policy.critical_tool_result_cards
+   * (docs/APPROVAL-RESULT-CARDS.md). Absent for every other card.
+   */
+  resultCard?: ApprovalResultCardData;
+  /**
    * The approval group the card joined at staging: the staging turn's id, for
    * a tool the bundle lists in agent_policy.critical_tool_group_approval. Two
    * or more pending cards that share it render as one grouped card
@@ -568,7 +691,18 @@ export type ApprovalOutcomePayload = {
   is_err?: boolean;
   executing?: boolean;
   execution_unknown?: boolean;
+  /** The result's outcome card (critical_tool_result_cards); success only. */
+  result_card?: unknown;
 };
+
+/**
+ * The outcome card of a settled answer, or undefined: only an answer that
+ * maps to a recorded success (approvalStatusFromOutcome → "approved") carries
+ * one the card may show.
+ */
+export function resultCardFromOutcome(data: ApprovalOutcomePayload): ApprovalResultCardData | undefined {
+  return approvalStatusFromOutcome(data) === "approved" ? parseApprovalResultCardData(data.result_card) : undefined;
+}
 
 /**
  * Maps those fields to a card status. null means in-flight: the caller
@@ -612,6 +746,7 @@ export function hydrateResolvedApproval(p: {
   tool_call_id?: string;
   recorded?: boolean;
   card?: unknown;
+  result_card?: unknown;
   resume_after_approval?: boolean;
   group_id?: string;
   progress_updates?: boolean;
@@ -624,6 +759,7 @@ export function hydrateResolvedApproval(p: {
     progress: executing ? parseApprovalProgress(p.progress) : undefined,
     resumeAfterApproval: p.resume_after_approval === true || undefined,
     card: parseApprovalCardData(p.card),
+    resultCard: executing ? undefined : resultCardFromOutcome(p),
     id: p.approval_id,
     tool: p.tool,
     summary: p.summary,

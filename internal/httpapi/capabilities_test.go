@@ -60,7 +60,7 @@ func TestShouldEmit(t *testing.T) {
 	if !shouldEmit(caps, "text.replace") {
 		t.Error("declared text.replace should emit under CapText")
 	}
-	for _, suppressed := range []string{"reasoning.delta", "tool.call", "tool.result", "tool.approval_required", "memory.proposed", "tool.auto_resolved"} {
+	for _, suppressed := range []string{"reasoning.delta", "tool.call", "tool.result", "tool.approval_required", "memory.proposed", "tool.auto_resolved", "tool.action_record_card"} {
 		if shouldEmit(caps, suppressed) {
 			t.Errorf("undeclared governed event %q should be suppressed", suppressed)
 		}

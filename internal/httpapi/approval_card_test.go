@@ -540,3 +540,26 @@ func TestStage_DescribesBeforeSuperseding(t *testing.T) {
 		t.Fatalf("describer calls when the old card was superseded = %d, want 1 (describe first)", st.callsAtSupersede)
 	}
 }
+
+// link_label names an item's link ("Open in Index Exchange"). It is optional,
+// text like any label, and only allowed with a link.
+func TestParseApprovalCard_LinkLabel(t *testing.T) {
+	with := `{"title":"t","items":[{"label":"A","link":"https://ssp.example.com/d/1","link_label":"Open in Index Exchange"}]}`
+	card, canonical, err := parseApprovalCard([]byte(with))
+	if err != nil || card.Items[0].LinkLabel != "Open in Index Exchange" || !strings.Contains(string(canonical), `"link_label":"Open in Index Exchange"`) {
+		t.Fatalf("link_label refused or dropped: %v %s", err, canonical)
+	}
+	// A card without it is canonicalised exactly as before (no new key).
+	if _, c, err := parseApprovalCard([]byte(goodCard)); err != nil || strings.Contains(string(c), "link_label") {
+		t.Fatalf("a card without link_label gained one: %v %s", err, c)
+	}
+	for name, raw := range map[string]string{
+		"no link":      `{"title":"t","items":[{"label":"A","link_label":"Open"}]}`,
+		"control char": `{"title":"t","items":[{"label":"A","link":"https://ssp.example.com/d/1","link_label":"Open\u0007"}]}`,
+		"too long":     `{"title":"t","items":[{"label":"A","link":"https://ssp.example.com/d/1","link_label":"` + strings.Repeat("x", 201) + `"}]}`,
+	} {
+		if _, _, err := parseApprovalCard([]byte(raw)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

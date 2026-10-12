@@ -21,9 +21,14 @@ func TestGovernApprovalResultBoundsApprovedBashBeforePersistence(t *testing.T) {
 	t.Cleanup(func() { agentcore.SetMaxToolOutputBytes(-1) })
 	agentcore.SetMaxToolOutputBytes(2048)
 	approval := &store.Approval{ID: "approval-1", ToolCallID: "bash-call", ToolName: "bash"}
-	text, isErr := governApprovalResult(context.Background(), approval, strings.Repeat("approved command output row ", 20_000), false)
+	long := strings.Repeat("approved command output row ", 20_000)
+	text, isErr, governed := governApprovalResult(context.Background(), approval, long, false)
 	if isErr || len(text) > 2048 || !strings.Contains(text, "original_bytes") || !strings.Contains(text, "recovery_action") {
 		t.Fatalf("approved bash persistence bypassed boundary: is_err=%t bytes=%d content=%.200s", isErr, len(text), text)
+	}
+	// The governed text (what a result card is read from) is NOT size-bound.
+	if governed != long {
+		t.Fatalf("governed text was cut or changed: %d bytes, want %d", len(governed), len(long))
 	}
 }
 

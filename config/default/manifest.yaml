@@ -424,6 +424,18 @@ remote_mcp_catalog: []
 #                               critical_tools (and not notify mode). See
 #                               docs/APPROVAL-PROGRESS.md. Example:
 #                                 critical_tool_progress: [execute_plan]
+#   critical_tool_result_cards: OPTIONAL critical suffixes (same suffix
+#                               matching as critical_tools) whose result JSON
+#                               carries a structured outcome card under the
+#                               top-level `result_card` key. Fleet checks it
+#                               against a fixed schema; when it passes, the
+#                               settled card (or notify record) shows it: a
+#                               one-line outcome, a row per record with its
+#                               ids, status and link, and "Retry failed (N)".
+#                               Any failure keeps today's card. Every member
+#                               must be in critical_tools. See
+#                               docs/APPROVAL-RESULT-CARDS.md. Example:
+#                                 critical_tool_result_cards: [execute_plan]
 #   critical_tool_timeouts:     OPTIONAL per-tool approval default-deny window
 #                               (#225), keyed by the same bare tool-name suffix
 #                               as critical_tools, in seconds. Highest-priority

@@ -1877,6 +1877,28 @@ agent_policy:
 	}
 }
 
+// validate-config reports a critical_tool_result_cards member that settles
+// no card: one not in critical_tools, or a handler-only card.
+func TestCheckAgentPolicy_ResultCards(t *testing.T) {
+	dir := t.TempDir()
+	body := `
+agent_policy:
+  critical_tools: [execute_plan, schedule_task]
+  critical_tool_result_cards: [execute_plan, execute_plans, schedule_task]
+`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := clientconfig.Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	res := checkAgentPolicy(b, nil)
+	if res.Status != statusFail || !strings.Contains(res.Detail, `"execute_plans"`) || !strings.Contains(res.Detail, `"schedule_task"`) || strings.Contains(res.Detail, `member "execute_plan"`) {
+		t.Fatalf("want agent_policy fail naming execute_plans and schedule_task only, got %q: %s", res.Status, res.Detail)
+	}
+}
+
 // validate-config holds critical_tool_card_describers to its rules: a
 // critical describer (it runs without approval) or one missing from
 // parallel_safe_tools fails the agent_policy check; a well-formed entry passes.

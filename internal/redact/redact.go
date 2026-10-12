@@ -32,6 +32,12 @@ import (
 // placeholder is what every matched secret is replaced with.
 const placeholder = "[REDACTED]"
 
+// MarkerPrefix opens every replacement the redactor writes ("[REDACTED]",
+// "[REDACTED PRIVATE KEY]"), so a reader of already-redacted text can tell
+// that a secret was scrubbed out of it (an approval's result card,
+// docs/APPROVAL-RESULT-CARDS.md).
+const MarkerPrefix = "[REDACTED"
+
 // minLiteralLen guards literal redaction against scrubbing short, common env
 // values (e.g. "true", a port number) that happen to be registered.
 const minLiteralLen = 8

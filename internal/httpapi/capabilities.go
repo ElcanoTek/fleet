@@ -70,6 +70,9 @@ var capabilityForEvent = map[string]SSECapability{
 	"tool.approval_superseded": CapApprovalCards,
 	"tool.auto_resolved":       CapApprovalCards,
 	"memory.proposed":          CapApprovalCards,
+	// A notify record's outcome card (docs/APPROVAL-RESULT-CARDS.md) is card
+	// data: a client that cannot render approval cards does not get it.
+	"tool.action_record_card": CapApprovalCards,
 }
 
 const (

@@ -207,6 +207,10 @@ type chatStore interface {
 	// SetApprovalProgress records the latest progress of an approved call that
 	// is still executing (docs/APPROVAL-PROGRESS.md); false once it is not.
 	SetApprovalProgress(ctx context.Context, userEmail, approvalID, progressJSON string) (bool, error)
+	// SetApprovalResultCard stores, once, the outcome card the call's own
+	// result carried (docs/APPROVAL-RESULT-CARDS.md): on an approved call
+	// still executing, or on a notify-mode record. False when nothing changed.
+	SetApprovalResultCard(ctx context.Context, userEmail, approvalID, cardJSON string) (bool, error)
 	GetApproval(ctx context.Context, userEmail, approvalID string) (*store.Approval, error)
 	ClaimApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error)
 	// ClaimApprovalAndSetModel is the suggest_advanced_model resolution: the

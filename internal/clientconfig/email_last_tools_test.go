@@ -138,3 +138,24 @@ agent_policy:
 		t.Errorf("AgentPolicy() must return a copy; the bundle now says %v", again.CriticalToolProgress)
 	}
 }
+
+// agent_policy.critical_tool_result_cards parses and is copied.
+func TestAgentPolicyResultCards(t *testing.T) {
+	dir := writeManifest(t, `
+agent_policy:
+  critical_tools: [execute_plan]
+  critical_tool_result_cards: [execute_plan]
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	p := b.AgentPolicy()
+	if len(p.CriticalToolResultCards) != 1 || p.CriticalToolResultCards[0] != "execute_plan" {
+		t.Fatalf("CriticalToolResultCards = %v", p.CriticalToolResultCards)
+	}
+	p.CriticalToolResultCards[0] = "mutated"
+	if again := b.AgentPolicy(); again.CriticalToolResultCards[0] != "execute_plan" {
+		t.Errorf("AgentPolicy() must return a copy; the bundle now says %v", again.CriticalToolResultCards)
+	}
+}

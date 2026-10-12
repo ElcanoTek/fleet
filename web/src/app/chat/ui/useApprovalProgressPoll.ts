@@ -15,6 +15,7 @@ import {
   type Approval,
   type ApprovalOutcomePayload,
   approvalStatusFromOutcome,
+  resultCardFromOutcome,
   parseApprovalProgress,
 } from "./history";
 import { conversationApprovalApiUrl } from "@/app/lib/conversationApiUrl";
@@ -52,7 +53,7 @@ export function approvalFromPoll(
   }
   const status = approvalStatusFromOutcome(row);
   if (status === null) return null;
-  return { ...current, status, resultText: row.result_text, executing: false, progress: undefined };
+  return { ...current, status, resultText: row.result_text, resultCard: resultCardFromOutcome(row), executing: false, progress: undefined };
 }
 
 export function useApprovalProgressPoll(

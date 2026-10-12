@@ -24,6 +24,7 @@ import {
   type Approval,
   type ApprovalOutcomePayload,
   approvalStatusFromOutcome,
+  resultCardFromOutcome,
 } from "./history";
 import {
   ApprovalCountdown,
@@ -158,7 +159,7 @@ export function ApprovalGroupCard({
           anyExecuting = true;
           onResolved({ ...approval, status: "pending", executing: true, resultText: r.result.result_text });
         } else {
-          onResolved({ ...approval, status: next, resultText: r.result.result_text, executing: false });
+          onResolved({ ...approval, status: next, resultText: r.result.result_text, resultCard: resultCardFromOutcome(r.result), executing: false });
         }
       }
       if (data.resume === true) onResumeExpected?.(anyExecuting);
