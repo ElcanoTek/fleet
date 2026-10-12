@@ -419,7 +419,8 @@ test("a running card shows its progress and settles on its own when the call end
 // A critical call fleet staged for approval resolves its tool call with the
 // gate's is_err APPROVAL_REQUIRED placeholder. Its chip used to render red, as
 // if the call had failed, right above the card asking for approval; it now
-// renders neutral and says "for approval". A real tool error stays red.
+// renders neutral and says "awaiting approval" while its card waits. A real
+// tool error stays red.
 test("a call staged for approval shows a neutral chip, a failed call stays red", async ({ page, context }) => {
   await context.addInitScript(() => window.localStorage.setItem("chat-show-stats", "1"));
   const staged =
@@ -458,9 +459,9 @@ test("a call staged for approval shows a neutral chip, a failed call stays red",
 
   const stagedChip = page.getByRole("button", { name: /deals_execute_plan/ }).first();
   await expect(stagedChip).toBeVisible();
-  await expect(stagedChip).toContainText("for approval");
+  await expect(stagedChip).toContainText("awaiting approval");
   await expect(stagedChip).not.toHaveAttribute("style", /--color-danger/);
   const failedChip = page.getByRole("button", { name: /deals_list_deals/ }).first();
   await expect(failedChip).toHaveAttribute("style", /--color-danger/);
-  await expect(failedChip).not.toContainText("for approval");
+  await expect(failedChip).not.toContainText("approval");
 });

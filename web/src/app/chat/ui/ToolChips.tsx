@@ -163,35 +163,47 @@ export function PythonOutput({
 // FAILURE uses the same prefix with no approval id, and stays an error.
 const STAGED_FOR_APPROVAL = /^APPROVAL_REQUIRED:[^\n]*?\(approval_id=([^)\s]+)\)/;
 
-// stagedApprovalIds returns the ids of the approval cards a message carries.
-export function stagedApprovalIds(approvals: ReadonlyArray<{ id: string }> | undefined): ReadonlySet<string> {
-  return new Set((approvals ?? []).map((a) => a.id));
+// stagedApprovalIds maps the approval cards a message carries to whether each
+// still waits for a decision (pending and not yet running).
+export function stagedApprovalIds(
+  approvals: ReadonlyArray<{ id: string; status?: string; executing?: boolean }> | undefined,
+): ReadonlyMap<string, boolean> {
+  return new Map((approvals ?? []).map((a) => [a.id, a.status === "pending" && a.executing !== true]));
 }
 
+// The two states of a staged call's chip: its card still waits for a decision
+// ("awaiting approval"), or the card has been decided since ("staged for
+// approval": the chip keeps the placeholder result until a reload brings the
+// real one, so it must not claim the call is still waiting).
+export type StagedChipState = "awaiting" | "staged";
+
 // isStagedForApproval reports whether an error chip is really a call fleet
-// staged for approval: its result is the gate's placeholder AND names an
-// approval card of the same message. The cross-check keeps a tool's own error
-// text that merely starts with the same words red, as before.
-export function isStagedForApproval(tc: ToolCall, approvalIds: ReadonlySet<string>): boolean {
-  if (tc.state !== "error" || !tc.resultText) return false;
+// staged for approval, and in which state: its result is the gate's
+// placeholder AND names an approval card of the same message. The cross-check
+// keeps a tool's own error text that merely starts with the same words red,
+// as before.
+export function isStagedForApproval(tc: ToolCall, approvals: ReadonlyMap<string, boolean>): StagedChipState | null {
+  if (tc.state !== "error" || !tc.resultText) return null;
   const m = STAGED_FOR_APPROVAL.exec(tc.resultText);
-  return m !== null && approvalIds.has(m[1]);
+  if (m === null || !approvals.has(m[1])) return null;
+  return approvals.get(m[1]) ? "awaiting" : "staged";
 }
 
 export function ToolChip({
   tc,
   taskTrackerDisplay,
   conversationId,
-  stagedForApproval = false,
+  stagedForApproval = null,
 }: {
   tc: ToolCall;
   taskTrackerDisplay: TaskTrackerDisplay | null;
   // Threaded so the spawn_subagent result card can fetch the child's own
   // transcript through this conversation's authorized endpoint (#1043).
   conversationId?: string | null;
-  // The call was staged for approval (isStagedForApproval): a neutral chip
-  // marked "for approval", not an error. Its card below holds the decision.
-  stagedForApproval?: boolean;
+  // The call was staged for approval (isStagedForApproval): a neutral chip,
+  // not an error, tagged with the card's state. Its card below holds the
+  // decision and the outcome.
+  stagedForApproval?: StagedChipState | null;
 }) {
   // A delegation opens by default (#1043 follow-up): it is the one tool call
   // that runs for minutes with the operator otherwise staring at a collapsed
@@ -199,7 +211,7 @@ export function ToolChip({
   // it. Every other tool keeps the click-to-open default.
   const [open, setOpen] = useState(tc.name === "spawn_subagent");
   const label = prettyToolName(tc.name);
-  const isErr = tc.state === "error" && !stagedForApproval;
+  const isErr = tc.state === "error" && stagedForApproval === null;
   const stateStyle: React.CSSProperties =
     isErr
       ? {
@@ -236,8 +248,8 @@ export function ToolChip({
           </span>
         ) : null}
         {stagedForApproval ? (
-          <span data-testid="tool-chip-staged" className="text-[var(--color-text-muted)]">
-            · for approval
+          <span data-testid="tool-chip-staged" data-state={stagedForApproval} className="text-[var(--color-text-muted)]">
+            {stagedForApproval === "awaiting" ? "· awaiting approval" : "· staged for approval"}
           </span>
         ) : null}
         {tc.state === "pending" ? (
