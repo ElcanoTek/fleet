@@ -115,7 +115,8 @@ unconfigured. The browser reaches them through the Next.js proxies under
 - A Prometheus `fleet_push_notifications_sent_total` counter and the periodic
   `last_active_at` sweep of stale subscriptions (expired endpoints are
   already reaped on send).
-- Deep links into the exact card or run (#504/#508 follow-ups; chat pushes
-  now open their conversation) and schedule missed/blocked events.
+- Deep links into the exact card (#504/#508 follow-ups; chat pushes now
+  open their conversation, and a task link opens the task's record) and
+  schedule missed/blocked events.
 - Email/Slack/Teams as additional `notify.PushSender`-style per-user
   backends.

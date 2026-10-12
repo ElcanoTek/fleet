@@ -29,6 +29,16 @@ const MCP_SERVERS = {
   ],
 };
 
+// A task only GET /tasks/{id} serves: a task link must open it even though the
+// board's list does not include it.
+const LINKED_TASK = {
+  id: "33333333-3333-4333-8333-333333333333",
+  prompt: "Pull the quarterly pacing report for the linked task",
+  status: "success",
+  created_at: new Date().toISOString(),
+  agent_session_id: "sess-3",
+};
+
 const SEED_TASKS = [
   {
     id: "11111111-1111-1111-1111-111111111111",
@@ -67,7 +77,7 @@ async function mockOrchestrator(page: Page, captured: { createBody?: Record<stri
     }
     // One task by id: what a task link (/orchestrator/tasks/<id>) loads.
     if (/^\/tasks\/[^/]+$/.test(path) && method === "GET") {
-      const task = SEED_TASKS.find((t) => path === `/tasks/${t.id}`);
+      const task = [...SEED_TASKS, LINKED_TASK].find((t) => path === `/tasks/${t.id}`);
       return task
         ? route.fulfill({ json: task })
         : route.fulfill({ status: 404, json: { detail: "task not found" } });
@@ -180,11 +190,34 @@ test("opening a task renders its log viewer (react-markdown)", async ({ page }) 
 // reopen it.
 test("a task link opens that task's log", async ({ page }) => {
   await mockOrchestrator(page, {});
-  await page.goto(`/orchestrator/tasks/${SEED_TASKS[0].id}`);
+  await page.goto(`/orchestrator/tasks/${LINKED_TASK.id}`);
 
-  await expect(page.getByRole("dialog", { name: "Task Logs" })).toBeVisible();
-  await expect(page.getByTestId("log-modal-body")).toContainText("Run the optimization protocol");
+  // The record names its own task's prompt, which only the by-id answer has:
+  // the board's list does not include this task.
+  const dialog = page.getByRole("dialog", { name: "Task Logs" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText(LINKED_TASK.prompt);
+  await expect(page.locator("#tasksTable")).not.toContainText(LINKED_TASK.prompt);
   await expect(page).toHaveURL(/\/orchestrator$/);
+});
+
+test("a link that is not a task id is not fetched, and says so", async ({ page }) => {
+  // A one-task fetch, or the list path ".." would collapse it to. The board's
+  // own /tasks/tags and /tasks/upcoming reads are not task fetches.
+  const fetched: string[] = [];
+  page.on("request", (r) => {
+    const path = new URL(r.url()).pathname;
+    const one = /^\/api\/orchestrator\/tasks\/([^/]+)$/.exec(path);
+    if (path === "/api/orchestrator/" || (one && !["tags", "upcoming"].includes(one[1]))) {
+      fetched.push(path);
+    }
+  });
+  await mockOrchestrator(page, {});
+  await page.goto("/orchestrator?task=..");
+
+  await expect(page.getByText(/That task could not be opened/)).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Task Logs" })).toHaveCount(0);
+  expect(fetched).toEqual([]);
 });
 
 test("a link to a task that cannot be loaded says so", async ({ page }) => {

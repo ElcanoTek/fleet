@@ -97,6 +97,11 @@ function initialLinkedTaskId(): string | null {
   return new URLSearchParams(window.location.search).get("task")?.trim() || null;
 }
 
+// TASK_ID is the shape of a task id (a UUID). A ?task= value of any other
+// shape is never fetched: "." or ".." would resolve the request to the task
+// list instead of one task.
+const TASK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // dropTaskParam takes ?task= back out of the address bar once the link has
 // been handled, so a reload shows the board rather than reopening the task.
 function dropTaskParam() {
@@ -169,16 +174,20 @@ function OrchestratorInner({
 
   // A task link opens that task's log once the session is known. The task is
   // fetched by id rather than looked up on the board, because the board's
-  // current page need not list it. A task that cannot be loaded (deleted, or
-  // not visible to this account) says so instead of opening nothing.
+  // current page need not list it. A task that cannot be loaded (deleted, not
+  // visible to this account, or not a task id at all) says so instead of
+  // opening nothing, and a row the user opened meanwhile is left open.
   const [linkedTaskId, setLinkedTaskId] = useState<string | null>(initialLinkedTaskId);
   useEffect(() => {
     if (!session.signedIn || !linkedTaskId) return;
     let stale = false;
-    orchestratorApi
-      .task(linkedTaskId)
+    const load = TASK_ID.test(linkedTaskId)
+      ? orchestratorApi.task(linkedTaskId)
+      : Promise.reject(new Error("not a task id"));
+    load
       .then((task) => {
-        if (!stale) setLogTask(task);
+        if (task.id !== linkedTaskId) throw new Error("a different task came back");
+        if (!stale) setLogTask((current) => current ?? task);
       })
       .catch(() => {
         if (!stale) {
