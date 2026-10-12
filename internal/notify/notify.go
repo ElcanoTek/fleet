@@ -119,8 +119,9 @@ const (
 
 // Kind names what raised an Event when Status alone does not say it. The
 // empty Kind is a task's own event. Only channels that word the event
-// themselves read it (Web Push renders its own title); email and the webhook
-// render Name and Message, which already say what happened.
+// themselves read it (Web Push renders its own title); email renders Name and
+// Message and the default webhook template renders Name, which already say
+// what happened.
 type Kind string
 
 // KindBudgetAlert is a soft budget threshold crossed (internal/sched/budget).

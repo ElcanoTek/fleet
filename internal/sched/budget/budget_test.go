@@ -273,6 +273,10 @@ func TestCheckCreate_SoftAlertOncePerWindow(t *testing.T) {
 	if ev.Kind != notify.KindBudgetAlert {
 		t.Errorf("alert kind = %q, want %q so a channel does not word it as an ask-pause", ev.Kind, notify.KindBudgetAlert)
 	}
+	// The push title is "⚠ " + Name, so Name must say what this is.
+	if !strings.HasPrefix(ev.Name, "Budget alert: ") {
+		t.Errorf("alert name = %q, want it to start with %q", ev.Name, "Budget alert: ")
+	}
 
 	// Repeat creates in the same window: no duplicate spam.
 	for i := 0; i < 3; i++ {

@@ -73,7 +73,8 @@ Notes on honest scope:
   `FLEET_NOTIFY_ON` filter and the webhook treat it like any other heads-up),
   but it carries `Kind: budget_alert` and pushes as `⚠ Budget alert: …`:
   nothing is waiting on an answer. It pushes to the budget's principal only
-  for a user-scoped budget, and opens the app root.
+  for a user-scoped budget. It carries no link, so a click brings an open
+  fleet window forward, or opens the app root.
 - The approval push fires for approvals staged **by an agent turn**. The
   user-initiated "promote to scheduled task" card does not push — the user is
   looking at it when it appears.
