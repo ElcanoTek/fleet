@@ -474,6 +474,12 @@ such an action finishes (**✓ Done** or **✗ Not applied**, named by the card'
 title), and one when the assistant could not carry on by itself after your
 approvals; clicking it opens the conversation.
 
+Browser notifications go to the account that turned them on in that browser.
+Signing out turns them off there, so the next person to use the browser does
+not get yours. The switch shows whether this browser gets **your**
+notifications: if someone else turned them on in it, or Fleet no longer has
+this browser on record for you, it reads off, and you can turn it on again.
+
 A deployment can also **group** chosen actions (booking the same plan in
 several external systems, for example): when the assistant asks for two or
 more of them in one reply, they arrive as one card titled **N actions to

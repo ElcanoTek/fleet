@@ -73,6 +73,20 @@ func (s *Store) ListPushSubscriptions(ctx context.Context, userEmail string) ([]
 	return out, rows.Err()
 }
 
+// HasUserPushSubscription reports whether userEmail holds the subscription for
+// endpoint — the POST /push/status check that lets the settings switch show
+// whether THIS browser gets the signed-in user's notifications, rather than
+// only whether the browser holds some subscription (which may be another
+// account's on a shared browser, or one the server has since dropped).
+func (s *Store) HasUserPushSubscription(ctx context.Context, userEmail, endpoint string) (bool, error) {
+	var held bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM push_subscriptions WHERE user_email = $1 AND endpoint = $2)`,
+		normalizeEmail(userEmail), endpoint,
+	).Scan(&held)
+	return held, err
+}
+
 // DeletePushSubscription removes a subscription by endpoint regardless of
 // owner — the send path's cleanup for endpoints the relay reported expired
 // (404/410). Idempotent: deleting an absent endpoint is a no-op.

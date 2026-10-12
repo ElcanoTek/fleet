@@ -28,8 +28,8 @@ func (s *Server) pushReady(w http.ResponseWriter) bool {
 }
 
 // pushSubscribeRequest is the browser's PushSubscription serialized to JSON
-// (sub.toJSON()); DELETE /push/unsubscribe accepts the same shape but only
-// reads Endpoint.
+// (sub.toJSON()); DELETE /push/unsubscribe and POST /push/status accept the
+// same shape but only read Endpoint.
 type pushSubscribeRequest struct {
 	Endpoint string `json:"endpoint"`
 	Keys     struct {
@@ -97,6 +97,39 @@ func (s *Server) pushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// pushStatus handles POST /push/status: {"subscribed": true} when the caller
+// holds the subscription for the given endpoint. The settings switch asks this
+// about the browser's own subscription, because a browser can hold one that is
+// not the signed-in user's — another account's on a shared browser, or one the
+// server dropped — and the switch must not read "on" for it. The endpoint
+// rides in the body, not the query string: it is a capability URL. A read, so
+// no viewer-write guard; owner-scoped in the store like unsubscribe.
+func (s *Server) pushStatus(w http.ResponseWriter, r *http.Request) {
+	// Method first, then readiness, as for the other push routes.
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.pushReady(w) {
+		return
+	}
+	var req pushSubscribeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Endpoint) == "" {
+		http.Error(w, "endpoint is required", http.StatusBadRequest)
+		return
+	}
+	held, err := s.store.HasUserPushSubscription(r.Context(), userFromCtx(r.Context()), req.Endpoint)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]bool{"subscribed": held})
 }
 
 // pushVAPIDPublicKey handles GET /push/vapid-public-key: the non-secret

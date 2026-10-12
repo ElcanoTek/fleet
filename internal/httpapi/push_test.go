@@ -24,6 +24,7 @@ func TestPushEndpointsDisabledReturn501(t *testing.T) {
 	}{
 		{"subscribe", http.MethodPost, "/push/subscribe", s.pushSubscribe},
 		{"unsubscribe", http.MethodDelete, "/push/unsubscribe", s.pushUnsubscribe},
+		{"status", http.MethodPost, "/push/status", s.pushStatus},
 		{"vapid-key", http.MethodGet, "/push/vapid-public-key", s.pushVAPIDPublicKey},
 	}
 	for _, tc := range cases {
@@ -56,6 +57,7 @@ func TestPushEndpointsWrongMethodIs405EvenWhenDisabled(t *testing.T) {
 	}{
 		{"subscribe", http.MethodGet, "/push/subscribe", s.pushSubscribe},
 		{"unsubscribe", http.MethodGet, "/push/unsubscribe", s.pushUnsubscribe},
+		{"status", http.MethodGet, "/push/status", s.pushStatus},
 		{"vapid-key", http.MethodPost, "/push/vapid-public-key", s.pushVAPIDPublicKey},
 	}
 	for _, tc := range cases {
@@ -133,6 +135,49 @@ func TestPushSubscribeLifecycle(t *testing.T) {
 	}
 	if subs, _ = st.ListPushSubscriptions(ctx, "u@x.com"); len(subs) != 0 {
 		t.Fatalf("row survived unsubscribe: %+v", subs)
+	}
+}
+
+// TestPushStatus is the check behind the settings switch: it answers for the
+// caller's own rows only, so a browser holding another account's subscription
+// (a shared browser) or one the server dropped reads as not subscribed.
+func TestPushStatus(t *testing.T) {
+	_, h := pushFixture(t)
+	sub := map[string]any{
+		"endpoint": "https://relay.example/ep-status",
+		"keys":     map[string]string{"auth": "auth-b64", "p256dh": "p256dh-b64"},
+	}
+	status := func(user, endpoint string) string {
+		t.Helper()
+		w := do(t, h, http.MethodPost, "/push/status", map[string]any{"endpoint": endpoint}, user)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status for %s: %d body=%s", user, w.Code, w.Body.String())
+		}
+		return strings.TrimSpace(w.Body.String())
+	}
+
+	if got := status("u@x.com", "https://relay.example/ep-status"); got != `{"subscribed":false}` {
+		t.Fatalf("before subscribing: %s", got)
+	}
+	if w := do(t, h, http.MethodPost, "/push/subscribe", sub, "u@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("subscribe: %d body=%s", w.Code, w.Body.String())
+	}
+	if got := status("u@x.com", "https://relay.example/ep-status"); got != `{"subscribed":true}` {
+		t.Errorf("owner: %s", got)
+	}
+	// The same browser endpoint, asked about by another account.
+	if got := status("other@x.com", "https://relay.example/ep-status"); got != `{"subscribed":false}` {
+		t.Errorf("another account: %s", got)
+	}
+	// The owner's row is gone (unsubscribed, or reaped after a 404/410).
+	if w := do(t, h, http.MethodDelete, "/push/unsubscribe", sub, "u@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("unsubscribe: %d", w.Code)
+	}
+	if got := status("u@x.com", "https://relay.example/ep-status"); got != `{"subscribed":false}` {
+		t.Errorf("after unsubscribe: %s", got)
+	}
+	if w := do(t, h, http.MethodPost, "/push/status", map[string]any{}, "u@x.com"); w.Code != http.StatusBadRequest {
+		t.Errorf("missing endpoint: %d, want 400", w.Code)
 	}
 }
 
