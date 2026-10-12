@@ -172,6 +172,7 @@ but some of it can still be pinned:
 | `scripts/check_shortcuts_doc_test.go` | A shortcut table naming a chord the shell does not bind. This one is not hypothetical: `docs/keyboard-shortcuts.md` advertised `Mod`+`F`/`N`/`J` long after the app stopped binding them, and that stale table was copied into the guide in good faith. The authority is the help-overlay catalog in `chat-experience.tsx`. |
 | `web/src/app/help/headings.test.ts` | An in-guide cross-reference pointing at a heading that no longer exists. |
 | `internal/clientconfig/builtin_skills_fleet_guide_test.go` | The skill citing a guide file that moved, and the guides losing the sections the skill's description promises. |
+| `scripts/check_notifications_guide_test.go` | A written path to the Browser notifications switch naming a settings section the switch is not in. Not hypothetical either: the switch moved to **Settings → General** and the guide kept sending people to **Settings → Connections**. The authority is `web/src/app/settings/page.tsx`. |
 
 Add a row when a new claim is checkable. The pattern to look for is a guide
 sentence that restates a constant, an enum, or a list the code already owns.

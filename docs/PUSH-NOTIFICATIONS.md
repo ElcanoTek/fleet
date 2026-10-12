@@ -33,16 +33,16 @@ channel consumes.
 3. Restart fleet. The startup log prints `web push: enabled`.
 
 4. Each user opts in per browser with the **Settings → General → Browser
-   notifications** switch. The flow asks for notification
-   permission, registers `web/public/sw.js`, subscribes with the server's
-   public key (fetched from `GET /push/vapid-public-key` — it is never baked
-   into the web build), and stores the subscription server-side. Disable
+   notifications** switch. The flow asks for notification permission,
+   registers `web/public/sw.js`, subscribes with the server's public key
+   (fetched from `GET /push/vapid-public-key` — it is never baked into the web
+   build), and stores the subscription server-side. Turning it off
    unsubscribes the browser and deletes the stored row.
 
 **Default OFF.** With any of the three `FLEET_VAPID_*` vars unset, the push
 subsystem does not exist: the `/push/*` endpoints answer `501 Not Implemented`
-with a machine-readable `push_disabled` error, the settings card explains what
-the operator must run, and no trigger fires.
+with a machine-readable `push_disabled` error, the settings switch is greyed
+out with a note to ask the operator to set push up, and no trigger fires.
 
 `FLEET_PUBLIC_URL` (shared with the #208 notifier) is reused to build the deep
 link a notification click opens (`/orchestrator/tasks/<id>` for task events).

@@ -190,11 +190,13 @@ Your account menu at the foot of the rail switches between **Light**, **Dark**,
 and **System** appearance and opens **Settings**.
 
 **Settings → General → Browser notifications** turns on alerts in the browser
-you are using: by default, when a task finishes, an action needs your approval,
-or a task is waiting for your answer, even while the Fleet tab is in the
-background. The browser asks for permission the first time. An alert carries
-only a short title (a task's name and state, or the action waiting on you),
-never message content. The switch is per browser,
+you are using, even while the tab is in the background. By default you get one
+when a task you created finishes or is waiting for your answer, and when an
+action in one of your chats needs your approval;
+[Cards that ask for a decision](#6-cards-that-ask-for-a-decision) describes the
+others. The browser asks for permission the first time. An alert shows only a
+short title (the start of the task's prompt and how it went, or the action
+waiting on you), never the conversation or a result. The switch is per browser,
 so turn it on in each browser you want alerts in. When the switch is greyed
 out, the line under it says why: the browser does not support them, they are
 blocked for this site in the browser's own settings (allow them there, then
