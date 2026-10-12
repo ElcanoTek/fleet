@@ -295,9 +295,10 @@ actually happened, and changes create new entries.
 ### Answer a paused task
 
 When a task pauses to ask a question, the question is waiting in its record, and
-a notification goes out if your deployment has a channel configured for one —
-not every deployment does, so if you are waiting on a run, the board is the
-thing that always knows. Provide the answer there and the task re-queues and
+a notification goes out if your deployment has a channel configured for one (a
+browser alert, if you turned those on under **Settings → General → Browser
+notifications**) — not every deployment does, so if you are waiting on a run,
+the board is the thing that always knows. Provide the answer there and the task re-queues and
 continues with your answer in hand. A paused task consumes nothing while it
 waits, and by default it waits as long as it takes — but a deployment can set an
 expiry, after which an unanswered run is failed and its question cleared. If

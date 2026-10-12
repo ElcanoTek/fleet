@@ -32,8 +32,8 @@ channel consumes.
 
 3. Restart fleet. The startup log prints `web push: enabled`.
 
-4. Each user opts in per browser: **Settings → Connections → Browser
-   notifications → Enable notifications**. The flow asks for notification
+4. Each user opts in per browser with the **Settings → General → Browser
+   notifications** switch. The flow asks for notification
    permission, registers `web/public/sw.js`, subscribes with the server's
    public key (fetched from `GET /push/vapid-public-key` — it is never baked
    into the web build), and stores the subscription server-side. Disable

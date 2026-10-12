@@ -189,6 +189,17 @@ for the owner, **Share…** and **Project settings…**. See [Keeping, shaping, 
 Your account menu at the foot of the rail switches between **Light**, **Dark**,
 and **System** appearance and opens **Settings**.
 
+**Settings → General → Browser notifications** turns on alerts in the browser
+you are using: by default, when a task finishes, an action needs your approval,
+or a task is waiting for your answer, even while the Fleet tab is in the
+background. The browser asks for permission the first time. An alert carries
+only a short title (a task's name and state, or the action waiting on you),
+never message content. The switch is per browser,
+so turn it on in each browser you want alerts in. When the switch is greyed
+out, the line under it says why: the browser does not support them, they are
+blocked for this site in the browser's own settings (allow them there, then
+reload), or your deployment has not set them up.
+
 Administrators manage account access under **Settings → Admin → Users**. Chat
 defaults to **Contributor**; **Viewer** is read-only. **Fleet Admin** grants full
 Chat and Ops Center permissions and highlights the included Contributor choices.
@@ -469,7 +480,7 @@ running card then shows a bar and a line such as **12 of 24 · creating deal
 12**, refreshed every couple of seconds while the tab is open and still there
 after a reload, and it switches to the outcome by itself when the action ends,
 without **Check result**. If you have turned on browser notifications
-(**Settings → Connections → Browser notifications**), you also get one when
+(**Settings → General → Browser notifications**), you also get one when
 such an action finishes (**✓ Done** or **✗ Not applied**, named by the card's
 title), and one when the assistant could not carry on by itself after your
 approvals; clicking it opens the conversation.
