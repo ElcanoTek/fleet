@@ -235,6 +235,35 @@ by itself, and the owner gets a browser push when the call finishes or when
 the automatic continue is blocked. See
 [APPROVAL-PROGRESS.md](APPROVAL-PROGRESS.md).
 
+## A staged call's tool chip is not an error
+
+A call a gate stages for approval resolves its tool call with the gate's
+`APPROVAL_REQUIRED: … (approval_id=<id>) …` placeholder, and that result is
+`is_err`: the model must read the call as not run. The web's execution-trail
+chip took `is_err` at its word and drew the call in the danger colour, right
+above the card asking the person to approve it (seen live on a deal booking,
+2026-10-11). The terminal client already shows such a call as "⏸ awaiting
+approval" (`internal/chattui`).
+
+The web now draws that chip neutral, with a muted **· sent for approval** tag
+and the expanded result no longer in the error colour. The tag claims nothing
+about the card's state: until a reload the chip keeps the placeholder result
+while the card goes on to pending, expired, running or decided, so the card,
+not the chip, says how it went (an earlier "awaiting approval" wording went
+stale after a decision or an expiry; Codex on #1721). The chip is neutral only
+when both hold (`isStagedForApproval`, `web/src/app/chat/ui/ToolChips.tsx`):
+
+- the result is the gate's placeholder: it starts with `APPROVAL_REQUIRED:` and
+  names an `approval_id` on its first line. A staging failure ("Could not stage
+  it …") names no id and stays red;
+- that id is an approval card of the same message, live or re-hydrated. A tool
+  whose own error text merely contains the words cannot make its chip neutral.
+
+Nothing else changes: the model-visible result, `is_err`, the stream frames and
+the stored history are the same, and every other chip renders as before. The
+check is generic (fleet's own gate text, not a bundle's), so it applies to every
+bundle's staged calls, email sends and risky shell commands included.
+
 ## Honest scope / deliberately not done
 
 - **No approvals-table mode column.** Notify records are tagged by their

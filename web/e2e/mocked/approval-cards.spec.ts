@@ -415,3 +415,52 @@ test("a running card shows its progress and settles on its own when the call end
   await expect(card.getByTestId("approval-result")).toContainText("24 deals created");
   expect(polls).toBeGreaterThan(0);
 });
+
+// A critical call fleet staged for approval resolves its tool call with the
+// gate's is_err APPROVAL_REQUIRED placeholder. Its chip used to render red, as
+// if the call had failed, right above the card asking for approval; it now
+// renders neutral and says "sent for approval". A real tool error stays red.
+test("a call staged for approval shows a neutral chip, a failed call stays red", async ({ page, context }) => {
+  await context.addInitScript(() => window.localStorage.setItem("chat-show-stats", "1"));
+  const staged =
+    "APPROVAL_REQUIRED: mcp_deals_execute_plan is a critical action and has been staged for explicit user approval (approval_id=ap-staged-1). Do NOT retry.";
+  await mockChatBoot(page, { conversations: [{ id: "conv-chips", title: "Staged chips" }] });
+  await page.route("**/api/conversations/conv-chips", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation: { id: "conv-chips", title: "Staged chips", persona: "default", model: "test-model", pinned: false },
+        history: [
+          { id: 1, role: "user", type: "text", content: { text: "book it" } },
+          { id: 2, role: "assistant", type: "tool_call", content: { id: "call-x", name: "mcp_deals_execute_plan", input: "{}" } },
+          { id: 3, role: "tool", type: "tool_result", content: { id: "call-x", name: "mcp_deals_execute_plan", text: staged, is_err: true } },
+          { id: 4, role: "assistant", type: "tool_call", content: { id: "call-y", name: "mcp_deals_list_deals", input: "{}" } },
+          { id: 5, role: "tool", type: "tool_result", content: { id: "call-y", name: "mcp_deals_list_deals", text: "upstream 503", is_err: true } },
+          { id: 6, role: "assistant", type: "text", content: { text: "Waiting for your approval." } },
+        ],
+        pending_approvals: [
+          {
+            approval_id: "ap-staged-1",
+            tool: "mcp_deals_execute_plan",
+            summary: { tool: "mcp_deals_execute_plan", args: [{ key: "plan_id", value: "dp_1" }] },
+            tool_call_id: "call-x",
+          },
+        ],
+        resolved_approvals: [],
+        pending_memory_proposals: [],
+      },
+    });
+  });
+  await page.goto("/chat");
+  const row = page.locator('[data-conversation-id="conv-chips"]');
+  await row.waitFor({ timeout: 15_000 });
+  await row.click();
+
+  const stagedChip = page.getByRole("button", { name: /deals_execute_plan/ }).first();
+  await expect(stagedChip).toBeVisible();
+  await expect(stagedChip).toContainText("sent for approval");
+  await expect(stagedChip).not.toHaveAttribute("style", /--color-danger/);
+  const failedChip = page.getByRole("button", { name: /deals_list_deals/ }).first();
+  await expect(failedChip).toHaveAttribute("style", /--color-danger/);
+  await expect(failedChip).not.toContainText("approval");
+});
