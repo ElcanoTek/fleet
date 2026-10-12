@@ -175,6 +175,16 @@ describe("the completed card from a result card", () => {
     expect(within(details).getByText("booking:93615")).toBeTruthy();
   });
 
+  it("a notify record never offers Retry failed, even if its card names keys", () => {
+    renderCard({
+      tool: "mcp_deal_sheet_next_campaign_id",
+      recorded: true,
+      resultText: "Ran without asking: this tool is declared notify-mode in the client bundle.",
+      resultCard: parseApprovalResultCardData(plan),
+    });
+    expect(screen.queryByTestId("approval-retry-failed")).toBeNull();
+  });
+
   it.each([
     ["no result card", {}],
     ["a failed run", { status: "failed" as const }],

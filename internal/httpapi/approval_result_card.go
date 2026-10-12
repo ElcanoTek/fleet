@@ -403,7 +403,7 @@ func (a *approvalStager) RecordActionResult(toolName, toolCallID, resultText str
 	if approvalID == "" || !succeeded {
 		return
 	}
-	card := storeApprovalResultCard(a.ctx, a.store, a.userEmail, approvalID, toolName, resultText)
+	card := storeApprovalResultCard(a.ctx, a.store, a.userEmail, approvalID, toolName, withoutRetry(resultText))
 	if card == nil {
 		return
 	}
@@ -412,6 +412,39 @@ func (a *approvalStager) RecordActionResult(toolName, toolCallID, resultText str
 		"tool":        toolName,
 		"result_card": card,
 	})
+}
+
+// withoutRetry returns a notify call's result with its card's `retry` left
+// out. A notify-mode tool runs without an approval, so "Retry failed" on its
+// record would ask for a call that runs straight away, not for a new
+// approval: a record never offers one. Anything that is not a card with a
+// retry is returned unchanged (and then judged by extractResultCard).
+func withoutRetry(text string) string {
+	var top map[string]json.RawMessage
+	if err := json.NewDecoder(strings.NewReader(strings.TrimSpace(text))).Decode(&top); err != nil {
+		return text
+	}
+	raw, ok := top[resultCardKey]
+	if !ok {
+		return text
+	}
+	var card map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &card); err != nil {
+		return text
+	}
+	if _, has := card["retry"]; !has {
+		return text
+	}
+	delete(card, "retry")
+	stripped, err := json.Marshal(card)
+	if err != nil {
+		return text
+	}
+	out, err := json.Marshal(map[string]json.RawMessage{resultCardKey: stripped})
+	if err != nil {
+		return text
+	}
+	return string(out)
 }
 
 // approvalResultCardPayload is the result card a client receives for a
@@ -427,8 +460,13 @@ func (s *Server) approvalResultCardPayload(a *store.Approval) json.RawMessage {
 	if flags := s.approvalOutcomeFlags(a); flags["is_err"] != false {
 		return nil
 	}
-	_, canonical, err := parseApprovalResultCard([]byte(a.ResultCardJSON))
+	card, canonical, err := parseApprovalResultCard([]byte(a.ResultCardJSON))
 	if err != nil || bytes.Contains(canonical, []byte(redact.MarkerPrefix)) || tools.RedactionWouldAlter(canonical) {
+		return nil
+	}
+	// A notify record never offers a retry (withoutRetry); a stored one is
+	// not served either.
+	if card.Retry != nil && isNotifyRecordResult(a.ResultText) {
 		return nil
 	}
 	return canonical

@@ -269,7 +269,10 @@ export function ApprovalResultCardView({
   const tone: Tone = recorded
     ? { border: "var(--color-border-strong)", bg: "var(--color-text-muted)", fg: "var(--color-text-secondary)", icon: "book" }
     : OUTCOME_TONE[result.outcome];
-  const retryKeys = result.retryKeys ?? [];
+  // A notify record never offers a retry: its tool runs without an approval,
+  // so "Retry failed" would ask for a call that runs straight away (the
+  // server leaves the retry out of a record's card too).
+  const retryKeys = recorded ? [] : (result.retryKeys ?? []);
   const title = recorded ? `${result.title} · ran without asking` : result.title;
   return (
     <div

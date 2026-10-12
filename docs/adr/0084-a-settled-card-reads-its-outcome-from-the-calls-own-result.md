@@ -70,7 +70,8 @@ Fleet uses option 2. A bundle lists critical suffixes in
    call runs. For a member of the list, the loop's result hook
    (`RecordToolResult`) hands the record its call's governed result once
    (`agentcore.ActionResultRecorder`), and the record stores and shows that
-   result's card. The hook carries no call id, so two recorded calls with the
+   result's card. A record never offers a retry, because a notify tool runs
+   without an approval and its retry would too. The hook carries no call id, so two recorded calls with the
    same tool and input get no card at all rather than risk the wrong one. A
    transport without the optional interface records exactly as before.
 7. **Any failure keeps today's card.** That covers no `result_card`, a result

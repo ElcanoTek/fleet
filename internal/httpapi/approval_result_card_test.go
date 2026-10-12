@@ -385,3 +385,34 @@ func TestRecordActionResult_StoresTheRecordsCard(t *testing.T) {
 		t.Fatalf("an undeclared tool stored %v (tracked %v)", st3.cards, a3.recordIDs)
 	}
 }
+
+// A notify-mode tool runs without an approval, so its record never offers
+// "Retry failed": the retry is left out when the record stores its card, and
+// a stored record card with a retry is not served (Codex P1 on #1722).
+func TestRecordActionResult_NeverOffersARetry(t *testing.T) {
+	useResultCardPolicy(t)
+	withRetry := `{"ok": false, "result_card": {"outcome": "partial", "title": "1 of 2 allocated", "items": [` +
+		`{"key": "a", "label": "A", "status": "done"}, {"key": "b", "label": "B", "status": "failed"}], "retry": {"keys": ["b"]}}}`
+	st := &recordStageStore{}
+	a := &approvalStager{ctx: context.Background(), store: st, conversationID: "c1", userEmail: "u@e.com", sink: &eventSink{}}
+	_ = a.RecordAction("mcp_deal_sheet_next_campaign_id", "call-1", `{}`, "")
+	a.RecordActionResult("mcp_deal_sheet_next_campaign_id", "call-1", withRetry, true)
+	stored := st.cards["ap-new"]
+	if stored == "" || strings.Contains(stored, "retry") || !strings.Contains(stored, "1 of 2 allocated") {
+		t.Fatalf("stored = %q, want the card without its retry", stored)
+	}
+	_, withRetryCard, err := parseApprovalResultCard([]byte(`{"outcome":"partial","title":"t","items":[{"key":"b","label":"B","status":"failed"}],"retry":{"keys":["b"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := store.Approval{Status: "approved", IsErr: sql.NullBool{Valid: true}, ResultText: notifyRecordResultPrefix + ": x", ResultCardJSON: string(withRetryCard)}
+	if (&Server{}).approvalResultCardPayload(&record) != nil {
+		t.Fatal("a record card with a retry must not be served")
+	}
+	// An approved call's card keeps its retry: the retry is staged for approval.
+	approved := record
+	approved.ResultText = "{}"
+	if (&Server{}).approvalResultCardPayload(&approved) == nil {
+		t.Fatal("an approved call's card with a retry must be served")
+	}
+}

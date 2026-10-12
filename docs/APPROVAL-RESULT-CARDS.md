@@ -177,9 +177,16 @@ result yet. For a member of `critical_tool_result_cards`:
   once (`agentcore.ActionResultRecorder.RecordActionResult`).
 - The stager stores the card on the record row (an approved row, `is_err`
   false, with the record text) and pushes it to the open card as
-  `tool.action_record_card {approval_id, tool, result_card}`.
+  `tool.action_record_card {approval_id, tool, result_card}`. That event is
+  under the `approval_cards` SSE capability, so a client that opted out of
+  approval cards does not get it.
 - A failed call, an unknown call id, or a transport without the interface
   changes nothing.
+- A record never offers **Retry failed**. A notify tool runs without an
+  approval, so a retry of it would run straight away rather than wait for a
+  new approval. The stager leaves the card's `retry` out, the read path
+  refuses to serve a record card that has one, and the web hides the button on
+  a record (Codex P1 on #1722).
 - The result hook carries no call id, so a result is matched by tool and
   input. If two recorded calls share both (parallel identical calls can finish
   in either order), neither gets a card, so a card never lands on the wrong
