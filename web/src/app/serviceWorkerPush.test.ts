@@ -15,7 +15,9 @@ type Listener = (event: unknown) => void;
 
 function loadWorker() {
   const listeners: Record<string, Listener> = {};
-  const showNotification = vi.fn(async () => {});
+  // Each call returns its own promise, so the test can check that exactly
+  // that promise was handed to event.waitUntil.
+  const showNotification = vi.fn(() => Promise.resolve());
   const scope = {
     location: new URL(`${ORIGIN}/sw.js`),
     clients: {},
@@ -25,22 +27,28 @@ function loadWorker() {
       listeners[type] = fn;
     },
   };
-  // `clients` is also a global in a real worker scope.
-  new Function("self", "clients", SOURCE)(scope, scope.clients);
+  // In a real worker scope `clients`, `location` and `registration` are also
+  // bare globals.
+  new Function("self", "clients", "location", "registration", SOURCE)(
+    scope,
+    scope.clients,
+    scope.location,
+    scope.registration,
+  );
   return { listeners, showNotification };
 }
 
+// push delivers one push event and returns what the worker showed. The
+// display must be handed to event.waitUntil: without it the browser may stop
+// the worker first, and Chrome then shows its own "updated in the background"
+// notice instead.
 async function push(data: { json: () => unknown } | undefined) {
   const worker = loadWorker();
-  let shown: Promise<unknown> = Promise.resolve();
-  worker.listeners.push({
-    data,
-    waitUntil: (p: Promise<unknown>) => {
-      shown = p;
-    },
-  });
-  await shown;
+  const waitUntil = vi.fn();
+  worker.listeners.push({ data, waitUntil });
   expect(worker.showNotification).toHaveBeenCalledTimes(1);
+  expect(waitUntil).toHaveBeenCalledWith(worker.showNotification.mock.results[0].value);
+  await waitUntil.mock.calls[0][0];
   return worker.showNotification.mock.calls[0] as unknown as [string, Record<string, unknown>];
 }
 
@@ -72,8 +80,11 @@ describe("sw.js push", () => {
       json: () => ({ title: "t", url: `${ORIGIN}/chat?c=1`, message: "model output", tag: "x" }),
     });
     expect(title).toBe("t");
-    expect(Object.keys(options).sort()).toEqual(["body", "data", "icon"]);
-    expect(options.data).toEqual({ url: `${ORIGIN}/chat?c=1` });
+    expect(options).toEqual({
+      body: "",
+      icon: "/app-icons/icon-192.png",
+      data: { url: `${ORIGIN}/chat?c=1` },
+    });
   });
 
   it("still shows a generic Fleet notification for a payload it cannot read", async () => {
@@ -87,7 +98,8 @@ describe("sw.js push", () => {
   });
 
   it("shows a generic Fleet notification for a push with no data", async () => {
-    const [title] = await push(undefined);
+    const [title, options] = await push(undefined);
     expect(title).toBe("Fleet");
+    expect(options).toEqual({ body: "", icon: "/app-icons/icon-192.png", data: { url: ORIGIN } });
   });
 });

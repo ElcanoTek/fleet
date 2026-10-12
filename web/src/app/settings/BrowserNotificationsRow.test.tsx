@@ -7,8 +7,10 @@ import { BrowserNotificationsRow } from "./BrowserNotificationsRow";
 // turn-on / turn-off flows. Every case starts from a browser with no push
 // subscription, so the flows run end to end through the switch itself.
 
+// 0xfb bytes encode to "-" and "_" in base64url, so the key exercises the
+// alphabet swap a plain base64 decode would choke on.
 const KEY_BYTES = (() => {
-  const k = new Uint8Array(65).fill(7);
+  const k = new Uint8Array(65).fill(0xfb);
   k[0] = 4;
   return k;
 })();
@@ -21,14 +23,23 @@ const ENDPOINT = "https://relay.example/ep";
 
 type Opts = {
   pushSupported?: boolean;
+  // Whether /sw.js is already registered. A real registration outlives an
+  // unsubscribe, so "registered, no subscription" is the usual state after
+  // someone turns notifications off — and the default here.
+  registered?: boolean;
   permission?: NotificationPermission;
   grant?: NotificationPermission;
   vapidStatus?: number;
   subscribeStatus?: number;
 };
 
+// stubBrowser fakes the Push API, the service worker container and fetch, and
+// records each step the switch takes in `events`, in order. The VAPID key read
+// is left out of the log: it happens on every load and is not a step of either
+// flow.
 function stubBrowser(opts: Opts = {}) {
   const events: string[] = [];
+  let registered = opts.registered ?? true;
   const browser = { current: null as null | { endpoint: string; unsubscribe: () => Promise<boolean> } };
   const reg = {
     pushManager: {
@@ -51,23 +62,22 @@ function stubBrowser(opts: Opts = {}) {
     },
   };
   if (opts.pushSupported !== false) vi.stubGlobal("PushManager", function PushManager() {});
-  const requestPermission = vi.fn(async () => {
-    events.push("permission prompt");
-    return opts.grant ?? "granted";
-  });
-  vi.stubGlobal(
-    "Notification",
-    Object.assign(function Notification() {}, {
-      permission: opts.permission ?? "default",
-      requestPermission,
+  const notification = Object.assign(function Notification() {}, {
+    permission: opts.permission ?? "default",
+    requestPermission: vi.fn(async () => {
+      events.push("permission prompt");
+      notification.permission = opts.grant ?? "granted";
+      return notification.permission;
     }),
-  );
+  });
+  vi.stubGlobal("Notification", notification);
   Object.defineProperty(navigator, "serviceWorker", {
     configurable: true,
     value: {
-      getRegistration: vi.fn(async () => (browser.current ? reg : undefined)),
+      getRegistration: vi.fn(async () => (registered ? reg : undefined)),
       register: vi.fn(async (url: string) => {
         events.push(`register ${url}`);
+        registered = true;
         return reg;
       }),
       ready: Promise.resolve(reg),
@@ -88,7 +98,7 @@ function stubBrowser(opts: Opts = {}) {
       return new Response(null, { status: 204 });
     }),
   );
-  return { events, requestPermission, reg };
+  return { events };
 }
 
 const switchEl = () => screen.getByTestId("browser-notifications-switch");
@@ -122,7 +132,8 @@ describe("BrowserNotificationsRow", () => {
   });
 
   it("turns on: permission, the service worker, a subscription on the server's key, stored", async () => {
-    const { events } = stubBrowser();
+    // First time in this browser: nothing registered yet.
+    const { events } = stubBrowser({ registered: false });
     render(<BrowserNotificationsRow />);
     await waitFor(() => expect(switchEl()).not.toBeDisabled());
     expect(switchEl()).toHaveAttribute("aria-checked", "false");
@@ -142,19 +153,20 @@ describe("BrowserNotificationsRow", () => {
     render(<BrowserNotificationsRow />);
     await waitFor(() => expect(switchEl()).not.toBeDisabled());
     fireEvent.click(switchEl());
-    await waitFor(() => expect(events).toContain("permission prompt"));
     await waitFor(() => expect(switchEl()).not.toBeDisabled());
     expect(switchEl()).toHaveAttribute("aria-checked", "false");
     expect(events).toEqual(["permission prompt"]);
   });
 
   it("shows the blocked note when the prompt is answered with Block", async () => {
-    stubBrowser({ grant: "denied" });
+    const { events } = stubBrowser({ grant: "denied" });
     render(<BrowserNotificationsRow />);
     await waitFor(() => expect(switchEl()).not.toBeDisabled());
     fireEvent.click(switchEl());
     expect(await screen.findByText(/Notifications are blocked for this site/)).toBeInTheDocument();
     expect(switchEl()).toHaveAttribute("aria-checked", "false");
+    expect(switchEl()).toBeDisabled();
+    expect(events).toEqual(["permission prompt"]);
   });
 
   it("stays off and says why when the server cannot store the subscription", async () => {
