@@ -89,6 +89,23 @@ function initialDashboardTab(): DashTab {
     : "tasks";
 }
 
+// initialLinkedTaskId reads a ?task=<id> link: where a task notification (the
+// browser push, the email, the webhook's log_url) lands, via the
+// /orchestrator/tasks/<id> redirect. Read lazily like initialDashboardTab.
+function initialLinkedTaskId(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("task")?.trim() || null;
+}
+
+// dropTaskParam takes ?task= back out of the address bar once the link has
+// been handled, so a reload shows the board rather than reopening the task.
+function dropTaskParam() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("task")) return;
+  url.searchParams.delete("task");
+  window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+}
+
 function OrchestratorInner({
   magicLinkLoginEnabled,
 }: {
@@ -149,6 +166,37 @@ function OrchestratorInner({
   const [deleteBusy, setDeleteBusy] = useState(false);
   const { showToast } = useToast();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // A task link opens that task's log once the session is known. The task is
+  // fetched by id rather than looked up on the board, because the board's
+  // current page need not list it. A task that cannot be loaded (deleted, or
+  // not visible to this account) says so instead of opening nothing.
+  const [linkedTaskId, setLinkedTaskId] = useState<string | null>(initialLinkedTaskId);
+  useEffect(() => {
+    if (!session.signedIn || !linkedTaskId) return;
+    let stale = false;
+    orchestratorApi
+      .task(linkedTaskId)
+      .then((task) => {
+        if (!stale) setLogTask(task);
+      })
+      .catch(() => {
+        if (!stale) {
+          showToast(
+            "That task could not be opened. It may have been deleted, or it is not visible to you.",
+            "error",
+          );
+        }
+      })
+      .finally(() => {
+        if (stale) return;
+        dropTaskParam();
+        setLinkedTaskId(null);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [session.signedIn, linkedTaskId, showToast]);
 
   // runNow resubmits the task as a fresh one-off run that starts immediately
   // (POST /tasks/{id}/rerun). The source is untouched — a recurring job keeps

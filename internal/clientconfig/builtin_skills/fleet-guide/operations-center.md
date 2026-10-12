@@ -262,6 +262,10 @@ record carries its own action strip, so **Edit**, **Resubmit**, **Delete**,
 **History**, **Discuss in chat**, and **Download logs** are all reachable from
 here without returning to the board.
 
+The link in a task's notification (an email, or a browser notification) opens
+the same record: the board loads with that task open. If the task has been
+deleted, or your account cannot see it, a message says so instead.
+
 The transcript reads as a timeline. Each tool call is one row with its result
 folded in. The row shows a step number, an icon and colour for the kind of tool
 (Python, shell, files, email, outbound send, audit, plan, other connectors),

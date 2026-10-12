@@ -45,7 +45,8 @@ with a machine-readable `push_disabled` error, the settings card explains what
 the operator must run, and no trigger fires.
 
 `FLEET_PUBLIC_URL` (shared with the #208 notifier) is reused to build the deep
-link a notification click opens (`/orchestrator/tasks/<id>` for task events).
+link a notification click opens (`/orchestrator/tasks/<id>` for task events,
+which forwards to `/orchestrator?task=<id>` and opens that task's record).
 Without it, clicks open the app origin the subscription was created on.
 
 ## Trigger matrix

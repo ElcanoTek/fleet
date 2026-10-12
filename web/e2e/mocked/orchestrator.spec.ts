@@ -65,6 +65,13 @@ async function mockOrchestrator(page: Page, captured: { createBody?: Record<stri
     if (/^\/tasks\/[^/]+\/workspace\//.test(path)) {
       return route.fulfill({ contentType: "image/png", body: ONE_PX_PNG });
     }
+    // One task by id: what a task link (/orchestrator/tasks/<id>) loads.
+    if (/^\/tasks\/[^/]+$/.test(path) && method === "GET") {
+      const task = SEED_TASKS.find((t) => path === `/tasks/${t.id}`);
+      return task
+        ? route.fulfill({ json: task })
+        : route.fulfill({ status: 404, json: { detail: "task not found" } });
+    }
     if (path.startsWith("/logs/")) {
       return route.fulfill({
         json: {
@@ -165,6 +172,28 @@ test("opening a task renders its log viewer (react-markdown)", async ({ page }) 
   // The assistant message's **Report** markdown renders to <strong>Report</strong>
   // via react-markdown — assert the bolded text, proving the markdown pipeline ran.
   await expect(page.getByTestId("log-modal-body").getByText("Report", { exact: true })).toBeVisible();
+});
+
+// A task notification's link (the browser push, the email, the webhook's
+// log_url) is /orchestrator/tasks/<id>. It lands on the board with that task's
+// log open, and leaves the address bar on the board so a reload does not
+// reopen it.
+test("a task link opens that task's log", async ({ page }) => {
+  await mockOrchestrator(page, {});
+  await page.goto(`/orchestrator/tasks/${SEED_TASKS[0].id}`);
+
+  await expect(page.getByRole("dialog", { name: "Task Logs" })).toBeVisible();
+  await expect(page.getByTestId("log-modal-body")).toContainText("Run the optimization protocol");
+  await expect(page).toHaveURL(/\/orchestrator$/);
+});
+
+test("a link to a task that cannot be loaded says so", async ({ page }) => {
+  await mockOrchestrator(page, {});
+  await page.goto("/orchestrator/tasks/99999999-9999-9999-9999-999999999999");
+
+  await expect(page.getByText(/That task could not be opened/)).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Task Logs" })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/orchestrator$/);
 });
 
 test("the log viewer renders an agent-generated image inline (#271)", async ({ page }) => {
