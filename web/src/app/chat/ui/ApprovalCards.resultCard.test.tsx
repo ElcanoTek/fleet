@@ -134,6 +134,22 @@ describe("the completed card from a result card", () => {
     expect(screen.getByTestId("approval-card-change")).toHaveTextContent("Floor$55.00→$0.10");
   });
 
+  it("shows each record's flags on a several-record card too", () => {
+    renderCard({
+      resultCard: parseApprovalResultCardData({
+        outcome: "done",
+        title: "2 of 2 updated",
+        items: [
+          { label: "Deal A", status: "done", flags: [{ code: "deal_active", label: "Deal is Active" }] },
+          { label: "Deal B", status: "done" },
+        ],
+      }),
+    });
+    const rows = screen.getAllByTestId("approval-result-item");
+    expect(within(rows[0]).getByTestId("approval-card-flag")).toHaveTextContent("Deal is Active");
+    expect(within(rows[1]).queryByTestId("approval-card-flag")).toBeNull();
+  });
+
   it("folds the done records of a long plan into one row, failures stay in view", () => {
     const items = Array.from({ length: 12 }, (_, i) => ({ key: `k${i}`, label: `Deal ${i}`, status: i === 4 ? "failed" : "done" }));
     renderCard({ resultCard: parseApprovalResultCardData({ outcome: "partial", title: "11 of 12 created", items, retry: { keys: ["k4"] } }) });

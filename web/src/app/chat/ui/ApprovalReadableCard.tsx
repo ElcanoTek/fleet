@@ -24,7 +24,7 @@ export const CARD_ITEMS_VISIBLE = 10;
 // More items than this get a search box.
 export const CARD_SEARCH_THRESHOLD = 25;
 
-function FlagBadge({ label, code }: { label: string; code: string }) {
+export function FlagBadge({ label, code }: { label: string; code: string }) {
   return (
     <span
       data-testid="approval-card-flag"

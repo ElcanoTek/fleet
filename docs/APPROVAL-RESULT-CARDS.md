@@ -139,8 +139,10 @@ checks it again on the client.
    which now also returns the governed text before the size bound.
 2. If the call ran without error, governance didn't block it, and the tool is
    opted in, `recordApprovalResultCard` looks for `result_card` in that
-   governed text. It validates the card, refuses it if the secret redaction
-   would change it, and writes the canonical JSON with
+   governed text (its first JSON value, so trailing hook context does not hide
+   it). It validates the card, refuses it if it carries the redactor's marker
+   (`[REDACTED…]`: governance already scrubbed a secret out of it) or if the
+   secret redaction would still change it, and writes the canonical JSON with
    `store.SetApprovalResultCard` (migration 077,
    `approvals.result_card_json`, nullable with no backfill). The write lands
    once, and only on the owner's row while it is still executing.
@@ -178,6 +180,10 @@ result yet. For a member of `critical_tool_result_cards`:
   `tool.action_record_card {approval_id, tool, result_card}`.
 - A failed call, an unknown call id, or a transport without the interface
   changes nothing.
+- The result hook carries no call id, so a result is matched by tool and
+  input. If two recorded calls share both (parallel identical calls can finish
+  in either order), neither gets a card, so a card never lands on the wrong
+  record.
 
 The record then reads "Campaign ID ELC07375 allocated · ran without asking".
 It keeps its record line and has its raw arguments (an idempotency hash, for

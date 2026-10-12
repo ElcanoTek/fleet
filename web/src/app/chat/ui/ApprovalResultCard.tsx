@@ -28,6 +28,7 @@ import {
   CardRows,
   DetailsPanel,
   DetailsToggle,
+  FlagBadge,
   RecordBox,
   RecordLink,
 } from "./ApprovalReadableCard";
@@ -168,6 +169,13 @@ function ResultRow({ item }: { item: ApprovalResultCardItem }) {
           <StatusChip status={item.status} />
         </div>
         <Ids item={item} />
+        {item.flags && item.flags.length > 0 ? (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {item.flags.map((f, i) => (
+              <FlagBadge key={`${f.code}-${i}`} code={f.code} label={f.label} />
+            ))}
+          </div>
+        ) : null}
         <Note item={item} />
         <CardRows changes={item.changes} settings={item.settings} />
       </div>

@@ -29,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/redact"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -329,8 +330,11 @@ func extractResultCard(text string) (canonical []byte, ok bool, reason string) {
 	if text == "" || text[0] != '{' || len(text) > approvalResultMaxScanBytes {
 		return nil, false, ""
 	}
+	// The first JSON value only: on the notify path a post_tool_use hook's
+	// context may follow the tool's own JSON. The card itself is still
+	// decoded strictly.
 	var top map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(text), &top); err != nil {
+	if err := json.NewDecoder(strings.NewReader(text)).Decode(&top); err != nil {
 		return nil, false, ""
 	}
 	raw, present := top[resultCardKey]
@@ -341,7 +345,10 @@ func extractResultCard(text string) (canonical []byte, ok bool, reason string) {
 	if err != nil {
 		return nil, false, redactedForLog(err)
 	}
-	if tools.RedactionWouldAlter(canonical) {
+	// The card is read from GOVERNED text, so a secret in it has already been
+	// replaced by the redactor's marker; a card that carries one is refused,
+	// like a card the redaction would still alter.
+	if bytes.Contains(canonical, []byte(redact.MarkerPrefix)) || tools.RedactionWouldAlter(canonical) {
 		return nil, false, "the card carries a secret-like value"
 	}
 	return canonical, true, ""
@@ -421,7 +428,7 @@ func (s *Server) approvalResultCardPayload(a *store.Approval) json.RawMessage {
 		return nil
 	}
 	_, canonical, err := parseApprovalResultCard([]byte(a.ResultCardJSON))
-	if err != nil || tools.RedactionWouldAlter(canonical) {
+	if err != nil || bytes.Contains(canonical, []byte(redact.MarkerPrefix)) || tools.RedactionWouldAlter(canonical) {
 		return nil
 	}
 	return canonical

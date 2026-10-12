@@ -165,3 +165,28 @@ func TestNotifyRecordWithoutResultCardsIsNotHandedAResult(t *testing.T) {
 		t.Fatalf("results = %v, pending = %v; want none", sink.results, o.notifyRecordedCalls)
 	}
 }
+
+// Two recorded calls with the same tool and input cannot be told apart by
+// the result hook (it carries no call id), so neither is handed a result:
+// a card never lands on the wrong record (Codex on #1722).
+func TestNotifyRecordWithAnAmbiguousResultIsNotHandedOne(t *testing.T) {
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+	ConfigureAgentPolicy(AgentPolicy{
+		CriticalToolSuffixes:    []string{"next_campaign_id"},
+		CriticalToolModes:       map[string]string{"next_campaign_id": ApprovalModeNotify},
+		CriticalToolResultCards: []string{"next_campaign_id"},
+	})
+	sink := &resultRecordingStager{}
+	o := newOrchestrationState(NewLogSession(), 100)
+	o.setApprovalSink(sink)
+	for _, id := range []string{"call-1", "call-2"} {
+		if blocked, _ := o.checkCriticalToolApproval("mcp_deal_sheet_next_campaign_id", id, `{"k":"v"}`); blocked {
+			t.Fatal("notify must not block")
+		}
+	}
+	o.recordToolResult("mcp_deal_sheet_next_campaign_id", `{"k":"v"}`, `{"campaign_id":"ELC2"}`, true)
+	o.recordToolResult("mcp_deal_sheet_next_campaign_id", `{"k":"v"}`, `{"campaign_id":"ELC1"}`, true)
+	if len(sink.results) != 0 || len(o.notifyRecordedCalls) != 0 {
+		t.Fatalf("results = %v, pending = %v; want none handed over and none left", sink.results, o.notifyRecordedCalls)
+	}
+}

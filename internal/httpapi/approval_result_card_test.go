@@ -136,6 +136,37 @@ func TestExtractResultCard(t *testing.T) {
 	if _, ok, reason := extractResultCard(envelopeWith(secret)); ok || reason == "" {
 		t.Fatalf("a secret-like value must withhold the card, got ok=%v reason=%q", ok, reason)
 	}
+	// The card is read from governed text, where the redactor has already
+	// replaced the secret: a card carrying the redactor's marker is refused too
+	// (Codex on #1722).
+	for _, marker := range []string{"token [REDACTED]", "[REDACTED PRIVATE KEY]"} {
+		scrubbed := strings.Replace(goodResultCard, "Verified: the deal reads back as created.", marker, 1)
+		if _, ok, reason := extractResultCard(envelopeWith(scrubbed)); ok || reason == "" {
+			t.Fatalf("%q: a redacted card must be withheld, got ok=%v reason=%q", marker, ok, reason)
+		}
+	}
+	// A post_tool_use hook's context after the tool's own JSON (the notify
+	// path) does not hide the card.
+	if _, ok, reason := extractResultCard(envelopeWith(goodResultCard) + "\n\n[hook] remember to check the deal sheet"); !ok || reason != "" {
+		t.Fatalf("trailing hook context: ok=%v reason=%q, want the card", ok, reason)
+	}
+}
+
+// End to end through the governance the approval path applies: a secret in
+// the card is scrubbed by the redactor, and the scrubbed card is not stored.
+func TestExecuteClaimedApproval_RedactedCardIsNotStored(t *testing.T) {
+	useResultCardPolicy(t)
+	secret := strings.Replace(goodResultCard, "Verified: the deal reads back as created.", "token ghp_0123456789abcdefghijklmnopqrstuvwxyzAB", 1)
+	st := &resultCardStore{groupStore: newGroupStore(store.Approval{ID: "ap1", ConversationID: "c1", ToolName: "mcp_deals_execute_plan", ArgsJSON: `{}`, Status: "approved", ResultText: approvalExecutingSentinel})}
+	s := resultCardServer(st, envelopeWith(secret), false)
+	a := st.state("ap1")
+	out := s.executeClaimedApproval(context.Background(), "u@example.com", "c1", "ap1", &a, approvalRequest{Approved: true})
+	if out["result_card"] != nil || len(st.cards) != 0 {
+		t.Fatalf("reply = %+v, writes = %v; a scrubbed card must not be stored", out, st.cards)
+	}
+	if strings.Contains(out["result_text"].(string), "ghp_") {
+		t.Fatal("the model-visible result must be the redacted one")
+	}
 }
 
 // resultCardStore is a groupStore that records SetApprovalResultCard writes.

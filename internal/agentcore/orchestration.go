@@ -1403,21 +1403,31 @@ func parseTaskTrackerSummaryLine(result string) taskTrackerSnapshot {
 // (ActionResultRecorder), for a call checkCriticalToolApproval recorded and
 // marked as waiting. The recorder runs outside o.mu: it writes to the store.
 func (o *orchestrationState) handOverNotifyRecordResult(toolName, rawInput, resultText string, succeeded bool) {
+	// The result hook carries no tool-call id, so a result is matched by tool
+	// and input. Two recorded calls with the same tool and input (parallel
+	// calls may finish in either order) cannot be told apart: neither is
+	// handed a result, so a card never lands on the wrong record.
 	o.mu.Lock()
 	var (
-		call  notifyRecordedCall
-		found bool
+		call    notifyRecordedCall
+		matches int
 	)
-	for i, c := range o.notifyRecordedCalls {
+	kept := o.notifyRecordedCalls[:0]
+	for _, c := range o.notifyRecordedCalls {
 		if c.tool == toolName && c.rawInput == rawInput {
-			call, found = c, true
-			o.notifyRecordedCalls = append(o.notifyRecordedCalls[:i:i], o.notifyRecordedCalls[i+1:]...)
-			break
+			call = c
+			matches++
+			continue
 		}
+		kept = append(kept, c)
 	}
+	o.notifyRecordedCalls = kept
 	sink := o.approvalSink
 	o.mu.Unlock()
-	if !found {
+	if matches != 1 {
+		if matches > 1 {
+			log.Printf("notify-mode record result: %d recorded %s calls share one input; no result card is attached to any of them", matches, toolName)
+		}
 		return
 	}
 	if rr, ok := sink.(ActionResultRecorder); ok {

@@ -45,8 +45,10 @@ Fleet uses option 2. A bundle lists critical suffixes in
    or a result that governance blocked, gets no card.
 2. **The schema is fixed and strict.** It is text-only. Unknown keys, nulls,
    wrong types, trailing data, control and bidirectional characters, and
-   non-https links are refused. The limits are the describer card's. A value
-   the secret redaction would change refuses the card.
+   non-https links are refused. The limits are the describer card's. The card
+   is read from governed text, so a card that carries the redactor's marker
+   (a secret was scrubbed out of it) is refused, and so is one the secret
+   redaction would still change.
 3. **What the card claims is held to its rows.** The outcome sets the card's
    tone, so it may not contradict the rows. A `done` card may not carry a
    failed, mismatched or unclear row, and a `failed` card may not carry an
@@ -68,8 +70,9 @@ Fleet uses option 2. A bundle lists critical suffixes in
    call runs. For a member of the list, the loop's result hook
    (`RecordToolResult`) hands the record its call's governed result once
    (`agentcore.ActionResultRecorder`), and the record stores and shows that
-   result's card. A transport without the optional interface records exactly
-   as before.
+   result's card. The hook carries no call id, so two recorded calls with the
+   same tool and input get no card at all rather than risk the wrong one. A
+   transport without the optional interface records exactly as before.
 7. **Any failure keeps today's card.** That covers no `result_card`, a result
    that isn't a JSON object, a refused card, or a failed store write. The
    outcome is never at stake.
