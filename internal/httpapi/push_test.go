@@ -181,6 +181,29 @@ func TestPushStatus(t *testing.T) {
 	}
 }
 
+// A viewer can ask whether this browser is subscribed: /push/status is a
+// read, so the viewer-write guard must not sit in front of it, while the
+// write routes keep it.
+func TestPushStatus_ViewerCanAsk(t *testing.T) {
+	s := memberFixture(t, "viewer@x.com")
+	setRole(t, s, "viewer@x.com", "viewer", "")
+	s.push = webpush.New(webpush.Config{
+		VAPIDPublicKey:  "test-public-key",
+		VAPIDPrivateKey: "test-private-key",
+		Contact:         "mailto:ops@example.com",
+	}, s.concreteStore(t))
+	h := s.Routes()
+
+	w := do(t, h, http.MethodPost, "/push/status", map[string]any{"endpoint": "https://relay.example/v"}, "viewer@x.com")
+	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"subscribed":false}` {
+		t.Fatalf("viewer status: %d %s", w.Code, w.Body.String())
+	}
+	sub := map[string]any{"endpoint": "https://relay.example/v", "keys": map[string]string{"auth": "a", "p256dh": "p"}}
+	if w := do(t, h, http.MethodPost, "/push/subscribe", sub, "viewer@x.com"); w.Code != http.StatusForbidden {
+		t.Errorf("viewer subscribe: %d, want 403 (the write guard still applies)", w.Code)
+	}
+}
+
 // TestApprovalStagerFirePushNotification exercises the approval-staged push
 // trigger (#292): a stager without push wired is a no-op, and with push wired
 // the detached send runs against the user's stored subscriptions (none here,

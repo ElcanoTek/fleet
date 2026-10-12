@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserNotificationsRow } from "./BrowserNotificationsRow";
 
@@ -100,5 +100,56 @@ describe("BrowserNotificationsRow reflects the server's record", () => {
     const sw = await settledSwitch();
     expect(sw).toHaveAttribute("aria-checked", "false");
     expect(requests.some((r) => r.includes("/api/push/status"))).toBe(false);
+  });
+
+  it("does not read on when another tab let the new subscription go while it was stored", async () => {
+    // Turning on in one tab while another tab's Settings decides "not yours"
+    // for the same subscription: the switch must not show on over nothing.
+    let current: { endpoint: string; unsubscribe: () => Promise<boolean>; toJSON: () => unknown } | null =
+      null;
+    const reg = {
+      pushManager: {
+        getSubscription: async () => current,
+        subscribe: vi.fn(async () => {
+          current = {
+            endpoint: ENDPOINT,
+            unsubscribe: async () => true,
+            toJSON: () => ({ endpoint: ENDPOINT, keys: { auth: "a", p256dh: "p" } }),
+          };
+          return current;
+        }),
+      },
+    };
+    vi.stubGlobal("PushManager", function PushManager() {});
+    vi.stubGlobal(
+      "Notification",
+      Object.assign(function Notification() {}, {
+        permission: "default",
+        requestPermission: vi.fn(async () => "granted"),
+      }),
+    );
+    Object.defineProperty(navigator, "serviceWorker", {
+      configurable: true,
+      value: {
+        getRegistration: vi.fn(async () => reg),
+        register: vi.fn(async () => reg),
+        ready: Promise.resolve(reg),
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/push/vapid-public-key") return Response.json({ key: "BKEY" });
+        // The other tab drops the browser's subscription while this store is
+        // in flight.
+        if (url === "/api/push/subscribe") current = null;
+        return new Response(null, { status: 204 });
+      }),
+    );
+    render(<BrowserNotificationsRow />);
+    const sw = await settledSwitch();
+    fireEvent.click(sw);
+    expect(await screen.findByText(/turned off in another tab/)).toBeInTheDocument();
+    expect(sw).toHaveAttribute("aria-checked", "false");
   });
 });

@@ -137,6 +137,11 @@ export function BrowserNotificationsRow() {
       if (!res.ok && res.status !== 204) {
         throw new Error((await res.text()) || `Subscribe failed: ${res.status}`);
       }
+      // Another tab's Settings may have let this browser's subscription go
+      // while it was being stored (it reads "not yours" until the store lands).
+      if ((await reg.pushManager.getSubscription())?.endpoint !== sub.endpoint) {
+        throw new Error("Notifications were turned off in another tab. Turn them on again.");
+      }
       setState("enabled");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Something went wrong.");

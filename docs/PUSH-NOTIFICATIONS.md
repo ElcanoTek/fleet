@@ -41,8 +41,9 @@ channel consumes.
    **on** only when the server holds this browser's subscription for the
    signed-in user (`POST /push/status`): a subscription the browser holds for
    another account, or one the server has dropped, reads **off** and the
-   browser lets it go. Signing out (every surface goes through the one
-   `signOut`) also lets it go, after deleting the stored row.
+   browser lets it go. Signing out from the account menu (every surface's
+   menu goes through the one `signOut`) also lets it go and deletes the
+   stored row.
 
 **Default OFF.** With any of the three `FLEET_VAPID_*` vars unset, the push
 subsystem does not exist: the `/push/*` endpoints answer `501 Not Implemented`
@@ -111,13 +112,15 @@ unconfigured. The browser reaches them through the Next.js proxies under
   subscriptions. Endpoint URLs are capability URLs, so log lines reduce them
   to their host.
 - **A browser is not an account.** The browser holds one subscription, but
-  the account that stored it is whoever turned notifications on there. Sign-out
-  deletes the row and unsubscribes the browser, so the next person to use it
-  does not get the signed-out account's alerts, and the settings page lets go
-  of a subscription the server does not hold for the signed-in user. A
-  session that simply expires does not run sign-out: until someone opens
-  Settings in that browser or turns notifications on there, the previous
-  account's alerts can still arrive in it.
+  the account that stored it is whoever turned notifications on there.
+  Sign-out through the account menu (`signOut`) unsubscribes the browser and
+  deletes the row, so the next person to use it does not get the signed-out
+  account's alerts, and the settings page lets go of a subscription the
+  server does not hold for the signed-in user. A session that ends any other
+  way runs none of this: one that expires, one revoked server-side, a
+  central-Auth back-channel logout, or the sign-out form on the no-access
+  page. Until someone opens Settings in that browser or turns notifications
+  on there, the previous account's alerts can still arrive in it.
 - **Subscription hygiene:** a `404`/`410` from the relay deletes the expired
   row during the send fan-out.
 

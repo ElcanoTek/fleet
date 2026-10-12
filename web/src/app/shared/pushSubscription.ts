@@ -12,17 +12,22 @@ export async function browserPushSubscription(): Promise<PushSubscription | null
 }
 
 // dropPushSubscription deletes the signed-in user's stored row for this
-// browser, then unsubscribes the browser. The delete goes first, while the
-// session and the endpoint are both still at hand; the browser's own
-// unsubscribe is what stops delivery, so it runs even when the delete fails
-// (the server reaps the row on its next send's 404/410).
+// browser and unsubscribes the browser, both at once. The browser's own
+// unsubscribe is what stops delivery, so it never waits behind the server
+// round trip: sign-out bounds this clean-up, and a slow delete must not
+// leave the browser subscribed. The delete is sent with keepalive so it can
+// finish after the page navigates away; if it fails, the server reaps the
+// row on its next send's 404/410.
 export async function dropPushSubscription(): Promise<void> {
   const sub = await browserPushSubscription();
   if (!sub) return;
-  await fetch("/api/push/unsubscribe", {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ endpoint: sub.endpoint }),
-  }).catch(() => undefined);
-  await sub.unsubscribe();
+  await Promise.allSettled([
+    fetch("/api/push/unsubscribe", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: sub.endpoint }),
+      keepalive: true,
+    }),
+    sub.unsubscribe(),
+  ]);
 }
