@@ -235,6 +235,16 @@ by itself, and the owner gets a browser push when the call finishes or when
 the automatic continue is blocked. See
 [APPROVAL-PROGRESS.md](APPROVAL-PROGRESS.md).
 
+## A settled card reads the call's own outcome
+
+For tools a bundle lists in `agent_policy.critical_tool_result_cards`, the
+tool's result can carry a `result_card`. The settled card (or a notify record)
+then shows a one-line outcome, a row per record with both of its ids, a status
+and a link, plain failure wording, and **Retry failed (N)**, which sends a user
+turn and so needs a new approval. The raw result moves under **Details**. A
+readable pending card follows the designer's layout. See
+[APPROVAL-RESULT-CARDS.md](APPROVAL-RESULT-CARDS.md) and ADR-0084.
+
 ## Honest scope / deliberately not done
 
 - **No approvals-table mode column.** Notify records are tagged by their

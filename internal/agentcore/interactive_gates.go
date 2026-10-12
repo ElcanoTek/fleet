@@ -114,6 +114,12 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 			if err := recorder.RecordAction(toolName, toolCallID, rawInput, undoHint); err != nil {
 				log.Printf("notify-mode record failed (%s): %v — falling back to a blocking approval", toolName, err)
 			} else {
+				// A tool in critical_tool_result_cards: its record waits for the
+				// call's result, to show the outcome card it carries
+				// (recordToolResult hands it over). Display only.
+				if _, ok := o.approvalSink.(ActionResultRecorder); ok && ApprovalResultCard(toolName) {
+					o.notifyRecordedCalls = append(o.notifyRecordedCalls, notifyRecordedCall{tool: toolName, rawInput: rawInput, toolCallID: toolCallID})
+				}
 				return false, ""
 			}
 		} else {

@@ -210,6 +210,11 @@ type orchestrationState struct {
 	// is the batch case (N independent records), which has no such coupling.
 	stagedCriticalApprovals []stagedCriticalApproval
 
+	// notifyRecordedCalls are this turn's notify-mode calls whose record waits
+	// for the call's result (critical_tool_result_cards); recordToolResult
+	// hands each its result once, then forgets it.
+	notifyRecordedCalls []notifyRecordedCall
+
 	// noteProposer stages agent-proposed admin-notes edits (BOTH modes), unlike
 	// memoryProposer which is interactive-only. Wired by the drivers via
 	// setNoteProposer; nil leaves propose_note reporting "not wired".
@@ -308,6 +313,26 @@ type ActionRecorder interface {
 	// RecordAction posts the record card. undoHint is the bundle-authored line
 	// describing how to reverse this action; it may be empty.
 	RecordAction(toolName, toolCallID, rawInput, undoHint string) error
+}
+
+// ActionResultRecorder is the OPTIONAL half of ActionRecorder for a notify-mode
+// tool the bundle lists in critical_tool_result_cards
+// (docs/APPROVAL-RESULT-CARDS.md): once the recorded call has returned, the
+// record is told its result, so the record card can show the outcome card
+// that result carried ("Campaign ID ELC07375 allocated") instead of only its
+// arguments. Display only: it cannot change the call, its result, or what the
+// model sees, and a sink without it records exactly as before.
+type ActionResultRecorder interface {
+	// RecordActionResult hands over the governed, unbounded result text of
+	// the call a RecordAction announced, and whether the call succeeded.
+	RecordActionResult(toolName, toolCallID, resultText string, succeeded bool)
+}
+
+// notifyRecordedCall is a notify-mode call whose record waits for its result
+// (ActionResultRecorder). Matched to the result by tool name and raw input,
+// the two values the result hook receives.
+type notifyRecordedCall struct {
+	tool, rawInput, toolCallID string
 }
 
 // Session pre-approval sentinels (#300): instead of a real approval ID, Stage
@@ -1067,6 +1092,7 @@ func (o *orchestrationState) dischargePendingCriticalAt(i int) {
 // recordToolResult updates tracking state after a tool call completes. Handles
 // both interactive email accounting and scheduled critical-action discharge.
 func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText string, succeeded bool) {
+	o.handOverNotifyRecordResult(toolName, rawInput, resultText, succeeded)
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
@@ -1370,5 +1396,31 @@ func parseTaskTrackerSummaryLine(result string) taskTrackerSnapshot {
 		Todo:       todo,
 		InProgress: inProgress,
 		Done:       done,
+	}
+}
+
+// handOverNotifyRecordResult tells the record of a notify-mode call its result
+// (ActionResultRecorder), for a call checkCriticalToolApproval recorded and
+// marked as waiting. The recorder runs outside o.mu: it writes to the store.
+func (o *orchestrationState) handOverNotifyRecordResult(toolName, rawInput, resultText string, succeeded bool) {
+	o.mu.Lock()
+	var (
+		call  notifyRecordedCall
+		found bool
+	)
+	for i, c := range o.notifyRecordedCalls {
+		if c.tool == toolName && c.rawInput == rawInput {
+			call, found = c, true
+			o.notifyRecordedCalls = append(o.notifyRecordedCalls[:i:i], o.notifyRecordedCalls[i+1:]...)
+			break
+		}
+	}
+	sink := o.approvalSink
+	o.mu.Unlock()
+	if !found {
+		return
+	}
+	if rr, ok := sink.(ActionResultRecorder); ok {
+		rr.RecordActionResult(call.tool, call.toolCallID, resultText, succeeded)
 	}
 }

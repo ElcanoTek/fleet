@@ -2088,6 +2088,11 @@ type Approval struct {
 	// written by SetApprovalProgress. Empty when none. Read by GetApproval,
 	// ListResolvedApprovals and ListExecutingApprovals.
 	ProgressJSON string
+	// ResultCardJSON is the outcome card the call's own result carried
+	// (migration 077, docs/APPROVAL-RESULT-CARDS.md): canonical JSON written
+	// once by SetApprovalResultCard. Empty when none. Read by GetApproval and
+	// ListResolvedApprovals.
+	ResultCardJSON string
 }
 
 // ListPendingApprovals returns every pending approval for a conversation,
@@ -2141,7 +2146,8 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, ''), COALESCE(group_id, ''), COALESCE(progress_json, '')
+		        is_err, COALESCE(card_json, ''), COALESCE(group_id, ''), COALESCE(progress_json, ''),
+		        COALESCE(result_card_json, '')
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status <> 'pending'
 		 ORDER BY created_at DESC
@@ -2157,7 +2163,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID, &a.ProgressJSON); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID, &a.ProgressJSON, &a.ResultCardJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2337,6 +2343,31 @@ func (s *Store) SetApprovalProgress(ctx context.Context, userEmail, approvalID, 
 	return n == 1, err
 }
 
+// NotifyRecordResultPrefix opens the result text of every notify-mode record
+// (#1153); httpapi writes it and tags reloaded rows `recorded` by it. Shared
+// here so SetApprovalResultCard can tell a record row from a decided one.
+const NotifyRecordResultPrefix = "Ran without asking"
+
+// SetApprovalResultCard stores the outcome card a call's own result carried
+// (docs/APPROVAL-RESULT-CARDS.md). It writes once, and only on a row whose
+// outcome it can describe: an approved call that is still executing (the
+// card is written just before SetApprovalResult records the outcome), or a
+// notify-mode record (approved, is_err false, the record text). It reports
+// whether a row was updated; a declined, failed or settled call, another
+// user's row, or a row that already has a card is left unchanged.
+func (s *Store) SetApprovalResultCard(ctx context.Context, userEmail, approvalID, cardJSON string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE approvals SET result_card_json = $1
+		 WHERE id = $2 AND user_email = $3 AND status = 'approved' AND result_card_json IS NULL
+		   AND ((is_err IS NULL AND result_text = $4) OR (is_err = FALSE AND starts_with(result_text, $5)))`,
+		cardJSON, approvalID, userEmail, ApprovalExecutingSentinel, NotifyRecordResultPrefix)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // ApprovalSeat is the public credential selection a staged MCP call ran under.
 // Both fields are configuration identifiers; no credential value is stored.
 type ApprovalSeat struct {
@@ -2354,14 +2385,15 @@ func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, ''), resume_state, COALESCE(group_id, ''), COALESCE(progress_json, '')
+		        is_err, COALESCE(card_json, ''), resume_state, COALESCE(group_id, ''), COALESCE(progress_json, ''),
+		        COALESCE(result_card_json, '')
 		 FROM approvals WHERE id = $1 AND user_email = $2`,
 		approvalID, userEmail,
 	)
 	var a Approval
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState, &a.GroupID, &a.ProgressJSON); err != nil {
+		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState, &a.GroupID, &a.ProgressJSON, &a.ResultCardJSON); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}

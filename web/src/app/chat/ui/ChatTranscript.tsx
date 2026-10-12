@@ -32,6 +32,7 @@ import {
   type MemoryProject,
 } from "./ApprovalCards";
 import { ApprovalGroupCard } from "./ApprovalGroupCard";
+import { retryFailedPrompt } from "./ApprovalResultCard";
 import { approvalRenderItems } from "./approvalGroups";
 import { MessageMinimap, MINIMAP_MAX, type MinimapEntry } from "./MessageMinimap";
 // The assistant markdown pipeline (react-markdown + micromark, ~43 KiB
@@ -1083,6 +1084,7 @@ export function ChatTranscript({
                                         onResumeExpected={onResumeExpected}
                                         onSwitchAndRetry={() => retryLastUserMessage()}
                                         onAskAgain={(timedOut) => void submitPrompt(askAgainPrompt(timedOut))}
+                                        onRetryFailed={(settled, keys) => void submitPrompt(retryFailedPrompt(settled, keys))}
                                       />
                                     );
                                   })}

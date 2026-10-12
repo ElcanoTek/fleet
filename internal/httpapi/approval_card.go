@@ -68,12 +68,15 @@ type ApprovalCard struct {
 
 // ApprovalCardItem is one record the call touches.
 type ApprovalCardItem struct {
-	Label    string                `json:"label"`
-	ID       string                `json:"id,omitempty"`
-	Link     string                `json:"link,omitempty"`
-	Changes  []ApprovalCardChange  `json:"changes,omitempty"`
-	Settings []ApprovalCardSetting `json:"settings,omitempty"`
-	Flags    []ApprovalCardFlag    `json:"flags,omitempty"`
+	Label string `json:"label"`
+	ID    string `json:"id,omitempty"`
+	Link  string `json:"link,omitempty"`
+	// LinkLabel names the link, e.g. "Open in Index Exchange"; the web shows
+	// "Open ↗" without it. Optional, and only with a link.
+	LinkLabel string                `json:"link_label,omitempty"`
+	Changes   []ApprovalCardChange  `json:"changes,omitempty"`
+	Settings  []ApprovalCardSetting `json:"settings,omitempty"`
+	Flags     []ApprovalCardFlag    `json:"flags,omitempty"`
 }
 
 // ApprovalCardChange is one field the call changes: before → after. Before is
@@ -214,53 +217,21 @@ func validateApprovalCard(c *ApprovalCard) error {
 		if err := cardText(at+".id", it.ID, approvalCardMaxTitle, false); err != nil {
 			return err
 		}
+		if err := cardText(at+".link_label", it.LinkLabel, approvalCardMaxTitle, false); err != nil {
+			return err
+		}
 		if it.Link != "" {
 			if err := cardLink(at+".link", it.Link); err != nil {
 				return err
 			}
+		} else if it.LinkLabel != "" {
+			return fmt.Errorf("%s.link_label names no link", at)
 		}
-		if len(it.Changes) > approvalCardMaxRowsPerSet || len(it.Settings) > approvalCardMaxRowsPerSet {
-			return fmt.Errorf("%s has more than %d changes or settings", at, approvalCardMaxRowsPerSet)
+		n, err := validateCardRows(at, it.Changes, it.Settings, it.Flags)
+		if err != nil {
+			return err
 		}
-		if len(it.Flags) > approvalCardMaxFlags {
-			return fmt.Errorf("%s has more than %d flags", at, approvalCardMaxFlags)
-		}
-		rows += len(it.Changes) + len(it.Settings) + len(it.Flags)
-		for j, ch := range it.Changes {
-			cat := fmt.Sprintf("%s.changes[%d]", at, j)
-			if err := cardText(cat+".label", ch.Label, approvalCardMaxTitle, true); err != nil {
-				return err
-			}
-			if ch.After == nil {
-				return fmt.Errorf("%s.after is required", cat)
-			}
-			if err := cardText(cat+".after", *ch.After, approvalCardMaxText, false); err != nil {
-				return err
-			}
-			if ch.Before != nil {
-				if err := cardText(cat+".before", *ch.Before, approvalCardMaxText, false); err != nil {
-					return err
-				}
-			}
-		}
-		for j, st := range it.Settings {
-			sat := fmt.Sprintf("%s.settings[%d]", at, j)
-			if err := cardText(sat+".label", st.Label, approvalCardMaxTitle, true); err != nil {
-				return err
-			}
-			if err := cardText(sat+".value", st.Value, approvalCardMaxText, false); err != nil {
-				return err
-			}
-		}
-		for j, f := range it.Flags {
-			fat := fmt.Sprintf("%s.flags[%d]", at, j)
-			if !approvalCardFlagCode.MatchString(f.Code) {
-				return fmt.Errorf("%s.code is not a short lowercase code", fat)
-			}
-			if err := cardText(fat+".label", f.Label, approvalCardMaxTitle, true); err != nil {
-				return err
-			}
-		}
+		rows += n
 	}
 	if rows > approvalCardMaxRows {
 		return fmt.Errorf("%d rows across the card, over the %d-row limit", rows, approvalCardMaxRows)

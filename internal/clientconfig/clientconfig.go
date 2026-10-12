@@ -421,6 +421,17 @@ type AgentPolicy struct {
 	//	agent_policy:
 	//	  critical_tool_progress: [execute_plan]
 	CriticalToolProgress []string `yaml:"critical_tool_progress"`
+	// CriticalToolResultCards is an OPTIONAL list of critical suffixes (same
+	// suffix matching as critical_tools) whose result carries a structured
+	// outcome card under the top-level `result_card` key. Fleet checks it
+	// against a fixed schema and, when it passes, the settled approval card
+	// (or notify record) renders it: a one-line outcome, a row per record
+	// with its ids, status and link, and "Retry failed (N)". Members must be
+	// in critical_tools (docs/APPROVAL-RESULT-CARDS.md).
+	//
+	//	agent_policy:
+	//	  critical_tool_result_cards: [execute_plan]
+	CriticalToolResultCards []string `yaml:"critical_tool_result_cards"`
 	// BatchSecondsPerDeal is DERIVED, never read from agent_policy: Bundle.AgentPolicy
 	// collects each mcp_servers[].batch_seconds_per_deal into it, keyed by
 	// server name, so the per-record batch budget reaches agentcore on the same
@@ -2807,6 +2818,7 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		CriticalToolResumeMaxPerHour:  b.AgentPolicyConfig.CriticalToolResumeMaxPerHour,
 		CriticalToolGroupApproval:     append([]string(nil), b.AgentPolicyConfig.CriticalToolGroupApproval...),
 		CriticalToolProgress:          append([]string(nil), b.AgentPolicyConfig.CriticalToolProgress...),
+		CriticalToolResultCards:       append([]string(nil), b.AgentPolicyConfig.CriticalToolResultCards...),
 	}
 	// An http_tool flagged `critical: true` opts into the SAME critical-tool audit
 	// gate as the manifest's critical_tools suffixes. The tool is registered as

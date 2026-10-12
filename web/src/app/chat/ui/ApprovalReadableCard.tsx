@@ -17,6 +17,7 @@
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import type { ApprovalCardData, ApprovalCardItem } from "./history";
+import { Icon } from "./Icon";
 
 // Items beyond this many collapse behind "Show N more".
 export const CARD_ITEMS_VISIBLE = 10;
@@ -54,7 +55,7 @@ function CardItem({ item }: { item: ApprovalCardItem }) {
             rel="noopener noreferrer"
             className="text-[0.72rem] text-[var(--color-accent)] underline-offset-2 hover:underline"
           >
-            Open ↗
+            {item.linkLabel ? `${item.linkLabel} ↗` : "Open ↗"}
           </a>
         ) : null}
       </div>
@@ -180,5 +181,277 @@ export function ApprovalCardDetails({ children }: { children: ReactNode }) {
       </summary>
       <div className="mt-1 min-w-0">{children}</div>
     </details>
+  );
+}
+
+// ── The pending card in the designer's layout (APPROVAL-CARD-DESCRIBERS.md) ──
+//
+// Only a card with a describer's readable card renders this way: an
+// "APPROVAL NEEDED" eyebrow with the countdown on the right, the plain-words
+// title and subtitle, the record in an inner box (name, monospace buyer-facing
+// id, "Open in <system>"), each change as label … before → after with the
+// values right-aligned, and Approve / Cancel with Details on the same row.
+
+// Rows (changes + settings) a single record shows before "Show all N".
+export const CARD_ROWS_VISIBLE = 8;
+
+// RecordLink is a record's external link: its label when the bundle names one
+// ("Open in Index Exchange"), else "Open".
+export function RecordLink({ link, linkLabel }: { link: string; linkLabel?: string }) {
+  return (
+    <a
+      href={link}
+      target="_blank"
+      rel="noopener noreferrer"
+      data-testid="approval-card-link"
+      className="inline-flex items-center gap-1 text-[0.75rem] font-medium text-[var(--color-accent)] underline-offset-2 hover:underline"
+    >
+      {linkLabel || "Open"}
+      <Icon name="external-link" className="size-3" />
+    </a>
+  );
+}
+
+// ChangeValue renders before → after with the new value emphasised.
+export function ChangeValue({ before, after }: { before?: string; after: string }) {
+  return (
+    <span className="min-w-0 break-words text-right">
+      {before !== undefined ? (
+        <>
+          <span className="text-[var(--color-text-muted)]">{before || "(empty)"}</span>
+          <span aria-label="changes to" className="mx-1.5 text-[var(--color-text-muted)]">
+            →
+          </span>
+        </>
+      ) : null}
+      <span className="font-semibold text-[var(--color-text-primary)]">{after || "(empty)"}</span>
+    </span>
+  );
+}
+
+// CardRows lists a record's changes and settings as label … value rows,
+// collapsing after CARD_ROWS_VISIBLE behind "Show all N".
+export function CardRows({ changes, settings }: Pick<ApprovalCardItem, "changes" | "settings">) {
+  const [expanded, setExpanded] = useState(false);
+  const rows = [
+    ...(changes ?? []).map((c, i) => ({ kind: "change" as const, key: `c${i}`, label: c.label, change: c })),
+    ...(settings ?? []).map((st, i) => ({ kind: "setting" as const, key: `s${i}`, label: st.label, value: st.value })),
+  ];
+  if (rows.length === 0) return null;
+  const shown = expanded ? rows : rows.slice(0, CARD_ROWS_VISIBLE);
+  const hidden = rows.length - shown.length;
+  return (
+    <div className="min-w-0">
+      <ul className="min-w-0">
+        {shown.map((r) => (
+          <li
+            key={r.key}
+            data-testid={r.kind === "change" ? "approval-card-change" : "approval-card-setting"}
+            className="flex min-w-0 items-baseline justify-between gap-3 border-t border-[var(--color-border-subtle)] py-1.5 text-[0.8rem]"
+          >
+            <span className="shrink-0 text-[var(--color-text-secondary)]">{r.label}</span>
+            {r.kind === "change" ? (
+              <ChangeValue before={r.change.before} after={r.change.after} />
+            ) : (
+              <span className="min-w-0 break-words text-right text-[var(--color-text-primary)]">{r.value}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {hidden > 0 ? (
+        <button
+          type="button"
+          data-testid="approval-card-rows-more"
+          className="mt-0.5 text-[0.75rem] font-medium text-[var(--color-accent)] hover:underline"
+          onClick={() => setExpanded(true)}
+        >
+          Show all {rows.length}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+// RecordBox is one record in the inner box: its name, its monospace
+// buyer-facing id and its link, and any flags. `children` adds lines (a
+// result card's status and ids).
+export function RecordBox({
+  label,
+  id,
+  link,
+  linkLabel,
+  flags,
+  children,
+  testId = "approval-card-item",
+}: {
+  label: string;
+  id?: string;
+  link?: string;
+  linkLabel?: string;
+  flags?: Array<{ code: string; label: string }>;
+  children?: ReactNode;
+  testId?: string;
+}) {
+  return (
+    <div
+      data-testid={testId}
+      className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-3 py-2"
+    >
+      <div className="min-w-0 break-words [overflow-wrap:anywhere] text-[0.85rem] font-medium leading-[1.45] text-[var(--color-text-primary)]">{label}</div>
+      {id || link ? (
+        <div className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+          {id ? <span className="break-all font-mono text-[0.75rem] text-[var(--color-text-muted)]">{id}</span> : null}
+          {link ? <RecordLink link={link} linkLabel={linkLabel} /> : null}
+        </div>
+      ) : null}
+      {flags && flags.length > 0 ? (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {flags.map((f, i) => (
+            <FlagBadge key={`${f.code}-${i}`} code={f.code} label={f.label} />
+          ))}
+        </div>
+      ) : null}
+      {children}
+    </div>
+  );
+}
+
+// PlanRow is one record of a several-record card: name, id and link on the
+// left, its single change's before → after on the right, flags below.
+function PlanRow({ item }: { item: ApprovalCardItem }) {
+  const single = item.changes && item.changes.length === 1 && !(item.settings && item.settings.length) ? item.changes[0] : null;
+  return (
+    <li data-testid="approval-card-item" className="min-w-0 border-t border-[var(--color-border-subtle)] py-2 first:border-t-0">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="break-words [overflow-wrap:anywhere] text-[0.82rem] font-medium text-[var(--color-text-primary)]">{item.label}</div>
+          {item.id || item.link ? (
+            <div className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-3">
+              {item.id ? <span className="break-all font-mono text-[0.72rem] text-[var(--color-text-muted)]">{item.id}</span> : null}
+              {item.link ? <RecordLink link={item.link} linkLabel={item.linkLabel} /> : null}
+            </div>
+          ) : null}
+        </div>
+        {single ? (
+          <span data-testid="approval-card-change" className="shrink-0 text-[0.8rem]">
+            <span className="sr-only">{single.label}: </span>
+            <ChangeValue before={single.before} after={single.after} />
+          </span>
+        ) : null}
+      </div>
+      {item.flags && item.flags.length > 0 ? (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {item.flags.map((f, i) => (
+            <FlagBadge key={`${f.code}-${i}`} code={f.code} label={f.label} />
+          ))}
+        </div>
+      ) : null}
+      {single ? null : <CardRows changes={item.changes} settings={item.settings} />}
+    </li>
+  );
+}
+
+// ReadablePendingRecords is the pending card's record area: one record in
+// its inner box with its rows below, or a list of records (collapsing after
+// CARD_ITEMS_VISIBLE, searchable above CARD_SEARCH_THRESHOLD).
+export function ReadablePendingRecords({ items }: { items: ApprovalCardItem[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const [query, setQuery] = useState("");
+  const searchable = items.length > CARD_SEARCH_THRESHOLD;
+  const filtered = useMemo(
+    () => (searchable && query.trim() ? items.filter((it) => matches(it, query.trim())) : items),
+    [items, query, searchable],
+  );
+  if (items.length === 0) return null;
+  if (items.length === 1) {
+    const it = items[0];
+    return (
+      <div className="mt-3 grid min-w-0 gap-2">
+        <RecordBox label={it.label} id={it.id} link={it.link} linkLabel={it.linkLabel} flags={it.flags} />
+        <CardRows changes={it.changes} settings={it.settings} />
+      </div>
+    );
+  }
+  const shown = expanded ? filtered : filtered.slice(0, CARD_ITEMS_VISIBLE);
+  const hidden = filtered.length - shown.length;
+  return (
+    <div className="mt-3 min-w-0">
+      {searchable ? (
+        <input
+          type="search"
+          data-testid="approval-card-search"
+          aria-label="Search the records on this card"
+          placeholder={`Search ${items.length} records`}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          className="mb-1.5 w-full rounded-md border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)]"
+        />
+      ) : null}
+      <ul className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-3">
+        {shown.map((it, i) => (
+          <PlanRow key={`${it.id ?? ""}-${i}`} item={it} />
+        ))}
+      </ul>
+      {searchable && query.trim() && filtered.length === 0 ? (
+        <p className="mt-1 text-[0.72rem] text-[var(--color-text-muted)]">No record matches “{query.trim()}”.</p>
+      ) : null}
+      {hidden > 0 ? (
+        <button
+          type="button"
+          data-testid="approval-card-show-more"
+          className="mt-1 text-[0.75rem] font-medium text-[var(--color-accent)] hover:underline"
+          onClick={() => setExpanded(true)}
+        >
+          Show {hidden} more
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+// DetailsToggle is the "Details ⌄" control that sits on the action row; the
+// panel it opens renders below the row (DetailsPanel), collapsed by default.
+export function DetailsToggle({ open, onToggle, controls }: { open: boolean; onToggle: () => void; controls: string }) {
+  return (
+    <button
+      type="button"
+      data-testid="approval-card-details-toggle"
+      aria-expanded={open}
+      aria-controls={controls}
+      onClick={onToggle}
+      className="ml-auto inline-flex items-center gap-1 text-[0.75rem] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+    >
+      Details
+      <Icon name="chevron-down" className={`size-3 transition-transform ${open ? "rotate-180" : ""}`} />
+    </button>
+  );
+}
+
+export function DetailsPanel({ id, open, children }: { id: string; open: boolean; children: ReactNode }) {
+  return (
+    <div id={id} data-testid="approval-card-details" hidden={!open} className="mt-2 min-w-0 border-t border-[var(--color-border-subtle)] pt-2">
+      {children}
+    </div>
+  );
+}
+
+// EyebrowCountdown is the pending card's top-right countdown: minutes while
+// there is time, m:ss in the last two minutes, and the timed-out notice.
+export function EyebrowCountdown({ remaining, expired }: { remaining: number | null; expired: boolean }) {
+  if (remaining === null) return null;
+  const text = expired
+    ? "Timed out — the action was not taken."
+    : remaining >= 120
+      ? `Auto-declines in ${Math.ceil(remaining / 60)} min`
+      : `Auto-declines in ${Math.floor(remaining / 60)}:${(remaining % 60).toString().padStart(2, "0")}`;
+  return (
+    <span
+      data-testid="approval-countdown"
+      className="inline-flex items-center gap-1 text-[0.72rem]"
+      style={{ color: expired ? "var(--color-danger)" : "var(--color-text-muted)" }}
+    >
+      <Icon name="clock" className="size-3" />
+      <span className={remaining < 120 && !expired ? "font-mono" : undefined}>{text}</span>
+    </span>
   );
 }

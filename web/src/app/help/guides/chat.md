@@ -426,7 +426,7 @@ about the first kind.
 | Run this shell command? | A command the platform treats as risky. | **Approve & run** · **Cancel** |
 | Schedule a task | The assistant proposes a scheduled task, usually because you chose **Make recurring task…**. See [From chat to a task](#10-from-chat-to-a-task). | **Approve & schedule** · **Edit** · **Cancel** |
 | Change a task | The assistant wants to stop or update an existing scheduled task. | **Approve & stop** or **Approve & update** · **Cancel** |
-| Run an action | Any other connector action that changes something, such as updating a record in an external system. The card names the action, the system it runs against, and the arguments it was called with. A deployment can make it read in plain words instead: a title, each record with its id and an **Open ↗** link, each change as before → after, and warnings such as "Deal is Active" as badges, with the raw arguments under **Details**. Long lists show the first 10 with **Show N more**, and a search box when there are more than 25. | **Approve & run** · **Cancel** |
+| Run an action | Any other connector action that changes something, such as updating a record in an external system. The card names the action, the system it runs against, and the arguments it was called with. A deployment can make it read in plain words instead: **APPROVAL NEEDED** with the countdown, a title, the record with its id and a link (**Open in …**), each change as before → after, and warnings such as "Deal is Active" as badges, with the raw arguments under **Details**. Long lists show the first 10 with **Show N more**, and a search box when there are more than 25. | **Approve & run** (**Approve** on a plain-words card) · **Cancel** |
 
 Three rules for every card. **Read what is about to happen**, not just the
 button: the card exists to tell you. **Cancel is free**: the assistant continues
@@ -439,7 +439,17 @@ After you approve, the card shows what actually happened: it ran, it failed, it
 is still running, or — for an older card whose run finished before outcomes were
 stored — that the outcome was not recorded. A plain-words card says it in one
 line (**Applied**, **Not applied**, **Declined**, **Timed out — not applied**),
-with the action's own result underneath and the records under **Details**. A still-running card is not a new
+with the action's own result underneath and the records under **Details**.
+A deployment can also have chosen actions report their own outcome. The
+finished card then says what happened in one line ("Created 1 Index Exchange
+deal · verified"), with a row per record: its name, its ids, a status
+(**Done**, **Not applied**, **Check didn't match**, **Outcome unclear**,
+**Already done**, **Not run**), and a link. The raw result moves under
+**Details**. When some records failed, **Retry failed (N)** asks the assistant
+to try only those again, and the retry comes back to you as a new card to
+approve: nothing runs from the click. A record that may already exist is never
+offered for retry. An action that ran without asking can say what it did the
+same way ("Campaign ID ELC07375 allocated"). A still-running card is not a new
 decision: Cancel, Edit, and the expiry countdown are withheld, and **Check
 result** fetches the outcome without running the action twice. In terminal chat
 the same flags apply: `/approve <id>` on a running card retrieves the result;

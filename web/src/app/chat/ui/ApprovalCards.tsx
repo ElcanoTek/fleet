@@ -12,7 +12,7 @@
 // byte-identical to the in-module originals.
 
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   currentAdvancedModel,
   labelForModel,
@@ -25,6 +25,7 @@ import {
   approvalIsExecuting,
   approvalProgressText,
   approvalStatusFromOutcome,
+  resultCardFromOutcome,
 } from "./history";
 import { useApprovalProgressPoll } from "./useApprovalProgressPoll";
 import { EmailSendResult, parseEmailSendPayload } from "./ToolChips";
@@ -32,7 +33,12 @@ import {
   ApprovalCardDetails,
   ApprovalCardItems,
   ApprovalReadableBody,
+  DetailsPanel,
+  DetailsToggle,
+  EyebrowCountdown,
+  ReadablePendingRecords,
 } from "./ApprovalReadableCard";
+import { ApprovalResultCardView } from "./ApprovalResultCard";
 import { conversationApprovalApiUrl } from "@/app/lib/conversationApiUrl";
 
 // Preview viewport presets for the inline email preview. These mirror the
@@ -372,10 +378,15 @@ export function ApprovalCard({
   onSwitchAndRetry,
   onAskAgain,
   onResumeExpected,
+  onRetryFailed,
 }: {
   approval: Approval;
   conversationId: string;
   onResolved: (next: Approval) => void;
+  // A result card's "Retry failed (N)" (docs/APPROVAL-RESULT-CARDS.md). The
+  // caller submits retryFailedPrompt(approval, keys) as a user turn, so the
+  // agent stages the retry for a new approval; nothing runs from the click.
+  onRetryFailed?: (approval: Approval, keys: string[]) => void;
   // The server answered resume: this card's tool resumes after approval
   // (docs/RESUME-AFTER-APPROVAL.md), so fleet will start a turn on its own —
   // now (the card settled) or once the still-executing call lands.
@@ -473,6 +484,7 @@ export function ApprovalCard({
         executing?: boolean;
         execution_unknown?: boolean;
         resume?: boolean;
+        result_card?: unknown;
       };
       const nextStatus = approvalStatusFromOutcome(data);
       if (data.resume === true) onResumeExpected?.(nextStatus === null);
@@ -492,6 +504,7 @@ export function ApprovalCard({
         ...approval,
         status: nextStatus,
         resultText: data.result_text,
+        resultCard: resultCardFromOutcome(data),
         executing: false,
         decisionError: undefined,
       });
@@ -568,6 +581,7 @@ export function ApprovalCard({
         applyAll={applyAll}
         onApplyAllChange={setApplyAll}
         onAskAgain={onAskAgain}
+        onRetryFailed={onRetryFailed}
       />
     );
   }
@@ -877,6 +891,7 @@ function GenericActionCard({
   applyAll,
   onApplyAllChange,
   onAskAgain,
+  onRetryFailed,
 }: {
   approval: Approval;
   submitting: "send" | "cancel" | null;
@@ -885,7 +900,10 @@ function GenericActionCard({
   applyAll: boolean;
   onApplyAllChange: (v: boolean) => void;
   onAskAgain?: (approval: Approval) => void;
+  onRetryFailed?: (approval: Approval, keys: string[]) => void;
 }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsId = useId();
   const executing = approvalIsExecuting(approval);
   const countdown = useApprovalCountdown(approval.expiresAt, approval.status, executing);
   const { action, server } = actionLabel(approval.tool);
@@ -960,6 +978,114 @@ function GenericActionCard({
         {rawArgs}
       </pre>
     ) : null;
+
+  // A settled success whose result carried an outcome card (a tool in
+  // critical_tool_result_cards, docs/APPROVAL-RESULT-CARDS.md): the completed
+  // card reads it. It keeps the approved card's title in view and its
+  // records, the raw call and the raw result under Details. Any other
+  // settled card renders below, as before.
+  if (approval.resultCard && approval.status === "approved" && !executing) {
+    return (
+      <ApprovalResultCardView
+        approval={approval}
+        result={approval.resultCard}
+        recorded={recorded}
+        approvedTitle={readable?.title}
+        approvedRecords={readable && readable.items.length > 0 ? <ApprovalCardItems items={readable.items} /> : null}
+        toolDetails={
+          <div className="mt-1 min-w-0">
+            {toolHeader}
+            {argsBlock}
+          </div>
+        }
+        onRetryFailed={onRetryFailed}
+      />
+    );
+  }
+
+  // A pending card with a describer's readable card, waiting for a decision:
+  // the designer's layout (APPROVAL NEEDED eyebrow and countdown, the record
+  // in its inner box, changes right-aligned, Approve / Cancel with Details on
+  // one row). The controls and their rules are the generic card's.
+  if (readable && approval.status === "pending" && !executing) {
+    return (
+      <div
+        data-approval-id={approval.id}
+        data-tool={approval.tool}
+        data-testid="generic-action-card"
+        data-layout="readable"
+        className="rounded-[var(--radius-lg)] border px-4 py-3 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]"
+        style={{
+          borderColor: "color-mix(in srgb, var(--color-accent) 55%, transparent)",
+          background: "color-mix(in srgb, var(--color-accent) 7%, var(--color-overlay-soft))",
+        }}
+      >
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <span
+            data-testid="approval-eyebrow"
+            className="text-[0.68rem] font-medium uppercase tracking-[0.18em] text-[var(--color-accent)]"
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            Approval needed
+          </span>
+          <EyebrowCountdown remaining={countdown.remaining} expired={countdown.expired} />
+        </div>
+        <div data-testid="approval-card-readable" className="min-w-0">
+          <div data-testid="generic-action-title" className="mt-1.5 min-w-0 break-words [overflow-wrap:anywhere] text-[0.95rem] font-semibold">
+            {readable.title}
+          </div>
+          {readable.subtitle ? (
+            <p className="mt-0.5 min-w-0 break-words text-[0.8rem] text-[var(--color-text-secondary)]">{readable.subtitle}</p>
+          ) : null}
+          <ReadablePendingRecords items={readable.items} />
+          {readable.footer ? (
+            <p className="mt-2 min-w-0 break-words text-[0.72rem] text-[var(--color-text-muted)]">{readable.footer}</p>
+          ) : null}
+        </div>
+        <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-2 border-t border-[var(--color-border-subtle)] pt-3">
+          <button
+            type="button"
+            className="rounded-full bg-[var(--color-primary)] px-4 py-1.5 text-[0.8rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+            disabled={submitting !== null || countdown.expired}
+            onClick={() => onResolve(true)}
+          >
+            {submitting === "send" ? "Running…" : applyAll ? "Approve + allow all" : "Approve"}
+          </button>
+          <button
+            type="button"
+            className="rounded-full px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+            disabled={submitting !== null || countdown.expired}
+            onClick={() => onResolve(false)}
+          >
+            {submitting === "cancel" ? "Cancelling…" : applyAll ? "Deny + block all" : "Cancel"}
+          </button>
+          <DetailsToggle open={detailsOpen} onToggle={() => setDetailsOpen((v) => !v)} controls={detailsId} />
+        </div>
+        <DetailsPanel id={detailsId} open={detailsOpen}>
+          {toolHeader}
+          {argsBlock}
+        </DetailsPanel>
+        <div className="mt-2 flex flex-col gap-2 empty:hidden">
+          <ApprovalSeatBadge server={approval.mcpServer} account={approval.mcpAccount} verb="Runs as" />
+          <ApprovalSubmitError message={submitError} />
+          {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
+          {approval.noSessionApproval ? null : (
+            <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
+              <input
+                type="checkbox"
+                data-testid="approval-apply-all"
+                checked={applyAll}
+                disabled={submitting !== null}
+                onChange={(e) => onApplyAllChange(e.target.checked)}
+                className="size-3.5 accent-[var(--color-primary)]"
+              />
+              Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
+            </label>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

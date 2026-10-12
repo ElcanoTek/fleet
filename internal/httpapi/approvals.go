@@ -107,6 +107,12 @@ type approvalStager struct {
 	// staging turn's id, so the cards one turn stages share it. "" (promote
 	// cards, tests) groups nothing.
 	groupID string
+	// recordIDs maps a notify-mode call's tool_call_id to the record row
+	// RecordAction wrote for it, for a tool in critical_tool_result_cards
+	// whose result then settles the record's outcome card
+	// (RecordActionResult). Guarded by recordMu.
+	recordMu  sync.Mutex
+	recordIDs map[string]string
 }
 
 var _ agent.MCPScopeBinder = (*approvalStager)(nil)
@@ -170,7 +176,7 @@ const previewEmailToolName = "preview_email"
 // `recorded` (the approvals table has no mode column — the prefix is the one
 // durable trace of HOW the row resolved), so RecordAction and
 // isNotifyRecordResult must stay in lockstep.
-const notifyRecordResultPrefix = "Ran without asking"
+const notifyRecordResultPrefix = store.NotifyRecordResultPrefix
 
 // isNotifyRecordResult reports whether a resolved approval row is a
 // notify-mode record rather than a human decision.
@@ -280,6 +286,16 @@ func (a *approvalStager) RecordAction(toolName, toolCallID, rawInput, undoHint s
 	}
 	if err := a.store.ResolveApproval(a.ctx, a.userEmail, approval.ID, "approved", result); err != nil {
 		return err
+	}
+	if toolCallID != "" && agentcore.ApprovalResultCard(toolName) {
+		// The call runs next; its result may carry the record's outcome card
+		// (RecordActionResult, docs/APPROVAL-RESULT-CARDS.md).
+		a.recordMu.Lock()
+		if a.recordIDs == nil {
+			a.recordIDs = map[string]string{}
+		}
+		a.recordIDs[toolCallID] = approval.ID
+		a.recordMu.Unlock()
 	}
 	a.sink.Emit("tool.action_recorded", map[string]any{
 		"approval_id": approval.ID,
@@ -1854,7 +1870,16 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 		resultText = fmt.Sprintf("%s failed: %v", actionVerb(approval.ToolName), toolErr)
 	}
 	isErr := toolErr != nil
-	resultText, isErr = governApprovalResult(execCtx, approval, resultText, isErr)
+	var governed string
+	resultText, isErr, governed = governApprovalResult(execCtx, approval, resultText, isErr)
+	// A tool in critical_tool_result_cards: the outcome card its own result
+	// carries, stored on the still-executing row just before the outcome, so
+	// the settled card and its reply carry both. Only for a call that ran and
+	// passed governance; anything else keeps today's card.
+	var resultCard json.RawMessage
+	if toolErr == nil && !isErr {
+		resultCard = s.recordApprovalResultCard(execCtx, user, approval, governed)
+	}
 	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText, isErr); err != nil {
 		log.Printf("SetApprovalResult: %v", err)
 		s.approvalPersistenceFailures.Store(approvalID, true)
@@ -1871,11 +1896,15 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	// The outcome is in the conversation now, so a resume turn can read it —
 	// this is also where a long call answered "executing" earlier lands.
 	s.noteApprovalSettled(convID, approval)
-	return s.resumeReplyFlag(execCtx, map[string]any{
+	reply := map[string]any{
 		"status":      "approved",
 		"result_text": resultText,
 		"is_err":      isErr,
-	}, approval)
+	}
+	if resultCard != nil {
+		reply["result_card"] = resultCard
+	}
+	return s.resumeReplyFlag(execCtx, reply, approval)
 }
 
 // DrainApprovalRuns stops admitting approved executions and blocks until
@@ -1943,11 +1972,15 @@ func (g *approvalRunGate) drain(ctx context.Context) bool {
 	}
 }
 
-func governApprovalResult(ctx context.Context, approval *store.Approval, text string, isErr bool) (string, bool) {
+// governApprovalResult applies the loop's post-execution boundary to an
+// approved call's result. It returns the bounded, model-visible text and its
+// error flag, plus the governed text before the size bound, which only the
+// result card reads (approval_result_card.go).
+func governApprovalResult(ctx context.Context, approval *store.Approval, text string, isErr bool) (bounded string, err bool, governed string) {
 	if approval == nil {
-		return agentcore.GovernAndBoundModelVisibleToolText(ctx, "approval", "", text, isErr)
+		return agentcore.GovernAndBoundModelVisibleToolTextFull(ctx, "approval", "", text, isErr)
 	}
-	return agentcore.GovernAndBoundModelVisibleToolText(ctx, approval.ToolName, resolutionCallID(approval), text, isErr)
+	return agentcore.GovernAndBoundModelVisibleToolTextFull(ctx, approval.ToolName, resolutionCallID(approval), text, isErr)
 }
 
 // approvalExecutingSentinel is the result_text ClaimApproval writes before
@@ -2010,7 +2043,10 @@ func (s *Server) approvalClientState(a *store.Approval) map[string]any {
 	if out["execution_unknown"] == true && a.ResultText == approvalExecutingSentinel {
 		out["result_text"] = "Execution outcome could not be recorded. Verify the external result before taking further action."
 	}
-	return out
+	// The outcome card the call's own result carried, for a tool in
+	// critical_tool_result_cards whose success fleet recorded. Absent for
+	// every other row, so its payload is unchanged.
+	return s.withApprovalResultCard(out, a)
 }
 
 // writeResolvedApprovalState answers a request that lost the claim race

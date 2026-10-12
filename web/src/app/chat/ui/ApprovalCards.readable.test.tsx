@@ -46,6 +46,8 @@ describe("the readable approval card", () => {
   it("renders the pending layout: title, records, before → after, flags; raw args under Details", async () => {
     renderCard({ card, expiresAt: Math.floor(Date.now() / 1000) + 600, mcpServer: "deals", mcpAccount: "client_a" });
     const cardEl = screen.getByTestId("generic-action-card");
+    expect(cardEl).toHaveAttribute("data-layout", "readable");
+    expect(screen.getByTestId("approval-eyebrow")).toHaveTextContent(/approval needed/i);
     expect(screen.getByTestId("generic-action-title")).toHaveTextContent(/^Update 2 deals$/);
     expect(cardEl).toHaveTextContent("Raise the floor on the Q4 package");
     const items = screen.getAllByTestId("approval-card-item");
@@ -55,22 +57,51 @@ describe("the readable approval card", () => {
     const link = within(items[0]).getByRole("link", { name: /Open/ });
     expect(link).toHaveAttribute("href", "https://ssp.example.com/deals/123");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    // A record with one change shows it on its row: before → after.
     expect(within(items[0]).getByTestId("approval-card-change")).toHaveTextContent("Floor: $2.00→$2.50");
     expect(within(items[0]).getByTestId("approval-card-flag")).toHaveTextContent("Deal is Active");
-    expect(within(items[1]).getByTestId("approval-card-change")).toHaveTextContent("End date: 2027-01-31");
-    expect(within(items[1]).getByTestId("approval-card-setting")).toHaveTextContent("Currency: USD");
+    // Several rows list as label … value.
+    expect(within(items[1]).getByTestId("approval-card-change")).toHaveTextContent("End date2027-01-31");
+    expect(within(items[1]).getByTestId("approval-card-setting")).toHaveTextContent("CurrencyUSD");
     expect(cardEl).toHaveTextContent("Changes apply immediately.");
-    // Raw tool + arguments are collapsed under Details.
+    // Raw tool + arguments are collapsed under Details, opened from the action row.
     const details = screen.getByTestId("approval-card-details");
-    expect(details).not.toHaveAttribute("open");
+    expect(details).not.toBeVisible();
+    const toggle = screen.getByTestId("approval-card-details-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(details).toBeVisible();
     expect(within(details).getByText("mcp_deals_update_deal")).toBeTruthy();
     expect(within(details).getByText("etag:")).toBeTruthy();
-    // Buttons, countdown, seat badge and apply-all are unchanged.
-    expect(screen.getByRole("button", { name: "Approve & run" })).toBeEnabled();
+    // The decision controls keep their rules: Approve / Cancel, countdown,
+    // seat badge and apply-all.
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
-    expect(await screen.findByTestId("approval-countdown")).toBeTruthy();
+    expect(await screen.findByText(/Auto-declines in 10 min/)).toBeTruthy();
     expect(screen.getByTestId("approval-seat")).toHaveTextContent("client_a");
     expect(screen.getByTestId("approval-apply-all")).toBeTruthy();
+  });
+
+  it("puts a single record in its inner box with its link label and rows below, collapsing many rows", () => {
+    const settings = Array.from({ length: 12 }, (_, i) => ({ label: `Setting ${i + 1}`, value: `v${i + 1}` }));
+    renderCard({
+      card: {
+        title: "Create 1 Index Exchange deal for Elcano",
+        subtitle: "Created Active · End date 2028-10-11 · set by policy",
+        items: [{ label: "Elcano_ChatTest_IX", id: "IX15", link: "https://ssp.example.com/d/1", linkLabel: "Open in Index Exchange", settings }],
+      },
+    });
+    const box = screen.getByTestId("approval-card-item");
+    expect(within(box).getByRole("link", { name: /Open in Index Exchange/ })).toHaveAttribute("href", "https://ssp.example.com/d/1");
+    expect(within(box).getByText("IX15")).toBeTruthy();
+    expect(screen.getAllByTestId("approval-card-setting")).toHaveLength(8);
+    fireEvent.click(screen.getByTestId("approval-card-rows-more"));
+    expect(screen.getAllByTestId("approval-card-setting")).toHaveLength(12);
+  });
+
+  it("the near-expiry countdown reads m:ss", async () => {
+    renderCard({ card, expiresAt: Math.floor(Date.now() / 1000) + 90 });
+    expect(await screen.findByText(/Auto-declines in 1:(29|30)/)).toBeTruthy();
   });
 
   it("renders every string as text", () => {

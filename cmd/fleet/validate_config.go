@@ -1161,6 +1161,13 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolModes:    p.CriticalToolModes,
 		CriticalToolProgress: p.CriticalToolProgress,
 	})...)
+	// critical_tool_result_cards: the member must be critical and not a
+	// handler-only card; a typo would quietly leave its settled cards on the
+	// raw result.
+	problems = append(problems, agentcore.ResultCardProblems(agentcore.AgentPolicy{
+		CriticalToolSuffixes:    p.CriticalToolSuffixes,
+		CriticalToolResultCards: p.CriticalToolResultCards,
+	})...)
 	if len(problems) > 0 {
 		res.Status = statusFail
 		res.Detail = strings.Join(problems, "; ")

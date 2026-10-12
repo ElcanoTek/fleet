@@ -1,0 +1,13 @@
+-- 077_approval_result_card.sql — the outcome card an approved call's own
+-- result carried (agent_policy.critical_tool_result_cards,
+-- docs/APPROVAL-RESULT-CARDS.md, ADR-0084).
+--
+-- Canonical JSON of the `result_card` object a tool in
+-- critical_tool_result_cards returned, after fleet's strict schema check and
+-- the secret-redaction check. Written once: on an approved call while it is
+-- still executing (just before its outcome is recorded), or on a notify-mode
+-- record once the call it records has returned. NULL is every other row (a
+-- tool that did not opt in, a result without a valid card, and every row
+-- written before this column existed), which renders the settled card exactly
+-- as before, so a nullable ADD with no backfill is the old behaviour.
+ALTER TABLE approvals ADD COLUMN result_card_json TEXT;
