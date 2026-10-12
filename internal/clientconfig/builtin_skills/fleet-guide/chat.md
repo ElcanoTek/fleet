@@ -224,7 +224,7 @@ your eye lands on the answer and then on anything that needs you:
 
 | Part | What it is |
 | --- | --- |
-| Execution trail | A row of chips, one per tool the assistant used: a file it read, a connector it called, code it ran. Click a chip to see exactly what went in and what came back. This is how you check the work. Shown only when **Show details** is on. |
+| Execution trail | A row of chips, one per tool the assistant used: a file it read, a connector it called, code it ran. Click a chip to see exactly what went in and what came back. This is how you check the work. A chip in the danger colour is a call that failed; the chip of an action waiting on an approval card is marked **for approval** instead, since it has not run. Shown only when **Show details** is on. |
 | Reasoning | The assistant's narrated thinking. Also shown only when **Show details** is on. |
 | The answer | Text, tables, charts, and images. Code and data come in copyable blocks. When the assistant produces an HTML report, it renders as an **HTML preview** with a **Show source** toggle. |
 | Interactive cards | A form, picker, checklist, comparison, chart or small calculator the assistant built for this answer. Fill it in and press its button; your answers go back as your next message. See [Interactive cards](#interactive-cards). |
