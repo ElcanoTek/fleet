@@ -894,45 +894,44 @@ and the file open in the editor, and never sends their text. So the file open
 in a JetBrains editor goes to fleet with every message, and is part of the
 conversation in fleet like anything else the user sends.
 
-- **What is read.** Only the files a prompt links to, never one the model
-  asks for. They are read through the client, so the text includes unsaved
-  edits and the client decides which files an agent may read. A file linked
-  twice in one prompt (attached, and also the open one) is read once: its
-  text goes where it is first linked, and a later link that names it
-  differently (with a line fragment, say) stays a link marked as the same
-  file.
+- **What is read.** Only the files a prompt links to, never one the model asks
+  for. They are read through the client, so the text includes unsaved edits
+  and the client decides which files an agent may read. A file linked twice in
+  one prompt (attached, and also the open one) is read once: its text goes
+  where it is first linked, and a later link that names it differently (with a
+  line fragment, say) stays a link marked as the same file.
 - **How much.** Up to 100 KB of one file, and 300 KB of all the files one
   prompt links to. A longer file is cut back to a line break (or between
   characters, when that would keep less than half), and the line naming it
   says how much of it is there and which limit cut it. A file that does not
-  fit what is left of the 300 KB is cut to it, or left out once less than
-  1 KB is left. The 300 KB keeps a prompt well inside fleet's 1 MB request
-  cap in the usual case, but the cap also counts the prompt's own text,
-  embedded resources and the JSON encoding (in which `<`, `>` and `&` take
-  6 bytes each), so a prompt of text dense in them can still pass it, and
-  fails as any prompt over the cap does.
+  fit what is left of the 300 KB is cut to it, or left out once less than 1 KB
+  is left. The 300 KB keeps a prompt well inside fleet's 1 MB request cap in
+  the usual case, but the cap also counts the prompt's own text, embedded
+  resources and the JSON encoding (in which `<`, `>` and `&` take 6 bytes
+  each), so a prompt of text dense in them can still pass it, and fails as any
+  prompt over the cap does.
 - **What is not read.** A file over 1 MB, by its size on disk, or for a file
   not on disk (a buffer never saved) by the size on its link (a size of 0
-  counts as none), is not read at all: the client sends a read's answer as one JSON-RPC line, and
-  acp-go-sdk drops the whole connection at a line over 10 MiB. A file whose
-  size is not known either way is asked for at most 102,402 lines, which
-  hold more than the 100 KB that is kept, so the cut is the same; a few very
-  long lines could still make an answer over 10 MiB, which ends the
-  connection. A file that is not included (too large, a folder, not a
-  regular file, not text, refused by the client, or not sent within the
-  10 seconds `fleet acp` waits for one prompt's files) stays a link,
-  followed by the reason, so the model can tell the user.
-- **When.** The reads happen once the prompt has the session, just before
-  it is submitted. A `session/cancel` during them ends the prompt
-  `cancelled`: no more files are asked for, and nothing reaches fleet. So
-  does the client going away during a read. Once the 10 seconds have run
-  out, no more files are asked for either. A `session/prompt` a client sends
-  as a notification rather than a request waits the 10 seconds out once and
-  gets none of its files, because acp-go-sdk hands an agent a read's answer
-  only once the notifications sent before it have been handled, the prompt
-  running the read among them. A resend is keyed by the
-  prompt as the client sent it, not by the files' text, so it is still
-  recognised as the same message when a file changed in between.
+  counts as none), is not read at all: the client sends a read's answer as one
+  JSON-RPC line, and acp-go-sdk drops the whole connection at a line over 10
+  MiB. A file whose size is not known either way is asked for at most 102,402
+  lines, which hold more than the 100 KB that is kept, so the cut is the same;
+  a few very long lines could still make an answer over 10 MiB, which ends the
+  connection. A file that is not included (too large, a folder, not a regular
+  file, not text, refused by the client, or not sent within the 10 seconds
+  `fleet acp` waits for one prompt's files) stays a link, followed by the
+  reason, so the model can tell the user.
+- **When.** The reads happen once the prompt has the session, just before it
+  is submitted. A `session/cancel` during them ends the prompt `cancelled`: no
+  more files are asked for, and nothing reaches fleet. So does the client
+  going away during a read. Once the 10 seconds have run out, no more files
+  are asked for either. A `session/prompt` a client sends as a notification
+  rather than a request waits the 10 seconds out once and gets none of its
+  files, because acp-go-sdk hands an agent a read's answer only once the
+  notifications sent before it have been handled, the prompt running the read
+  among them. A resend is keyed by the prompt as the client sent it, not by
+  the files' text, so it is still recognised as the same message when a file
+  changed in between.
 
 ## Errors
 
@@ -1067,36 +1066,34 @@ What shipped:
   prompt's session, and fleet gets its text; a `session/cancel` during a read
   ends the prompt `cancelled`, the next file is not asked for and nothing is
   sent to fleet; a prompt cancelled while it waits behind another for the
-  session reads nothing; the client going away during a read submits
-  nothing; and a resend after a lost answer keeps its key although the file
-  changed. Directly: the client's text is used, not the disk's; a file
-  linked twice is read once, and another link to it with a fragment is
-  marked as the same file; `localhost`, a percent-encoded path and a
-  fragment are read as the file, under its URI without the fragment and
-  with the link as sent beside it;
-  another scheme, another host and a relative URI stay links, unread; a
+  session reads nothing; the client going away during a read submits nothing;
+  and a resend after a lost answer keeps its key although the file changed.
+  Directly: the client's text is used, not the disk's; a file linked twice is
+  read once, and another link to it with a fragment is marked as the same
+  file; `localhost`, a percent-encoded path and a fragment are read as the
+  file, under its URI without the fragment and with the link as sent beside
+  it; another scheme, another host and a relative URI stay links, unread; a
   client without the capability, or a connection that cannot read, gets the
-  prompt as sent; a file over 1 MB on disk or by its link's size, a folder
-  and a FIFO are not read; a file of unknown size (a link's size of 0
-  included) is asked for a bounded number of lines, and a known one whole,
-  and an answer that may stop short of the file's end is not given a size;
-  a cut lands on a line break, or
-  between characters (never inside one) when the line break would keep
-  less than half; text with a NUL byte, a read the client refuses (with the
-  detail it gives) and a missing file stay links with the reason; files
-  share the 300 KB (one that fits what is left goes whole, the one that
-  reaches the limit is cut, and once less than 1 KB is left the next is
-  left out, unread when its size shows it cannot fit); and a client that
-  never answers is given up on after the wait, with the files after it not
-  asked for.
-- Checked live against a real `fleet serve` on 2026-10-13. PyCharm 2026.2
-  (AI Assistant 262.10968.223) links the file open in the editor with every
+  prompt as sent; a file over 1 MB on disk or by its link's size, a folder and
+  a FIFO are not read; a file of unknown size (a link's size of 0 included) is
+  asked for a bounded number of lines, and a known one whole, and an answer
+  that may stop short of the file's end is not given a size; a cut lands on a
+  line break, or between characters (never inside one) when the line break
+  would keep less than half; text with a NUL byte, a read the client refuses
+  (with the detail it gives) and a missing file stay links with the reason;
+  files share the 300 KB (one that fits what is left goes whole, the one that
+  reaches the limit is cut, and once less than 1 KB is left the next is left
+  out, unread when its size shows it cannot fit); and a client that never
+  answers is given up on after the wait, with the files after it not asked
+  for.
+- Checked live against a real `fleet serve` on 2026-10-13. PyCharm 2026.2 (AI
+  Assistant 262.10968.223) links the file open in the editor with every
   message and an `@`-attached file as well: `fleet acp` read them through
-  PyCharm, the model quoted the open file's first line, and a 376 KB file
-  that was both open and attached was read once and cut to its first 100 KB,
-  which the model reported. Emacs agent-shell 0.85.3 linked a 125 KB `@`
-  mention (over its embed limit); it was read through agent-shell and cut
-  the same way.
+  PyCharm, the model quoted the open file's first line, and a 376 KB file that
+  was both open and attached was read once and cut to its first 100 KB, which
+  the model reported. Emacs agent-shell 0.85.3 linked a 125 KB `@` mention
+  (over its embed limit); it was read through agent-shell and cut the same
+  way.
 - Tests in `internal/acp` cover the order of prompts and cancels through the
   real entry point, with test hooks that delay the SDK's handoff to the agent:
   a cancel sent right behind a prompt stops it, a prompt sent right after a
