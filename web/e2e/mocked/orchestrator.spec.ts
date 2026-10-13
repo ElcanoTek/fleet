@@ -32,12 +32,16 @@ const MCP_SERVERS = {
 // A task only GET /tasks/{id} serves: a task link must open it even though the
 // board's list does not include it.
 const LINKED_TASK = {
-  id: "33333333-3333-4333-8333-333333333333",
+  id: "3333abcd-3333-4333-8333-33333333abcd",
   prompt: "Pull the quarterly pacing report for the linked task",
   status: "success",
   created_at: new Date().toISOString(),
   agent_session_id: "sess-3",
 };
+
+// A task id whose by-id fetch fails with a server error: a failure that says
+// nothing about the task, so the link stays in the address bar for a reload.
+const UNAVAILABLE_TASK_ID = "55555555-5555-4555-8555-555555555555";
 
 const SEED_TASKS = [
   {
@@ -75,9 +79,17 @@ async function mockOrchestrator(page: Page, captured: { createBody?: Record<stri
     if (/^\/tasks\/[^/]+\/workspace\//.test(path)) {
       return route.fulfill({ contentType: "image/png", body: ONE_PX_PNG });
     }
-    // One task by id: what a task link (/orchestrator/tasks/<id>) loads.
-    if (/^\/tasks\/[^/]+$/.test(path) && method === "GET") {
-      const task = [...SEED_TASKS, LINKED_TASK].find((t) => path === `/tasks/${t.id}`);
+    // One task by id: what a task link (/orchestrator/tasks/<id>) loads. The
+    // board's own /tasks/tags, /tasks/upcoming and /tasks/estimate reads are
+    // not task ids and fall through.
+    const oneTask = /^\/tasks\/([^/]+)$/.exec(path);
+    if (oneTask && !["tags", "upcoming", "estimate"].includes(oneTask[1]) && method === "GET") {
+      if (oneTask[1] === UNAVAILABLE_TASK_ID) {
+        return route.fulfill({ status: 503, json: { detail: "try again later" } });
+      }
+      // Like the server, match the id in any case and answer with its
+      // canonical lowercase form.
+      const task = [...SEED_TASKS, LINKED_TASK].find((t) => oneTask[1].toLowerCase() === t.id);
       return task
         ? route.fulfill({ json: task })
         : route.fulfill({ status: 404, json: { detail: "task not found" } });
@@ -227,6 +239,24 @@ test("a link to a task that cannot be loaded says so", async ({ page }) => {
   await expect(page.getByText(/That task could not be opened/)).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Task Logs" })).toHaveCount(0);
   await expect(page).toHaveURL(/\/orchestrator$/);
+});
+
+test("a task link with an uppercased id still opens the task", async ({ page }) => {
+  await mockOrchestrator(page, {});
+  await page.goto(`/orchestrator/tasks/${LINKED_TASK.id.toUpperCase()}`);
+
+  const dialog = page.getByRole("dialog", { name: "Task Logs" });
+  await expect(dialog).toContainText(LINKED_TASK.prompt);
+  await expect(page).toHaveURL(/\/orchestrator$/);
+});
+
+test("a task link the server could not answer for now stays for a reload", async ({ page }) => {
+  await mockOrchestrator(page, {});
+  await page.goto(`/orchestrator/tasks/${UNAVAILABLE_TASK_ID}`);
+
+  await expect(page.getByText(/could not be loaded just now/)).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Task Logs" })).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`\\?task=${UNAVAILABLE_TASK_ID}$`));
 });
 
 test("the log viewer renders an agent-generated image inline (#271)", async ({ page }) => {

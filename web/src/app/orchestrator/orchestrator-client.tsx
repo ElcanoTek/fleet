@@ -94,7 +94,18 @@ function initialDashboardTab(): DashTab {
 // /orchestrator/tasks/<id> redirect. Read lazily like initialDashboardTab.
 function initialLinkedTaskId(): string | null {
   if (typeof window === "undefined") return null;
-  return new URLSearchParams(window.location.search).get("task")?.trim() || null;
+  // Lowercased: the server writes a task id in lowercase, so an uppercased
+  // link still matches the task that comes back.
+  return new URLSearchParams(window.location.search).get("task")?.trim().toLowerCase() || null;
+}
+
+// transientLoadError is a failure that says nothing about the task itself: no
+// HTTP answer at all (fetch rejects with a TypeError), a rate limit, or a
+// server error.
+function transientLoadError(err: unknown): boolean {
+  if (err instanceof TypeError) return true;
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status === "number" && (status === 429 || status >= 500);
 }
 
 // TASK_ID is the shape of a task id (a UUID). A ?task= value of any other
@@ -104,6 +115,8 @@ const TASK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // dropTaskParam takes ?task= back out of the address bar once the link has
 // been handled, so a reload shows the board rather than reopening the task.
+// A load that failed only for now (offline, rate-limited, a server error)
+// keeps it, so a reload retries the link.
 function dropTaskParam() {
   const url = new URL(window.location.href);
   if (!url.searchParams.has("task")) return;
@@ -186,20 +199,27 @@ function OrchestratorInner({
       : Promise.reject(new Error("not a task id"));
     load
       .then((task) => {
-        if (task.id !== linkedTaskId) throw new Error("a different task came back");
+        if (task.id.toLowerCase() !== linkedTaskId) throw new Error("a different task came back");
         if (!stale) setLogTask((current) => current ?? task);
       })
-      .catch(() => {
-        if (!stale) {
+      .then(
+        () => true,
+        (err: unknown) => {
+          if (stale) return true;
+          if (transientLoadError(err)) {
+            showToast("That task could not be loaded just now. Reload the page to try again.", "error");
+            return false;
+          }
           showToast(
             "That task could not be opened. It may have been deleted, or it is not visible to you.",
             "error",
           );
-        }
-      })
-      .finally(() => {
+          return true;
+        },
+      )
+      .then((handled) => {
         if (stale) return;
-        dropTaskParam();
+        if (handled) dropTaskParam();
         setLinkedTaskId(null);
       });
     return () => {
