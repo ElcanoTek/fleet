@@ -62,24 +62,33 @@ the settings switch loads, it compares the key its subscription records with
 `GET /push/vapid-public-key`. On a mismatch it unsubscribes, subscribes with
 the current key (permission is already granted, so no prompt), and asks
 `POST /push/renew` to move the signed-in user's row to the new subscription.
-The server moves it only if that user held the old row. A "not yours", or a
-`400` or `403` (a Viewer account cannot renew, as it cannot subscribe), makes
-the browser drop the new subscription too, so a renewal never signs up an
-account that did not turn notifications on in that browser. Any other failure
-(offline, a timeout, an expired session, a `5xx`) is no answer: the new
-subscription is kept, the endpoint it replaced is remembered in the browser,
-and the move is retried on the next check. A settings switch that loads in
-the meantime, and finds the server does not hold the new subscription, reads
-off with a note to reload, and keeps the subscription rather than letting it
-go. If the keys rotate again first, the renewal tries the remembered endpoint
-before the current one.
+The server moves it only if that user held the old row. A "not yours", a
+`400`, or a `403` the server marks as its own refusal (`{"error":"read_only"}`
+— a Viewer account cannot renew, as it cannot subscribe — or
+`{"error":"not_a_member"}`) makes the browser drop the new subscription too,
+so a renewal never signs up an account that did not turn notifications on in
+that browser. Any other failure is no answer: offline, a timeout, an expired
+session, a `5xx`, and any other `403` — notably the web app's origin check
+(`{"error":"forbidden"}`), which a misconfigured public origin turns on for
+every request and which says nothing about whose subscription it is. The new
+subscription is kept, the endpoints the server has not answered for are
+remembered in the browser, and the move is retried from each on the next
+check. A settings switch that loads in the meantime, and finds the server
+does not hold the new subscription, reads off with a note to reload, and
+keeps the subscription rather than letting it go. If the keys rotate again
+first, the renewal tries the remembered endpoints, oldest first, before the
+current one, and remembers the current one too if that attempt gets no
+answer: a move the server made whose answer was lost leaves the row at the
+endpoint that renewal made, so each unconfirmed endpoint is kept until the
+server answers for it (a definite "not yours" forgets it). The browser keeps
+at most the 8 most recent; an older one is forgotten.
 
 The check, the switch's own reads and replacement, and sign-out's clean-up run
 under one browser-wide Web Lock, so two tabs never replace the subscription at
 once. The check's and the switch's requests made while holding it give up
 after 10 seconds, and sign-out waits at most a second for it before cleaning
-up anyway. Sign-out also deletes the row of a renewal the server never
-confirmed.
+up anyway. Sign-out also deletes the rows at every endpoint a renewal the
+server never confirmed left remembered.
 
 Limits: until a browser next opens fleet its notifications do not arrive; a
 browser that does not report the key its subscription was made with is not

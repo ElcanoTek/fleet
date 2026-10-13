@@ -16,7 +16,7 @@ const OLD_KEY = keyBytes(1);
 const NEW_KEY = keyBytes(2);
 
 type Browser = { current: ReturnType<typeof fakeSub> | null; events: string[] };
-type RenewAnswer = { renewed: boolean } | "network-error" | number;
+type RenewAnswer = { renewed: boolean } | "network-error" | number | { status: number; error: string };
 
 function fakeSub(endpoint: string, key: Uint8Array, browser: Browser) {
   const sub = {
@@ -84,6 +84,7 @@ function stubBrowser(opts: {
       const answer = typeof opts.renew === "function" ? opts.renew(oldEndpoint) : opts.renew;
       if (answer === "network-error") throw new TypeError("network down");
       if (typeof answer === "number") return new Response("boom", { status: answer });
+      if (answer && "status" in answer) return Response.json({ error: answer.error }, { status: answer.status });
       return Response.json(answer ?? { renewed: true });
     }
     return new Response(null, { status: 404 });
@@ -169,8 +170,13 @@ describe("ensureCurrentPushKey", () => {
     }
   });
 
-  it("takes a 400 or 403 as a final no: a Viewer cannot renew, so it is not retried", async () => {
-    for (const refusal of [403, 400]) {
+  it("takes a 400, or a 403 the server marks as its own refusal, as a final no: a Viewer cannot renew, so it is not retried", async () => {
+    const refusals: RenewAnswer[] = [
+      { status: 403, error: "read_only" },
+      { status: 403, error: "not_a_member" },
+      400,
+    ];
+    for (const refusal of refusals) {
       window.localStorage.clear();
       const b = stubBrowser({ renew: refusal });
       expect(await (await loadCheck())()).toBe("dropped");
@@ -178,6 +184,79 @@ describe("ensureCurrentPushKey", () => {
       expect(window.localStorage.getItem("fleet.push.pendingRenewal")).toBeNull();
       vi.unstubAllGlobals();
     }
+  });
+
+  it("keeps the new subscription on a 403 that is not the server's refusal, such as the web app's origin check", async () => {
+    // A deployment whose public origin is misconfigured rejects every POST
+    // with {"error":"forbidden"}; that says nothing about whose subscription
+    // this is, so letting it go would turn notifications off on every renewal.
+    const failures: RenewAnswer[] = [{ status: 403, error: "forbidden" }, 403];
+    for (const failure of failures) {
+      window.localStorage.clear();
+      const b = stubBrowser({ renew: failure });
+      expect(await (await loadCheck())()).toBe("pending");
+      expect(b.browser.current?.endpoint).toBe("https://relay.example/new");
+      expect(JSON.parse(window.localStorage.getItem("fleet.push.pendingRenewal")!)).toEqual([
+        "https://relay.example/old",
+      ]);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("remembers every unconfirmed endpoint, so a lost answer and a second rotation do not strand the row", async () => {
+    // Renewal original → old reached the server but its answer was lost, so
+    // "original" is pending and the row now sits at "old". The keys rotate
+    // again and this renewal gets no answer either.
+    window.localStorage.setItem("fleet.push.pendingRenewal", JSON.stringify(["https://relay.example/original"]));
+    const b = stubBrowser({ renew: "network-error" });
+    expect(await (await loadCheck())()).toBe("pending");
+    expect(JSON.parse(window.localStorage.getItem("fleet.push.pendingRenewal")!)).toEqual([
+      "https://relay.example/original",
+      "https://relay.example/old",
+    ]);
+    vi.unstubAllGlobals();
+
+    // Next load, back online: the subscription is on the current key; the
+    // server says no for "original" and moves the row from "old".
+    const again = stubBrowser({
+      subKey: NEW_KEY,
+      renew: (oldEndpoint) => ({ renewed: oldEndpoint === "https://relay.example/old" }),
+    });
+    again.browser.current = b.browser.current;
+    expect(await (await loadCheck())()).toBe("renewed");
+    expect(again.events.filter((e) => e.startsWith("POST /api/push/renew"))).toEqual([
+      renewBody("https://relay.example/original", "https://relay.example/new"),
+      renewBody("https://relay.example/old", "https://relay.example/new"),
+    ]);
+    expect(again.browser.current?.endpoint).toBe("https://relay.example/new");
+    expect(window.localStorage.getItem("fleet.push.pendingRenewal")).toBeNull();
+  });
+
+  it("forgets a pending endpoint the server said no to, and keeps the ones it did not answer", async () => {
+    window.localStorage.setItem(
+      "fleet.push.pendingRenewal",
+      JSON.stringify(["https://relay.example/a", "https://relay.example/b"]),
+    );
+    const b = stubBrowser({
+      subKey: NEW_KEY,
+      renew: (oldEndpoint) => (oldEndpoint === "https://relay.example/a" ? { renewed: false } : 503),
+    });
+    expect(await (await loadCheck())()).toBe("pending");
+    expect(b.browser.current?.endpoint).toBe("https://relay.example/old");
+    expect(JSON.parse(window.localStorage.getItem("fleet.push.pendingRenewal")!)).toEqual([
+      "https://relay.example/b",
+    ]);
+  });
+
+  it("keeps at most the eight most recent pending endpoints", async () => {
+    const many = Array.from({ length: 10 }, (_, i) => `https://relay.example/p${i}`);
+    window.localStorage.setItem("fleet.push.pendingRenewal", JSON.stringify(many));
+    stubBrowser({ renew: "network-error" });
+    expect(await (await loadCheck())()).toBe("pending");
+    const kept = JSON.parse(window.localStorage.getItem("fleet.push.pendingRenewal")!) as string[];
+    expect(kept).toHaveLength(8);
+    expect(kept.at(-1)).toBe("https://relay.example/old");
+    expect(kept[0]).toBe("https://relay.example/p3");
   });
 
   it("after a second rotation, tries the endpoint a pending renewal replaced before this one", async () => {
@@ -303,10 +382,17 @@ describe("withPushLock", () => {
     expect(held).toEqual([true]);
   });
 
-  it("takePendingRenewal hands over the remembered endpoint once", async () => {
-    window.localStorage.setItem("fleet.push.pendingRenewal", "https://relay.example/original");
+  it("takePendingRenewal hands over the remembered endpoints once", async () => {
     const { takePendingRenewal } = await import("./pushKey");
-    expect(takePendingRenewal()).toBe("https://relay.example/original");
-    expect(takePendingRenewal()).toBeNull();
+    window.localStorage.setItem(
+      "fleet.push.pendingRenewal",
+      JSON.stringify(["https://relay.example/original", "https://relay.example/old"]),
+    );
+    expect(takePendingRenewal()).toEqual(["https://relay.example/original", "https://relay.example/old"]);
+    expect(takePendingRenewal()).toEqual([]);
+    // The single endpoint an earlier version stored.
+    window.localStorage.setItem("fleet.push.pendingRenewal", "https://relay.example/original");
+    expect(takePendingRenewal()).toEqual(["https://relay.example/original"]);
+    expect(window.localStorage.getItem("fleet.push.pendingRenewal")).toBeNull();
   });
 });

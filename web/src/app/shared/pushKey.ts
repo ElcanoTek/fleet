@@ -45,35 +45,56 @@ export function sameKey(a: string, b: string): boolean {
   return norm(a) === norm(b);
 }
 
-// PENDING_RENEWAL remembers, per browser, the endpoint a renewal replaced
+// PENDING_RENEWAL remembers, per browser, the endpoints renewals replaced
 // when the server gave no answer to the move (offline, a timeout, a 5xx, an
 // expired session). The new subscription is kept, and the next check retries
-// the move from it.
+// the move from each of them. It is a set, not one endpoint: a move the
+// server made whose answer was lost leaves the row at the endpoint that
+// renewal made, and a later rotation must still be able to move it from
+// there — so every unconfirmed endpoint is kept until the server answers for
+// it, up to MAX_PENDING_RENEWALS (the most recent ones).
 const PENDING_RENEWAL = "fleet.push.pendingRenewal";
+const MAX_PENDING_RENEWALS = 8;
 
-function readPending(): string | null {
-  try {
-    return window.localStorage.getItem(PENDING_RENEWAL);
-  } catch {
-    return null;
-  }
+// dedupe keeps the first of each non-empty endpoint, in order.
+function dedupe(endpoints: (string | null | undefined)[]): string[] {
+  return endpoints.filter((e, i, all): e is string => !!e && all.indexOf(e) === i);
 }
 
-function writePending(endpoint: string | null): void {
+function readPending(): string[] {
+  let raw: string | null;
   try {
-    if (endpoint) window.localStorage.setItem(PENDING_RENEWAL, endpoint);
+    raw = window.localStorage.getItem(PENDING_RENEWAL);
+  } catch {
+    return [];
+  }
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return dedupe(parsed.filter((e): e is string => typeof e === "string"));
+  } catch {
+    // An endpoint is a URL, never JSON: the single endpoint an earlier
+    // version stored.
+  }
+  return [raw];
+}
+
+function writePending(endpoints: string[]): void {
+  const keep = dedupe(endpoints).slice(-MAX_PENDING_RENEWALS);
+  try {
+    if (keep.length) window.localStorage.setItem(PENDING_RENEWAL, JSON.stringify(keep));
     else window.localStorage.removeItem(PENDING_RENEWAL);
   } catch {
     // Without storage the renewal is simply not retried.
   }
 }
 
-// takePendingRenewal returns the endpoint of a renewal the server never
-// confirmed, and forgets it: sign-out deletes that row too, since it belongs
-// to the account signing out.
-export function takePendingRenewal(): string | null {
+// takePendingRenewal returns the endpoints of renewals the server never
+// confirmed, and forgets them: sign-out deletes those rows too, since any of
+// them may be the account's that is signing out.
+export function takePendingRenewal(): string[] {
   const pending = readPending();
-  writePending(null);
+  writePending([]);
   return pending;
 }
 
@@ -127,10 +148,14 @@ export function ensureCurrentPushKey(): Promise<PushKeyCheck> {
 }
 
 // askRenew asks the server to move this user's row from oldEndpoint to sub:
-// true or false is the server's answer, null is none. A 400 or 403 is an
-// answer — a request the server will never accept, such as from a Viewer
-// account, which may not subscribe either — so it counts as false; any other
-// failure (offline, a timeout, an expired session, a 5xx) is no answer.
+// true or false is the server's answer, null is none. A 400 is an answer — a
+// request the server will never accept — and so is a 403 the server marks as
+// its own refusal: {"error":"read_only"} for a Viewer account, which may not
+// subscribe either, or {"error":"not_a_member"}. Both count as false. Any
+// other 403 is not about this subscription — the web app's origin check
+// ({"error":"forbidden"}, a misconfigured public origin) or a proxy in front
+// of it — so, like every other failure (offline, a timeout, an expired
+// session, a 5xx), it is no answer.
 async function askRenew(oldEndpoint: string, sub: PushSubscription): Promise<boolean | null> {
   try {
     const res = await fetch("/api/push/renew", {
@@ -139,7 +164,8 @@ async function askRenew(oldEndpoint: string, sub: PushSubscription): Promise<boo
       body: JSON.stringify({ old_endpoint: oldEndpoint, ...sub.toJSON() }),
       signal: lockedFetchSignal(),
     });
-    if (res.status === 400 || res.status === 403) return false;
+    if (res.status === 400) return false;
+    if (res.status === 403) return (await serverRefusal(res)) ? false : null;
     if (!res.ok) return null;
     return ((await res.json()) as { renewed?: boolean }).renewed === true;
   } catch {
@@ -147,23 +173,38 @@ async function askRenew(oldEndpoint: string, sub: PushSubscription): Promise<boo
   }
 }
 
+// SERVER_REFUSALS are the 403 error codes the server sends for a caller it
+// will never let renew.
+const SERVER_REFUSALS = new Set(["read_only", "not_a_member"]);
+
+async function serverRefusal(res: Response): Promise<boolean> {
+  try {
+    const { error } = (await res.json()) as { error?: unknown };
+    return typeof error === "string" && SERVER_REFUSALS.has(error);
+  } catch {
+    return false;
+  }
+}
+
 // renew moves this user's row to sub from the first of oldEndpoints the
 // server confirms, and settles what the browser keeps: only an explicit "not
-// yours" for every one lets the new subscription go; no answer keeps it and
-// remembers the endpoint for the next check.
+// yours" for every one lets the new subscription go. No answer keeps it and
+// remembers every endpoint the server has not yet answered for — the one
+// asked and the ones not reached — for the next check; an endpoint the
+// server said no to is forgotten.
 async function renew(oldEndpoints: string[], sub: PushSubscription): Promise<PushKeyCheck> {
-  for (const oldEndpoint of oldEndpoints) {
+  for (const [i, oldEndpoint] of oldEndpoints.entries()) {
     const answer = await askRenew(oldEndpoint, sub);
     if (answer === null) {
-      writePending(oldEndpoint);
+      writePending(oldEndpoints.slice(i));
       return "pending";
     }
     if (answer) {
-      writePending(null);
+      writePending([]);
       return "renewed";
     }
   }
-  writePending(null);
+  writePending([]);
   // Not this user's subscription (another account's, on a shared browser):
   // let the new one go too, so the settings switch reads off and the user
   // can turn notifications on again.
@@ -196,8 +237,10 @@ async function checkPushKey(): Promise<PushKeyCheck> {
   if (sameKey(known, key)) {
     // On the current key, but a renewal the server never confirmed is
     // retried now.
-    const pending = readPending();
-    return pending && pending !== sub.endpoint ? renew([pending], sub) : "current";
+    const pending = readPending().filter((e) => e !== sub.endpoint);
+    if (pending.length) return renew(pending, sub);
+    writePending([]);
+    return "current";
   }
 
   // Made with an earlier key. The browser will not subscribe with a new key
@@ -215,8 +258,7 @@ async function checkPushKey(): Promise<PushKeyCheck> {
     // settings switch now reads off, and turning it on tries again.
     return "failed";
   }
-  // A renewal still pending from an earlier rotation means the user's row may
-  // still sit at that endpoint rather than this one: try it first.
-  const pending = readPending();
-  return renew(pending && pending !== sub.endpoint ? [pending, sub.endpoint] : [sub.endpoint], fresh);
+  // Renewals still pending from earlier rotations mean the user's row may
+  // still sit at one of those endpoints rather than this one: try them first.
+  return renew(dedupe([...readPending(), sub.endpoint]), fresh);
 }

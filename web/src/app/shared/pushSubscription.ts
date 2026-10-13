@@ -32,7 +32,7 @@ const PUSH_LOCK_WAIT_MS = 1000;
 export function dropPushSubscription(): Promise<void> {
   return withPushLock(async () => {
     const sub = await browserPushSubscription();
-    const endpoints = [sub?.endpoint, takePendingRenewal()].filter(
+    const endpoints = [sub?.endpoint, ...takePendingRenewal()].filter(
       (e, i, all): e is string => !!e && all.indexOf(e) === i,
     );
     await Promise.allSettled([

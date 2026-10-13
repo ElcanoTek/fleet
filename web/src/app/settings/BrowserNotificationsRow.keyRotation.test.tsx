@@ -178,7 +178,9 @@ describe("BrowserNotificationsRow after a VAPID key rotation", () => {
     expect(sw).toHaveAttribute("aria-checked", "false");
     expect(browser.current?.endpoint).toBe("https://relay.example/new");
     expect(screen.getByText(/could not be renewed after a key change/)).toBeInTheDocument();
-    expect(window.localStorage.getItem("fleet.push.pendingRenewal")).toBe("https://relay.example/old");
+    expect(JSON.parse(window.localStorage.getItem("fleet.push.pendingRenewal")!)).toEqual([
+      "https://relay.example/old",
+    ]);
   });
 
   it("checks with the server and stores a new subscription only while holding the push lock", async () => {

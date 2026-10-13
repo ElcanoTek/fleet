@@ -10,6 +10,8 @@ const verifyOriginMock = vi.fn();
 
 vi.mock("@/app/lib/auth", () => ({
   getServerSession: (...args: unknown[]) => getServerSessionMock(...args),
+  // The real origin check, used by one test, falls back to the Host header.
+  getConfiguredOrigin: () => null,
 }));
 vi.mock("@/app/lib/csrf", () => ({
   verifyOrigin: (...args: unknown[]) => verifyOriginMock(...args),
@@ -91,6 +93,37 @@ describe("POST /api/push/renew", () => {
     });
     const res = await POST(renewRequest());
     expect(res.status).toBe(403);
+    expect(chatServerFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("passes the server's Viewer refusal through with its read_only marker", async () => {
+    // The browser tells this 403 (not this user's to renew: drop the new
+    // subscription) from the origin check's (no answer: retry) by its body.
+    chatServerFetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: "read_only" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const res = await POST(renewRequest());
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "read_only" });
+  });
+
+  it("answers an origin-check failure with a 403 that carries no server refusal marker", async () => {
+    const { verifyOrigin } = await vi.importActual<typeof import("@/app/lib/csrf")>("@/app/lib/csrf");
+    verifyOriginMock.mockImplementation(verifyOrigin);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await POST(
+      new NextRequest("https://fleet.example.com/api/push/renew", {
+        method: "POST",
+        headers: { origin: "https://elsewhere.example" },
+        body: JSON.stringify(RENEW),
+      }),
+    );
+    expect(res.status).toBe(403);
+    const { error } = (await res.json()) as { error: string };
+    expect(["read_only", "not_a_member"]).not.toContain(error);
     expect(chatServerFetchMock).not.toHaveBeenCalled();
   });
 
