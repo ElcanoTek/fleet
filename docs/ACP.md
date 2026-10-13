@@ -435,8 +435,8 @@ agent runs" under "Buzz"), `--server` stays `http://localhost:8080` and
 `fleet` must be built for the editor's computer, and be v2026.10.13.9 or
 later: an older one sends PyCharm's files on as bare links and ends a new
 chat's first reply seconds late. For building `fleet` and copying the token
-file without printing it, see steps 1 and 4 of "Add fleet in Buzz Desktop" (step 1's minimum version
-is Buzz's). The token can act as any fleet user: keep the file readable only by
+file without printing it, see steps 1 and 4 of "Add fleet in Buzz Desktop"
+(step 1's minimum version is Buzz's). The token can act as any fleet user: keep the file readable only by
 you, and never put the token itself in `acp.json`. Give `command` an absolute
 path (checked): an IDE started from the Dock may not see your shell's `PATH`.
 PyCharm starts `fleet acp` for each new chat, and an edit to `acp.json` applies
