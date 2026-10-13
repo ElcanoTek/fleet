@@ -58,7 +58,7 @@ const revisedMarker = "\n\n— revised answer —\n\n"
 // one governed turn; and stop one server-side.
 type turnClient interface {
 	CheckIdentity(ctx context.Context) error
-	StreamInput(ctx context.Context, message, convID, inputID string, onEvent func(chattui.Event)) (string, error)
+	StreamTurn(ctx context.Context, message, convID, inputID string, onEvent func(chattui.Event)) (string, <-chan struct{}, error)
 	Cancel(convID, turnID string) error
 	CancelInput(convID, inputID string) error
 }
@@ -178,9 +178,10 @@ type session struct {
 	// its turn's output and whatever that prompt's outcome; sending clears
 	// it, so it goes out at most once per session (sendMCPNotice). A prompt
 	// that ends before that point (refused, cancelled before it got the
-	// session, or left when the client went away) leaves it for the next. One
-	// cancelled while the notice was being written is not submitted, but the
-	// notice has gone out, so it is not repeated. Under mu.
+	// session or while the last prompt's turn was finishing, or left when the
+	// client went away) leaves it for the next. One cancelled while the
+	// notice was being written is not submitted, but the notice has gone
+	// out, so it is not repeated. Under mu.
 	mcpNotice string
 	// unsettled holds, per prompt text (by its hash), the key of every
 	// prompt whose outcome is unknown: the request may have been accepted
@@ -216,6 +217,16 @@ type session struct {
 	// message once per waiter. One small entry per confirmed Stop of a lost
 	// answer, never evicted, like stoppedKeys.
 	successors map[string]string
+	// rest is the rest of the last prompt's stream, still being read after
+	// its turn ended (chattui's StreamTurn): closed, or nil, once the stream
+	// has ended. The server keeps a turn's stream open past its terminal
+	// frame for the turn's last work (titling a new conversation, a few
+	// seconds) and counts the turn as running until then, so a message posted
+	// to the conversation before then is queued behind it, and its answer
+	// would reach the web chat but never the client. The prompt answers as its
+	// turn ends; the session's next prompt waits for rest (awaitRest) before
+	// it is submitted. Under mu.
+	rest <-chan struct{}
 }
 
 // target returns the conversation a prompt under key is sent to: the one
@@ -728,8 +739,69 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	if cancelCtx.Err() != nil {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
 	}
+	// Nor submitted while the last prompt's turn is still finishing on the
+	// server (session.rest): fleet would queue it, and its answer would never
+	// reach the client. A session/cancel during that wait ends it unsent.
+	if !sess.awaitRest(cancelCtx) {
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
+	}
 	key := idempotencyKey(p.MessageId, sess, message, earlier)
 	return a.promptOnce(ctx, cancelCtx, p, sess, message, key)
+}
+
+// awaitRest waits for the rest of the last prompt's stream to end (see
+// session.rest), or for stop. ok is false when stop ended the wait. The wait
+// is bounded: readRest ends the read restWait after the turn ended. Under
+// sess.mu.
+func (s *session) awaitRest(stop context.Context) (ok bool) {
+	if s.rest == nil {
+		return true
+	}
+	select {
+	case <-s.rest:
+		s.rest = nil
+		// The client going away also ends the read (readRest), so both may
+		// be ready: stop decides.
+		return stop.Err() == nil
+	case <-stop.Done():
+		return false
+	}
+}
+
+// restWait bounds how long a turn's stream is read past its terminal frame
+// (see session.rest). The server titles a new conversation within 18 s, or
+// gives up on it, before it ends the stream; this leaves room for the rest of
+// its post-turn bookkeeping. A var so tests can shorten it.
+var restWait = 30 * time.Second
+
+// readOn hands rest, a turn's stream past its terminal frame, to readRest
+// and makes it the session's (session.rest), so the answer goes out now and
+// the session's next prompt waits for the stream to end. It returns what
+// ends the stream as the prompt returns: endStream itself when the stream
+// has ended already, else nothing, since readRest ends it. Under sess.mu.
+func (a *Agent) readOn(sess *session, rest <-chan struct{}, endStream context.CancelFunc) context.CancelFunc {
+	select {
+	case <-rest:
+		return endStream
+	default:
+	}
+	sess.rest = rest
+	go a.readRest(rest, endStream)
+	return func() {}
+}
+
+// readRest ends the read of rest, a turn's stream past its terminal frame,
+// by cancelling it (stopRead) once it has ended on its own, restWait has
+// passed, or the client has gone.
+func (a *Agent) readRest(rest <-chan struct{}, stopRead context.CancelFunc) {
+	t := time.NewTimer(restWait)
+	defer t.Stop()
+	select {
+	case <-rest:
+	case <-t.C:
+	case <-a.lifetime.Done():
+	}
+	stopRead()
 }
 
 // promptOnce submits the prompt under one idempotency key and translates the
@@ -754,7 +826,10 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 	}
 	defer cancelStop()
 	streamCtx, cancelStream := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancelStream()
+	// The stream ends as the prompt returns, unless its turn ended with the
+	// stream still open: readRest then reads on, and ends it (readOn).
+	endStream := cancelStream
+	defer func() { endStream() }()
 
 	// Notifications must still go out while the turn is being cancelled, so
 	// they are sent on a context that ignores the turn's cancellation.
@@ -782,10 +857,11 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 	streamDone := make(chan struct{})
 	stopped := make(chan stopOutcome, 1)
 	go a.stopTurn(stopCtx, tr, key, streamDone, stopped, cancelStream)
-	convID, streamErr := a.client.StreamInput(streamCtx, message, target, key, tr.handle)
+	convID, rest, streamErr := a.client.StreamTurn(streamCtx, message, target, key, tr.handle)
 	close(streamDone)
 	stop := <-stopped
 	stopErr := stop.err
+	endStream = a.readOn(sess, rest, cancelStream)
 	if convID == "" {
 		convID = tr.conversationID()
 	}
