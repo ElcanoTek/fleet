@@ -37,7 +37,13 @@ channel consumes.
    permission, registers `web/public/sw.js`, subscribes with the server's
    public key (fetched from `GET /push/vapid-public-key` — it is never baked
    into the web build), and stores the subscription server-side. Disable
-   unsubscribes the browser and deletes the stored row.
+   unsubscribes the browser and deletes the stored row. The switch reads
+   **on** only when the server holds this browser's subscription for the
+   signed-in user (`POST /push/status`): a subscription the browser holds for
+   another account, or one the server has dropped, reads **off** and the
+   browser lets it go. Signing out from the account menu (every surface's
+   menu goes through the one `signOut`) also lets it go and deletes the
+   stored row.
 
 **Default OFF.** With any of the three `FLEET_VAPID_*` vars unset, the push
 subsystem does not exist: the `/push/*` endpoints answer `501 Not Implemented`
@@ -83,9 +89,10 @@ Notes on honest scope:
 | --- | --- | --- |
 | `/push/subscribe` | POST | Upsert the caller's `PushSubscription` (endpoint + keys), keyed on the endpoint. 204. |
 | `/push/unsubscribe` | DELETE | Delete the caller's row for the endpoint (owner-scoped). Idempotent 204. |
+| `/push/status` | POST | `{"subscribed": bool}`: whether the caller holds the row for the endpoint (owner-scoped read; the endpoint rides in the body because it is a capability URL). |
 | `/push/vapid-public-key` | GET | `{"key": "<VAPID public key>"}` — non-secret. |
 
-All three return `501` with `{"error":"push_disabled", ...}` when
+All four return `501` with `{"error":"push_disabled", ...}` when
 unconfigured. The browser reaches them through the Next.js proxies under
 `/api/push/*` (session cookie + origin-checked like every mutating route).
 
@@ -104,6 +111,16 @@ unconfigured. The browser reaches them through the Next.js proxies under
   the authenticated email; a user can only manage (and receive on) their own
   subscriptions. Endpoint URLs are capability URLs, so log lines reduce them
   to their host.
+- **A browser is not an account.** The browser holds one subscription, but
+  the account that stored it is whoever turned notifications on there.
+  Sign-out through the account menu (`signOut`) unsubscribes the browser and
+  deletes the row, so the next person to use it does not get the signed-out
+  account's alerts, and the settings page lets go of a subscription the
+  server does not hold for the signed-in user. A session that ends any other
+  way runs none of this: one that expires, one revoked server-side, a
+  central-Auth back-channel logout, or the sign-out form on the no-access
+  page. Until someone opens Settings in that browser or turns notifications
+  on there, the previous account's alerts can still arrive in it.
 - **Subscription hygiene:** a `404`/`410` from the relay deletes the expired
   row during the send fan-out.
 

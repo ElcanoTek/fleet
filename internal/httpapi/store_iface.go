@@ -248,11 +248,13 @@ type chatStore interface {
 	HasArmedApprovals(ctx context.Context, convID string) (bool, error)
 	CountUserMessagesAfterTimestamp(ctx context.Context, convID string, ts int64) (int64, error)
 
-	// Browser Web Push subscriptions (#292): the POST /push/subscribe upsert
-	// and the owner-scoped DELETE /push/unsubscribe. (The send path reads
-	// subscriptions through internal/webpush's own store seam, not this one.)
+	// Browser Web Push subscriptions (#292): the POST /push/subscribe upsert,
+	// the owner-scoped DELETE /push/unsubscribe, and the owner-scoped
+	// POST /push/status read. (The send path reads subscriptions through
+	// internal/webpush's own store seam, not this one.)
 	UpsertPushSubscription(ctx context.Context, userEmail, endpoint, keysAuth, keysP256dh string) error
 	DeleteUserPushSubscription(ctx context.Context, userEmail, endpoint string) error
+	HasUserPushSubscription(ctx context.Context, userEmail, endpoint string) (bool, error)
 
 	// Health summary (#301): DB liveness + pool snapshot + chat-side LLM spend.
 	Ping(ctx context.Context) error
