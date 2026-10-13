@@ -104,6 +104,16 @@ needs approval, the reply ends with a link or a `fleet chat --approve` command,
 because approvals are settled in fleet, not in the client. Images and audio are
 not accepted.
 
+Files you attach in your editor reach fleet as the editor sends them. When it
+sends only a link to a file, as JetBrains does for a file you attach and for the
+file open in the editor, `fleet acp` asks the editor for the file's text, if the
+editor lets agents read files (JetBrains and Emacs agent-shell do), and sends
+that with your message. Up to 100 KB of a file, and 300 KB of all the files a
+message links to, are sent: a longer file is cut, and one over 1 MB is not sent
+at all; either way the assistant is told. In JetBrains this means the file open
+in the editor goes to fleet with every message, so close a file holding secrets
+before you chat.
+
 If your operator has added fleet to your Buzz workspace, you @mention it
 there. By default only the person who set it up, and their own agents, can
 instruct it; your operator can let others too. Its reply comes once its turn
@@ -496,7 +506,8 @@ without **Check result**. If you have turned on browser notifications
 (**Settings → General → Browser notifications**), you also get one when
 such an action finishes (**✓ Done** or **✗ Not applied**, named by the card's
 title), and one when the assistant could not carry on by itself after your
-approvals; clicking it opens the conversation.
+approvals; clicking it opens the conversation, in your Chat tab if you have
+one open (it reloads, so an unsent message there is lost) or in a new one.
 
 Browser notifications go to the account that turned them on in that browser.
 Signing out from the account menu turns them off there, so the next person to

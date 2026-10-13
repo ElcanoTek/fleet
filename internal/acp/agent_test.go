@@ -134,10 +134,13 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// recordingClient is the ACP client side: it records every session/update.
+// recordingClient is the ACP client side: it records every session/update,
+// and every fs/read_text_file, which read answers (nil: refused).
 type recordingClient struct {
 	mu      sync.Mutex
 	updates []acpsdk.SessionUpdate
+	read    func(context.Context, acpsdk.ReadTextFileRequest) (acpsdk.ReadTextFileResponse, error)
+	reads   []acpsdk.ReadTextFileRequest
 }
 
 func (c *recordingClient) SessionUpdate(_ context.Context, n acpsdk.SessionNotification) error {
@@ -162,8 +165,15 @@ func (c *recordingClient) text() string {
 func (c *recordingClient) RequestPermission(context.Context, acpsdk.RequestPermissionRequest) (acpsdk.RequestPermissionResponse, error) {
 	return acpsdk.RequestPermissionResponse{}, errors.New("fleet acp must not request permission")
 }
-func (c *recordingClient) ReadTextFile(context.Context, acpsdk.ReadTextFileRequest) (acpsdk.ReadTextFileResponse, error) {
-	return acpsdk.ReadTextFileResponse{}, errors.New("unexpected fs read")
+func (c *recordingClient) ReadTextFile(ctx context.Context, p acpsdk.ReadTextFileRequest) (acpsdk.ReadTextFileResponse, error) {
+	c.mu.Lock()
+	c.reads = append(c.reads, p)
+	read := c.read
+	c.mu.Unlock()
+	if read == nil {
+		return acpsdk.ReadTextFileResponse{}, errors.New("unexpected fs read")
+	}
+	return read(ctx, p)
 }
 func (c *recordingClient) WriteTextFile(context.Context, acpsdk.WriteTextFileRequest) (acpsdk.WriteTextFileResponse, error) {
 	return acpsdk.WriteTextFileResponse{}, errors.New("unexpected fs write")
