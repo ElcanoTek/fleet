@@ -32,6 +32,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -82,6 +83,15 @@ type Agent struct {
 	version   string
 
 	conn updater
+	// files reads a file through the client (fs/read_text_file): the
+	// connection, when it can (SetConnection). clientReads is whether the
+	// client said in initialize that it answers such reads. Both are needed
+	// before a prompt's file links are read (withLinkedFiles).
+	files       fileReader
+	clientReads atomic.Bool
+	// connDone closes when the client's connection does: the SDK
+	// connection's Done, when it has one (SetConnection). See catchHangUp.
+	connDone <-chan struct{}
 	// lifetime ends when the ACP client goes away: its connection closes
 	// (stdin EOF, see SetConnection), a write to stdout fails (it stopped
 	// reading), or `fleet acp` gets a signal to stop (run). hangUp ends it.
@@ -178,9 +188,10 @@ type session struct {
 	// its turn's output and whatever that prompt's outcome; sending clears
 	// it, so it goes out at most once per session (sendMCPNotice). A prompt
 	// that ends before that point (refused, cancelled before it got the
-	// session, or left when the client went away) leaves it for the next. One
-	// cancelled while the notice was being written is not submitted, but the
-	// notice has gone out, so it is not repeated. Under mu.
+	// session or while the files it links to were read, or left when the
+	// client went away) leaves it for the next. One cancelled while the
+	// notice was being written is not submitted, but the notice has gone
+	// out, so it is not repeated. Under mu.
 	mcpNotice string
 	// unsettled holds, per prompt text (by its hash), the key of every
 	// prompt whose outcome is unknown: the request may have been accepted
@@ -322,11 +333,32 @@ func NewAgent(client turnClient, cfgErr error, publicURL string, timeout time.Du
 // lifetime).
 func (a *Agent) SetConnection(c updater) {
 	a.conn = c
+	if r, ok := c.(fileReader); ok {
+		a.files = r
+	}
 	if d, ok := c.(interface{ Done() <-chan struct{} }); ok {
+		a.connDone = d.Done()
 		go func() {
 			<-d.Done()
 			a.hangUp()
 		}()
+	}
+}
+
+// catchHangUp ends the agent's lifetime now if the client's connection has
+// closed. The watcher SetConnection starts does that too, but on its own
+// goroutine: a request the agent sent the client (a file read) fails on the
+// same close, and the prompt that sent it must not run on, toward
+// submission, before the watcher has run. hangUp cancels every prompt's
+// stop signal synchronously, so the prompt's next check sees it.
+func (a *Agent) catchHangUp() {
+	if a.connDone == nil {
+		return
+	}
+	select {
+	case <-a.connDone:
+		a.hangUp()
+	default:
 	}
 }
 
@@ -336,7 +368,12 @@ func (a *Agent) SetConnection(c updater) {
 // sends, even the stdio ones ACP expects every agent to support), no auth
 // methods (identity is the operator-provisioned fleet user, resolved
 // host-side from the environment).
-func (a *Agent) Initialize(_ context.Context, _ acpsdk.InitializeRequest) (acpsdk.InitializeResponse, error) {
+//
+// Of the client's capabilities only fs.readTextFile is used: a client that
+// answers fs/read_text_file has the files its prompts link to read through
+// it (withLinkedFiles).
+func (a *Agent) Initialize(_ context.Context, p acpsdk.InitializeRequest) (acpsdk.InitializeResponse, error) {
+	a.clientReads.Store(p.ClientCapabilities.Fs.ReadTextFile)
 	title := "fleet"
 	return acpsdk.InitializeResponse{
 		ProtocolVersion: SpecVersion,
@@ -728,8 +765,18 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	if cancelCtx.Err() != nil {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
 	}
+	// The files the prompt links to are read now, once it holds the session,
+	// so a prompt cancelled while it waited reads nothing and the text is
+	// what the files hold as it is submitted. What is submitted carries them;
+	// message, the prompt as the client sent it, still keys a resend (see
+	// withLinkedFiles). A session/cancel during the reads ends them and the
+	// prompt, unsubmitted, as the check above would.
+	submitted := a.withLinkedFiles(cancelCtx, p.SessionId, p.Prompt, message)
+	if cancelCtx.Err() != nil {
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
+	}
 	key := idempotencyKey(p.MessageId, sess, message, earlier)
-	return a.promptOnce(ctx, cancelCtx, p, sess, message, key)
+	return a.promptOnce(ctx, cancelCtx, p, sess, message, submitted, key)
 }
 
 // promptOnce submits the prompt under one idempotency key and translates the
@@ -742,7 +789,11 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 // cancelCtx is the prompt's stop signal (Agent.track): it ends on a
 // session/cancel or when the client goes away (Agent.lifetime). ctx is the
 // SDK's request context, used only for its values (see Prompt).
-func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptRequest, sess *session, message, key string) (acpsdk.PromptResponse, error) {
+//
+// message is the prompt as the client sent it, which keys a resend; submitted
+// is what fleet is sent: message with the linked files' text, when any were
+// read (withLinkedFiles).
+func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptRequest, sess *session, message, submitted, key string) (acpsdk.PromptResponse, error) {
 	// stopCtx ends when the client cancels (session/cancel, or hangs up) or
 	// the timeout fires. The stream itself runs on a context that ignores
 	// both: a fleet turn is detached from its HTTP request by design, so
@@ -782,7 +833,7 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 	streamDone := make(chan struct{})
 	stopped := make(chan stopOutcome, 1)
 	go a.stopTurn(stopCtx, tr, key, streamDone, stopped, cancelStream)
-	convID, streamErr := a.client.StreamInput(streamCtx, message, target, key, tr.handle)
+	convID, streamErr := a.client.StreamInput(streamCtx, submitted, target, key, tr.handle)
 	close(streamDone)
 	stop := <-stopped
 	stopErr := stop.err
@@ -1483,20 +1534,30 @@ func startsSentence(rest string) bool {
 // embedded text resource is inlined under its URI, in a fence its text cannot
 // close (fenced), so the model sees what the user attached and where it ends.
 // Nor can a URI or a link's name break out of its line (uriLineBreaks).
-// Images, audio and binary blobs are refused (not advertised).
+// Images, audio and binary blobs are refused (not advertised). This is the
+// prompt as the client sent it; withLinkedFiles builds what is submitted when
+// a linked file's text can be read through the client.
 func promptText(blocks []acpsdk.ContentBlock) (string, error) {
+	return renderPrompt(blocks, func(l *acpsdk.ContentBlockResourceLink) (string, bool) {
+		return linkMarkdown(l), true
+	})
+}
+
+// renderPrompt is promptText with each resource_link written by link, which
+// may also drop it (false).
+func renderPrompt(blocks []acpsdk.ContentBlock, link func(*acpsdk.ContentBlockResourceLink) (string, bool)) (string, error) {
 	var parts []string
 	for _, b := range blocks {
 		switch {
 		case b.Text != nil:
 			parts = append(parts, b.Text.Text)
 		case b.ResourceLink != nil:
-			uri := uriLineBreaks.Replace(b.ResourceLink.Uri)
-			name := nameLineBreaks.Replace(orDefault(b.ResourceLink.Name, uri))
-			parts = append(parts, fmt.Sprintf("[%s](%s)", name, uri))
+			if s, ok := link(b.ResourceLink); ok {
+				parts = append(parts, s)
+			}
 		case b.Resource != nil && b.Resource.Resource.TextResourceContents != nil:
 			r := b.Resource.Resource.TextResourceContents
-			parts = append(parts, fmt.Sprintf("Contents of %s:\n%s", uriLineBreaks.Replace(r.Uri), fenced(r.Text)))
+			parts = append(parts, contentsOf(r.Uri, "", r.Text))
 		case b.Image != nil:
 			return "", errors.New("fleet acp does not accept image content (promptCapabilities.image is false)")
 		case b.Audio != nil:
@@ -1510,6 +1571,23 @@ func promptText(blocks []acpsdk.ContentBlock) (string, error) {
 		return "", errors.New("empty prompt")
 	}
 	return msg, nil
+}
+
+// linkMarkdown is a resource_link as the model sees it when its file is not
+// included: a Markdown link to its URI.
+func linkMarkdown(l *acpsdk.ContentBlockResourceLink) string {
+	uri := uriLineBreaks.Replace(l.Uri)
+	name := nameLineBreaks.Replace(orDefault(l.Name, uri))
+	return fmt.Sprintf("[%s](%s)", name, uri)
+}
+
+// contentsOf is an attachment's text under its URI, in a fence its text
+// cannot close (fenced); note, when set, follows the URI in parentheses.
+func contentsOf(uri, note, text string) string {
+	if note != "" {
+		note = " (" + note + ")"
+	}
+	return fmt.Sprintf("Contents of %s%s:\n%s", uriLineBreaks.Replace(uri), note, fenced(text))
 }
 
 // A URI and a link's name sit inside a line fleet writes, so a line break in
