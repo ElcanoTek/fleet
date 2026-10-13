@@ -121,8 +121,9 @@ func run(argv []string, in io.Reader, out, errOut io.Writer, listen func() <-cha
 	fs.Usage = func() {
 		fmt.Fprintln(errOut, "usage: fleet acp [--email you@org] [--server URL] [--model slug] [--timeout 30m]")
 		fmt.Fprintln(errOut, "\nRun fleet as an Agent Client Protocol agent on stdin/stdout, for ACP clients")
-		fmt.Fprintln(errOut, "(buzz-acp, Zed, JetBrains, …) to launch. Each prompt is one governed turn on the")
-		fmt.Fprintln(errOut, "running fleet server, exactly like `fleet chat`. See docs/ACP.md.")
+		fmt.Fprintln(errOut, "(Zed, JetBrains, Neovim, Emacs, …) to launch. Each prompt is one governed turn")
+		fmt.Fprintln(errOut, "on the running fleet server, exactly like `fleet chat`. Buzz's buzz-acp needs")
+		fmt.Fprintln(errOut, "fleet-buzz-bridge between it and fleet acp. See docs/ACP.md.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(argv); err != nil {

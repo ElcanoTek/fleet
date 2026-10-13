@@ -2,8 +2,8 @@
 //
 // ACP (agentclientprotocol.com — the Zed/JetBrains protocol, not IBM's older
 // Agent Communication Protocol) is JSON-RPC 2.0 over stdio, client → agent: an
-// ACP client (buzz-acp, Zed, JetBrains, …) launches `fleet acp` as a
-// subprocess and drives sessions over its stdin/stdout.
+// ACP client (Zed, JetBrains, buzz-acp through fleet-buzz-bridge, …) launches
+// `fleet acp` as a subprocess and drives sessions over its stdin/stdout.
 //
 // The load-bearing design choice is the same one A2A made (ADR-0051): ACP is a
 // protocol-shaped translation of a seam fleet already ships, not a new seam.
