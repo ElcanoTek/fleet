@@ -191,13 +191,17 @@ and **System** appearance and opens **Settings**.
 
 **Settings → General → Browser notifications** turns on alerts in the browser
 you are using, even while the tab is in the background. By default you get one
-when a task you created finishes or is waiting for your answer, and when an
-action in one of your chats needs your approval;
+when a task you created finishes, is waiting for your answer, or sends a
+progress note while it runs (that one also reads **Waiting for your answer**,
+though the task carries on), when an action in one of your chats needs your
+approval, and, if your account has a usage budget, when your spending crosses
+its soft limit (**⚠ Budget alert**);
 [Cards that ask for a decision](#6-cards-that-ask-for-a-decision) describes the
 others. The browser asks for permission the first time. An alert shows only a
-short title (the start of the task's prompt and how it went, or the action
-waiting on you), never the conversation or a result. The switch is per browser,
-so turn it on in each browser you want alerts in. When the switch is greyed
+short title (the start of the task's prompt and how it went, the action
+waiting on you, or the budget and its window), never the conversation or a
+result. The switch is per browser and per account, so turn it on in each
+browser you want alerts in. When the switch is greyed
 out, the line under it says why: the browser does not support them, they are
 blocked for this site in the browser's own settings (allow them there, then
 reload), or your deployment has not set them up.
