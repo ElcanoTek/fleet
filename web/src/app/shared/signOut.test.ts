@@ -13,10 +13,41 @@ function stubPushSubscription(
   });
 }
 
+// stubLocks installs a Web Locks API that grants one holder at a time, in
+// order, and gives up on a waiting request when its signal aborts.
+function stubLocks() {
+  let queue: Promise<unknown> = Promise.resolve();
+  Object.defineProperty(navigator, "locks", {
+    configurable: true,
+    value: {
+      request: (_name: string, a: unknown, b?: () => Promise<unknown>) => {
+        const fn = (b ?? a) as () => Promise<unknown>;
+        const signal = b ? (a as { signal?: AbortSignal }).signal : undefined;
+        let granted = false;
+        const run = queue.then(() => {
+          if (signal?.aborted) throw signal.reason;
+          granted = true;
+          return fn();
+        });
+        queue = run.catch(() => undefined);
+        if (!signal) return run;
+        return new Promise((resolve, reject) => {
+          run.then(resolve, reject);
+          signal.addEventListener("abort", () => {
+            if (!granted) reject(signal.reason);
+          });
+        });
+      },
+    },
+  });
+}
+
 describe("signOut", () => {
   afterEach(() => {
     document.body.innerHTML = "";
     Reflect.deleteProperty(navigator, "serviceWorker");
+    Reflect.deleteProperty(navigator, "locks");
+    window.localStorage.clear();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -135,6 +166,69 @@ describe("signOut", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("also deletes the row a key renewal the server never confirmed left behind", async () => {
+    // That row is still the signing-out account's, at the endpoint the
+    // renewal replaced.
+    window.localStorage.setItem("fleet.push.pendingRenewal", "https://relay.example/old");
+    const unsubscribe = vi.fn(async () => true);
+    stubPushSubscription({ endpoint: "https://relay.example/new", unsubscribe });
+    const deleted: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        deleted.push((JSON.parse(String(init.body)) as { endpoint: string }).endpoint);
+        return new Response(null, { status: 204 });
+      }),
+    );
+    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+    await signOut();
+    expect(deleted.sort()).toEqual(["https://relay.example/new", "https://relay.example/old"]);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem("fleet.push.pendingRenewal")).toBeNull();
+  });
+
+  it("waits for a key renewal running in another tab, then lets the renewed subscription go", async () => {
+    // Mid-renewal the browser briefly holds no subscription; reading it then
+    // would miss the one the renewal is about to store for this account.
+    stubLocks();
+    const renewed = { endpoint: "https://relay.example/renewed", unsubscribe: vi.fn(async () => true) };
+    let current: typeof renewed | null = null;
+    stubPushSubscription(renewed, async () => current);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+    let finishRenewal!: () => void;
+    const otherTab = navigator.locks.request(
+      "fleet-push-subscription",
+      () =>
+        new Promise<void>((resolve) => {
+          finishRenewal = () => {
+            current = renewed;
+            resolve();
+          };
+        }),
+    );
+    const done = signOut();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(renewed.unsubscribe).not.toHaveBeenCalled();
+    finishRenewal();
+    await otherTab;
+    await done;
+    expect(renewed.unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not wait on a push lock that another tab holds for too long", async () => {
+    stubLocks();
+    void navigator.locks.request("fleet-push-subscription", () => new Promise(() => {}));
+    const unsubscribe = vi.fn(async () => true);
+    stubPushSubscription({ endpoint: "https://relay.example/ep", unsubscribe });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+    const submit = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+    await signOut();
+    // The clean-up went ahead without the lock, inside sign-out's own bound.
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledTimes(1);
   });
 
   it("signOutAfter does not let a hung cleanup hold the sign-out", async () => {

@@ -46,8 +46,9 @@ export function sameKey(a: string, b: string): boolean {
 }
 
 // PENDING_RENEWAL remembers, per browser, the endpoint a renewal replaced
-// when the server could not confirm the move (offline, a 5xx). The new
-// subscription is kept, and the next check retries the move from it.
+// when the server gave no answer to the move (offline, a timeout, a 5xx, an
+// expired session). The new subscription is kept, and the next check retries
+// the move from it.
 const PENDING_RENEWAL = "fleet.push.pendingRenewal";
 
 function readPending(): string | null {
@@ -67,13 +68,46 @@ function writePending(endpoint: string | null): void {
   }
 }
 
+// takePendingRenewal returns the endpoint of a renewal the server never
+// confirmed, and forgets it: sign-out deletes that row too, since it belongs
+// to the account signing out.
+export function takePendingRenewal(): string | null {
+  const pending = readPending();
+  writePending(null);
+  return pending;
+}
+
+// LOCKED_FETCH_TIMEOUT_MS bounds each request made while holding the push
+// lock, so one tab's hung request cannot hold every other tab's switch and
+// renewal behind it.
+const LOCKED_FETCH_TIMEOUT_MS = 10_000;
+
+export function lockedFetchSignal(): AbortSignal | undefined {
+  return typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+    ? AbortSignal.timeout(LOCKED_FETCH_TIMEOUT_MS)
+    : undefined;
+}
+
 // withPushLock runs fn while holding a browser-wide lock, so two tabs (or the
 // settings switch in one and the check in another) never replace the same
 // subscription at once: unsubscribe acts on the browser's registration, not
 // on the object a tab read earlier. Without the Web Locks API it just runs.
-export function withPushLock<T>(fn: () => Promise<T>): Promise<T> {
+// With waitMs, fn runs without the lock if the lock is not free by then: for
+// a caller that must finish on its own deadline (sign-out).
+export async function withPushLock<T>(fn: () => Promise<T>, opts: { waitMs?: number } = {}): Promise<T> {
   const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
-  return locks ? locks.request("fleet-push-subscription", fn) : fn();
+  if (!locks) return fn();
+  if (opts.waitMs === undefined) return locks.request("fleet-push-subscription", fn);
+  let granted = false;
+  try {
+    return await locks.request("fleet-push-subscription", { signal: AbortSignal.timeout(opts.waitMs) }, () => {
+      granted = true;
+      return fn();
+    });
+  } catch (e) {
+    if (granted) throw e;
+    return fn();
+  }
 }
 
 let check: Promise<PushKeyCheck> | null = null;
@@ -92,28 +126,44 @@ export function ensureCurrentPushKey(): Promise<PushKeyCheck> {
   return check;
 }
 
-// renew asks the server to move this user's row from oldEndpoint to sub, and
-// settles what the browser keeps: only an explicit "not yours" lets the new
-// subscription go; a failure to get an answer keeps it and remembers the old
-// endpoint for the next check.
-async function renew(oldEndpoint: string, sub: PushSubscription): Promise<PushKeyCheck> {
-  let answer: { renewed?: boolean } | null = null;
+// askRenew asks the server to move this user's row from oldEndpoint to sub:
+// true or false is the server's answer, null is none. A 400 or 403 is an
+// answer — a request the server will never accept, such as from a Viewer
+// account, which may not subscribe either — so it counts as false; any other
+// failure (offline, a timeout, an expired session, a 5xx) is no answer.
+async function askRenew(oldEndpoint: string, sub: PushSubscription): Promise<boolean | null> {
   try {
     const res = await fetch("/api/push/renew", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ old_endpoint: oldEndpoint, ...sub.toJSON() }),
+      signal: lockedFetchSignal(),
     });
-    if (res.ok) answer = (await res.json()) as { renewed?: boolean };
+    if (res.status === 400 || res.status === 403) return false;
+    if (!res.ok) return null;
+    return ((await res.json()) as { renewed?: boolean }).renewed === true;
   } catch {
-    answer = null;
+    return null;
   }
-  if (answer === null) {
-    writePending(oldEndpoint);
-    return "pending";
+}
+
+// renew moves this user's row to sub from the first of oldEndpoints the
+// server confirms, and settles what the browser keeps: only an explicit "not
+// yours" for every one lets the new subscription go; no answer keeps it and
+// remembers the endpoint for the next check.
+async function renew(oldEndpoints: string[], sub: PushSubscription): Promise<PushKeyCheck> {
+  for (const oldEndpoint of oldEndpoints) {
+    const answer = await askRenew(oldEndpoint, sub);
+    if (answer === null) {
+      writePending(oldEndpoint);
+      return "pending";
+    }
+    if (answer) {
+      writePending(null);
+      return "renewed";
+    }
   }
   writePending(null);
-  if (answer.renewed === true) return "renewed";
   // Not this user's subscription (another account's, on a shared browser):
   // let the new one go too, so the settings switch reads off and the user
   // can turn notifications on again.
@@ -139,7 +189,7 @@ async function checkPushKey(): Promise<PushKeyCheck> {
   const known = sub ? subscriptionKey(sub) : null;
   if (!reg || !sub || !known) return "none";
   // Signed out, push not configured, or offline: nothing to compare against.
-  const res = await fetch("/api/push/vapid-public-key", { cache: "no-store" });
+  const res = await fetch("/api/push/vapid-public-key", { cache: "no-store", signal: lockedFetchSignal() });
   if (!res.ok) return "none";
   const { key } = (await res.json()) as { key?: string };
   if (!key) return "none";
@@ -147,7 +197,7 @@ async function checkPushKey(): Promise<PushKeyCheck> {
     // On the current key, but a renewal the server never confirmed is
     // retried now.
     const pending = readPending();
-    return pending && pending !== sub.endpoint ? renew(pending, sub) : "current";
+    return pending && pending !== sub.endpoint ? renew([pending], sub) : "current";
   }
 
   // Made with an earlier key. The browser will not subscribe with a new key
@@ -165,5 +215,8 @@ async function checkPushKey(): Promise<PushKeyCheck> {
     // settings switch now reads off, and turning it on tries again.
     return "failed";
   }
-  return renew(sub.endpoint, fresh);
+  // A renewal still pending from an earlier rotation means the user's row may
+  // still sit at that endpoint rather than this one: try it first.
+  const pending = readPending();
+  return renew(pending && pending !== sub.endpoint ? [pending, sub.endpoint] : [sub.endpoint], fresh);
 }

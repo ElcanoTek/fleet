@@ -16,6 +16,7 @@ const OLD_KEY = keyBytes(1);
 const NEW_KEY = keyBytes(2);
 
 type Browser = { current: ReturnType<typeof fakeSub> | null; events: string[] };
+type RenewAnswer = { renewed: boolean } | "network-error" | number;
 
 function fakeSub(endpoint: string, key: Uint8Array, browser: Browser) {
   const sub = {
@@ -39,7 +40,7 @@ function stubBrowser(opts: {
   subKey?: Uint8Array | null;
   serverKey?: Uint8Array;
   vapidStatus?: number;
-  renew?: { renewed: boolean } | "network-error" | number;
+  renew?: RenewAnswer | ((oldEndpoint: string) => RenewAnswer);
   subscribeFails?: boolean;
 }) {
   const browser: Browser = { current: null, events: [] };
@@ -79,9 +80,11 @@ function stubBrowser(opts: {
         : Response.json({ key: b64url(opts.serverKey ?? NEW_KEY) });
     }
     if (url === "/api/push/renew") {
-      if (opts.renew === "network-error") throw new TypeError("network down");
-      if (typeof opts.renew === "number") return new Response("boom", { status: opts.renew });
-      return Response.json(opts.renew ?? { renewed: true });
+      const oldEndpoint = (JSON.parse(String(init?.body)) as { old_endpoint: string }).old_endpoint;
+      const answer = typeof opts.renew === "function" ? opts.renew(oldEndpoint) : opts.renew;
+      if (answer === "network-error") throw new TypeError("network down");
+      if (typeof answer === "number") return new Response("boom", { status: answer });
+      return Response.json(answer ?? { renewed: true });
     }
     return new Response(null, { status: 404 });
   });
@@ -143,7 +146,9 @@ describe("ensureCurrentPushKey", () => {
   });
 
   it("keeps the new subscription when the server gives no answer, and retries the move next time", async () => {
-    for (const failure of ["network-error", 503] as const) {
+    // No answer: offline, a 5xx, or a session that expired (401, which a
+    // sign-in fixes).
+    for (const failure of ["network-error", 503, 401] as const) {
       window.localStorage.clear();
       const b = stubBrowser({ renew: failure });
       expect(await (await loadCheck())()).toBe("pending");
@@ -160,6 +165,33 @@ describe("ensureCurrentPushKey", () => {
         renewBody("https://relay.example/old", "https://relay.example/new"),
       ]);
       expect(await (await loadCheck())()).toBe("current");
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("takes a 400 or 403 as a final no: a Viewer cannot renew, so it is not retried", async () => {
+    for (const refusal of [403, 400]) {
+      window.localStorage.clear();
+      const b = stubBrowser({ renew: refusal });
+      expect(await (await loadCheck())()).toBe("dropped");
+      expect(b.browser.current).toBeNull();
+      expect(window.localStorage.getItem("fleet.push.pendingRenewal")).toBeNull();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("after a second rotation, tries the endpoint a pending renewal replaced before this one", async () => {
+    // A renewal the server never confirmed left the user's row at the
+    // original endpoint, or (the answer was lost) moved it to the current one.
+    for (const rowAt of ["https://relay.example/original", "https://relay.example/old"]) {
+      window.localStorage.setItem("fleet.push.pendingRenewal", "https://relay.example/original");
+      const b = stubBrowser({ renew: (oldEndpoint) => ({ renewed: oldEndpoint === rowAt }) });
+      expect(await (await loadCheck())()).toBe("renewed");
+      const asked = b.events.filter((e) => e.startsWith("POST /api/push/renew"));
+      expect(asked[0]).toBe(renewBody("https://relay.example/original", "https://relay.example/new"));
+      expect(asked).toHaveLength(rowAt === "https://relay.example/original" ? 1 : 2);
+      expect(b.browser.current?.endpoint).toBe("https://relay.example/new");
+      expect(window.localStorage.getItem("fleet.push.pendingRenewal")).toBeNull();
       vi.unstubAllGlobals();
     }
   });
@@ -213,5 +245,68 @@ describe("ensureCurrentPushKey", () => {
     stubBrowser({ renew: { renewed: true } });
     expect(await (await loadCheck())()).toBe("renewed");
     expect(requests).toEqual(["fleet-push-subscription"]);
+  });
+});
+
+describe("withPushLock", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, "locks");
+    window.localStorage.clear();
+  });
+
+  // A lock another tab holds and never lets go: a request waits until its
+  // signal gives up, as the Web Locks API does.
+  function stubHeldLock() {
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: vi.fn(
+          (_name: string, opts: { signal?: AbortSignal }) =>
+            new Promise((_resolve, reject) => {
+              opts.signal?.addEventListener("abort", () => reject(opts.signal?.reason));
+            }),
+        ),
+      },
+    });
+  }
+
+  it("with a deadline, goes ahead without the lock once the wait is over", async () => {
+    stubHeldLock();
+    const { withPushLock } = await import("./pushKey");
+    const fn = vi.fn(async () => "done");
+    expect(await withPushLock(fn, { waitMs: 20 })).toBe("done");
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("with a deadline, runs under the lock when it is free, and does not run twice on an error", async () => {
+    const held: boolean[] = [];
+    let holding = false;
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: vi.fn(async (_name: string, _opts: unknown, fn: () => Promise<unknown>) => {
+          holding = true;
+          try {
+            return await fn();
+          } finally {
+            holding = false;
+          }
+        }),
+      },
+    });
+    const { withPushLock } = await import("./pushKey");
+    const fn = vi.fn(async () => {
+      held.push(holding);
+      throw new Error("boom");
+    });
+    await expect(withPushLock(fn, { waitMs: 1000 })).rejects.toThrow("boom");
+    expect(held).toEqual([true]);
+  });
+
+  it("takePendingRenewal hands over the remembered endpoint once", async () => {
+    window.localStorage.setItem("fleet.push.pendingRenewal", "https://relay.example/original");
+    const { takePendingRenewal } = await import("./pushKey");
+    expect(takePendingRenewal()).toBe("https://relay.example/original");
+    expect(takePendingRenewal()).toBeNull();
   });
 });

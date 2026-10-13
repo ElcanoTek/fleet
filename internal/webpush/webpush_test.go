@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -440,45 +441,35 @@ func TestConversationLink(t *testing.T) {
 	}
 }
 
-// A relay that refuses this server's VAPID credentials (401/403) is the
-// signature of a subscription made with an earlier key. The row is kept —
-// the browser renews it — and the log says what happened.
-func TestSendOne_RefusedVAPIDKeyKeepsTheRowAndSaysWhy(t *testing.T) {
-	refused := testSubscription(t, "https://relay.example/old-key")
-	st := &fakeStore{subs: []store.PushSubscription{refused}}
-	relay := &fakeRelay{status: map[string]int{refused.Endpoint: http.StatusForbidden}}
-	svc := newTestService(t, st, relay)
-	var logged []string
-	svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+// A relay that refuses this server's VAPID authentication keeps the row: after
+// a key rotation that is usually a subscription made with an earlier key,
+// which the browser renews. Push services differ on the code (FCM answers 403,
+// others may answer 401), and the same refusal also comes from a broken key
+// pair, so the log names both causes for either code.
+func TestSendOne_RefusedVAPIDKeepsTheRowAndNamesBothCauses(t *testing.T) {
+	for _, code := range []int{http.StatusForbidden, http.StatusUnauthorized} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			refused := testSubscription(t, "https://relay.example/old-key")
+			st := &fakeStore{subs: []store.PushSubscription{refused}}
+			relay := &fakeRelay{status: map[string]int{refused.Endpoint: code}}
+			svc := newTestService(t, st, relay)
+			var logged []string
+			svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
 
-	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
-		t.Fatalf("sendToUser: %v", err)
-	}
-	if len(st.deleted) != 0 {
-		t.Errorf("deleted %v; a refused key must not retire the row", st.deleted)
-	}
-	if len(logged) != 1 || !strings.Contains(logged[0], "status 403") || !strings.Contains(logged[0], "earlier one") {
-		t.Errorf("log = %q, want the refused-key explanation", logged)
-	}
-}
-
-// A 401 is the VAPID authentication refused outright, which no renewal fixes:
-// the log points the operator at the configuration instead.
-func TestSendOne_RefusedVAPIDAuthPointsAtTheConfig(t *testing.T) {
-	sub := testSubscription(t, "https://relay.example/ep")
-	st := &fakeStore{subs: []store.PushSubscription{sub}}
-	relay := &fakeRelay{status: map[string]int{sub.Endpoint: http.StatusUnauthorized}}
-	svc := newTestService(t, st, relay)
-	var logged []string
-	svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
-
-	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
-		t.Fatalf("sendToUser: %v", err)
-	}
-	if len(st.deleted) != 0 {
-		t.Errorf("deleted %v; a refused authentication must not retire the row", st.deleted)
-	}
-	if len(logged) != 1 || !strings.Contains(logged[0], "status 401") || !strings.Contains(logged[0], "FLEET_VAPID_PRIVATE_KEY") || strings.Contains(logged[0], "renews") {
-		t.Errorf("log = %q, want the configuration hint and no renewal promise", logged)
+			if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+				t.Fatalf("sendToUser: %v", err)
+			}
+			if len(st.deleted) != 0 {
+				t.Errorf("deleted %v; a refused key must not retire the row", st.deleted)
+			}
+			if len(logged) != 1 {
+				t.Fatalf("log = %q, want one line", logged)
+			}
+			for _, want := range []string{fmt.Sprintf("status %d", code), "earlier key", "renews", "FLEET_VAPID_PRIVATE_KEY"} {
+				if !strings.Contains(logged[0], want) {
+					t.Errorf("log = %q, want it to mention %q", logged[0], want)
+				}
+			}
+		})
 	}
 }

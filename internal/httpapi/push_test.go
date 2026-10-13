@@ -263,6 +263,29 @@ func TestApprovalStagerFirePushNotification(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
+// A Viewer cannot renew, as it cannot subscribe: /push/renew is a write, so
+// the viewer-write guard answers 403 — which the browser treats as a final
+// "no" and drops the new subscription, rather than retrying on every page.
+func TestPushRenew_ViewerIsRefused(t *testing.T) {
+	s := memberFixture(t, "viewer@x.com")
+	setRole(t, s, "viewer@x.com", "viewer", "")
+	s.push = webpush.New(webpush.Config{
+		VAPIDPublicKey:  "test-public-key",
+		VAPIDPrivateKey: "test-private-key",
+		Contact:         "mailto:ops@example.com",
+	}, s.concreteStore(t))
+	h := s.Routes()
+
+	renew := map[string]any{
+		"old_endpoint": "https://relay.example/old",
+		"endpoint":     "https://relay.example/new",
+		"keys":         map[string]string{"auth": "a", "p256dh": "p"},
+	}
+	if w := do(t, h, http.MethodPost, "/push/renew", renew, "viewer@x.com"); w.Code != http.StatusForbidden {
+		t.Errorf("viewer renew: %d, want 403", w.Code)
+	}
+}
+
 // TestPushSubscribeValidation rejects malformed bodies with 400 and wrong
 // methods with 405.
 func TestPushSubscribeValidation(t *testing.T) {
