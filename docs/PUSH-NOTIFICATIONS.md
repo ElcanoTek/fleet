@@ -53,9 +53,11 @@ out with a note to ask the operator to set push up, and no trigger fires.
 `FLEET_PUBLIC_URL` (shared with the #208 notifier) is reused to build the deep
 link a notification click opens (`/orchestrator/tasks/<id>` for task events,
 which forwards to `/orchestrator?task=<id>` and opens that task's record).
-Without it, clicks open the app origin the subscription was created on. A
-click opens the link in an open fleet tab already in that part of the app, or
-in a new window (see the click note below).
+Without it a task notification carries no link, so its click brings an open
+fleet window forward or opens the app root; chat links are relative and open
+their conversation either way. A click on a link opens it in an open fleet
+tab already in that part of the app, or in a new window (see the click note
+below).
 
 ## Trigger matrix
 
@@ -95,15 +97,17 @@ Notes on honest scope:
   host, but the session cookie lives on this one). The service worker
   navigates the most recently used fleet tab it controls that is already in
   the link's part of the app (the Operations Center for a task, Chat for a
-  conversation); navigating reloads that tab. It never takes over a tab
-  elsewhere, where an unsent message would be lost: with no matching tab it
-  opens the link in a new window. The browser grants one window action per
-  click, so the tab is chosen before that action is spent, and the tab is
-  navigated even if focusing it fails. The worker claims the tabs already
-  open when it activates, and skips waiting so an update applies without
-  closing every tab. A link to the app root just brings fleet forward.
-  Deferred: telling an open tab to show the record in place, without a
-  reload.
+  conversation). Navigating reloads that tab, so anything unsaved in it (an
+  unsent message, a half-written task) is lost. A tab elsewhere in the app is
+  never reloaded: with no matching tab the link opens in a new window. Only
+  top-level tabs count, not a same-origin frame inside a page. The browser
+  grants one window action per click, so the tab is chosen before that action
+  is spent, and the tab is navigated even if focusing it fails. The worker
+  claims the tabs already open when it activates, and skips waiting so an
+  update applies without closing every tab. A link to the app root, or no
+  link, just brings fleet forward, or opens it. Deferred: telling an open tab
+  to show the record in place, without a reload, which would keep unsaved
+  work.
 
 ## HTTP surface (chat server, auth + member gated)
 
@@ -154,7 +158,8 @@ unconfigured. The browser reaches them through the Next.js proxies under
   `last_active_at` sweep of stale subscriptions (expired endpoints are
   already reaped on send).
 - Deep links into the exact card (#504/#508 follow-ups; chat pushes now
-  open their conversation, and task pushes the task's record) and
+  open their conversation, and task pushes the task's record when
+  `FLEET_PUBLIC_URL` is set) and
   schedule missed/blocked events.
 - Email/Slack/Teams as additional `notify.PushSender`-style per-user
   backends.

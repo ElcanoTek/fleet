@@ -264,10 +264,12 @@ here without returning to the board.
 
 When your deployment puts a link in task notifications, by email or in the
 browser, the link opens the same record: the board loads with that task open.
-Clicking a browser notification uses the board's tab if you have one open (it
-reloads), or opens a new one. If the task has been deleted, or your account
-cannot see it, a message says so instead. Signed out, you sign in first and
-land on your usual start page, so open the task from the board from there.
+Clicking a browser notification about a task opens the record in the board's
+tab if you have one open, or in a new tab. The board's tab reloads, so anything
+unsaved in it, such as a half-written new task, is lost. If the task has been
+deleted, or your account cannot see it, a message says so instead. Signed out,
+you sign in first and land on your usual start page, so open the task from the
+board from there.
 
 The transcript reads as a timeline. Each tool call is one row with its result
 folded in. The row shows a step number, an icon and colour for the kind of tool
