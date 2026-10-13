@@ -198,9 +198,9 @@ export function BrowserNotificationsRow() {
       label="Browser notifications"
       desc={
         <>
-          Get an alert when a task you created finishes or is waiting for your answer, or when an
-          action in one of your chats needs your approval — even when this tab is in the
-          background. An alert shows only a short title, such as the start of the task&apos;s
+          By default, get an alert when a task you created finishes or is waiting for your answer,
+          or when an action in one of your chats needs your approval — even when this tab is in
+          the background. An alert shows only a short title, such as the start of the task&apos;s
           prompt, never the conversation or a result.
           {note ? <span className="mt-[0.3rem] block">{note}</span> : null}
         </>
