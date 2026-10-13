@@ -201,7 +201,8 @@ others. The browser asks for permission the first time. An alert shows only a
 short title (the start of the task's prompt and how it went, the action
 waiting on you, or the budget and its window), never the conversation or a
 result. The switch is per browser and per account, so turn it on in each
-browser you want alerts in. When the switch is greyed
+browser you want alerts in. A **Viewer** account cannot turn them on: the
+switch reports an error instead. When the switch is greyed
 out, the line under it says why: the browser does not support them, they are
 blocked for this site in the browser's own settings (allow them there, then
 reload), or your deployment has not set them up.
