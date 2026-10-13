@@ -79,12 +79,13 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/remote-mcp-servers", auth(member(mutate(http.HandlerFunc(s.remoteMCPServers)))))
 	mux.Handle("/remote-mcp-servers/", auth(member(mutate(http.HandlerFunc(s.remoteMCPServerByID)))))
 	mux.Handle("/oauth/mcp/callback", auth(member(mutate(http.HandlerFunc(s.remoteMCPOAuthCallback)))))
-	// Browser Web Push (#292): subscribe/unsubscribe manage only the caller's
-	// own rows, status reads only the caller's own rows, and the VAPID public
-	// key is a non-secret read. All four answer 501 until the operator
+	// Browser Web Push (#292): subscribe/unsubscribe/renew manage only the
+	// caller's own rows, status reads only the caller's own rows, and the VAPID
+	// public key is a non-secret read. All answer 501 until the operator
 	// configures VAPID keys (fleet generate-vapid-keys).
 	mux.Handle("/push/subscribe", auth(member(mutate(http.HandlerFunc(s.pushSubscribe)))))
 	mux.Handle("/push/unsubscribe", auth(member(mutate(http.HandlerFunc(s.pushUnsubscribe)))))
+	mux.Handle("/push/renew", auth(member(mutate(http.HandlerFunc(s.pushRenew)))))
 	mux.Handle("/push/status", auth(member(http.HandlerFunc(s.pushStatus))))
 	mux.Handle("/push/vapid-public-key", auth(member(http.HandlerFunc(s.pushVAPIDPublicKey))))
 	mux.Handle("/server-config", auth(member(http.HandlerFunc(s.serverConfig))))

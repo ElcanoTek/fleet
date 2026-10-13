@@ -6,8 +6,10 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -436,5 +438,38 @@ func TestConversationLink(t *testing.T) {
 	}
 	if got := (&Service{}).ConversationLink("abc"); got != "/chat?c=abc" {
 		t.Errorf("relative link = %q", got)
+	}
+}
+
+// A relay that refuses this server's VAPID authentication keeps the row: after
+// a key rotation that is usually a subscription made with an earlier key,
+// which the browser renews. Push services differ on the code (FCM answers 403,
+// others may answer 401), and the same refusal also comes from a broken key
+// pair, so the log names both causes for either code.
+func TestSendOne_RefusedVAPIDKeepsTheRowAndNamesBothCauses(t *testing.T) {
+	for _, code := range []int{http.StatusForbidden, http.StatusUnauthorized} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			refused := testSubscription(t, "https://relay.example/old-key")
+			st := &fakeStore{subs: []store.PushSubscription{refused}}
+			relay := &fakeRelay{status: map[string]int{refused.Endpoint: code}}
+			svc := newTestService(t, st, relay)
+			var logged []string
+			svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+
+			if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+				t.Fatalf("sendToUser: %v", err)
+			}
+			if len(st.deleted) != 0 {
+				t.Errorf("deleted %v; a refused key must not retire the row", st.deleted)
+			}
+			if len(logged) != 1 {
+				t.Fatalf("log = %q, want one line", logged)
+			}
+			for _, want := range []string{fmt.Sprintf("status %d", code), "earlier key", "renews", "FLEET_VAPID_PRIVATE_KEY"} {
+				if !strings.Contains(logged[0], want) {
+					t.Errorf("log = %q, want it to mention %q", logged[0], want)
+				}
+			}
+		})
 	}
 }

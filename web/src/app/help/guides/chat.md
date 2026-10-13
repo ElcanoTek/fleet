@@ -216,7 +216,10 @@ browser you want alerts in. A **Viewer** account cannot turn them on: the
 switch reports an error instead. When the switch is greyed
 out, the line under it says why: the browser does not support them, they are
 blocked for this site in the browser's own settings (allow them there, then
-reload), or your deployment has not set them up.
+reload), or your deployment has not set them up. If your deployment changes its
+notification keys, a browser gets no alerts until you next open Fleet in it,
+which renews them by itself; if the switch then says they could not be
+renewed, reload the page.
 
 Administrators manage account access under **Settings → Admin → Users**. Chat
 defaults to **Contributor**; **Viewer** is read-only. **Fleet Admin** grants full
