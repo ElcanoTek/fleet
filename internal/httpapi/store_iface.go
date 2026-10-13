@@ -255,6 +255,9 @@ type chatStore interface {
 	UpsertPushSubscription(ctx context.Context, userEmail, endpoint, keysAuth, keysP256dh string) error
 	DeleteUserPushSubscription(ctx context.Context, userEmail, endpoint string) error
 	HasUserPushSubscription(ctx context.Context, userEmail, endpoint string) (bool, error)
+	// RenewPushSubscription is POST /push/renew: the owner-scoped move of a
+	// row to the browser's new subscription after a VAPID key rotation.
+	RenewPushSubscription(ctx context.Context, userEmail, oldEndpoint, endpoint, keysAuth, keysP256dh string) (bool, error)
 
 	// Health summary (#301): DB liveness + pool snapshot + chat-side LLM spend.
 	Ping(ctx context.Context) error

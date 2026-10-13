@@ -4,6 +4,7 @@ import {
   DEFAULT_BACKGROUND_LIGHT,
   getServerBranding,
 } from "@/app/lib/serverBranding";
+import { PushKeyRenewal } from "@/app/shared/PushKeyRenewal";
 import "./globals.css";
 
 // force-dynamic is LOAD-BEARING for white-labeling, and it applies to this
@@ -232,7 +233,10 @@ export default function RootLayout({
         {/* eslint-disable-next-line @next/next/no-css-tags */}
         <link rel="stylesheet" href="/api/theme" />
       </head>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {children}
+        <PushKeyRenewal />
+      </body>
     </html>
   );
 }

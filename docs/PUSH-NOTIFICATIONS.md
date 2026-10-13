@@ -45,6 +45,49 @@ channel consumes.
    menu goes through the one `signOut`) also lets it go and deletes the
    stored row.
 
+**Rotating the keys.** A browser subscription is bound to the VAPID key it
+was made with, so after the operator replaces the `FLEET_VAPID_*` pair every
+existing subscription is refused by the push service. Which status a refusal
+carries is the push service's choice (RFC 8292 leaves it open): FCM answers
+`403`, and other services may answer `401`. fleet keeps those rows rather
+than deleting them, and logs `relay … returned status <code>: it refused this
+server's VAPID authentication …`. The line names both causes, because a key
+pair that does not match, a bad `FLEET_VAPID_CONTACT` or a wrong host clock
+are refused the same way: a refusal that persists after browsers have
+reopened fleet points at the configuration, which renewal cannot fix.
+
+Each browser renews its own subscription: on a page load (`PushKeyRenewal` in
+the root layout, skipped on `/login` and `/shared` pages) and again each time
+the settings switch loads, it compares the key its subscription records with
+`GET /push/vapid-public-key`. On a mismatch it unsubscribes, subscribes with
+the current key (permission is already granted, so no prompt), and asks
+`POST /push/renew` to move the signed-in user's row to the new subscription.
+The server moves it only if that user held the old row. A "not yours", or a
+`400` or `403` (a Viewer account cannot renew, as it cannot subscribe), makes
+the browser drop the new subscription too, so a renewal never signs up an
+account that did not turn notifications on in that browser. Any other failure
+(offline, a timeout, an expired session, a `5xx`) is no answer: the new
+subscription is kept, the endpoint it replaced is remembered in the browser,
+and the move is retried on the next check. A settings switch that loads in
+the meantime, and finds the server does not hold the new subscription, reads
+off with a note to reload, and keeps the subscription rather than letting it
+go. If the keys rotate again first, the renewal tries the remembered endpoint
+before the current one.
+
+The check, the switch's own reads and replacement, and sign-out's clean-up run
+under one browser-wide Web Lock, so two tabs never replace the subscription at
+once. The check's and the switch's requests made while holding it give up
+after 10 seconds, and sign-out waits at most a second for it before cleaning
+up anyway. Sign-out also deletes the row of a renewal the server never
+confirmed.
+
+Limits: until a browser next opens fleet its notifications do not arrive; a
+browser that does not report the key its subscription was made with is not
+checked; a browser that refuses to subscribe again is left with no
+subscription and its switch reads off; and a browser that never opens fleet
+again leaves a refused row behind (the stale-subscription sweep below is still
+deferred).
+
 **Default OFF.** With any of the three `FLEET_VAPID_*` vars unset, the push
 subsystem does not exist: the `/push/*` endpoints answer `501 Not Implemented`
 with a machine-readable `push_disabled` error, the settings switch is greyed
@@ -116,9 +159,10 @@ Notes on honest scope:
 | `/push/subscribe` | POST | Upsert the caller's `PushSubscription` (endpoint + keys), keyed on the endpoint. 204. |
 | `/push/unsubscribe` | DELETE | Delete the caller's row for the endpoint (owner-scoped). Idempotent 204. |
 | `/push/status` | POST | `{"subscribed": bool}`: whether the caller holds the row for the endpoint (owner-scoped read; the endpoint rides in the body because it is a capability URL). |
+| `/push/renew` | POST | `{old_endpoint, endpoint, keys}` → `{"renewed": bool}`: move the caller's row from the old endpoint to the browser's new subscription after a key rotation. False (nothing changed) unless the caller held the old row; true again if a second tab already moved it. |
 | `/push/vapid-public-key` | GET | `{"key": "<VAPID public key>"}` — non-secret. |
 
-All four return `501` with `{"error":"push_disabled", ...}` when
+All five return `501` with `{"error":"push_disabled", ...}` when
 unconfigured. The browser reaches them through the Next.js proxies under
 `/api/push/*` (session cookie + origin-checked like every mutating route).
 
@@ -133,8 +177,8 @@ unconfigured. The browser reaches them through the Next.js proxies under
   operator env-file, is printed exactly once by `fleet generate-vapid-keys`,
   and never enters the sandbox, the model context, a client, or a log line.
   The public key is non-secret.
-- **Subscriptions are per-user.** Every subscribe/unsubscribe is scoped to
-  the authenticated email; a user can only manage (and receive on) their own
+- **Subscriptions are per-user.** Every subscribe, unsubscribe, status read
+  and renewal is scoped to the authenticated email; a user can only manage (and receive on) their own
   subscriptions. Endpoint URLs are capability URLs, so log lines reduce them
   to their host.
 - **A browser is not an account.** The browser holds one subscription, but
@@ -146,7 +190,10 @@ unconfigured. The browser reaches them through the Next.js proxies under
   way runs none of this: one that expires, one revoked server-side, a
   central-Auth back-channel logout, or the sign-out form on the no-access
   page. Until someone opens Settings in that browser or turns notifications
-  on there, the previous account's alerts can still arrive in it.
+  on there, the previous account's alerts can still arrive in it. After a key
+  rotation, the next account's first page load in that browser also lets the
+  previous account's subscription go, since the renewal is not that
+  account's to make.
 - **Subscription hygiene:** a `404`/`410` from the relay deletes the expired
   row during the send fan-out.
 
