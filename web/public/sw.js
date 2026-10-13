@@ -62,7 +62,13 @@ self.addEventListener("notificationclick", (event) => {
 async function openNotificationTarget(link) {
   const origin = self.location.origin;
   const given = new URL(link || "/", origin);
-  const target = new URL(given.pathname + given.search + given.hash, origin);
+  // Each part is assigned onto a URL of this origin rather than re-parsed as
+  // a string: a path beginning "//" (https://a.example//b.example/x) would
+  // otherwise read as a link to another host. Assigning never changes the host.
+  const target = new URL(origin);
+  target.pathname = given.pathname;
+  target.search = given.search;
+  target.hash = given.hash;
   const section = target.pathname.split("/")[1] || "";
   const topLevel = (list) => list.filter((c) => c.frameType === "top-level");
   if (!section) {
