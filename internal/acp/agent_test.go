@@ -1731,15 +1731,16 @@ func TestStagingFailureIsNotPending(t *testing.T) {
 	}
 }
 
-// A cancel that races the turn's own end must not send a Stop: it is
+// A cancel that comes after the turn's own end must not send a Stop: it is
 // conversation-scoped and would hit a follow-up queued from another surface.
+// The prompt has answered by then: it ends as its turn's terminal frame
+// arrives, not when the server closes the stream after it, so the cancel
+// reaches nothing.
 func TestNoStopAfterTheTurnEnded(t *testing.T) {
-	ended := make(chan struct{})
 	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
 		w.emit("conversation", map[string]any{"id": "conv-done"})
 		w.emit("text.delta", map[string]any{"text": "done"})
 		w.emit("turn.completed", map[string]any{})
-		close(ended)
 		<-r.Context().Done() // the socket lingers after the terminal frame
 	}})
 	sid := h.newSession(t)
@@ -1748,29 +1749,30 @@ func TestNoStopAfterTheTurnEnded(t *testing.T) {
 		r, _ := h.prompt(sid, "x")
 		done <- r
 	}()
-	<-ended
-	time.Sleep(50 * time.Millisecond) // let the terminal frame be read
+	select {
+	case r := <-done:
+		if r.StopReason != acpsdk.StopReasonEndTurn {
+			t.Fatalf("stop reason %q, want end_turn", r.StopReason)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the prompt did not answer at the terminal frame")
+	}
 	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("prompt did not return")
-	}
+	time.Sleep(50 * time.Millisecond) // let the cancel be handled
 	h.fleet.mu.Lock()
 	defer h.fleet.mu.Unlock()
 	if len(h.fleet.cancels) != 0 {
 		t.Errorf("a Stop was sent after the turn ended: %q", h.fleet.cancels)
 	}
-	// Nothing was stopped, and the transcript says the finished turn stands.
-	if !strings.Contains(h.client.text(), "already finished") {
-		t.Errorf("a cancel after the terminal frame read as a confirmed stop: %q", h.client.text())
-	}
 }
 
-// A timeout that fires as the turn completes is not a timeout.
-func TestTimeoutAfterTheTurnEndedIsAnEndTurn(t *testing.T) {
+// A turn that completes while its stream lingers past the timeout is an
+// end_turn, not a timeout: the prompt answers at the terminal frame. (A
+// timeout that fires after the terminal frame is handled is
+// TestStopTurnNeverStopsATurnThatEnded.)
+func TestLingeringStreamPastTheTimeoutIsAnEndTurn(t *testing.T) {
 	h := newHarness(t, harnessOpts{timeout: 100 * time.Millisecond, turn: func(w *sseWriter, r *http.Request) {
 		w.emit("conversation", map[string]any{"id": "c"})
 		w.emit("turn.completed", map[string]any{})
