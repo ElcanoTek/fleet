@@ -285,6 +285,12 @@ func eventTitle(ev notify.Event) (title string, ok bool) {
 	case notify.StatusFailure:
 		return fmt.Sprintf("✗ Task failed: %s (%s)", ev.Name, formatDuration(ev.DurationSeconds)), true
 	case notify.StatusProgress:
+		if ev.Kind == notify.KindBudgetAlert {
+			// A soft budget threshold crossed: a heads-up, nothing waits on an
+			// answer. Name already reads "Budget alert: <scope> <principal>
+			// (<window> window)".
+			return "⚠ " + ev.Name, true
+		}
 		// #510 ask-pause (and the agent's mid-run notify tool, which shares the
 		// StatusProgress path): the task wants the human.
 		return "⏸ Waiting for your answer: " + ev.Name, true

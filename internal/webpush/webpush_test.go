@@ -282,6 +282,21 @@ func TestEventTitle(t *testing.T) {
 	}
 }
 
+// A budget soft alert travels as StatusProgress (the On-list filter and the
+// webhook treat it as a heads-up) but nothing waits on an answer, so it must
+// not read as an ask-pause.
+func TestEventTitle_BudgetAlert(t *testing.T) {
+	ev := notify.Event{
+		Status: notify.StatusProgress,
+		Kind:   notify.KindBudgetAlert,
+		Name:   "Budget alert: user alice@example.com (day window)",
+	}
+	got, ok := eventTitle(ev)
+	if !ok || got != "⚠ Budget alert: user alice@example.com (day window)" {
+		t.Errorf("eventTitle(budget alert) = %q ok=%v", got, ok)
+	}
+}
+
 // TestSendEvent_Gating covers delivery + the FLEET_PUSH_ON_TASK_COMPLETE /
 // Audience gating.
 func TestSendEvent_Gating(t *testing.T) {

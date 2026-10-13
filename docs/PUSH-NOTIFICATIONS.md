@@ -61,6 +61,7 @@ Without it, clicks open the app origin the subscription was created on.
 | Task terminal: success | `FLEET_PUSH_ON_TASK_COMPLETE` | `✓ Task complete: <name> (<duration>)` |
 | Task terminal: failure (error, retry-exhausted dead-letter, interrupted) | `FLEET_PUSH_ON_TASK_COMPLETE` | `✗ Task failed: <name> (<duration>)` |
 | Task paused for `ask` / mid-run `notify` progress (#510) | `FLEET_PUSH_ON_TASK_COMPLETE` | `⏸ Waiting for your answer: <name>` |
+| A user-scoped budget crossed its soft threshold (`internal/sched/budget`) | `FLEET_PUSH_ON_TASK_COMPLETE` | `⚠ Budget alert: user <email> (<window> window)` |
 | Chat approval card staged (#292) | `FLEET_PUSH_ON_APPROVAL_REQUEST` | `⚠ Approval needed: <tool name>` (high urgency) |
 | An approved call of a tool in `agent_policy.critical_tool_progress` finished ([APPROVAL-PROGRESS.md](APPROVAL-PROGRESS.md)) | `FLEET_PUSH_ON_APPROVAL_REQUEST` | `✓ Done: <card title or tool name>` / `✗ Not applied: …` (normal urgency) |
 | The automatic continue after approvals was skipped over its hourly cap or a full queue ([RESUME-AFTER-APPROVAL.md](RESUME-AFTER-APPROVAL.md)) | `FLEET_PUSH_ON_APPROVAL_REQUEST` | `⏸ Waiting for you: the chat did not continue on its own` (high urgency) |
@@ -74,6 +75,12 @@ Notes on honest scope:
   push channel too — the channels share one `Notify()` pipeline.
 - The agent's mid-run `notify` tool shares the progress status with `ask`
   pauses, so both render the `⏸ Waiting for your answer` title.
+- A budget soft alert also travels as a progress event (so the
+  `FLEET_NOTIFY_ON` filter and the webhook treat it like any other heads-up),
+  but it carries `Kind: budget_alert` and pushes as `⚠ Budget alert: …`:
+  nothing is waiting on an answer. It pushes to the budget's principal only
+  for a user-scoped budget. It carries no link, so a click brings an open
+  fleet window forward, or opens the app root.
 - The approval push fires for approvals staged **by an agent turn**. The
   user-initiated "promote to scheduled task" card does not push — the user is
   looking at it when it appears.
