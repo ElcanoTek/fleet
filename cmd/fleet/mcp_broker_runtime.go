@@ -17,6 +17,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
+	"github.com/ElcanoTek/fleet/internal/redact"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 )
 
@@ -516,7 +517,15 @@ func scrubParentConnectorState(bundle *clientconfig.Bundle, cfg *config.Config, 
 		// value is kept solely as a redaction target and is never emitted. It is
 		// the backstop for what comes BACK across the broker boundary, which the
 		// boundary itself cannot police.
-		agentcore.RegisterSecretLiteral(os.Getenv(key))
+		//
+		// A filesystem path under a non-credential name is the exception: it is
+		// configuration, not a secret. CUTLASS_ALLOWED_DIRS holds the workspace
+		// root, and as a literal it turned every run-folder path in a tool
+		// result into "[REDACTED]/mcp-runs/task-…", which the model then passed
+		// back to tools that needed the real folder.
+		if value := os.Getenv(key); redact.IsSecretEnvName(key) || !redact.IsPathListValue(value) {
+			agentcore.RegisterSecretLiteral(value)
+		}
 		if err := os.Unsetenv(key); err != nil {
 			errs = append(errs, fmt.Errorf("unset connector environment %s: %w", key, err))
 		}
