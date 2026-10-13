@@ -629,3 +629,47 @@ func TestEmailLast_SubstituteDefinitiveFailureRetiresPending(t *testing.T) {
 	}
 	mustNotBlock(t, o, elEmail, elEmailArgs, elEmailOK)
 }
+
+// (a2) The same settle, with the summary email sent through Amazon SES, which
+// answers status_code 200 where SendGrid answered 202. Fleet used to accept
+// only 202, so the SES send never counted as the summary email. In a
+// 2026-10-13 two-deal run (one IX create booked, one refused on a catalog
+// miss), the settled-failed unit therefore stayed owed after a correct deal
+// sheet had gone out. Finish was refused and the model was told to abort, so
+// the run ended as an error, and the abort then demanded an email the reader
+// already had.
+func TestEmailLast_SESSummaryEmailReleasesSettledFailure(t *testing.T) {
+	withEmailLastPolicy(t)
+	const (
+		sesEmail     = "mcp_ses_outbound_send_email"
+		sesEmailOK   = `{"status_code":200,"message_id":"010f01a1","status":"queued","attachments_count":1}`
+		ixRefusedArg = `{"name":"Deal 2","dsp":"ttd","segment_names":["ZZ Nonexistent Segment Test"]}`
+		ixRefused    = `{"success":false,"deal":null,"error":{"provider":"indexexchange",` +
+			`"operation":"execute_deal_from_prompt_inputs","status_code":null,` +
+			`"message":"No exact match for segment: ZZ Nonexistent Segment Test. NO deal was created.",` +
+			`"details":{"code":"ix_execute_refused","retryable":false}}}`
+	)
+	o := newOrchStateForTest()
+	resp := confirmAudit(t, o, []criticalActionStruct{
+		{Tool: elIXCreate, DealName: "Deal 1"}, {Tool: elIXCreate, DealName: "Deal 2"}, {Tool: sesEmail},
+	}, nil)
+	if resp.IsError {
+		t.Fatalf("audit refused: %s", resp.Content)
+	}
+	mustNotBlock(t, o, elIXCreate, `{"name":"Deal 1","dsp":"ttd"}`, elCreateOK)
+	mustNotBlock(t, o, elIXCreate, ixRefusedArg, ixRefused)
+	if got := o.settledFailedSuffixes(); len(got) != 1 {
+		t.Fatalf("the catalog-miss refusal must settle exactly one unit, got %v", got)
+	}
+	mustNotBlock(t, o, sesEmail, elEmailArgs, sesEmailOK)
+	if !o.summaryEmailSent || o.sendEmailSuccessCount != 1 {
+		t.Fatalf("an SES 200 send must count as the summary email (summaryEmailSent=%v, count=%d)",
+			o.summaryEmailSent, o.sendEmailSuccessCount)
+	}
+	if ok, msgs := elFinish(t, o); !ok {
+		t.Fatalf("finish must be allowed once the SES email recorded the failure, got %v", msgs)
+	}
+	if o.auditTerminalFailure {
+		t.Fatal("one of two deals booked and the sheet went out: the run must not be recorded as aborted")
+	}
+}

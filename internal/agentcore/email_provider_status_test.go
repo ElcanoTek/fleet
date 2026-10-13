@@ -66,3 +66,27 @@ func TestEmailProviderRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestSendEmailSucceeded(t *testing.T) {
+	cases := []struct {
+		result string
+		want   bool
+	}{
+		{`{"status_code":202,"status":"queued"}`, true},                         // SendGrid
+		{`{"status_code":200,"message_id":"010f01a1","status":"queued"}`, true}, // Amazon SES
+		{`{"status_code":204}`, true},
+		{`{"status_code":199}`, false},
+		{`{"status_code":300}`, false},
+		{`{"status_code":500}`, false},
+		{`{"status_code":200,"error":"boom"}`, false},
+		{`{"status_code":"200"}`, false},
+		{`{"status":"queued"}`, false},
+		{`queued`, false},
+		{``, false},
+	}
+	for _, c := range cases {
+		if got := sendEmailSucceeded(c.result); got != c.want {
+			t.Errorf("sendEmailSucceeded(%q) = %v, want %v", c.result, got, c.want)
+		}
+	}
+}
