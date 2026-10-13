@@ -388,6 +388,96 @@ with a button to copy them. Read it before sharing: it holds every prompt and
 the full text of each file you mentioned. Zed's own log (`zed: open log`) also
 records what `fleet acp` writes to stderr.
 
+### JetBrains (AI Assistant)
+
+Tested against a real `fleet serve` with a live model, from PyCharm 2026.2
+with the AI Assistant plugin 262.10968.223 on macOS, on 2026-10-13. Connect,
+multi-turn, streamed answer text, thinking and tool calls, cancel,
+`--timeout`, approving through the link in the reply, queueing behind a turn
+running in the web chat, attached files and the file open in the editor, the
+IDE's own MCP server, and the daemon-down and unknown-user errors all worked.
+JetBrains documents that a custom agent needs the AI Assistant plugin but no
+JetBrains AI subscription (not checked: the check ran on a PyCharm trial), and
+the other IntelliJ-based IDEs share the same AI Assistant (not checked).
+
+In the AI Chat tool window, the menu (⋯) → **Add Custom Agent** opens
+`~/.jetbrains/acp.json`. Add fleet there:
+
+```json
+{
+  "default_mcp_settings": {},
+  "agent_servers": {
+    "fleet": {
+      "command": "/usr/local/bin/fleet",
+      "use_custom_mcp": false,
+      "use_idea_mcp": false,
+      "args": ["acp", "--email", "acp-bot@example.com",
+               "--server", "http://localhost:8080",
+               "--public-url", "http://localhost:3000",
+               "--token-file", "/Users/you/.config/fleet/fleet-token"]
+    }
+  }
+}
+```
+
+Then pick fleet in AI Chat's agent menu. The snippet was checked live as
+written on 2026-10-13, with only the paths changed. The check ran PyCharm on a
+Mac and fleet in a VM whose chat API (8080) and web UI (3000) were forwarded to
+the Mac's `localhost`; point `--server` and `--public-url` at fleet as the
+editor's computer reaches it (an SSH tunnel works the same way; see "Add fleet
+in Buzz Desktop"). The token file holds fleet's shared server token, which can
+act as any fleet user: keep it readable only by you, and never put the token
+itself in `acp.json`. Give `command` an absolute path, as checked: an IDE
+started from the Dock may not see your shell's `PATH`. PyCharm starts `fleet acp` for each new
+chat, and an edit to `acp.json` applies to the next one (checked).
+
+`use_idea_mcp` and `use_custom_mcp` matter. PyCharm sends every custom agent
+its own built-in MCP server (`pycharm`), although JetBrains documents
+`use_idea_mcp` as off by default, and `use_custom_mcp` (on by default) adds
+every MCP server you configured in the IDE. fleet does not use them (see
+`session/new`), so without these two lines the first reply in each chat starts
+with a note naming them; with them PyCharm sends none (checked).
+
+PyCharm sends files as links only: a file you attach with `@`, and, with every
+message, the file open in the editor. fleet asks PyCharm for each one's text
+and inlines it, up to 100 KB of a file (see "Linked files" under "Protocol
+mapping"). So the file open in the editor goes to fleet with every message,
+and becomes part of the conversation; close a file holding secrets before you
+chat. With `main.py` open, the model quoted its first line; a 376 KB file that
+was both open and attached was read once and cut to its first 100 KB, which
+the model reported (checked). PyCharm offers no "Image…" attachment for fleet,
+since `initialize` advertises no image support, and a screenshot dropped on
+the chat input is sent as its file name only, as text, with no warning
+(checked).
+
+Replies stream, with the model's reasoning under a collapsible "Thought for
+Ns" line and each tool call by name (checked). Whether answer text streams
+depends on the model: `anthropic/claude-opus-5.5` streamed it, while
+`openai/gpt-6-luna-pro` sent its answer in one block, so it appeared at once
+(checked from fleet's own stream). The Stop button sends `session/cancel`, and
+fleet stops the turn server-side as described under "Protocol mapping";
+PyCharm shows "Cancelled by user" (checked). PyCharm removes the Stop button
+as soon as the answer appears, so a Stop cannot be sent after it. A turn over
+`--timeout` ends with fleet's error, "the fleet turn did not finish within …
+and was stopped (raise it with fleet acp --timeout)" (checked). PyCharm offers
+no edit or resend of a message sent to a custom agent.
+
+An approval ends the reply with fleet's link to approve it in the web UI, and
+a message queued behind a turn running in the web chat gets fleet's queued
+note; the queued message's answer appears in the web chat only (both
+checked). Errors show in red under the agent's name: an unknown user's 403
+with the command that fixes it, and, with the server down, "connect
+http://localhost:8080: … connection refused" (both checked). PyCharm opens a
+session for each new chat, so a refused session shows its error in each.
+
+For an adapter bug report, turn on extended logging (Search Everywhere →
+**Registry** → `llm.agent.extended.logging`, then restart the IDE). PyCharm
+then writes every message between it and `fleet acp` to `acp/acp-transport.log`
+in its log folder (on macOS, `~/Library/Logs/JetBrains/PyCharm2026.2/`;
+checked), and JetBrains documents the AI Chat menu's **Get ACP Logs** for
+collecting them (not used in the check). Read them before sharing: they hold
+every prompt and the text of every file sent.
+
 ### Buzz
 
 Buzz runs agents with its `buzz-acp` harness. An @mention becomes an ACP
@@ -415,10 +505,10 @@ starts `fleet acp` itself and:
   the agent's Buzz key in its environment) before `session/new` reaches
   `fleet acp`, which would not use it.
 
-It is not part of fleet, and it is not published: it lives in a separate,
-private repository, together with `fleet-buzz-gateway` (see "Run it on
-Kubernetes from Buzz Desktop"), and that repository's README is the reference
-for both. The setups below need access to it.
+It is not part of fleet: it lives in its own repository,
+[ElcanoTek/fleet-buzz-bridge](https://github.com/ElcanoTek/fleet-buzz-bridge),
+together with `fleet-buzz-gateway` (see "Run it on Kubernetes from Buzz
+Desktop"), and that repository's README is the reference for both.
 
 Checked live on 2026-10-08 with Buzz Desktop on macOS and its bundled
 `buzz-acp`, `buzz-acp` built from block/buzz `70d2ca7`, a hosted Buzz relay,
@@ -475,7 +565,9 @@ On the computer that runs Buzz Desktop, you need:
    CGO_ENABLED=0 go build -o fleet ./cmd/fleet` for an Apple-silicon Mac) and
    copy it over. Prompt and cancel order, which Buzz relies on (see "What to
    expect"), needs v2026.10.09.5 or later.
-2. **`fleet-buzz-bridge`,** from its repository, next to `fleet`.
+2. **`fleet-buzz-bridge`,** built from
+   [its repository](https://github.com/ElcanoTek/fleet-buzz-bridge)
+   (`go build -o fleet-buzz-bridge .` in a clone), next to `fleet`.
 3. **A fleet user for the agent.** On the fleet server:
    `fleet chat user add buzz-bot@example.com --password -`. Every turn runs as
    this user, whoever asked in Buzz.
@@ -582,7 +674,8 @@ On the fleet server:
    `--add-source=10.43.0.0/16`); on the server checked it was not running.
    With k3s installed, `fleet doctor`, sandbox smoke test included, still
    passed; fleet's sandbox egress sealing was not rechecked on its own.
-2. **`fleet-buzz-gateway`,** from the bridge's repository. fleet's chat API
+2. **`fleet-buzz-gateway`,** built from the bridge's repository
+   (`go build -o fleet-buzz-gateway ./gateway` in a clone). fleet's chat API
    stays on loopback. The gateway listens on the cluster bridge address only,
    adds fleet's server token, read from a file only it can read, pins every
    request to one fleet user, and forwards only what `fleet acp` calls
@@ -1089,6 +1182,13 @@ What shipped:
   out, unread when its size shows it cannot fit); and a client that never
   answers is given up on after the wait, with the files after it not asked
   for.
+- Checked live against a real `fleet serve` with a live model from PyCharm
+  2026.2 (AI Assistant 262.10968.223) on macOS on 2026-10-13: the features
+  listed under "JetBrains (AI Assistant)", the snippet as published there
+  (with the IDE's MCP server sent, then with `use_idea_mcp` and
+  `use_custom_mcp` off), a 20 s `--timeout`, an unknown user, the server down,
+  a message queued behind a web-chat turn, an approval, a dropped screenshot,
+  and the extended ACP log.
 - Checked live against a real `fleet serve` on 2026-10-13. PyCharm 2026.2 (AI
   Assistant 262.10968.223) links the file open in the editor with every
   message and an `@`-attached file as well: `fleet acp` read them through
