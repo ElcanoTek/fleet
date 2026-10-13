@@ -49,7 +49,13 @@ server-side batch always requires a typed approval.
 **Payload-level failure never discharges a commitment.** Before any commitment
 is marked executed, the result payload is checked for the MCP failure
 convention (top-level `"success": false`, or a non-empty top-level `"error"`),
-generalizing the previous `send_email`-only check to every critical tool. Batch
+generalizing the previous `send_email`-only check to every critical tool. For
+the summary-email tools (`send_email`, `send_template_email`) a numeric
+top-level `status_code` outside 2xx is a failure too (#1714): a provider that
+rejects a send over a clean MCP transport, such as SES or SendGrid answering
+`{"status_code":500}`, delivered nothing, so it neither discharges the email's
+commitment nor resets its retry budget. A result with no numeric `status_code`
+is judged by the convention above alone. Batch
 tools that return per-record `results[]` are discharged per succeeded record,
 idempotently across resumes, and never for record ids the audit did not
 approve.
