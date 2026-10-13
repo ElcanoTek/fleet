@@ -688,6 +688,9 @@ export const orchestratorApi = {
   // both carry a CostForecast, so request() resolves either as success.
   estimateTask: (body: TaskCreate) =>
     request<CostForecast>("/tasks/estimate", { method: "POST", body: JSON.stringify(body) }),
+  // One task by id (GET /tasks/{id}) — how a task link opens a row the
+  // dashboard's current page may not list.
+  task: (taskId: string) => request<Task>(`/tasks/${encodeURIComponent(taskId)}`),
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
   // A spawned child's own transcript (#1043) — 404 when the transcript file is
   // no longer on the host (the linkage entry on the parent log stays the

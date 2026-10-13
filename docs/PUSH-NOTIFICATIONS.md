@@ -51,8 +51,13 @@ with a machine-readable `push_disabled` error, the settings switch is greyed
 out with a note to ask the operator to set push up, and no trigger fires.
 
 `FLEET_PUBLIC_URL` (shared with the #208 notifier) is reused to build the deep
-link a notification click opens (`/orchestrator/tasks/<id>` for task events).
-Without it, clicks open the app origin the subscription was created on.
+link a notification click opens (`/orchestrator/tasks/<id>` for task events,
+which forwards to `/orchestrator?task=<id>` and opens that task's record).
+Without it, clicks open the app origin the subscription was created on. The
+service worker navigates an already-open fleet window only for a chat link
+(`?c=`): when a fleet window is open, a task push's click brings that window
+forward without opening the task, and the record opens only when no fleet
+window was open.
 
 ## Trigger matrix
 
@@ -138,7 +143,9 @@ unconfigured. The browser reaches them through the Next.js proxies under
 - A Prometheus `fleet_push_notifications_sent_total` counter and the periodic
   `last_active_at` sweep of stale subscriptions (expired endpoints are
   already reaped on send).
-- Deep links into the exact card or run (#504/#508 follow-ups; chat pushes
-  now open their conversation) and schedule missed/blocked events.
+- Deep links into the exact card (#504/#508 follow-ups; chat pushes now
+  open their conversation, and a task link opens the task's record when no
+  fleet window is open) and
+  schedule missed/blocked events.
 - Email/Slack/Teams as additional `notify.PushSender`-style per-user
   backends.

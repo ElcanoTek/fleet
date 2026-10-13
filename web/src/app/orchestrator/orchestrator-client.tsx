@@ -89,6 +89,41 @@ function initialDashboardTab(): DashTab {
     : "tasks";
 }
 
+// initialLinkedTaskId reads a ?task=<id> link: where a task notification (the
+// browser push, the email, the webhook's log_url) lands, via the
+// /orchestrator/tasks/<id> redirect. Read lazily like initialDashboardTab.
+function initialLinkedTaskId(): string | null {
+  if (typeof window === "undefined") return null;
+  // Lowercased: the server writes a task id in lowercase, so an uppercased
+  // link still matches the task that comes back.
+  return new URLSearchParams(window.location.search).get("task")?.trim().toLowerCase() || null;
+}
+
+// transientLoadError is a failure that says nothing about the task itself: no
+// HTTP answer at all (fetch rejects with a TypeError), a rate limit, or a
+// server error.
+function transientLoadError(err: unknown): boolean {
+  if (err instanceof TypeError) return true;
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status === "number" && (status === 429 || status >= 500);
+}
+
+// TASK_ID is the shape of a task id (a UUID). A ?task= value of any other
+// shape is never fetched: "." or ".." would resolve the request to the task
+// list instead of one task.
+const TASK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// dropTaskParam takes ?task= back out of the address bar once the link has
+// been handled, so a reload shows the board rather than reopening the task.
+// A load that failed only for now (offline, rate-limited, a server error)
+// keeps it, so a reload retries the link.
+function dropTaskParam() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("task")) return;
+  url.searchParams.delete("task");
+  window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+}
+
 function OrchestratorInner({
   magicLinkLoginEnabled,
 }: {
@@ -149,6 +184,48 @@ function OrchestratorInner({
   const [deleteBusy, setDeleteBusy] = useState(false);
   const { showToast } = useToast();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // A task link opens that task's log once the session is known. The task is
+  // fetched by id rather than looked up on the board, because the board's
+  // current page need not list it. A task that cannot be loaded (deleted, not
+  // visible to this account, or not a task id at all) says so instead of
+  // opening nothing, and a row the user opened meanwhile is left open.
+  const [linkedTaskId, setLinkedTaskId] = useState<string | null>(initialLinkedTaskId);
+  useEffect(() => {
+    if (!session.signedIn || !linkedTaskId) return;
+    let stale = false;
+    const load = TASK_ID.test(linkedTaskId)
+      ? orchestratorApi.task(linkedTaskId)
+      : Promise.reject(new Error("not a task id"));
+    load
+      .then((task) => {
+        if (task.id.toLowerCase() !== linkedTaskId) throw new Error("a different task came back");
+        if (!stale) setLogTask((current) => current ?? task);
+      })
+      .then(
+        () => true,
+        (err: unknown) => {
+          if (stale) return true;
+          if (transientLoadError(err)) {
+            showToast("That task could not be loaded just now. Reload the page to try again.", "error");
+            return false;
+          }
+          showToast(
+            "That task could not be opened. It may have been deleted, or it is not visible to you.",
+            "error",
+          );
+          return true;
+        },
+      )
+      .then((handled) => {
+        if (stale) return;
+        if (handled) dropTaskParam();
+        setLinkedTaskId(null);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [session.signedIn, linkedTaskId, showToast]);
 
   // runNow resubmits the task as a fresh one-off run that starts immediately
   // (POST /tasks/{id}/rerun). The source is untouched — a recurring job keeps
