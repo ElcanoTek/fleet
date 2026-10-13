@@ -243,3 +243,27 @@ func TestRedactor_VendorPatternsAreSingleShot(t *testing.T) {
 		}
 	}
 }
+
+func TestIsPathListValue(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"/var/lib/fleet/workspace", true},
+		{":/var/lib/fleet/workspace", true},
+		{"/opt/data:/var/lib/fleet/workspace/", true},
+		{"/home/fleet/.cache/x-1_2@v3~", true},
+		{"", false},
+		{":", false},
+		{"relative/dir", false},
+		{"/var/lib:relative", false},
+		{"https://example.com/path", false},
+		{"/dir with space", false},
+		{"/Ab3+kQ9=", false},
+		{"sk-or-v1-0123456789abcdef", false},
+	} {
+		if got := IsPathListValue(tc.value); got != tc.want {
+			t.Errorf("IsPathListValue(%q) = %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}

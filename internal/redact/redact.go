@@ -441,6 +441,32 @@ func IsSecretEnvName(name string) bool {
 	return secretEnvNamePattern.MatchString(name)
 }
 
+// pathElementPattern matches one absolute filesystem path built only from the
+// characters deployment paths use. "+" and "=" are left out on purpose: they
+// are what standard base64 adds to this alphabet, so a token that merely
+// happens to start with "/" rarely passes.
+var pathElementPattern = regexp.MustCompile(`^/[A-Za-z0-9._@~-]+(/[A-Za-z0-9._@~-]*)*$`)
+
+// IsPathListValue reports whether value is an absolute filesystem path or a
+// colon-separated list of them (CUTLASS_ALLOWED_DIRS, a PATH-style setting).
+// Such a value is configuration, not a credential, and as a literal it would
+// blank every output that names a file under it — the run workspace included.
+// Callers that register env values wholesale use it, together with
+// IsSecretEnvName, to leave paths out.
+func IsPathListValue(value string) bool {
+	found := false
+	for _, part := range strings.Split(value, ":") {
+		if part == "" {
+			continue
+		}
+		if !pathElementPattern.MatchString(part) {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
 // RegisterEnvLiterals adds the values of secret-looking env vars (by name) to r
 // as literals. environ is in os.Environ() form ("NAME=value").
 func (r *Redactor) RegisterEnvLiterals(environ []string) {

@@ -431,6 +431,48 @@ func TestValidateConnectorParentEnvSeparation_RejectsRuntimeAndAccountOverlap(t 
 	}
 }
 
+// TestScrubParentConnectorState_LeavesPathsReadable pins the Bob's Discount
+// Furniture refresh failure: CUTLASS_ALLOWED_DIRS carries the workspace root,
+// and registering it as a secret literal masked every run-folder path in tool
+// output. A path under a non-credential name stays readable; a credential, and
+// a path under a credential-shaped name, are still scrubbed.
+func TestScrubParentConnectorState_LeavesPathsReadable(t *testing.T) {
+	t.Setenv("SCRUBTEST_ALLOWED_DIRS", "/srv/scrubtest-workspace")
+	t.Setenv("SCRUBTEST_CERT_KEY", "/srv/scrubtest-keys/client.pem")
+	t.Setenv("SCRUBTEST_TOKEN", "scrubtest-novel-credential-41f7")
+	bundleDir := mcpTestBundle(t, `mcp_servers:
+  - name: demo
+    type: stdio
+    command: /bin/true
+    always: true
+    env:
+      DIRS: "${SCRUBTEST_ALLOWED_DIRS}"
+      CERT: "${SCRUBTEST_CERT_KEY}"
+      TOKEN: "${SCRUBTEST_TOKEN}"
+    tools: [lookup]
+`)
+	bundle, err := clientconfig.Load(bundleDir)
+	if err != nil {
+		t.Fatalf("load bundle: %v", err)
+	}
+	if err := scrubParentConnectorState(bundle, &config.Config{}, map[string]agent.MCPServerSpec{}); err != nil {
+		t.Fatalf("scrubParentConnectorState: %v", err)
+	}
+	if os.Getenv("SCRUBTEST_ALLOWED_DIRS") != "" || os.Getenv("SCRUBTEST_TOKEN") != "" {
+		t.Fatal("connector environment survived scrub")
+	}
+	runPath := "saved to /srv/scrubtest-workspace/mcp-runs/task-9-1/data.parquet"
+	if got := agentcore.RedactSecrets(runPath); got != runPath {
+		t.Fatalf("workspace path was masked: %q", got)
+	}
+	if got := agentcore.RedactSecrets("token scrubtest-novel-credential-41f7 rejected"); strings.Contains(got, "scrubtest-novel-credential-41f7") {
+		t.Fatalf("connector credential not scrubbed: %q", got)
+	}
+	if got := agentcore.RedactSecrets("cert at /srv/scrubtest-keys/client.pem"); strings.Contains(got, "/srv/scrubtest-keys/client.pem") {
+		t.Fatalf("path under a credential-shaped name not scrubbed: %q", got)
+	}
+}
+
 func TestStartProductionMCPRuntime_FailureDoesNotScrubParent(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not found")
