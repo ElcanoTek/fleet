@@ -245,6 +245,42 @@ func (c *Client) Stream(ctx context.Context, message, convID string, onEvent fun
 // StreamInput is Stream with an idempotency key (inputID, "" = none): a
 // retried POST carrying the same id cannot start or queue the message twice.
 func (c *Client) StreamInput(ctx context.Context, message, convID, inputID string, onEvent func(Event)) (string, error) {
+	id, _, err := c.streamTurn(ctx, message, convID, inputID, onEvent, false)
+	return id, err
+}
+
+// StreamTurn is StreamInput for a caller that needs the turn's outcome when
+// the turn ends, not when its stream does. The server keeps a turn's stream
+// open past its terminal frame for its post-turn work: by default, titling a
+// conversation after its first turn, a model call of a few seconds; with
+// memory auto-indexing on, mining every turn for memories too. StreamTurn
+// returns as soon as the terminal frame has been handed to onEvent, with that
+// frame's outcome, and reads the rest of the stream in the background without
+// passing it on; rest closes when the stream has ended (or ctx ends it). The
+// outcome is StreamInput's, except when a second terminal frame follows the
+// first (a turn.error the server sends if its post-turn work fails after the
+// turn completed): StreamInput reports the last, StreamTurn the first, the
+// outcome of the turn itself. The server counts the turn as running
+// until then, so a message posted to the conversation before rest closes is
+// queued behind it. ctx must outlive the call for that read: cancelling it
+// ends the read, and closes rest, at once. For an outcome without a stream
+// (a queue acknowledgement, a refusal, a stream that ended before its
+// terminal frame), rest is already closed.
+func (c *Client) StreamTurn(ctx context.Context, message, convID, inputID string, onEvent func(Event)) (string, <-chan struct{}, error) {
+	return c.streamTurn(ctx, message, convID, inputID, onEvent, true)
+}
+
+// noRest is the rest of a stream that has nothing left to read.
+var noRest = func() <-chan struct{} {
+	c := make(chan struct{})
+	close(c)
+	return c
+}()
+
+// streamTurn posts a turn and reads its stream. early makes it StreamTurn:
+// it returns at the terminal frame and reads the rest in the background.
+// Otherwise it is StreamInput: it reads the stream to its end first.
+func (c *Client) streamTurn(ctx context.Context, message, convID, inputID string, onEvent func(Event), early bool) (string, <-chan struct{}, error) {
 	body, err := json.Marshal(turnRequest{
 		Message:        message,
 		ConversationID: convID,
@@ -255,11 +291,11 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 		InputIDScope:   c.inputIDScope(inputID),
 	})
 	if err != nil {
-		return convID, err
+		return convID, noRest, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.ServerURL+"/chat", bytes.NewReader(body))
 	if err != nil {
-		return convID, err
+		return convID, noRest, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
@@ -267,9 +303,14 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return convID, fmt.Errorf("connect %s: %w", c.cfg.ServerURL, err)
+		return convID, noRest, fmt.Errorf("connect %s: %w", c.cfg.ServerURL, err)
 	}
-	defer resp.Body.Close()
+	readsBody := false // the stream's reader closes the body instead
+	defer func() {
+		if !readsBody {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	// A queue acknowledgement is JSON, not a stream: 202 for a newly queued
 	// message, 200 for an idempotent replay of one already accepted.
@@ -289,15 +330,15 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 		derr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ack)
 		if derr == nil && ack.Queued {
 			id := orDefault(ack.ConversationID, convID)
-			return id, &QueuedError{ConversationID: id, InputID: ack.Input.ID, Position: ack.Input.Position, Ahead: ack.Input.Ahead, Mode: ack.Input.Mode, State: ack.Input.State, Replay: resp.StatusCode == http.StatusOK}
+			return id, noRest, &QueuedError{ConversationID: id, InputID: ack.Input.ID, Position: ack.Input.Position, Ahead: ack.Input.Ahead, Mode: ack.Input.Mode, State: ack.Input.State, Replay: resp.StatusCode == http.StatusOK}
 		}
 		// An unreadable acknowledgement (the connection closed mid-body) is not
 		// a refusal: fleet may well have queued the message. Report it as a
 		// transport failure — an unknown outcome — never as a definite status.
-		return convID, fmt.Errorf("server accepted the request (%d) but its acknowledgement was unreadable: %v", resp.StatusCode, orDefault(errString(derr), "not a queue acknowledgement"))
+		return convID, noRest, fmt.Errorf("server accepted the request (%d) but its acknowledgement was unreadable: %v", resp.StatusCode, orDefault(errString(derr), "not a queue acknowledgement"))
 	}
 	if resp.StatusCode != http.StatusOK {
-		return convID, c.refusal(resp)
+		return convID, noRest, c.refusal(resp)
 	}
 
 	newConvID := convID
@@ -316,45 +357,84 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 	if hdr := strings.TrimSpace(resp.Header.Get("X-Fleet-Turn-Id")); hdr != "" {
 		onEvent(Event{Name: "turn.identified", Data: map[string]any{"turn_id": hdr}})
 	}
-	terminalSeen := false
-	var terminalErr error
-	perr := parseSSE(resp.Body, func(ev Event) {
-		if ev.Name == "conversation" {
-			if id := ev.Str("id"); id != "" {
-				newConvID = id
+	type outcome struct {
+		convID string
+		err    error
+	}
+	// Buffered: read reports once, early or at the stream's end, and never
+	// waits for the report to be taken.
+	result := make(chan outcome, 1)
+	rest := make(chan struct{})
+	// parse reads the stream to its end. Early, it sends the outcome on result
+	// as the terminal frame is handled, and reports that it did (sent);
+	// otherwise it returns the outcome.
+	parse := func() (o outcome, sent bool) {
+		terminalSeen, reported := false, false
+		var terminalErr error
+		perr := parseSSE(resp.Body, func(ev Event) {
+			if reported {
+				return // the turn has ended: the rest of the stream is dropped
 			}
+			if ev.Name == "conversation" {
+				if id := ev.Str("id"); id != "" {
+					newConvID = id
+				}
+			}
+			switch ev.Name {
+			case "turn.completed":
+				terminalSeen = true
+			case "turn.cancelled":
+				terminalSeen = true
+				terminalErr = context.Canceled
+			case "turn.error":
+				terminalSeen = true
+				terminalErr = fmt.Errorf("turn failed: %s", orDefault(ev.Str("message"), "the server reported an error"))
+			case "turn.model_required":
+				terminalSeen = true
+				terminalErr = fmt.Errorf("turn requires another model: %s", orDefault(ev.Str("message"), "select a different model and retry"))
+			}
+			onEvent(ev)
+			if early && terminalSeen {
+				reported = true
+				result <- outcome{newConvID, terminalErr}
+			}
+		})
+		// A terminal event is authoritative: turn.completed is emitted only
+		// after the canonical history commit, so a transport close racing just
+		// afterward must not downgrade that committed outcome to cancellation
+		// or read failure.
+		switch {
+		case reported:
+			return outcome{}, true
+		case terminalErr != nil:
+			return outcome{newConvID, terminalErr}, false
+		case terminalSeen:
+			return outcome{newConvID, nil}, false
+		case ctx.Err() != nil:
+			return outcome{newConvID, ctx.Err()}, false
+		case perr != nil:
+			return outcome{newConvID, perr}, false
 		}
-		switch ev.Name {
-		case "turn.completed":
-			terminalSeen = true
-		case "turn.cancelled":
-			terminalSeen = true
-			terminalErr = context.Canceled
-		case "turn.error":
-			terminalSeen = true
-			terminalErr = fmt.Errorf("turn failed: %s", orDefault(ev.Str("message"), "the server reported an error"))
-		case "turn.model_required":
-			terminalSeen = true
-			terminalErr = fmt.Errorf("turn requires another model: %s", orDefault(ev.Str("message"), "select a different model and retry"))
+		return outcome{newConvID, fmt.Errorf("stream ended before a terminal turn event")}, false
+	}
+	// read parses the stream, then closes it and rest, before an outcome it
+	// did not report early: a caller handed that outcome finds rest closed.
+	read := func() {
+		o, sent := parse()
+		_ = resp.Body.Close()
+		close(rest)
+		if !sent {
+			result <- o
 		}
-		onEvent(ev)
-	})
-	// A terminal event is authoritative: turn.completed is emitted only after
-	// the canonical history commit, so a transport close racing just afterward
-	// must not downgrade that committed outcome to cancellation or read failure.
-	if terminalErr != nil {
-		return newConvID, terminalErr
 	}
-	if terminalSeen {
-		return newConvID, nil
+	readsBody = true
+	if early {
+		go read()
+	} else {
+		read()
 	}
-	if err := ctx.Err(); err != nil {
-		return newConvID, err
-	}
-	if perr != nil {
-		return newConvID, perr
-	}
-	return newConvID, fmt.Errorf("stream ended before a terminal turn event")
+	o := <-result
+	return o.convID, rest, o.err
 }
 
 // attachFrozenArgsRaw replaces frozen_args with the exact JSON bytes so
