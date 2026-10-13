@@ -431,21 +431,21 @@ agent runs" under "Buzz"), `--server` stays `http://localhost:8080` and
 
 `fleet` must be built for the editor's computer, and be vTBD or later: an older
 one sends PyCharm's files on as bare links and ends a new chat's first reply
-seconds late. Copy the token file there without printing the token: see steps 1
-and 4 of "Add fleet in Buzz Desktop" (step 1's minimum version is Buzz's). The
-token can act as any fleet user: keep the file readable only by you, and never
-put the token itself in `acp.json`. Give `command` an absolute path (checked):
-an IDE started from the Dock may not see your shell's `PATH`. PyCharm starts
-`fleet acp` for each new chat, and an edit to `acp.json` applies to the next
-one (checked).
+seconds late. For building `fleet` and copying the token file without printing
+it, see steps 1 and 4 of "Add fleet in Buzz Desktop" (step 1's minimum version
+is Buzz's). The token can act as any fleet user: keep the file readable only by
+you, and never put the token itself in `acp.json`. Give `command` an absolute
+path (checked): an IDE started from the Dock may not see your shell's `PATH`.
+PyCharm starts `fleet acp` for each new chat, and an edit to `acp.json` applies
+to the next one (checked).
 
 `use_idea_mcp` and `use_custom_mcp` matter. Without `"use_idea_mcp": false`,
 PyCharm sent fleet its own built-in MCP server (`pycharm`), although JetBrains
 documents that setting as off by default. `use_custom_mcp`, on by default
 according to JetBrains, adds every MCP server you configured in the IDE (not
-checked: none was configured). fleet uses neither (see `session/new`), so
-without these two lines the first reply in each chat starts with a note naming
-them. With both set to false, PyCharm sent none (checked).
+checked: none was configured). fleet uses none of these servers (see
+`session/new`), so without these two lines the first reply in each chat starts
+with a note naming them. With both set to false, PyCharm sent none (checked).
 
 PyCharm sends files as links only: a file you attach with `@`, and, with every
 message, the file open in the editor. fleet asks PyCharm for each one's text
