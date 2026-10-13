@@ -125,8 +125,8 @@ answers both in one reply. Files attached in Buzz cannot be read by fleet,
 and Buzz's agent instructions and memories do not reach it. The conversation
 is also in fleet's web chat, under the user the agent runs as.
 
-MCP servers your editor sends are not used by fleet: the ones you set up, and
-in JetBrains its own built-in one. fleet's tools and connectors are the ones your
+MCP servers your editor sends are not used by fleet: the ones you set up, and in
+JetBrains its own built-in one. fleet's tools and connectors are the ones your
 operator set up, and they run on the fleet server. The first reply in a session
 says so, naming the servers your editor sent.
 

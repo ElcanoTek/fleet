@@ -20,8 +20,9 @@ unlinked file, read like an unresolved gap. It is not one.
 
 #984 shipped differently from its plan. The plan's bridge (a Buzz agent posting
 fleet turns over the chat API) became `fleet acp`, an ACP agent in the fleet
-binary that any ACP client launches, plus a small adapter for Buzz's
-`buzz-acp`, which expects an agent to post its own replies. The planned
+binary that any ACP client launches, plus `fleet-buzz-bridge`, a small adapter
+outside fleet, for Buzz's `buzz-acp`, which expects an agent to post its own
+replies. The planned
 `docs/BUZZ.md` runbook is the "Buzz" section of `docs/ACP.md`.
 
 For the current plan-of-record on anything else, prefer the GitHub issue.

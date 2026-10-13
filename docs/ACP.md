@@ -285,8 +285,8 @@ stops the turn server-side as described under "Protocol mapping". agent-shell
 marks the turn "Cancelled" and, unlike CodeCompanion, keeps listening, so it
 shows the notes fleet sends after a stop, such as the note that the turn had
 already finished before the Stop arrived (checked live; now rare, as a prompt
-answers as its turn ends). How the shell ends matters too. Quitting Emacs (`C-x
-C-c`, answering yes to killing its active processes) sends `fleet acp`
+answers as its turn ends). How the shell ends matters too. Quitting Emacs
+(`C-x C-c`, answering yes to killing its active processes) sends `fleet acp`
 `SIGHUP`, so a running turn is stopped (checked live). Killing the agent-shell
 buffer (`C-x k`) does not: acp.el ends the agent with `delete-process`, which
 sends `SIGKILL`, and the turn keeps running server-side (checked live). Stop it
@@ -443,16 +443,16 @@ with a note naming them; with them PyCharm sends none (checked).
 PyCharm sends files as links only: a file you attach with `@`, and, with every
 message, the file open in the editor. fleet asks PyCharm for each one's text
 and inlines it, up to 100 KB of a file (see "Linked files" under "Protocol
-mapping"). The `fleet` on the editor's computer does this, so it must be a
-build that reads linked files. So the file open in the editor goes to fleet
-with every message, each time adding its text to the conversation and to the
-turn's cost; close a file holding secrets before you chat. With `main.py`
+mapping"); the `fleet` on the editor's computer does this, so it must be a
+build that reads linked files. The file open in the editor therefore goes to
+fleet with every message, each time adding its text to the conversation and to
+the turn's cost; close a file holding secrets before you chat. With `main.py`
 open, the model quoted its first line; a 376 KB file that was both open and
 attached was read once and cut to its first 100 KB, which the model reported
-(checked). PyCharm offers no "Image…" attachment for fleet, since
-`initialize` advertises no image support (checked), and a screenshot dropped
-on the chat input is sent as its file name only, as text, with no warning
-(checked).
+(checked). PyCharm offers no "Image…" attachment in a fleet chat (checked;
+`initialize` advertises no image support, though a chat whose session fleet
+refused did offer it), and a screenshot dropped on the chat input is sent as
+its file name only, as text, with no warning (checked).
 
 Replies stream, with the model's reasoning under a collapsible "Thought for
 Ns" line and each tool call by name (checked). Whether answer text streams
@@ -1209,12 +1209,14 @@ What shipped:
   finish, then ran.
 - Checked live against a real `fleet serve` on 2026-10-13: Emacs agent-shell
   0.85.3 linked a 125 KB `@` mention (over its embed limit); it was read
-  through agent-shell and cut to its first 100 KB. From a script, with
-  `openai/gpt-6-luna-pro`: before a prompt answered at its turn's end, a new
-  chat's first reply ended 5–6 s after its answer, and a second `POST /chat`
-  sent right after `turn.completed` was queued (`202`); after, the reply ended
-  0.32 s after its answer, a follow-up sent at once was answered rather than
-  queued, and so was one sent at once after a Stop mid-turn.
+  through agent-shell and cut to its first 100 KB.
+- Checked against a real `fleet serve` on 2026-10-13 from a script, with
+  `openai/gpt-6-luna-pro`. Without the change that answers a prompt at its
+  turn's end, a new chat's first reply ended 5–6 s after its answer, and a
+  second `POST /chat` sent right after `turn.completed` was queued (`202`).
+  With it, the reply ended 0.32 s after its answer, a follow-up sent at once
+  was answered rather than queued, and so was one sent at once after a Stop
+  mid-turn.
 - Tests cover a prompt answering at its turn's terminal frame. In
   `internal/chattui`, `StreamTurn` returns at the terminal frame, with that
   frame's outcome for each kind of terminal frame (the first, when a second
