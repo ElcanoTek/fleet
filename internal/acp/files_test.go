@@ -129,15 +129,16 @@ func TestLinkedFileTextReplacesItsLink(t *testing.T) {
 
 // The forms a client writes a local file in: localhost as the host, a
 // percent-encoded path, a fragment naming lines. The text's heading names
-// the whole file, since the whole file follows.
+// the whole file, since the whole file follows, and keeps the link as sent,
+// so the model knows which lines the user pointed at.
 func TestLinkedFileURIForms(t *testing.T) {
 	r := &fakeReader{files: map[string]string{"/v/my file.go": "package a\n", "/v/b.go": "package b\n"}}
 	got := submit(t, readingAgent(r),
 		acpsdk.ResourceLinkBlock("my file.go", "file://localhost/v/my%20file.go"),
-		acpsdk.ResourceLinkBlock("b.go", "file:///v/b.go#L5"),
+		acpsdk.ResourceLinkBlock("b.go (lines 5-9)", "file:///v/b.go#L5:9"),
 	)
 	want := "Contents of file://localhost/v/my%20file.go:\n````\npackage a\n\n````\n\n" +
-		"Contents of file:///v/b.go:\n````\npackage b\n\n````"
+		"Contents of file:///v/b.go (linked as [b.go (lines 5-9)](file:///v/b.go#L5:9)):\n````\npackage b\n\n````"
 	if got != want {
 		t.Errorf("submitted\n%q\nwant\n%q", got, want)
 	}
@@ -194,7 +195,10 @@ func TestLinkedFileLimits(t *testing.T) {
 			"/v/long.go": rows(1800, 90), // 159 KB; the limit falls mid-line
 			"/v/img.png": "\x89PNG\r\n\x1a\n\x00\x00",
 		},
-		errs: map[string]error{"/v/secret": &acpsdk.RequestError{Code: -32603, Message: "path is outside the project"}},
+		errs: map[string]error{
+			"/v/secret": &acpsdk.RequestError{Code: -32603, Message: "path is outside the project"},
+			"/v/denied": &acpsdk.RequestError{Code: -32603, Message: "Internal error", Data: map[string]any{"error": "permission denied"}},
+		},
 	}
 	a := readingAgent(r)
 	for _, tc := range []struct {
@@ -217,6 +221,8 @@ func TestLinkedFileLimits(t *testing.T) {
 			"[x](file:///v/img.png) (not included: it is not a text file)", true},
 		{"refused", acpsdk.ResourceLinkBlock("x", "file:///v/secret"),
 			"[x](file:///v/secret) (not included: the editor could not read it: path is outside the project)", true},
+		{"refused, with detail", acpsdk.ResourceLinkBlock("x", "file:///v/denied"),
+			"[x](file:///v/denied) (not included: the editor could not read it: Internal error: permission denied)", true},
 		{"missing", acpsdk.ResourceLinkBlock("x", "file:///v/gone"),
 			"[x](file:///v/gone) (not included: the editor could not read it: no such file)", true},
 	} {
@@ -260,7 +266,8 @@ func TestCutAt(t *testing.T) {
 // The files of one message share linkedFilesBudget. A file that fits what
 // is left goes whole, however little that is; the one that reaches the
 // limit is cut, with a note naming the shared limit; and once too little is
-// left to cut to, a file that does not fit is left out.
+// left to cut to, a file that does not fit is left out: after it is read,
+// or, when its size is known, without reading it.
 func TestLinkedFilesShareOneBudget(t *testing.T) {
 	r := &fakeReader{files: map[string]string{"/v/small": "small", "/v/tiny": "tiny!"}}
 	names := []string{"a", "b", "c", "small", "d", "tiny", "e"}
@@ -271,6 +278,7 @@ func TestLinkedFilesShareOneBudget(t *testing.T) {
 		}
 		blocks = append(blocks, acpsdk.ResourceLinkBlock(name, "file:///v/"+name))
 	}
+	blocks = append(blocks, sizedLink("f", "file:///v/f", 2000))
 	got := submit(t, readingAgent(r), blocks...)
 	for _, want := range []string{
 		"Contents of file:///v/a:\n````\n" + lines(1584) + "\n````",
@@ -279,9 +287,15 @@ func TestLinkedFilesShareOneBudget(t *testing.T) {
 		"Contents of file:///v/d (the first 3 KB of 99 KB: fleet acp includes up to 300 KB of linked files in one message):\n````\n" + lines(47) + "\n````",
 		"Contents of file:///v/tiny:\n````\ntiny!\n````", // 59 bytes left
 		"[e](file:///v/e) (not included: this message already carries 300 KB of linked files, the most fleet acp sends)",
+		"[f](file:///v/f) (not included: this message already carries 300 KB of linked files, the most fleet acp sends)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("submitted text is missing %.200q", want)
+		}
+	}
+	for _, path := range r.asked() {
+		if path == "/v/f" {
+			t.Error("f was read although its size showed it could not fit")
 		}
 	}
 }
@@ -297,22 +311,27 @@ func TestUnknownSizeAsksForBoundedLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &fakeReader{files: map[string]string{
-		onDisk:      "a\n",
-		"/v/sized":  "b\n",
-		"/v/buffer": rows(linkedFileLines, 2), // as many lines as were asked for
+		onDisk:     "a\n",
+		"/v/sized": "b\n",
+		// As many lines as were asked for, the last one's line break
+		// dropped: the answer may stop short of the file's end.
+		"/v/buffer": strings.TrimSuffix(rows(linkedFileLines, 2), "\n"),
+		"/v/zero":   "c\n",
 	}}
 	got := submit(t, readingAgent(r),
 		acpsdk.ResourceLinkBlock("a", fileURI(onDisk)),
 		sizedLink("sized", "file:///v/sized", 2),
 		acpsdk.ResourceLinkBlock("buffer", "file:///v/buffer"),
+		sizedLink("zero", "file:///v/zero", 0), // a size of 0 is no size
 	)
 	r.mu.Lock()
 	reqs := append([]acpsdk.ReadTextFileRequest(nil), r.reqs...)
 	r.mu.Unlock()
-	if len(reqs) != 3 {
-		t.Fatalf("%d reads, want 3", len(reqs))
+	if len(reqs) != 4 {
+		t.Fatalf("%d reads, want 4", len(reqs))
 	}
-	for i, wantLimit := range []*int{nil, nil, func() *int { n := linkedFileLines; return &n }()} {
+	bounded := func() *int { n := linkedFileLines; return &n }()
+	for i, wantLimit := range []*int{nil, nil, bounded, bounded} {
 		switch lim := reqs[i].Limit; {
 		case wantLimit == nil && lim != nil:
 			t.Errorf("read of %s asked for %d lines, want the whole file", reqs[i].Path, *lim)

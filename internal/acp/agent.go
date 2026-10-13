@@ -89,6 +89,9 @@ type Agent struct {
 	// before a prompt's file links are read (withLinkedFiles).
 	files       fileReader
 	clientReads atomic.Bool
+	// connDone closes when the client's connection does: the SDK
+	// connection's Done, when it has one (SetConnection). See catchHangUp.
+	connDone <-chan struct{}
 	// lifetime ends when the ACP client goes away: its connection closes
 	// (stdin EOF, see SetConnection), a write to stdout fails (it stopped
 	// reading), or `fleet acp` gets a signal to stop (run). hangUp ends it.
@@ -186,9 +189,9 @@ type session struct {
 	// it, so it goes out at most once per session (sendMCPNotice). A prompt
 	// that ends before that point (refused, cancelled before it got the
 	// session or while the files it links to were read, or left when the
-	// client went away) leaves it for the next. One
-	// cancelled while the notice was being written is not submitted, but the
-	// notice has gone out, so it is not repeated. Under mu.
+	// client went away) leaves it for the next. One cancelled while the
+	// notice was being written is not submitted, but the notice has gone
+	// out, so it is not repeated. Under mu.
 	mcpNotice string
 	// unsettled holds, per prompt text (by its hash), the key of every
 	// prompt whose outcome is unknown: the request may have been accepted
@@ -334,10 +337,28 @@ func (a *Agent) SetConnection(c updater) {
 		a.files = r
 	}
 	if d, ok := c.(interface{ Done() <-chan struct{} }); ok {
+		a.connDone = d.Done()
 		go func() {
 			<-d.Done()
 			a.hangUp()
 		}()
+	}
+}
+
+// catchHangUp ends the agent's lifetime now if the client's connection has
+// closed. The watcher SetConnection starts does that too, but on its own
+// goroutine: a request the agent sent the client (a file read) fails on the
+// same close, and the prompt that sent it must not run on, toward
+// submission, before the watcher has run. hangUp cancels every prompt's
+// stop signal synchronously, so the prompt's next check sees it.
+func (a *Agent) catchHangUp() {
+	if a.connDone == nil {
+		return
+	}
+	select {
+	case <-a.connDone:
+		a.hangUp()
+	default:
 	}
 }
 

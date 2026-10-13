@@ -59,11 +59,11 @@ const (
 )
 
 // linkedFilesWait bounds all of one message's reads, so a client that never
-// answers one holds the prompt for at most this long. A client that sends
-// session/prompt as a notification waits it out on every read: the SDK
-// hands an agent a read's answer only once the notifications sent before
-// it have been handled, the prompt running the read among them. A var so
-// tests can shorten it.
+// answers one holds the prompt for at most this long. A prompt a client sends
+// as a notification waits it out once and gets none of its files: the SDK
+// hands an agent a read's answer only once the notifications sent before it
+// have been handled, the prompt running the read among them. A var so tests
+// can shorten it.
 var linkedFilesWait = 10 * time.Second
 
 // withLinkedFiles is what a prompt submits to fleet: message (promptText's),
@@ -120,7 +120,13 @@ func (a *Agent) withLinkedFiles(ctx context.Context, sid acpsdk.SessionId, block
 			return linkMarkdown(l) + " (not included: " + note + ")", true
 		}
 		budget -= len(text)
-		return contentsOf(wholeFile(l.Uri), note, text), true
+		heading := wholeFile(l.Uri)
+		if heading != l.Uri {
+			// The link named part of the file (#L5:9): keep it as sent,
+			// so the model knows which lines the user pointed at.
+			note = strings.TrimSuffix("linked as "+linkMarkdown(l)+"; "+note, "; ")
+		}
+		return contentsOf(heading, note, text), true
 	})
 	if err != nil {
 		return message // not reached: promptText accepted these blocks
@@ -145,9 +151,10 @@ func (a *Agent) readLinked(ctx context.Context, sid acpsdk.SessionId, l *acpsdk.
 			return "", "it is not a regular file", false
 		}
 		size = int(fi.Size())
-	} else if l.Size != nil && *l.Size >= 0 {
+	} else if l.Size != nil && *l.Size > 0 {
 		// Not on this machine (a buffer never saved, say): the client may
-		// hold it, and its link may say how large it is.
+		// hold it, and its link may say how large it is. A size of 0 is
+		// taken as unknown: a client may send it for a buffer it never sized.
 		size = *l.Size
 	}
 	if size > linkedFileReadMax {
@@ -163,15 +170,11 @@ func (a *Agent) readLinked(ctx context.Context, sid acpsdk.SessionId, l *acpsdk.
 	}
 	resp, err := a.files.ReadTextFile(ctx, req)
 	if err != nil {
+		a.catchHangUp() // a read fails at once when the client goes away
 		if ctx.Err() != nil {
 			return "", stoppedNote(ctx), false
 		}
-		reason := err.Error()
-		var re *acpsdk.RequestError
-		if errors.As(err, &re) {
-			reason = re.Message
-		}
-		return "", "the editor could not read it: " + errorMessage(reason), false
+		return "", "the editor could not read it: " + errorMessage(clientError(err)), false
 	}
 	text = resp.Content
 	if strings.ContainsRune(text, 0) {
@@ -204,6 +207,32 @@ func stoppedNote(ctx context.Context) string {
 		return fmt.Sprintf("the %s fleet acp waits for a message's linked files ran out before it arrived", linkedFilesWait)
 	}
 	return "the message was cancelled before it was read"
+}
+
+// clientError is what the client said about a failed request: its error's
+// message, and the detail it put in data when the message is only the name
+// of the error's code ("Internal error").
+func clientError(err error) string {
+	var re *acpsdk.RequestError
+	if !errors.As(err, &re) {
+		return err.Error()
+	}
+	detail := ""
+	switch d := re.Data.(type) {
+	case string:
+		detail = d
+	case map[string]any:
+		for _, k := range []string{"error", "message", "details"} {
+			if v, ok := d[k].(string); ok && v != "" {
+				detail = v
+				break
+			}
+		}
+	}
+	if detail == "" || detail == re.Message {
+		return re.Message
+	}
+	return re.Message + ": " + detail
 }
 
 func budgetNote() string {
