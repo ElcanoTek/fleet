@@ -7,9 +7,12 @@
 // Notification.requestPermission() → register /sw.js → subscribe with the
 // server's VAPID public key (fetched, never build-time embedded) → store the
 // subscription server-side. Disabling unsubscribes locally AND deletes the
-// stored row. The extra real-world states the design doesn't show
-// (unsupported browser / operator hasn't configured VAPID / permission
-// denied) render as a note under the description with the switch disabled.
+// stored row. "On" means the server holds this browser's subscription for the
+// signed-in user, not merely that the browser holds one; signing out lets the
+// browser's subscription go (shared/signOut). The extra real-world states the
+// design doesn't show (unsupported browser / operator hasn't configured VAPID
+// / permission denied) render as a note under the description with the switch
+// disabled.
 
 import { useEffect, useState } from "react";
 import { SetRow, SetSwitch } from "./ui/atoms";
@@ -47,6 +50,21 @@ async function fetchVapidKey(): Promise<string | null> {
   return data.key;
 }
 
+// serverHoldsSubscription asks whether the signed-in user holds the stored
+// row for this browser's subscription endpoint. Anything but a 200 throws, so
+// a failed check is never read as "not yours".
+async function serverHoldsSubscription(endpoint: string): Promise<boolean> {
+  const res = await fetch("/api/push/status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoint }),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Failed to check notifications: ${res.status}`);
+  const data = (await res.json()) as { subscribed?: boolean };
+  return data.subscribed === true;
+}
+
 export function BrowserNotificationsRow() {
   const [state, setState] = useState<PushState>("loading");
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +79,16 @@ export function BrowserNotificationsRow() {
       if (Notification.permission === "denied") return "denied" as const;
       const reg = await navigator.serviceWorker.getRegistration("/sw.js");
       const sub = await reg?.pushManager.getSubscription();
-      return sub ? ("enabled" as const) : ("disabled" as const);
+      if (!sub) return "disabled" as const;
+      // A subscription in this browser counts only if the server holds it for
+      // the signed-in user. It can be another account's (someone else turned
+      // notifications on in this browser) or one the server has dropped; either
+      // way nothing reaches this user through it, so the switch reads off and
+      // the browser lets it go, which also stops another account's alerts
+      // arriving here.
+      if (await serverHoldsSubscription(sub.endpoint)) return "enabled" as const;
+      await sub.unsubscribe().catch(() => undefined);
+      return "disabled" as const;
     })()
       .then((next) => {
         if (!stale) setState(next);
@@ -109,6 +136,11 @@ export function BrowserNotificationsRow() {
       }
       if (!res.ok && res.status !== 204) {
         throw new Error((await res.text()) || `Subscribe failed: ${res.status}`);
+      }
+      // Another tab's Settings may have let this browser's subscription go
+      // while it was being stored (it reads "not yours" until the store lands).
+      if ((await reg.pushManager.getSubscription())?.endpoint !== sub.endpoint) {
+        throw new Error("Notifications were turned off in another tab. Turn them on again.");
       }
       setState("enabled");
     } catch (e: unknown) {

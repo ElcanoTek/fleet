@@ -107,3 +107,40 @@ func TestPushSubscriptions_UpsertValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestPushSubscriptions_HasUser answers for the owner only, follows a
+// re-subscribe that hands the endpoint to another account, and is
+// case-insensitive on the email like every other push query.
+func TestPushSubscriptions_HasUser(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const ep = "https://push.example/held"
+
+	held := func(user string) bool {
+		t.Helper()
+		ok, err := s.HasUserPushSubscription(ctx, user, ep)
+		if err != nil {
+			t.Fatalf("has %s: %v", user, err)
+		}
+		return ok
+	}
+	if held("u@x.com") {
+		t.Fatal("held before any upsert")
+	}
+	if err := s.UpsertPushSubscription(ctx, "u@x.com", ep, "fake-auth", "fake-p256dh"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if !held("u@x.com") || !held("U@X.com") {
+		t.Error("owner does not hold its own row")
+	}
+	if held("other@x.com") {
+		t.Error("another account holds the owner's row")
+	}
+	// The same browser re-subscribed while another account was signed in.
+	if err := s.UpsertPushSubscription(ctx, "other@x.com", ep, "fake-auth", "fake-p256dh"); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	if held("u@x.com") || !held("other@x.com") {
+		t.Error("ownership did not follow the newest claim")
+	}
+}
