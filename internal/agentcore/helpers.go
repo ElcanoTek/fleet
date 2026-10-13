@@ -115,6 +115,32 @@ func sendEmailSucceeded(result string) bool {
 	return int(statusCode) == 202
 }
 
+// emailProviderRejected reports whether a summary-email tool (send_email,
+// send_template_email) came back over a clean transport carrying a provider
+// status that is not 2xx — SES or SendGrid answering {"status_code":500}, say
+// (#1714). mcpReportedFailure only reads the cutlass "success"/"error"
+// convention, so without this such a result counted as a successful execution
+// and discharged the email's critical-action commitment although nothing was
+// delivered. A result with no numeric status_code is left to
+// mcpReportedFailure, so email servers that report differently keep their
+// accounting.
+func emailProviderRejected(toolName, result string) bool {
+	if !isSummaryEmailTool(toolName) {
+		return false
+	}
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" || trimmed[0] != '{' {
+		return false
+	}
+	var probe struct {
+		StatusCode *float64 `json:"status_code"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &probe); err != nil || probe.StatusCode == nil {
+		return false
+	}
+	return *probe.StatusCode < 200 || *probe.StatusCode >= 300
+}
+
 // emailDedupKey returns the duplicate-send key for an email tool call.
 // Prefers the semantic fingerprint (normalized recipients/subject/body) so
 // cosmetic JSON differences cannot bypass the duplicate-send guard. Falls back

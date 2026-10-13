@@ -1102,8 +1102,10 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 	// does NOT return a per-record results[] that is a FAILED execution: it
 	// must not discharge a commitment and counts against the retry budget.
 	// Batch tools that DO return results[] are accounted per-record below
-	// (parseDealOutcomes), not via this flag.
-	effectiveSucceeded := succeeded && !mcpReportedFailure(resultText)
+	// (parseDealOutcomes), not via this flag. An email tool whose provider
+	// answered with a non-2xx status_code delivered nothing either (#1714).
+	effectiveSucceeded := succeeded && !mcpReportedFailure(resultText) &&
+		!emailProviderRejected(toolName, resultText)
 
 	if isEmailTool(toolName) && succeeded {
 		if sendEmailSucceeded(strings.TrimSpace(resultText)) {
