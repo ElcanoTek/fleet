@@ -132,6 +132,46 @@ func (s *Server) pushStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"subscribed": held})
 }
 
+// pushRenewRequest is a browser's new PushSubscription (sub.toJSON()) plus the
+// endpoint of the one it replaces.
+type pushRenewRequest struct {
+	OldEndpoint string `json:"old_endpoint"`
+	pushSubscribeRequest
+}
+
+// pushRenew handles POST /push/renew: move the caller's row from old_endpoint
+// to the browser's new subscription, {"renewed": bool}. The browser renews
+// after the operator rotates the VAPID keys — a subscription made with the old
+// key is refused by the push service for every send signed with the new one.
+// It answers false, changing nothing, unless the caller holds the old row, so
+// a browser holding another account's subscription cannot hand it to whoever
+// is signed in now; the browser then drops the subscription it just made.
+func (s *Server) pushRenew(w http.ResponseWriter, r *http.Request) {
+	// Method first, then readiness, as for the other push routes.
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.pushReady(w) {
+		return
+	}
+	var req pushRenewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.OldEndpoint) == "" || strings.TrimSpace(req.Endpoint) == "" || req.Keys.Auth == "" || req.Keys.P256dh == "" {
+		http.Error(w, "old_endpoint, endpoint and keys (auth, p256dh) are required", http.StatusBadRequest)
+		return
+	}
+	renewed, err := s.store.RenewPushSubscription(r.Context(), userFromCtx(r.Context()), req.OldEndpoint, req.Endpoint, req.Keys.Auth, req.Keys.P256dh)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]bool{"renewed": renewed})
+}
+
 // pushVAPIDPublicKey handles GET /push/vapid-public-key: the non-secret
 // application server key the browser subscribes with. Served here so the
 // client never needs a build-time NEXT_PUBLIC_* embed of it.

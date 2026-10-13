@@ -15,6 +15,14 @@
 // disabled.
 
 import { useEffect, useState } from "react";
+import {
+  ensureCurrentPushKey,
+  lockedFetchSignal,
+  sameKey,
+  subscriptionKey,
+  urlBase64ToUint8Array,
+  withPushLock,
+} from "@/app/shared/pushKey";
 import { SetRow, SetSwitch } from "./ui/atoms";
 
 type PushState =
@@ -24,16 +32,6 @@ type PushState =
   | "denied" // the user blocked notifications for this site
   | "disabled" // supported + configured, not subscribed
   | "enabled"; // an active subscription is stored
-
-// urlBase64ToUint8Array decodes the base64url VAPID public key into the
-// BufferSource shape pushManager.subscribe expects.
-function urlBase64ToUint8Array(base64: string): Uint8Array {
-  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
-  const raw = window.atob((base64 + padding).replace(/-/g, "+").replace(/_/g, "/"));
-  const out = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-  return out;
-}
 
 function pushSupported(): boolean {
   return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
@@ -52,18 +50,24 @@ async function fetchVapidKey(): Promise<string | null> {
 
 // serverHoldsSubscription asks whether the signed-in user holds the stored
 // row for this browser's subscription endpoint. Anything but a 200 throws, so
-// a failed check is never read as "not yours".
+// a failed check is never read as "not yours". Called under the push lock.
 async function serverHoldsSubscription(endpoint: string): Promise<boolean> {
   const res = await fetch("/api/push/status", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ endpoint }),
     cache: "no-store",
+    signal: lockedFetchSignal(),
   });
   if (!res.ok) throw new Error(`Failed to check notifications: ${res.status}`);
   const data = (await res.json()) as { subscribed?: boolean };
   return data.subscribed === true;
 }
+
+// RENEWAL_PENDING explains a switch that reads off because this browser's
+// renewal after a key change is still waiting on the server.
+const RENEWAL_PENDING =
+  "Notifications in this browser could not be renewed after a key change. Reload the page to try again.";
 
 export function BrowserNotificationsRow() {
   const [state, setState] = useState<PushState>("loading");
@@ -77,18 +81,29 @@ export function BrowserNotificationsRow() {
       const key = await fetchVapidKey();
       if (key === null) return "unconfigured" as const;
       if (Notification.permission === "denied") return "denied" as const;
-      const reg = await navigator.serviceWorker.getRegistration("/sw.js");
-      const sub = await reg?.pushManager.getSubscription();
-      if (!sub) return "disabled" as const;
-      // A subscription in this browser counts only if the server holds it for
-      // the signed-in user. It can be another account's (someone else turned
-      // notifications on in this browser) or one the server has dropped; either
-      // way nothing reaches this user through it, so the switch reads off and
-      // the browser lets it go, which also stops another account's alerts
-      // arriving here.
-      if (await serverHoldsSubscription(sub.endpoint)) return "enabled" as const;
-      await sub.unsubscribe().catch(() => undefined);
-      return "disabled" as const;
+      // A subscription made with an earlier VAPID key is renewed (or let go)
+      // before the switch reads it; the same check the root layout runs,
+      // shared while it is running, so the two never renew twice.
+      const checked = await ensureCurrentPushKey();
+      // Under the lock, like the renewal and enable(): another tab must not
+      // replace the subscription between this read and the unsubscribe below.
+      return withPushLock(async () => {
+        const reg = await navigator.serviceWorker.getRegistration("/sw.js");
+        const sub = await reg?.pushManager.getSubscription();
+        if (!sub) return "disabled" as const;
+        // A subscription in this browser counts only if the server holds it
+        // for the signed-in user. It can be another account's (someone else
+        // turned notifications on in this browser) or one the server has
+        // dropped; either way nothing reaches this user through it, so the
+        // switch reads off and the browser lets it go, which also stops
+        // another account's alerts arriving here.
+        if (await serverHoldsSubscription(sub.endpoint)) return "enabled" as const;
+        // Except a renewal the server has not confirmed yet: the row has not
+        // moved to this subscription, and letting it go would lose the retry.
+        if (checked === "pending") throw new Error(RENEWAL_PENDING);
+        await sub.unsubscribe().catch(() => undefined);
+        return "disabled" as const;
+      });
     })()
       .then((next) => {
         if (!stale) setState(next);
@@ -119,16 +134,37 @@ export function BrowserNotificationsRow() {
       }
       const reg = await navigator.serviceWorker.register("/sw.js");
       await navigator.serviceWorker.ready;
-      const sub =
-        (await reg.pushManager.getSubscription()) ??
-        (await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(key).buffer as ArrayBuffer,
-        }));
-      const res = await fetch("/api/push/subscribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sub.toJSON()),
+      // Under the same lock as the key check, so another tab never replaces
+      // the subscription between this read and the store.
+      const { res, endpoint } = await withPushLock(async () => {
+        let existing = await reg.pushManager.getSubscription();
+        const existingKey = existing ? subscriptionKey(existing) : null;
+        if (existing && existingKey && !sameKey(existingKey, key)) {
+          // Made with an earlier VAPID key: it can receive nothing, and the
+          // browser will not subscribe with the new key while it exists. Its
+          // stored row (if it is this user's) goes too.
+          await fetch("/api/push/unsubscribe", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ endpoint: existing.endpoint }),
+            signal: lockedFetchSignal(),
+          });
+          await existing.unsubscribe();
+          existing = null;
+        }
+        const sub =
+          existing ??
+          (await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(key).buffer as ArrayBuffer,
+          }));
+        const stored = await fetch("/api/push/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(sub.toJSON()),
+          signal: lockedFetchSignal(),
+        });
+        return { res: stored, endpoint: sub.endpoint };
       });
       if (res.status === 501) {
         setState("unconfigured");
@@ -139,7 +175,7 @@ export function BrowserNotificationsRow() {
       }
       // Another tab's Settings may have let this browser's subscription go
       // while it was being stored (it reads "not yours" until the store lands).
-      if ((await reg.pushManager.getSubscription())?.endpoint !== sub.endpoint) {
+      if ((await reg.pushManager.getSubscription())?.endpoint !== endpoint) {
         throw new Error("Notifications were turned off in another tab. Turn them on again.");
       }
       setState("enabled");

@@ -223,7 +223,10 @@ browser you want alerts in. A **Viewer** account cannot turn them on: the
 switch reports an error instead. When the switch is greyed
 out, the line under it says why: the browser does not support them, they are
 blocked for this site in the browser's own settings (allow them there, then
-reload), or your deployment has not set them up.
+reload), or your deployment has not set them up. If your deployment changes its
+notification keys, a browser gets no alerts until you next open Fleet in it,
+which renews them by itself; if the switch then says they could not be
+renewed, reload the page.
 
 Administrators manage account access under **Settings → Admin → Users**. Chat
 defaults to **Contributor**; **Viewer** is read-only. **Fleet Admin** grants full
@@ -508,7 +511,8 @@ without **Check result**. If you have turned on browser notifications
 (**Settings → General → Browser notifications**), you also get one when
 such an action finishes (**✓ Done** or **✗ Not applied**, named by the card's
 title), and one when the assistant could not carry on by itself after your
-approvals; clicking it opens the conversation.
+approvals; clicking it opens the conversation, in your Chat tab if you have
+one open (it reloads, so an unsent message there is lost) or in a new one.
 
 Browser notifications go to the account that turned them on in that browser.
 Signing out from the account menu turns them off there, so the next person to
