@@ -60,7 +60,7 @@ panel, until a different one is saved.
 | `FLEET_WEBHOOK_BODY_TEMPLATE` | built-in JSON | Go `text/template` over the event |
 | `FLEET_WEBHOOK_SECRET` | — | outbound HMAC signing key (secret) — see [WEBHOOK-SIGNING.md](WEBHOOK-SIGNING.md) |
 | `FLEET_NOTIFY_TIMEOUT` / `FLEET_NOTIFY_RETRIES` | 10s / 2 | timing knobs — env-only by design |
-| `FLEET_PUBLIC_URL` | — | absolute base for the log link — env-only |
+| `FLEET_PUBLIC_URL` | — | absolute base for the log link (`<base>/orchestrator/tasks/<id>`, which opens that task's record in the Operations Center) — env-only |
 
 Precedence: **admin row (when saved) > env vars**. Timing knobs and the
 public URL base stay env-derived even under an admin row.
