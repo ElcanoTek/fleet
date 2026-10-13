@@ -401,7 +401,10 @@ check ran on a PyCharm trial), and the other IntelliJ-based IDEs share the same
 AI Assistant (not checked).
 
 In the AI Chat tool window, the menu (⋯) → **Add Custom Agent** opens
-`~/.jetbrains/acp.json`. Add fleet there:
+`~/.jetbrains/acp.json`. Add fleet there. The file below is the whole file for
+a first agent; if yours already lists other agents or sets
+`default_mcp_settings`, add only the `"fleet"` entry under `agent_servers` and
+keep the rest as it is:
 
 ```json
 {
@@ -429,7 +432,7 @@ computer reaches it. Through an SSH tunnel to a hosted fleet (see "Where the
 agent runs" under "Buzz"), `--server` stays `http://localhost:8080` and
 `--public-url` is fleet's web address, such as `https://fleet.example.com`.
 
-`fleet` must be built for the editor's computer, and be vTBD or later: an older
+`fleet` must be built for the editor's computer, and be v2026.10.13.9 or later: an older
 one sends PyCharm's files on as bare links and ends a new chat's first reply
 seconds late. For building `fleet` and copying the token file without printing
 it, see steps 1 and 4 of "Add fleet in Buzz Desktop" (step 1's minimum version
@@ -1035,8 +1038,9 @@ conversation in fleet like anything else the user sends.
   `fleet acp` waits for one prompt's files) stays a link, followed by the
   reason, so the model can tell the user.
 - **When.** The reads happen once the prompt has the session and fleet has
-  finished the last prompt's turn (its stream has ended, or 90 seconds have
-  passed since its answer; see `session/prompt`), just before it is submitted.
+  stopped waiting on the last prompt's turn (its stream has ended, or, if it has
+  not, 90 seconds have passed since its answer, which does not mean fleet has
+  finished that turn; see `session/prompt`), just before it is submitted.
   A `session/cancel` during them ends the prompt `cancelled`: no more files are
   asked for, and nothing reaches fleet. So does the client going away during a
   read. Once the 10 seconds have run out, no more files are asked for either. A
