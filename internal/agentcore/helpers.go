@@ -90,8 +90,13 @@ func preferredUpstreamFor(modelSlug string) string {
 }
 
 // sendEmailSucceeded reports whether a send_email tool result indicates the
-// send was queued (SendGrid returns status_code 202). cutlass's JSON-parsing
-// form: any non-2xx / error payload is a failure.
+// send was queued: any 2xx status_code with no error payload. SendGrid answers
+// 202; Amazon SES (ses_outbound, which replaced SendGrid on the bundles)
+// answers 200. Accepting only 202 left an SES send uncounted, so a batch with a
+// definitively failed create never saw its summary email: the settled-failed
+// unit stayed owed, finish was refused and the run aborted to an error after
+// a correct deal sheet had gone out. A non-2xx status, an error payload, or
+// "success":false is a failure.
 func sendEmailSucceeded(result string) bool {
 	trimmed := strings.TrimSpace(result)
 	if trimmed == "" {
@@ -104,6 +109,12 @@ func sendEmailSucceeded(result string) bool {
 	if _, hasError := payload["error"]; hasError {
 		return false
 	}
+	// The repo-wide failure signal wins over the transport status: a 2xx that
+	// also says {"success":false} delivered nothing, and counting it would
+	// mark the summary email sent and fingerprint it against a retry.
+	if mcpReportedFailure(trimmed) {
+		return false
+	}
 	statusValue, hasStatus := payload["status_code"]
 	if !hasStatus {
 		return false
@@ -112,7 +123,7 @@ func sendEmailSucceeded(result string) bool {
 	if !ok {
 		return false
 	}
-	return int(statusCode) == 202
+	return int(statusCode) >= 200 && int(statusCode) < 300
 }
 
 // emailProviderRejected reports whether a summary-email tool (send_email,
