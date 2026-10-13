@@ -106,11 +106,13 @@ not accepted.
 
 Files you attach in your editor reach fleet as the editor sends them. When it
 sends only a link to a file, as JetBrains does for a file you attach and for the
-file open in the editor, `fleet acp` asks the editor for the file's text and
-sends that with your message. Up to 100 KB of a file, and 300 KB of all of a
-message's files, are sent; a longer file is cut, and the assistant is told how
-much of it it has. In JetBrains this means the file open in the editor goes to
-fleet with every message, so close a file holding secrets before you chat.
+file open in the editor, `fleet acp` asks the editor for the file's text, if the
+editor lets agents read files (JetBrains and Emacs agent-shell do), and sends
+that with your message. Up to 100 KB of a file, and 300 KB of all the files a
+message links to, are sent: a longer file is cut, and one over 1 MB is not sent
+at all; either way the assistant is told. In JetBrains this means the file open
+in the editor goes to fleet with every message, so close a file holding secrets
+before you chat.
 
 If your operator has added fleet to your Buzz workspace, you @mention it
 there. By default only the person who set it up, and their own agents, can

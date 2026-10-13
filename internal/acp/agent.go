@@ -185,7 +185,8 @@ type session struct {
 	// its turn's output and whatever that prompt's outcome; sending clears
 	// it, so it goes out at most once per session (sendMCPNotice). A prompt
 	// that ends before that point (refused, cancelled before it got the
-	// session, or left when the client went away) leaves it for the next. One
+	// session or while the files it links to were read, or left when the
+	// client went away) leaves it for the next. One
 	// cancelled while the notice was being written is not submitted, but the
 	// notice has gone out, so it is not repeated. Under mu.
 	mcpNotice string

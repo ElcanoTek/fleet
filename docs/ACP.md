@@ -135,12 +135,12 @@ context as a bare text line (`Sharing the following file as context: <path>`),
 whatever the agent's `promptCapabilities.embeddedContext` says. It expects the
 agent to read the path itself, from a shared filesystem or back over ACP with
 `fs/read_text_file`. fleet reads a file back over ACP only when a prompt links
-to it (a `resource_link`, see "Prompt content" under "Protocol mapping"), not
+to it (a `resource_link`, see "Linked files" under "Protocol mapping"), not
 when its path is written in the text, so without the override the model sees
-only a path and asks for the file to be pasted. The
-override sends CodeCompanion's rendering of the buffer (line-numbered, in its
-`<attachment>` wrapper) as an embedded `resource` block, which fleet inlines
-under its URI; with it, the model answered from the buffer content. It relies
+only a path and asks for the file to be pasted. The override sends
+CodeCompanion's rendering of the buffer (line-numbered, in its `<attachment>`
+wrapper) as an embedded `resource` block, which fleet inlines under its URI;
+with it, the model answered from the buffer content. It relies
 on CodeCompanion internals (the `handlers.form_messages(self, messages,
 capabilities)` hook, `_meta.tag` and `_meta.sent`, and the
 `codecompanion.interactions.shared.tags` module path), so recheck it after
@@ -264,7 +264,7 @@ answered from it (checked live). A file larger than
 `agent-shell-embed-file-size-limit` (100 KB by default) is sent as a bare
 `resource_link` instead. agent-shell answers `fs/read_text_file`, so fleet asks
 it for the file and includes its first 100 KB, with a note saying it was cut
-(see "Prompt content" under "Protocol mapping"; checked live on 2026-10-13
+(see "Linked files" under "Protocol mapping"; checked live on 2026-10-13
 with a 125 KB file). To share more of a bigger file, raise the limit (it
 applies to every agent-shell agent):
 
@@ -853,8 +853,8 @@ Limits:
 
 | ACP | fleet |
 | --- | --- |
-| `initialize` | Protocol 1; `agentInfo` `fleet` + the build version; capabilities: text prompts, embedded text resources (`promptCapabilities.embeddedContext`), and `loadSession: false`. No auth methods, no image or audio, no `mcpCapabilities` (client MCP servers are ignored; see `session/new`). Of the client's capabilities only `fs.readTextFile` is used: from a client that sets it, the files a prompt links to are read (see "Prompt content" below). |
-| `session/new` | Checks the configured user and token with the server, then records a session. The check is one `GET /me` with the same headers a prompt sends, bounded at 10 s; `/me` sits behind the same IP filter, shared-token check and membership check as `POST /chat`. A refusal fails `session/new` with `auth_required` and the text the first prompt would have got (see Errors), so it shows when the session opens instead of after a prompt has been typed: a wrong token, an email that is not a fleet user, a viewer-role user, an address the IP filter refuses, or a 401. For fleet's own refusals the text is identical; a proxy's 401 or 403 can depend on the path. `/me` refuses no read, so a viewer is recognised by the `role` it reports and gets the same text a viewer's prompt does. An answer that says nothing about the identity opens the session anyway, and the first prompt reports any real problem: no answer at all (a server that is down, unresolvable, or silent for the 10 s; left to the prompt on purpose, because some clients, such as CodeCompanion.nvim, show a `session/new` error only as a notice without its text, but a prompt's error in the chat), a 404 (a server older than `/me`: a newer `fleet` binary may run `fleet acp` against an older server), a 5xx, any other 4xx, or a 200 whose body is not the expected JSON. The fleet conversation is created by the first prompt, like a new web chat. A missing email or token is found before the server is asked. Client-supplied `mcpServers` are accepted and **ignored**: `fleet acp` never starts, contacts, stores or forwards them, because fleet's tools and connectors come from the operator's bundle and run host-side with brokered credentials. They are not refused, because clients send every MCP server their user configured to every ACP agent: Zed forwards the servers in its `context_servers` setting (Zed 1.22.0 showed "Failed to Launch — Invalid params" while `fleet acp` refused them) and Emacs agent-shell its `agent-shell-mcp-servers`, so a refusal left such a user unable to open a session at all. Only the servers' names are used and kept. An entry can carry secrets in its `env`, `headers`, `args`, `url` or `_meta`, and `fleet acp` never logs, shows or keeps any of those. `fleet acp` writes one line to stderr at `session/new` once the identity check has not refused it, each name quoted (`fleet acp: ignoring 1 MCP server sent by the client ("dummy-mcp"); fleet's connectors come from the operator's bundle`), and the user is told once per session: the first prompt that gets the session and is not cancelled opens with an `agent_message_chunk` of its own paragraph, ``fleet does not use the MCP server your editor sent (`dummy-mcp`): fleet's tools and connectors come from the fleet operator and run on the fleet server.``, sent just before its submission. So it comes ahead of anything the turn streams and goes out whatever the prompt's outcome: answered, queued by fleet, or failed. Later prompts in the session, a resend of that first prompt included, do not repeat it. A prompt that ends before that point (refused content, over the waiting cap, cancelled before it got the session, the client gone) leaves the notice for the next one. A `session/cancel` (or the client going away) that lands while the notice is being written is honoured before the submission: the prompt answers `cancelled` and is never sent to fleet, and the notice, which has gone out, is not repeated. The notice is not part of the fleet conversation, and `text.replace` is reconciled against the turn's own text without it, so it never causes a `— revised answer —`. Each name is shown on one line: control and space characters (line breaks, tabs, escapes) become a space, Unicode format characters (category Cf: bidi overrides, zero-width spaces) are dropped, runs of spaces collapse, and the name is cut at 60 characters. Other invisible characters (U+3164, variation selectors) pass through, harmless inside the Markdown inline code the notice puts each name in. At most 5 names are listed, then "and N more"; an entry with no name shows as "unnamed" (`""` on stderr). `acp-go-sdk` decodes each entry before `fleet acp` sees it: a `null` entry, `{}` and an entry of a transport the SDK does not know decode (as HTTP) and are ignored like the rest, but an entry the SDK cannot decode makes the SDK itself answer `session/new` with invalid params (see Deviations and limits). |
+| `initialize` | Protocol 1; `agentInfo` `fleet` + the build version; capabilities: text prompts, embedded text resources (`promptCapabilities.embeddedContext`), and `loadSession: false`. No auth methods, no image or audio, no `mcpCapabilities` (client MCP servers are ignored; see `session/new`). Of the client's capabilities only `fs.readTextFile` is used: from a client that sets it, the files a prompt links to are read (see "Linked files" below). |
+| `session/new` | Checks the configured user and token with the server, then records a session. The check is one `GET /me` with the same headers a prompt sends, bounded at 10 s; `/me` sits behind the same IP filter, shared-token check and membership check as `POST /chat`. A refusal fails `session/new` with `auth_required` and the text the first prompt would have got (see Errors), so it shows when the session opens instead of after a prompt has been typed: a wrong token, an email that is not a fleet user, a viewer-role user, an address the IP filter refuses, or a 401. For fleet's own refusals the text is identical; a proxy's 401 or 403 can depend on the path. `/me` refuses no read, so a viewer is recognised by the `role` it reports and gets the same text a viewer's prompt does. An answer that says nothing about the identity opens the session anyway, and the first prompt reports any real problem: no answer at all (a server that is down, unresolvable, or silent for the 10 s; left to the prompt on purpose, because some clients, such as CodeCompanion.nvim, show a `session/new` error only as a notice without its text, but a prompt's error in the chat), a 404 (a server older than `/me`: a newer `fleet` binary may run `fleet acp` against an older server), a 5xx, any other 4xx, or a 200 whose body is not the expected JSON. The fleet conversation is created by the first prompt, like a new web chat. A missing email or token is found before the server is asked. Client-supplied `mcpServers` are accepted and **ignored**: `fleet acp` never starts, contacts, stores or forwards them, because fleet's tools and connectors come from the operator's bundle and run host-side with brokered credentials. They are not refused, because clients send every MCP server their user configured to every ACP agent: Zed forwards the servers in its `context_servers` setting (Zed 1.22.0 showed "Failed to Launch — Invalid params" while `fleet acp` refused them) and Emacs agent-shell its `agent-shell-mcp-servers`, so a refusal left such a user unable to open a session at all. Only the servers' names are used and kept. An entry can carry secrets in its `env`, `headers`, `args`, `url` or `_meta`, and `fleet acp` never logs, shows or keeps any of those. `fleet acp` writes one line to stderr at `session/new` once the identity check has not refused it, each name quoted (`fleet acp: ignoring 1 MCP server sent by the client ("dummy-mcp"); fleet's connectors come from the operator's bundle`), and the user is told once per session: the first prompt that gets the session and is not cancelled opens with an `agent_message_chunk` of its own paragraph, ``fleet does not use the MCP server your editor sent (`dummy-mcp`): fleet's tools and connectors come from the fleet operator and run on the fleet server.``, sent just before its submission. So it comes ahead of anything the turn streams and goes out whatever the prompt's outcome: answered, queued by fleet, or failed. Later prompts in the session, a resend of that first prompt included, do not repeat it. A prompt that ends before that point (refused content, over the waiting cap, cancelled before it got the session or while the files it links to were read, the client gone) leaves the notice for the next one. A `session/cancel` (or the client going away) that lands while the notice is being written is honoured before the submission: the prompt answers `cancelled` and is never sent to fleet, and the notice, which has gone out, is not repeated. The notice is not part of the fleet conversation, and `text.replace` is reconciled against the turn's own text without it, so it never causes a `— revised answer —`. Each name is shown on one line: control and space characters (line breaks, tabs, escapes) become a space, Unicode format characters (category Cf: bidi overrides, zero-width spaces) are dropped, runs of spaces collapse, and the name is cut at 60 characters. Other invisible characters (U+3164, variation selectors) pass through, harmless inside the Markdown inline code the notice puts each name in. At most 5 names are listed, then "and N more"; an entry with no name shows as "unnamed" (`""` on stderr). `acp-go-sdk` decodes each entry before `fleet acp` sees it: a `null` entry, `{}` and an entry of a transport the SDK does not know decode (as HTTP) and are ignored like the rest, but an entry the SDK cannot decode makes the SDK itself answer `session/new` with invalid params (see Deviations and limits). |
 | `session/prompt` | One `POST /chat` turn. Later prompts in the session continue the same fleet conversation. The conversation id is taken from the `X-Fleet-Conversation-Id` response header as well as the first frame, so a stream that dies early does not start a second conversation on retry. Each prompt carries an idempotency `input_id`: the client's `messageId` when it sends one (echoed back as `userMessageId`, and scoped to the ACP session, since clients may number messages per session), otherwise a key that a retry of the same text reuses after a lost answer. fleet records that key whether the prompt started a turn directly or was queued (`docs/INPUT-QUEUE.md`), so a resend within the input queue's retention window (`docs/INPUT-QUEUE.md`) is answered with the original input and never run twice. The reply then says the message is already running or has finished, was already taken (how that turn ended, its reply or an error, is in the conversation), or is still queued (with its place in line when fleet reports one), and where to follow it. A prompt sent while an earlier prompt on the session is still open never stops it: prompts on a session run one at a time, so the new one waits for the session while the earlier one runs on and answers with its own outcome. Waiting prompts take the session in the order the client sent them. `acp-go-sdk` runs each request on its own goroutine, so on its own it can hand `fleet acp` two prompts sent at almost the same moment in either order. `fleet acp` reads stdin ahead of the SDK and holds a prompt back from it until every prompt sent before it has been registered and every `session/cancel` sent before it has been handled; other lines pass straight through. The wait normally lasts microseconds and is bounded at 2 s (see Deviations and limits). If the new one carries the same key (the same `messageId`, or the same text while an earlier attempt's outcome is unknown), it is then answered with that input as above and never run twice; otherwise it runs as its own turn. At most 20 prompts wait for a session behind the one running (the same bound as fleet's own input queue, which cannot see prompts that have not reached it yet); one more is refused at once with an internal error saying the session already has a prompt running and 20 waiting, and is never sent to fleet, so the client can send it again once they are answered. Each prompt with an unknown outcome (a lost answer, or a 5xx, which can follow an input fleet committed), or whose cancel fleet did not confirm, keeps its own key until it is answered, so unrelated prompts in between do not break a later retry; these keys are never evicted (a forgotten key would let its retry run twice), so they cost one small entry per lost answer for the life of the session. A prompt whose answer was lost while it was being cancelled is stopped by its key (`POST /conversations/{id}/cancel` with `input_id`): fleet withdraws it if still queued, cancels its turn if running, and refuses to launch it if its turn has not registered yet, atomically with registration; if the prompt has not reached fleet at all, fleet takes its key with a cancelled record, so the late arrival never runs. A Stop fleet does not accept, or sends but cannot confirm in time (and the turn's stream does not confirm either), is reported as unconfirmed, and one that reached fleet after the turn had already finished (whether the Stop named the turn or the input's key, the turn's final frame arrived first, or fleet accepted the Stop but the turn completed, or failed on its own, in the same instant, which the adapter learns by reading on to the turn's final frame) says so: the prompt still ends `cancelled`, as ACP requires, with a note that nothing was stopped and what the turn did stands. A retry of an unresolved prompt goes to the conversation it was first sent to (none, for a session's first prompt), since fleet recognises a key only there; it does not move the session to another conversation. If fleet reports that an earlier attempt was accepted and cancelled, the prompt is not resubmitted: fleet does not record why an input was cancelled, and a Stop from any surface looks the same as a launch that failed, so resubmitting could run a message after its Stop succeeded. The reply says it did not run and asks for it to be sent again as a new message (a new `messageId`). A text-only prompt whose lost answer's Stop fleet confirmed drops its key, so sending the same text again runs it rather than replaying the cancelled attempt. Every same-text prompt that was already waiting behind that Stop is a resend of the one message: the first to get the session runs it under a fresh key and the rest reuse that key, so it runs once, and the rest are answered with that run. A prompt cancelled while fleet was queueing it, or whose resend was answered with an earlier attempt that is still queued or running, is stopped by its key the same way. If the conversation already has a running turn (started from another surface, such as the web chat), fleet queues the prompt to run after it; the prompt then ends `end_turn` with a note saying it was queued, its place in line when fleet reports one (next, or how many other queued messages run first), and where to follow it, rather than an error inviting a retry. The response carries `_meta["fleet.conversationId"]` and token `usage`. |
 | `session/cancel` | Stops the turn **server-side** (`POST /conversations/{id}/cancel`, scope `turn`) and answers the prompt with stop reason `cancelled`. Closing the HTTP stream alone would not stop the turn, because fleet detaches a turn from its request by design. If fleet does not accept the Stop, the prompt still answers `cancelled` (ACP requires it), but the transcript says the turn may still be running and where to stop it. A turn stopped from another fleet surface, such as the web chat's Stop, also ends as `cancelled`, including a Stop that cancelled the prompt before its turn started. The Stop names the watched turn (`turn_id` from `turn.started`), and the server cancels it only while it is the running turn, so it can never hit a follow-up queued from another surface. The turn id comes from the `X-Fleet-Turn-Id` response header or the `turn.started` frame. A turn already reported as over is never sent a Stop, and an untargeted Stop is never sent. Without the turn id, the prompt is stopped by its key instead (`input_id`, as under `session/prompt`): fleet withdraws it if still queued, cancels its turn if running, and the prompt reports a confirmed stop, an input that had already finished, or an unconfirmed stop, whichever fleet answers. Only when no conversation is known either is the stop reported as unconfirmed. It reaches every prompt open on the session when it is handled: the one running a turn, and any still waiting for an earlier prompt on the session, which are never sent to fleet. Those are the prompts the client sent before the cancel, not the ones it sent after: the SDK can hand `fleet acp` a cancel and a prompt sent at almost the same moment in either order, so `fleet acp` holds the cancel back until each prompt sent before it has been registered, and a prompt sent after it until the cancel has been handled (see `session/prompt`). That holds unless a wait reaches its 2 s bound (see Deviations and limits). A later `session/prompt` is not a cancel, although `acp-go-sdk` cancels the earlier request's context when one arrives on the session: `fleet acp` keeps its own stop for each prompt, so the earlier prompt runs on (see `session/prompt`). A `$/cancel_request` naming a prompt arrives as that same context, cannot be told apart from it, and is ignored, which ACP allows for `$/` notifications. |
 | `session/close` | Forgets the session. The conversation stays in fleet like any chat. |
@@ -873,39 +873,64 @@ Stream events map onto `session/update`:
 | `turn.policy_blocked` | Stop reason `refusal` |
 
 Prompt content: text blocks are joined. A `resource_link` becomes a Markdown
-link, except a link to a file on the user's machine (`file://`, with no host
-or `localhost`) from a client that set `fs.readTextFile` in `initialize`:
-`fleet acp` asks the client for that file's text (`fs/read_text_file`) and
-puts it in the link's place, inlined like an embedded text resource. fleet
-runs on a server, which cannot open a path on the user's machine, and some
-clients send every file as a link: JetBrains AI Assistant links both a file
-the user attaches and the file open in the editor, and never sends their
-text. So the file open in a JetBrains editor goes to fleet with every
-message, and is part of the conversation in fleet like anything else the
-user sends. Only the files a prompt links to are read, never one the model
-asks for. They are read through the client, so the text includes unsaved
-edits and the client decides which files an agent may read. A file linked
-twice in one prompt (attached, and also the open one) is included once,
-where it is first linked. Up to 100 KB of one file and 300 KB of all of a
-prompt's files are included; a longer file is cut at a line break, and the
-line naming it says how much of it is there and which limit cut it. A file
-over 1 MB on disk is not read at all: the client sends a read's answer as one
-JSON-RPC line, and acp-go-sdk drops the whole connection at a line over
-10 MiB. A file the client holds but that is not on disk (a buffer never
-saved) is asked for without that check. A file that is not included (too
-large, a folder, not text, refused by the client, or not sent within the
-10 seconds `fleet acp` waits for one prompt's files) stays a link, followed
-by the reason, so the model can tell the user. The reads happen once the
-prompt has the session, just before it is submitted; a `session/cancel`
-during them ends the prompt `cancelled`, and nothing reaches fleet. A resend
-is keyed by the prompt as the client sent it, not by the files' text, so it
-is still recognised as the same message when a file changed in between. An
-embedded text resource is inlined under its URI, in a code fence of
+link, except a link to a file on the user's machine, as the next paragraph
+says. An embedded text resource is inlined under its URI, in a code fence of
 at least four backticks and longer than any run of backticks in its text, so
 a fence inside the file cannot end it early. A line break in a URI is
 percent-encoded, and one in a link's name becomes a space, so neither can
 start Markdown of its own. Images, audio and binary blobs are refused with
 invalid params, which matches what `initialize` advertises.
+
+Linked files: from a client that set `fs.readTextFile` in `initialize`, a
+link to a file on the user's machine (`file://`, with no host or
+`localhost`) is read. `fleet acp` asks the client for the file's text
+(`fs/read_text_file`) and puts it in the link's place, inlined like an
+embedded text resource under the file's URI (without a `#L5`-style fragment,
+since the whole file follows). The model's tools run in fleet's sandbox,
+which cannot open a path on the user's machine, and some clients send every
+file as a link: JetBrains AI Assistant (PyCharm 2026.2) links both a file the
+user attaches and the file open in the editor, and never sends their text.
+So the file open in a JetBrains editor goes to fleet with every message, and
+is part of the conversation in fleet like anything else the user sends.
+
+- **What is read.** Only the files a prompt links to, never one the model
+  asks for. They are read through the client, so the text includes unsaved
+  edits and the client decides which files an agent may read. A file linked
+  twice in one prompt (attached, and also the open one) is read once: its
+  text goes where it is first linked, and a later link that names it
+  differently (with a line fragment, say) stays a link marked as the same
+  file.
+- **How much.** Up to 100 KB of one file, and 300 KB of all the files one
+  prompt links to. A longer file is cut back to a line break (or between
+  characters, when that would keep less than half), and the line naming it
+  says how much of it is there and which limit cut it. A file that does not
+  fit what is left of the 300 KB is cut to it, or left out once less than
+  1 KB is left. The 300 KB keeps a prompt well inside fleet's 1 MB request
+  cap in the usual case, but the cap also counts the prompt's own text,
+  embedded resources and the JSON encoding (in which `<`, `>` and `&` take
+  6 bytes each), so a prompt of text dense in them can still pass it, and
+  fails as any prompt over the cap does.
+- **What is not read.** A file over 1 MB, by its size on disk, or for a file
+  not on disk (a buffer never saved) by the size on its link, is not read at
+  all: the client sends a read's answer as one JSON-RPC line, and
+  acp-go-sdk drops the whole connection at a line over 10 MiB. A file whose
+  size is not known either way is asked for at most 102,402 lines, which
+  hold more than the 100 KB that is kept, so the cut is the same; a few very
+  long lines could still make an answer over 10 MiB, which ends the
+  connection. A file that is not included (too large, a folder, not a
+  regular file, not text, refused by the client, or not sent within the
+  10 seconds `fleet acp` waits for one prompt's files) stays a link,
+  followed by the reason, so the model can tell the user.
+- **When.** The reads happen once the prompt has the session, just before
+  it is submitted. A `session/cancel` during them ends the prompt
+  `cancelled`: no more files are asked for, and nothing reaches fleet. Once
+  the 10 seconds have run out, no more files are asked for either. A client
+  that sends `session/prompt` as a notification rather than a request waits
+  the 10 seconds out on every read, because acp-go-sdk hands an agent a
+  read's answer only once the notifications sent before it have been
+  handled, the prompt running the read among them. A resend is keyed by the
+  prompt as the client sent it, not by the files' text, so it is still
+  recognised as the same message when a file changed in between.
 
 ## Errors
 
@@ -1037,18 +1062,27 @@ What shipped:
   lands while the notice is being written is covered by a test, not live.
 - Tests in `internal/acp` cover files a prompt links to. Through a real SDK
   client: a client that sets `fs.readTextFile` is asked for the file, on the
-  prompt's session, and fleet gets its text; a `session/cancel` during the
-  read ends the prompt `cancelled` with nothing sent to fleet; and a resend
-  after a lost answer keeps its key although the file changed. Directly: the
-  client's text is used, not the disk's; a file linked twice is read once;
+  prompt's session, and fleet gets its text; a `session/cancel` during a read
+  ends the prompt `cancelled`, the next file is not asked for and nothing is
+  sent to fleet; a prompt cancelled while it waits behind another for the
+  session reads nothing; the client going away during a read submits
+  nothing; and a resend after a lost answer keeps its key although the file
+  changed. Directly: the client's text is used, not the disk's; a file
+  linked twice is read once, and another link to it with a fragment is
+  marked as the same file; `localhost`, a percent-encoded path and a
+  fragment are read as the file, under its URI without the fragment;
   another scheme, another host and a relative URI stay links, unread; a
   client without the capability, or a connection that cannot read, gets the
-  prompt as sent; a file over 1 MB on disk and a folder are not read; a file
-  over 100 KB is cut at a line break, and one long line between characters;
-  text with a NUL byte, a read the client refuses and a missing file stay
-  links with the reason; five 99 KB files share the 300 KB (the fourth is
-  cut, the fifth left out); and a client that never answers is given up on
-  after the wait.
+  prompt as sent; a file over 1 MB on disk or by its link's size, a folder
+  and a FIFO are not read; a file of unknown size is asked for a bounded
+  number of lines, and a known one whole; a cut lands on a line break, or
+  between characters (never inside one) when the line break would keep
+  less than half; text with a NUL byte, a read the client refuses and a
+  missing file stay links with the reason; files share the 300 KB (one that
+  fits what is left goes whole, the one that reaches the limit is cut, and
+  once less than 1 KB is left the next is left out); and a client that
+  never answers is given up on after the wait, with the files after it not
+  asked for.
 - Checked live against a real `fleet serve` on 2026-10-13. PyCharm 2026.2
   (AI Assistant 262.10968.223) links the file open in the editor with every
   message and an `@`-attached file as well: `fleet acp` read them through
@@ -1175,14 +1209,16 @@ Deviations and limits:
   a prompt links to.** Tool calls run in fleet's sandbox workspace. The
   session `cwd` is recorded, not mounted. A file a prompt links to (a
   `resource_link`) is read through the client when it supports
-  `fs/read_text_file`, up to 100 KB of it (see "Prompt content" under
+  `fs/read_text_file`, up to 100 KB of it (see "Linked files" under
   "Protocol mapping"); from a client that does not, the model sees only the
-  path. A client that writes a file's path into the prompt text loses that
-  context: fleet cannot read the path. CodeCompanion.nvim does this by
-  default; the configuration under "Neovim (CodeCompanion.nvim)" works
-  around it. Emacs's agent-shell links a file over its embed limit (100 KB by
-  default) instead of embedding it, so fleet reads its first 100 KB back;
-  "Emacs (agent-shell)" says how to send more. Zed sends only the first 1 KB
+  path. JetBrains AI Assistant (PyCharm 2026.2) sends every file this way,
+  attached or open in the editor. A client that writes a file's path into
+  the prompt text loses that context: fleet cannot read the path.
+  CodeCompanion.nvim does this by default; the configuration under "Neovim
+  (CodeCompanion.nvim)" works around it. Emacs's agent-shell links a file
+  over its embed limit (100 KB by default) instead of embedding it, so fleet
+  reads its first 100 KB back; "Emacs (agent-shell)" says how to send more.
+  Zed sends only the first 1 KB
   of a larger file (in the check, a 20 KB file was cut and a 15 KB one went
   whole; see "Zed").
 - **The client's MCP servers are not used.** ACP's
