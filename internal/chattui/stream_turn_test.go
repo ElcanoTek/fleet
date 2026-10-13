@@ -54,6 +54,12 @@ func TestStreamTurnReturnsAtTheTerminalFrame(t *testing.T) {
 	release := make(chan struct{})
 	srv := lingeringTurn([]string{frameConversation, frameText, frameCompleted}, frameTitle, release)
 	defer srv.Close()
+	released := false
+	defer func() { // first: Close waits for the handler, failed or not
+		if !released {
+			close(release)
+		}
+	}()
 	var seen []string
 	type res struct {
 		id   string
@@ -83,6 +89,7 @@ func TestStreamTurnReturnsAtTheTerminalFrame(t *testing.T) {
 		t.Fatal("rest closed while the server still held the stream open")
 	}
 	close(release)
+	released = true
 	select {
 	case <-r.rest:
 	case <-time.After(10 * time.Second):

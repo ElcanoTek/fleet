@@ -177,6 +177,7 @@ func TestAwaitRest(t *testing.T) {
 // stream once the turn's terminal frame is in.
 func TestNextPromptAfterAStopWaitsForTheStoppedTurn(t *testing.T) {
 	release := make(chan struct{})
+	started := make(chan struct{}) // the first turn reached fleet
 	var streamEnded, secondEarly atomic.Bool
 	var calls atomic.Int32
 	h := newHarness(t, harnessOpts{})
@@ -192,6 +193,7 @@ func TestNextPromptAfterAStopWaitsForTheStoppedTurn(t *testing.T) {
 		w.emit("conversation", map[string]any{"id": "conv-s"})
 		w.emit("turn.started", map[string]any{"turn_id": "t1"})
 		w.emit("text.delta", map[string]any{"text": "working"})
+		close(started)
 		for { // until the Stop arrives
 			h.fleet.mu.Lock()
 			n := len(h.fleet.cancels)
@@ -222,6 +224,7 @@ func TestNextPromptAfterAStopWaitsForTheStoppedTurn(t *testing.T) {
 	})
 	sid := h.newSession(t)
 	first := h.promptAsync(t, sid, "first", nil, 1)
+	<-started // so the cancel is a Stop of a running turn, not of an unsent prompt
 	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
 		t.Fatal(err)
 	}
@@ -249,6 +252,7 @@ func TestRestReadEndsWhenTheClientGoesAway(t *testing.T) {
 		<-r.Context().Done()
 		close(cut)
 	}})
+	h.agent.restWait = 10 * time.Second // a regression fails in seconds, not 90
 	sid := h.newSession(t)
 	if _, err := h.prompt(sid, "first"); err != nil {
 		t.Fatal(err)

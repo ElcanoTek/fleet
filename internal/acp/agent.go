@@ -826,7 +826,8 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 	// the timeout fires. The stream itself runs on a context that ignores
 	// both: a fleet turn is detached from its HTTP request by design, so
 	// dropping the stream would not stop it. Instead stopTurn stops the turn
-	// server-side first and only then ends the stream.
+	// server-side first and only then, if the turn's terminal frame has not
+	// arrived, ends the stream.
 	stopCtx, cancelStop := cancelCtx, context.CancelFunc(func() {})
 	if a.timeout > 0 {
 		stopCtx, cancelStop = context.WithTimeout(cancelCtx, a.timeout)
@@ -1056,7 +1057,8 @@ const turnGrace = time.Second
 // stopOutcome is what the stop watcher did: intervened is true when it sent
 // (or tried to send) a Stop, and err is that Stop's failure, if any.
 // alreadyEnded means the Stop reached fleet after the turn had finished, so
-// it stopped nothing and the stream was read to its real end.
+// it stopped nothing, and the stream was read to the turn's terminal frame
+// (what is left of it goes to readRest, see handOffRest).
 type stopOutcome struct {
 	intervened   bool
 	alreadyEnded bool
@@ -1065,8 +1067,9 @@ type stopOutcome struct {
 
 // stopTurn watches one prompt. If stop fires before the stream finishes, it
 // waits (bounded) for the conversation id, stops the fleet turn server-side,
-// then ends the stream. It reports what it did on stopped, so Prompt never
-// reports a stop the server did not confirm.
+// then ends the stream, unless the turn's terminal frame has arrived (cut).
+// It reports what it did on stopped, so Prompt never reports a stop the
+// server did not confirm.
 //
 // A turn the server already reported as over is never stopped: the Stop is
 // conversation-scoped, so sending it after the watched turn ended could
@@ -1135,9 +1138,9 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 				err = nil // the turn's own terminal frame confirms the stop
 			}
 			if tr.endedOnItsOwn() {
-				// The terminal frame is in; let the stream finish on its own
-				// (briefly), so the prompt reports the turn's own outcome
-				// rather than a stream it cut short.
+				// The terminal frame is in, so StreamTurn returns on its own
+				// (at once) and the prompt reports the turn's own outcome;
+				// the wait is bounded only in case it does not.
 				select {
 				case <-streamDone:
 				case <-time.After(stopSettleWait):
@@ -1156,9 +1159,9 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 				stopped <- stopOutcome{alreadyEnded: true}
 				return
 			case <-tr.endedCh:
-				// The terminal frame is the answer; the stream can stay open
-				// a while longer for post-turn work (auto-titling), so let
-				// it finish only briefly, as for a completed turn above.
+				// The terminal frame is the answer, and StreamTurn returns
+				// at it on its own; the wait is bounded only in case it does
+				// not, as for a turn that ended on its own above.
 				select {
 				case <-streamDone:
 				case <-time.After(stopSettleWait):
