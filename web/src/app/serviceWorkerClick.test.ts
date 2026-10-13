@@ -193,6 +193,23 @@ describe("sw.js notification click", () => {
     await click(root, "https://fleet.public.example");
     expect(root.actions).toEqual([`focus ${ORIGIN}/chat`]);
   });
+
+  it("keeps a path that begins with two slashes on this origin", async () => {
+    // Rebuilt as a string, "//evil.example/x" would read as a link to another
+    // host; the path must stay a path.
+    for (const [link, path] of [
+      [`${ORIGIN}//evil.example/x`, "//evil.example/x"],
+      ["https://fleet.public.example//evil.example/x", "//evil.example/x"],
+      ["/a/..//evil.example", "//evil.example"],
+      [`${ORIGIN}/a/..//evil.example/chat?c=abc#latest`, "//evil.example/chat?c=abc#latest"],
+      ["//evil.example/x", "/x"],
+    ]) {
+      const worker = loadWorker([]);
+      await click(worker, link);
+      expect(worker.actions).toEqual([`open ${ORIGIN}${path}`]);
+      expect(new URL(worker.clients.openWindow.mock.calls[0][0]).origin).toBe(ORIGIN);
+    }
+  });
 });
 
 describe("sw.js lifecycle", () => {

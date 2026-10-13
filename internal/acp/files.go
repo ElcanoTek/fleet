@@ -45,16 +45,20 @@ const (
 	// its size on disk (or the size on its link, for a file not on disk). The
 	// client answers a read with one JSON-RPC line, and the SDK drops the
 	// whole connection at a line over 10 MiB (maxLine), which no file up to
-	// 1 MB can make, even with every byte escaped (6 bytes each).
+	// 1 MB can make, even with every byte escaped (6 bytes each). The client
+	// answers with its buffer, though, not the disk's copy, and unsaved edits
+	// can make that far larger; linkedFileLines bounds that case.
 	linkedFileReadMax = 1 << 20
-	// linkedFileLines is how many lines fleet acp asks for of a file whose
-	// size it does not know (not on disk, and no size on its link). A line is
-	// at least one byte with its line break, so when the file goes on past
-	// these lines they hold more than linkedFileCut bytes, even if the client
-	// drops the last one's line break, and the cut is the one the whole file
-	// would get. It bounds the answer for a file of many lines (a log); one of
-	// a few very long lines can still make an answer over 10 MiB, which ends
-	// the connection.
+	// linkedFileLines is how many lines fleet acp asks for of every file:
+	// one whose size it does not know (not on disk, and no size on its link),
+	// and one on disk too, whose buffer in the client may hold unsaved edits
+	// far larger than the disk's copy. A line is at least one byte with its
+	// line break, so when the file goes on past these lines they hold more
+	// than linkedFileCut bytes, even if the client drops the last one's line
+	// break, and the cut is the one the whole file would get. It bounds the
+	// answer for a file of many lines (a log, a large paste); one of a few
+	// very long lines can still make an answer over 10 MiB, which ends the
+	// connection.
 	linkedFileLines = linkedFileCut + 2
 )
 
@@ -163,11 +167,11 @@ func (a *Agent) readLinked(ctx context.Context, sid acpsdk.SessionId, l *acpsdk.
 	if size > budget && budget < linkedFilesFloor {
 		return "", budgetNote(), false
 	}
-	req := acpsdk.ReadTextFileRequest{SessionId: sid, Path: path}
-	if size < 0 {
-		lines := linkedFileLines
-		req.Limit = &lines
-	}
+	// Every read is bounded in lines, a file's size on disk included: the
+	// client answers with its buffer, unsaved edits and all, which can be far
+	// larger than the disk's copy, and the text is cut to limit below anyway.
+	lines := linkedFileLines
+	req := acpsdk.ReadTextFileRequest{SessionId: sid, Path: path, Limit: &lines}
 	resp, err := a.files.ReadTextFile(ctx, req)
 	if err != nil {
 		a.catchHangUp() // a read fails at once when the client goes away
@@ -188,7 +192,7 @@ func (a *Agent) readLinked(ctx context.Context, sid acpsdk.SessionId, l *acpsdk.
 		return "", budgetNote(), false
 	}
 	of := "of " + sizeText(len(text))
-	if req.Limit != nil && strings.Count(text, "\n") >= linkedFileLines-1 {
+	if strings.Count(text, "\n") >= linkedFileLines-1 {
 		of = "of a longer file" // the answer may stop short of the file's end
 	}
 	cut := cutAt(text, limit)

@@ -1015,7 +1015,9 @@ conversation in fleet like anything else the user sends.
   and the client decides which files an agent may read. A file linked twice in
   one prompt (attached, and also the open one) is read once: its text goes
   where it is first linked, and a later link that names it differently (with a
-  line fragment, say) stays a link marked as the same file.
+  line fragment, say) stays a link marked as the same file. A later link with
+  the exact same URI is dropped from the submitted text, leaving nothing in its
+  place.
 - **How much.** Up to 100 KB of one file, and 300 KB of all the files one
   prompt links to. A longer file is cut back to a line break (or between
   characters, when that would keep less than half), and the line naming it
@@ -1030,10 +1032,18 @@ conversation in fleet like anything else the user sends.
   not on disk (a buffer never saved) by the size on its link (a size of 0
   counts as none), is not read at all: the client sends a read's answer as one
   JSON-RPC line, and acp-go-sdk drops the whole connection at a line over 10
-  MiB. A file whose size is not known either way is asked for at most 102,402
-  lines, which hold more than the 100 KB that is kept, so the cut is the same;
-  a few very long lines could still make an answer over 10 MiB, which ends the
-  connection. A file that is not included (too large, a folder, not a regular
+  MiB. Every file is asked for at most 102,402 lines, which hold more than the
+  100 KB that is kept, so the cut is the same. That bounds a file whose size is
+  not known either way, and also one on disk, since the client answers with its
+  buffer, whose unsaved edits (a large paste) can make it far larger than the
+  disk's copy; a few very long lines could still make an answer over 10 MiB,
+  which ends the connection. The size, folder and regular-file checks look at
+  the disk of the machine running `fleet acp`, not the client's, so they assume
+  the editor and `fleet acp` run on the same machine. Otherwise a path that does
+  not exist there is treated as a file not on disk (sized by its link, or
+  unknown), and one that does names whatever file is at that path on the `fleet
+  acp` machine, whose size and kind are checked instead of the editor's file.
+  A file that is not included (too large, a folder, not a regular
   file, not text, refused by the client, or not sent within the 10 seconds
   `fleet acp` waits for one prompt's files) stays a link, followed by the
   reason, so the model can tell the user.
@@ -1194,7 +1204,8 @@ What shipped:
   client without the capability, or a connection that cannot read, gets the
   prompt as sent; a file over 1 MB on disk or by its link's size, a folder and
   a FIFO are not read; a file of unknown size (a link's size of 0 included) is
-  asked for a bounded number of lines, and a known one whole, and an answer
+  asked for a bounded number of lines, and so is one on disk whose client
+  buffer is far larger than the disk's copy, and an answer
   that may stop short of the file's end is not given a size; a cut lands on a
   line break, or between characters (never inside one) when the line break
   would keep less than half; text with a NUL byte, a read the client refuses
@@ -1239,7 +1250,10 @@ What shipped:
   away ends the read of the rest; and a stream that never ends holds the next
   prompt only for the bound. Directly: a Stop or a timeout that fires after
   the terminal frame was handled sends no Stop and leaves the stream to the
-  prompt. The recorded chat-stream contract replays through `StreamTurn`.
+  prompt, and one whose Stop fleet refuses cuts the stream only while the
+  turn is still running: the terminal frame cannot land between that check
+  and the cut, which would end the read of the turn's post-turn work. The
+  recorded chat-stream contract replays through `StreamTurn`.
 - Tests in `internal/acp` cover the order of prompts and cancels through the
   real entry point, with test hooks that delay the SDK's handoff to the agent:
   a cancel sent right behind a prompt stops it, a prompt sent right after a

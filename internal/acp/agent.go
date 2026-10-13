@@ -1131,12 +1131,12 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 	// terminal frame is in, StreamTurn has returned (or is about to) on its
 	// own, and what is left of the stream is the turn's post-turn work: the
 	// prompt hands it to readRest (handOffRest), so the session's next prompt
-	// waits for it, a Stopped or timed-out prompt's included.
-	cut := func() {
-		if !tr.ended() {
-			cancelStream()
-		}
-	}
+	// waits for it, a Stopped or timed-out prompt's included. The check and
+	// the cancel are one step (unlessEnded): were they two, the terminal
+	// frame could land between them, and the cancel would then end the read
+	// of the turn's post-turn work, closing rest at once, so the next prompt
+	// would be submitted, and queued, while that work still runs.
+	cut := func() { tr.unlessEnded(cancelStream) }
 	select {
 	case <-streamDone:
 		stopped <- stopOutcome{}

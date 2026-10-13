@@ -127,6 +127,18 @@ func (t *translator) ended() bool {
 	return t.terminal
 }
 
+// unlessEnded calls f unless the server has said the watched turn is over,
+// holding the lock the terminal frame is marked under, so the frame cannot
+// land between the check and f: either f runs first, or the turn is over
+// and f never runs. f must not block, nor call back into t.
+func (t *translator) unlessEnded(f func()) {
+	t.terminalMu.Lock()
+	defer t.terminalMu.Unlock()
+	if !t.terminal {
+		f()
+	}
+}
+
 func (t *translator) setTurn(id string) {
 	if id == "" {
 		return
@@ -153,6 +165,9 @@ func (t *translator) conversationID() string {
 
 func (t *translator) handle(ev chattui.Event) {
 	switch ev.Name {
+	case "turn.completed", "turn.cancelled", "turn.error", "turn.model_required":
+		t.markEnded(ev)
+		return
 	case "conversation":
 		t.setConversation(ev.Str("id"))
 	case "turn.started", "turn.identified":
@@ -216,18 +231,23 @@ func (t *translator) handle(ev chattui.Event) {
 		t.approvals = kept
 	case "turn.policy_blocked":
 		t.policyBlocked = true
-	case "turn.completed":
+	}
+}
+
+// markEnded records a terminal frame, and the usage a turn.completed carries,
+// under terminalMu before anything else in handle runs for it: a stop's
+// unlessEnded must not find the turn still running once its terminal frame
+// is being handled, or it would cut the read of the turn's post-turn work.
+func (t *translator) markEnded(ev chattui.Event) {
+	t.terminalMu.Lock()
+	defer t.terminalMu.Unlock()
+	if ev.Name == "turn.completed" {
 		t.usage = usageFrom(ev.Data)
 	}
-	switch ev.Name {
-	case "turn.completed", "turn.cancelled", "turn.error", "turn.model_required":
-		t.terminalMu.Lock()
-		if !t.terminal {
-			t.terminal = true
-			t.endedBy = ev.Name
-			close(t.endedCh)
-		}
-		t.terminalMu.Unlock()
+	if !t.terminal {
+		t.terminal = true
+		t.endedBy = ev.Name
+		close(t.endedCh)
 	}
 }
 

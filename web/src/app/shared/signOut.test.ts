@@ -168,10 +168,15 @@ describe("signOut", () => {
     }
   });
 
-  it("also deletes the row a key renewal the server never confirmed left behind", async () => {
-    // That row is still the signing-out account's, at the endpoint the
+  it("also deletes the rows key renewals the server never confirmed may have left behind", async () => {
+    // Such a row is still the signing-out account's, at an endpoint a
     // renewal replaced.
-    window.localStorage.setItem("fleet.push.pendingRenewal", "https://relay.example/old");
+    window.localStorage.setItem(
+      "fleet.push.pendingRenewals.v2",
+      JSON.stringify(["https://relay.example/original", "https://relay.example/old"]),
+    );
+    // And the single endpoint the previous version kept under its own key.
+    window.localStorage.setItem("fleet.push.pendingRenewal", "https://relay.example/legacy");
     const unsubscribe = vi.fn(async () => true);
     stubPushSubscription({ endpoint: "https://relay.example/new", unsubscribe });
     const deleted: string[] = [];
@@ -184,8 +189,14 @@ describe("signOut", () => {
     );
     vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
     await signOut();
-    expect(deleted.sort()).toEqual(["https://relay.example/new", "https://relay.example/old"]);
+    expect(deleted.sort()).toEqual([
+      "https://relay.example/legacy",
+      "https://relay.example/new",
+      "https://relay.example/old",
+      "https://relay.example/original",
+    ]);
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem("fleet.push.pendingRenewals.v2")).toBeNull();
     expect(window.localStorage.getItem("fleet.push.pendingRenewal")).toBeNull();
   });
 

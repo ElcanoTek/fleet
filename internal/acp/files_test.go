@@ -300,26 +300,34 @@ func TestLinkedFilesShareOneBudget(t *testing.T) {
 	}
 }
 
-// A file whose size fleet acp does not know (not on disk, no size on its
-// link) is asked for a bounded number of lines; one it knows is asked for
-// whole. When the answer may stop short of the file's end, the note does
-// not claim the file's size.
-func TestUnknownSizeAsksForBoundedLines(t *testing.T) {
+// Every read is asked for a bounded number of lines: a file whose size
+// fleet acp does not know (not on disk, no size on its link), and one it
+// does, since the client answers with its buffer and unsaved edits can make
+// that far larger than the disk's copy (a few bytes on disk, a huge paste
+// unsaved), an answer the SDK would end the connection over. When the answer
+// may stop short of the file's end, the note does not claim the file's size.
+func TestEveryReadAsksForBoundedLines(t *testing.T) {
 	dir := t.TempDir()
 	onDisk := filepath.Join(dir, "a.txt")
-	if err := os.WriteFile(onDisk, []byte("a\n"), 0o600); err != nil {
-		t.Fatal(err)
+	pasted := filepath.Join(dir, "pasted.txt")
+	for _, p := range []string{onDisk, pasted} {
+		if err := os.WriteFile(p, []byte("a\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
+	// As many lines as were asked for, the last one's line break dropped:
+	// the answer may stop short of the file's end.
+	full := strings.TrimSuffix(rows(linkedFileLines, 2), "\n")
 	r := &fakeReader{files: map[string]string{
-		onDisk:     "a\n",
-		"/v/sized": "b\n",
-		// As many lines as were asked for, the last one's line break
-		// dropped: the answer may stop short of the file's end.
-		"/v/buffer": strings.TrimSuffix(rows(linkedFileLines, 2), "\n"),
+		onDisk:      "a\n",
+		pasted:      full, // 2 bytes on disk; the editor's buffer is far larger
+		"/v/sized":  "b\n",
+		"/v/buffer": full,
 		"/v/zero":   "c\n",
 	}}
 	got := submit(t, readingAgent(r),
 		acpsdk.ResourceLinkBlock("a", fileURI(onDisk)),
+		acpsdk.ResourceLinkBlock("pasted", fileURI(pasted)),
 		sizedLink("sized", "file:///v/sized", 2),
 		acpsdk.ResourceLinkBlock("buffer", "file:///v/buffer"),
 		sizedLink("zero", "file:///v/zero", 0), // a size of 0 is no size
@@ -327,21 +335,19 @@ func TestUnknownSizeAsksForBoundedLines(t *testing.T) {
 	r.mu.Lock()
 	reqs := append([]acpsdk.ReadTextFileRequest(nil), r.reqs...)
 	r.mu.Unlock()
-	if len(reqs) != 4 {
-		t.Fatalf("%d reads, want 4", len(reqs))
+	if len(reqs) != 5 {
+		t.Fatalf("%d reads, want 5", len(reqs))
 	}
-	bounded := func() *int { n := linkedFileLines; return &n }()
-	for i, wantLimit := range []*int{nil, nil, bounded, bounded} {
-		switch lim := reqs[i].Limit; {
-		case wantLimit == nil && lim != nil:
-			t.Errorf("read of %s asked for %d lines, want the whole file", reqs[i].Path, *lim)
-		case wantLimit != nil && (lim == nil || *lim != *wantLimit):
-			t.Errorf("read of %s asked for %v lines, want %d", reqs[i].Path, lim, *wantLimit)
+	for _, req := range reqs {
+		if req.Limit == nil || *req.Limit != linkedFileLines {
+			t.Errorf("read of %s asked for %v lines, want %d", req.Path, req.Limit, linkedFileLines)
 		}
 	}
-	want := "Contents of file:///v/buffer (the first 100 KB of a longer file: fleet acp includes up to 100 KB of a linked file):"
-	if !strings.Contains(got, want) {
-		t.Errorf("submitted text is missing %q", want)
+	for _, uri := range []string{fileURI(pasted), "file:///v/buffer"} {
+		want := "Contents of " + uri + " (the first 100 KB of a longer file: fleet acp includes up to 100 KB of a linked file):"
+		if !strings.Contains(got, want) {
+			t.Errorf("submitted text is missing %q", want)
+		}
 	}
 }
 
