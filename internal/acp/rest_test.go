@@ -316,3 +316,54 @@ func TestStopTurnNeverStopsATurnThatEnded(t *testing.T) {
 		}
 	}
 }
+
+// refusingTurns refuses every Stop, so stopTurn gives up on the turn and
+// ends the stream (cut) with the turn still running as far as it knows.
+type refusingTurns struct{ recordingTurns }
+
+func (r *refusingTurns) Cancel(string, string) error { return errors.New("refused") }
+
+// A Stop or a timeout racing the turn's terminal frame never cuts a stream
+// whose turn has ended: the frame lands either before stopTurn decides to
+// cut, which then leaves the stream to the prompt (so the next prompt waits
+// for the turn's post-turn work), or after the stream was cut. The fake cut
+// lands the frame at the worst moment, between stopTurn's check that the turn
+// is still running and its cancel, whenever the translator lets it land
+// there; then it records whether that cancel ended a turn that was over.
+func TestStopTurnCutIsAtomicWithTheTurnEnding(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	timedOut, cancelTimeout := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelTimeout()
+	for name, stop := range map[string]context.Context{"cancelled": cancelled, "timed out": timedOut} {
+		a := NewAgent(&refusingTurns{}, nil, "", 0, "test")
+		tr := newTranslator("s", "", func(acpsdk.SessionUpdate) {})
+		tr.handle(chattui.Event{Name: "conversation", Data: map[string]any{"id": "c"}})
+		tr.handle(chattui.Event{Name: "turn.started", Data: map[string]any{"turn_id": "t"}})
+		cuts, cutEndedTurn := 0, false
+		cutStream := func() {
+			cuts++
+			// TryLock succeeds only when cut does not hold the lock the
+			// frame is marked under: the frame can land now.
+			if tr.terminalMu.TryLock() {
+				tr.terminalMu.Unlock()
+				tr.handle(chattui.Event{Name: "turn.completed", Data: map[string]any{}})
+			}
+			// Safe either way: this goroutine holds the lock (cut does), or
+			// marked the frame itself just above.
+			cutEndedTurn = tr.terminal
+		}
+		stopped := make(chan stopOutcome, 1)
+		a.stopTurn(stop, tr, "key", make(chan struct{}), stopped, cutStream)
+		out := <-stopped
+		if !out.intervened || out.err == nil {
+			t.Errorf("%s: outcome %+v, want the refused Stop reported", name, out)
+		}
+		if cuts == 0 {
+			t.Fatalf("%s: the stream of a turn the Stop could not stop was never cut", name)
+		}
+		if cutEndedTurn {
+			t.Errorf("%s: the stream was cut after its turn ended, so the next prompt would not wait for the turn's post-turn work", name)
+		}
+	}
+}

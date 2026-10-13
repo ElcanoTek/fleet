@@ -1122,7 +1122,10 @@ What shipped:
   away ends the read of the rest; and a stream that never ends holds the next
   prompt only for the bound. Directly: a Stop or a timeout that fires after
   the terminal frame was handled sends no Stop and leaves the stream to the
-  prompt. The recorded chat-stream contract replays through `StreamTurn`.
+  prompt, and one whose Stop fleet refuses cuts the stream only while the
+  turn is still running: the terminal frame cannot land between that check
+  and the cut, which would end the read of the turn's post-turn work. The
+  recorded chat-stream contract replays through `StreamTurn`.
 - Tests in `internal/acp` cover the order of prompts and cancels through the
   real entry point, with test hooks that delay the SDK's handoff to the agent:
   a cancel sent right behind a prompt stops it, a prompt sent right after a

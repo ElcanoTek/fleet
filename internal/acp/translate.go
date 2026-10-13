@@ -127,6 +127,18 @@ func (t *translator) ended() bool {
 	return t.terminal
 }
 
+// unlessEnded calls f unless the server has said the watched turn is over,
+// holding the lock the terminal frame is marked under, so the frame cannot
+// land between the check and f: either f runs first, or the turn is over
+// and f never runs. f must not block, nor call back into t.
+func (t *translator) unlessEnded(f func()) {
+	t.terminalMu.Lock()
+	defer t.terminalMu.Unlock()
+	if !t.terminal {
+		f()
+	}
+}
+
 func (t *translator) setTurn(id string) {
 	if id == "" {
 		return
