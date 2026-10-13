@@ -81,14 +81,24 @@ current one, and remembers the current one too if that attempt gets no
 answer: a move the server made whose answer was lost leaves the row at the
 endpoint that renewal made, so each unconfirmed endpoint is kept until the
 server answers for it (a definite "not yours" forgets it). The browser keeps
-at most the 8 most recent; an older one is forgotten.
+at most the 8 most recent; an older one is forgotten. A retry from an old
+endpoint whose move did land is not mistaken for "not yours": the server
+answers yes when the signed-in user already holds the new endpoint, so the
+row is confirmed where it is and the subscription kept.
+
+The remembered endpoints are a JSON list in `localStorage` under
+`fleet.push.pendingRenewals.v2`. The release that first renewed
+subscriptions kept a single endpoint under `fleet.push.pendingRenewal`, and
+a tab still running that release reads whatever is there as one endpoint,
+so the list is never written to that key: an endpoint found there is read
+into the list (as the oldest) and the old key removed.
 
 The check, the switch's own reads and replacement, and sign-out's clean-up run
 under one browser-wide Web Lock, so two tabs never replace the subscription at
 once. The check's and the switch's requests made while holding it give up
 after 10 seconds, and sign-out waits at most a second for it before cleaning
 up anyway. Sign-out also deletes the rows at every endpoint a renewal the
-server never confirmed left remembered.
+server never confirmed left remembered, under either key.
 
 Limits: until a browser next opens fleet its notifications do not arrive; a
 browser that does not report the key its subscription was made with is not

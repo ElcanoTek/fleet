@@ -99,6 +99,11 @@ async function loadCheck() {
   return (await import("./pushKey")).ensureCurrentPushKey;
 }
 
+// The list of unconfirmed endpoints, and the single endpoint the previous
+// version kept under another key.
+const PENDING_KEY = "fleet.push.pendingRenewals.v2";
+const LEGACY_PENDING_KEY = "fleet.push.pendingRenewal";
+
 const renewBody = (oldEndpoint: string, endpoint: string) =>
   `POST /api/push/renew ${JSON.stringify({
     old_endpoint: oldEndpoint,
@@ -181,7 +186,7 @@ describe("ensureCurrentPushKey", () => {
       const b = stubBrowser({ renew: refusal });
       expect(await (await loadCheck())()).toBe("dropped");
       expect(b.browser.current).toBeNull();
-      expect(window.localStorage.getItem("fleet.push.pendingRenewal")).toBeNull();
+      expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
       vi.unstubAllGlobals();
     }
   });
@@ -196,9 +201,7 @@ describe("ensureCurrentPushKey", () => {
       const b = stubBrowser({ renew: failure });
       expect(await (await loadCheck())()).toBe("pending");
       expect(b.browser.current?.endpoint).toBe("https://relay.example/new");
-      expect(JSON.parse(window.localStorage.getItem("fleet.push.pendingRenewal")!)).toEqual([
-        "https://relay.example/old",
-      ]);
+      expect(JSON.parse(window.localStorage.getItem(PENDING_KEY)!)).toEqual(["https://relay.example/old"]);
       vi.unstubAllGlobals();
     }
   });
@@ -207,10 +210,10 @@ describe("ensureCurrentPushKey", () => {
     // Renewal original → old reached the server but its answer was lost, so
     // "original" is pending and the row now sits at "old". The keys rotate
     // again and this renewal gets no answer either.
-    window.localStorage.setItem("fleet.push.pendingRenewal", JSON.stringify(["https://relay.example/original"]));
+    window.localStorage.setItem(PENDING_KEY, JSON.stringify(["https://relay.example/original"]));
     const b = stubBrowser({ renew: "network-error" });
     expect(await (await loadCheck())()).toBe("pending");
-    expect(JSON.parse(window.localStorage.getItem("fleet.push.pendingRenewal")!)).toEqual([
+    expect(JSON.parse(window.localStorage.getItem(PENDING_KEY)!)).toEqual([
       "https://relay.example/original",
       "https://relay.example/old",
     ]);
@@ -229,31 +232,26 @@ describe("ensureCurrentPushKey", () => {
       renewBody("https://relay.example/old", "https://relay.example/new"),
     ]);
     expect(again.browser.current?.endpoint).toBe("https://relay.example/new");
-    expect(window.localStorage.getItem("fleet.push.pendingRenewal")).toBeNull();
+    expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
   });
 
   it("forgets a pending endpoint the server said no to, and keeps the ones it did not answer", async () => {
-    window.localStorage.setItem(
-      "fleet.push.pendingRenewal",
-      JSON.stringify(["https://relay.example/a", "https://relay.example/b"]),
-    );
+    window.localStorage.setItem(PENDING_KEY, JSON.stringify(["https://relay.example/a", "https://relay.example/b"]));
     const b = stubBrowser({
       subKey: NEW_KEY,
       renew: (oldEndpoint) => (oldEndpoint === "https://relay.example/a" ? { renewed: false } : 503),
     });
     expect(await (await loadCheck())()).toBe("pending");
     expect(b.browser.current?.endpoint).toBe("https://relay.example/old");
-    expect(JSON.parse(window.localStorage.getItem("fleet.push.pendingRenewal")!)).toEqual([
-      "https://relay.example/b",
-    ]);
+    expect(JSON.parse(window.localStorage.getItem(PENDING_KEY)!)).toEqual(["https://relay.example/b"]);
   });
 
   it("keeps at most the eight most recent pending endpoints", async () => {
     const many = Array.from({ length: 10 }, (_, i) => `https://relay.example/p${i}`);
-    window.localStorage.setItem("fleet.push.pendingRenewal", JSON.stringify(many));
+    window.localStorage.setItem(PENDING_KEY, JSON.stringify(many));
     stubBrowser({ renew: "network-error" });
     expect(await (await loadCheck())()).toBe("pending");
-    const kept = JSON.parse(window.localStorage.getItem("fleet.push.pendingRenewal")!) as string[];
+    const kept = JSON.parse(window.localStorage.getItem(PENDING_KEY)!) as string[];
     expect(kept).toHaveLength(8);
     expect(kept.at(-1)).toBe("https://relay.example/old");
     expect(kept[0]).toBe("https://relay.example/p3");
@@ -263,16 +261,85 @@ describe("ensureCurrentPushKey", () => {
     // A renewal the server never confirmed left the user's row at the
     // original endpoint, or (the answer was lost) moved it to the current one.
     for (const rowAt of ["https://relay.example/original", "https://relay.example/old"]) {
-      window.localStorage.setItem("fleet.push.pendingRenewal", "https://relay.example/original");
+      window.localStorage.setItem(LEGACY_PENDING_KEY, "https://relay.example/original");
       const b = stubBrowser({ renew: (oldEndpoint) => ({ renewed: oldEndpoint === rowAt }) });
       expect(await (await loadCheck())()).toBe("renewed");
       const asked = b.events.filter((e) => e.startsWith("POST /api/push/renew"));
       expect(asked[0]).toBe(renewBody("https://relay.example/original", "https://relay.example/new"));
       expect(asked).toHaveLength(rowAt === "https://relay.example/original" ? 1 : 2);
       expect(b.browser.current?.endpoint).toBe("https://relay.example/new");
-      expect(window.localStorage.getItem("fleet.push.pendingRenewal")).toBeNull();
+      expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
+      expect(window.localStorage.getItem(LEGACY_PENDING_KEY)).toBeNull();
       vi.unstubAllGlobals();
     }
+  });
+
+  it("keeps the current subscription when a renewal whose answer was lost had already moved the row to it", async () => {
+    // A server that behaves as RenewPushSubscription does: it moves the
+    // caller's row from old_endpoint, and when the caller already holds the
+    // new endpoint (the move landed, only its answer was lost) it says yes
+    // again instead of "not yours".
+    const rows = new Map<string, string>([["https://relay.example/old", "me"]]);
+    let lose = true;
+    const server = (oldEndpoint: string, endpoint: string): RenewAnswer => {
+      let renewed = false;
+      if (rows.get(oldEndpoint) === "me") {
+        rows.delete(oldEndpoint);
+        rows.set(endpoint, "me");
+        renewed = true;
+      } else if (rows.get(endpoint) === "me") {
+        rows.delete(oldEndpoint);
+        renewed = true;
+      }
+      if (lose) {
+        lose = false;
+        return "network-error";
+      }
+      return { renewed };
+    };
+    const b = stubBrowser({ renew: (oldEndpoint) => server(oldEndpoint, "https://relay.example/new") });
+    expect(await (await loadCheck())()).toBe("pending");
+    expect([...rows.keys()]).toEqual(["https://relay.example/new"]);
+
+    const again = stubBrowser({
+      subKey: NEW_KEY,
+      renew: (oldEndpoint) => server(oldEndpoint, "https://relay.example/new"),
+    });
+    again.browser.current = b.browser.current;
+    expect(await (await loadCheck())()).toBe("renewed");
+    expect(again.browser.current?.endpoint).toBe("https://relay.example/new");
+    expect(again.events.some((e) => e.startsWith("unsubscribe"))).toBe(false);
+    expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
+  });
+
+  it("never writes the list of pending endpoints to the key the previous version reads as one endpoint", async () => {
+    // A tab still running the previous bundle reads fleet.push.pendingRenewal
+    // as a single endpoint: a JSON list there would be posted as old_endpoint,
+    // refused, and the valid subscription dropped.
+    window.localStorage.setItem(PENDING_KEY, JSON.stringify(["https://relay.example/original"]));
+    stubBrowser({ renew: "network-error" });
+    expect(await (await loadCheck())()).toBe("pending");
+    expect(window.localStorage.getItem(LEGACY_PENDING_KEY)).toBeNull();
+    expect(JSON.parse(window.localStorage.getItem(PENDING_KEY)!)).toEqual([
+      "https://relay.example/original",
+      "https://relay.example/old",
+    ]);
+  });
+
+  it("migrates the endpoint the previous version stored into the list, oldest first", async () => {
+    window.localStorage.setItem(LEGACY_PENDING_KEY, "https://relay.example/legacy");
+    window.localStorage.setItem(PENDING_KEY, JSON.stringify(["https://relay.example/original"]));
+    const b = stubBrowser({ renew: "network-error" });
+    expect(await (await loadCheck())()).toBe("pending");
+    expect(b.events.filter((e) => e.startsWith("POST /api/push/renew"))).toEqual([
+      renewBody("https://relay.example/legacy", "https://relay.example/new"),
+    ]);
+    expect(window.localStorage.getItem(LEGACY_PENDING_KEY)).toBeNull();
+    expect(JSON.parse(window.localStorage.getItem(PENDING_KEY)!)).toEqual([
+      "https://relay.example/legacy",
+      "https://relay.example/original",
+      "https://relay.example/old",
+    ]);
   });
 
   it("reports a browser that will not subscribe again instead of hiding it", async () => {
@@ -385,14 +452,26 @@ describe("withPushLock", () => {
   it("takePendingRenewal hands over the remembered endpoints once", async () => {
     const { takePendingRenewal } = await import("./pushKey");
     window.localStorage.setItem(
-      "fleet.push.pendingRenewal",
+      PENDING_KEY,
       JSON.stringify(["https://relay.example/original", "https://relay.example/old"]),
     );
     expect(takePendingRenewal()).toEqual(["https://relay.example/original", "https://relay.example/old"]);
     expect(takePendingRenewal()).toEqual([]);
     // The single endpoint an earlier version stored.
-    window.localStorage.setItem("fleet.push.pendingRenewal", "https://relay.example/original");
+    window.localStorage.setItem(LEGACY_PENDING_KEY, "https://relay.example/original");
     expect(takePendingRenewal()).toEqual(["https://relay.example/original"]);
-    expect(window.localStorage.getItem("fleet.push.pendingRenewal")).toBeNull();
+    expect(window.localStorage.getItem(LEGACY_PENDING_KEY)).toBeNull();
+    // Both at once (a tab on the previous version wrote one meanwhile).
+    window.localStorage.setItem(LEGACY_PENDING_KEY, "https://relay.example/legacy");
+    window.localStorage.setItem(PENDING_KEY, JSON.stringify(["https://relay.example/old"]));
+    expect(takePendingRenewal()).toEqual(["https://relay.example/legacy", "https://relay.example/old"]);
+    // A list an unreleased build of this change wrote to the legacy key.
+    window.localStorage.setItem(
+      LEGACY_PENDING_KEY,
+      JSON.stringify(["https://relay.example/a", "https://relay.example/b"]),
+    );
+    expect(takePendingRenewal()).toEqual(["https://relay.example/a", "https://relay.example/b"]);
+    expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
+    expect(window.localStorage.getItem(LEGACY_PENDING_KEY)).toBeNull();
   });
 });

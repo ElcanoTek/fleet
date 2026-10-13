@@ -45,7 +45,7 @@ export function sameKey(a: string, b: string): boolean {
   return norm(a) === norm(b);
 }
 
-// PENDING_RENEWAL remembers, per browser, the endpoints renewals replaced
+// PENDING_RENEWALS remembers, per browser, the endpoints renewals replaced
 // when the server gave no answer to the move (offline, a timeout, a 5xx, an
 // expired session). The new subscription is kept, and the next check retries
 // the move from each of them. It is a set, not one endpoint: a move the
@@ -53,7 +53,15 @@ export function sameKey(a: string, b: string): boolean {
 // renewal made, and a later rotation must still be able to move it from
 // there — so every unconfirmed endpoint is kept until the server answers for
 // it, up to MAX_PENDING_RENEWALS (the most recent ones).
-const PENDING_RENEWAL = "fleet.push.pendingRenewal";
+//
+// The list lives under its own key. LEGACY_PENDING_RENEWAL is where the
+// previous version kept a single endpoint, and a tab still running that
+// bundle reads whatever is there as one endpoint: a list written there would
+// be posted as old_endpoint, refused, and that tab would drop a valid
+// subscription. So the legacy key is only ever read and removed, never
+// written; an endpoint found there joins the list, oldest first.
+const PENDING_RENEWALS = "fleet.push.pendingRenewals.v2";
+const LEGACY_PENDING_RENEWAL = "fleet.push.pendingRenewal";
 const MAX_PENDING_RENEWALS = 8;
 
 // dedupe keeps the first of each non-empty endpoint, in order.
@@ -62,28 +70,44 @@ function dedupe(endpoints: (string | null | undefined)[]): string[] {
 }
 
 function readPending(): string[] {
+  let legacy: string | null;
   let raw: string | null;
   try {
-    raw = window.localStorage.getItem(PENDING_RENEWAL);
+    legacy = window.localStorage.getItem(LEGACY_PENDING_RENEWAL);
+    raw = window.localStorage.getItem(PENDING_RENEWALS);
   } catch {
     return [];
   }
-  if (!raw) return [];
+  let list: string[] = [];
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (Array.isArray(parsed)) return dedupe(parsed.filter((e): e is string => typeof e === "string"));
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(parsed)) list = parsed.filter((e): e is string => typeof e === "string");
   } catch {
-    // An endpoint is a URL, never JSON: the single endpoint an earlier
-    // version stored.
+    // Not ours to make sense of: start the list again.
   }
-  return [raw];
+  return dedupe([...legacyEndpoints(legacy), ...list]);
+}
+
+// legacyEndpoints reads the legacy key: one endpoint, or — written there by a
+// build of this change before the list moved to its own key — a list.
+function legacyEndpoints(legacy: string | null): string[] {
+  if (!legacy) return [];
+  if (!legacy.startsWith("[")) return [legacy];
+  try {
+    const parsed: unknown = JSON.parse(legacy);
+    return Array.isArray(parsed) ? parsed.filter((e): e is string => typeof e === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 function writePending(endpoints: string[]): void {
   const keep = dedupe(endpoints).slice(-MAX_PENDING_RENEWALS);
   try {
-    if (keep.length) window.localStorage.setItem(PENDING_RENEWAL, JSON.stringify(keep));
-    else window.localStorage.removeItem(PENDING_RENEWAL);
+    // Whatever was under the legacy key was read into endpoints first.
+    window.localStorage.removeItem(LEGACY_PENDING_RENEWAL);
+    if (keep.length) window.localStorage.setItem(PENDING_RENEWALS, JSON.stringify(keep));
+    else window.localStorage.removeItem(PENDING_RENEWALS);
   } catch {
     // Without storage the renewal is simply not retried.
   }
@@ -192,6 +216,12 @@ async function serverRefusal(res: Response): Promise<boolean> {
 // remembers every endpoint the server has not yet answered for — the one
 // asked and the ones not reached — for the next check; an endpoint the
 // server said no to is forgotten.
+//
+// A "not yours" is safe to act on even after a renewal whose answer was lost
+// moved the row to sub itself: the server answers yes, not "not yours", when
+// the caller already holds the new endpoint (RenewPushSubscription is
+// idempotent), so a retry from the old endpoint confirms the row at sub
+// rather than letting sub go.
 async function renew(oldEndpoints: string[], sub: PushSubscription): Promise<PushKeyCheck> {
   for (const [i, oldEndpoint] of oldEndpoints.entries()) {
     const answer = await askRenew(oldEndpoint, sub);
