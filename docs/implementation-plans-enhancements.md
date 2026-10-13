@@ -22,7 +22,8 @@ unlinked file, read like an unresolved gap. It is not one.
 fleet turns over the chat API) became `fleet acp`, an ACP agent in the fleet
 binary that any ACP client launches, plus `fleet-buzz-bridge`, a small adapter
 outside fleet, for Buzz's `buzz-acp`, which expects an agent to post its own
-replies. The planned
-`docs/BUZZ.md` runbook is the "Buzz" section of `docs/ACP.md`.
+replies. The planned `docs/BUZZ.md` runbook is the "Buzz" section of
+`docs/ACP.md`. Posting replies in Buzz from fleet itself stays deferred (see
+"Deferred" in `docs/ACP.md`).
 
 For the current plan-of-record on anything else, prefer the GitHub issue.

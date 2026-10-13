@@ -102,8 +102,8 @@ launches it, and each message becomes a normal fleet chat turn as the user named
 any other. Replies, reasoning and tool steps stream to the client. If a step
 needs approval, the reply ends with a link or a `fleet chat --approve` command,
 because approvals are settled in fleet, not in the client. Images and audio are
-not accepted. JetBrains sends a screenshot you drop on the chat as its file name
-only, without a warning.
+not accepted. JetBrains sends a screenshot you drop into the chat as its file
+name only, so the assistant never sees the image, and nothing warns you.
 
 Files you attach in your editor reach fleet as the editor sends them. When it
 sends only a link to a file, as JetBrains does for a file you attach and for the
@@ -125,10 +125,10 @@ answers both in one reply. Files attached in Buzz cannot be read by fleet,
 and Buzz's agent instructions and memories do not reach it. The conversation
 is also in fleet's web chat, under the user the agent runs as.
 
-MCP servers your editor sends are not used by fleet: the ones you set up, and in
-JetBrains its own built-in one. fleet's tools and connectors are the ones your
-operator set up, and they run on the fleet server. The first reply in a session
-says so, naming the servers your editor sent.
+MCP servers your editor sends are not used by fleet: the ones you set up and,
+unless it is turned off, the one built into JetBrains. fleet's tools and
+connectors are the ones your operator set up, and they run on the fleet server.
+The first reply in a session says so, naming the servers your editor sent.
 
 When the client opens a session, `fleet acp` checks your user and token with the
 fleet server first. A wrong token, an email that is not a fleet user, a
