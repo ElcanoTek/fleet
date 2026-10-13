@@ -316,6 +316,7 @@ func (e *Enforcer) maybeSoftAlert(ctx context.Context, b models.Budget, ws time.
 		Status:  notify.StatusProgress,
 		CostUSD: fmt.Sprintf("%.4f", spendUSD),
 		Message: softAlertMessage(b, spendUSD, spendTokens),
+		Kind:    notify.KindBudgetAlert,
 	}
 	if b.Scope == models.BudgetScopeUser {
 		// The user principal is the sched username — an email on a standard
