@@ -1758,8 +1758,11 @@ func TestNoStopAfterTheTurnEnded(t *testing.T) {
 	}
 }
 
-// A timeout that fires as the turn completes is not a timeout.
-func TestTimeoutAfterTheTurnEndedIsAnEndTurn(t *testing.T) {
+// A turn that completes while its stream lingers past the timeout is an
+// end_turn, not a timeout: the prompt answers at the terminal frame. (A
+// timeout that fires after the terminal frame is handled is
+// TestStopTurnNeverStopsATurnThatEnded.)
+func TestLingeringStreamPastTheTimeoutIsAnEndTurn(t *testing.T) {
 	h := newHarness(t, harnessOpts{timeout: 100 * time.Millisecond, turn: func(w *sseWriter, r *http.Request) {
 		w.emit("conversation", map[string]any{"id": "c"})
 		w.emit("turn.completed", map[string]any{})

@@ -16,11 +16,11 @@ import (
 
 // The chat stream contract, consumer side for `fleet acp`: every recording in
 // testdata/contracts/chat-stream — what the real producer emits — goes through
-// the same path a prompt takes in production (the chattui client reading the
-// stream, the translator turning it into ACP session updates), and the editor
-// must end up seeing the recorded answer, every tool call with the outcome
-// its result reported, and the turn ended by the recorded terminal event. See
-// internal/agent TestChatStreamContract for the producer side.
+// the same path a prompt takes in production (the chattui client's StreamTurn
+// reading the stream, the translator turning it into ACP session updates), and
+// the editor must end up seeing the recorded answer, every tool call with the
+// outcome its result reported, and the turn ended by the recorded terminal
+// event. See internal/agent TestChatStreamContract for the producer side.
 func TestTranslatorReplaysRecordedContract(t *testing.T) {
 	for _, name := range contracttest.ChatStreamRecordings(t) {
 		t.Run(name, func(t *testing.T) {
@@ -41,7 +41,8 @@ func TestTranslatorReplaysRecordedContract(t *testing.T) {
 				updates = append(updates, u)
 			})
 			client := chattui.NewClient(chattui.Config{ServerURL: srv.URL, Email: "u@example.com"})
-			_, _ = client.Stream(context.Background(), "replay", "", tr.handle)
+			_, rest, _ := client.StreamTurn(context.Background(), "replay", "", "", tr.handle)
+			<-rest
 
 			mu.Lock()
 			defer mu.Unlock()

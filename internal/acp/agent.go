@@ -82,6 +82,9 @@ type Agent struct {
 	version   string
 
 	conn updater
+	// restWait bounds how long a turn's stream is read past its terminal
+	// frame (see session.rest): defaultRestWait, or shorter in tests.
+	restWait time.Duration
 	// lifetime ends when the ACP client goes away: its connection closes
 	// (stdin EOF, see SetConnection), a write to stdout fails (it stopped
 	// reading), or `fleet acp` gets a signal to stop (run). hangUp ends it.
@@ -317,6 +320,7 @@ func NewAgent(client turnClient, cfgErr error, publicURL string, timeout time.Du
 		version:   version,
 		lifetime:  lifetime,
 		hangUp:    hangUp,
+		restWait:  defaultRestWait,
 		diag:      io.Discard,
 		sessions:  map[acpsdk.SessionId]*session{},
 		inflight:  map[acpsdk.SessionId]map[uint64]context.CancelFunc{},
@@ -751,8 +755,8 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 
 // awaitRest waits for the rest of the last prompt's stream to end (see
 // session.rest), or for stop. ok is false when stop ended the wait. The wait
-// is bounded: readRest ends the read restWait after the turn ended. Under
-// sess.mu.
+// is bounded: readRest ends the read Agent.restWait after the turn ended.
+// Under sess.mu.
 func (s *session) awaitRest(stop context.Context) (ok bool) {
 	if s.rest == nil {
 		return true
@@ -768,18 +772,21 @@ func (s *session) awaitRest(stop context.Context) (ok bool) {
 	}
 }
 
-// restWait bounds how long a turn's stream is read past its terminal frame
-// (see session.rest). The server titles a new conversation within 18 s, or
-// gives up on it, before it ends the stream; this leaves room for the rest of
-// its post-turn bookkeeping. A var so tests can shorten it.
-var restWait = 30 * time.Second
+// defaultRestWait bounds how long a turn's stream is read past its terminal
+// frame (see session.rest). The server's post-turn work before it ends the
+// stream is bounded by its own deadlines: titling a new conversation after
+// its first turn (18 s, on by default), its bookkeeping (10 s), and, when the
+// operator turns on memory auto-indexing, mining every turn for memories
+// (30 s). This covers all three with room to spare.
+const defaultRestWait = 90 * time.Second
 
-// readOn hands rest, a turn's stream past its terminal frame, to readRest
-// and makes it the session's (session.rest), so the answer goes out now and
-// the session's next prompt waits for the stream to end. It returns what
-// ends the stream as the prompt returns: endStream itself when the stream
-// has ended already, else nothing, since readRest ends it. Under sess.mu.
-func (a *Agent) readOn(sess *session, rest <-chan struct{}, endStream context.CancelFunc) context.CancelFunc {
+// handOffRest hands rest, a turn's stream past its terminal frame, to
+// readRest and makes it the session's (session.rest), so the answer goes out
+// now and the session's next prompt waits for the stream to end. It returns
+// what ends the stream as the prompt returns: endStream itself when the
+// stream has ended already, else nothing, since readRest ends it. Under
+// sess.mu.
+func (a *Agent) handOffRest(sess *session, rest <-chan struct{}, endStream context.CancelFunc) context.CancelFunc {
 	select {
 	case <-rest:
 		return endStream
@@ -791,10 +798,10 @@ func (a *Agent) readOn(sess *session, rest <-chan struct{}, endStream context.Ca
 }
 
 // readRest ends the read of rest, a turn's stream past its terminal frame,
-// by cancelling it (stopRead) once it has ended on its own, restWait has
+// by cancelling it (stopRead) once it has ended on its own, a.restWait has
 // passed, or the client has gone.
 func (a *Agent) readRest(rest <-chan struct{}, stopRead context.CancelFunc) {
-	t := time.NewTimer(restWait)
+	t := time.NewTimer(a.restWait)
 	defer t.Stop()
 	select {
 	case <-rest:
@@ -827,7 +834,7 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 	defer cancelStop()
 	streamCtx, cancelStream := context.WithCancel(context.WithoutCancel(ctx))
 	// The stream ends as the prompt returns, unless its turn ended with the
-	// stream still open: readRest then reads on, and ends it (readOn).
+	// stream still open: readRest then reads on, and ends it (handOffRest).
 	endStream := cancelStream
 	defer func() { endStream() }()
 
@@ -861,7 +868,7 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 	close(streamDone)
 	stop := <-stopped
 	stopErr := stop.err
-	endStream = a.readOn(sess, rest, cancelStream)
+	endStream = a.handOffRest(sess, rest, cancelStream)
 	if convID == "" {
 		convID = tr.conversationID()
 	}
@@ -1065,6 +1072,16 @@ type stopOutcome struct {
 // conversation-scoped, so sending it after the watched turn ended could
 // cancel a follow-up queued from another surface instead.
 func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, streamDone <-chan struct{}, stopped chan<- stopOutcome, cancelStream context.CancelFunc) {
+	// cut ends the stream so that StreamTurn returns. Once the turn's
+	// terminal frame is in, StreamTurn has returned (or is about to) on its
+	// own, and what is left of the stream is the turn's post-turn work: the
+	// prompt hands it to readRest (handOffRest), so the session's next prompt
+	// waits for it, a Stopped or timed-out prompt's included.
+	cut := func() {
+		if !tr.ended() {
+			cancelStream()
+		}
+	}
 	select {
 	case <-streamDone:
 		stopped <- stopOutcome{}
@@ -1091,8 +1108,8 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 	}
 	if tr.ended() {
 		// The turn's terminal frame arrived first: nothing left to stop, and
-		// the turn's outcome (tool effects included) stands.
-		cancelStream()
+		// the turn's outcome (tool effects included) stands. The stream is
+		// left to the prompt (cut).
 		stopped <- stopOutcome{alreadyEnded: true}
 		return
 	}
@@ -1124,7 +1141,7 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 				select {
 				case <-streamDone:
 				case <-time.After(stopSettleWait):
-					cancelStream()
+					cut()
 				}
 				stopped <- stopOutcome{intervened: true, alreadyEnded: true}
 				return
@@ -1145,7 +1162,7 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 				select {
 				case <-streamDone:
 				case <-time.After(stopSettleWait):
-					cancelStream()
+					cut()
 				}
 				stopped <- stopOutcome{alreadyEnded: true}
 				return
@@ -1160,7 +1177,7 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 		// and find this prompt by its key instead: a turn started for this
 		// submission gets a targeted Stop, a queue row with this key is
 		// withdrawn.
-		cancelStream()
+		cut()
 		err = a.reconcileLost(id, key) // ErrTurnNotRunning: already finished (promptOnce says so)
 	} else {
 		select {
@@ -1176,7 +1193,7 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 			err = errors.New("fleet never reported the conversation id, so there was nothing to address the Stop to")
 		}
 	}
-	cancelStream()
+	cut()
 	stopped <- stopOutcome{intervened: true, err: err}
 }
 

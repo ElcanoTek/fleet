@@ -251,12 +251,16 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 
 // StreamTurn is StreamInput for a caller that needs the turn's outcome when
 // the turn ends, not when its stream does. The server keeps a turn's stream
-// open past its terminal frame for the turn's last work: on a conversation's
-// first turn that is titling the conversation, a model call of a few
-// seconds. StreamTurn returns as soon as the terminal frame has been handed
-// to onEvent, with the outcome StreamInput would give, and reads the rest of
-// the stream in the background without passing it on; rest closes when the
-// stream has ended (or ctx ends it). The server counts the turn as running
+// open past its terminal frame for its post-turn work: by default, titling a
+// conversation after its first turn, a model call of a few seconds; with
+// memory auto-indexing on, mining every turn for memories too. StreamTurn
+// returns as soon as the terminal frame has been handed to onEvent, with that
+// frame's outcome, and reads the rest of the stream in the background without
+// passing it on; rest closes when the stream has ended (or ctx ends it). The
+// outcome is StreamInput's, except when a second terminal frame follows the
+// first (a turn.error the server sends if its post-turn work fails after the
+// turn completed): StreamInput reports the last, StreamTurn the first, the
+// outcome of the turn itself. The server counts the turn as running
 // until then, so a message posted to the conversation before rest closes is
 // queued behind it. ctx must outlive the call for that read: cancelling it
 // ends the read, and closes rest, at once. For an outcome without a stream
@@ -273,7 +277,9 @@ var noRest = func() <-chan struct{} {
 	return c
 }()
 
-// streamTurn is StreamInput and, early, StreamTurn.
+// streamTurn posts a turn and reads its stream. early makes it StreamTurn:
+// it returns at the terminal frame and reads the rest in the background.
+// Otherwise it is StreamInput: it reads the stream to its end first.
 func (c *Client) streamTurn(ctx context.Context, message, convID, inputID string, onEvent func(Event), early bool) (string, <-chan struct{}, error) {
 	body, err := json.Marshal(turnRequest{
 		Message:        message,
@@ -359,10 +365,11 @@ func (c *Client) streamTurn(ctx context.Context, message, convID, inputID string
 	// waits for the report to be taken.
 	result := make(chan outcome, 1)
 	rest := make(chan struct{})
-	// parse reads the stream to its end. Early, it reports the outcome as the
-	// terminal frame is handled (reported); otherwise it returns it.
-	parse := func() (o outcome, reported bool) {
-		terminalSeen := false
+	// parse reads the stream to its end. Early, it sends the outcome on result
+	// as the terminal frame is handled, and reports that it did (sent);
+	// otherwise it returns the outcome.
+	parse := func() (o outcome, sent bool) {
+		terminalSeen, reported := false, false
 		var terminalErr error
 		perr := parseSSE(resp.Body, func(ev Event) {
 			if reported {
@@ -413,10 +420,10 @@ func (c *Client) streamTurn(ctx context.Context, message, convID, inputID string
 	// read parses the stream, then closes it and rest, before an outcome it
 	// did not report early: a caller handed that outcome finds rest closed.
 	read := func() {
-		o, reported := parse()
+		o, sent := parse()
 		_ = resp.Body.Close()
 		close(rest)
-		if !reported {
+		if !sent {
 			result <- o
 		}
 	}

@@ -125,9 +125,10 @@ from opening, with an error that says which and how to fix it. A server that
 cannot be reached does not: the session opens, and your first message reports
 the problem.
 
-A reply ends in the client as soon as its answer is complete. After the first
-reply in a new conversation, fleet takes a few seconds to name the conversation;
-a message you send in that time waits until it has, rather than being queued.
+A reply ends in the client as soon as its answer is complete. fleet may still
+need a few seconds to finish the turn (by default it names a new conversation
+after its first reply); a message you send in that time waits, for up to 90
+seconds, rather than being queued.
 
 A message sent from the client while an earlier one is still running does not
 stop it. It waits, and messages on the same session run one at a time, in the

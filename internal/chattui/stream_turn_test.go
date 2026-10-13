@@ -203,3 +203,23 @@ func TestStreamInputStillReadsToTheEnd(t *testing.T) {
 		t.Errorf("events = %v", seen)
 	}
 }
+
+// A second terminal frame after the first (the server reports a failure of
+// its post-turn work after the turn completed): StreamTurn reports the
+// first, the turn's own outcome; StreamInput the last.
+func TestStreamTurnReportsTheFirstTerminalFrame(t *testing.T) {
+	frames := []string{frameConversation, frameCompleted, "event: turn.error\ndata: {\"message\":\"post-turn work failed\"}\n\n"}
+	release := make(chan struct{})
+	close(release)
+	srv := lingeringTurn(frames, "", release)
+	defer srv.Close()
+	c := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"})
+	_, rest, err := c.StreamTurn(context.Background(), "hi", "", "", func(Event) {})
+	if err != nil {
+		t.Errorf("StreamTurn: %v, want the completed turn", err)
+	}
+	<-rest
+	if _, err := c.StreamInput(context.Background(), "hi", "", "", func(Event) {}); err == nil || err.Error() != "turn failed: post-turn work failed" {
+		t.Errorf("StreamInput: %v, want the last frame's error", err)
+	}
+}
