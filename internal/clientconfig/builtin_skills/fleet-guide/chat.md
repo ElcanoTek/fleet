@@ -104,6 +104,14 @@ needs approval, the reply ends with a link or a `fleet chat --approve` command,
 because approvals are settled in fleet, not in the client. Images and audio are
 not accepted.
 
+Files you attach in your editor reach fleet as the editor sends them. When it
+sends only a link to a file, as JetBrains does for a file you attach and for the
+file open in the editor, `fleet acp` asks the editor for the file's text and
+sends that with your message. Up to 100 KB of a file, and 300 KB of all of a
+message's files, are sent; a longer file is cut, and the assistant is told how
+much of it it has. In JetBrains this means the file open in the editor goes to
+fleet with every message, so close a file holding secrets before you chat.
+
 If your operator has added fleet to your Buzz workspace, you @mention it
 there. By default only the person who set it up, and their own agents, can
 instruct it; your operator can let others too. Its reply comes once its turn
