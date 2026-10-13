@@ -184,8 +184,8 @@ fleet is built on open protocols:
   ([`docs/A2A.md`](docs/A2A.md)).
 - **[ACP](https://agentclientprotocol.com)** — `fleet acp` lets ACP clients
   (Zed, JetBrains, Neovim, Emacs) drive governed fleet turns, and Buzz through
-  `fleet-buzz-bridge`, a separate, private adapter that is not part of fleet
-  ([`docs/ACP.md`](docs/ACP.md)).
+  [`fleet-buzz-bridge`](https://github.com/ElcanoTek/fleet-buzz-bridge), a
+  separate adapter that is not part of fleet ([`docs/ACP.md`](docs/ACP.md)).
 - **OpenAPI 3.1** — the orchestrator HTTP API
   ([`docs/openapi.yaml`](docs/openapi.yaml)), kept in lockstep with its routes
   by a CI drift test. The chat routes are documented in

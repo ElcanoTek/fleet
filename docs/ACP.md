@@ -129,22 +129,21 @@ require("codecompanion").setup({
 
 The `form_messages` override is what makes file and buffer context work:
 `#{buffer}`, `#{buffers}`, `/buffer` and `/file` all go through it (all four
-were checked live). The `goose` preset advertises `clientCapabilities.fs`
-read and write, and CodeCompanion's stock ACP helper sends file and buffer
-context as a bare text line (`Sharing the following file as context: <path>`),
-whatever the agent's `promptCapabilities.embeddedContext` says. It expects the
-agent to read the path itself, from a shared filesystem or back over ACP with
+were checked live). The `goose` preset advertises `clientCapabilities.fs` read
+and write, and CodeCompanion's stock ACP helper sends file and buffer context
+as a bare text line (`Sharing the following file as context: <path>`), whatever
+the agent's `promptCapabilities.embeddedContext` says. It expects the agent to
+read the path itself, from a shared filesystem or back over ACP with
 `fs/read_text_file`. fleet reads a file back over ACP only when a prompt links
 to it (a `resource_link`, see "Linked files" under "Protocol mapping"), not
 when its path is written in the text, so without the override the model sees
 only a path and asks for the file to be pasted. The override sends
 CodeCompanion's rendering of the buffer (line-numbered, in its `<attachment>`
 wrapper) as an embedded `resource` block, which fleet inlines under its URI;
-with it, the model answered from the buffer content. It relies
-on CodeCompanion internals (the `handlers.form_messages(self, messages,
-capabilities)` hook, `_meta.tag` and `_meta.sent`, and the
-`codecompanion.interactions.shared.tags` module path), so recheck it after
-upgrading CodeCompanion.
+with it, the model answered from the buffer content. It relies on CodeCompanion
+internals (the `handlers.form_messages(self, messages, capabilities)` hook,
+`_meta.tag` and `_meta.sent`, and the `codecompanion.interactions.shared.tags`
+module path), so recheck it after upgrading CodeCompanion.
 
 CodeCompanion starts `fleet acp` in Neovim's current directory, with Neovim's
 environment plus the adapter's `env`, and fleet resolves the token as above,
@@ -286,12 +285,12 @@ stops the turn server-side as described under "Protocol mapping". agent-shell
 marks the turn "Cancelled" and, unlike CodeCompanion, keeps listening, so it
 shows the notes fleet sends after a stop, such as the note that the turn had
 already finished before the Stop arrived (checked live; now rare, as a prompt
-answers as its turn ends). How the shell ends
-matters too. Quitting Emacs (`C-x C-c`, answering yes to killing its active
-processes) sends `fleet acp` `SIGHUP`, so a running turn is stopped (checked
-live). Killing the agent-shell buffer (`C-x k`) does not: acp.el ends the agent
-with `delete-process`, which sends `SIGKILL`, and the turn keeps running
-server-side (checked live). Stop it in the web chat.
+answers as its turn ends). How the shell ends matters too. Quitting Emacs
+(`C-x C-c`, answering yes to killing its active processes) sends `fleet acp`
+`SIGHUP`, so a running turn is stopped (checked live). Killing the agent-shell
+buffer (`C-x k`) does not: acp.el ends the agent with `delete-process`, which
+sends `SIGKILL`, and the turn keeps running server-side (checked live). Stop it
+in the web chat.
 
 agent-shell's error box shows the error's `message`, which is fleet's reason
 (see Errors); "[ Details ]" expands the raw error. A wrong token, an email
@@ -388,6 +387,118 @@ with a button to copy them. Read it before sharing: it holds every prompt and
 the full text of each file you mentioned. Zed's own log (`zed: open log`) also
 records what `fleet acp` writes to stderr.
 
+### JetBrains (AI Assistant)
+
+Tested against a real `fleet serve` with a live model, from PyCharm 2026.2 with
+the AI Assistant plugin 262.10968.223 on macOS, on 2026-10-13. Connect,
+multi-turn, streamed answer text, thinking and tool calls, cancel, `--timeout`,
+the approval link at the end of a reply (the link itself was not followed from
+PyCharm), queueing behind a turn running in the web chat, attached files and
+the file open in the editor, the IDE's own MCP server, and the daemon-down and
+unknown-user errors all worked. JetBrains documents that a custom agent needs
+the AI Assistant plugin but no JetBrains AI subscription (not checked: the
+check ran on a PyCharm trial), and the other IntelliJ-based IDEs share the same
+AI Assistant (not checked).
+
+In the AI Chat tool window, the menu (⋯) → **Add Custom Agent** opens
+`~/.jetbrains/acp.json`. Add fleet there. The file below is the whole file for
+a first agent; if yours already lists other agents or sets
+`default_mcp_settings`, add only the `"fleet"` entry under `agent_servers` and
+keep the rest as it is:
+
+```json
+{
+  "default_mcp_settings": {},
+  "agent_servers": {
+    "fleet": {
+      "command": "/usr/local/bin/fleet",
+      "use_custom_mcp": false,
+      "use_idea_mcp": false,
+      "args": ["acp", "--email", "acp-bot@example.com",
+               "--server", "http://localhost:8080",
+               "--public-url", "http://localhost:3000",
+               "--token-file", "/Users/you/.config/fleet/acp-token"]
+    }
+  }
+}
+```
+
+Then pick fleet in AI Chat's agent menu. The snippet is the one checked live on
+2026-10-13, with the email and paths replaced and its `--model` argument left
+out (fleet then uses the workspace default). The check ran PyCharm on a Mac
+and fleet in a VM whose chat API (8080) and web UI (3000) were forwarded to the
+Mac's `localhost`; point `--server` and `--public-url` at fleet as the editor's
+computer reaches it. Through an SSH tunnel to a hosted fleet (see "Where the
+agent runs" under "Buzz"), `--server` stays `http://localhost:8080` and
+`--public-url` is fleet's web address, such as `https://fleet.example.com`.
+
+`fleet` must be built for the editor's computer, and be v2026.10.13.9 or later:
+an older one sends PyCharm's files on as bare links and ends a new chat's first
+reply seconds late. For building `fleet` and copying the token file without
+printing it, see steps 1 and 4 of "Add fleet in Buzz Desktop" (step 1's minimum
+version is Buzz's). The token can act as any fleet user: keep the file readable
+only by you, and never put the token itself in `acp.json`. Give `command` an
+absolute path (checked): an IDE started from the Dock may not see your shell's
+`PATH`. PyCharm starts `fleet acp` for each new chat, and an edit to `acp.json`
+applies to the next one (checked).
+
+`use_idea_mcp` and `use_custom_mcp` matter. Without `"use_idea_mcp": false`,
+PyCharm sent fleet its own built-in MCP server (`pycharm`), although JetBrains
+documents that setting as off by default. `use_custom_mcp`, on by default
+according to JetBrains, adds every MCP server you configured in the IDE (not
+checked: none was configured). fleet uses none of these servers (see
+`session/new`), so without these two lines the first reply in each chat starts
+with a note naming them. With both set to false, PyCharm sent none (checked).
+
+PyCharm sends files as links only: a file you attach with `@`, and, with every
+message, the file open in the editor. fleet asks PyCharm for each one's text
+and inlines it, up to 100 KB of a file (see "Linked files" under "Protocol
+mapping"); the `fleet` on the editor's computer does this. The file open in the
+editor therefore goes to fleet with every message, each time adding its text to
+the conversation and to the turn's cost; close a file holding secrets before
+you chat. With `main.py` open, the model quoted its first line; a 376 KB file
+that was both open and attached was read once and cut to its first 100 KB,
+which the model reported (checked). PyCharm offers no "Image…" attachment in a
+working fleet chat (checked; a chat whose session fleet refused did offer one),
+and a screenshot dropped on the chat input is sent as its file name only, as
+text, with no warning (checked).
+
+Replies stream, with the model's reasoning under a collapsible "Thought for
+Ns" line and each tool call by name (checked). Whether answer text streams
+depends on the model: `anthropic/claude-opus-5.5` streamed it, while
+`openai/gpt-6-luna-pro` sent its answer in one block, so it appeared at once
+(checked from fleet's own stream). A reply ends as soon as its answer is
+complete, even while fleet is still naming a new conversation (see
+`session/prompt`): the first reply of a new chat ended 5 ms after its answer,
+and a message sent 0.6 s later waited 2.4 s for fleet to finish naming the
+conversation, then ran, instead of being queued (checked).
+
+The Stop button sends `session/cancel`, and fleet stops the turn server-side as
+described under "Protocol mapping"; PyCharm shows "Cancelled by user"
+(checked). PyCharm removes the Stop button as soon as a reply's answer appears,
+so a Stop cannot be sent after it (checked). A turn over `--timeout` ends with
+fleet's error, "the fleet turn did not finish within … and was stopped (raise
+it with fleet acp --timeout)" (checked). PyCharm offers no edit or resend of a
+message sent to a custom agent (checked). Quitting PyCharm, or closing its
+chat, with a reply running was not checked; if the turn runs on, stop it in the
+web chat.
+
+An approval ends the reply with fleet's link to approve it in the web UI, and
+a message queued behind a turn running in the web chat gets fleet's queued
+note; the queued message's answer appears in the web chat only (both
+checked). Errors show in red under the agent's name: an unknown user's 403
+with the command that fixes it, and, with the server down, "connect
+http://localhost:8080: … connection refused" (both checked). PyCharm opens a
+session for each new chat, so a refused session shows its error in each.
+
+For an adapter bug report, turn on extended logging (Search Everywhere →
+**Registry** → `llm.agent.extended.logging`, then restart the IDE). PyCharm
+then writes every message between it and `fleet acp` to `acp/acp-transport.log`
+in its log folder (on macOS, `~/Library/Logs/JetBrains/PyCharm2026.2/`;
+checked), and JetBrains documents the AI Chat menu's **Get ACP Logs** for
+collecting them (not used in the check). Read them before sharing: they hold
+every prompt and the text of every file sent.
+
 ### Buzz
 
 Buzz runs agents with its `buzz-acp` harness. An @mention becomes an ACP
@@ -415,10 +526,10 @@ starts `fleet acp` itself and:
   the agent's Buzz key in its environment) before `session/new` reaches
   `fleet acp`, which would not use it.
 
-It is not part of fleet, and it is not published: it lives in a separate,
-private repository, together with `fleet-buzz-gateway` (see "Run it on
-Kubernetes from Buzz Desktop"), and that repository's README is the reference
-for both. The setups below need access to it.
+It is not part of fleet: it lives in its own repository,
+[ElcanoTek/fleet-buzz-bridge](https://github.com/ElcanoTek/fleet-buzz-bridge),
+together with `fleet-buzz-gateway` (see "Run it on Kubernetes from Buzz
+Desktop"), and that repository's README is the reference for both.
 
 Checked live on 2026-10-08 with Buzz Desktop on macOS and its bundled
 `buzz-acp`, `buzz-acp` built from block/buzz `70d2ca7`, a hosted Buzz relay,
@@ -475,7 +586,9 @@ On the computer that runs Buzz Desktop, you need:
    CGO_ENABLED=0 go build -o fleet ./cmd/fleet` for an Apple-silicon Mac) and
    copy it over. Prompt and cancel order, which Buzz relies on (see "What to
    expect"), needs v2026.10.09.5 or later.
-2. **`fleet-buzz-bridge`,** from its repository, next to `fleet`.
+2. **`fleet-buzz-bridge`,** built from
+   [its repository](https://github.com/ElcanoTek/fleet-buzz-bridge)
+   (`go build -o fleet-buzz-bridge .` in a clone), next to `fleet`.
 3. **A fleet user for the agent.** On the fleet server:
    `fleet chat user add buzz-bot@example.com --password -`. Every turn runs as
    this user, whoever asked in Buzz.
@@ -582,7 +695,8 @@ On the fleet server:
    `--add-source=10.43.0.0/16`); on the server checked it was not running.
    With k3s installed, `fleet doctor`, sandbox smoke test included, still
    passed; fleet's sandbox egress sealing was not rechecked on its own.
-2. **`fleet-buzz-gateway`,** from the bridge's repository. fleet's chat API
+2. **`fleet-buzz-gateway`,** built from the bridge's repository
+   (`go build -o fleet-buzz-gateway ./gateway` in a clone). fleet's chat API
    stays on loopback. The gateway listens on the cluster bridge address only,
    adds fleet's server token, read from a file only it can read, pins every
    request to one fleet user, and forwards only what `fleet acp` calls
@@ -923,18 +1037,19 @@ conversation in fleet like anything else the user sends.
   file, not text, refused by the client, or not sent within the 10 seconds
   `fleet acp` waits for one prompt's files) stays a link, followed by the
   reason, so the model can tell the user.
-- **When.** The reads happen once the prompt has the session and the last
-  prompt's turn has finished (see `session/prompt`), just before it is
-  submitted. A `session/cancel` during them ends the prompt `cancelled`: no
-  more files are asked for, and nothing reaches fleet. So does the client
-  going away during a read. Once the 10 seconds have run out, no more files
-  are asked for either. A `session/prompt` a client sends as a notification
-  rather than a request waits the 10 seconds out once and gets none of its
-  files, because acp-go-sdk hands an agent a read's answer only once the
-  notifications sent before it have been handled, the prompt running the read
-  among them. A resend is keyed by the prompt as the client sent it, not by
-  the files' text, so it is still recognised as the same message when a file
-  changed in between.
+- **When.** The reads happen once the prompt has the session and fleet has
+  stopped waiting on the last prompt's turn (its stream has ended, or, if it has
+  not, 90 seconds have passed since its answer, which does not mean fleet has
+  finished that turn; see `session/prompt`), just before it is submitted.
+  A `session/cancel` during them ends the prompt `cancelled`: no more files are
+  asked for, and nothing reaches fleet. So does the client going away during a
+  read. Once the 10 seconds have run out, no more files are asked for either. A
+  `session/prompt` a client sends as a notification rather than a request waits
+  the 10 seconds out once and gets none of its files, because acp-go-sdk hands
+  an agent a read's answer only once the notifications sent before it have been
+  handled, the prompt running the read among them. A resend is keyed by the
+  prompt as the client sent it, not by the files' text, so it is still
+  recognised as the same message when a file changed in between.
 
 ## Errors
 
@@ -1089,14 +1204,27 @@ What shipped:
   out, unread when its size shows it cannot fit); and a client that never
   answers is given up on after the wait, with the files after it not asked
   for.
-- Checked live against a real `fleet serve` on 2026-10-13. PyCharm 2026.2 (AI
-  Assistant 262.10968.223) links the file open in the editor with every
-  message and an `@`-attached file as well: `fleet acp` read them through
-  PyCharm, the model quoted the open file's first line, and a 376 KB file that
-  was both open and attached was read once and cut to its first 100 KB, which
-  the model reported. Emacs agent-shell 0.85.3 linked a 125 KB `@` mention
-  (over its embed limit); it was read through agent-shell and cut the same
-  way.
+- Checked live against a real `fleet serve` with a live model from PyCharm
+  2026.2 (AI Assistant 262.10968.223) on macOS on 2026-10-13: the features
+  listed under "JetBrains (AI Assistant)", the snippet there (with the IDE's
+  MCP server sent, then with `use_idea_mcp` and `use_custom_mcp` off), a 20 s
+  `--timeout`, a dropped screenshot, and the extended ACP log. PyCharm links
+  the file open in the editor with every message, and an `@`-attached file as
+  well: `fleet acp` read them through PyCharm, the model quoted the open file's
+  first line, and a 376 KB file that was both open and attached was read once
+  and cut to its first 100 KB, which the model reported. A new chat's first
+  reply ended 5 ms after its answer, and a message sent 0.6 s later waited
+  2.4 s for fleet to finish naming the conversation, then ran.
+- Checked live against a real `fleet serve` on 2026-10-13: Emacs agent-shell
+  0.85.3 linked a 125 KB `@` mention (over its embed limit); it was read
+  through agent-shell and cut to its first 100 KB.
+- Checked against a real `fleet serve` on 2026-10-13 from a script, with
+  `openai/gpt-6-luna-pro`. Without the change that answers a prompt at its
+  turn's end, a new chat's first reply ended 5–6 s after its answer, and a
+  second `POST /chat` sent right after `turn.completed` was queued (`202`).
+  With it, the reply ended 0.32 s after its answer, a follow-up sent at once
+  was answered rather than queued, and so was one sent at once after a Stop
+  mid-turn.
 - Tests cover a prompt answering at its turn's terminal frame. In
   `internal/chattui`, `StreamTurn` returns at the terminal frame, with that
   frame's outcome for each kind of terminal frame (the first, when a second

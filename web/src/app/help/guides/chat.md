@@ -102,7 +102,8 @@ launches it, and each message becomes a normal fleet chat turn as the user named
 any other. Replies, reasoning and tool steps stream to the client. If a step
 needs approval, the reply ends with a link or a `fleet chat --approve` command,
 because approvals are settled in fleet, not in the client. Images and audio are
-not accepted.
+not accepted. JetBrains sends a screenshot you drop into the chat as its file
+name only, so the assistant never sees the image, and nothing warns you.
 
 Files you attach in your editor reach fleet as the editor sends them. When it
 sends only a link to a file, as JetBrains does for a file you attach and for the
@@ -111,8 +112,8 @@ editor lets agents read files (JetBrains and Emacs agent-shell do), and sends
 that with your message. Up to 100 KB of a file, and 300 KB of all the files a
 message links to, are sent: a longer file is cut, and one over 1 MB is not sent
 at all; either way the assistant is told. In JetBrains this means the file open
-in the editor goes to fleet with every message, so close a file holding secrets
-before you chat.
+in the editor goes to fleet with every message, each time adding its text to the
+conversation, so close a file holding secrets before you chat.
 
 If your operator has added fleet to your Buzz workspace, you @mention it
 there. By default only the person who set it up, and their own agents, can
@@ -124,7 +125,8 @@ answers both in one reply. Files attached in Buzz cannot be read by fleet,
 and Buzz's agent instructions and memories do not reach it. The conversation
 is also in fleet's web chat, under the user the agent runs as.
 
-MCP servers you set up in your editor are not used by fleet. fleet's tools and
+MCP servers your editor sends are not used by fleet: the ones you set up and,
+unless it is turned off, the one built into JetBrains. fleet's tools and
 connectors are the ones your operator set up, and they run on the fleet server.
 The first reply in a session says so, naming the servers your editor sent.
 
