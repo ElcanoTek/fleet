@@ -122,7 +122,7 @@ export function BrowserNotificationsRow() {
       await navigator.serviceWorker.ready;
       // Under the same lock as the key check, so another tab never replaces
       // the subscription between this read and the store.
-      const res = await withPushLock(async () => {
+      const { res, endpoint } = await withPushLock(async () => {
         let existing = await reg.pushManager.getSubscription();
         const existingKey = existing ? subscriptionKey(existing) : null;
         if (existing && existingKey && !sameKey(existingKey, key)) {
@@ -143,11 +143,12 @@ export function BrowserNotificationsRow() {
             userVisibleOnly: true,
             applicationServerKey: urlBase64ToUint8Array(key).buffer as ArrayBuffer,
           }));
-        return fetch("/api/push/subscribe", {
+        const stored = await fetch("/api/push/subscribe", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(sub.toJSON()),
         });
+        return { res: stored, endpoint: sub.endpoint };
       });
       if (res.status === 501) {
         setState("unconfigured");
@@ -158,7 +159,7 @@ export function BrowserNotificationsRow() {
       }
       // Another tab's Settings may have let this browser's subscription go
       // while it was being stored (it reads "not yours" until the store lands).
-      if ((await reg.pushManager.getSubscription())?.endpoint !== sub.endpoint) {
+      if ((await reg.pushManager.getSubscription())?.endpoint !== endpoint) {
         throw new Error("Notifications were turned off in another tab. Turn them on again.");
       }
       setState("enabled");

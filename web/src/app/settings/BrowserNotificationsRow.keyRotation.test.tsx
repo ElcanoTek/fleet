@@ -31,11 +31,13 @@ function makeSub(endpoint: string, key: Uint8Array, browser: { current: FakeSub 
 }
 
 // stubBrowser keeps one "current" subscription the way a browser does:
-// unsubscribe clears it, subscribe replaces it.
+// unsubscribe clears it, subscribe replaces it. The server side keeps the
+// signed-in user's stored endpoints, which /api/push/status reads.
 function stubBrowser(opts: { start: "old" | "none"; renewed?: boolean }) {
   const browser = { current: null as FakeSub | null, events: [] as string[] };
   const old = makeSub("https://relay.example/old", OLD_KEY, browser);
   if (opts.start === "old") browser.current = old;
+  const stored = new Set<string>(opts.start === "old" ? [old.endpoint] : []);
   const reg = {
     pushManager: {
       getSubscription: async () => browser.current,
@@ -69,7 +71,21 @@ function stubBrowser(opts: { start: "old" | "none"; renewed?: boolean }) {
         browser.events.push(`${init?.method ?? "GET"} ${url}`);
       }
       if (url === "/api/push/vapid-public-key") return Response.json({ key: b64url(NEW_KEY) });
-      if (url === "/api/push/renew") return Response.json({ renewed: opts.renewed ?? true });
+      const body = JSON.parse((init?.body as string | undefined) ?? "{}") as {
+        endpoint?: string;
+        old_endpoint?: string;
+      };
+      if (url === "/api/push/status") return Response.json({ subscribed: stored.has(body.endpoint ?? "") });
+      if (url === "/api/push/renew") {
+        const renewed = opts.renewed ?? true;
+        if (renewed) {
+          stored.delete(body.old_endpoint ?? "");
+          stored.add(body.endpoint ?? "");
+        }
+        return Response.json({ renewed });
+      }
+      if (url === "/api/push/subscribe") stored.add(body.endpoint ?? "");
+      if (url === "/api/push/unsubscribe") stored.delete(body.endpoint ?? "");
       return new Response(null, { status: 204 });
     }),
   );
@@ -101,6 +117,8 @@ describe("BrowserNotificationsRow after a VAPID key rotation", () => {
       "unsubscribe https://relay.example/old",
       `subscribe ${b64url(NEW_KEY)}`,
       "POST /api/push/renew",
+      // The switch then asks whether the server holds the renewed one.
+      "POST /api/push/status",
     ]);
     expect(browser.current?.endpoint).toBe("https://relay.example/new");
   });
