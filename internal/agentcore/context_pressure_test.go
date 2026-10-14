@@ -484,14 +484,14 @@ func TestRun_ContextPressure_MultiRoundCompactsFromGroundTruthAndFeedsForward(t 
 // TestRun_ContextPressure_MultiRoundWarnDedupAndReset pins the cross-round warn
 // contract: a hovering run surfaces ONE banner, and a compaction RESETS the
 // dedup so a later climb warns again. Round 0 warns off the estimate; round 1's
-// real 95K tokens compact (resetting the flag); round 2's real 80K tokens warn
+// real 95K tokens compact (resetting the flag); round 2's real 77K tokens warn
 // again. Exactly two warn events ⇒ both the dedup (no third) and the reset (the
 // second) hold; without the reset the second warn would be suppressed.
 func TestRun_ContextPressure_MultiRoundWarnDedupAndReset(t *testing.T) {
 	slug := "ctx209-multiround-warn"
 	recordContextMax(slug, testContextWindow)
 	session := NewLogSession()
-	model := &capturingModel{slug: slug, inputByCall: []int{95_000, 80_000, 80_000}}
+	model := &capturingModel{slug: slug, inputByCall: []int{95_000, 77_000, 77_000}}
 	obs := &captureObserver{}
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
 		Input:      historyInput{system: "s", msgs: fillerMessages(8, 38_000), label: "warn"}, // 76K tokens → 0.76 estimate, inside the reserved target

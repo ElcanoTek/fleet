@@ -683,9 +683,19 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 
 	pct := float64(used) / float64(window)
 	pressure := map[string]any{evtFieldUsedTokens: used, evtFieldWindowSize: window, evtFieldPct: pct}
+	// An interactive engine compacts where its mid-turn checkpoint pauses: on
+	// a smaller window the in-round guard's input allowance sits below the
+	// plain threshold, and a pause that found nothing to compact would only
+	// pause again on the next step.
+	compactAt := int(float64(window) * contextCompactionThreshold(e.envPrefix))
+	if !e.requireCompactionOptIn {
+		if limit := e.windowCheckpointLimit(activeModel); limit > 0 && limit < compactAt {
+			compactAt = limit
+		}
+	}
 
 	switch {
-	case pct >= contextCompactionThreshold(e.envPrefix):
+	case used >= compactAt:
 		if e.requireCompactionOptIn && !e.envPrefix.lookupBool("SCHEDULED_AUTO_COMPACT") {
 			if !out.warned {
 				sink.emit(evtContextPressure, pressure)
@@ -945,7 +955,8 @@ const maxResendCheckpoints = 40
 //   - SCHEDULED engine: the resend budget (effectiveResendBudget), a cost
 //     control (#1534); 0 when the budget is disabled.
 //   - INTERACTIVE engine: the window-compaction threshold of the active
-//     model's context window. A chat turn is a single round, so without this
+//     model's context window, clamped to the in-round guard's input
+//     allowance (windowCheckpointLimit). A chat turn is a single round, so without this
 //     its pre-round pressure check runs once while dozens of tool steps grow
 //     the prompt past the window inside the round. Inert after a window
 //     compaction found nothing to summarize (windowCompactionStalled).
@@ -960,11 +971,7 @@ func (e *engine) checkpointThreshold(activeModel fantasy.LanguageModel) int {
 	if activeModel == nil || e.windowCompactionStalled {
 		return 0
 	}
-	window := contextWindowForActiveModel(activeModel)
-	if window <= 0 {
-		return 0
-	}
-	return int(float64(window) * contextCompactionThreshold(e.envPrefix))
+	return e.windowCheckpointLimit(activeModel)
 }
 
 // compactionCheckpoint returns the StopCondition that pauses a round's tool
@@ -1102,7 +1109,16 @@ func (e *engine) effectiveResendBudget(budget int) int {
 // provider reserves contextAccounting takes. Past either, the round is reduced
 // or refused before StopWhen could observe the threshold.
 func (e *engine) resendWindowLimit() int {
-	active := e.currentModel()
+	return e.windowCheckpointLimit(e.currentModel())
+}
+
+// windowCheckpointLimit is resendWindowLimit for a given model: the lower of
+// the window-compaction point and the input allowance modelContextBudgetStep
+// enforces. On a window below roughly 320K tokens the allowance is the lower
+// one (a 200K window leaves ~173K after the completion and provider
+// reserves), so a checkpoint or compaction waiting for the plain 90% would
+// never see the step the guard refuses first.
+func (e *engine) windowCheckpointLimit(active fantasy.LanguageModel) int {
 	window := contextWindowForActiveModel(active)
 	if window <= 0 {
 		return 0

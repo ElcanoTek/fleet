@@ -865,15 +865,7 @@ func (e *engine) streamRoundWithResilience(
 				rollbackAttempt()
 				messages = e.forceCompactMessageHistory(ctx, messages)
 				forceCompactedThisRound = true
-				// Tell live clients the older history was summarized, the same
-				// event (and chat banner) a proactive compaction produces.
-				if st := e.lastForcedCompaction; st.removed > 0 && sink != nil {
-					sink.emit(evtContextCompacted, map[string]any{
-						evtFieldRemovedTurns:  st.removed,
-						evtFieldSummaryTokens: st.summaryTokens,
-						evtFieldTrigger:       "overflow",
-					})
-				}
+				e.noteForcedCompaction(sink)
 				continue
 			}
 			if canSwapFallback(e, activeModel, swappedToFallback) {
@@ -946,6 +938,25 @@ func (e *engine) streamRoundWithResilience(
 		}
 	}
 	return streamRoundOutcome{}, fmt.Errorf("fantasy agent error after %d recovery attempts: %w", recoveryLimit, lastErr)
+}
+
+// noteForcedCompaction follows an overflow (reactive) compaction that removed
+// history: it re-arms the mid-turn window checkpoint (the history now has
+// something to summarize again) and tells live clients the older history was
+// summarized — the same event, and chat note, a proactive compaction produces.
+func (e *engine) noteForcedCompaction(sink *streamSink) {
+	st := e.lastForcedCompaction
+	if st.removed == 0 {
+		return
+	}
+	e.windowCompactionStalled = false
+	if sink != nil {
+		sink.emit(evtContextCompacted, map[string]any{
+			evtFieldRemovedTurns:  st.removed,
+			evtFieldSummaryTokens: st.summaryTokens,
+			evtFieldTrigger:       "overflow",
+		})
+	}
 }
 
 func fatalProviderError(err error, providerErr *fantasy.ProviderError) error {

@@ -508,12 +508,14 @@ carrying ~850K tokens of tool results look small enough to skip.
 the pre-round check above runs once per turn while dozens of tool steps can grow
 the prompt past the window inside it. The interactive engine therefore pauses the
 tool loop after a tool step whose real prompt size reached the compaction
-threshold — the same stop-condition mechanism as the scheduled resend-budget
-checkpoint below, sharing its cap of 40 pauses per run — and the run loop
-compacts and resumes the same conversation. No `fleet.context_checkpoint` event
+threshold — clamped to the in-round guard's input allowance, which is the lower
+one on windows below roughly 320K — on the same stop-condition mechanism as the
+scheduled resend-budget checkpoint below, sharing its cap of 40 pauses per run;
+the run loop compacts at that same point and resumes the same conversation
+(details: [SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md#the-interactive-window-checkpoint-1754)). No `fleet.context_checkpoint` event
 is streamed to chat clients; they see the `fleet.context_compacted` that follows.
-If that compaction finds nothing to summarize, the checkpoint goes inert until a
-later compaction succeeds. Chat compactions shorten the request only: the stored
+If a window compaction finds nothing to summarize, the checkpoint goes inert
+until a later compaction (proactive or overflow) removes history. Chat compactions shorten the request only: the stored
 transcript keeps its history, so a later turn that starts over the threshold
 compacts again.
 

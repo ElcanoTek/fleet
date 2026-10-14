@@ -245,8 +245,16 @@ func TestCheckpointThreshold(t *testing.T) {
 
 	interactive := newMockEngine(t, model)
 	interactive.envPrefix = CanonicalEnvPrefix
-	if got, want := interactive.checkpointThreshold(model), testContextWindow*90/100; got != want {
-		t.Errorf("interactive threshold = %d, want %d (0.90 of the window)", got, want)
+	// The lower of 0.90 × window and the in-round guard's input allowance
+	// (window − completion − provider reserves): on a 100K window the
+	// allowance is the binding one, so the checkpoint pauses where the guard
+	// would otherwise refuse the step first.
+	got := interactive.checkpointThreshold(model)
+	if got <= 0 || got > testContextWindow*90/100 {
+		t.Errorf("interactive threshold = %d, want within (0, %d]", got, testContextWindow*90/100)
+	}
+	if want := interactive.windowCheckpointLimit(model); got != want {
+		t.Errorf("interactive threshold = %d, want the window checkpoint limit %d", got, want)
 	}
 	if interactive.checkpointThreshold(nil) != 0 {
 		t.Error("no active model, no window checkpoint")
@@ -261,5 +269,37 @@ func TestCheckpointThreshold(t *testing.T) {
 	scheduled.requireCompactionOptIn = true
 	if got := scheduled.checkpointThreshold(model); got != 1000 {
 		t.Errorf("scheduled threshold = %d, want the 1000-token resend budget", got)
+	}
+}
+
+// An overflow (reactive) compaction that actually summarized history re-arms
+// the mid-turn window checkpoint an earlier unsplittable pass left inert:
+// otherwise a resumed tool loop that grows past the window again could neither
+// pause nor force-compact a second time in the round.
+func TestStreamRound_ForcedCompactionClearsStalledWindowCheckpoint(t *testing.T) {
+	calls := 0
+	model := &namedMockModel{name: "ctx-overflow-rearm"}
+	model.streamFunc = func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+		calls++
+		if calls == 1 {
+			return nil, &fantasy.ProviderError{StatusCode: 400, Message: "Provider returned error", ResponseBody: []byte(anthropicOverflowBody)}
+		}
+		return streamStop()(nil, call)
+	}
+	e := newMockEngine(t, model)
+	e.windowCompactionStalled = true
+	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
+		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
+	}
+	messages := fillerMessages(compactionKeepTail+6, 20)
+	if _, err := e.streamRoundWithResilience(context.Background(), newOrchestrationState(e.logSession, 50), newStreamSink(nil), 1000,
+		messages, buildAgent(model), model, false, buildAgent); err != nil {
+		t.Fatalf("expected the round to recover via forced compaction, got %v", err)
+	}
+	if e.lastForcedCompaction.removed == 0 {
+		t.Fatal("expected the forced compaction to remove history")
+	}
+	if e.windowCompactionStalled {
+		t.Error("a forced compaction that removed history must clear windowCompactionStalled")
 	}
 }
