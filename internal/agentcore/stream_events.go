@@ -1,8 +1,10 @@
 package agentcore
 
 import (
+	"context"
 	"strings"
 	"sync"
+	"time"
 
 	"charm.land/fantasy"
 )
@@ -55,6 +57,10 @@ const (
 	evtFieldInput = "input"
 	evtFieldText  = "text"
 	evtFieldIsErr = "is_err"
+	// evtFieldDurationMS rides tool.result: wall-clock milliseconds from the
+	// tool's dispatch (the outermost Run wrapper) to its result. Absent when
+	// the call never reached dispatch (invalid / not-found / provider-executed).
+	evtFieldDurationMS = "duration_ms"
 
 	// Context-pressure event payload fields (#209).
 	evtFieldUsedTokens    = "used_tokens"
@@ -144,12 +150,18 @@ type streamSink struct {
 	// its side effect). See streamRoundWithResilience.
 	toolEvents        int
 	failedToolResults int
+	// toolStarts holds the dispatch time of each in-flight tool call, keyed by
+	// call id, so onToolResult can report how long the tool itself took. The
+	// provider's streaming time is excluded: fantasy dispatches a step's tools
+	// only after that step's stream has ended.
+	toolStarts map[string]time.Time
 }
 
 func newStreamSink(obs Observer, attribution ...panicAttribution) *streamSink {
 	sink := &streamSink{
 		observer:      obs,
 		reasoningBufs: make(map[string]*strings.Builder),
+		toolStarts:    make(map[string]time.Time),
 	}
 	if len(attribution) > 0 {
 		sink.attribution = attribution[0]
@@ -266,16 +278,53 @@ func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
 		Role: roleTool, Type: "tool_result",
 		ToolCallID: id, ToolName: name, Text: text, IsErr: isErr,
 	})
+	started, timed := s.toolStarts[id]
+	delete(s.toolStarts, id)
 	s.mu.Unlock()
 	if s.logSession != nil {
 		s.logSession.AddToolResult(id, name, text, isErr)
 	}
-	s.emit("tool.result", map[string]any{
+	payload := map[string]any{
 		evtFieldID:    id,
 		evtFieldName:  name,
 		evtFieldText:  truncate(text, toolResultMaxStreamBytes),
 		evtFieldIsErr: isErr,
-	})
+	}
+	if timed {
+		payload[evtFieldDurationMS] = time.Since(started).Milliseconds()
+	}
+	s.emit("tool.result", payload)
+}
+
+// noteToolStart stamps a tool call's dispatch time. The first stamp wins: the
+// deferred-MCP bridge dispatches its inner tool under the same call id, and
+// the outer dispatch is the one the user waited on. Nil-safe.
+func (s *streamSink) noteToolStart(id string) {
+	if s == nil || id == "" {
+		return
+	}
+	s.mu.Lock()
+	if _, ok := s.toolStarts[id]; !ok {
+		s.toolStarts[id] = time.Now()
+	}
+	s.mu.Unlock()
+}
+
+// toolTimingKey carries the round's streamSink on the stream context, so the
+// tool dispatch wrapper (built before the sink exists) can stamp start times.
+type toolTimingKey struct{}
+
+func withToolTiming(ctx context.Context, s *streamSink) context.Context {
+	if s == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, toolTimingKey{}, s)
+}
+
+func noteToolStart(ctx context.Context, id string) {
+	if s, ok := ctx.Value(toolTimingKey{}).(*streamSink); ok {
+		s.noteToolStart(id)
+	}
 }
 
 // toolEventCount is nil-safe (0): the resilience loop tolerates a nil sink

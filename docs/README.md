@@ -327,6 +327,7 @@ above fails otherwise.
 - [`TOOL-DISCLOSURE.md`](TOOL-DISCLOSURE.md) — BM25 progressive tool disclosure
 - [`TOOL-OUTPUT-BOUNDARY.md`](TOOL-OUTPUT-BOUNDARY.md) — Bounded model-visible tool output
 - [`TOOL-PANIC-CONTAINMENT.md`](TOOL-PANIC-CONTAINMENT.md) — Agent tool panic containment
+- [`TOOL-TIMING.md`](TOOL-TIMING.md) — Per-call tool timing: `duration_ms` on `tool.result` and in the tool-call audit ledger
 - [`TURN-JOURNAL.md`](TURN-JOURNAL.md) — Durable turn journal & commit-gated terminal success (#798)
 - [`TURN-OUTCOME.md`](TURN-OUTCOME.md) — Turn outcome — a server-side answer the client reads instead of inferring (#1593)
 - [`UNIFIED-ADMIN-PERMISSION-UI.md`](UNIFIED-ADMIN-PERMISSION-UI.md) — Unified admin permission in the Users UI

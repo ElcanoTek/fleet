@@ -153,6 +153,7 @@ func (t *panicContainedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 }
 
 func (t *panicContainedTool) Run(ctx context.Context, call fantasy.ToolCall) (resp fantasy.ToolResponse, err error) {
+	noteToolStart(ctx, call.ID)
 	state := &toolPanicState{phase: panicPhaseToolExecute}
 	ctx = context.WithValue(ctx, toolPanicStateKey{}, state)
 	defer func() {

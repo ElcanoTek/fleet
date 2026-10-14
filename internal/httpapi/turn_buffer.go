@@ -94,6 +94,11 @@ type turnBuffer struct {
 	// snapshot?" — so this isolates genuine backpressure from a failed batch
 	// insert. Written under mu on the same line that sets needsBackfill.
 	droppedOnFull int
+
+	// toolDurations records each tool.result's duration_ms by call id (guarded
+	// by mu). Kept apart from events because the sliding window can evict
+	// early frames, and the tool-call audit ledger needs every call's timing.
+	toolDurations map[string]int64
 }
 
 // bufferedEvent is one already-serialized SSE frame. Data is the
@@ -255,6 +260,7 @@ func (b *turnBuffer) Emit(event string, payload any) {
 	}
 	ev := bufferedEvent{ID: id, Name: event, Data: data}
 	b.events = append(b.events, ev)
+	b.noteToolDuration(event, payload)
 	b.totalBytes += len(data)
 
 	// Sliding-window eviction: drop the oldest events once over the byte cap,
@@ -292,6 +298,38 @@ func (b *turnBuffer) Emit(event string, payload any) {
 			log.Printf("persister channel full (turn=%s); event id=%d deferred to Finish backfill", b.turnID, ev.ID)
 		}
 	}
+}
+
+// noteToolDuration captures a tool.result frame's duration_ms. Caller holds mu.
+func (b *turnBuffer) noteToolDuration(event string, payload any) {
+	if event != "tool.result" {
+		return
+	}
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return
+	}
+	id, _ := m["id"].(string)
+	ms, ok := m["duration_ms"].(int64)
+	if id == "" || !ok {
+		return
+	}
+	if b.toolDurations == nil {
+		b.toolDurations = make(map[string]int64)
+	}
+	b.toolDurations[id] = ms
+}
+
+// toolDurationsSnapshot returns a copy of the per-call tool durations seen so
+// far, keyed by tool-call id.
+func (b *turnBuffer) toolDurationsSnapshot() map[string]int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make(map[string]int64, len(b.toolDurations))
+	for id, ms := range b.toolDurations {
+		out[id] = ms
+	}
+	return out
 }
 
 // broadcastControl fans out a one-shot control frame (e.g. "shutdown") to all

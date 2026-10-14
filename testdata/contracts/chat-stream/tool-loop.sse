@@ -11,7 +11,7 @@ data: {"id":"call_contract_ok","input":"{\"command\":\"echo CONTRACT_TOOL_OK\"}"
 
 id: 3
 event: tool.result
-data: {"id":"call_contract_ok","is_err":false,"name":"bash","text":"{\"exit_code\":0,\"stdout\":\"CONTRACT_TOOL_OK\\n\",\"stderr\":\"\",\"command\":\"echo CONTRACT_TOOL_OK\",\"working_directory\":\"WORKSPACE\",\"execution_time_ms\":0}"}
+data: {"duration_ms":0,"id":"call_contract_ok","is_err":false,"name":"bash","text":"{\"exit_code\":0,\"stdout\":\"CONTRACT_TOOL_OK\\n\",\"stderr\":\"\",\"command\":\"echo CONTRACT_TOOL_OK\",\"working_directory\":\"WORKSPACE\",\"execution_time_ms\":0}"}
 
 id: 4
 event: tool.call
@@ -19,7 +19,7 @@ data: {"id":"call_contract_exit","input":"{\"command\":\"test -e contract-path-t
 
 id: 5
 event: tool.result
-data: {"id":"call_contract_exit","is_err":false,"name":"bash","text":"{\"exit_code\":1,\"stdout\":\"\",\"stderr\":\"\",\"command\":\"test -e contract-path-that-does-not-exist\",\"working_directory\":\"WORKSPACE\",\"execution_time_ms\":0,\"error\":\"exit status 1\"}"}
+data: {"duration_ms":0,"id":"call_contract_exit","is_err":false,"name":"bash","text":"{\"exit_code\":1,\"stdout\":\"\",\"stderr\":\"\",\"command\":\"test -e contract-path-that-does-not-exist\",\"working_directory\":\"WORKSPACE\",\"execution_time_ms\":0,\"error\":\"exit status 1\"}"}
 
 id: 6
 event: tool.call
@@ -27,7 +27,7 @@ data: {"id":"call_contract_err","input":"{\"path\":\"contract-file-that-does-not
 
 id: 7
 event: tool.result
-data: {"id":"call_contract_err","is_err":true,"name":"view_file","text":"path validation failed: file does not exist: contract-file-that-does-not-exist.txt"}
+data: {"duration_ms":0,"id":"call_contract_err","is_err":true,"name":"view_file","text":"path validation failed: file does not exist: contract-file-that-does-not-exist.txt"}
 
 id: 8
 event: text.delta
