@@ -741,6 +741,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // One drain-follower per conversation (followQueueDrain re-enters itself
   // through the reattach it awaits).
   const queueFollowInFlightRef = useRef<Set<string>>(new Set<string>());
+  // A follow request that arrived while that conversation's follower was
+  // already running. The running one may have read its snapshot before the
+  // newly accepted row committed, and would stop on an empty queue; it runs
+  // once more on its way out instead of the request being dropped.
+  const queueFollowRerunRef = useRef<Set<string>>(new Set<string>());
   // One resume-follower per conversation; a newer request only extends the
   // deadline of the one already looking.
   const resumeFollowDeadlineRef = useRef<Map<string, number>>(
@@ -3304,8 +3309,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // (both stream finalizers call back into here), so deferring loses
     // nothing (#1584).
     if (recoveryOwns(convId) || chasingSuccessor(convId)) return;
-    if (queueFollowInFlightRef.current.has(convId)) return;
+    if (queueFollowInFlightRef.current.has(convId)) {
+      queueFollowRerunRef.current.add(convId);
+      return;
+    }
     queueFollowInFlightRef.current.add(convId);
+    queueFollowRerunRef.current.delete(convId);
     // Set whenever we see drain work we have not yet put on screen; cleared
     // by attaching to the turn that ran it. Still set when the queue empties
     // means the turn happened where nobody could see it.
@@ -3347,6 +3356,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
     } finally {
       queueFollowInFlightRef.current.delete(convId);
+      if (queueFollowRerunRef.current.delete(convId) && !recoveryUnmountedRef.current) {
+        void followQueueDrain(convId);
+      }
     }
   };
 
@@ -4231,7 +4243,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         watchQueuedCardSend(convId, value, queueSubmissionId, opts.onUnsent, opts.stillHeld);
         opts.onHeld?.(convId, queueSubmissionId);
       }
-      void refreshQueue(convId);
+      // Show the chip, then follow the queue. The turn we queued behind may
+      // have ended in the instant this POST was in flight — its terminal
+      // frame was out, but the server had not yet unregistered it, so it
+      // still answered "queued" — and its stream-end follower has already
+      // looked at the queue and found nothing. The server drains the row the
+      // moment that turn lets go, so without a follower here the follow-up
+      // runs where this tab cannot see it and its chip reads "queued" until a
+      // reload. While the turn is still streaming this is a no-op: its own
+      // stream end follows the queue.
+      void refreshQueue(convId).then(() => followQueueDrain(convId));
       return true;
     }
 

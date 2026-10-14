@@ -504,6 +504,84 @@ describe("a direct submission the server queued instead of running", () => {
     expect(msgs[3].content).toBe("Rewritten for the client.");
     expect(msgs.some((m) => m.state === "thinking" || m.state === "streaming")).toBe(false);
   }, 20_000);
+
+});
+
+// The edge the user hit: a follow-up submitted in the instant a turn ends. The
+// composer still reads busy, so it posts mode:"queue"; the server, whose turn
+// has emitted its terminal frame but not yet unregistered, queues it (202) and
+// drains it as soon as that turn lets go. The finishing turn's stream-end
+// follower has already looked at the queue — before this row committed — and
+// stopped on an empty snapshot. Nothing else follows the queue, so the
+// follow-up ran where the tab could not see it while its chip sat on
+// "queued" until a reload.
+describe("a follow-up queued in the instant its predecessor ended", () => {
+  it("streams the drained turn and clears the chip", async () => {
+    const h = makeHarness({
+      initial: answeredTranscript(),
+      persisted: drainedHistory(),
+      // The ack-time read sees the row already claimed; gone once it ran.
+      queue: [[queuedRow("q1", "running")], [queuedRow("q1", "running")], []],
+      inflight: [{ inflight: true, turn_id: "t2" }],
+      streamBodies: [
+        () =>
+          closedStream([
+            sse(1, "turn.started", { turn_id: "t2", input_id: "q1", queued: true }),
+            sse(2, "user.message", { text: "keep it clear and concise" }),
+            sse(3, "text.delta", { text: "Rewritten for the client." }),
+            sse(4, "turn.completed", {}),
+          ]),
+      ],
+    });
+    // The stale busy flag that routes the submission down the queue path.
+    h.deps.streamingConvsRef.current.add(CONV);
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await act(async () => {
+      expect(await result.current.submitPrompt("keep it clear and concise")).toBe(true);
+    });
+
+    await vi.waitFor(() => expect(convSlot(h, CONV).length).toBe(4), { timeout: 4000, interval: 25 });
+    const msgs = convSlot(h, CONV);
+    expect(msgs[2].content).toBe("keep it clear and concise");
+    expect(msgs[3].content).toBe("Rewritten for the client.");
+    expect(msgs.some((m) => m.state === "thinking" || m.state === "streaming")).toBe(false);
+    // The chip left with the input instead of reading "queued" forever.
+    await vi.waitFor(() => expect(result.current.queuedInputs.get(CONV)).toEqual([]), {
+      timeout: 4000,
+      interval: 25,
+    });
+  });
+
+  it("a follow request made while a follower is running is not dropped", async () => {
+    const h = makeHarness({
+      initial: answeredTranscript(),
+      persisted: drainedHistory(),
+      // The running follower reads before the row commits (empty) and stops;
+      // the row is there by the time the deferred request looks.
+      queue: [[], [queuedRow("q1", "running")], []],
+      inflight: [{ inflight: true, turn_id: "t2" }],
+      streamBodies: [
+        () =>
+          closedStream([
+            sse(1, "turn.started", { turn_id: "t2", input_id: "q1", queued: true }),
+            sse(2, "user.message", { text: "keep it clear and concise" }),
+            sse(3, "text.delta", { text: "Rewritten for the client." }),
+            sse(4, "turn.completed", {}),
+          ]),
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const first = result.current.followQueueDrain(CONV);
+    // Arrives while the first follower is still awaiting its snapshot.
+    await result.current.followQueueDrain(CONV);
+    await first;
+
+    await vi.waitFor(() => expect(convSlot(h, CONV).length).toBe(4), { timeout: 4000, interval: 25 });
+    expect(convSlot(h, CONV)[3].content).toBe("Rewritten for the client.");
+    expect(h.streamAttaches).toBe(1);
+  });
 });
 
 // A generative-UI card counts a refused message as unanswered and an accepted
