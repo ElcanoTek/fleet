@@ -32,8 +32,9 @@ DIFF_MAX_BYTES = 4096
 # this size: the old file is held in memory for the diff, and difflib slows
 # down sharply on large inputs. Larger files still report their hashes.
 DIFF_SOURCE_MAX_BYTES = 256 * 1024
-# ...and only when the lines that differ, with their context, are at most this
-# many a side: difflib's cost grows with the square of the line count, and a
+# A write's or an edit's diff covers only the span from the first changed line
+# to the last, with context, and is skipped when that span is over this many
+# lines a side: difflib's cost grows with the square of the line count, and a
 # diff that long would be cut to DIFF_MAX_BYTES anyway.
 DIFF_MAX_LINES = 2000
 # A plain write (no expected_hash) hashes the file it replaces only up to this
@@ -785,6 +786,28 @@ def do_edit(req):
                 "edit is a no-op (old_text and new_text produce identical content)",
             )
 
+        # Describe the edit before committing it, as a write does: a
+        # replace_all through a long file would otherwise diff past the
+        # file-op timeout after the edit had landed.
+        diff, added, removed, note = _bounded_diff(
+            req["path"], content, updated, "edit", DIFF_MAX_LINES
+        )
+        response = {
+            "ok": True,
+            "err_kind": "",
+            "err": "",
+            "data_b64": "",
+            "size": len(updated),
+            "count": count,
+            "sha256": hashlib.sha256(updated).hexdigest(),
+            "old_sha256": old_digest,
+            "match_count": count,
+            "added": added,
+            "removed": removed,
+            "diff": diff,
+            "diff_note": note,
+        }
+
         try:
             _atomic_write(
                 parent_fd,
@@ -799,22 +822,7 @@ def do_edit(req):
             except (OSError, UnsafePath, StaleContent):
                 current = "unknown"
             return _stale(expected, current)
-
-        diff, added, removed, _ = _bounded_diff(req["path"], content, updated)
-        return {
-            "ok": True,
-            "err_kind": "",
-            "err": "",
-            "data_b64": "",
-            "size": len(updated),
-            "count": count,
-            "sha256": hashlib.sha256(updated).hexdigest(),
-            "old_sha256": old_digest,
-            "match_count": count,
-            "added": added,
-            "removed": removed,
-            "diff": diff,
-        }
+        return response
     except FileNotFoundError:
         return fail("not_found", "file not found")
     except IsADirectoryError:

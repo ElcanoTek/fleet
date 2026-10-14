@@ -31,6 +31,17 @@ new I/O path.
 - **Bounded unified diff.** A successful `edit_file` returns a unified diff
   (bounded to a few KB; large edits show a truncation marker and still apply in
   full) plus `+added/-removed` line counts.
+- **Bounded diff time.** The diff is taken before the edit is committed, over
+  only the span from the first changed line to the last, with three lines of
+  context, the way `write_file`'s is (below). A span over 2,000 lines a side
+  gets a note ("no diff: the change spans over 2000 lines") in place of the
+  diff and the line counts; the edit still applies in full. Before, the whole
+  file was diffed after the commit: a `replace_all` changing every other line
+  of a 233 KB file took 62.8 s to diff, past the 60 s file-op timeout, so an
+  edit that had landed was reported as failed and the sandbox was retired.
+  Unlike a write's, an edit's diff has no size cap: `edit_file` already holds
+  the whole file, and finding the span is linear (one change in a 59 MB file
+  took 0.33 s to diff).
 - **Atomic, mode-preserving write** (already delivered by #784 and relied on
   here): same-directory temp + `os.replace`, preserving an existing file's mode
   (a `chmod +x`'d script keeps its execute bit through an edit).
@@ -127,9 +138,6 @@ Not done, deliberately:
   model-output artifacts), although only `write_file` shows the report: one
   streamed read of a file being replaced (skipped over 64 MB, see above) and,
   for text up to the caps, a bounded diff.
-- **`edit_file`'s diff is unchanged:** it still diffs the whole file, with no
-  line cap, so a `replace_all` touching lines all through a very long file can
-  still be slow.
 
 ## Deliberately deferred
 

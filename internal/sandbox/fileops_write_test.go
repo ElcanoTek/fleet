@@ -1,7 +1,8 @@
 package sandbox
 
-// #1745: write_file's overwrite report and stale-content guard, through the
-// REAL embedded fileops.py on the host backend (as fileops_test.go does).
+// #1745: write_file's overwrite report and stale-content guard, and the
+// bounded diff it shares with edit_file, through the REAL embedded fileops.py
+// on the host backend (as fileops_test.go does).
 
 import (
 	"bytes"
@@ -264,11 +265,17 @@ func TestFileOp_WriteOverNonRegularFile(t *testing.T) {
 	}
 }
 
-// runPatchedWrite runs fileops.do_write(req) under python3 after applying
-// patch, Python run once `fileops` (the embedded script) is imported, and
-// decodes the result. It forces races and failures that real timing cannot
-// produce on demand. A helper that hangs fails the test after 15 s.
+// runPatchedWrite is runPatchedOp for a write.
 func runPatchedWrite(t *testing.T, req map[string]any, patch string) (FileOpResult, error) {
+	t.Helper()
+	return runPatchedOp(t, "write", req, patch)
+}
+
+// runPatchedOp runs fileops.do_<op>(req) under python3 after applying patch,
+// Python run once `fileops` (the embedded script) is imported, and decodes
+// the result. It forces races and failures that real timing cannot produce
+// on demand. A helper that hangs fails the test after 15 s.
+func runPatchedOp(t *testing.T, op string, req map[string]any, patch string) (FileOpResult, error) {
 	t.Helper()
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 required for the fileop seam")
@@ -277,7 +284,7 @@ func runPatchedWrite(t *testing.T, req map[string]any, patch string) (FileOpResu
 	if err := os.WriteFile(filepath.Join(mod, "fileops.py"), fileOpsScript, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	req["op"] = "write"
+	req["op"] = op
 	if _, ok := req["anchor"]; !ok {
 		req["anchor"] = req["root"]
 	}
@@ -286,7 +293,7 @@ func runPatchedWrite(t *testing.T, req map[string]any, patch string) (FileOpResu
 		t.Fatal(err)
 	}
 	driver := "import json, os, sys\nsys.path.insert(0, sys.argv[1])\nimport fileops\n" + patch +
-		"\nprint(json.dumps(fileops.do_write(json.loads(sys.argv[2]))))\n"
+		"\nprint(json.dumps(fileops.do_" + op + "(json.loads(sys.argv[2]))))\n"
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "python3", "-I", "-c", driver, mod, string(raw)).Output()
@@ -716,6 +723,99 @@ func TestFileOp_WriteDiffWindow(t *testing.T) {
 // without a final newline. Where a change lands in a run of identical lines
 // the two may place it differently, so there each diff is applied to the old
 // file instead, and must give the new one.
+// edit_file's diff is bounded like write_file's: a replace_all through a long
+// file used to diff the whole file, which took longer than the file-op
+// timeout, after the edit had landed.
+func TestFileOp_EditDiffWindow(t *testing.T) {
+	sb := fileopTestSandbox(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	path := filepath.Join(root, "big.txt")
+	edit := func(t *testing.T, content string, req FileOpRequest) FileOpResult {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		req.Op, req.Path, req.Root = FileOpEdit, path, root
+		start := time.Now()
+		res, err := sb.RunFileOp(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d := time.Since(start); d > 10*time.Second {
+			t.Errorf("edit took %v", d)
+		}
+		return res
+	}
+	lines := make([]string, 40000)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("%05d\n", i+1)
+	}
+
+	t.Run("one line changed deep in a long file", func(t *testing.T) {
+		res := edit(t, strings.Join(lines, ""), FileOpRequest{OldText: "30000\n", NewText: "thirty\n"})
+		if !strings.Contains(res.Diff, "@@ -29997,7 +29997,7 @@\n") || !strings.Contains(res.Diff, "-30000\n+thirty\n") || res.Added != 1 || res.Removed != 1 || res.DiffNote != "" {
+			t.Errorf("diff = %q (+%d/-%d, note %q), want one changed line at 30000 with file line numbers", res.Diff, res.Added, res.Removed, res.DiffNote)
+		}
+	})
+
+	t.Run("replace_all through the whole file", func(t *testing.T) {
+		alt := make([]string, len(lines))
+		for i, l := range lines {
+			if i%2 == 1 {
+				l = "same\n"
+			}
+			alt[i] = l
+		}
+		old := strings.Join(alt, "")
+		want := strings.ReplaceAll(old, "same\n", "SAME\n")
+		res := edit(t, old, FileOpRequest{OldText: "same\n", NewText: "SAME\n", ReplaceAll: true})
+		if res.Diff != "" || !strings.Contains(res.DiffNote, "spans over 2000 lines") || res.Added != 0 || res.Removed != 0 {
+			t.Errorf("result = diff %d bytes (+%d/-%d), note %q; want no diff and the span note", len(res.Diff), res.Added, res.Removed, res.DiffNote)
+		}
+		if res.ReplacedCount != 20000 || res.OldSHA256 != sha256Hex([]byte(old)) || res.SHA256 != sha256Hex([]byte(want)) {
+			t.Errorf("count %d, old %s, new %s; want 20000 and both hashes", res.ReplacedCount, res.OldSHA256, res.SHA256)
+		}
+		if got, _ := os.ReadFile(path); string(got) != want {
+			t.Error("the edit was not applied in full")
+		}
+	})
+}
+
+// The diff describes the file as it was before the rename: work done after
+// the commit could outlast the file-op timeout and report an edit or a write
+// that landed as failed.
+func TestFileOp_DiffIsTakenBeforeTheCommit(t *testing.T) {
+	patch := `def diff_of_the_file_on_disk(path, before, after, verb="edit", max_lines=None):
+    with open(path, "rb") as f:
+        return "on disk: " + f.read().decode(), 0, 0, ""
+fileops._bounded_diff = diff_of_the_file_on_disk
+`
+	for op, req := range map[string]map[string]any{
+		"write": {"data_b64": "bmV3Cg=="},               // new\n
+		"edit":  {"old_b64": "b2xk", "new_b64": "bmV3"}, // old → new
+	} {
+		t.Run(op, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "f.txt")
+			if err := os.WriteFile(path, []byte("old\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			req["path"], req["root"] = path, root
+			res, err := runPatchedOp(t, op, req, patch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Diff != "on disk: old\n" {
+				t.Errorf("diff saw %q, want the file before the rename", res.Diff)
+			}
+			if got, _ := os.ReadFile(path); string(got) != "new\n" {
+				t.Errorf("file = %q, want new", got)
+			}
+		})
+	}
+}
+
 func TestFileOp_WriteDiffWindowMatchesTheWholeFileDiff(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 required")
