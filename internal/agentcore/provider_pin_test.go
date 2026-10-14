@@ -15,7 +15,8 @@ func TestUpstreamPinFor(t *testing.T) {
 	}{
 		// The everyday default: Google serves this family alone, so the pin is
 		// strict — there is no second upstream to fall back to.
-		{DefaultCoreModel, "OpenAI", false}, // everyday default: soft pin to OpenAI, official-weights pool
+		{DefaultCoreModel, "Google", true},
+		{"openai/gpt-6-luna-pro", "OpenAI", false}, // previous default: soft pin to OpenAI, official-weights pool
 		{"z-ai/glm-5.2", "Z.AI", false},
 		{"z-ai/glm-4.6", "Z.AI", false},
 		{"~z-ai/glm-latest", "Z.AI", false}, // `~` alias inherits the pin
@@ -94,7 +95,7 @@ func TestUpstreamPinQuantizationFloor(t *testing.T) {
 	}
 
 	// Unmixed families keep no filter — the floor is targeted, not global.
-	for _, slug := range []string{"z-ai/glm-5.2", "openai/gpt-5.4", "google/gemini-3-flash-preview", DefaultCoreModel} {
+	for _, slug := range []string{"z-ai/glm-5.2", "openai/gpt-5.4", "google/gemini-3-flash-preview", "openai/gpt-6-luna-pro", DefaultCoreModel} {
 		p := upstreamPinFor(slug)
 		if p == nil {
 			t.Fatalf("upstreamPinFor(%q) = nil, want a pin", slug)
@@ -261,7 +262,8 @@ func TestUpstreamPinQuantizationsNotAliased(t *testing.T) {
 // fallback; it must agree with upstreamPinFor on which family owns a slug.
 func TestPreferredUpstreamFor(t *testing.T) {
 	cases := map[string]string{
-		DefaultCoreModel:    "OpenAI",
+		DefaultCoreModel:    "Google",
+		"openai/gpt-6-luna": "OpenAI",
 		"deepseek/v3":       "DeepSeek",
 		"~z-ai/glm-latest":  "Z.AI",
 		"openai/gpt-5.4":    "OpenAI",

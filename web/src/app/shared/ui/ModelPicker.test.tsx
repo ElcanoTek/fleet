@@ -42,7 +42,8 @@ describe("ModelPicker", () => {
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
     await waitFor(() => screen.getByText(ADVANCED_MODEL_LABEL));
-    fireEvent.change(input, { target: { value: "luna" } });
+    // A query that matches the default tier's slug and not the advanced one's.
+    fireEvent.change(input, { target: { value: DEFAULT_MODEL.split("/")[1] } });
     await waitFor(() => {
       expect(screen.getByText(DEFAULT_MODEL_LABEL)).toBeInTheDocument();
     });

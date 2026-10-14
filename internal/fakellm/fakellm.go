@@ -154,6 +154,7 @@ func New() *Server {
 			// whatever the defaults currently are.
 			agentcore.DefaultCoreModel,
 			agentcore.DefaultMaxModel,
+			"openai/gpt-6-luna-pro",
 			"openai/gpt-6-luna",
 			"openai/gpt-5.6-luna-pro",
 			"openai/gpt-5.6-luna",

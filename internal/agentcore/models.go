@@ -24,6 +24,17 @@ const (
 	// alias slug defeats the send-side reasoning reconstruction (see
 	// isAliasModel).
 	//
+	// Gemini 4 Argon (2026-10-14, replacing openai/gpt-6-luna-pro): Google's
+	// Gemini 4 generation, released on OpenRouter 2026-10-13. $2/M in, $10/M
+	// out, cache reads at $0.10/M, a 1,048,576-token window. Its endpoints are
+	// Google Vertex (global, global/priority) and Google AI Studio; the strict
+	// `google/` pin in canonicalUpstream holds every request on Vertex alone
+	// (encrypted thought signatures validate only at the minting upstream),
+	// which also keeps the prompt cache on one upstream. `google/` slugs get
+	// explicit cache_control breakpoints (explicitBreakpointPrefixes). Note this
+	// is a price step UP from Luna Pro ($0.10/$0.50) — see
+	// docs/MODEL-DEFAULTS.md.
+	//
 	// GPT-6 Luna Pro (2026-09-22, replacing openai/gpt-5.6-luna-pro): the
 	// GPT-6 generation of the same everyday tier, $0.10/M in, $0.50/M out,
 	// cache reads at $0.01/M, a 1,050,000-token window, and OpenAI's own three
@@ -41,7 +52,7 @@ const (
 	// jobs on Luna Pro ran in 4–10 minutes at $0.16–0.62 with 89–95% cache
 	// hits. The `openai/` soft pin in canonicalUpstream keeps the prompt cache
 	// on one upstream with graceful degradation.
-	DefaultCoreModel = "openai/gpt-6-luna-pro"
+	DefaultCoreModel = "google/gemini-4-argon"
 	// DefaultMaxModel is the strong tier — the model escalation
 	// (suggest_advanced_model, chat's "advanced model") resolves to. Exact slug,
 	// never a `~latest` alias. Claude Opus 5.5 (2026-09-22, replacing
@@ -87,9 +98,11 @@ var modelContextWindows = []struct {
 	// accepts and hard-errors. Cold-start/offline only; a running fleet gets
 	// this from the live OpenRouter catalog.
 	//
-	// 3.7 keeps its row alongside the current default: the slug stays
+	// Gemini 4 Argon is the current default (2026-10-14); exact slug for the
+	// same reason. 3.8 and 3.7 keep their rows alongside it: the slug stays
 	// selectable (and stays the fallback an admin-configured tier may point
 	// at), and both serve the same 1,048,576 window.
+	{"google/gemini-4-argon", 1_048_576},
 	{"google/gemini-3.8-flash", 1_048_576},
 	{"google/gemini-3.7-flash", 1_048_576},
 	{"google/gemini-2.5-pro", 1_000_000},
@@ -109,8 +122,8 @@ var modelContextWindows = []struct {
 	// without this line the strong tier — the slug users escalate to for their
 	// LARGEST problems — would cold-boot compacting at 38% of its real window.
 	{"openai/gpt-5.6", 1_050_000},
-	// GPT-6 (sol / luna / astra and their -pro variants, DefaultCoreModel is
-	// gpt-6-luna-pro) is 1,050,000 too. No generic openai/gpt-6 row existed, so
+	// GPT-6 (sol / luna / astra and their -pro variants; gpt-6-luna-pro was
+	// DefaultCoreModel until 2026-10-14) is 1,050,000 too. No generic openai/gpt-6 row existed, so
 	// without this the everyday tier would fall through to the default window.
 	{"openai/gpt-6", 1_050_000},
 	{"openai/gpt-4.1", 1_000_000},

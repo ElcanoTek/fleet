@@ -1,6 +1,6 @@
-# Model defaults: GPT-6 Luna Pro everyday, Claude Opus 5.5 as the strong tier
+# Model defaults: Gemini 4 Argon everyday, Claude Opus 5.5 as the strong tier
 
-**Status:** shipped 2026-09-22 (previous swap 2026-09-21, recorded below). Design
+**Status:** shipped 2026-10-14 (previous swaps 2026-09-22 and 2026-09-21, recorded below). Design
 note for the default-model swaps, and the checklist for the next one.
 
 ## Changing the defaults (checklist)
@@ -32,6 +32,36 @@ hold the slugs, plus data that has to be checked by hand:
 
 Deployments that set `FLEET_DEFAULT_MODEL` / `FLEET_ADVANCED_MODEL`, or the admin model
 tiers, are unaffected by any of this. Only the compiled-in fallback moves.
+
+## 2026-10-14: Gemini 4 Argon as the everyday default
+
+| Slot | Before | After |
+|---|---|---|
+| `DefaultCoreModel` (+ `DefaultTitleModel` and every auxiliary fallback that ends in it, and the lockdown allow-list default) | `openai/gpt-6-luna-pro` | `google/gemini-4-argon` |
+| `DefaultMaxModel` | `anthropic/claude-opus-5.5` | unchanged |
+
+- **Gemini 4 Argon**: released on OpenRouter 2026-10-13. $2/M in, $10/M out,
+  $0.10/M cache reads, 1,048,576-token window. Endpoints read 2026-10-14: Google
+  (Vertex `global`, `global/priority`) and Google AI Studio (default, `flex`,
+  `priority`), quantization "unknown" on all.
+- **Routing**: the existing `google/` pin is strict (`Only=[Google]`, no
+  fallbacks), so every request goes to Vertex and the prompt cache stays on one
+  upstream. That also satisfies `TestDefaultCoreModelCannotBeServedAtArbitraryPrecision`
+  without an `officialPoolSlugs` entry. AI Studio is not reachable under the pin.
+  `google/` slugs get explicit `cache_control` breakpoints.
+- **Context window**: an exact-slug row `google/gemini-4-argon` → 1,048,576 was
+  added (no family prefix, for the same Nano Banana reason as the 3.x rows).
+- **Cost**: this is a price step **up** — 20× Luna Pro's input and output rates
+  ($0.10/$0.50) and 10× its cache-read rate. Because `DefaultTitleModel` and the
+  auxiliary-model fallbacks derive from `DefaultCoreModel`, titles, metadata,
+  memory extraction and error analysis move to Argon too unless their own
+  `FLEET_*_MODEL` is set.
+- **Not measured**: not benchmarked on production jobs before shipping. The
+  2026-09-21 move away from Gemini (below) was driven by cold prompt caches
+  across provider hops on 3.8 Flash; watch cache-hit rate, cost and
+  dead-letters on the first day of scheduled runs.
+- Luna Pro keeps its `officialPoolSlugs` entry and context row: it stays
+  selectable and an admin tier override may still point at it.
 
 ## 2026-09-22: GPT-6 Luna Pro + Claude Opus 5.5
 
