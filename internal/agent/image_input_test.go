@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 )
@@ -56,7 +57,7 @@ func TestAssembleTurnMessages_EmptyUploadsRootSkipsImages(t *testing.T) {
 	_, entry, err := assembleTurnMessages(TurnInput{
 		UserMessage:      "see this",
 		ImageAttachments: []ImageAttachment{{Path: p, MediaType: "image/png", Name: "shot.png"}},
-	})
+	}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

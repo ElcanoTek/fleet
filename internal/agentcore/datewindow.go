@@ -52,9 +52,28 @@ func RuntimeDateTurnSuffix(now time.Time) string {
 
 // appendRuntimeDateMessage appends the per-run date suffix as a trailing
 // user message (same append-only pattern as user_prompt_submit hook
-// context) so the prompt-cache prefix stays stable.
+// context) so the prompt-cache prefix stays stable within the run.
 func appendRuntimeDateMessage(messages []fantasy.Message, now time.Time) []fantasy.Message {
 	return append(messages, fantasy.NewUserMessage(RuntimeDateTurnSuffix(now)))
+}
+
+// RuntimeDateMessage is the runtime_today note for a stored UTC day
+// ("YYYY-MM-DD", what RuntimeToday returns), byte-identical to the one
+// RuntimeDateTurnSuffix produced on that day. It reports false for a value
+// that is not such a date.
+//
+// It exists so a multi-turn driver can keep each turn's note IN the
+// conversation instead of as a request-local tail. A tail that is dropped
+// from history means request N is never a prefix of request N+1, and an
+// implicit-only cache (Gemini 4 Argon) then misses on every new user turn;
+// persisting the day and regenerating the note on replay keeps every
+// request a strict append of the last (docs/PROMPT-CACHE-CONTRACT.md).
+func RuntimeDateMessage(day string) (fantasy.Message, bool) {
+	t, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		return fantasy.Message{}, false
+	}
+	return fantasy.NewUserMessage(RuntimeDateTurnSuffix(t)), true
 }
 
 // date-upper-bound keys commonly used by mailbox / report MCP tools.

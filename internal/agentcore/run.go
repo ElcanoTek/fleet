@@ -120,6 +120,14 @@ type RunConfig struct {
 	// the global FLEET_DEFAULT_THINKING_BUDGET_TOKENS default; a non-Claude model
 	// silently ignores it (see supportsExtendedThinking).
 	ThinkingConfig *ThinkingConfig
+
+	// RuntimeDateInInput reports that the input already ends this turn with its
+	// runtime_today note (RuntimeDateMessage), persisted with the user turn so
+	// the next turn replays it in place. Run then does not append its own
+	// request-local note. The interactive driver sets it; a one-shot run
+	// (scheduled, sub-agent child) leaves it false and gets the tail, which is
+	// cache-stable there because the whole run is one append-only transcript.
+	RuntimeDateInInput bool
 }
 
 // Deps are the run dependencies: the four seams plus the model handles, MCP
@@ -449,19 +457,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	if err != nil {
 		return Result{}, err
 	}
-	// Per-run runtime_today in the message tail (#1026). The system prompt
-	// already carries a day-granular date, but multi-day chats still reused
-	// yesterday's mailbox bounds; restating it here (append-only, after
-	// hooks) makes the current UTC date harder to ignore without touching
-	// the cached prefix.
-	messages = appendRuntimeDateMessage(messages, runtimeNow())
-	// Per-run working directory in the message tail. Scheduled runs and
-	// delegated children carry a forced working dir but no conversation id, so
-	// the system prompt's "## Working directory" section (interactive turns
-	// only) never reaches them — see WorkingDirTurnSuffix for what that cost.
-	if forced := tools.ForcedWorkingDirFromContext(ctx); forced != "" {
-		messages = appendWorkingDirMessage(messages, forced)
-	}
+	messages = appendRunTailMessages(ctx, cfg, messages)
 
 	maxTokens := runMaxCompletionTokens(cfg)
 	eng.maxCompletionTokens = int(maxTokens)
@@ -947,6 +943,29 @@ func runFallbackModels(deps Deps) []fantasy.LanguageModel {
 		return []fantasy.LanguageModel{deps.FallbackModel}
 	}
 	return append([]fantasy.LanguageModel(nil), deps.FallbackModels...)
+}
+
+// appendRunTailMessages adds the per-run, engine-authored context that follows
+// the input (after hooks, so append-only):
+//
+//   - runtime_today (#1026). The system prompt already carries a day-granular
+//     date, but multi-day chats still reused yesterday's mailbox bounds;
+//     restating it here makes the current UTC date harder to ignore without
+//     touching the cached prefix. A multi-turn driver that persists the note
+//     with the user turn (RuntimeDateInInput) has already placed it, and a
+//     second, request-local copy would break the next turn's prefix.
+//   - The forced working directory. Scheduled runs and delegated children
+//     carry one but no conversation id, so the system prompt's "## Working
+//     directory" section (interactive turns only) never reaches them — see
+//     WorkingDirTurnSuffix for what that cost.
+func appendRunTailMessages(ctx context.Context, cfg RunConfig, messages []fantasy.Message) []fantasy.Message {
+	if !cfg.RuntimeDateInInput {
+		messages = appendRuntimeDateMessage(messages, runtimeNow())
+	}
+	if forced := tools.ForcedWorkingDirFromContext(ctx); forced != "" {
+		messages = appendWorkingDirMessage(messages, forced)
+	}
+	return messages
 }
 
 // runMaxCompletionTokens resolves the per-completion output cap: the

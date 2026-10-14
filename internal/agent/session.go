@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // EventSink is the callback interface the HTTP layer implements to turn
@@ -86,6 +88,14 @@ type TextContent struct {
 	// else, so existing rows are unchanged. Replay ignores it: the model reads
 	// the entry's labelled text like any user message.
 	Kind string `json:"kind,omitempty"`
+	// RuntimeToday is the UTC day ("YYYY-MM-DD") this user turn ran on. The
+	// model read that day's runtime_today note (agentcore.RuntimeDateMessage)
+	// directly after this message, and replay regenerates the same note in
+	// the same place, so each turn's request is a strict append of the last
+	// one and the provider prompt cache keeps hitting across turns
+	// (docs/PROMPT-CACHE-CONTRACT.md, #1026). Empty on rows written before it
+	// existed: they replay with no note, as they were sent.
+	RuntimeToday string `json:"runtime_today,omitempty"`
 }
 
 // InputKindApprovalResume is TextContent.Kind / TurnInput.InputKind for the
@@ -350,6 +360,9 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 				// InjectedContext is empty — ComposeUserMessage is then the
 				// identity).
 				out = append(out, fantasy.NewUserMessage(ComposeUserMessage(c.Text, e.InjectedContext), parts...))
+				if note, ok := agentcore.RuntimeDateMessage(c.RuntimeToday); ok {
+					out = append(out, note)
+				}
 			case "assistant":
 				pendingAssistant = append(pendingAssistant, fantasy.TextPart{Text: c.Text})
 			}

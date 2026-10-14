@@ -74,6 +74,22 @@ func supportsExplicitBreakpoints(model string) bool {
 	return false
 }
 
+// stablePrefixOnly reports whether the model's family must carry breakpoints on
+// the stable prefix ONLY — never the rolling recency window. Gemini on
+// OpenRouter turns the LAST breakpoint of a request into an explicit context
+// cache (a billed write, 5-minute TTL that does not refresh) and ignores the
+// rest. A breakpoint on the moving tail therefore writes a brand-new cache of
+// the whole prompt on every request and never reads one back; measured on
+// google/gemini-3.8-flash (2026-10-14): ~2x the prompt billed and a full write
+// per request, ~7x the cost of a single system-prompt breakpoint, which writes
+// once and is read back on every later request. Gemini 4 Argon has no explicit
+// caching (implicit only), so the placement neither helps nor hurts it; the
+// same rule keeps the family consistent. See docs/PROMPT-CACHE-CONTRACT.md.
+func stablePrefixOnly(model string) bool {
+	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "~")
+	return strings.HasPrefix(m, "google/gemini") || strings.HasPrefix(m, "gemini-")
+}
+
 // cacheControlEphemeral is the only cache_control type the codebase emits.
 const cacheControlEphemeral = "ephemeral"
 
@@ -124,7 +140,9 @@ func WithCompactionSummaryBreakpoint(isSummary func(fantasy.Message) bool) Cache
 //
 //  1. Last system message — stable prefix.
 //  2. Compaction summary (only when WithCompactionSummaryBreakpoint is set).
-//  3. Last two non-system messages — rolling recency window.
+//  3. Last two non-system messages — rolling recency window. Skipped for
+//     Gemini (stablePrefixOnly), where only the last breakpoint counts and a
+//     moving one re-writes the whole prompt every request.
 func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFunction {
 	cfg := cacheOption{}
 	for _, o := range opts {
@@ -180,8 +198,12 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 		// already carries a breakpoint, and skipping the request-local budget
 		// wind-down notice, whose live spend figures change every step — a
 		// breakpoint there can never hit (see isBudgetWindDownNotice).
+		rolling := 2
+		if stablePrefixOnly(model) {
+			rolling = 0
+		}
 		marked := 0
-		for i := len(msgs) - 1; i >= 0 && marked < 2; i-- {
+		for i := len(msgs) - 1; i >= 0 && marked < rolling; i-- {
 			if msgs[i].Role == fantasy.MessageRoleSystem {
 				continue
 			}

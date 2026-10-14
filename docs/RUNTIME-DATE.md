@@ -13,11 +13,18 @@ pre-send source-coverage ledger belong in the client bundle (reporting
 skill + mailbox MCP). This change makes the date signal **harder to
 ignore** and annotates the two failure modes the engine can see.
 
-1. **Structured `runtime_today` on every run.** `agentcore.Run` appends a
-   trailing user message (`RuntimeDateTurnSuffix`) with `runtime_today` and
-   a 3-day `freshness_window` (`today-2d .. today`). Interactive and
-   scheduled modes share this path. The suffix is model-facing only — it is
-   not persisted as the user's typed text.
+1. **Structured `runtime_today` on every run.** A user message
+   (`RuntimeDateTurnSuffix`) with `runtime_today` and a 3-day
+   `freshness_window` (`today-2d .. today`) follows the turn's input.
+   - *Interactive chat* sends it directly after the user's message and
+     persists the day with the user entry (`runtime_today` in the entry's
+     content, never the user's typed text); every later turn replays the
+     identical note in the same place (`agentcore.RuntimeDateMessage`). Each
+     turn's request is then a strict prefix of the next one, which an
+     implicit-only provider cache (Gemini 4 Argon) needs to keep hitting
+     across turns. See [PROMPT-CACHE-CONTRACT.md](PROMPT-CACHE-CONTRACT.md).
+   - *Scheduled and sub-agent runs* get it from `agentcore.Run` as a trailing
+     message; the run is one transcript, so it stays put for every step.
 2. **Day-granular system-prompt date, strengthened.** The existing
    `runtimeDateContext` block now also names `runtime_today` and
    `freshness_window`, still at day precision (one cache miss per UTC
@@ -60,3 +67,9 @@ ignore** and annotates the two failure modes the engine can see.
 - Empty exact search with subject punctuation still parsed and flagged.
 - `agentcore.Run` injects today's `runtime_today`, not yesterday's.
 - `mcpTool.Run` surfaces both notes on a stale empty mailbox search.
+- A chat turn's request is a byte-exact prefix of the next turn's, across a
+  UTC-midnight rollover (`TestTurnRequestIsAPrefixOfTheNext`); a legacy user
+  row replays with no note (`TestReplayLegacyUserRowHasNoRuntimeNote`).
+- A stored day regenerates the exact note sent that day
+  (`TestRuntimeDateMessage_MatchesTheDaysSuffix`), and a run whose input
+  carries the note adds no second copy (`TestRun_RuntimeDateInInputAddsNoTail`).

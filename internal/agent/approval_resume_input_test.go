@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 )
@@ -14,7 +15,7 @@ import (
 // ordinary turn's entry is byte-for-byte what it was before (no "kind" key).
 func TestAssembleTurnMessages_InputKind(t *testing.T) {
 	const notice = "[Approval resolved] mcp_deals_update_deal approval_id=a1 outcome=approved."
-	msgs, entry, err := assembleTurnMessages(TurnInput{UserMessage: notice, InputKind: InputKindApprovalResume})
+	msgs, entry, err := assembleTurnMessages(TurnInput{UserMessage: notice, InputKind: InputKindApprovalResume}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,12 +26,14 @@ func TestAssembleTurnMessages_InputKind(t *testing.T) {
 	if entry.Role != "user" || c.Kind != InputKindApprovalResume || c.Text != notice {
 		t.Fatalf("user entry = %s %s, want a user entry of kind %q with the notice text", entry.Role, entry.Content, InputKindApprovalResume)
 	}
-	last := msgs[len(msgs)-1]
+	// The turn's runtime_today note follows the user message; the input itself
+	// is the one before it.
+	last := msgs[len(msgs)-2]
 	if last.Role != fantasy.MessageRoleUser || !strings.Contains(messageText(last), notice) {
 		t.Fatalf("the model must read the notice as the turn's user message, got %+v", last)
 	}
 
-	_, plain, err := assembleTurnMessages(TurnInput{UserMessage: "hello"})
+	_, plain, err := assembleTurnMessages(TurnInput{UserMessage: "hello"}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,8 +49,11 @@ func TestAssembleTurnMessages_InputKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(replayed) != 2 || replayed[0].Role != fantasy.MessageRoleUser || !strings.Contains(messageText(replayed[0]), notice) {
-		t.Fatalf("replay = %+v, want the resume input as a user message and no notice", replayed)
+	// user input, its persisted runtime_today note, the assistant reply — and
+	// no notice.
+	if len(replayed) != 3 || replayed[0].Role != fantasy.MessageRoleUser || !strings.Contains(messageText(replayed[0]), notice) ||
+		!strings.Contains(messageText(replayed[1]), "runtime_today:") {
+		t.Fatalf("replay = %+v, want the resume input as a user message, its runtime_today note, and no notice", replayed)
 	}
 }
 

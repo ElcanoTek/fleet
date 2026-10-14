@@ -275,3 +275,66 @@ func TestMCPTool_AnnotatesStaleDateWindow(t *testing.T) {
 		t.Fatalf("original payload should still be present:\n%s", resp.Content)
 	}
 }
+
+// A stored day regenerates the exact note the model read that day, at any
+// hour, so a driver that persists the day replays byte-identical history.
+func TestRuntimeDateMessage_MatchesTheDaysSuffix(t *testing.T) {
+	for _, ts := range []string{"2026-08-13T00:00:00Z", "2026-08-13T15:04:05Z", "2026-08-13T23:59:59Z"} {
+		got, ok := RuntimeDateMessage("2026-08-13")
+		if !ok {
+			t.Fatal("RuntimeDateMessage rejected a valid day")
+		}
+		if want := RuntimeDateTurnSuffix(mustUTC(t, ts)); msgText(got) != want {
+			t.Fatalf("note for 2026-08-13 = %q, want the suffix sent at %s: %q", msgText(got), ts, want)
+		}
+		if got.Role != fantasy.MessageRoleUser {
+			t.Fatalf("note role = %s, want user", got.Role)
+		}
+	}
+	for _, bad := range []string{"", "2026-8-13", "2026-08-13T00:00:00Z", "yesterday"} {
+		if _, ok := RuntimeDateMessage(bad); ok {
+			t.Errorf("RuntimeDateMessage(%q) accepted a value that is not a day", bad)
+		}
+	}
+}
+
+// When the input already carries the turn's note (the interactive driver
+// persists it with the user turn), Run must not append a second, request-local
+// copy: that copy is dropped from history, so the next turn's request would no
+// longer start with this one and an implicit-only cache would miss.
+func TestRun_RuntimeDateInInputAddsNoTail(t *testing.T) {
+	now := mustUTC(t, "2026-08-13T09:00:00Z")
+	orig := runtimeNow
+	runtimeNow = func() time.Time { return now }
+	t.Cleanup(func() { runtimeNow = orig })
+
+	note, _ := RuntimeDateMessage("2026-08-13")
+	input := []fantasy.Message{fantasy.NewUserMessage("check again for the latest report"), note}
+	session := NewLogSession()
+	model := &capturingModel{slug: "date-window-model", inputByCall: []int{10}}
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix, RuntimeDateInInput: true}, Deps{
+		Input:      historyInput{system: "s", msgs: input, label: "date"},
+		Policy:     newRoundsPolicy(session, 0),
+		Model:      model,
+		LogSession: session,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	notes := 0
+	var last fantasy.Message
+	for _, m := range model.call(0) {
+		if strings.Contains(msgText(m), "runtime_today: 2026-08-13") {
+			notes++
+		}
+		if m.Role != fantasy.MessageRoleSystem {
+			last = m
+		}
+	}
+	if notes != 1 {
+		t.Fatalf("model saw %d runtime_today notes, want exactly the one the input carried", notes)
+	}
+	if msgText(last) != msgText(note) {
+		t.Fatalf("the input's note must stay the last message the model reads, got %q", msgText(last))
+	}
+}

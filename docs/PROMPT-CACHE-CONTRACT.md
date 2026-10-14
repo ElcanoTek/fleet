@@ -72,9 +72,41 @@ prompt stable within a conversation:
   cache miss per conversation per UTC-midnight rollover in exchange for
   correct "today" reasoning. Do not tighten it below day precision. The
   per-turn `runtime_today` restatement (`RuntimeDateTurnSuffix`,
-  `internal/agentcore/datewindow.go`) lives in the **message tail**, not this
+  `internal/agentcore/datewindow.go`) lives in the **message history**, not this
   prefix, so a multi-day chat can be re-anchored every turn without an extra
-  prefix miss (#1026).
+  prefix miss (#1026) — see "History must be append-only" below.
+
+### History must be append-only
+
+Each request of a conversation must be a **strict prefix** of the next one:
+nothing the model saw may be dropped, reordered or rewritten when the next turn
+replays history. Anthropic's lookback and OpenAI's block cache tolerate a small
+divergence near the tail; an implicit-only cache does not — Gemini 4 Argon
+carries a cache over only when the next request appends to the previous one
+(measured 2026-10-14, below).
+
+So per-turn model-facing context belongs IN the turn, persisted, not in a
+request-local tail:
+
+- **Interactive chat** persists each turn's `runtime_today` note: the user
+  entry stores the UTC day (`TextContent.RuntimeToday`, JSON
+  `runtime_today`), `assembleTurnMessages` sends the note directly after the
+  user message, and `replayHistory` regenerates the identical bytes in the same
+  place on every later turn (`agentcore.RuntimeDateMessage`). The run sets
+  `RunConfig.RuntimeDateInInput` so `agentcore.Run` does not add a second,
+  request-local copy. A user row written before this has no day and replays
+  with no note, exactly as it was sent: an existing chat takes one cache miss
+  on its first turn after the upgrade and is append-only from then on.
+- **One-shot runs** (scheduled tasks, sub-agent children) keep the
+  request-local tail from `agentcore.Run`: the whole run is one append-only
+  transcript, so the tail stays put for every step.
+- **Guard:** `TestTurnRequestIsAPrefixOfTheNext` (`internal/agent`) builds two
+  consecutive turns — across a UTC-midnight rollover — and fails if turn 1's
+  messages are not a byte-exact prefix of turn 2's.
+- **Still request-local:** `user_prompt_submit` hook context and the budget
+  wind-down notice. A bundle that injects per-turn hook context re-opens this
+  gap for its chats; the wind-down notice only appears near a run's budget
+  ceiling.
 - **Deterministic roster.** The MCP/skill/persona roster injected into the prompt
   must be built from a stable, ordered source (sort before joining), never a raw
   map range.
@@ -100,11 +132,102 @@ request):
 2. The **compaction summary** (`WithCompactionSummaryBreakpoint`, enabled in the
    shared loop) — a stable boundary between the cached head and the evolving
    tail after a compaction pass.
-3. The **last two non-system messages** — a rolling recency window.
+3. The **last two non-system messages** — a rolling recency window. **Not for
+   Gemini** (`stablePrefixOnly`, below).
+
+**Gemini gets the stable prefix only.** OpenRouter turns the *last* breakpoint
+of a Gemini request into an explicit context cache — a billed write with a
+5-minute TTL that does not refresh — and ignores the others. A breakpoint on
+the moving tail therefore wrote a brand-new cache of the whole prompt on every
+request and never read one back. Measured on `google/gemini-3.8-flash`
+(2026-10-14, the live check below): the old placement billed ~2× the prompt
+and a full write per request; a single system-prompt breakpoint writes once and
+is read back in full on every later request — the same conversation went from
+$0.025 to $0.0053. With a compaction summary present it is the last (and so the
+used) breakpoint, which is stable until the next compaction. Gemini 4 Argon has
+no explicit caching (implicit only, Google's docs) and was measured to ignore
+`cache_control` entirely, so the rule neither helps nor hurts it.
 
 Breakpoint placement is itself part of the contract: the last-system-message
 breakpoint is what makes the prefix cacheable, so the system prompt must be the
 leading, stable content.
+
+## Live check (`TestPromptCacheLive`)
+
+`internal/agentcore/prompt_cache_live_test.go` drives the real `Run` loop —
+fleet's breakpoints, upstream pins, tool roster and request-local tail
+messages — against OpenRouter, and reports per request the served provider,
+prompt / cached / cache-write tokens and cost. Three turns, one tool call, a
+~7K-token system prompt with a fresh nonce (so turn 1 is cold). It costs real
+money, so it is opt-in:
+
+```sh
+FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=…   FLEET_CACHE_LIVE_MODELS=google/gemini-4-argon,anthropic/claude-opus-5.5   go test -tags fleet_host_executor -run TestPromptCacheLive -v ./internal/agentcore/
+```
+
+It fails when a request after the first reads nothing from cache (one miss is
+allowed for implicit-cache families, which are the upstream's best effort;
+explicit-breakpoint families must read every time), or when fleet's recorded
+cached tokens disagree with the wire. The response stream is teed, not
+buffered, so the first-chunk watchdog behaves as in production, and each turn
+replays the previous turn's text, tool calls and tool results the way
+`replayHistory` does. `FLEET_CACHE_LIVE_TURN_GAP`
+sets the pause between turns (default 5s); `FLEET_CACHE_LIVE_DUMP=<dir>` writes
+each request body for inspection. Run it after any change to the prompt layout,
+the breakpoints, or the upstream pins.
+
+### Results, 2026-10-14
+
+26 models — the latest from each major lab on OpenRouter, the Artificial
+Analysis top list, and fleet's tiers — on the final code (Gemini stable-prefix
+breakpoints + persisted `runtime_today`). "Hits" is how many of the three
+requests after the cold first one read from cache.
+
+| Lab | Model | Hits | Notes |
+|---|---|---|---|
+| Anthropic | `claude-opus-5.5`, `claude-sonnet-5.5`, `claude-fable-5.1`, `claude-haiku-5.5` | 3/3 each | ~11.6K of ~11.9K read; explicit breakpoints |
+| OpenAI | `gpt-6-luna-pro` (default tier), `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-sol-pro` | 3/3 each | automatic |
+| Google | `gemini-4-argon` (strong tier) | 2/3 in the matrix run; **15/15 over five repeat runs** | implicit only; reads ~4.1–6.9K of ~8.9K (Google varies it) |
+| Google | `gemini-3.8-flash` | 3/3 | one write, then the full ~8.5K read; see the Gemini placement note above |
+| xAI | `grok-4.7` | 3/3 | |
+| Qwen | `qwen3.8-max-0902`, `qwen3.8-max-prime` | 3/3 each | implicit; explicit breakpoints measured slightly dearer |
+| Z.AI | `glm-5.3`, `glm-5.3-prime` | 3/3 each | |
+| Moonshot | `kimi-k3` | 3/3 | |
+| StepFun | `step-5-preview` | 3/3 | |
+| Xiaomi | `mimo-v2.6-pro` | 3/3 | 2/3 in an earlier run (alternating hit/miss on GMICloud) |
+| DeepSeek | `deepseek-v4.1-flash` | 2/3 | served by a fallback host (Morph) this run; 3/3 on DeepSeek's own endpoint in two earlier runs |
+| DeepSeek | `deepseek-v4-pro-0813` | 0/3 | served by a third-party host (Baidu), not DeepSeek's endpoint; 2/3 in an earlier run |
+| MiniMax | `minimax-m3` | 2/3 | first repeat missed, then hit |
+| NVIDIA | `nemotron-3-ultra-550b-a55b` | 2/3 | alternating hit/miss on one provider (BaseTen) |
+| Meta | `muse-wonder` | 2/3 | intermittent upstream |
+| Meta | `muse-spark-1.3` | 3/3 | ~113 tokens only |
+| Mistral | `mistral-large-4-0` | 1/3 | implicit cache warms only after several requests |
+| Cohere | `command-a-plus` | 0/3 | no cache reads through OpenRouter at all |
+
+Every model stayed on one provider for all its requests (pins or OpenRouter's
+sticky routing), so the misses in the lower rows are the upstream's own cache
+behaviour, not fleet's request shape: raw-HTTP runs with no breakpoints, a
+system breakpoint, or fleet's placement gave the same pattern for Mistral,
+Cohere and Meta. `amazon/nova-premier-v1` was dropped: Bedrock now returns 404
+(end of life).
+
+**Gemini 4 Argon across turns (fixed).** Before the change above, Argon missed
+on every new user turn: the request-local `runtime_today` tail was not kept in
+history, so turn N's request was never a prefix of turn N+1's. Replaying
+fleet's exact wire bodies isolated it (with the tail, turn 2 missed; without
+it, turn 2 read ~6.5K), and a six-turn chat cost ~60–75% more input. The
+turn-2 request missed in all four live runs on the old layout; with the note
+persisted in history it read from cache in all five repeat runs (15/15 later
+requests).
+
+**Known gap: cache writes are not recorded.** fantasy's OpenRouter usage
+struct has no `cache_write_tokens` field, so `CacheCreationTokens` is 0 for
+every OpenRouter model (the live check logs the difference instead of
+failing). Default billing is unaffected — fleet uses OpenRouter's reported
+`usage.cost` — but per-model pricing overrides that price cache writes, and the
+`cache_creation_tokens` shown in session and task stats, under-count. The fix
+belongs upstream in fantasy (parse `prompt_tokens_details.cache_write_tokens`
+into `fantasy.Usage.CacheCreationTokens`).
 
 ## Kill switch & observability
 

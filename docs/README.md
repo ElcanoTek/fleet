@@ -288,7 +288,7 @@ above fails otherwise.
 - [`PR-STEWARDSHIP.md`](PR-STEWARDSHIP.md) — PR stewardship — the reference
 - [`PRIME-AGENT-COMPARISON.md`](PRIME-AGENT-COMPARISON.md) — Prime Agent comparison — what fleet borrowed, and what it deliberately didn't
 - [`PROJECTS.md`](PROJECTS.md) — Projects / Spaces: shared team workspaces
-- [`PROMPT-CACHE-CONTRACT.md`](PROMPT-CACHE-CONTRACT.md) — Prompt-cache prefix-stability contract (#507)
+- [`PROMPT-CACHE-CONTRACT.md`](PROMPT-CACHE-CONTRACT.md) — Prompt-cache prefix-stability contract (#507), breakpoint placement per family, and the opt-in live cache check with its 2026-10-14 results
 - [`PROMPT-LIBRARY.md`](PROMPT-LIBRARY.md) — Hybrid prompt library
 - [`PROVIDER-AWARE-MODELS.md`](PROVIDER-AWARE-MODELS.md) — Active-provider model discovery, picker filtering, and unavailable-selection recovery
 - [`PROVIDERS.md`](PROVIDERS.md) — Multi-provider LLM configuration (#289)

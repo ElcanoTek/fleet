@@ -136,16 +136,36 @@ func TestPromptCachingStep_GooglePlacesBreakpoints(t *testing.T) {
 		fantasy.NewSystemMessage("you are an assistant"),
 		fantasy.NewUserMessage("hello"),
 	}
-	step := promptCachingStep("google/gemini-3-flash-preview")
-	_, out, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
+	// Gemini on OpenRouter makes the LAST breakpoint an explicit cache write,
+	// so only the stable prefix is marked: a rolling tail marker would write a
+	// fresh cache of the whole prompt on every request (stablePrefixOnly).
+	for _, slug := range []string{"google/gemini-3-flash-preview", "google/gemini-4-argon", "~google/gemini-flash-latest", "gemini-3-flash-preview"} {
+		step := promptCachingStep(slug)
+		_, out, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
+		if err != nil {
+			t.Fatalf("%s step: %v", slug, err)
+		}
+		if !hasCacheMarker(out.Messages[0]) {
+			t.Errorf("%s: system message should carry a cache marker", slug)
+		}
+		if hasCacheMarker(out.Messages[1]) {
+			t.Errorf("%s: the moving tail must not carry a cache marker", slug)
+		}
+	}
+
+	// With a compaction summary, the summary is the last (and so the used)
+	// breakpoint: stable until the next compaction, so it is read back too.
+	summary := fantasy.NewUserMessage(compactionSummaryPrefix + "] dropped 12 messages")
+	long := []fantasy.Message{fantasy.NewSystemMessage("sys"), summary, newAssistantMessage("a"), fantasy.NewUserMessage("b")}
+	_, out, err := promptCachingStep("google/gemini-4-argon", WithCompactionSummaryBreakpoint(nil))(
+		context.Background(), fantasy.PrepareStepFunctionOptions{Messages: long})
 	if err != nil {
-		t.Fatalf("step: %v", err)
+		t.Fatal(err)
 	}
-	if !hasCacheMarker(out.Messages[0]) {
-		t.Error("system message should carry a cache marker for google/")
-	}
-	if !hasCacheMarker(out.Messages[1]) {
-		t.Error("last user message should carry a cache marker for google/")
+	for i, want := range []bool{true, true, false, false} {
+		if hasCacheMarker(out.Messages[i]) != want {
+			t.Errorf("gemini with summary: msg[%d] marker = %v, want %v", i, !want, want)
+		}
 	}
 }
 

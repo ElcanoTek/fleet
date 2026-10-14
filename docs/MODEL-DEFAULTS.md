@@ -70,10 +70,11 @@ tiers, are unaffected by any of this. Only the compiled-in fallback moves.
   implement Google's long-decode continuation; answers needing more than the cap
   still end at the cap.
 - **Explicit caching**: Google lists explicit context caching as unsupported on
-  Argon (implicit caching is on). fleet sends `cache_control` breakpoints for
-  `google/` slugs through OpenRouter. That was not exercised against a live
-  Argon endpoint before shipping; watch the first escalated turns for cache
-  errors.
+  Argon (implicit caching is on). Measured live on 2026-10-14: Argon ignores
+  the `cache_control` breakpoints fleet sends (no error, no cache write), and
+  its implicit cache covers ~6.7K of an ~8.9K prompt, across user turns too
+  once the `runtime_today` note moved into persisted history; see
+  [PROMPT-CACHE-CONTRACT.md](PROMPT-CACHE-CONTRACT.md#results-2026-10-14).
 - **Not measured**: not benchmarked on production jobs before shipping. Watch
   escalated turns' quality and cost on the first day.
 - Opus 5.5 keeps its `officialPoolSlugs` entry and context-window prefix: it stays
