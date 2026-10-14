@@ -582,6 +582,63 @@ describe("a follow-up queued in the instant its predecessor ended", () => {
     expect(convSlot(h, CONV)[3].content).toBe("Rewritten for the client.");
     expect(h.streamAttaches).toBe(1);
   });
+
+  it("reloads the transcript when the acked turn finished before any queue read", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: answeredTranscript(),
+      persisted: drainedHistory(),
+      // The drained turn ran and finished before either read: both are empty,
+      // and only the ack itself says there was anything to show.
+      queue: [[]],
+      inflight: [{ inflight: false }],
+    });
+    h.deps.streamingConvsRef.current.add(CONV);
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await act(async () => {
+      await result.current.submitPrompt("keep it clear and concise");
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(h.loadConversationCalls).toEqual([CONV]);
+    expect(convSlot(h, CONV).map((m) => m.content)).toEqual([
+      "run the analysis",
+      "Here is the analysis.",
+      "keep it clear and concise",
+      "Rewritten for the client.",
+    ]);
+  });
+
+  it("its own reattach's stream end does not restart the follower", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: answeredTranscript(),
+      persisted: drainedHistory(),
+      queue: [[queuedRow("q1", "running")], []],
+      inflight: [{ inflight: true, turn_id: "t2" }],
+      streamBodies: [
+        () =>
+          closedStream([
+            sse(1, "turn.started", { turn_id: "t2", input_id: "q1", queued: true }),
+            sse(2, "user.message", { text: "keep it clear and concise" }),
+            sse(3, "text.delta", { text: "Rewritten for the client." }),
+            sse(4, "turn.completed", {}),
+          ]),
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await act(async () => {
+      await result.current.followQueueDrain(CONV);
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    // One read to find the row, one to see it gone. A third is the follower
+    // restarting itself — with a fresh 20-turn budget — after every turn.
+    expect(h.queueReads).toBe(2);
+    expect(h.streamAttaches).toBe(1);
+  });
 });
 
 // A generative-UI card counts a refused message as unanswered and an accepted

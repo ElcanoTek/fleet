@@ -742,10 +742,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // through the reattach it awaits).
   const queueFollowInFlightRef = useRef<Set<string>>(new Set<string>());
   // A follow request that arrived while that conversation's follower was
-  // already running. The running one may have read its snapshot before the
-  // newly accepted row committed, and would stop on an empty queue; it runs
-  // once more on its way out instead of the request being dropped.
-  const queueFollowRerunRef = useRef<Set<string>>(new Set<string>());
+  // already running, and after its latest queue read. The running one may
+  // have read its snapshot before the newly accepted row committed, and would
+  // stop on an empty queue; it runs once more on its way out instead of the
+  // request being dropped. The value carries the request's `unseen` hint.
+  const queueFollowRerunRef = useRef<Map<string, boolean>>(new Map<string, boolean>());
+  // Set while a follower awaits its OWN reattach. That reattach's stream end
+  // calls back into followQueueDrain, which is the follower re-entering
+  // itself, not a new request: its loop re-reads the queue next anyway, and
+  // counting it as a rerun would restart the follower — with a fresh turn
+  // budget — after every turn it streamed.
+  const queueFollowReattachingRef = useRef<Set<string>>(new Set<string>());
   // One resume-follower per conversation; a newer request only extends the
   // deadline of the one already looking.
   const resumeFollowDeadlineRef = useRef<Map<string, number>>(
@@ -3298,7 +3305,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   //   - the backoff ran out with the row still queued → stop, leaving an
   //     ACCURATE chip strip whose send-now button forces the drain. That is
   //     the deliberate no-auto-drain-at-boot case (docs/INPUT-QUEUE.md).
-  const followQueueDrain = async (convId: string) => {
+  // `unseen`: the caller already knows the queue held work this tab has not
+  // shown (a submission's queue ack). An empty first snapshot then means the
+  // turn ran and finished before we looked, so the transcript is reloaded.
+  const followQueueDrain = async (convId: string, opts?: { unseen?: boolean }) => {
     if (isPendingKey(convId)) return; // a brand-new chat has no queue
     // Recovery owns an unresolved slot on this conversation, and its attach
     // is bound to the turn it is recovering. This follower's is not: it would
@@ -3310,15 +3320,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // nothing (#1584).
     if (recoveryOwns(convId) || chasingSuccessor(convId)) return;
     if (queueFollowInFlightRef.current.has(convId)) {
-      queueFollowRerunRef.current.add(convId);
+      if (!queueFollowReattachingRef.current.has(convId)) {
+        const prior = queueFollowRerunRef.current.get(convId) === true;
+        queueFollowRerunRef.current.set(convId, prior || opts?.unseen === true);
+      }
       return;
     }
     queueFollowInFlightRef.current.add(convId);
-    queueFollowRerunRef.current.delete(convId);
     // Set whenever we see drain work we have not yet put on screen; cleared
     // by attaching to the turn that ran it. Still set when the queue empties
     // means the turn happened where nobody could see it.
-    let unseenWork = false;
+    let unseenWork = opts?.unseen === true;
     // Hard stop on how many turns one follow-through will chain. The server
     // caps a conversation at maxPendingInputs (20) queued rows, so this can
     // only bite if a reattach kept reporting success without the queue ever
@@ -3334,11 +3346,23 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // it returns, and the next unbound attach would then reuse the
         // recovery-owned slot.
         if (recoveryOwns(convId) || chasingSuccessor(convId)) return;
+        // This read answers every request made before it; only one made
+        // after it can need a rerun.
+        const rerunUnseen = queueFollowRerunRef.current.get(convId) === true;
+        queueFollowRerunRef.current.delete(convId);
+        if (rerunUnseen) unseenWork = true;
         const items = await refreshQueue(convId);
         if (items === null) return; // snapshot unknown — don't guess
         if (!hasPendingQueueWork(items)) break;
         unseenWork = true;
-        if (await reattachToConv(convId)) {
+        queueFollowReattachingRef.current.add(convId);
+        let attached: boolean;
+        try {
+          attached = await reattachToConv(convId);
+        } finally {
+          queueFollowReattachingRef.current.delete(convId);
+        }
+        if (attached) {
           // That turn is on screen and finished. Look again from the top:
           // the next queued row gets the same treatment.
           unseenWork = false;
@@ -3356,8 +3380,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
     } finally {
       queueFollowInFlightRef.current.delete(convId);
-      if (queueFollowRerunRef.current.delete(convId) && !recoveryUnmountedRef.current) {
-        void followQueueDrain(convId);
+      const rerun = queueFollowRerunRef.current.get(convId);
+      queueFollowRerunRef.current.delete(convId);
+      if (rerun !== undefined && !recoveryUnmountedRef.current) {
+        void followQueueDrain(convId, { unseen: rerun });
       }
     }
   };
@@ -4252,7 +4278,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // runs where this tab cannot see it and its chip reads "queued" until a
       // reload. While the turn is still streaming this is a no-op: its own
       // stream end follows the queue.
-      void refreshQueue(convId).then(() => followQueueDrain(convId));
+      // The ack proves there is work this tab has not shown, so a follower
+      // that finds the queue already empty reloads the transcript.
+      void refreshQueue(convId).then(() => followQueueDrain(convId, { unseen: true }));
       return true;
     }
 
