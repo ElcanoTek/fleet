@@ -473,6 +473,51 @@ func TestFileOp_SymlinkSwapCannotRedirectReadOrWrite(t *testing.T) {
 			t.Fatalf("held-directory write = %q err=%v", data, err)
 		}
 	})
+
+	// #1745: an overwrite reads the file it replaces (for its hash and diff)
+	// and checks an expected hash; both happen through the held dirfd too, so
+	// the swap can neither redirect the write nor describe the victim's file.
+	t.Run("overwrite", func(t *testing.T) {
+		parent := filepath.Join(attacker, "overwrite-parent")
+		if err := os.Mkdir(parent, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		mine := []byte("attacker draft")
+		if err := os.WriteFile(filepath.Join(parent, "secret.txt"), mine, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		marker := ".fleet-fileop-test-overwrite"
+		out := make(chan fileOpOutcome, 1)
+		go func() {
+			result, err := sb.RunFileOp(context.Background(), FileOpRequest{
+				Op: FileOpWrite, Path: filepath.Join(parent, "secret.txt"), Root: attacker, Data: []byte("safe"),
+				ExpectedSHA256: sha256Hex(mine),
+				testPause:      time.Second, testReadyName: marker,
+			})
+			out <- fileOpOutcome{result: result, err: err}
+		}()
+		waitForFileOpMarker(t, filepath.Join(parent, marker))
+		held := filepath.Join(attacker, "overwrite-parent-held")
+		if err := os.Rename(parent, held); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(victim, parent); err != nil {
+			t.Fatal(err)
+		}
+		got := <-out
+		if got.err != nil {
+			t.Fatalf("overwrite through held dirfd: %v", got.err)
+		}
+		if !got.result.Replaced || got.result.OldSHA256 != sha256Hex(mine) {
+			t.Errorf("overwrite described %+v, want the held file's old hash", got.result)
+		}
+		if data, err := os.ReadFile(filepath.Join(victim, "secret.txt")); err != nil || string(data) != "victim secret" {
+			t.Fatalf("overwrite escaped into victim: %q err=%v", data, err)
+		}
+		if data, err := os.ReadFile(filepath.Join(held, "secret.txt")); err != nil || string(data) != "safe" {
+			t.Fatalf("held-directory overwrite = %q err=%v", data, err)
+		}
+	})
 }
 
 // TestContainerFileOpIsolation (podman-gated, e2e-live) proves the file op runs
@@ -510,7 +555,8 @@ func TestContainerFileOpIsolation(t *testing.T) {
 	}
 
 	path := tmp + "/report.txt"
-	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Root: tmp, Data: []byte("in-container")}); err != nil {
+	first, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Root: tmp, Data: []byte("in-container")})
+	if err != nil {
 		t.Fatalf("write fileop in lockdown container: %v", err)
 	}
 	res, err := sb.RunBash(ctx, BashRequest{Command: "cat " + path, Timeout: 10 * time.Second})
@@ -519,6 +565,19 @@ func TestContainerFileOpIsolation(t *testing.T) {
 	}
 	if strings.TrimSpace(string(res.Stdout)) != "in-container" {
 		t.Fatalf("fileop write not visible in-container: %q", res.Stdout)
+	}
+
+	// #1745 under the image's own python3: a stale hash is refused, and a
+	// guarded overwrite reports what it replaced.
+	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Root: tmp, Data: []byte("x"), ExpectedSHA256: ExpectAbsent}); !errors.Is(err, ErrFileOpStale) {
+		t.Fatalf("create-only write over an existing file in-container = %v, want ErrFileOpStale", err)
+	}
+	over, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Root: tmp, Data: []byte("replaced\n"), ExpectedSHA256: first.SHA256})
+	if err != nil {
+		t.Fatalf("guarded overwrite in-container: %v", err)
+	}
+	if !over.Replaced || over.OldSHA256 != first.SHA256 || !strings.Contains(over.Diff, "+replaced") {
+		t.Fatalf("in-container overwrite = %+v, want the old hash and a diff", over)
 	}
 }
 

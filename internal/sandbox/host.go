@@ -14,7 +14,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -182,40 +181,9 @@ func (h *hostImpl) executeFileOp(ctx context.Context, req FileOpRequest) (FileOp
 	cmdCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	wire := map[string]any{
-		"op":     string(req.Op),
-		"path":   req.Path,
-		"root":   req.Root,
-		"anchor": req.Root,
-	}
-	switch req.Op {
-	case FileOpRead:
-		wire["offset"] = req.Offset
-		wire["limit"] = req.Limit
-	case FileOpWrite:
-		wire["data_b64"] = base64.StdEncoding.EncodeToString(req.Data)
-	case FileOpEdit:
-		wire["old_b64"] = base64.StdEncoding.EncodeToString([]byte(req.OldText))
-		wire["new_b64"] = base64.StdEncoding.EncodeToString([]byte(req.NewText))
-		wire["replace_all"] = req.ReplaceAll
-		if req.ExpectedSHA256 != "" {
-			wire["expected_sha256"] = req.ExpectedSHA256
-		}
-	case fileOpBindRoot:
-	default:
-		return FileOpResult{}, fmt.Errorf("unknown fileop %q", req.Op)
-	}
-	if req.testPause > 0 {
-		wire["test_pause_ms"] = req.testPause.Milliseconds()
-		wire["test_ready_name"] = req.testReadyName
-	}
-	if req.rootBound {
-		wire["expected_dev"] = req.expectedDev
-		wire["expected_ino"] = req.expectedIno
-	}
-	reqJSON, err := json.Marshal(wire)
+	reqJSON, err := encodeFileOpWire(req, req.Root)
 	if err != nil {
-		return FileOpResult{}, fmt.Errorf("marshal fileop: %w", err)
+		return FileOpResult{}, err
 	}
 
 	//nolint:gosec // fixed embedded script; the host backend is the test/dev executor

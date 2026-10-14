@@ -36,7 +36,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1163,49 +1162,6 @@ func (k *k8sImpl) executeFileOp(ctx context.Context, req FileOpRequest, anchor s
 		return FileOpResult{}, fmt.Errorf("fileop %s: helper exit %d (%.200s)", req.Op, code, sanitizeClusterText(stderr.String()))
 	}
 	return decodeFileOpResponse(stdout.Bytes())
-}
-
-// encodeFileOpWire builds the JSON request fileops.py reads — shared shape
-// with the podman/host backends (their inline wire-building predates this
-// helper; the k8s backend uses it so the three cannot drift further).
-func encodeFileOpWire(req FileOpRequest, anchor string) ([]byte, error) {
-	wire := map[string]any{
-		"op":     string(req.Op),
-		"path":   req.Path,
-		"root":   req.Root,
-		"anchor": anchor,
-	}
-	switch req.Op {
-	case FileOpRead:
-		wire["offset"] = req.Offset
-		wire["limit"] = req.Limit
-	case FileOpWrite:
-		wire["data_b64"] = base64.StdEncoding.EncodeToString(req.Data)
-	case FileOpEdit:
-		wire["old_b64"] = base64.StdEncoding.EncodeToString([]byte(req.OldText))
-		wire["new_b64"] = base64.StdEncoding.EncodeToString([]byte(req.NewText))
-		wire["replace_all"] = req.ReplaceAll
-		if req.ExpectedSHA256 != "" {
-			wire["expected_sha256"] = req.ExpectedSHA256
-		}
-	case fileOpBindRoot:
-		// Root + anchor are the complete request.
-	default:
-		return nil, fmt.Errorf("unknown fileop %q", req.Op)
-	}
-	if req.testPause > 0 {
-		wire["test_pause_ms"] = req.testPause.Milliseconds()
-		wire["test_ready_name"] = req.testReadyName
-	}
-	if req.rootBound {
-		wire["expected_dev"] = req.expectedDev
-		wire["expected_ino"] = req.expectedIno
-	}
-	out, err := json.Marshal(wire)
-	if err != nil {
-		return nil, fmt.Errorf("marshal fileop: %w", err)
-	}
-	return out, nil
 }
 
 func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResult, error) {

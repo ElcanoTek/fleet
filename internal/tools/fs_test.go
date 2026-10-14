@@ -4,6 +4,8 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"os/exec"
@@ -41,8 +43,8 @@ func TestWriteFileTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
-	if !strings.Contains(result, "Successfully wrote") {
-		t.Errorf("Expected success message, got %s", result)
+	if !strings.HasPrefix(result, "Created "+testFile+" (13 bytes)\nsha256: ") {
+		t.Errorf("Expected a created-file message, got %s", result)
 	}
 	content, err := os.ReadFile(testFile)
 	if err != nil {
@@ -56,6 +58,115 @@ func TestWriteFileTool(t *testing.T) {
 	if info, _ := os.Stat(testFile); info != nil && info.Mode().Perm() != 0o600 {
 		t.Errorf("mode = %o, want 600", info.Mode().Perm())
 	}
+}
+
+// #1745: an overwrite says so, with the replaced file's hash and size and a
+// diff, so a write over a file the model forgot is visible in the transcript.
+func TestWriteFileTool_ReportsOverwrite(t *testing.T) {
+	sb := fsTestSandbox(t)
+	ctx := context.Background()
+	testFile := filepath.Join(t.TempDir(), "plan.md")
+	old := "# Plan\nstep one\n"
+	if err := os.WriteFile(testFile, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldHash := sha256Hex(old)
+
+	result, err := runWriteFile(ctx, sb, WriteFileParams{Path: testFile, Content: "# Plan\nstep two\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := "Overwrote existing file " + testFile + " (old_sha256 " + oldHash + ", 16 bytes) with 16 bytes (+1/-1 lines)\nsha256: " + sha256Hex("# Plan\nstep two\n") + "\n\n"
+	if !strings.HasPrefix(result, head) || !strings.Contains(result, "-step one\n") || !strings.Contains(result, "+step two\n") {
+		t.Errorf("result = %q, want %q and the diff", result, head)
+	}
+
+	result, err = runWriteFile(ctx, sb, WriteFileParams{Path: testFile, Content: "# Plan\nstep two\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(result, "Overwrote existing file "+testFile+" with identical content (16 bytes)\nsha256: ") || strings.Contains(result, "@@") {
+		t.Errorf("identical rewrite = %q, want it named as such, with no diff", result)
+	}
+
+	if err := os.WriteFile(testFile, []byte{0xff, 0x00, 0x01}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err = runWriteFile(ctx, sb, WriteFileParams{Path: testFile, Content: "text\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "(old_sha256 "+sha256Hex("\xff\x00\x01")+", 3 bytes) with 5 bytes\n") || !strings.HasSuffix(result, "\n(no diff: binary content)") {
+		t.Errorf("binary overwrite = %q, want the old hash and a no-diff note", result)
+	}
+
+	if os.Geteuid() != 0 { // root can read a 0200 file
+		if err := os.Chmod(testFile, 0o200); err != nil {
+			t.Fatal(err)
+		}
+		result, err = runWriteFile(ctx, sb, WriteFileParams{Path: testFile, Content: "again\n"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "Overwrote existing file " + testFile + " (5 bytes) with 6 bytes\nsha256: " + sha256Hex("again\n") + "\n(no hash or diff: the old file could not be read (Permission denied))"
+		if result != want {
+			t.Errorf("unreadable overwrite = %q, want %q", result, want)
+		}
+	}
+}
+
+func TestWriteFileTool_ExpectedHash(t *testing.T) {
+	sb := fsTestSandbox(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	testFile := filepath.Join(dir, "data.csv")
+	if err := os.WriteFile(testFile, []byte("a,b\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := runWriteFile(ctx, sb, WriteFileParams{Path: testFile, Content: "x", ExpectedHash: sha256Hex("old view")})
+	if err == nil || !strings.HasPrefix(err.Error(), "file content has changed since it was last read (expected sha256 "+sha256Hex("old view")+", current "+sha256Hex("a,b\n")+")") {
+		t.Errorf("stale write = %v, want the stale message with both hashes", err)
+	}
+	_, err = runWriteFile(ctx, sb, WriteFileParams{Path: testFile, Content: "x", ExpectedHash: "absent"})
+	if err == nil || !strings.HasPrefix(err.Error(), "file already exists (sha256 "+sha256Hex("a,b\n")+", 4 bytes)") {
+		t.Errorf("create-only write over a file = %v, want it refused, naming the file", err)
+	}
+	if got, _ := os.ReadFile(testFile); string(got) != "a,b\n" {
+		t.Fatalf("a refused write changed the file: %q", got)
+	}
+
+	result, err := runWriteFile(ctx, sb, WriteFileParams{Path: testFile, Content: "c,d\n", ExpectedHash: sha256Hex("a,b\n")})
+	if err != nil || !strings.HasPrefix(result, "Overwrote existing file") {
+		t.Fatalf("guarded overwrite = %q, %v", result, err)
+	}
+	fresh := filepath.Join(dir, "fresh.csv")
+	result, err = runWriteFile(ctx, sb, WriteFileParams{Path: fresh, Content: "e\n", ExpectedHash: "absent"})
+	if err != nil || !strings.HasPrefix(result, "Created "+fresh) {
+		t.Fatalf("create-only write = %q, %v", result, err)
+	}
+}
+
+// expected_hash "absent" names no file to edit; edit_file says so instead of
+// reporting a stale hash.
+func TestEditFileTool_RejectsAbsent(t *testing.T) {
+	sb := fsTestSandbox(t)
+	testFile := filepath.Join(t.TempDir(), "x.txt")
+	if err := os.WriteFile(testFile, []byte("abc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runEditFile(context.Background(), sb, EditFileParams{Path: testFile, OldText: "a", NewText: "b", ExpectedHash: " Absent"})
+	if err == nil || !strings.Contains(err.Error(), `expected_hash "absent" is for write_file`) {
+		t.Errorf("edit with absent = %v, want it pointed at write_file", err)
+	}
+	if got, _ := os.ReadFile(testFile); string(got) != "abc" {
+		t.Errorf("file changed: %q", got)
+	}
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 func TestEditFileTool(t *testing.T) {

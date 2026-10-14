@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -975,41 +974,9 @@ func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, an
 	cmdCtx, cancel := context.WithTimeout(ctx, fileOpTimeout)
 	defer cancel()
 
-	wire := map[string]any{
-		"op":     string(req.Op),
-		"path":   req.Path,
-		"root":   req.Root,
-		"anchor": anchor,
-	}
-	switch req.Op {
-	case FileOpRead:
-		wire["offset"] = req.Offset
-		wire["limit"] = req.Limit
-	case FileOpWrite:
-		wire["data_b64"] = base64.StdEncoding.EncodeToString(req.Data)
-	case FileOpEdit:
-		wire["old_b64"] = base64.StdEncoding.EncodeToString([]byte(req.OldText))
-		wire["new_b64"] = base64.StdEncoding.EncodeToString([]byte(req.NewText))
-		wire["replace_all"] = req.ReplaceAll
-		if req.ExpectedSHA256 != "" {
-			wire["expected_sha256"] = req.ExpectedSHA256
-		}
-	case fileOpBindRoot:
-		// Root + anchor are the complete request.
-	default:
-		return FileOpResult{}, fmt.Errorf("unknown fileop %q", req.Op)
-	}
-	if req.testPause > 0 {
-		wire["test_pause_ms"] = req.testPause.Milliseconds()
-		wire["test_ready_name"] = req.testReadyName
-	}
-	if req.rootBound {
-		wire["expected_dev"] = req.expectedDev
-		wire["expected_ino"] = req.expectedIno
-	}
-	reqJSON, err := json.Marshal(wire)
+	reqJSON, err := encodeFileOpWire(req, anchor)
 	if err != nil {
-		return FileOpResult{}, fmt.Errorf("marshal fileop: %w", err)
+		return FileOpResult{}, err
 	}
 
 	args := c.podmanArgs([]string{"exec", "-i", containerID, "python3", "-c", string(fileOpsScript)})
