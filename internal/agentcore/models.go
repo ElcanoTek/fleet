@@ -44,7 +44,16 @@ const (
 	DefaultCoreModel = "openai/gpt-6-luna-pro"
 	// DefaultMaxModel is the strong tier — the model escalation
 	// (suggest_advanced_model, chat's "advanced model") resolves to. Exact slug,
-	// never a `~latest` alias. Claude Opus 5.5 (2026-09-22, replacing
+	// never a `~latest` alias. Gemini 4 Argon (2026-10-14, replacing
+	// anthropic/claude-opus-5.5): Google's Gemini 4 generation, released on
+	// OpenRouter 2026-10-13. $2/M in, $10/M out ($4/$20 for Opus 5.5), cache
+	// reads at $0.10/M, a 1,048,576-token window. Endpoints are Google Vertex
+	// (global, global/priority) and Google AI Studio; the strict `google/` pin in
+	// canonicalUpstream holds every request on Vertex (encrypted thought
+	// signatures validate only at the minting upstream), which also keeps the
+	// prompt cache on one upstream. Still a different provider family from the
+	// default, so an escalation is also a provider change. History: Claude
+	// Opus 5.5 (2026-09-22, replacing
 	// anthropic/claude-opus-5): same 1M window and the same eleven official
 	// endpoints across Anthropic, Claude Platform on AWS, Bedrock, Azure and
 	// Google, at $4/M in and $20/M out (Opus 5: $5/$25). History: Claude Opus 5
@@ -55,7 +64,7 @@ const (
 	// in canonicalUpstream, so the escalation path keeps per-upstream prompt-cache
 	// locality. The scheduled-task FALLBACK is configured separately
 	// (FLEET_TASK_FALLBACK_MODEL; production uses deepseek/deepseek-v4.1-flash).
-	DefaultMaxModel = "anthropic/claude-opus-5.5"
+	DefaultMaxModel = "google/gemini-4-argon"
 	// AdvancedModelSlug is chat's name for the same strong tier. Kept in sync
 	// with DefaultMaxModel.
 	AdvancedModelSlug = DefaultMaxModel
@@ -64,6 +73,34 @@ const (
 	// SuggestAdvancedCooldownTurns is the chat suggest_advanced_model cooldown.
 	SuggestAdvancedCooldownTurns = 3
 )
+
+// minCompletionTokens lists slug prefixes whose per-call output allowance must
+// not drop below a floor. Gemini 4 counts thinking against max_output_tokens and
+// reasons at medium effort by default, so a cap below the floor can be spent
+// entirely on thinking and return a truncated or empty answer; Google's Gemini 4
+// Argon migration guide says to raise any limit under 32K to at least 32,768.
+// The floor only RAISES a smaller configured cap — it never lowers one — and the
+// run's cost/token ceilings still bound spend. Longest prefix first.
+var minCompletionTokens = []struct {
+	prefix string
+	tokens int
+}{
+	{"google/gemini-4", 32_768},
+}
+
+// completionTokensForModel returns the per-call output allowance for slug: the
+// configured cap, raised to the model's minCompletionTokens floor when it is
+// below it. Callers use the SAME value for the request's MaxOutputTokens and
+// for the context reserve (contextAccounting), so the reserve stays exact.
+func completionTokensForModel(slug string, configured int64) int64 {
+	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(slug)), "~")
+	for _, f := range minCompletionTokens {
+		if strings.HasPrefix(m, f.prefix) {
+			return max(configured, int64(f.tokens))
+		}
+	}
+	return configured
+}
 
 // modelOpenAIGPT5 is hoisted because the context-window table and several test
 // fixtures assert on this exact slug.
@@ -87,9 +124,13 @@ var modelContextWindows = []struct {
 	// accepts and hard-errors. Cold-start/offline only; a running fleet gets
 	// this from the live OpenRouter catalog.
 	//
-	// 3.7 keeps its row alongside the current default: the slug stays
+	// Gemini 4 Argon is the strong tier (DefaultMaxModel, 2026-10-14); exact
+	// slug for the same reason.
+	//
+	// 3.7 keeps its row alongside 3.8: the slug stays
 	// selectable (and stays the fallback an admin-configured tier may point
 	// at), and both serve the same 1,048,576 window.
+	{"google/gemini-4-argon", 1_048_576},
 	{"google/gemini-3.8-flash", 1_048_576},
 	{"google/gemini-3.7-flash", 1_048_576},
 	{"google/gemini-2.5-pro", 1_000_000},
@@ -117,7 +158,7 @@ var modelContextWindows = []struct {
 	{"openai/o1", 200_000},
 	{modelOpenAIGPT5, 400_000},
 	// Claude 5 ships a 1M window (this prefix also covers Opus 5.5, the
-	// DefaultMaxModel); the generic row
+	// DefaultMaxModel until 2026-10-14); the generic row
 	// below keeps the Claude 4 family at 200K. Longest prefix first.
 	{"anthropic/claude-opus-5", 1_000_000},
 	{"anthropic/claude-sonnet-5", 1_000_000},

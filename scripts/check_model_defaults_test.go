@@ -43,7 +43,7 @@ func TestModelDefaultsAreInSync(t *testing.T) {
 	}
 
 	// The chat guide names both defaults in prose ("By default those two are
-	// **GPT-6 Luna Pro** … and **Claude Opus 5.5** …"). The label's provider
+	// **GPT-6 Luna Pro** … and **Gemini 4 Argon** …"). The label's provider
 	// prefix ("OpenAI: ") is dropped there.
 	guide := readFile(t, root, "internal/clientconfig/builtin_skills/fleet-guide/chat.md")
 	for _, name := range []string{"DEFAULT_MODEL_LABEL", "ADVANCED_MODEL_LABEL"} {
@@ -54,5 +54,18 @@ func TestModelDefaultsAreInSync(t *testing.T) {
 		if !strings.Contains(guide, "**"+label+"**") {
 			t.Errorf("fleet-guide/chat.md does not name the default %q (from %s); update the guide and run make sync-guides", label, name)
 		}
+	}
+
+	// The Operations Center guide names the task form's pre-filled default
+	// ("pre-filled with your workspace's default model (**GPT-6 Luna Pro** …").
+	// It went stale once (still naming GPT-5.6 Luna Pro after the 2026-09-22
+	// swap) because only the chat guide was checked.
+	ops := readFile(t, root, "internal/clientconfig/builtin_skills/fleet-guide/operations-center.md")
+	label := constant("DEFAULT_MODEL_LABEL")
+	if i := strings.Index(label, ": "); i >= 0 {
+		label = label[i+2:]
+	}
+	if !strings.Contains(ops, "**"+label+"**") {
+		t.Errorf("fleet-guide/operations-center.md does not name the default %q (from DEFAULT_MODEL_LABEL); update the guide and run make sync-guides", label)
 	}
 }

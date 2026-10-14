@@ -1024,12 +1024,17 @@ func (e *engine) effectiveResendBudget(budget int) int {
 // provider reserves contextAccounting takes. Past either, the round is reduced
 // or refused before StopWhen could observe the threshold.
 func (e *engine) resendWindowLimit() int {
-	window := contextWindowForActiveModel(e.currentModel())
+	active := e.currentModel()
+	window := contextWindowForActiveModel(active)
 	if window <= 0 {
 		return 0
 	}
 	limit := int(float64(window) * contextCompactionThreshold(e.envPrefix))
-	acct := contextAccounting(modelContextPrefixBudget{}, e.maxCompletionTokens, window)
+	completion := int64(e.maxCompletionTokens)
+	if active != nil {
+		completion = completionTokensForModel(active.Model(), completion)
+	}
+	acct := contextAccounting(modelContextPrefixBudget{}, int(completion), window)
 	if allowance := window - acct.completionTokens - acct.providerTokens; allowance < limit {
 		limit = allowance
 	}
@@ -1178,6 +1183,10 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		modelSlug = activeModel.Model()
 	}
 	r.activeModelSlug = modelSlug
+	// The per-call output allowance for THIS model: the run's cap, raised to the
+	// model's floor (completionTokensForModel). Sent as MaxOutputTokens and
+	// reserved by modelContextBudgetStep below — one value for both.
+	maxOutputTokens := completionTokensForModel(modelSlug, r.maxTokens)
 	sink := r.sink
 	// A provider that accepts the request but never produces a semantic event
 	// must not monopolize the run deadline. Once the first event arrives the timer
@@ -1210,7 +1219,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 	observability.AddBreadcrumb(ctx, "llm", "llm request: "+modelSlug, nil)
 	result, err := ag.Stream(streamCtx, fantasy.AgentStreamCall{
 		Messages:        messages,
-		MaxOutputTokens: &r.maxTokens,
+		MaxOutputTokens: &maxOutputTokens,
 		Temperature:     &temp,
 		ProviderOptions: r.engine.providerOptions(modelSlug),
 		MaxRetries:      &maxRetries,
@@ -1320,7 +1329,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// Prompt-cache markers must be attached to the reduced message
 			// slice, and no provider call may observe the pre-reduction
 			// history. opts.Model makes fallback swaps use their own window.
-			modelContextBudgetStep(r.engine.modelContextPrefix, int(r.maxTokens), sink),
+			modelContextBudgetStep(r.engine.modelContextPrefix, int(maxOutputTokens), sink),
 			promptCachingStep(modelSlug,
 				WithCacheEnvPrefix(r.engine.envPrefix),
 				// The shared loop is where compaction summaries live (the engine's

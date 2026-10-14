@@ -38,8 +38,11 @@ the fact.
 **The default moved to `google/gemini-3.8-flash`** (strict pin, one upstream, no
 floor needed) and then, on 2026-09-21, to **`openai/gpt-5.6-luna-pro`** with
 **`anthropic/claude-opus-5`** as the strong tier, and on 2026-09-22 to
-**`openai/gpt-6-luna-pro`** / **`anthropic/claude-opus-5.5`** (see
-[MODEL-DEFAULTS.md](MODEL-DEFAULTS.md)). Both are soft-pinned to their vendor
+**`openai/gpt-6-luna-pro`** / **`anthropic/claude-opus-5.5`**, and on
+2026-10-14 the strong tier moved to **`google/gemini-4-argon`** (strict
+`google/` pin, one upstream, so it needs neither a floor nor an
+`officialPoolSlugs` entry; see [MODEL-DEFAULTS.md](MODEL-DEFAULTS.md)). The
+Luna Pro and Opus slugs are soft-pinned to their vendor
 with cloud resellers of the *official* weights as the only fallbacks, so neither
 has a third-party quantized pool to degrade onto; `officialPoolSlugs` records
 those two exact slugs with the endpoint list that was checked, and the guard test
@@ -71,7 +74,7 @@ The list is now the **allow-list on the request**. For a listed slug
 | slug | `order` | `only` (provider routing names) |
 |---|---|---|
 | `openai/gpt-6-luna-pro` (default) | OpenAI | OpenAI, Azure, Amazon Bedrock |
-| `anthropic/claude-opus-5.5` (strong) | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
+| `anthropic/claude-opus-5.5` (strong until 2026-10-14) | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
 | `openai/gpt-5.6-luna-pro` | OpenAI | OpenAI, Azure, Amazon Bedrock |
 | `anthropic/claude-opus-5` | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
 

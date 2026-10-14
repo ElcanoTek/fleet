@@ -158,11 +158,12 @@ var canonicalUpstream = []struct {
 	strict        bool
 	quantizations []string
 }{
+	// The strong tier (DefaultMaxModel, Gemini 4 Argon) lives here.
 	// Google serves this family alone, so the pin is STRICT (Only, no
 	// fallbacks) and needs no serving-precision floor — there is no second
 	// upstream to degrade onto.
 	{"google/", upstreamProviderGoogle, true, nil},
-	// The strong tier (DefaultMaxModel, Claude Opus 5) lives here: a soft pin
+	// The strong tier until 2026-10-14 (Claude Opus 5.5): a soft pin
 	// to Anthropic's own endpoint with graceful degradation onto the cloud
 	// resellers of the same weights. The default-pin guard's exemption for that
 	// slug — and the allow-list that enforces it — is recorded per SLUG in
@@ -242,7 +243,7 @@ var officialPoolSlugs = map[string]officialPoolAllowlist{
 	},
 	// 2026-09-22: Anthropic ×2, Claude Platform on AWS ×1, Amazon Bedrock ×3,
 	// Azure ×2, Google ×3 — eleven endpoints, every quantization "unknown".
-	// DefaultMaxModel.
+	// DefaultMaxModel until 2026-10-14.
 	"anthropic/claude-opus-5.5": {
 		checked: "2026-09-22",
 		providers: []string{
