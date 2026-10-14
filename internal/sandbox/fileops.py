@@ -36,6 +36,12 @@ DIFF_SOURCE_MAX_BYTES = 256 * 1024
 # many a side: difflib's cost grows with the square of the line count, and a
 # diff that long would be cut to DIFF_MAX_BYTES anyway.
 DIFF_MAX_LINES = 2000
+# A plain write (no expected_hash) hashes the file it replaces only up to this
+# size. The hash is a courtesy report, and a file op that outlives the
+# executor's timeout retires the sandbox, so a multi-GB file on slow storage
+# must not turn a write that used to be instant into a failed turn. A write
+# guarded by a hash always reads the file: the caller asked for the check.
+REPORT_HASH_MAX_BYTES = 64 * 1024 * 1024
 # expected_sha256 on a write may name no hash at all but this: the file must
 # not exist yet (create-only).
 EXPECT_ABSENT = "absent"
@@ -536,6 +542,11 @@ def do_write(req):
         if before is not None:
             if not stat.S_ISREG(before.st_mode):
                 unread = "the old entry was not a regular file"
+            elif not guard and before.st_size > REPORT_HASH_MAX_BYTES:
+                unread = (
+                    "the old file is over %d MB, too large to hash for a report"
+                    % (REPORT_HASH_MAX_BYTES // (1024 * 1024))
+                )
             else:
                 try:
                     old = _read_replaced(parent_fd, name, before)
