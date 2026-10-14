@@ -99,6 +99,20 @@ func TestWriteFileTool_ReportsOverwrite(t *testing.T) {
 	if !strings.Contains(result, "(old_sha256 "+sha256Hex("\xff\x00\x01")+", 3 bytes) with 5 bytes\n") || !strings.HasSuffix(result, "\n(no diff: binary content)") {
 		t.Errorf("binary overwrite = %q, want the old hash and a no-diff note", result)
 	}
+
+	if os.Geteuid() != 0 { // root can read a 0200 file
+		if err := os.Chmod(testFile, 0o200); err != nil {
+			t.Fatal(err)
+		}
+		result, err = runWriteFile(ctx, sb, WriteFileParams{Path: testFile, Content: "again\n"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "Overwrote existing file " + testFile + " (5 bytes) with 6 bytes\nsha256: " + sha256Hex("again\n") + "\n(no hash or diff: the old file could not be read (Permission denied))"
+		if result != want {
+			t.Errorf("unreadable overwrite = %q, want %q", result, want)
+		}
+	}
 }
 
 func TestWriteFileTool_ExpectedHash(t *testing.T) {

@@ -474,8 +474,8 @@ os.read = read_while_growing
 `
 			res, err := runPatchedWrite(t, map[string]any{"path": path, "root": root, "data_b64": "bmV3Cg==", "expected_sha256": expected}, patch)
 			if expected != "" {
-				if !errors.Is(err, ErrFileOpStale) {
-					t.Fatalf("guarded write over a growing file = %v, want ErrFileOpStale", err)
+				if !errors.Is(err, ErrFileOpStale) || !strings.Contains(err.Error(), "changed while its hash was computed") {
+					t.Fatalf("guarded write over a growing file = %v, want stale: it changed while hashed", err)
 				}
 				return
 			}
@@ -500,9 +500,12 @@ func TestFileOp_WriteOverAnUnreadableFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("secret\n"), 0o200); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{sha256Hex([]byte("secret\n")), ExpectAbsent} {
-		if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Root: root, Data: []byte("x"), ExpectedSHA256: expected}); err == nil {
-			t.Errorf("expected %q over an unreadable file succeeded", expected)
+	for expected, want := range map[string]string{
+		sha256Hex([]byte("secret\n")): "Permission denied",
+		ExpectAbsent:                  "already exists (7 bytes; the old file could not be read (Permission denied))",
+	} {
+		if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Root: root, Data: []byte("x"), ExpectedSHA256: expected}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("expected %q over an unreadable file = %v, want a refusal saying %q", expected, err, want)
 		}
 	}
 	if err := os.Chmod(path, 0o600); err != nil {

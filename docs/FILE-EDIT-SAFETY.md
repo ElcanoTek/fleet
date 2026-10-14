@@ -48,32 +48,55 @@ wrote N bytes". The same seam now reports an overwrite and can guard it:
   (+a/-r lines)`, the new `sha256`, and a unified diff bounded like
   `edit_file`'s (4 KB, then a truncation marker; the write is applied in
   full). A new file reads `Created <path> (N bytes)`, and rewriting identical
-  content says so. There is no diff for binary content (either side not valid
-  UTF-8), or when either side is over 256 KB: the hashes and sizes are still
-  reported, with a note saying why there is no diff.
+  content says so. The diff is computed before the commit.
+- **When there is no diff.** Binary content (either side not valid UTF-8),
+  either side over 256 KB, or a change spread over more than 2,000 lines a
+  side: the hashes and sizes are still reported, with a note saying why.
+  Only the lines that differ, with three lines of context, are diffed (the
+  hunk headers keep the file's line numbers), so one changed line in a long
+  file stays cheap. The line cap exists because difflib's cost grows with the
+  square of the line count: a 256 KB file of short lines, every other one
+  changed, took over 60 s to diff, past the 60 s file-op timeout.
 - **`expected_hash` on `write_file`.** Optional, with `edit_file`'s meaning:
   the SHA-256 the file must have now (an optional `sha256:` prefix, any case).
-  If the file differs, or is gone, the write fails (`ErrFileOpStale`) and
+  If the file differs, is gone, is not a regular file, or cannot be read, the
+  write fails (`ErrFileOpStale`, or a write error for an unreadable file) and
   nothing is written: no file, and no missing directory, is created. The hash
-  is checked again just before the atomic rename, as for `edit_file`. The value
-  `"absent"` makes the write create-only: it fails if anything exists at the
-  path. `edit_file` refuses `"absent"`, since it edits a file that exists.
+  is checked again just before the atomic rename, as for `edit_file`.
+- **`"absent"` makes the write create-only.** It fails if anything exists at
+  the path, and a file created while the write is in progress is refused too.
+  The last check runs just before the rename, so a file created in the
+  instant between that check and the rename is still replaced. `edit_file`
+  refuses `"absent"`, since it edits a file that exists.
 - **Overwriting stays allowed by default.** There is no `overwrite=true` flag
   and no read-before-write requirement; like `edit_file`'s, the guard is
-  opt-in.
+  opt-in. A write without `expected_hash` is never refused because the old
+  file cannot be described: when it is unreadable (for example mode 0200), is
+  swapped or deleted while it is read, or grows while it is hashed, the write
+  goes ahead as before #1745 and says the old file could not be read. A
+  non-regular entry at the path (a FIFO, a socket) is replaced as before,
+  reported without a hash.
 - **How the old file is read.** Through the parent directory descriptor the
   write uses, no-follow and non-blocking, and checked to be the regular file
-  `lstat` saw, so a symlink or FIFO swapped in cannot redirect the read or hang
-  the executor (a swap is refused as stale, a symlink as unsafe). It is hashed
-  as it streams; its bytes are kept only up to 256 KB, for the diff. A
-  non-regular entry already at the path (a FIFO, a socket) is replaced as
-  before, reported without a hash, and never matches an `expected_hash`.
+  `lstat` saw, so a symlink or FIFO swapped in cannot redirect the read or
+  stall the executor: a symlink is refused as an unsafe path, and any other
+  swap is never described as the replaced file. It is hashed as it streams;
+  its bytes are kept only up to 256 KB, for the diff.
+- **No blocking on a FIFO, for any file tool.** `view_file`, `edit_file` and
+  the guarded write's last hash open the file non-blocking and refuse anything
+  but a regular file ("path is not a regular file"). Before, a FIFO in the
+  workspace made `view_file` wait until the 60 s file-op timeout, which retires
+  the sandbox.
 - **A file that appears meanwhile.** If an entry appears at the path between
-  the executor finding none and the rename, the write is refused as stale,
-  rather than replacing it and reporting a create.
+  the executor finding none and the rename, the write is refused as stale
+  ("a file appeared at this path …"), rather than replacing it and reporting a
+  create.
 - **Stale messages.** A stale refusal now carries only the executor's
   explanation (`FileOpStaleError`); `edit_file`'s used to repeat "file content
   has changed since it was last read" twice.
+- **One wire encoder.** The podman, host and kubernetes backends now build the
+  executor's request with the same function, so a field such as
+  `expected_sha256` cannot reach one backend and not another.
 - `view_file`'s metadata trailer now points at `write_file` as well as
   `edit_file`.
 
@@ -86,10 +109,14 @@ Not done, deliberately:
 - **Without `expected_hash`, the old file is not re-checked** between its hash
   and the rename (the same as `edit_file` without one), so the reported old
   hash and diff describe the file as it was read.
-- **Every write through the seam pays the extra read**, the native tools that
+- **Every write through the seam pays the extra work**, the native tools that
   write files included (`download_url`, `generate_image`, `xlsx_workbook`,
   model-output artifacts), although only `write_file` shows the report: one
-  streamed read of a file being replaced.
+  streamed read of a file being replaced and, for text up to the caps, a
+  bounded diff.
+- **`edit_file`'s diff is unchanged:** it still diffs the whole file, with no
+  line cap, so a `replace_all` touching lines all through a very long file can
+  still be slow.
 
 ## Deliberately deferred
 
