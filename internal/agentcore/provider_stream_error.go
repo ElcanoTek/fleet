@@ -161,13 +161,15 @@ const contextLengthCode = "context_length_exceeded"
 //   - Anthropic: "prompt is too long: M tokens > N maximum" (recognized by
 //     fantasy's native Anthropic provider, not when relayed by OpenRouter
 //     inside error.metadata.raw).
-//   - Google:    "The input token count (M) exceeds the maximum number of
+//   - Google:    "The input token count exceeds the maximum number of tokens
+//     allowed N." (Gemini 4, observed live through OpenRouter 2026-10-14),
+//     and the older "The input token count (M) exceeds the maximum number of
 //     tokens allowed (N)."
 var (
 	contextWindowExceededPattern = regexp.MustCompile(`(?i)\bexceeds the context window\b|\bcontext[_ ]length[_ ]exceeded\b`)
 	promptTooLongPattern         = regexp.MustCompile(`(?i)\bprompt is too long:\s*(\d+)\s*tokens?\s*>\s*(\d+)\s*maximum\b`)
 	maxContextLengthPattern      = regexp.MustCompile(`(?i)\bmaximum context length is (\d+) tokens\b(?:[^"}]{0,120}?\bresulted in (\d+) tokens\b)?`)
-	inputTokenCountPattern       = regexp.MustCompile(`(?i)\binput token count \(?(\d+)\)? exceeds the maximum number of tokens allowed \(?(\d+)\)?`)
+	inputTokenCountPattern       = regexp.MustCompile(`(?i)\binput token count\b(?:\s*\(?(\d+)\)?)?\s+exceeds the maximum number of tokens allowed\b(?:\s*\(?(\d+)\)?)?`)
 )
 
 // contextLengthRejection reports whether a provider error is really an

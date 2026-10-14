@@ -19,7 +19,10 @@ const (
 	// upstream wording (with both token counts) rides in error.metadata.raw.
 	anthropicOverflowBody = `{"error":{"message":"Provider returned error","code":400,"metadata":{"raw":"{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 1314963 tokens > 1000000 maximum\"}}","provider_name":"Claude Platform on AWS"}}}`
 	googleOverflowBody    = `{"error":{"message":"Provider returned error","code":400,"metadata":{"raw":"The input token count (1196265) exceeds the maximum number of tokens allowed (1048575).","provider_name":"Google AI Studio"}}}`
-	providerCodeOnlyBody  = `{"error":{"message":"Provider returned error","code":400,"metadata":{"provider_code":"context_length_exceeded","error_type":"invalid_request","provider_name":"OpenAI"}}}`
+	// Recorded live through OpenRouter (google/gemini-4-argon, 2026-10-14): no
+	// used count, and the limit without parentheses.
+	gemini4OverflowBody  = `{"error":{"message":"Provider returned error","code":400,"metadata":{"raw":"{ \"error\": { \"code\": 400, \"message\": \"The input token count exceeds the maximum number of tokens allowed 1048576.\", \"status\": \"INVALID_ARGUMENT\" } }","provider_name":"Google AI Studio"}}}`
+	providerCodeOnlyBody = `{"error":{"message":"Provider returned error","code":400,"metadata":{"provider_code":"context_length_exceeded","error_type":"invalid_request","provider_name":"OpenAI"}}}`
 )
 
 func TestClassifyStreamError_RelayedContextOverflow(t *testing.T) {
@@ -57,6 +60,13 @@ func TestClassifyStreamError_RelayedContextOverflow(t *testing.T) {
 			want:      streamErrorContextTooLarge,
 			wantMax:   1_048_575,
 			wantUsed:  1_196_265,
+			wantFlags: true,
+		},
+		{
+			name:      "Gemini 4 wording (live-recorded), limit only",
+			err:       &fantasy.ProviderError{StatusCode: 400, Message: "Provider returned error", ResponseBody: []byte(gemini4OverflowBody)},
+			want:      streamErrorContextTooLarge,
+			wantMax:   1_048_576,
 			wantFlags: true,
 		},
 		{
