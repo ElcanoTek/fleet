@@ -39,7 +39,7 @@ the fact.
 floor needed) and then, on 2026-09-21, to **`openai/gpt-5.6-luna-pro`** with
 **`anthropic/claude-opus-5`** as the strong tier, and on 2026-09-22 to
 **`openai/gpt-6-luna-pro`** / **`anthropic/claude-opus-5.5`**, and on
-2026-10-14 the everyday default moved to **`google/gemini-4-argon`** (strict
+2026-10-14 the strong tier moved to **`google/gemini-4-argon`** (strict
 `google/` pin, one upstream, so it needs neither a floor nor an
 `officialPoolSlugs` entry; see [MODEL-DEFAULTS.md](MODEL-DEFAULTS.md)). The
 Luna Pro and Opus slugs are soft-pinned to their vendor
@@ -73,8 +73,8 @@ The list is now the **allow-list on the request**. For a listed slug
 
 | slug | `order` | `only` (provider routing names) |
 |---|---|---|
-| `openai/gpt-6-luna-pro` (default until 2026-10-14) | OpenAI | OpenAI, Azure, Amazon Bedrock |
-| `anthropic/claude-opus-5.5` (strong) | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
+| `openai/gpt-6-luna-pro` (default) | OpenAI | OpenAI, Azure, Amazon Bedrock |
+| `anthropic/claude-opus-5.5` (strong until 2026-10-14) | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
 | `openai/gpt-5.6-luna-pro` | OpenAI | OpenAI, Azure, Amazon Bedrock |
 | `anthropic/claude-opus-5` | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
 

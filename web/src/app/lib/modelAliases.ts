@@ -31,11 +31,11 @@
 // dropped across tool loops and Anthropic hard-400s with "Invalid
 // `signature` in `thinking` block" (root-caused + live-verified
 // 2026-06-04).
-export const DEFAULT_MODEL = "google/gemini-4-argon";
-export const DEFAULT_MODEL_LABEL = "Google: Gemini 4 Argon";
+export const DEFAULT_MODEL = "openai/gpt-6-luna-pro";
+export const DEFAULT_MODEL_LABEL = "OpenAI: GPT-6 Luna Pro";
 
-export const ADVANCED_MODEL = "anthropic/claude-opus-5.5";
-export const ADVANCED_MODEL_LABEL = "Anthropic: Claude Opus 5.5";
+export const ADVANCED_MODEL = "google/gemini-4-argon";
+export const ADVANCED_MODEL_LABEL = "Google: Gemini 4 Argon";
 
 // The scheduled-task FALLBACK the Operations Center create form pre-fills:
 // what a task fails over to when its primary is down. Compiled-in fallback

@@ -54,15 +54,10 @@ func TestUpdateUsage_QuotedServedNameIsNotAFallback(t *testing.T) {
 	}
 }
 
-// openAIPinned is a soft-pinned (OpenAI-first) slug, named here rather than
-// read from DefaultCoreModel so these fallback cases keep testing a soft pin
-// whichever family holds the default tier.
-const openAIPinned = "openai/gpt-6-luna-pro"
-
 // A run served by its canonical upstream is not a fallback.
 func TestUpdateUsage_CanonicalUpstreamIsNotAFallback(t *testing.T) {
 	o := newOrchestrationState(NewLogSession(), 50)
-	o.updateUsage(openAIPinned, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("OpenAI"))
+	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("OpenAI"))
 
 	if o.ServedFallback {
 		t.Error("ServedFallback = true for a step served by the pinned upstream")
@@ -76,7 +71,7 @@ func TestUpdateUsage_CanonicalUpstreamIsNotAFallback(t *testing.T) {
 // this is the signal that explains an otherwise inexplicable bad response.
 func TestUpdateUsage_RecordsUpstreamFallback(t *testing.T) {
 	o := newOrchestrationState(NewLogSession(), 50)
-	o.updateUsage(openAIPinned, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("DeepInfra"))
+	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("DeepInfra"))
 
 	if !o.ServedFallback {
 		t.Error("ServedFallback = false for a step served off the pinned upstream")
@@ -87,7 +82,7 @@ func TestUpdateUsage_RecordsUpstreamFallback(t *testing.T) {
 
 	// The flag latches: a later step returning to the canonical upstream must
 	// not erase the fact that part of the run was served elsewhere.
-	o.updateUsage(openAIPinned, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("Google"))
+	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("Google"))
 	if !o.ServedFallback {
 		t.Error("ServedFallback cleared after the run returned to the pinned upstream; it must latch")
 	}
@@ -114,8 +109,8 @@ func TestUpdateUsage_UnpinnedFamilyNeverFlagsFallback(t *testing.T) {
 // rather than clobbering a previously recorded one with "".
 func TestUpdateUsage_AbsentMetadataPreservesAttribution(t *testing.T) {
 	o := newOrchestrationState(NewLogSession(), 50)
-	o.updateUsage(openAIPinned, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("Google"))
-	o.updateUsage(openAIPinned, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, fantasy.ProviderMetadata{})
+	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("Google"))
+	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, fantasy.ProviderMetadata{})
 
 	if o.LastServedUpstream != "Google" {
 		t.Errorf("LastServedUpstream = %q, want the last known upstream %q", o.LastServedUpstream, "Google")

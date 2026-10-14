@@ -43,8 +43,8 @@ func TestModelDefaultsAreInSync(t *testing.T) {
 	}
 
 	// The chat guide names both defaults in prose ("By default those two are
-	// **Gemini 4 Argon** … and **Claude Opus 5.5** …"). The label's provider
-	// prefix ("Google: ") is dropped there.
+	// **GPT-6 Luna Pro** … and **Gemini 4 Argon** …"). The label's provider
+	// prefix ("OpenAI: ") is dropped there.
 	guide := readFile(t, root, "internal/clientconfig/builtin_skills/fleet-guide/chat.md")
 	for _, name := range []string{"DEFAULT_MODEL_LABEL", "ADVANCED_MODEL_LABEL"} {
 		label := constant(name)

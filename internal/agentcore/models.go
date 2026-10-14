@@ -24,17 +24,6 @@ const (
 	// alias slug defeats the send-side reasoning reconstruction (see
 	// isAliasModel).
 	//
-	// Gemini 4 Argon (2026-10-14, replacing openai/gpt-6-luna-pro): Google's
-	// Gemini 4 generation, released on OpenRouter 2026-10-13. $2/M in, $10/M
-	// out, cache reads at $0.10/M, a 1,048,576-token window. Its endpoints are
-	// Google Vertex (global, global/priority) and Google AI Studio; the strict
-	// `google/` pin in canonicalUpstream holds every request on Vertex alone
-	// (encrypted thought signatures validate only at the minting upstream),
-	// which also keeps the prompt cache on one upstream. `google/` slugs get
-	// explicit cache_control breakpoints (explicitBreakpointPrefixes). Note this
-	// is a price step UP from Luna Pro ($0.10/$0.50) — see
-	// docs/MODEL-DEFAULTS.md.
-	//
 	// GPT-6 Luna Pro (2026-09-22, replacing openai/gpt-5.6-luna-pro): the
 	// GPT-6 generation of the same everyday tier, $0.10/M in, $0.50/M out,
 	// cache reads at $0.01/M, a 1,050,000-token window, and OpenAI's own three
@@ -52,10 +41,19 @@ const (
 	// jobs on Luna Pro ran in 4–10 minutes at $0.16–0.62 with 89–95% cache
 	// hits. The `openai/` soft pin in canonicalUpstream keeps the prompt cache
 	// on one upstream with graceful degradation.
-	DefaultCoreModel = "google/gemini-4-argon"
+	DefaultCoreModel = "openai/gpt-6-luna-pro"
 	// DefaultMaxModel is the strong tier — the model escalation
 	// (suggest_advanced_model, chat's "advanced model") resolves to. Exact slug,
-	// never a `~latest` alias. Claude Opus 5.5 (2026-09-22, replacing
+	// never a `~latest` alias. Gemini 4 Argon (2026-10-14, replacing
+	// anthropic/claude-opus-5.5): Google's Gemini 4 generation, released on
+	// OpenRouter 2026-10-13. $2/M in, $10/M out ($4/$20 for Opus 5.5), cache
+	// reads at $0.10/M, a 1,048,576-token window. Endpoints are Google Vertex
+	// (global, global/priority) and Google AI Studio; the strict `google/` pin in
+	// canonicalUpstream holds every request on Vertex (encrypted thought
+	// signatures validate only at the minting upstream), which also keeps the
+	// prompt cache on one upstream. Still a different provider family from the
+	// default, so an escalation is also a provider change. History: Claude
+	// Opus 5.5 (2026-09-22, replacing
 	// anthropic/claude-opus-5): same 1M window and the same eleven official
 	// endpoints across Anthropic, Claude Platform on AWS, Bedrock, Azure and
 	// Google, at $4/M in and $20/M out (Opus 5: $5/$25). History: Claude Opus 5
@@ -66,7 +64,7 @@ const (
 	// in canonicalUpstream, so the escalation path keeps per-upstream prompt-cache
 	// locality. The scheduled-task FALLBACK is configured separately
 	// (FLEET_TASK_FALLBACK_MODEL; production uses deepseek/deepseek-v4.1-flash).
-	DefaultMaxModel = "anthropic/claude-opus-5.5"
+	DefaultMaxModel = "google/gemini-4-argon"
 	// AdvancedModelSlug is chat's name for the same strong tier. Kept in sync
 	// with DefaultMaxModel.
 	AdvancedModelSlug = DefaultMaxModel
@@ -98,8 +96,10 @@ var modelContextWindows = []struct {
 	// accepts and hard-errors. Cold-start/offline only; a running fleet gets
 	// this from the live OpenRouter catalog.
 	//
-	// Gemini 4 Argon is the current default (2026-10-14); exact slug for the
-	// same reason. 3.8 and 3.7 keep their rows alongside it: the slug stays
+	// Gemini 4 Argon is the strong tier (DefaultMaxModel, 2026-10-14); exact
+	// slug for the same reason.
+	//
+	// 3.7 keeps its row alongside 3.8: the slug stays
 	// selectable (and stays the fallback an admin-configured tier may point
 	// at), and both serve the same 1,048,576 window.
 	{"google/gemini-4-argon", 1_048_576},
@@ -122,15 +122,15 @@ var modelContextWindows = []struct {
 	// without this line the strong tier — the slug users escalate to for their
 	// LARGEST problems — would cold-boot compacting at 38% of its real window.
 	{"openai/gpt-5.6", 1_050_000},
-	// GPT-6 (sol / luna / astra and their -pro variants; gpt-6-luna-pro was
-	// DefaultCoreModel until 2026-10-14) is 1,050,000 too. No generic openai/gpt-6 row existed, so
+	// GPT-6 (sol / luna / astra and their -pro variants, DefaultCoreModel is
+	// gpt-6-luna-pro) is 1,050,000 too. No generic openai/gpt-6 row existed, so
 	// without this the everyday tier would fall through to the default window.
 	{"openai/gpt-6", 1_050_000},
 	{"openai/gpt-4.1", 1_000_000},
 	{"openai/o1", 200_000},
 	{modelOpenAIGPT5, 400_000},
 	// Claude 5 ships a 1M window (this prefix also covers Opus 5.5, the
-	// DefaultMaxModel); the generic row
+	// DefaultMaxModel until 2026-10-14); the generic row
 	// below keeps the Claude 4 family at 200K. Longest prefix first.
 	{"anthropic/claude-opus-5", 1_000_000},
 	{"anthropic/claude-sonnet-5", 1_000_000},

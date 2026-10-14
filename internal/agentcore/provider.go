@@ -158,19 +158,20 @@ var canonicalUpstream = []struct {
 	strict        bool
 	quantizations []string
 }{
-	// The everyday default (DefaultCoreModel, Gemini 4 Argon) lives here.
+	// The strong tier (DefaultMaxModel, Gemini 4 Argon) lives here.
 	// Google serves this family alone, so the pin is STRICT (Only, no
 	// fallbacks) and needs no serving-precision floor — there is no second
 	// upstream to degrade onto.
 	{"google/", upstreamProviderGoogle, true, nil},
-	// The strong tier (DefaultMaxModel, Claude Opus 5) lives here: a soft pin
+	// The strong tier until 2026-10-14 (Claude Opus 5.5): a soft pin
 	// to Anthropic's own endpoint with graceful degradation onto the cloud
 	// resellers of the same weights. The default-pin guard's exemption for that
 	// slug — and the allow-list that enforces it — is recorded per SLUG in
 	// officialPoolSlugs, not here.
 	{"anthropic/", upstreamProviderAnthropic, false, nil},
-	// This family carried the everyday default until 2026-10-14 (GPT-6 Luna
-	// Pro; operators still select it explicitly). Soft pin: OpenAI first, Azure and Amazon Bedrock as
+	// This family carries the recommended everyday default (DefaultCoreModel,
+	// GPT-5.6 Luna Pro), so this is the hot path for ordinary chat turns and
+	// every scheduled run. Soft pin: OpenAI first, Azure and Amazon Bedrock as
 	// fallbacks. No floor: see officialPoolSlugs for the per-slug evidence and
 	// the allow-list that holds the pool to it.
 	{"openai/", upstreamProviderOpenAI, false, nil},
@@ -233,7 +234,7 @@ var officialPoolSlugs = map[string]officialPoolAllowlist{
 	// weights coming back must not need a code change, and a name with no
 	// endpoint behind it simply never matches.
 	// 2026-09-22: OpenAI ×3 (openai, openai/flex, openai/fast) — every endpoint
-	// quantization "unknown". DefaultCoreModel until 2026-10-14. Azure and Amazon Bedrock resell
+	// quantization "unknown". DefaultCoreModel. Azure and Amazon Bedrock resell
 	// the official weights for earlier OpenAI models and stay listed so a
 	// reseller endpoint appearing later needs no code change.
 	"openai/gpt-6-luna-pro": {
@@ -242,7 +243,7 @@ var officialPoolSlugs = map[string]officialPoolAllowlist{
 	},
 	// 2026-09-22: Anthropic ×2, Claude Platform on AWS ×1, Amazon Bedrock ×3,
 	// Azure ×2, Google ×3 — eleven endpoints, every quantization "unknown".
-	// DefaultMaxModel.
+	// DefaultMaxModel until 2026-10-14.
 	"anthropic/claude-opus-5.5": {
 		checked: "2026-09-22",
 		providers: []string{
