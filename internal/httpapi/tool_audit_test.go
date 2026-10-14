@@ -36,7 +36,10 @@ func TestDeriveToolCallEntries(t *testing.T) {
 		mk("assistant", "tool_call", agent.ToolCallContent{ID: "c4", Name: "send_email", Input: `{"to":"x@y.com"}`}),
 	}
 
-	got := deriveToolCallEntries(history, "conv-1", "turn-1", "u@x.com", 1000)
+	// c1 was timed; c3 has no timing (an un-dispatched call); c4 has a stray
+	// duration but no result, which must not be attached to an unpaired row.
+	durations := map[string]int64{"c1": 1234, "c2": 0, "c4": 99}
+	got := deriveToolCallEntries(history, "conv-1", "turn-1", "u@x.com", 1000, durations)
 	if len(got) != 4 {
 		t.Fatalf("expected 4 entries, got %d", len(got))
 	}
@@ -67,6 +70,36 @@ func TestDeriveToolCallEntries(t *testing.T) {
 	// c4: no result → flagged error, empty result summary.
 	if got[3].ToolName != "send_email" || !got[3].IsError || got[3].ResultSummary != "" {
 		t.Errorf("c4 (unpaired) wrong: %+v", got[3])
+	}
+
+	// Durations: attached by call id, zero kept as a real measurement, absent
+	// stays nil, and an unpaired call never gets one.
+	if got[0].DurationMS == nil || *got[0].DurationMS != 1234 {
+		t.Errorf("c1 duration = %v, want 1234", got[0].DurationMS)
+	}
+	if got[1].DurationMS == nil || *got[1].DurationMS != 0 {
+		t.Errorf("c2 duration = %v, want 0", got[1].DurationMS)
+	}
+	if got[2].DurationMS != nil {
+		t.Errorf("c3 duration = %v, want nil", *got[2].DurationMS)
+	}
+	if got[3].DurationMS != nil {
+		t.Errorf("c4 (unpaired) duration = %v, want nil", *got[3].DurationMS)
+	}
+}
+
+// TestTurnBufferToolDurations checks the buffer keeps every tool.result's
+// duration_ms by call id, even after the sliding window evicts the frame.
+func TestTurnBufferToolDurations(t *testing.T) {
+	b := newTurnBuffer("conv", "turn")
+	b.maxBytes = 1 // evict everything but the newest frame
+	b.Emit("tool.call", map[string]any{"id": "a", "name": "bash"})
+	b.Emit("tool.result", map[string]any{"id": "a", "name": "bash", "duration_ms": int64(42)})
+	b.Emit("tool.result", map[string]any{"id": "b", "name": "bash"}) // untimed
+	b.Emit("text.delta", map[string]any{"id": "c", "duration_ms": int64(7)})
+	got := b.toolDurationsSnapshot()
+	if len(got) != 1 || got["a"] != 42 {
+		t.Fatalf("toolDurationsSnapshot = %v, want map[a:42]", got)
 	}
 }
 

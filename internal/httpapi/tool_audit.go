@@ -35,12 +35,10 @@ var auditRedactor = sync.OnceValue(func() *redact.Redactor { return redact.NewRe
 // produces a row, flagged IsError with an empty result and no duration — so the
 // ledger never silently drops a call that started.
 //
-// startedAt is the turn's start time; per-call timing is not available from the
-// history (the SDK does not propagate per-call token/latency, see the issue's
-// out-of-scope note), so DurationMS is left nil here. The column exists so a
-// later change that does thread per-call timing can populate it without a
-// migration.
-func deriveToolCallEntries(history []agent.HistoryEntry, convID, turnID, userEmail string, startedAt int64) []store.ToolCallEntry {
+// startedAt is the turn's start time, stamped on every row. durations maps a
+// tool-call id to the duration_ms its tool.result frame carried (dispatch to
+// result, measured in agentcore); a call with no entry keeps DurationMS nil.
+func deriveToolCallEntries(history []agent.HistoryEntry, convID, turnID, userEmail string, startedAt int64, durations map[string]int64) []store.ToolCallEntry {
 	// First pass: collect tool_result text/outcome keyed by tool-call id.
 	type result struct {
 		text  string
@@ -83,6 +81,9 @@ func deriveToolCallEntries(history []agent.HistoryEntry, convID, turnID, userEma
 			// stream redactor can't leak here either.
 			entry.ResultSummary = capBytes(auditRedactor().Redact(r.text), auditSummaryMaxBytes)
 			entry.IsError = r.isErr
+			if ms, ok := durations[c.ID]; ok {
+				entry.DurationMS = &ms
+			}
 		} else {
 			// Call started but never produced a result — interrupted/cancelled.
 			entry.IsError = true

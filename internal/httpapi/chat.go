@@ -1304,8 +1304,8 @@ func (s *Server) runTurnAsync(
 	steer *steerMailbox,
 ) {
 	// Turn-start timestamp, stamped on every tool-call audit row derived from
-	// this turn (the SDK does not propagate per-call timing, so the turn start is
-	// the available anchor — see deriveToolCallEntries).
+	// this turn (rows carry a per-call duration, not a per-call start — see
+	// deriveToolCallEntries).
 	startedAtUnix := time.Now().Unix()
 	// Order matters: finishTurn must seal the buffer and schedule
 	// retention AFTER title_updated has been emitted. turnCancel runs
@@ -1451,7 +1451,7 @@ func (s *Server) runTurnAsync(
 	// are redacted before insertion (see deriveToolCallEntries). Best-effort: a
 	// failure is logged but never fails the turn — the ledger is observability,
 	// not a turn-blocking dependency.
-	if entries := deriveToolCallEntries(res.NewHistory, conv.ID, buf.turnID, user, startedAtUnix); len(entries) > 0 {
+	if entries := deriveToolCallEntries(res.NewHistory, conv.ID, buf.turnID, user, startedAtUnix, buf.toolDurationsSnapshot()); len(entries) > 0 {
 		if err := s.store.RecordToolCalls(persistCtx, entries); err != nil {
 			log.Printf("RecordToolCalls (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		}

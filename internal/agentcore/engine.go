@@ -1193,6 +1193,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 	// is disarmed and the original context remains authoritative.
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
+	streamCtx = withToolTiming(streamCtx, sink)
 	// The deadline scales with the prompt (#1537): the previous step's input
 	// token count is the best available estimate of this call's prompt size.
 	promptTokens := r.orch.lastStepInputTokens()
