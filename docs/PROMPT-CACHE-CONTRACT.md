@@ -100,11 +100,74 @@ request):
 2. The **compaction summary** (`WithCompactionSummaryBreakpoint`, enabled in the
    shared loop) — a stable boundary between the cached head and the evolving
    tail after a compaction pass.
-3. The **last two non-system messages** — a rolling recency window.
+3. The **last two non-system messages** — a rolling recency window. **Not for
+   Gemini** (`stablePrefixOnly`, below).
+
+**Gemini gets the stable prefix only.** OpenRouter turns the *last* breakpoint
+of a Gemini request into an explicit context cache — a billed write with a
+5-minute TTL that does not refresh — and ignores the others. A breakpoint on
+the moving tail therefore wrote a brand-new cache of the whole prompt on every
+request and never read one back. Measured on `google/gemini-3.8-flash`
+(2026-10-14, the live check below): the old placement billed ~2× the prompt
+and a full write per request; a single system-prompt breakpoint writes once and
+is read back in full on every later request — the same conversation went from
+$0.025 to $0.0053. With a compaction summary present it is the last (and so the
+used) breakpoint, which is stable until the next compaction. Gemini 4 Argon has
+no explicit caching (implicit only, Google's docs) and was measured to ignore
+`cache_control` entirely, so the rule neither helps nor hurts it.
 
 Breakpoint placement is itself part of the contract: the last-system-message
 breakpoint is what makes the prefix cacheable, so the system prompt must be the
 leading, stable content.
+
+## Live check (`TestPromptCacheLive`)
+
+`internal/agentcore/prompt_cache_live_test.go` drives the real `Run` loop —
+fleet's breakpoints, upstream pins, tool roster and request-local tail
+messages — against OpenRouter, and reports per request the served provider,
+prompt / cached / cache-write tokens and cost. Three turns, one tool call, a
+~7K-token system prompt with a fresh nonce (so turn 1 is cold). It costs real
+money, so it is opt-in:
+
+```sh
+FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=…   FLEET_CACHE_LIVE_MODELS=google/gemini-4-argon,anthropic/claude-opus-5.5   go test -tags fleet_host_executor -run TestPromptCacheLive -v ./internal/agentcore/
+```
+
+It fails when a request after the first reads nothing from cache, or when
+fleet's recorded cached tokens disagree with the wire. `FLEET_CACHE_LIVE_TURN_GAP`
+sets the pause between turns (default 5s); `FLEET_CACHE_LIVE_DUMP=<dir>` writes
+each request body for inspection. Run it after any change to the prompt layout,
+the breakpoints, or the upstream pins.
+
+### Results, 2026-10-14
+
+18 models — the Artificial Analysis top list available on OpenRouter plus
+fleet's tiers. With the Gemini placement fix, **every model except Gemini 4
+Argon read from cache on every request after the first**: Claude Opus 5.5,
+Sonnet 5.5, Fable 5.1, Haiku 5.5; GPT-6 Luna Pro, GPT-6 Astra, GPT-6.1 Sol;
+Gemini 3.8 Flash; Grok 4.7; Qwen3.8 Max; GLM-5.3; Kimi K3; DeepSeek V4.1 Flash;
+Muse Wonder; MiMo-V2.6-Pro; MiniMax M3; Step 5 Preview.
+
+**Gemini 4 Argon** (the strong tier) is implicit-only and only partly cached:
+hits cover ~6.5K of an ~8.7K prompt, and the in-turn tool loop hits every time.
+Across *user turns* it misses: its implicit cache carries over only when the
+next request strictly appends to the previous one, and the request-local
+`runtime_today` tail message (`appendRuntimeDateMessage`, #1026) is not kept in
+history, so turn N's request is never a prefix of turn N+1's. Replaying fleet's
+exact wire bodies isolated it: with the tail, turn 2 missed; without it, turn 2
+read ~6.5K. Over a six-turn chat without tools the tail cost ~60–75% more
+input. Every other family above hits across turns with the tail in place.
+Where the tail belongs for Gemini is an open product decision (it is #1026's
+"harder to ignore" re-anchor), not changed here.
+
+**Known gap: cache writes are not recorded.** fantasy's OpenRouter usage
+struct has no `cache_write_tokens` field, so `CacheCreationTokens` is 0 for
+every OpenRouter model (the live check logs the difference instead of
+failing). Default billing is unaffected — fleet uses OpenRouter's reported
+`usage.cost` — but per-model pricing overrides that price cache writes, and the
+`cache_creation_tokens` shown in session and task stats, under-count. The fix
+belongs upstream in fantasy (parse `prompt_tokens_details.cache_write_tokens`
+into `fantasy.Usage.CacheCreationTokens`).
 
 ## Kill switch & observability
 
