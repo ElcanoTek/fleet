@@ -235,7 +235,9 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 			gap = d
 		}
 	}
-	var history []fantasy.Message
+	// Per turn: the user message, its runtime_today note, and the replayed
+	// assistant/tool messages.
+	history := make([]fantasy.Message, 0, 4*len(userTurns))
 	var fleetCached, fleetWrite int
 	for i, u := range userTurns {
 		if i > 0 {
