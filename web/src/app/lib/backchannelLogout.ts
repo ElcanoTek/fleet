@@ -38,10 +38,12 @@ function staticSigningPublicKeys(): string[] {
 // that makes a signing-key rotation a one-sided change on Auth instead of an
 // env edit on every Fleet host. Static env keys stay as bootstrap and offline
 // fallback: a fetch failure keeps whatever was cached, and a token whose key
-// is already known never waits on the network. Refreshes are rate-limited so
-// tokens with unknown kids cannot amplify requests to Auth.
+// is static or in a fresh cache never waits on the network. A stale refresh
+// waits at most jwksTimeoutMs. Refreshes are rate-limited so tokens with
+// unknown kids cannot amplify requests to Auth.
 const jwksCacheMs = 10 * 60 * 1000;
 const jwksMinRefreshMs = 60 * 1000;
+const jwksTimeoutMs = 5 * 1000;
 const maxJwksBytes = 64 * 1024;
 
 type JwksCache = { keys: string[]; fetchedAt: number; lastAttempt: number };
@@ -55,6 +57,7 @@ async function fetchJwksKeys(
     const res = await fetchImpl(`${issuer.replace(/\/+$/, "")}/jwks.json`, {
       headers: { Accept: "application/json" },
       redirect: "error",
+      signal: AbortSignal.timeout(jwksTimeoutMs),
     });
     if (!res.ok) return null;
     const text = await res.text();
@@ -137,16 +140,19 @@ export async function resolveSigningKeys(
   };
   // A configured key is the bootstrap and offline path. When it already
   // matches the token, do not make receipt of a signed back-channel event
-  // depend on Auth also being reachable for JWKS at that instant.
+  // depend on Auth also being reachable for JWKS at that instant. A key known
+  // only from the JWKS gets the same shortcut while the cache is fresh; once
+  // it is stale the JWKS is re-read first, so a key Auth retired stops being
+  // trusted within the cache window (a failed fetch keeps the cached keys).
+  const cached = jwksCache.get(issuer);
+  const fresh = cached !== undefined && now - cached.fetchedAt <= jwksCacheMs;
   if (kid) {
-    const knownKeys = merge();
-    for (const key of knownKeys) {
-      if ((await kidForKey(key)) === kid) return knownKeys;
+    const trusted = fresh ? merge() : staticSigningPublicKeys();
+    for (const key of trusted) {
+      if ((await kidForKey(key)) === kid) return merge();
     }
   }
-  const cached = jwksCache.get(issuer);
-  if (!cached || now - cached.fetchedAt > jwksCacheMs)
-    await refreshJwks(issuer, now, fetchImpl);
+  if (!fresh) await refreshJwks(issuer, now, fetchImpl);
   let keys = merge();
   if (kid) {
     let known = false;

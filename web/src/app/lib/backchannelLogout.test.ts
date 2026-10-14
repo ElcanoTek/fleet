@@ -209,6 +209,139 @@ describe("verifyBackchannelLogoutToken", () => {
     expect(calls).toBe(2);
   });
 
+  it("re-reads a stale JWKS before trusting a key it learned there", async () => {
+    const issuer = "https://auth.example.com";
+    const retired = await logoutToken(pair);
+    const currentPair = (await crypto.subtle.generateKey(
+      { name: "Ed25519" },
+      true,
+      ["sign", "verify"],
+    )) as CryptoKeyPair;
+    const current = await logoutToken(currentPair);
+    const retiredKid = b64url(
+      new Uint8Array(
+        await crypto.subtle.digest(
+          "SHA-256",
+          Buffer.from(retired.publicKey, "base64"),
+        ),
+      ).slice(0, 16),
+    );
+    let published = await jwksFor(pair, currentPair);
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response(published, { status: 200 });
+    }) as unknown as typeof fetch;
+
+    // Fresh cache: a key learned from the JWKS is trusted without a request.
+    expect(
+      await resolveSigningKeys(issuer, retiredKid, fetchImpl, 1_000_000),
+    ).toContain(retired.publicKey);
+    expect(
+      await resolveSigningKeys(
+        issuer,
+        retiredKid,
+        fetchImpl,
+        1_000_000 + 5_000,
+      ),
+    ).toContain(retired.publicKey);
+    expect(calls).toBe(1);
+
+    // Auth retires the key. Once the cache is stale the JWKS is re-read, and
+    // the retired key is no longer offered for verification.
+    published = await jwksFor(currentPair);
+    const keys = await resolveSigningKeys(
+      issuer,
+      retiredKid,
+      fetchImpl,
+      1_000_000 + 11 * 60_000,
+    );
+    expect(calls).toBe(2);
+    expect(keys).not.toContain(retired.publicKey);
+    expect(keys).toContain(current.publicKey);
+  });
+
+  it("keeps a stale cached key when Auth cannot be reached", async () => {
+    const issuer = "https://auth.example.com";
+    const token = await logoutToken(pair);
+    const kid = b64url(
+      new Uint8Array(
+        await crypto.subtle.digest(
+          "SHA-256",
+          Buffer.from(token.publicKey, "base64"),
+        ),
+      ).slice(0, 16),
+    );
+    const online = (async () =>
+      new Response(await jwksFor(pair), {
+        status: 200,
+      })) as unknown as typeof fetch;
+    await resolveSigningKeys(issuer, kid, online, 1_000_000);
+    // A failed fetch keeps whatever was cached, so an outage does not stop
+    // back-channel events signed with a key Auth still publishes.
+    expect(
+      await resolveSigningKeys(issuer, kid, noNetwork, 1_000_000 + 11 * 60_000),
+    ).toContain(token.publicKey);
+  });
+
+  it("bounds the JWKS request with a timeout signal", async () => {
+    let signal: AbortSignal | null | undefined;
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      signal = init?.signal;
+      return new Response(await jwksFor(pair), { status: 200 });
+    }) as unknown as typeof fetch;
+    await resolveSigningKeys(
+      "https://auth.example.com",
+      null,
+      fetchImpl,
+      1_000_000,
+    );
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(false);
+  });
+
+  it("verifies both token types with cached keys when a stale refresh times out", async () => {
+    const logout = await logoutToken(pair, { exp: 10_000 });
+    const access = await accessToken(pair, { exp: 10_000 });
+    const online = (async () =>
+      new Response(await jwksFor(pair), {
+        status: 200,
+      })) as unknown as typeof fetch;
+    let timeouts = 0;
+    const timedOut = (async (_url: string, init?: RequestInit) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      timeouts += 1;
+      throw new DOMException("The operation timed out.", "TimeoutError");
+    }) as unknown as typeof fetch;
+    await resolveSigningKeys(
+      "https://auth.example.com",
+      null,
+      online,
+      1_010_000,
+    );
+    // Eleven minutes later the cache is stale and Auth does not answer in
+    // time: the cached key still verifies both kinds of event.
+    await expect(
+      verifyBackchannelLogoutToken(
+        logout.raw,
+        "https://auth.example.com",
+        "fleet",
+        1_010 + 660,
+        timedOut,
+      ),
+    ).resolves.toMatchObject({ subject: "account-123" });
+    await expect(
+      verifyApplicationAccessToken(
+        access.raw,
+        "https://auth.example.com",
+        "fleet",
+        1_010 + 730,
+        timedOut,
+      ),
+    ).resolves.toMatchObject({ action: "grant" });
+    expect(timeouts).toBe(2);
+  });
+
   it("ignores malformed JWKS entries", async () => {
     const doc = JSON.stringify({
       keys: [
