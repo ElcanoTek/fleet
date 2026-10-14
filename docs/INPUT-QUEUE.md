@@ -276,6 +276,17 @@ client believed the conversation was idle) is answered with the JSON ack, not
 a stream — the client classifies the response and shows a chip instead of
 pumping the ack as SSE.
 
+A submission's own queue ack is a third such moment. A follow-up sent in the
+instant a turn ends is still routed down the queue path (the composer reads
+busy), and the server still answers `202` (the turn has emitted its terminal
+frame but not yet unregistered) — then drains the row as soon as that turn
+lets go. The finishing turn's stream-end look may already have read an empty
+queue, before this row committed, so the client follows the queue again after
+the ack, and a follow request that arrives while a look is already running
+makes that look run once more rather than being dropped. Without both, the
+follow-up ran where the tab could not see it and its chip read "queued" until
+a reload.
+
 ## Honest scope (deferred)
 
 - Steer with attachments (downgrades to queue); steering for scheduled runs.
