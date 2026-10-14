@@ -76,6 +76,14 @@ wrote N bytes". The same seam now reports an overwrite and can guard it:
   goes ahead as before #1745 and says the old file could not be read. A
   non-regular entry at the path (a FIFO, a socket) is replaced as before,
   reported without a hash.
+- **A plain write does not hash a file over 64 MB.** Without `expected_hash`
+  the old hash is only a report, and the file op runs under a 60 s timeout
+  whose expiry retires the sandbox: a multi-GB file on slow storage (a network
+  volume on the kubernetes backend) could turn a write that used to be
+  instant into a failed turn. Such a file is replaced and reported with its
+  size and a note, no hash. A write with `expected_hash` still reads it in
+  full, so a guard over a very large file on slow storage can still hit the
+  timeout.
 - **How the old file is read.** Through the parent directory descriptor the
   write uses, no-follow and non-blocking, and checked to be the regular file
   `lstat` saw, so a symlink or FIFO swapped in cannot redirect the read or
@@ -114,8 +122,8 @@ Not done, deliberately:
 - **Every write through the seam pays the extra work**, the native tools that
   write files included (`download_url`, `generate_image`, `xlsx_workbook`,
   model-output artifacts), although only `write_file` shows the report: one
-  streamed read of a file being replaced and, for text up to the caps, a
-  bounded diff.
+  streamed read of a file being replaced (skipped over 64 MB, see above) and,
+  for text up to the caps, a bounded diff.
 - **`edit_file`'s diff is unchanged:** it still diffs the whole file, with no
   line cap, so a `replace_all` touching lines all through a very long file can
   still be slow.

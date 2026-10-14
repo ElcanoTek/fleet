@@ -544,6 +544,53 @@ func TestFileOp_WriteOverAnUnreadableFile(t *testing.T) {
 	}
 }
 
+// A plain write over a file larger than the report cap does not read it: the
+// hash is only a report, and a read that outlived the file-op timeout would
+// retire the sandbox. A hash guard still reads and checks it. The big file is
+// sparse, so the test writes no real 64 MB.
+func TestFileOp_WriteSkipsHashingAHugeReplacedFile(t *testing.T) {
+	sb := fileopTestSandbox(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	path := filepath.Join(root, "dump.bin")
+	const size = 64*1024*1024 + 1
+	mkBig := func() {
+		t.Helper()
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Truncate(path, size); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mkBig()
+	res, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Root: root, Data: []byte("small\n")})
+	if err != nil {
+		t.Fatalf("plain write over a huge file: %v", err)
+	}
+	if !res.Replaced || res.OldSHA256 != "" || res.OldSize != size || !strings.Contains(res.DiffNote, "over 64 MB") {
+		t.Errorf("result = %+v, want a replaced %d-byte file with no hash, noted as over 64 MB", res, size)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "small\n" {
+		t.Fatalf("file not written: %d bytes", len(got))
+	}
+
+	mkBig()
+	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Root: root, Data: []byte("x"), ExpectedSHA256: ExpectAbsent}); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("absent over a huge file = %v, want a refusal", err)
+	}
+	zeros := sha256Hex(make([]byte, size))
+	_, err = sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Root: root, Data: []byte("x"), ExpectedSHA256: sha256Hex([]byte("other"))})
+	if !errors.Is(err, ErrFileOpStale) || !strings.Contains(err.Error(), zeros) {
+		t.Errorf("mismatched guard over a huge file = %v, want stale naming the current hash", err)
+	}
+	res, err = sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Root: root, Data: []byte("guarded\n"), ExpectedSHA256: zeros})
+	if err != nil || res.OldSHA256 != zeros {
+		t.Errorf("matching guard over a huge file = %+v, %v; want written with old_sha256 %s", res, err, zeros)
+	}
+}
+
 // view_file and edit_file refuse a FIFO at once rather than blocking on it
 // until the file-op timeout retires the sandbox.
 func TestFileOp_ReadAndEditRefuseAFIFO(t *testing.T) {
