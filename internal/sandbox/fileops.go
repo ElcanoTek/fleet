@@ -62,9 +62,11 @@ type FileOpRequest struct {
 	OldText    string
 	NewText    string
 	ReplaceAll bool
-	// ExpectedSHA256 is an optional stale-content guard (#787): when set, the
-	// edit fails (ErrFileOpStale) unless the file's current content hashes to
-	// it. Accepts an optional "sha256:" prefix; case-insensitive hex.
+	// ExpectedSHA256 is an optional stale-content guard for an edit (#787) or
+	// a write (#1745): when set, the op fails (ErrFileOpStale) and leaves the
+	// file untouched unless the file's current content hashes to it. Accepts
+	// an optional "sha256:" prefix; case-insensitive hex. A write also takes
+	// ExpectAbsent: create the file only if nothing exists at Path yet.
 	ExpectedSHA256 string
 
 	// testPause/testReadyName provide a deterministic rendezvous for the
@@ -78,6 +80,10 @@ type FileOpRequest struct {
 	rootBound     bool
 }
 
+// ExpectAbsent is the ExpectedSHA256 value that makes a write create-only
+// (#1745): it fails with ErrFileOpStale if anything exists at the path.
+const ExpectAbsent = "absent"
+
 // FileOpResult is the outcome of a FileOpRequest.
 type FileOpResult struct {
 	Data          []byte // read: the bytes read
@@ -87,12 +93,21 @@ type FileOpResult struct {
 	// the written content's hash on write/edit (#787 — the version handle for
 	// a later edit's ExpectedSHA256).
 	SHA256 string
-	// OldSHA256 / Added / Removed / Diff describe an edit (#787): the
-	// pre-edit hash, the +/- line counts, and a bounded unified diff.
-	OldSHA256    string
-	Added        int
-	Removed      int
-	Diff         string
+	// OldSHA256 / Added / Removed / Diff describe an edit (#787), and the file
+	// a write replaced (#1745): the old hash, the +/- line counts, and a
+	// bounded unified diff. A write leaves OldSHA256 empty when what it
+	// replaced was not a regular file.
+	OldSHA256 string
+	Added     int
+	Removed   int
+	Diff      string
+	// Replaced and OldSize report that a write replaced an existing entry,
+	// and that entry's size (#1745). DiffNote says why such a write has no
+	// diff: binary content, a file over the diff size cap, or an old entry
+	// that was not a regular file.
+	Replaced     bool
+	OldSize      int64
+	DiffNote     string
 	rootIdentity FileOpRootIdentity
 }
 
@@ -115,12 +130,25 @@ var (
 	// ErrFileOpAmbiguous: edit_text matched more than one location and
 	// replace_all was not set (#787). *FileOpAmbiguousError carries the count.
 	ErrFileOpAmbiguous = errors.New("old_text matches multiple locations")
-	// ErrFileOpStale: the file changed since ExpectedSHA256 was captured (#787).
+	// ErrFileOpStale: the file is not the one ExpectedSHA256 names (#787, #1745):
+	// it changed since, is gone, or (ExpectAbsent) already exists.
+	// *FileOpStaleError carries the executor's explanation.
 	ErrFileOpStale = errors.New("file content has changed since it was last read")
 	// ErrFileOpNoOp: old_text and new_text produce identical content (#787).
 	ErrFileOpNoOp       = errors.New("edit is a no-op")
 	ErrFileOpUnsafePath = errors.New("file operation path changed or contains a symlink")
 )
+
+// FileOpStaleError carries the executor's explanation of a stale-content
+// refusal (#787, #1745): what was expected, what is there, and how to recover.
+type FileOpStaleError struct {
+	Msg string
+}
+
+func (e *FileOpStaleError) Error() string { return e.Msg }
+func (e *FileOpStaleError) Is(target error) bool {
+	return target == ErrFileOpStale
+}
 
 // FileOpAmbiguousError carries the match count + the executor's guidance for an
 // ambiguous edit so the tool layer can surface both.
@@ -263,6 +291,9 @@ type fileOpResponse struct {
 	Removed    int    `json:"removed"`
 	Diff       string `json:"diff"`
 	Hint       string `json:"hint"`
+	Replaced   bool   `json:"replaced"`
+	OldSize    int64  `json:"old_size"`
+	DiffNote   string `json:"diff_note"`
 	Dev        uint64 `json:"dev"`
 	Ino        uint64 `json:"ino"`
 }
@@ -288,7 +319,7 @@ func decodeFileOpResponse(out []byte) (FileOpResult, error) {
 		case "ambiguous":
 			return FileOpResult{}, &FileOpAmbiguousError{Count: resp.MatchCount, Msg: resp.Err}
 		case "stale":
-			return FileOpResult{}, fmt.Errorf("%w: %s", ErrFileOpStale, resp.Err)
+			return FileOpResult{}, &FileOpStaleError{Msg: resp.Err}
 		case "noop":
 			return FileOpResult{}, ErrFileOpNoOp
 		case "unsafe_path":
@@ -308,6 +339,7 @@ func decodeFileOpResponse(out []byte) (FileOpResult, error) {
 	return FileOpResult{
 		Data: data, Size: resp.Size, ReplacedCount: resp.Count, SHA256: resp.SHA256,
 		OldSHA256: resp.OldSHA256, Added: resp.Added, Removed: resp.Removed, Diff: resp.Diff,
+		Replaced: resp.Replaced, OldSize: resp.OldSize, DiffNote: resp.DiffNote,
 		rootIdentity: FileOpRootIdentity{Dev: resp.Dev, Ino: resp.Ino},
 	}, nil
 }

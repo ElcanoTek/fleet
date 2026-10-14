@@ -247,7 +247,7 @@ above fails otherwise.
 - [`EVALS.md`](EVALS.md) — Self-hosted evals & regression gating
 - [`EVENT-TRIGGERS.md`](EVENT-TRIGGERS.md) — Event-driven triggers — email ingress (#511)
 - [`FEATURE-NOTES.md`](FEATURE-NOTES.md) — Feature design notes
-- [`FILE-EDIT-SAFETY.md`](FILE-EDIT-SAFETY.md) — File-edit safety (#787)
+- [`FILE-EDIT-SAFETY.md`](FILE-EDIT-SAFETY.md) — File-edit safety (#787, #1745)
 - [`generating-demo-gif.md`](generating-demo-gif.md) — Generating the demo GIFs (TUI + web)
 - [`GENERATIVE-UI.md`](GENERATIVE-UI.md) — Generative UI: interactive cards the agent builds in chat (`show_ui`)
 - [`GROUPED-APPROVALS.md`](GROUPED-APPROVALS.md) — Grouped approvals: the cards one turn stages for opted-in tools render as one card with a checkbox per call

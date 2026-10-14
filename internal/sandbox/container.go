@@ -987,6 +987,9 @@ func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, an
 		wire["limit"] = req.Limit
 	case FileOpWrite:
 		wire["data_b64"] = base64.StdEncoding.EncodeToString(req.Data)
+		if req.ExpectedSHA256 != "" {
+			wire["expected_sha256"] = req.ExpectedSHA256
+		}
 	case FileOpEdit:
 		wire["old_b64"] = base64.StdEncoding.EncodeToString([]byte(req.OldText))
 		wire["new_b64"] = base64.StdEncoding.EncodeToString([]byte(req.NewText))

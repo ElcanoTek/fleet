@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"unicode/utf8"
 
 	"charm.land/fantasy"
@@ -27,15 +28,17 @@ import (
 
 // WriteFileParams are the typed parameters for the write_file tool.
 type WriteFileParams struct {
-	Path    string `json:"path" description:"The file path to write to."`
-	Content string `json:"content" description:"The content to write to the file."`
+	Path         string `json:"path" description:"The file path to write to."`
+	Content      string `json:"content" description:"The content to write to the file."`
+	ExpectedHash string `json:"expected_hash,omitempty" description:"Optional guard. The SHA-256 (hex, as returned by view_file/edit_file/write_file) the file must have now, or \"absent\" to write only if no file exists yet. If the file does not match, the write fails and the file is left untouched."`
 }
 
 // NewWriteFileTool creates a fantasy.AgentTool for writing files, bound to the
-// per-turn sandbox (#784).
+// per-turn sandbox (#784). An overwrite is reported, with the replaced file's
+// hash, size and a bounded diff, and expected_hash guards it (#1745).
 func NewWriteFileTool(sb *sandbox.Sandbox) fantasy.AgentTool {
 	return fantasy.NewAgentTool("write_file",
-		"Writes content to a file, creating it if it doesn't exist or overwriting it if it does. Relative paths resolve against the per-conversation workspace (same cwd as bash/run_python).",
+		"Writes content to a file, creating it if it doesn't exist or overwriting it if it does; an overwrite returns the replaced file's SHA-256, size and a diff. Pass expected_hash (from view_file, or \"absent\" to create only) to fail safely instead of replacing a file that changed or already exists. Relative paths resolve against the per-conversation workspace (same cwd as bash/run_python).",
 		func(ctx context.Context, params WriteFileParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			result, err := runWriteFile(ctx, sb, params)
 			if err != nil {
@@ -65,19 +68,49 @@ func runWriteFile(ctx context.Context, sb *sandbox.Sandbox, params WriteFilePara
 		return "", fmt.Errorf("path validation failed: %w", err)
 	}
 	res, err := sb.RunFileOp(ctx, sandbox.FileOpRequest{
-		Op:   sandbox.FileOpWrite,
-		Path: validPath,
-		Root: root,
-		Data: []byte(params.Content),
+		Op:             sandbox.FileOpWrite,
+		Path:           validPath,
+		Root:           root,
+		Data:           []byte(params.Content),
+		ExpectedSHA256: params.ExpectedHash,
 	})
 	if err != nil {
 		return "", fileOpError("write", err)
 	}
-	out := fmt.Sprintf("Successfully wrote %d bytes to %s", len(params.Content), validPath)
+	return writeFileResult(validPath, len(params.Content), res), nil
+}
+
+// writeFileResult tells the model what a write did (#1745). A created file
+// and an overwritten one read differently, and an overwrite names the hash
+// and size of what it replaced, with a bounded diff, so a write that
+// destroyed a file the model had forgotten is visible in the transcript.
+func writeFileResult(path string, n int, res sandbox.FileOpResult) string {
+	var out string
+	switch {
+	case !res.Replaced:
+		out = fmt.Sprintf("Created %s (%d bytes)", path, n)
+	case res.OldSHA256 == "":
+		out = fmt.Sprintf("Overwrote existing entry %s (not a regular file, %d bytes) with %d bytes", path, res.OldSize, n)
+	case res.OldSHA256 == res.SHA256:
+		out = fmt.Sprintf("Overwrote existing file %s with identical content (%d bytes)", path, n)
+	default:
+		out = fmt.Sprintf("Overwrote existing file %s (old_sha256 %s, %d bytes) with %d bytes", path, res.OldSHA256, res.OldSize, n)
+		if res.DiffNote == "" {
+			out += fmt.Sprintf(" (+%d/-%d lines)", res.Added, res.Removed)
+		}
+	}
 	if res.SHA256 != "" {
 		out += "\nsha256: " + res.SHA256
 	}
-	return out, nil
+	if res.Replaced && res.OldSHA256 != res.SHA256 {
+		switch {
+		case res.Diff != "":
+			out += "\n\n" + res.Diff
+		case res.DiffNote != "":
+			out += "\n(" + res.DiffNote + ")"
+		}
+	}
+	return out
 }
 
 // ── edit_file ──
@@ -117,6 +150,9 @@ func runEditFile(ctx context.Context, sb *sandbox.Sandbox, params EditFileParams
 	}
 	if params.OldText == params.NewText {
 		return "", fmt.Errorf("edit is a no-op (old_text and new_text are identical)")
+	}
+	if strings.EqualFold(strings.TrimSpace(params.ExpectedHash), sandbox.ExpectAbsent) {
+		return "", fmt.Errorf(`expected_hash "absent" is for write_file; edit_file edits a file that exists — pass its sha256 from view_file`)
 	}
 	resolved, err := resolveWorkspacePath(ctx, params.Path)
 	if err != nil {
@@ -269,7 +305,7 @@ func runViewFile(ctx context.Context, sb *sandbox.Sandbox, params ViewFileParams
 	// Content-version trailer (#787): the full-file SHA-256 the model can pass
 	// back as edit_file's expected_hash to guard against a stale edit.
 	if res.SHA256 != "" {
-		content += fmt.Sprintf("\n\n(file metadata: sha256=%s size=%d bytes — pass sha256 as expected_hash to edit_file to guard against concurrent changes)", res.SHA256, totalSize)
+		content += fmt.Sprintf("\n\n(file metadata: sha256=%s size=%d bytes — pass sha256 as expected_hash to edit_file or write_file to guard against concurrent changes)", res.SHA256, totalSize)
 	}
 	return content, nil
 }
