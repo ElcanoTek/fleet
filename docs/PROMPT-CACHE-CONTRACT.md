@@ -165,8 +165,13 @@ money, so it is opt-in:
 FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=…   FLEET_CACHE_LIVE_MODELS=google/gemini-4-argon,anthropic/claude-opus-5.5   go test -tags fleet_host_executor -run TestPromptCacheLive -v ./internal/agentcore/
 ```
 
-It fails when a request after the first reads nothing from cache, or when
-fleet's recorded cached tokens disagree with the wire. `FLEET_CACHE_LIVE_TURN_GAP`
+It fails when a request after the first reads nothing from cache (one miss is
+allowed for implicit-cache families, which are the upstream's best effort;
+explicit-breakpoint families must read every time), or when fleet's recorded
+cached tokens disagree with the wire. The response stream is teed, not
+buffered, so the first-chunk watchdog behaves as in production, and each turn
+replays the previous turn's text, tool calls and tool results the way
+`replayHistory` does. `FLEET_CACHE_LIVE_TURN_GAP`
 sets the pause between turns (default 5s); `FLEET_CACHE_LIVE_DUMP=<dir>` writes
 each request body for inspection. Run it after any change to the prompt layout,
 the breakpoints, or the upstream pins.
@@ -182,21 +187,21 @@ requests after the cold first one read from cache.
 |---|---|---|---|
 | Anthropic | `claude-opus-5.5`, `claude-sonnet-5.5`, `claude-fable-5.1`, `claude-haiku-5.5` | 3/3 each | ~11.6K of ~11.9K read; explicit breakpoints |
 | OpenAI | `gpt-6-luna-pro` (default tier), `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-sol-pro` | 3/3 each | automatic |
-| Google | `gemini-4-argon` (strong tier) | 3/3 | implicit only; ~6.7–6.9K of ~8.9K |
+| Google | `gemini-4-argon` (strong tier) | 2/3 in the matrix run; **15/15 over five repeat runs** | implicit only; reads ~4.1–6.9K of ~8.9K (Google varies it) |
 | Google | `gemini-3.8-flash` | 3/3 | one write, then the full ~8.5K read; see the Gemini placement note above |
 | xAI | `grok-4.7` | 3/3 | |
 | Qwen | `qwen3.8-max-0902`, `qwen3.8-max-prime` | 3/3 each | implicit; explicit breakpoints measured slightly dearer |
 | Z.AI | `glm-5.3`, `glm-5.3-prime` | 3/3 each | |
 | Moonshot | `kimi-k3` | 3/3 | |
 | StepFun | `step-5-preview` | 3/3 | |
-| DeepSeek | `deepseek-v4.1-flash` | 3/3 | |
-| DeepSeek | `deepseek-v4-pro-0813` | 2/3 | served by a third-party host (Baidu), not DeepSeek's endpoint |
+| Xiaomi | `mimo-v2.6-pro` | 3/3 | 2/3 in an earlier run (alternating hit/miss on GMICloud) |
+| DeepSeek | `deepseek-v4.1-flash` | 2/3 | served by a fallback host (Morph) this run; 3/3 on DeepSeek's own endpoint in two earlier runs |
+| DeepSeek | `deepseek-v4-pro-0813` | 0/3 | served by a third-party host (Baidu), not DeepSeek's endpoint; 2/3 in an earlier run |
 | MiniMax | `minimax-m3` | 2/3 | first repeat missed, then hit |
-| Xiaomi | `mimo-v2.6-pro` | 2/3 | alternating hit/miss on one provider (GMICloud) |
 | NVIDIA | `nemotron-3-ultra-550b-a55b` | 2/3 | alternating hit/miss on one provider (BaseTen) |
-| Meta | `muse-spark-1.3` | 3/3 | small, intermittent hits |
-| Meta | `muse-wonder` | 2/3 | ~116 tokens; intermittent upstream |
-| Mistral | `mistral-large-4-0` | 0/3 | implicit cache warms only after several requests |
+| Meta | `muse-wonder` | 2/3 | intermittent upstream |
+| Meta | `muse-spark-1.3` | 3/3 | ~113 tokens only |
+| Mistral | `mistral-large-4-0` | 1/3 | implicit cache warms only after several requests |
 | Cohere | `command-a-plus` | 0/3 | no cache reads through OpenRouter at all |
 
 Every model stayed on one provider for all its requests (pins or OpenRouter's
@@ -210,8 +215,10 @@ Cohere and Meta. `amazon/nova-premier-v1` was dropped: Bedrock now returns 404
 on every new user turn: the request-local `runtime_today` tail was not kept in
 history, so turn N's request was never a prefix of turn N+1's. Replaying
 fleet's exact wire bodies isolated it (with the tail, turn 2 missed; without
-it, turn 2 read ~6.5K), and a six-turn chat cost ~60–75% more input. With the
-note persisted in history, turn 2 reads ~6.7K like every later request.
+it, turn 2 read ~6.5K), and a six-turn chat cost ~60–75% more input. The
+turn-2 request missed in all four live runs on the old layout; with the note
+persisted in history it read from cache in all five repeat runs (15/15 later
+requests).
 
 **Known gap: cache writes are not recorded.** fantasy's OpenRouter usage
 struct has no `cache_write_tokens` field, so `CacheCreationTokens` is 0 for

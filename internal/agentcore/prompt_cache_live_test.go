@@ -84,7 +84,9 @@ type liveCacheRecord struct {
 
 // liveCacheTransport forwards to OpenRouter, keeps each request body, and
 // pulls the final usage object (and the serving provider) out of the SSE
-// stream without changing what the provider client reads.
+// stream AS THE CLIENT READS IT: the response body is teed, never buffered
+// first, so the first event reaches fantasy as soon as it arrives and the
+// first-chunk watchdog behaves exactly as in production.
 type liveCacheTransport struct {
 	mu      sync.Mutex
 	turn    int
@@ -101,24 +103,45 @@ func (t *liveCacheTransport) RoundTrip(req *http.Request) (*http.Response, error
 	if err != nil || !strings.HasSuffix(req.URL.Path, "/chat/completions") {
 		return resp, err
 	}
-	raw, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if err != nil {
-		return nil, err
-	}
-	resp.Body = io.NopCloser(bytes.NewReader(raw))
-
+	t.mu.Lock()
+	turn := t.turn
+	t.mu.Unlock()
 	if dir := os.Getenv("FLEET_CACHE_LIVE_DUMP"); dir != "" {
-		t.mu.Lock()
-		n := len(t.records) + 1
-		t.mu.Unlock()
 		var m struct {
 			Model string `json:"model"`
 		}
 		_ = json.Unmarshal(reqBody, &m)
-		_ = os.WriteFile(fmt.Sprintf("%s/%s-req%d.json", dir, strings.ReplaceAll(m.Model, "/", "_"), n), reqBody, 0o600)
+		_ = os.WriteFile(fmt.Sprintf("%s/%s-%d.json", dir, strings.ReplaceAll(m.Model, "/", "_"), time.Now().UnixNano()), reqBody, 0o600)
 	}
-	rec := liveCacheRecord{Extra: map[string]json.RawMessage{}}
+	resp.Body = &liveCacheBody{rc: resp.Body, finish: func(raw []byte) { t.record(turn, reqBody, raw) }}
+	return resp, nil
+}
+
+// liveCacheBody tees the stream into a buffer and hands it to finish once,
+// when the client hits EOF or closes the body (whichever comes first).
+type liveCacheBody struct {
+	rc     io.ReadCloser
+	buf    bytes.Buffer
+	once   sync.Once
+	finish func([]byte)
+}
+
+func (b *liveCacheBody) Read(p []byte) (int, error) {
+	n, err := b.rc.Read(p)
+	b.buf.Write(p[:n])
+	if err == io.EOF {
+		b.once.Do(func() { b.finish(b.buf.Bytes()) })
+	}
+	return n, err
+}
+
+func (b *liveCacheBody) Close() error {
+	b.once.Do(func() { b.finish(b.buf.Bytes()) })
+	return b.rc.Close()
+}
+
+func (t *liveCacheTransport) record(turn int, reqBody, raw []byte) {
+	rec := liveCacheRecord{Turn: turn, Extra: map[string]json.RawMessage{}}
 	rec.Breakpoints = bytes.Count(reqBody, []byte(`"cache_control"`))
 	var reqJSON struct {
 		Provider json.RawMessage `json:"provider"`
@@ -160,10 +183,8 @@ func (t *liveCacheTransport) RoundTrip(req *http.Request) (*http.Response, error
 		}
 	}
 	t.mu.Lock()
-	rec.Turn = t.turn
 	t.records = append(t.records, rec)
 	t.mu.Unlock()
-	return resp, nil
 }
 
 // extraTopLevelFields returns the request's top-level keys other than the
@@ -242,7 +263,7 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 		}
 		fleetCached += session.CachedTokens
 		fleetWrite += session.CacheCreationTokens
-		history = append(history, fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.TextPart{Text: res.FinalText}}})
+		history = append(history, liveReplayEntries(res.Entries)...)
 	}
 
 	var wireCached, wireWrite, reads, laterReqs int
@@ -273,8 +294,18 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 	if fleetWrite != wireWrite {
 		t.Logf("%s: fleet recorded %d cache-write tokens, the wire reported %d (fantasy does not parse cache_write_tokens)", slug, fleetWrite, wireWrite)
 	}
-	if laterReqs > 0 && reads < laterReqs {
-		t.Errorf("%s: only %d of %d requests after the first read from cache", slug, reads, laterReqs)
+	// A family fleet sends explicit breakpoints to must read on every request
+	// after the first. An implicit cache is the upstream's best effort — the
+	// same request shape reads on one run and misses on the next (Gemini 4
+	// Argon: 15/15 over five runs, then a turn-2 miss) — so one miss is
+	// tolerated there. The deterministic guard for the request shape itself is
+	// agent.TestTurnRequestIsAPrefixOfTheNext.
+	allowed := 0
+	if !supportsExplicitBreakpoints(slug) {
+		allowed = 1
+	}
+	if laterReqs > 0 && reads < laterReqs-allowed {
+		t.Errorf("%s: only %d of %d requests after the first read from cache (%d miss allowed)", slug, reads, laterReqs, allowed)
 	}
 }
 
@@ -283,5 +314,38 @@ func keys(m map[string]json.RawMessage) []string {
 	for k := range m {
 		out = append(out, k)
 	}
+	return out
+}
+
+// liveReplayEntries turns a run's entries into the messages the next turn
+// replays, in the shape agent.replayHistory produces (that package imports
+// this one, so it cannot be called here): assistant text and tool calls
+// coalesce into one assistant message, each followed by its tool results;
+// reasoning is never replayed.
+func liveReplayEntries(entries []RunEntry) []fantasy.Message {
+	var out []fantasy.Message
+	var pending []fantasy.MessagePart
+	flush := func() {
+		if len(pending) > 0 {
+			out = append(out, fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: pending})
+			pending = nil
+		}
+	}
+	for _, e := range entries {
+		switch e.Type {
+		case "text":
+			if e.Role == "assistant" {
+				pending = append(pending, fantasy.TextPart{Text: e.Text})
+			}
+		case "tool_call":
+			pending = append(pending, fantasy.ToolCallPart{ToolCallID: e.ToolCallID, ToolName: e.ToolName, Input: e.ToolInput})
+		case "tool_result":
+			flush()
+			out = append(out, fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+				fantasy.ToolResultPart{ToolCallID: e.ToolCallID, Output: fantasy.ToolResultOutputContentText{Text: e.Text}},
+			}})
+		}
+	}
+	flush()
 	return out
 }
