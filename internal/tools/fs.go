@@ -35,10 +35,11 @@ type WriteFileParams struct {
 
 // NewWriteFileTool creates a fantasy.AgentTool for writing files, bound to the
 // per-turn sandbox (#784). An overwrite is reported, with the replaced file's
-// hash, size and a bounded diff, and expected_hash guards it (#1745).
+// size and, when it was read, its hash and a bounded diff; expected_hash
+// guards it (#1745).
 func NewWriteFileTool(sb *sandbox.Sandbox) fantasy.AgentTool {
 	return fantasy.NewAgentTool("write_file",
-		"Writes content to a file, creating it if it doesn't exist or overwriting it if it does; an overwrite reports the replaced file's SHA-256, size and a diff (expected_hash guards it). Relative paths resolve against the per-conversation workspace (same cwd as bash/run_python).",
+		"Writes content to a file, creating it if it doesn't exist or overwriting it if it does; an overwrite reports the replaced file's size and, when it can be read (a file over 64 MB is hashed only under expected_hash), its SHA-256 and a diff (expected_hash guards it). Relative paths resolve against the per-conversation workspace (same cwd as bash/run_python).",
 		func(ctx context.Context, params WriteFileParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			result, err := runWriteFile(ctx, sb, params)
 			if err != nil {

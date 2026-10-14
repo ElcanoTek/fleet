@@ -26,7 +26,7 @@ new I/O path.
 - **Content versions everywhere.** `view_file` appends a `sha256=…/size=…`
   metadata trailer (the full-file hash, streamed so any size works),
   `write_file` returns the written content's `sha256` (and, since #1745, the
-  `old_sha256` of a file it replaced), and `edit_file` returns `old_sha256` +
+  `old_sha256` of a file it replaced, when it read that file), and `edit_file` returns `old_sha256` +
   `new_sha256`.
 - **Bounded unified diff.** A successful `edit_file` returns a unified diff
   (bounded to a few KB; large edits show a truncation marker and still apply in
@@ -48,7 +48,10 @@ wrote N bytes". The same seam now reports an overwrite and can guard it:
   (+a/-r lines)`, the new `sha256`, and a unified diff bounded like
   `edit_file`'s (4 KB, then a truncation marker; the write is applied in
   full). A new file reads `Created <path> (N bytes)`, and rewriting identical
-  content says so. The diff is computed before the commit.
+  content says so. The diff is computed before the commit. When the old file
+  was not read (unreadable, not a regular file, or over 64 MB on a write
+  without `expected_hash`, below), the report gives its size and a note
+  instead of `old_sha256` and a diff.
 - **When there is no diff.** Binary content (either side not valid UTF-8),
   either side over 256 KB, or a change spread over more than 2,000 lines a
   side: the hashes and sizes are still reported, with a note saying why.
