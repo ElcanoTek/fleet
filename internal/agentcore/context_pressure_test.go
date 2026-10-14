@@ -232,13 +232,35 @@ func TestContextThresholds_ClampsOutOfRange(t *testing.T) {
 	}
 }
 
-func TestEstimateMessagesTokens(t *testing.T) {
-	// 4 messages × 40 chars = 160 chars → 40 tokens (each 40/4 = 10).
-	if got := estimateMessagesTokens(fillerMessages(4, 40)); got != 40 {
-		t.Errorf("estimate = %d, want 40", got)
+// The turn-start estimate must count what the provider is sent — tool calls
+// and tool results included — not only text parts. A data-heavy chat carries
+// almost all of its size in tool results; a text-only count once let a
+// conversation at ~850K tokens look small and skip compaction entirely.
+func TestEstimateRequestTokens_CountsToolPayloads(t *testing.T) {
+	e := &engine{}
+	payload := strings.Repeat("x", 40_000) // ≈10K tokens at 4 chars/token
+	history := []fantasy.Message{
+		fantasy.NewUserMessage("pull the deal report"),
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ToolCallPart{ToolCallID: "c1", ToolName: "run_python", Input: `{"code":"print(1)"}`},
+		}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+			fantasy.ToolResultPart{ToolCallID: "c1", Output: fantasy.ToolResultOutputContentText{Text: payload}},
+		}},
 	}
-	if got := estimateMessagesTokens(nil); got != 0 {
-		t.Errorf("estimate of empty = %d, want 0", got)
+	got := e.estimateRequestTokens(history)
+	if got < 10_000 {
+		t.Fatalf("estimate = %d, want >= 10000: the tool result must be counted", got)
+	}
+	if got > 10_200 {
+		t.Fatalf("estimate = %d, want roughly the payload plus framing", got)
+	}
+	if e.estimateRequestTokens(nil) != 0 {
+		t.Errorf("estimate of an empty request with no prefix should be 0")
+	}
+	e.modelContextPrefix = modelContextPrefixBudget{systemTokens: 300, toolTokens: 700}
+	if withPrefix := e.estimateRequestTokens(history); withPrefix != got+1000 {
+		t.Errorf("estimate with prefix = %d, want %d (system prompt + tool schemas are sent too)", withPrefix, got+1000)
 	}
 }
 
@@ -462,14 +484,14 @@ func TestRun_ContextPressure_MultiRoundCompactsFromGroundTruthAndFeedsForward(t 
 // TestRun_ContextPressure_MultiRoundWarnDedupAndReset pins the cross-round warn
 // contract: a hovering run surfaces ONE banner, and a compaction RESETS the
 // dedup so a later climb warns again. Round 0 warns off the estimate; round 1's
-// real 95K tokens compact (resetting the flag); round 2's real 80K tokens warn
+// real 95K tokens compact (resetting the flag); round 2's real 77K tokens warn
 // again. Exactly two warn events ⇒ both the dedup (no third) and the reset (the
 // second) hold; without the reset the second warn would be suppressed.
 func TestRun_ContextPressure_MultiRoundWarnDedupAndReset(t *testing.T) {
 	slug := "ctx209-multiround-warn"
 	recordContextMax(slug, testContextWindow)
 	session := NewLogSession()
-	model := &capturingModel{slug: slug, inputByCall: []int{95_000, 80_000, 80_000}}
+	model := &capturingModel{slug: slug, inputByCall: []int{95_000, 77_000, 77_000}}
 	obs := &captureObserver{}
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
 		Input:      historyInput{system: "s", msgs: fillerMessages(8, 38_000), label: "warn"}, // 76K tokens → 0.76 estimate, inside the reserved target

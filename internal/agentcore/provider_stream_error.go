@@ -3,6 +3,7 @@ package agentcore
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -54,6 +55,10 @@ type upstreamErrorDetail struct {
 	ErrorType    string
 	ProviderCode string
 	Raw          string
+	// Code and Message are the gateway's own top-level error.code and
+	// error.message, read only to classify the failure (never logged).
+	Code    string
+	Message string
 }
 
 // upstreamDetailMaxBody bounds how much response body the parser will scan.
@@ -85,6 +90,8 @@ func parseUpstreamErrorDetail(body []byte) upstreamErrorDetail {
 	}
 	var envelope struct {
 		Error struct {
+			Code     json.RawMessage            `json:"code"`
+			Message  string                     `json:"message"`
 			Metadata map[string]json.RawMessage `json:"metadata"`
 		} `json:"error"`
 	}
@@ -95,6 +102,8 @@ func parseUpstreamErrorDetail(body []byte) upstreamErrorDetail {
 	out.ErrorType = rawMessageText(envelope.Error.Metadata["error_type"])
 	out.ProviderCode = rawMessageText(envelope.Error.Metadata["provider_code"])
 	out.Raw = rawMessageText(envelope.Error.Metadata["raw"])
+	out.Code = rawMessageText(envelope.Error.Code)
+	out.Message = strings.TrimSpace(envelope.Error.Message)
 	return out
 }
 
@@ -136,6 +145,95 @@ func providerErrorUpstreamDetail(providerErr *fantasy.ProviderError) string {
 		parts = append(parts, fmt.Sprintf("raw=%q", truncate(raw, upstreamRawMaxLen)))
 	}
 	return strings.Join(parts, " ")
+}
+
+// contextLengthCode is the error code OpenAI-compatible providers use for an
+// over-window prompt. OpenRouter relays it either as the top-level error.code
+// or as error.metadata.provider_code.
+const contextLengthCode = "context_length_exceeded"
+
+// Over-window prompt messages that fantasy's OpenAI-compatible error parser
+// does not recognize, so a relayed rejection would otherwise be classed as an
+// ordinary 4xx and end the turn instead of compacting:
+//   - OpenAI:    "Your input exceeds the context window of this model."
+//     and "This model's maximum context length is N tokens. However, your
+//     messages resulted in M tokens."
+//   - Anthropic: "prompt is too long: M tokens > N maximum" (recognized by
+//     fantasy's native Anthropic provider, not when relayed by OpenRouter
+//     inside error.metadata.raw).
+//   - Google:    "The input token count exceeds the maximum number of tokens
+//     allowed N." (Gemini 4, observed live through OpenRouter 2026-10-14),
+//     and the older "The input token count (M) exceeds the maximum number of
+//     tokens allowed (N)."
+var (
+	contextWindowExceededPattern = regexp.MustCompile(`(?i)\bexceeds the context window\b|\bcontext[_ ]length[_ ]exceeded\b`)
+	promptTooLongPattern         = regexp.MustCompile(`(?i)\bprompt is too long:\s*(\d+)\s*tokens?\s*>\s*(\d+)\s*maximum\b`)
+	maxContextLengthPattern      = regexp.MustCompile(`(?i)\bmaximum context length is (\d+) tokens\b(?:[^"}]{0,120}?\bresulted in (\d+) tokens\b)?`)
+	inputTokenCountPattern       = regexp.MustCompile(`(?i)\binput token count\b(?:\s*\(?(\d+)\)?)?\s+exceeds the maximum number of tokens allowed\b(?:\s*\(?(\d+)\)?)?`)
+)
+
+// contextLengthRejection reports whether a provider error is really an
+// over-window prompt that fantasy left unflagged, and returns a copy marked
+// ContextTooLargeErr (with the used/max token counts when the message carries
+// them) so the resilience loop takes the forced-compaction path and records
+// the observed window. Credential and billing failures never match: a
+// compacted prompt would not get past them.
+//
+// Only the adapter's message, the gateway's error.code/error.message and the
+// structured upstream detail (error.metadata) are consulted.
+func contextLengthRejection(providerErr *fantasy.ProviderError) (*fantasy.ProviderError, bool) {
+	if providerErr == nil || providerErr.AuthError {
+		return nil, false
+	}
+	switch providerErr.StatusCode {
+	case http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden, http.StatusTooManyRequests:
+		return nil, false
+	}
+	if providerErr.StatusCode >= http.StatusInternalServerError {
+		return nil, false
+	}
+	detail := parseUpstreamErrorDetail(providerErr.ResponseBody)
+	texts := []string{providerErr.Message, detail.Message, detail.Raw}
+	matched := strings.EqualFold(detail.Code, contextLengthCode) || strings.EqualFold(detail.ProviderCode, contextLengthCode)
+	used, maxTokens := 0, 0
+	for _, text := range texts {
+		if text == "" {
+			continue
+		}
+		if contextWindowExceededPattern.MatchString(text) {
+			matched = true
+		}
+		if m := promptTooLongPattern.FindStringSubmatch(text); m != nil {
+			matched = true
+			used, maxTokens = atoiOrZero(m[1]), atoiOrZero(m[2])
+		} else if m := inputTokenCountPattern.FindStringSubmatch(text); m != nil {
+			matched = true
+			used, maxTokens = atoiOrZero(m[1]), atoiOrZero(m[2])
+		} else if m := maxContextLengthPattern.FindStringSubmatch(text); m != nil {
+			matched = true
+			maxTokens, used = atoiOrZero(m[1]), atoiOrZero(m[2])
+		}
+	}
+	if !matched {
+		return nil, false
+	}
+	flagged := *providerErr
+	flagged.ContextTooLargeErr = true
+	if flagged.ContextUsedTokens == 0 {
+		flagged.ContextUsedTokens = used
+	}
+	if flagged.ContextMaxTokens == 0 {
+		flagged.ContextMaxTokens = maxTokens
+	}
+	return &flagged, true
+}
+
+func atoiOrZero(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // expiredPromptCachePattern matches the upstream message Google returns when

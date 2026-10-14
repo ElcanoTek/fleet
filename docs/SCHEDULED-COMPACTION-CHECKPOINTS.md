@@ -187,8 +187,48 @@ then unbounded) to 347K.
 
 ## What did not change
 
-- Interactive runs: no checkpoint, no resend-budget compaction — a chat's
-  history is the user's to keep (`TestResendBudgetCheckpoint_ScheduledOnlyAndBudgetGated`).
+- Interactive runs: no resend-budget checkpoint and no resend-budget
+  compaction — a chat's history is the user's to keep, and its cost is not
+  this rule's business (`TestResendBudgetCheckpoint_ScheduledOnlyAndBudgetGated`).
+  **Since 2026-10-14 (#1754) an interactive run does get a different
+  checkpoint on the same mechanism: a window-pressure one.**
+
+## The interactive window checkpoint (#1754)
+
+A chat turn is one round, so its pre-round pressure check runs once while
+dozens of tool steps can grow the prompt past the model's window inside it. In
+production a data-heavy chat did exactly that and then failed seven turns as
+"too long" on every model. The interactive engine now pauses its tool loop on
+the same stop-condition mechanism, at a different threshold:
+
+- **Where it pauses** (`engine.checkpointThreshold`): after a tool step whose
+  real prompt size (fresh + cache-read input) reached the lower of the window
+  compaction threshold (`FLEET_CONTEXT_COMPACTION_THRESHOLD`, default 0.90 of
+  the active model's window) and the input allowance the in-round guard
+  (`modelContextBudgetStep`) enforces (`windowCheckpointLimit`). On a window
+  below roughly 320K tokens the allowance is the lower one: a 200K window leaves
+  about 173K after the completion and provider reserves, so waiting for 180K
+  would let the guard refuse the step first.
+- **What happens next**: the run loop compacts at the same point (the
+  pre-round check uses the clamped limit for interactive runs, so a pause
+  always finds the compaction it was waiting for) and resumes the same
+  conversation. Only a tool-calls finish pauses; the cap of 40 pauses per run is
+  shared with the resend-budget checkpoint.
+- **What the client sees**: no `fleet.context_checkpoint` event (that event is
+  scheduled-only); the `fleet.context_compacted` that follows, which the chat
+  renders as "Older context was summarized to make room". The session log gets a
+  `[context_checkpoint] prompt N tokens reached the window-compaction
+  threshold …` breadcrumb.
+- **When it goes inert**: if a window compaction finds nothing to summarize
+  (one enormous message), the checkpoint stops pausing until a later
+  compaction — proactive or the reactive overflow recovery — removes history.
+- **What it does not change**: chat compaction still shortens the request only;
+  the stored transcript keeps its history, so a later turn that starts over the
+  threshold compacts again. Scheduled runs are unchanged.
+
+Pinned by `TestRun_WindowCheckpoint_InteractivePausesCompactsAndResumes`,
+`TestCheckpointThreshold` and
+`TestStreamRound_ForcedCompactionClearsStalledWindowCheckpoint`.
 - The window-pressure compaction and its `FLEET_SCHEDULED_AUTO_COMPACT` opt-in.
 - The knob: `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` (default 80K) is reused; `0`
   disables both the between-round trigger and the checkpoint.

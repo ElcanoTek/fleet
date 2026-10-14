@@ -495,11 +495,41 @@ after a `context_length_exceeded` error:
 
 Both honor the usual `CHAT_`/`CUTLASS_` prefix aliases, and a value outside
 `(0,1]` falls back to its default. The size signal is the **per-call** input
-size (`LastStepPromptTokens`), never the cumulative token total, so a long run
-does not ratchet the trigger into a compaction spiral; on a turn's first round —
-before any per-call size is known — it falls back to a char-heuristic estimate of
-the carried-over history so a single-round turn that *starts* near the limit is
-still covered.
+size (`LastStepPromptTokens`, or the run orchestration's `LastStepInputTokens`
+when the policy carries no session — the interactive one does not), never the
+cumulative token total, so a long run does not ratchet the trigger into a
+compaction spiral. On a turn's first round — before any per-call size is known —
+it falls back to an estimate of the whole request (`estimateRequestTokens`):
+every model-visible part of the history, tool calls and tool results included,
+plus the system prompt and tool schemas. A text-only estimate once let a chat
+carrying ~850K tokens of tool results look small enough to skip.
+
+**Mid-turn window checkpoint (interactive).** A chat turn is a single round, so
+the pre-round check above runs once per turn while dozens of tool steps can grow
+the prompt past the window inside it. The interactive engine therefore pauses the
+tool loop after a tool step whose real prompt size reached the compaction
+threshold — clamped to the in-round guard's input allowance, which is the lower
+one on windows below roughly 320K — on the same stop-condition mechanism as the
+scheduled resend-budget checkpoint below, sharing its cap of 40 pauses per run;
+the run loop compacts at that same point and resumes the same conversation
+(details: [SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md#the-interactive-window-checkpoint-1754)). No `fleet.context_checkpoint` event
+is streamed to chat clients; they see the `fleet.context_compacted` that follows.
+If a window compaction finds nothing to summarize, the checkpoint goes inert
+until a later compaction (proactive or overflow) removes history. Chat compactions shorten the request only: the stored
+transcript keeps its history, so a later turn that starts over the threshold
+compacts again.
+
+**Reactive recovery recognizes relayed overflow errors.** When the provider
+rejects a prompt as too large, the round force-compacts and retries (resuming
+after the last completed tool step, never replaying one), emits
+`fleet.context_compacted` with `trigger: "overflow"`, and records the window the
+error reported. fantasy flags only some wordings, so `contextLengthRejection`
+also recognizes what OpenRouter relays: `context_length_exceeded` as
+`error.code` or `metadata.provider_code`, OpenAI's "exceeds the context window"
+and "maximum context length is N tokens", Anthropic's "prompt is too long: M
+tokens > N maximum" and Google's "input token count (M) exceeds the maximum
+number of tokens allowed (N)" — including inside `error.metadata.raw`. Credential,
+billing, rate-limit and 5xx errors never match.
 
 **Scheduled safeguard.** Unattended runs must not silently rewrite their own
 transcript: in `ModeScheduled` the warn event still fires (and a breadcrumb is

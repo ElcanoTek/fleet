@@ -276,7 +276,7 @@ func TestResendBudgetCheckpoint_NeedsHistoryToSummarize(t *testing.T) {
 	if e.resendBudgetCheckpoint(short)(result.Steps) {
 		t.Fatal("the StopCondition paused with 3 droppable messages")
 	}
-	if e.consumeResendCheckpoint(result, 1, short) {
+	if e.consumeResendCheckpoint(result, 1, short, nil) {
 		t.Fatal("the run loop counted a pause with 3 droppable messages")
 	}
 	if e.resendCheckpoints != 0 {
@@ -288,7 +288,7 @@ func TestResendBudgetCheckpoint_NeedsHistoryToSummarize(t *testing.T) {
 	if !e.resendBudgetCheckpoint(enough)(result.Steps) {
 		t.Fatal("the StopCondition must pause with 4 droppable messages")
 	}
-	if !e.consumeResendCheckpoint(result, 1, enough) {
+	if !e.consumeResendCheckpoint(result, 1, enough, nil) {
 		t.Fatal("the run loop must count a pause with 4 droppable messages")
 	}
 }

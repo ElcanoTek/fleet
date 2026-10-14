@@ -860,8 +860,13 @@ full, a banner says so and the assistant starts to slow down and cost more per
 turn. **Compact conversation**, from the ring or the banner, replaces the earlier
 turns with a short summary so the conversation fits comfortably again; the
 transcript keeps its history, only the assistant's working view is shortened.
-When a topic changes entirely, a new conversation is cheaper and clearer than
-compacting an old one.
+You do not have to watch for it: by default, once a request reaches about 90% of
+the model's limit, the platform summarizes the oldest part of that working view
+by itself — between turns, or in the middle of a long turn that keeps pulling in
+data — and a note in the reply says so. If a model still rejects a request as
+too long, the platform summarizes and retries on its own instead of failing the
+turn. When a topic changes entirely, a new conversation is cheaper and clearer
+than compacting an old one.
 
 ## 9. The prompt library
 

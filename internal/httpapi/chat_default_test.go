@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -2464,19 +2465,47 @@ func (f *cancelErrEngine) RunTurn(ctx context.Context, _ TurnInput, _ agent.Even
 	return nil, ctx.Err()
 }
 
+// syncLogBuffer is a goroutine-safe log sink: the turn goroutine writes the
+// RunTurn line while the test reads it.
+type syncLogBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // A Stop that makes the engine fail with the cancellation is advertised as
 // turn.cancelled, so the Stop is confirmed (only turn.cancelled confirms
 // one); an engine failure of its own, even one reached after a Stop, is
-// still turn.error.
+// still turn.error. The log line agrees: a Stop is "RunTurn cancelled", not
+// "RunTurn error" — including the production shape where the Stop lands
+// while the turn's MCP scope is still opening.
 func TestStopCausedEngineErrorIsAdvertisedCancelled(t *testing.T) {
+	logs := &syncLogBuffer{}
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(logs)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(prevOut); log.SetFlags(prevFlags) })
 	for _, tc := range []struct {
-		name  string
-		err   error
-		frame string
-		want  turnStop
+		name    string
+		err     error
+		frame   string
+		want    turnStop
+		logLine string
 	}{
-		{"the cancellation", nil, "turn.cancelled", turnStopped},
-		{"a failure of its own", errors.New("sandbox unavailable"), "turn.error", turnNotStopped},
+		{"the cancellation", nil, "turn.cancelled", turnStopped, ""},
+		{"a cancellation while the MCP scope opens", fmt.Errorf("open MCP turn scope (stop-log-mcp): %w", context.Canceled), "turn.cancelled", turnStopped, "RunTurn cancelled before it finished"},
+		{"a failure of its own", errors.New("sandbox unavailable (stop-log-own)"), "turn.error", turnNotStopped, "RunTurn error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			eng := &cancelErrEngine{err: tc.err, started: make(chan struct{})}
@@ -2494,6 +2523,22 @@ func TestStopCausedEngineErrorIsAdvertisedCancelled(t *testing.T) {
 			}
 			if got := entry.buf.terminalOutcome(); got != tc.frame {
 				t.Fatalf("terminal frame %q, want %q", got, tc.frame)
+			}
+			if tc.logLine == "" {
+				return
+			}
+			// The line is written before the terminal frame is emitted. log is
+			// process-global and other tests share conversation ids, so find
+			// this case's line by the marker in its error text.
+			marker := tc.err.Error()
+			var line string
+			for _, l := range strings.Split(logs.String(), "\n") {
+				if strings.Contains(l, marker) {
+					line = l
+				}
+			}
+			if !strings.HasPrefix(line, tc.logLine) {
+				t.Fatalf("log line = %q, want prefix %q", line, tc.logLine)
 			}
 		})
 	}

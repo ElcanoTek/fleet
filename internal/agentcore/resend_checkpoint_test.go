@@ -81,7 +81,7 @@ func TestResendBudgetCheckpoint_ScheduledOnlyAndBudgetGated(t *testing.T) {
 	if interactive.resendBudgetCheckpoint(nil) != nil {
 		t.Error("an interactive engine must not get a resend checkpoint: a chat's history is the user's to keep")
 	}
-	if got := len(interactive.roundStopConditions(0, nil)); got != 0 {
+	if got := len(interactive.roundStopConditions(0, nil, nil)); got != 0 {
 		t.Errorf("interactive round stop conditions = %d, want 0", got)
 	}
 	scheduled := newMockEngine(t, model)
@@ -90,7 +90,7 @@ func TestResendBudgetCheckpoint_ScheduledOnlyAndBudgetGated(t *testing.T) {
 	if scheduled.resendBudgetCheckpoint(nil) == nil {
 		t.Fatal("a scheduled engine with a resend budget must get the checkpoint")
 	}
-	if got := len(scheduled.roundStopConditions(7, nil)); got != 2 {
+	if got := len(scheduled.roundStopConditions(7, nil, nil)); got != 2 {
 		t.Errorf("scheduled round stop conditions = %d, want step cap + checkpoint", got)
 	}
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
@@ -271,17 +271,17 @@ func TestConsumeResendCheckpoint_CapTieRefusesAndAccountingResets(t *testing.T) 
 		return r
 	}
 	input := fillerMessages(1+minResendCheckpointHistory, 10)
-	if !e.consumeResendCheckpoint(over(1), 1, input) {
+	if !e.consumeResendCheckpoint(over(1), 1, input, nil) {
 		t.Fatal("first single-step pause fits under a cap of 3")
 	}
-	if !e.consumeResendCheckpoint(over(1), 1, input) {
+	if !e.consumeResendCheckpoint(over(1), 1, input, nil) {
 		t.Fatal("second single-step pause fits under a cap of 3")
 	}
-	if e.consumeResendCheckpoint(over(1), 1, input) {
+	if e.consumeResendCheckpoint(over(1), 1, input, nil) {
 		t.Fatal("the third step reaches the cap: the pause must be refused so the cap wins the tie")
 	}
 	e.roundEndedOnItsOwn()
-	if !e.consumeResendCheckpoint(over(1), 1, input) {
+	if !e.consumeResendCheckpoint(over(1), 1, input, nil) {
 		t.Fatal("a round that ended on its own resets the step accounting for the next logical round")
 	}
 	if e.checkpointSteps != 1 {
@@ -301,10 +301,10 @@ func TestConsumeResendCheckpoint_CountsResilienceResumedSteps(t *testing.T) {
 	tail := &fantasy.AgentResult{Steps: []fantasy.StepResult{{Response: fantasy.Response{FinishReason: fantasy.FinishReasonToolCalls, Usage: fantasy.Usage{InputTokens: 1500}}}}}
 	input := fillerMessages(1+minResendCheckpointHistory, 10)
 	// 99 steps completed before the recovery + 1 in the resumed attempt = the cap.
-	if e.consumeResendCheckpoint(tail, 99+len(tail.Steps), input) {
+	if e.consumeResendCheckpoint(tail, 99+len(tail.Steps), input, nil) {
 		t.Fatal("a recovered round that reached the cap must not be paused")
 	}
-	if !e.consumeResendCheckpoint(tail, 50+len(tail.Steps), input) {
+	if !e.consumeResendCheckpoint(tail, 50+len(tail.Steps), input, nil) {
 		t.Fatal("a recovered round under the cap may pause")
 	}
 	if e.checkpointSteps != 51 {

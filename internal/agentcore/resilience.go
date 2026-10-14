@@ -338,6 +338,12 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 		if providerErr.IsContextTooLarge() {
 			return streamErrorContextTooLarge, providerErr
 		}
+		// A relayed over-window rejection fantasy did not flag (OpenRouter's
+		// OpenAI/Anthropic/Google wording) is still a context overflow: compact
+		// and retry rather than end the turn on "pick a different model".
+		if flagged, ok := contextLengthRejection(providerErr); ok {
+			return streamErrorContextTooLarge, flagged
+		}
 		// An expired server-side prompt cache arrives as a 400, but the request
 		// is fine and a re-send rebuilds the cache: treat it as a stream blip
 		// (one same-model retry, then the fallback swap) rather than a
@@ -359,6 +365,9 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 	if sse := parseSSEStreamError(err); sse != nil {
 		if sse.IsContextTooLarge() {
 			return streamErrorContextTooLarge, sse
+		}
+		if flagged, ok := contextLengthRejection(sse); ok {
+			return streamErrorContextTooLarge, flagged
 		}
 		if sse.IsRetryable() {
 			return streamErrorStreamBlip, sse
@@ -856,6 +865,7 @@ func (e *engine) streamRoundWithResilience(
 				rollbackAttempt()
 				messages = e.forceCompactMessageHistory(ctx, messages)
 				forceCompactedThisRound = true
+				e.noteForcedCompaction(sink)
 				continue
 			}
 			if canSwapFallback(e, activeModel, swappedToFallback) {
@@ -928,6 +938,25 @@ func (e *engine) streamRoundWithResilience(
 		}
 	}
 	return streamRoundOutcome{}, fmt.Errorf("fantasy agent error after %d recovery attempts: %w", recoveryLimit, lastErr)
+}
+
+// noteForcedCompaction follows an overflow (reactive) compaction that removed
+// history: it re-arms the mid-turn window checkpoint (the history now has
+// something to summarize again) and tells live clients the older history was
+// summarized — the same event, and chat note, a proactive compaction produces.
+func (e *engine) noteForcedCompaction(sink *streamSink) {
+	st := e.lastForcedCompaction
+	if st.removed == 0 {
+		return
+	}
+	e.windowCompactionStalled = false
+	if sink != nil {
+		sink.emit(evtContextCompacted, map[string]any{
+			evtFieldRemovedTurns:  st.removed,
+			evtFieldSummaryTokens: st.summaryTokens,
+			evtFieldTrigger:       "overflow",
+		})
+	}
 }
 
 func fatalProviderError(err error, providerErr *fantasy.ProviderError) error {
