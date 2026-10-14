@@ -28,7 +28,9 @@ import (
 // and implicit caches (Gemini 4) need a moment to become readable.
 //
 // The shape is a three-turn conversation whose second turn makes one tool
-// call, over a ~7K-token system prompt — past every family's minimum
+// call, built the way the interactive driver builds it (each user turn
+// followed by its persisted runtime_today note, RuntimeDateInInput set — see
+// agent.assembleTurnMessages), over a ~7K-token system prompt — past every family's minimum
 // cacheable prefix (Gemini 4: 4,096). Turn 1 can only write the cache; every
 // later request should read at least the system prompt + tools back.
 //
@@ -221,11 +223,13 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 		transport.mu.Lock()
 		transport.turn = i + 1
 		transport.mu.Unlock()
-		history = append(history, fantasy.NewUserMessage(u))
+		note, _ := RuntimeDateMessage(RuntimeToday(time.Now()))
+		history = append(history, fantasy.NewUserMessage(u), note)
 		session := NewLogSession()
 		res, err := Run(ctx, ModeInteractive, RunConfig{
-			EnvPrefix:   CanonicalEnvPrefix,
-			NativeTools: []fantasy.AgentTool{lookup},
+			EnvPrefix:          CanonicalEnvPrefix,
+			NativeTools:        []fantasy.AgentTool{lookup},
+			RuntimeDateInInput: true,
 		}, Deps{
 			Input:      historyInput{system: system, msgs: append([]fantasy.Message(nil), history...), label: "cache-live"},
 			Policy:     newRoundsPolicy(session, 0),

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 )
@@ -94,12 +95,12 @@ func TestAssembleTurnMessagesSplitsThePersistedEntry(t *testing.T) {
 	msgs, entry, err := assembleTurnMessages(TurnInput{
 		UserMessage:     "what is the CPM?",
 		InjectedContext: injectedAttachmentBlock,
-	})
+	}, time.Now())
 	if err != nil {
 		t.Fatalf("assembleTurnMessages: %v", err)
 	}
-	if len(msgs) != 1 {
-		t.Fatalf("messages = %d, want 1", len(msgs))
+	if len(msgs) != 2 {
+		t.Fatalf("messages = %d, want 2 (the user message, then its runtime_today note)", len(msgs))
 	}
 	var sent string
 	for _, part := range msgs[0].Content {

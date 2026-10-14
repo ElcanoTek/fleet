@@ -120,6 +120,14 @@ type RunConfig struct {
 	// the global FLEET_DEFAULT_THINKING_BUDGET_TOKENS default; a non-Claude model
 	// silently ignores it (see supportsExtendedThinking).
 	ThinkingConfig *ThinkingConfig
+
+	// RuntimeDateInInput reports that the input already ends this turn with its
+	// runtime_today note (RuntimeDateMessage), persisted with the user turn so
+	// the next turn replays it in place. Run then does not append its own
+	// request-local note. The interactive driver sets it; a one-shot run
+	// (scheduled, sub-agent child) leaves it false and gets the tail, which is
+	// cache-stable there because the whole run is one append-only transcript.
+	RuntimeDateInInput bool
 }
 
 // Deps are the run dependencies: the four seams plus the model handles, MCP
@@ -453,8 +461,12 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// already carries a day-granular date, but multi-day chats still reused
 	// yesterday's mailbox bounds; restating it here (append-only, after
 	// hooks) makes the current UTC date harder to ignore without touching
-	// the cached prefix.
-	messages = appendRuntimeDateMessage(messages, runtimeNow())
+	// the cached prefix. A multi-turn driver that persists the note with the
+	// user turn (RuntimeDateInInput) has already placed it; appending a second,
+	// request-local copy would break the next turn's prefix.
+	if !cfg.RuntimeDateInInput {
+		messages = appendRuntimeDateMessage(messages, runtimeNow())
+	}
 	// Per-run working directory in the message tail. Scheduled runs and
 	// delegated children carry a forced working dir but no conversation id, so
 	// the system prompt's "## Working directory" section (interactive turns

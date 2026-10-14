@@ -1653,23 +1653,28 @@ func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, per
 }
 
 // assembleTurnMessages replays the persisted history and appends this turn's
-// user message (with any image attachments) as the outgoing model messages. It
-// also returns the user HistoryEntry: the new user message + its image refs
-// are persisted as the first entry of the turn; the run loop's accumulated
-// entries follow.
-func assembleTurnMessages(in TurnInput) ([]fantasy.Message, HistoryEntry, error) {
+// user message (with any image attachments) and its runtime_today note as the
+// outgoing model messages. It also returns the user HistoryEntry: the new user
+// message + its image refs + the day the note names are persisted as the first
+// entry of the turn; the run loop's accumulated entries follow. Persisting the
+// day is what lets the next turn replay the note in place
+// (agentcore.RuntimeDateMessage), so this request is a prefix of the next.
+func assembleTurnMessages(in TurnInput, now time.Time) ([]fantasy.Message, HistoryEntry, error) {
 	history, err := replayHistory(in.History, in.UploadsRoot)
 	if err != nil {
 		return nil, HistoryEntry{}, fmt.Errorf("replay history: %w", err)
 	}
 	imageParts, imageRefs := loadImageAttachments(in.ImageAttachments, in.UploadsRoot)
-	messages := make([]fantasy.Message, 0, len(history)+1)
+	messages := make([]fantasy.Message, 0, len(history)+2)
 	messages = append(messages, history...)
 	// The model gets both halves, joined here and nowhere else; the persisted
 	// entry keeps them apart so the branch copy and the transcript can tell
 	// the user's own words from server-injected context (ADR-0058).
 	messages = append(messages, fantasy.NewUserMessage(ComposeUserMessage(in.UserMessage, in.InjectedContext), imageParts...))
-	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs, Kind: in.InputKind})
+	today := agentcore.RuntimeToday(now)
+	note, _ := agentcore.RuntimeDateMessage(today) // RuntimeToday always yields a valid day
+	messages = append(messages, note)
+	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs, Kind: in.InputKind, RuntimeToday: today})
 	userEntry.InjectedContext = in.InjectedContext
 	return messages, userEntry, nil
 }
@@ -1826,7 +1831,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		return nil, err
 	}
 
-	messages, userEntry, err := assembleTurnMessages(in)
+	messages, userEntry, err := assembleTurnMessages(in, startedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1858,30 +1863,33 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	selection := interactiveRunSelection(in.OptionalMCPServersEnabled, in.MCPAccountDefaults)
 
 	tc := TurnConfig{
-		SystemPrompt:    systemPrompt,
-		Messages:        messages,
-		Label:           in.ConversationID,
-		ConversationID:  in.ConversationID,
-		Model:           model,
-		FallbackModels:  providerFallbacks,
-		Temperature:     m.config.LiveTemperature(),
-		MaxTokens:       maxTokens,
-		MaxIterations:   m.config.LiveMaxIterations(),
-		NativeTools:     turnTools.Tools,
-		Sandbox:         sb,
-		MCPClient:       m.mcpClient,
-		MCPBroker:       turnBroker,
-		MCPCatalog:      turnCatalog,
-		Allowlist:       agentcore.MCPAllowlist(turnAllowlist),
-		OptionalServers: agentcore.MCPOptionalSet(turnOptional),
-		Selection:       selection,
-		Persona:         persona,
-		PersonaPolicy:   m.personaPolicy(persona),
-		MaxCostUSD:      m.config.LiveMaxCostUSD(),
-		MaxTotalTokens:  m.config.LiveMaxTotalTokens(),
-		ApprovalStager:  in.ApprovalStager,
-		MemoryProposer:  in.MemoryProposer,
-		NoteProposer:    m.noteProposer,
+		SystemPrompt: systemPrompt,
+		Messages:     messages,
+		// assembleTurnMessages ended Messages with this turn's persisted
+		// runtime_today note; Run must not add a request-local one.
+		RuntimeDateInMessages: true,
+		Label:                 in.ConversationID,
+		ConversationID:        in.ConversationID,
+		Model:                 model,
+		FallbackModels:        providerFallbacks,
+		Temperature:           m.config.LiveTemperature(),
+		MaxTokens:             maxTokens,
+		MaxIterations:         m.config.LiveMaxIterations(),
+		NativeTools:           turnTools.Tools,
+		Sandbox:               sb,
+		MCPClient:             m.mcpClient,
+		MCPBroker:             turnBroker,
+		MCPCatalog:            turnCatalog,
+		Allowlist:             agentcore.MCPAllowlist(turnAllowlist),
+		OptionalServers:       agentcore.MCPOptionalSet(turnOptional),
+		Selection:             selection,
+		Persona:               persona,
+		PersonaPolicy:         m.personaPolicy(persona),
+		MaxCostUSD:            m.config.LiveMaxCostUSD(),
+		MaxTotalTokens:        m.config.LiveMaxTotalTokens(),
+		ApprovalStager:        in.ApprovalStager,
+		MemoryProposer:        in.MemoryProposer,
+		NoteProposer:          m.noteProposer,
 		// The finish nudge / BLOCKED texts name protocols/self-audit.md only when
 		// this bundle actually ships it.
 		AuditProtocolRef: AuditProtocolRef(m.protocolsDir),

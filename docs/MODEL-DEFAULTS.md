@@ -72,8 +72,8 @@ tiers, are unaffected by any of this. Only the compiled-in fallback moves.
 - **Explicit caching**: Google lists explicit context caching as unsupported on
   Argon (implicit caching is on). Measured live on 2026-10-14: Argon ignores
   the `cache_control` breakpoints fleet sends (no error, no cache write), and
-  its implicit cache covers ~6.5K of an ~8.7K prompt. It misses across user
-  turns because of the request-local `runtime_today` tail; see
+  its implicit cache covers ~6.7K of an ~8.9K prompt, across user turns too
+  once the `runtime_today` note moved into persisted history; see
   [PROMPT-CACHE-CONTRACT.md](PROMPT-CACHE-CONTRACT.md#results-2026-10-14).
 - **Not measured**: not benchmarked on production jobs before shipping. Watch
   escalated turns' quality and cost on the first day.

@@ -36,7 +36,12 @@ type TurnConfig struct {
 	// Messages is the replayed conversation history + the new user message
 	// (built by replayHistory from the stored HistoryEntry rows).
 	Messages []fantasy.Message
-	Label    string
+	// RuntimeDateInMessages reports that Messages already ends with this
+	// turn's runtime_today note, persisted with the user entry
+	// (assembleTurnMessages); it becomes agentcore.RunConfig.RuntimeDateInInput.
+	// False for callers that build Messages themselves: Run appends the note.
+	RuntimeDateInMessages bool
+	Label                 string
 	// ConversationID is operator-only panic attribution for the governed run.
 	// It is never added to the model prompt or tool arguments.
 	ConversationID string
@@ -234,6 +239,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		PersonaPolicy:       tc.PersonaPolicy,
 		ProviderHeaders:     agentcore.DefaultProviderHeaders,
 		ThinkingConfig:      tc.ThinkingConfig,
+		RuntimeDateInInput:  tc.RuntimeDateInMessages,
 	}
 	return agentcore.Run(ctx, agentcore.ModeInteractive, cfg, deps)
 }
