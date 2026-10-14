@@ -74,6 +74,34 @@ const (
 	SuggestAdvancedCooldownTurns = 3
 )
 
+// minCompletionTokens lists slug prefixes whose per-call output allowance must
+// not drop below a floor. Gemini 4 counts thinking against max_output_tokens and
+// reasons at medium effort by default, so a cap below the floor can be spent
+// entirely on thinking and return a truncated or empty answer; Google's Gemini 4
+// Argon migration guide says to raise any limit under 32K to at least 32,768.
+// The floor only RAISES a smaller configured cap — it never lowers one — and the
+// run's cost/token ceilings still bound spend. Longest prefix first.
+var minCompletionTokens = []struct {
+	prefix string
+	tokens int
+}{
+	{"google/gemini-4", 32_768},
+}
+
+// completionTokensForModel returns the per-call output allowance for slug: the
+// configured cap, raised to the model's minCompletionTokens floor when it is
+// below it. Callers use the SAME value for the request's MaxOutputTokens and
+// for the context reserve (contextAccounting), so the reserve stays exact.
+func completionTokensForModel(slug string, configured int64) int64 {
+	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(slug)), "~")
+	for _, f := range minCompletionTokens {
+		if strings.HasPrefix(m, f.prefix) {
+			return max(configured, int64(f.tokens))
+		}
+	}
+	return configured
+}
+
 // modelOpenAIGPT5 is hoisted because the context-window table and several test
 // fixtures assert on this exact slug.
 const modelOpenAIGPT5 = "openai/gpt-5"

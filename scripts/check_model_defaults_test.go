@@ -55,4 +55,17 @@ func TestModelDefaultsAreInSync(t *testing.T) {
 			t.Errorf("fleet-guide/chat.md does not name the default %q (from %s); update the guide and run make sync-guides", label, name)
 		}
 	}
+
+	// The Operations Center guide names the task form's pre-filled default
+	// ("pre-filled with your workspace's default model (**GPT-6 Luna Pro** …").
+	// It went stale once (still naming GPT-5.6 Luna Pro after the 2026-09-22
+	// swap) because only the chat guide was checked.
+	ops := readFile(t, root, "internal/clientconfig/builtin_skills/fleet-guide/operations-center.md")
+	label := constant("DEFAULT_MODEL_LABEL")
+	if i := strings.Index(label, ": "); i >= 0 {
+		label = label[i+2:]
+	}
+	if !strings.Contains(ops, "**"+label+"**") {
+		t.Errorf("fleet-guide/operations-center.md does not name the default %q (from DEFAULT_MODEL_LABEL); update the guide and run make sync-guides", label)
+	}
 }

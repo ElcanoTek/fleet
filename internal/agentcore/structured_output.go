@@ -76,6 +76,9 @@ func (e *engine) generateTerminalStructuredOutput(
 	if model == nil {
 		return nil, fmt.Errorf("%w: no active model", ErrStructuredOutputGeneration)
 	}
+	// The model's output floor applies here too, to both the prompt bound and
+	// the call below (completionTokensForModel).
+	maxTokens = completionTokensForModel(model.Model(), maxTokens)
 	if err := validateDeclaredOutputSchema(schemaRaw); err != nil {
 		return nil, err
 	}

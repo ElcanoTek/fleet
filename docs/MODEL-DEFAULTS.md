@@ -58,10 +58,29 @@ tiers, are unaffected by any of this. Only the compiled-in fallback moves.
   (`supportsExtendedThinking`) applies to Anthropic Claude slugs only, so it does
   not apply to the strong tier now; Argon uses its own default reasoning. Google
   thought signatures are carried by the existing reasoning-metadata path.
+- **Output floor**: Gemini 4 counts thinking against `max_output_tokens`, and
+  Google's Argon migration guide says to raise any limit under 32K to at least
+  32,768, or the model can spend the whole cap thinking and return an empty or
+  truncated answer. fleet's per-call cap defaults to 16,384, so
+  `completionTokensForModel` raises the cap to 32,768 for `google/gemini-4*`
+  slugs. It is applied to the stream call, the terminal structured-output call,
+  and the matching context reserves, so the reserve still equals what is sent.
+  It only raises a smaller cap (`FLEET_LLM_MAX_TOKENS` included), never lowers
+  one, and the run's cost and token ceilings still bound spend. Fleet does not
+  implement Google's long-decode continuation; answers needing more than the cap
+  still end at the cap.
+- **Explicit caching**: Google lists explicit context caching as unsupported on
+  Argon (implicit caching is on). fleet sends `cache_control` breakpoints for
+  `google/` slugs through OpenRouter. That was not exercised against a live
+  Argon endpoint before shipping; watch the first escalated turns for cache
+  errors.
 - **Not measured**: not benchmarked on production jobs before shipping. Watch
   escalated turns' quality and cost on the first day.
 - Opus 5.5 keeps its `officialPoolSlugs` entry and context-window prefix: it stays
   selectable and an admin tier override may still point at it.
+- **Guide drift**: the Operations Center guide still named GPT-5.6 Luna Pro as
+  the task form's default (stale since 2026-09-22). It is corrected, and
+  `TestModelDefaultsAreInSync` now checks that guide names the default too.
 
 ## 2026-09-22: GPT-6 Luna Pro + Claude Opus 5.5
 
