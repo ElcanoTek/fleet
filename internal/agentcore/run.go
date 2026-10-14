@@ -676,19 +676,31 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// When the prompt floor crowds the budget the pause fires at the floor
 		// rule's threshold instead, and the breadcrumb and event say so (#1600,
 		// see engine.effectiveResendBudget).
-		if eng.consumeResendCheckpoint(finalResult, outcome.completedSteps+len(finalResult.Steps), messages) {
+		//
+		// An interactive engine pauses the same way at the window-compaction
+		// threshold instead (engine.checkpointThreshold): the breadcrumb says
+		// so, and no checkpoint event is streamed — the chat client hears about
+		// the pause through the fleet.context_compacted event that follows.
+		if eng.consumeResendCheckpoint(finalResult, outcome.completedSteps+len(finalResult.Steps), messages, activeModel) {
 			messages = append(messages, carryRoundMessages(finalResult)...)
 			resent := lastStepPromptTokens(finalResult)
-			budget := contextResendBudgetTokens(cfg.EnvPrefix)
-			eng.logSession.AddMessage(roleUser, fmt.Sprintf(
-				"[context_checkpoint] resent prompt %d tokens reached %s; the tool loop paused after %d step(s) so the history can be compacted before the next call (checkpoint %d)",
-				resent, eng.resendCheckpointReached(budget), outcome.completedSteps+len(finalResult.Steps), eng.resendCheckpoints), nil, nil)
-			sink.emit(evtContextCheckpoint, eng.withResendFloorFields(map[string]any{
-				evtFieldUsedTokens:   resent,
-				evtFieldResendBudget: budget,
-				evtFieldTrigger:      "resend_budget",
-				"checkpoint":         eng.resendCheckpoints,
-			}, budget))
+			steps := outcome.completedSteps + len(finalResult.Steps)
+			if cfg.RequireCompactionOptIn {
+				budget := contextResendBudgetTokens(cfg.EnvPrefix)
+				eng.logSession.AddMessage(roleUser, fmt.Sprintf(
+					"[context_checkpoint] resent prompt %d tokens reached %s; the tool loop paused after %d step(s) so the history can be compacted before the next call (checkpoint %d)",
+					resent, eng.resendCheckpointReached(budget), steps, eng.resendCheckpoints), nil, nil)
+				sink.emit(evtContextCheckpoint, eng.withResendFloorFields(map[string]any{
+					evtFieldUsedTokens:   resent,
+					evtFieldResendBudget: budget,
+					evtFieldTrigger:      "resend_budget",
+					"checkpoint":         eng.resendCheckpoints,
+				}, budget))
+			} else {
+				eng.logSession.AddMessage(roleUser, fmt.Sprintf(
+					"[context_checkpoint] prompt %d tokens reached the window-compaction threshold (%d of a %d-token window); the tool loop paused after %d step(s) so the history can be compacted before the next call (checkpoint %d)",
+					resent, eng.checkpointThreshold(activeModel), contextWindowForActiveModel(activeModel), steps, eng.resendCheckpoints), nil, nil)
+			}
 			// The emit is an observer boundary like every other: an observer
 			// that failed on it has already doomed the run, so stop here rather
 			// than buy a summary and execute another tool step first.

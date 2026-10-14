@@ -101,6 +101,15 @@ type engine struct {
 	// whole tool loop across checkpoints instead of restarting per pause. Reset
 	// when a round ends on its own (finish or enforcement).
 	checkpointSteps int
+	// windowCompactionStalled is set when a window-pressure compaction found
+	// nothing to summarize, and cleared by the next one that succeeds. While it
+	// is set the interactive window checkpoint stays inert, so the tool loop is
+	// not paused again and again for a compaction that cannot happen.
+	windowCompactionStalled bool
+	// lastForcedCompaction is what the latest overflow (reactive) compaction
+	// removed, so the recovery can tell live clients the history was
+	// summarized (see forcedCompactionStats).
+	lastForcedCompaction forcedCompactionStats
 	// resendFloor, resendPrefix, resendFloorStale and resendFloorNoted carry
 	// the checkpoint's floor rule (#1600, see effectiveResendBudget).
 	// resendFloor is the resent size measured at the latest floor point: the
@@ -347,6 +356,7 @@ func (e *engine) currentModel() fantasy.LanguageModel {
 // Uses the engine's compactionSummarizer when set, else a deterministic
 // placeholder summary tagged with compactionSummaryPrefix.
 func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fantasy.Message) []fantasy.Message {
+	e.lastForcedCompaction = forcedCompactionStats{}
 	keepHead := compactionHeadLen(messages)
 	if len(messages) <= keepHead+compactionKeepTail+1 {
 		return messages
@@ -387,9 +397,18 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 	out = appendPlanReannounce(out, e.runOrch)
 	out = append(out, tail...)
 	e.consecutiveCompactions++
+	e.lastForcedCompaction = forcedCompactionStats{removed: len(middle), summaryTokens: estimateMessageTokens(summary)}
 	// The next step re-measures the resend-checkpoint floor (#1600).
 	e.resendFloorStale = true
 	return out
+}
+
+// forcedCompactionStats describes the latest forceCompactMessageHistory call
+// for the fleet.context_compacted event the overflow recovery emits; zero when
+// that call found nothing to summarize.
+type forcedCompactionStats struct {
+	removed       int
+	summaryTokens int
 }
 
 // planReannouncePrefix tags the post-compaction plan-state message so a later
@@ -543,8 +562,8 @@ func (e *engine) logCompactionSummary(summary fantasy.Message) {
 
 // estimateMessageTokens gives a rough token count for a message by summing its
 // text-part lengths and dividing by 4 (the usual ~4-chars-per-token heuristic).
-// Used only for the fleet.context_compacted event metadata and the pre-first-step
-// pressure estimate (estimateMessagesTokens), never for billing.
+// Used only for the fleet.context_compacted event metadata, never for billing
+// or for the pressure check (see estimateRequestTokens).
 func estimateMessageTokens(m fantasy.Message) int {
 	chars := 0
 	for _, part := range m.Content {
@@ -555,20 +574,18 @@ func estimateMessageTokens(m fantasy.Message) int {
 	return chars / 4
 }
 
-// estimateMessagesTokens sums estimateMessageTokens across the whole history.
-// It is the pre-first-step fallback for the context-pressure check (#209): at
-// the top of a turn's first round no provider-reported per-call input size
-// exists yet (LastStepPromptTokens is 0), so a single-round interactive turn
-// that STARTS near the window would otherwise never be checked. This estimate
-// of the carried-over history fills that gap. It is deliberately a lower bound
-// (it omits the system prompt + tool schemas the provider also counts), so it
-// errs toward warning/compacting slightly late rather than spuriously early.
-func estimateMessagesTokens(messages []fantasy.Message) int {
-	total := 0
-	for _, m := range messages {
-		total += estimateMessageTokens(m)
-	}
-	return total
+// estimateRequestTokens is the pre-first-step fallback for the context-pressure
+// check (#209): at the top of a turn's first round no provider-reported
+// per-call input size exists yet (LastStepPromptTokens is 0), so a chat turn
+// that STARTS near the window would otherwise never be checked. It counts what
+// the provider will be sent: every model-visible part of the history — tool
+// calls and tool results included, which dominate a data-heavy chat — plus the
+// system prompt and tool schemas. A text-only count once let a conversation
+// carrying ~850K tokens of tool results look small enough to skip, until every
+// model rejected it as over-window.
+func (e *engine) estimateRequestTokens(messages []fantasy.Message) int {
+	prefix := e.modelContextPrefix
+	return estimateBudgetMessagesTokens(messages, prefix) + prefix.systemTokens + prefix.toolTokens
 }
 
 // contextPressureResult carries a pre-round context-pressure check's outcome
@@ -587,10 +604,12 @@ type contextPressureResult struct {
 // The size signal is LastStepPromptTokens (the per-CALL input size, overwritten
 // each step), never the cumulative PromptTokens, which only grows and would
 // ratchet the trigger into a compaction spiral (see the session_log
-// token-semantics doc). Before a turn's first step it is 0, so we fall back to a
-// char-heuristic estimate of the carried-over history: that is what makes the
-// check fire on a single-round interactive turn that STARTS near the window, not
-// only on multi-round runs where a prior step reported real usage.
+// token-semantics doc). Before a turn's first step it is 0, so we fall back to
+// estimateRequestTokens: that is what makes the check fire on a chat turn that
+// STARTS near the window, not only on multi-round runs where a prior step
+// reported real usage. Within a round, the window checkpoint
+// (compactionCheckpoint) brings the loop back here once a step's real size
+// crosses the compaction threshold.
 //
 // A driver may gate compaction behind an opt-in (requireCompactionOptIn): an
 // unattended scheduled run must not silently rewrite its own transcript, so the
@@ -607,7 +626,14 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 	}
 	used := e.logSession.LastStepPromptTokens
 	if used <= 0 {
-		used = estimateMessagesTokens(messages)
+		// The run's orchestration tracks the same per-step size whether or not
+		// its policy carries a session; the interactive policy does not, so in
+		// chat this is the only provider-reported signal (e.g. after a window
+		// checkpoint paused the tool loop mid-turn).
+		used = e.runOrch.lastStepInputTokens()
+	}
+	if used <= 0 {
+		used = e.estimateRequestTokens(messages)
 	}
 	if used <= 0 {
 		return out
@@ -673,19 +699,24 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 		if res := e.proactiveCompact(ctx, messages); res.compacted {
 			out.messages = res.messages
 			out.warned = false
+			e.windowCompactionStalled = false
 			e.logCompactionSummary(res.summary)
 			sink.emit(evtContextCompacted, map[string]any{
 				evtFieldRemovedTurns:  res.removedTurns,
 				evtFieldSummaryTokens: res.summaryTokens,
 				evtFieldTrigger:       "window",
 			})
-		} else if !out.warned {
+		} else {
 			// Nothing compactible (e.g. one enormous message: head + a single
-			// active turn — proactiveCompact's documented no-op). Still surface
-			// the pressure so the worst case isn't silent; the reactive overflow
-			// path is the only backstop left.
-			sink.emit(evtContextPressure, pressure)
-			out.warned = true
+			// active turn — proactiveCompact's documented no-op). Stop pausing
+			// the tool loop for a compaction that cannot happen, and still
+			// surface the pressure so the worst case isn't silent; the reactive
+			// overflow path is the only backstop left.
+			e.windowCompactionStalled = true
+			if !out.warned {
+				sink.emit(evtContextPressure, pressure)
+				out.warned = true
+			}
 		}
 	case pct >= contextPressureWarnThreshold(e.envPrefix):
 		if !out.warned {
@@ -908,10 +939,57 @@ func stepStopConditions(maxIterations int) []fantasy.StopCondition {
 // cost/token ceilings exactly as before this feature.
 const maxResendCheckpoints = 40
 
+// checkpointThreshold is the per-call prompt size (fresh + cache-read input) at
+// which the round's tool loop pauses so the run loop can compact before the
+// next call, or 0 when no checkpoint applies:
+//   - SCHEDULED engine: the resend budget (effectiveResendBudget), a cost
+//     control (#1534); 0 when the budget is disabled.
+//   - INTERACTIVE engine: the window-compaction threshold of the active
+//     model's context window. A chat turn is a single round, so without this
+//     its pre-round pressure check runs once while dozens of tool steps grow
+//     the prompt past the window inside the round. Inert after a window
+//     compaction found nothing to summarize (windowCompactionStalled).
+func (e *engine) checkpointThreshold(activeModel fantasy.LanguageModel) int {
+	if e.requireCompactionOptIn {
+		budget := contextResendBudgetTokens(e.envPrefix)
+		if budget <= 0 {
+			return 0
+		}
+		return e.effectiveResendBudget(budget)
+	}
+	if activeModel == nil || e.windowCompactionStalled {
+		return 0
+	}
+	window := contextWindowForActiveModel(activeModel)
+	if window <= 0 {
+		return 0
+	}
+	return int(float64(window) * contextCompactionThreshold(e.envPrefix))
+}
+
+// compactionCheckpoint returns the StopCondition that pauses a round's tool
+// loop at checkpointThreshold, or nil when no checkpoint applies.
+func (e *engine) compactionCheckpoint(input []fantasy.Message, activeModel fantasy.LanguageModel) fantasy.StopCondition {
+	if !e.requireCompactionOptIn {
+		if e.checkpointThreshold(activeModel) <= 0 {
+			return nil
+		}
+		inputHistory := historyAfterHead(input)
+		return func(steps []fantasy.StepResult) bool {
+			if e.resendCheckpoints >= maxResendCheckpoints {
+				return false
+			}
+			return stepAtResendBudget(steps, e.checkpointThreshold(activeModel), inputHistory)
+		}
+	}
+	return e.resendBudgetCheckpoint(input)
+}
+
 // resendBudgetCheckpoint returns the StopCondition that pauses a SCHEDULED
 // run's tool loop once a step's prompt (fresh + cache-read input) reaches the
 // resend budget, or nil when the checkpoint does not apply (interactive engine,
-// budget disabled).
+// budget disabled). The interactive engine's window checkpoint is the other
+// branch of compactionCheckpoint.
 //
 // Why a stop condition: the cost-aware compaction (#1534) runs in
 // checkContextPressure BEFORE a round, but a scheduled run is one fantasy round
@@ -1133,8 +1211,12 @@ func (e *engine) resendCheckpointReached(budget int) string {
 // stream nearly the whole cap again. input is the final attempt's input
 // history (streamRoundOutcome.messages), the same slice its StopCondition
 // counted.
-func (e *engine) consumeResendCheckpoint(result *fantasy.AgentResult, roundSteps int, input []fantasy.Message) bool {
-	if result == nil || !e.requireCompactionOptIn || e.resendCheckpoints >= maxResendCheckpoints {
+func (e *engine) consumeResendCheckpoint(result *fantasy.AgentResult, roundSteps int, input []fantasy.Message, activeModel fantasy.LanguageModel) bool {
+	if result == nil || e.resendCheckpoints >= maxResendCheckpoints {
+		return false
+	}
+	threshold := e.checkpointThreshold(activeModel)
+	if threshold <= 0 {
 		return false
 	}
 	if roundSteps < len(result.Steps) {
@@ -1143,7 +1225,7 @@ func (e *engine) consumeResendCheckpoint(result *fantasy.AgentResult, roundSteps
 	if e.maxIterations > 0 && e.checkpointSteps+roundSteps >= e.maxIterations {
 		return false
 	}
-	if !stepAtResendBudget(result.Steps, e.effectiveResendBudget(contextResendBudgetTokens(e.envPrefix)), historyAfterHead(input)) {
+	if !stepAtResendBudget(result.Steps, threshold, historyAfterHead(input)) {
 		return false
 	}
 	e.resendCheckpoints++
@@ -1159,12 +1241,13 @@ func (e *engine) roundEndedOnItsOwn() {
 }
 
 // roundStopConditions is the round's StopWhen: the step cap (a model that
-// never stops calling tools) plus, for a scheduled engine with a resend budget,
-// the compaction checkpoint. fantasy stops on the FIRST condition that holds.
-// input is the round's input history (see resendBudgetCheckpoint).
-func (e *engine) roundStopConditions(stepLimit int, input []fantasy.Message) []fantasy.StopCondition {
+// never stops calling tools) plus the compaction checkpoint — the resend budget
+// for a scheduled engine, the window threshold for an interactive one (see
+// checkpointThreshold). fantasy stops on the FIRST condition that holds. input
+// is the round's input history (see resendBudgetCheckpoint).
+func (e *engine) roundStopConditions(stepLimit int, input []fantasy.Message, activeModel fantasy.LanguageModel) []fantasy.StopCondition {
 	stops := stepStopConditions(stepLimit)
-	if cp := e.resendBudgetCheckpoint(input); cp != nil {
+	if cp := e.compactionCheckpoint(input, activeModel); cp != nil {
 		stops = append(stops, cp)
 	}
 	return stops
@@ -1224,7 +1307,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		Temperature:     &temp,
 		ProviderOptions: r.engine.providerOptions(modelSlug),
 		MaxRetries:      &maxRetries,
-		StopWhen:        r.engine.roundStopConditions(stepLimit, messages),
+		StopWhen:        r.engine.roundStopConditions(stepLimit, messages, activeModel),
 		// Fantasy's inner backoff-and-retry, surfaced two ways: turn.retry to
 		// the Observer (the web client's inline "retrying" badge; journal
 		// recovery resets accumulated text on it) and the engine's session-log

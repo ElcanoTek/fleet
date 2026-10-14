@@ -1403,20 +1403,24 @@ func (s *Server) runTurnAsync(
 		InputKind:      inputKind,
 	}, buf)
 	if err != nil {
-		log.Printf("RunTurn error (user=%s conv=%s): %s", logSafe(user), logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from email, conv id, and the error text.
 		// The resilience layer inside RunTurn emits `turn.model_required`
 		// itself on any non-cancellation failure (see agent/resilience.go).
 		// Avoid emitting a redundant — and misleading — `turn.error` in
 		// that case; the frontend already has the structured reason and
 		// model slug it needs.
-		switch {
-		case errors.Is(err, context.Canceled) && turnCtx.Err() != nil:
+		if errors.Is(err, context.Canceled) && turnCtx.Err() != nil {
 			// A Stop cancelled the turn before the engine could report it
-			// cancelled itself (preflight, say): advertise the cancellation,
-			// not an error. A Stop is confirmed only by turn.cancelled, so a
-			// turn.error here would read as a failure of the turn's own.
+			// cancelled itself (preflight, say — e.g. while the turn's MCP
+			// scope was still opening): advertise the cancellation, not an
+			// error. A Stop is confirmed only by turn.cancelled, so a
+			// turn.error here would read as a failure of the turn's own —
+			// and so would an "error" log line, which is what operators grep.
+			log.Printf("RunTurn cancelled before it finished (user=%s conv=%s): %s", logSafe(user), logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from email, conv id, and the error text.
 			buf.Emit("turn.cancelled", map[string]any{"reason": "cancelled"})
-		case !errors.Is(err, ErrModelSelectionRequired):
+			return
+		}
+		log.Printf("RunTurn error (user=%s conv=%s): %s", logSafe(user), logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from email, conv id, and the error text.
+		if !errors.Is(err, ErrModelSelectionRequired) {
 			buf.Emit("turn.error", map[string]any{"message": err.Error()})
 		}
 		return
