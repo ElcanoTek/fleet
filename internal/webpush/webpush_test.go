@@ -7,12 +7,16 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	webpushgo "github.com/SherClockHolmes/webpush-go"
@@ -195,8 +199,8 @@ func TestNilServiceIsNoOp(t *testing.T) {
 // on the wire (RFC 8291; the relay never sees content).
 func TestSendToUser_FansOutEncrypted(t *testing.T) {
 	st := &fakeStore{subs: []store.PushSubscription{
-		testSubscription(t, "https://relay.example/ep1"),
-		testSubscription(t, "https://relay.example/ep2"),
+		testSubscription(t, "https://fcm.googleapis.com/fcm/send/ep1"),
+		testSubscription(t, "https://updates.push.services.mozilla.com/wpush/v2/ep2"),
 	}}
 	relay := &fakeRelay{}
 	svc := newTestService(t, st, relay)
@@ -236,10 +240,10 @@ func TestSendToUser_FansOutEncrypted(t *testing.T) {
 // TestSendToUser_ExpiredSubscriptionDeleted: 404/410 from the relay retires
 // the row; other failures do not, and never stop the fan-out.
 func TestSendToUser_ExpiredSubscriptionDeleted(t *testing.T) {
-	gone := testSubscription(t, "https://relay.example/gone")
-	dead := testSubscription(t, "https://relay.example/dead")
-	live := testSubscription(t, "https://relay.example/live")
-	flaky := testSubscription(t, "https://relay.example/flaky")
+	gone := testSubscription(t, "https://fcm.googleapis.com/fcm/send/gone")
+	dead := testSubscription(t, "https://fcm.googleapis.com/fcm/send/dead")
+	live := testSubscription(t, "https://fcm.googleapis.com/fcm/send/live")
+	flaky := testSubscription(t, "https://fcm.googleapis.com/fcm/send/flaky")
 	st := &fakeStore{subs: []store.PushSubscription{gone, dead, live, flaky}}
 	relay := &fakeRelay{status: map[string]int{
 		gone.Endpoint:  http.StatusGone,
@@ -305,7 +309,7 @@ func TestEventTitle_BudgetAlert(t *testing.T) {
 // Audience gating.
 func TestSendEvent_Gating(t *testing.T) {
 	for _, status := range []notify.Status{notify.StatusSuccess, notify.StatusFailure, notify.StatusProgress} {
-		st := &fakeStore{subs: []store.PushSubscription{testSubscription(t, "https://relay.example/ep")}}
+		st := &fakeStore{subs: []store.PushSubscription{testSubscription(t, "https://fcm.googleapis.com/fcm/send/ep")}}
 		relay := &fakeRelay{}
 		svc := newTestService(t, st, relay)
 		ev := notify.Event{Status: status, Name: "nightly report", DurationSeconds: 90, Audience: "u@x.com", LogURL: "https://x/log"}
@@ -318,7 +322,7 @@ func TestSendEvent_Gating(t *testing.T) {
 	}
 
 	// Audience empty → no push (nothing to route to).
-	st := &fakeStore{subs: []store.PushSubscription{testSubscription(t, "https://relay.example/ep")}}
+	st := &fakeStore{subs: []store.PushSubscription{testSubscription(t, "https://fcm.googleapis.com/fcm/send/ep")}}
 	relay := &fakeRelay{}
 	svc := newTestService(t, st, relay)
 	if err := svc.SendEvent(context.Background(), notify.Event{Status: notify.StatusSuccess}); err != nil {
@@ -341,7 +345,7 @@ func TestSendEvent_Gating(t *testing.T) {
 // TestNotifyApprovalRequired: high urgency, tool-name-only title, and the
 // FLEET_PUSH_ON_APPROVAL_REQUEST gate.
 func TestNotifyApprovalRequired(t *testing.T) {
-	st := &fakeStore{subs: []store.PushSubscription{testSubscription(t, "https://relay.example/ep")}}
+	st := &fakeStore{subs: []store.PushSubscription{testSubscription(t, "https://fcm.googleapis.com/fcm/send/ep")}}
 	relay := &fakeRelay{}
 	svc := newTestService(t, st, relay)
 
@@ -372,11 +376,15 @@ func TestNotifyApprovalRequired(t *testing.T) {
 
 // TestEndpointHost: the capability URL is reduced to its host for logs.
 func TestEndpointHost(t *testing.T) {
-	if got := endpointHost("https://fcm.googleapis.com/fcm/send/abc123secret"); got != "fcm.googleapis.com" {
-		t.Errorf("endpointHost = %q", got)
-	}
-	if got := endpointHost("no-scheme-or-path"); got != "no-scheme-or-path" {
-		t.Errorf("endpointHost fallback = %q", got)
+	for in, want := range map[string]string{
+		"https://fcm.googleapis.com/fcm/send/abc123secret":        "fcm.googleapis.com",
+		"https://user:pw@relay.example:8443/ep?token=secret#frag": "relay.example:8443",
+		"no-scheme-or-path": "(unparseable endpoint)",
+		"https://%zz/ep":    "(unparseable endpoint)",
+	} {
+		if got := endpointHost(in); got != want {
+			t.Errorf("endpointHost(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -384,7 +392,7 @@ func TestEndpointHost(t *testing.T) {
 // urgency that matches whether the person is blocking anything, and the same
 // FLEET_PUSH_ON_APPROVAL_REQUEST gate.
 func TestNotifyApprovalFinishedAndResumeSkipped(t *testing.T) {
-	st := &fakeStore{subs: []store.PushSubscription{testSubscription(t, "https://relay.example/ep")}}
+	st := &fakeStore{subs: []store.PushSubscription{testSubscription(t, "https://fcm.googleapis.com/fcm/send/ep")}}
 	relay := &fakeRelay{}
 	svc := newTestService(t, st, relay)
 
@@ -451,7 +459,7 @@ func TestConversationLink(t *testing.T) {
 func TestSendOne_RefusedVAPIDKeepsTheRowAndNamesBothCauses(t *testing.T) {
 	for _, code := range []int{http.StatusForbidden, http.StatusUnauthorized} {
 		t.Run(strconv.Itoa(code), func(t *testing.T) {
-			refused := testSubscription(t, "https://relay.example/old-key")
+			refused := testSubscription(t, "https://fcm.googleapis.com/fcm/send/old-key")
 			st := &fakeStore{subs: []store.PushSubscription{refused}}
 			relay := &fakeRelay{status: map[string]int{refused.Endpoint: code}}
 			svc := newTestService(t, st, relay)
@@ -583,5 +591,200 @@ func TestRelayReason_BoundsTheReason(t *testing.T) {
 	}
 	if got, want := relayReason(strings.NewReader(`{"reason":"a\nb"}`)), ` (reason "a\nb")`; got != want {
 		t.Errorf("relayReason = %q, want %q: a newline is escaped, never raw in the log", got, want)
+	}
+}
+
+// ValidateEndpoint admits the push service each major browser subscribes with
+// and nothing else: the endpoint is browser-supplied, and fleet POSTs to it
+// from the host.
+func TestValidateEndpoint(t *testing.T) {
+	for _, ok := range []string{
+		"https://fcm.googleapis.com/fcm/send/abc:APA91b",             // Chrome
+		"https://fcm.googleapis.com/wp/abc",                          // Chrome, newer path
+		"https://jmt17.google.com/fcm/send/abc:APA91b",               // Chrome Beta/Dev/Canary, Chromium
+		"https://updates.push.services.mozilla.com/wpush/v2/gAAAAAB", // Firefox
+		"https://web.push.apple.com/QGd2EBk7PvmwJ",                   // Safari
+		"https://wns2-par02p.notify.windows.com/w/?token=BQYAAAB",    // Edge
+		"https://FCM.GoogleAPIs.com/fcm/send/abc",                    // case
+		"https://" + strings.Repeat("a", 63) + ".push.apple.com/x",   // the longest label
+	} {
+		if err := ValidateEndpoint(ok); err != nil {
+			t.Errorf("ValidateEndpoint(%q) = %v, want accepted", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"",
+		"not a url",
+		"https://%zz/ep",
+		"https:fcm.googleapis.com/fcm/send/abc",  // opaque, no host
+		"http://fcm.googleapis.com/fcm/send/abc", // not https
+		"https://u:p@fcm.googleapis.com/fcm/send/a", // user info
+		"https://fcm.googleapis.com:8443/fcm/send/a",
+		"https://fcm.googleapis.com:443/fcm/send/a", // browsers send no port; ":443" would sign the wrong VAPID audience
+		"https://fcm.googleapis.com:/fcm/send/a",
+		"https://fcm.googleapis.com./fcm/send/a", // trailing dot: an empty last label
+		"https://127.0.0.1/ep",
+		"https://169.254.169.254/latest/meta-data/",
+		"https://[::1]/ep",
+		"https://10.0.0.5:9000/ep",
+		"https://localhost/ep",
+		"https://203.0.113.10/ep",                  // a public IP is still not a push service
+		"https://push.example.net/ep",              // a self-hosted push server
+		"https://storage.googleapis.com/bucket/ep", // googleapis.com is not all FCM
+		"https://evilfcm.googleapis.com/ep",
+		"https://fcm.googleapis.com.evil.example/ep",
+		"https://www.google.com/ep", // google.com is not all FCM either
+		"https://evil-jmt17.google.com/ep",
+		"https://jmt17.google.com.evil.example/ep",
+		"https://push.apple.com/ep", // a domain entry needs a subdomain
+		"https://.push.apple.com/ep",
+		"https://xpush.apple.com/ep",
+		"https://web.push.apple.com.evil.example/ep",
+		"https://evil-notify.windows.com/ep",
+		"https://wns2.notify.windows.com.evil.example/ep",
+		// Unicode lookalikes: strings.ToLower folds "İ" to "i", but net/http
+		// dials the IDNA (punycode) form, a different, registrable domain.
+		"https://fcm.googleapİs.com/fcm/send/x",
+		"https://fcm.googleap%C4%B0s.com/fcm/send/x",
+		"https://x.push.services.mozİlla.com/wpush/v2/x",
+		"https://wns2.notify.wİndows.com/w/?token=x",
+		"https://\u202eevil.push.apple.com/x", // a bidi override would also reach the log
+		"https://x%25.push.apple.com/x",
+		"https://[::1]:443/ep",
+		// Not a DNS name, though under a listed domain: an empty label, a label
+		// past 63 bytes, a name past 253.
+		"https://x..push.apple.com/x",
+		"https://..push.apple.com/x",
+		"https://" + strings.Repeat("a", 64) + ".push.apple.com/x",
+		"https://" + strings.Repeat("a.", 120) + "push.apple.com/x",
+	} {
+		if err := ValidateEndpoint(bad); err == nil {
+			t.Errorf("ValidateEndpoint(%q) accepted, want refused", bad)
+		}
+	}
+	// The error names the host and the rule for the operator's log, and never
+	// the path, which is the endpoint's secret part.
+	err := ValidateEndpoint("https://push.example.net/secret-token")
+	if err == nil || !strings.Contains(err.Error(), `"push.example.net"`) || !strings.Contains(err.Error(), "not on a push service") || strings.Contains(err.Error(), "secret-token") {
+		t.Errorf("error = %v, want the host and the rule without the path", err)
+	}
+	// An endpoint with no host says so, rather than quoting an empty one.
+	if err := ValidateEndpoint("https:fcm.googleapis.com/fcm/send/abc"); err == nil || !strings.Contains(err.Error(), "has no host") {
+		t.Errorf("error = %v, want the missing host named", err)
+	}
+	// The host is the member's to choose, so the error quotes at most a DNS
+	// name's worth of it.
+	if err := ValidateEndpoint("https://" + strings.Repeat("a", 1<<20) + ".push.apple.com/x"); err == nil || len(err.Error()) > 2*maxHostLen {
+		t.Errorf("error is %d bytes, want the host cut to %d", len(fmt.Sprint(err)), maxHostLen)
+	}
+	// A port gets its own rule in the log, the one an operator can act on.
+	for _, ep := range []string{"https://fcm.googleapis.com:443/fcm/send/a", "https://fcm.googleapis.com:/fcm/send/a"} {
+		if err := ValidateEndpoint(ep); err == nil || !strings.Contains(err.Error(), "names a port") {
+			t.Errorf("ValidateEndpoint(%q) = %v, want the port named", ep, err)
+		}
+	}
+	// The host is quoted in the error, so a bidi override or line separator in
+	// one never reaches a log line raw.
+	if err := ValidateEndpoint("https://\u202eevil.push.apple.com/x"); err == nil || strings.ContainsRune(err.Error(), '\u202e') {
+		t.Errorf("error = %q, want the host escaped", err)
+	}
+}
+
+// A stored row that is not on a push service (stored before endpoints were
+// checked, or written straight to the database) is never sent to, and is
+// retired so it is not refused again on every send. The user's other
+// browsers still get theirs.
+func TestSendToUser_NeverSendsOffAPushServiceAndRetiresTheRow(t *testing.T) {
+	good := testSubscription(t, "https://fcm.googleapis.com/fcm/send/good")
+	internal := testSubscription(t, "http://127.0.0.1:8080/admin/secret-token")
+	metadata := testSubscription(t, "https://169.254.169.254/latest/meta-data/")
+	elsewhere := testSubscription(t, "https://push.example.net/ep")
+	st := &fakeStore{subs: []store.PushSubscription{internal, good, metadata, elsewhere}}
+	relay := &fakeRelay{}
+	svc := newTestService(t, st, relay)
+	var logged []string
+	svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+
+	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+		t.Fatalf("sendToUser: %v", err)
+	}
+	if len(relay.requests) != 1 || relay.requests[0].URL.String() != good.Endpoint {
+		got := make([]string, 0, len(relay.requests))
+		for _, r := range relay.requests {
+			got = append(got, r.URL.String())
+		}
+		t.Fatalf("sent to %v, want only the push-service endpoint", got)
+	}
+	want := map[string]bool{internal.Endpoint: true, metadata.Endpoint: true, elsewhere.Endpoint: true}
+	if len(st.deleted) != 3 || !want[st.deleted[0]] || !want[st.deleted[1]] || !want[st.deleted[2]] {
+		t.Errorf("deleted %v, want exactly the three rows off a push service", st.deleted)
+	}
+	joined := strings.Join(logged, "\n")
+	for _, want := range []string{"u@x.com", `"127.0.0.1:8080"`, `"push.example.net"`} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("log = %q, want it to name %s", joined, want)
+		}
+	}
+	if strings.Contains(joined, "secret-token") {
+		t.Errorf("log = %q carries an endpoint path", joined)
+	}
+}
+
+// failingRelay fails every send the way net/http does: a *url.Error, whose
+// text quotes the full request URL.
+type failingRelay struct{}
+
+func (failingRelay) Do(req *http.Request) (*http.Response, error) {
+	return nil, &url.Error{Op: "Post", URL: req.URL.String(), Err: errors.New("dial tcp: i/o timeout")}
+}
+
+// A transport error is logged with its cause and host, never the endpoint
+// URL, which is a capability: anyone holding it can push to that browser.
+func TestSendOne_TransportErrorLogsNoEndpoint(t *testing.T) {
+	sub := testSubscription(t, "https://fcm.googleapis.com/fcm/send/secret-token")
+	svc := newTestService(t, &fakeStore{subs: []store.PushSubscription{sub}}, nil)
+	svc.client = failingRelay{}
+	var logged []string
+	svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+
+	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+		t.Fatalf("sendToUser: %v", err)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "fcm.googleapis.com") || !strings.Contains(logged[0], "i/o timeout") || strings.Contains(logged[0], "secret-token") {
+		t.Errorf("log = %q, want the host and the cause without the endpoint", logged)
+	}
+}
+
+// The sender's own client never follows a redirect, so a send cannot be
+// bounced off a push-service host to an address ValidateEndpoint never saw,
+// and it keeps the default transport, so the operator's HTTPS_PROXY applies.
+func TestNewClient_NoRedirectsAndTheDefaultTransport(t *testing.T) {
+	var landed atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/send", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/landed", http.StatusTemporaryRedirect)
+	})
+	mux.HandleFunc("/landed", func(http.ResponseWriter, *http.Request) { landed.Store(true) })
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	svc := New(testConfig(t), &fakeStore{})
+	c, ok := svc.client.(*http.Client)
+	if !ok {
+		t.Fatalf("New's client is %T, want *http.Client", svc.client)
+	}
+	resp, err := c.Post(srv.URL+"/send", "application/octet-stream", strings.NewReader("x"))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusTemporaryRedirect || landed.Load() {
+		t.Errorf("status %d, landed %v: want the 307 returned and the redirect not followed", resp.StatusCode, landed.Load())
+	}
+	if c.Transport != nil {
+		t.Errorf("Transport = %T, want nil (http.DefaultTransport, which honors HTTPS_PROXY)", c.Transport)
+	}
+	if c.Timeout != sendTimeout {
+		t.Errorf("Timeout = %v, want %v", c.Timeout, sendTimeout)
 	}
 }

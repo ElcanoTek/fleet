@@ -9,8 +9,11 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/webpush"
 )
 
 // pushReady reports whether Web Push is configured; handlers short-circuit
@@ -24,6 +27,27 @@ func (s *Server) pushReady(w http.ResponseWriter) bool {
 		_, _ = w.Write([]byte(`{"error":"push_disabled","detail":"web push is not configured on this server (run 'fleet generate-vapid-keys' and set FLEET_VAPID_PUBLIC_KEY, FLEET_VAPID_PRIVATE_KEY, FLEET_VAPID_CONTACT)"}`))
 		return false
 	}
+	return true
+}
+
+// pushServiceRefused is the 400 a browser gets for an endpoint that is not on
+// a push service fleet sends to (webpush.ValidateEndpoint). The settings switch
+// shows it as is. A browser only produces such an endpoint when it uses another
+// push service, so the message names the browsers that work rather than the
+// rule; the log line names the host and the rule.
+const pushServiceRefused = "This browser's push service is not one this server sends notifications to. Turn notifications on in Chrome, Edge, Firefox or Safari instead."
+
+// refusedPushEndpoint reports whether endpoint must be refused, answering the
+// 400 and logging why when it is. The server later POSTs to the endpoint from
+// the host, so only a push service's is stored: see the webpush package
+// comment. what names the request in the log line ("subscription", "renewal").
+func refusedPushEndpoint(w http.ResponseWriter, user, what, endpoint string) bool {
+	err := webpush.ValidateEndpoint(endpoint)
+	if err == nil {
+		return false
+	}
+	log.Printf("push: refused a %s from %s: %v", what, user, err)
+	http.Error(w, pushServiceRefused, http.StatusBadRequest)
 	return true
 }
 
@@ -61,6 +85,9 @@ func (s *Server) pushSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := userFromCtx(r.Context())
+	if refusedPushEndpoint(w, user, "subscription", req.Endpoint) {
+		return
+	}
 	if err := s.store.UpsertPushSubscription(r.Context(), user, req.Endpoint, req.Keys.Auth, req.Keys.P256dh); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -164,7 +191,14 @@ func (s *Server) pushRenew(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "old_endpoint, endpoint and keys (auth, p256dh) are required", http.StatusBadRequest)
 		return
 	}
-	renewed, err := s.store.RenewPushSubscription(r.Context(), userFromCtx(r.Context()), req.OldEndpoint, req.Endpoint, req.Keys.Auth, req.Keys.P256dh)
+	// Only the new endpoint is checked: the old one is only looked up, and a
+	// refused renewal leaves it where it is (the browser then drops the new
+	// subscription, as for any 400).
+	user := userFromCtx(r.Context())
+	if refusedPushEndpoint(w, user, "renewal", req.Endpoint) {
+		return
+	}
+	renewed, err := s.store.RenewPushSubscription(r.Context(), user, req.OldEndpoint, req.Endpoint, req.Keys.Auth, req.Keys.P256dh)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

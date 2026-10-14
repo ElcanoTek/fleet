@@ -5,7 +5,9 @@ failed, an approval card is waiting, or a paused task wants an answer — even
 when the fleet tab is backgrounded or closed (#292). It uses the standard
 **Web Push API** (RFC 8030/8291/8292 via `github.com/SherClockHolmes/webpush-go`):
 no native app, no mobile SDK, no third-party account. Chrome, Edge, Firefox,
-and Safari 16.4+ are covered.
+and Safari 16.4+ are covered. fleet sends only to those browsers' push
+services, so a browser that uses any other cannot turn notifications on (see
+[Security posture](#security-posture)).
 
 Per Brad's routing note on #292, Web Push is **one backend of the existing
 notifier** (`internal/notify`), not a parallel trigger path: task lifecycle
@@ -184,10 +186,10 @@ Notes on honest scope:
 
 | Route | Method | Behavior |
 | --- | --- | --- |
-| `/push/subscribe` | POST | Upsert the caller's `PushSubscription` (endpoint + keys), keyed on the endpoint. 204. |
+| `/push/subscribe` | POST | Upsert the caller's `PushSubscription` (endpoint + keys), keyed on the endpoint. 204. `400` for an endpoint that is not on a browser push service (see Security posture). |
 | `/push/unsubscribe` | DELETE | Delete the caller's row for the endpoint (owner-scoped). Idempotent 204. |
 | `/push/status` | POST | `{"subscribed": bool}`: whether the caller holds the row for the endpoint (owner-scoped read; the endpoint rides in the body because it is a capability URL). |
-| `/push/renew` | POST | `{old_endpoint, endpoint, keys}` → `{"renewed": bool}`: move the caller's row from the old endpoint to the browser's new subscription after a key rotation. False (nothing changed) unless the caller held the old row; true again if a second tab already moved it. |
+| `/push/renew` | POST | `{old_endpoint, endpoint, keys}` → `{"renewed": bool}`: move the caller's row from the old endpoint to the browser's new subscription after a key rotation. False (nothing changed) unless the caller held the old row; true again if a second tab already moved it. `400`, changing nothing, when the new endpoint is not on a browser push service. |
 | `/push/vapid-public-key` | GET | `{"key": "<VAPID public key>"}` — non-secret. |
 
 All five return `501` with `{"error":"push_disabled", ...}` when
@@ -199,8 +201,9 @@ unconfigured. The browser reaches them through the Next.js proxies under
 - **Payloads are low-detail by design.** A push carries a title, an optional
   short body, and a deep-link URL — never raw model output, tool arguments,
   message content, or a secret. Payloads are additionally end-to-end
-  encrypted to the browser (RFC 8291), so the push relay (FCM/Mozilla/Apple)
-  never sees plaintext; the low-detail rule holds anyway.
+  encrypted to the browser (RFC 8291), so the push relay (Google's, Mozilla's,
+  Apple's or Microsoft's) never sees plaintext; the low-detail rule holds
+  anyway.
 - **The VAPID private key is a host-side secret.** It lives only in the
   operator env-file, is printed exactly once by `fleet generate-vapid-keys`,
   and never enters the sandbox, the model context, a client, or a log line.
@@ -208,7 +211,48 @@ unconfigured. The browser reaches them through the Next.js proxies under
 - **Subscriptions are per-user.** Every subscribe, unsubscribe, status read
   and renewal is scoped to the authenticated email; a user can only manage (and receive on) their own
   subscriptions. Endpoint URLs are capability URLs, so log lines reduce them
-  to their host.
+  to their host, a failed send's network error included.
+- **fleet sends only to browser push services.** The endpoint a subscription
+  names comes from the browser, so any signed-in member could store one, and
+  fleet POSTs to it from the host. An endpoint is accepted only when it is an
+  `https` URL with no port and no user info, whose host is a plain ASCII DNS
+  name (labels of letters, digits and hyphens, at most 63 bytes each and 253
+  in all) and one of these:
+
+  | Push service | Browsers | Hosts |
+  | --- | --- | --- |
+  | Firebase Cloud Messaging | Chrome and the Chromium-based browsers that use Google's service | `fcm.googleapis.com`; `jmt17.google.com`, the staging host Chromium uses on every channel but Stable (Chrome Beta, Dev and Canary, and Chromium builds) |
+  | Mozilla autopush | Firefox | `*.push.services.mozilla.com` |
+  | Apple | Safari | `*.push.apple.com` (Apple's documented hosts) |
+  | Windows Push Notification Services | Edge on the desktop | `*.notify.windows.com` (Microsoft's documented domain) |
+
+  `/push/subscribe` and `/push/renew` answer anything else with `400` and the
+  line the settings switch shows: *"This browser's push service is not one
+  this server sends notifications to. Turn notifications on in Chrome, Edge,
+  Firefox or Safari instead."* The server logs `push: refused a subscription
+  from <user>: the endpoint on "<host>" <rule>` (or `a renewal`). The sender
+  checks every stored row again before it sends, and deletes one that fails
+  without sending to it (`webpush: retiring a subscription of <user>: …`), so
+  a row stored before this check, or written straight to the database, is
+  never sent to. A send never follows a redirect. Because the host is fixed to
+  a push service, sends go through the ordinary HTTP client, so a host whose
+  only way out is `HTTPS_PROXY` still delivers. The ASCII rule matters: Go
+  dials a non-ASCII host by its punycode form, so a Unicode lookalike of a
+  listed host (`fcm.googleapİs.com`) would otherwise pass the match and reach
+  a different, registrable domain. Tested live: Chrome
+  (`fcm.googleapis.com`), Safari (`web.push.apple.com`), Firefox
+  (`updates.push.services.mozilla.com`) and Edge
+  (`wns2-par02p.notify.windows.com`) on macOS were each accepted and received
+  a push, and Chromium on Linux (`jmt17.google.com`) was accepted and received
+  one too. Safari on iOS and iPadOS was not tested.
+
+  What this costs: a browser that uses another push service cannot turn
+  notifications on. That is a browser pointed at a self-hosted Mozilla push
+  server, or one with a push service of its own; the switch shows the line
+  above. Such a browser that had notifications on before this check loses
+  them without notice: its row is deleted at the next send, and its switch
+  reads off the next time Settings is opened. There is no setting to add a
+  push service.
 - **A browser is not an account.** The browser holds one subscription, but
   the account that stored it is whoever turned notifications on there.
   Sign-out through the account menu (`signOut`) unsubscribes the browser and
@@ -223,7 +267,8 @@ unconfigured. The browser reaches them through the Next.js proxies under
   previous account's subscription go, since the renewal is not that
   account's to make.
 - **Subscription hygiene:** a `404`/`410` from the relay deletes the expired
-  row during the send fan-out.
+  row during the send fan-out, and a row whose endpoint is not on a push
+  service is deleted there without a send (see above).
 
 ## Deliberately deferred (out of scope for #292)
 
@@ -238,3 +283,5 @@ unconfigured. The browser reaches them through the Next.js proxies under
   schedule missed/blocked events.
 - Email/Slack/Teams as additional `notify.PushSender`-style per-user
   backends.
+- An operator setting to add a push service beyond the four above (a
+  self-hosted Mozilla push server, say).

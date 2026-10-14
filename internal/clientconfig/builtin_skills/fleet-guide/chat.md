@@ -220,7 +220,10 @@ short title (the start of the task's prompt and how it went, the action
 waiting on you, or the budget and its window), never the conversation or a
 result. The switch is per browser and per account, so turn it on in each
 browser you want alerts in. A **Viewer** account cannot turn them on: the
-switch reports an error instead. When the switch is greyed
+switch reports an error instead. They work in Chrome, Edge, Firefox and Safari,
+and in browsers that use the same push services as those; in a browser that
+uses a different push service, the switch reports an error, so turn them on in
+one of those browsers instead. When the switch is greyed
 out, the line under it says why: the browser does not support them, they are
 blocked for this site in the browser's own settings (allow them there, then
 reload), or your deployment has not set them up. If your deployment changes its

@@ -18,6 +18,14 @@
 //     via GET /push/vapid-public-key.
 //   - Subscriptions are per-user rows in the chat store; the HTTP layer
 //     scopes every subscribe/unsubscribe by the authenticated email.
+//   - The endpoint fleet POSTs to is BROWSER-supplied: any signed-in member
+//     can store one, so it is not trusted as an address. ValidateEndpoint
+//     admits only an https URL on the push service of a major browser, on
+//     subscribe and renew and again before every send, so a member cannot
+//     point the host's requests at a loopback, metadata, or internal address.
+//     Fixing the HOST (not just refusing internal IPs) is what keeps the
+//     sender on an ordinary client: the operator's HTTPS_PROXY still applies,
+//     and a hostname cannot resolve somewhere fleet did not choose.
 //
 // Default OFF: with any of FLEET_VAPID_PUBLIC_KEY / FLEET_VAPID_PRIVATE_KEY /
 // FLEET_VAPID_CONTACT unset, New returns nil and every Service method is a
@@ -28,6 +36,7 @@ package webpush
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -55,6 +64,34 @@ var (
 // best-effort and always fired off the hot path, so a short bound beats a
 // hung goroutine.
 const sendTimeout = 10 * time.Second
+
+// pushServiceHosts and pushServiceDomains are where fleet sends: the push
+// service each major browser subscribes with. A host matches a pushServiceHosts
+// entry exactly, or is a subdomain of a pushServiceDomains entry.
+//
+//   - fcm.googleapis.com: Firebase Cloud Messaging, for Chrome Stable and the
+//     Chromium-based browsers that use Google's service. Exact: other
+//     googleapis.com hosts serve unrelated APIs and user content.
+//   - jmt17.google.com: the same service's staging host, which Chromium hands
+//     out on every channel but Stable (Chrome Beta, Dev and Canary, and a
+//     Chromium build that reports no channel): see GetGcmEndpointForChannel
+//     in Chromium's components/push_messaging. Exact, like FCM's. (Behind a
+//     Chromium feature flag those channels use fcm.googleapis.com/preprod/wp/
+//     instead, which the first entry covers.)
+//   - push.services.mozilla.com: Mozilla autopush, for Firefox
+//     (updates.push.services.mozilla.com).
+//   - push.apple.com: Apple's service, for Safari; Apple documents
+//     *.push.apple.com as the hosts to allow.
+//   - notify.windows.com: the Windows Push Notification Services, for Edge on
+//     the desktop (wns2-*.notify.windows.com); Microsoft documents
+//     notify.windows.com as the only domain to send to.
+//
+// A browser on any other push service (a self-hosted autopush, say) cannot turn
+// notifications on; docs/PUSH-NOTIFICATIONS.md says so.
+var (
+	pushServiceHosts   = []string{"fcm.googleapis.com", "jmt17.google.com"}
+	pushServiceDomains = []string{"push.services.mozilla.com", "push.apple.com", "notify.windows.com"}
+)
 
 // payloadTTLSeconds is how long the relay may hold an undelivered
 // notification for an offline browser (the issue's suggested 1h).
@@ -140,7 +177,7 @@ type Service struct {
 	cfg   Config
 	store SubscriptionStore
 	// client is the HTTP seam handed to webpush-go, overridable in tests so no
-	// real relay is contacted. Defaults to a timeout-bounded http.Client.
+	// real relay is contacted. Defaults to newClient's.
 	client webpushgo.HTTPClient
 	// logf is the package logger seam, overridable in tests. It must never be
 	// handed a secret — log lines carry only emails/endpoints hosts, statuses,
@@ -151,15 +188,132 @@ type Service struct {
 // New builds a Service, or returns nil (feature off, all methods no-op) when
 // cfg is not fully configured. st must be non-nil when cfg is enabled.
 func New(cfg Config, st SubscriptionStore) *Service {
+	return NewWithHTTPClient(cfg, st, nil)
+}
+
+// NewWithHTTPClient is New with the HTTP client supplied by the caller. It is a
+// test seam: a fake push service, so a package outside this one can run a real
+// send (VAPID signing, payload encryption) with no network. ValidateEndpoint
+// still gates every send, but the redirect policy is the caller's client's, so
+// production code uses New. A nil client gets New's.
+func NewWithHTTPClient(cfg Config, st SubscriptionStore, client webpushgo.HTTPClient) *Service {
 	if !cfg.Enabled() {
 		return nil
+	}
+	if client == nil {
+		client = newClient()
 	}
 	return &Service{
 		cfg:    cfg,
 		store:  st,
-		client: &http.Client{Timeout: sendTimeout},
+		client: client,
 		logf:   log.Printf,
 	}
+}
+
+// newClient is the sender's HTTP client. Its transport is the default one, so
+// the operator's HTTPS_PROXY applies: ValidateEndpoint fixes the host to a
+// push service, so there is no internal address for a dial-time guard to
+// refuse. A push service answers a send itself (201) and has no reason to
+// redirect one, so a redirect is never followed: every request stays on the
+// host ValidateEndpoint checked, whatever some path on that host answers.
+func newClient() *http.Client {
+	return &http.Client{
+		Timeout: sendTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+// ValidateEndpoint reports whether fleet may store and send to a
+// browser-supplied push endpoint: an https URL with no port and no user info,
+// whose host is a push service in pushServiceHosts or pushServiceDomains. The
+// error names the host and the rule that failed, for the operator's log; the
+// browser is told only that its push service is not supported.
+//
+// The host must be a plain ASCII DNS name (see isPlainHostname) before it is
+// matched. net/http maps a non-ASCII host through IDNA to a punycode name,
+// while strings.ToLower folds some letters to ASCII ("İ" to "i"), so a Unicode
+// lookalike of a listed host would match here and dial a domain anyone can
+// register. A push service never issues one. A port is refused too: browsers
+// never send one, and webpush-go signs the VAPID audience from the host as
+// written, so an explicit ":443" would make a row the push service refuses.
+func ValidateEndpoint(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return errors.New("the endpoint is not a valid URL")
+	}
+	var why string
+	switch {
+	case u.Scheme != "https":
+		why = "is not an https URL"
+	case u.User != nil:
+		why = "carries user info"
+	case u.Host == "":
+		why = "has no host"
+	case u.Port() != "" || strings.HasSuffix(u.Host, ":"):
+		why = "names a port"
+	case !isPlainHostname(u.Host):
+		why = "has a host that is not a plain ASCII DNS name"
+	case !isPushServiceHost(strings.ToLower(u.Host)):
+		why = "is not on a push service fleet sends to"
+	default:
+		return nil
+	}
+	host := u.Host
+	if len(host) > maxHostLen {
+		// The host is the member's to choose and goes into the operator's log.
+		host = host[:maxHostLen] + "…"
+	}
+	return fmt.Errorf("the endpoint on %q %s", host, why)
+}
+
+// maxHostLen is the longest DNS name (RFC 1035), and maxLabelLen its longest
+// label.
+const (
+	maxHostLen  = 253
+	maxLabelLen = 63
+)
+
+// isPlainHostname reports whether host is a DNS name in plain ASCII: labels of
+// 1 to 63 letters, digits and hyphens, joined by dots, at most 253 bytes in
+// all. So no port, no IP-literal brackets, no zone, no empty label, nothing
+// that net/http would rewrite before it dials.
+func isPlainHostname(host string) bool {
+	if host == "" || len(host) > maxHostLen {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > maxLabelLen {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// isPushServiceHost reports whether a lowercased host is a push service (see
+// pushServiceHosts; isPlainHostname has already held it to ASCII). A domain
+// entry matches only a whole-label subdomain, so neither "xpush.apple.com"
+// nor "push.apple.com.example" passes.
+func isPushServiceHost(host string) bool {
+	for _, h := range pushServiceHosts {
+		if host == h {
+			return true
+		}
+	}
+	for _, d := range pushServiceDomains {
+		if len(host) > len(d)+1 && strings.HasSuffix(host, "."+d) {
+			return true
+		}
+	}
+	return false
 }
 
 // Enabled reports whether the service is configured and usable.
@@ -215,6 +369,17 @@ func (s *Service) sendToUser(ctx context.Context, userEmail, title, body, deepLi
 // relay says the endpoint is gone. Errors are logged, never returned — one
 // dead browser must not mask delivery to the user's other browsers.
 func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSubscription, urgency webpushgo.Urgency) {
+	// A row stored before endpoints were checked, or written straight to the
+	// database, is never sent to: the subscribe-time check is not the only
+	// gate. It can never be delivered, so it is retired like an endpoint the
+	// relay reported gone rather than refused again on every send.
+	if err := ValidateEndpoint(sub.Endpoint); err != nil {
+		s.logf("webpush: retiring a subscription of %s: %v", sub.UserEmail, err)
+		if err := s.store.DeletePushSubscription(ctx, sub.Endpoint); err != nil {
+			s.logf("webpush: delete refused subscription failed: %v", err)
+		}
+		return
+	}
 	resp, err := webpushgo.SendNotificationWithContext(ctx, payload, &webpushgo.Subscription{
 		Endpoint: sub.Endpoint,
 		Keys:     webpushgo.Keys{Auth: sub.KeysAuth, P256dh: sub.KeysP256dh},
@@ -227,6 +392,12 @@ func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSub
 		VAPIDPrivateKey: s.cfg.VAPIDPrivateKey,
 	})
 	if err != nil {
+		// A transport error is a *url.Error whose text quotes the whole
+		// endpoint, a capability URL. Log only its cause, next to the host.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
 		s.logf("webpush: send to %s failed: %v", endpointHost(sub.Endpoint), err)
 		return
 	}
@@ -314,11 +485,10 @@ func relayReason(body io.Reader) string {
 // full endpoint is a capability URL (anyone holding it can send to that
 // browser), so it never goes to the log whole.
 func endpointHost(endpoint string) string {
-	trimmed := strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
-	if i := strings.IndexByte(trimmed, '/'); i >= 0 {
-		return trimmed[:i]
+	if u, err := url.Parse(endpoint); err == nil && u.Host != "" {
+		return u.Host // host[:port]; never the user info, path or query
 	}
-	return trimmed
+	return "(unparseable endpoint)"
 }
 
 // SendEvent adapts a notify.Event into a task-lifecycle push, making the
