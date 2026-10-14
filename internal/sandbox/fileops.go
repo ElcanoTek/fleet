@@ -103,8 +103,9 @@ type FileOpResult struct {
 	Diff      string
 	// Replaced and OldSize report that a write replaced an existing entry,
 	// and that entry's size (#1745). DiffNote says why such a write has no
-	// diff: binary content, a file over the diff size cap, or an old entry
-	// that was not a regular file.
+	// diff (binary content, a file or change over the diff caps), or no old
+	// hash either (an old entry that was not a regular file, or could not be
+	// read).
 	Replaced     bool
 	OldSize      int64
 	DiffNote     string
@@ -145,7 +146,12 @@ type FileOpStaleError struct {
 	Msg string
 }
 
-func (e *FileOpStaleError) Error() string { return e.Msg }
+func (e *FileOpStaleError) Error() string {
+	if e.Msg == "" {
+		return ErrFileOpStale.Error()
+	}
+	return e.Msg
+}
 func (e *FileOpStaleError) Is(target error) bool {
 	return target == ErrFileOpStale
 }
@@ -273,6 +279,53 @@ func pathWithin(root, path string) (bool, error) {
 		return false, err
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel), nil
+}
+
+// encodeFileOpWire builds the JSON request fileops.py reads. Every backend
+// (podman, kubernetes, host) sends it, so a field added here reaches all
+// three: the podman and host backends once built their own copies, and a
+// field missing from one silently dropped a guard on that backend.
+func encodeFileOpWire(req FileOpRequest, anchor string) ([]byte, error) {
+	wire := map[string]any{
+		"op":     string(req.Op),
+		"path":   req.Path,
+		"root":   req.Root,
+		"anchor": anchor,
+	}
+	switch req.Op {
+	case FileOpRead:
+		wire["offset"] = req.Offset
+		wire["limit"] = req.Limit
+	case FileOpWrite:
+		wire["data_b64"] = base64.StdEncoding.EncodeToString(req.Data)
+		if req.ExpectedSHA256 != "" {
+			wire["expected_sha256"] = req.ExpectedSHA256
+		}
+	case FileOpEdit:
+		wire["old_b64"] = base64.StdEncoding.EncodeToString([]byte(req.OldText))
+		wire["new_b64"] = base64.StdEncoding.EncodeToString([]byte(req.NewText))
+		wire["replace_all"] = req.ReplaceAll
+		if req.ExpectedSHA256 != "" {
+			wire["expected_sha256"] = req.ExpectedSHA256
+		}
+	case fileOpBindRoot:
+		// Root + anchor are the complete request.
+	default:
+		return nil, fmt.Errorf("unknown fileop %q", req.Op)
+	}
+	if req.testPause > 0 {
+		wire["test_pause_ms"] = req.testPause.Milliseconds()
+		wire["test_ready_name"] = req.testReadyName
+	}
+	if req.rootBound {
+		wire["expected_dev"] = req.expectedDev
+		wire["expected_ino"] = req.expectedIno
+	}
+	out, err := json.Marshal(wire)
+	if err != nil {
+		return nil, fmt.Errorf("marshal fileop: %w", err)
+	}
+	return out, nil
 }
 
 // fileOpResponse is the JSON shape fileops.py writes (shared by both backends;

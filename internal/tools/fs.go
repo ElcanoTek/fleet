@@ -38,7 +38,7 @@ type WriteFileParams struct {
 // hash, size and a bounded diff, and expected_hash guards it (#1745).
 func NewWriteFileTool(sb *sandbox.Sandbox) fantasy.AgentTool {
 	return fantasy.NewAgentTool("write_file",
-		"Writes content to a file, creating it if it doesn't exist or overwriting it if it does; an overwrite returns the replaced file's SHA-256, size and a diff. Pass expected_hash (from view_file, or \"absent\" to create only) to fail safely instead of replacing a file that changed or already exists. Relative paths resolve against the per-conversation workspace (same cwd as bash/run_python).",
+		"Writes content to a file, creating it if it doesn't exist or overwriting it if it does; an overwrite reports the replaced file's SHA-256, size and a diff (expected_hash guards it). Relative paths resolve against the per-conversation workspace (same cwd as bash/run_python).",
 		func(ctx context.Context, params WriteFileParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			result, err := runWriteFile(ctx, sb, params)
 			if err != nil {
@@ -84,13 +84,15 @@ func runWriteFile(ctx context.Context, sb *sandbox.Sandbox, params WriteFilePara
 // and an overwritten one read differently, and an overwrite names the hash
 // and size of what it replaced, with a bounded diff, so a write that
 // destroyed a file the model had forgotten is visible in the transcript.
+// When the old entry could not be hashed (not a regular file, or
+// unreadable), the executor's note says why.
 func writeFileResult(path string, n int, res sandbox.FileOpResult) string {
 	var out string
 	switch {
 	case !res.Replaced:
 		out = fmt.Sprintf("Created %s (%d bytes)", path, n)
 	case res.OldSHA256 == "":
-		out = fmt.Sprintf("Overwrote existing entry %s (not a regular file, %d bytes) with %d bytes", path, res.OldSize, n)
+		out = fmt.Sprintf("Overwrote existing file %s (%d bytes) with %d bytes", path, res.OldSize, n)
 	case res.OldSHA256 == res.SHA256:
 		out = fmt.Sprintf("Overwrote existing file %s with identical content (%d bytes)", path, n)
 	default:

@@ -20,6 +20,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import secrets
 import stat
 import sys
@@ -31,6 +32,10 @@ DIFF_MAX_BYTES = 4096
 # this size: the old file is held in memory for the diff, and difflib slows
 # down sharply on large inputs. Larger files still report their hashes.
 DIFF_SOURCE_MAX_BYTES = 256 * 1024
+# ...and only when the lines that differ, with their context, are at most this
+# many a side: difflib's cost grows with the square of the line count, and a
+# diff that long would be cut to DIFF_MAX_BYTES anyway.
+DIFF_MAX_LINES = 2000
 # expected_sha256 on a write may name no hash at all but this: the file must
 # not exist yet (create-only).
 EXPECT_ABSENT = "absent"
@@ -42,6 +47,20 @@ class UnsafePath(Exception):
 
 class StaleContent(Exception):
     pass
+
+
+class NotRegularFile(OSError):
+    """The path names a FIFO, socket or device, not a regular file. Files are
+    opened non-blocking and this is refused, so such an entry cannot stall
+    the helper until the file-op timeout retires the sandbox."""
+
+    def __init__(self):
+        super().__init__(errno.EINVAL, "path is not a regular file")
+
+
+APPEARED = (
+    "a file appeared at this path while it was being written; view it, then retry"
+)
 
 
 def fail(kind, msg, **extra):
@@ -211,7 +230,13 @@ def _test_pause(req, parent_fd):
 
 def _open_file(parent_fd, name):
     try:
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
+        # O_NONBLOCK: a FIFO would otherwise block the open until a writer
+        # came; on a regular file it changes nothing.
+        fd = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+            dir_fd=parent_fd,
+        )
     except FileNotFoundError:
         raise
     except IsADirectoryError:
@@ -224,6 +249,9 @@ def _open_file(parent_fd, name):
     if stat.S_ISDIR(info.st_mode):
         os.close(fd)
         raise IsADirectoryError(name)
+    if not stat.S_ISREG(info.st_mode):
+        os.close(fd)
+        raise NotRegularFile()
     return fd, info
 
 
@@ -280,10 +308,7 @@ def _atomic_write(
     if expect_absent and before is not None:
         # The caller saw no file here and reports the write as a create; an
         # entry that appeared since must not be replaced unreported.
-        raise StaleContent(
-            "a file appeared at this path while it was being written; "
-            "view it, then retry"
-        )
+        raise StaleContent(APPEARED)
     mode = stat.S_IMODE(before.st_mode) if before is not None else 0o600
     owner = (before.st_uid, before.st_gid) if before is not None else None
 
@@ -321,11 +346,16 @@ def _atomic_write(
         current = _lstat_at(parent_fd, name)
         if before is None:
             if current is not None:
-                raise UnsafePath("destination appeared during write")
+                # Only a write starts with no file (#1745); a file created
+                # meanwhile is a concurrent change, not a path attack.
+                raise StaleContent(APPEARED)
         elif not _same_file(before, current):
             raise UnsafePath("destination changed during write")
         if expected_digest is not None:
-            current_digest = _sha256_open_at(parent_fd, name)
+            try:
+                current_digest = _sha256_open_at(parent_fd, name)
+            except (FileNotFoundError, NotRegularFile) as exc:
+                raise StaleContent("file changed before it was replaced") from exc
             if current_digest != expected_digest:
                 raise StaleContent("file content changed before the edit was committed")
         os.replace(tmp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
@@ -394,6 +424,8 @@ def do_read(req):
         return fail("unsafe_path", str(exc))
     except StaleContent as exc:
         return fail("stale", str(exc))
+    except NotRegularFile as exc:
+        return fail("", exc.strerror)
     except OSError as exc:
         return fail("", "read failed: %s" % exc)
     finally:
@@ -411,12 +443,13 @@ def _expected_digest(req):
 
 
 def _read_replaced(parent_fd, name, seen):
-    """Hash the regular file a write is about to replace, keeping its bytes
-    when they are small enough to diff (else None).
+    """Hash the regular file a write is about to replace: (sha256, its bytes
+    when small enough to diff or None, its size).
 
-    Opened non-blocking and checked against the entry lstat saw, so a FIFO or
-    another file swapped in since cannot hang the helper or be described in
-    its place: the write is refused instead, and nothing is replaced.
+    Opened through the held parent dirfd, no-follow and non-blocking, and
+    checked to be the entry lstat saw, so a symlink, FIFO or other file
+    swapped in since cannot redirect the read, stall the helper, or be
+    described in its place.
     """
     changed = "file changed while it was being written; retry"
     try:
@@ -452,83 +485,89 @@ def _read_replaced(parent_fd, name, seen):
         after = os.fstat(fd)
         if (info.st_size, info.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
             raise StaleContent("file changed while its hash was computed; retry")
-        return digest.hexdigest(), (b"".join(kept) if kept is not None else None)
+        kept = b"".join(kept) if kept is not None else None
+        return digest.hexdigest(), kept, info.st_size
     finally:
         os.close(fd)
 
 
 def _write_diff(path, old, new):
-    """The bounded diff of an overwrite, or why there is none."""
+    """The bounded diff of an overwrite: (diff, added, removed, note), where
+    note says why there is no diff."""
     if old is None or len(new) > DIFF_SOURCE_MAX_BYTES:
-        return (
-            "",
-            0,
-            0,
-            "no diff: a file is over %d KB" % (DIFF_SOURCE_MAX_BYTES // 1024),
-        )
+        note = "no diff: a file is over %d KB" % (DIFF_SOURCE_MAX_BYTES // 1024)
+        return "", 0, 0, note
     try:
         old.decode("utf-8")
         new.decode("utf-8")
     except UnicodeDecodeError:
         return "", 0, 0, "no diff: binary content"
-    diff, added, removed = _bounded_diff(path, old, new, "write")
-    return diff, added, removed, ""
+    return _bounded_diff(path, old, new, "write", DIFF_MAX_LINES)
+
+
+def _reason(exc):
+    if isinstance(exc, OSError) and exc.strerror:
+        return exc.strerror
+    return str(exc)
 
 
 def do_write(req):
     parent_fd = -1
     expected = _expected_digest(req)
+    # guard: a hash the file must have now. "absent" refuses any existing
+    # entry; no expected_hash replaces whatever is there, as before #1745.
+    guard = expected not in ("", EXPECT_ABSENT)
     try:
         try:
             # A hash names a file that must already exist: a missing directory
             # means it is gone, and creating directories to say so would be a
             # write the caller did not ask for.
-            parent_fd, name = _open_parent(req, create=expected in ("", EXPECT_ABSENT))
+            parent_fd, name = _open_parent(req, create=not guard)
         except FileNotFoundError:
-            return _write_stale_missing(expected)
+            if guard:
+                return _write_stale_missing(expected)
+            raise
         _test_pause(req, parent_fd)
         data = base64.b64decode(req.get("data_b64", ""))
 
         before = _lstat_at(parent_fd, name)
-        old_digest, old_data = None, None
-        if before is not None and stat.S_ISREG(before.st_mode):
-            old_digest, old_data = _read_replaced(parent_fd, name, before)
-        if expected == EXPECT_ABSENT:
-            if before is not None:
-                return fail(
-                    "stale",
-                    'file already exists (%s, %d bytes); expected_hash "absent" '
-                    "only creates a new file — view it, then pass its sha256 as "
-                    "expected_hash to replace it"
-                    % (
-                        "sha256 " + old_digest if old_digest else "not a regular file",
-                        before.st_size,
-                    ),
-                )
-        elif expected:
+        old = None  # (sha256, bytes or None, size) of the file being replaced
+        unread = None  # why an existing entry could not be described
+        if before is not None:
+            if not stat.S_ISREG(before.st_mode):
+                unread = "the old entry was not a regular file"
+            else:
+                try:
+                    old = _read_replaced(parent_fd, name, before)
+                except (StaleContent, OSError) as exc:
+                    if guard:
+                        raise
+                    unread = "the old file could not be read (%s)" % _reason(exc)
+
+        if expected == EXPECT_ABSENT and before is not None:
+            if old is not None:
+                what = "file already exists (sha256 %s, %d bytes)" % (old[0], old[2])
+                how = "view it, then pass its sha256 as expected_hash to replace it"
+            elif stat.S_ISREG(before.st_mode):
+                what = "file already exists (%d bytes; %s)" % (before.st_size, unread)
+                how = "write without expected_hash to replace it"
+            else:
+                what = "something other than a regular file (a FIFO, socket or device) exists at this path"
+                how = "write without expected_hash to replace it"
+            return fail(
+                "stale",
+                '%s; expected_hash "absent" only creates a new file — %s' % (what, how),
+            )
+        if guard:
             if before is None:
                 return _write_stale_missing(expected)
-            if old_digest != expected:
-                return _stale(expected, old_digest or "not a regular file")
+            if old is None:
+                return _stale(expected, "not a regular file")
+            if old[0] != expected:
+                return _stale(expected, old[0])
 
-        guard = bool(expected) and expected != EXPECT_ABSENT
-        try:
-            _atomic_write(
-                parent_fd,
-                name,
-                data,
-                expected=before,
-                expected_digest=old_digest if guard else None,
-                expect_absent=before is None,
-            )
-        except StaleContent as exc:
-            if before is None or not guard:
-                return fail("stale", str(exc))  # a file appeared meanwhile
-            try:
-                current = _sha256_open_at(parent_fd, name)
-            except (OSError, UnsafePath, StaleContent):
-                current = "unknown"
-            return _stale(expected, current)
+        # Describe the overwrite before committing it, so a slow diff can
+        # never leave a write that landed reported as failed.
         response = {
             "ok": True,
             "err_kind": "",
@@ -539,14 +578,39 @@ def do_write(req):
             "sha256": hashlib.sha256(data).hexdigest(),
             "replaced": before is not None,
         }
-        if before is not None:
-            response["old_size"] = before.st_size
-            response["old_sha256"] = old_digest or ""
-            if old_digest is None:
-                response["diff_note"] = "no diff: the old entry was not a regular file"
-            else:
-                diff, added, removed, note = _write_diff(req["path"], old_data, data)
-                response.update(diff=diff, added=added, removed=removed, diff_note=note)
+        if old is not None:
+            diff, added, removed, note = _write_diff(req["path"], old[1], data)
+            response.update(
+                old_sha256=old[0],
+                old_size=old[2],
+                diff=diff,
+                added=added,
+                removed=removed,
+                diff_note=note,
+            )
+        elif before is not None:
+            response.update(
+                old_sha256="",
+                old_size=before.st_size,
+                diff_note="no hash or diff: " + unread,
+            )
+
+        try:
+            _atomic_write(
+                parent_fd,
+                name,
+                data,
+                expected_digest=old[0] if guard else None,
+                expect_absent=before is None,
+            )
+        except StaleContent as exc:
+            if not guard or before is None:
+                return fail("stale", str(exc))  # a file appeared meanwhile
+            try:
+                current = _sha256_open_at(parent_fd, name)
+            except (OSError, UnsafePath, StaleContent):
+                current = "unknown"
+            return _stale(expected, current)
         return response
     except IsADirectoryError:
         return fail("is_dir", "path is a directory")
@@ -561,9 +625,53 @@ def do_write(req):
             os.close(parent_fd)
 
 
-def _bounded_diff(path, before, after, verb="edit"):
+def _changed_window(old, new, context):
+    """Drop the lines old and new share at the start and the end, keeping
+    context lines around the change: (offset of the window, old, new)."""
+    n = min(len(old), len(new))
+    head = 0
+    while head < n and old[head] == new[head]:
+        head += 1
+    tail = 0
+    while tail < n - head and old[-1 - tail] == new[-1 - tail]:
+        tail += 1
+    start = max(0, head - context)
+    cut = max(0, tail - context)
+    return start, old[start : len(old) - cut], new[start : len(new) - cut]
+
+
+HUNK = re.compile(r"^@@ -(\d+)((?:,\d+)?) \+(\d+)((?:,\d+)?) @@")
+
+
+def _shift_hunk(line, offset):
+    """Move a hunk header from window line numbers to the file's."""
+    return HUNK.sub(
+        lambda m: (
+            "@@ -%d%s +%d%s @@"
+            % (
+                int(m.group(1)) + offset,
+                m.group(2),
+                int(m.group(3)) + offset,
+                m.group(4),
+            )
+        ),
+        line,
+    )
+
+
+def _bounded_diff(path, before, after, verb="edit", max_lines=None):
+    """A unified diff cut to DIFF_MAX_BYTES: (diff, added, removed, note).
+
+    With max_lines, only the changed window is diffed, and a window longer
+    than max_lines a side gets no diff, with a note saying so.
+    """
     old_lines = before.decode("utf-8", "replace").splitlines(keepends=True)
     new_lines = after.decode("utf-8", "replace").splitlines(keepends=True)
+    offset = 0
+    if max_lines is not None:
+        offset, old_lines, new_lines = _changed_window(old_lines, new_lines, 3)
+        if max(len(old_lines), len(new_lines)) > max_lines:
+            return "", 0, 0, "no diff: the change spans over %d lines" % max_lines
     name = os.path.basename(path)
     lines = list(
         difflib.unified_diff(
@@ -574,6 +682,11 @@ def _bounded_diff(path, before, after, verb="edit"):
             n=3,
         )
     )
+    if offset:
+        lines = [
+            _shift_hunk(line, offset) if line.startswith("@@") else line
+            for line in lines
+        ]
     added = sum(
         1 for line in lines if line.startswith("+") and not line.startswith("+++")
     )
@@ -585,7 +698,7 @@ def _bounded_diff(path, before, after, verb="edit"):
     if len(encoded) > DIFF_MAX_BYTES:
         text = encoded[:DIFF_MAX_BYTES].decode("utf-8", "ignore")
         text += "\n... diff truncated (%s applied in full) ..." % verb
-    return text, added, removed
+    return text, added, removed, ""
 
 
 def _stale(expected, current):
@@ -673,7 +786,7 @@ def do_edit(req):
                 current = "unknown"
             return _stale(expected, current)
 
-        diff, added, removed = _bounded_diff(req["path"], content, updated)
+        diff, added, removed, _ = _bounded_diff(req["path"], content, updated)
         return {
             "ok": True,
             "err_kind": "",
@@ -694,6 +807,8 @@ def do_edit(req):
         return fail("is_dir", "path is a directory")
     except UnsafePath as exc:
         return fail("unsafe_path", str(exc))
+    except NotRegularFile as exc:
+        return fail("", exc.strerror)
     except OSError as exc:
         return fail("", "edit failed: %s" % exc)
     finally:
