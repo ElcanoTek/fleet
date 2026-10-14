@@ -404,8 +404,8 @@ os.mkfifo(name, dir_fd=parent_fd)`, nil},
 			if err != nil {
 				t.Fatalf("a plain write over a swapped entry was refused: %v", err)
 			}
-			if !res.Replaced || res.OldSHA256 != "" || !strings.Contains(res.DiffNote, "could not be read") {
-				t.Errorf("result = %+v, want a replaced file with no old hash, noted as unread", res)
+			if !res.Replaced || res.OldSHA256 != "" || !strings.Contains(res.DiffNote, "could not be read") || strings.Contains(res.DiffNote, "retry") {
+				t.Errorf("result = %+v, want a replaced file with no old hash, noted as unread (and no advice to retry a write that went through)", res)
 			}
 			if got, _ := os.ReadFile(path); string(got) != "new\n" {
 				t.Errorf("file = %q, want the new content", got)
@@ -421,29 +421,47 @@ func strconvQuote(s string) string {
 
 // A guarded write hashes the file again just before the rename: a change made
 // after its first check is refused as stale, naming the current hash, and the
-// change survives.
+// change survives. So is a FIFO swapped in, which the re-check opens
+// non-blocking and refuses rather than waiting on.
 func TestFileOp_GuardedWriteRechecksBeforeTheRename(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "f.txt")
-	orig := []byte("original\n")
-	if err := os.WriteFile(path, orig, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	patch := `real_read = fileops._read_replaced
+	for _, tc := range []struct {
+		name, change, want string
+		check              func(t *testing.T, path string)
+	}{
+		{"content changed", `fd = os.open(name, os.O_WRONLY | os.O_TRUNC, dir_fd=parent_fd)
+os.write(fd, b"concurrent\n")
+os.close(fd)`, "current " + sha256Hex([]byte("concurrent\n")), func(t *testing.T, path string) {
+			if got, _ := os.ReadFile(path); string(got) != "concurrent\n" {
+				t.Fatalf("the concurrent change was overwritten: %q", got)
+			}
+		}},
+		{"FIFO swapped in", `os.unlink(name, dir_fd=parent_fd)
+os.mkfifo(name, dir_fd=parent_fd)`, "current unknown", func(t *testing.T, path string) {
+			if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+				t.Fatalf("the FIFO was replaced: %v %v", info, err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "f.txt")
+			orig := []byte("original\n")
+			if err := os.WriteFile(path, orig, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			patch := `real_read = fileops._read_replaced
 def read_then_change(parent_fd, name, seen):
     result = real_read(parent_fd, name, seen)
-    fd = os.open(name, os.O_WRONLY | os.O_TRUNC, dir_fd=parent_fd)
-    os.write(fd, b"concurrent\n")
-    os.close(fd)
+` + indent(tc.change, "    ") + `
     return result
 fileops._read_replaced = read_then_change
 `
-	_, err := runPatchedWrite(t, map[string]any{"path": path, "root": root, "data_b64": "bmV3Cg==", "expected_sha256": sha256Hex(orig)}, patch)
-	if !errors.Is(err, ErrFileOpStale) || !strings.Contains(err.Error(), "current "+sha256Hex([]byte("concurrent\n"))) {
-		t.Fatalf("err = %v, want stale naming the concurrent content's hash", err)
-	}
-	if got, _ := os.ReadFile(path); string(got) != "concurrent\n" {
-		t.Fatalf("the concurrent change was overwritten: %q", got)
+			_, err := runPatchedWrite(t, map[string]any{"path": path, "root": root, "data_b64": "bmV3Cg==", "expected_sha256": sha256Hex(orig)}, patch)
+			if !errors.Is(err, ErrFileOpStale) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want stale naming %q", err, tc.want)
+			}
+			tc.check(t, path)
+		})
 	}
 }
 
@@ -648,7 +666,9 @@ func TestFileOp_WriteDiffWindow(t *testing.T) {
 
 // The windowed diff is the diff difflib gives for the whole file, for
 // changes at the start, middle and end, insertions, deletions, and a file
-// without a final newline.
+// without a final newline. Where a change lands in a run of identical lines
+// the two may place it differently, so there each diff is applied to the old
+// file instead, and must give the new one.
 func TestFileOp_WriteDiffWindowMatchesTheWholeFileDiff(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 required")
@@ -673,6 +693,36 @@ cases = {
     "all": ["other %d\n" % i for i in range(1, 41)],
     "empty": [],
 }
+import re
+HDR = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+def apply(old, diff):
+    lines = diff.splitlines(keepends=True)[2:]
+    out, pos, i = [], 0, 0
+    while i < len(lines):
+        m = HDR.match(lines[i])
+        i += 1
+        a, b = int(m.group(1)), int(m.group(2) if m.group(2) is not None else 1)
+        start = a - 1 if b else a
+        if start < pos:
+            return None
+        out += old[pos:start]
+        pos = start
+        while i < len(lines) and not lines[i].startswith("@@"):
+            tag, text = lines[i][0], lines[i][1:]
+            i += 1
+            if tag in " -":
+                if pos >= len(old) or old[pos] != text:
+                    return None
+                pos += 1
+            if tag in " +":
+                out.append(text)
+    return out + old[pos:]
+blank = ["\n"] * 10
+runs = {
+    "a line added to a run": (blank, blank + ["\n"]),
+    "a line taken from a run": (blank, blank[1:]),
+    "a run grown in the middle": (base[:5] + blank + base[5:], base[:5] + blank * 2 + base[5:]),
+}
 bad = []
 for name, new in cases.items():
     old_b, new_b = "".join(base).encode(), "".join(new).encode()
@@ -680,6 +730,16 @@ for name, new in cases.items():
     window = fileops._bounded_diff("f", old_b, new_b, "write", 2000)
     if whole != window:
         bad.append("%s:\n%r\n%r" % (name, whole, window))
+for name, new in cases.items():
+    window = fileops._bounded_diff("f", "".join(base).encode(), "".join(new).encode(), "write", 2000)
+    if apply(base, window[0]) != new:
+        bad.append("%s: the windowed diff does not apply:\n%r" % (name, window))
+for name, (old, new) in runs.items():
+    old_b, new_b = "".join(old).encode(), "".join(new).encode()
+    whole = fileops._bounded_diff("f", old_b, new_b, "write")
+    window = fileops._bounded_diff("f", old_b, new_b, "write", 2000)
+    if apply(old, window[0]) != new or window[1:] != whole[1:]:
+        bad.append("%s: the windowed diff does not apply, or its counts differ:\n%r\n%r" % (name, whole, window))
 print("\n".join(bad) or "ok")
 `
 	out, err := exec.Command("python3", "-I", "-c", driver, mod).CombinedOutput()

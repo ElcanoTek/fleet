@@ -542,7 +542,10 @@ def do_write(req):
                 except (StaleContent, OSError) as exc:
                     if guard:
                         raise
-                    unread = "the old file could not be read (%s)" % _reason(exc)
+                    reason = _reason(exc)
+                    if reason.endswith("; retry"):  # the write goes ahead
+                        reason = reason[: -len("; retry")]
+                    unread = "the old file could not be read (%s)" % reason
 
         if expected == EXPECT_ABSENT and before is not None:
             if old is not None:

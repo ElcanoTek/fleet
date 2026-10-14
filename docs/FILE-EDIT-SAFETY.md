@@ -82,11 +82,11 @@ wrote N bytes". The same seam now reports an overwrite and can guard it:
   stall the executor: a symlink is refused as an unsafe path, and any other
   swap is never described as the replaced file. It is hashed as it streams;
   its bytes are kept only up to 256 KB, for the diff.
-- **No blocking on a FIFO, for any file tool.** `view_file`, `edit_file` and
-  the guarded write's last hash open the file non-blocking and refuse anything
-  but a regular file ("path is not a regular file"). Before, a FIFO in the
-  workspace made `view_file` wait until the 60 s file-op timeout, which retires
-  the sandbox.
+- **No blocking on a FIFO, for any file tool.** `view_file` and `edit_file`
+  open the file non-blocking and refuse anything but a regular file ("path is
+  not a regular file"); a guarded write whose file turns into a FIFO before
+  the rename is refused as stale. Before, a FIFO in the workspace made
+  `view_file` wait until the 60 s file-op timeout, which retires the sandbox.
 - **A file that appears meanwhile.** If an entry appears at the path between
   the executor finding none and the rename, the write is refused as stale
   ("a file appeared at this path …"), rather than replacing it and reporting a
@@ -106,9 +106,11 @@ Not done, deliberately:
   `expected_hash` (an open question in the issue), and there is no
   read-before-write gate: the issue's source paper does not show that the
   extra friction helps.
-- **Without `expected_hash`, the old file is not re-checked** between its hash
-  and the rename (the same as `edit_file` without one), so the reported old
-  hash and diff describe the file as it was read.
+- **Without `expected_hash`, nothing is re-checked** between the old file's
+  hash and the rename: a plain write replaces whatever is at the path then, as
+  before #1745. The reported old hash and diff describe the file that was
+  read, which a concurrent swap can make a different file from the one
+  replaced.
 - **Every write through the seam pays the extra work**, the native tools that
   write files included (`download_url`, `generate_image`, `xlsx_workbook`,
   model-output artifacts), although only `write_file` shows the report: one
