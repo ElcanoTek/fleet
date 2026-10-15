@@ -227,7 +227,9 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		s.classifierOutcome(checks, stage, record)
 		return
 	}
-	metrics.RecordEscalationClassifierCheck(checks[0].mode, "late")
+	// Lateness is its own counter: the check is still counted once, by its
+	// eventual outcome, in the background.
+	metrics.RecordEscalationClassifierLate(checks[0].mode)
 	s.background.Go("escalation.classifier_late", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), agentcore.StruggleCheckTimeout+5*time.Second)
 		defer cancel()

@@ -3975,7 +3975,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // Let the transcript drop the retried bubble first, so the card holds
       // against the answer it will show without it.
       await new Promise((resolve) => window.setTimeout(resolve, 0));
-      const detail: ResendDetail = { cardId: answer.cardId, actionId: answer.actionId, message: lastUser.content };
+      const detail: ResendDetail = {
+        cardId: answer.cardId,
+        actionId: answer.actionId,
+        message: lastUser.content,
+        model: retryOpts?.model,
+      };
       window.dispatchEvent(new CustomEvent(RESEND_EVENT, { detail }));
       if (detail.handled) {
         await detail.done;

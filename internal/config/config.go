@@ -2038,6 +2038,9 @@ func (c *Config) Validate() error {
 	if c.UnpinnedCap <= 0 {
 		return fmt.Errorf("CONVERSATION_UNPINNED_CAP must be positive")
 	}
+	if err := c.validateEscalationClassifier(); err != nil {
+		return err
+	}
 	if c.InputQueueRetentionDays < 0 {
 		return fmt.Errorf("FLEET_INPUT_QUEUE_RETENTION_DAYS must be non-negative")
 	}
@@ -2554,4 +2557,24 @@ func normalizeBudgetFraction(f float64) float64 {
 func TaskDefaultMaxRetriesFromEnv() int {
 	lp := &loadParser{}
 	return min(max(lp.getenvFleetInt("TASK_DEFAULT_MAX_RETRIES", 1), 0), 10)
+}
+
+// validateEscalationClassifier refuses a mistyped classifier mode or model
+// slug at boot (docs/CHAT-ESCALATION.md). Read leniently, an unknown mode
+// would quietly turn the default-on check off, and a malformed slug would
+// fail at the Decisions API on every message. The rules match what the admin
+// panel accepts. Empty means "use the default".
+func (c *Config) validateEscalationClassifier() error {
+	switch strings.ToLower(strings.TrimSpace(c.EscalationClassifierMode)) {
+	case "", EscalationClassifierOff, EscalationClassifierObserve, EscalationClassifierSuggest:
+	default:
+		return fmt.Errorf("FLEET_ESCALATION_CLASSIFIER_MODE must be off, observe or suggest (got %q)", c.EscalationClassifierMode)
+	}
+	if m := strings.TrimSpace(c.EscalationClassifierModel); m != "" {
+		i := strings.Index(m, "/")
+		if i <= 0 || i == len(m)-1 || strings.ContainsAny(m, " \t\n") || len(m) > 200 {
+			return fmt.Errorf("FLEET_ESCALATION_CLASSIFIER_MODEL must be a model slug like provider/model (got %q)", c.EscalationClassifierModel)
+		}
+	}
+	return nil
 }

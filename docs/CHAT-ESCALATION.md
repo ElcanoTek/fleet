@@ -54,7 +54,7 @@ comes from the signal ("3 tool calls in a row failed on this request…").
   1.5 s for the answers (the client blocks the next message while the stream
   is open). A later answer is recorded in the background for the per-user
   count, without a card, since the stream has closed
-  (`fleet_escalation_classifier_checks_total{outcome="late"}`).
+  (`fleet_escalation_classifier_late_total`).
 - **What it sends.** The last ~6,000 characters of user and assistant *text*:
   never tool output, attachments or the injected context. It goes through
   OpenRouter's Decisions API (`POST /api/alpha/decisions`), the same path Lens
@@ -87,6 +87,19 @@ comes from the signal ("3 tool calls in a row failed on this request…").
   record, plus a `fleet_escalation_classifier_checks_total{outcome="error"}`
   increment. A turn is never blocked or delayed by it.
 
+### What it does not touch
+
+- **The main model's prompt and prompt cache.** The frustration check is a
+  separate request to the Decisions API; it reads history and never writes to
+  it. A server-staged card's resolution note is appended at the end of the
+  history and, having no tool call of its own, is dropped on replay
+  (`replayHistory` emits results only alongside their calls), so the cached
+  prefix the next turn sends is unchanged. The one cache cost is a single
+  rebuild after deploy, because this release edits the
+  `suggest_advanced_model` description and the generic chat prompt.
+- **The run's cost ceiling.** The check is a host-side call, off the ceiling,
+  like titling.
+
 ### Records and metrics
 
 - **`escalation_events`** (migration 078) gets one row per struggle:
@@ -108,7 +121,9 @@ comes from the signal ("3 tool calls in a row failed on this request…").
     `staged`, `suppressed`, `error`, `dismissed`, or `accepted_switch_and_retry`
     / `accepted_switch_only`;
   - `fleet_escalation_classifier_checks_total{mode, outcome}`, where outcome is
-    `pushback`, `ok`, `error` or `late`.
+    `pushback`, `ok` or `error`, once per check;
+  - `fleet_escalation_classifier_late_total{mode}`, checks that answered after
+    the turn's stream closed.
 - **The approvals table** now records which accept action was taken, in the
   result text.
 

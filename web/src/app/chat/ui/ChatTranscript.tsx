@@ -114,6 +114,7 @@ export type ChatTranscriptProps = {
       onUnsent?: () => void;
       onHeld?: (convId: string, submissionId: string) => void;
       stillHeld?: () => boolean;
+      model?: string;
     },
   ) => void | Promise<void | boolean>;
   /** Resumes the watch on a card answer held across a page load. */
@@ -860,8 +861,8 @@ export function ChatTranscript({
                                           occurrence={genUi.occurrences.get(tc) ?? 0}
                                           retired={isPreSummary}
                                           storageScope={realConvId(currentConvKey) ?? currentConvKey}
-                                          onSubmit={(text, onUnsent, onHeld, stillHeld) =>
-                                            submitPrompt(text, { fromCard: true, onUnsent, onHeld, stillHeld })
+                                          onSubmit={(text, onUnsent, onHeld, stillHeld, model) =>
+                                            submitPrompt(text, { fromCard: true, onUnsent, onHeld, stillHeld, model })
                                           }
                                           onResumeHeld={resumeHeldCardSend}
                                         />

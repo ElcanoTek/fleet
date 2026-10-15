@@ -330,10 +330,19 @@ func RecordModelEscalation(source, outcome string) {
 }
 
 // RecordEscalationClassifierCheck counts one decision-model struggle check by
-// mode (observe | suggest) and outcome (pushback | ok | error).
+// mode (observe | suggest) and outcome (pushback | ok | error), once per
+// check whether or not it answered in time.
 func RecordEscalationClassifierCheck(mode, outcome string) {
 	incCounter("fleet_escalation_classifier_checks_total", "Decision-model struggle checks on chat messages by mode and outcome.",
 		[]string{"mode", "outcome"}, []string{mode, outcome}, 1)
+}
+
+// RecordEscalationClassifierLate counts struggle checks still running when the
+// turn's grace window ended; each is also counted once, by its eventual
+// outcome, in fleet_escalation_classifier_checks_total.
+func RecordEscalationClassifierLate(mode string) {
+	incCounter("fleet_escalation_classifier_late_total", "Decision-model struggle checks that answered after the turn's stream closed, by mode.",
+		[]string{"mode"}, []string{mode}, 1)
 }
 
 func RecordGuardrailVerdict(source, mode, outcome string) {

@@ -153,11 +153,14 @@ export type GenerativeCardProps = {
   // card stores them with its hold so a reload can resume the watch.
   // stillHeld: whether this card still holds the send (false once the user
   // pressed Unlock), so server checks for it stop.
+  // model: send on this model rather than the selected one (a resend that is
+  // part of a switch to the advanced model).
   onSubmit?: (
     message: string,
     onUnsent?: () => void,
     onHeld?: (convId: string, submissionId: string) => void,
     stillHeld?: () => boolean,
+    model?: string,
   ) => void | Promise<void | boolean>;
   /**
    * Resumes the server watch on a hold restored after a page load (the
@@ -912,7 +915,7 @@ function CardBody({
   // Sends a built message under a hold, and returns how to take that hold
   // back. Shared by a click and by a Retry of this card's answer (RESEND_EVENT),
   // so a retried answer holds the card exactly as the original did.
-  const deliver = async (message: string, actionId: string, keyAtClick: string): Promise<void> => {
+  const deliver = async (message: string, actionId: string, keyAtClick: string, model?: string): Promise<void> => {
     if (!onSubmit) return;
     const sendId = nextSendId();
     // Publish the hold before the send, not after: a direct send resolves
@@ -924,16 +927,18 @@ function CardBody({
       if (!readOnly && pendingSend(storeId) === sendId) savePending(storeId, null);
     };
     try {
-      const accepted = await onSubmit(
-        message,
-        () => {
-          if (!readOnly) releaseHeld(storeId, sendId);
-        },
-        (conv, sid) => {
-          if (!readOnly) notePendingWatch(storeId, sendId, { conv, sid, digest: keyDigest(message) });
-        },
-        () => !readOnly && pendingSend(storeId) === sendId,
-      );
+      const onUnsent = () => {
+        if (!readOnly) releaseHeld(storeId, sendId);
+      };
+      const onHeld = (conv: string, sid: string) => {
+        if (!readOnly) notePendingWatch(storeId, sendId, { conv, sid, digest: keyDigest(message) });
+      };
+      const stillHeld = () => !readOnly && pendingSend(storeId) === sendId;
+      // The model goes along only on a resend that switches models; a click
+      // sends on the selected model, as it always has.
+      const accepted = await (model === undefined
+        ? onSubmit(message, onUnsent, onHeld, stillHeld)
+        : onSubmit(message, onUnsent, onHeld, stillHeld, model));
       if (accepted === false) {
         release();
         if (!readOnly) markDraftSent(storeId, "");
@@ -965,7 +970,7 @@ function CardBody({
       const d = (e as CustomEvent<ResendDetail>).detail;
       if (!d || d.handled || d.cardId !== cardId) return;
       d.handled = true;
-      d.done = deliverRef.current(d.message, d.actionId, submissionKeyRef.current).catch(() => {
+      d.done = deliverRef.current(d.message, d.actionId, submissionKeyRef.current, d.model).catch(() => {
         setNotice("Could not send. Try again.");
       });
     };
