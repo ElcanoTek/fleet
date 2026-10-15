@@ -185,8 +185,8 @@ not inherit it.
 `google/` pin is strict (`Only=[Google]`, no fallbacks) because Gemini's
 encrypted thought signatures validate only at the minting upstream. Gemma is
 open weights that a dozen hosts serve, with no such signatures; pinned to
-Google's single Vertex endpoint, `google/gemma-4-26b-a4b-it` ("Elcano:
-Wavebend Light") failed 4 of 6 live calls with `429 … temporarily
+Google's single Vertex endpoint, `google/gemma-4-26b-a4b-it` failed 4 of 6
+live calls with `429 … temporarily
 rate-limited upstream` on 2026-10-15 while the unpinned, floored pool answered
 6 of 6, and 5 of 5 real fleet turns with a tool completed after the change.
 `unpinnedOpenWeightsPrefixes` (today `google/gemma`) makes such slugs route as
@@ -265,7 +265,9 @@ of it was served elsewhere.
   than speculatively constrained — a too-narrow allow-list makes a family
   unroutable, which is a worse failure than the one being fixed. Individual
   slugs get a floor only through `precisionFloorSlugs`, one checked slug at a
-  time (today: `qwen/qwen3.8-27b`). Other open-weights `qwen/` slugs also mix
+  time (today: `qwen/qwen3.8-27b` and `google/gemma-4-26b-a4b-it`; the Gemma
+  slug also routes outside the `google/` family pin, see
+  `unpinnedOpenWeightsPrefixes`). Other open-weights `qwen/` slugs also mix
   precisions (fp4 or int4 appear on `qwen3.6-35b-a3b`, `qwen3.5-9b`,
   `qwen3.5-35b-a3b`, `qwen3-coder`, `qwen3-14b` as of 2026-10-15) and were left
   out of scope; add each with its endpoint list when someone relies on it.

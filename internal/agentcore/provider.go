@@ -333,9 +333,8 @@ var precisionFloorSlugs = map[string]string{
 	// (Darkbloom, Makora, Cloudflare, Google Vertex). The floor leaves the nine
 	// fp8-and-above endpoints; it also drops Google's endpoint, which answered
 	// 429 "temporarily rate-limited upstream" to 4 of 6 live calls while the
-	// pool answered 6 of 6. Pinned as "Elcano: Wavebend Light"
-	// (FLEET_PINNED_MODELS) for a client alpha. Routed without the google/
-	// family pin: see unpinnedOpenWeightsPrefixes.
+	// pool answered 6 of 6. Routed without the google/ family pin: see
+	// unpinnedOpenWeightsPrefixes.
 	"google/gemma-4-26b-a4b-it": "2026-10-15",
 	// 2026-10-15: 20 endpoints. fp4 ×3 (Tenstorrent, Darkbloom, ModelRun),
 	// fp8 ×9, bf16 ×1 (DeepInfra), fp16 ×1 (Cerebras), unknown ×6 (Wafer,

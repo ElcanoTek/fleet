@@ -384,12 +384,12 @@ func TestPreferredUpstreamFor(t *testing.T) {
 
 // Gemma is open weights under the google/ prefix: the strict Google pin (there
 // for Gemini's thought signatures) must not govern it. Pinned to Google's one
-// endpoint, "Elcano: Wavebend Light" failed 4 of 6 live calls with 429 while a
+// endpoint, google/gemma-4-26b-a4b-it failed 4 of 6 live calls with 429 while a
 // dozen other hosts served it (2026-10-15).
 func TestUpstreamPinFor_GemmaIsNotPinnedToGoogle(t *testing.T) {
 	p := upstreamPinFor("google/gemma-4-26b-a4b-it")
 	if p == nil {
-		t.Fatal("the Wavebend Light slug must carry its recorded precision floor")
+		t.Fatal("google/gemma-4-26b-a4b-it must carry its recorded precision floor")
 	}
 	if len(p.Only) != 0 || len(p.Order) != 0 {
 		t.Fatalf("Gemma must not be pinned to a provider, got Only=%v Order=%v", p.Only, p.Order)
