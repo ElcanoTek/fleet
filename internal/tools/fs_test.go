@@ -222,7 +222,7 @@ func TestEditFileTool_ReportsTheDiffOrWhyNot(t *testing.T) {
 		t.Fatal(err)
 	}
 	updated := "FIRST\n" + strings.ReplaceAll(old, "same\n", "SAME\n")
-	want := "Successfully replaced 1100 occurrence(s) in " + testFile + "\nold_sha256: " + sha256Hex("FIRST\n"+old) + "\nnew_sha256: " + sha256Hex(updated) + "\n(no diff: the change spans over 2000 lines)"
+	want := "Successfully replaced 1100 occurrence(s) in " + testFile + "\nold_sha256: " + sha256Hex("FIRST\n"+old) + "\nnew_sha256: " + sha256Hex(updated) + "\n(no diff: the changes, with context, are over 2000 lines)"
 	if result != want {
 		t.Errorf("result = %q, want %q", result, want)
 	}
