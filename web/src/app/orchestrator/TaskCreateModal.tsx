@@ -22,8 +22,8 @@ import { useToast } from "@/app/shared/ui/Toast";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { ModelPicker } from "@/app/shared/ui/ModelPicker";
 import {
-  currentDefaultModel,
   currentTaskFallbackModel,
+  currentTaskModel,
 } from "@/app/lib/modelAliases";
 import { useClientConfig } from "@/app/lib/useClientConfig";
 import { McpServerPicker } from "@/app/shared/ui/McpServerPicker";
@@ -67,12 +67,12 @@ const PROMPT_AUTOGROW_MAX_PX = 240;
 const PROMPT_EXPANDED_STORAGE_KEY = "fleet-task-prompt-expanded";
 
 // The form's pre-filled model pair is LIVE, not compiled in: the primary is the
-// workspace default tier (an admin override in Settings → Model tiers reaches a
-// new task exactly as it reaches a new chat) and the fallback is the operator's
-// scheduler fallback when one is set. Both arrive with /api/client-config, which
+// workspace task tier (Settings → Model tiers → Task model, which follows the
+// advanced model unless overridden — a task is a long unattended run, unlike a
+// chat) and the fallback is the operator's scheduler fallback when one is set. Both arrive with /api/client-config, which
 // the Operations Center shell fetches on mount; before it lands the compiled-in
 // pair (modelAliases.ts) stands in.
-const defaultPrimaryModel = () => currentDefaultModel();
+const defaultPrimaryModel = () => currentTaskModel();
 const defaultFallbackModel = () => currentTaskFallbackModel();
 
 const SCHEDULE_PRESETS = [
@@ -450,7 +450,7 @@ export function TaskCreateModal({
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      if (!modelTouched.current) setModel(currentDefaultModel());
+      if (!modelTouched.current) setModel(currentTaskModel());
       if (!fallbackTouched.current) setFallbackModel(currentTaskFallbackModel());
     });
     return () => {
@@ -2265,7 +2265,7 @@ export function TaskCreateModal({
                             modelTouched.current = true;
                             setModel(v);
                           }}
-                          placeholder={currentDefaultModel()}
+                          placeholder={currentTaskModel()}
                         />
                         {errors.model ? (
                           <div className="validation-error" data-testid="error-model">

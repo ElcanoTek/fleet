@@ -38,3 +38,36 @@ func TestModelTierHolders(t *testing.T) {
 		t.Fatalf("advanced after clear = %q, want %q", got, DefaultMaxModel)
 	}
 }
+
+// The task tier has no seed of its own: unset, it follows the advanced tier
+// live, so moving the advanced model moves scheduled work with it. An override
+// pins it independently, and clearing the override restores the follow.
+func TestTaskModelTierFollowsAdvanced(t *testing.T) {
+	t.Cleanup(func() {
+		SetAdvancedModel("")
+		SetTaskModel("")
+	})
+
+	if got := CurrentTaskModel(); got != DefaultMaxModel {
+		t.Fatalf("seed task tier = %q, want the advanced seed %q", got, DefaultMaxModel)
+	}
+
+	SetAdvancedModel("acme/frontier-1-pro")
+	if got := CurrentTaskModel(); got != "acme/frontier-1-pro" {
+		t.Fatalf("task tier after an advanced change = %q, want it to follow", got)
+	}
+
+	SetTaskModel("  acme/long-runner  ")
+	if got := CurrentTaskModel(); got != "acme/long-runner" {
+		t.Fatalf("task tier with an override = %q", got)
+	}
+	SetAdvancedModel("acme/frontier-2-pro")
+	if got := CurrentTaskModel(); got != "acme/long-runner" {
+		t.Fatalf("an override must not follow the advanced tier, got %q", got)
+	}
+
+	SetTaskModel("")
+	if got := CurrentTaskModel(); got != "acme/frontier-2-pro" {
+		t.Fatalf("task tier after clearing the override = %q, want the advanced tier", got)
+	}
+}

@@ -62,6 +62,7 @@ func testDefaults() map[string]string {
 		"subagents_enabled":                 "true",
 		"default_model":                     "openai/gpt-5.6-luna-pro",
 		"advanced_model":                    "anthropic/claude-opus-5",
+		"task_model":                        "",
 		"memory_autoindex_enabled":          "false",
 		"error_analysis_enabled":            "true",
 		"auto_title_enabled":                "true",
@@ -179,6 +180,8 @@ func TestValidate(t *testing.T) {
 		{"default_model", "openai/", "", true},                                                  // empty model half
 		{"default_model", "openai/gpt 5", "", true},                                             // internal whitespace
 		{"advanced_model", strings.Repeat("a", 100) + "/" + strings.Repeat("b", 101), "", true}, // over 200 chars
+		{"task_model", "google/gemini-4-argon", "google/gemini-4-argon", false},
+		{"task_model", "", "", true}, // EmptyDefaultOK loosens the env default only, never an admin write
 		// KindFloat (the per-run cost ceiling): cents allowed and rounded, 0 =
 		// unlimited, whole-dollar bounds, nothing non-numeric.
 		{"max_cost_usd", "8.5", "8.5", false},
@@ -201,6 +204,40 @@ func TestValidate(t *testing.T) {
 		if !c.wantErr && got != c.want {
 			t.Errorf("Validate(%s, %q) = %q, want %q", c.key, c.in, got, c.want)
 		}
+	}
+}
+
+// TestEmptyTaskModelDefaultFollowsAdvanced: an unset FLEET_TASK_MODEL is the
+// normal case — the task tier then follows advanced_model — so the empty
+// default is accepted as is and applied as a default (override=false), and a
+// Reset returns the hook to it rather than pinning a slug.
+func TestEmptyTaskModelDefaultFollowsAdvanced(t *testing.T) {
+	st := newFakeStore()
+	applied := map[string]string{}
+	svc := newTestService(t, st, applied)
+	ctx := context.Background()
+
+	if err := svc.ApplyAll(ctx); err != nil {
+		t.Fatalf("ApplyAll: %v", err)
+	}
+	if applied["task_model"] != "" || applied["task_model/override"] != "false" {
+		t.Fatalf("boot apply = %q (override %s), want the empty default", applied["task_model"], applied["task_model/override"])
+	}
+	if _, err := svc.Set(ctx, "task_model", "acme/long-runner", "admin@x"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if applied["task_model"] != "acme/long-runner" || applied["task_model/override"] != "true" {
+		t.Fatalf("override apply = %q (override %s)", applied["task_model"], applied["task_model/override"])
+	}
+	r, err := svc.Reset(ctx, "task_model", "admin@x")
+	if err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if r.Value != "" || r.Default != "" || r.Source != SourceDefault {
+		t.Errorf("reset resolved = %+v, want the empty default", r)
+	}
+	if applied["task_model"] != "" || applied["task_model/override"] != "false" {
+		t.Errorf("reset apply = %q (override %s), want the empty default", applied["task_model"], applied["task_model/override"])
 	}
 }
 

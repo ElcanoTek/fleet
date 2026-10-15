@@ -346,7 +346,10 @@ models, there is nothing to switch to and the conversation keeps refusing —
 start a new lockdown chat and tell your admin the list needs a named model
 first. Admins can fix the provider
 configuration under **Settings → Admin → Model providers**, and set the default
-and stronger model under **Settings → Admin → Features → Model tiers**.
+and stronger model under **Settings → Admin → Features → Model tiers**. A task you
+schedule from chat does not keep the chat's model: unless you ask for a specific
+model, it runs on the workspace's task model, which is the stronger model by
+default.
 If a direct provider takes precedence over OpenRouter, available OpenRouter
 choices are labeled with their configured provider name and use an explicit
 provider-prefixed route.

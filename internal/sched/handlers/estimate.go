@@ -80,7 +80,7 @@ func (h *Handlers) EstimateTask(w http.ResponseWriter, r *http.Request) {
 // in agentcore. Split out so the model/prompt/tool resolution is unit-testable
 // without an HTTP round-trip.
 func (h *Handlers) forecastTask(tc *models.TaskCreate) agentcore.CostForecast {
-	model := h.config.DefaultTaskModel
+	model := h.defaultTaskModel()
 	if tc.Model != nil && strings.TrimSpace(*tc.Model) != "" {
 		model = strings.TrimSpace(*tc.Model)
 	}
@@ -168,4 +168,16 @@ func (h *Handlers) maxTotalTokens() int {
 		return h.config.LiveMaxTotalTokens()
 	}
 	return 0
+}
+
+// defaultTaskModel is the slug a task with no explicit model runs on: the
+// fixed Config.DefaultTaskModel when one is set, else the live task tier. The
+// task tier is never empty (unset, it follows the advanced tier), so an
+// unpinned task always has a model; that is what retired the #1014
+// "no model configured" create-time refusal.
+func (h *Handlers) defaultTaskModel() string {
+	if m := strings.TrimSpace(h.config.DefaultTaskModel); m != "" {
+		return m
+	}
+	return agentcore.CurrentTaskModel()
 }

@@ -16,7 +16,7 @@
 // The task YAML is a thin mirror of the scheduled-task create shape:
 //
 //	prompt: "Summarize today's news and email it to me."
-//	model: anthropic/claude-opus-4.8              # optional; else CUTLASS_TASK_MODEL/config
+//	model: anthropic/claude-opus-4.8              # optional; else the task tier (FLEET_TASK_MODEL, else the advanced model)
 //	fallback_model: anthropic/claude-sonnet-4-6   # optional
 //	max_iterations: 20                            # optional
 //	mcp_selection:                                # optional
@@ -140,6 +140,13 @@ func run(argv []string, progName string) error {
 	// runs. The generic bundle ships none, so cost accounting stays on the
 	// OpenRouter-returned price.
 	agentcore.ConfigurePricing(toAgentcorePricing(bundle.Pricing()))
+
+	// A task YAML without a model runs on the task tier, the same as on the
+	// server. There is no settings service here, so seed the tier holders from
+	// the env: FLEET_TASK_MODEL when set, else FLEET_ADVANCED_MODEL, else the
+	// compiled-in advanced model.
+	agentcore.SetAdvancedModel(cfg.AdvancedModel)
+	agentcore.SetTaskModel(cfg.TaskModel)
 
 	// Fresh, isolated workspace for this run so it never collides with the
 	// server's shared workspace/ — set BEFORE agent.New so the sandbox pool

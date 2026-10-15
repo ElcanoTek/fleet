@@ -258,6 +258,30 @@ describe("FeaturesAdminPage", () => {
     expect(JSON.parse(String(put?.[1]?.body))).toEqual({ value: "acme/frontier-1" });
   });
 
+  // The task model's server default is usually empty, which means "follow
+  // the advanced model". The row must say so rather than render a blank
+  // default, and an empty value must not offer a Save.
+  it("renders an unset task model as following the advanced model", async () => {
+    const TASK_TIER: Resolved = {
+      key: "task_model",
+      kind: "model",
+      env_var: "FLEET_TASK_MODEL",
+      value: "",
+      source: "default",
+      default: "",
+    };
+    vi.stubGlobal("fetch", mockFetch([TASK_TIER]));
+    render(<FeaturesAdminPage />);
+
+    const row = await screen.findByTestId("setting-task_model");
+    expect(within(row).getByText("Task model")).toBeInTheDocument();
+    expect(within(row).getByText(/follows the advanced model when unset/)).toBeInTheDocument();
+    const input = within(within(row).getByTestId("model-picker-task_model")).getByRole("combobox");
+    expect(input).toHaveValue("");
+    expect(input).toHaveAttribute("placeholder", "Follows the advanced model");
+    expect(screen.queryByTestId("save-task_model")).toBeNull();
+  });
+
   it("surfaces a server rejection as a row error and keeps the old value", async () => {
     const fetchMock = mockFetch([PII], (url, init) => {
       if (init.method === "PUT") {
