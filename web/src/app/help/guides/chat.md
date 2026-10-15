@@ -1004,6 +1004,8 @@ menu, the assistant proposes a task from the conversation and stages a schedule
 card. **Edit** opens the name, the schedule, and the full prompt; **Approve &
 schedule** (or **Approve with changes**, if you edited) creates it; **Cancel**
 creates nothing. The name you confirm becomes the task's title on the board.
+The card also shows the model the task will run on: the workspace's task model
+(the stronger model by default), not the model this chat was using.
 
 The trade-off, stated plainly: the prompt is generated from the conversation
 rather than taken from the library, so review it in **Edit** with the same

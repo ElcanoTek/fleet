@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -66,6 +67,10 @@ func TestPromoteToTask_StagesScheduleApproval(t *testing.T) {
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv := seedConv(t, s, user)
+	// The promoted task runs on the task tier, which follows the advanced
+	// tier, not on the conversation's own model ("openrouter/auto").
+	agentcore.SetAdvancedModel("acme/frontier-pro")
+	t.Cleanup(func() { agentcore.SetAdvancedModel("") })
 	// The conversation had two connectors on when it was promoted (ADR-0068):
 	// the promoted task must inherit exactly those.
 	if err := s.store.SetOptionalMCPServers(context.Background(), user, conv.ID, []string{"gamma", "tavily"}); err != nil {
@@ -99,6 +104,9 @@ func TestPromoteToTask_StagesScheduleApproval(t *testing.T) {
 	if params.Cron != "0 9 * * *" {
 		t.Errorf("staged cron = %q, want the synthesized value", params.Cron)
 	}
+	if params.Model != "acme/frontier-pro" {
+		t.Errorf("staged model = %q, want the task tier (the advanced model), not the conversation's", params.Model)
+	}
 	var staged scheduleTaskStagedArgs
 	if err := json.Unmarshal([]byte(appr.ArgsJSON), &staged); err != nil {
 		t.Fatalf("staged args: %v", err)
@@ -118,6 +126,8 @@ func TestPromoteToTask_StagesScheduleApproval(t *testing.T) {
 		t.Errorf("card summary must name the inherited connectors, got %v", body.Approval["summary"])
 	} else if labels, _ := summary["connectors"].([]any); len(labels) != 2 {
 		t.Errorf("card connectors = %v", summary["connectors"])
+	} else if summary["model"] != "acme/frontier-pro" {
+		t.Errorf("card model = %v, want the task tier shown before approval", summary["model"])
 	}
 	if body.Approval["approval_id"] != appr.ID {
 		t.Errorf("response approval_id = %v, want %q", body.Approval["approval_id"], appr.ID)

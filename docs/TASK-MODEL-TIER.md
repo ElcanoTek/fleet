@@ -28,6 +28,9 @@ The task tier feeds every place a task's model is chosen by default:
   (`/client-config` `models.task_model`, `currentTaskModel()` in the web).
 - **`schedule_task` from chat** pins it on the task when the agent names no
   model. A chat-scheduled task no longer inherits the conversation's model.
+- **Make recurring task… (promote a chat)** stages its schedule card with the
+  task tier as the model (`handlePromoteToTask`), so the card shows it before
+  approval and the approved task is pinned to it.
 - **An unpinned task** (an API or import create with no `model`) runs on it,
   read at dispatch (`scheduledrun.runWorker`). The cost estimate reads it too.
 - **`fleet task run`** seeds it from `FLEET_TASK_MODEL` / `FLEET_ADVANCED_MODEL`,
