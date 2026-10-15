@@ -46,7 +46,9 @@ func refusedPushEndpoint(w http.ResponseWriter, user, what, endpoint string) boo
 	if err == nil {
 		return false
 	}
-	log.Printf("push: refused a %s from %s: %v", what, user, err)
+	// The error quotes the host with %q already; logSafe is the guard the
+	// package's other user-derived log values carry.
+	log.Printf("push: refused a %s from %s: %s", what, logSafe(user), logSafe(err.Error()))
 	http.Error(w, pushServiceRefused, http.StatusBadRequest)
 	return true
 }
