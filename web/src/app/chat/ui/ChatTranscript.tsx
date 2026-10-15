@@ -72,6 +72,7 @@ import {
   type Message,
 } from "./history";
 import { currentAdvancedModel } from "@/app/lib/modelAliases";
+import { advancedRetryAllowed, useQueuedSwitchRetry } from "./useQueuedSwitchRetry";
 import { AutoContinueNotice, FleetNotices } from "./FleetNotices";
 import { InjectedContextNote } from "./InjectedContextNote";
 import {
@@ -97,6 +98,9 @@ export type ChatTranscriptProps = {
   // Load / empty / lockdown gating
   isLoadingHistory: boolean;
   isLockdown: boolean;
+  // The lockdown allow-list (empty outside lockdown). Retry with the advanced
+  // model is offered in a lockdown chat only when the list names that model.
+  lockdownAllowedModels?: readonly string[];
   messages: Message[];
 
   // Empty-state protocol pills
@@ -245,6 +249,7 @@ export function ChatTranscript({
   promptRef,
   isLoadingHistory,
   isLockdown,
+  lockdownAllowedModels = [],
   messages,
   pills,
   activePillId,
@@ -314,6 +319,11 @@ export function ChatTranscript({
   // after every render (see below), so a row re-mounting on scroll never
   // replays its slide-in — only genuinely new turns animate. See
   // VirtualTranscriptRow for how the gate is applied.
+  // Switch & retry, held until the stream closes (docs/CHAT-ESCALATION.md).
+  const switchAndRetry = useQueuedSwitchRetry(isStreaming, retryLastUserMessage);
+  // Retry with the advanced model, unless a lockdown allow-list excludes it.
+  const canRetryWithAdvanced = advancedRetryAllowed(isLockdown, lockdownAllowedModels, currentAdvancedModel());
+
   const animatedIdsRef = useRef<Set<number>>(new Set());
   useEffect(() => {
     for (const message of messages) animatedIdsRef.current.add(message.id);
@@ -1085,7 +1095,7 @@ export function ChatTranscript({
                                         onResolved={onResolved}
                                         onModelSwitched={(model) => setSelectedModel(model)}
                                         onResumeExpected={onResumeExpected}
-                                        onSwitchAndRetry={(model) => retryLastUserMessage({ model })}
+                                        onSwitchAndRetry={switchAndRetry}
                                         onAskAgain={(timedOut) => void submitPrompt(askAgainPrompt(timedOut))}
                                         onRetryFailed={(settled, keys) =>
                                           // A card's own request: it neither takes nor clears
@@ -1140,7 +1150,7 @@ export function ChatTranscript({
                                       advanced model, which the conversation then keeps.
                                       The model is passed explicitly because the switch
                                       below has not re-rendered selectedModel yet. */}
-                                  {!message.cancelled && !message.failed && canRetry && selectedModel !== currentAdvancedModel() ? (
+                                  {!message.cancelled && !message.failed && canRetry && canRetryWithAdvanced && selectedModel !== currentAdvancedModel() ? (
                                     <button
                                       type="button"
                                       className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"

@@ -261,7 +261,7 @@ func (c *Config) LiveEscalationClassifier() (mode, model string, thresholdPct in
 	if model == "" {
 		model = DefaultEscalationClassifierModel
 	}
-	if thresholdPct < 1 || thresholdPct > 99 {
+	if thresholdPct < 50 || thresholdPct > 99 {
 		thresholdPct = 80
 	}
 	return mode, model, thresholdPct

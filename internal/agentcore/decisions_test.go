@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 // conversation tail as state, and returns the model's probability.
 func TestCheckStruggle_ParsesProbability(t *testing.T) {
 	var got decisionRequest
+	var wire map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/alpha/decisions" || r.Method != http.MethodPost {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
@@ -21,7 +23,9 @@ func TestCheckStruggle_ParsesProbability(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			t.Errorf("authorization header = %q", r.Header.Get("Authorization"))
 		}
-		_ = json.NewDecoder(r.Body).Decode(&got)
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &got)
+		_ = json.Unmarshal(raw, &wire)
 		_, _ = w.Write([]byte(`{"model":"typesafe/jev-1.14-20261014","answers":{"struggle":{"type":"noul","noul":0.97}},"usage":{"cost":0.000018},"provider":"TypeSafe"}`))
 	}))
 	defer srv.Close()
@@ -40,6 +44,27 @@ func TestCheckStruggle_ParsesProbability(t *testing.T) {
 	q, ok := got.Questions[struggleQuestionID]
 	if !ok || q.Type != "noul" || q.Criteria["true"] == "" || q.Criteria["false"] == "" {
 		t.Errorf("question = %+v", q)
+	}
+	// instructions goes on the wire as one string, the documented form.
+	question, _ := wire["questions"].(map[string]any)[struggleQuestionID].(map[string]any)
+	if s, ok := question["instructions"].(string); !ok || !strings.Contains(s, "pushes back") {
+		t.Errorf("instructions on the wire = %#v, want a string", question["instructions"])
+	}
+}
+
+// An override with a path keeps only its scheme and host, like the provider
+// transport, so the request still reaches /api/alpha/decisions.
+func TestDecisionsEndpointHonorsOverrideOrigin(t *testing.T) {
+	t.Setenv("OPENROUTER_BASE_URL", "http://127.0.0.1:9/v1")
+	if got := decisionsEndpointFor(); got != "http://127.0.0.1:9/api/alpha/decisions" {
+		t.Errorf("decisions endpoint = %q", got)
+	}
+	if got := decisionModelsEndpointFor(); got != "http://127.0.0.1:9/api/v1/models?output_modalities=text,decisions" {
+		t.Errorf("models endpoint = %q", got)
+	}
+	t.Setenv("OPENROUTER_BASE_URL", "")
+	if got := decisionsEndpointFor(); got != decisionsEndpointURL {
+		t.Errorf("no override: %q", got)
 	}
 }
 

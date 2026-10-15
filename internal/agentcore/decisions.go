@@ -24,6 +24,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,23 +69,37 @@ type StruggleVerdict struct {
 
 // decisionsEndpointFor honors the OPENROUTER_BASE_URL E2E seam, like every
 // other OpenRouter call, so tests never reach the live network.
-func decisionsEndpointFor() string {
-	if override := openRouterBaseURLOverride(); override != "" {
-		return strings.TrimRight(override, "/") + "/api/alpha/decisions"
-	}
-	return decisionsEndpointURL
-}
+func decisionsEndpointFor() string { return withOpenRouterOverride(decisionsEndpointURL) }
 
-func decisionModelsEndpointFor() string {
-	if override := openRouterBaseURLOverride(); override != "" {
-		return strings.TrimRight(override, "/") + "/api/v1/models?output_modalities=text,decisions"
+func decisionModelsEndpointFor() string { return withOpenRouterOverride(decisionModelsURL) }
+
+// withOpenRouterOverride swaps only the scheme and host of an OpenRouter URL
+// for the OPENROUTER_BASE_URL override, the way the provider transport does,
+// so an override carrying a path (http://127.0.0.1:9/v1) still reaches the
+// real /api/... route.
+func withOpenRouterOverride(upstream string) string {
+	override := openRouterBaseURLOverride()
+	if override == "" {
+		return upstream
 	}
-	return decisionModelsURL
+	o, err := url.Parse(override)
+	if err != nil || o.Scheme == "" || o.Host == "" {
+		return upstream
+	}
+	u, err := url.Parse(upstream)
+	if err != nil {
+		return upstream
+	}
+	u.Scheme, u.Host = o.Scheme, o.Host
+	return u.String()
 }
 
 type decisionQuestion struct {
-	Type         string            `json:"type"`
-	Instructions map[string]string `json:"instructions"`
+	Type string `json:"type"`
+	// Instructions is one string, the form OpenRouter documents. (TypeSafe
+	// also accepts a {task, context} object, which Lens sends; both scored
+	// the same live on 2026-10-15.)
+	Instructions string            `json:"instructions"`
 	Criteria     map[string]string `json:"criteria"`
 }
 
@@ -123,7 +138,7 @@ func CheckStruggle(ctx context.Context, apiKey, model, conversation string) (Str
 		State: map[string]string{"conversation": tailRunes(conversation, MaxStruggleTranscriptRunes)},
 		Questions: map[string]decisionQuestion{struggleQuestionID: {
 			Type:         "noul",
-			Instructions: map[string]string{"task": struggleTask, "context": struggleContext},
+			Instructions: struggleTask + "\n\n" + struggleContext,
 			// OpenRouter's schema requires both outcomes for a yes/no question.
 			Criteria: map[string]string{"true": struggleTrue, "false": struggleFalse},
 		}},

@@ -843,9 +843,11 @@ type Config struct {
 	EscalationSignalsEnabled bool
 	// EscalationClassifierMode is off | observe | suggest for the decision-model
 	// check on the user's latest message. observe scores and records without
-	// showing a card. FLEET_ESCALATION_CLASSIFIER_MODE, default off: it sends
-	// the tail of the conversation to a second model vendor, so an operator
-	// opts in.
+	// showing a card. FLEET_ESCALATION_CLASSIFIER_MODE, default suggest (owner
+	// decision, 2026-10-15). It sends the tail of the conversation's text to
+	// the decision model's provider through OpenRouter; an operator who does
+	// not want that sets off. It never runs without an OpenRouter key or on a
+	// lockdown conversation.
 	EscalationClassifierMode string
 	// EscalationClassifierModel is the OpenRouter decision model
 	// (FLEET_ESCALATION_CLASSIFIER_MODEL, default DefaultEscalationClassifierModel,
@@ -1694,7 +1696,7 @@ func Load(envFile string) (*Config, error) {
 		AutoTitle:            lp.getenvFleetBool("AUTO_TITLE", true),
 
 		EscalationSignalsEnabled:      lp.getenvFleetBool("ESCALATION_SIGNALS_ENABLED", true),
-		EscalationClassifierMode:      strings.ToLower(getenvFleetDefault("ESCALATION_CLASSIFIER_MODE", EscalationClassifierOff)),
+		EscalationClassifierMode:      strings.ToLower(getenvFleetDefault("ESCALATION_CLASSIFIER_MODE", EscalationClassifierSuggest)),
 		EscalationClassifierModel:     getenvFleetDefault("ESCALATION_CLASSIFIER_MODEL", DefaultEscalationClassifierModel),
 		EscalationClassifierThreshold: lp.getenvFleetInt("ESCALATION_CLASSIFIER_THRESHOLD", 80),
 		MemoryModel:                   getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),

@@ -191,9 +191,9 @@ const META: Record<string, SettingMeta> = {
     description:
       "A small decision model reads the end of the conversation after each user message (from the second on) and estimates whether the user is pushing back on a wrong or incomplete answer. Each check costs about $0.00002 with Jev and runs alongside the reply, so it adds no wait. It sends the recent user and assistant text, never tool output or files, to the decision model's provider through OpenRouter; lockdown chats are never checked.",
     optionHelp: {
-      off: "Off (default): no check, nothing sent.",
-      observe: "Check every message and count frustrated ones on the Users page, without showing a card. Use this first to see how often it fires.",
-      suggest: "Check, count, and offer the advanced model when the user is pushing back.",
+      off: "Off: no check, nothing sent.",
+      observe: "Check every message and count frustrated ones on the Users page, without showing a card.",
+      suggest: "Suggest (default): check, count, and offer the advanced model when the user is pushing back.",
     },
   },
   escalation_classifier_model: {

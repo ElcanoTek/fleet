@@ -6599,6 +6599,7 @@ export function ChatExperience({
               lastUserMessageId={lastUserMessageId}
               lastAssistantMessageId={lastAssistantMessageId}
               editLastUserSignal={editLastUserSignal}
+              lockdownAllowedModels={serverConfig.lockdownAllowedModels}
               selectedModel={selectedModel}
               patchAssistantMessage={patchAssistantMessage}
               resendUserMessage={resendUserMessage}

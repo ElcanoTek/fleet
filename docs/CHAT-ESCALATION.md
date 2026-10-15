@@ -18,21 +18,26 @@ except **Retry with** use the same card (**Switch & retry**, **Just switch**,
 | The assistant | It calls `suggest_advanced_model` (unchanged; the tool description now also names repeated failures, and the generic chat prompt says when to hand up) | none |
 | Struggle signals | End of turn: 3+ tool calls failed in a row, the loop guard blocked a repeated call, the context was compacted, or 25+ tool calls in the turn | none: read from the turn's own history and stream |
 | Frustration check | A decision model (Jev by default) scores the user's latest message as pushback on a wrong or incomplete answer | ~$0.00002 per message (measured: ~460 input tokens on Jev 1.14) |
-| **Retry with** | The user presses it under a reply | none: it is a normal retry on the advanced model |
+| **Retry with** | The user presses it under a reply (hidden in a lockdown chat whose allow-list does not name the advanced model) | none: it is a normal retry on the advanced model |
 
 **The card gate** (`approvalStager.stageSuggestionGated`):
 
 - no card on a conversation already on the advanced model;
 - no second card while one is pending;
 - after a card is dismissed, or accepted and the user later moved off the
-  advanced model, no new card until 3 more user messages have been sent;
+  advanced model, no new card until the user has sent 3 more messages since
+  answering it (counted from the card's resolution, so time it sat pending
+  does not count);
 - at most one card per turn.
 
 Accepting used to suppress a conversation for good, so a user who moved back to
 the fast model was never offered the advanced one again.
 
 **Host-staged cards** come after the reply is complete, on the same turn
-stream, so they never interrupt the model. The card's `args_json` records who
+stream, so they never interrupt the model. The check is the last post-turn
+step, so the stream closes right after a card lands; a **Switch & retry**
+pressed before it closes is held by the client and sent once it does
+(`useQueuedSwitchRetry`). The card's `args_json` records who
 asked (`source`: `model`, `signal`, `classifier`), and the reason it shows
 comes from the signal ("3 tool calls in a row failed on this request…").
 
@@ -60,11 +65,11 @@ comes from the signal ("3 tool calls in a row failed on this request…").
 - **On the advanced model** it still runs, so the per-user count is complete,
   but never shows a card.
 - **Modes** (admin setting):
-  - `off`, the default. Nothing is sent: it is a second vendor seeing chat
-    text, so an operator opts in.
-  - `observe`: score and count, no card. Use this first to see how often it
-    fires.
-  - `suggest`: score, count, and offer the card.
+  - `suggest`, the default: score, count, and offer the card.
+  - `observe`: score and count, no card.
+  - `off`: nothing is sent. The check sends recent chat text to a second model
+    vendor (the decision model's provider, through OpenRouter); a deployment
+    that must not do that sets `off` (`FLEET_ESCALATION_CLASSIFIER_MODE=off`).
 - **Model.** Any OpenRouter decision model. The default, `~typesafe/jev-latest`,
   is a moving alias, so a new Jev release needs no change. The admin panel lists
   every paid decision model OpenRouter offers, live and cached for an hour

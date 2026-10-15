@@ -13,10 +13,11 @@ import (
 // user messages since it.
 type reofferStore struct {
 	frozenSuggestionStore
-	prior     *store.Approval
-	userTurns int64
-	convModel string
-	staged    int
+	prior        *store.Approval
+	userTurns    int64
+	convModel    string
+	staged       int
+	countedSince int64
 }
 
 func (s *reofferStore) Get(context.Context, string, string) (*store.Conversation, error) {
@@ -25,7 +26,8 @@ func (s *reofferStore) Get(context.Context, string, string) (*store.Conversation
 func (s *reofferStore) LatestApprovalByTool(context.Context, string, string) (*store.Approval, error) {
 	return s.prior, nil
 }
-func (s *reofferStore) CountUserMessagesAfterTimestamp(context.Context, string, int64) (int64, error) {
+func (s *reofferStore) CountUserMessagesAfterTimestamp(_ context.Context, _ string, since int64) (int64, error) {
+	s.countedSince = since
 	return s.userTurns, nil
 }
 func (s *reofferStore) CreateApproval(ctx context.Context, conv, user, tool, call, args string, expiry int64, seat store.ApprovalSeat) (*store.Approval, error) {
@@ -67,5 +69,27 @@ func TestSuggestionReofferedAfterSwitchingBack(t *testing.T) {
 				t.Errorf("args = %s, want the source recorded", st.approval.ArgsJSON)
 			}
 		})
+	}
+}
+
+// The cooldown counts the user's messages since they answered the card, not
+// since it appeared: a card left pending for a while must not have its
+// cooldown already spent when it is answered.
+func TestSuggestionCooldownCountsFromResolution(t *testing.T) {
+	st := &reofferStore{prior: &store.Approval{Status: "approved", CreatedAt: 100, ResolvedAt: 900}, convModel: "fast/model"}
+	a := &approvalStager{ctx: context.Background(), store: st, conversationID: "c", userEmail: "u", sink: &recordingSink{}}
+	if _, err := a.StageHostSuggestion(suggestionSourceSignal, "r"); err != nil {
+		t.Fatal(err)
+	}
+	if st.countedSince != 900 {
+		t.Errorf("counted since %d, want the resolution time", st.countedSince)
+	}
+	// A row resolved before resolved_at was recorded falls back to created_at.
+	st.prior = &store.Approval{Status: "rejected", CreatedAt: 100}
+	if _, err := a.StageHostSuggestion(suggestionSourceSignal, "r"); err != nil {
+		t.Fatal(err)
+	}
+	if st.countedSince != 100 {
+		t.Errorf("legacy row counted since %d, want created_at", st.countedSince)
 	}
 }

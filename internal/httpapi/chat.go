@@ -1471,11 +1471,6 @@ func (s *Server) runTurnAsync(
 		metrics.RecordTurnTimeout("interactive")
 	}
 
-	// Offer the advanced model if the turn struggled or the user is pushing
-	// back (docs/CHAT-ESCALATION.md). Before the title call so a card is not
-	// held behind it; the classifier has been running since the turn began.
-	s.escalateAfterTurn(persistCtx, buf, conv, user, res, check)
-
 	// First-turn auto-title: on the opening turn, summarize the exchange
 	// into a 5-7 word sidebar title. Emits via the buffer so both the
 	// initial client and any reattach see it.
@@ -1544,6 +1539,16 @@ func (s *Server) runTurnAsync(
 		s.autoIndexMemories(memCtx, buf, conv.ID, user, userInput, res.FinalText)
 		memCancel()
 	}
+
+	// Offer the advanced model if the turn struggled or the user is pushing
+	// back (docs/CHAT-ESCALATION.md). LAST, so the stream closes right after a
+	// card lands: until it closes the client counts the turn as streaming and
+	// would hold a Switch & retry click (ChatTranscript queues it). The
+	// classifier has been running since the turn began, so this rarely waits.
+	// Its own context: persistCtx's 10s budget may be spent by now.
+	escCtx, escCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	s.escalateAfterTurn(escCtx, buf, conv, user, res, check)
+	escCancel()
 }
 
 // sweepRetention runs the post-turn database retention sweeps — expired

@@ -64,7 +64,7 @@ func testDefaults() map[string]string {
 		"advanced_model":                    "anthropic/claude-opus-5",
 		"task_model":                        "",
 		"escalation_signals_enabled":        "true",
-		"escalation_classifier_mode":        "off",
+		"escalation_classifier_mode":        "suggest",
 		"escalation_classifier_model":       "~typesafe/jev-latest",
 		"escalation_classifier_threshold":   "80",
 		"memory_autoindex_enabled":          "false",

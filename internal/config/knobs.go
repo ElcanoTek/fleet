@@ -199,7 +199,9 @@ var envKnobs = []envKnob{
 	{key: "FLEET_SELF_IMPROVE_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_AUTO_TITLE", fleet: true, kind: kindBool},
 	{key: "FLEET_ESCALATION_SIGNALS_ENABLED", fleet: true, kind: kindBool},
-	{key: "FLEET_ESCALATION_CLASSIFIER_THRESHOLD", fleet: true, kind: kindInt},
+	// Percent, the same 50–99 the admin setting allows: below 50 a coin flip
+	// would count as frustration and stage cards on most messages.
+	{key: "FLEET_ESCALATION_CLASSIFIER_THRESHOLD", fleet: true, kind: kindInt, min: bound(50), max: bound(99)},
 	{key: "FLEET_MEMORY_AUTOINDEX_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_MEMORY_GRAPH_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_APPROVAL_TIMEOUT_SECONDS", fleet: true, kind: kindInt},

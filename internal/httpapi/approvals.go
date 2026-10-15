@@ -642,7 +642,15 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 		case "pending":
 			return "", "SUGGESTION_SUPPRESSED: a model-switch suggestion is already pending the user's response. Do not stage another.", nil
 		case "approved", "rejected":
-			n, err := a.store.CountUserMessagesAfterTimestamp(a.ctx, a.conversationID, prior.CreatedAt)
+			// The cooldown runs from the user's answer, not from when the card
+			// appeared: messages sent while it sat pending are not "after" it.
+			// Rows resolved before resolved_at was recorded fall back to
+			// created_at.
+			since := prior.ResolvedAt
+			if since <= 0 {
+				since = prior.CreatedAt
+			}
+			n, err := a.store.CountUserMessagesAfterTimestamp(a.ctx, a.conversationID, since)
 			if err != nil {
 				return "", "", fmt.Errorf("count user turns: %w", err)
 			}

@@ -359,7 +359,7 @@ retry** when a question is heavier than the current model handles well, or a
 one-line banner when you attach a large spreadsheet to the fast model. Fleet can
 show the same card on its own after a reply that clearly struggled (several tool
 calls failing in a row, the same step repeated, or a very long turn) and, if your
-admin has turned it on, when your message reads as pushback on a wrong answer.
+admin hasn't turned it off, when your message reads as pushback on a wrong answer.
 All of these are suggestions. Nothing changes unless you accept. If an answer is
 wrong and you don't want to wait for a suggestion, **Retry with** under the reply
 asks again on the stronger model straight away.
