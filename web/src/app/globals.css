@@ -4734,6 +4734,10 @@ select.mcp-server-picker__account-select {
   color: var(--color-text-muted);
   opacity: 0.45;
 }
+.model-cost-free {
+  color: var(--color-success);
+  font-weight: 600;
+}
 .model-cost-tier-1 {
   --model-cost-color: var(--color-success);
 }

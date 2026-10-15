@@ -148,21 +148,29 @@ export function ModelPicker({ id, value, onChange, placeholder, ...rest }: Model
               >
                 <span className="model-picker-header">
                   <span className="model-picker-name">{model.name}</span>
-                  {model.workspace ? (
-                    <span className="model-picker-badge">Workspace</span>
-                  ) : model.recommended ? (
+                  {/* recommended > operator pin tag > workspace, the same
+                      precedence as the chat picker's pill. */}
+                  {model.recommended ? (
                     <span className="model-picker-badge">Recommended</span>
+                  ) : model.pinTag ? (
+                    <span className="model-picker-badge">{model.pinTag}</span>
+                  ) : model.workspace ? (
+                    <span className="model-picker-badge">Workspace</span>
                   ) : null}
                   {/* Cost tier last so the row's leading edge stays the name;
                       absent for models with no catalog pricing. */}
                   <ModelCostIndicator
+                    free={model.free}
                     prices={{
                       pricePrompt: model.pricePrompt,
                       priceCompletion: model.priceCompletion,
                     }}
                   />
                 </span>
-                <span className="model-picker-slug">{model.id}</span>
+                {/* A relabelled operator pin shows only its label. */}
+                {model.relabelled ? null : (
+                  <span className="model-picker-slug">{model.id}</span>
+                )}
               </button>
             ))
           )}

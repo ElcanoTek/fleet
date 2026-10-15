@@ -3,7 +3,13 @@ import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/re
 import { useState } from "react";
 import { ModelPicker } from "./ModelPicker";
 import { _resetModelCacheForTests } from "@/app/shared/lib/models";
-import { ADVANCED_MODEL_LABEL, DEFAULT_MODEL, DEFAULT_MODEL_LABEL } from "@/app/lib/modelAliases";
+import {
+  ADVANCED_MODEL_LABEL,
+  DEFAULT_MODEL,
+  DEFAULT_MODEL_LABEL,
+  _resetModelTiersForTests,
+  setModelTiers,
+} from "@/app/lib/modelAliases";
 
 // Component test for the React ModelPicker (port of moc's model-picker.js).
 // The pure filtering logic is covered in models.test.ts; here we verify the
@@ -47,6 +53,58 @@ describe("ModelPicker", () => {
       expect(screen.getByText(DEFAULT_MODEL_LABEL)).toBeInTheDocument();
     });
     expect(screen.queryByText(ADVANCED_MODEL_LABEL)).not.toBeInTheDocument();
+  });
+
+  it("shows an operator pin under its label and tag, without its slug", async () => {
+    setModelTiers({ pinned: [{ slug: "acme/open-70b", label: "Elcano Nova", tag: "alpha" }] });
+    try {
+      render(<Harness />);
+      const input = screen.getByRole("combobox") as HTMLInputElement;
+      fireEvent.focus(input);
+      const row = await waitFor(() => screen.getByText("Elcano Nova").closest("button"));
+      expect(row).not.toBeNull();
+      expect(row).toHaveTextContent("alpha");
+      expect(row).not.toHaveTextContent("acme/open-70b");
+      fireEvent.click(screen.getByText("Elcano Nova"));
+      // The underlying slug is still what the form stores and sends.
+      expect(input.value).toBe("acme/open-70b");
+    } finally {
+      _resetModelTiersForTests();
+    }
+  });
+
+  it("prefers a pin tag over the workspace badge", async () => {
+    setModelTiers({ pinned: [{ slug: "bundle-openai/gpt-4o", tag: "beta" }] });
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () => String(url).includes("llm-provider-models") ? {
+        routing_known: true,
+        providers: [{ name: "bundle-openai", type: "openai", models: ["gpt-4o"], catch_all: false }],
+        models: [{ id: "bundle-openai/gpt-4o", name: "GPT-4o" }],
+      } : { models: [] },
+    })));
+    try {
+      render(<Harness />);
+      fireEvent.focus(screen.getByRole("combobox"));
+      const row = await waitFor(() => screen.getByText("GPT-4o").closest("button"));
+      expect(row).toHaveTextContent("beta");
+      expect(row).not.toHaveTextContent("Workspace");
+    } finally {
+      _resetModelTiersForTests();
+    }
+  });
+
+  it("shows Free instead of a cost band for a free pin", async () => {
+    setModelTiers({ pinned: [{ slug: "acme/open-8b", label: "Gift", free: true }] });
+    try {
+      render(<Harness />);
+      fireEvent.focus(screen.getByRole("combobox"));
+      const row = await waitFor(() => screen.getByText("Gift").closest("button"));
+      expect(row).toHaveTextContent("Free");
+      expect(row?.querySelector("[data-cost-tier='free']")).not.toBeNull();
+    } finally {
+      _resetModelTiersForTests();
+    }
   });
 
   it("commits a clicked option into the input value", async () => {

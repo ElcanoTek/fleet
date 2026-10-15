@@ -198,6 +198,7 @@ describe("useClientConfig model tiers", () => {
       expect(result.current.models).toEqual({
         defaultModel: "acme/frontier-1",
         advancedModel: "acme/frontier-1-pro",
+        pinned: [],
       }),
     );
     expect(currentDefaultModel()).toBe("acme/frontier-1");
@@ -212,6 +213,7 @@ describe("useClientConfig model tiers", () => {
     expect(result.current.models).toEqual({
       defaultModel: before.def,
       advancedModel: before.adv,
+      pinned: [],
     });
     expect(currentDefaultModel()).toBe(before.def);
   });

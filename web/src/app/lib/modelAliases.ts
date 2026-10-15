@@ -69,7 +69,71 @@ export type ModelTiersConfig = {
   default_model?: string;
   advanced_model?: string;
   task_fallback_model?: string;
+  pinned?: unknown;
 };
+
+// PinnedModel is one operator-pinned picker row (FLEET_PINNED_MODELS, carried
+// as `models.pinned` on /api/client-config): a slug both pickers list right
+// under the recommended tiers, shown under `label` when set and with `tag` as
+// its pill (e.g. "alpha"). `free`, or the optional prices (USD per million
+// tokens), replace the catalog's price in the cost band. Presentation only — the slug is
+// still what a turn or task sends and what the server resolves, and real
+// spend is metered at the provider's price; see docs/PINNED-MODELS.md.
+export type PinnedModel = {
+  slug: string;
+  label?: string;
+  tag?: string;
+  // Shown as "Free" in place of the cost band (display only).
+  free?: boolean;
+  inputPricePerMtok?: number;
+  outputPricePerMtok?: number;
+};
+
+function parsePrice(raw: unknown): number | undefined {
+  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : undefined;
+}
+
+// pinnedPrices converts a pin's per-million overrides into the per-token
+// pricePrompt / priceCompletion fields the picker rows carry; only the sides
+// the operator set are returned, so the rest keep the catalog value.
+export function pinnedPrices(
+  pin: PinnedModel | undefined,
+): { pricePrompt?: number; priceCompletion?: number; free?: boolean } {
+  if (!pin) return {};
+  if (pin.free) return { pricePrompt: 0, priceCompletion: 0, free: true };
+  return {
+    ...(pin.inputPricePerMtok !== undefined ? { pricePrompt: pin.inputPricePerMtok / 1e6 } : {}),
+    ...(pin.outputPricePerMtok !== undefined ? { priceCompletion: pin.outputPricePerMtok / 1e6 } : {}),
+  };
+}
+
+let livePinned: ReadonlyArray<PinnedModel> = [];
+
+// parsePinned keeps only well-formed entries from the opaque payload, so an
+// unexpected shape degrades to "no pins" rather than breaking the shell.
+function parsePinned(raw: unknown): PinnedModel[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: PinnedModel[] = [];
+  for (const entry of raw) {
+    const slug = String((entry as { slug?: unknown })?.slug ?? "").trim();
+    if (!slug || seen.has(slug)) continue;
+    seen.add(slug);
+    const label = String((entry as { label?: unknown })?.label ?? "").trim();
+    const tag = String((entry as { tag?: unknown })?.tag ?? "").trim();
+    const input = parsePrice((entry as { input_price_per_mtok?: unknown })?.input_price_per_mtok);
+    const output = parsePrice((entry as { output_price_per_mtok?: unknown })?.output_price_per_mtok);
+    out.push({
+      slug,
+      ...(label ? { label } : {}),
+      ...(tag ? { tag } : {}),
+      ...((entry as { free?: unknown })?.free === true ? { free: true } : {}),
+      ...(input !== undefined ? { inputPricePerMtok: input } : {}),
+      ...(output !== undefined ? { outputPricePerMtok: output } : {}),
+    });
+  }
+  return out;
+}
 
 // setModelTiers installs the workspace's effective tier slugs (from the
 // member-gated /client-config payload). Empty/missing fields keep the
@@ -83,6 +147,24 @@ export function setModelTiers(cfg: ModelTiersConfig | null | undefined): void {
     advancedModel: adv || ADVANCED_MODEL,
     taskFallbackModel: fb || DEFAULT_TASK_FALLBACK_MODEL,
   };
+  livePinned = parsePinned(cfg?.pinned);
+}
+
+// currentPinnedModels is the operator's pinned rows in declared order (empty
+// until a /api/client-config payload carrying some lands).
+export function currentPinnedModels(): ReadonlyArray<PinnedModel> {
+  return livePinned;
+}
+
+// pinnedModelFor returns the pin for a slug, if the operator pinned it.
+export function pinnedModelFor(slug: string): PinnedModel | undefined {
+  return livePinned.find((p) => p.slug === slug);
+}
+
+// pinnedLabelFor returns the operator's display label for a pinned slug, or
+// undefined when the slug is not pinned or the pin keeps the catalog name.
+export function pinnedLabelFor(slug: string): string | undefined {
+  return pinnedModelFor(slug)?.label;
 }
 
 // currentTaskFallbackModel is the fallback slug the task-create form pre-fills:
@@ -128,6 +210,7 @@ export const TIER_MODELS: ReadonlyArray<{ slug: string; label: string }> = [
 
 // _resetModelTiersForTests restores the compiled-in pair between tests.
 export function _resetModelTiersForTests(): void {
+  livePinned = [];
   liveTiers = {
     defaultModel: DEFAULT_MODEL,
     advancedModel: ADVANCED_MODEL,
@@ -151,8 +234,11 @@ export type ModelTier = "default" | "advanced" | "tested" | "experimental";
 // labelForModel returns the display name for a slug we know, or the raw
 // slug otherwise. Used by the model-picker chip + dropdown so the pinned
 // models read as real model names, never as aliases.
+//
+// An operator pin label (FLEET_PINNED_MODELS) wins over the compiled-in
+// labels, so a relabelled slug reads the same everywhere it is named.
 export function labelForModel(slug: string): string {
-  return KNOWN_LABELS[slug] ?? slug;
+  return pinnedLabelFor(slug) ?? KNOWN_LABELS[slug] ?? slug;
 }
 
 // tierForModel classifies a slug into a UI badge category against the

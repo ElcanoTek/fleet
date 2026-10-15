@@ -14,6 +14,9 @@ import {
   currentTierModels,
   labelForModel,
   setModelTiers,
+  currentPinnedModels,
+  pinnedPrices,
+  pinnedModelFor,
   tierForModel,
 } from "./modelAliases";
 
@@ -107,5 +110,51 @@ describe("setModelTiers", () => {
     expect(currentAdvancedModel()).toBe(ADVANCED_MODEL);
     setModelTiers(null);
     expect(currentDefaultModel()).toBe(DEFAULT_MODEL);
+  });
+});
+
+describe("pinned models (FLEET_PINNED_MODELS)", () => {
+  it("installs well-formed pins in order and relabels them", () => {
+    setModelTiers({
+      pinned: [
+        { slug: " acme/open-70b ", label: "Elcano Nova", tag: "alpha" },
+        { slug: "acme/open-8b" },
+        { slug: "acme/open-70b", label: "duplicate dropped" },
+        { label: "no slug dropped" },
+        "garbage",
+      ],
+    });
+    expect(currentPinnedModels()).toEqual([
+      { slug: "acme/open-70b", label: "Elcano Nova", tag: "alpha" },
+      { slug: "acme/open-8b" },
+    ]);
+    expect(labelForModel("acme/open-70b")).toBe("Elcano Nova");
+    expect(labelForModel("acme/open-8b")).toBe("acme/open-8b");
+    expect(pinnedModelFor("acme/open-70b")?.tag).toBe("alpha");
+  });
+
+  it("degrades a malformed or missing pin list to no pins", () => {
+    setModelTiers({ pinned: { slug: "a/b" } });
+    expect(currentPinnedModels()).toEqual([]);
+    setModelTiers({ pinned: [{ slug: "a/b" }] });
+    setModelTiers({});
+    expect(currentPinnedModels()).toEqual([]);
+  });
+});
+
+describe("pinned prices", () => {
+  it("parses per-million overrides and free, dropping bad values", () => {
+    setModelTiers({
+      pinned: [
+        { slug: "a/priced", input_price_per_mtok: 1.5, output_price_per_mtok: 0 },
+        { slug: "a/free", free: true },
+        { slug: "a/bad", input_price_per_mtok: -1, output_price_per_mtok: "2" },
+      ],
+    });
+    const [priced, free, bad] = currentPinnedModels();
+    expect(pinnedPrices(priced)).toEqual({ pricePrompt: 1.5e-6, priceCompletion: 0 });
+    expect(pinnedPrices(free)).toEqual({ pricePrompt: 0, priceCompletion: 0, free: true });
+    expect(pinnedPrices(bad)).toEqual({});
+    expect(pinnedPrices(undefined)).toEqual({});
   });
 });
