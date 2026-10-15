@@ -831,6 +831,18 @@ func TestFileOp_EditDiffLimits(t *testing.T) {
 		})
 	}
 
+	t.Run("lines of exactly 256 KB are diffed", func(t *testing.T) {
+		for _, tc := range []struct {
+			size int
+			note string
+		}{{256 * 1024, ""}, {256*1024 + 1, "no diff: the changes, with context, are over 256 KB"}} {
+			res := runEdit(t, "x"+strings.Repeat("a", tc.size-2)+"\n", FileOpRequest{OldText: "x", NewText: "y"})
+			if res.DiffNote != tc.note || (tc.note == "") != (res.Diff != "") {
+				t.Errorf("%d bytes: note %q, diff %d bytes; want note %q", tc.size, res.DiffNote, len(res.Diff), tc.note)
+			}
+		}
+	})
+
 	t.Run("the line cap counts a last line without a newline", func(t *testing.T) {
 		for _, tc := range []struct {
 			lines int
@@ -873,9 +885,9 @@ func TestFileOp_EditDiffOfBinaryAndLongEdits(t *testing.T) {
 // difflib gives for the whole file: hunks just apart or just close enough to
 // merge, a replacement in the context of the one before, two on one line,
 // text across lines, added and removed lines, the first and last lines,
-// CRLF, a pattern that overlaps itself, form feeds, and a window that starts
-// on a blank line. Every diff must also apply to the old file and give the
-// new one.
+// CRLF, a pattern that overlaps itself, form feeds, a window that starts on
+// a blank line, and a last line without a newline. Every diff must also apply
+// to the old file and give the new one.
 func TestFileOp_EditDiffMatchesTheWholeFileDiff(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 required")
@@ -908,6 +920,8 @@ cases = [
     ("overlapping", "aaaaa\n" + base, "aa", "b", True),
     ("form feeds", "x\fy\n" + base, "line 3\n", "three\n", False),
     ("a window from a blank line", "".join("\n" if i % 2 else "line %d\n" % i for i in range(1, 41)), "line 20\n", "twenty\n", False),
+    ("no final newline", base + "end", "end", "END", False),
+    ("the final newline removed", base, "line 40\n", "line 40", False),
 ]
 HDR = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 def apply(old, diff):
@@ -926,6 +940,9 @@ def apply(old, diff):
         while i < len(lines) and not lines[i].startswith("@@"):
             tag, text = lines[i][0], lines[i][1:]
             i += 1
+            if i < len(lines) and lines[i].startswith("\\"):
+                text = text[:-1]  # "\ No newline at end of file"
+                i += 1
             if tag in " -":
                 if pos >= len(old) or old[pos] != text:
                     return None
@@ -975,6 +992,28 @@ func TestFileOp_DiffLinesAreCountedAtNewlines(t *testing.T) {
 		if !strings.Contains(res.Diff, "@@ -3,4 +3,4 @@\n line 3\n line 4\n line 5\n-line 6\n+six\n") {
 			t.Errorf("op %v: diff = %q, want line 6 numbered as the sixth line", req.Op, res.Diff)
 		}
+	}
+}
+
+// A last line without a newline is marked as diff marks it, rather than run
+// into the next line of the diff, and the +/- counts take only real lines:
+// content lines that start with "++" or "--" included.
+func TestFileOp_DiffLinesAtTheEdgesOfTheFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, old, new, want string
+		added, removed                int
+	}{
+		{"no final newline", "one\ntwo\nlast", "last", "LAST",
+			"@@ -1,3 +1,3 @@\n one\n two\n-last\n\\ No newline at end of file\n+LAST\n\\ No newline at end of file\n", 1, 1},
+		{"lines that look like headers", "a\n--y\nb\n", "--y\n", "++x\n+++z\n",
+			"@@ -1,3 +1,4 @@\n a\n---y\n+++x\n++++z\n b\n", 2, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := runEdit(t, tc.content, FileOpRequest{OldText: tc.old, NewText: tc.new})
+			if !strings.HasSuffix(res.Diff, tc.want) || res.Added != tc.added || res.Removed != tc.removed {
+				t.Errorf("diff = %q (+%d/-%d), want it to end %q (+%d/-%d)", res.Diff, res.Added, res.Removed, tc.want, tc.added, tc.removed)
+			}
+		})
 	}
 }
 
@@ -1087,6 +1126,9 @@ def apply(old, diff):
         while i < len(lines) and not lines[i].startswith("@@"):
             tag, text = lines[i][0], lines[i][1:]
             i += 1
+            if i < len(lines) and lines[i].startswith("\\"):
+                text = text[:-1]  # "\ No newline at end of file"
+                i += 1
             if tag in " -":
                 if pos >= len(old) or old[pos] != text:
                     return None

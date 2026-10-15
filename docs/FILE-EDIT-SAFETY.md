@@ -35,22 +35,27 @@ new I/O path.
   committed, from only the lines around the replacements, with three lines of
   context; the rest of the file is never decoded or diffed. Each replacement
   gets its own hunk unless its context lines touch another's, so a
-  `replace_all` rename through a long file still shows every site, however
-  far apart they are. When the lines around the replacements come to
-  over 2,000 lines or 256 KB a side, the result has a note in place of the
-  diff and the line counts ("no diff: the changes, with context, are over
-  2000 lines"), and the edit still applies in full; when they are not UTF-8,
-  the note is "no diff: binary content". Hunk headers number lines as
-  `grep -n` and `sed` do, counting only `\n`.
-  Before, the whole file was decoded and diffed after the commit. A
-  `replace_all` changing every other line of a 233 KB file took 62.8 s to
-  diff, past the 60 s file-op timeout, so an edit that had landed was reported
-  as failed and the sandbox was retired; and under the default 512 MiB sandbox
-  memory limit, diffing a file of a few tens of MB ran out of memory after
-  the edit had landed. Measured
-  now: one change in a 69 MB file takes 0.09 s and 148 MiB at peak (the edit
-  holds the old and the new file); a rename at six places across a 3,654-line
-  file shows all six (+6/-6).
+  `replace_all` rename through a long file gets a hunk for every site, however
+  far apart they are (the diff is still cut at 4 KB). When the lines around
+  the replacements come to over 2,000 lines or 256 KB a side, the result has a
+  note in place of the diff and the line counts ("no diff: the changes, with
+  context, are over 2000 lines"), and the edit still applies in full; when
+  they are not UTF-8, the note is "no diff: binary content".
+- **Line numbers and the last line.** Hunk headers number lines as `grep -n`
+  and `sed` do, counting only `\n`, for `write_file`'s diff too; a file whose
+  lines end in a lone `\r` therefore diffs as one long line. A last line
+  without a newline is marked `\ No newline at end of file`, as `diff` and
+  `git` mark it; before, difflib ran it into the next line of the diff
+  (`-last+LAST`).
+- **Why, and what it costs now.** Before, the whole file was decoded and
+  diffed after the commit. A `replace_all` changing every other line of a
+  233 KB file took 62.8 s to diff, past the 60 s file-op timeout, so an edit
+  that had landed was reported as failed and the sandbox was retired; and
+  under the default 512 MiB sandbox memory limit, diffing a file of a few tens
+  of MB ran out of memory after the edit had landed. Measured now: one change
+  in a 69 MB file takes 0.09 s and 148 MiB at peak (the edit holds the old and
+  the new file); a rename at six places across a 3,654-line file shows all six
+  (+6/-6).
 - **Atomic, mode-preserving write** (already delivered by #784 and relied on
   here): same-directory temp + `os.replace`, preserving an existing file's mode
   (a `chmod +x`'d script keeps its execute bit through an edit).
@@ -77,9 +82,10 @@ wrote N bytes". The same seam now reports an overwrite and can guard it:
   side: the hashes and sizes are still reported, with a note saying why.
   Only the lines that differ, with three lines of context, are diffed (the
   hunk headers keep the file's line numbers, counted at `\n`), so one changed
-  line in a long file stays cheap. The line cap exists because difflib's cost grows with the
-  square of the line count: a 256 KB file of short lines, every other one
-  changed, took over 60 s to diff, past the 60 s file-op timeout.
+  line in a long file stays cheap. The line cap exists because difflib's cost
+  grows with the square of the line count: a 256 KB file of short lines,
+  every other one changed, took over 60 s to diff, past the 60 s file-op
+  timeout.
 - **`expected_hash` on `write_file`.** Optional, with `edit_file`'s meaning:
   the SHA-256 the file must have now (an optional `sha256:` prefix, any case).
   If the file differs, is gone, is not a regular file, or cannot be read, the

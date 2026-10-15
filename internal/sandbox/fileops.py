@@ -692,13 +692,16 @@ def _shift_hunk(line, old_offset, new_offset):
 
 def _hunks(before, after, old_offset, new_offset):
     """difflib's hunks between two runs of lines, numbered as lines of the
-    files they were cut from, old_offset and new_offset lines in."""
-    lines = list(difflib.unified_diff(before, after, n=DIFF_CONTEXT))[2:]
-    if old_offset or new_offset:
-        lines = [
-            _shift_hunk(line, old_offset, new_offset) if line.startswith("@@") else line
-            for line in lines
-        ]
+    files they were cut from, old_offset and new_offset lines in. A last line
+    without a newline gets diff's marker, where difflib would run it into the
+    next line of the diff."""
+    lines = []
+    for line in list(difflib.unified_diff(before, after, n=DIFF_CONTEXT))[2:]:
+        if line.startswith("@@") and (old_offset or new_offset):
+            line = _shift_hunk(line, old_offset, new_offset)
+        elif not line.endswith("\n"):
+            line += "\n\\ No newline at end of file\n"
+        lines.append(line)
     return lines
 
 
@@ -779,9 +782,10 @@ def _edit_diff(path, before, after, old, new, count):
     # A window holds whole lines: its replacements, with DIFF_CONTEXT lines
     # around them. Windows that touch are merged, so each window maps to
     # after by shifting it by grow for every replacement ahead of it.
-    # Each line is scanned a bounded number of times, however many
-    # replacements it holds, and every byte scanned joins a window, so the
-    # size check below also bounds the time.
+    # The search for old runs once through the file, as count and replace
+    # already did. The line scans touch each line a bounded number of times,
+    # however many replacements it holds, and only bytes that join a window,
+    # so the size check below bounds them too.
     windows = []
     size = 0
     line_end = 0  # the end of the line where the last replacement ends
