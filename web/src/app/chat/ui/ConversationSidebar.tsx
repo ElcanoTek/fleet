@@ -1362,12 +1362,11 @@ export function ConversationSidebar({
     />
   );
 
-  // Projects section (#509 follow-up): the top MAX_RAIL_PROJECTS projects as
-  // expandable groups; each project row is also the drop target for a
+  // Projects section (#509 follow-up): every project, pinned first, as
+  // expandable groups inside the section's own scroller; each project row is also the drop target for a
   // conversation drag. The header always renders — its + creates a project
   // (opens the modal straight on the new-project form), and each row's kebab
-  // (where the chat count used to be) carries edit/rename/delete. The full
-  // list stays reachable via the empty-state row and the modal itself.
+  // (where the chat count used to be) carries edit/rename/delete.
   const projectsSection = (
     <div className="mb-1">
       <div className="flex items-center gap-1">
@@ -1752,11 +1751,12 @@ export function ConversationSidebar({
 
       {/* Projects section — ABOVE the New-chat row (the rail's primary nav
           block). Wide-collapsed (≥sm) it hides with the rest of the wide-only
-          content; the max-height guard keeps a deep expanded tree from
-          pushing New chat and the list off-screen. */}
+          content; the max-height guard keeps a long or deeply expanded
+          tree from pushing New chat and the list off-screen — past it the
+          section scrolls on its own, like the Chats list below. */}
       <div
         className={[
-          "max-h-[40vh] overflow-y-auto overflow-x-hidden",
+          "max-h-[30vh] overflow-y-auto overflow-x-hidden",
           railCollapsed ? "sm:hidden" : "",
         ].join(" ")}
       >
