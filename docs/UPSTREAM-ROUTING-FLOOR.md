@@ -165,6 +165,36 @@ mutating one request's policy cannot corrupt the floor process-wide).
   omitting it would make the *preferred* route unroutable.
 - Every other family keeps `nil`, so their requests are byte-identical to before.
 
+**1b. Per-slug floors (`precisionFloorSlugs`).** Some families cannot take a
+floor as a whole but contain slugs that need one. `qwen/` is the case: Alibaba
+alone serves most `qwen/` slugs (Qwen3.8 Max, Flash, Plus and the rest), and
+every one of those endpoints reports quantization `unknown`, so a family-wide
+`fp8AndAbove` would make them unroutable. Qwen's open-weights slugs are the
+opposite: third-party hosts serve them at fp4 through bf16.
+
+`precisionFloorSlugs` gives the floor to exact slugs, read with the endpoint
+list in hand, on the same per-slug terms as `officialPoolSlugs`: a sibling does
+not inherit it.
+
+| slug | checked | pool | floor leaves |
+|---|---|---|---|
+| `qwen/qwen3.8-27b` | 2026-10-15 | 20 endpoints: fp4 ×3 (Tenstorrent, Darkbloom, ModelRun), fp8 ×9, bf16 ×1 (DeepInfra), fp16 ×1 (Cerebras), unknown ×6 (Wafer, DekaLLM, Phala, Novita, Alibaba, Cloudflare) | 11 endpoints |
+
+A listed slug with no `canonicalUpstream` entry gets the floor alone:
+`quantizations` plus `allow_fallbacks: true`, with no `order` and no `only`, so
+OpenRouter keeps balancing across every endpoint that clears the floor.
+`preferredUpstreamFor` stays `""` for it, so served-upstream attribution never
+flags a fallback (there is no preferred upstream to fall back from). A listed
+slug inside a pinned family that has no family floor gets the floor on top of
+its pin.
+
+Why this slug: an operator pin (`FLEET_PINNED_MODELS`) shows it under a product
+name for an in-house model alpha, so its output quality reads as that
+product's quality. The fp4 endpoints are among the cheapest in its pool, so
+price-weighted routing reaches them often without a floor. The pin is a display
+alias; routing and this floor key on the real slug, so the floor holds under
+any label.
+
 **2. Served-upstream attribution.** `openrouterServedProvider` reads
 `.Provider` off OpenRouter's provider metadata — the upstream that actually
 served the step, which `updateUsage` previously discarded while keeping only
@@ -200,11 +230,18 @@ of it was served elsewhere.
   to a pool needs the same manual check and a code change before requests may
   reach it. That is the intended direction of the failure: the pool cannot grow
   silently, only shrink.
-- **Only the DeepSeek family gets a floor.** It is the one family documented to
-  mix precisions across its pool. Other soft-pinned families
+- **Only the DeepSeek family gets a family-wide floor.** It is the one family
+  documented to mix precisions across its pool. Other soft-pinned families
   (`anthropic/`, `openai/`, `moonshotai/`, `z-ai/`) were left untouched rather
   than speculatively constrained — a too-narrow allow-list makes a family
-  unroutable, which is a worse failure than the one being fixed.
+  unroutable, which is a worse failure than the one being fixed. Individual
+  slugs get a floor only through `precisionFloorSlugs`, one checked slug at a
+  time (today: `qwen/qwen3.8-27b`). Other open-weights `qwen/` slugs also mix
+  precisions (fp4 or int4 appear on `qwen3.6-35b-a3b`, `qwen3.5-9b`,
+  `qwen3.5-35b-a3b`, `qwen3-coder`, `qwen3-14b` as of 2026-10-15) and were left
+  out of scope; add each with its endpoint list when someone relies on it.
+- **The per-slug floor matches the exact slug.** A variant suffix
+  (`qwen/qwen3.8-27b:nitro`) is a different slug and does not inherit it.
 - **The floor may narrow availability.** If DeepSeek's first-party endpoint is
   down *and* every fp8+ alternative is saturated, a request that previously
   degraded to fp4 now fails instead. That is the intended trade: the prior
@@ -228,7 +265,10 @@ of it was served elsewhere.
   `TestOfficialPoolExemptionIsEnforcedAtRequestTime` (a listed slug's request
   carries its validated pool as `only`, alias form included, fallbacks still on,
   the preferred upstream inside the set, siblings with no allow-list),
-  `TestOfficialPoolAllowlistNotAliased`, and
+  `TestOfficialPoolAllowlistNotAliased`, `TestPrecisionFloorSlugs` (a listed
+  slug and its `~` form carry `fp8AndAbove` with fallbacks on and no `only`;
+  `qwen/qwen3.8-27b` gets no `order` and no preferred upstream; Alibaba-only
+  siblings get no pin at all), and
   `TestDefaultCoreModelCannotBeServedAtArbitraryPrecision`, which now reads the
   emitted policy rather than the exemption table.
 - `internal/agentcore/served_upstream_test.go` — canonical route is not a
