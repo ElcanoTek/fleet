@@ -222,13 +222,28 @@ the same stop-condition mechanism, at a different threshold:
 - **When it goes inert**: if a window compaction finds nothing to summarize
   (one enormous message), the checkpoint stops pausing until a later
   compaction — proactive or the reactive overflow recovery — removes history.
+- **Scheduled runs can opt into it** (#1764): a scheduled engine uses the
+  window checkpoint instead of the resend budget when the operator turns the
+  budget off (`FLEET_CONTEXT_RESEND_BUDGET_TOKENS=0`) **and** opts into
+  proactive compaction (`FLEET_SCHEDULED_AUTO_COMPACT=1`) — "compact only near
+  the model's limit" (`engine.windowCheckpointActive`). Without it, a
+  scheduled run is one round of many tool steps whose window compaction is
+  checked only at round start, so a long run could reach the window before
+  the next check and fall to the reactive overflow recovery. With the budget
+  off and no opt-in, a scheduled run still never pauses or rewrites its
+  transcript. Why an operator would choose this: with prompt-cache hits above
+  80%, a resend-budget compaction (one uncached summarizer call plus a cold
+  step after it) costs more than the cache-read savings it buys; on
+  2026-10-15 production data it was ~$5–6 of ~$14 Argon spend.
 - **What it does not change**: chat compaction still shortens the request only;
   the stored transcript keeps its history, so a later turn that starts over the
   threshold compacts again. Scheduled runs are unchanged.
 
 Pinned by `TestRun_WindowCheckpoint_InteractivePausesCompactsAndResumes`,
-`TestCheckpointThreshold` and
-`TestStreamRound_ForcedCompactionClearsStalledWindowCheckpoint`.
+`TestCheckpointThreshold`,
+`TestStreamRound_ForcedCompactionClearsStalledWindowCheckpoint`, and for the
+scheduled opt-in `TestWindowCheckpointActive` and
+`TestRun_ScheduledWindowCheckpoint_CompactsNearTheLimitAndResumes`.
 - The window-pressure compaction and its `FLEET_SCHEDULED_AUTO_COMPACT` opt-in.
 - The knob: `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` (default 80K) is reused; `0`
   disables both the between-round trigger and the checkpoint.

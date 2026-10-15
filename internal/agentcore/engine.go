@@ -688,7 +688,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 	// plain threshold, and a pause that found nothing to compact would only
 	// pause again on the next step.
 	compactAt := int(float64(window) * contextCompactionThreshold(e.envPrefix))
-	if !e.requireCompactionOptIn {
+	if e.windowCheckpointActive() {
 		if limit := e.windowCheckpointLimit(activeModel); limit > 0 && limit < compactAt {
 			compactAt = limit
 		}
@@ -961,7 +961,7 @@ const maxResendCheckpoints = 40
 //     the prompt past the window inside the round. Inert after a window
 //     compaction found nothing to summarize (windowCompactionStalled).
 func (e *engine) checkpointThreshold(activeModel fantasy.LanguageModel) int {
-	if e.requireCompactionOptIn {
+	if !e.windowCheckpointActive() {
 		budget := contextResendBudgetTokens(e.envPrefix)
 		if budget <= 0 {
 			return 0
@@ -974,10 +974,25 @@ func (e *engine) checkpointThreshold(activeModel fantasy.LanguageModel) int {
 	return e.windowCheckpointLimit(activeModel)
 }
 
+// windowCheckpointActive reports whether the round's checkpoint is the
+// window-pressure one rather than the resend budget: always for an interactive
+// engine, and for a scheduled engine whose operator turned the resend budget
+// off (FLEET_CONTEXT_RESEND_BUDGET_TOKENS=0) and opted into proactive
+// compaction (FLEET_SCHEDULED_AUTO_COMPACT=1) — "compact only near the
+// model's limit". A scheduled run is one round of many tool steps, so without
+// this its window compaction would be checked only at round start and a long
+// run could grow past the window before the next one.
+func (e *engine) windowCheckpointActive() bool {
+	if !e.requireCompactionOptIn {
+		return true
+	}
+	return contextResendBudgetTokens(e.envPrefix) <= 0 && e.envPrefix.lookupBool("SCHEDULED_AUTO_COMPACT")
+}
+
 // compactionCheckpoint returns the StopCondition that pauses a round's tool
 // loop at checkpointThreshold, or nil when no checkpoint applies.
 func (e *engine) compactionCheckpoint(input []fantasy.Message, activeModel fantasy.LanguageModel) fantasy.StopCondition {
-	if !e.requireCompactionOptIn {
+	if e.windowCheckpointActive() {
 		if e.checkpointThreshold(activeModel) <= 0 {
 			return nil
 		}
