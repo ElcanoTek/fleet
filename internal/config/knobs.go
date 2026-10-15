@@ -271,7 +271,7 @@ var envKnobs = []envKnob{
 	{key: "FLEET_A2A_PUSH_ALLOW_PRIVATE", fleet: true, kind: kindBool},
 	// min 1: a zero would mean "answer with the SUBMITTED row immediately",
 	// which is what returnImmediately is for — a set 0 is a misconfiguration.
-	{key: "FLEET_A2A_UNARY_WAIT_SECONDS", fleet: true, kind: kindInt, min: bound(1)},
+	{key: "FLEET_A2A_UNARY_WAIT_SECONDS", fleet: true, kind: kindInt, min: bound(1)}, // gitleaks:allow — a knob NAME, not a credential (generic-api-key entropy false positive)
 	{key: "FLEET_SANDBOX_PIDS", kind: kindInt},
 	// min 1: a set 0 would mean "no time at all for a sandbox start", which is
 	// a misconfiguration — unset is the way to keep the backend default (#1358).
