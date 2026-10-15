@@ -2415,7 +2415,15 @@ func buildRerunTaskCreate(source *models.Task, keepRecurrence bool, o taskRerunO
 	} else {
 		tc.ScheduledFor = nil // immediate run-now
 		if !keepRecurrence {
-			tc.Recurrence = "" // rerun is one-time
+			// Rerun is one-time, so the recurrence's end conditions go with it:
+			// TaskToCreate carries recurrence_until/recurrence_remaining, and
+			// validateTaskCreate rejects either without a recurrence — which made
+			// every rerun (and every "just this run" edit) of a recurring task
+			// with an end date or run count fail with "recurrence_until requires
+			// a recurrence". Matches the trigger-run projection in storage.
+			tc.Recurrence = ""
+			tc.RecurrenceUntil = nil
+			tc.RecurrenceRemaining = nil
 		}
 	}
 	if err := applyRerunOverrides(&tc, o); err != nil {
