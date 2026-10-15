@@ -181,10 +181,16 @@ func runEditFile(ctx context.Context, sb *sandbox.Sandbox, params EditFileParams
 	if err != nil {
 		return "", fileOpError("edit", err)
 	}
-	out := fmt.Sprintf("Successfully replaced %d occurrence(s) in %s (+%d/-%d lines)\nold_sha256: %s\nnew_sha256: %s",
-		res.ReplacedCount, validPath, res.Added, res.Removed, res.OldSHA256, res.SHA256)
-	if res.Diff != "" {
+	out := fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", res.ReplacedCount, validPath)
+	if res.DiffNote == "" {
+		out += fmt.Sprintf(" (+%d/-%d lines)", res.Added, res.Removed)
+	}
+	out += fmt.Sprintf("\nold_sha256: %s\nnew_sha256: %s", res.OldSHA256, res.SHA256)
+	switch {
+	case res.Diff != "":
 		out += "\n\n" + res.Diff
+	case res.DiffNote != "":
+		out += "\n(" + res.DiffNote + ")"
 	}
 	return out, nil
 }

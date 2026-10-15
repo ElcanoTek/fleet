@@ -197,6 +197,37 @@ func TestEditFileTool(t *testing.T) {
 	}
 }
 
+// edit_file reports its diff with the line counts, or, for a change spread
+// over too many lines to diff, a note in their place.
+func TestEditFileTool_ReportsTheDiffOrWhyNot(t *testing.T) {
+	sb := fsTestSandbox(t)
+	ctx := context.Background()
+	testFile := filepath.Join(t.TempDir(), "list.txt")
+	old := strings.Repeat("keep\nsame\n", 1100)
+	if err := os.WriteFile(testFile, []byte("first\n"+old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := runEditFile(ctx, sb, EditFileParams{Path: testFile, OldText: "first\n", NewText: "FIRST\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := "Successfully replaced 1 occurrence(s) in " + testFile + " (+1/-1 lines)\nold_sha256: " + sha256Hex("first\n"+old) + "\nnew_sha256: " + sha256Hex("FIRST\n"+old) + "\n\n"
+	if !strings.HasPrefix(result, head) || !strings.Contains(result, "-first\n+FIRST\n") {
+		t.Errorf("result = %q, want %q and the diff", result, head)
+	}
+
+	result, err = runEditFile(ctx, sb, EditFileParams{Path: testFile, OldText: "same\n", NewText: "SAME\n", ReplaceAll: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := "FIRST\n" + strings.ReplaceAll(old, "same\n", "SAME\n")
+	want := "Successfully replaced 1100 occurrence(s) in " + testFile + "\nold_sha256: " + sha256Hex("FIRST\n"+old) + "\nnew_sha256: " + sha256Hex(updated) + "\n(no diff: the changes, with context, are over 2000 lines)"
+	if result != want {
+		t.Errorf("result = %q, want %q", result, want)
+	}
+}
+
 func TestEditFileTool_OldTextAbsentLeavesFileUnchanged(t *testing.T) {
 	sb := fsTestSandbox(t)
 	testFile := filepath.Join(t.TempDir(), "test.txt")

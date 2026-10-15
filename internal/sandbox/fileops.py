@@ -30,12 +30,17 @@ import time
 DIFF_MAX_BYTES = 4096
 # A write is diffed against the file it replaces only when both are at most
 # this size: the old file is held in memory for the diff, and difflib slows
-# down sharply on large inputs. Larger files still report their hashes.
+# down sharply on large inputs. Larger files still report their hashes. An
+# edit is diffed only when the lines around its replacements are at most this
+# size a side.
 DIFF_SOURCE_MAX_BYTES = 256 * 1024
-# ...and only when the lines that differ, with their context, are at most this
-# many a side: difflib's cost grows with the square of the line count, and a
-# diff that long would be cut to DIFF_MAX_BYTES anyway.
+# A write's diff covers only the span from the first changed line to the last,
+# and an edit's only the lines around its replacements, each with
+# DIFF_CONTEXT lines of context; either is skipped when those lines are over
+# DIFF_MAX_LINES a side: difflib's cost grows with the square of the line
+# count, and a diff that long would be cut to DIFF_MAX_BYTES anyway.
 DIFF_MAX_LINES = 2000
+DIFF_CONTEXT = 3
 # A plain write (no expected_hash) hashes the file it replaces only up to this
 # size. The hash is a courtesy report, and a file op that outlives the
 # executor's timeout retires the sandbox, so a multi-GB file on slow storage
@@ -654,23 +659,66 @@ def _changed_window(old, new, context):
     return start, old[start : len(old) - cut], new[start : len(new) - cut]
 
 
+def _lines(text):
+    """text split after each "\n", so lines are numbered as grep -n and sed
+    number them; str.splitlines would also split at \f, \v, a lone \r and
+    more."""
+    lines = text.split("\n")
+    last = lines.pop()
+    lines = [line + "\n" for line in lines]
+    if last:
+        lines.append(last)
+    return lines
+
+
 HUNK = re.compile(r"^@@ -(\d+)((?:,\d+)?) \+(\d+)((?:,\d+)?) @@")
 
 
-def _shift_hunk(line, offset):
-    """Move a hunk header from window line numbers to the file's."""
+def _shift_hunk(line, old_offset, new_offset):
+    """Move a hunk header from window line numbers to the files'."""
     return HUNK.sub(
         lambda m: (
             "@@ -%d%s +%d%s @@"
             % (
-                int(m.group(1)) + offset,
+                int(m.group(1)) + old_offset,
                 m.group(2),
-                int(m.group(3)) + offset,
+                int(m.group(3)) + new_offset,
                 m.group(4),
             )
         ),
         line,
     )
+
+
+def _hunks(before, after, old_offset, new_offset):
+    """difflib's hunks between two runs of lines, numbered as lines of the
+    files they were cut from, old_offset and new_offset lines in. A last line
+    without a newline gets diff's marker, where difflib would run it into the
+    next line of the diff."""
+    lines = []
+    for line in list(difflib.unified_diff(before, after, n=DIFF_CONTEXT))[2:]:
+        if line.startswith("@@") and (old_offset or new_offset):
+            line = _shift_hunk(line, old_offset, new_offset)
+        elif not line.endswith("\n"):
+            line += "\n\\ No newline at end of file\n"
+        lines.append(line)
+    return lines
+
+
+def _diff_text(path, hunks, verb):
+    """hunks as one unified diff cut to DIFF_MAX_BYTES: (diff, added, removed,
+    note)."""
+    if not hunks:
+        return "", 0, 0, ""
+    added = sum(1 for line in hunks if line.startswith("+"))
+    removed = sum(1 for line in hunks if line.startswith("-"))
+    name = os.path.basename(path)
+    text = "--- %s (before)\n+++ %s (after)\n" % (name, name) + "".join(hunks)
+    encoded = text.encode("utf-8")
+    if len(encoded) > DIFF_MAX_BYTES:
+        text = encoded[:DIFF_MAX_BYTES].decode("utf-8", "ignore")
+        text += "\n... diff truncated (%s applied in full) ..." % verb
+    return text, added, removed, ""
 
 
 def _bounded_diff(path, before, after, verb="edit", max_lines=None):
@@ -679,40 +727,119 @@ def _bounded_diff(path, before, after, verb="edit", max_lines=None):
     With max_lines, only the changed window is diffed, and a window longer
     than max_lines a side gets no diff, with a note saying so.
     """
-    old_lines = before.decode("utf-8", "replace").splitlines(keepends=True)
-    new_lines = after.decode("utf-8", "replace").splitlines(keepends=True)
+    old_lines = _lines(before.decode("utf-8", "replace"))
+    new_lines = _lines(after.decode("utf-8", "replace"))
     offset = 0
     if max_lines is not None:
-        offset, old_lines, new_lines = _changed_window(old_lines, new_lines, 3)
+        offset, old_lines, new_lines = _changed_window(
+            old_lines, new_lines, DIFF_CONTEXT
+        )
         if max(len(old_lines), len(new_lines)) > max_lines:
             return "", 0, 0, "no diff: the change spans over %d lines" % max_lines
-    name = os.path.basename(path)
-    lines = list(
-        difflib.unified_diff(
-            old_lines,
-            new_lines,
-            fromfile=name + " (before)",
-            tofile=name + " (after)",
-            n=3,
-        )
-    )
-    if offset:
-        lines = [
-            _shift_hunk(line, offset) if line.startswith("@@") else line
-            for line in lines
-        ]
-    added = sum(
-        1 for line in lines if line.startswith("+") and not line.startswith("+++")
-    )
-    removed = sum(
-        1 for line in lines if line.startswith("-") and not line.startswith("---")
-    )
-    text = "".join(lines)
-    encoded = text.encode("utf-8")
-    if len(encoded) > DIFF_MAX_BYTES:
-        text = encoded[:DIFF_MAX_BYTES].decode("utf-8", "ignore")
-        text += "\n... diff truncated (%s applied in full) ..." % verb
-    return text, added, removed, ""
+    return _diff_text(path, _hunks(old_lines, new_lines, offset, offset), verb)
+
+
+def _line_start(buf, pos, lines):
+    """Where the line holding buf[pos] starts, moved back `lines` lines."""
+    start = buf.rfind(b"\n", 0, pos) + 1
+    for _ in range(lines):
+        if start == 0:
+            break
+        start = buf.rfind(b"\n", 0, start - 1) + 1
+    return start
+
+
+def _line_end(buf, pos, lines):
+    """Where the line holding buf[pos] ends, after its "\n", moved on `lines`
+    lines."""
+    for _ in range(lines + 1):
+        pos = buf.find(b"\n", pos)
+        if pos < 0:
+            return len(buf)
+        pos += 1
+    return pos
+
+
+def _line_count(buf, start, end):
+    """The lines in buf[start:end], counted as _lines counts them."""
+    return buf.count(b"\n", start, end) + (end > start and buf[end - 1] != 0x0A)
+
+
+def _edit_diff(path, before, after, old, new, count):
+    """edit_file's bounded diff: (diff, added, removed, note).
+
+    The edit knows where it replaced old with new, so it diffs only the lines
+    around its replacements and never decodes the whole file: a replace_all
+    rename through a long file keeps its diff, and a large file costs little
+    more memory than the edit itself. When those lines come to over
+    DIFF_SOURCE_MAX_BYTES or DIFF_MAX_LINES a side, or are not UTF-8, there
+    is a note instead.
+    """
+    if not old:
+        return _bounded_diff(path, before, after, "edit", DIFF_MAX_LINES)
+    grow = len(new) - len(old)
+    # [start, end, replacements before it] of each window, in before's bytes.
+    # A window holds whole lines: its replacements, with DIFF_CONTEXT lines
+    # around them. Windows that touch are merged, so each window maps to
+    # after by shifting it by grow for every replacement ahead of it.
+    # The search for old runs once through the file, as count and replace
+    # already did. The line scans touch each line a bounded number of times,
+    # however many replacements it holds, and only bytes that join a window,
+    # so the size check below bounds them too.
+    windows = []
+    size = 0
+    line_end = 0  # the end of the line where the last replacement ends
+    at = -len(old)
+    for i in range(count):
+        at = before.find(old, at + len(old))
+        last = at + len(old) - 1
+        if windows and at < windows[-1][1]:
+            start = windows[-1][0]
+        else:
+            start = _line_start(before, at, DIFF_CONTEXT)
+        if last < line_end:
+            end = windows[-1][1]  # it ends on the same line as the last one
+        else:
+            line_end = _line_end(before, last, 0)
+            end = _line_end(before, last, DIFF_CONTEXT)
+        if windows and start <= windows[-1][1]:
+            size += end - windows[-1][1]
+            windows[-1][1] = end
+        else:
+            size += end - start
+            windows.append([start, end, i])
+        if max(size, size + (i + 1) * grow) > DIFF_SOURCE_MAX_BYTES:
+            note = "no diff: the changes, with context, are over %d KB" % (
+                DIFF_SOURCE_MAX_BYTES // 1024
+            )
+            return "", 0, 0, note
+
+    spans = []  # (start, end) of each window in before, then in after
+    for n, (start, end, ahead) in enumerate(windows):
+        through = windows[n + 1][2] if n + 1 < len(windows) else count
+        spans.append((start, end, start + ahead * grow, end + through * grow))
+    old_lines = sum(_line_count(before, a, b) for a, b, _, _ in spans)
+    new_lines = sum(_line_count(after, c, d) for _, _, c, d in spans)
+    if max(old_lines, new_lines) > DIFF_MAX_LINES:
+        note = "no diff: the changes, with context, are over %d lines" % DIFF_MAX_LINES
+        return "", 0, 0, note
+
+    hunks = []
+    old_line = new_line = old_at = new_at = 0
+    try:
+        for old_start, old_end, new_start, new_end in spans:
+            old_line += before.count(b"\n", old_at, old_start)
+            new_line += after.count(b"\n", new_at, new_start)
+            old_at, new_at = old_start, new_start
+            hunks += _hunks(
+                _lines(before[old_start:old_end].decode("utf-8")),
+                _lines(after[new_start:new_end].decode("utf-8")),
+                old_line,
+                new_line,
+            )
+    except UnicodeDecodeError:
+        return "", 0, 0, "no diff: binary content"
+    return _diff_text(path, hunks, "edit")
 
 
 def _stale(expected, current):
@@ -785,6 +912,28 @@ def do_edit(req):
                 "edit is a no-op (old_text and new_text produce identical content)",
             )
 
+        # Describe the edit before committing it, as a write does: a
+        # replace_all through a long file would otherwise diff past the
+        # file-op timeout after the edit had landed.
+        diff, added, removed, note = _edit_diff(
+            req["path"], content, updated, old, new, count
+        )
+        response = {
+            "ok": True,
+            "err_kind": "",
+            "err": "",
+            "data_b64": "",
+            "size": len(updated),
+            "count": count,
+            "sha256": hashlib.sha256(updated).hexdigest(),
+            "old_sha256": old_digest,
+            "match_count": count,
+            "added": added,
+            "removed": removed,
+            "diff": diff,
+            "diff_note": note,
+        }
+
         try:
             _atomic_write(
                 parent_fd,
@@ -799,22 +948,7 @@ def do_edit(req):
             except (OSError, UnsafePath, StaleContent):
                 current = "unknown"
             return _stale(expected, current)
-
-        diff, added, removed, _ = _bounded_diff(req["path"], content, updated)
-        return {
-            "ok": True,
-            "err_kind": "",
-            "err": "",
-            "data_b64": "",
-            "size": len(updated),
-            "count": count,
-            "sha256": hashlib.sha256(updated).hexdigest(),
-            "old_sha256": old_digest,
-            "match_count": count,
-            "added": added,
-            "removed": removed,
-            "diff": diff,
-        }
+        return response
     except FileNotFoundError:
         return fail("not_found", "file not found")
     except IsADirectoryError:

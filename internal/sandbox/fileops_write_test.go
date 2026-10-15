@@ -1,7 +1,8 @@
 package sandbox
 
-// #1745: write_file's overwrite report and stale-content guard, through the
-// REAL embedded fileops.py on the host backend (as fileops_test.go does).
+// #1745: write_file's overwrite report and stale-content guard, and the
+// bounded diff it shares with edit_file, through the REAL embedded fileops.py
+// on the host backend (as fileops_test.go does).
 
 import (
 	"bytes"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -264,11 +266,17 @@ func TestFileOp_WriteOverNonRegularFile(t *testing.T) {
 	}
 }
 
-// runPatchedWrite runs fileops.do_write(req) under python3 after applying
-// patch, Python run once `fileops` (the embedded script) is imported, and
-// decodes the result. It forces races and failures that real timing cannot
-// produce on demand. A helper that hangs fails the test after 15 s.
+// runPatchedWrite is runPatchedOp for a write.
 func runPatchedWrite(t *testing.T, req map[string]any, patch string) (FileOpResult, error) {
+	t.Helper()
+	return runPatchedOp(t, "write", req, patch)
+}
+
+// runPatchedOp runs fileops.do_<op>(req) under python3 after applying patch,
+// Python run once `fileops` (the embedded script) is imported, and decodes
+// the result. It forces races and failures that real timing cannot produce
+// on demand. A helper that hangs fails the test after 15 s.
+func runPatchedOp(t *testing.T, op string, req map[string]any, patch string) (FileOpResult, error) {
 	t.Helper()
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 required for the fileop seam")
@@ -277,7 +285,7 @@ func runPatchedWrite(t *testing.T, req map[string]any, patch string) (FileOpResu
 	if err := os.WriteFile(filepath.Join(mod, "fileops.py"), fileOpsScript, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	req["op"] = "write"
+	req["op"] = op
 	if _, ok := req["anchor"]; !ok {
 		req["anchor"] = req["root"]
 	}
@@ -286,7 +294,7 @@ func runPatchedWrite(t *testing.T, req map[string]any, patch string) (FileOpResu
 		t.Fatal(err)
 	}
 	driver := "import json, os, sys\nsys.path.insert(0, sys.argv[1])\nimport fileops\n" + patch +
-		"\nprint(json.dumps(fileops.do_write(json.loads(sys.argv[2]))))\n"
+		"\nprint(json.dumps(fileops.do_" + op + "(json.loads(sys.argv[2]))))\n"
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "python3", "-I", "-c", driver, mod, string(raw)).Output()
@@ -711,6 +719,367 @@ func TestFileOp_WriteDiffWindow(t *testing.T) {
 	})
 }
 
+// runEdit writes content to a fresh file and edits it through the host
+// sandbox's fileops.py, failing the test if the edit took over 10 s or was
+// not applied in full.
+func runEdit(t *testing.T, content string, req FileOpRequest) FileOpResult {
+	t.Helper()
+	sb := fileopTestSandbox(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "f.txt")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req.Op, req.Path, req.Root = FileOpEdit, path, root
+	start := time.Now()
+	res, err := sb.RunFileOp(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("edit took %v", d)
+	}
+	n := 1
+	if req.ReplaceAll {
+		n = -1
+	}
+	if got, _ := os.ReadFile(path); string(got) != strings.Replace(content, req.OldText, req.NewText, n) {
+		t.Error("the edit was not applied in full")
+	}
+	return res
+}
+
+// numberedLines is 40,000 lines, "00001\n" to "40000\n".
+func numberedLines() []string {
+	lines := make([]string, 40000)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("%05d\n", i+1)
+	}
+	return lines
+}
+
+// edit_file's diff covers only the lines around its replacements: a
+// replace_all through a long file used to diff the whole file, after the edit
+// had landed, which took longer than the file-op timeout, and decoding the
+// whole file ran large ones out of sandbox memory.
+func TestFileOp_EditDiffWindow(t *testing.T) {
+	lines := numberedLines()
+
+	t.Run("one line changed deep in a long file", func(t *testing.T) {
+		res := runEdit(t, strings.Join(lines, ""), FileOpRequest{OldText: "30000\n", NewText: "thirty\n"})
+		if !strings.Contains(res.Diff, "@@ -29997,7 +29997,7 @@\n") || !strings.Contains(res.Diff, "-30000\n+thirty\n") || res.Added != 1 || res.Removed != 1 || res.DiffNote != "" {
+			t.Errorf("diff = %q (+%d/-%d, note %q), want one changed line at 30000 with file line numbers", res.Diff, res.Added, res.Removed, res.DiffNote)
+		}
+	})
+
+	t.Run("a rename through a long file keeps its diff", func(t *testing.T) {
+		calls := slices.Clone(lines)
+		for _, n := range []int{10, 20000, 39990} {
+			calls[n-1] = "call name()\n"
+		}
+		// Each replacement adds a line, so each later hunk starts one line
+		// further on in the new file than in the old.
+		res := runEdit(t, strings.Join(calls, ""), FileOpRequest{OldText: "name()", NewText: "renamed(\n\targ)", ReplaceAll: true})
+		for _, header := range []string{"@@ -7,7 +7,8 @@\n", "@@ -19997,7 +19998,8 @@\n", "@@ -39987,7 +39989,8 @@\n"} {
+			if !strings.Contains(res.Diff, header) {
+				t.Errorf("diff = %q, want hunk %q", res.Diff, header)
+			}
+		}
+		if res.ReplacedCount != 3 || res.Added != 6 || res.Removed != 3 || res.DiffNote != "" || strings.Count(res.Diff, "-call name()\n+call renamed(\n+\targ)\n") != 3 {
+			t.Errorf("count %d, +%d/-%d, note %q, diff %q; want 3 replacements shown", res.ReplacedCount, res.Added, res.Removed, res.DiffNote, res.Diff)
+		}
+	})
+}
+
+// An edit whose replacements, with their context, come to over the line or
+// size cap gets a note in place of the diff, and is still applied in full.
+func TestFileOp_EditDiffLimits(t *testing.T) {
+	lines := numberedLines()
+
+	t.Run("replace_all through the whole file", func(t *testing.T) {
+		alt := make([]string, len(lines))
+		for i, l := range lines {
+			if i%2 == 1 {
+				l = "same\n"
+			}
+			alt[i] = l
+		}
+		old := strings.Join(alt, "")
+		want := strings.ReplaceAll(old, "same\n", "SAME\n")
+		res := runEdit(t, old, FileOpRequest{OldText: "same\n", NewText: "SAME\n", ReplaceAll: true})
+		if res.Diff != "" || res.DiffNote != "no diff: the changes, with context, are over 2000 lines" || res.Added != 0 || res.Removed != 0 {
+			t.Errorf("result = diff %d bytes (+%d/-%d), note %q; want no diff and the line note", len(res.Diff), res.Added, res.Removed, res.DiffNote)
+		}
+		if res.ReplacedCount != 20000 || res.OldSHA256 != sha256Hex([]byte(old)) || res.SHA256 != sha256Hex([]byte(want)) {
+			t.Errorf("count %d, old %s, new %s; want 20000 and both hashes", res.ReplacedCount, res.OldSHA256, res.SHA256)
+		}
+	})
+
+	for _, tc := range []struct {
+		name, content, new string
+		count              int
+	}{
+		{"one line over 256 KB", strings.Repeat("a", 300*1024) + "\n", "b", 300 * 1024},
+		{"1,000 lines of 300 bytes", strings.Repeat(strings.Repeat("a", 299)+"\n", 1000), "b", 299000},
+		{"lines grown past 256 KB", strings.Repeat("a\n", 300), strings.Repeat("b", 1024), 300},
+	} {
+		t.Run("over 256 KB: "+tc.name, func(t *testing.T) {
+			res := runEdit(t, tc.content, FileOpRequest{OldText: "a", NewText: tc.new, ReplaceAll: true})
+			if res.Diff != "" || res.DiffNote != "no diff: the changes, with context, are over 256 KB" || res.ReplacedCount != tc.count {
+				t.Errorf("result = diff %d bytes, note %q, count %d; want the size note", len(res.Diff), res.DiffNote, res.ReplacedCount)
+			}
+		})
+	}
+
+	t.Run("lines of exactly 256 KB are diffed", func(t *testing.T) {
+		for _, tc := range []struct {
+			size int
+			note string
+		}{{256 * 1024, ""}, {256*1024 + 1, "no diff: the changes, with context, are over 256 KB"}} {
+			res := runEdit(t, "x"+strings.Repeat("a", tc.size-2)+"\n", FileOpRequest{OldText: "x", NewText: "y"})
+			if res.DiffNote != tc.note || (tc.note == "") != (res.Diff != "") {
+				t.Errorf("%d bytes: note %q, diff %d bytes; want note %q", tc.size, res.DiffNote, len(res.Diff), tc.note)
+			}
+		}
+	})
+
+	t.Run("the line cap counts a last line without a newline", func(t *testing.T) {
+		for _, tc := range []struct {
+			lines int
+			note  string
+		}{{2000, ""}, {2001, "no diff: the changes, with context, are over 2000 lines"}} {
+			content := strings.Repeat("x\n", tc.lines-1) + "x"
+			res := runEdit(t, content, FileOpRequest{OldText: "x", NewText: "y", ReplaceAll: true})
+			if res.DiffNote != tc.note || (tc.note == "") != (res.Diff != "") {
+				t.Errorf("%d lines: note %q, diff %d bytes; want note %q", tc.lines, res.DiffNote, len(res.Diff), tc.note)
+			}
+		}
+	})
+}
+
+// Non-UTF-8 lines get a note, and a long diff is cut with the edit's marker.
+func TestFileOp_EditDiffOfBinaryAndLongEdits(t *testing.T) {
+	t.Run("binary content", func(t *testing.T) {
+		for _, tc := range []struct{ old, new string }{{"\xff", "\xfe"}, {"\xff", "-"}, {"-", "\xff"}} {
+			content := "text\nA" + tc.old + "B\n"
+			res := runEdit(t, content, FileOpRequest{OldText: tc.old, NewText: tc.new})
+			if res.Diff != "" || res.DiffNote != "no diff: binary content" || res.SHA256 != sha256Hex([]byte("text\nA"+tc.new+"B\n")) {
+				t.Errorf("%q → %q: diff %q, note %q; want the binary note", tc.old, tc.new, res.Diff, res.DiffNote)
+			}
+		}
+	})
+
+	t.Run("a long diff is cut, and says the edit applied", func(t *testing.T) {
+		items := make([]string, 1000)
+		for i := range items {
+			items[i] = fmt.Sprintf("item %04d\n", i)
+		}
+		res := runEdit(t, strings.Join(items, ""), FileOpRequest{OldText: "item", NewText: "entry", ReplaceAll: true})
+		if len(res.Diff) > 4096+100 || !strings.HasSuffix(res.Diff, "diff truncated (edit applied in full) ...") || res.Added != 1000 || res.Removed != 1000 {
+			t.Errorf("diff of %d bytes (+%d/-%d), ending %q; want it cut near 4 KB with the edit note", len(res.Diff), res.Added, res.Removed, res.Diff[max(0, len(res.Diff)-80):])
+		}
+	})
+}
+
+// An edit's diff, cut from the lines around each replacement, is the diff
+// difflib gives for the whole file: hunks just apart or just close enough to
+// merge, a replacement in the context of the one before, two on one line,
+// text across lines, added and removed lines, the first and last lines,
+// CRLF, a pattern that overlaps itself, form feeds, a window that starts on
+// a blank line, and a last line without a newline. Every diff must also apply
+// to the old file and give the new one.
+func TestFileOp_EditDiffMatchesTheWholeFileDiff(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 required")
+	}
+	mod := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mod, "fileops.py"), fileOpsScript, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	driver := `import re, sys
+sys.path.insert(0, sys.argv[1])
+import fileops
+base = "".join("line %d\n" % i for i in range(1, 41))
+def at(*lines):
+    rows = ["line %d\n" % i for i in range(1, 41)]
+    for n in lines:
+        rows[n - 1] = "call f(x) here\n"
+    return "".join(rows)
+cases = [
+    ("one", base, "line 20\n", "changed\n", False),
+    ("seven apart", at(10, 17), "f(x)", "g(x)", True),
+    ("eight apart", at(10, 18), "f(x)", "g(x)", True),
+    ("in the context before", at(10, 12), "f(x)", "g(x)", True),
+    ("two on one line", base.replace("line 20\n", "f(x) f(x)\n"), "f(x)", "g(y)", True),
+    ("across lines", base, "line 5\nline 6\n", "joined\n", False),
+    ("adds lines", at(3, 30), "f(x)", "f(\n  x,\n)", True),
+    ("removes lines", at(3, 30), "call f(x) here\n", "", True),
+    ("first line", base, "line 1\n", "first\n", False),
+    ("last line", base, "line 40\n", "last\n", False),
+    ("crlf", base.replace("\n", "\r\n"), "line 7", "seven", False),
+    ("overlapping", "aaaaa\n" + base, "aa", "b", True),
+    ("form feeds", "x\fy\n" + base, "line 3\n", "three\n", False),
+    ("a window from a blank line", "".join("\n" if i % 2 else "line %d\n" % i for i in range(1, 41)), "line 20\n", "twenty\n", False),
+    ("no final newline", base + "end", "end", "END", False),
+    ("the final newline removed", base, "line 40\n", "line 40", False),
+]
+HDR = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+def apply(old, diff):
+    lines = fileops._lines(diff)[2:]
+    out, pos, i = [], 0, 0
+    while i < len(lines):
+        m = HDR.match(lines[i])
+        i += 1
+        a, b = int(m.group(1)), int(m.group(2) if m.group(2) is not None else 1)
+        c, d = int(m.group(3)), int(m.group(4) if m.group(4) is not None else 1)
+        start = a - 1 if b else a
+        if start < pos or (c - 1 if d else c) != len(out) + start - pos:
+            return None
+        out += old[pos:start]
+        pos = start
+        while i < len(lines) and not lines[i].startswith("@@"):
+            tag, text = lines[i][0], lines[i][1:]
+            i += 1
+            if i < len(lines) and lines[i].startswith("\\"):
+                text = text[:-1]  # "\ No newline at end of file"
+                i += 1
+            if tag in " -":
+                if pos >= len(old) or old[pos] != text:
+                    return None
+                pos += 1
+            if tag in " +":
+                out.append(text)
+    return out + old[pos:]
+bad = []
+for name, text, old, new, every in cases:
+    before, o, n = text.encode(), old.encode(), new.encode()
+    count = before.count(o) if every else 1
+    after = before.replace(o, n) if every else before.replace(o, n, 1)
+    whole = fileops._bounded_diff("f", before, after, "edit")
+    got = fileops._edit_diff("f", before, after, o, n, count)
+    if got != whole:
+        bad.append("%s:\n%r\n%r" % (name, whole, got))
+    if apply(fileops._lines(text), got[0]) != fileops._lines(after.decode()):
+        bad.append("%s: the diff does not apply:\n%r" % (name, got))
+print("\n".join(bad) or "ok")
+`
+	out, err := exec.Command("python3", "-I", "-c", driver, mod).CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "ok" {
+		t.Fatalf("edit diffs differ from whole-file diffs (err %v):\n%s", err, out)
+	}
+}
+
+// Hunk headers count lines at "\n", as grep -n and sed do: a form feed, a
+// vertical tab or a lone \r inside a line does not start a new one.
+func TestFileOp_DiffLinesAreCountedAtNewlines(t *testing.T) {
+	sb := fileopTestSandbox(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	path := filepath.Join(root, "f.txt")
+	old := "a\fb\vc\rd\nline 2\nline 3\nline 4\nline 5\nline 6\n"
+	for _, req := range []FileOpRequest{
+		{Op: FileOpEdit, OldText: "line 6", NewText: "six"},
+		{Op: FileOpWrite, Data: []byte(strings.Replace(old, "line 6", "six", 1))},
+	} {
+		if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		req.Path, req.Root = path, root
+		res, err := sb.RunFileOp(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(res.Diff, "@@ -3,4 +3,4 @@\n line 3\n line 4\n line 5\n-line 6\n+six\n") {
+			t.Errorf("op %v: diff = %q, want line 6 numbered as the sixth line", req.Op, res.Diff)
+		}
+	}
+}
+
+// A last line without a newline is marked as diff marks it, rather than run
+// into the next line of the diff, and the +/- counts take only real lines:
+// content lines that start with "++" or "--" included.
+func TestFileOp_DiffLinesAtTheEdgesOfTheFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, old, new, want string
+		added, removed                int
+	}{
+		{"no final newline", "one\ntwo\nlast", "last", "LAST",
+			"@@ -1,3 +1,3 @@\n one\n two\n-last\n\\ No newline at end of file\n+LAST\n\\ No newline at end of file\n", 1, 1},
+		{"lines that look like headers", "a\n--y\nb\n", "--y\n", "++x\n+++z\n",
+			"@@ -1,3 +1,4 @@\n a\n---y\n+++x\n++++z\n b\n", 2, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := runEdit(t, tc.content, FileOpRequest{OldText: tc.old, NewText: tc.new})
+			if !strings.HasSuffix(res.Diff, tc.want) || res.Added != tc.added || res.Removed != tc.removed {
+				t.Errorf("diff = %q (+%d/-%d), want it to end %q (+%d/-%d)", res.Diff, res.Added, res.Removed, tc.want, tc.added, tc.removed)
+			}
+		})
+	}
+}
+
+// An edit whose file changes between the read and the rename is refused as
+// stale, and the concurrent change is kept: the reply built before the commit
+// is not sent.
+func TestFileOp_GuardedEditRechecksBeforeTheRename(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "f.txt")
+	if err := os.WriteFile(path, []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	patch := `real_diff = fileops._edit_diff
+def diff_then_change(path, *args):
+    result = real_diff(path, *args)
+    with open(path, "wb") as f:
+        f.write(b"concurrent\n")
+    return result
+fileops._edit_diff = diff_then_change
+`
+	_, err := runPatchedOp(t, "edit", map[string]any{
+		"path": path, "root": root, "old_b64": "b2xk", "new_b64": "bmV3", // old → new
+		"expected_sha256": sha256Hex([]byte("old\n")),
+	}, patch)
+	if !errors.Is(err, ErrFileOpStale) || !strings.Contains(err.Error(), "current "+sha256Hex([]byte("concurrent\n"))) {
+		t.Fatalf("err = %v, want stale naming the concurrent content's hash", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "concurrent\n" {
+		t.Fatalf("the concurrent change was overwritten: %q", got)
+	}
+}
+
+// The diff describes the file as it was before the rename: work done after
+// the commit could outlast the file-op timeout and report an edit or a write
+// that landed as failed.
+func TestFileOp_DiffIsTakenBeforeTheCommit(t *testing.T) {
+	for op, req := range map[string]map[string]any{
+		"write": {"data_b64": "bmV3Cg=="},               // new\n
+		"edit":  {"old_b64": "b2xk", "new_b64": "bmV3"}, // old → new
+	} {
+		t.Run(op, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "f.txt")
+			if err := os.WriteFile(path, []byte("old\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			req["path"], req["root"] = path, root
+			patch := `def hunks_of_the_file_on_disk(before, after, old_offset, new_offset):
+    with open(` + strconvQuote(path) + `, "rb") as f:
+        return [" on disk: " + f.read().decode()]
+fileops._hunks = hunks_of_the_file_on_disk
+`
+			res, err := runPatchedOp(t, op, req, patch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasSuffix(res.Diff, "\n on disk: old\n") {
+				t.Errorf("diff saw %q, want the file before the rename", res.Diff)
+			}
+			if got, _ := os.ReadFile(path); string(got) != "new\n" {
+				t.Errorf("file = %q, want new", got)
+			}
+		})
+	}
+}
+
 // The windowed diff is the diff difflib gives for the whole file, for
 // changes at the start, middle and end, insertions, deletions, and a file
 // without a final newline. Where a change lands in a run of identical lines
@@ -757,6 +1126,9 @@ def apply(old, diff):
         while i < len(lines) and not lines[i].startswith("@@"):
             tag, text = lines[i][0], lines[i][1:]
             i += 1
+            if i < len(lines) and lines[i].startswith("\\"):
+                text = text[:-1]  # "\ No newline at end of file"
+                i += 1
             if tag in " -":
                 if pos >= len(old) or old[pos] != text:
                     return None

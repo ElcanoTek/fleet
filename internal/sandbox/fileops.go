@@ -105,7 +105,8 @@ type FileOpResult struct {
 	// and that entry's size (#1745). DiffNote says why such a write has no
 	// diff (binary content, a file or change over the diff caps), or no old
 	// hash either (an old entry that was not a regular file, or could not be
-	// read).
+	// read), and why an edit has no diff (a change over the line cap); Added
+	// and Removed are then zero.
 	Replaced     bool
 	OldSize      int64
 	DiffNote     string
