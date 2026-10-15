@@ -42,6 +42,44 @@ func TestBuildRerunTaskCreate(t *testing.T) {
 		}
 	})
 
+	t.Run("rerun of a recurrence with end conditions drops them and validates", func(t *testing.T) {
+		// Regression: the recipe kept recurrence_until/recurrence_remaining
+		// after clearing recurrence, so validateTaskCreate rejected every rerun
+		// (and every "just this run" edit) of a bounded recurring task with
+		// "recurrence_until requires a recurrence".
+		until := time.Now().Add(30 * 24 * time.Hour).UTC()
+		remaining := 5
+		bounded := &models.Task{
+			Prompt:              "do the work for the team",
+			Recurrence:          "0 9 * * 1-5",
+			RecurrenceUntil:     &until,
+			RecurrenceRemaining: &remaining,
+			Timezone:            "America/New_York",
+		}
+		tc, err := buildRerunTaskCreate(bounded, false, taskRerunOverrides{}, time.UTC)
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		if tc.RecurrenceUntil != nil || tc.RecurrenceRemaining != nil {
+			t.Errorf("rerun must clear recurrence end conditions, got until=%v remaining=%v", tc.RecurrenceUntil, tc.RecurrenceRemaining)
+		}
+		if verr := h.validateTaskCreate(&tc); verr != nil {
+			t.Fatalf("rerun recipe must pass validation, got %v", verr)
+		}
+
+		// A clone keeps the schedule, so it keeps the end conditions too.
+		clone, err := buildRerunTaskCreate(bounded, true, taskRerunOverrides{}, time.UTC)
+		if err != nil {
+			t.Fatalf("clone build: %v", err)
+		}
+		if clone.RecurrenceUntil == nil || clone.RecurrenceRemaining == nil {
+			t.Errorf("clone must keep recurrence end conditions, got until=%v remaining=%v", clone.RecurrenceUntil, clone.RecurrenceRemaining)
+		}
+		if verr := h.validateTaskCreate(&clone); verr != nil {
+			t.Fatalf("clone recipe must pass validation, got %v", verr)
+		}
+	})
+
 	t.Run("recurring clone keeps recurrence and schedules a future fire", func(t *testing.T) {
 		tc, err := buildRerunTaskCreate(src, true, taskRerunOverrides{}, time.UTC)
 		if err != nil {
