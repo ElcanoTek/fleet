@@ -1,11 +1,13 @@
 import Link from "next/link";
+import { SignOutForm } from "./sign-out-form";
 // Shown when a user has a valid session minted elsewhere (the shared
 // elcano_auth cookie, or central Auth via OIDC) but their email isn't on
 // this deployment's user-list yet. They're signed in, just not a member — so
 // this is a dead-end with a way out (the same sign-out every surface uses,
-// which also ends a central-Auth session), not a redirect back to login. The
-// real boundary is chat-server, which 403s every API call for non-members;
-// this page just makes that legible.
+// which also ends a central-Auth session and lets go of this browser's push
+// subscription), not a redirect back to login. The real boundary is
+// chat-server, which 403s every API call for non-members; this page just
+// makes that legible.
 export default function NoAccessPage() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-[var(--gradient-bg-home-signature)] px-6 py-10">
@@ -24,14 +26,7 @@ export default function NoAccessPage() {
         >
           Try again
         </Link>
-        <form action="/api/auth/logout" method="post" className="mt-3">
-          <button
-            type="submit"
-            className="w-full rounded-xl border border-[var(--color-border)] px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
-          >
-            Sign out
-          </button>
-        </form>
+        <SignOutForm />
       </div>
     </main>
   );
