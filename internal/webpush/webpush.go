@@ -68,7 +68,8 @@ type Config struct {
 	VAPIDPublicKey  string
 	VAPIDPrivateKey string
 	// Contact is the RFC 8292 subject (mailto: or https: URL) push relays may
-	// use to reach the operator about misbehaving senders.
+	// use to reach the operator about misbehaving senders. A bare address is
+	// taken as a mailto: one (see vapidSubscriber).
 	Contact string
 	// OnTaskComplete gates the runner-side task lifecycle pushes (terminal
 	// success/failure + paused-awaiting-input/progress). Default ON when the
@@ -219,7 +220,7 @@ func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSub
 		Keys:     webpushgo.Keys{Auth: sub.KeysAuth, P256dh: sub.KeysP256dh},
 	}, &webpushgo.Options{
 		HTTPClient:      s.client,
-		Subscriber:      s.cfg.Contact,
+		Subscriber:      vapidSubscriber(s.cfg.Contact),
 		TTL:             payloadTTLSeconds,
 		Urgency:         urgency,
 		VAPIDPublicKey:  s.cfg.VAPIDPublicKey,
@@ -250,10 +251,63 @@ func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSub
 		// it (POST /push/renew) the next time it loads fleet. Every send still
 		// refused after browsers have reopened fleet points at the
 		// configuration instead, so the line names both.
-		s.logf("webpush: relay %s returned status %d: it refused this server's VAPID authentication. A subscription made with an earlier key is the usual cause after a key rotation, and the browser renews it the next time it opens fleet; if this persists, check that FLEET_VAPID_PUBLIC_KEY and FLEET_VAPID_PRIVATE_KEY are one pair, FLEET_VAPID_CONTACT is a mailto: or https: address, and the host clock is right", endpointHost(sub.Endpoint), resp.StatusCode)
+		s.logf("webpush: relay %s returned status %d%s: it refused this server's VAPID authentication. A subscription made with an earlier key is the usual cause after a key rotation, and the browser renews it the next time it opens fleet; if this persists, check that FLEET_VAPID_PUBLIC_KEY and FLEET_VAPID_PRIVATE_KEY are one pair, FLEET_VAPID_CONTACT is a mailto: or https: address, and the host clock is right", endpointHost(sub.Endpoint), resp.StatusCode, relayReason(resp.Body))
 	case resp.StatusCode < 200 || resp.StatusCode >= 300:
-		s.logf("webpush: relay %s returned status %d", endpointHost(sub.Endpoint), resp.StatusCode)
+		s.logf("webpush: relay %s returned status %d%s", endpointHost(sub.Endpoint), resp.StatusCode, relayReason(resp.Body))
 	}
+}
+
+// vapidSubscriber is the contact in the form webpush-go expects. webpush-go
+// writes the VAPID token's "sub" claim itself: it keeps a contact that starts
+// with "https:" (lower case only) and puts "mailto:" in front of anything else.
+// FLEET_VAPID_CONTACT is documented (and printed by `fleet generate-vapid-keys`)
+// as a whole "mailto:" URI, so passing it through made the claim
+// "mailto:mailto:…". FCM accepts that; Apple's push service refuses every such
+// send (403, "BadJwtToken"), so Safari never got a notification. So a leading
+// "mailto:" is dropped and an "https:" scheme is lowercased, in any case: the
+// claim then carries exactly one scheme for a mailto: address, a bare address
+// or an https: URL.
+func vapidSubscriber(contact string) string {
+	const mailto, https = "mailto:", "https:"
+	c := strings.TrimSpace(contact)
+	switch {
+	case len(c) >= len(mailto) && strings.EqualFold(c[:len(mailto)], mailto):
+		return strings.TrimSpace(c[len(mailto):])
+	case len(c) >= len(https) && strings.EqualFold(c[:len(https)], https):
+		return https + c[len(https):]
+	}
+	return c
+}
+
+// maxReasonBytes bounds how much of a refusal's body relayReason reads, and
+// maxReasonLen how much of the reason reaches the log line.
+const (
+	maxReasonBytes = 4096
+	maxReasonLen   = 100
+)
+
+// relayReason is the push service's stated reason for a refusal, formatted for
+// the log line (` (reason "BadJwtToken")`), or "" when it gives none. Apple's
+// push service answers a refusal with a JSON object whose "reason" names the
+// cause; only that field is read, never the rest of the body, which is the
+// push service's to word and could quote the request.
+func relayReason(body io.Reader) string {
+	var parsed struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(io.LimitReader(body, maxReasonBytes)).Decode(&parsed); err != nil {
+		return ""
+	}
+	reason := strings.TrimSpace(parsed.Reason)
+	if reason == "" {
+		return ""
+	}
+	if len(reason) > maxReasonLen {
+		// Cut on a character boundary: ToValidUTF8 drops a rune split by
+		// the cut instead of leaving a stray byte for %q to print as \xNN.
+		reason = strings.ToValidUTF8(reason[:maxReasonLen], "")
+	}
+	return fmt.Sprintf(" (reason %q)", reason)
 }
 
 // endpointHost reduces a subscription endpoint to its host for log lines: the

@@ -30,6 +30,12 @@ channel consumes.
    FLEET_VAPID_CONTACT=mailto:you@example.com
    ```
 
+   The contact can be a `mailto:` address as above, a bare address, or an
+   `https:` URL. The push library adds `mailto:` itself to anything that is
+   not an `https:` URL, so fleet drops a leading `mailto:` (and lowercases an
+   `https:` scheme) before handing the contact over: the token it signs names
+   the contact with exactly one scheme, which Apple's push service requires.
+
 3. Restart fleet. The startup log prints `web push: enabled`.
 
 4. Each user opts in per browser with the **Settings → General → Browser
@@ -45,16 +51,19 @@ channel consumes.
    menu goes through the one `signOut`) also lets it go and deletes the
    stored row.
 
-**Rotating the keys.** A browser subscription is bound to the VAPID key it
-was made with, so after the operator replaces the `FLEET_VAPID_*` pair every
+**Rotating the keys.** A browser subscription is bound to the VAPID key it was
+made with, so after the operator replaces the `FLEET_VAPID_*` pair every
 existing subscription is refused by the push service. Which status a refusal
 carries is the push service's choice (RFC 8292 leaves it open): FCM answers
-`403`, and other services may answer `401`. fleet keeps those rows rather
-than deleting them, and logs `relay … returned status <code>: it refused this
-server's VAPID authentication …`. The line names both causes, because a key
-pair that does not match, a bad `FLEET_VAPID_CONTACT` or a wrong host clock
-are refused the same way: a refusal that persists after browsers have
-reopened fleet points at the configuration, which renewal cannot fix.
+`403`, and other services may answer `401`. fleet keeps those rows rather than
+deleting them, and logs `relay … returned status <code>: it refused this
+server's VAPID authentication …`, with the push service's reason after the
+code when it gives one (Apple's names one in a JSON `reason` field, such as
+`BadJwtToken` for a token it does not accept). Only that reason is logged,
+never the rest of the response. The line names both causes, because a key pair
+that does not match, a bad `FLEET_VAPID_CONTACT` or a wrong host clock are
+refused the same way: a refusal that persists after browsers have reopened
+fleet points at the configuration, which renewal cannot fix.
 
 Each browser renews its own subscription: on a page load (`PushKeyRenewal` in
 the root layout, skipped on `/login` and `/shared` pages) and again each time
