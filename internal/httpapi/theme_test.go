@@ -296,3 +296,31 @@ func TestClientConfig_CarriesLiveModelTiers(t *testing.T) {
 		t.Errorf("body %s must carry the operator's task fallback %s", w.Body.String(), want)
 	}
 }
+
+// /client-config carries the operator's pinned picker rows (FLEET_PINNED_MODELS)
+// verbatim, and omits the key entirely when none are configured so an older web
+// build sees the payload it always saw.
+func TestClientConfig_CarriesPinnedModels(t *testing.T) {
+	s := newLogoServer(t, "mark.svg", []byte("<svg/>"))
+	if s.cfg == nil {
+		s.cfg = &config.Config{}
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/client-config", nil)
+
+	w := httptest.NewRecorder()
+	s.clientConfigHandler(w, req)
+	if strings.Contains(w.Body.String(), `"pinned"`) {
+		t.Errorf("body %s must omit pinned when none are configured", w.Body.String())
+	}
+
+	s.cfg.PinnedModels = []config.PinnedModel{
+		{Slug: "acme/open-70b", Label: "Elcano Nova", Tag: "alpha"},
+		{Slug: "acme/open-8b"},
+	}
+	w = httptest.NewRecorder()
+	s.clientConfigHandler(w, req)
+	want := `"pinned":[{"slug":"acme/open-70b","label":"Elcano Nova","tag":"alpha"},{"slug":"acme/open-8b"}]`
+	if !strings.Contains(w.Body.String(), want) {
+		t.Errorf("body %s must carry the pinned rows %s", w.Body.String(), want)
+	}
+}

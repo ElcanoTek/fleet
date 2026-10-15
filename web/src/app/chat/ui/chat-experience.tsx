@@ -19,7 +19,9 @@ import {
   currentDefaultModel,
   currentTierModels,
   DEFAULT_MODEL as FALLBACK_DEFAULT_MODEL,
+  currentPinnedModels,
   labelForModel,
+  pinnedLabelFor,
 } from "@/app/lib/modelAliases";
 import { computeContextUsage, type ContextUsage } from "@/app/lib/contextUsage";
 import { parseSseChunk } from "@/app/lib/sse";
@@ -1600,14 +1602,24 @@ export function ChatExperience({
   const MAX_SEARCH_RESULTS = 15;
   const filteredRankedModels = useMemo(() => {
     const query = modelSearchQuery.trim().toLowerCase();
+    // Operator pins (FLEET_PINNED_MODELS) relabel their slug everywhere the
+    // picker names it, so the catalog/ranked rows are renamed up front. The
+    // pin list is module state installed by the same /api/client-config
+    // payload that replaces workspaceModelTiers, so that dep re-runs this.
+    const relabel = (model: RankedModel): RankedModel => {
+      const label = pinnedLabelFor(model.slug);
+      return label ? { ...model, name: label } : model;
+    };
+    const ranked = rankedModels.map(relabel);
+    const catalog = catalogModels.map(relabel);
     // The two pinned rows are hand-written, so their prices have to be joined
     // back from the catalog (or the ranked list when the catalog is empty) —
     // otherwise the recommended models would be the only rows in the listbox
     // without a cost indicator.
     const pricesFor = (slug: string) => {
       const hit =
-        catalogModels.find((m) => m.slug === slug) ??
-        rankedModels.find((m) => m.slug === slug);
+        catalog.find((m) => m.slug === slug) ??
+        ranked.find((m) => m.slug === slug);
       if (!hit) return {};
       return {
         pricePrompt: hit.pricePrompt,
@@ -1625,8 +1637,23 @@ export function ChatExperience({
     const defaults = tierModels.filter((model) =>
       modelIsAvailable(model.slug, modelRouting, true),
     );
+    // Pinned rows sit directly under the recommended tiers. A pin with no
+    // label keeps the catalog display name; the catalog also supplies the
+    // prices / context / created a hand-written row would otherwise lack.
+    const pinnedModels: RankedModel[] = currentPinnedModels()
+      .map((pin) => {
+        const hit =
+          catalog.find((m) => m.slug === pin.slug) ??
+          ranked.find((m) => m.slug === pin.slug);
+        return {
+          ...(hit ?? {}),
+          slug: pin.slug,
+          name: pin.label ?? hit?.name ?? pin.slug,
+        };
+      })
+      .filter((model) => modelIsAvailable(model.slug, modelRouting, true));
     const publicCatalog = new Set(
-      [...catalogModels, ...rankedModels].map((model) => model.slug),
+      [...catalog, ...ranked].map((model) => model.slug),
     );
     const catalogChoices = (models: RankedModel[]): RankedModel[] =>
       models.flatMap((model) =>
@@ -1664,8 +1691,8 @@ export function ChatExperience({
           out.push(aliased);
           continue;
         }
-        const fromRanked = rankedModels.find((m) => m.slug === slug);
-        const fromCatalog = catalogModels.find((m) => m.slug === slug);
+        const fromRanked = ranked.find((m) => m.slug === slug);
+        const fromCatalog = catalog.find((m) => m.slug === slug);
         const known = fromRanked ?? fromCatalog;
         out.push(known ?? { slug, name: slug });
       }
@@ -1680,8 +1707,9 @@ export function ChatExperience({
       const out: RankedModel[] = [];
       for (const m of [
         ...defaults,
+        ...pinnedModels,
         ...workspaceModels,
-        ...catalogChoices([...tierModels, ...rankedModels]),
+        ...catalogChoices([...tierModels, ...ranked]),
       ]) {
         if (!modelIsAvailable(m.slug, modelRouting, !m.workspace)) continue;
         if (seen.has(m.slug)) continue;
@@ -1691,15 +1719,18 @@ export function ChatExperience({
       return out;
     }
     const source = catalogChoices(
-      catalogModels.length > 0 ? catalogModels : rankedModels,
+      catalog.length > 0 ? catalog : ranked,
     );
+    // A relabelled pin matches on its label only: searching the underlying
+    // slug's vendor/model name should not surface the renamed row.
     const matchesQuery = (m: RankedModel) =>
-      m.slug.toLowerCase().includes(query) ||
+      (!pinnedLabelFor(m.slug) && m.slug.toLowerCase().includes(query)) ||
       m.name.toLowerCase().includes(query);
     const seen = new Set<string>();
     const matches: RankedModel[] = [];
     for (const d of [
       ...defaults,
+      ...pinnedModels,
       ...workspaceModels,
       ...catalogChoices(tierModels),
     ]) {

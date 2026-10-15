@@ -10,6 +10,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/config"
 )
 
 // ── /personas ──────────────────────────────────────────────────────────────
@@ -83,6 +84,11 @@ type clientConfigModels struct {
 	// pre-filled PRIMARY is DefaultModel — the live admin tier — so an admin
 	// override reaches new tasks the same way it reaches new chats.
 	TaskFallbackModel string `json:"task_fallback_model,omitempty"`
+	// Pinned are the operator's extra picker rows (FLEET_PINNED_MODELS): slugs
+	// the chat and task pickers list under the recommended tiers, with an
+	// optional display label and tag pill. Omitted when none are configured,
+	// so an older web build sees exactly the payload it saw before.
+	Pinned []config.PinnedModel `json:"pinned,omitempty"`
 }
 
 type clientConfigBranding struct {
@@ -138,6 +144,7 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.cfg != nil {
 		resp.Models.TaskFallbackModel = strings.TrimSpace(s.cfg.TaskFallbackModel)
+		resp.Models.Pinned = s.cfg.PinnedModels
 	}
 	if s.clientConfig != nil {
 		b := s.clientConfig

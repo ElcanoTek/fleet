@@ -32,6 +32,7 @@ import {
   currentAdvancedModel,
   currentAdvancedModelLabel,
   currentDefaultModel,
+  pinnedModelFor,
   tierForModel,
 } from "@/app/lib/modelAliases";
 import { ModelCostIndicator } from "@/app/shared/ui/ModelCostIndicator";
@@ -973,6 +974,13 @@ export function Composer({
                         const isTier =
                           tier === "default" || tier === "advanced";
                         const isFresh = isNewlyReleased(model.created);
+                        // An operator pin (FLEET_PINNED_MODELS) ranks right
+                        // under recommended; its tag ("alpha", …) is the
+                        // pill, and a relabelled pin's tooltip omits the
+                        // underlying slug it renames.
+                        const pin = model.slug
+                          ? pinnedModelFor(model.slug)
+                          : undefined;
                         let pill: ReactNode = null;
                         if (isTier) {
                           // Same size/case as the tested/experimental
@@ -980,6 +988,15 @@ export function Composer({
                           pill = (
                             <span className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-success)_40%,transparent)] px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums text-[var(--color-success)]">
                               recommended
+                            </span>
+                          );
+                        } else if (pin?.tag) {
+                          pill = (
+                            <span
+                              data-testid="model-pin-tag"
+                              className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-warning)_45%,transparent)] px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums text-[var(--color-warning)]"
+                            >
+                              {pin.tag}
                             </span>
                           );
                         } else if (model.workspace) {
@@ -1010,9 +1027,11 @@ export function Composer({
                             role="option"
                             aria-selected={isSelected}
                             title={
-                              model.slug
-                                ? `${model.name} (${model.slug})`
-                                : "Use the server-configured default model"
+                              !model.slug
+                                ? "Use the server-configured default model"
+                                : pin?.label
+                                  ? model.name
+                                  : `${model.name} (${model.slug})`
                             }
                             className={`${POP_ROW} ${isSelected ? POP_ROW_SELECTED : ""} ${
                               isHighlighted && !isSelected

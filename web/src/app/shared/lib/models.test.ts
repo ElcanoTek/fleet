@@ -135,6 +135,52 @@ describe("loadModels (fetch + fallback)", () => {
     });
   });
 
+  it("lists operator pins under the tiers, relabelled and tagged", async () => {
+    setModelTiers({
+      pinned: [
+        { slug: "acme/open-70b", label: "Elcano Nova", tag: "alpha" },
+        { slug: "acme/open-8b" },
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        if (String(url).includes("/api/model-catalog")) {
+          return {
+            ok: true,
+            json: async () => ({
+              models: [
+                { slug: "zeta/other", name: "Zeta: Other" },
+                { slug: "acme/open-8b", name: "Acme: Open 8B", price_completion: 0.000001 },
+                { slug: "acme/open-70b", name: "Acme: Open 70B", price_completion: 0.000002 },
+              ],
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ models: [], providers: [] }) };
+      }),
+    );
+    const models = await loadModels();
+    const ids = models.map((m) => m.id);
+    // Pins follow the two tier seeds, in declared order, ahead of the catalog.
+    expect(ids.indexOf("acme/open-70b")).toBe(2);
+    expect(ids.indexOf("acme/open-8b")).toBe(3);
+    expect(ids.indexOf("zeta/other")).toBe(4);
+    expect(models[2]).toMatchObject({
+      name: "Elcano Nova",
+      pinTag: "alpha",
+      relabelled: true,
+      priceCompletion: 0.000002,
+    });
+    // A label-less pin keeps the catalog name and is not relabelled.
+    expect(models[3]).toMatchObject({ name: "Acme: Open 8B" });
+    expect(models[3].relabelled).toBeUndefined();
+    // The relabelled pin is found by its label, never by the slug it renames.
+    expect(filterModels(models, "nova").map((m) => m.id)).toContain("acme/open-70b");
+    expect(filterModels(models, "open-70b").map((m) => m.id)).not.toContain("acme/open-70b");
+    expect(filterModels(models, "open-8b").map((m) => m.id)).toContain("acme/open-8b");
+  });
+
   it("merges seeds with the proxied catalog", async () => {
     vi.stubGlobal(
       "fetch",

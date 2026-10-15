@@ -293,6 +293,8 @@ var allowedEnvVars = map[string]bool{
 	// advanced_model admin settings ──
 	"FLEET_DEFAULT_MODEL":  true,
 	"FLEET_ADVANCED_MODEL": true,
+	// ── operator-pinned / relabelled picker rows ──
+	"FLEET_PINNED_MODELS":  true,
 	"CUTLASS_ALLOWED_DIRS": true,
 	"GH_TOKEN":             true,
 
@@ -1307,6 +1309,11 @@ type Config struct {
 	// settings instead of a second, drifting copy of the same slugs.
 	LockdownAllowedModels []string
 
+	// PinnedModels are the operator's extra picker rows (FLEET_PINNED_MODELS):
+	// slugs listed under the recommended tiers with an optional display label
+	// and tag pill. Presentation only — see config.PinnedModel.
+	PinnedModels []PinnedModel
+
 	// MockMode short-circuits LLM calls (e2e). FLEET_MOCK_MODE / CHAT_MOCK_MODE.
 	MockMode bool
 
@@ -1851,6 +1858,9 @@ func Load(envFile string) (*Config, error) {
 	}
 	if cfg.TrustedProxies, ipErr = parseIPList(getenvFleet("TRUSTED_PROXIES")); ipErr != nil {
 		return nil, fmt.Errorf("FLEET_TRUSTED_PROXIES: %w", ipErr)
+	}
+	if cfg.PinnedModels, ipErr = parsePinnedModels(getenvFleet("PINNED_MODELS")); ipErr != nil {
+		return nil, fmt.Errorf("FLEET_PINNED_MODELS: %w", ipErr)
 	}
 
 	// ── personas / prompts (cutlass file-name normalization) ──

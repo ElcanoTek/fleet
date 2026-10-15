@@ -152,6 +152,8 @@ export function ModelPicker({ id, value, onChange, placeholder, ...rest }: Model
                     <span className="model-picker-badge">Workspace</span>
                   ) : model.recommended ? (
                     <span className="model-picker-badge">Recommended</span>
+                  ) : model.pinTag ? (
+                    <span className="model-picker-badge">{model.pinTag}</span>
                   ) : null}
                   {/* Cost tier last so the row's leading edge stays the name;
                       absent for models with no catalog pricing. */}
@@ -162,7 +164,10 @@ export function ModelPicker({ id, value, onChange, placeholder, ...rest }: Model
                     }}
                   />
                 </span>
-                <span className="model-picker-slug">{model.id}</span>
+                {/* A relabelled operator pin shows only its label. */}
+                {model.relabelled ? null : (
+                  <span className="model-picker-slug">{model.id}</span>
+                )}
               </button>
             ))
           )}

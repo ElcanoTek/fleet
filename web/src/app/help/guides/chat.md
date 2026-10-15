@@ -320,7 +320,9 @@ formatting — and the second is stronger, for judgment calls, retrospectives, a
 anything where depth matters more than speed. By default those two are
 **Claude Haiku 5.5** (new conversations start on it) and **Gemini 4 Argon** (the
 model a "switch to a stronger model" suggestion offers); your admin can point
-either slot at a different model. The rest of the list is marked by
+either slot at a different model. Your admin can also pin more models just
+below those two, sometimes under their own name and with a tag such as
+**alpha** that marks a model still in trial. The rest of the list is marked by
 status (**tested**, **new**, or **experimental**), and a model whose pricing the
 deployment knows shows its cost band, so you can see what you are about to
 spend. No band means the price is unknown rather than zero — worth asking about
