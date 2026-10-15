@@ -139,3 +139,39 @@ func TestParseDecisionModels(t *testing.T) {
 		t.Errorf("jev = %+v", got[1])
 	}
 }
+
+// A blocking workspace guardrail screens the classifier's text before it is
+// sent: flagged text, or a detector that is down, never reaches the Decisions
+// API. In observe mode the request goes out, as the turn's own would.
+func TestCheckStruggle_HonorsGuardrail(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		_, _ = w.Write([]byte(`{"answers":{"struggle":{"type":"noul","noul":0.1}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("OPENROUTER_BASE_URL", srv.URL)
+	t.Cleanup(func() { SetGuardrail(false, false, "off", "", nil) })
+
+	for _, c := range []struct {
+		name     string
+		block    bool
+		detector *fakeGuardrailDetector
+		wantSent bool
+	}{
+		{"block, flagged", true, &fakeGuardrailDetector{flagged: true}, false},
+		{"block, detector down", true, &fakeGuardrailDetector{err: errors.New("down")}, false},
+		{"block, clean", true, &fakeGuardrailDetector{}, true},
+		{"observe, flagged", false, &fakeGuardrailDetector{flagged: true}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			SetGuardrail(true, c.block, map[bool]string{true: "block", false: "observe"}[c.block], "prompt-injection", c.detector)
+			before := hits
+			_, err := CheckStruggle(context.Background(), "test-key", "acme/decider", "User: hi\n\nAssistant: ok\n\nUser: wrong")
+			sent := hits > before
+			if sent != c.wantSent || (err == nil) != c.wantSent || c.detector.calls != 1 {
+				t.Fatalf("sent = %v err = %v detector calls = %d; want sent %v after one screen", sent, err, c.detector.calls, c.wantSent)
+			}
+		})
+	}
+}

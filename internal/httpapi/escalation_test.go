@@ -51,6 +51,8 @@ func TestStruggleSignals(t *testing.T) {
 		// Calls held for the user's approval are not failures, and do not
 		// break a real streak either.
 		{"approvals are not failures", repeat(toolResult(t, "APPROVAL_REQUIRED: send email — staged for user approval", true), 3), 0, ""},
+		{"session-policy denials are not failures", repeat(toolResult(t, "APPROVAL_DENIED: the user pre-denied bash for this conversation (session policy).", true), 3), 0, ""},
+		{"held behind another approval is not a failure", repeat(toolResult(t, "APPROVAL_BLOCKED: send_email already has a critical action awaiting the user's approval", true), 3), 0, ""},
 		{"approval inside a streak", []agent.HistoryEntry{fail, fail, toolResult(t, "APPROVAL_REQUIRED: x", true), fail}, 0, escalationSignalToolErrors},
 	}
 	for _, c := range cases {

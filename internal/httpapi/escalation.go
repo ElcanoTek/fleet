@@ -95,9 +95,12 @@ func struggleFromHistory(history []agent.HistoryEntry, compactions int) turnStru
 	return t
 }
 
-// controlResultPrefixes mark tool results the governance layer returns in
-// place of running a call that is waiting on the user, not failing.
-var controlResultPrefixes = []string{"APPROVAL_REQUIRED", "SUGGESTION_DISPLAYED", "SUGGESTION_SUPPRESSED", "SUGGESTION_UNAVAILABLE"}
+// controlResultPrefixes mark tool results the approval layer returns in place
+// of running a call: held for the user (APPROVAL_REQUIRED, APPROVAL_BLOCKED),
+// refused by the user's own session policy (APPROVAL_DENIED), or a suggestion
+// card's own bookkeeping. None of them is a tool failing. (BLOCKED: policy
+// refusals still count: those are the model trying something it shouldn't.)
+var controlResultPrefixes = []string{"APPROVAL_", "SUGGESTION_"}
 
 func isControlResult(text string) bool {
 	for _, p := range controlResultPrefixes {

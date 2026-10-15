@@ -56,3 +56,11 @@ export function hasPendingSwitchSuggestion(
 ): boolean {
   return (approvals ?? []).some((a) => a.tool === "suggest_advanced_model" && a.status === "pending");
 }
+
+// anySwitchSuggestionPending is hasPendingSwitchSuggestion across a whole
+// conversation: a card left waiting on an older reply still blocks new ones.
+export function anySwitchSuggestionPending(
+  messages: ReadonlyArray<{ approvals?: ReadonlyArray<{ tool: string; status: string }> }>,
+): boolean {
+  return messages.some((m) => hasPendingSwitchSuggestion(m.approvals));
+}

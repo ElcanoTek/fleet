@@ -72,7 +72,7 @@ import {
   type Message,
 } from "./history";
 import { currentAdvancedModel } from "@/app/lib/modelAliases";
-import { advancedRetryAllowed, hasPendingSwitchSuggestion, useQueuedSwitchRetry } from "./useQueuedSwitchRetry";
+import { advancedRetryAllowed, anySwitchSuggestionPending, useQueuedSwitchRetry } from "./useQueuedSwitchRetry";
 import { AutoContinueNotice, FleetNotices } from "./FleetNotices";
 import { InjectedContextNote } from "./InjectedContextNote";
 import {
@@ -101,6 +101,9 @@ export type ChatTranscriptProps = {
   // The lockdown allow-list (empty outside lockdown). Retry with the advanced
   // model is offered in a lockdown chat only when the list names that model.
   lockdownAllowedModels?: readonly string[];
+  // FLEET_LOCKDOWN_ONLY: the server treats every chat as lockdown, including
+  // ones created before it was turned on, whose own flag is still false.
+  lockdownOnly?: boolean;
   messages: Message[];
 
   // Empty-state protocol pills
@@ -251,6 +254,7 @@ export function ChatTranscript({
   isLoadingHistory,
   isLockdown,
   lockdownAllowedModels = [],
+  lockdownOnly = false,
   messages,
   pills,
   activePillId,
@@ -323,7 +327,11 @@ export function ChatTranscript({
   // Switch & retry, held until the stream closes (docs/CHAT-ESCALATION.md).
   const switchAndRetry = useQueuedSwitchRetry(isStreaming, currentConvKey, retryLastUserMessage);
   // Retry with the advanced model, unless a lockdown allow-list excludes it.
-  const canRetryWithAdvanced = advancedRetryAllowed(isLockdown, lockdownAllowedModels, currentAdvancedModel());
+  const canRetryWithAdvanced = advancedRetryAllowed(isLockdown || lockdownOnly, lockdownAllowedModels, currentAdvancedModel());
+  // A switch card still waiting anywhere in the chat hides Retry with: the
+  // card's Switch & retry answers it, and the server offers no new card
+  // while one is pending.
+  const switchSuggestionPending = anySwitchSuggestionPending(messages);
 
   const animatedIdsRef = useRef<Set<number>>(new Set());
   useEffect(() => {
@@ -1153,7 +1161,7 @@ export function ChatTranscript({
                                       below has not re-rendered selectedModel yet. Hidden
                                       while a switch card is pending: the card's Switch &
                                       retry resolves it, this would orphan it. */}
-                                  {!message.cancelled && !message.failed && canRetry && canRetryWithAdvanced && selectedModel !== currentAdvancedModel() && !hasPendingSwitchSuggestion(message.approvals) ? (
+                                  {!message.cancelled && !message.failed && canRetry && canRetryWithAdvanced && selectedModel !== currentAdvancedModel() && !switchSuggestionPending ? (
                                     <button
                                       type="button"
                                       className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"

@@ -13,7 +13,8 @@ package agentcore
 //
 // The call is host-side and off the run's cost ceiling, like the other
 // post-turn aux calls (title, memory extraction). It never sees tool output
-// or attachments: the caller passes only user/assistant text.
+// or attachments: the caller passes only user/assistant text, and a blocking
+// workspace guardrail screens that text before it is sent.
 
 import (
 	"bytes"
@@ -133,9 +134,17 @@ func CheckStruggle(ctx context.Context, apiKey, model, conversation string) (Str
 	if strings.TrimSpace(apiKey) == "" {
 		return StruggleVerdict{}, ErrDecisionUnavailable
 	}
+	conversation = tailRunes(conversation, MaxStruggleTranscriptRunes)
+	// The same ingress boundary as the turn (screenSeedMessages): text the
+	// workspace guardrail would block, or cannot screen in block mode, never
+	// leaves for another vendor. The check starts alongside the turn, before
+	// the turn's own screen has run, so it screens for itself.
+	if blocked, err := screenText(ctx, "escalation_classifier", conversation); blocked {
+		return StruggleVerdict{}, fmt.Errorf("decision request not sent: %w", err)
+	}
 	body, err := json.Marshal(decisionRequest{
 		Model: model,
-		State: map[string]string{"conversation": tailRunes(conversation, MaxStruggleTranscriptRunes)},
+		State: map[string]string{"conversation": conversation},
 		Questions: map[string]decisionQuestion{struggleQuestionID: {
 			Type:         "noul",
 			Instructions: struggleTask + "\n\n" + struggleContext,

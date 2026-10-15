@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
-import { advancedRetryAllowed, hasPendingSwitchSuggestion, useQueuedSwitchRetry } from "./useQueuedSwitchRetry";
+import { advancedRetryAllowed, anySwitchSuggestionPending, hasPendingSwitchSuggestion, useQueuedSwitchRetry } from "./useQueuedSwitchRetry";
 
 describe("useQueuedSwitchRetry", () => {
   it("retries at once when no turn is streaming", () => {
@@ -59,5 +59,15 @@ describe("hasPendingSwitchSuggestion", () => {
     expect(hasPendingSwitchSuggestion([{ tool: "suggest_advanced_model", status: "pending" }])).toBe(true);
     expect(hasPendingSwitchSuggestion([{ tool: "suggest_advanced_model", status: "rejected" }])).toBe(false);
     expect(hasPendingSwitchSuggestion([{ tool: "send_email", status: "pending" }])).toBe(false);
+  });
+});
+
+describe("anySwitchSuggestionPending", () => {
+  it("sees a card still waiting on an older reply, not only the latest", () => {
+    const waiting = { approvals: [{ tool: "suggest_advanced_model", status: "pending" }] };
+    const answered = { approvals: [{ tool: "suggest_advanced_model", status: "approved" }] };
+    expect(anySwitchSuggestionPending([waiting, {}, {}])).toBe(true);
+    expect(anySwitchSuggestionPending([answered, {}])).toBe(false);
+    expect(anySwitchSuggestionPending([])).toBe(false);
   });
 });

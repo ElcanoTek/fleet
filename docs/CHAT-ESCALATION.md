@@ -134,7 +134,10 @@ comes from the signal ("3 tool calls in a row failed on this request…").
   the card's answer note in the history, so a message sent while the card was
   pending never counts, even in the same second as the answer. If the note was
   not written, it counts only messages after the answer's second.
-- **Retry with is hidden while a switch card is pending** on the reply. The
+- **The classifier text passes the workspace guardrail first.** In block mode,
+  text the guardrail flags (or cannot screen) is never sent to the decision
+  model, the same ingress rule the turn follows.
+- **Retry with is hidden while a switch card is pending** anywhere in the chat. The
   card's own **Switch & retry** does the same and answers the card; the footer
   retry would remove the reply and leave the card pending, which blocks later
   suggestions.
