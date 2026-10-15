@@ -72,7 +72,7 @@ import {
   type Message,
 } from "./history";
 import { currentAdvancedModel } from "@/app/lib/modelAliases";
-import { advancedRetryAllowed, useQueuedSwitchRetry } from "./useQueuedSwitchRetry";
+import { advancedRetryAllowed, hasPendingSwitchSuggestion, useQueuedSwitchRetry } from "./useQueuedSwitchRetry";
 import { AutoContinueNotice, FleetNotices } from "./FleetNotices";
 import { InjectedContextNote } from "./InjectedContextNote";
 import {
@@ -1150,8 +1150,10 @@ export function ChatTranscript({
                                       (docs/CHAT-ESCALATION.md): the same retry, on the
                                       advanced model, which the conversation then keeps.
                                       The model is passed explicitly because the switch
-                                      below has not re-rendered selectedModel yet. */}
-                                  {!message.cancelled && !message.failed && canRetry && canRetryWithAdvanced && selectedModel !== currentAdvancedModel() ? (
+                                      below has not re-rendered selectedModel yet. Hidden
+                                      while a switch card is pending: the card's Switch &
+                                      retry resolves it, this would orphan it. */}
+                                  {!message.cancelled && !message.failed && canRetry && canRetryWithAdvanced && selectedModel !== currentAdvancedModel() && !hasPendingSwitchSuggestion(message.approvals) ? (
                                     <button
                                       type="button"
                                       className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"

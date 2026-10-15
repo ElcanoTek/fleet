@@ -1351,6 +1351,14 @@ func (s *Server) runTurnAsync(
 	// The escalation classifier (docs/CHAT-ESCALATION.md) runs alongside the
 	// turn so it never delays the reply; escalateAfterTurn reads its answer.
 	check := s.startStruggleCheck(conv, history, userInput, inputKind)
+	// Every exit that does not reach escalateAfterTurn (a failed turn, a
+	// recovered panic) still counts the request already sent, once.
+	checkHandedOff := false
+	defer func() {
+		if !checkHandedOff {
+			s.discardStruggleCheck(check)
+		}
+	}()
 
 	journal := newTurnJournalWriter(s.store, buf.turnID)
 	commits := &turnCommits{store: s.store, convID: conv.ID, turnID: buf.turnID, journal: journal}
@@ -1389,9 +1397,8 @@ func (s *Server) runTurnAsync(
 		InputKind:      inputKind,
 	}, buf)
 	if err != nil {
-		// No result, so no card; the classifier request already sent is
-		// still counted.
-		s.discardStruggleCheck(check)
+		// No result, so no card; the deferred drain above counts the
+		// classifier request already sent.
 		// The resilience layer inside RunTurn emits `turn.model_required`
 		// itself on any non-cancellation failure (see agent/resilience.go).
 		// Avoid emitting a redundant — and misleading — `turn.error` in
@@ -1550,6 +1557,7 @@ func (s *Server) runTurnAsync(
 	// classifier has been running since the turn began, so this rarely waits.
 	// Its own context: persistCtx's 10s budget may be spent by now.
 	escCtx, escCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	checkHandedOff = true
 	s.escalateAfterTurn(escCtx, buf, conv, user, history, res, check)
 	escCancel()
 }

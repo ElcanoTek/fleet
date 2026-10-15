@@ -39,12 +39,20 @@ func TestCountUserMessagesAfterResolution_SameSecond(t *testing.T) {
 		t.Errorf("count = %d, want 2 (the message sent before the answer must not count)", n)
 	}
 
-	// Without a note the timestamp bound alone applies.
-	n, err = s.CountUserMessagesAfterResolution(ctx, conv.ID, "call_missing", resolvedAt+3600)
+	// Without a note (its write is best-effort) the count falls back to
+	// messages strictly after the answer's second: the same-second messages,
+	// including the one sent while the card was pending, do not count.
+	n, err = s.CountUserMessagesAfterResolution(ctx, conv.ID, "call_missing", resolvedAt)
 	if err != nil {
 		t.Fatalf("CountUserMessagesAfterResolution: %v", err)
 	}
 	if n != 0 {
-		t.Errorf("count = %d, want 0 (nothing is after a later resolution)", n)
+		t.Errorf("count without a note = %d, want 0 (nothing is strictly after the answer's second)", n)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE messages SET created_at = $1 WHERE conversation_id = $2 AND content LIKE '%after 2%'`, resolvedAt+1, conv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n, err = s.CountUserMessagesAfterResolution(ctx, conv.ID, "call_missing", resolvedAt); err != nil || n != 1 {
+		t.Errorf("count without a note = %d (err %v), want 1 (a later-second message counts)", n, err)
 	}
 }

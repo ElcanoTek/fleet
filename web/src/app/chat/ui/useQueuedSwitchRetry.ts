@@ -45,3 +45,14 @@ export function useQueuedSwitchRetry(
 export function advancedRetryAllowed(isLockdown: boolean, allowed: readonly string[], advanced: string): boolean {
   return !isLockdown || allowed.includes(advanced);
 }
+
+// hasPendingSwitchSuggestion reports whether a reply carries a model-switch
+// card still waiting on the user. "Retry with" is hidden then: the card's own
+// Switch & retry does the same and resolves the card, while the footer retry
+// would truncate the reply and leave the card pending server-side, which
+// suppresses every later suggestion as "already pending".
+export function hasPendingSwitchSuggestion(
+  approvals: ReadonlyArray<{ tool: string; status: string }> | undefined,
+): boolean {
+  return (approvals ?? []).some((a) => a.tool === "suggest_advanced_model" && a.status === "pending");
+}

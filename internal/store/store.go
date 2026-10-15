@@ -2676,19 +2676,20 @@ func (s *Store) CountUserMessagesAfterTimestamp(ctx context.Context, convID stri
 // message against an answer given in the same second. The answer's
 // tool_result note (written under callID right after the claim) is the exact
 // boundary in message order: only user messages with a later id count. The
-// timestamp bound still applies, so a missing note can only make the count
-// smaller (a longer cooldown), never count a message from before the answer
-// second.
+// note is best-effort; without it the count falls back to messages strictly
+// after the answer's second, which can only leave a same-second message out
+// (a longer cooldown), never count one sent before the answer.
 func (s *Store) CountUserMessagesAfterResolution(ctx context.Context, convID, callID string, resolvedAt int64) (int64, error) {
 	var n int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM messages m
+		`WITH note AS (
+		   SELECT MAX(r.id) AS id FROM messages r
+		   WHERE r.conversation_id = $1 AND r.type = 'tool_result'
+		     AND r.created_at >= $3 AND r.content::jsonb->>'id' = $2)
+		 SELECT COUNT(*) FROM messages m, note
 		 WHERE m.conversation_id = $1 AND m.role = 'user' AND m.type = 'text'
-		   AND m.created_at >= $3
-		   AND m.id > COALESCE((
-		         SELECT MAX(r.id) FROM messages r
-		         WHERE r.conversation_id = $1 AND r.type = 'tool_result'
-		           AND r.created_at >= $3 AND r.content::jsonb->>'id' = $2), 0)`,
+		   AND CASE WHEN note.id IS NULL THEN m.created_at > $3
+		            ELSE m.created_at >= $3 AND m.id > note.id END`,
 		convID, callID, resolvedAt,
 	).Scan(&n)
 	return n, err

@@ -2,6 +2,8 @@ package fakellm_test
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -40,5 +42,40 @@ func TestDecisionsSeam(t *testing.T) {
 	}
 	if _, err := agentcore.CheckStruggle(context.Background(), "", "m/x", "User: hi"); err == nil {
 		t.Error("a missing key must fail before any request")
+	}
+}
+
+// The filtered listing fleet's admin picker asks for carries one paid
+// decision model; the default listing, which feeds the chat picker, does not.
+func TestDecisionModelListing(t *testing.T) {
+	srv := httptest.NewServer(fakellm.New().Handler())
+	t.Cleanup(srv.Close)
+	t.Setenv("OPENROUTER_BASE_URL", srv.URL+"/api/v1")
+
+	models, err := agentcore.ListDecisionModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListDecisionModels: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != fakellm.DecisionModelID || models[0].InputPerMillion <= 0 {
+		t.Fatalf("decision models = %+v, want the fake's one paid decision model", models)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/v1/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var listing struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&listing); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range listing.Data {
+		if m.ID == fakellm.DecisionModelID {
+			t.Fatal("the default listing must not carry the decision model")
+		}
 	}
 }

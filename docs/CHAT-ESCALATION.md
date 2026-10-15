@@ -124,18 +124,26 @@ comes from the signal ("3 tool calls in a row failed on this request…").
     / `accepted_switch_only`;
   - `fleet_escalation_classifier_checks_total{mode, outcome}`, where outcome is
     `pushback`, `ok` or `error`, once per request sent, including one from a
-    turn the user stopped or that failed (no card and no record then);
+    turn the user stopped, that failed, or that panicked (no card and no
+    record then);
   - `fleet_escalation_classifier_late_total{mode}`, once per request still
     running when the turn's stream closed.
 - **The approvals table** now records which accept action was taken, in the
   result text.
 - **The cooldown is counted in message order.** It counts user messages after
   the card's answer note in the history, so a message sent while the card was
-  pending never counts, even in the same second as the answer.
+  pending never counts, even in the same second as the answer. If the note was
+  not written, it counts only messages after the answer's second.
+- **Retry with is hidden while a switch card is pending** on the reply. The
+  card's own **Switch & retry** does the same and answers the card; the footer
+  retry would remove the reply and leave the card pending, which blocks later
+  suggestions.
 - **Testing.** The fake LLM (`internal/fakellm`) answers the Decisions API:
   0.95 when the latest user message carries `[[pushback]]`, else 0.05. So the
   live E2E stack, which runs the default `suggest` mode, gets a real answer on
-  every message, and a spec can raise the card on purpose.
+  every message, and a spec can raise the card on purpose. Its model listing
+  also carries one paid decision model when asked for decision models, so the
+  admin picker has something to show.
 
 ## Fixed along the way
 

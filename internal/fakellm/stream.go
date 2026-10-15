@@ -354,7 +354,12 @@ func handleDecisions(w http.ResponseWriter, r *http.Request) {
 
 // ── /api/v1/models ──
 
-func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
+// DecisionModelID is the decision model the fake lists when asked for
+// decision models (?output_modalities=...decisions), as OpenRouter does: its
+// default listing leaves them out, so the chat picker never sees it.
+const DecisionModelID = "~typesafe/jev-latest"
+
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	ids := append([]string(nil), s.models...)
 	s.mu.RUnlock()
@@ -368,7 +373,8 @@ func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
 		Completion string `json:"completion"`
 	}
 	type architecture struct {
-		InputModalities []string `json:"input_modalities"`
+		InputModalities  []string `json:"input_modalities"`
+		OutputModalities []string `json:"output_modalities"`
 	}
 	type topProvider struct {
 		MaxCompletionTokens *int `json:"max_completion_tokens"`
@@ -391,8 +397,17 @@ func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
 			Name:          id,
 			ContextLength: 200000,
 			Pricing:       pricing{Prompt: "0.000003", Completion: "0.000015"},
-			Architecture:  architecture{InputModalities: []string{"text", "image"}},
+			Architecture:  architecture{InputModalities: []string{"text", "image"}, OutputModalities: []string{"text"}},
 			TopProvider:   topProvider{MaxCompletionTokens: &maxCompletion},
+		})
+	}
+	if strings.Contains(r.URL.Query().Get("output_modalities"), "decisions") {
+		out.Data = append(out.Data, entry{
+			ID:            DecisionModelID,
+			Name:          "TypeSafe: Jev (fake)",
+			ContextLength: 32768,
+			Pricing:       pricing{Prompt: "0.00000004", Completion: "0"},
+			Architecture:  architecture{InputModalities: []string{"text"}, OutputModalities: []string{"decisions"}},
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
