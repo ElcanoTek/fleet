@@ -46,6 +46,10 @@ func TestStruggleSignals(t *testing.T) {
 		{"compaction", []agent.HistoryEntry{ok}, 1, escalationSignalCompaction},
 		{"long turn", repeat(ok, escalationLongTurnToolCalls), 0, escalationSignalLongTurn},
 		{"just under long", repeat(ok, escalationLongTurnToolCalls-1), 0, ""},
+		// Calls held for the user's approval are not failures, and do not
+		// break a real streak either.
+		{"approvals are not failures", repeat(toolResult(t, "APPROVAL_REQUIRED: send email — staged for user approval", true), 3), 0, ""},
+		{"approval inside a streak", []agent.HistoryEntry{fail, fail, toolResult(t, "APPROVAL_REQUIRED: x", true), fail}, 0, escalationSignalToolErrors},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

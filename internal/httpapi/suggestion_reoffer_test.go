@@ -81,8 +81,8 @@ func TestSuggestionCooldownCountsFromResolution(t *testing.T) {
 	if _, err := a.StageHostSuggestion(suggestionSourceSignal, "r"); err != nil {
 		t.Fatal(err)
 	}
-	if st.countedSince != 900 {
-		t.Errorf("counted since %d, want the resolution time", st.countedSince)
+	if st.countedSince != 899 {
+		t.Errorf("counted since %d, want the second before the resolution (messages in the resolution's own second count)", st.countedSince)
 	}
 	// A row resolved before resolved_at was recorded falls back to created_at.
 	st.prior = &store.Approval{Status: "rejected", CreatedAt: 100}

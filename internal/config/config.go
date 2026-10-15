@@ -1943,6 +1943,11 @@ func Load(envFile string) (*Config, error) {
 	if err := cfg.validateAccountEvents(os.Getenv("FLEET_WEBHOOK_SECRET")); err != nil {
 		return nil, err
 	}
+	// The escalation classifier's mode and model fail boot when mistyped,
+	// here in Load so `fleet serve` refuses them, not only validate-config.
+	if err := cfg.validateEscalationClassifier(); err != nil {
+		return nil, err
+	}
 
 	// Retired knobs (ADR-0063): the Rampart PII engine is gone, so these two do
 	// nothing any more. Say so once at boot instead of silently ignoring an
@@ -2037,9 +2042,6 @@ func (c *Config) Validate() error {
 	}
 	if c.UnpinnedCap <= 0 {
 		return fmt.Errorf("CONVERSATION_UNPINNED_CAP must be positive")
-	}
-	if err := c.validateEscalationClassifier(); err != nil {
-		return err
 	}
 	if c.InputQueueRetentionDays < 0 {
 		return fmt.Errorf("FLEET_INPUT_QUEUE_RETENTION_DAYS must be non-negative")
@@ -2560,7 +2562,8 @@ func TaskDefaultMaxRetriesFromEnv() int {
 }
 
 // validateEscalationClassifier refuses a mistyped classifier mode or model
-// slug at boot (docs/CHAT-ESCALATION.md). Read leniently, an unknown mode
+// slug at boot (docs/CHAT-ESCALATION.md); Load calls it, so `fleet serve` and
+// validate-config both refuse a bad value. Read leniently, an unknown mode
 // would quietly turn the default-on check off, and a malformed slug would
 // fail at the Decisions API on every message. The rules match what the admin
 // panel accepts. Empty means "use the default".

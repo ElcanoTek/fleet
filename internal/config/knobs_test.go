@@ -45,6 +45,10 @@ func TestLoad_MalformedKnobFailsLoud(t *testing.T) {
 		{"FLEET_MAX_ITERATIONS", "0", []string{"FLEET_MAX_ITERATIONS", "between 1 and 10000"}},
 		// A typo'd frustration threshold would count most messages as pushback.
 		{"FLEET_ESCALATION_CLASSIFIER_THRESHOLD", "5", []string{"FLEET_ESCALATION_CLASSIFIER_THRESHOLD", "between 50 and 99"}},
+		// The string-valued classifier settings fail in Load, so `fleet serve`
+		// refuses them, not only validate-config.
+		{"FLEET_ESCALATION_CLASSIFIER_MODE", "sugest", []string{"FLEET_ESCALATION_CLASSIFIER_MODE", `"sugest"`}},
+		{"FLEET_ESCALATION_CLASSIFIER_MODEL", "jev-latest", []string{"FLEET_ESCALATION_CLASSIFIER_MODEL", `"jev-latest"`}},
 		{"FLEET_MAX_TOTAL_TOKENS", "-5", []string{"FLEET_MAX_TOTAL_TOKENS", ">= 0"}},
 		{"FLEET_TEMPERATURE", "-0.1", []string{"FLEET_TEMPERATURE", ">= 0"}},
 		{"FLEET_MAX_COST_USD", "-1", []string{"FLEET_MAX_COST_USD", ">= 0"}},

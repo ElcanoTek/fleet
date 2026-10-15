@@ -73,8 +73,15 @@ func struggleFromHistory(history []agent.HistoryEntry, compactions int) turnStru
 			continue
 		}
 		t.toolCalls++
-		if strings.HasPrefix(strings.TrimSpace(c.Text), "LOOP_GUARD") {
+		text := strings.TrimSpace(c.Text)
+		if strings.HasPrefix(text, "LOOP_GUARD") {
 			t.loopGuardBlocks++
+		}
+		// A call held for the user's approval, or a model-switch suggestion,
+		// is marked as an error result but nothing failed: it is not part of
+		// a failure streak, and does not break one either.
+		if isControlResult(text) {
+			continue
 		}
 		if c.IsErr {
 			streak++
@@ -86,6 +93,19 @@ func struggleFromHistory(history []agent.HistoryEntry, compactions int) turnStru
 		}
 	}
 	return t
+}
+
+// controlResultPrefixes mark tool results the governance layer returns in
+// place of running a call that is waiting on the user, not failing.
+var controlResultPrefixes = []string{"APPROVAL_REQUIRED", "SUGGESTION_DISPLAYED", "SUGGESTION_SUPPRESSED", "SUGGESTION_UNAVAILABLE"}
+
+func isControlResult(text string) bool {
+	for _, p := range controlResultPrefixes {
+		if strings.HasPrefix(text, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // strongest names the most telling signal that fired, with the reason the
@@ -261,6 +281,8 @@ func allDone(checks []*struggleCheck, d time.Duration) bool {
 // longer be shown (the stream closed while the check was late).
 func (s *Server) classifierOutcome(checks []*struggleCheck, stage func(source, reason string) bool, record func(source, signal string, p *float64, suggested bool)) {
 	mode, threshold := checks[0].mode, checks[0].threshold
+	// Each request is counted once by its own outcome; the card and the
+	// per-user record use the highest probability among them.
 	best, answered := 0.0, false
 	for _, c := range checks {
 		v, err := c.wait()
@@ -270,18 +292,18 @@ func (s *Server) classifierOutcome(checks []*struggleCheck, stage func(source, r
 			continue
 		}
 		answered = true
+		if v.Probability >= threshold {
+			metrics.RecordEscalationClassifierCheck(mode, "pushback")
+		} else {
+			metrics.RecordEscalationClassifierCheck(mode, "ok")
+		}
 		if v.Probability > best {
 			best = v.Probability
 		}
 	}
-	if !answered {
+	if !answered || best < threshold {
 		return
 	}
-	if best < threshold {
-		metrics.RecordEscalationClassifierCheck(mode, "ok")
-		return
-	}
-	metrics.RecordEscalationClassifierCheck(mode, "pushback")
 	suggested := false
 	if stage != nil && mode == config.EscalationClassifierSuggest {
 		suggested = stage(suggestionSourceClassifier, escalationClassifierReason)

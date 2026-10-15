@@ -654,8 +654,13 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 			// appeared: messages sent while it sat pending are not "after" it.
 			// Rows resolved before resolved_at was recorded fall back to
 			// created_at.
-			since := prior.ResolvedAt
-			if since <= 0 {
+			// Timestamps are whole seconds and the count is strictly after,
+			// so count from the second before the resolution: a message sent
+			// in the same second as the answer is after it. (Legacy rows keep
+			// created_at, where the staging turn's own message may share the
+			// second and must not count.)
+			since := prior.ResolvedAt - 1
+			if prior.ResolvedAt <= 0 {
 				since = prior.CreatedAt
 			}
 			n, err := a.store.CountUserMessagesAfterTimestamp(a.ctx, a.conversationID, since)

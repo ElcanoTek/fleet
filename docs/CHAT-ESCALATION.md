@@ -16,7 +16,7 @@ except **Retry with** use the same card (**Switch & retry**, **Just switch**,
 | Source | What triggers it | Cost |
 |---|---|---|
 | The assistant | It calls `suggest_advanced_model` (unchanged; the tool description now also names repeated failures, and the generic chat prompt says when to hand up) | none |
-| Struggle signals | End of turn: 3+ tool calls failed in a row, the loop guard blocked a repeated call, the context was compacted, or 25+ tool calls in the turn | none: read from the turn's own history and stream |
+| Struggle signals | End of turn: 3+ tool calls failed in a row (a call held for the user's approval is not a failure), the loop guard blocked a repeated call, the context was compacted, or 25+ tool calls in the turn | none: read from the turn's own history and stream |
 | Frustration check | A decision model (Jev by default) scores the user's latest message as pushback on a wrong or incomplete answer | ~$0.00002 per message (measured: ~460 input tokens on Jev 1.14) |
 | **Retry with** | The user presses it under a reply (hidden in a lockdown chat whose allow-list does not name the advanced model) | none: it is a normal retry on the advanced model |
 
