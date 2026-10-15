@@ -86,9 +86,14 @@ export type LogViewerProps = {
   // closes the modal, so this component stays presentational (same contract as
   // onEdit). Omitted = no affordance.
   onDelete?: (task: Task) => void;
+  // Called once when a live run's stream reports that the run ended. Which
+  // view renders follows task.status, so the finished record replaces the
+  // live view only once the parent hands in a copy of the task that is no
+  // longer running; this is the parent's cue to fetch one.
+  onRunEnded?: (taskId: string) => void;
 };
 
-export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSelectTask, onDelete }: LogViewerProps) {
+export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSelectTask, onDelete, onRunEnded }: LogViewerProps) {
   if (!task) return null;
   // Key the inner body on the task id so switching tasks remounts the fetch
   // hook — that reproduces the old "reset session to null then refetch on task
@@ -101,6 +106,7 @@ export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSel
         task={task}
         onClose={onClose}
         canStop={!!canStop}
+        onRunEnded={onRunEnded}
       />
     );
   }
@@ -495,10 +501,12 @@ function LiveTaskView({
   task,
   onClose,
   canStop,
+  onRunEnded,
 }: {
   task: Task;
   onClose: () => void;
   canStop: boolean;
+  onRunEnded?: (taskId: string) => void;
 }) {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   // Which live step cards are open, and each tool entry's 1-based step number.
@@ -534,6 +542,11 @@ function LiveTaskView({
   useDialogA11y(true, overlayRef, onClose);
   const lastEventID = useRef<string | undefined>(undefined);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  // Through a ref so a parent re-render does not reattach the stream.
+  const onRunEndedRef = useRef(onRunEnded);
+  useEffect(() => {
+    onRunEndedRef.current = onRunEnded;
+  });
 
   useEffect(() => {
     const ac = new AbortController();
@@ -542,9 +555,11 @@ function LiveTaskView({
       if (frame._event_id) lastEventID.current = frame._event_id;
       if (frame.type === "status") {
         if (frame.status && frame.status !== "running") {
+          const first = !terminalRef.current;
           terminalRef.current = true;
           setRunStatus(frame.status);
           if (frame.stopped_by) setStoppedBy(frame.stopped_by);
+          if (first) onRunEndedRef.current?.(task.id);
         }
         return;
       }
