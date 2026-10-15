@@ -15,9 +15,18 @@ import (
 // default at boot and any admin override live. Consumers that mean "the
 // CURRENT tier" read CurrentDefaultModel/CurrentAdvancedModel; the constants
 // remain only as the built-in seed and for tests that pin the shipped values.
+//
+// The third slot, the task tier, is what an Operations Center task runs on by
+// default. It has no compiled-in constant of its own: unset, it FOLLOWS the
+// advanced tier, so a deployment names its strong model once and both chat
+// escalation and scheduled work pick it up. Chat is where people pick fast
+// models to play with; a scheduled task is a long unattended run, which is the
+// job the strong model is for (docs/TASK-MODEL-TIER.md).
 var modelTiers = struct {
 	mu       sync.RWMutex
 	def, adv string
+	// task is the task-tier override; "" means "follow adv".
+	task string
 }{def: DefaultCoreModel, adv: DefaultMaxModel}
 
 // CurrentDefaultModel returns the effective everyday-tier slug — what a new
@@ -33,6 +42,20 @@ func CurrentDefaultModel() string {
 func CurrentAdvancedModel() string {
 	modelTiers.mu.RLock()
 	defer modelTiers.mu.RUnlock()
+	return modelTiers.adv
+}
+
+// CurrentTaskModel returns the effective task-tier slug: what a scheduled task
+// with no pinned model runs on and what the Operations Center create form
+// pre-fills. It is the task-tier override when one is set, otherwise the
+// CURRENT advanced tier, so it is never empty and an advanced-tier change
+// reaches it without a second edit.
+func CurrentTaskModel() string {
+	modelTiers.mu.RLock()
+	defer modelTiers.mu.RUnlock()
+	if modelTiers.task != "" {
+		return modelTiers.task
+	}
 	return modelTiers.adv
 }
 
@@ -58,5 +81,14 @@ func SetAdvancedModel(slug string) {
 	}
 	modelTiers.mu.Lock()
 	modelTiers.adv = v
+	modelTiers.mu.Unlock()
+}
+
+// SetTaskModel installs the task-tier override. Empty clears it, and the task
+// tier then follows the advanced tier (CurrentTaskModel).
+func SetTaskModel(slug string) {
+	v := strings.TrimSpace(slug)
+	modelTiers.mu.Lock()
+	modelTiers.task = v
 	modelTiers.mu.Unlock()
 }

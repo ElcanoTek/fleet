@@ -63,9 +63,13 @@ type Config struct {
 	// the runtime selection so the forecast reflects the same model + ceilings a
 	// real dispatch would use. All advisory; the forecast never gates creation.
 	//
-	// DefaultTaskModel is the model a task with no explicit model resolves to
-	// (CUTLASS_TASK_MODEL). MaxCostUSD is the per-turn cost ceiling
-	// (CUTLASS_MAX_COST_USD); 0 disables the would-hit-ceiling check.
+	// DefaultTaskModel, when set, is a FIXED model a task with no explicit model
+	// resolves to. Production leaves it empty so the live task tier serves
+	// (agentcore.CurrentTaskModel: the admin task_model setting, else
+	// FLEET_TASK_MODEL, else the advanced tier), the same slug the scheduled
+	// runner resolves at dispatch; see defaultTaskModel. MaxCostUSD is the
+	// per-turn cost ceiling (CUTLASS_MAX_COST_USD); 0 disables the
+	// would-hit-ceiling check.
 	// DefaultMaxIterations is the loop iteration cap applied when a task omits
 	// one (FLEET_MAX_ITERATIONS via config.MaxIterations).
 	DefaultTaskModel     string
@@ -1031,14 +1035,6 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error { //nolint:go
 	}
 	if err := normalizeOptionalModel(&tc.FallbackModel, "fallback_model"); err != nil {
 		return err
-	}
-	// A task with neither its own model nor a deployment default can never run:
-	// the dispatcher fails it terminally on the first attempt and dead-letters it
-	// (#1014). Refuse it here instead, so the author sees the problem while they
-	// are still looking at the request rather than up to a cron period later, in
-	// the DLQ, having published nothing.
-	if tc.Model == nil && strings.TrimSpace(h.config.DefaultTaskModel) == "" {
-		return fmt.Errorf("no model configured: set FLEET_TASK_MODEL on the orchestrator, or pass model on the task")
 	}
 	if err := validateTaskLimits(tc); err != nil {
 		return err

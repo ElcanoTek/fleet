@@ -70,6 +70,9 @@ type SettingMeta = {
   optionHelp?: Record<string, string>;
   // Suffix hint for numeric fields ("bytes — 0 uses 64 KiB; hard max 128 KiB").
   unitHint?: string;
+  // What an EMPTY server default means, for a setting whose unset env value
+  // is a state rather than a gap (task_model: follow the advanced model).
+  emptyDefault?: string;
 };
 
 const META: Record<string, SettingMeta> = {
@@ -172,6 +175,12 @@ const META: Record<string, SettingMeta> = {
     description:
       "The stronger escalation target — what the agent\u2019s \u201Cswitch to the advanced model\u201D suggestion and the spreadsheet nudge move a conversation to, and the second pinned picker row. Same sources as the default model. Applies live, including to suggestion cards already on screen.",
   },
+  task_model: {
+    label: "Task model",
+    description:
+      "What Operations Center tasks run on: the model the new-task form pre-fills, the model a task scheduled from chat gets when the agent names none, and what a task with no model of its own runs on. Unset, it follows the advanced model, because a scheduled task is a long unattended run. Set it only to give tasks a different model from chat\u2019s advanced tier. Applies live to new tasks; a task that already has a model keeps it.",
+    emptyDefault: "Follows the advanced model",
+  },
 };
 
 const PRIVACY_GROUP = "Privacy & data protection";
@@ -195,7 +204,7 @@ const GROUPS: { title: string; keys: string[] }[] = [
   },
   {
     title: "Model tiers",
-    keys: ["default_model", "advanced_model"],
+    keys: ["default_model", "advanced_model", "task_model"],
   },
   {
     title: "Workspace features",
@@ -477,8 +486,13 @@ function FeatRow({
           </p>
         ) : null}
         <p className="m-0 text-[0.7rem] text-[var(--color-text-muted)]">
-          Default {setting.default !== "" ? <CodeChip>{setting.default}</CodeChip> : null} from{" "}
-          <CodeChip>{setting.env_var}</CodeChip>
+          Default{" "}
+          {setting.default !== "" ? (
+            <CodeChip>{setting.default}</CodeChip>
+          ) : meta.emptyDefault ? (
+            <>({meta.emptyDefault.toLowerCase()} when unset)</>
+          ) : null}{" "}
+          from <CodeChip>{setting.env_var}</CodeChip>
           {resettable && setting.updated_by ? <> · set by {setting.updated_by}</> : null}
         </p>
         {setting.kind === "enum" && meta.optionHelp?.[setting.value] ? (
@@ -540,6 +554,7 @@ function FeatRow({
         ) : setting.kind === "model" ? (
           <ModelControl
             setting={setting}
+            placeholder={meta.emptyDefault}
             busy={busy}
             draft={draft}
             setDraft={setDraft}
@@ -623,12 +638,15 @@ function UrlControl({
 // only enforces the provider/model shape.
 function ModelControl({
   setting,
+  placeholder,
   busy,
   draft,
   setDraft,
   onSave,
 }: {
   setting: ResolvedSetting;
+  // Shown while the value is empty (task_model unset follows the advanced model).
+  placeholder?: string;
   busy: boolean;
   draft: string | undefined;
   setDraft: (v: string) => void;
@@ -643,7 +661,7 @@ function ModelControl({
           id={`model-${setting.key}`}
           value={value}
           onChange={setDraft}
-          placeholder="provider/model"
+          placeholder={placeholder ?? "provider/model"}
           aria-describedby={undefined}
         />
       </div>

@@ -56,16 +56,18 @@ func TestModelDefaultsAreInSync(t *testing.T) {
 		}
 	}
 
-	// The Operations Center guide names the task form's pre-filled default
-	// ("pre-filled with your workspace's default model (**GPT-6 Luna Pro** …").
-	// It went stale once (still naming GPT-5.6 Luna Pro after the 2026-09-22
-	// swap) because only the chat guide was checked.
+	// The Operations Center guide names the task form's pre-filled model
+	// ("pre-filled with your workspace's task model, which is the advanced
+	// model by default (**Gemini 4 Argon** …"). The task tier follows the
+	// advanced tier unless overridden, so the advanced label is the one to
+	// name. It went stale once (still naming GPT-5.6 Luna Pro after the
+	// 2026-09-22 swap) because only the chat guide was checked.
 	ops := readFile(t, root, "internal/clientconfig/builtin_skills/fleet-guide/operations-center.md")
-	label := constant("DEFAULT_MODEL_LABEL")
+	label := constant("ADVANCED_MODEL_LABEL")
 	if i := strings.Index(label, ": "); i >= 0 {
 		label = label[i+2:]
 	}
 	if !strings.Contains(ops, "**"+label+"**") {
-		t.Errorf("fleet-guide/operations-center.md does not name the default %q (from DEFAULT_MODEL_LABEL); update the guide and run make sync-guides", label)
+		t.Errorf("fleet-guide/operations-center.md does not name the task form's default %q (from ADVANCED_MODEL_LABEL); update the guide and run make sync-guides", label)
 	}
 }

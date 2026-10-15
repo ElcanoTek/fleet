@@ -2633,44 +2633,24 @@ func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown b
 // create_task seam; the human approval plus the box-wide cost/iteration ceilings
 // bound a misconfigured task.) A nil seam (feature unconfigured) is surfaced as a
 // clear error rather than silently succeeding.
-// scheduledTaskModel resolves the model a chat-created scheduled task runs on.
-// An explicit slug from the agent wins; otherwise the task inherits the model of
-// the conversation it was scheduled from.
+// scheduledTaskModel resolves the model a chat-created scheduled task runs on:
+// the agent's explicit slug, else the live task tier
+// (agentcore.CurrentTaskModel — the admin task_model setting, else
+// FLEET_TASK_MODEL, else the advanced tier).
 //
-// Inheritance is the fix for #1014: schedule_task's `model` is optional and the
-// agent is told it "defaults to the orchestrator's configured model", so it
-// routinely omits it — and on a deployment with no FLEET_TASK_MODEL that left
-// task.Model nil with nothing behind it, so every chat-created task dead-lettered
-// at first dispatch with "no model configured", having run nothing. Pinning the
-// conversation's model also makes the run reproducible: the task records what it
-// was created against instead of drifting with a server env var.
-//
-// A lookup failure is not fatal — it falls through to the empty string, which
-// leaves the seam's existing cfg.TaskModel fallback (and the create-time
-// validation behind it) in charge.
-// conversationGetter is the one chatStore method scheduledTaskModel needs.
-// Narrowing it here keeps the resolution unit-testable without standing up the
-// whole chatStore surface (or a database) for one lookup.
-type conversationGetter interface {
-	Get(ctx context.Context, userEmail, convID string) (*store.Conversation, error)
-}
-
-func scheduledTaskModel(ctx context.Context, convs conversationGetter, approval *store.Approval, explicit string) string {
+// It deliberately does NOT inherit the conversation's model. Chat is where
+// people pick fast models to play with, and a scheduled task is a long
+// unattended run: inheriting put tasks scheduled from a quick chat on the
+// everyday tier, the model least suited to them (docs/TASK-MODEL-TIER.md).
+// Inheritance was the #1014 fix for an unpinned task with no deployment
+// default; the task tier is never empty, so that case cannot arise. The slug
+// is still pinned on the task at create time, so the run is reproducible and
+// does not drift with a later tier change.
+func scheduledTaskModel(explicit string) string {
 	if m := strings.TrimSpace(explicit); m != "" {
 		return m
 	}
-	if convs == nil {
-		return ""
-	}
-	conv, err := convs.Get(ctx, approval.UserEmail, approval.ConversationID)
-	if err != nil {
-		log.Printf("schedule_task: conversation lookup for model inheritance failed (%v); falling back to the orchestrator default", err)
-		return ""
-	}
-	if conv == nil {
-		return ""
-	}
-	return strings.TrimSpace(conv.Model)
+	return agentcore.CurrentTaskModel()
 }
 
 func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Approval, edits *scheduleTaskEdits) (string, error) {
@@ -2701,7 +2681,7 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 	req := TaskScheduleRequest{
 		Title:                strings.TrimSpace(p.Name),
 		Prompt:               strings.TrimSpace(p.Prompt),
-		Model:                scheduledTaskModel(ctx, s.store, approval, p.Model),
+		Model:                scheduledTaskModel(p.Model),
 		Cron:                 strings.TrimSpace(p.Cron),
 		MaxIterations:        p.MaxIterations,
 		AllowNetwork:         p.AllowNetwork,

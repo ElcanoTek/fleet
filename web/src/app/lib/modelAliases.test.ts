@@ -11,6 +11,7 @@ import {
   currentAdvancedModel,
   currentDefaultModel,
   currentTaskFallbackModel,
+  currentTaskModel,
   currentTierModels,
   labelForModel,
   setModelTiers,
@@ -100,6 +101,20 @@ describe("setModelTiers", () => {
     expect(currentAdvancedModel()).toBe(ADVANCED_MODEL);
     setModelTiers({ task_fallback_model: "  " });
     expect(currentTaskFallbackModel()).toBe(DEFAULT_TASK_FALLBACK_MODEL);
+  });
+
+  it("pre-fills tasks from the task tier, which follows the advanced tier when unset", () => {
+    expect(currentTaskModel()).toBe(ADVANCED_MODEL);
+    // An older server sends no task_model: follow the live advanced tier.
+    setModelTiers({ default_model: "acme/fast-chat", advanced_model: "acme/frontier-pro" });
+    expect(currentTaskModel()).toBe("acme/frontier-pro");
+    // An admin task model wins, and never shadows the chat tiers.
+    setModelTiers({ advanced_model: "acme/frontier-pro", task_model: " acme/long-runner " });
+    expect(currentTaskModel()).toBe("acme/long-runner");
+    expect(currentAdvancedModel()).toBe("acme/frontier-pro");
+    expect(currentDefaultModel()).toBe(DEFAULT_MODEL);
+    setModelTiers({ task_model: "  " });
+    expect(currentTaskModel()).toBe(ADVANCED_MODEL);
   });
 
   it("keeps the fallback for missing, empty, or whitespace fields", () => {

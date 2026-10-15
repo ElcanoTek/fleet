@@ -42,8 +42,9 @@ export const ADVANCED_MODEL_LABEL = "Google: Gemini 4 Argon";
 // only — the effective slug is the operator's FLEET_TASK_FALLBACK_MODEL,
 // which arrives as `task_fallback_model` on /api/client-config. Read it via
 // currentTaskFallbackModel(). (The form's pre-filled PRIMARY is the live
-// default tier, currentDefaultModel(), so an admin override reaches new
-// tasks exactly as it reaches new chats.)
+// task tier, currentTaskModel(): the admin "Task model" setting, which
+// follows the advanced tier unless overridden. Chat runs on the fast
+// default tier; a scheduled task is a long unattended run.)
 export const DEFAULT_TASK_FALLBACK_MODEL = "deepseek/deepseek-v4.1-flash";
 
 // Display names for slugs we know by heart. An admin-configured tier
@@ -62,12 +63,14 @@ const KNOWN_LABELS: Readonly<Record<string, string>> = {
 let liveTiers = {
   defaultModel: DEFAULT_MODEL,
   advancedModel: ADVANCED_MODEL,
+  taskModel: ADVANCED_MODEL,
   taskFallbackModel: DEFAULT_TASK_FALLBACK_MODEL,
 };
 
 export type ModelTiersConfig = {
   default_model?: string;
   advanced_model?: string;
+  task_model?: string;
   task_fallback_model?: string;
   pinned?: unknown;
 };
@@ -141,10 +144,15 @@ function parsePinned(raw: unknown): PinnedModel[] {
 export function setModelTiers(cfg: ModelTiersConfig | null | undefined): void {
   const def = String(cfg?.default_model ?? "").trim();
   const adv = String(cfg?.advanced_model ?? "").trim();
+  const task = String(cfg?.task_model ?? "").trim();
   const fb = String(cfg?.task_fallback_model ?? "").trim();
+  const advancedModel = adv || ADVANCED_MODEL;
   liveTiers = {
     defaultModel: def || DEFAULT_MODEL,
-    advancedModel: adv || ADVANCED_MODEL,
+    advancedModel,
+    // An older server sends no task_model; the task tier then follows the
+    // advanced tier, which is what the server would have resolved anyway.
+    taskModel: task || advancedModel,
     taskFallbackModel: fb || DEFAULT_TASK_FALLBACK_MODEL,
   };
   livePinned = parsePinned(cfg?.pinned);
@@ -172,6 +180,12 @@ export function pinnedLabelFor(slug: string): string | undefined {
 // compiled-in DEFAULT_TASK_FALLBACK_MODEL.
 export function currentTaskFallbackModel(): string {
   return liveTiers.taskFallbackModel;
+}
+
+// currentTaskModel is the primary model the task-create form pre-fills: the
+// live task tier (the advanced tier unless an admin set a task model).
+export function currentTaskModel(): string {
+  return liveTiers.taskModel;
 }
 
 export function currentDefaultModel(): string {
@@ -214,6 +228,7 @@ export function _resetModelTiersForTests(): void {
   liveTiers = {
     defaultModel: DEFAULT_MODEL,
     advancedModel: ADVANCED_MODEL,
+    taskModel: ADVANCED_MODEL,
     taskFallbackModel: DEFAULT_TASK_FALLBACK_MODEL,
   };
 }

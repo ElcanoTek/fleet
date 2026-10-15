@@ -17,6 +17,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -84,10 +85,17 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 		cronExpr = promoteFallbackCron
 	}
 
+	// The promoted task runs on the task tier (the advanced model unless an
+	// admin set a task model), never the conversation's model: chat runs on the
+	// fast everyday tier, a recurring task is a long unattended run
+	// (docs/TASK-MODEL-TIER.md). Approval would resolve the same slug from an
+	// empty model (scheduledTaskModel); staging it explicitly puts it on the
+	// card, so the user sees what the task will run on before approving.
 	params := tools.ScheduleTaskParams{
 		Name:   proposal.Name,
 		Prompt: proposal.Prompt,
 		Cron:   cronExpr,
+		Model:  agentcore.CurrentTaskModel(),
 		Tags:   []string{"source-chat"},
 	}
 	rawInput, err := json.Marshal(params)

@@ -731,10 +731,8 @@ func run() error {
 	// path POST /tasks uses — no second governance/create path is forked. The
 	// seam carries the budget gate so scheduling from chat cannot bypass a
 	// budget that would refuse the same user on POST /tasks (#601 part 2).
-	chatOpts = append(chatOpts, httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage, budgetEnforcer, cfg.TaskModel)))
+	chatOpts = append(chatOpts, httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage, budgetEnforcer)))
 	chatOpts = append(chatOpts, httpapi.WithTaskManager(taskManagerProvider(schedStorage)))
-
-	warnIfNoDefaultTaskModel(cfg.TaskModel)
 
 	// Admin-managed LLM providers: after a persisted edit the handler invokes
 	// this to re-read the store, re-merge with the bundle table, and swap the
@@ -801,8 +799,8 @@ func run() error {
 		// Cost-forecast inputs (#233): mirror the runtime selection so POST
 		// /tasks/estimate projects against the same model + iteration cap + cost
 		// ceiling a real dispatch uses. cfg.MaxIterations is the per-task default
-		// the runner applies when a task omits one.
-		DefaultTaskModel:     cfg.TaskModel,
+		// the runner applies when a task omits one. DefaultTaskModel stays
+		// unset: the handlers read the live task tier, as the runner does.
 		MaxCostUSD:           cfg.MaxCostUSD,
 		LiveMaxCostUSD:       cfg.LiveMaxCostUSD,
 		LiveMaxTotalTokens:   cfg.LiveMaxTotalTokens,
@@ -2639,19 +2637,6 @@ func emailReplierFor(n *notify.Notifier) runner.EmailReplier {
 	return n
 }
 
-// warnIfNoDefaultTaskModel says once at boot that this deployment can only run
-// scheduled tasks that pin their own model, rather than letting that surface
-// per-task in the dead-letter queue (#1014). It names every accepted spelling,
-// since the knob resolves through the FLEET_/CHAT_/CUTLASS_ alias family (#1015)
-// and the old error text pointed only at the legacy one.
-func warnIfNoDefaultTaskModel(taskModel string) {
-	if strings.TrimSpace(taskModel) != "" {
-		return
-	}
-	log.Printf("WARNING: no default task model configured (FLEET_TASK_MODEL, or CHAT_/CUTLASS_TASK_MODEL). " +
-		"Scheduled tasks that do not pin their own model will be refused at create time.")
-}
-
 // taskManagerProvider adapts the sched storage layer to the chat manage_tasks
 // seam (#1152): update or stop tasks that already exist.
 //
@@ -2858,7 +2843,7 @@ func taskMutationLabel(t *schedmodels.Task) string {
 	return t.ID.String()
 }
 
-func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enforcer, defaultTaskModel string) func(context.Context, httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
+func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enforcer) func(context.Context, httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
 	return func(ctx context.Context, req httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
 		// Per-principal rolling budget (#601 part 2): the chat path runs the
 		// SAME shared gate POST /tasks and /tasks/batch run, keyed on the
@@ -2877,13 +2862,6 @@ func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enf
 		}
 		if m := strings.TrimSpace(req.Model); m != "" {
 			tc.Model = &m
-		}
-		// EnqueueTask skips the HTTP handler's validation, so the create-time
-		// model gate (#1014) is applied here too — otherwise the chat path is the
-		// one way to enqueue a task that cannot possibly run. Surfaces in chat as
-		// the schedule_task failure text, like the budget refusal above.
-		if tc.Model == nil && strings.TrimSpace(defaultTaskModel) == "" {
-			return nil, fmt.Errorf("no model configured: set FLEET_TASK_MODEL on the orchestrator, or pass model on the task")
 		}
 		if req.MaxIterations > 0 {
 			iters := req.MaxIterations

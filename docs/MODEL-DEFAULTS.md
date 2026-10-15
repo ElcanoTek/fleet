@@ -25,13 +25,23 @@ hold the slugs, plus data that has to be checked by hand:
    resellers.
 5. **Context window**: if no `modelContextWindows` prefix covers the new slug, add one.
    `TestDefaultTiersResolveTheirContextWindows` checks the static table on its own.
-6. **User guide**: update the two names in `internal/clientconfig/builtin_skills/fleet-guide/chat.md`,
-   then `make sync-guides`. The drift test checks the guide names both labels.
+6. **User guide**: update the two names in `internal/clientconfig/builtin_skills/fleet-guide/chat.md`
+   and the advanced model's name in `operations-center.md` (the task form pre-fills the
+   task tier, which follows the advanced tier), then `make sync-guides`. The drift test
+   checks both guides.
 7. **Docs**: a row in the table below, plus the pools in
    [UPSTREAM-ROUTING-FLOOR.md](UPSTREAM-ROUTING-FLOOR.md).
 
 Deployments that set `FLEET_DEFAULT_MODEL` / `FLEET_ADVANCED_MODEL`, or the admin model
 tiers, are unaffected by any of this. Only the compiled-in fallback moves.
+
+## 2026-10-15 (follow-up): Operations Center tasks default to the advanced tier
+
+The Haiku swap below also moved the Operations Center's pre-filled task model to
+Haiku, because the form pre-filled the chat default. A third live tier, the
+**task model** (`task_model` admin setting, env `FLEET_TASK_MODEL`), now owns
+that slot and follows the advanced tier unless set. Chat keeps the fast default;
+tasks get the strong model. See [TASK-MODEL-TIER.md](TASK-MODEL-TIER.md).
 
 ## 2026-10-15: Claude Haiku 5.5 as the everyday default
 

@@ -694,13 +694,12 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	if err != nil {
 		return nil, false, "", err
 	}
-	// Resolve the task's model (falls back to the configured task model).
-	modelSlug := r.cfg.TaskModel
+	// Resolve the task's model: its pinned slug, else the live task tier (the
+	// admin task_model setting, else FLEET_TASK_MODEL, else the advanced tier),
+	// read per run so a tier change reaches the next run of an unpinned task.
+	modelSlug := agentcore.CurrentTaskModel()
 	if task.Model != nil && strings.TrimSpace(*task.Model) != "" {
 		modelSlug = strings.TrimSpace(*task.Model)
-	}
-	if modelSlug == "" {
-		return nil, false, "", fmt.Errorf("no model configured for scheduled task (set FLEET_TASK_MODEL on the orchestrator, or pin the task's model)")
 	}
 	model, providerFallbacks, err := r.mgr.ResolveWithFallbacks(ctx, modelSlug)
 	if err != nil {

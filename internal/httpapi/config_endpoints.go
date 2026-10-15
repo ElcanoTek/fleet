@@ -77,12 +77,14 @@ type clientConfigResponse struct {
 type clientConfigModels struct {
 	DefaultModel  string `json:"default_model"`
 	AdvancedModel string `json:"advanced_model"`
+	// TaskModel is the live task tier (agentcore.CurrentTaskModel): what the
+	// Operations Center create form pre-fills as a new task's primary model.
+	// Never empty — with no override it is the advanced tier.
+	TaskModel string `json:"task_model"`
 	// TaskFallbackModel is the scheduler's fallback model (FLEET_TASK_FALLBACK_MODEL)
 	// when the operator set one, so the Operations Center's create form
 	// pre-fills the same fallback an unpinned scheduled task would get. Omitted
-	// when unset; the web then keeps its compiled-in fallback. The form's
-	// pre-filled PRIMARY is DefaultModel — the live admin tier — so an admin
-	// override reaches new tasks the same way it reaches new chats.
+	// when unset; the web then keeps its compiled-in fallback.
 	TaskFallbackModel string `json:"task_fallback_model,omitempty"`
 	// Pinned are the operator's extra picker rows (FLEET_PINNED_MODELS): slugs
 	// the chat and task pickers list under the recommended tiers, with an
@@ -140,6 +142,7 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 		Models: clientConfigModels{
 			DefaultModel:  agentcore.CurrentDefaultModel(),
 			AdvancedModel: agentcore.CurrentAdvancedModel(),
+			TaskModel:     agentcore.CurrentTaskModel(),
 		},
 	}
 	if s.cfg != nil {

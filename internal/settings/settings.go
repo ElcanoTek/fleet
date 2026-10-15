@@ -79,6 +79,12 @@ type Spec struct {
 	Min       int  `json:"min,omitempty"`
 	Max       int  `json:"max,omitempty"`
 	MinZeroOK bool `json:"min_zero_ok,omitempty"`
+	// EmptyDefaultOK marks a setting whose UNSET env default is itself a
+	// meaningful state the apply hook interprets, not a value outside the
+	// bounds: an empty task_model default means "follow the advanced model".
+	// It loosens only the default; an admin write is still held to the Kind's
+	// rules, so nobody can store an empty slug.
+	EmptyDefaultOK bool `json:"empty_default_ok,omitempty"`
 	// EnvVar names the env var(s) the default comes from, for provenance only —
 	// resolution happens at boot in cmd/fleet, not here.
 	EnvVar string `json:"env_var"`
@@ -151,13 +157,19 @@ func Registry() []Spec {
 		// conversation starts on, and the suggest_advanced_model escalation
 		// target. Live: the web re-reads them from /client-config on every
 		// shell mount, and the Go escalation path reads the agentcore holder
-		// per call. Deliberately NOT here: the scheduled-task default model
-		// (FLEET_TASK_MODEL) — the scheduler snapshots it at boot, so admitting
-		// it would violate the live-apply rule this registry is built on.
+		// per call.
 		{Key: "default_model", Kind: KindModel,
 			EnvVar: "FLEET_DEFAULT_MODEL"},
 		{Key: "advanced_model", Kind: KindModel,
 			EnvVar: "FLEET_ADVANCED_MODEL"},
+		// The task tier: what the Operations Center create form pre-fills and
+		// what a task with no pinned model runs on. Live: the scheduled runner,
+		// the create gate and the cost estimate read the agentcore holder per
+		// task, and the web re-reads it with the other tiers. Its env default
+		// is usually unset, which means "follow advanced_model"
+		// (docs/TASK-MODEL-TIER.md).
+		{Key: "task_model", Kind: KindModel, EmptyDefaultOK: true,
+			EnvVar: "FLEET_TASK_MODEL"},
 
 		// Workspace features.
 		{Key: "memory_autoindex_enabled", Kind: KindBool,
@@ -361,6 +373,9 @@ func NewService(st Store, defaults map[string]string, hooks map[string]ApplyFunc
 			return nil, fmt.Errorf("settings: no boot default for %q", spec.Key)
 		}
 		nd, err := Validate(spec, d)
+		if err != nil && spec.EmptyDefaultOK && strings.TrimSpace(d) == "" {
+			nd, err = "", nil
+		}
 		if err != nil {
 			// Out-of-bounds env default: keep it verbatim. It is what the runtime
 			// actually does and what a reset must revert to; only NEW admin writes

@@ -5,7 +5,7 @@ import type { McpServer, Task, TaskTemplate } from "@/app/shared/lib/orchestrato
 import { buildPromptWithRecipients } from "./taskEmailBlock";
 import { browserTimeZone } from "@/app/shared/lib/timezones";
 import {
-  DEFAULT_MODEL,
+  ADVANCED_MODEL,
   DEFAULT_TASK_FALLBACK_MODEL,
   _resetModelTiersForTests,
   setModelTiers,
@@ -72,10 +72,11 @@ afterEach(() => {
   __resetClientConfigCacheForTests();
 });
 
-// The pre-filled model pair is the LIVE workspace default + the operator's
+// The pre-filled model pair is the LIVE workspace task tier + the operator's
 // scheduler fallback (both from /api/client-config), not a compiled-in pair:
-// an admin who changes the default model in Settings must see new tasks pick
-// it up, or the setting is a lie for the Operations Center.
+// an admin who changes the task model in Settings must see new tasks pick it
+// up, or the setting is a lie for the Operations Center. The task tier is NOT
+// the chat default: chat runs on the fast tier, a task on the strong one.
 describe("TaskCreateModal — default model pair", () => {
   it("launches with the compiled-in pair before any client config lands", async () => {
     createTask.mockResolvedValue({ id: "t1" });
@@ -84,7 +85,7 @@ describe("TaskCreateModal — default model pair", () => {
     fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0]).toMatchObject({
-      model: DEFAULT_MODEL,
+      model: ADVANCED_MODEL,
       fallback_model: DEFAULT_TASK_FALLBACK_MODEL,
     });
   });
@@ -97,7 +98,7 @@ describe("TaskCreateModal — default model pair", () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        models: { default_model: "acme/frontier-1", task_fallback_model: "acme/cheap-1" },
+        models: { task_model: "acme/frontier-1", task_fallback_model: "acme/cheap-1" },
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -121,11 +122,11 @@ describe("TaskCreateModal — default model pair", () => {
   // The module cache can hold an OLDER admin slug from a previous mount; the
   // mount-time refresh must still move a pristine form to the newer one.
   it("refreshes a pristine form from a stale cached admin default", async () => {
-    setModelTiers({ default_model: "acme/old-default", task_fallback_model: "acme/old-cheap" });
+    setModelTiers({ task_model: "acme/old-default", task_fallback_model: "acme/old-cheap" });
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        models: { default_model: "acme/new-default", task_fallback_model: "acme/new-cheap" },
+        models: { task_model: "acme/new-default", task_fallback_model: "acme/new-cheap" },
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -154,7 +155,7 @@ describe("TaskCreateModal — default model pair", () => {
     resolveConfig({
       ok: true,
       json: async () => ({
-        models: { default_model: "acme/frontier-1", task_fallback_model: "acme/cheap-1" },
+        models: { task_model: "acme/frontier-1", task_fallback_model: "acme/cheap-1" },
       }),
     });
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
@@ -171,8 +172,8 @@ describe("TaskCreateModal — default model pair", () => {
     });
   });
 
-  it("pre-fills the admin's default model and the operator's task fallback", async () => {
-    setModelTiers({ default_model: "acme/frontier-1", task_fallback_model: "acme/cheap-1" });
+  it("pre-fills the admin's task model and the operator's task fallback", async () => {
+    setModelTiers({ task_model: "acme/frontier-1", task_fallback_model: "acme/cheap-1" });
     createTask.mockResolvedValue({ id: "t1" });
     renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
@@ -182,6 +183,19 @@ describe("TaskCreateModal — default model pair", () => {
       model: "acme/frontier-1",
       fallback_model: "acme/cheap-1",
     });
+  });
+
+  // With no task-model override the server sends task_model = the advanced
+  // tier; an older server sends none, and the form still follows the advanced
+  // tier. The chat default never reaches a task.
+  it("follows the advanced tier, never the chat default", async () => {
+    setModelTiers({ default_model: "acme/fast-chat", advanced_model: "acme/frontier-pro" });
+    createTask.mockResolvedValue({ id: "t1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][0]).toMatchObject({ model: "acme/frontier-pro" });
   });
 });
 

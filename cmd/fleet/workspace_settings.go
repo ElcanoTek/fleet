@@ -37,18 +37,21 @@ import (
 // file configures.
 func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Service, *guardrailState, error) {
 	defaults := map[string]string{
-		"pii_redaction_mode":                defaultPIIRedactionMode(cfg),
-		"guardrail_url":                     cfg.GuardrailURL,
-		"guardrail_mode":                    defaultGuardrailMode(cfg),
-		"tool_disclosure_threshold":         strconv.Itoa(agentcore.EnvToolDisclosureThreshold()),
-		"max_tool_output_bytes":             strconv.Itoa(agentcore.EnvMaxToolOutputBytes()),
-		"approval_timeout_seconds":          strconv.Itoa(cfg.ApprovalTimeoutSeconds),
-		"max_cost_usd":                      strconv.FormatFloat(cfg.MaxCostUSD, 'f', -1, 64),
-		"max_total_tokens":                  strconv.Itoa(cfg.MaxTotalTokens),
-		"phone_a_friend_enabled":            strconv.FormatBool(cfg.PhoneAFriendEnabled),
-		"subagents_enabled":                 strconv.FormatBool(cfg.SubagentsEnabled),
-		"default_model":                     defaultModelTier(cfg.DefaultModel, agentcore.DefaultCoreModel),
-		"advanced_model":                    defaultModelTier(cfg.AdvancedModel, agentcore.DefaultMaxModel),
+		"pii_redaction_mode":        defaultPIIRedactionMode(cfg),
+		"guardrail_url":             cfg.GuardrailURL,
+		"guardrail_mode":            defaultGuardrailMode(cfg),
+		"tool_disclosure_threshold": strconv.Itoa(agentcore.EnvToolDisclosureThreshold()),
+		"max_tool_output_bytes":     strconv.Itoa(agentcore.EnvMaxToolOutputBytes()),
+		"approval_timeout_seconds":  strconv.Itoa(cfg.ApprovalTimeoutSeconds),
+		"max_cost_usd":              strconv.FormatFloat(cfg.MaxCostUSD, 'f', -1, 64),
+		"max_total_tokens":          strconv.Itoa(cfg.MaxTotalTokens),
+		"phone_a_friend_enabled":    strconv.FormatBool(cfg.PhoneAFriendEnabled),
+		"subagents_enabled":         strconv.FormatBool(cfg.SubagentsEnabled),
+		"default_model":             defaultModelTier(cfg.DefaultModel, agentcore.DefaultCoreModel),
+		"advanced_model":            defaultModelTier(cfg.AdvancedModel, agentcore.DefaultMaxModel),
+		// Usually empty: an unset FLEET_TASK_MODEL means the task tier follows
+		// the advanced model (agentcore.CurrentTaskModel).
+		"task_model":                        strings.TrimSpace(cfg.TaskModel),
 		"memory_autoindex_enabled":          strconv.FormatBool(cfg.MemoryAutoIndexEnabled),
 		"error_analysis_enabled":            strconv.FormatBool(cfg.ErrorAnalysisEnabled),
 		"auto_title_enabled":                strconv.FormatBool(cfg.AutoTitle),
@@ -77,8 +80,11 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		// as "revert to the compiled-in constant", so even an empty default can
 		// never blank a tier. /client-config re-reads the holders per request,
 		// which is what makes the web side live.
-		"default_model":            applyModelTier(agentcore.SetDefaultModel),
-		"advanced_model":           applyModelTier(agentcore.SetAdvancedModel),
+		"default_model":  applyModelTier(agentcore.SetDefaultModel),
+		"advanced_model": applyModelTier(agentcore.SetAdvancedModel),
+		// The task tier's setter treats "" as "follow the advanced tier", so
+		// the usual empty default and a Reset both restore the follow.
+		"task_model":               applyModelTier(agentcore.SetTaskModel),
 		"approval_timeout_seconds": applyIntSetting(cfg.SetApprovalTimeoutSeconds),
 		// The cost ceiling is ALSO in the #286 env-reload set, so its override
 		// is a separate value (config.SetMaxCostUSDOverride): a default
@@ -271,6 +277,7 @@ func defaultModelTier(envValue, builtin string) string {
 func seedModelTiersFromConfig(cfg *config.Config) {
 	agentcore.SetDefaultModel(cfg.DefaultModel)
 	agentcore.SetAdvancedModel(cfg.AdvancedModel)
+	agentcore.SetTaskModel(cfg.TaskModel)
 }
 
 // applyModelTier adapts an agentcore model-tier setter to an ApplyFunc. Like
