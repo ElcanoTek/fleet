@@ -87,28 +87,33 @@ type mcpGates struct {
 	optIn     map[string]bool
 }
 
-// gateFor is the gate that keeps the mcp_<server>_<tool> name out of the run,
-// by the build loop's own Gate-1 and Gate-2 rules, or "" when neither does
-// (an unknown server, or a tool the allowlist admits but the catalog lacks).
-func (g mcpGates) gateFor(name string, catalogServers map[string]bool) string {
+// gateFor is the gate the build loop's own Gate-1 and Gate-2 rules would
+// apply to the mcp_<server>_<tool> name, and the connector it names (the
+// optional key for gateOptIn), or "" when neither applies. It goes by the name
+// alone, so it cannot tell a dropped tool from a made-up one on the same
+// connector: callers say only what is true of both.
+func (g mcpGates) gateFor(name string, catalogServers map[string]bool) (string, string) {
 	server, tool := g.splitMCPName(name, catalogServers)
 	if server == "" {
-		return ""
+		return "", ""
 	}
 	if key := optionalServerFor(server, g.optional); key != "" && !g.optIn[key] {
-		return gateOptIn
+		return gateOptIn, key
 	}
 	if list := g.allow.gateEntry(server, g.exclusive); (len(list) > 0 || g.exclusive) && !slices.Contains(list, tool) {
 		if g.exclusive {
-			return gateNarrowed
+			return gateNarrowed, server
 		}
-		return gateAllowlist
+		return gateAllowlist, server
 	}
-	return ""
+	return "", ""
 }
 
 // splitMCPName splits mcp_<server>_<tool> at the longest server name the run
-// knows: a catalog registration name, an allowlist key or an optional server.
+// knows: a catalog registration name or an optional server, and in a
+// narrowed run an allowlist key too (a server none of whose tools the run
+// requires has only its deny-all entry). Outside a narrowed run an allowlist
+// key alone is no evidence: its server may simply not be in this run.
 func (g mcpGates) splitMCPName(name string, catalogServers map[string]bool) (string, string) {
 	best := ""
 	consider := func(server string) {
@@ -120,8 +125,10 @@ func (g mcpGates) splitMCPName(name string, catalogServers map[string]bool) (str
 	for s := range catalogServers {
 		consider(s)
 	}
-	for s := range g.allow {
-		consider(s)
+	if g.exclusive {
+		for s := range g.allow {
+			consider(s)
+		}
 	}
 	for s := range g.optional {
 		consider(s)
@@ -185,10 +192,11 @@ func (o *outOfRoster) repair(modelSlug string, sink *streamSink) fantasy.RepairT
 		if hasTool(opts.AvailableTools, call.ToolName) {
 			return repairJSON(call), nil
 		}
-		reason, repaired, note := o.classify(call, opts.AvailableTools)
-		if note != "" && call.ToolCallID != "" {
+		got := o.classify(call, opts.AvailableTools, opts.ValidationError)
+		reason, repaired := got.reason, got.repaired
+		if got.note != "" && call.ToolCallID != "" {
 			o.mu.Lock()
-			o.notes[noteKey{call.ToolCallID, call.ToolName}] = note
+			o.notes[noteKey{call.ToolCallID, call.ToolName}] = got.note
 			o.mu.Unlock()
 		}
 		model := modelSlug
@@ -201,6 +209,9 @@ func (o *outOfRoster) repair(modelSlug string, sink *streamSink) fantasy.RepairT
 		if repaired != nil {
 			payload["rerouted_to"] = repaired.ToolName
 		}
+		if got.inferred != "" {
+			payload["inferred_gate"] = got.inferred
+		}
 		if sink != nil {
 			sink.emit(eventToolCallOutOfRoster, payload)
 		}
@@ -208,40 +219,75 @@ func (o *outOfRoster) repair(modelSlug string, sink *streamSink) fantasy.RepairT
 	}
 }
 
-// classify decides what an unregistered call is: the reason label, the
-// rewritten call (deferred only) and the explanation for its result ("" keeps
-// fantasy's own text).
-func (o *outOfRoster) classify(call fantasy.ToolCallContent, available []fantasy.AgentTool) (string, *fantasy.ToolCallContent, string) {
+// outOfRosterOutcome is what classify decided about an unregistered call.
+type outOfRosterOutcome struct {
+	reason   string                   // the metric's reason label
+	repaired *fantasy.ToolCallContent // the rewritten call (a deferred tool)
+	note     string                   // the result's text; "" keeps fantasy's
+	inferred string                   // a gate gateFor inferred from the name
+}
+
+// classify decides what an unregistered call is. A gate the roster recorded
+// removed a tool that exists, so the result says so outright and the metric
+// counts it under that gate. A gate inferred from the name alone (gateFor)
+// fits a made-up name on that connector just as well, so the result keeps
+// fantasy's text, with its list of tools to correct a typo from, and adds
+// only what is true either way; the metric counts it as unknown.
+func (o *outOfRoster) classify(call fantasy.ToolCallContent, available []fantasy.AgentTool, validation error) outOfRosterOutcome {
 	o.mu.Lock()
 	deferred := o.roster.deferredMCP > 0 && slices.Contains(o.roster.mcp, call.ToolName)
 	gate := o.roster.removed[call.ToolName]
+	var inferred, server string
 	if gate == "" && !deferred && strings.HasPrefix(call.ToolName, "mcp_") {
-		gate = o.gates.gateFor(call.ToolName, o.roster.servers)
+		inferred, server = o.gates.gateFor(call.ToolName, o.roster.servers)
 	}
 	o.mu.Unlock()
 
-	if deferred {
-		if !hasTool(available, toolNameToolCall) {
-			// The persona denied the bridge itself (an explicit deny: the
-			// bridges are exempt from a persona's allow list).
-			return outOfRosterDeferred, nil, fmt.Sprintf(
-				"%s is not available in this run and was not called: it is reachable only through tool_call, "+
-					"which is not in your tool list.", call.ToolName)
-		}
+	switch {
+	case deferred && !hasTool(available, toolNameToolCall):
+		// The persona denied the bridge itself (an explicit deny: the
+		// bridges are exempt from a persona's allow list).
+		return outOfRosterOutcome{reason: outOfRosterDeferred, note: fmt.Sprintf(
+			"%s is not available in this run and was not called: it is reachable only through tool_call, "+
+				"which is not in your tool list.", call.ToolName)}
+	case deferred:
 		if input, ok := deferredCallInput(call.ToolName, call.Input); ok {
 			repaired := call
 			repaired.ToolName = toolNameToolCall
 			repaired.Input = input
-			return outOfRosterDeferred, &repaired, ""
+			return outOfRosterOutcome{reason: outOfRosterDeferred, repaired: &repaired}
 		}
-		return outOfRosterDeferred, nil, fmt.Sprintf(
+		return outOfRosterOutcome{reason: outOfRosterDeferred, note: fmt.Sprintf(
 			"%s was not called: it is reachable only through tool_call, and its arguments were not a JSON object. "+
-				"Call tool_call with {\"name\": %q, \"arguments\": {...}}.", call.ToolName, call.ToolName)
+				"Call tool_call with {\"name\": %q, \"arguments\": {...}}.", call.ToolName, call.ToolName)}
+	case gate != "":
+		return outOfRosterOutcome{reason: gate, note: o.gateNote(call.ToolName, gate)}
+	case inferred != "":
+		notFound := "tool not found: " + call.ToolName + "."
+		if validation != nil {
+			notFound = validation.Error()
+		}
+		return outOfRosterOutcome{reason: outOfRosterUnknown, inferred: inferred,
+			note: strings.TrimSuffix(notFound, ".") + ". " + o.inferredNote(call.ToolName, inferred, server)}
 	}
-	if gate == "" {
-		return outOfRosterUnknown, nil, ""
+	return outOfRosterOutcome{reason: outOfRosterUnknown}
+}
+
+// inferredNote is the sentence a gate inferred from tool's name adds to
+// fantasy's result: true whether or not a tool by that name exists.
+func (o *outOfRoster) inferredNote(tool, gate, server string) string {
+	switch gate {
+	case gateNarrowed:
+		note := "This run's tools are narrowed to the ones it requires, and that name is not one of them."
+		if standIn := o.orch.narrowedStandInFor(tool); standIn != "" {
+			note += " The registered stand-in for it is " + standIn + "; call that instead."
+		}
+		return note
+	case gateOptIn:
+		return "That name is on the optional " + server + " connector, which this run did not turn on."
+	default:
+		return "The " + server + " connector's tool allowlist does not include that name."
 	}
-	return gate, nil, o.gateNote(call.ToolName, gate)
 }
 
 // gateNote explains, in the refused call's result, which gate removed tool.

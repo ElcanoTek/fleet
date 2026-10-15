@@ -463,49 +463,66 @@ func TestOutOfRoster_FinalizeInputCarriesTheRecovery(t *testing.T) {
 }
 
 // Out of process, the MCP broker applies the allowlist before the catalog
-// arrives, so the roster never sees what it dropped. The gate is still named,
-// by the run's own Gate-1 and Gate-2 rules applied to the called name.
+// arrives, so the roster never sees what it dropped. The run's own Gate-1 and
+// Gate-2 rules, applied to the called name, still find the gate; but a name
+// alone cannot tell a dropped tool from a made-up one on the same connector,
+// so fantasy's result, with its list of tools, is kept and only a sentence
+// true of both is added, and the metric counts the call as unknown.
 func TestOutOfRoster_GateOfAToolTheBrokerAlreadyDropped(t *testing.T) {
-	filtered := func(drop ...string) []mcp.ServerTool {
-		var out []mcp.ServerTool
-		for _, st := range discMCPTools(6) {
-			if !slices.Contains(drop, st.Tool.Name) {
-				out = append(out, st)
-			}
-		}
-		return out
+	tool := func(server, name string) mcp.ServerTool {
+		return mcp.ServerTool{ServerName: server, Tool: mcp.Tool{Name: name, InputSchema: map[string]any{"type": "object"}}}
 	}
+	// What the broker hands over: each server's allowed tools only.
+	catalog := []mcp.ServerTool{
+		tool("srv", "search"), tool("google", "search"), tool("google_drive", "list"), tool("jira_prod", "search"),
+	}
+	const narrowed = "This run's tools are narrowed to the ones it requires, and that name is not one of them."
 	for _, tc := range []struct {
-		name, tool, why string
-		cfg             RunConfig
+		name, tool, gate, sentence string
+		cfg                        RunConfig
 	}{
-		{"allowlist", "mcp_srv_stripe_refund_charge_2", "its connector's tool allowlist does not include it",
-			RunConfig{Allowlist: mcpAllowlist{"srv": discToolNames(6, "stripe_refund_charge_2")}}},
-		{"narrowed", "mcp_srv_stripe_refund_charge_2", "this run's tools are narrowed to the ones it requires, and mcp_srv_stripe_refund_charge_2 is not one of them",
-			RunConfig{Allowlist: mcpAllowlist{"srv": discToolNames(6, "stripe_refund_charge_2")}, MCPRosterNarrowing: "required_tools_only"}},
-		{"narrowed, a server with no entry", "mcp_other_sync", "this run's tools are narrowed to the ones it requires, and mcp_other_sync is not one of them",
-			// The scheduled driver gives a server with no required tool this
-			// deny-all entry (scheduledrun's rosterNarrowingDeniesAll).
-			RunConfig{Allowlist: mcpAllowlist{"srv": discToolNames(6), "other": {"__roster_narrowing_denies_all_tools__"}}, MCPRosterNarrowing: "required_tools_only"}},
-		{"optional connector", "mcp_opt_lookup", "it belongs to an optional connector this run did not turn on",
+		{"allowlist", "mcp_srv_refund", "allowlist", "The srv connector's tool allowlist does not include that name.",
+			RunConfig{Allowlist: mcpAllowlist{"srv": {"search"}}}},
+		{"the longest server name", "mcp_google_drive_delete", "allowlist", "The google_drive connector's tool allowlist does not include that name.",
+			RunConfig{Allowlist: mcpAllowlist{"google_drive": {"list"}}}},
+		{"a variant seat under its base's allowlist", "mcp_jira_prod_delete", "allowlist", "The jira_prod connector's tool allowlist does not include that name.",
+			RunConfig{Allowlist: mcpAllowlist{"jira": {"search"}}}},
+		{"narrowed", "mcp_srv_refund", "narrowed", narrowed,
+			RunConfig{Allowlist: mcpAllowlist{"srv": {"search"}}, MCPRosterNarrowing: "required_tools_only"}},
+		// The scheduled driver gives a server with no required tool this
+		// deny-all entry (scheduledrun's rosterNarrowingDeniesAll).
+		{"narrowed, a server with no required tool", "mcp_other_sync", "narrowed", narrowed,
+			RunConfig{Allowlist: mcpAllowlist{"srv": {"search"}, "other": {"__roster_narrowing_denies_all_tools__"}}, MCPRosterNarrowing: "required_tools_only"}},
+		{"optional connector", "mcp_opt_lookup", "opt_in", "That name is on the optional opt connector, which this run did not turn on.",
 			RunConfig{OptionalServers: mcpOptionalSet{"opt": true}}},
-		{"no gate: a made-up tool", "mcp_srv_made_up", "",
+		{"no gate: an allowlist key for a server not in this run", "mcp_stripe_refund", "", "",
+			RunConfig{Allowlist: mcpAllowlist{"stripe": {"charge"}}}},
+		{"no gate: a made-up tool with no allowlist", "mcp_srv_made_up", "", "",
 			RunConfig{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			broker := &fakeBroker{}
+			obs := &oorEvents{}
 			model := newOORModel("oor-filtered", []oorCall{{"c1", tc.tool, `{}`}})
-			runOOR(t, tc.cfg, Deps{Model: model, MCPCatalog: filtered("stripe_refund_charge_2"), MCPBroker: broker})
+			runOOR(t, tc.cfg, Deps{Model: model, MCPCatalog: catalog, MCPBroker: broker, Observer: obs})
 			got := model.resultSeen(2, "c1")
-			if tc.why == "" {
-				if !strings.HasPrefix(got, "tool not found: "+tc.tool+". Available tools: ") {
-					t.Fatalf("result %q, want fantasy's own", got)
-				}
-			} else if want := tc.tool + " is not available in this run and was not called: " + tc.why + "."; got != want {
-				t.Fatalf("result %q, want %q", got, want)
+			if !strings.HasPrefix(got, "tool not found: "+tc.tool+". Available tools: ") {
+				t.Fatalf("result %q, want fantasy's own text first", got)
+			}
+			if tc.sentence != "" && !strings.HasSuffix(got, ". "+tc.sentence) {
+				t.Fatalf("result %q, want it to end %q", got, tc.sentence)
+			}
+			if tc.sentence == "" && strings.Count(got, ". ") > 1 {
+				t.Fatalf("result %q, want fantasy's text alone", got)
 			}
 			if broker.lastTool != "" {
 				t.Fatalf("a gated tool reached the broker: %s", broker.lastTool)
+			}
+			obs.mu.Lock()
+			defer obs.mu.Unlock()
+			if len(obs.events) != 1 || obs.events[0]["reason"] != "unknown" || (obs.events[0]["inferred_gate"] != nil) != (tc.gate != "") ||
+				(tc.gate != "" && obs.events[0]["inferred_gate"] != tc.gate) {
+				t.Fatalf("events = %v, want reason unknown and inferred gate %q", obs.events, tc.gate)
 			}
 		})
 	}
@@ -699,4 +716,65 @@ func grepLines(s, sub string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// resultTextIn is the text of call id's result in msgs (the last one, if
+// several), and whether there was one.
+func resultTextIn(msgs []fantasy.Message, id string) (string, bool) {
+	text, found := "", false
+	for _, m := range msgs {
+		for _, p := range m.Content {
+			tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](p)
+			if !ok || tr.ToolCallID != id {
+				continue
+			}
+			found = true
+			if e, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Output); ok {
+				text = e.Error.Error()
+			} else if txt, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentText](tr.Output); ok {
+				text = txt.Text
+			}
+		}
+	}
+	return text, found
+}
+
+// The finalize hook is handed the round's transcript from the carry, already
+// explained, for the recovery call it may make.
+func TestOutOfRoster_FinalizeHookIsSentTheExplanation(t *testing.T) {
+	var got []fantasy.Message
+	runOOR(t, RunConfig{
+		NativeTools:   []fantasy.AgentTool{echoTool{name: "secret_tool", out: "ran"}},
+		PersonaPolicy: &PersonaToolPermissions{Deny: []string{"secret_tool"}},
+	}, Deps{
+		Model: newOORModel("oor-finalize", []oorCall{{"c1", "secret_tool", `{}`}}),
+		Finalize: func(_ context.Context, in FinalizeInput) (string, error) {
+			got = in.Messages
+			return in.FinalText, nil
+		},
+	})
+	const want = "secret_tool is not available in this run and was not called: this persona's tool policy does not allow it."
+	if text, ok := resultTextIn(got, "c1"); !ok || text != want {
+		t.Fatalf("the finalize hook was handed %q (found %t), want the explanation", text, ok)
+	}
+}
+
+// The explanation step runs before the recovery checkpoint (and the reducers
+// and cache markers after it), so a resumed stream replays the explained
+// history, not fantasy's text.
+func TestOutOfRoster_RecoveryCheckpointHoldsTheExplanation(t *testing.T) {
+	model := newOORModel("oor-checkpoint", []oorCall{{"c1", "secret_tool", `{}`}})
+	e := newMockEngine(t, model)
+	e.outOfRoster = newOutOfRoster("", nil, mcpGates{})
+	e.outOfRoster.setRoster(toolRoster{removed: map[string]string{"secret_tool": gatePersona}})
+	round := newRoundState(e, newOrchestrationState(e.logSession, 50), 1000)
+	round.sink = newStreamSink(nil)
+	round.sink.outOfRoster = e.outOfRoster
+	if _, err := round.stream(context.Background(), fantasy.NewAgent(model), model, []fantasy.Message{fantasy.NewUserMessage("go")}); err != nil {
+		t.Fatal(err)
+	}
+	const want = "secret_tool is not available in this run and was not called: this persona's tool policy does not allow it."
+	if text, ok := resultTextIn(round.recoveryMessages, "c1"); !ok || text != want {
+		t.Fatalf("the recovery checkpoint holds %q (found %t), want the explanation", text, ok)
+	}
 }

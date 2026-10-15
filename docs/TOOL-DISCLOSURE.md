@@ -95,8 +95,8 @@ plus the `fast_io` and `fastio_helpers` tools, to the eight or so it names.
 A model sometimes calls a tool name that is not in its tool list. Fantasy, the
 agent framework, answers every such call with `tool not found: X. Available
 tools: …` as a failed tool result, and the run goes on. That is right for a
-made-up name, but in the two common cases the tool does exist this run
-(`internal/agentcore/out_of_roster.go`):
+made-up name, but it misleads when the name is a real tool that was deferred,
+or that a gate kept out of the run (`internal/agentcore/out_of_roster.go`):
 
 - **A deferred tool called by name.** Models still call `mcp_*` names above
   the threshold, and in #1006 one concluded from the refusal that the connector
@@ -122,12 +122,20 @@ made-up name, but in the two common cases the tool does exist this run
   in this run and was not called: this run's tools are narrowed to the ones it
   requires, and mcp_pages_deploy_page_upload is not one of them." In a narrowed
   run it also names the registered stand-in, when there is one, by the rule the
-  audit nudges use. Out of process, the MCP broker applies a server's allowlist
-  before the catalog reaches the run (ADR-0042), so a tool the allowlist or a
-  narrowed roster dropped is never seen or recorded. An `mcp_*` name with no
-  record is therefore matched against the server names the run knows (the
-  catalog's, the allowlist's and the optional connectors') and run through the
-  same opt-in and allowlist rules the build applies.
+  audit nudges use.
+- **A tool the broker already dropped.** Out of process, the MCP broker
+  applies a server's allowlist before the catalog reaches the run (ADR-0042),
+  so a tool the allowlist or a narrowed roster dropped is never seen or
+  recorded. An `mcp_*` name with no record is matched against the server names
+  the run knows (the catalog's and the optional connectors', and in a narrowed
+  run the allowlist's, which name the servers with no required tool) and run
+  through the same opt-in and allowlist rules the build applies. A name alone
+  cannot tell a dropped tool from a made-up one on the same connector, so the
+  result keeps fantasy's text, with its list of tools to correct a typo from,
+  and adds a sentence true of both: "The srv connector's tool allowlist does not
+  include that name.", or the narrowing (with its stand-in) or the optional
+  connector. The metric counts such a call as `unknown`, and the event names
+  the gate it inferred.
 - **Any other name** keeps fantasy's result and its list of available tools.
 
 Rerouting cannot widen access. Only a name in the run's deferred registry is
@@ -149,14 +157,17 @@ result on the step after the call, already explained, so the prompt-cache
 prefix does not change.
 
 **Counted per model.** `fleet_tool_call_out_of_roster_total{model, reason}` on
-`/metrics` counts every such call the model emits; `reason` is `deferred`, one
-of the gates above, or `unknown`. Fantasy repairs a step's calls before it
-knows whether it will run them, so a call in a step whose output was cut short
-(by length or a content filter) is counted, and reported as rerouted, though
-nothing ran. The tool name is not a label, since catalog names can be
+`/metrics` counts every such call the model emits; `reason` is `deferred`, a
+gate the roster recorded, or `unknown`. Fantasy repairs a step's calls before
+it dispatches them, and dispatches only when the step finished with tool
+calls: a call in a step that finished for another reason (a provider's `stop`,
+say) is counted, and reported as rerouted, though nothing ran. A step cut
+short by length or a content filter is not repaired, so its calls are not
+counted. The tool name is not a label, since catalog names can be
 user-controlled. It is in the `fleet.tool_call_out_of_roster` Observer event
-(`id`, `tool`, `reason`, `model`, and `rerouted_to` when rerouted), which chat
-streams as an event the web client ignores, and in a log line.
+(`id`, `tool`, `reason`, `model`, `rerouted_to` when rerouted, and
+`inferred_gate` for a dropped tool's gate), which chat streams as an event the
+web client ignores, and in a log line.
 
 Two details of the hook. Fantasy reads it from the stream call, not the agent,
 so it is set on every stream, including the leaked-call finalize retry, which

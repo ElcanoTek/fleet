@@ -754,15 +754,6 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 // completed, so it would rationally start the whole task over — observed as a
 // 31-minute scheduled run re-downloading and re-computing its entire analysis
 // after the audit-confirmation nudge (task 401172db).
-// roundCarry is carryRoundMessages with the run's out-of-roster explanations
-// in place of fantasy's "tool not found" (#1744). Every consumer of a round's
-// transcript (the next round, the finalize hook, the terminal structured
-// output, compaction) takes it from here, so each later model call is sent the
-// text the model was first sent, and the cached prefix holds.
-func (e *engine) roundCarry(result *fantasy.AgentResult) []fantasy.Message {
-	return e.outOfRoster.explain(carryRoundMessages(result))
-}
-
 func carryRoundMessages(result *fantasy.AgentResult) []fantasy.Message {
 	if result == nil {
 		return nil
@@ -772,6 +763,15 @@ func carryRoundMessages(result *fantasy.AgentResult) []fantasy.Message {
 		out = append(out, messagesForReplay(step.Messages)...)
 	}
 	return out
+}
+
+// roundCarry is carryRoundMessages with the run's out-of-roster explanations
+// in place of fantasy's "tool not found" (#1744). Every consumer of a round's
+// transcript (the next round, the finalize hook, the terminal structured
+// output, compaction) takes it from here, so each later model call is sent the
+// text the model was first sent, and the cached prefix holds.
+func (e *engine) roundCarry(result *fantasy.AgentResult) []fantasy.Message {
+	return e.outOfRoster.explain(carryRoundMessages(result))
 }
 
 // Replay keeps tool evidence while dropping provider-specific reasoning blocks.
