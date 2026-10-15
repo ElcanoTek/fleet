@@ -1,0 +1,297 @@
+package agentcore
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"slices"
+	"strings"
+	"sync"
+
+	"charm.land/fantasy"
+	"charm.land/fantasy/jsonrepair"
+
+	"github.com/ElcanoTek/fleet/internal/metrics"
+)
+
+// Out-of-roster tool calls (#1744). A model sometimes calls a tool name that
+// is not in this run's tool list. Fantasy answers every such call with the
+// same "tool not found: X. Available tools: …" result, which is right for a
+// made-up name but misleads for the two common cases, names that DO exist this
+// run but are not directly callable:
+//
+//   - a deferred MCP tool (#506), reachable only through tool_call. The model
+//     took the refusal to mean the connector was down (#1006). Such a call is
+//     now rewritten into tool_call {name, arguments} and runs through the
+//     bridge, under the same persona, allowlist, approval and audit gates as a
+//     tool_call the model wrote itself.
+//   - a tool a gate removed: a narrowed roster (#1603), the persona policy
+//     (#294), an optional connector the run did not turn on, a connector's
+//     allowlist, or an invalid schema. Such a call is never run; its result
+//     names the gate (and, in a narrowed run, the registered stand-in).
+//
+// Every out-of-roster call is counted per model and reason
+// (fleet_tool_call_out_of_roster_total) and reported to the Observer, so
+// roster decisions can be made from data.
+//
+// It can never widen access. Only a name in this run's deferred registry is
+// rewritten, and only into tool_call, which re-checks the name against that
+// registry and dispatches through the governed tool; every other name keeps
+// fantasy's refusal, with at most a better explanation.
+
+// Out-of-roster reasons, the metric's bounded reason label.
+const (
+	outOfRosterDeferred = "deferred"
+	outOfRosterUnknown  = "unknown"
+)
+
+// eventToolCallOutOfRoster is the Observer event for one out-of-roster call.
+const eventToolCallOutOfRoster = "fleet.tool_call_out_of_roster"
+
+// outOfRoster is a run's out-of-roster state: the current roster (replaced on
+// the mid-run MCP rebuild) and the explanation for each refused call, by tool
+// call ID, which the stream sink records and explainStep sends the model in
+// place of fantasy's "tool not found". nil-safe.
+type outOfRoster struct {
+	persona string
+	orch    *orchestrationState // for a narrowed run's stand-in; may be nil
+
+	mu     sync.Mutex
+	roster toolRoster
+	notes  map[string]string
+}
+
+func newOutOfRoster(persona string, orch *orchestrationState) *outOfRoster {
+	return &outOfRoster{persona: persona, orch: orch, notes: map[string]string{}}
+}
+
+// setRoster installs the roster the run just built.
+func (o *outOfRoster) setRoster(r toolRoster) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.roster = r
+	o.mu.Unlock()
+}
+
+// note is the explanation recorded for a refused call, if any.
+func (o *outOfRoster) note(callID string) (string, bool) {
+	if o == nil || callID == "" {
+		return "", false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n, ok := o.notes[callID]
+	return n, ok
+}
+
+// repair is the run's fantasy RepairToolCallFunction for a stream on
+// modelSlug. A call to a registered tool that failed validation gets
+// fantasy's default JSON repair, which installing a repair function turns
+// off. A call to an unregistered name is classified, counted and reported:
+// a deferred tool is rewritten into tool_call; any other name is left to
+// fantasy's refusal, with the gate's explanation recorded for its result.
+func (o *outOfRoster) repair(modelSlug string, sink *streamSink) fantasy.RepairToolCallFunction {
+	if o == nil {
+		return nil
+	}
+	return func(_ context.Context, opts fantasy.ToolCallRepairOptions) (*fantasy.ToolCallContent, error) {
+		call := opts.OriginalToolCall
+		if hasTool(opts.AvailableTools, call.ToolName) {
+			return repairJSON(call), nil
+		}
+		reason, repaired, note := o.classify(call, opts.AvailableTools)
+		if note != "" && call.ToolCallID != "" {
+			o.mu.Lock()
+			o.notes[call.ToolCallID] = note
+			o.mu.Unlock()
+		}
+		model := modelSlug
+		if model == "" {
+			model = "unknown"
+		}
+		metrics.RecordToolCallOutOfRoster(model, reason)
+		log.Printf("out-of-roster tool call: model=%s tool=%q reason=%s rerouted=%t", model, call.ToolName, reason, repaired != nil)
+		payload := map[string]any{"id": call.ToolCallID, "tool": call.ToolName, "reason": reason, "model": model}
+		if repaired != nil {
+			payload["rerouted_to"] = repaired.ToolName
+		}
+		if sink != nil {
+			sink.emit(eventToolCallOutOfRoster, payload)
+		}
+		return repaired, nil
+	}
+}
+
+// classify decides what an unregistered call is: the reason label, the
+// rewritten call (deferred only) and the explanation for its result ("" keeps
+// fantasy's own text).
+func (o *outOfRoster) classify(call fantasy.ToolCallContent, available []fantasy.AgentTool) (string, *fantasy.ToolCallContent, string) {
+	o.mu.Lock()
+	deferred := o.roster.deferredMCP > 0 && slices.Contains(o.roster.mcp, call.ToolName)
+	gate := o.roster.removed[call.ToolName]
+	o.mu.Unlock()
+
+	if deferred && hasTool(available, toolNameToolCall) {
+		if input, ok := deferredCallInput(call.ToolName, call.Input); ok {
+			repaired := call
+			repaired.ToolName = toolNameToolCall
+			repaired.Input = input
+			return outOfRosterDeferred, &repaired, ""
+		}
+		return outOfRosterDeferred, nil, fmt.Sprintf(
+			"%s was not called: it is reachable only through tool_call, and its arguments were not a JSON object. "+
+				"Call tool_call with {\"name\": %q, \"arguments\": {...}}.", call.ToolName, call.ToolName)
+	}
+	if gate == "" {
+		return outOfRosterUnknown, nil, ""
+	}
+	return gate, nil, o.gateNote(call.ToolName, gate)
+}
+
+// gateNote explains, in the refused call's result, which gate removed tool.
+func (o *outOfRoster) gateNote(tool, gate string) string {
+	var why string
+	switch gate {
+	case gateNarrowed:
+		why = "this run's tools are narrowed to the ones it requires, and " + tool + " is not one of them"
+		if standIn := o.orch.narrowedStandInFor(tool); standIn != "" {
+			why += "; the registered stand-in is " + standIn + ", call it instead"
+		}
+	case gatePersona:
+		persona := "this persona"
+		if o.persona != "" {
+			persona = fmt.Sprintf("the %q persona", o.persona)
+		}
+		why = persona + "'s tool policy does not allow it"
+	case gateOptIn:
+		why = "it belongs to an optional connector this run did not turn on"
+	case gateAllowlist:
+		why = "its connector's tool allowlist does not include it"
+	case gateSchema:
+		why = "its input schema is not valid JSON Schema, so it is not offered to the model"
+	default:
+		return ""
+	}
+	return fmt.Sprintf("%s is not available in this run and was not called: %s.", tool, why)
+}
+
+// hasTool reports whether name is in the step's tool list.
+func hasTool(tools []fantasy.AgentTool, name string) bool {
+	for _, t := range tools {
+		if t.Info().Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// repairJSON is fantasy's default repair for a registered tool's call, which
+// a custom repair function replaces: jsonrepair over malformed input. nil when
+// it changes nothing.
+func repairJSON(call fantasy.ToolCallContent) *fantasy.ToolCallContent {
+	repaired, err := jsonrepair.RepairJSON(call.Input)
+	if err != nil || repaired == call.Input {
+		return nil
+	}
+	call.Input = repaired
+	return &call
+}
+
+// deferredCallInput is tool_call's input for a direct call to the deferred
+// tool name: {"name": name, "arguments": <the call's input>}. Empty input is
+// no arguments; malformed input gets jsonrepair. ok is false when the input
+// is still not a JSON object.
+func deferredCallInput(name, input string) (string, bool) {
+	args := strings.TrimSpace(input)
+	if args == "" {
+		args = "{}"
+	}
+	if !isJSONObject(args) {
+		repaired, err := jsonrepair.RepairJSON(args)
+		if err != nil || !isJSONObject(repaired) {
+			return "", false
+		}
+		args = repaired
+	}
+	out, err := json.Marshal(struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}{name, json.RawMessage(args)})
+	if err != nil {
+		return "", false
+	}
+	return string(out), true
+}
+
+func isJSONObject(s string) bool {
+	var v map[string]any
+	return json.Unmarshal([]byte(s), &v) == nil && v != nil
+}
+
+// explainStep is a PrepareStep that sends the model, for each refused call
+// that has one, the explanation the transcript records instead of fantasy's
+// "tool not found". It rewrites a copy of the step's messages, never the run's
+// history, and gives the same text on every step, so the prompt-cache prefix
+// is unchanged: the model first sees a refused call's result on the step
+// after the call, already explained.
+func (o *outOfRoster) explainStep(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+	if o == nil {
+		return ctx, fantasy.PrepareStepResult{}, nil
+	}
+	o.mu.Lock()
+	if len(o.notes) == 0 {
+		o.mu.Unlock()
+		return ctx, fantasy.PrepareStepResult{}, nil
+	}
+	notes := make(map[string]string, len(o.notes))
+	for id, n := range o.notes {
+		notes[id] = n
+	}
+	o.mu.Unlock()
+	if msgs, changed := explainResults(opts.Messages, notes); changed {
+		return ctx, fantasy.PrepareStepResult{Messages: msgs}, nil
+	}
+	return ctx, fantasy.PrepareStepResult{}, nil
+}
+
+// explainResults replaces the error output of each tool result with a note
+// by its call ID, copying only what it changes. changed is false when no
+// result had a note.
+func explainResults(msgs []fantasy.Message, notes map[string]string) ([]fantasy.Message, bool) {
+	var out []fantasy.Message
+	for i, m := range msgs {
+		if m.Role != fantasy.MessageRoleTool {
+			continue
+		}
+		var parts []fantasy.MessagePart
+		for j, p := range m.Content {
+			tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](p)
+			if !ok {
+				continue
+			}
+			n, ok := notes[tr.ToolCallID]
+			if !ok {
+				continue
+			}
+			if _, isErr := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Output); !isErr {
+				continue
+			}
+			if parts == nil {
+				parts = slices.Clone(m.Content)
+			}
+			tr.Output = fantasy.ToolResultOutputContentError{Error: errors.New(n)}
+			parts[j] = tr
+		}
+		if parts != nil {
+			if out == nil {
+				out = slices.Clone(msgs)
+			}
+			out[i].Content = parts
+		}
+	}
+	return out, out != nil
+}

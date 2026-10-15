@@ -25,7 +25,7 @@ func TestLiveRegistrySectionShapes(t *testing.T) {
 	}
 
 	deferred := toolRoster{deferredMCP: 159, deferredByServer: map[string]int{"notion": 42, "github": 44, "google-drive": 8, "linear": 65}}.liveRegistrySection()
-	for _, want := range []string{"159 MCP tools are available this turn", "NOT in your tool list by name", "`tool_search {query}`", "`tool_describe {name}`", "`tool_call {name, arguments}`", "will fail with \"tool not found\""} {
+	for _, want := range []string{"159 MCP tools are available this turn", "NOT in your tool list by name", "`tool_search {query}`", "`tool_describe {name}`", "`tool_call {name, arguments}`", "Use `tool_call`; a direct `mcp_*` call is rerouted through it for you."} {
 		if !strings.Contains(deferred, want) {
 			t.Errorf("deferred section missing %q:\n%s", want, deferred)
 		}

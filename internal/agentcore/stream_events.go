@@ -133,6 +133,9 @@ type streamSink struct {
 	// The durable tool transcript is written before the UI preview is truncated.
 	// Verifiers must never reconstruct evidence from a display fragment.
 	logSession *LogSession
+	// outOfRoster supplies a refused out-of-roster call's explanation (#1744).
+	// nil when unset (nil-safe).
+	outOfRoster *outOfRoster
 
 	mu sync.Mutex
 	// entries is the ordered accumulation of this run's reasoning / text /
@@ -262,6 +265,14 @@ func (s *streamSink) onToolCall(id, name, input string) {
 
 // onToolResult forwards (truncated) + records (full) a tool result.
 func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
+	// A refused out-of-roster call is recorded with the gate's explanation,
+	// not fantasy's "tool not found" (#1744); explainStep sends the model the
+	// same text.
+	if isErr {
+		if note, ok := s.outOfRoster.note(id); ok {
+			text = note
+		}
+	}
 	// Every externally sourced result crosses its secret/PII/output boundary
 	// before the ToolResponse reaches Fantasy; disclosure-bridge corrections are
 	// Fleet-generated. Reapply only the deterministic secret scrubber as a final

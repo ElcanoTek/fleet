@@ -316,6 +316,16 @@ func RecordTurnTimeout(kind string) {
 	incCounter(nameTurnTimeouts, "Turn timeout events by kind.", []string{"kind"}, []string{kind}, 1)
 }
 
+// RecordToolCallOutOfRoster counts a model's call to a tool name that was not
+// in its tool list (#1744), by model and bounded reason: deferred (rerouted
+// through tool_call), the gate that removed the tool (narrowed, persona,
+// opt_in, allowlist, schema) or unknown. The tool name is not a label: catalog
+// names can be user-controlled.
+func RecordToolCallOutOfRoster(model, reason string) {
+	incCounter("fleet_tool_call_out_of_roster_total", "Model tool calls to a name not in the run's tool list, by model and reason.",
+		[]string{"model", "reason"}, []string{model, reason}, 1)
+}
+
 func RecordProviderFailover(from, to, reason string) {
 	incCounter("fleet_provider_failovers_total", "Cross-provider LLM failover attempts by configured provider and reason.",
 		[]string{"from", "to", "reason"}, []string{from, to, reason}, 1)

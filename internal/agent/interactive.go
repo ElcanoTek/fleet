@@ -362,11 +362,17 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 	)
 	maxTokens := int64(tc.MaxTokens)
 	temp := tc.Temperature
+	var repair fantasy.RepairToolCallFunction
+	if in.RepairToolCall != nil {
+		repair = in.RepairToolCall(tc.Model.Model())
+	}
 	var sb strings.Builder
 	_, err := agent.Stream(ctx, fantasy.AgentStreamCall{
 		Messages:        convo,
 		MaxOutputTokens: &maxTokens,
 		Temperature:     &temp,
+		// The run's out-of-roster recovery (#1744), as on the main stream.
+		RepairToolCall: repair,
 		// The run's step cap (CHAT_MAX_ITERATIONS) applies to the retry too —
 		// it streams with tools, so it is a real loop, not a single call.
 		StopWhen: in.StopWhen,

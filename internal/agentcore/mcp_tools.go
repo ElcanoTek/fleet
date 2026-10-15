@@ -341,6 +341,32 @@ type toolRoster struct {
 	// deferred — what the model can reach at all. A narrowed run's audit gate
 	// reads it (recordNarrowedRoster).
 	mcp []string
+
+	// removed names the gate that kept each catalog tool out of this run
+	// (#1744): gateOptIn, gateAllowlist, gateNarrowed, gatePersona or
+	// gateSchema. A model that calls one of these names is told which gate
+	// removed it, instead of only "tool not found" (out_of_roster.go).
+	removed map[string]string
+}
+
+// The gates a tool can be removed by, as toolRoster.removed records them.
+const (
+	gateOptIn     = "opt_in"
+	gateAllowlist = "allowlist"
+	gateNarrowed  = "narrowed"
+	gatePersona   = "persona"
+	gateSchema    = "schema"
+)
+
+// noteRemoved records that gate kept name out of the roster. The first gate
+// to remove a name wins, as it does in the build loop.
+func (r *toolRoster) noteRemoved(name, gate string) {
+	if r.removed == nil {
+		r.removed = map[string]string{}
+	}
+	if _, seen := r.removed[name]; !seen {
+		r.removed[name] = gate
+	}
 }
 
 // buildFantasyToolsWithRoster is buildFantasyTools plus the roster summary the
@@ -391,6 +417,7 @@ func buildFantasyToolsWithRoster(
 		// (#1272).
 		if optionalKey := optionalServerFor(st.ServerName, optionalServers); optionalKey != "" && !optIn[optionalKey] {
 			mcpSkippedOptional++
+			roster.noteRemoved(mcpToolName(st), gateOptIn)
 			continue
 		}
 		// Gate 2: per-server tool allowlist. An absent entry allows all, unless
@@ -399,6 +426,11 @@ func buildFantasyToolsWithRoster(
 		// registers nothing.
 		if list := allow.gateEntry(st.ServerName, cfg.exclusiveAllowlist); (len(list) > 0 || cfg.exclusiveAllowlist) && !slices.Contains(list, st.Tool.Name) {
 			mcpSkippedAllowlist++
+			gate := gateAllowlist
+			if cfg.exclusiveAllowlist {
+				gate = gateNarrowed
+			}
+			roster.noteRemoved(mcpToolName(st), gate)
 			continue
 		}
 		// Gate 3 (per-task credential allowlist, #184) is enforced at the MCPBroker
@@ -429,6 +461,7 @@ func buildFantasyToolsWithRoster(
 			if suppressed, reason := personaBlocksTool(*cfg.personaPolicy, mt.Name()); suppressed {
 				emitPersonaToolBlocked(cfg.observer, cfg.personaName, mt.Name(), reason)
 				mcpSkippedPersona++
+				roster.noteRemoved(mt.Name(), gatePersona)
 				continue
 			}
 		}
@@ -445,6 +478,7 @@ func buildFantasyToolsWithRoster(
 		if hasIssue && issue.Status == ToolSchemaInvalid {
 			emitToolSchemaInvalid(cfg.observer, mt.Name(), issue.Detail)
 			mcpSkippedSchema++
+			roster.noteRemoved(mt.Name(), gateSchema)
 			continue
 		}
 		// Install the final model-visible boundary before the tool enters the
@@ -647,6 +681,12 @@ type mcpTool struct {
 
 func (m *mcpTool) Name() string {
 	return fmt.Sprintf("mcp_%s_%s", m.serverName, m.tool.Name)
+}
+
+// mcpToolName is the model-facing name a catalog tool registers under, for a
+// gate that drops it before its mcpTool exists.
+func mcpToolName(st mcp.ServerTool) string {
+	return (&mcpTool{serverName: st.ServerName, tool: st.Tool}).Name()
 }
 
 func (m *mcpTool) Info() fantasy.ToolInfo {

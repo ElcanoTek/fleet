@@ -331,7 +331,7 @@ above fails otherwise.
 - [`TESTING-STRATEGY.md`](TESTING-STRATEGY.md) — Testing strategy — the layers, where a test goes, contracts
 - [`TESTING.md`](TESTING.md) — Testing fleet
 - [`TIMERS.md`](TIMERS.md) — `fleet timers install` — one-command setup for the scheduled-maintenance timers
-- [`TOOL-DISCLOSURE.md`](TOOL-DISCLOSURE.md) — BM25 progressive tool disclosure
+- [`TOOL-DISCLOSURE.md`](TOOL-DISCLOSURE.md) — BM25 progressive tool disclosure, and calls to tools not in the tool list (#1744)
 - [`TOOL-OUTPUT-BOUNDARY.md`](TOOL-OUTPUT-BOUNDARY.md) — Bounded model-visible tool output
 - [`TOOL-PANIC-CONTAINMENT.md`](TOOL-PANIC-CONTAINMENT.md) — Agent tool panic containment
 - [`TOOL-TIMING.md`](TOOL-TIMING.md) — Per-call tool timing: `duration_ms` on `tool.result` and in the tool-call audit ledger

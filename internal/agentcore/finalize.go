@@ -53,6 +53,12 @@ type FinalizeInput struct {
 	// completions past the ceiling. Nil-safe: when unset the inner step runs
 	// unguarded.
 	GuardStep func(fantasy.PrepareStepFunction) fantasy.PrepareStepFunction
+	// RepairToolCall is the run's out-of-roster recovery (#1744) for a finalize
+	// retry that streams with tools, given the retry's model slug. Set it on
+	// the retry's AgentStreamCall: Stream ignores an agent-level repair
+	// function. GuardStep already sends the model the refused calls'
+	// explanations. Nil-safe: nil leaves fantasy's default.
+	RepairToolCall func(modelSlug string) fantasy.RepairToolCallFunction
 	// StopWhen carries the run's step-cap conditions (MaxIterations) into a
 	// finalize retry's stream — the retry re-runs WITH tools, so without it a
 	// model that keeps issuing (policy-blocked) tool calls loops paid steps

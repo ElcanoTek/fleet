@@ -381,6 +381,69 @@ func TestInteractiveFinalize_LeakedCallRetryRunsWithoutSideEffects(t *testing.T)
 	}
 }
 
+// TestInteractiveFinalize_LeakedCallRetryReroutesADeferredCall: the leaked-call
+// retry streams with the run's tools, so it gets the run's out-of-roster
+// recovery too (#1744). A direct call to a deferred MCP tool there runs
+// through tool_call instead of answering "tool not found".
+func TestInteractiveFinalize_LeakedCallRetryReroutesADeferredCall(t *testing.T) {
+	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "1")
+	broker := &interactiveRecordingBroker{}
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			mu.Lock()
+			calls++
+			n := calls
+			mu.Unlock()
+			return func(yield func(fantasy.StreamPart) bool) {
+				switch n {
+				case 1:
+					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "call:default_api:lookup{q:x}"}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				case 2:
+					// The retry calls the deferred tool by its own name.
+					if !yield(fantasy.StreamPart{
+						Type: fantasy.StreamPartTypeToolCall, ID: "mcp-1",
+						ToolCallName: "mcp_bundle_lookup", ToolCallInput: `{}`,
+					}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+				default:
+					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "did the real call"}) {
+						return
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				}
+			}, nil
+		},
+	}
+	tc := TurnConfig{
+		SystemPrompt:  "sys",
+		Messages:      []fantasy.Message{fantasy.NewUserMessage("look it up")},
+		Model:         model,
+		MaxTokens:     1024,
+		MaxIterations: 6,
+		MCPBroker:     broker,
+		// Two tools over a threshold of 1: both defer behind the bridges.
+		MCPCatalog: []mcp.ServerTool{
+			{ServerName: "bundle", Tool: mcp.Tool{Name: "lookup", Description: "lookup"}},
+			{ServerName: "bundle", Tool: mcp.Tool{Name: "other", Description: "other"}},
+		},
+	}
+	if _, err := RunInteractiveTurn(context.Background(), tc, &captureObs{}); err != nil {
+		t.Fatalf("RunInteractiveTurn: %v", err)
+	}
+	if broker.calls != 1 {
+		t.Fatalf("broker executed %d calls, want 1: the retry's direct call to a deferred tool must run through tool_call", broker.calls)
+	}
+}
+
 // TestInteractiveFinalize_StripsLeakedCall verifies the hook returns the
 // stripped text when the reply was real prose with a stray leaked call inline
 // (no follow-up model call needed).

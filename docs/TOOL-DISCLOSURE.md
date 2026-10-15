@@ -61,11 +61,11 @@ catalogs).
 `agentcore.Run` *after* `buildFantasyTools` returns, from what it actually
 registered (`internal/agentcore/live_registry.go`): below the threshold it
 lists the `mcp_*` names verbatim; above it, it says how many tools sit behind
-the bridges, names the connectors, and tells the model that a direct `mcp_*`
-call will fail and `tool_call` is the way in. The section used to be written
-by the driver before the roster existed, so above the threshold it listed
-every name as callable — the model called one, got "tool not found", and gave
-up on a working connector (#1006, four hosted connectors = 159 tools).
+the bridges, names the connectors, and tells the model to use `tool_call` (a
+direct `mcp_*` call is rerouted through it, see below). The section used to
+be written by the driver before the roster existed, so above the threshold it
+listed every name as callable — the model called one, got "tool not found",
+and gave up on a working connector (#1006, four hosted connectors = 159 tools).
 
 ## Narrowing the roster instead (#1603)
 
@@ -89,6 +89,77 @@ threshold count all see the narrowed roster. A narrowed roster usually lands
 well under the threshold. A Pages data refresh drops from the 44 Pages tools
 (about 135 KB of descriptions and schemas, ≈34K tokens resent on every step),
 plus the `fast_io` and `fastio_helpers` tools, to the eight or so it names.
+
+## Calls to tools not in the list (#1744)
+
+A model sometimes calls a tool name that is not in its tool list. Fantasy, the
+agent framework, answers every such call with `tool not found: X. Available
+tools: …` as a failed tool result, and the run goes on. That is right for a
+made-up name, but in the two common cases the tool does exist this run
+(`internal/agentcore/out_of_roster.go`):
+
+- **A deferred tool called by name.** Models still call `mcp_*` names above
+  the threshold, and in #1006 one concluded from the refusal that the connector
+  was down. Now a direct call to a name in this run's deferred registry is
+  rewritten into `tool_call {name, arguments}`, with the same call ID. It then
+  runs through the bridge exactly as a `tool_call` the model wrote: persona and
+  allowlist, credential allowlist, approval staging, audit and output
+  governance, and the transcript records it as a `tool_call`. A test pins that
+  the policy calls, staged approvals, broker dispatch and transcript are
+  identical for the two. Arguments that are still not a JSON object after
+  `jsonrepair` are not rerouted; the result says how to call `tool_call`.
+- **A tool a gate removed.** The roster records which gate kept each catalog
+  tool out: an optional connector the run did not turn on (`opt_in`), a
+  connector's tool allowlist (`allowlist`), a narrowed roster (`narrowed`,
+  #1603), the persona's tool policy (`persona`, MCP and native tools), or an
+  invalid input schema (`schema`). A call to one of these names is never run,
+  and its result names the gate: "mcp_pages_deploy_page_upload is not available
+  in this run and was not called: this run's tools are narrowed to the ones it
+  requires, and mcp_pages_deploy_page_upload is not one of them." In a narrowed
+  run it also names the registered stand-in, when there is one, by the rule the
+  audit nudges use.
+- **Any other name** keeps fantasy's result and its list of available tools.
+
+Rerouting cannot widen access. Only a name in the run's deferred registry is
+rewritten, and only into `tool_call`, which checks the name against that
+registry again and dispatches through the governed tool. A gated name never is:
+the gates run before the registry is built, so it is never in it.
+
+**How the explanation reaches the model.** Fantasy's repair hook can rewrite a
+call, but cannot change the error of a call it leaves invalid. So the
+explanation is kept by call ID. The run's transcript, and with it the next
+turn's history, records it in place of fantasy's text, and a prepare step sends
+it in place of fantasy's text on every later step of the run. That step
+rewrites a copy of the step's messages and gives the same text every time. The
+model first sees the result on the step after the call, already explained, so
+the prompt-cache prefix does not change.
+
+**Counted per model.** `fleet_tool_call_out_of_roster_total{model, reason}` on
+`/metrics` counts every such call; `reason` is `deferred`, one of the gates
+above, or `unknown`. The tool name is not a label, since catalog names can be
+user-controlled. It is in the `fleet.tool_call_out_of_roster` Observer event
+(`id`, `tool`, `reason`, `model`, and `rerouted_to` when rerouted), which chat
+streams as an event the web client ignores, and in a log line.
+
+Two details of the hook. Fantasy reads it from the stream call, not the agent,
+so it is set on every stream, including the leaked-call finalize retry, which
+streams with the run's tools and also sends the explanations. And installing a
+hook turns off fantasy's default repair, `jsonrepair` of a registered tool's
+malformed arguments; the run's hook keeps it.
+
+Not done, deliberately:
+
+- The stand-in sentences in the narrowed run's audit nudges stay. They say more
+  than the explanation (which records to call the stand-in with), and the issue
+  expects the explanation to replace them only over time.
+- No mapping of other harnesses' tool names (`str_replace_editor` →
+  `edit_file`) and no per-model rosters; both are out of the issue's scope, and
+  the metric is the data either would need.
+- A direct call to a deferred tool when the persona denies `tool_call` itself
+  is not rerouted and keeps fantasy's text. The bridges are exempt from a
+  persona's allow list, so only an explicit deny of `tool_call` does this.
+- A tool missing for any other reason, such as a native tool the driver did not
+  register, counts as `unknown`.
 
 ## BM25 index (`internal/tools/bm25_index.go`)
 

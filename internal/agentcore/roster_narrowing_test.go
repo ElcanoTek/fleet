@@ -184,8 +184,21 @@ func TestRun_MCPRosterNarrowing(t *testing.T) {
 		strings.Contains(systemPrompt, "mcp_pages_acct") || strings.Contains(systemPrompt, "mcp_pages_archive") {
 		t.Fatalf("live registry must list exactly the narrowed roster:\n%s", systemPrompt)
 	}
-	if !strings.Contains(toolResult, "tool not found: mcp_pages_deploy_page_upload") {
-		t.Fatalf("a call to a narrowed-away tool must answer 'tool not found', got %q", toolResult)
+	// The model is told the narrowing removed the tool (#1744), and the
+	// transcript records the same text.
+	const want = "mcp_pages_deploy_page_upload is not available in this run and was not called: " +
+		"this run's tools are narrowed to the ones it requires, and mcp_pages_deploy_page_upload is not one of them."
+	if toolResult != want {
+		t.Fatalf("a call to a narrowed-away tool must name the narrowing, got %q", toolResult)
+	}
+	recorded := ""
+	for _, m := range session.Messages {
+		if m.ToolCallID != nil && *m.ToolCallID == "c1" && m.Role == "tool" {
+			recorded = m.Content
+		}
+	}
+	if recorded != want {
+		t.Fatalf("the transcript must record the explanation, got %q", recorded)
 	}
 	if broker.lastTool != "" {
 		t.Fatalf("the narrowed-away tool reached the broker: %s/%s", broker.lastServer, broker.lastTool)

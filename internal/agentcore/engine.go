@@ -31,6 +31,11 @@ type engine struct {
 	fallbackModel  fantasy.LanguageModel
 	fallbackModels []fantasy.LanguageModel
 
+	// outOfRoster recovers the model's calls to names not in its tool list
+	// (#1744): the stream's RepairToolCall and the explainStep below. nil in
+	// the lifted parity tests that build an engine directly (nil-safe).
+	outOfRoster *outOfRoster
+
 	resilience resilienceConfig
 	logSession *LogSession
 	onRetry    fantasy.OnRetryCallback
@@ -1339,6 +1344,9 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		ProviderOptions: r.engine.providerOptions(modelSlug),
 		MaxRetries:      &maxRetries,
 		StopWhen:        r.engine.roundStopConditions(stepLimit, messages, activeModel),
+		// Set on the call, not the agent: Stream reads the call's repair
+		// function only (#1744).
+		RepairToolCall: r.engine.outOfRoster.repair(modelSlug, sink),
 		// Fantasy's inner backoff-and-retry, surfaced two ways: turn.retry to
 		// the Observer (the web client's inline "retrying" badge; journal
 		// recovery resets accumulated text on it) and the engine's session-log
@@ -1429,6 +1437,10 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 				}
 				return ctx, fantasy.PrepareStepResult{}, nil
 			},
+			// A refused out-of-roster call's result says which gate removed
+			// the tool (#1744). First, so the recovery checkpoint, the
+			// reducers and the cache markers all see the explained history.
+			r.engine.outOfRoster.explainStep,
 			// Steering (#785) runs before the reducers so an injected user
 			// message is budget-accounted and cache-marked like any other
 			// history — and never observed by a provider before its durable

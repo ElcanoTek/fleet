@@ -532,7 +532,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// a zero-overhead passthrough (current behavior). Re-applied on every
 		// rebuild (the mcp_load_servers dirty path) via this closure.
 		if cfg.PersonaPolicy != nil {
-			tools = resolvePersonaTools(cfg.PersonaName, *cfg.PersonaPolicy, tools, deps.Observer)
+			tools = resolvePersonaRoster(cfg.PersonaName, *cfg.PersonaPolicy, tools, &roster, deps.Observer)
 		}
 		// A narrowed run's audit gate reads the live roster (#1603).
 		recordNarrowedRoster(deps.Policy, cfg.MCPRosterNarrowing, roster)
@@ -543,6 +543,8 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	if err != nil {
 		return Result{}, fmt.Errorf("build tools: %w", err)
 	}
+	eng.outOfRoster = newOutOfRoster(cfg.PersonaName, usageOrch)
+	eng.outOfRoster.setRoster(roster)
 	// One breadcrumb for a narrowed roster (#1603), at the first build only: a
 	// mid-run MCP rebuild re-applies the same exhaustive allowlist but does not
 	// repeat the line.
@@ -571,6 +573,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// rounds so a multi-round scheduled run builds one coherent transcript.
 	sink := newStreamSink(deps.Observer, panicAttribution)
 	sink.logSession = logSession
+	sink.outOfRoster = eng.outOfRoster
 	// Auxiliary model-call metering (#1118). Two seams, both capability
 	// closures over usageOrch (the state itself never escapes Run), so every
 	// model call an aux path makes on behalf of this run lands in the SAME
@@ -615,6 +618,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			if err != nil {
 				return Result{}, fmt.Errorf("rebuild tools: %w", err)
 			}
+			eng.outOfRoster.setRoster(roster)
 			// The roster changed, so the section describing it is re-derived
 			// from the base — never appended a second time.
 			systemPrompt = withLiveRegistry(basePrompt, roster)
@@ -764,6 +768,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 				finalText, err = finalizeWithPanicBoundary(ctx, deps.Finalize, finalizeInputFor(
 					mode, finalText, finalizeMessages, sink.toolEventCount()-roundToolMark,
 					fantasyTools, deps.Observer, systemPrompt, sink, panicAttribution, usageOrch, activeModel, cfg.MaxIterations,
+					eng.outOfRoster,
 				), observerBoundary)
 				if err != nil {
 					return Result{}, err
@@ -1125,6 +1130,7 @@ func lastStepPromptTokens(result *fantasy.AgentResult) int {
 func finalizeInputFor(mode Mode, finalText string, messages []fantasy.Message, roundToolEvents int,
 	fantasyTools []fantasy.AgentTool, observer Observer, systemPrompt string, sink *streamSink,
 	panicAttribution panicAttribution, usageOrch *orchestrationState, activeModel fantasy.LanguageModel, maxIterations int,
+	outOfRoster *outOfRoster,
 ) FinalizeInput {
 	return FinalizeInput{
 		Mode:            mode,
@@ -1137,10 +1143,16 @@ func finalizeInputFor(mode Mode, finalText string, messages []fantasy.Message, r
 		OnToolCall:      finalizeToolCallCallback(sink, panicAttribution),
 		OnToolResult:    finalizeToolResultCallback(sink, panicAttribution),
 		GuardStep: func(inner fantasy.PrepareStepFunction) fantasy.PrepareStepFunction {
+			// Refused out-of-roster calls are explained before the retry's own
+			// steps (context budget, cache markers) see the history (#1744).
+			step := chainPrepareStepFunctions(outOfRoster.explainStep, inner)
 			if usageOrch == nil {
-				return inner
+				return step
 			}
-			return budgetGuardedStep(usageOrch, inner)
+			return budgetGuardedStep(usageOrch, step)
+		},
+		RepairToolCall: func(modelSlug string) fantasy.RepairToolCallFunction {
+			return outOfRoster.repair(modelSlug, sink)
 		},
 		StopWhen: stepStopConditions(maxIterations),
 		RecordUsage: func(u fantasy.Usage, md fantasy.ProviderMetadata) {
