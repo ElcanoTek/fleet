@@ -11,6 +11,11 @@ export type UserStat = {
   last_activity: number;
   total_cost_usd: number;
   total_turns: number;
+  // Struggle counts (docs/CHAT-ESCALATION.md). Optional so a payload from an
+  // older server still parses; the table shows "—" when absent.
+  frustrated_messages?: number;
+  struggle_signals?: number;
+  advanced_switches?: number;
 };
 
 type StatsResponse = {

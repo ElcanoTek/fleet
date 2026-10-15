@@ -398,7 +398,10 @@ export function ApprovalCard({
   // suggest_advanced_model only: fired AFTER onModelSwitched when the user
   // picked "Switch & retry". The caller is expected to re-submit the
   // prior user turn under the newly-pinned model.
-  onSwitchAndRetry?: () => void | Promise<void>;
+  // Receives the model the conversation was just pinned to: the retry must
+  // send it explicitly, because the caller's selected-model state has not
+  // re-rendered yet and would resend (and re-pin) the old model.
+  onSwitchAndRetry?: (model: string) => void | Promise<void>;
   // Fired when the user clicks Ask again on a timed-out card. The caller
   // submits askAgainPrompt(approval) as a user turn so the agent re-stages.
   onAskAgain?: (approval: Approval) => void;
@@ -1753,7 +1756,10 @@ function SuggestAdvancedModelCard({
   conversationId: string;
   onResolved: (next: Approval) => void;
   onModelSwitched?: (model: string) => void;
-  onSwitchAndRetry?: () => void | Promise<void>;
+  // Receives the model the conversation was just pinned to: the retry must
+  // send it explicitly, because the caller's selected-model state has not
+  // re-rendered yet and would resend (and re-pin) the old model.
+  onSwitchAndRetry?: (model: string) => void | Promise<void>;
 }) {
   const [pending, setPending] = useState<SuggestAction | null>(null);
   // Same contract as ApprovalCard.resolve: a failed POST leaves the nudge
@@ -1806,7 +1812,7 @@ function SuggestAdvancedModelCard({
       if (data.status === "approved" && data.model) {
         onModelSwitched?.(data.model);
         if (action === "switch_and_retry") {
-          await onSwitchAndRetry?.();
+          await onSwitchAndRetry?.(data.model);
         }
       }
     } catch (err) {

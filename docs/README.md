@@ -282,6 +282,7 @@ above fails otherwise.
 - [`OPERATORS.md`](OPERATORS.md) — Operating fleet
 - [`OPS-CENTER-LOG-TIMELINE.md`](OPS-CENTER-LOG-TIMELINE.md) — Operations Center log timeline — one readable step per tool call
 - [`OPS-CONNECTOR-DEFAULTS.md`](OPS-CONNECTOR-DEFAULTS.md) — Operations connector defaults
+- [`CHAT-ESCALATION.md`](CHAT-ESCALATION.md) — When chat offers the advanced model: the assistant's own suggestion, free end-of-turn struggle signals, the optional Jev frustration check, **Retry with**, and the per-user frustration counts on the admin Users page
 - [`TASK-MODEL-TIER.md`](TASK-MODEL-TIER.md) — The task model tier: Operations Center tasks default to the advanced model (admin-settable), while chat keeps the fast default
 - [`PINNED-MODELS.md`](PINNED-MODELS.md) — Pinned and relabelled picker models (`FLEET_PINNED_MODELS`): a display alias, not a secrecy boundary
 - [`PII-REDACTION.md`](PII-REDACTION.md) — Optional PII redaction (#450); the

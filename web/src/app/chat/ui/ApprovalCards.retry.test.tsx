@@ -277,3 +277,37 @@ describe("the advanced-model nudge keeps its choices when the POST fails", () =>
     expect(onResolved.mock.calls[0][0].status).not.toBe("execution_unknown");
   });
 });
+
+// Switch & retry hands the pinned model to the retry. The caller's selected
+// model has not re-rendered yet when the retry fires, and a retry sent on the
+// old model would re-pin it and run the answer on the model the user just
+// left (docs/CHAT-ESCALATION.md).
+describe("Switch & retry", () => {
+  it("passes the newly pinned model to the retry", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ status: "approved", action: "switch_and_retry", model: "google/gemini-4-argon" }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const onModelSwitched = vi.fn();
+    const onSwitchAndRetry = vi.fn();
+    const approval = { id: "ap_1", tool: "suggest_advanced_model", status: "pending", summary: {} } as Approval;
+    render(
+      <ApprovalCard
+        approval={approval}
+        conversationId="conv_1"
+        onResolved={vi.fn()}
+        onModelSwitched={onModelSwitched}
+        onSwitchAndRetry={onSwitchAndRetry}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Switch & retry/ }));
+    await waitFor(() => expect(onSwitchAndRetry).toHaveBeenCalledTimes(1));
+    expect(onModelSwitched).toHaveBeenCalledWith("google/gemini-4-argon");
+    expect(onSwitchAndRetry).toHaveBeenCalledWith("google/gemini-4-argon");
+  });
+});

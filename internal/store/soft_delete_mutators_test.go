@@ -114,6 +114,24 @@ func TestAdminStats_ExcludesSoftDeleted(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("AppendHistory: %v", err)
 	}
+	// Struggle counts follow the conversation too: one of each on the kept
+	// chat, one of each on the chat about to be deleted.
+	for _, convID := range []string{kept.ID, gone.ID} {
+		for _, src := range []string{"classifier", "signal"} {
+			if err := s.RecordEscalationEvent(ctx, EscalationEvent{
+				ConversationID: convID, TurnID: "t", UserEmail: owner, CreatedAt: 1, Source: src, Signal: "x",
+			}); err != nil {
+				t.Fatalf("RecordEscalationEvent: %v", err)
+			}
+		}
+		a, err := s.CreateApproval(ctx, convID, owner, "suggest_advanced_model", "call_"+convID, `{}`, 0, ApprovalSeat{})
+		if err != nil {
+			t.Fatalf("CreateApproval: %v", err)
+		}
+		if err := s.ResolveApproval(ctx, owner, a.ID, "approved", ""); err != nil {
+			t.Fatalf("ResolveApproval: %v", err)
+		}
+	}
 	if err := s.Delete(ctx, owner, gone.ID); err != nil {
 		t.Fatalf("soft delete: %v", err)
 	}
@@ -139,5 +157,9 @@ func TestAdminStats_ExcludesSoftDeleted(t *testing.T) {
 	}
 	if row.LastActivity != keptActivity {
 		t.Errorf("LastActivity = %d, want %d (a deletion must not read as recent activity)", row.LastActivity, keptActivity)
+	}
+	if row.FrustratedMessages != 1 || row.StruggleSignals != 1 || row.AdvancedSwitches != 1 {
+		t.Errorf("struggle counts = frustrated %d, signals %d, switches %d; want 1, 1, 1 (the tombstoned chat's must not count)",
+			row.FrustratedMessages, row.StruggleSignals, row.AdvancedSwitches)
 	}
 }

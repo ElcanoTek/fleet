@@ -707,7 +707,10 @@ export function parseSubmissionMessage(text: string): Submission | null {
  * the renderer.
  */
 export const RESEND_EVENT = "genui:resend";
-export type ResendDetail = { cardId: string; actionId: string; message: string; handled?: boolean; done?: Promise<void> };
+// model: the retry is a switch to this model (Switch & retry / Retry with),
+// so the card's resend must carry it rather than the selected model the
+// caller has not re-rendered yet (docs/CHAT-ESCALATION.md).
+export type ResendDetail = { cardId: string; actionId: string; message: string; model?: string; handled?: boolean; done?: Promise<void> };
 
 /**
  * A Retry the server queued while its card was scrolled out of the

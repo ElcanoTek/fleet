@@ -1576,6 +1576,27 @@ describe("holds and other tabs", () => {
     expect(other.handled).toBeUndefined();
   });
 
+  // A Switch & retry of a card answer carries the newly pinned model through
+  // the card's resend, so it is not sent on the model the user just left.
+  it("passes the resend's model through to onSubmit", async () => {
+    const s = spec({ title: "M", components: [{ type: "text", text: "?" }], actions: [{ id: "a", label: "Yes", kind: "message", message: "yes" }] });
+    const onSubmit = vi.fn(async () => true);
+    render(<GenerativeCard cardId="rm" spec={s} onSubmit={onSubmit} />);
+    const message = buildReplyMessage("rm", "a", "yes");
+    const detail: ResendDetail = { cardId: "rm", actionId: "a", message, model: "adv/model" };
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(RESEND_EVENT, { detail }));
+      await detail.done;
+    });
+    expect(onSubmit).toHaveBeenCalledWith(
+      message,
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      "adv/model",
+    );
+  });
+
   it("labels a chart value near the largest double as finite", () => {
     const s = spec({
       title: "C",

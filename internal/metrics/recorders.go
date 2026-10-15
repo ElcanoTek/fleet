@@ -321,6 +321,30 @@ func RecordProviderFailover(from, to, reason string) {
 		[]string{"from", "to", "reason"}, []string{from, to, reason}, 1)
 }
 
+// RecordModelEscalation counts one step of a "switch to the advanced model"
+// suggestion (docs/CHAT-ESCALATION.md). source is model | signal | classifier;
+// outcome is staged | suppressed | error | dismissed | accepted_<action>.
+func RecordModelEscalation(source, outcome string) {
+	incCounter("fleet_model_escalations_total", "Advanced-model suggestions in chat by who asked (model, signal, classifier) and outcome.",
+		[]string{"source", "outcome"}, []string{source, outcome}, 1)
+}
+
+// RecordEscalationClassifierCheck counts one decision-model struggle check by
+// mode (observe | suggest) and outcome (pushback | ok | error), once per
+// check whether or not it answered in time.
+func RecordEscalationClassifierCheck(mode, outcome string) {
+	incCounter("fleet_escalation_classifier_checks_total", "Decision-model struggle checks on chat messages by mode and outcome.",
+		[]string{"mode", "outcome"}, []string{mode, outcome}, 1)
+}
+
+// RecordEscalationClassifierLate counts struggle checks still running when the
+// turn's grace window ended; each is also counted once, by its eventual
+// outcome, in fleet_escalation_classifier_checks_total.
+func RecordEscalationClassifierLate(mode string) {
+	incCounter("fleet_escalation_classifier_late_total", "Decision-model struggle checks that answered after the turn's stream closed, by mode.",
+		[]string{"mode"}, []string{mode}, 1)
+}
+
 func RecordGuardrailVerdict(source, mode, outcome string) {
 	incCounter("fleet_guardrail_checks_total", "Host-side content guardrail checks by source, mode, and outcome.",
 		[]string{"source", "mode", "outcome"}, []string{source, mode, outcome}, 1)

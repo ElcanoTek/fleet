@@ -137,6 +137,7 @@ type chatStore interface {
 	// Tool-call audit ledger (#224): one row per tool invocation, written from
 	// the post-turn persistence path and read by GET /conversations/{id}/audit.
 	RecordToolCalls(ctx context.Context, entries []store.ToolCallEntry) error
+	RecordEscalationEvent(ctx context.Context, e store.EscalationEvent) error
 	ListToolCalls(ctx context.Context, conversationID, toolFilter string, fromUnix int64, limit int) ([]store.ToolCallEntry, error)
 
 	// Projects / Spaces (#509).
@@ -247,6 +248,7 @@ type chatStore interface {
 	AppendApprovalResumeDroppedNotice(ctx context.Context, convID string) error
 	HasArmedApprovals(ctx context.Context, convID string) (bool, error)
 	CountUserMessagesAfterTimestamp(ctx context.Context, convID string, ts int64) (int64, error)
+	CountUserMessagesAfterResolution(ctx context.Context, convID, callID string, resolvedAt int64) (int64, error)
 
 	// Browser Web Push subscriptions (#292): the POST /push/subscribe upsert,
 	// the owner-scoped DELETE /push/unsubscribe, and the owner-scoped

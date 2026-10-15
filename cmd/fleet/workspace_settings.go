@@ -52,6 +52,10 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		// Usually empty: an unset FLEET_TASK_MODEL means the task tier follows
 		// the advanced model (agentcore.CurrentTaskModel).
 		"task_model":                        strings.TrimSpace(cfg.TaskModel),
+		"escalation_signals_enabled":        strconv.FormatBool(cfg.EscalationSignalsEnabled),
+		"escalation_classifier_mode":        cfg.EscalationClassifierMode,
+		"escalation_classifier_model":       cfg.EscalationClassifierModel,
+		"escalation_classifier_threshold":   strconv.Itoa(cfg.EscalationClassifierThreshold),
 		"memory_autoindex_enabled":          strconv.FormatBool(cfg.MemoryAutoIndexEnabled),
 		"error_analysis_enabled":            strconv.FormatBool(cfg.ErrorAnalysisEnabled),
 		"auto_title_enabled":                strconv.FormatBool(cfg.AutoTitle),
@@ -84,8 +88,14 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"advanced_model": applyModelTier(agentcore.SetAdvancedModel),
 		// The task tier's setter treats "" as "follow the advanced tier", so
 		// the usual empty default and a Reset both restore the follow.
-		"task_model":               applyModelTier(agentcore.SetTaskModel),
-		"approval_timeout_seconds": applyIntSetting(cfg.SetApprovalTimeoutSeconds),
+		"task_model": applyModelTier(agentcore.SetTaskModel),
+		// Chat escalation (docs/CHAT-ESCALATION.md): plain live config fields,
+		// read at each chat turn's start.
+		"escalation_signals_enabled":      applyBoolSetting(cfg.SetEscalationSignalsEnabled),
+		"escalation_classifier_mode":      applyStringSetting(cfg.SetEscalationClassifierMode),
+		"escalation_classifier_model":     applyStringSetting(cfg.SetEscalationClassifierModel),
+		"escalation_classifier_threshold": applyIntSetting(cfg.SetEscalationClassifierThreshold),
+		"approval_timeout_seconds":        applyIntSetting(cfg.SetApprovalTimeoutSeconds),
 		// The cost ceiling is ALSO in the #286 env-reload set, so its override
 		// is a separate value (config.SetMaxCostUSDOverride): a default
 		// (override=false) clears it and the env/reload value serves again.
@@ -284,6 +294,15 @@ func seedModelTiersFromConfig(cfg *config.Config) {
 // the config bool setters, the holder doesn't re-read the env after boot, so
 // applying the default and applying an override are the same operation.
 func applyModelTier(set func(string)) settings.ApplyFunc {
+	return func(value string, _ bool) error {
+		set(value)
+		return nil
+	}
+}
+
+// applyStringSetting adapts a config live setter for a registry-validated
+// string (an enum or a model slug) to an ApplyFunc.
+func applyStringSetting(set func(string)) settings.ApplyFunc {
 	return func(value string, _ bool) error {
 		set(value)
 		return nil

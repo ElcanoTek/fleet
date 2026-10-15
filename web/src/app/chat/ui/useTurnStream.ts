@@ -632,6 +632,9 @@ export interface UseTurnStream {
       // Whether the card still holds this send: once it does not (the user
       // pressed Unlock), the server checks for it stop.
       stillHeld?: () => boolean;
+      // Send on this model instead of the selected one: a switch made in the
+      // same click has not re-rendered selectedModel yet.
+      model?: string;
     },
   ) => Promise<boolean>;
   /**
@@ -651,7 +654,9 @@ export interface UseTurnStream {
     userMessageId: number,
     editedContent: string,
   ) => Promise<void>;
-  retryLastUserMessage: () => Promise<void>;
+  // opts.model sends the retry on that model (and pins it, as any turn's
+  // model does), for a switch the selected-model state has not caught up with.
+  retryLastUserMessage: (opts?: { model?: string }) => Promise<void>;
   // #785 pending-input queue: per-conversation snapshot + mutations.
   //
   // A Map, not a Record: the key is a conversation id that arrives from the URL
@@ -3917,8 +3922,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     await submitPrompt(trimmedContent);
   };
 
-  const retryLastUserMessage = async () => {
+  const retryLastUserMessage = async (retryOpts?: { model?: string }) => {
     if (isStreaming) return;
+    // Check the send gate BEFORE deleting anything: the retry truncates the
+    // last turn locally and server-side, and a submit that then refused would
+    // lose it. An explicit model bypasses the selected model's error.
+    if (modelError && !retryOpts?.model) return;
     const targetKey = activeConversationIdRef.current ?? PENDING_CONV_KEY;
     const history = getConvMessages(targetKey);
     let lastUser: Message | undefined;
@@ -3966,7 +3975,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // Let the transcript drop the retried bubble first, so the card holds
       // against the answer it will show without it.
       await new Promise((resolve) => window.setTimeout(resolve, 0));
-      const detail: ResendDetail = { cardId: answer.cardId, actionId: answer.actionId, message: lastUser.content };
+      const detail: ResendDetail = {
+        cardId: answer.cardId,
+        actionId: answer.actionId,
+        message: lastUser.content,
+        model: retryOpts?.model,
+      };
       window.dispatchEvent(new CustomEvent(RESEND_EVENT, { detail }));
       if (detail.handled) {
         await detail.done;
@@ -3974,13 +3988,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
     }
     if (!answer) {
-      await submitPrompt(lastUser.content);
+      await submitPrompt(lastUser.content, { model: retryOpts?.model });
       return;
     }
     // No mounted card took it: the hold the card would set is kept for it
     // to take over when it scrolls back into view (takeRetryHold).
     let sid = "";
     await submitPrompt(lastUser.content, {
+      model: retryOpts?.model,
       fromCard: true,
       onHeld: (conv, submissionId) => {
         sid = submissionId;
@@ -4130,6 +4145,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // Whether the card still holds this send: once it does not (the user
       // pressed Unlock), the server checks for it stop.
       stillHeld?: () => boolean;
+      // Send on this model instead of the selected one: a switch made in the
+      // same click has not re-rendered selectedModel yet.
+      model?: string;
     },
   ): Promise<boolean> => {
     const value = submittedPrompt.trim();
@@ -4141,7 +4159,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     const convId = activeConversationIdRef.current;
     const composerKey = convId ?? PENDING_CONV_KEY;
     if (!value || !userEmail) return false;
-    if (modelError) return false;
+    // modelError is about the SELECTED model; a send that names its own
+    // model (a retry on the advanced model) is not blocked by it.
+    if (modelError && !opts?.model) return false;
     // A generative-UI card's answer is not composer text: it neither clears
     // nor restores what the user is typing, and never takes the composer's
     // pending attachments with it.
@@ -4376,7 +4396,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     abortControllersRef.current.set(initialTarget, abortController);
     markConvStreaming(initialTarget);
 
-    const trimmedModel = selectedModel.trim();
+    const trimmedModel = (opts?.model ?? selectedModel).trim();
     const body: Record<string, unknown> = {
       message: value,
       persona: selectedPersona,

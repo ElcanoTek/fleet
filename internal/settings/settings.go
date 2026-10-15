@@ -171,6 +171,22 @@ func Registry() []Spec {
 		{Key: "task_model", Kind: KindModel, EmptyDefaultOK: true,
 			EnvVar: "FLEET_TASK_MODEL"},
 
+		// Chat escalation (docs/CHAT-ESCALATION.md): when fleet itself offers
+		// a conversation on the everyday model the advanced one. Live: the
+		// chat turn reads all four at turn start. The classifier model is any
+		// OpenRouter decision model; the default is a moving alias, so a new
+		// Jev release needs no change here.
+		{Key: "escalation_signals_enabled", Kind: KindBool,
+			EnvVar: "FLEET_ESCALATION_SIGNALS_ENABLED"},
+		{Key: "escalation_classifier_mode", Kind: KindEnum,
+			Enum:   []string{"off", "observe", "suggest"},
+			EnvVar: "FLEET_ESCALATION_CLASSIFIER_MODE"},
+		{Key: "escalation_classifier_model", Kind: KindModel,
+			EnvVar: "FLEET_ESCALATION_CLASSIFIER_MODEL"},
+		// Percent: 50 keeps a coin flip from ever counting as pushback.
+		{Key: "escalation_classifier_threshold", Kind: KindInt, Min: 50, Max: 99,
+			EnvVar: "FLEET_ESCALATION_CLASSIFIER_THRESHOLD"},
+
 		// Workspace features.
 		{Key: "memory_autoindex_enabled", Kind: KindBool,
 			EnvVar: "FLEET_MEMORY_AUTOINDEX_ENABLED"},

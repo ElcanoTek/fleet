@@ -15,6 +15,8 @@ package config
 // during Load and in tests (nil reload state → direct access, same contract as
 // reload.go's Live* getters).
 
+import "strings"
+
 // liveBool reads a bool field under the runtime read lock.
 func (c *Config) liveBool(read func() bool) bool {
 	if c.reload == nil {
@@ -226,4 +228,59 @@ func (c *Config) MaxTotalTokensOverride() (int, bool) {
 	defer c.reload.mu.RUnlock()
 	read()
 	return v, ok
+}
+
+// LiveEscalationSignalsEnabled reports whether the end-of-turn struggle signals
+// may offer the advanced model (docs/CHAT-ESCALATION.md), admin-override-aware.
+func (c *Config) LiveEscalationSignalsEnabled() bool {
+	return c.liveBool(func() bool { return c.EscalationSignalsEnabled })
+}
+
+// SetEscalationSignalsEnabled applies the admin override for the struggle signals.
+func (c *Config) SetEscalationSignalsEnabled(v bool) {
+	c.setLive(func() { c.EscalationSignalsEnabled = v })
+}
+
+// LiveEscalationClassifier returns the decision-model check's mode, model and
+// threshold (percent) as one consistent snapshot, admin-override-aware. An
+// unknown mode reads as off.
+func (c *Config) LiveEscalationClassifier() (mode, model string, thresholdPct int) {
+	read := func() {
+		mode, model, thresholdPct = c.EscalationClassifierMode, c.EscalationClassifierModel, c.EscalationClassifierThreshold
+	}
+	if c.reload == nil {
+		read()
+	} else {
+		c.reload.mu.RLock()
+		read()
+		c.reload.mu.RUnlock()
+	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case EscalationClassifierObserve, EscalationClassifierSuggest:
+	default:
+		mode = EscalationClassifierOff
+	}
+	if model = strings.TrimSpace(model); model == "" {
+		model = DefaultEscalationClassifierModel
+	}
+	if thresholdPct < 50 || thresholdPct > 99 {
+		thresholdPct = 80
+	}
+	return mode, model, thresholdPct
+}
+
+// SetEscalationClassifierMode applies the admin override for the classifier mode.
+func (c *Config) SetEscalationClassifierMode(v string) {
+	c.setLive(func() { c.EscalationClassifierMode = v })
+}
+
+// SetEscalationClassifierModel applies the admin override for the decision model.
+func (c *Config) SetEscalationClassifierModel(v string) {
+	c.setLive(func() { c.EscalationClassifierModel = v })
+}
+
+// SetEscalationClassifierThreshold applies the admin override for the threshold.
+func (c *Config) SetEscalationClassifierThreshold(v int) {
+	c.setLive(func() { c.EscalationClassifierThreshold = v })
 }

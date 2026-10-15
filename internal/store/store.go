@@ -2670,6 +2670,31 @@ func (s *Store) CountUserMessagesAfterTimestamp(ctx context.Context, convID stri
 	return n, err
 }
 
+// CountUserMessagesAfterResolution counts a conversation's user messages sent
+// after an approval card was answered, for the suggest_advanced_model
+// cooldown. Timestamps are whole seconds, so on their own they cannot order a
+// message against an answer given in the same second. The answer's
+// tool_result note (written under callID right after the claim) is the exact
+// boundary in message order: only user messages with a later id count. The
+// note is best-effort; without it the count falls back to messages strictly
+// after the answer's second, which can only leave a same-second message out
+// (a longer cooldown), never count one sent before the answer.
+func (s *Store) CountUserMessagesAfterResolution(ctx context.Context, convID, callID string, resolvedAt int64) (int64, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx,
+		`WITH note AS (
+		   SELECT MAX(r.id) AS id FROM messages r
+		   WHERE r.conversation_id = $1 AND r.type = 'tool_result'
+		     AND r.created_at >= $3 AND r.content::jsonb->>'id' = $2)
+		 SELECT COUNT(*) FROM messages m, note
+		 WHERE m.conversation_id = $1 AND m.role = 'user' AND m.type = 'text'
+		   AND CASE WHEN note.id IS NULL THEN m.created_at > $3
+		            ELSE m.created_at >= $3 AND m.id > note.id END`,
+		convID, callID, resolvedAt,
+	).Scan(&n)
+	return n, err
+}
+
 // SupersedePendingApprovals marks every pending approval for a
 // (conversation, tool) pair as rejected, with a canned result text
 // explaining it was superseded. Used when the agent stages a fresh
@@ -2776,6 +2801,62 @@ type AdminRow struct {
 	TotalPromptTokens        int64
 	TotalCachedTokens        int64
 	TotalCacheCreationTokens int64
+	// Struggle counts (docs/CHAT-ESCALATION.md), from escalation_events and
+	// approvals. FrustratedMessages counts messages the decision-model
+	// classifier scored as pushback on the assistant; StruggleSignals counts
+	// turns a free signal fired on; AdvancedSwitches counts accepted
+	// "switch to the advanced model" cards.
+	FrustratedMessages int
+	StruggleSignals    int
+	AdvancedSwitches   int
+}
+
+// EscalationEvent is one escalation_events row (docs/CHAT-ESCALATION.md).
+type EscalationEvent struct {
+	ConversationID string
+	TurnID         string
+	UserEmail      string
+	CreatedAt      int64
+	// Source is "classifier" or "signal".
+	Source string
+	// Signal is "frustration" for the classifier, else the signal's name.
+	Signal string
+	// Probability is the classifier's P(pushback); nil for a signal row.
+	Probability *float64
+	Model       string
+	Suggested   bool
+}
+
+// RecordEscalationEvent appends one escalation_events row.
+func (s *Store) RecordEscalationEvent(ctx context.Context, e EscalationEvent) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO escalation_events
+		   (conversation_id, turn_id, user_email, created_at, source, signal, probability, model, suggested)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		e.ConversationID, e.TurnID, e.UserEmail, e.CreatedAt, e.Source, e.Signal, e.Probability, e.Model, e.Suggested,
+	)
+	return err
+}
+
+// EscalationEvents returns a conversation's escalation_events rows, oldest
+// first (audit reads and tests).
+func (s *Store) EscalationEvents(ctx context.Context, convID string) ([]EscalationEvent, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT conversation_id, turn_id, user_email, created_at, source, signal, probability, model, suggested
+		 FROM escalation_events WHERE conversation_id = $1 ORDER BY id`, convID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EscalationEvent
+	for rows.Next() {
+		var e EscalationEvent
+		if err := rows.Scan(&e.ConversationID, &e.TurnID, &e.UserEmail, &e.CreatedAt, &e.Source, &e.Signal, &e.Probability, &e.Model, &e.Suggested); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // AdminStats aggregates per-user metrics for the /admin page. One query
@@ -2852,6 +2933,68 @@ func (s *Store) AdminStats(ctx context.Context) ([]AdminRow, error) {
 		}
 	}
 	if err := metricRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Struggle counts, from live conversations only: a soft-deleted chat's
+	// events stop counting when it is deleted, as a hard delete's cascade
+	// would. A user with events but no other row still gets one, like the
+	// turn_metrics pass above.
+	rowFor := func(email string) *AdminRow {
+		if row, ok := byEmail[email]; ok {
+			return row
+		}
+		row := &AdminRow{Email: email}
+		byEmail[email] = row
+		return row
+	}
+	escRows, err := s.db.QueryContext(ctx,
+		`SELECT e.user_email,
+		        COUNT(*) FILTER (WHERE e.source = 'classifier'),
+		        COUNT(*) FILTER (WHERE e.source = 'signal')
+		 FROM escalation_events e
+		 JOIN conversations c ON c.id = e.conversation_id
+		 WHERE c.deleted_at IS NULL
+		 GROUP BY e.user_email`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer escRows.Close()
+	for escRows.Next() {
+		var email string
+		var frustrated, signals int
+		if err := escRows.Scan(&email, &frustrated, &signals); err != nil {
+			return nil, err
+		}
+		row := rowFor(email)
+		row.FrustratedMessages = frustrated
+		row.StruggleSignals = signals
+	}
+	if err := escRows.Err(); err != nil {
+		return nil, err
+	}
+	switchRows, err := s.db.QueryContext(ctx,
+		`SELECT a.user_email, COUNT(*)
+		 FROM approvals a
+		 JOIN conversations c ON c.id = a.conversation_id
+		 WHERE a.tool_name = 'suggest_advanced_model' AND a.status = 'approved'
+		   AND c.deleted_at IS NULL
+		 GROUP BY a.user_email`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer switchRows.Close()
+	for switchRows.Next() {
+		var email string
+		var n int
+		if err := switchRows.Scan(&email, &n); err != nil {
+			return nil, err
+		}
+		rowFor(email).AdvancedSwitches = n
+	}
+	if err := switchRows.Err(); err != nil {
 		return nil, err
 	}
 
