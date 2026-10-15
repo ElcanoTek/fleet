@@ -133,7 +133,7 @@ export function BulkDeleteConfirmModal({
       <div className="flex items-center justify-end gap-2">
         <button
           type="button"
-          className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+          className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
           onClick={onCancel}
         >
           Cancel
@@ -142,7 +142,7 @@ export function BulkDeleteConfirmModal({
           type="button"
           disabled={!ready}
           className={[
-            "rounded-full px-4 py-2 text-[0.8125rem] font-medium transition",
+            "rounded-[var(--radius-md)] px-4 py-2 text-[0.8125rem] font-medium transition",
             // The foreground travels with the fill. --color-surface-1 is the
             // theme-aware readable foreground on a saturated fill (dark in the
             // dark theme, white in the light one) — white was 2.77:1 on the

@@ -1763,7 +1763,7 @@ export function TaskCreateModal({
                     Schedule
                   </span>
                 </div>
-                <div className="task-segment" role="radiogroup" aria-labelledby="schedule-label">
+                <div className="seg seg--md" role="radiogroup" aria-labelledby="schedule-label">
                   {SCHEDULE_MODES.map((m) => (
                     <button
                       key={m.id}
@@ -1771,7 +1771,7 @@ export function TaskCreateModal({
                       role="radio"
                       aria-checked={scheduleMode === m.id}
                       tabIndex={scheduleMode === m.id ? 0 : -1}
-                      className={`task-segment-btn${scheduleMode === m.id ? " is-active" : ""}`}
+                      className="seg-option"
                       onClick={() => changeScheduleMode(m.id)}
                       onKeyDown={onSegmentKeyDown}
                     >
@@ -1841,12 +1841,12 @@ export function TaskCreateModal({
 
                 {scheduleMode === "repeat" ? (
                   <div className="task-schedule-repeat">
-                    <div className="repeat-editor-tabs" role="tablist" aria-label="Repeat input method">
+                    <div className="seg seg--md repeat-editor-tabs" role="tablist" aria-label="Repeat input method">
                       <button
                         type="button"
                         role="tab"
                         aria-selected={repeatEditor === "simple"}
-                        className={repeatEditor === "simple" ? "is-active" : ""}
+                        className="seg-option"
                         disabled={repeatEditor === "cron" && parseSimpleSchedule(recurrence) === null}
                         title={
                           repeatEditor === "cron" && parseSimpleSchedule(recurrence) === null
@@ -1857,7 +1857,7 @@ export function TaskCreateModal({
                       >
                         Simple schedule
                       </button>
-                      <button type="button" role="tab" aria-selected={repeatEditor === "cron"} className={repeatEditor === "cron" ? "is-active" : ""} onClick={() => setRepeatEditor("cron")}>
+                      <button type="button" role="tab" aria-selected={repeatEditor === "cron"} className="seg-option" onClick={() => setRepeatEditor("cron")}>
                         Advanced cron
                       </button>
                     </div>

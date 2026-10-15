@@ -33,10 +33,10 @@ describe("AccountMenu", () => {
   it("drives the theme via the System/Light/Dark segmented control", () => {
     render(<AccountMenu email="sam@elcanotek.com" onSignOut={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
-    fireEvent.click(screen.getByRole("button", { name: "dark" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
     expect(window.localStorage.getItem("chat-theme-preference")).toBe("dark");
-    fireEvent.click(screen.getByRole("button", { name: "light" }));
+    fireEvent.click(screen.getByRole("button", { name: "Light" }));
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
     expect(window.localStorage.getItem("chat-theme-preference")).toBe("light");
   });
@@ -44,9 +44,9 @@ describe("AccountMenu", () => {
   it("System clears the stored preference and follows the OS", () => {
     render(<AccountMenu email="sam@elcanotek.com" onSignOut={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
-    fireEvent.click(screen.getByRole("button", { name: "dark" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
     expect(window.localStorage.getItem("chat-theme-preference")).toBe("dark");
-    const systemButton = screen.getByRole("button", { name: "system" });
+    const systemButton = screen.getByRole("button", { name: "System" });
     fireEvent.click(systemButton);
     expect(window.localStorage.getItem("chat-theme-preference")).toBeNull();
     expect(systemButton).toHaveAttribute("aria-pressed", "true");
@@ -58,11 +58,11 @@ describe("AccountMenu", () => {
   it("defaults to System with no stored preference", () => {
     render(<AccountMenu email="sam@elcanotek.com" onSignOut={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
-    expect(screen.getByRole("button", { name: "system" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "System" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    expect(screen.getByRole("button", { name: "dark" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Dark" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );

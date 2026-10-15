@@ -685,7 +685,7 @@ function InlineHtmlPreview({
         <button
           type="button"
           onClick={() => setShowSource((v) => !v)}
-          className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[0.62rem] normal-case tracking-normal text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)]"
+          className="rounded-[var(--radius-md)] border border-[var(--color-border)] px-2 py-0.5 text-[0.62rem] normal-case tracking-normal text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)]"
         >
           {showSource ? "Show preview" : "Show source"}
         </button>

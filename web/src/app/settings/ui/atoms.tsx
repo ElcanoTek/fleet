@@ -6,7 +6,7 @@
 // Tailwind idiom the rest of the app uses, with the design's exact metrics.
 // Every color rides a semantic token so client theming keeps working.
 
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "@/app/shared/ui/Icon";
 
 /* ── Buttons (.btn / .btn-primary / .btn-ghost / .btn-sm / .conn-reveal) ── */
@@ -207,82 +207,9 @@ export function SetSwitch({
   );
 }
 
-/* ── Segmented control (.theme-seg) ── */
+/* ── Segmented control: lives in shared/ui so every surface uses one ── */
 
-export function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
-  label,
-  disabled,
-  dividers,
-  emphasized,
-  onDeselect,
-}: {
-  value: T;
-  options: readonly { value: T; label: string; description?: string }[];
-  onChange: (next: T) => void;
-  label: string;
-  disabled?: boolean;
-  /** Hairline separators between segments — for controls with 3+ textual
-   *  options where the boundaries otherwise blur together. */
-  dividers?: boolean;
-  /** Draw the control's border with the branded action gradient. */
-  emphasized?: boolean;
-  /** Optional checkbox-like behavior for a selected one-option control. */
-  onDeselect?: () => void;
-}) {
-  const tooltipBaseId = useId();
-  return (
-    <span
-      role="group"
-      aria-label={label}
-      className={[
-        "inline-flex shrink-0 rounded-[var(--radius-pill)] border",
-        emphasized
-          ? "border-transparent bg-[linear-gradient(var(--color-surface-1),var(--color-surface-1))_padding-box,var(--gradient-action-primary)_border-box]"
-          : "border-[var(--color-border)]",
-        dividers ? "divide-x divide-[var(--color-border-subtle)]" : "",
-      ].join(" ")}
-    >
-      {options.map((o, index) => {
-        const tooltipId = o.description
-          ? `${tooltipBaseId}-option-${index}`
-          : undefined;
-        return (
-          <span key={o.value} className="group/seg-option relative inline-flex">
-            <button
-              type="button"
-              aria-pressed={value === o.value}
-              aria-describedby={tooltipId}
-              disabled={disabled}
-              onClick={() => value === o.value && onDeselect ? onDeselect() : onChange(o.value)}
-              className={[
-                "px-[0.6rem] py-[0.18rem] text-[0.72rem] font-medium transition focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
-                index === 0 ? "rounded-l-full" : "",
-                index === options.length - 1 ? "rounded-r-full" : "",
-                value === o.value
-                  ? "bg-[var(--color-primary)] text-[var(--color-on-primary)]"
-                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] focus-visible:bg-[var(--color-overlay-soft)]",
-              ].join(" ")}
-            >
-              {o.label}
-            </button>
-            {o.description ? (
-              <span
-                id={tooltipId}
-                role="tooltip"
-                className="pointer-events-none absolute left-1/2 top-[calc(100%+0.4rem)] z-[500] w-max max-w-[min(16rem,calc(100vw-1rem))] -translate-x-1/2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-[0.55rem] py-[0.4rem] text-center text-[0.7rem] font-normal leading-snug text-[var(--color-text-secondary)] opacity-0 shadow-[var(--shadow-md)] transition-opacity duration-75 group-hover/seg-option:opacity-100 group-focus-within/seg-option:opacity-100"
-              >
-                {o.description}
-              </span>
-            ) : null}
-          </span>
-        );
-      })}
-    </span>
-  );
-}
+export { Segmented } from "@/app/shared/ui/Segmented";
 
 /* ── Inline action status (.act-status / .act-note) ── */
 

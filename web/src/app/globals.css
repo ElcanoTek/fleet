@@ -1660,7 +1660,7 @@ button {
   justify-content: center;
   gap: 0.4rem;
   padding: 0.5rem 0.9rem;
-  border-radius: 0.6rem;
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
   font-size: 0.875rem;
   font-weight: 500;
@@ -4117,39 +4117,78 @@ tr.sla-row-fail {
   font-size: 0.75rem;
   margin-top: 0.3rem;
 }
-/* ── Schedule: segmented Run now · Run once · Repeat mode — only one mode's
-   fields exist at a time (the old both-fields-filled state is
-   unrepresentable). Active fill rides the 140ms motion token; the focus ring
-   is inset so the pill's clipped corners don't cut it. */
-.task-segment {
-  display: inline-flex;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-pill);
-  overflow: hidden;
+/* ── Segmented control: THE single-choice switch for 2–4 mutually exclusive
+   options (theme, schedule mode, list/week, simple/cron, memory views, the
+   email preview's inbox/size). One pill track, the active option filled with
+   the brand primary. Selection is read from whichever ARIA state the control
+   uses (aria-pressed for button groups, aria-checked for radiogroups,
+   aria-selected for tablists), so behavior stays with each caller and only
+   the look is shared. Underlined page tabs, filter chips and agent-generated
+   choice cards are different patterns and do not use this.
+
+   The track does not clip (a Segmented option can carry a tooltip that hangs
+   below it), so the end options round themselves; an option may sit directly
+   in the track or inside one wrapper span. The focus ring is inset so it
+   stays inside the rounded ends. In the components layer so a Tailwind
+   utility on a caller (Segmented's gradient-border emphasis) still wins. */
+@layer components {
+  .seg {
+    display: inline-flex;
+    flex-shrink: 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-pill);
+  }
+  .seg-option {
+    padding: 0.18rem 0.6rem;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background var(--motion-fast) ease,
+      color var(--motion-fast) ease;
+  }
+  .seg > .seg-option:first-child,
+  .seg > :first-child > .seg-option {
+    border-start-start-radius: var(--radius-pill);
+    border-end-start-radius: var(--radius-pill);
+  }
+  .seg > .seg-option:last-child,
+  .seg > :last-child > .seg-option {
+    border-start-end-radius: var(--radius-pill);
+    border-end-end-radius: var(--radius-pill);
+  }
+  /* Unselected only: a hover rule that also matched the selected option
+     would outrank the selection rules and put body text on the primary
+     fill. */
+  .seg-option:not([aria-pressed="true"], [aria-checked="true"], [aria-selected="true"]):hover:not(:disabled) {
+    color: var(--color-text-primary);
+  }
+  .seg-option[aria-pressed="true"],
+  .seg-option[aria-checked="true"],
+  .seg-option[aria-selected="true"] {
+    background: var(--color-primary);
+    color: var(--color-on-primary);
+  }
+  .seg-option:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--color-accent);
+  }
+  /* Form-field size, for a segmented control that IS the field (the task
+     modal's schedule mode and repeat editor). */
+  .seg--md .seg-option {
+    padding: 0.375rem 1rem;
+    font-size: 0.78rem;
+  }
 }
-.task-segment-btn {
-  padding: 0.375rem 1rem;
-  font-size: 0.78rem;
-  font-weight: 500;
-  color: var(--color-text-muted);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition:
-    background var(--motion-fast) ease,
-    color var(--motion-fast) ease;
-}
-.task-segment-btn:hover {
-  color: var(--color-text-secondary);
-}
-.task-segment-btn.is-active {
-  background: var(--color-primary);
-  color: var(--color-on-primary);
-  font-weight: 600;
-}
-.task-segment-btn:focus-visible {
-  outline: none;
-  box-shadow: inset 0 0 0 2px var(--color-accent);
+/* Unlayered on purpose: the bare `button { cursor: pointer }` rule above is
+   unlayered too, and unlayered CSS outranks every @layer rule. */
+.seg-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 .task-schedule-caption {
   margin: 0.5rem 0 0;
@@ -4214,30 +4253,7 @@ tr.sla-row-fail {
   color: var(--color-text-muted);
 }
 .repeat-editor-tabs {
-  display: inline-flex;
-  gap: 0.25rem;
-  padding: 0.2rem;
   margin-bottom: 0.75rem;
-  border-radius: 0.5rem;
-  background: var(--color-overlay-soft);
-}
-.repeat-editor-tabs button {
-  border: 0;
-  border-radius: 0.4rem;
-  padding: 0.35rem 0.65rem;
-  background: transparent;
-  color: var(--color-text-muted);
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-.repeat-editor-tabs button.is-active {
-  background: var(--color-surface-2);
-  color: var(--color-text-primary);
-  box-shadow: var(--shadow-sm);
-}
-.repeat-editor-tabs button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 .simple-schedule-grid {
   display: grid;

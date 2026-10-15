@@ -21,6 +21,7 @@ import { useRef, useState } from "react";
 import { useTheme } from "@/app/shared/hooks/useTheme";
 import { Icon } from "./Icon";
 import { Menu, MenuItem, MenuSeparator } from "./Menu";
+import { Segmented } from "./Segmented";
 
 function Avatar({ email, className }: { email: string; className?: string }) {
   const initial = (email || "?").charAt(0).toUpperCase();
@@ -36,6 +37,12 @@ function Avatar({ email, className }: { email: string; className?: string }) {
     </span>
   );
 }
+
+const THEME_OPTIONS = [
+  { value: "system", label: "System" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+] as const;
 
 export function AccountMenu({
   email,
@@ -132,28 +139,12 @@ export function AccountMenu({
         <div className="flex items-center gap-2 px-2 py-1.5 text-[0.82rem] text-[var(--color-text-secondary)]">
           <Icon name="moon" className="size-4 shrink-0 text-[var(--color-text-muted)]" />
           <span className="min-w-0 flex-1">Theme</span>
-          <span
-            role="group"
-            aria-label="Theme"
-            className="inline-flex overflow-hidden rounded-[var(--radius-pill)] border border-[var(--color-border)]"
-          >
-            {(["system", "light", "dark"] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                aria-pressed={themePreference === value}
-                onClick={() => setTheme(value)}
-                className={[
-                  "px-[0.6rem] py-[0.18rem] text-[0.72rem] font-medium capitalize transition focus-visible:outline-none",
-                  themePreference === value
-                    ? "bg-[var(--color-primary)] text-[var(--color-on-primary)]"
-                    : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]",
-                ].join(" ")}
-              >
-                {value}
-              </button>
-            ))}
-          </span>
+          <Segmented
+            label="Theme"
+            value={themePreference}
+            options={THEME_OPTIONS}
+            onChange={setTheme}
+          />
         </div>
         <MenuSeparator />
         <MenuItem

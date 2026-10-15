@@ -58,9 +58,9 @@ import { CloseButton } from "@/app/shared/ui/CloseButton";
 // ── shared button looks (live Fleet tokens only) ─────────────────────────
 const FOCUS =
   "focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]";
-const PRIMARY_BTN = `inline-flex min-h-9 items-center gap-2 rounded-full border border-[var(--color-primary)] bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-semibold leading-tight text-[var(--color-on-primary)] transition hover:bg-[var(--color-primary-hover)] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
-const SECONDARY_BTN = `inline-flex min-h-[2.125rem] items-center gap-1.5 rounded-full border border-[var(--color-border-strong)] bg-transparent px-3.5 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
-const DANGER_OUTLINE_BTN = `inline-flex min-h-[2.125rem] items-center rounded-full border border-[var(--color-danger-border)] bg-transparent px-3.5 py-1.5 text-[0.8125rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
+const PRIMARY_BTN = `inline-flex min-h-9 items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-primary)] bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-semibold leading-tight text-[var(--color-on-primary)] transition hover:bg-[var(--color-primary-hover)] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
+const SECONDARY_BTN = `inline-flex min-h-[2.125rem] items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-transparent px-3.5 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
+const DANGER_OUTLINE_BTN = `inline-flex min-h-[2.125rem] items-center rounded-[var(--radius-md)] border border-[var(--color-danger-border)] bg-transparent px-3.5 py-1.5 text-[0.8125rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
 const LINK_BTN = `p-0 text-[0.78rem] font-medium text-[var(--color-accent)] underline underline-offset-2 ${FOCUS}`;
 const BODY = "m-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]";
 const STRONG = "font-semibold text-[var(--color-text-primary)]";
@@ -667,7 +667,7 @@ export function ShareDialog({
                     type="button"
                     disabled
                     aria-disabled="true"
-                    className="inline-flex h-9 cursor-not-allowed items-center gap-1.5 rounded-full border border-dashed border-[var(--color-border-strong)] bg-transparent px-4 text-[0.8125rem] font-semibold text-[var(--color-text-disabled)]"
+                    className="inline-flex h-9 cursor-not-allowed items-center gap-1.5 rounded-[var(--radius-md)] border border-dashed border-[var(--color-border-strong)] bg-transparent px-4 text-[0.8125rem] font-semibold text-[var(--color-text-disabled)]"
                   >
                     <LockGlyph className="size-3.5" />
                     Share with a team (unavailable)
@@ -785,7 +785,7 @@ export function ShareDialog({
                     // with the honest no-number sentence).
                     disabled={working || outputsStatus === "loading"}
                     onClick={() => void stopSharing(conversation)}
-                    className={`inline-flex min-h-[1.875rem] items-center rounded-full border border-[var(--color-danger)] bg-[var(--color-danger)] px-3.5 text-[0.78rem] font-semibold text-[var(--color-surface-1)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`}
+                    className={`inline-flex min-h-[1.875rem] items-center rounded-[var(--radius-md)] border border-[var(--color-danger)] bg-[var(--color-danger)] px-3.5 text-[0.78rem] font-semibold text-[var(--color-surface-1)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`}
                   >
                     Stop sharing
                   </button>
@@ -793,7 +793,7 @@ export function ShareDialog({
                     type="button"
                     disabled={working}
                     onClick={() => setConfirmStop(false)}
-                    className={`inline-flex min-h-[1.875rem] items-center rounded-full border border-[var(--color-border-strong)] bg-transparent px-3.5 text-[0.78rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-60 ${FOCUS}`}
+                    className={`inline-flex min-h-[1.875rem] items-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-transparent px-3.5 text-[0.78rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-60 ${FOCUS}`}
                   >
                     Keep sharing
                   </button>
@@ -871,7 +871,7 @@ export function ShareDialog({
                       <button
                         type="button"
                         onClick={() => onCopyLink(buildShareUrl(token))}
-                        className={`h-8 shrink-0 rounded-full border border-[var(--color-accent)] px-3.5 text-[0.78rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)] ${FOCUS}`}
+                        className={`h-8 shrink-0 rounded-[var(--radius-md)] border border-[var(--color-accent)] px-3.5 text-[0.78rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)] ${FOCUS}`}
                       >
                         {copied ? "Copied ✓" : "Copy link"}
                       </button>
@@ -890,7 +890,7 @@ export function ShareDialog({
                             setConfirmStopLink(false);
                             onStopLink(conversation);
                           }}
-                          className={`rounded-full border border-[var(--color-danger-border)] bg-[var(--color-danger)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`}
+                          className={`rounded-[var(--radius-md)] border border-[var(--color-danger-border)] bg-[var(--color-danger)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`}
                         >
                           {busy ? "Stopping…" : "Stop the public link"}
                         </button>
@@ -898,7 +898,7 @@ export function ShareDialog({
                           type="button"
                           disabled={working}
                           onClick={() => setConfirmStopLink(false)}
-                          className={`rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50 ${FOCUS}`}
+                          className={`rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50 ${FOCUS}`}
                         >
                           Keep the link
                         </button>
@@ -909,7 +909,7 @@ export function ShareDialog({
                           type="button"
                           disabled={working}
                           onClick={() => setConfirmStopLink(true)}
-                          className={`rounded-full border border-[var(--color-danger-border)] px-3 py-1 text-[0.75rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`}
+                          className={`rounded-[var(--radius-md)] border border-[var(--color-danger-border)] px-3 py-1 text-[0.75rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`}
                         >
                           Stop the public link
                         </button>
@@ -930,7 +930,7 @@ export function ShareDialog({
                         type="button"
                         disabled={working}
                         onClick={() => onCreateLink(conversation)}
-                        className={`rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.78rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`}
+                        className={`rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.78rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`}
                       >
                         {busy ? "Creating…" : "Create public link"}
                       </button>
@@ -945,7 +945,7 @@ export function ShareDialog({
             <button
               type="button"
               onClick={onClose}
-              className={`rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] ${FOCUS}`}
+              className={`rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] ${FOCUS}`}
             >
               Done
             </button>
@@ -1030,7 +1030,7 @@ export function ChatShareControls({
         type="button"
         data-testid="chat-header-share"
         onClick={onOpen}
-        className={`inline-flex h-[1.875rem] items-center rounded-full border border-[var(--color-border-strong)] bg-transparent px-3.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] ${FOCUS}`}
+        className={`inline-flex h-[1.875rem] items-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-transparent px-3.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] ${FOCUS}`}
       >
         Share
       </button>

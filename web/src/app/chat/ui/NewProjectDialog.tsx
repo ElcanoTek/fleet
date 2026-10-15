@@ -340,7 +340,7 @@ export function NewProjectDialog({
       <div className="flex items-center justify-end gap-2">
         <button
           type="button"
-          className="rounded-full border border-[var(--color-border-strong)] px-4 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           onClick={onClose}
         >
           Cancel
@@ -348,7 +348,7 @@ export function NewProjectDialog({
         <button
           type="button"
           disabled={!canCreate}
-          className="rounded-full bg-[var(--color-primary)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-on-primary)] transition hover:opacity-90 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
+          className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-on-primary)] transition hover:opacity-90 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
           onClick={() => void create()}
         >
           {busy ? "Creating…" : "Create project"}

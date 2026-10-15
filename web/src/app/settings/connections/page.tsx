@@ -464,13 +464,15 @@ type AddOverrides = {
   account?: string;
 };
 
-// dirAddButtonClass — the pill Add/Set up button on a directory card.
+// dirAddButtonClass — the Add/Set up button on a directory card. The action
+// takes the button radius; once added it becomes an "Added" status and takes
+// the pill, matching the badge rule in DESIGN.md.
 function dirAddButtonClass(added: boolean): string {
   return [
-    "shrink-0 rounded-[var(--radius-pill)] border bg-transparent px-[0.85rem] py-[0.24rem] text-[0.76rem] font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",
+    "shrink-0 border bg-transparent px-[0.85rem] py-[0.24rem] text-[0.76rem] font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",
     added
-      ? "border-[var(--color-success-border)] text-[var(--color-success)]"
-      : "border-[var(--color-border-strong)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-overlay-soft)] disabled:opacity-50",
+      ? "rounded-[var(--radius-pill)] border-[var(--color-success-border)] text-[var(--color-success)]"
+      : "rounded-[var(--radius-md)] border-[var(--color-border-strong)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-overlay-soft)] disabled:opacity-50",
   ].join(" ");
 }
 

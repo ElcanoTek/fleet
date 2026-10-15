@@ -142,6 +142,29 @@ pills on `rounded-full`/`--radius-pill`. Legacy steps still in the tree
 hero cards) are internally consistent families — match the surrounding file;
 don't invent new in-between values.
 
+## Button and pill shapes
+
+Shape tells a reader what can be pressed. Every **text button** (Send,
+Cancel, Done, Share, Create, Retry, Add memory, the orchestrator `.btn`
+family, the settings `btnClass`) uses `--radius-md`. Full pills
+(`rounded-full` / `--radius-pill`) are reserved for things that are not
+buttons or are chips: status and info badges, removable tag/label/filter
+chips, choice chips that add a value, segmented tracks, switch tracks, avatars,
+count bubbles, round icon-only buttons and progress bars. A helper that builds
+both (GenerativeCard's `chipButton` / `actionButton`) has to be split, not
+shared.
+
+## Segmented controls
+
+A choice between 2–4 mutually exclusive options (theme, schedule mode,
+list/week, simple/cron, memory views, the email preview's inbox and size) is
+ONE look: `.seg` / `.seg-option` in `globals.css`, a pill track with the active
+option on `--color-primary` / `--color-on-primary`. React button groups use
+`shared/ui/Segmented` (aria-pressed); a radiogroup or tablist with its own
+keyboard handling keeps its markup and semantics and takes the classes
+(`.seg--md` is the form-field size). Underlined page tabs, filter chips with
+counts and agent-generated choice cards are different patterns.
+
 ## Focus states
 
 Interactive elements use the shared ring:

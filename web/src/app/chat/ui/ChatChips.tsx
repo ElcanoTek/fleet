@@ -338,7 +338,7 @@ export function SummaryBanner({
           {collapsedRangeCount > 0 ? (
             <button
               type="button"
-              className="rounded-full px-2 py-0.5 text-[0.7rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+              className="rounded-[var(--radius-md)] px-2 py-0.5 text-[0.7rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
               onClick={onToggleExpand}
               aria-expanded={summaryExpanded}
             >
@@ -347,7 +347,7 @@ export function SummaryBanner({
           ) : null}
           <button
             type="button"
-            className="rounded-full px-2 py-0.5 text-[0.7rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-[var(--radius-md)] px-2 py-0.5 text-[0.7rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
             onClick={onResummarize}
             disabled={isSummarizing}
             title="Compact again against the current scroll. Replace semantics: this banner's text is swapped, not chained."

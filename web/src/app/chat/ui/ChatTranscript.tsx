@@ -1458,7 +1458,7 @@ function UserBubble({
           </button>
           <button
             type="button"
-            className="inline-flex items-center gap-1 rounded-full bg-[var(--color-text-primary)] px-3 py-1 text-[0.72rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-30"
+            className="inline-flex items-center gap-1 rounded-[var(--radius-md)] bg-[var(--color-text-primary)] px-3 py-1 text-[0.72rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-30"
             disabled={!draft.trim() || draft === message.content}
             onClick={saveEdit}
           >
@@ -1714,7 +1714,7 @@ export function SaveToMemoryAction({
           />
           <button
             type="button"
-            className="rounded-full bg-[var(--color-text-primary)] px-2.5 py-1 text-[0.7rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
+            className="rounded-[var(--radius-md)] bg-[var(--color-text-primary)] px-2.5 py-1 text-[0.7rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
             disabled={state === "saving"}
             onClick={() => void save(destination)}
           >
