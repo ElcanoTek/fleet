@@ -83,8 +83,11 @@ const notifyDescription = `Send a non-blocking progress update to the human.
 
 Use for a meaningful milestone or a heads-up during a long run ("finished
 stage 1 of 3", "found 4 anomalies, continuing"). The run CONTINUES — this does
-not pause or wait. Use sparingly; it is out-of-band (it may notify by email/
-webhook), not a log line.`
+not pause or wait. Use sparingly; it is out-of-band, not a log line: it may
+alert a person by email, webhook or browser notification. Your message text
+goes in an email (a webhook only if set up to include it); a browser
+notification names the task (by the start of its prompt) and never shows your
+text.`
 
 // NewNotifyTool creates the non-blocking notify tool (scheduled set).
 func NewNotifyTool() fantasy.AgentTool {

@@ -2,8 +2,12 @@
 
 Two human-in-the-loop message types for **scheduled** runs (#510):
 
-- **`notify`** — a non-blocking progress update. The run continues; the message
-  is delivered out-of-band (the notifier, #208).
+- **`notify`** — a non-blocking progress update. The run continues; the
+  notifier (#208) sends it out-of-band on the channels the operator set up. An
+  email carries the message text (a webhook only when its body template uses
+  `{{.Message}}`); a browser push (#292), sent when the task owner turned
+  browser notifications on, is a title naming the task, never the message
+  ([PUSH-NOTIFICATIONS.md](PUSH-NOTIFICATIONS.md)).
 - **`ask`** — a blocking question. The run **ends and releases its sandbox +
   lease**, the task parks in the new non-terminal `paused_awaiting_input`
   status, and a human answer re-queues it — the next run is given the Q&A and
