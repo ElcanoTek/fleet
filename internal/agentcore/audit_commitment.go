@@ -683,13 +683,14 @@ func (o *orchestrationState) resetBatchApprovals() {
 // name a full server-qualified critical tool a NARROWED run did not register
 // (narrowedMCPRoster, #1603); nil when the roster is not narrowed. The narrowing
 // removed such a tool from every path to the model — direct, deferred and
-// tool_call alike — so a call to it is answered "tool not found". An entry is
-// accepted when a registered tool could discharge it anyway: the same name, or
-// a same-server alias twin or approved substitute (the typedCommitment
-// nameMatches rule), so a declaration naming the inline write is not refused
-// when the run registered only its upload twin. Entries the full-name check in
-// registerCommittedActionsTyped drops anyway (a bare suffix, a non-critical
-// name) are left to it. Callers must hold o.mu.
+// tool_call alike — so a call to it is refused, with a result naming the
+// narrowing (#1744). An entry is accepted when a registered tool could
+// discharge it anyway: the same name, or a same-server alias twin or approved
+// substitute (the typedCommitment nameMatches rule), so a declaration naming
+// the inline write is not refused when the run registered only its upload
+// twin. Entries the full-name check in registerCommittedActionsTyped drops
+// anyway (a bare suffix, a non-critical name) are left to it. Callers must
+// hold o.mu.
 func (o *orchestrationState) unregisteredTypedActions(actions []criticalActionStruct) []string {
 	if o.narrowedMCPRoster == nil {
 		return nil
@@ -744,7 +745,7 @@ func (o *orchestrationState) narrowedStandIn(tool, suffix string, batch bool) st
 // registered — the confirm_audit confirmation, the finish-enforcement nudge
 // and the no-matching-commitment BLOCKED — naming the registered stand-in to
 // call. Without it a later nudge sends the model back to a declared tool that
-// answers "tool not found", and the run loops. "" when there is nothing to
+// the run refuses, and the run loops. "" when there is nothing to
 // name. Callers must hold o.mu.
 func (o *orchestrationState) standInClause() string {
 	notes := o.narrowedStandInNotes()
@@ -783,7 +784,7 @@ func (o *orchestrationState) legacyStandInNote(suffix string) string {
 // whose suffix no registered tool carries), the registered stand-in to call
 // instead ("declared → stand-in"). confirm_audit appends them to its
 // "execute exactly those calls" instruction, which would otherwise send the
-// model to a tool that answers "tool not found". nil when not narrowed.
+// model to a tool the run refuses. nil when not narrowed.
 // Callers must hold o.mu.
 func (o *orchestrationState) narrowedStandInNotes() []string {
 	if o.narrowedMCPRoster == nil {
@@ -858,7 +859,7 @@ func (o *orchestrationState) unregisteredLegacyActions(declared []string) []stri
 func unregisteredActionsRefusal(field string, tools []string) string {
 	return fmt.Sprintf("Audit Rejected: %s names %s, which this run cannot call, and no tool it can call "+
 		"stands in for them (an alias twin or an approved substitute on the same server). The run's MCP tools "+
-		"are narrowed to the task's required tools, and a call to any other tool is answered \"tool not found\", "+
+		"are narrowed to the task's required tools, and a call to any other tool is refused, "+
 		"so this approval could never be discharged. Declare only tools from your tool list and re-run "+
 		"confirm_audit; a tool the task needs belongs in its EXECUTION REQUIREMENTS required_tools.",
 		field, strings.Join(tools, ", "))

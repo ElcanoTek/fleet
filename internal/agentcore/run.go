@@ -509,6 +509,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// the pre-load catalog — mcp_load appeared to succeed and changed
 	// nothing). An injected deps.MCPCatalog stays static by design: the
 	// injector owns its lifecycle.
+	eng.outOfRoster = newOutOfRoster(cfg.PersonaName, usageOrch, mcpGates{
+		allow: cfg.Allowlist, exclusive: toolCfg.exclusiveAllowlist, optional: cfg.OptionalServers, optIn: optIn,
+	})
 	buildTools := func() ([]fantasy.AgentTool, toolRoster, error) {
 		catalog := deps.MCPCatalog
 		if catalog == nil {
@@ -536,6 +539,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		}
 		// A narrowed run's audit gate reads the live roster (#1603).
 		recordNarrowedRoster(deps.Policy, cfg.MCPRosterNarrowing, roster)
+		// So does out-of-roster recovery (#1744), on every build: the first
+		// and each mid-run MCP rebuild.
+		eng.outOfRoster.setRoster(roster)
 		return tools, roster, observerBoundary.Err()
 	}
 
@@ -543,10 +549,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	if err != nil {
 		return Result{}, fmt.Errorf("build tools: %w", err)
 	}
-	eng.outOfRoster = newOutOfRoster(cfg.PersonaName, usageOrch, mcpGates{
-		allow: cfg.Allowlist, exclusive: toolCfg.exclusiveAllowlist, optional: cfg.OptionalServers, optIn: optIn,
-	})
-	eng.outOfRoster.setRoster(roster)
+
 	// One breadcrumb for a narrowed roster (#1603), at the first build only: a
 	// mid-run MCP rebuild re-applies the same exhaustive allowlist but does not
 	// repeat the line.
@@ -620,7 +623,6 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			if err != nil {
 				return Result{}, fmt.Errorf("rebuild tools: %w", err)
 			}
-			eng.outOfRoster.setRoster(roster)
 			// The roster changed, so the section describing it is re-derived
 			// from the base — never appended a second time.
 			systemPrompt = withLiveRegistry(basePrompt, roster)
@@ -690,7 +692,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// checkpoint event is streamed; clients hear about the pause through the
 		// fleet.context_compacted event that follows.
 		if eng.consumeResendCheckpoint(finalResult, outcome.completedSteps+len(finalResult.Steps), messages, activeModel) {
-			messages = append(messages, carryRoundMessages(finalResult)...)
+			messages = append(messages, eng.roundCarry(finalResult)...)
 			resent := lastStepPromptTokens(finalResult)
 			steps := outcome.completedSteps + len(finalResult.Steps)
 			if !eng.windowCheckpointActive() {
@@ -766,7 +768,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 				// carry as the enforcement loop and the terminal structured-
 				// output phase; copied so the loop's own slice stays the round
 				// input (completeRun appends the carry itself).
-				finalizeMessages := append(append([]fantasy.Message(nil), messages...), carryRoundMessages(finalResult)...)
+				finalizeMessages := append(append([]fantasy.Message(nil), messages...), eng.roundCarry(finalResult)...)
 				finalText, err = finalizeWithPanicBoundary(ctx, deps.Finalize, finalizeInputFor(
 					mode, finalText, finalizeMessages, sink.toolEventCount()-roundToolMark,
 					fantasyTools, deps.Observer, systemPrompt, sink, panicAttribution, usageOrch, activeModel, cfg.MaxIterations,
@@ -821,7 +823,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// this round's text.delta events; completeRun emits text.replace with
 		// the authoritative final answer so they drop the superseded draft
 		// without discarding abort-path transcripts.
-		messages = append(messages, carryRoundMessages(finalResult)...)
+		messages = append(messages, eng.roundCarry(finalResult)...)
 		messages, err = appendEnforcementMessages(messages, enforcementMsgs, deps.Observer, observerBoundary)
 		if err != nil {
 			return Result{}, err
@@ -912,7 +914,7 @@ func completeRun(ctx context.Context, in runCompletion) (Result, error) {
 		// messages is the input to the last ordinary round. Carry its completed
 		// assistant/tool transcript so terminal formatting uses work already done.
 		terminalMessages := append([]fantasy.Message(nil), in.messages...)
-		terminalMessages = append(terminalMessages, carryRoundMessages(in.finalResult)...)
+		terminalMessages = append(terminalMessages, in.engine.roundCarry(in.finalResult)...)
 		var err error
 		outputJSON, err = in.engine.generateTerminalStructuredOutput(
 			ctx, in.activeModel, in.systemPrompt, terminalMessages,

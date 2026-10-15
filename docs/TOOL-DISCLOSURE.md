@@ -101,13 +101,18 @@ made-up name, but in the two common cases the tool does exist this run
 - **A deferred tool called by name.** Models still call `mcp_*` names above
   the threshold, and in #1006 one concluded from the refusal that the connector
   was down. Now a direct call to a name in this run's deferred registry is
-  rewritten into `tool_call {name, arguments}`, with the same call ID. It then
-  runs through the bridge exactly as a `tool_call` the model wrote: persona and
-  allowlist, credential allowlist, approval staging, audit and output
-  governance, and the transcript records it as a `tool_call`. A test pins that
-  the policy calls, staged approvals, broker dispatch and transcript are
-  identical for the two. Arguments that are still not a JSON object after
-  `jsonrepair` are not rerouted; the result says how to call `tool_call`.
+  rewritten into `tool_call {name, arguments}`, with the same call ID and the
+  model's own argument bytes. It then runs through the bridge exactly as a
+  `tool_call` the model wrote: persona and allowlist, credential allowlist,
+  approval staging, audit and output governance, and the transcript records it
+  as a `tool_call`. A test pins that the policy calls, staged approvals, broker
+  dispatch and transcript are identical for the two, arguments with spacing and
+  HTML characters included. Arguments get `tool_call`'s own leniency (malformed
+  JSON is repaired; `null` and a one-object array are taken); others are not
+  rerouted, and the result says how to call `tool_call`. If the persona denies
+  `tool_call` itself, nothing is rerouted: the live registry does not promise
+  it, and the call's result says the tool is reachable only through
+  `tool_call`, which is not in the tool list.
 - **A tool a gate removed.** The roster records which gate kept each catalog
   tool out: an optional connector the run did not turn on (`opt_in`), a
   connector's tool allowlist (`allowlist`), a narrowed roster (`narrowed`,
@@ -132,16 +137,23 @@ the gates run before the registry is built, so it is never in it.
 
 **How the explanation reaches the model.** Fantasy's repair hook can rewrite a
 call, but cannot change the error of a call it leaves invalid. So the
-explanation is kept by call ID. The run's transcript, and with it the next
-turn's history, records it in place of fantasy's text, and a prepare step sends
-it in place of fantasy's text on every later step of the run. That step
-rewrites a copy of the step's messages and gives the same text every time. The
-model first sees the result on the step after the call, already explained, so
-the prompt-cache prefix does not change.
+explanation is kept by call ID and tool name. A provider may reuse a call ID,
+and keyed by the ID alone a later failure of a tool that did run would read
+"was not called". The run's transcript, and with it the next turn's history,
+records the explanation in place of fantasy's text. Every later model call of
+the run is sent it too: a prepare step rewrites a copy of each step's
+messages, and the transcript a round carries on, to the next round, the
+finalize hook, the terminal structured output and compaction, is rewritten
+the same way. It is the same text every time, and the model first sees the
+result on the step after the call, already explained, so the prompt-cache
+prefix does not change.
 
 **Counted per model.** `fleet_tool_call_out_of_roster_total{model, reason}` on
-`/metrics` counts every such call; `reason` is `deferred`, one of the gates
-above, or `unknown`. The tool name is not a label, since catalog names can be
+`/metrics` counts every such call the model emits; `reason` is `deferred`, one
+of the gates above, or `unknown`. Fantasy repairs a step's calls before it
+knows whether it will run them, so a call in a step whose output was cut short
+(by length or a content filter) is counted, and reported as rerouted, though
+nothing ran. The tool name is not a label, since catalog names can be
 user-controlled. It is in the `fleet.tool_call_out_of_roster` Observer event
 (`id`, `tool`, `reason`, `model`, and `rerouted_to` when rerouted), which chat
 streams as an event the web client ignores, and in a log line.
@@ -160,9 +172,6 @@ Not done, deliberately:
 - No mapping of other harnesses' tool names (`str_replace_editor` →
   `edit_file`) and no per-model rosters; both are out of the issue's scope, and
   the metric is the data either would need.
-- A direct call to a deferred tool when the persona denies `tool_call` itself
-  is not rerouted and keeps fantasy's text. The bridges are exempt from a
-  persona's allow list, so only an explicit deny of `tool_call` does this.
 - A tool missing for any other reason counts as `unknown`: a native tool the
   driver did not register, a tool an allowlist admits but the server does not
   have, or a tool on a server the run knows nothing about, such as one loaded

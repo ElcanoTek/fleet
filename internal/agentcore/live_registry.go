@@ -41,7 +41,10 @@ func (r toolRoster) liveRegistrySection() string {
 		// tokens and invites a direct call.
 		fmt.Fprintf(&sb, "%d MCP tools are available this turn, but the roster is large, so they are NOT in your tool list by name. ", r.deferredMCP)
 		sb.WriteString("They are reachable only through three bridge tools: `tool_search {query}` finds tools by keyword, `tool_describe {name}` returns a tool's parameters, and `tool_call {name, arguments}` invokes it. ")
-		sb.WriteString("Use `tool_call`; a direct `mcp_*` call is rerouted through it for you. ")
+		// Unless the persona denied the bridge itself: then nothing reroutes.
+		if r.removed[toolNameToolCall] == "" {
+			sb.WriteString("Use `tool_call`; a direct `mcp_*` call is rerouted through it for you. ")
+		}
 		sb.WriteString("Tool names follow `mcp_<connector>_<tool>`; searching by the connector name or the task works. Connectors behind the bridges:\n\n")
 		servers := make([]string, 0, len(r.deferredByServer))
 		for s := range r.deferredByServer {

@@ -51,9 +51,9 @@ const (
 const eventToolCallOutOfRoster = "fleet.tool_call_out_of_roster"
 
 // outOfRoster is a run's out-of-roster state: the current roster (replaced on
-// the mid-run MCP rebuild) and the explanation for each refused call, by tool
-// call ID, which the stream sink records and explainStep sends the model in
-// place of fantasy's "tool not found". nil-safe.
+// the mid-run MCP rebuild) and the explanation for each refused call, which
+// the stream sink records and explain/explainStep send the model in place of
+// fantasy's "tool not found". nil-safe.
 type outOfRoster struct {
 	persona string
 	orch    *orchestrationState // for a narrowed run's stand-in; may be nil
@@ -61,11 +61,17 @@ type outOfRoster struct {
 
 	mu     sync.Mutex
 	roster toolRoster
-	notes  map[string]string
+	notes  map[noteKey]string
 }
 
+// noteKey is a refused call: its ID and its tool name. A provider may reuse a
+// call ID across steps, so the ID alone would put one call's explanation on
+// another tool's result: a write that ran and failed would read "was not
+// called", and invite a retry.
+type noteKey struct{ id, tool string }
+
 func newOutOfRoster(persona string, orch *orchestrationState, gates mcpGates) *outOfRoster {
-	return &outOfRoster{persona: persona, orch: orch, gates: gates, notes: map[string]string{}}
+	return &outOfRoster{persona: persona, orch: orch, gates: gates, notes: map[noteKey]string{}}
 }
 
 // mcpGates is the run's Gate-1 (opt-in) and Gate-2 (allowlist) configuration.
@@ -136,15 +142,32 @@ func (o *outOfRoster) setRoster(r toolRoster) {
 	o.mu.Unlock()
 }
 
-// note is the explanation recorded for a refused call, if any.
-func (o *outOfRoster) note(callID string) (string, bool) {
+// note is the explanation recorded for the refused call callID to tool, if any.
+func (o *outOfRoster) note(callID, tool string) (string, bool) {
 	if o == nil || callID == "" {
 		return "", false
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	n, ok := o.notes[callID]
+	n, ok := o.notes[noteKey{callID, tool}]
 	return n, ok
+}
+
+// snapshotNotes copies the recorded explanations; nil when there are none.
+func (o *outOfRoster) snapshotNotes() map[noteKey]string {
+	if o == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(o.notes) == 0 {
+		return nil
+	}
+	notes := make(map[noteKey]string, len(o.notes))
+	for k, n := range o.notes {
+		notes[k] = n
+	}
+	return notes
 }
 
 // repair is the run's fantasy RepairToolCallFunction for a stream on
@@ -165,7 +188,7 @@ func (o *outOfRoster) repair(modelSlug string, sink *streamSink) fantasy.RepairT
 		reason, repaired, note := o.classify(call, opts.AvailableTools)
 		if note != "" && call.ToolCallID != "" {
 			o.mu.Lock()
-			o.notes[call.ToolCallID] = note
+			o.notes[noteKey{call.ToolCallID, call.ToolName}] = note
 			o.mu.Unlock()
 		}
 		model := modelSlug
@@ -197,7 +220,14 @@ func (o *outOfRoster) classify(call fantasy.ToolCallContent, available []fantasy
 	}
 	o.mu.Unlock()
 
-	if deferred && hasTool(available, toolNameToolCall) {
+	if deferred {
+		if !hasTool(available, toolNameToolCall) {
+			// The persona denied the bridge itself (an explicit deny: the
+			// bridges are exempt from a persona's allow list).
+			return outOfRosterDeferred, nil, fmt.Sprintf(
+				"%s is not available in this run and was not called: it is reachable only through tool_call, "+
+					"which is not in your tool list.", call.ToolName)
+		}
 		if input, ok := deferredCallInput(call.ToolName, call.Input); ok {
 			repaired := call
 			repaired.ToolName = toolNameToolCall
@@ -264,34 +294,32 @@ func repairJSON(call fantasy.ToolCallContent) *fantasy.ToolCallContent {
 }
 
 // deferredCallInput is tool_call's input for a direct call to the deferred
-// tool name: {"name": name, "arguments": <the call's input>}. Empty input is
-// no arguments; malformed input gets jsonrepair. ok is false when the input
-// is still not a JSON object.
+// tool name: {"name": name, "arguments": <the call's input>}. The input's own
+// bytes are kept, so the policy, approval and transcript see exactly what a
+// tool_call the model wrote would carry. Empty input is no arguments;
+// malformed JSON gets jsonrepair. ok is false when tool_call would refuse the
+// arguments anyway (normalizeDeferredArguments: an object, null, or a
+// one-object array).
 func deferredCallInput(name, input string) (string, bool) {
 	args := strings.TrimSpace(input)
 	if args == "" {
 		args = "{}"
 	}
-	if !isJSONObject(args) {
+	if !json.Valid([]byte(args)) {
 		repaired, err := jsonrepair.RepairJSON(args)
-		if err != nil || !isJSONObject(repaired) {
+		if err != nil || !json.Valid([]byte(repaired)) {
 			return "", false
 		}
-		args = repaired
+		args = strings.TrimSpace(repaired)
 	}
-	out, err := json.Marshal(struct {
-		Name      string          `json:"name"`
-		Arguments json.RawMessage `json:"arguments"`
-	}{name, json.RawMessage(args)})
+	if _, err := normalizeDeferredArguments(json.RawMessage(args)); err != nil {
+		return "", false
+	}
+	quoted, err := json.Marshal(name)
 	if err != nil {
 		return "", false
 	}
-	return string(out), true
-}
-
-func isJSONObject(s string) bool {
-	var v map[string]any
-	return json.Unmarshal([]byte(s), &v) == nil && v != nil
+	return `{"name":` + string(quoted) + `,"arguments":` + args + `}`, true
 }
 
 // explainStep is a PrepareStep that sends the model, for each refused call
@@ -301,31 +329,42 @@ func isJSONObject(s string) bool {
 // is unchanged: the model first sees a refused call's result on the step
 // after the call, already explained.
 func (o *outOfRoster) explainStep(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
-	if o == nil {
-		return ctx, fantasy.PrepareStepResult{}, nil
-	}
-	o.mu.Lock()
-	if len(o.notes) == 0 {
-		o.mu.Unlock()
-		return ctx, fantasy.PrepareStepResult{}, nil
-	}
-	notes := make(map[string]string, len(o.notes))
-	for id, n := range o.notes {
-		notes[id] = n
-	}
-	o.mu.Unlock()
-	if msgs, changed := explainResults(opts.Messages, notes); changed {
+	if msgs, changed := explainResults(opts.Messages, o.snapshotNotes()); changed {
 		return ctx, fantasy.PrepareStepResult{Messages: msgs}, nil
 	}
 	return ctx, fantasy.PrepareStepResult{}, nil
 }
 
-// explainResults replaces the error output of each tool result with a note
-// by its call ID, copying only what it changes. changed is false when no
-// result had a note.
-func explainResults(msgs []fantasy.Message, notes map[string]string) ([]fantasy.Message, bool) {
+// explain is msgs with the refused calls' explanations in place of fantasy's
+// text: for a round's transcript as the run carries it on (engine.roundCarry)
+// to the next round, the finalize hook, the terminal structured-output phase
+// and compaction, so every later model call sees what the model was sent.
+func (o *outOfRoster) explain(msgs []fantasy.Message) []fantasy.Message {
+	if out, changed := explainResults(msgs, o.snapshotNotes()); changed {
+		return out
+	}
+	return msgs
+}
+
+// explainResults replaces the error output of each tool result that has a
+// note, by its call ID and the tool the preceding assistant message called,
+// copying only what it changes. changed is false when nothing changed.
+func explainResults(msgs []fantasy.Message, notes map[noteKey]string) ([]fantasy.Message, bool) {
+	if len(notes) == 0 {
+		return nil, false
+	}
 	var out []fantasy.Message
+	called := map[string]string{} // call ID → tool, from the latest assistant message
 	for i, m := range msgs {
+		if m.Role == fantasy.MessageRoleAssistant {
+			clear(called)
+			for _, p := range m.Content {
+				if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](p); ok {
+					called[tc.ToolCallID] = tc.ToolName
+				}
+			}
+			continue
+		}
 		if m.Role != fantasy.MessageRoleTool {
 			continue
 		}
@@ -335,11 +374,12 @@ func explainResults(msgs []fantasy.Message, notes map[string]string) ([]fantasy.
 			if !ok {
 				continue
 			}
-			n, ok := notes[tr.ToolCallID]
+			n, ok := notes[noteKey{tr.ToolCallID, called[tr.ToolCallID]}]
 			if !ok {
 				continue
 			}
-			if _, isErr := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Output); !isErr {
+			e, isErr := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Output)
+			if !isErr || (e.Error != nil && e.Error.Error() == n) {
 				continue
 			}
 			if parts == nil {

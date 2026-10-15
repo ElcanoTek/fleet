@@ -726,8 +726,8 @@ Consequences worth stating plainly:
     (`recordNarrowedRoster`), refreshed at the first tool build and every
     mid-run MCP rebuild.
   - The run log carries one `[roster] required_tools_only: N mcp tools
-    registered` breadcrumb. A call to a tool the narrowing removed is answered
-    `tool not found`.
+    registered` breadcrumb. A call to a tool the narrowing removed is refused,
+    and its result says the run's tools are narrowed (#1744).
   - Roster order is unchanged (catalog order, as the prompt-cache contract
     requires).
 

@@ -2,8 +2,10 @@ package agentcore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
@@ -177,6 +179,7 @@ func TestOutOfRoster_DeferredCallRunsThroughToolCall(t *testing.T) {
 	}{
 		{"a critical tool is staged for approval", "mcp_srv_stripe_refund_charge_2", `{"amount":5}`, true},
 		{"another tool runs", "mcp_srv_slack_send_message_0", `{"text":"hi"}`, false},
+		{"arguments keep their own bytes", "mcp_srv_slack_send_message_0", `{ "text": "<b>hi</b> & bye" }`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bridged := run(t, oorCall{"c1", toolNameToolCall, `{"name":"` + tc.tool + `","arguments":` + tc.args + `}`})
@@ -184,7 +187,7 @@ func TestOutOfRoster_DeferredCallRunsThroughToolCall(t *testing.T) {
 			if !reflect.DeepEqual(direct, bridged) {
 				t.Fatalf("a direct call to a deferred tool differs from a tool_call:\ndirect:  %+v\nbridged: %+v", direct, bridged)
 			}
-			wantBroker := "srv/" + strings.TrimPrefix(tc.tool, "mcp_srv_") + " " + tc.args
+			wantBroker := "srv/" + strings.TrimPrefix(tc.tool, "mcp_srv_") + " " + compactJSON(t, tc.args)
 			if tc.staged {
 				wantBroker = "/ " // blocked pending approval: never dispatched
 			}
@@ -366,18 +369,23 @@ func TestOutOfRoster_DeferredCallWithBadArguments(t *testing.T) {
 }
 
 // explainResults rewrites copies: the run's own history keeps fantasy's
-// result, and results without a note, or that are not errors, are untouched.
+// result, and results without a note for their call ID and tool, or that are
+// not errors, are untouched.
 func TestOutOfRoster_ExplainResultsCopies(t *testing.T) {
 	notFound := fantasy.ToolResultOutputContentError{Error: errors.New("tool not found: x")}
 	msgs := []fantasy.Message{
-		fantasy.NewUserMessage("hi"),
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ToolCallPart{ToolCallID: "a", ToolName: "x"},
+			fantasy.ToolCallPart{ToolCallID: "b", ToolName: "x"},
+			fantasy.ToolCallPart{ToolCallID: "c", ToolName: "x"},
+		}},
 		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
 			fantasy.ToolResultPart{ToolCallID: "a", Output: notFound},
 			fantasy.ToolResultPart{ToolCallID: "b", Output: notFound},
 			fantasy.ToolResultPart{ToolCallID: "c", Output: fantasy.ToolResultOutputContentText{Text: "ok"}},
 		}},
 	}
-	out, changed := explainResults(msgs, map[string]string{"a": "explained", "c": "never"})
+	out, changed := explainResults(msgs, map[noteKey]string{{"a", "x"}: "explained", {"c", "x"}: "never", {"b", "other"}: "wrong tool"})
 	if !changed {
 		t.Fatal("want a change")
 	}
@@ -395,8 +403,11 @@ func TestOutOfRoster_ExplainResultsCopies(t *testing.T) {
 	if text(msgs, 0) != "tool not found: x" {
 		t.Errorf("the original history was changed: %q", text(msgs, 0))
 	}
-	if _, changed := explainResults(msgs, map[string]string{"z": "n"}); changed {
+	if _, changed := explainResults(msgs, map[noteKey]string{{"z", "x"}: "n"}); changed {
 		t.Error("no note matched, yet a change was reported")
+	}
+	if again, changed := explainResults(out, map[noteKey]string{{"a", "x"}: "explained"}); changed || len(again) != 0 {
+		t.Error("an already explained result was copied again")
 	}
 }
 
@@ -421,17 +432,20 @@ func TestOutOfRoster_NarrowedNoteNamesTheStandIn(t *testing.T) {
 func TestOutOfRoster_FinalizeInputCarriesTheRecovery(t *testing.T) {
 	o := newOutOfRoster("", nil, mcpGates{})
 	o.setRoster(toolRoster{deferredMCP: 1, mcp: []string{"mcp_srv_x"}})
-	o.notes["c1"] = "explained"
+	o.notes[noteKey{"c1", "mcp_y"}] = "explained"
 	in := finalizeInputFor(ModeInteractive, "", nil, 0, nil, nil, "", nil, panicAttribution{}, nil, nil, 0, o)
 
-	msgs := []fantasy.Message{{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
-		fantasy.ToolResultPart{ToolCallID: "c1", Output: fantasy.ToolResultOutputContentError{Error: errors.New("tool not found: mcp_y")}},
-	}}}
+	msgs := []fantasy.Message{
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "c1", ToolName: "mcp_y"}}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+			fantasy.ToolResultPart{ToolCallID: "c1", Output: fantasy.ToolResultOutputContentError{Error: errors.New("tool not found: mcp_y")}},
+		}},
+	}
 	_, res, err := in.GuardStep(nil)(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
-	if err != nil || len(res.Messages) != 1 {
+	if err != nil || len(res.Messages) != 2 {
 		t.Fatalf("GuardStep: %v, %d messages", err, len(res.Messages))
 	}
-	tr, _ := fantasy.AsMessagePart[fantasy.ToolResultPart](res.Messages[0].Content[0])
+	tr, _ := fantasy.AsMessagePart[fantasy.ToolResultPart](res.Messages[1].Content[0])
 	if e, _ := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Output); e.Error == nil || e.Error.Error() != "explained" {
 		t.Fatalf("the finalize retry's model is not sent the explanation: %+v", tr.Output)
 	}
@@ -495,4 +509,194 @@ func TestOutOfRoster_GateOfAToolTheBrokerAlreadyDropped(t *testing.T) {
 			}
 		})
 	}
+}
+
+// compactJSON is s re-encoded as the broker's json.Marshal writes it.
+func compactJSON(t *testing.T, s string) string {
+	t.Helper()
+	var v any
+	if err := json.Unmarshal([]byte(s), &v); err != nil {
+		t.Fatal(err)
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// failTool is a native tool whose call fails, after doing its work.
+type failTool struct{ name, msg string }
+
+func (f failTool) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{Name: f.name, Description: "fails", Parameters: map[string]any{"type": "object"}}
+}
+func (f failTool) ProviderOptions() fantasy.ProviderOptions     { return nil }
+func (f failTool) SetProviderOptions(_ fantasy.ProviderOptions) {}
+func (f failTool) Run(context.Context, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	return fantasy.NewTextErrorResponse(f.msg), nil
+}
+
+// A provider may reuse a call ID. An explanation belongs to the refused call
+// alone: a later call with the same ID to a registered tool that ran and
+// failed keeps its own error, never "was not called".
+func TestOutOfRoster_AReusedCallIDKeepsEachResult(t *testing.T) {
+	const failed = "upstream 500: write may have partially applied"
+	session := NewLogSession()
+	model := newOORModel("oor-reused-id",
+		[]oorCall{{"call_0", "secret_tool", `{}`}},
+		[]oorCall{{"call_0", "write_thing", `{}`}},
+	)
+	runOOR(t, RunConfig{
+		NativeTools:   []fantasy.AgentTool{echoTool{name: "secret_tool", out: "ran"}, failTool{name: "write_thing", msg: failed}},
+		PersonaPolicy: &PersonaToolPermissions{Deny: []string{"secret_tool"}},
+	}, Deps{Model: model, LogSession: session})
+	tr := transcriptOf(session)
+	if !slices.Contains(tr, "result write_thing "+failed) {
+		t.Fatalf("the failed write must keep its own error, transcript %v", tr)
+	}
+	if !slices.Contains(tr, "result secret_tool secret_tool is not available in this run and was not called: this persona's tool policy does not allow it.") {
+		t.Fatalf("the refused call must keep its explanation, transcript %v", tr)
+	}
+	if got := model.resultSeen(3, "call_0"); got != failed {
+		t.Fatalf("the model was sent %q for the failed write, want its own error", got)
+	}
+}
+
+// The terminal structured-output phase, which takes the round's transcript
+// from the carry rather than a stream, is sent the explanation too.
+func TestOutOfRoster_TerminalOutputSeesTheExplanation(t *testing.T) {
+	script := newOORModel("unused", []oorCall{{"c1", "secret_tool", `{}`}})
+	model := &terminalTestModel{provider: "anthropic", model: "oor-terminal", responses: []*fantasy.Response{terminalToolResponse(`{"answer":1}`)}}
+	model.streamFunc = script.streamFunc
+	runOOR(t, RunConfig{
+		OutputSchema:  json.RawMessage(terminalTestSchema),
+		NativeTools:   []fantasy.AgentTool{echoTool{name: "secret_tool", out: "ran"}},
+		PersonaPolicy: &PersonaToolPermissions{Deny: []string{"secret_tool"}},
+	}, Deps{Model: model})
+	const want = "secret_tool is not available in this run and was not called: this persona's tool policy does not allow it."
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if len(model.generate) != 1 {
+		t.Fatalf("terminal calls = %d, want 1", len(model.generate))
+	}
+	for _, m := range model.generate[0].Prompt {
+		for _, p := range m.Content {
+			if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](p); ok && tr.ToolCallID == "c1" {
+				if e, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Output); !ok || e.Error.Error() != want {
+					t.Fatalf("the terminal phase was sent %+v, want the explanation", tr.Output)
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("the terminal phase was not sent the refused call's result")
+}
+
+// The sink substitutes the explanation only for an error result: a call that
+// succeeded keeps its own text whatever note shares its ID and tool.
+func TestOutOfRoster_SinkExplainsOnlyErrors(t *testing.T) {
+	o := newOutOfRoster("", nil, mcpGates{})
+	o.notes[noteKey{"c1", "t"}] = "explained"
+	sink := newStreamSink(nil)
+	sink.outOfRoster = o
+	sink.onToolResult("c1", "t", "ok", false)
+	sink.onToolResult("c1", "t", "tool not found: t", true)
+	sink.onToolResult("c1", "other", "boom", true)
+	got := make([]string, 0, len(sink.entries))
+	for _, e := range sink.entries {
+		got = append(got, e.Text)
+	}
+	if want := []string{"ok", "explained", "boom"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("recorded %v, want %v", got, want)
+	}
+}
+
+// A deferred tool's arguments get tool_call's own leniency: malformed JSON is
+// repaired, and null or a one-object array are accepted as tool_call accepts
+// them.
+func TestOutOfRoster_DeferredArgumentsAsToolCallTakesThem(t *testing.T) {
+	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "5")
+	for _, tc := range []struct{ input, want string }{
+		{`{"text":"hi",}`, `{"text":"hi"}`},
+		{`null`, `{}`},
+		{`[{"text":"hi"}]`, `{"text":"hi"}`},
+		{``, `{}`},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			broker := &fakeBroker{}
+			model := newOORModel("oor-args", []oorCall{{"c1", "mcp_srv_slack_send_message_0", tc.input}})
+			runOOR(t, RunConfig{NativeTools: discNative(3)}, Deps{Model: model, MCPCatalog: discMCPTools(20), MCPBroker: broker})
+			if broker.lastTool != "slack_send_message_0" || broker.lastArgs != tc.want {
+				t.Fatalf("broker got %q %s, want slack_send_message_0 %s (the model was sent %q)", broker.lastTool, broker.lastArgs, tc.want, model.resultSeen(2, "c1"))
+			}
+		})
+	}
+}
+
+// When the persona denies tool_call itself, nothing reroutes: the prompt does
+// not promise it, and a direct call to a deferred tool says why it failed.
+func TestOutOfRoster_PersonaDeniesTheBridge(t *testing.T) {
+	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "5")
+	broker := &fakeBroker{}
+	obs := &oorEvents{}
+	var prompt string
+	model := newOORModel("oor-no-bridge", []oorCall{{"c1", "mcp_srv_slack_send_message_0", `{}`}})
+	inner := model.streamFunc
+	model.streamFunc = func(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+		for _, m := range call.Prompt {
+			for _, p := range m.Content {
+				if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](p); ok && m.Role == fantasy.MessageRoleSystem {
+					prompt = tp.Text
+				}
+			}
+		}
+		return inner(ctx, call)
+	}
+	runOOR(t, RunConfig{NativeTools: discNative(3), PersonaPolicy: &PersonaToolPermissions{Deny: []string{"tool_call"}}},
+		Deps{Model: model, MCPCatalog: discMCPTools(20), MCPBroker: broker, Observer: obs})
+	const want = "mcp_srv_slack_send_message_0 is not available in this run and was not called: it is reachable only through tool_call, which is not in your tool list."
+	if got := model.resultSeen(2, "c1"); got != want || broker.lastTool != "" {
+		t.Fatalf("result %q (broker %q), want %q", got, broker.lastTool, want)
+	}
+	if strings.Contains(prompt, "rerouted") {
+		t.Fatalf("the prompt promises rerouting with the bridge denied:\n%s", prompt)
+	}
+	obs.mu.Lock()
+	defer obs.mu.Unlock()
+	if len(obs.events) != 1 || obs.events[0]["reason"] != "deferred" || obs.events[0]["rerouted_to"] != nil {
+		t.Fatalf("events = %v, want one deferred, not rerouted", obs.events)
+	}
+}
+
+// After a fallback swap, the count is labelled with the model that made the
+// call.
+func TestOutOfRoster_CountsTheFallbackModel(t *testing.T) {
+	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "5")
+	t.Setenv("FLEET_RETRY_MAX_ATTEMPTS", "0")
+	// Failover is cross-provider, so the primary needs a provider of its own.
+	primary := &otherProviderModel{namedMockModel: namedMockModel{name: "oor-primary"}}
+	primary.streamFunc = func(context.Context, fantasy.Call) (fantasy.StreamResponse, error) {
+		return nil, &fantasy.ProviderError{StatusCode: http.StatusServiceUnavailable, Message: "capacity"}
+	}
+	fallback := newOORModel("oor-fallback-model", []oorCall{{"c1", "mcp_srv_slack_send_message_0", `{}`}})
+	runOOR(t, RunConfig{NativeTools: discNative(3)}, Deps{Model: primary, FallbackModel: fallback, MCPCatalog: discMCPTools(20)})
+	counts := grepLines(metrics.Render(), "fleet_tool_call_out_of_roster_total{")
+	if !strings.Contains(counts, `{model="oor-fallback-model",reason="deferred"} 1`) || strings.Contains(counts, `model="oor-primary"`) {
+		t.Fatalf("want the call counted under the fallback model:\n%s", counts)
+	}
+}
+
+type otherProviderModel struct{ namedMockModel }
+
+func (m *otherProviderModel) Provider() string { return "other-provider" }
+
+func grepLines(s, sub string) string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.Contains(l, sub) {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
 }
