@@ -39,7 +39,22 @@ channel consumes.
    `https:` scheme) before handing the contact over: the token it signs names
    the contact with exactly one scheme, which Apple's push service requires.
 
-3. Restart fleet. The startup log prints `web push: enabled`.
+   A contact that cannot be a `mailto:` address or an `https:` URL still
+   turns push on, but fleet logs one `webpush: WARNING FLEET_VAPID_CONTACT is
+   not a usable contact: it …` line at startup that says what is wrong and
+   which forms work. It catches nothing after `mailto:`, an address with no
+   `@` or nothing on one side of it, a scheme other than `mailto:` or
+   `https:` (an `http:` URL, say), a space or angle brackets
+   (`mailto: <you@example.com>`), and an `https:` URL with no host. It names
+   a wrong scheme but never quotes the rest of the value. Push stays on
+   because the push services differ: Apple's, which delivers to Safari, may
+   refuse every notification signed with such a contact (it answers `403`
+   with reason `BadJwtToken`), while others may still deliver them. The check
+   is about form only: it does not know whether a push service accepts the
+   address's domain, so a contact it passes can still be refused.
+
+3. Restart fleet. The startup log prints `web push: enabled`, after the
+   warning above when there is one.
 
 4. Each user opts in per browser with the **Settings → General → Browser
    notifications** switch. The flow asks for notification permission,
@@ -66,7 +81,8 @@ code when it gives one (Apple's names one in a JSON `reason` field, such as
 never the rest of the response. The line names both causes, because a key pair
 that does not match, a bad `FLEET_VAPID_CONTACT` or a wrong host clock are
 refused the same way: a refusal that persists after browsers have reopened
-fleet points at the configuration, which renewal cannot fix.
+fleet points at the configuration, which renewal cannot fix. (A contact whose
+form is wrong is also named by the startup warning in step 2 of the setup.)
 
 Each browser renews its own subscription: on a page load (`PushKeyRenewal` in
 the root layout, skipped on `/login` and `/shared` pages) and again each time

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -800,5 +801,176 @@ func TestNewClient_NoRedirectsAndTheDefaultTransport(t *testing.T) {
 	}
 	if c.Timeout != sendTimeout {
 		t.Errorf("Timeout = %v, want %v", c.Timeout, sendTimeout)
+	}
+}
+
+// contactProblem flags a FLEET_VAPID_CONTACT that cannot be a mailto: address
+// or an https: URL, and nothing else: a warning on a contact that works would
+// teach operators to ignore it.
+func TestContactProblem(t *testing.T) {
+	for _, tc := range []struct{ contact, want string }{
+		// Usable: what the docs and `fleet generate-vapid-keys` describe, in the
+		// forms vapidSubscriber accepts, and addresses a stricter check would
+		// wrongly refuse.
+		{"mailto:ops@example.com", ""},
+		{"MAILTO:ops@example.com", ""},
+		{" mailto:ops@example.com ", ""},
+		{"mailto: ops@example.com", ""}, // vapidSubscriber trims after the scheme
+		{"ops@example.com", ""},
+		{"mailto:ops+push@example.com", ""},
+		{"mailto:ops@mail.eu.example.co.uk", ""},
+		{"mailto:ops@bücher.example", ""},
+		{"mailto:ops@xn--bcher-kva.example", ""},
+		{"mailto:ops@example.com?subject=fleet%20push", ""},
+		{"mailto:a@b", ""},
+		{"https://ops.example.com/abuse", ""},
+		{"HTTPS://ops.example.com/abuse", ""},
+		{"https://example.com", ""},
+		{"https://example.com:8443/contact", ""},
+		{"https://例え.jp/contact", ""},
+
+		// Unusable.
+		{"", "is empty"},
+		{"   ", "is empty"},
+		{"mailto:", `has no address after "mailto:"`},
+		{"mailto:   ", `has no address after "mailto:"`},
+		{"MAILTO:", `has no address after "mailto:"`},
+		{"http://example.com", `starts with "http:" rather than "mailto:" or "https:"`},
+		{"HTTP://example.com/contact", `starts with "http:" rather than "mailto:" or "https:"`},
+		{"ftp:x", `starts with "ftp:" rather than "mailto:" or "https:"`},
+		{"tel:+15551234567", `starts with "tel:" rather than "mailto:" or "https:"`},
+		{"mailto:mailto:ops@example.com", `has "mailto:" after "mailto:" where the address belongs`},
+		{"mailto:https://example.com", `has "https:" after "mailto:" where the address belongs`},
+		{"admin", `has no "@", so it is not an e-mail address`},
+		{"example.com", `has no "@", so it is not an e-mail address`},
+		{"mailto:admin", `has no "@", so it is not an e-mail address`},
+		{"@example.com", `has nothing before the "@"`},
+		{"mailto:ops@", `has nothing after the "@"`},
+		{"mailto: <ops@example.com>", "contains a space or angle brackets"},
+		{"Ops Team <ops@example.com>", "contains a space or angle brackets"},
+		{"mailto:ops @example.com", "contains a space or angle brackets"},
+		{"https://exa mple.com", "contains a space or angle brackets"},
+		{"https:", "is an https: URL with no host"},
+		{"https://", "is an https: URL with no host"},
+		{"https:example.com", "is an https: URL with no host"},
+		{"https:///contact", "is an https: URL with no host"},
+		{"https://:443", "is an https: URL with no host"},
+		{"https://example.com:port", "is not a valid https: URL"},
+	} {
+		if got := contactProblem(tc.contact); got != tc.want {
+			t.Errorf("contactProblem(%q) = %q, want %q", tc.contact, got, tc.want)
+			continue
+		}
+		if tc.want != "" {
+			continue
+		}
+		// A usable contact reaches the token as a mailto: address or an
+		// https:// URL (webpush-go adds "mailto:" to anything not "https:").
+		sub := vapidSubscriber(tc.contact)
+		if !strings.HasPrefix(sub, "https:") {
+			sub = "mailto:" + sub
+		}
+		mailto := strings.HasPrefix(sub, "mailto:") && strings.Contains(sub, "@")
+		if !mailto && !strings.HasPrefix(sub, "https://") {
+			t.Errorf("contact %q passes but its claim is %q", tc.contact, sub)
+		}
+	}
+}
+
+// An unusable contact is named once, when push is enabled, through the
+// package's log seam; push stays enabled, a send adds no second warning, and
+// no key reaches the line, not even a private key a slipped env-file put in
+// the contact.
+func TestNew_WarnsOnceAboutAnUnusableContact(t *testing.T) {
+	for _, tc := range []struct {
+		name, contact, problem string
+		pasteKey               bool // the contact is the private key
+	}{
+		{name: "empty mailto", contact: "mailto:", problem: `it has no address after "mailto:"`},
+		{name: "http URL", contact: "http://ops.example.com/contact", problem: `it starts with "http:"`},
+		{name: "private key pasted as the contact", pasteKey: true, problem: `it has no "@"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			cfg.Contact = tc.contact
+			if tc.pasteKey {
+				cfg.Contact = cfg.VAPIDPrivateKey
+			}
+			var logged []string
+			logf := func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+			st := &fakeStore{subs: []store.PushSubscription{testSubscription(t, "https://fcm.googleapis.com/fcm/send/ep")}}
+
+			relay := &fakeRelay{}
+			svc := newService(cfg, st, relay, logf)
+			if !svc.Enabled() {
+				t.Fatal("an unusable contact must warn, not turn push off")
+			}
+			if len(logged) != 1 {
+				t.Fatalf("log = %q, want one warning", logged)
+			}
+			for _, want := range []string{"WARNING", "FLEET_VAPID_CONTACT is not a usable contact", tc.problem, "BadJwtToken", "mailto:you@example.com", "https://example.com/contact"} {
+				if !strings.Contains(logged[0], want) {
+					t.Errorf("warning = %q, want it to mention %q", logged[0], want)
+				}
+			}
+			for name, secret := range map[string]string{"private key": cfg.VAPIDPrivateKey, "public key": cfg.VAPIDPublicKey} {
+				if strings.Contains(logged[0], secret) {
+					t.Errorf("warning carries the %s: %q", name, logged[0])
+				}
+			}
+
+			if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", UrgencyNormal); err != nil {
+				t.Fatalf("sendToUser: %v", err)
+			}
+			if len(relay.requests) != 1 {
+				t.Fatalf("got %d relay requests, want 1: push must still send", len(relay.requests))
+			}
+			if len(logged) != 1 {
+				t.Errorf("log = %q; the warning belongs to startup, not to each send", logged)
+			}
+		})
+	}
+
+	// A usable contact, and push left off, log nothing.
+	var logged []string
+	logf := func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	if svc := newService(testConfig(t), &fakeStore{}, nil, logf); svc == nil {
+		t.Fatal("newService returned nil for an enabled config")
+	}
+	if svc := newService(Config{}, &fakeStore{}, nil, logf); svc != nil {
+		t.Error("newService must return nil for a disabled config")
+	}
+	if len(logged) != 0 {
+		t.Errorf("log = %q, want nothing", logged)
+	}
+}
+
+// Both exported constructors build through newService, so each warns once on
+// the process logger, and NewWithHTTPClient keeps the caller's client.
+func TestNewAndNewWithHTTPClient_WarnOnTheProcessLogger(t *testing.T) {
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(prevOut); log.SetFlags(prevFlags) })
+
+	cfg := testConfig(t)
+	cfg.Contact = "mailto:"
+	relay := &fakeRelay{}
+	for name, build := range map[string]func() *Service{
+		"New":               func() *Service { return New(cfg, &fakeStore{}) },
+		"NewWithHTTPClient": func() *Service { return NewWithHTTPClient(cfg, &fakeStore{}, relay) },
+	} {
+		buf.Reset()
+		svc := build()
+		if !svc.Enabled() {
+			t.Fatalf("%s: push must stay on", name)
+		}
+		if n := strings.Count(buf.String(), "FLEET_VAPID_CONTACT is not a usable contact"); n != 1 {
+			t.Errorf("%s logged the warning %d times, want once: %q", name, n, buf.String())
+		}
+		if name == "NewWithHTTPClient" && svc.client != relay {
+			t.Errorf("NewWithHTTPClient replaced the caller's client with %T", svc.client)
+		}
 	}
 }
