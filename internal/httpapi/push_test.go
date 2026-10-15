@@ -99,7 +99,7 @@ func TestPushSubscribeLifecycle(t *testing.T) {
 	st := s.concreteStore(t)
 
 	sub := map[string]any{
-		"endpoint": "https://relay.example/ep1",
+		"endpoint": "https://fcm.googleapis.com/fcm/send/ep1",
 		"keys":     map[string]string{"auth": "auth-b64", "p256dh": "p256dh-b64"},
 	}
 	if w := do(t, h, http.MethodPost, "/push/subscribe", sub, "u@x.com"); w.Code != http.StatusNoContent {
@@ -113,7 +113,7 @@ func TestPushSubscribeLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(subs) != 1 || subs[0].Endpoint != "https://relay.example/ep1" || subs[0].KeysAuth != "auth-b64" {
+	if len(subs) != 1 || subs[0].Endpoint != "https://fcm.googleapis.com/fcm/send/ep1" || subs[0].KeysAuth != "auth-b64" {
 		t.Fatalf("stored rows: %+v", subs)
 	}
 
@@ -146,7 +146,7 @@ func TestPushSubscribeLifecycle(t *testing.T) {
 func TestPushStatus(t *testing.T) {
 	_, h := pushFixture(t)
 	sub := map[string]any{
-		"endpoint": "https://relay.example/ep-status",
+		"endpoint": "https://fcm.googleapis.com/fcm/send/ep-status",
 		"keys":     map[string]string{"auth": "auth-b64", "p256dh": "p256dh-b64"},
 	}
 	status := func(user, endpoint string) string {
@@ -158,24 +158,24 @@ func TestPushStatus(t *testing.T) {
 		return strings.TrimSpace(w.Body.String())
 	}
 
-	if got := status("u@x.com", "https://relay.example/ep-status"); got != `{"subscribed":false}` {
+	if got := status("u@x.com", "https://fcm.googleapis.com/fcm/send/ep-status"); got != `{"subscribed":false}` {
 		t.Fatalf("before subscribing: %s", got)
 	}
 	if w := do(t, h, http.MethodPost, "/push/subscribe", sub, "u@x.com"); w.Code != http.StatusNoContent {
 		t.Fatalf("subscribe: %d body=%s", w.Code, w.Body.String())
 	}
-	if got := status("u@x.com", "https://relay.example/ep-status"); got != `{"subscribed":true}` {
+	if got := status("u@x.com", "https://fcm.googleapis.com/fcm/send/ep-status"); got != `{"subscribed":true}` {
 		t.Errorf("owner: %s", got)
 	}
 	// The same browser endpoint, asked about by another account.
-	if got := status("other@x.com", "https://relay.example/ep-status"); got != `{"subscribed":false}` {
+	if got := status("other@x.com", "https://fcm.googleapis.com/fcm/send/ep-status"); got != `{"subscribed":false}` {
 		t.Errorf("another account: %s", got)
 	}
 	// The owner's row is gone (unsubscribed, or reaped after a 404/410).
 	if w := do(t, h, http.MethodDelete, "/push/unsubscribe", sub, "u@x.com"); w.Code != http.StatusNoContent {
 		t.Fatalf("unsubscribe: %d", w.Code)
 	}
-	if got := status("u@x.com", "https://relay.example/ep-status"); got != `{"subscribed":false}` {
+	if got := status("u@x.com", "https://fcm.googleapis.com/fcm/send/ep-status"); got != `{"subscribed":false}` {
 		t.Errorf("after unsubscribe: %s", got)
 	}
 	if w := do(t, h, http.MethodPost, "/push/status", map[string]any{}, "u@x.com"); w.Code != http.StatusBadRequest {
@@ -196,11 +196,11 @@ func TestPushStatus_ViewerCanAsk(t *testing.T) {
 	}, s.concreteStore(t))
 	h := s.Routes()
 
-	w := do(t, h, http.MethodPost, "/push/status", map[string]any{"endpoint": "https://relay.example/v"}, "viewer@x.com")
+	w := do(t, h, http.MethodPost, "/push/status", map[string]any{"endpoint": "https://fcm.googleapis.com/fcm/send/v"}, "viewer@x.com")
 	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"subscribed":false}` {
 		t.Fatalf("viewer status: %d %s", w.Code, w.Body.String())
 	}
-	sub := map[string]any{"endpoint": "https://relay.example/v", "keys": map[string]string{"auth": "a", "p256dh": "p"}}
+	sub := map[string]any{"endpoint": "https://fcm.googleapis.com/fcm/send/v", "keys": map[string]string{"auth": "a", "p256dh": "p"}}
 	if w := do(t, h, http.MethodPost, "/push/subscribe", sub, "viewer@x.com"); w.Code != http.StatusForbidden {
 		t.Errorf("viewer subscribe: %d, want 403 (the write guard still applies)", w.Code)
 	}
@@ -213,12 +213,12 @@ func TestPushRenew(t *testing.T) {
 	s, h := pushFixture(t)
 	st := s.concreteStore(t)
 	keys := map[string]string{"auth": "auth-b64", "p256dh": "p256dh-b64"}
-	if w := do(t, h, http.MethodPost, "/push/subscribe", map[string]any{"endpoint": "https://relay.example/old", "keys": keys}, "u@x.com"); w.Code != http.StatusNoContent {
+	if w := do(t, h, http.MethodPost, "/push/subscribe", map[string]any{"endpoint": "https://fcm.googleapis.com/fcm/send/old", "keys": keys}, "u@x.com"); w.Code != http.StatusNoContent {
 		t.Fatalf("subscribe: %d body=%s", w.Code, w.Body.String())
 	}
 	renew := map[string]any{
-		"old_endpoint": "https://relay.example/old",
-		"endpoint":     "https://relay.example/new",
+		"old_endpoint": "https://fcm.googleapis.com/fcm/send/old",
+		"endpoint":     "https://fcm.googleapis.com/fcm/send/new",
 		"keys":         map[string]string{"auth": "auth-new", "p256dh": "p256dh-new"},
 	}
 
@@ -231,13 +231,48 @@ func TestPushRenew(t *testing.T) {
 		t.Fatalf("owner: %d %s", w.Code, w.Body.String())
 	}
 	subs, err := st.ListPushSubscriptions(context.Background(), "u@x.com")
-	if err != nil || len(subs) != 1 || subs[0].Endpoint != "https://relay.example/new" || subs[0].KeysAuth != "auth-new" {
+	if err != nil || len(subs) != 1 || subs[0].Endpoint != "https://fcm.googleapis.com/fcm/send/new" || subs[0].KeysAuth != "auth-new" {
 		t.Fatalf("rows after renew: %+v (err %v)", subs, err)
 	}
 
 	delete(renew, "old_endpoint")
 	if w := do(t, h, http.MethodPost, "/push/renew", renew, "u@x.com"); w.Code != http.StatusBadRequest {
 		t.Errorf("missing old_endpoint: %d, want 400", w.Code)
+	}
+}
+
+// The server later POSTs to a stored endpoint from the host, so subscribe
+// and renew refuse one that is not on a browser's push service: 400 with the
+// message the settings switch shows, and nothing stored or moved.
+func TestPushSubscribeAndRenew_RefuseAnEndpointNotOnAPushService(t *testing.T) {
+	s, h := pushFixture(t)
+	ctx := context.Background()
+	st := s.concreteStore(t)
+	keys := map[string]string{"auth": "auth-b64", "p256dh": "p256dh-b64"}
+	const held = "https://fcm.googleapis.com/fcm/send/held"
+	if w := do(t, h, http.MethodPost, "/push/subscribe", map[string]any{"endpoint": held, "keys": keys}, "u@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("subscribe: %d body=%s", w.Code, w.Body.String())
+	}
+
+	for _, bad := range []string{
+		"http://127.0.0.1:8080/admin",
+		"https://169.254.169.254/latest/meta-data/",
+		"https://10.0.0.5/ep",
+		"https://push.example.net/ep",
+		"http://fcm.googleapis.com/fcm/send/abc",
+	} {
+		w := do(t, h, http.MethodPost, "/push/subscribe", map[string]any{"endpoint": bad, "keys": keys}, "u@x.com")
+		if w.Code != http.StatusBadRequest || strings.TrimSpace(w.Body.String()) != pushServiceRefused {
+			t.Errorf("subscribe %s: %d %q, want 400 with the switch's message", bad, w.Code, w.Body.String())
+		}
+		renew := map[string]any{"old_endpoint": held, "endpoint": bad, "keys": keys}
+		if w := do(t, h, http.MethodPost, "/push/renew", renew, "u@x.com"); w.Code != http.StatusBadRequest || strings.TrimSpace(w.Body.String()) != pushServiceRefused {
+			t.Errorf("renew onto %s: %d %q, want 400 with the switch's message", bad, w.Code, w.Body.String())
+		}
+	}
+	subs, err := st.ListPushSubscriptions(ctx, "u@x.com")
+	if err != nil || len(subs) != 1 || subs[0].Endpoint != held {
+		t.Fatalf("rows after refusals: %+v (err %v), want only the held row, unmoved", subs, err)
 	}
 }
 
@@ -277,8 +312,8 @@ func TestPushRenew_ViewerIsRefused(t *testing.T) {
 	h := s.Routes()
 
 	renew := map[string]any{
-		"old_endpoint": "https://relay.example/old",
-		"endpoint":     "https://relay.example/new",
+		"old_endpoint": "https://fcm.googleapis.com/fcm/send/old",
+		"endpoint":     "https://fcm.googleapis.com/fcm/send/new",
 		"keys":         map[string]string{"auth": "a", "p256dh": "p"},
 	}
 	if w := do(t, h, http.MethodPost, "/push/renew", renew, "viewer@x.com"); w.Code != http.StatusForbidden {
@@ -292,7 +327,7 @@ func TestPushSubscribeValidation(t *testing.T) {
 	_, h := pushFixture(t)
 
 	// Missing keys.
-	bad := map[string]any{"endpoint": "https://relay.example/ep"}
+	bad := map[string]any{"endpoint": "https://fcm.googleapis.com/fcm/send/ep"}
 	if w := do(t, h, http.MethodPost, "/push/subscribe", bad, "u@x.com"); w.Code != http.StatusBadRequest {
 		t.Errorf("subscribe missing keys: %d, want 400", w.Code)
 	}

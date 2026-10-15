@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -255,6 +254,15 @@ type pushRelay struct {
 	urgencies []string
 }
 
+// Do is the service's HTTP client: the subscription names a real push
+// service's host, as a stored one must, and no request leaves the test.
+func (p *pushRelay) Do(req *http.Request) (*http.Response, error) {
+	p.mu.Lock()
+	p.urgencies = append(p.urgencies, req.Header.Get("Urgency"))
+	p.mu.Unlock()
+	return &http.Response{StatusCode: http.StatusCreated, Body: http.NoBody}, nil
+}
+
 func (p *pushRelay) seen() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -274,13 +282,6 @@ func (relaySubscriptions) DeletePushSubscription(context.Context, string) error 
 func newPushRelay(t *testing.T) (*pushRelay, *webpush.Service) {
 	t.Helper()
 	relay := &pushRelay{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		relay.mu.Lock()
-		relay.urgencies = append(relay.urgencies, r.Header.Get("Urgency"))
-		relay.mu.Unlock()
-		w.WriteHeader(http.StatusCreated)
-	}))
-	t.Cleanup(srv.Close)
 	priv, pub, err := webpushgo.GenerateVAPIDKeys()
 	if err != nil {
 		t.Fatal(err)
@@ -292,14 +293,14 @@ func newPushRelay(t *testing.T) (*pushRelay, *webpush.Service) {
 	auth := make([]byte, 16)
 	_, _ = rand.Read(auth)
 	sub := store.PushSubscription{
-		UserEmail: "u@example.com", Endpoint: srv.URL + "/ep",
+		UserEmail: "u@example.com", Endpoint: "https://fcm.googleapis.com/fcm/send/progress",
 		KeysAuth:   base64.RawURLEncoding.EncodeToString(auth),
 		KeysP256dh: base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()),
 	}
-	svc := webpush.New(webpush.Config{
+	svc := webpush.NewWithHTTPClient(webpush.Config{
 		VAPIDPublicKey: pub, VAPIDPrivateKey: priv, Contact: "mailto:ops@example.com",
 		OnApprovalRequest: true,
-	}, relaySubscriptions{sub: sub})
+	}, relaySubscriptions{sub: sub}, relay)
 	return relay, svc
 }
 
