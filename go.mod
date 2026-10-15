@@ -12,7 +12,7 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.6.0
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/coder/acp-go-sdk v0.13.5
-	github.com/getsentry/sentry-go v0.49.0
+	github.com/getsentry/sentry-go v0.50.0
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/goccy/go-yaml v1.19.2
 	github.com/golang-migrate/migrate/v4 v4.20.1
