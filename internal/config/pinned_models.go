@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 )
@@ -55,8 +56,18 @@ func parsePinnedModels(raw string) ([]PinnedModel, error) {
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var in []PinnedModel
+	const want = `want a JSON array like [{"slug":"vendor/model","label":"Name","tag":"alpha"}]`
 	if err := dec.Decode(&in); err != nil {
-		return nil, fmt.Errorf(`want a JSON array like [{"slug":"vendor/model","label":"Name","tag":"alpha"}]: %w`, err)
+		return nil, fmt.Errorf("%s: %w", want, err)
+	}
+	// A set value must be exactly one array: `null` decodes to a nil slice and
+	// a second value after the array would be silently ignored — both would
+	// boot with no pins instead of failing loud.
+	if in == nil {
+		return nil, fmt.Errorf("%s, got null", want)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("%s: unexpected data after the array", want)
 	}
 	if len(in) > maxPinnedModels {
 		return nil, fmt.Errorf("at most %d pinned models, got %d", maxPinnedModels, len(in))
