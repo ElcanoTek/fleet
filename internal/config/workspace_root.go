@@ -30,10 +30,10 @@ const workspaceRootEnv = "FLEET_WORKSPACE_ROOT"
 // the default behaves exactly as if the operator had set it, and setting it
 // stays a pure override.
 //
-// The pin is recorded on the reload state so Reload re-asserts it after
-// re-applying the env file and the boot env snapshot; otherwise a relative
-// operator spelling would come back on the first reload and split the lazy
-// readers from cfg again. The root stays boot-only (cfg.WorkspaceRoot is not a
+// The pin is recorded on the reload state so Reload never re-applies the
+// canonical key from the env file or the boot env snapshot; otherwise a
+// relative operator spelling would come back on the first reload (even
+// briefly, while turns are running) and split the lazy readers from cfg. The root stays boot-only (cfg.WorkspaceRoot is not a
 // reloadable field), so a changed value takes a restart, as before.
 func (c *Config) PinWorkspaceRoot() {
 	root := strings.TrimSpace(c.WorkspaceRoot)

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -68,5 +69,33 @@ func TestPinWorkspaceRootSurvivesReload(t *testing.T) {
 				t.Fatalf("after reload FLEET_WORKSPACE_ROOT = %q, want pinned %q", got, want)
 			}
 		})
+	}
+}
+
+// TestPinWorkspaceRootSurvivesFailedReload: a reload that errors partway
+// through the env file (here a line past bufio.Scanner's 64 KiB token limit,
+// after the root line) must not leave the relative spelling installed.
+// Reload never writes the pinned key at all, so there is no window — and no
+// early-return path — in which a running turn could read the relative root.
+func TestPinWorkspaceRootSurvivesFailedReload(t *testing.T) {
+	isolateEnv(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	envPath := filepath.Join(t.TempDir(), ".env")
+	writeEnv(t, envPath, "FLEET_WORKSPACE_ROOT=custom/ws\n")
+
+	cfg, err := Load(envPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cfg.PinWorkspaceRoot()
+	want := filepath.Join(dir, "custom", "ws")
+
+	writeEnv(t, envPath, "FLEET_WORKSPACE_ROOT=custom/ws\nFLEET_TEMPERATURE="+strings.Repeat("9", 70*1024)+"\n")
+	if _, err := cfg.Reload(envPath); err == nil {
+		t.Fatal("Reload: want a scanner error from the oversized line, got nil")
+	}
+	if got := os.Getenv("FLEET_WORKSPACE_ROOT"); got != want {
+		t.Fatalf("after failed reload FLEET_WORKSPACE_ROOT = %q, want pinned %q", got, want)
 	}
 }
