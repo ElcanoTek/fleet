@@ -2054,78 +2054,8 @@ tr.clickable:hover td {
    snake_case class names) so every lifecycle state gets its own hue instead
    of the old outline-only success/error/running trio. Unknown statuses fall
    back to the pending-gray base. */
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.15rem 0.55rem;
-  border-radius: var(--radius-pill);
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-status-pending-fg);
-  background: var(--color-status-pending-bg);
-  border: 1px solid var(--color-status-pending-border);
-}
-.status-success,
-.status-active,
-.status-idle {
-  color: var(--color-status-success-fg);
-  background: var(--color-status-success-bg);
-  border-color: var(--color-status-success-border);
-}
-.status-error,
-.status-failed {
-  color: var(--color-status-error-fg);
-  background: var(--color-status-error-bg);
-  border-color: var(--color-status-error-border);
-}
-.status-running {
-  color: var(--color-status-running-fg);
-  background: var(--color-status-running-bg);
-  border-color: var(--color-status-running-border);
-}
-.status-proposed {
-  color: var(--color-status-proposed-fg);
-  background: var(--color-status-proposed-bg);
-  border-color: var(--color-status-proposed-border);
-}
-.status-scheduled {
-  color: var(--color-status-scheduled-fg);
-  background: var(--color-status-scheduled-bg);
-  border-color: var(--color-status-scheduled-border);
-}
-.status-leased {
-  color: var(--color-status-leased-fg);
-  background: var(--color-status-leased-bg);
-  border-color: var(--color-status-leased-border);
-}
-.status-dead_lettered,
-.status-paused_awaiting_input {
-  color: var(--color-status-warning-fg);
-  background: var(--color-status-warning-bg);
-  border-color: var(--color-status-warning-border);
-}
-/* A success whose declared completion clause recorded a blocked outcome
-   (run_outcome "blocked"): it did its job and decided not to publish, which
-   must not read as the same green as a run that did. */
-.status-blocked {
-  color: var(--color-status-blocked-fg);
-  background: var(--color-status-blocked-bg);
-  border-color: var(--color-status-blocked-border);
-}
-.status-cancelled {
-  color: var(--color-status-cancelled-fg);
-  background: var(--color-status-cancelled-bg);
-  border-color: var(--color-status-cancelled-border);
-}
-/* Self-wake (docs/SELF-WAKE.md): a sleeping task is calm, not a warning —
-   it re-queues itself, unlike paused_awaiting_input which needs a human. */
-.status-paused_awaiting_wake {
-  color: var(--color-status-leased-fg);
-  background: var(--color-status-leased-bg);
-  border-color: var(--color-status-leased-border);
-}
+/* Task/run status chips render through shared/ui/StatusChip (RunStatusChip);
+   `.status-badge` / `.status-<state>` are unstyled test hooks now. */
 .sleeping-tasks {
   margin: 0 0 1.25rem;
   padding: 0.85rem 1rem;
@@ -2196,52 +2126,9 @@ tr.clickable:hover td {
   min-width: 0;
 }
 /* Logs column: colored pill when logs exist, muted ghost when not. */
-.logs-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.15rem 0.55rem;
-  border-radius: var(--radius-pill);
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--color-status-assigned-fg);
-  background: var(--color-status-assigned-bg);
-  border: 1px solid var(--color-status-assigned-border);
-}
-.logs-badge.no-logs {
-  color: var(--color-text-muted);
-  background: transparent;
-  border-color: var(--color-border);
-}
-
 /* SLA monitoring (#274): table badges, log-modal progress bar, report tab. */
-.sla-badge {
-  display: inline-block;
-  padding: 0.1rem 0.5rem;
-  border-radius: var(--radius-pill);
-  font-size: 0.72rem;
-  font-weight: 600;
-  border: 1px solid var(--color-border);
-  white-space: nowrap;
-}
-.sla-badge-ok {
-  color: var(--color-status-success-fg);
-  background: var(--color-status-success-bg);
-  border-color: var(--color-status-success-border);
-}
-.sla-badge-warn {
-  color: var(--color-status-warning-fg);
-  background: var(--color-status-warning-bg);
-  border-color: var(--color-status-warning-border);
-}
-.sla-badge-fail {
-  color: var(--color-status-error-fg);
-  background: var(--color-status-error-bg);
-  border-color: var(--color-status-error-border);
-}
-.sla-badge-none {
-  color: var(--color-text-muted);
-  border-color: transparent;
-}
+/* SLA chips render through orchestrator/taskDisplay SlaChip (the shared
+   StatusChip); `.sla-badge*` classes are unstyled test hooks. */
 tr.sla-row-fail {
   background: color-mix(in srgb, var(--color-danger) 8%, transparent);
 }
@@ -2607,22 +2494,8 @@ tr.sla-row-fail {
   white-space: nowrap;
   font-size: 0.9rem;
 }
-.upcoming-run-kind {
-  font-size: 0.72rem;
-  padding: 0.1rem 0.5rem;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-.upcoming-run-kind-recurring {
-  color: var(--color-status-assigned-fg);
-  background: var(--color-status-assigned-bg);
-  border: 1px solid var(--color-status-assigned-border);
-}
-.upcoming-run-kind-oneshot {
-  color: var(--color-status-scheduled-fg);
-  background: var(--color-status-scheduled-bg);
-  border: 1px solid var(--color-status-scheduled-border);
-}
+/* .upcoming-run-kind renders through shared/ui/StatusChip; only its phone
+   layout below is styled here. */
 @media (max-width: 720px) {
   /* On phones the nowrap schedule pill ("At minute 30 past every hour…")
      starves the name column to nothing. Two lines instead: time + name,
@@ -4686,17 +4559,6 @@ select.mcp-server-picker__account-select {
   line-height: 1.75rem;
 }
 /* Connected remote servers (#443/#466): a read-only status pill, not a toggle. */
-.mcp-server-picker__connected {
-  flex: 0 0 auto;
-  font-size: 0.62rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--color-success);
-  border: 1px solid var(--color-success-border);
-  border-radius: var(--radius-pill);
-  padding: 0.125rem 0.5rem;
-}
 
 /* Model picker dropdown */
 .model-picker {
@@ -4733,14 +4595,6 @@ select.mcp-server-picker__account-select {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-}
-.model-picker-badge {
-  font-size: 0.6rem;
-  text-transform: uppercase;
-  color: var(--color-accent);
-  border: 1px solid var(--color-accent);
-  border-radius: 0.3rem;
-  padding: 0 0.25rem;
 }
 .model-picker-slug {
   display: block;
@@ -5785,44 +5639,7 @@ select.mcp-server-picker__account-select {
 }
 
 /* Status pills */
-.lt-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.05rem 0.5rem;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--color-border);
-  font-size: 0.66rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  max-width: 28rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.lt-pill--ok {
-  color: var(--color-success-soft);
-  border-color: color-mix(in srgb, var(--color-success-strong) 50%, transparent);
-  background: color-mix(in srgb, var(--color-success-strong) 12%, transparent);
-}
-.lt-pill--error {
-  color: var(--color-danger-soft);
-  border-color: color-mix(in srgb, var(--color-danger-strong) 55%, transparent);
-  background: color-mix(in srgb, var(--color-danger-strong) 14%, transparent);
-}
-.lt-pill--warn {
-  color: var(--color-warning-soft);
-  border-color: color-mix(in srgb, var(--color-warning-strong) 50%, transparent);
-  background: color-mix(in srgb, var(--color-warning-strong) 12%, transparent);
-}
-.lt-pill--running {
-  color: var(--color-status-running-fg);
-  border-color: var(--color-status-running-border);
-  background: var(--color-status-running-bg);
-}
-.lt-pill--neutral {
-  color: var(--color-text-secondary);
-  font-weight: 500;
-}
+/* Timeline pills render through shared/ui/StatusChip; `.lt-pill*` are hooks. */
 
 /* Plan (task_tracker) */
 .lt-plan {

@@ -2,6 +2,7 @@
 
 import { useCallback } from "react";
 import type { McpServer, MCPChoice } from "@/app/shared/lib/orchestratorApi";
+import { StatusChip } from "./StatusChip";
 
 // McpServerPicker is the full-size connector selection editor used by the
 // orchestrator task form. It retains a conversation mode for embedded/full-size
@@ -119,13 +120,14 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
                   data-server={server.name}
                   data-remote="true"
                 >
-                  <span
-                    className="mcp-server-picker__connected"
-                    data-testid={`mcp-remote-${server.name}`}
+                  <StatusChip
+                    tone="success"
+                    className="mcp-server-picker__connected shrink-0"
+                    testId={`mcp-remote-${server.name}`}
                     aria-label={`${server.name} (connected, auto-available)`}
                   >
                     Connected
-                  </span>
+                  </StatusChip>
                   <span className="mcp-server-picker__name">{server.display_name || server.name}</span>
                   {server.description ? (
                     <span className="mcp-server-picker__desc">{server.description}</span>

@@ -71,6 +71,7 @@ import { PENDING_CONV_KEY } from "./workspaceHref";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { Segmented } from "@/app/shared/ui/Segmented";
+import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { Icon } from "./Icon";
 import { QueuedInputs } from "./QueuedInputs";
 import { ProjectsModal, type Project } from "./ProjectsModal";
@@ -5974,9 +5975,9 @@ export function ChatExperience({
                             <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[0.7rem] text-[var(--color-text-muted)]">
                               <span>
                                 {memory.kind && memory.kind !== "fact" ? (
-                                  <span className="mr-1.5 rounded-full border border-[var(--color-border)] px-1.5 py-0.5">
+                                  <StatusChip tone="neutral" className="mr-1.5">
                                     {memory.kind}
-                                  </span>
+                                  </StatusChip>
                                 ) : null}
                                 {sourceLabel}
                                 {learned ? ` · learned ${learned}` : ""}
@@ -6415,13 +6416,16 @@ export function ChatExperience({
                 </h2>
               )}
               {isLockdown ? (
-                <span
-                  className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-2 py-0.5 text-[0.6875rem] font-medium text-[var(--color-accent)]"
+                <StatusChip
+                  tone="accent"
+                  className="shrink-0"
                   title="Lockdown chat — sandboxed container, restricted models"
                 >
-                  <Icon name="lock" className="size-3" />
-                  <span className="hidden sm:inline">Lockdown</span>
-                </span>
+                  <span className="inline-flex items-center gap-1">
+                    <Icon name="lock" className="size-3" />
+                    <span className="hidden sm:inline">Lockdown</span>
+                  </span>
+                </StatusChip>
               ) : null}
               {/* Sharing entry point (#12): the visibility chip ("Only you",
                   "Shared with <team>", "Public link") and a Share button, on

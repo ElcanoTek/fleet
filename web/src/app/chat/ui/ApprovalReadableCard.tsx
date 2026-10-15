@@ -18,6 +18,7 @@ import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import type { ApprovalCardData, ApprovalCardItem } from "./history";
 import { Icon } from "./Icon";
+import { StatusChip } from "@/app/shared/ui/StatusChip";
 
 // Items beyond this many collapse behind "Show N more".
 export const CARD_ITEMS_VISIBLE = 10;
@@ -26,17 +27,9 @@ export const CARD_SEARCH_THRESHOLD = 25;
 
 export function FlagBadge({ label, code }: { label: string; code: string }) {
   return (
-    <span
-      data-testid="approval-card-flag"
-      data-flag-code={code}
-      className="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-medium"
-      style={{
-        borderColor: "var(--color-warning-border)",
-        color: "var(--color-warning)",
-      }}
-    >
+    <StatusChip tone="warning" testId="approval-card-flag" data-flag-code={code}>
       {label}
-    </span>
+    </StatusChip>
   );
 }
 

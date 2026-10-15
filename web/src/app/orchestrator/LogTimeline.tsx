@@ -15,6 +15,7 @@
 import { lazy, memo, Suspense, useCallback, useMemo, useState, type ReactNode } from "react";
 import type { LogMessage } from "@/app/shared/lib/orchestratorApi";
 import { stripAnsiCodes } from "@/app/shared/lib/format";
+import { StatusChip, type StatusTone } from "@/app/shared/ui/StatusChip";
 import {
   buildTimeline,
   formatDuration,
@@ -138,8 +139,26 @@ function Section({ label, aside, children }: { label: string; aside?: ReactNode;
   );
 }
 
+const PILL_TONE: Record<"ok" | "error" | "warn" | "neutral" | "running", StatusTone> = {
+  ok: "success",
+  error: "danger",
+  warn: "warning",
+  neutral: "neutral",
+  running: "run-running",
+};
+
+// Pill is a timeline state on the shared status chip; `lt-pill--<tone>` is an
+// unstyled hook. Long values (an error line) truncate instead of widening the
+// step header.
 function Pill({ tone, children }: { tone: "ok" | "error" | "warn" | "neutral" | "running"; children: ReactNode }) {
-  return <span className={`lt-pill lt-pill--${tone}`}>{children}</span>;
+  return (
+    <StatusChip
+      tone={PILL_TONE[tone]}
+      className={`lt-pill lt-pill--${tone} max-w-[28rem] overflow-hidden text-ellipsis align-middle`}
+    >
+      {children}
+    </StatusChip>
+  );
 }
 
 // ── tool input ───────────────────────────────────────────────────────────────

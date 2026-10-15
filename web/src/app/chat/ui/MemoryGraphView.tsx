@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { StatusChip } from "@/app/shared/ui/StatusChip";
 import {
   buildGraphQueryString,
   groupRelationsBySubject,
@@ -102,9 +103,9 @@ export function MemoryGraphView() {
               >
                 <p className="text-[0.875rem] font-medium text-[var(--color-text-primary)]">
                   {group.subject.name}
-                  <span className="ml-1.5 rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[0.65rem] font-normal text-[var(--color-text-muted)]">
+                  <StatusChip tone="neutral" className="ml-1.5 font-normal">
                     {group.subject.type}
-                  </span>
+                  </StatusChip>
                 </p>
                 <ul className="mt-1.5 grid gap-1">
                   {group.relations.map((rel) => {

@@ -17,6 +17,7 @@ import type {
 import { orchestratorApi, OrchestratorError } from "@/app/shared/lib/orchestratorApi";
 import { formatTimeFirst, stripAnsiCodes } from "@/app/shared/lib/format";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
+import { RunStatusChip } from "@/app/shared/ui/StatusChip";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { useToast } from "@/app/shared/ui/Toast";
 import {
@@ -710,14 +711,14 @@ function LiveTaskView({
         <div className="modal-header">
           <h3 className="modal-log-title" title={task.prompt ?? ""}>
             Live activity
-            <span
-              className={`status-badge status-${terminal ? (runStatus === "succeeded" ? "success" : runStatus === "stopped" ? "cancelled" : "error") : "running"}`}
-              style={{ marginLeft: 8 }}
-              data-testid="live-run-status"
+            <RunStatusChip
+              state={terminal ? (runStatus === "succeeded" ? "success" : runStatus === "stopped" ? "cancelled" : "error") : "running"}
+              className="ml-2"
+              testId="live-run-status"
             >
               {runStatus}
               {stoppedBy ? ` by ${stoppedBy}` : ""}
-            </span>
+            </RunStatusChip>
           </h3>
           <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
             {canStop && !terminal ? (
@@ -1578,12 +1579,12 @@ function SelfImprovePanel({
                 }}
               >
                 <span>
-                  <span
-                    className={`status-badge status-${li.status === "active" ? "success" : li.status === "proposed" ? "running" : "cancelled"}`}
-                    style={{ marginRight: 6 }}
+                  <RunStatusChip
+                    state={li.status === "active" ? "success" : li.status === "proposed" ? "running" : "cancelled"}
+                    className="mr-1.5"
                   >
                     v{li.version} {li.status}
-                  </span>
+                  </RunStatusChip>
                   {li.content}
                 </span>
                 {canManage ? (

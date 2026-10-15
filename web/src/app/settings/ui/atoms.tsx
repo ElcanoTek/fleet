@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "@/app/shared/ui/Icon";
+import { StatusChip, type StatusTone } from "@/app/shared/ui/StatusChip";
 
 /* ── Buttons (.btn / .btn-primary / .btn-ghost / .btn-sm / .conn-reveal) ── */
 
@@ -98,7 +99,17 @@ export const SETTINGS_INPUT =
 
 /* ── Badges (.conn-badge + variants) ── */
 
+// ConnBadge keeps the settings pages' variant names but renders the shared
+// StatusChip, so a settings badge and an Operations Center status are the
+// same size and family.
 export type BadgeVariant = "neutral" | "success" | "warn" | "overridden";
+
+const BADGE_TONE: Record<BadgeVariant, StatusTone> = {
+  neutral: "neutral",
+  success: "success",
+  warn: "warning",
+  overridden: "accent",
+};
 
 export function ConnBadge({
   variant = "neutral",
@@ -111,25 +122,10 @@ export function ConnBadge({
   title?: string;
   children: ReactNode;
 }) {
-  const variantClass = {
-    neutral:
-      "border-[var(--color-border-strong)] text-[var(--color-text-muted)]",
-    success: "border-[var(--color-success-border)] text-[var(--color-success)]",
-    warn: "border-[color-mix(in_srgb,var(--color-warning)_50%,transparent)] text-[var(--color-warning)]",
-    overridden:
-      "border-[color-mix(in_srgb,var(--color-accent)_50%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] text-[var(--color-accent)]",
-  }[variant];
   return (
-    <span
-      title={title}
-      className={[
-        "shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] border px-2 py-[0.13rem] text-[0.63rem] font-semibold tracking-[0.04em]",
-        variantClass,
-        className ?? "",
-      ].join(" ")}
-    >
+    <StatusChip tone={BADGE_TONE[variant]} title={title} className={["shrink-0", className ?? ""].join(" ").trim()}>
       {children}
-    </span>
+    </StatusChip>
   );
 }
 

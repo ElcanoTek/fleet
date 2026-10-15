@@ -5,6 +5,7 @@ import { orchestratorApi, type UpcomingRun } from "@/app/shared/lib/orchestrator
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { plural } from "./plural";
+import { StatusChip } from "@/app/shared/ui/StatusChip";
 
 // UpcomingPanel — the Operations Center "Upcoming" tab (Scheduler UX 2.0, #504):
 // a forward-looking timeline of the next scheduled runs, grouped by calendar
@@ -348,9 +349,12 @@ function UpcomingTimeline({ runs }: { runs: UpcomingRun[] }) {
                   <span className="upcoming-run-name" title={run.prompt}>
                     {run.title || run.name || run.prompt.slice(0, 80) || "(untitled task)"}
                   </span>
-                  <span className={`upcoming-run-kind upcoming-run-kind-${run.recurring ? "recurring" : "oneshot"}`}>
+                  <StatusChip
+                    tone={run.recurring ? "run-assigned" : "run-scheduled"}
+                    className={`upcoming-run-kind upcoming-run-kind-${run.recurring ? "recurring" : "oneshot"}`}
+                  >
                     {run.recurring ? describeCronExpression(run.recurrence) : "One-time"}
-                  </span>
+                  </StatusChip>
                 </li>
               );
             })}

@@ -41,6 +41,7 @@ import {
 import { ApprovalResultCardView } from "./ApprovalResultCard";
 import { conversationApprovalApiUrl } from "@/app/lib/conversationApiUrl";
 import { Segmented } from "@/app/shared/ui/Segmented";
+import { StatusChip } from "@/app/shared/ui/StatusChip";
 
 // Preview viewport presets for the inline email preview. These mirror the
 // widths real clients render at — 375px ≈ iPhone portrait, 700px is the
@@ -744,9 +745,9 @@ export function ApprovalCard({
               <li key={`${a.path}-${i}`} className="break-all text-[var(--color-text-secondary)]" title={a.path}>
                 <span className="font-medium text-[var(--color-text-primary)]">{a.name}</span>
                 {"inline" in a ? (
-                  <span className="ml-1.5 rounded-full border border-[var(--color-border-strong)] px-1.5 text-[0.66rem] text-[var(--color-text-muted)]">
+                  <StatusChip tone="neutral" className="ml-1.5">
                     inline
-                  </span>
+                  </StatusChip>
                 ) : null}
                 {a.path !== a.name ? (
                   <span className="ml-1.5 text-[0.72rem] text-[var(--color-text-muted)]">{a.path}</span>
@@ -2479,9 +2480,9 @@ export function MemoryProposalCard({
         </span>
         Save this memory?
         {proposal.kind && proposal.kind !== "fact" ? (
-          <span className="rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[0.65rem] font-normal text-[var(--color-text-muted)]">
+          <StatusChip tone="neutral" className="font-normal">
             {proposal.kind}
-          </span>
+          </StatusChip>
         ) : null}
       </div>
       <p className="mb-3 whitespace-pre-wrap text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">

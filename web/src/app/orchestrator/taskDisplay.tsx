@@ -1,5 +1,7 @@
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import { formatTimeFirst, truncate } from "@/app/shared/lib/format";
+import { RunStatusChip, StatusChip, type RunTone } from "@/app/shared/ui/StatusChip";
+import type { ReactNode } from "react";
 import {
   describeCronExpression,
   describeCronExpressionShort,
@@ -67,20 +69,10 @@ export function TaskStatusBadge({ task }: { task: Task }) {
   const blocked = blockedReason(task);
   if (blocked) {
     return (
-      <span
-        className="status-badge status-blocked"
-        title={`Blocked: ${blocked}`}
-        data-testid="status-blocked"
-      >
-        blocked
-      </span>
+      <RunStatusChip state="blocked" title={`Blocked: ${blocked}`} testId="status-blocked" />
     );
   }
-  return (
-    <span className={`status-badge status-${task.status ?? "unknown"}`}>
-      {task.status ?? "-"}
-    </span>
-  );
+  return <RunStatusChip state={task.status ?? "unknown"}>{task.status ?? "-"}</RunStatusChip>;
 }
 
 // scheduleStoppedReason is why a recurring task's schedule stopped at this
@@ -135,22 +127,46 @@ export function TaskSlaBadge({ task }: { task: Task }) {
   const badge = slaBadge(task);
   if (badge) {
     return (
-      <span className={`sla-badge sla-badge-${badge.tone}`} title={badge.label}>
+      <SlaChip tone={badge.tone} title={badge.label}>
         {badge.label}
-      </span>
+      </SlaChip>
     );
   }
   if (task.expected_duration_minutes) {
     return (
-      <span
-        className="sla-badge sla-badge-ok"
-        title={`Expected ${task.expected_duration_minutes}m`}
-      >
+      <SlaChip tone="ok" title={`Expected ${task.expected_duration_minutes}m`}>
         {task.actual_duration_seconds != null
           ? `${Math.round(task.actual_duration_seconds / 60)}m / ${task.expected_duration_minutes}m`
           : `${task.expected_duration_minutes}m`}
-      </span>
+      </SlaChip>
     );
   }
-  return <span className="sla-badge sla-badge-none">—</span>;
+  return <span className="sla-badge sla-badge-none text-[var(--color-text-muted)]">—</span>;
+}
+
+// SlaChip is an SLA state (ok / warn / fail) on the shared status chip. The
+// `sla-badge sla-badge-<tone>` classes are unstyled test hooks.
+const SLA_TONE: Record<string, RunTone> = {
+  ok: "run-success",
+  warn: "run-warning",
+  fail: "run-error",
+};
+export function SlaChip({
+  tone,
+  title,
+  children,
+}: {
+  tone: string;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <StatusChip
+      tone={SLA_TONE[tone] ?? "neutral"}
+      title={title}
+      className={`sla-badge sla-badge-${tone}`}
+    >
+      {children}
+    </StatusChip>
+  );
 }

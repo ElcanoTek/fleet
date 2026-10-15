@@ -5,6 +5,7 @@ import type { Task } from "@/app/shared/lib/orchestratorApi";
 import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";
 import { formatTimeFirst, truncate } from "@/app/shared/lib/format";
 import { Icon } from "@/app/shared/ui/Icon";
+import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { labelChipStyle } from "@/app/shared/lib/labelColors";
 import {
   createdByLabel,
@@ -14,6 +15,7 @@ import {
   promptName,
   taskRunLabel,
   TaskSlaBadge,
+  SlaChip,
   TaskStatusBadge,
 } from "./taskDisplay";
 
@@ -412,9 +414,9 @@ export function TasksTable({
                     <td>{formatTimeFirst(task.created_at)}</td>
                     <td>
                       <span className="task-row-actions">
-                        <span className={`logs-badge ${hasLogs ? "" : "no-logs"}`}>
+                        <StatusChip tone={hasLogs ? "run-assigned" : "neutral"} className={`logs-badge${hasLogs ? "" : " no-logs"}`}>
                           {hasLogs ? "View" : "None"}
-                        </span>
+                        </StatusChip>
                         {onRunNow && RUNNABLE_STATUSES.has(task.status ?? "") ? (
                           <button
                             type="button"
@@ -523,13 +525,13 @@ export function TasksTable({
                   <span className="task-card-top">
                     <TaskStatusBadge task={task} />
                     {badge ? (
-                      <span className={`sla-badge sla-badge-${badge.tone}`}>{badge.label}</span>
+                      <SlaChip tone={badge.tone}>{badge.label}</SlaChip>
                     ) : task.expected_duration_minutes ? (
-                      <span className="sla-badge sla-badge-ok">
+                      <SlaChip tone="ok">
                         {task.actual_duration_seconds != null
                           ? `${Math.round(task.actual_duration_seconds / 60)}m / ${task.expected_duration_minutes}m`
                           : `${task.expected_duration_minutes}m`}
-                      </span>
+                      </SlaChip>
                     ) : null}
                   </span>
                   {task.title?.trim() || promptName(task.prompt ?? "") ? (
@@ -543,9 +545,9 @@ export function TasksTable({
                     {scheduleLabel(task) !== "-" ? (
                       <span title={scheduleTitle(task)}>{scheduleLabel(task)}</span>
                     ) : null}
-                    <span className={`logs-badge ${hasLogs ? "" : "no-logs"}`}>
+                    <StatusChip tone={hasLogs ? "run-assigned" : "neutral"} className={`logs-badge${hasLogs ? "" : " no-logs"}`}>
                       {hasLogs ? "View logs" : "No logs"}
-                    </span>
+                    </StatusChip>
                     {onRunNow && RUNNABLE_STATUSES.has(task.status ?? "") ? (
                       <span
                         role="button"
