@@ -165,17 +165,14 @@ server when an approved card for that conversation executes. Verified on
   turn records a seat (`approvalStager.seatFor` falls back to
   `{Server: <registered name>}`), so this only affects rows from before
   #167 residual 2. Not changed here.
-- **Relative workspace root (pre-existing, affects both paths equally).**
-  With `FLEET_WORKSPACE_ROOT` unset (neither `deploy/fleet.service` nor the
-  repo's scripts set it; the Helm chart does), `WorkspaceDirForConversation` returns the relative
-  `workspace/<convID>`. That string becomes both the server's cwd and its
-  `${FLEET_WORKSPACE}` value, so a server that opens `$FLEET_WORKSPACE/x`
-  relative to its own cwd lands in `workspace/<convID>/workspace/<convID>/x`.
-  Turn and approval agree (the file is still found), but the path is not the
-  one the conversation's sandbox sees. `SharedMCPWorkspaceDir` and
-  `WorkspaceRootDir` already absolutize. Absolutizing the scope workdir would
-  change the turn path too, so it is a separate follow-up, not part of this
-  change.
+- **Relative workspace root (fixed).** Before `fleet serve` pinned the
+  workspace root at boot, an unset `FLEET_WORKSPACE_ROOT` made
+  `WorkspaceDirForConversation` return the relative `workspace/<convID>`,
+  which became both a server's cwd and its `${FLEET_WORKSPACE}`, so
+  `$FLEET_WORKSPACE/x` landed in `workspace/<convID>/workspace/<convID>/x`.
+  Boot now resolves the root once (the operator's value, else `./workspace`
+  under the cwd), makes it absolute, and exports it as `FLEET_WORKSPACE_ROOT`,
+  so every reader gets the same absolute path whether or not the operator set it.
 - `docs/MCP-BUNDLE-ENV.md`'s spawn-path table lists "the `fleet mcp-broker`
   process" under `SharedMCPWorkspaceDir()`. That holds for the broker's
   boot-time shared client, but a broker **scope** (every interactive turn and

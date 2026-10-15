@@ -306,6 +306,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	cfg.PinWorkspaceRoot()
 
 	// OpenTelemetry distributed tracing (#186): OPT-IN via FLEET_OTEL_ENDPOINT.
 	// With the endpoint unset (the default) this is a complete no-op — no

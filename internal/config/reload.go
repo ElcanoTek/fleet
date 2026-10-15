@@ -50,6 +50,12 @@ type reloadState struct {
 	// silently rotated by a reload of a drifted .env — Reload restores these and
 	// reports the drift in Skipped instead.
 	bootSecrets map[string]*string
+	// pinnedWorkspaceRoot is the absolute workspace root PinWorkspaceRoot
+	// exported at boot ("" until it runs). Once set, Reload skips the
+	// canonical key in both the env-file and bootEnv re-apply
+	// (skipOnReload), which would otherwise put back an operator's RELATIVE
+	// spelling.
+	pinnedWorkspaceRoot string
 }
 
 // newReloadState captures the boot environment so a later Reload reproduces
@@ -112,6 +118,19 @@ func (c *Config) ExcludeEnvVarsFromReload(names ...string) error {
 		delete(c.reload.bootEnv, name)
 	}
 	return nil
+}
+
+// skipOnReload reports whether Reload must leave name's process-env value
+// untouched: an excluded credential, or the canonical workspace root once
+// PinWorkspaceRoot has exported its absolute value. Skipping the root (rather
+// than re-pinning it afterwards) means a reload never publishes the operator's
+// relative spelling, not even for the window before a re-pin or on an
+// early-error return — running turns read it without taking reload.serialize.
+func (rs *reloadState) skipOnReload(name string) bool {
+	if name == workspaceRootEnv && rs.pinnedWorkspaceRoot != "" {
+		return true
+	}
+	return rs.envExcluded(name)
 }
 
 func (rs *reloadState) envExcluded(name string) bool {
@@ -274,12 +293,12 @@ func (c *Config) Reload(envFile string) (ReloadResult, error) {
 	defer c.reload.serialize.Unlock()
 
 	if envFile != "" {
-		if err := loadEnvFileFiltered(envFile, func(name string) bool { return !c.reload.envExcluded(name) }); err != nil && !os.IsNotExist(err) {
+		if err := loadEnvFileFiltered(envFile, func(name string) bool { return !c.reload.skipOnReload(name) }); err != nil && !os.IsNotExist(err) {
 			return ReloadResult{}, fmt.Errorf("reload env file %s: %w", envFile, err)
 		}
 	}
 	for k, v := range c.reload.bootEnv {
-		if c.reload.envExcluded(k) {
+		if c.reload.skipOnReload(k) {
 			continue
 		}
 		_ = os.Setenv(k, v)
