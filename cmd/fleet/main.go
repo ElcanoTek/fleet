@@ -2316,7 +2316,7 @@ func pinWorkspaceRoot(cfg *config.Config) {
 	if err != nil {
 		// Only an unreadable cwd gets here; every reader would fail the same
 		// way, so keep the boot going on the unresolved value as before.
-		log.Printf("workspace root: could not absolutize %q: %v", workspaceRootOrDefault(cfg.WorkspaceRoot), err)
+		log.Printf("workspace root: could not resolve an absolute path: %v", err)
 		return
 	}
 	cfg.WorkspaceRoot = abs
