@@ -81,7 +81,7 @@ func openrouterServedProvider(metadata fantasy.ProviderMetadata) string {
 // detect a fallback.
 func preferredUpstreamFor(modelSlug string) string {
 	matchSlug := strings.TrimPrefix(modelSlug, "~")
-	for _, c := range canonicalUpstream {
+	for _, c := range familyPinsFor(matchSlug) {
 		if strings.HasPrefix(matchSlug, c.prefix) {
 			return c.name
 		}

@@ -179,6 +179,18 @@ not inherit it.
 | slug | checked | pool | floor leaves |
 |---|---|---|---|
 | `qwen/qwen3.8-27b` | 2026-10-15 | 20 endpoints: fp4 ×3 (Tenstorrent, Darkbloom, ModelRun), fp8 ×9, bf16 ×1 (DeepInfra), fp16 ×1 (Cerebras), unknown ×6 (Wafer, DekaLLM, Phala, Novita, Alibaba, Cloudflare) | 11 endpoints |
+| `google/gemma-4-26b-a4b-it` | 2026-10-15 | 13 endpoints: bf16 ×7 (DekaLLM, NextBit, CoreWeave, Io Net, Venice, Parasail, Novita), fp8 ×2 (DeepInfra, SiliconFlow), unknown ×4 (Darkbloom, Makora, Cloudflare, Google Vertex) | 9 endpoints |
+
+**Open-weights slugs under a pinned family are not governed by its pin.** The
+`google/` pin is strict (`Only=[Google]`, no fallbacks) because Gemini's
+encrypted thought signatures validate only at the minting upstream. Gemma is
+open weights that a dozen hosts serve, with no such signatures; pinned to
+Google's single Vertex endpoint, `google/gemma-4-26b-a4b-it` ("Elcano:
+Wavebend Light") failed 4 of 6 live calls with `429 … temporarily
+rate-limited upstream` on 2026-10-15 while the unpinned, floored pool answered
+6 of 6, and 5 of 5 real fleet turns with a tool completed after the change.
+`unpinnedOpenWeightsPrefixes` (today `google/gemma`) makes such slugs route as
+an unpinned family — the floor alone where one is recorded, nothing otherwise.
 
 A listed slug with no `canonicalUpstream` entry gets the floor alone:
 `quantizations` plus `allow_fallbacks: true`, with no `order` and no `only`, so

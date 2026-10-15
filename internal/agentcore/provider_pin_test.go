@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"charm.land/fantasy/providers/openrouter"
@@ -378,5 +379,43 @@ func TestPreferredUpstreamFor(t *testing.T) {
 		if got := preferredUpstreamFor(slug); got != want {
 			t.Errorf("preferredUpstreamFor(%q) = %q, want %q", slug, got, want)
 		}
+	}
+}
+
+// Gemma is open weights under the google/ prefix: the strict Google pin (there
+// for Gemini's thought signatures) must not govern it. Pinned to Google's one
+// endpoint, "Elcano: Wavebend Light" failed 4 of 6 live calls with 429 while a
+// dozen other hosts served it (2026-10-15).
+func TestUpstreamPinFor_GemmaIsNotPinnedToGoogle(t *testing.T) {
+	p := upstreamPinFor("google/gemma-4-26b-a4b-it")
+	if p == nil {
+		t.Fatal("the Wavebend Light slug must carry its recorded precision floor")
+	}
+	if len(p.Only) != 0 || len(p.Order) != 0 {
+		t.Fatalf("Gemma must not be pinned to a provider, got Only=%v Order=%v", p.Only, p.Order)
+	}
+	if p.AllowFallbacks == nil || !*p.AllowFallbacks {
+		t.Fatal("Gemma routing must allow fallbacks across hosts")
+	}
+	if strings.Join(p.Quantizations, ",") != strings.Join(fp8AndAbove, ",") {
+		t.Fatalf("quantizations = %v, want the fp8-and-above floor", p.Quantizations)
+	}
+	// The `~` alias marker resolves to the same policy.
+	if alias := upstreamPinFor("~google/gemma-4-26b-a4b-it"); alias == nil || len(alias.Only) != 0 {
+		t.Fatalf("alias slug policy = %+v, want the same unpinned floor", alias)
+	}
+	// A Gemma slug with no recorded pool: unpinned and no floor (a floor is
+	// only safe per slug, read with the endpoint list in hand).
+	if got := upstreamPinFor("google/gemma-4-31b-it"); got != nil {
+		t.Fatalf("upstreamPinFor(gemma-4-31b) = %+v, want nil", got)
+	}
+	// Gemini keeps the strict pin.
+	g := upstreamPinFor(DefaultMaxModel)
+	if g == nil || len(g.Only) != 1 || g.Only[0] != "Google" || g.AllowFallbacks == nil || *g.AllowFallbacks {
+		t.Fatalf("Gemini pin = %+v, want strict Only=[Google]", g)
+	}
+	// No preferred upstream, so a step served by any host is not a "fallback".
+	if got := preferredUpstreamFor("google/gemma-4-26b-a4b-it"); got != "" {
+		t.Fatalf("preferredUpstreamFor(gemma) = %q, want \"\"", got)
 	}
 }
