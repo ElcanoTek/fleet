@@ -50,6 +50,11 @@ type reloadState struct {
 	// silently rotated by a reload of a drifted .env — Reload restores these and
 	// reports the drift in Skipped instead.
 	bootSecrets map[string]*string
+	// pinnedWorkspaceRoot is the absolute workspace root PinWorkspaceRoot
+	// exported at boot ("" until it runs). The env-file and bootEnv re-apply
+	// below would otherwise put back an operator's RELATIVE spelling, so
+	// Reload re-asserts this value after them.
+	pinnedWorkspaceRoot string
 }
 
 // newReloadState captures the boot environment so a later Reload reproduces
@@ -283,6 +288,9 @@ func (c *Config) Reload(envFile string) (ReloadResult, error) {
 			continue
 		}
 		_ = os.Setenv(k, v)
+	}
+	if p := c.reload.pinnedWorkspaceRoot; p != "" {
+		_ = os.Setenv(workspaceRootEnv, p)
 	}
 
 	result := ReloadResult{

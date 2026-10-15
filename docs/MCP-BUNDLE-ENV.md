@@ -57,7 +57,8 @@ subprocess-launch time:
 `<workspace-root>` is `FLEET_WORKSPACE_ROOT` (legacy `CHAT_`/`CUTLASS_`
 aliases honored), else `./workspace` under the process cwd
 (`/var/lib/fleet/workspace` under `deploy/fleet.service`). `fleet serve`
-resolves it to an absolute path once at boot and exports it, so the default
+resolves it to an absolute path once at boot and exports it (a config reload
+keeps that absolute value; changing the root takes a restart), so the default
 needs no configuration and setting the variable is purely an override. A spawn path with no directory to offer
 drops the token-bearing keys so the server sees the var as **unset** (its
 documented inert posture) — never a literal token, never an empty string.
