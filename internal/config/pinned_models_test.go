@@ -25,6 +25,15 @@ func TestParsePinnedModels(t *testing.T) {
 			raw:  `'[{"slug":"a/b"},{"slug":"c/d","tag":"beta"}]'`,
 			want: []PinnedModel{{Slug: "a/b"}, {Slug: "c/d", Tag: "beta"}},
 		},
+		{
+			name: "price overrides, zero is kept",
+			raw:  `[{"slug":"a/b","input_price_per_mtok":1.5,"output_price_per_mtok":0}]`,
+			want: []PinnedModel{{Slug: "a/b", InputPricePerMtok: ptrFloat(1.5), OutputPricePerMtok: ptrFloat(0)}},
+		},
+		{name: "free", raw: `[{"slug":"a/b","free":true}]`, want: []PinnedModel{{Slug: "a/b", Free: true}}},
+		{name: "free with price", raw: `[{"slug":"a/b","free":true,"input_price_per_mtok":1}]`, wantErr: "mutually exclusive"},
+		{name: "negative price", raw: `[{"slug":"a/b","input_price_per_mtok":-1}]`, wantErr: "input_price_per_mtok must be between"},
+		{name: "absurd price", raw: `[{"slug":"a/b","output_price_per_mtok":20000}]`, wantErr: "output_price_per_mtok must be between"},
 		{name: "not json", raw: "a/b=Name", wantErr: "JSON array"},
 		{name: "object not array", raw: `{"slug":"a/b"}`, wantErr: "JSON array"},
 		{name: "unknown field", raw: `[{"slug":"a/b","lable":"typo"}]`, wantErr: "unknown field"},
@@ -73,3 +82,5 @@ func TestLoad_ParsesPinnedModels(t *testing.T) {
 		t.Fatalf("PinnedModels = %#v, want %#v", cfg.PinnedModels, want)
 	}
 }
+
+func ptrFloat(v float64) *float64 { return &v }

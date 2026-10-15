@@ -22,6 +22,8 @@ import {
   currentPinnedModels,
   labelForModel,
   pinnedLabelFor,
+  pinnedModelFor,
+  pinnedPrices,
 } from "@/app/lib/modelAliases";
 import { computeContextUsage, type ContextUsage } from "@/app/lib/contextUsage";
 import { parseSseChunk } from "@/app/lib/sse";
@@ -266,6 +268,14 @@ export type RankedModel = {
   // ("<provider>/<model>" explicit-routing slugs). Drives the picker's
   // "workspace" pill.
   workspace?: boolean;
+  // Operator pin presentation (FLEET_PINNED_MODELS), carried on the row so it
+  // survives the explicit-route rewrite ("<provider>/<slug>"): `pinTag` is
+  // the pill, `relabelled` marks a row shown under an operator label whose
+  // slug the picker neither prints nor matches searches on.
+  pinTag?: string;
+  relabelled?: boolean;
+  // Operator pin marked free: the cost band reads "Free".
+  free?: boolean;
 };
 
 // Connector rows shown in chat's Tools picker. Optional and remote rows carry
@@ -1255,12 +1265,20 @@ export function ChatExperience({
   // Keeps the chip showing the same string as the model's menu row rather
   // than the OpenRouter slug.
   const selectedModelLabel = useMemo(() => {
+    // An operator pin label wins; read from the client-config snapshot so the
+    // chip re-labels when that payload lands after the catalog did.
+    const pinLabel = workspaceModelTiers?.pinned.find(
+      (p) => p.slug === selectedModel,
+    )?.label;
+    if (pinLabel) return pinLabel;
     const alias = labelForModel(selectedModel);
     if (alias !== selectedModel) return alias;
     const slug = selectedModel.trim();
     if (!slug) return selectedModel;
     if (selectedCatalogModel && selectedCatalogSlug !== slug) {
-      return `${slug.slice(0, slug.indexOf("/"))}: ${selectedCatalogModel.name}`;
+      const name =
+        pinnedLabelFor(selectedCatalogSlug) ?? selectedCatalogModel.name;
+      return `${slug.slice(0, slug.indexOf("/"))}: ${name}`;
     }
     const known =
       selectedCatalogModel ?? workspaceModels.find((m) => m.slug === slug);
@@ -1270,18 +1288,28 @@ export function ChatExperience({
     selectedCatalogModel,
     selectedCatalogSlug,
     workspaceModels,
+    workspaceModelTiers,
   ]);
   // Prices for the currently selected slug, feeding the cost indicator on the
   // composer's model chip. Unknown slugs (a half-typed custom slug, a
   // workspace-provider model) resolve to null and the chip shows no tier.
+  // An operator pin's displayed price (FLEET_PINNED_MODELS) overrides the
+  // catalog's, matching the row the user picked it from.
+  const selectedPin = workspaceModelTiers?.pinned.find(
+    (p) => p.slug === selectedModel.trim() || p.slug === selectedCatalogSlug,
+  );
+  const selectedModelFree = selectedPin?.free === true;
   const selectedModelPrices = useMemo<ModelPrices | null>(() => {
     const known = selectedCatalogModel;
-    if (!known) return null;
+    const override = pinnedPrices(selectedPin);
+    if (!known && override.pricePrompt === undefined && override.priceCompletion === undefined) {
+      return null;
+    }
     return {
-      pricePrompt: known.pricePrompt,
-      priceCompletion: known.priceCompletion,
+      pricePrompt: override.pricePrompt ?? known?.pricePrompt,
+      priceCompletion: override.priceCompletion ?? known?.priceCompletion,
     };
-  }, [selectedCatalogModel]);
+  }, [selectedCatalogModel, selectedPin]);
   const contextUsage = useMemo<ContextUsage | null>(
     () =>
       computeContextUsage({
@@ -1607,8 +1635,14 @@ export function ChatExperience({
     // pin list is module state installed by the same /api/client-config
     // payload that replaces workspaceModelTiers, so that dep re-runs this.
     const relabel = (model: RankedModel): RankedModel => {
-      const label = pinnedLabelFor(model.slug);
-      return label ? { ...model, name: label } : model;
+      const pin = pinnedModelFor(model.slug);
+      if (!pin) return model;
+      return {
+        ...model,
+        ...(pin.label ? { name: pin.label, relabelled: true } : {}),
+        ...(pin.tag ? { pinTag: pin.tag } : {}),
+        ...pinnedPrices(pin),
+      };
     };
     const ranked = rankedModels.map(relabel);
     const catalog = catalogModels.map(relabel);
@@ -1638,20 +1672,20 @@ export function ChatExperience({
       modelIsAvailable(model.slug, modelRouting, true),
     );
     // Pinned rows sit directly under the recommended tiers. A pin with no
-    // label keeps the catalog display name; the catalog also supplies the
-    // prices / context / created a hand-written row would otherwise lack.
-    const pinnedModels: RankedModel[] = currentPinnedModels()
-      .map((pin) => {
-        const hit =
-          catalog.find((m) => m.slug === pin.slug) ??
-          ranked.find((m) => m.slug === pin.slug);
-        return {
-          ...(hit ?? {}),
-          slug: pin.slug,
-          name: pin.label ?? hit?.name ?? pin.slug,
-        };
-      })
-      .filter((model) => modelIsAvailable(model.slug, modelRouting, true));
+    // label keeps the catalog (or workspace-provider) display name; that row
+    // also supplies the prices / context / created / workspace flag a
+    // hand-written row would otherwise lack.
+    const pinnedSeeds: RankedModel[] = currentPinnedModels().map((pin) => {
+      const hit =
+        catalog.find((m) => m.slug === pin.slug) ??
+        ranked.find((m) => m.slug === pin.slug) ??
+        workspaceModels.find((m) => m.slug === pin.slug);
+      return relabel({
+        ...(hit ?? {}),
+        slug: pin.slug,
+        name: hit?.name ?? pin.slug,
+      });
+    });
     const publicCatalog = new Set(
       [...catalog, ...ranked].map((model) => model.slug),
     );
@@ -1670,6 +1704,13 @@ export function ChatExperience({
           workspace: !!route.provider,
         })),
       );
+    // Public pins take the same explicit-route rewrite as catalog rows (a
+    // native catch-all can shadow the OpenRouter one); workspace pins are
+    // already provider-routed and only need the availability check.
+    const pinnedModels: RankedModel[] = [
+      ...pinnedSeeds.filter((m) => m.workspace),
+      ...catalogChoices(pinnedSeeds.filter((m) => !m.workspace)),
+    ].filter((m) => modelIsAvailable(m.slug, modelRouting, !m.workspace));
 
     // Lockdown chats are pinned to the operator-configured allow-list.
     // Build a fixed list that mirrors that allow-list (default first,
@@ -1694,7 +1735,10 @@ export function ChatExperience({
         const fromRanked = ranked.find((m) => m.slug === slug);
         const fromCatalog = catalog.find((m) => m.slug === slug);
         const known = fromRanked ?? fromCatalog;
-        out.push(known ?? { slug, name: slug });
+        out.push(
+          known ??
+            pinnedSeeds.find((m) => m.slug === slug) ?? { slug, name: slug },
+        );
       }
       return out;
     }
@@ -1724,7 +1768,7 @@ export function ChatExperience({
     // A relabelled pin matches on its label only: searching the underlying
     // slug's vendor/model name should not surface the renamed row.
     const matchesQuery = (m: RankedModel) =>
-      (!pinnedLabelFor(m.slug) && m.slug.toLowerCase().includes(query)) ||
+      (!m.relabelled && m.slug.toLowerCase().includes(query)) ||
       m.name.toLowerCase().includes(query);
     const seen = new Set<string>();
     const matches: RankedModel[] = [];
@@ -6689,6 +6733,7 @@ export function ChatExperience({
                 setSelectedModel={selectModelExplicitly}
                 selectedModelLabel={selectedModelLabel}
                 selectedModelPrices={selectedModelPrices}
+                selectedModelFree={selectedModelFree}
                 modelError={modelError}
                 modelPickerOpen={modelPickerOpen}
                 setModelPickerOpen={setModelPickerOpen}

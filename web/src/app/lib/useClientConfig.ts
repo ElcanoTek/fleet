@@ -5,8 +5,10 @@ import { DEFAULT_PILLS, type ProtocolPill } from "@/app/chat/ui/protocolPills";
 import {
   currentAdvancedModel,
   currentDefaultModel,
+  currentPinnedModels,
   setModelTiers,
   type ModelTiersConfig,
+  type PinnedModel,
 } from "@/app/lib/modelAliases";
 
 // useClientConfig fetches the active client's runtime config from
@@ -56,7 +58,12 @@ export type UseClientConfig = {
   // lands, setModelTiers() has ALREADY installed the pair module-wide — this
   // field exists so a consumer can react to the arrival itself (e.g. adopting
   // the live default for a not-yet-started conversation).
-  models: { defaultModel: string; advancedModel: string } | null;
+  models: {
+    defaultModel: string;
+    advancedModel: string;
+    // Operator pins (FLEET_PINNED_MODELS) from the same payload.
+    pinned: ReadonlyArray<PinnedModel>;
+  } | null;
   loading: boolean;
 };
 
@@ -79,7 +86,12 @@ type ClientConfigResponse = {
 let cachedConfig: {
   branding: ClientBranding;
   pills: ProtocolPill[];
-  models: { defaultModel: string; advancedModel: string } | null;
+  models: {
+    defaultModel: string;
+    advancedModel: string;
+    // Operator pins (FLEET_PINNED_MODELS) from the same payload.
+    pinned: ReadonlyArray<PinnedModel>;
+  } | null;
 } | null = null;
 
 // Module-scope reader so the useState initializers don't read a mutable
@@ -140,6 +152,7 @@ export async function refreshClientConfig(): Promise<boolean> {
       models: {
         defaultModel: currentDefaultModel(),
         advancedModel: currentAdvancedModel(),
+        pinned: currentPinnedModels(),
       },
     };
     publishCachedConfig();

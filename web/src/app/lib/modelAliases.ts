@@ -75,9 +75,37 @@ export type ModelTiersConfig = {
 // PinnedModel is one operator-pinned picker row (FLEET_PINNED_MODELS, carried
 // as `models.pinned` on /api/client-config): a slug both pickers list right
 // under the recommended tiers, shown under `label` when set and with `tag` as
-// its pill (e.g. "alpha"). Presentation only — the slug is still what a turn
-// or task sends and what the server resolves; see docs/PINNED-MODELS.md.
-export type PinnedModel = { slug: string; label?: string; tag?: string };
+// its pill (e.g. "alpha"). `free`, or the optional prices (USD per million
+// tokens), replace the catalog's price in the cost band. Presentation only — the slug is
+// still what a turn or task sends and what the server resolves, and real
+// spend is metered at the provider's price; see docs/PINNED-MODELS.md.
+export type PinnedModel = {
+  slug: string;
+  label?: string;
+  tag?: string;
+  // Shown as "Free" in place of the cost band (display only).
+  free?: boolean;
+  inputPricePerMtok?: number;
+  outputPricePerMtok?: number;
+};
+
+function parsePrice(raw: unknown): number | undefined {
+  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : undefined;
+}
+
+// pinnedPrices converts a pin's per-million overrides into the per-token
+// pricePrompt / priceCompletion fields the picker rows carry; only the sides
+// the operator set are returned, so the rest keep the catalog value.
+export function pinnedPrices(
+  pin: PinnedModel | undefined,
+): { pricePrompt?: number; priceCompletion?: number; free?: boolean } {
+  if (!pin) return {};
+  if (pin.free) return { pricePrompt: 0, priceCompletion: 0, free: true };
+  return {
+    ...(pin.inputPricePerMtok !== undefined ? { pricePrompt: pin.inputPricePerMtok / 1e6 } : {}),
+    ...(pin.outputPricePerMtok !== undefined ? { priceCompletion: pin.outputPricePerMtok / 1e6 } : {}),
+  };
+}
 
 let livePinned: ReadonlyArray<PinnedModel> = [];
 
@@ -93,7 +121,16 @@ function parsePinned(raw: unknown): PinnedModel[] {
     seen.add(slug);
     const label = String((entry as { label?: unknown })?.label ?? "").trim();
     const tag = String((entry as { tag?: unknown })?.tag ?? "").trim();
-    out.push({ slug, ...(label ? { label } : {}), ...(tag ? { tag } : {}) });
+    const input = parsePrice((entry as { input_price_per_mtok?: unknown })?.input_price_per_mtok);
+    const output = parsePrice((entry as { output_price_per_mtok?: unknown })?.output_price_per_mtok);
+    out.push({
+      slug,
+      ...(label ? { label } : {}),
+      ...(tag ? { tag } : {}),
+      ...((entry as { free?: unknown })?.free === true ? { free: true } : {}),
+      ...(input !== undefined ? { inputPricePerMtok: input } : {}),
+      ...(output !== undefined ? { outputPricePerMtok: output } : {}),
+    });
   }
   return out;
 }

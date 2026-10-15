@@ -322,7 +322,8 @@ anything where depth matters more than speed. By default those two are
 model a "switch to a stronger model" suggestion offers); your admin can point
 either slot at a different model. Your admin can also pin more models just
 below those two, sometimes under their own name and with a tag such as
-**alpha** that marks a model still in trial. The rest of the list is marked by
+**alpha** that marks a model still in trial. A pinned model can also show
+**Free** where its cost band would be. The rest of the list is marked by
 status (**tested**, **new**, or **experimental**), and a model whose pricing the
 deployment knows shows its cost band, so you can see what you are about to
 spend. No band means the price is unknown rather than zero — worth asking about

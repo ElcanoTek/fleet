@@ -14,11 +14,27 @@ import { modelCostFor, MAX_COST_TIER, type ModelPrices } from "@/app/shared/lib/
 
 export function ModelCostIndicator({
   prices,
+  free,
   className,
 }: {
   prices: ModelPrices | null | undefined;
+  // An operator pin marked free (FLEET_PINNED_MODELS) reads "Free" instead of
+  // a "$" band. Display only — the provider's real price is still metered.
+  free?: boolean;
   className?: string;
 }) {
+  if (free) {
+    return (
+      <span
+        className={`model-cost model-cost-free${className ? ` ${className}` : ""}`}
+        title="Free"
+        aria-label="Free"
+        data-cost-tier="free"
+      >
+        Free
+      </span>
+    );
+  }
   const cost = modelCostFor(prices);
   if (!cost) return null;
   const rest = MAX_COST_TIER - cost.tier;

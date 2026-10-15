@@ -73,6 +73,40 @@ describe("ModelPicker", () => {
     }
   });
 
+  it("prefers a pin tag over the workspace badge", async () => {
+    setModelTiers({ pinned: [{ slug: "bundle-openai/gpt-4o", tag: "beta" }] });
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () => String(url).includes("llm-provider-models") ? {
+        routing_known: true,
+        providers: [{ name: "bundle-openai", type: "openai", models: ["gpt-4o"], catch_all: false }],
+        models: [{ id: "bundle-openai/gpt-4o", name: "GPT-4o" }],
+      } : { models: [] },
+    })));
+    try {
+      render(<Harness />);
+      fireEvent.focus(screen.getByRole("combobox"));
+      const row = await waitFor(() => screen.getByText("GPT-4o").closest("button"));
+      expect(row).toHaveTextContent("beta");
+      expect(row).not.toHaveTextContent("Workspace");
+    } finally {
+      _resetModelTiersForTests();
+    }
+  });
+
+  it("shows Free instead of a cost band for a free pin", async () => {
+    setModelTiers({ pinned: [{ slug: "acme/open-8b", label: "Gift", free: true }] });
+    try {
+      render(<Harness />);
+      fireEvent.focus(screen.getByRole("combobox"));
+      const row = await waitFor(() => screen.getByText("Gift").closest("button"));
+      expect(row).toHaveTextContent("Free");
+      expect(row?.querySelector("[data-cost-tier='free']")).not.toBeNull();
+    } finally {
+      _resetModelTiersForTests();
+    }
+  });
+
   it("commits a clicked option into the input value", async () => {
     render(<Harness />);
     const input = screen.getByRole("combobox") as HTMLInputElement;

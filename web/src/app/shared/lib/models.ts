@@ -8,7 +8,7 @@
 // pins connect-src to 'self' (#590), so a direct browser fetch is blocked and
 // used to silently strand the picker on its two seed models.
 
-import { currentPinnedModels, currentTierModels, pinnedModelFor } from "@/app/lib/modelAliases";
+import { currentPinnedModels, currentTierModels, pinnedModelFor, pinnedPrices } from "@/app/lib/modelAliases";
 import { loadWorkspaceModelCatalog, _resetWorkspaceModelCacheForTests } from "./workspaceModels";
 import { catalogModelRoutes } from "./modelRouting";
 
@@ -30,6 +30,8 @@ export type PickerModel = {
   // underlying slug the picker then neither prints nor matches searches on.
   pinTag?: string;
   relabelled?: boolean;
+  // Operator pin marked free: the cost band reads "Free".
+  free?: boolean;
 };
 
 export const MODEL_CATALOG_URL = "/api/model-catalog";
@@ -62,8 +64,9 @@ export function pinnedSeedModels(fetchedList: PickerModel[]): PickerModel[] {
   }));
 }
 
-// applyPins stamps the pin presentation (label, tag, relabelled) onto every
-// row whose slug the operator pinned, wherever in the list it landed.
+// applyPins stamps the pin presentation (label, tag, relabelled, displayed
+// price overrides / free) onto every row whose slug the operator pinned,
+// wherever in the list it landed.
 export function applyPins(models: PickerModel[]): PickerModel[] {
   return models.map((m) => {
     const pin = pinnedModelFor(m.id);
@@ -72,6 +75,7 @@ export function applyPins(models: PickerModel[]): PickerModel[] {
       ...m,
       ...(pin.label ? { name: pin.label, relabelled: true } : {}),
       ...(pin.tag ? { pinTag: pin.tag } : {}),
+      ...pinnedPrices(pin),
     };
   });
 }
@@ -213,14 +217,22 @@ async function fetchCatalogModels(): Promise<PickerModel[]> {
 
 let cachedModels: PickerModel[] | null = null;
 let cachedAt = 0;
+// The pin list the cache was built against: a /api/client-config payload that
+// lands after the first load changes it, and the next load rebuilds rather
+// than serving a pre-pin list for the rest of the TTL.
+let cachedPinsKey = "";
 let inflight: Promise<PickerModel[]> | null = null;
 
 // Returns the merged (workspace + tier seeds + operator pins + OpenRouter-
 // catalog) list, fetched with a short cache. Workspace-provider models come
 // first so an admin-configured model is immediately visible in browse mode;
-// either fetch failing degrades to the rest of the list, and the seeds alone are the floor.
+// either fetch failing degrades to the rest of the list, and the seeds alone
+// are the floor.
 export async function loadModels(): Promise<PickerModel[]> {
-  if (cachedModels && Date.now() - cachedAt < 30_000) return cachedModels;
+  const pinsKey = JSON.stringify(currentPinnedModels());
+  if (cachedModels && pinsKey === cachedPinsKey && Date.now() - cachedAt < 30_000) {
+    return cachedModels;
+  }
   if (inflight) return inflight;
   inflight = (async () => {
     const [catalog, fetched] = await Promise.all([
@@ -235,10 +247,13 @@ export async function loadModels(): Promise<PickerModel[]> {
       workspace: true,
     }));
     const seeds = [...seedModels(), ...pinnedSeedModels(fetched)];
-    const base =
+    // Pins are stamped BEFORE route expansion so a pin rewritten to an
+    // explicit "<provider>/<slug>" route keeps its label, tag and hidden slug.
+    const base = applyPins(
       fetched.length > 0
         ? dedupeAndOrder(enrichFromCatalog(seeds, fetched), fetched)
-        : seeds;
+        : seeds,
+    );
     const publicCatalog = new Set(fetched.map((model) => model.id));
     const routed = base.flatMap((model) => catalogModelRoutes(model.id, catalog.routing, publicCatalog.has(model.id)).map((route) => ({
       ...model,
@@ -247,8 +262,9 @@ export async function loadModels(): Promise<PickerModel[]> {
       // An explicit alternate route isn't the configured recommended tier.
       ...(route.provider ? { recommended: false, workspace: true } : {}),
     })));
-    cachedModels = applyPins(dedupeAndOrder(workspace, routed));
+    cachedModels = dedupeAndOrder(applyPins(workspace), routed);
     cachedAt = Date.now();
+    cachedPinsKey = pinsKey;
     inflight = null;
     return cachedModels;
   })();

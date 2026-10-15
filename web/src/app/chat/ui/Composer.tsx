@@ -32,7 +32,6 @@ import {
   currentAdvancedModel,
   currentAdvancedModelLabel,
   currentDefaultModel,
-  pinnedModelFor,
   tierForModel,
 } from "@/app/lib/modelAliases";
 import { ModelCostIndicator } from "@/app/shared/ui/ModelCostIndicator";
@@ -228,6 +227,8 @@ export type ComposerProps = {
   // on the chip. null whenever the slug has no catalog pricing (workspace
   // provider, half-typed custom slug) — the chip then shows no tier.
   selectedModelPrices: ModelPrices | null;
+  // The selected model is an operator pin marked free: the chip reads "Free".
+  selectedModelFree?: boolean;
   modelError: { message: string; modelsUrl: string } | null;
   modelPickerOpen: boolean;
   setModelPickerOpen: Dispatch<SetStateAction<boolean>>;
@@ -315,6 +316,7 @@ export function Composer({
   cancelRecovery,
   selectedModelLabel,
   selectedModelPrices,
+  selectedModelFree,
   modelError,
   modelPickerOpen,
   setModelPickerOpen,
@@ -874,7 +876,10 @@ export function Composer({
                           .model-cost sets `display: inline-flex` outside
                           Tailwind's utility layer and would win otherwise. */}
                 <span className="hidden shrink-0 items-center sm:inline-flex">
-                  <ModelCostIndicator prices={selectedModelPrices} />
+                  <ModelCostIndicator
+                    prices={selectedModelPrices}
+                    free={selectedModelFree}
+                  />
                 </span>
                 <Icon
                   name="selector"
@@ -978,9 +983,6 @@ export function Composer({
                         // under recommended; its tag ("alpha", …) is the
                         // pill, and a relabelled pin's tooltip omits the
                         // underlying slug it renames.
-                        const pin = model.slug
-                          ? pinnedModelFor(model.slug)
-                          : undefined;
                         let pill: ReactNode = null;
                         if (isTier) {
                           // Same size/case as the tested/experimental
@@ -990,13 +992,13 @@ export function Composer({
                               recommended
                             </span>
                           );
-                        } else if (pin?.tag) {
+                        } else if (model.pinTag) {
                           pill = (
                             <span
                               data-testid="model-pin-tag"
                               className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-warning)_45%,transparent)] px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums text-[var(--color-warning)]"
                             >
-                              {pin.tag}
+                              {model.pinTag}
                             </span>
                           );
                         } else if (model.workspace) {
@@ -1029,7 +1031,7 @@ export function Composer({
                             title={
                               !model.slug
                                 ? "Use the server-configured default model"
-                                : pin?.label
+                                : model.relabelled
                                   ? model.name
                                   : `${model.name} (${model.slug})`
                             }
@@ -1056,6 +1058,7 @@ export function Composer({
                             <span className="flex shrink-0 items-center gap-[0.35rem]">
                               {pill}
                               <ModelCostIndicator
+                                free={model.free}
                                 prices={{
                                   pricePrompt: model.pricePrompt,
                                   priceCompletion: model.priceCompletion,

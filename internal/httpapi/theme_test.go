@@ -315,11 +315,11 @@ func TestClientConfig_CarriesPinnedModels(t *testing.T) {
 
 	s.cfg.PinnedModels = []config.PinnedModel{
 		{Slug: "acme/open-70b", Label: "Elcano Nova", Tag: "alpha"},
-		{Slug: "acme/open-8b"},
+		{Slug: "acme/open-8b", OutputPricePerMtok: func() *float64 { v := 0.0; return &v }()},
 	}
 	w = httptest.NewRecorder()
 	s.clientConfigHandler(w, req)
-	want := `"pinned":[{"slug":"acme/open-70b","label":"Elcano Nova","tag":"alpha"},{"slug":"acme/open-8b"}]`
+	want := `"pinned":[{"slug":"acme/open-70b","label":"Elcano Nova","tag":"alpha"},{"slug":"acme/open-8b","output_price_per_mtok":0}]`
 	if !strings.Contains(w.Body.String(), want) {
 		t.Errorf("body %s must carry the pinned rows %s", w.Body.String(), want)
 	}

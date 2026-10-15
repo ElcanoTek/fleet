@@ -15,6 +15,7 @@ import {
   labelForModel,
   setModelTiers,
   currentPinnedModels,
+  pinnedPrices,
   pinnedModelFor,
   tierForModel,
 } from "./modelAliases";
@@ -138,5 +139,22 @@ describe("pinned models (FLEET_PINNED_MODELS)", () => {
     setModelTiers({ pinned: [{ slug: "a/b" }] });
     setModelTiers({});
     expect(currentPinnedModels()).toEqual([]);
+  });
+});
+
+describe("pinned prices", () => {
+  it("parses per-million overrides and free, dropping bad values", () => {
+    setModelTiers({
+      pinned: [
+        { slug: "a/priced", input_price_per_mtok: 1.5, output_price_per_mtok: 0 },
+        { slug: "a/free", free: true },
+        { slug: "a/bad", input_price_per_mtok: -1, output_price_per_mtok: "2" },
+      ],
+    });
+    const [priced, free, bad] = currentPinnedModels();
+    expect(pinnedPrices(priced)).toEqual({ pricePrompt: 1.5e-6, priceCompletion: 0 });
+    expect(pinnedPrices(free)).toEqual({ pricePrompt: 0, priceCompletion: 0, free: true });
+    expect(pinnedPrices(bad)).toEqual({});
+    expect(pinnedPrices(undefined)).toEqual({});
   });
 });
