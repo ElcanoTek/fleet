@@ -175,7 +175,18 @@ describe("project grouping (#509 follow-up)", () => {
     ]);
   });
 
-  it("projectGroups returns the top N projects by recent update, each with its chats in input order", () => {
+  it("projectGroups returns every project by default, pinned first then most recent", () => {
+    // The rail once cut this to five; a sixth project and its chats then
+    // vanished from the rail with no way to reach them.
+    const projects = Array.from({ length: 12 }, (_, i) => proj(`p${i}`, i));
+    const groups = projectGroups([conv({ title: "deep", project_id: "p0" })], projects);
+    expect(groups).toHaveLength(12);
+    expect(groups[0].project.id).toBe("p11");
+    expect(groups[11].project.id).toBe("p0");
+    expect(groups[11].chats.map((c) => c.title)).toEqual(["deep"]);
+  });
+
+  it("projectGroups returns the top N projects by recent update when capped, each with its chats in input order", () => {
     const projects = [proj("old", 1), proj("newest", 9), proj("mid", 5)];
     const all = [
       conv({ title: "a", project_id: "newest" }),

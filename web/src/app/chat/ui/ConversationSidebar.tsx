@@ -15,7 +15,7 @@
 // Delete/Download <title>") are preserved verbatim — they now live inside the
 // kebab menu, and the live conversation-mgmt e2e opens the kebab to reach them.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import type { ClientBranding } from "@/app/lib/useClientConfig";
@@ -1265,7 +1265,6 @@ export function ConversationSidebar({
     projects.length > 0 ? new Set(projects.map((p) => p.id)) : undefined;
   const pinned = pinnedUnfiled(conversations, knownProjectIds);
   const recent = recentUnfiled(conversations, knownProjectIds);
-  const projectTree = projectGroups(conversations, projects);
   const filtering = computeIsFiltering({
     labels: filterLabels,
     query: sidebarQuery,
@@ -1275,16 +1274,22 @@ export function ConversationSidebar({
   // content hits deduped against conversations the title filter already
   // shows (a chat matching both ways should appear once).
   const queryLower = sidebarQuery.trim().toLowerCase();
-  const matchingProjects = searching
-    ? projects.filter((p) => p.name.toLowerCase().includes(queryLower))
-    : [];
-  // While searching, the Projects SECTION shows name matches from ALL
-  // projects (not just the top-5 slice) as normal expandable tree rows —
-  // results live under their real heading, not in an ad-hoc group inside
-  // the Chats list.
-  const visibleProjectTree = searching
-    ? projectGroups(conversations, matchingProjects, Math.max(matchingProjects.length, 1))
-    : projectTree;
+  const matchingProjects = useMemo(
+    () => (searching ? projects.filter((p) => p.name.toLowerCase().includes(queryLower)) : []),
+    [searching, projects, queryLower],
+  );
+  // The Projects SECTION's tree: every project, or — while searching — the
+  // name matches, as normal expandable tree rows (results live under their
+  // real heading, not in an ad-hoc group inside the Chats list). Only the tree
+  // on screen is built, and only when its inputs change: the rail re-renders
+  // on every streamed event, and the tree now spans every project.
+  const visibleProjectTree = useMemo(
+    () =>
+      searching
+        ? projectGroups(conversations, matchingProjects, Math.max(matchingProjects.length, 1))
+        : projectGroups(conversations, projects),
+    [searching, conversations, matchingProjects, projects],
+  );
   const shownIds = new Set(filteredConversations.map((c) => c.id));
   const messageHits = searching
     ? (contentResults ?? []).filter((r) => !shownIds.has(r.conversation_id))
@@ -1362,12 +1367,11 @@ export function ConversationSidebar({
     />
   );
 
-  // Projects section (#509 follow-up): the top MAX_RAIL_PROJECTS projects as
-  // expandable groups; each project row is also the drop target for a
+  // Projects section (#509 follow-up): every project, pinned first, as
+  // expandable groups inside the section's own scroller; each project row is also the drop target for a
   // conversation drag. The header always renders — its + creates a project
   // (opens the modal straight on the new-project form), and each row's kebab
-  // (where the chat count used to be) carries edit/rename/delete. The full
-  // list stays reachable via the empty-state row and the modal itself.
+  // (where the chat count used to be) carries edit/rename/delete.
   const projectsSection = (
     <div className="mb-1">
       <div className="flex items-center gap-1">
@@ -1752,11 +1756,12 @@ export function ConversationSidebar({
 
       {/* Projects section — ABOVE the New-chat row (the rail's primary nav
           block). Wide-collapsed (≥sm) it hides with the rest of the wide-only
-          content; the max-height guard keeps a deep expanded tree from
-          pushing New chat and the list off-screen. */}
+          content; the max-height guard keeps a long or deeply expanded
+          tree from pushing New chat and the list off-screen — past it the
+          section scrolls on its own, like the Chats list below. */}
       <div
         className={[
-          "max-h-[40vh] overflow-y-auto overflow-x-hidden",
+          "max-h-[30vh] overflow-y-auto overflow-x-hidden",
           railCollapsed ? "sm:hidden" : "",
         ].join(" ")}
       >

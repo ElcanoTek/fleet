@@ -135,10 +135,6 @@ export function recentUnfiled<T extends OrganizableConversation>(
 
 // ── Projects in the rail (#509 follow-up) ────────────────────────────────────
 
-// MAX_RAIL_PROJECTS caps how many projects the rail section shows — the most
-// recently updated ones. The rest stay reachable through the Projects modal.
-export const MAX_RAIL_PROJECTS = 5;
-
 // ProjectLike is the structural slice of a Project the rail grouping needs
 // (the full type lives in ProjectsModal.tsx; a minimal shape keeps this
 // module React-free and unit-testable, like OrganizableConversation above).
@@ -147,26 +143,39 @@ export type ProjectLike = { id: string; name: string; updated_at: number; pinned
 export type ProjectGroup<T, P extends ProjectLike = ProjectLike> = { project: P; chats: T[] };
 
 // projectGroups returns the rail's project tree: pinned projects first (in
-// place, no separate section), then the rest by most-recent update, cut to
-// the top `max`; each group's conversations keep the caller's list order
-// (the server already sorts by updated_at DESC). Because pinned sorts before
-// the cut, a pinned project always makes the rail. A project with no chats
-// still gets a group — a fresh project must exist in the rail to be a drag
-// target. Conversations whose project is NOT in the top slice stay hidden
-// from the main list (they're project chats) and are reachable via search,
-// filters, or the modal. Generic over the caller's project type so richer
+// place, no separate section), then the rest by the project's own most recent
+// update (its updated_at — a settings change, not chat activity); each
+// group's conversations keep the caller's list order (the server already sorts
+// by updated_at DESC). Every project is returned unless the caller passes
+// `max` (search caps the tree to its matches). The rail used to cut this to
+// the five freshest projects, with "the rest reachable through the Projects
+// modal" — but nothing in the rail opened that modal once a project existed,
+// so a sixth project, and every chat filed in it (project chats live only
+// under their project), simply vanished. The rail's Projects section is its
+// own scroller (max 30vh), so a long list scrolls there like Chats does. A
+// project with no chats still gets a group — a fresh project must exist in the
+// rail to be a drag target. Generic over the caller's project type so richer
 // fields (owner_email for the kebab's owner gate) survive the grouping.
 export function projectGroups<T extends OrganizableConversation, P extends ProjectLike>(
   conversations: readonly T[],
   projects: readonly P[],
-  max: number = MAX_RAIL_PROJECTS,
+  max: number = Number.POSITIVE_INFINITY,
 ): ProjectGroup<T, P>[] {
+  // One pass over the conversations, not one per project: with every project
+  // listed, a per-project filter is O(projects × conversations) on each render.
+  const byProject = new Map<string, T[]>();
+  for (const c of conversations) {
+    if (!c.project_id) continue;
+    const list = byProject.get(c.project_id);
+    if (list) list.push(c);
+    else byProject.set(c.project_id, [c]);
+  }
   return [...projects]
     .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updated_at - a.updated_at)
     .slice(0, max)
     .map((project) => ({
       project,
-      chats: conversations.filter((c) => c.project_id === project.id),
+      chats: byProject.get(project.id) ?? [],
     }));
 }
 
