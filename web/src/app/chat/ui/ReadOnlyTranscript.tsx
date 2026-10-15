@@ -182,7 +182,7 @@ export function ReadOnlyTranscript({
                     <ReplyBubble reply={reply} />
                   </div>
                 ) : (
-                  <div className="max-w-[85%] whitespace-pre-wrap rounded-[1rem] bg-[var(--color-overlay-strong)] px-4 py-2.5 text-[0.9375rem] leading-[1.55]">
+                  <div className="max-w-[85%] whitespace-pre-wrap rounded-[1rem] bg-[var(--color-overlay-soft)] px-4 py-2.5 text-[0.9375rem] leading-[1.55]">
                     {b.text}
                   </div>
                 );

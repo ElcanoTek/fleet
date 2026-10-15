@@ -344,7 +344,7 @@ function ApprovalResult({ text }: { text: string }) {
   return (
     <pre
       data-testid="approval-result"
-      className="mt-2 max-h-60 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.72rem] leading-[1.45] text-[var(--color-text-muted)]"
+      className="mt-2 max-h-60 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-inset)] p-2 text-[0.72rem] leading-[1.45] text-[var(--color-text-muted)]"
       style={{ fontFamily: "var(--font-code)" }}
     >
       {text}
@@ -975,7 +975,7 @@ function GenericActionCard({
       </div>
     ) : rawArgs ? (
       <pre
-        className="max-h-40 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.75rem] text-[var(--color-text-primary)]"
+        className="max-h-40 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-inset)] p-2 text-[0.75rem] text-[var(--color-text-primary)]"
         style={{ fontFamily: "var(--font-code)" }}
       >
         {rawArgs}
@@ -1234,7 +1234,7 @@ function BashApprovalCard({
         </span>
       </div>
 
-      <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-overlay-strong)] p-2 font-mono text-[0.78rem] text-[var(--color-text-primary)]">
+      <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-inset)] p-2 font-mono text-[0.78rem] text-[var(--color-text-primary)]">
         {command}
       </pre>
 
@@ -1478,7 +1478,7 @@ function ScheduleTaskCard({
           </label>
         </div>
       ) : promptPreview ? (
-        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.75rem] text-[var(--color-text-primary)]">
+        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-inset)] p-2 text-[0.75rem] text-[var(--color-text-primary)]">
           {promptPreview}
         </pre>
       ) : null}
@@ -1658,7 +1658,7 @@ function ManageTasksCard({
       </div>
 
       {changes.length > 0 ? (
-        <ul className="mt-2 grid gap-0.5 rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.75rem] text-[var(--color-text-primary)]">
+        <ul className="mt-2 grid gap-0.5 rounded-md bg-[var(--color-surface-inset)] p-2 text-[0.75rem] text-[var(--color-text-primary)]">
           {changes.map((line) => (
             <li key={line}>{line}</li>
           ))}
@@ -2027,7 +2027,7 @@ function EmailPreview({
           <p className="mb-1 text-[0.7rem] text-[var(--color-text-muted)]">{overflowNotice}</p>
         ) : null}
         <pre
-          className="max-h-[16rem] min-w-0 max-w-full overflow-auto rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] px-2 py-1.5 text-[0.75rem] leading-[1.45] text-[var(--color-text-secondary)] whitespace-pre-wrap break-all"
+          className="max-h-[16rem] min-w-0 max-w-full overflow-auto rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.75rem] leading-[1.45] text-[var(--color-text-secondary)] whitespace-pre-wrap break-all"
           style={{ fontFamily: "var(--font-code)" }}
         >
           {html}
@@ -2038,7 +2038,7 @@ function EmailPreview({
 
   return (
     <div className="mt-2 min-w-0 max-w-full overflow-hidden rounded-[0.6rem] border border-[var(--color-border)]">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-overlay-strong)] px-2 py-1.5 text-[0.7rem]">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.7rem]">
         <div className="flex flex-wrap items-center gap-2">
           <SegGroup label="Inbox">
             <SegButton active={inbox === "light"} onClick={() => onInboxChange("light")}>Light</SegButton>
@@ -2087,7 +2087,7 @@ function EmailPreview({
 
       {showRaw ? (
         <pre
-          className="max-h-[14rem] min-w-0 max-w-full overflow-auto border-t border-[var(--color-border)] bg-[var(--color-overlay-strong)] px-2 py-1.5 text-[0.72rem] leading-[1.45] text-[var(--color-text-secondary)] whitespace-pre-wrap break-all"
+          className="max-h-[14rem] min-w-0 max-w-full overflow-auto border-t border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.72rem] leading-[1.45] text-[var(--color-text-secondary)] whitespace-pre-wrap break-all"
           style={{ fontFamily: "var(--font-code)" }}
         >
           {html}

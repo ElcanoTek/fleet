@@ -66,6 +66,14 @@
   --color-connector-always-on-knob: var(--color-text-muted);
   --color-overlay-soft: rgba(0, 0, 0, 0.2);
   --color-overlay-strong: rgba(0, 0, 0, 0.4);
+  /* Recessed in-flow surface: code/output wells, preview toolbars, tool-result
+     panels. Distinct from --color-overlay-strong, which is the modal SCRIM: in
+     dark mode the two are the same black wash, but a light-theme scrim has to
+     be a visible slate film while a well inside a card must stay near-white, so
+     a well painted with the scrim token read as a muddy grey band. Dark
+     derives from the scrim so a bundle's dark overlay_strong still tints its
+     wells; light is set independently below. */
+  --color-surface-inset: var(--color-overlay-strong);
   /* Navigation-rail row states. Distinct from --color-overlay-* (which is a
      black/white scrim) so rail hover/active read as a light wash on the
      sidebar surface regardless of theme. The later theming PR repaints these
@@ -395,8 +403,9 @@
   --color-text-secondary: #33415f;
   --color-text-muted: #5c6a87;
   --color-text-disabled: rgba(92, 106, 135, 0.6);
-  --color-overlay-soft: rgba(114, 114, 171, 0.08);
+  --color-overlay-soft: rgba(114, 114, 171, 0.05);
   --color-overlay-strong: rgba(20, 24, 36, 0.16);
+  --color-surface-inset: rgba(38, 55, 92, 0.045);
   --rail-hover: rgba(38, 55, 92, 0.07);
   --rail-active: rgba(38, 55, 92, 0.11);
   /* Light-mode status + syntax tokens. Darker saturated values for
@@ -500,21 +509,21 @@
     ),
     linear-gradient(
       150deg,
-      color-mix(in srgb, var(--color-surface-2) 34%, #fff) 0%,
-      color-mix(in srgb, var(--color-surface-2) 89%, #fff) 52%,
-      color-mix(in srgb, var(--color-surface-2) 98%, #000) 100%
+      color-mix(in srgb, var(--color-surface-2) 18%, #fff) 0%,
+      color-mix(in srgb, var(--color-surface-2) 45%, #fff) 52%,
+      color-mix(in srgb, var(--color-surface-2) 70%, #fff) 100%
     );
   --gradient-bg:
     radial-gradient(
       circle at 9% -8%,
-      color-mix(in srgb, var(--color-primary) 24%, transparent),
+      color-mix(in srgb, var(--color-primary) 14%, transparent),
       transparent 42%
     ),
     linear-gradient(
       150deg,
-      color-mix(in srgb, var(--color-surface-2) 34%, #fff) 0%,
-      color-mix(in srgb, var(--color-surface-2) 89%, #fff) 52%,
-      color-mix(in srgb, var(--color-surface-2) 98%, #000) 100%
+      color-mix(in srgb, var(--color-surface-2) 18%, #fff) 0%,
+      color-mix(in srgb, var(--color-surface-2) 45%, #fff) 52%,
+      color-mix(in srgb, var(--color-surface-2) 70%, #fff) 100%
     );
   --gradient-bg-ops-console:
     radial-gradient(
@@ -1666,6 +1675,15 @@ button {
   opacity: 0.5;
   cursor: not-allowed;
 }
+/* Compact variant for in-card toolbars (Expand all, Prompt library, pager
+   buttons). ~30px tall vs .btn's ~37px. The class was used for a long time
+   before it was defined, so those buttons rendered at full size and the
+   longer labels wrapped to two lines on phones; nowrap pins them to one. */
+.btn-small {
+  padding: 0.3rem 0.65rem;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
 .btn-primary {
   background: var(--color-primary);
   color: var(--color-on-primary);
@@ -2225,7 +2243,7 @@ tr.clickable:hover td {
   border-color: transparent;
 }
 tr.sla-row-fail {
-  background: rgba(224, 128, 128, 0.08);
+  background: color-mix(in srgb, var(--color-danger) 8%, transparent);
 }
 .sla-detail {
   padding: 0.5rem 1rem;
@@ -3245,7 +3263,11 @@ tr.sla-row-fail {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  /* The same scrim token DialogShell paints, so an orchestrator modal and a
+     chat dialog dim the page with one theme-aware color (a literal black/60
+     here turned the whole light-theme page charcoal behind the task modals).
+     DialogShell additionally blurs; these do not. */
+  background: var(--color-overlay-strong);
   display: none;
   align-items: flex-start;
   justify-content: center;
@@ -3294,6 +3316,8 @@ tr.sla-row-fail {
 }
 .modal-header h3 {
   margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
   color: var(--color-text-primary);
 }
 .modal-body {
@@ -5108,6 +5132,7 @@ select.mcp-server-picker__account-select {
   white-space: nowrap;
   min-width: 0;
   font-size: 1rem;
+  font-weight: 600;
 }
 
 /* Task summary strip: mirrors the Recent Tasks row (ID / Status / SLA /
@@ -5597,7 +5622,7 @@ select.mcp-server-picker__account-select {
   overflow-wrap: anywhere;
 }
 .lt-terminal {
-  background: var(--color-overlay-strong);
+  background: var(--color-surface-inset);
   padding: 0.5rem 0.65rem;
   overflow-x: auto;
 }

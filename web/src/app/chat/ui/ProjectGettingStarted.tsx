@@ -1,6 +1,7 @@
 "use client";
 
 import { Icon } from "./Icon";
+import { CloseButton } from "@/app/shared/ui/CloseButton";
 
 // The project home's getting-started card (Fleet Projects sharing, B6 / B8 /
 // B12 / B25; decisions #15, #16, #21). It replaces the old empty-state
@@ -227,15 +228,7 @@ export function ProjectGettingStarted({
           {done} of {model.steps.length}
         </span>
         <span className="flex-1" />
-        <button
-          type="button"
-          aria-label="Dismiss getting started"
-          title="Hide for now"
-          className="inline-flex size-7 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-          onClick={onDismiss}
-        >
-          <Icon name="close" className="size-3.5" />
-        </button>
+        <CloseButton label="Dismiss getting started" onClick={onDismiss} />
       </div>
       <h2 className="m-0 text-[1rem] font-semibold text-[var(--color-text-primary)]">
         {model.title}

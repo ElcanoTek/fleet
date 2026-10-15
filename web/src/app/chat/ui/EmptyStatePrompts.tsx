@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { FormFields } from "@/app/shared/ui/FormFields";
 import {
   formInitialValues,
@@ -109,14 +110,7 @@ export function ProtocolPillForm({
           <PillIcon name={pill.icon} className="size-4 text-[var(--color-accent)]" />
           {pill.title}
         </span>
-        <button
-          type="button"
-          aria-label="Cancel"
-          onClick={onCancel}
-          className="inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-        >
-          <PillIcon name="close" className="size-4" />
-        </button>
+        <CloseButton label="Cancel" onClick={onCancel} />
       </div>
 
       <p className="text-[0.83rem] leading-snug text-[var(--color-text-muted)]">

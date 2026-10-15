@@ -100,6 +100,10 @@ Known, deliberate exceptions:
 - **Surfaces & text** — `--color-bg`, `--color-surface-1/2`, the
   `--gradient-*` surface set, `--color-text-primary/secondary/muted/disabled`,
   `--color-border`/`-strong`/`-subtle`, `--color-overlay-soft/strong`.
+  `--color-overlay-strong` is the modal **scrim** only; a recessed in-flow
+  surface (code/output well, preview toolbar, tool-result panel) uses
+  `--color-surface-inset`. The two match in dark mode, but a light scrim must
+  stay a visible slate film while a well inside a card stays near-white.
 - **Brand accents** — `--color-primary(-hover)`, `--color-secondary`,
   `--color-accent`.
 - **Status** — two layers, both theme-aware:

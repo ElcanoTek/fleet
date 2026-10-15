@@ -1909,7 +1909,7 @@ function Chart({ c }: { c: Component }) {
 function Code({ c }: { c: Component }) {
   return (
     <pre
-      className="m-0 max-h-72 min-w-0 overflow-auto whitespace-pre-wrap break-all rounded-[var(--radius-md)] bg-[var(--color-overlay-strong)] p-2 text-[0.75rem]"
+      className="m-0 max-h-72 min-w-0 overflow-auto whitespace-pre-wrap break-all rounded-[var(--radius-md)] bg-[var(--color-surface-inset)] p-2 text-[0.75rem]"
       style={{ fontFamily: "var(--font-code)" }}
       data-language={str(c.language) || undefined}
     >
