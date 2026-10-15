@@ -373,6 +373,24 @@ func upstreamPinFor(modelSlug string) *openrouter.Provider {
 	return nil
 }
 
+// RoutingProviderOptions returns the OpenRouter routing policy for modelSlug
+// (upstreamPinFor: the upstream pin, the official-pool allow-list, the serving-
+// precision floor) as call options, for one-off model calls made outside the
+// run loop on the run's own model: the compaction summarizer and manual
+// summarize. Without it those calls go out with no provider block, so a slug
+// with a floor could be served below it on exactly the calls that condense a
+// long run's history. It carries routing only; the run loop's thinking and
+// long-context extras stay with engine.providerOptions. Nil when the slug has
+// no policy. Keyed under openrouter.Name like the run loop's options, so a
+// natively routed model ignores it.
+func RoutingProviderOptions(modelSlug string) fantasy.ProviderOptions {
+	p := upstreamPinFor(modelSlug)
+	if p == nil {
+		return nil
+	}
+	return fantasy.ProviderOptions{openrouter.Name: &openrouter.ProviderOptions{Provider: p}}
+}
+
 // anthropicLongContextSlug reports whether a raw slug string is a long-context
 // Claude variant (string form, for slug-only callers).
 func anthropicLongContextSlug(slug string) bool {

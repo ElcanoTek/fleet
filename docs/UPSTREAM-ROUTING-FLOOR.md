@@ -195,6 +195,23 @@ price-weighted routing reaches them often without a floor. The pin is a display
 alias; routing and this floor key on the real slug, so the floor holds under
 any label.
 
+**1c. One-off calls on the run's own model carry the same policy.** The
+compaction summarizer (chat and scheduled) and manual summarize buy their
+summary from the model the run is driving, but they build their own call, and
+until now they sent it with no `provider` block at all. That bypassed every
+policy on this page, the DeepSeek family floor included, on the calls that
+condense a long run's history. They now attach
+`agentcore.RoutingProviderOptions(slug)`, which is `upstreamPinFor` (pin,
+allow-list, floor) and nothing else: the run loop's thinking and long-context
+extras stay with the run loop. A slug with no policy still sends no `provider`
+block.
+
+Other one-off calls (chat titles, memory extraction and graph, error analysis,
+library prompts, recurring-task suggestions, eval judging, metadata tools) still
+send none. They use their own operator-configured models rather than the run's,
+so they reach a floored slug only if an operator points one of those settings at
+it.
+
 **2. Served-upstream attribution.** `openrouterServedProvider` reads
 `.Provider` off OpenRouter's provider metadata — the upstream that actually
 served the step, which `updateUsage` previously discarded while keeping only
@@ -250,7 +267,13 @@ of it was served elsewhere.
   OpenRouter's documented spelling and the `Quantizations` field on
   `openrouter.Provider`, and the routing policy is unit-tested, but no live
   request was made from this change (tests run against the fake-LLM seam with no
-  API key). The first live turn on a DeepSeek slug is the real confirmation.
+  API key). The first live turn on a DeepSeek slug is the real confirmation of
+  the family floor. The per-slug floor is a separate branch: a live turn on
+  `qwen/qwen3.8-27b` confirms it. Check the provider that served each of its
+  generations in OpenRouter's activity log: it should be one of the
+  fp8-or-better endpoints in the table above, never Tenstorrent, Darkbloom or
+  ModelRun. fleet does not surface it here, because the slug has no preferred
+  upstream, so the fallback log line never fires for it.
 - **This does not explain every bad response.** A flash-tier model given a large
   system prompt and a wide MCP tool roster can produce a poor answer on a
   perfectly good fp8 route. The attribution exists precisely so that case can be

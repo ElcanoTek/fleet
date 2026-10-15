@@ -1,6 +1,11 @@
 package agentcore
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+
+	"charm.land/fantasy/providers/openrouter"
+)
 
 // Pins the canonical-upstream table. Families served by more than one upstream
 // are pinned so OpenRouter's implicit per-upstream prompt cache keeps hitting
@@ -288,6 +293,32 @@ func TestPrecisionFloorSlugs(t *testing.T) {
 	for _, slug := range []string{"qwen/qwen3.8-max-0902", "qwen/qwen3.8-flash", "qwen/qwen3.6-35b-a3b", "qwen/qwen3.8-27b-instruct"} {
 		if p := upstreamPinFor(slug); p != nil {
 			t.Errorf("upstreamPinFor(%q) = %+v, want nil: only listed slugs carry the floor", slug, p)
+		}
+	}
+}
+
+// RoutingProviderOptions hands one-off calls (compaction, manual summarize) the
+// same routing policy the run loop sends for a slug, and nothing for a slug
+// with no policy, so their requests stay unchanged.
+func TestRoutingProviderOptions(t *testing.T) {
+	for _, slug := range []string{"qwen/qwen3.8-27b", DefaultMaxModel, "deepseek/deepseek-v4.1-flash", "anthropic/claude-opus-5.5"} {
+		opts := RoutingProviderOptions(slug)
+		or, ok := opts[openrouter.Name].(*openrouter.ProviderOptions)
+		if !ok || or.Provider == nil {
+			t.Fatalf("RoutingProviderOptions(%q) = %#v, want an OpenRouter provider policy", slug, opts)
+		}
+		want := upstreamPinFor(slug)
+		if fmt.Sprint(or.Provider.Order, or.Provider.Only, or.Provider.Quantizations, *or.Provider.AllowFallbacks) !=
+			fmt.Sprint(want.Order, want.Only, want.Quantizations, *want.AllowFallbacks) {
+			t.Errorf("RoutingProviderOptions(%q).Provider = %+v, want the run loop's policy %+v", slug, or.Provider, want)
+		}
+		if or.Reasoning != nil || or.ExtraBody != nil {
+			t.Errorf("RoutingProviderOptions(%q) carries %+v, want routing only", slug, or)
+		}
+	}
+	for _, slug := range []string{"x-ai/grok-4.6", "mistralai/mixtral", "qwen/qwen3.8-flash"} {
+		if opts := RoutingProviderOptions(slug); opts != nil {
+			t.Errorf("RoutingProviderOptions(%q) = %#v, want nil: the slug has no routing policy", slug, opts)
 		}
 	}
 }

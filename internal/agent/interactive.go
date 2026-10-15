@@ -561,6 +561,9 @@ func summarizeDroppedMiddleWith(ctx context.Context, model fantasy.LanguageModel
 	out, err := agent.Generate(ctx, fantasy.AgentCall{
 		Messages:        convo,
 		MaxOutputTokens: &maxTokens,
+		// Same upstream routing as the run's own calls, so the summary is not
+		// served below a slug's precision floor or outside its allow-list.
+		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
 	})
 	if err != nil {
 		return placeholderCompactionSummary(len(droppable))
