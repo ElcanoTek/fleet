@@ -68,7 +68,8 @@ comes from the signal ("3 tool calls in a row failed on this request…").
 - **When it is skipped:**
   - the first message of a conversation;
   - turns fleet started itself (a resume after an approval);
-  - lockdown conversations;
+  - lockdown conversations, including every chat when `FLEET_LOCKDOWN_ONLY` is on
+    (chats created before it was turned on too);
   - deployments with no OpenRouter key.
 - **On the advanced model** it still runs, so the per-user count is complete,
   but never shows a card.
@@ -123,7 +124,7 @@ comes from the signal ("3 tool calls in a row failed on this request…").
     / `accepted_switch_only`;
   - `fleet_escalation_classifier_checks_total{mode, outcome}`, where outcome is
     `pushback`, `ok` or `error`, once per request sent, including one from a
-    turn the user stopped (that turn shows no card and records nothing);
+    turn the user stopped or that failed (no card and no record then);
   - `fleet_escalation_classifier_late_total{mode}`, once per request still
     running when the turn's stream closed.
 - **The approvals table** now records which accept action was taken, in the

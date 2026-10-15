@@ -114,6 +114,11 @@ func TestStartStruggleCheckGates(t *testing.T) {
 		"lockdown": func() *struggleCheck {
 			return s.startStruggleCheck(&store.Conversation{Lockdown: true}, history, "x", "")
 		},
+		"lockdown-only deployment, chat created before it": func() *struggleCheck {
+			s.cfg.LockdownOnly = true
+			defer func() { s.cfg.LockdownOnly = false }()
+			return s.startStruggleCheck(conv, history, "x", "")
+		},
 	} {
 		if run() != nil {
 			t.Errorf("%s: want no check", name)
@@ -428,5 +433,43 @@ func TestEscalateAfterTurn_CancelledTurnCountsCheck(t *testing.T) {
 	}
 	if pendingSuggestion(t, s, user, conv.ID) != nil || len(escalationEvents(t, s, conv.ID)) != 0 {
 		t.Fatal("a stopped turn must not stage a card or record a struggle")
+	}
+}
+
+// failingEngine fails every turn before it produces a result.
+type failingEngine struct{ fakeEngine }
+
+func (*failingEngine) RunTurn(context.Context, TurnInput, agent.EventSink) (*TurnResult, error) {
+	return nil, errors.New("provider unavailable (escalation-test)")
+}
+
+// A turn that fails before producing a result shows no card, but the
+// classifier request already sent alongside it is still counted.
+func TestFailedTurnCountsStartedClassifierCheck(t *testing.T) {
+	prev := checkStruggle
+	checkStruggle = func(context.Context, string, string, string) (agentcore.StruggleVerdict, error) {
+		return agentcore.StruggleVerdict{Probability: 0.97}, nil
+	}
+	t.Cleanup(func() { checkStruggle = prev })
+
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, &failingEngine{}, st)
+	srv.cfg.OpenRouterAPIKey = "sk-or-test"
+	srv.cfg.EscalationClassifierMode = config.EscalationClassifierObserve
+	srv.cfg.EscalationClassifierModel = "acme/decider"
+	srv.cfg.EscalationClassifierThreshold = 80
+	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+	if _, err := st.AppendHistory(context.Background(), conv.ID, []agent.HistoryEntry{
+		textEntry("user", "revenue by month"), textEntry("assistant", "Total is $1M."),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	series := `fleet_escalation_classifier_checks_total{mode="observe",outcome="pushback"}`
+	before := counterValue(t, series)
+	postChatRequest(t, srv, map[string]any{"message": "still wrong", "conversation_id": conv.ID})
+	srv.background.StopAndWait()
+	if got := counterValue(t, series) - before; got != 1 {
+		t.Fatalf("failed turn's check counted %v times, want 1", got)
 	}
 }

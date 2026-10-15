@@ -147,7 +147,8 @@ var checkStruggle = agentcore.CheckStruggle
 // when the classifier is on, or returns nil. It skips:
 //   - a turn fleet started itself (a resume after an approval): nobody spoke;
 //   - the first message of a conversation: there is no answer to push back on;
-//   - lockdown conversations: their text does not go to another vendor;
+//   - lockdown conversations, including every chat under LockdownOnly: their
+//     text does not go to another vendor;
 //   - deployments with no OpenRouter key.
 //
 // It runs on every model, including the advanced one, so the per-user
@@ -158,7 +159,9 @@ func (s *Server) startStruggleCheck(conv *store.Conversation, history []agent.Hi
 		return nil
 	}
 	mode, model, pct := s.cfg.LiveEscalationClassifier()
-	if mode == config.EscalationClassifierOff || inputKind != "" || conv.Lockdown ||
+	// LockdownOnly covers chats created before the operator turned it on,
+	// whose own flag is still false (the same OR stagedBashLockdown applies).
+	if mode == config.EscalationClassifierOff || inputKind != "" || conv.Lockdown || s.cfg.LockdownOnly ||
 		strings.TrimSpace(s.cfg.OpenRouterAPIKey) == "" || strings.TrimSpace(userInput) == "" {
 		return nil
 	}
@@ -185,9 +188,7 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		// A stopped turn shows no card and records no struggle, but the
 		// opening check was already sent (it is detached from the turn), so
 		// it is still counted by its outcome: the metric is once per request.
-		if check != nil {
-			s.background.Go("escalation.classifier_cancelled", func() { countClassifierCheck(check) })
-		}
+		s.discardStruggleCheck(check)
 		return
 	}
 	var stager *approvalStager
@@ -314,6 +315,16 @@ func (s *Server) classifierOutcome(checks []*struggleCheck, stage func(source, r
 		suggested = stage(suggestionSourceClassifier, escalationClassifierReason)
 	}
 	record(suggestionSourceClassifier, escalationSignalFrustration, &best, suggested)
+}
+
+// discardStruggleCheck counts an already-sent check whose turn will show no
+// card (stopped, or failed before producing a result): the request was made,
+// so the metric still counts it once, by its outcome. nil is a no-op.
+func (s *Server) discardStruggleCheck(check *struggleCheck) {
+	if check == nil {
+		return
+	}
+	s.background.Go("escalation.classifier_discarded", func() { countClassifierCheck(check) })
 }
 
 // countClassifierCheck waits for one check and counts it by its outcome,

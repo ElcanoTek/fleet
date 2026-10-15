@@ -1389,6 +1389,9 @@ func (s *Server) runTurnAsync(
 		InputKind:      inputKind,
 	}, buf)
 	if err != nil {
+		// No result, so no card; the classifier request already sent is
+		// still counted.
+		s.discardStruggleCheck(check)
 		// The resilience layer inside RunTurn emits `turn.model_required`
 		// itself on any non-cancellation failure (see agent/resilience.go).
 		// Avoid emitting a redundant — and misleading — `turn.error` in
@@ -1602,5 +1605,6 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 		taskConnectors:       s.chatTaskConnectorsFor(user, conv.ID),
 		groupID:              buf.turnID,
 		modelAllowed:         s.cfg.LockdownAllows,
+		lockdownOnly:         s.cfg.LockdownOnly,
 	}
 }

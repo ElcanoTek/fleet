@@ -126,4 +126,12 @@ func TestSuggestionRespectsLockdownAllowList(t *testing.T) {
 			t.Errorf("model-requested suggestion message = %q, want the lockdown suppression", msg)
 		}
 	}
+
+	// LockdownOnly makes a chat created before it was turned on lockdown too.
+	st := &reofferStore{convModel: "fast/model"}
+	a := &approvalStager{ctx: context.Background(), store: st, conversationID: "c", userEmail: "u", sink: &recordingSink{},
+		modelAllowed: func(string) bool { return false }, lockdownOnly: true}
+	if staged, err := a.StageHostSuggestion(suggestionSourceSignal, "r"); err != nil || staged {
+		t.Errorf("lockdown-only deployment: staged = %v, err = %v; want suppressed", staged, err)
+	}
 }
