@@ -209,8 +209,8 @@ and **System** appearance and opens **Settings**.
 **Settings → General → Browser notifications** turns on alerts in the browser
 you are using, even while the tab is in the background. By default you get one
 when a task you created finishes, is waiting for your answer, or sends a
-progress note while it runs (that one also reads **Waiting for your answer**,
-though the task carries on), when an action in one of your chats needs your
+progress note while it runs (**Progress note**: the task carries on, and the
+note itself is not shown), when an action in one of your chats needs your
 approval, and, if your account has a usage budget, when you try to create a
 task while your spending is past its soft limit (**⚠ Budget alert**: it is
 checked then, not the moment spending crosses the limit);

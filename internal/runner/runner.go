@@ -940,7 +940,7 @@ func (p *Pool) buildTaskRunContext(taskCtx context.Context, task *models.Task, t
 		return nil
 	})
 	runCtx = tools.WithNotifyHandler(runCtx, func(message string) {
-		p.notifyProgress(task, message)
+		p.notifyProgress(task, message, notify.KindProgressNote)
 	})
 	// self-wake (docs/SELF-WAKE.md): the wake handler mirrors ask — record the
 	// spec + cancel THIS run so it ends and releases the sandbox/lease;
@@ -982,7 +982,7 @@ func (p *Pool) parkForQuestion(task *models.Task, session *models.LogSession, pa
 	} else if !ok {
 		log.Printf("runner: task %s pause did not apply (lease lost or not running)", task.ID)
 	}
-	p.notifyProgress(task, "Task is paused and needs your answer: "+pauseQuestion)
+	p.notifyProgress(task, "Task is paused and needs your answer: "+pauseQuestion, "")
 	log.Printf("runner: task %s paused awaiting input after %v", task.ID, time.Since(start).Round(time.Second))
 }
 
@@ -1783,8 +1783,10 @@ func (p *Pool) activeCancel(taskID uuid.UUID) context.CancelFunc {
 }
 
 // notifyProgress fires a non-blocking, out-of-band progress notification for a
-// task (#510 notify / ask-pause). Off-thread + no-op when no notifier is wired.
-func (p *Pool) notifyProgress(task *models.Task, message string) {
+// task (#510 notify / ask-pause). kind tells the two apart for a channel that
+// words its own title: notify.KindProgressNote for the agent's notify tool,
+// empty for an ask-pause. Off-thread + no-op when no notifier is wired.
+func (p *Pool) notifyProgress(task *models.Task, message string, kind notify.Kind) {
 	if p.notifier == nil {
 		return
 	}
@@ -1793,6 +1795,7 @@ func (p *Pool) notifyProgress(task *models.Task, message string) {
 		defer cancel()
 		ev := notify.Event{
 			Status:  notify.StatusProgress,
+			Kind:    kind,
 			TaskID:  task.ID.String(),
 			Name:    notifyTaskName(task.Prompt),
 			Message: message,

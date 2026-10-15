@@ -301,6 +301,22 @@ func TestEventTitle_BudgetAlert(t *testing.T) {
 	}
 }
 
+// The agent's mid-run notify tool also travels as StatusProgress, but the run
+// carries on, so its note must not read as an ask-pause. The note itself
+// (Message) stays off the lock screen.
+func TestEventTitle_ProgressNote(t *testing.T) {
+	ev := notify.Event{
+		Status:  notify.StatusProgress,
+		Kind:    notify.KindProgressNote,
+		Name:    "nightly report",
+		Message: "finished stage 1 of 3",
+	}
+	got, ok := eventTitle(ev)
+	if !ok || got != "✎ Progress note: nightly report" {
+		t.Errorf("eventTitle(progress note) = %q ok=%v", got, ok)
+	}
+}
+
 // TestSendEvent_Gating covers delivery + the FLEET_PUSH_ON_TASK_COMPLETE /
 // Audience gating.
 func TestSendEvent_Gating(t *testing.T) {
