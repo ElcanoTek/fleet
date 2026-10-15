@@ -6,6 +6,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -91,7 +92,8 @@ type fakeRelay struct {
 	mu       sync.Mutex
 	requests []*http.Request
 	bodies   [][]byte
-	status   map[string]int // by endpoint URL; 0 → 201
+	status   map[string]int    // by endpoint URL; 0 → 201
+	reply    map[string]string // response body by endpoint URL; default empty
 }
 
 func (f *fakeRelay) Do(req *http.Request) (*http.Response, error) {
@@ -104,7 +106,7 @@ func (f *fakeRelay) Do(req *http.Request) (*http.Response, error) {
 	if code == 0 {
 		code = http.StatusCreated
 	}
-	return &http.Response{StatusCode: code, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+	return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(f.reply[req.URL.String()]))}, nil
 }
 
 // newTestService wires an enabled Service over the fakes, silencing logs.
@@ -471,5 +473,115 @@ func TestSendOne_RefusedVAPIDKeepsTheRowAndNamesBothCauses(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// vapidSubject decodes the "sub" claim of the VAPID token a send carried
+// (Authorization: vapid t=<jwt>, k=<key>).
+func vapidSubject(t *testing.T, req *http.Request) string {
+	t.Helper()
+	auth := req.Header.Get("Authorization")
+	tok, _, _ := strings.Cut(strings.TrimPrefix(auth, "vapid t="), ",")
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		t.Fatalf("Authorization %q carries no JWT", auth)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode JWT claims: %v", err)
+	}
+	var claims struct {
+		Sub string `json:"sub"`
+	}
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		t.Fatalf("parse JWT claims: %v", err)
+	}
+	return claims.Sub
+}
+
+// The VAPID token carries exactly one "mailto:", however the operator wrote
+// FLEET_VAPID_CONTACT. webpush-go adds the scheme itself, so the documented
+// "mailto:…" form used to go out as "mailto:mailto:…", which Apple's push
+// service refuses (403 BadJwtToken): Safari got no notifications at all.
+func TestSendOne_VAPIDSubjectHasOneScheme(t *testing.T) {
+	for _, tc := range []struct{ name, contact, want string }{
+		{"mailto", "mailto:ops@example.com", "mailto:ops@example.com"},
+		{"MAILTO", "MAILTO:ops@example.com", "mailto:ops@example.com"},
+		{"padded", " mailto:ops@example.com ", "mailto:ops@example.com"}, // Load trims; the send path must not depend on it
+		{"space after scheme", "mailto: ops@example.com", "mailto:ops@example.com"},
+		{"bare address", "ops@example.com", "mailto:ops@example.com"},
+		{"https", "https://ops.example.com/abuse", "https://ops.example.com/abuse"},
+		{"HTTPS", "HTTPS://ops.example.com/abuse", "https://ops.example.com/abuse"}, // webpush-go checks for lower-case https: only
+		{"Https", "Https://ops.example.com/abuse", "https://ops.example.com/abuse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &fakeStore{subs: []store.PushSubscription{testSubscription(t, "https://web.push.apple.com/QGd2EBk7PvmwJ")}}
+			relay := &fakeRelay{}
+			svc := newTestService(t, st, relay)
+			svc.cfg.Contact = tc.contact
+
+			if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+				t.Fatalf("sendToUser: %v", err)
+			}
+			if len(relay.requests) != 1 {
+				t.Fatalf("got %d requests, want 1", len(relay.requests))
+			}
+			if got := vapidSubject(t, relay.requests[0]); got != tc.want {
+				t.Errorf("VAPID sub = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A refusal's log line carries the reason the push service gives (Apple puts
+// it in a JSON "reason" field), and nothing else from the body.
+func TestSendOne_RefusalLogsThePushServicesReason(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+		status           int
+	}{
+		{"apple 403", `{"reason":"BadJwtToken"}`, ` (reason "BadJwtToken")`, http.StatusForbidden},
+		{"other refusal", `{"reason":"TooManyRequests"}`, ` (reason "TooManyRequests")`, http.StatusTooManyRequests},
+		{"no body", "", "", http.StatusForbidden},
+		{"not JSON", "<html>secret-token</html>", "", http.StatusForbidden},
+		{"JSON without a reason", `{"message":"secret-token"}`, "", http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sub := testSubscription(t, "https://web.push.apple.com/secret-token")
+			st := &fakeStore{subs: []store.PushSubscription{sub}}
+			relay := &fakeRelay{status: map[string]int{sub.Endpoint: tc.status}, reply: map[string]string{sub.Endpoint: tc.body}}
+			svc := newTestService(t, st, relay)
+			var logged []string
+			svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+
+			if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+				t.Fatalf("sendToUser: %v", err)
+			}
+			if len(logged) != 1 {
+				t.Fatalf("log = %q, want one line", logged)
+			}
+			head := fmt.Sprintf("returned status %d%s", tc.status, tc.want)
+			if !strings.Contains(logged[0], head) {
+				t.Errorf("log = %q, want it to contain %q", logged[0], head)
+			}
+			if strings.Contains(logged[0], "secret-token") {
+				t.Errorf("log = %q quotes the body or the endpoint path", logged[0])
+			}
+		})
+	}
+}
+
+func TestRelayReason_BoundsTheReason(t *testing.T) {
+	long := strings.Repeat("x", 500)
+	got := relayReason(strings.NewReader(`{"reason":"` + long + `"}`))
+	if want := fmt.Sprintf(" (reason %q)", strings.Repeat("x", maxReasonLen)); got != want {
+		t.Errorf("relayReason = %q, want the reason cut to %d bytes", got, maxReasonLen)
+	}
+	// A cut through a multi-byte character drops it rather than leaving half.
+	if got, want := relayReason(strings.NewReader(`{"reason":"`+strings.Repeat("x", maxReasonLen-1)+`é"}`)), fmt.Sprintf(" (reason %q)", strings.Repeat("x", maxReasonLen-1)); got != want {
+		t.Errorf("relayReason = %q, want %q", got, want)
+	}
+	if got, want := relayReason(strings.NewReader(`{"reason":"a\nb"}`)), ` (reason "a\nb")`; got != want {
+		t.Errorf("relayReason = %q, want %q: a newline is escaped, never raw in the log", got, want)
 	}
 }
