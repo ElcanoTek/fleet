@@ -707,9 +707,11 @@ deletes a conversation; chats always stay with their owner.
 
 ### The project home
 
-The rail lists every project you can see, pinned ones first and then the most
-recently active; once the list is longer than the space it has, the **Projects**
-section scrolls on its own, the same way **Chats** does below it.
+The rail lists every project you can see: pinned ones first, then the rest by
+when each project was last created or edited (renamed, or its settings or
+sharing changed) — chatting in a project does not move it up. Once the list is
+longer than the space it has, the **Projects** section scrolls on its own, the
+same way **Chats** does below it.
 
 Open a project from the rail to reach its home. Its title carries a pill saying
 who can see it — **Only you** or **Shared with** your team; in a shared project

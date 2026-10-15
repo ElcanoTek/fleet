@@ -143,7 +143,8 @@ export type ProjectLike = { id: string; name: string; updated_at: number; pinned
 export type ProjectGroup<T, P extends ProjectLike = ProjectLike> = { project: P; chats: T[] };
 
 // projectGroups returns the rail's project tree: pinned projects first (in
-// place, no separate section), then the rest by most-recent update; each
+// place, no separate section), then the rest by the project's own most recent
+// update (its updated_at — a settings change, not chat activity); each
 // group's conversations keep the caller's list order (the server already sorts
 // by updated_at DESC). Every project is returned unless the caller passes
 // `max` (search caps the tree to its matches). The rail used to cut this to
@@ -160,12 +161,21 @@ export function projectGroups<T extends OrganizableConversation, P extends Proje
   projects: readonly P[],
   max: number = Number.POSITIVE_INFINITY,
 ): ProjectGroup<T, P>[] {
+  // One pass over the conversations, not one per project: with every project
+  // listed, a per-project filter is O(projects × conversations) on each render.
+  const byProject = new Map<string, T[]>();
+  for (const c of conversations) {
+    if (!c.project_id) continue;
+    const list = byProject.get(c.project_id);
+    if (list) list.push(c);
+    else byProject.set(c.project_id, [c]);
+  }
   return [...projects]
     .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updated_at - a.updated_at)
     .slice(0, max)
     .map((project) => ({
       project,
-      chats: conversations.filter((c) => c.project_id === project.id),
+      chats: byProject.get(project.id) ?? [],
     }));
 }
 

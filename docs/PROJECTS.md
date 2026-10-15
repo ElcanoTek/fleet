@@ -147,6 +147,40 @@ owners shared. A person's open/closed groups and the getting-started card's
 /projects/{id}/my-state`). See [`TEAM-SHARING.md`](TEAM-SHARING.md) "Files in
 a team share".
 
+## Projects in the rail (#1755)
+
+The chat rail's **Projects** section lists **every** project the viewer can
+see (`projectGroups` in `web/src/app/chat/ui/conversationOrganization.ts`),
+pinned first, then by the project's own `updated_at` — set on create and on
+`UpdateProject` (rename, instructions, sharing), **not** by chat activity in
+the project, so a busy older project does not rise. Each project is an
+expandable group holding the viewer's chats filed in it.
+
+- **Its own scroller.** The section scrolls independently, capped at `30vh`,
+  so a long project list never pushes **New chat** and the Chats list
+  off-screen; Chats scrolls in the space below it. The cap was `40vh` while the
+  section held at most five projects; with every project listed, `40vh` left
+  Chats about three rows on a 720–900px window, so it was lowered — a
+  balance, easy to revisit.
+- **Why not a cut.** The section used to show only the five most recently
+  updated projects (`MAX_RAIL_PROJECTS`), "the rest reachable through the
+  Projects modal" — but nothing in the rail opened that modal once a project
+  existed. A sixth project, and every chat filed in it (project chats appear
+  only under their project), vanished from the rail and could be found only by
+  search.
+- **Cost.** Grouping indexes the conversations by project in one pass
+  (`O(projects + conversations)`), and the rail memoizes the tree it shows,
+  rebuilding it only when the conversations, projects or search change — the
+  rail re-renders on every streamed event. While searching, only the matching
+  projects' tree is built.
+- **Deferred.** The list is neither virtualized nor paginated: every project
+  mounts a row (and its menu), and `ListProjectsForUser` has no `LIMIT`. That is
+  fine at the tens of projects teams have today; a deployment with hundreds
+  would want windowing in the rail and a bounded list endpoint.
+
+Pinned by `e2e/mocked/projects-rail-scroll.spec.ts` and
+`conversationOrganization.test.ts`.
+
 ## Export / audit
 
 `GET /projects/{id}/export` (owner or admin — it carries every member's
