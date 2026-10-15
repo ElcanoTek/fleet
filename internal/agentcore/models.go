@@ -24,6 +24,20 @@ const (
 	// alias slug defeats the send-side reasoning reconstruction (see
 	// isAliasModel).
 	//
+	// Claude Haiku 5.5 (2026-10-15, replacing openai/gpt-6-luna-pro): the
+	// everyday tier moves to Anthropic for speed. Luna Pro is a reasoning
+	// ("pro") model that thinks before every visible token; on a live
+	// benchmark from a production box (2026-10-14) it took ~5.7s per call on
+	// a short prompt and ~10.3s on a ~25K-token one, and a data-heavy chat
+	// turn makes one such call per tool step. Haiku 5.5 is priced the same
+	// ($0.10/M in, $0.50/M out), with a 1,000,000-token window and 128K
+	// output, served by Anthropic and the official resellers of its weights
+	// (Claude Platform on AWS, Amazon Bedrock, Azure, Google Vertex) — the
+	// `anthropic/` soft pin below keeps the prompt cache on one upstream, and
+	// Anthropic's explicit cache breakpoints are already pinned by the live
+	// prompt-cache check (docs/PROMPT-CACHE-CONTRACT.md). See
+	// docs/MODEL-DEFAULTS.md.
+	//
 	// GPT-6 Luna Pro (2026-09-22, replacing openai/gpt-5.6-luna-pro): the
 	// GPT-6 generation of the same everyday tier, $0.10/M in, $0.50/M out,
 	// cache reads at $0.01/M, a 1,050,000-token window, and OpenAI's own three
@@ -41,7 +55,7 @@ const (
 	// jobs on Luna Pro ran in 4–10 minutes at $0.16–0.62 with 89–95% cache
 	// hits. The `openai/` soft pin in canonicalUpstream keeps the prompt cache
 	// on one upstream with graceful degradation.
-	DefaultCoreModel = "openai/gpt-6-luna-pro"
+	DefaultCoreModel = "anthropic/claude-haiku-5.5"
 	// DefaultMaxModel is the strong tier — the model escalation
 	// (suggest_advanced_model, chat's "advanced model") resolves to. Exact slug,
 	// never a `~latest` alias. Gemini 4 Argon (2026-10-14, replacing
@@ -150,8 +164,8 @@ var modelContextWindows = []struct {
 	// without this line the strong tier — the slug users escalate to for their
 	// LARGEST problems — would cold-boot compacting at 38% of its real window.
 	{"openai/gpt-5.6", 1_050_000},
-	// GPT-6 (sol / luna / astra and their -pro variants, DefaultCoreModel is
-	// gpt-6-luna-pro) is 1,050,000 too. No generic openai/gpt-6 row existed, so
+	// GPT-6 (sol / luna / astra and their -pro variants; gpt-6-luna-pro was
+	// DefaultCoreModel until 2026-10-15) is 1,050,000 too. No generic openai/gpt-6 row existed, so
 	// without this the everyday tier would fall through to the default window.
 	{"openai/gpt-6", 1_050_000},
 	{"openai/gpt-4.1", 1_000_000},
@@ -162,6 +176,12 @@ var modelContextWindows = []struct {
 	// below keeps the Claude 4 family at 200K. Longest prefix first.
 	{"anthropic/claude-opus-5", 1_000_000},
 	{"anthropic/claude-sonnet-5", 1_000_000},
+	// Haiku 5 (DefaultCoreModel is claude-haiku-5.5, 2026-10-15) is 1M as
+	// well; without this row the everyday tier would cold-boot on the 200K
+	// Claude 4 line below and compact at a fifth of its real window. The
+	// prefix stops at "haiku-5" so claude-haiku-4.5 (200K) keeps the
+	// generic row.
+	{"anthropic/claude-haiku-5", 1_000_000},
 	{"anthropic/claude", 200_000},
 	// 4.6 is 500K; the generic grok entry below is the old 131K line and still
 	// covers earlier builds. Longer prefix first, as above. (4.6 held the strong

@@ -73,7 +73,8 @@ The list is now the **allow-list on the request**. For a listed slug
 
 | slug | `order` | `only` (provider routing names) |
 |---|---|---|
-| `openai/gpt-6-luna-pro` (default) | OpenAI | OpenAI, Azure, Amazon Bedrock |
+| `anthropic/claude-haiku-5.5` (default since 2026-10-15) | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
+| `openai/gpt-6-luna-pro` (default until 2026-10-15) | OpenAI | OpenAI, Azure, Amazon Bedrock |
 | `anthropic/claude-opus-5.5` (strong until 2026-10-14) | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
 | `openai/gpt-5.6-luna-pro` | OpenAI | OpenAI, Azure, Amazon Bedrock |
 | `anthropic/claude-opus-5` | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
@@ -116,6 +117,10 @@ pools were re-read from `GET /api/v1/models/{slug}/endpoints` on 2026-09-22:
   on the allow-list so its return needs no code change.)
 - `anthropic/claude-opus-5` — 11 endpoints: Anthropic ×2, Claude Platform on
   AWS ×1, Amazon Bedrock ×3, Azure ×2, Google ×3.
+- `anthropic/claude-haiku-5.5` (read 2026-10-15) — 10 endpoints: Anthropic ×1,
+  Claude Platform on AWS ×1, Amazon Bedrock ×3 (global, us-east-1, eu-west-1),
+  Azure ×2 (global, us), Google ×3 (Vertex global, europe, us); quantization
+  "unknown" on all.
 - `openai/gpt-6-luna-pro` — 3 endpoints, all OpenAI (`openai`, `openai/flex`,
   `openai/fast`). No Azure yet, so the everyday tier currently has a single
   provider behind it; Azure/Bedrock stay allow-listed for when they list it.

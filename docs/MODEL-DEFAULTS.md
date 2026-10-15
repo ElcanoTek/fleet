@@ -1,6 +1,6 @@
-# Model defaults: GPT-6 Luna Pro everyday, Gemini 4 Argon as the strong tier
+# Model defaults: Claude Haiku 5.5 everyday, Gemini 4 Argon as the strong tier
 
-**Status:** shipped 2026-10-14 (previous swaps 2026-09-22 and 2026-09-21, recorded below). Design
+**Status:** shipped 2026-10-15 (previous swaps 2026-10-14, 2026-09-22 and 2026-09-21, recorded below). Design
 note for the default-model swaps, and the checklist for the next one.
 
 ## Changing the defaults (checklist)
@@ -32,6 +32,37 @@ hold the slugs, plus data that has to be checked by hand:
 
 Deployments that set `FLEET_DEFAULT_MODEL` / `FLEET_ADVANCED_MODEL`, or the admin model
 tiers, are unaffected by any of this. Only the compiled-in fallback moves.
+
+## 2026-10-15: Claude Haiku 5.5 as the everyday default
+
+| Slot | Before | After |
+|---|---|---|
+| `DefaultCoreModel` (new chats, the Operations Center's pre-filled task model, aux calls derived from it) | `openai/gpt-6-luna-pro` | `anthropic/claude-haiku-5.5` |
+| `DefaultMaxModel` | `google/gemini-4-argon` | unchanged |
+
+- **Why: speed.** GPT-6 Luna Pro is a reasoning ("pro") model that thinks
+  before every visible token. A live benchmark from a production box on
+  2026-10-14 measured it at ~5.7s per call on a short prompt and ~10.3s on a
+  ~25K-token one (GPT-5.6 Sol, Claude Opus 5.5 and Gemini 4 Argon were 4.0–4.5s
+  on the same large prompt), and a data-heavy chat turn makes one such call
+  per tool step — customers felt it as "the platform got slower".
+- **Claude Haiku 5.5**: $0.10/M in, $0.50/M out — the same price as Luna Pro —
+  a 1,000,000-token window and 128K output. Endpoints read 2026-10-15: Anthropic,
+  Claude Platform on AWS, Amazon Bedrock ×3, Azure ×2, Google Vertex ×3,
+  quantization "unknown" on all; recorded in `officialPoolSlugs`.
+- **Routing**: the existing `anthropic/` soft pin (Order=[Anthropic], fallbacks
+  to the official resellers) now carries the hot path, and keeps the prompt
+  cache on one upstream. The live prompt-cache check already covers Haiku 5.5
+  with explicit breakpoints (~11.6K of ~11.9K read, docs/PROMPT-CACHE-CONTRACT.md).
+- **Context window**: a `anthropic/claude-haiku-5` → 1,000,000 row, ahead of
+  the generic 200K Claude line (which keeps Haiku 4.5 at 200K).
+- **Not changed**: fleet's explicit extended-thinking budget
+  (`supportsExtendedThinking`) still covers Opus/Sonnet/Fable only, so the
+  default does not get a forced thinking budget — the point of the switch is
+  answering without a long think. Deployments that set `FLEET_DEFAULT_MODEL` /
+  `FLEET_TASK_MODEL` or the admin model tiers keep what they set, and existing
+  tasks keep the model they were saved with (`fleet sched task set-model`
+  moves them).
 
 ## 2026-10-14: Gemini 4 Argon as the strong tier
 
