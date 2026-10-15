@@ -161,11 +161,11 @@ function useMembers(projectId: string, enabled: boolean, nonce: number) {
 }
 
 const pillGhost =
-  "rounded-full border border-[var(--color-border-strong)] px-4 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50";
+  "rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50";
 const pillPrimary =
-  "rounded-full bg-[var(--color-primary)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-on-primary)] transition hover:opacity-90 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50";
+  "rounded-[var(--radius-md)] bg-[var(--color-primary)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-on-primary)] transition hover:opacity-90 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50";
 const pillDanger =
-  "rounded-full bg-[var(--color-danger)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-surface-1)] transition hover:opacity-90 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50";
+  "rounded-[var(--radius-md)] bg-[var(--color-danger)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-surface-1)] transition hover:opacity-90 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50";
 
 export function ProjectSettingsDialog({
   project,
@@ -359,7 +359,7 @@ export function ProjectSettingsDialog({
           <button
             type="button"
             aria-expanded={panel === "transfer"}
-            className="shrink-0 rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            className="shrink-0 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             onClick={() => {
               setPanel(panel === "transfer" ? null : "transfer");
               setTransferError(null);
@@ -372,7 +372,7 @@ export function ProjectSettingsDialog({
             type="button"
             disabled
             aria-disabled="true"
-            className="inline-flex shrink-0 cursor-not-allowed items-center gap-1 rounded-full border border-dashed border-[var(--color-border-strong)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-text-disabled)]"
+            className="inline-flex shrink-0 cursor-not-allowed items-center gap-1 rounded-[var(--radius-md)] border border-dashed border-[var(--color-border-strong)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-text-disabled)]"
           >
             <LockGlyph className="size-3" />
             Transfer… (unavailable)

@@ -110,8 +110,12 @@ function tone(v: unknown, fallback: Tone = "neutral"): Tone {
 
 const inputClass =
   "w-full min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-bg)] px-2.5 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none transition focus:border-[var(--color-accent)] disabled:opacity-60";
+// A choice chip (adds a value to a pick list) stays a pill; a text action in
+// the same small outline style (Back, Previous, Next) takes the button radius.
 const chipButton =
   "rounded-full border border-[var(--color-border-strong)] px-2.5 py-1 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50";
+const actionButton =
+  "rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-2.5 py-1 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50";
 
 // ───────────────────────── card shell ─────────────────────────
 
@@ -1140,12 +1144,12 @@ function CardBody({
                 <button
                   ref={confirmYesRef}
                   type="button"
-                  className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] hover:opacity-90"
+                  className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] hover:opacity-90"
                   onClick={() => onConfirm(confirmingVisible)}
                 >
                   Yes, {confirmingVisible.label.toLowerCase()}
                 </button>
-                <button type="button" className={chipButton} onClick={backOut}>
+                <button type="button" className={actionButton} onClick={backOut}>
                   Back
                 </button>
               </div>
@@ -1167,10 +1171,10 @@ function CardBody({
                       onClick={() => onAction(a)}
                       className={
                         style === "primary"
-                          ? "rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+                          ? "rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
                           : style === "danger"
-                            ? "rounded-full border border-[var(--color-danger-border)] px-3 py-1.5 text-[0.75rem] text-[var(--color-danger)] transition hover:opacity-90 disabled:opacity-50"
-                            : chipButton + " py-1.5"
+                            ? "rounded-[var(--radius-md)] border border-[var(--color-danger-border)] px-3 py-1.5 text-[0.75rem] text-[var(--color-danger)] transition hover:opacity-90 disabled:opacity-50"
+                            : actionButton + " py-1.5"
                       }
                     >
                       {sending === a.id ? "Sending…" : a.label}
@@ -1439,12 +1443,12 @@ function Tabs({ c }: { c: Component }) {
       {steps && tabs.length > 1 ? (
         <div className="flex items-center gap-2">
           {active > 0 ? (
-            <button type="button" className={chipButton} onClick={() => setActive(active - 1)}>
+            <button type="button" className={actionButton} onClick={() => setActive(active - 1)}>
               ← {tabs[active - 1].label}
             </button>
           ) : null}
           {active < tabs.length - 1 ? (
-            <button type="button" className={chipButton} onClick={() => setActive(active + 1)}>
+            <button type="button" className={actionButton} onClick={() => setActive(active + 1)}>
               {tabs[active + 1].label} →
             </button>
           ) : null}
@@ -2689,7 +2693,7 @@ function Repeater({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         <div>
           <button
             type="button"
-            className={chipButton}
+            className={actionButton}
             onClick={() => {
               const [added] = freshKeys(1);
               update([...items, newItem(fields)], [...itemKeys, added], added);

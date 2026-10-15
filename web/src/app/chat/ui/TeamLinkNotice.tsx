@@ -66,7 +66,7 @@ export function TeamLinkNotice({
               <button
                 type="button"
                 onClick={() => onOpenProject(notice.project!.id)}
-                className="inline-flex h-9 items-center rounded-full border border-[var(--color-border-strong)] px-4 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                className="inline-flex h-9 items-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
               >
                 Open {notice.project.name}
               </button>

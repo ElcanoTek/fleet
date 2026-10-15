@@ -137,7 +137,7 @@ const POP_DESC = "text-[0.7rem] text-[var(--color-text-muted)]";
 // break the popover's Escape-closes / focus-returns-to-trigger contract for
 // a keyboard user mid-gesture.
 const POP_ACTION_BTN =
-  "rounded-[var(--radius-pill)] border border-[var(--color-border)] px-[0.55rem] py-[0.1rem] text-[0.68rem] font-medium text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
+  "rounded-[var(--radius-md)] border border-[var(--color-border)] px-[0.55rem] py-[0.1rem] text-[0.68rem] font-medium text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
 
 // The design's .mini-switch: the visual toggle knob inside a tools pop-row.
 // Purely decorative — the row <button> carries the aria-pressed state.
@@ -757,7 +757,7 @@ export function Composer({
             <span className="flex items-center gap-2">
               <button
                 type="button"
-                className="rounded-full border border-[var(--color-accent)] px-2.5 py-0.5 text-[0.7rem] text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                className="rounded-[var(--radius-md)] border border-[var(--color-accent)] px-2.5 py-0.5 text-[0.7rem] text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 disabled={isStreaming}
                 onClick={() => {
                   setSelectedModel(spreadsheetNudge.recommendedModel);

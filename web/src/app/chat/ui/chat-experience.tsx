@@ -70,6 +70,7 @@ import { bootstrapFailureDestination } from "./bootstrapFailure";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
+import { Segmented } from "@/app/shared/ui/Segmented";
 import { Icon } from "./Icon";
 import { QueuedInputs } from "./QueuedInputs";
 import { ProjectsModal, type Project } from "./ProjectsModal";
@@ -5580,14 +5581,14 @@ export function ChatExperience({
             <div className="flex items-center justify-end gap-2">
               <button
                 type="button"
-                className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
                 onClick={() => setConfirmBulkDelete(false)}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                className="rounded-full bg-[var(--color-danger)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90"
+                className="rounded-[var(--radius-md)] bg-[var(--color-danger)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90"
                 onClick={() => {
                   setConfirmBulkDelete(false);
                   // Reports its own failure via the rail toast (see
@@ -5789,7 +5790,7 @@ export function ChatExperience({
             <div className="mt-4 flex justify-end">
               <button
                 type="button"
-                className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.78rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
+                className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.78rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
                 onClick={() => setPromoteMemoryId(null)}
               >
                 Cancel
@@ -5834,37 +5835,21 @@ export function ChatExperience({
                 team learnings, the same list (and the same permissions) as
                 the project home's panel, reachable without leaving the
                 conversation (Item D4). */}
-            <div className="flex items-center gap-1">
-              {(
-                [
-                  "list",
-                  "graph",
-                  ...(activeProjectForMemory ? (["team"] as const) : []),
-                ] as const
-              ).map((view) => {
-                // Falls back to what is actually showing — see
-                // activeMemoryView.
-                const active = activeMemoryView;
-                return (
-                  <button
-                    key={view}
-                    type="button"
-                    aria-current={active === view ? "true" : undefined}
-                    className={`rounded-full border px-3 py-1 text-[0.75rem] transition ${
-                      active === view
-                        ? "border-[var(--color-text-primary)] text-[var(--color-text-primary)]"
-                        : "border-[var(--color-border-strong)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                    }`}
-                    onClick={() => setMemoryView(view)}
-                  >
-                    {view === "list"
-                      ? "My memory"
-                      : view === "graph"
-                        ? "Graph"
-                        : "Team learnings"}
-                  </button>
-                );
-              })}
+            <div className="flex items-center">
+              {/* Falls back to what is actually showing; see
+                  activeMemoryView. */}
+              <Segmented
+                label="Memory view"
+                value={activeMemoryView}
+                options={[
+                  { value: "list", label: "My memory" },
+                  { value: "graph", label: "Graph" },
+                  ...(activeProjectForMemory
+                    ? [{ value: "team" as const, label: "Team learnings" }]
+                    : []),
+                ]}
+                onChange={setMemoryView}
+              />
             </div>
 
             {memoryView === "team" && activeProjectForMemory ? (
@@ -5917,7 +5902,7 @@ export function ChatExperience({
                       {editingMemoryId ? (
                         <button
                           type="button"
-                          className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                          className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
                           onClick={() => {
                             setEditingMemoryId(null);
                             setMemoryDraft("");
@@ -5928,7 +5913,7 @@ export function ChatExperience({
                       ) : null}
                       <button
                         type="button"
-                        className="rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
+                        className="rounded-[var(--radius-md)] bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
                         disabled={!memoryDraft.trim() || isSavingMemory}
                         onClick={() => void saveMemory()}
                       >
@@ -6113,14 +6098,14 @@ export function ChatExperience({
             <div className="flex items-center justify-end gap-2">
               <button
                 type="button"
-                className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
                 onClick={() => setConfirmSummarize(false)}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
+                className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
                 onClick={() => {
                   setConfirmSummarize(false);
                   void summarizeConversation();
@@ -6277,14 +6262,14 @@ export function ChatExperience({
 
             <div className="flex items-center justify-end gap-2">
               <button
-                className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
                 type="button"
                 onClick={() => setPendingDeleteConversation(null)}
               >
                 Cancel
               </button>
               <button
-                className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+                className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
                 type="button"
                 disabled={isDeletingConversation}
                 onClick={() => void confirmDeleteConversation()}

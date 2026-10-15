@@ -325,12 +325,12 @@ export function ProjectsModal({
               </div>
             )}
             <div className="flex items-center justify-end gap-2">
-              <button type="button" className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]" onClick={() => setEditing(false)}>
+              <button type="button" className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]" onClick={() => setEditing(false)}>
                 Cancel
               </button>
               <button
                 type="button"
-                className="rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
+                className="rounded-[var(--radius-md)] bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
                 disabled={busy || !name.trim()}
                 onClick={() => {
                   if (unsharing) {
@@ -345,7 +345,7 @@ export function ProjectsModal({
             </div>
           </div>
         ) : (
-          <button type="button" className="self-start rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80" onClick={() => (onNewProject ? onNewProject() : openEditor(null))}>
+          <button type="button" className="self-start rounded-[var(--radius-md)] bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80" onClick={() => (onNewProject ? onNewProject() : openEditor(null))}>
             New project
           </button>
         )}
@@ -414,7 +414,7 @@ export function ProjectsModal({
                           value={memoryDraft}
                           onChange={(e) => setMemoryDraft(e.target.value)}
                         />
-                        <button type="button" className="rounded-full border border-[var(--color-border-strong)] px-2.5 py-1 text-[0.72rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-40" disabled={!memoryDraft.trim()} onClick={() => void addMemory()}>
+                        <button type="button" className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-2.5 py-1 text-[0.72rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-40" disabled={!memoryDraft.trim()} onClick={() => void addMemory()}>
                           Add
                         </button>
                       </div>

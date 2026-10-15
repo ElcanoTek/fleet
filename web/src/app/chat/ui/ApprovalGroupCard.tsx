@@ -248,7 +248,7 @@ export function ApprovalGroupCard({
           <button
             type="button"
             data-testid="approval-group-approve"
-            className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+            className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
             disabled={disabled || checkedIds.length === 0}
             onClick={() => void decide(checkedIds, uncheckedIds)}
           >
@@ -257,7 +257,7 @@ export function ApprovalGroupCard({
           <button
             type="button"
             data-testid="approval-group-one-at-a-time"
-            className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+            className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
             disabled={submitting !== null}
             onClick={onOneAtATime}
           >
@@ -266,7 +266,7 @@ export function ApprovalGroupCard({
           <button
             type="button"
             data-testid="approval-group-cancel"
-            className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+            className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
             disabled={disabled}
             onClick={() => void decide([], approvals.map((a) => a.id))}
           >

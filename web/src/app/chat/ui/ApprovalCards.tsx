@@ -40,6 +40,7 @@ import {
 } from "./ApprovalReadableCard";
 import { ApprovalResultCardView } from "./ApprovalResultCard";
 import { conversationApprovalApiUrl } from "@/app/lib/conversationApiUrl";
+import { Segmented } from "@/app/shared/ui/Segmented";
 
 // Preview viewport presets for the inline email preview. These mirror the
 // widths real clients render at — 375px ≈ iPhone portrait, 700px is the
@@ -173,7 +174,7 @@ function AskAgainButton({ approval, onAskAgain }: {
       <button
         type="button"
         data-testid="approval-ask-again"
-        className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)]"
+        className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)]"
         onClick={() => onAskAgain(approval)}
       >
         Ask again
@@ -287,7 +288,7 @@ function ApprovalExecutingControls({
       <button
         type="button"
         data-testid="approval-check-result"
-        className="w-fit rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+        className="w-fit rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
         disabled={submitting !== null}
         onClick={onCheck}
       >
@@ -782,7 +783,7 @@ export function ApprovalCard({
           <div className="mt-3 flex items-center gap-2">
             <button
               type="button"
-              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
               disabled={submitting !== null}
               onClick={() => void resolve(true)}
             >
@@ -795,7 +796,7 @@ export function ApprovalCard({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+                className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
                 disabled={submitting !== null || countdown.expired}
                 onClick={() => void resolve(true)}
               >
@@ -803,7 +804,7 @@ export function ApprovalCard({
               </button>
               <button
                 type="button"
-                className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
                 disabled={submitting !== null || countdown.expired}
                 onClick={() => void resolve(false)}
               >
@@ -1048,7 +1049,7 @@ function GenericActionCard({
         <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-2 border-t border-[var(--color-border-subtle)] pt-3">
           <button
             type="button"
-            className="rounded-full bg-[var(--color-primary)] px-4 py-1.5 text-[0.8rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+            className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-4 py-1.5 text-[0.8rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
             disabled={submitting !== null || countdown.expired}
             onClick={() => onResolve(true)}
           >
@@ -1056,7 +1057,7 @@ function GenericActionCard({
           </button>
           <button
             type="button"
-            className="rounded-full px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+            className="rounded-[var(--radius-md)] px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
             disabled={submitting !== null || countdown.expired}
             onClick={() => onResolve(false)}
           >
@@ -1134,7 +1135,7 @@ function GenericActionCard({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+              className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(true)}
             >
@@ -1142,7 +1143,7 @@ function GenericActionCard({
             </button>
             <button
               type="button"
-              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(false)}
             >
@@ -1258,7 +1259,7 @@ function BashApprovalCard({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+              className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(true)}
             >
@@ -1266,7 +1267,7 @@ function BashApprovalCard({
             </button>
             <button
               type="button"
-              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(false)}
             >
@@ -1496,7 +1497,7 @@ function ScheduleTaskCard({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+              className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(true, collectEdits())}
             >
@@ -1508,7 +1509,7 @@ function ScheduleTaskCard({
             </button>
             <button
               type="button"
-              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
               disabled={submitting !== null || countdown.expired}
               onClick={() => {
                 setEditing((was) => {
@@ -1526,7 +1527,7 @@ function ScheduleTaskCard({
             </button>
             <button
               type="button"
-              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(false)}
             >
@@ -1682,7 +1683,7 @@ function ManageTasksCard({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+              className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(true)}
             >
@@ -1696,7 +1697,7 @@ function ManageTasksCard({
             </button>
             <button
               type="button"
-              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(false)}
             >
@@ -1863,7 +1864,7 @@ function SuggestAdvancedModelCard({
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             type="button"
-            className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+            className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
             disabled={pending !== null}
             onClick={() => void submit("switch_and_retry")}
           >
@@ -1871,7 +1872,7 @@ function SuggestAdvancedModelCard({
           </button>
           <button
             type="button"
-            className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+            className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
             disabled={pending !== null}
             onClick={() => void submit("switch_only")}
           >
@@ -1879,7 +1880,7 @@ function SuggestAdvancedModelCard({
           </button>
           <button
             type="button"
-            className="rounded-full border border-transparent px-3 py-1.5 text-[0.75rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+            className="rounded-[var(--radius-md)] border border-transparent px-3 py-1.5 text-[0.75rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
             disabled={pending !== null}
             onClick={() => void submit("dismiss")}
           >
@@ -2223,7 +2224,7 @@ function SegGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="inline-flex items-center gap-1.5">
       <span className="text-[0.68rem] uppercase tracking-wide text-[var(--color-text-muted)]">{label}</span>
-      <div className="inline-flex items-center gap-0.5 rounded-full border border-[var(--color-border-strong)] p-0.5">
+      <div role="group" aria-label={label} className="seg">
         {children}
       </div>
     </div>
@@ -2240,16 +2241,7 @@ function SegButton({
   children: ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      className={[
-        "rounded-full px-2 py-0.5 text-[0.68rem] transition",
-        active
-          ? "bg-[var(--color-text-primary)] text-[var(--color-surface-1)]"
-          : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
-      ].join(" ")}
-      onClick={onClick}
-    >
+    <button type="button" aria-pressed={active} className="seg-option" onClick={onClick}>
       {children}
     </button>
   );
@@ -2333,6 +2325,11 @@ export type MemoryProject = { id: string; name: string; teamShared: boolean };
 
 export type MemoryDestination = "personal" | "project";
 
+const MEMORY_DESTINATIONS = [
+  { value: "personal", label: "My memory" },
+  { value: "project", label: "Team learnings" },
+] as const;
+
 // MemoryDestinationPicker is the visible "Save to:" choice (Item D1). It is
 // deliberately a segmented control rather than a default with an override
 // somewhere else: a member working inside a team-shared project usually means
@@ -2352,43 +2349,19 @@ export function MemoryDestinationPicker({
   onChange: (next: MemoryDestination) => void;
   disabled?: boolean;
 }) {
-  const optionClass = (active: boolean) =>
-    [
-      "rounded-full px-2.5 py-1 text-[0.7rem] transition disabled:opacity-40",
-      active
-        ? "bg-[var(--color-text-primary)] font-medium text-[var(--color-surface-1)]"
-        : "text-[var(--color-text-secondary)] hover:bg-[var(--color-overlay-soft)]",
-    ].join(" ");
   // Spans, not divs: this renders both as a block inside the approval card and
   // INLINE inside the message action row, and a <div> nested in that row's
   // <span> is invalid markup React will complain about at hydration.
   return (
     <span className="mb-2 flex flex-wrap items-center gap-1.5">
       <span className="text-[0.7rem] text-[var(--color-text-muted)]">Save to:</span>
-      <span
-        role="group"
-        aria-label="Where to save this memory"
-        className="inline-flex items-center gap-0.5 rounded-full border border-[var(--color-border)] p-0.5"
-      >
-        <button
-          type="button"
-          disabled={disabled}
-          aria-pressed={value === "personal"}
-          className={optionClass(value === "personal")}
-          onClick={() => onChange("personal")}
-        >
-          My memory
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          aria-pressed={value === "project"}
-          className={optionClass(value === "project")}
-          onClick={() => onChange("project")}
-        >
-          Team learnings
-        </button>
-      </span>
+      <Segmented
+        label="Where to save this memory"
+        value={value}
+        options={MEMORY_DESTINATIONS}
+        onChange={onChange}
+        disabled={disabled}
+      />
       <span className="text-[0.68rem] text-[var(--color-text-muted)]">
         {value === "project"
           ? `everyone in ${project.name}`
@@ -2543,7 +2516,7 @@ export function MemoryProposalCard({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className="rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
+            className="rounded-[var(--radius-md)] bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
             disabled={submitting !== null}
             onClick={() => void resolve(true)}
           >
@@ -2551,7 +2524,7 @@ export function MemoryProposalCard({
           </button>
           <button
             type="button"
-            className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
+            className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
             disabled={submitting !== null}
             onClick={() => void resolve(false)}
           >

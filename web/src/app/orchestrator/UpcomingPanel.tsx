@@ -118,7 +118,7 @@ export function UpcomingPanel() {
         >
           Refresh
         </button>
-        <div className="task-segment" role="radiogroup" aria-label="Upcoming view">
+        <div className="seg seg--md" role="radiogroup" aria-label="Upcoming view">
           {VIEWS.map((v) => (
             <button
               key={v.id}
@@ -126,7 +126,7 @@ export function UpcomingPanel() {
               role="radio"
               aria-checked={view === v.id}
               tabIndex={view === v.id ? 0 : -1}
-              className={`task-segment-btn${view === v.id ? " is-active" : ""}`}
+              className="seg-option"
               data-testid={`upcoming-view-${v.id}`}
               onClick={() => changeView(v.id)}
             >
