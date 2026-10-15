@@ -306,6 +306,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	pinWorkspaceRoot(cfg)
 
 	// OpenTelemetry distributed tracing (#186): OPT-IN via FLEET_OTEL_ENDPOINT.
 	// With the endpoint unset (the default) this is a complete no-op — no
@@ -2290,6 +2291,36 @@ func workspaceRootOrDefault(workspaceRoot string) string {
 		root = "workspace"
 	}
 	return root
+}
+
+// pinWorkspaceRoot resolves the workspace root ONCE at boot — the operator's
+// FLEET_WORKSPACE_ROOT (legacy CHAT_/CUTLASS_ aliases honored) when set, else
+// ./workspace under the process cwd (/var/lib/fleet/workspace under
+// deploy/fleet.service) — makes it absolute, and writes it back to both
+// cfg.WorkspaceRoot and the canonical FLEET_WORKSPACE_ROOT env var.
+//
+// Why the env write: the root is not read in one place. The sandbox pool and
+// the file-tool confinement read cfg, but the per-conversation workspace
+// (tools.WorkspaceDirForConversation), the MCP workspace dirs and the
+// ${FLEET_WORKSPACE_ROOT} token (agentcore), `fleet worktree`, and the
+// out-of-process MCP broker (which inherits FLEET_WORKSPACE_ROOT through its
+// env passthrough) each read the env lazily, each with its own "./workspace"
+// fallback — and not all of them absolutize it. With the variable unset, a
+// conversation-scoped MCP server got the RELATIVE workspace/<convID> as both
+// its cwd and its ${FLEET_WORKSPACE}, so $FLEET_WORKSPACE/x resolved to
+// workspace/<convID>/workspace/<convID>/x. Pinning one absolute value means
+// the default behaves exactly as if the operator had set it, and setting it
+// stays a pure override.
+func pinWorkspaceRoot(cfg *config.Config) {
+	abs, err := filepath.Abs(workspaceRootOrDefault(cfg.WorkspaceRoot))
+	if err != nil {
+		// Only an unreadable cwd gets here; every reader would fail the same
+		// way, so keep the boot going on the unresolved value as before.
+		log.Printf("workspace root: could not absolutize %q: %v", workspaceRootOrDefault(cfg.WorkspaceRoot), err)
+		return
+	}
+	cfg.WorkspaceRoot = abs
+	_ = os.Setenv("FLEET_WORKSPACE_ROOT", abs)
 }
 
 func orchestratorAddr() string {
