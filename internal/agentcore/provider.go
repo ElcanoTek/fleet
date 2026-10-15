@@ -140,6 +140,28 @@ const (
 // where nobody is watching.
 var fp8AndAbove = []string{"fp8", "fp16", "bf16", "fp32"}
 
+// unpinnedOpenWeightsPrefixes are slugs under a pinned family prefix that the
+// family pin must NOT govern: open-weights models the vendor publishes but
+// many hosts serve. The google/ pin is strict (Only=[Google], no fallbacks)
+// because Gemini's encrypted thought signatures validate only at the minting
+// upstream; Gemma has no such signatures, and pinning it to Google's single
+// endpoint turned that endpoint's rate limiting into user-facing failures
+// (4 of 6 live calls answered 429 on 2026-10-15, while 12 other hosts were up).
+// These slugs route like an unpinned family, with a precision floor where one
+// is recorded in precisionFloorSlugs.
+var unpinnedOpenWeightsPrefixes = []string{"google/gemma"}
+
+// familyPinsFor returns the canonicalUpstream rows that may govern a slug:
+// all of them, or none for an unpinned open-weights slug.
+func familyPinsFor(matchSlug string) []familyPin {
+	for _, p := range unpinnedOpenWeightsPrefixes {
+		if strings.HasPrefix(matchSlug, p) {
+			return nil
+		}
+	}
+	return canonicalUpstream
+}
+
 // canonicalUpstream pins each model family to a single OpenRouter upstream so
 // prompt caches (which are per-upstream) survive across calls. strict=true
 // (Only + AllowFallbacks=false) is required for Google (encrypted thought
@@ -152,12 +174,14 @@ var fp8AndAbove = []string{"fp8", "fp16", "bf16", "fp32"}
 // soft-pinned request is one busy first-party endpoint away from being served
 // by whatever else in the pool answers — including a lower-precision quant of
 // the same slug. The pin fixed cache locality and left quality unguarded.
-var canonicalUpstream = []struct {
+type familyPin struct {
 	prefix        string
 	name          string
 	strict        bool
 	quantizations []string
-}{
+}
+
+var canonicalUpstream = []familyPin{
 	// The strong tier (DefaultMaxModel, Gemini 4 Argon) lives here.
 	// Google serves this family alone, so the pin is STRICT (Only, no
 	// fallbacks) and needs no serving-precision floor — there is no second
@@ -304,6 +328,14 @@ var officialPoolSlugs = map[string]officialPoolAllowlist{
 // preferredUpstreamFor stays "" (there is no preferred upstream for the
 // served-upstream attribution to compare against).
 var precisionFloorSlugs = map[string]string{
+	// 2026-10-15: 13 endpoints. bf16 ×7 (DekaLLM, NextBit, CoreWeave, Io Net,
+	// Venice, Parasail, Novita), fp8 ×2 (DeepInfra, SiliconFlow), unknown ×4
+	// (Darkbloom, Makora, Cloudflare, Google Vertex). The floor leaves the nine
+	// fp8-and-above endpoints; it also drops Google's endpoint, which answered
+	// 429 "temporarily rate-limited upstream" to 4 of 6 live calls while the
+	// pool answered 6 of 6. Routed without the google/ family pin: see
+	// unpinnedOpenWeightsPrefixes.
+	"google/gemma-4-26b-a4b-it": "2026-10-15",
 	// 2026-10-15: 20 endpoints. fp4 ×3 (Tenstorrent, Darkbloom, ModelRun),
 	// fp8 ×9, bf16 ×1 (DeepInfra), fp16 ×1 (Cerebras), unknown ×6 (Wafer,
 	// DekaLLM, Phala, Novita, Alibaba, Cloudflare). The floor leaves the 11
@@ -332,7 +364,7 @@ func pinServesOfficialWeightsOnly(modelSlug string) bool {
 // policy (chat behaviour; superset of cutlass which did not strip).
 func upstreamPinFor(modelSlug string) *openrouter.Provider {
 	matchSlug := strings.TrimPrefix(modelSlug, "~")
-	for _, c := range canonicalUpstream {
+	for _, c := range familyPinsFor(matchSlug) {
 		if !strings.HasPrefix(matchSlug, c.prefix) {
 			continue
 		}

@@ -179,6 +179,18 @@ not inherit it.
 | slug | checked | pool | floor leaves |
 |---|---|---|---|
 | `qwen/qwen3.8-27b` | 2026-10-15 | 20 endpoints: fp4 ×3 (Tenstorrent, Darkbloom, ModelRun), fp8 ×9, bf16 ×1 (DeepInfra), fp16 ×1 (Cerebras), unknown ×6 (Wafer, DekaLLM, Phala, Novita, Alibaba, Cloudflare) | 11 endpoints |
+| `google/gemma-4-26b-a4b-it` | 2026-10-15 | 13 endpoints: bf16 ×7 (DekaLLM, NextBit, CoreWeave, Io Net, Venice, Parasail, Novita), fp8 ×2 (DeepInfra, SiliconFlow), unknown ×4 (Darkbloom, Makora, Cloudflare, Google Vertex) | 9 endpoints |
+
+**Open-weights slugs under a pinned family are not governed by its pin.** The
+`google/` pin is strict (`Only=[Google]`, no fallbacks) because Gemini's
+encrypted thought signatures validate only at the minting upstream. Gemma is
+open weights that a dozen hosts serve, with no such signatures; pinned to
+Google's single Vertex endpoint, `google/gemma-4-26b-a4b-it` failed 4 of 6
+live calls with `429 … temporarily
+rate-limited upstream` on 2026-10-15 while the unpinned, floored pool answered
+6 of 6, and 5 of 5 real fleet turns with a tool completed after the change.
+`unpinnedOpenWeightsPrefixes` (today `google/gemma`) makes such slugs route as
+an unpinned family — the floor alone where one is recorded, nothing otherwise.
 
 A listed slug with no `canonicalUpstream` entry gets the floor alone:
 `quantizations` plus `allow_fallbacks: true`, with no `order` and no `only`, so
@@ -253,7 +265,9 @@ of it was served elsewhere.
   than speculatively constrained — a too-narrow allow-list makes a family
   unroutable, which is a worse failure than the one being fixed. Individual
   slugs get a floor only through `precisionFloorSlugs`, one checked slug at a
-  time (today: `qwen/qwen3.8-27b`). Other open-weights `qwen/` slugs also mix
+  time (today: `qwen/qwen3.8-27b` and `google/gemma-4-26b-a4b-it`; the Gemma
+  slug also routes outside the `google/` family pin, see
+  `unpinnedOpenWeightsPrefixes`). Other open-weights `qwen/` slugs also mix
   precisions (fp4 or int4 appear on `qwen3.6-35b-a3b`, `qwen3.5-9b`,
   `qwen3.5-35b-a3b`, `qwen3-coder`, `qwen3-14b` as of 2026-10-15) and were left
   out of scope; add each with its endpoint list when someone relies on it.
@@ -263,13 +277,16 @@ of it was served elsewhere.
   down *and* every fp8+ alternative is saturated, a request that previously
   degraded to fp4 now fails instead. That is the intended trade: the prior
   behavior returned a plausible-looking but degraded answer with no signal.
-- **Not verified against live OpenRouter.** The quantization strings match
-  OpenRouter's documented spelling and the `Quantizations` field on
-  `openrouter.Provider`, and the routing policy is unit-tested, but no live
-  request was made from this change (tests run against the fake-LLM seam with no
-  API key). The first live turn on a DeepSeek slug is the real confirmation of
-  the family floor. The per-slug floor is a separate branch: a live turn on
-  `qwen/qwen3.8-27b` confirms it. Check the provider that served each of its
+- **Live verification: the Gemma policy only.** The routing policy is
+  unit-tested everywhere and the quantization strings match OpenRouter's
+  documented spelling and the `Quantizations` field on `openrouter.Provider`.
+  Only `google/gemma-4-26b-a4b-it` has been checked live (2026-10-15): its
+  unpinned, fp8-and-above request succeeded on 6 of 6 calls (each served by
+  an fp8+ host) and on 5 of 5 real fleet turns with a tool, against 2 of 6
+  under the old Google-only pin. The DeepSeek family floor and the
+  `qwen/qwen3.8-27b` slug floor remain unverified live: the first live turn on
+  a DeepSeek slug confirms the family floor, and a live turn on
+  `qwen/qwen3.8-27b` confirms its slug floor. Check the provider that served each of its
   generations in OpenRouter's activity log: it should be one of the
   fp8-or-better endpoints in the table above, never Tenstorrent, Darkbloom or
   ModelRun. fleet does not surface it here, because the slug has no preferred
