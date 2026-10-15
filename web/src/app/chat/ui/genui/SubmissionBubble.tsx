@@ -74,7 +74,7 @@ export function SubmissionBubble({
       {notSent ? <NotSentNote /> : null}
       {showRaw ? (
         <pre
-          className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.72rem]"
+          className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-inset)] p-2 text-[0.72rem]"
           style={{ fontFamily: "var(--font-code)" }}
         >
           {raw}

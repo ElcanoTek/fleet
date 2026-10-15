@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useState } from "react";
+import { CloseButton } from "./CloseButton";
 
 // Toast notifications for the orchestrator view. Replaces moc's imperative
 // toast.js (document.body manipulation) with a React context + portal-free
@@ -54,14 +55,11 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             role="alert"
           >
             <span className="min-w-0 flex-1">{t.message}</span>
-            <button
-              type="button"
-              aria-label="Dismiss notification"
-              className="shrink-0 cursor-pointer border-0 bg-transparent p-0 text-current opacity-60 transition hover:opacity-100"
+            <CloseButton
+              className="-my-1.5 -mr-2"
+              label="Dismiss notification"
               onClick={() => dismiss(t.id)}
-            >
-              <span aria-hidden="true">&times;</span>
-            </button>
+            />
           </div>
         ))}
       </div>

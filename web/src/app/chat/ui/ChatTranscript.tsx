@@ -1143,7 +1143,7 @@ export function ChatTranscript({
                               ) : null}
 
                               {message.state === "done" && message.content ? (
-                                <div className="flex items-center gap-3 text-[0.7rem]">
+                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.7rem]">
                                   <CopyButton text={message.content} />
                                   {!message.cancelled && !message.failed && canRetry ? (
                                     <button

@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { CloseButton } from "@/app/shared/ui/CloseButton";
 
 // Chat-surface toasts that can carry ONE action — "Manage" after a share,
 // "Share with <team>" after a move. The rail's error toast is a plain line;
@@ -81,14 +82,11 @@ export function ChatToastProvider({ children }: { children: React.ReactNode }) {
                 {t.action.label}
               </button>
             ) : null}
-            <button
-              type="button"
-              aria-label="Dismiss notification"
-              className="shrink-0 rounded-[var(--radius-md)] px-1.5 py-1 text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
+            <CloseButton
+              className="-my-1"
+              label="Dismiss notification"
               onClick={() => dismiss(t.id)}
-            >
-              <span aria-hidden>×</span>
-            </button>
+            />
           </div>
         ))}
       </div>

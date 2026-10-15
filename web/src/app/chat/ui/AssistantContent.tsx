@@ -679,7 +679,7 @@ function InlineHtmlPreview({
     );
   }
   return (
-    <div className="my-2 overflow-hidden rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)]">
+    <div className="my-2 overflow-hidden rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)]">
       <div className="flex items-center justify-between border-b border-[var(--color-border)] px-2 py-1 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
         <span>HTML preview</span>
         <button

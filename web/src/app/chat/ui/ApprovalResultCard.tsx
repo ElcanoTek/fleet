@@ -348,7 +348,7 @@ export function ApprovalResultCardView({
           {!recorded && approval.resultText ? (
             <pre
               data-testid="approval-result"
-              className="mt-2 max-h-60 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.72rem] leading-[1.45] text-[var(--color-text-muted)]"
+              className="mt-2 max-h-60 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-inset)] p-2 text-[0.72rem] leading-[1.45] text-[var(--color-text-muted)]"
               style={{ fontFamily: "var(--font-code)" }}
             >
               {approval.resultText}

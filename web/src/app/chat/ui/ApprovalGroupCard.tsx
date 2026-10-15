@@ -72,7 +72,7 @@ function RawArgs({ approval }: { approval: Approval }) {
         </div>
       ) : raw ? (
         <pre
-          className="max-h-40 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.75rem] text-[var(--color-text-primary)]"
+          className="max-h-40 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-inset)] p-2 text-[0.75rem] text-[var(--color-text-primary)]"
           style={{ fontFamily: "var(--font-code)" }}
         >
           {raw}

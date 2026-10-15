@@ -223,7 +223,7 @@ export function NavRail({
       <button
         aria-label="Close navigation"
         className={[
-          "fixed inset-0 z-20 bg-[color-mix(in_srgb,var(--color-overlay-strong)_120%,black)] backdrop-blur-[2px] transition sm:hidden",
+          "fixed inset-0 z-20 bg-[var(--color-overlay-strong)] backdrop-blur-[2px] transition sm:hidden",
           sidebarOpen ? "block" : "hidden",
         ].join(" ")}
         type="button"
@@ -236,7 +236,7 @@ export function NavRail({
         <button
           aria-label="Close navigation"
           type="button"
-          className="fixed inset-0 z-[380] hidden bg-[color-mix(in_srgb,var(--color-overlay-strong)_120%,black)] sm:block"
+          className="fixed inset-0 z-[380] hidden bg-[var(--color-overlay-strong)] sm:block"
           onClick={() => setCollapsed(true)}
         />
       ) : null}
@@ -274,7 +274,13 @@ export function NavRail({
         <div
           className={[
             "flex items-center px-1",
-            collapsed ? "sm:flex-col sm:gap-2 sm:px-0" : "justify-between",
+            // justify-between stays on below sm in both states: narrow
+            // viewports always report collapsed, and dropping it there parked
+            // the drawer's close X against the brand name instead of at the
+            // row's end.
+            collapsed
+              ? "justify-between sm:flex-col sm:justify-start sm:gap-2 sm:px-0"
+              : "justify-between",
           ].join(" ")}
         >
           <div className={["flex min-w-0 items-center gap-2.5", collapsed ? "sm:flex-col" : ""].join(" ")}>

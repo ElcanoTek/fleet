@@ -99,7 +99,7 @@ export function DownloadChatDialog({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/60 p-0 sm:p-4"
+      className="fixed inset-0 z-[1200] flex items-center justify-center bg-[var(--color-overlay-strong)] p-0 sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-label="Download chat"

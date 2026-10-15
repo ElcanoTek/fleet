@@ -96,7 +96,7 @@ export function PythonOutput({
   return (
     <div className="grid min-w-0 gap-1.5">
       {figures}
-      <div className="min-w-0 max-w-full overflow-hidden rounded-[0.75rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)]">
+      <div className="min-w-0 max-w-full overflow-hidden rounded-[0.75rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)]">
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
@@ -307,7 +307,7 @@ function parseJSON(raw: string): unknown {
 function JsonFallback({ raw }: { raw: string }) {
   return (
     <pre
-      className="overflow-x-auto rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] px-2 py-1.5 text-[0.72rem] leading-[1.4] text-[var(--color-text-secondary)]"
+      className="overflow-x-auto rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.72rem] leading-[1.4] text-[var(--color-text-secondary)]"
       style={{ fontFamily: "var(--font-code)" }}
     >
       {safePretty(raw)}
@@ -409,7 +409,7 @@ function CodeBlock({
   maxHeight?: string;
 }) {
   return (
-    <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] min-w-0 max-w-full">
+    <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full">
       {language ? (
         <div className="border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
           {language}
@@ -476,7 +476,7 @@ function ToolInputView({
   if (name === "bash" && typeof args.command === "string") {
     const cwd = typeof args.working_dir === "string" ? args.working_dir : "";
     return (
-      <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] min-w-0 max-w-full">
+      <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full">
         <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
           <span>bash</span>
           {cwd ? (
@@ -503,7 +503,7 @@ function ToolInputView({
     const cmd = typeof args.command === "string" ? args.command : "";
     if (cmd === "view") {
       return (
-        <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] px-2 py-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
+        <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
           viewing task list
         </div>
       );
@@ -525,7 +525,7 @@ function ToolInputView({
     const oldText = typeof args.old_text === "string" ? args.old_text : "";
     const newText = typeof args.new_text === "string" ? args.new_text : "";
     return (
-      <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] min-w-0 max-w-full">
+      <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full">
         <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
           <span>{name.replace("_", " ")}</span>
           <span className="truncate normal-case tracking-normal text-[0.7rem] text-[var(--color-text-primary)]">
@@ -568,7 +568,7 @@ function ToolInputView({
 
   if (name === "web_fetch" && typeof args.url === "string") {
     return (
-      <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] px-2 py-1.5 text-[0.72rem] text-[var(--color-text-primary)]">
+      <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.72rem] text-[var(--color-text-primary)]">
         <span className="text-[var(--color-text-muted)]">GET </span>
         <span style={{ fontFamily: "var(--font-code)" }}>{args.url}</span>
       </div>
@@ -577,7 +577,7 @@ function ToolInputView({
 
   if (name === "smart_search" && typeof args.query === "string") {
     return (
-      <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] px-2 py-1.5 text-[0.72rem] text-[var(--color-text-primary)]">
+      <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.72rem] text-[var(--color-text-primary)]">
         <span className="text-[var(--color-text-muted)]">search </span>
         <span className="italic">&ldquo;{args.query}&rdquo;</span>
       </div>
@@ -589,7 +589,7 @@ function ToolInputView({
   if (name === "spawn_subagent" && typeof args.task === "string") {
     const role = typeof args.role === "string" && args.role ? args.role : "explore";
     return (
-      <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] min-w-0 max-w-full">
+      <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full">
         <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
           <span>sub-agent</span>
           <span className="rounded-full border border-[var(--color-border)] px-1.5 normal-case tracking-normal">
@@ -612,7 +612,7 @@ function ToolInputView({
 // TaskList renders the task_tracker task array with status glyphs.
 function TaskList({ tasks }: { tasks: unknown[] }) {
   return (
-    <ul className="grid gap-0.5 rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] px-2 py-1.5 text-[0.78rem]">
+    <ul className="grid gap-0.5 rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.78rem]">
       {tasks.map((raw, i) => {
         const t = (raw ?? {}) as Record<string, unknown>;
         const title = typeof t.title === "string" ? t.title : "(untitled)";
@@ -746,7 +746,7 @@ function ToolResultView({
 
   return (
     <pre
-      className="max-h-[16rem] overflow-auto rounded-[0.6rem] border bg-[var(--color-overlay-strong)] px-2 py-1.5 text-[0.72rem] leading-[1.4]"
+      className="max-h-[16rem] overflow-auto rounded-[0.6rem] border bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.72rem] leading-[1.4]"
       style={{
         fontFamily: "var(--font-code)",
         borderColor: isErr
@@ -776,7 +776,7 @@ function BashResult({
   const failed = isErr || exitCode !== 0;
 
   return (
-    <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] min-w-0 max-w-full">
+    <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full">
       <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem]">
         <span
           className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[0.62rem] font-medium uppercase tracking-wider"
@@ -886,7 +886,7 @@ function SubagentActivityPanel({ activity }: { activity: SubagentActivity }) {
   const running = activity.phase !== "finished";
   return (
     <div
-      className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] min-w-0 max-w-full"
+      className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full"
       data-testid="chat-subagent-activity"
     >
       <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
@@ -1043,7 +1043,7 @@ function SubagentSpawnResult({
     : [];
   return (
     <div
-      className="rounded-[0.6rem] border bg-[var(--color-overlay-strong)] min-w-0 max-w-full"
+      className="rounded-[0.6rem] border bg-[var(--color-surface-inset)] min-w-0 max-w-full"
       style={{
         borderColor: success ? "var(--color-border)" : "var(--color-danger-border)",
       }}
@@ -1150,7 +1150,7 @@ export function EmailSendResult({
       : "";
 
   return (
-    <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] min-w-0 max-w-full">
+    <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full">
       <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-[0.72rem]">
         <span
           className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[0.62rem] font-medium uppercase tracking-wider"
