@@ -136,7 +136,8 @@ below).
 | --- | --- | --- |
 | Task terminal: success | `FLEET_PUSH_ON_TASK_COMPLETE` | `✓ Task complete: <name> (<duration>)` |
 | Task terminal: failure (error, retry-exhausted dead-letter, interrupted) | `FLEET_PUSH_ON_TASK_COMPLETE` | `✗ Task failed: <name> (<duration>)` |
-| Task paused for `ask` / mid-run `notify` progress (#510) | `FLEET_PUSH_ON_TASK_COMPLETE` | `⏸ Waiting for your answer: <name>` |
+| Task paused for `ask` (#510) | `FLEET_PUSH_ON_TASK_COMPLETE` | `⏸ Waiting for your answer: <name>` |
+| A progress note from the agent's mid-run `notify` tool (#510) | `FLEET_PUSH_ON_TASK_COMPLETE` | `✎ Progress note: <name>` |
 | A user-scoped budget crossed its soft threshold (`internal/sched/budget`) | `FLEET_PUSH_ON_TASK_COMPLETE` | `⚠ Budget alert: user <email> (<window> window)` |
 | Chat approval card staged (#292) | `FLEET_PUSH_ON_APPROVAL_REQUEST` | `⚠ Approval needed: <tool name>` (high urgency) |
 | An approved call of a tool in `agent_policy.critical_tool_progress` finished ([APPROVAL-PROGRESS.md](APPROVAL-PROGRESS.md)) | `FLEET_PUSH_ON_APPROVAL_REQUEST` | `✓ Done: <card title or tool name>` / `✗ Not applied: …` (normal urgency) |
@@ -150,7 +151,13 @@ Notes on honest scope:
 - The `FLEET_NOTIFY_ON` status filter (email/webhook, #208) applies to the
   push channel too — the channels share one `Notify()` pipeline.
 - The agent's mid-run `notify` tool shares the progress status with `ask`
-  pauses, so both render the `⏸ Waiting for your answer` title.
+  pauses (so the `FLEET_NOTIFY_ON` filter treats both alike), but it carries
+  `Kind: progress_note` and pushes as `✎ Progress note: …`: the run carries
+  on and nothing waits on an answer. The push names the task, never the note
+  itself (a push carries no `Message`); the note goes to email, and to a
+  custom webhook template that uses `{{.Message}}`. Such a template can tell
+  a note from a question with `{{.Kind}}` (`progress_note`, or empty for an
+  `ask` pause); the default payload has no kind field.
 - A budget soft alert also travels as a progress event (so the
   `FLEET_NOTIFY_ON` filter and the webhook treat it like any other heads-up),
   but it carries `Kind: budget_alert` and pushes as `⚠ Budget alert: …`:

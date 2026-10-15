@@ -130,6 +130,12 @@ type Kind string
 // answer, so a channel must not word it as an ask-pause.
 const KindBudgetAlert Kind = "budget_alert"
 
+// KindProgressNote is a progress update the agent sent with its notify tool
+// mid-run (#510). It shares StatusProgress with an ask-pause, but the run
+// carries on and nothing waits on an answer, so a channel must not word it as
+// an ask-pause either. An ask-pause is the task's own event (empty Kind).
+const KindProgressNote Kind = "progress_note"
+
 // Event is the fully-resolved, secret-free outcome of one task run. The runner
 // builds it from the task + the run's LogSession and hands it to Notify; the
 // senders render it into the email body / webhook payload. It deliberately holds
@@ -167,7 +173,8 @@ type Event struct {
 	// event. The deployment-wide email/webhook channels ignore it entirely.
 	Audience string
 	// Kind is what raised the event when it is not the task itself (see
-	// Kind). Empty for every runner event.
+	// Kind). Empty for the runner's terminal and ask-pause events;
+	// KindProgressNote for the agent's notify tool.
 	Kind Kind
 }
 

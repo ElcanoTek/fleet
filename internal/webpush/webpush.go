@@ -349,14 +349,20 @@ func eventTitle(ev notify.Event) (title string, ok bool) {
 	case notify.StatusFailure:
 		return fmt.Sprintf("✗ Task failed: %s (%s)", ev.Name, formatDuration(ev.DurationSeconds)), true
 	case notify.StatusProgress:
-		if ev.Kind == notify.KindBudgetAlert {
+		switch ev.Kind {
+		case notify.KindBudgetAlert:
 			// A soft budget threshold crossed: a heads-up, nothing waits on an
 			// answer. Name already reads "Budget alert: <scope> <principal>
 			// (<window> window)".
 			return "⚠ " + ev.Name, true
+		case notify.KindProgressNote:
+			// The agent's mid-run notify tool: the run carries on. The note
+			// itself stays off the lock screen, like every Message. "✎" sits
+			// beside ✓ and ✗ in Dingbats and stays a symbol in text fonts,
+			// where "ℹ" falls back to a plain "i".
+			return "✎ Progress note: " + ev.Name, true
 		}
-		// #510 ask-pause (and the agent's mid-run notify tool, which shares the
-		// StatusProgress path): the task wants the human.
+		// #510 ask-pause: the task wants the human.
 		return "⏸ Waiting for your answer: " + ev.Name, true
 	default:
 		return "", false

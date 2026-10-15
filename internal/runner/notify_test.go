@@ -2,16 +2,19 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"charm.land/fantasy"
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // fakeNotifier captures the events the runner fires so tests can assert payload
@@ -111,6 +114,53 @@ func TestNotifyTerminal_Fires(t *testing.T) {
 	// nil notifier: no panic, no fire.
 	pNil := &Pool{}
 	pNil.notifyTerminal(task, notify.StatusSuccess, nil, time.Second) // must not panic
+}
+
+// TestProgressEvents_NotifyToolIsAProgressNote: the agent's notify tool and an
+// ask-pause both raise a StatusProgress event, but only the ask waits on the
+// human. The notify tool's event carries notify.KindProgressNote, so a channel
+// that words its own title (Web Push) does not read it as "waiting for your
+// answer"; the ask-pause's carries no Kind. Both go through a real pool run
+// whose runner calls the real tools.
+func TestProgressEvents_NotifyToolIsAProgressNote(t *testing.T) {
+	store := newTestStore(t)
+	seedTask(t, store, 0, 0)
+	fake := &fakeNotifier{}
+	runner := TaskRunnerFunc(func(ctx context.Context, _ *models.Task) (*models.LogSession, error) {
+		for _, step := range []struct {
+			tool  fantasy.AgentTool
+			input string
+		}{
+			{tools.NewNotifyTool(), `{"message":"finished stage 1 of 3"}`},
+			{tools.NewAskTool(), `{"question":"which currency?"}`},
+		} {
+			resp, err := step.tool.Run(ctx, fantasy.ToolCall{Input: step.input})
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", step.tool.Info().Name, err)
+			}
+			if resp.IsError {
+				return nil, fmt.Errorf("%s: %s", step.tool.Info().Name, resp.Content)
+			}
+		}
+		<-ctx.Done() // ask ends this run
+		return nil, ctx.Err()
+	})
+	runPoolUntil(t, store, runner, fake, func() bool { return len(fake.drain()) == 2 })
+
+	got := fake.drain()
+	byKind := map[notify.Kind]notify.Event{}
+	for _, ev := range got {
+		if ev.Status != notify.StatusProgress {
+			t.Errorf("status = %q, want progress: %+v", ev.Status, ev)
+		}
+		byKind[ev.Kind] = ev
+	}
+	if ev, ok := byKind[notify.KindProgressNote]; !ok || ev.Message != "finished stage 1 of 3" {
+		t.Errorf("want the notify tool's event with Kind %q and the note; got events %+v", notify.KindProgressNote, got)
+	}
+	if ev, ok := byKind[""]; !ok || !strings.Contains(ev.Message, "which currency?") {
+		t.Errorf("want the ask-pause event with no Kind and the question; got events %+v", got)
+	}
 }
 
 // TestNotifyTerminal_AudienceEmptyWithoutOwner: an anonymous task (nil
