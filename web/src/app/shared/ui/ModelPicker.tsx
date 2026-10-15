@@ -9,6 +9,7 @@ import {
 } from "@/app/shared/lib/models";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { ModelCostIndicator } from "@/app/shared/ui/ModelCostIndicator";
+import { StatusChip } from "./StatusChip";
 
 // ModelPicker — combobox autocomplete over OpenRouter model slugs. React port
 // of moc's model-picker.js. The pure filtering/affordability logic lives in
@@ -151,11 +152,11 @@ export function ModelPicker({ id, value, onChange, placeholder, ...rest }: Model
                   {/* recommended > operator pin tag > workspace, the same
                       precedence as the chat picker's pill. */}
                   {model.recommended ? (
-                    <span className="model-picker-badge">Recommended</span>
+                    <StatusChip tone="success" className="model-picker-badge">recommended</StatusChip>
                   ) : model.pinTag ? (
-                    <span className="model-picker-badge">{model.pinTag}</span>
+                    <StatusChip tone="warning" className="model-picker-badge">{model.pinTag}</StatusChip>
                   ) : model.workspace ? (
-                    <span className="model-picker-badge">Workspace</span>
+                    <StatusChip tone="accent" className="model-picker-badge">workspace</StatusChip>
                   ) : null}
                   {/* Cost tier last so the row's leading edge stays the name;
                       absent for models with no catalog pricing. */}

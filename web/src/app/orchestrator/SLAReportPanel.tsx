@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { orchestratorApi, type SLAReport } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { plural } from "./plural";
+import { SlaChip } from "./taskDisplay";
 
 // SLAReportPanel — the Operations Center SLA tab (#274): a per-task-name table
 // of the actual-duration p50/p95 + breach rate over a window, plus a tiny SVG
@@ -98,9 +99,7 @@ function SLATable({ report }: { report: SLAReport }) {
                 <td>{row.p50_actual_minutes.toFixed(1)}m</td>
                 <td>{row.p95_actual_minutes.toFixed(1)}m</td>
                 <td>
-                  <span className={`sla-badge sla-badge-${breachTone}`}>
-                    {row.breach_rate_pct.toFixed(1)}%
-                  </span>
+                  <SlaChip tone={breachTone}>{row.breach_rate_pct.toFixed(1)}%</SlaChip>
                 </td>
                 <td>{row.sample_count}</td>
                 <td>

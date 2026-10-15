@@ -48,6 +48,7 @@ import {
   type SkillInfo,
 } from "./skillSlash";
 import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
+import { StatusChip } from "@/app/shared/ui/StatusChip";
 
 // isNewlyReleased was a module-level helper in chat-experience; its only
 // caller was the composer's model-picker rows, so it moves here verbatim
@@ -988,24 +989,21 @@ export function Composer({
                           // Same size/case as the tested/experimental
                           // badges — green is the only differentiator.
                           pill = (
-                            <span className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-success)_40%,transparent)] px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums text-[var(--color-success)]">
+                            <StatusChip tone="success" className="shrink-0 tabular-nums">
                               recommended
-                            </span>
+                            </StatusChip>
                           );
                         } else if (model.pinTag) {
                           pill = (
-                            <span
-                              data-testid="model-pin-tag"
-                              className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-warning)_45%,transparent)] px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums text-[var(--color-warning)]"
-                            >
+                            <StatusChip tone="warning" testId="model-pin-tag" className="shrink-0 tabular-nums">
                               {model.pinTag}
-                            </span>
+                            </StatusChip>
                           );
                         } else if (model.workspace) {
                           pill = (
-                            <span className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums text-[var(--color-accent)]">
+                            <StatusChip tone="accent" className="shrink-0 tabular-nums">
                               workspace
-                            </span>
+                            </StatusChip>
                           );
                         } else if (tier === "tested") {
                           pill = <ModelValidationBadge tier="tested" />;

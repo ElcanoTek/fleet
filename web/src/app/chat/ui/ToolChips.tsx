@@ -24,6 +24,7 @@ import {
 import { WorkspaceImage } from "./WorkspaceImage";
 import { resolveWorkspaceHref } from "./workspaceHref";
 import { conversationApiPath } from "@/app/lib/conversationApiUrl";
+import { StatusChip } from "@/app/shared/ui/StatusChip";
 
 // The syntax highlighter (react-syntax-highlighter + grammars, ~75 KiB
 // transfer) is the single largest dependency of the initial /chat bundle,
@@ -106,15 +107,7 @@ export function PythonOutput({
             <span aria-hidden>{expanded ? "▾" : "▸"}</span>
             <span>python output{summaryBits ? ` · ${summaryBits}` : ""}</span>
             {hasErr ? (
-              <span
-                className="rounded-full border px-1.5 text-[0.62rem]"
-                style={{
-                  borderColor: "var(--color-danger-border)",
-                  color: "var(--color-danger)",
-                }}
-              >
-                error
-              </span>
+              <StatusChip tone="danger">error</StatusChip>
             ) : null}
           </span>
           <span className="text-[var(--color-text-muted)]">
@@ -592,9 +585,9 @@ function ToolInputView({
       <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full">
         <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wider text-[var(--color-text-muted)]">
           <span>sub-agent</span>
-          <span className="rounded-full border border-[var(--color-border)] px-1.5 normal-case tracking-normal">
+          <StatusChip tone="neutral" className="normal-case tracking-normal">
             {role}
-          </span>
+          </StatusChip>
         </div>
         <pre
           className="overflow-auto whitespace-pre-wrap px-2 py-1.5 text-[0.72rem] leading-[1.4] text-[var(--color-text-primary)]"
@@ -778,17 +771,9 @@ function BashResult({
   return (
     <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full">
       <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2 py-0.5 text-[0.65rem]">
-        <span
-          className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[0.62rem] font-medium uppercase tracking-wider"
-          style={{
-            borderColor: failed
-              ? "var(--color-danger-border)"
-              : "var(--color-success-border)",
-            color: failed ? "var(--color-danger)" : "var(--color-success)",
-          }}
-        >
+        <StatusChip tone={failed ? "danger" : "success"} caps>
           exit {exitCode}
-        </span>
+        </StatusChip>
         {elapsed ? (
           <span className="text-[var(--color-text-muted)]">{elapsed}ms</span>
         ) : null}
@@ -1054,9 +1039,7 @@ function SubagentSpawnResult({
           Sub-agent{childId ? ` ${childId.replace(/^subagent-/, "").slice(0, 8)}…` : ""}
         </span>
         {role ? (
-          <span className="rounded-full border border-[var(--color-border)] px-1.5 text-[var(--color-text-muted)]">
-            {role}
-          </span>
+          <StatusChip tone="neutral">{role}</StatusChip>
         ) : null}
         <span
           className="ml-auto font-semibold"
@@ -1152,17 +1135,9 @@ export function EmailSendResult({
   return (
     <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] min-w-0 max-w-full">
       <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-[0.72rem]">
-        <span
-          className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[0.62rem] font-medium uppercase tracking-wider"
-          style={{
-            borderColor: failed
-              ? "var(--color-danger-border)"
-              : "var(--color-success-border)",
-            color: failed ? "var(--color-danger)" : "var(--color-success)",
-          }}
-        >
+        <StatusChip tone={failed ? "danger" : "success"} caps>
           {headline}
-        </span>
+        </StatusChip>
         {detail ? (
           <span
             data-testid="email-send-detail"
@@ -1177,17 +1152,11 @@ export function EmailSendResult({
           </span>
         ) : null}
         {!failed && warnings.length ? (
-          <span
-            className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[0.62rem]"
-            style={{
-              borderColor: "var(--color-warning-border)",
-              color: "var(--color-warning)",
-            }}
-          >
+          <StatusChip tone="warning">
             {warnings.length === 1
               ? "1 formatting note"
               : `${warnings.length} formatting notes`}
-          </span>
+          </StatusChip>
         ) : null}
       </div>
       <details className="border-t border-[var(--color-border)]">

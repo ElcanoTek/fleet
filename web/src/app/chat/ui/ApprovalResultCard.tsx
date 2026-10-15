@@ -23,6 +23,7 @@ import type {
   ApprovalResultOutcome,
 } from "./history";
 import { Icon } from "./Icon";
+import { StatusChip, type StatusTone } from "@/app/shared/ui/StatusChip";
 import {
   CARD_ITEMS_VISIBLE,
   CardRows,
@@ -97,18 +98,31 @@ export function retryFailedPrompt(approval: Approval, keys: string[]): string {
   return `Retry the ${what} from the approved ${approval.tool} call (approval_id=${approval.id}): ${list}. Retry only ${n === 1 ? "this one" : "these"}, and stage the retry for my approval.`;
 }
 
-function StatusChip({ status }: { status: ApprovalResultItemStatus }) {
-  const color = statusColor(status);
+// ResultStatusChip is a record's outcome on the shared status chip; the tone
+// follows statusColor's grouping.
+function resultTone(status: ApprovalResultItemStatus): StatusTone {
+  switch (status) {
+    case "done":
+    case "skipped":
+      return "success";
+    case "failed":
+      return "danger";
+    case "mismatch":
+    case "unclear":
+      return "warning";
+    default:
+      return "neutral";
+  }
+}
+
+function ResultStatusChip({ status }: { status: ApprovalResultItemStatus }) {
   return (
-    <span
-      data-testid="approval-result-status"
-      data-status={status}
-      className="inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[0.68rem] font-medium"
-      style={{ borderColor: `color-mix(in srgb, ${color} 45%, transparent)`, color }}
-    >
-      <StatusGlyph status={status} />
-      {RESULT_STATUS_LABEL[status]}
-    </span>
+    <StatusChip tone={resultTone(status)} testId="approval-result-status" data-status={status} className="shrink-0">
+      <span className="inline-flex items-center gap-1">
+        <StatusGlyph status={status} />
+        {RESULT_STATUS_LABEL[status]}
+      </span>
+    </StatusChip>
   );
 }
 
@@ -166,7 +180,7 @@ function ResultRow({ item }: { item: ApprovalResultCardItem }) {
           <span className={`min-w-0 break-words [overflow-wrap:anywhere] text-[0.82rem] font-medium ${item.status === "not_run" ? "text-[var(--color-text-muted)]" : "text-[var(--color-text-primary)]"}`}>
             {item.label}
           </span>
-          <StatusChip status={item.status} />
+          <ResultStatusChip status={item.status} />
         </div>
         <Ids item={item} />
         {item.flags && item.flags.length > 0 ? (
@@ -197,7 +211,7 @@ function ResultRecords({ items }: { items: ApprovalResultCardItem[] }) {
       <div className="mt-2 grid min-w-0 gap-2">
         <RecordBox testId="approval-result-item" label={it.label} flags={it.flags}>
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-            <StatusChip status={it.status} />
+            <ResultStatusChip status={it.status} />
           </div>
           <Ids item={it} />
           <Note item={it} />

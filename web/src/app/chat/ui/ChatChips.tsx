@@ -30,6 +30,7 @@ import {
 import { Icon } from "./Icon";
 import { formatBytes, formatDuration, formatTokens, formatUsd } from "./formatters";
 import { TeamGlyph } from "./ShareGlyphs";
+import { StatusChip } from "@/app/shared/ui/StatusChip";
 
 // PendingAttachment describes a file the user has picked to send with the
 // next turn. We carry the live File object for display (chip name/size
@@ -56,31 +57,25 @@ export type PendingAttachment = {
 // tier rows: solid accent fill > translucent accent (tested) > muted
 // outline (experimental).
 export function ModelValidationBadge({ tier }: { tier: ModelTier }) {
-  const tone =
-    tier === "tested"
-      ? "border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 text-[var(--color-accent)]"
-      : "border-[var(--color-border-strong)] text-[var(--color-text-muted)]";
   return (
-    <span
-      className={`shrink-0 rounded-full border px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums ${tone}`}
-    >
+    <StatusChip tone={tier === "tested" ? "accent" : "neutral"} className="shrink-0 tabular-nums">
       {tier}
-    </span>
+    </StatusChip>
   );
 }
 
 // "✨ new" pill for entries listed on OpenRouter within the last
-// NEW_MODEL_WINDOW_DAYS. Uses --color-success (green) so it sits
-// alongside the accent-fill `recommended` pill without competing for
-// the same visual slot.
+// NEW_MODEL_WINDOW_DAYS. Uses the success tone (green) so it sits
+// alongside the accent `tested` pill without competing for the same slot.
 export function NewModelBadge() {
   return (
-    <span
-      className="shrink-0 rounded-full border border-[var(--color-success-border)] bg-[var(--color-success)]/15 px-1.5 py-0 text-[0.6rem] font-semibold leading-4 tabular-nums text-[var(--color-success)]"
+    <StatusChip
+      tone="success"
+      className="shrink-0 tabular-nums"
       title="Listed on OpenRouter within the last two weeks"
     >
       ✨ new
-    </span>
+    </StatusChip>
   );
 }
 

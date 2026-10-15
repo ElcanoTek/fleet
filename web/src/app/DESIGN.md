@@ -122,9 +122,20 @@ Known, deliberate exceptions:
 
 ## Shared status primitives (`shared/ui/`)
 
-- **`StatusChip`** — every small status pill: connection state, "Bundled" /
-  "Third-party" trust badges, admin health pills. Tones: `success`,
-  `warning`, `danger`, `neutral`. Don't hand-roll
+- **`StatusChip`** — every small status pill, one size everywhere:
+  connection state, "Bundled" / "Workspace" / "Built-in" badges (settings
+  `ConnBadge` is a thin wrapper), admin health pills, tool-output error and
+  exit chips, the model picker's tags, AND the Operations Center's task, SLA,
+  log, dataset and learned-instruction states. General tones: `success`,
+  `warning`, `danger`, `neutral`, `accent` (a deliberate non-default such as
+  an admin override). Run tones (`run-pending` … `run-cancelled`) keep each
+  lifecycle state's own `--color-status-<state>-*` colors, because a run has
+  ~10 states four tones cannot tell apart; `runStateTone(state)` maps a status
+  value to its tone, and `RunStatusChip` renders one. **Case rule:** `caps`
+  (uppercase, tracked, semibold) is for run/lifecycle states, which are system
+  values scanned down a table column; every other badge keeps normal case.
+  The old `.status-badge` / `.status-<state>` / `.sla-badge*` / `.logs-badge`
+  classes are unstyled test hooks now. Don't hand-roll
   `rounded-full border px-2 py-0.5` + a color trio again; add a tone (token
   pair first) if none fits. `statusToneClass(tone)` exposes just the colors
   for non-pill markup.

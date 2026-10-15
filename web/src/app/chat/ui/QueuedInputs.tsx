@@ -7,6 +7,7 @@
 
 import { Icon } from "./Icon";
 import type { QueuedInput } from "./useTurnStream";
+import { StatusChip } from "@/app/shared/ui/StatusChip";
 
 // The chip's badge. A "resume" row is the turn fleet starts on its own after
 // an approval card is settled, waiting behind the running turn; Remove drops
@@ -35,9 +36,9 @@ export function QueuedInputs({
           key={it.id}
           className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs text-[var(--color-text-muted)]"
         >
-          <span className="shrink-0 rounded-[var(--radius-pill)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[0.65rem] uppercase tracking-wide">
+          <StatusChip tone="neutral" caps className="shrink-0">
             {queuedInputLabel(it)}
-          </span>
+          </StatusChip>
           <span className="min-w-0 flex-1 truncate" title={it.message_preview}>
             {it.mode === "resume"
               ? // fleet's own input (docs/RESUME-AFTER-APPROVAL.md): say what

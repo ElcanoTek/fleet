@@ -8,6 +8,7 @@ import {
   type DatasetRow,
 } from "@/app/shared/lib/orchestratorApi";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
+import { RunStatusChip } from "@/app/shared/ui/StatusChip";
 import { ConfirmDialog } from "@/app/shared/ui/ConfirmDialog";
 import { useToast } from "@/app/shared/ui/Toast";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
@@ -236,9 +237,7 @@ export function DatasetsPanel() {
               onClick={() => selectDataset(d.id)}
             >
               {d.name}
-              <span className={`status-badge status-${d.status}`} style={{ marginLeft: 6 }}>
-                {d.status}
-              </span>
+              <RunStatusChip state={d.status} className="ml-1.5" />
             </button>
           ))}
         </div>
@@ -357,7 +356,7 @@ export function DatasetsPanel() {
                       );
                     })}
                     <td>
-                      <span className={`status-badge status-${row.status}`}>{row.status}</span>
+                      <RunStatusChip state={row.status} />
                     </td>
                     <td style={{ maxWidth: "18rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.error || row.result_note}>
                       {row.error || row.result_note || ""}
