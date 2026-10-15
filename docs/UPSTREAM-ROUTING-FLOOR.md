@@ -277,13 +277,16 @@ of it was served elsewhere.
   down *and* every fp8+ alternative is saturated, a request that previously
   degraded to fp4 now fails instead. That is the intended trade: the prior
   behavior returned a plausible-looking but degraded answer with no signal.
-- **Not verified against live OpenRouter.** The quantization strings match
-  OpenRouter's documented spelling and the `Quantizations` field on
-  `openrouter.Provider`, and the routing policy is unit-tested, but no live
-  request was made from this change (tests run against the fake-LLM seam with no
-  API key). The first live turn on a DeepSeek slug is the real confirmation of
-  the family floor. The per-slug floor is a separate branch: a live turn on
-  `qwen/qwen3.8-27b` confirms it. Check the provider that served each of its
+- **Live verification: the Gemma policy only.** The routing policy is
+  unit-tested everywhere and the quantization strings match OpenRouter's
+  documented spelling and the `Quantizations` field on `openrouter.Provider`.
+  Only `google/gemma-4-26b-a4b-it` has been checked live (2026-10-15): its
+  unpinned, fp8-and-above request succeeded on 6 of 6 calls (each served by
+  an fp8+ host) and on 5 of 5 real fleet turns with a tool, against 2 of 6
+  under the old Google-only pin. The DeepSeek family floor and the
+  `qwen/qwen3.8-27b` slug floor remain unverified live: the first live turn on
+  a DeepSeek slug confirms the family floor, and a live turn on
+  `qwen/qwen3.8-27b` confirms its slug floor. Check the provider that served each of its
   generations in OpenRouter's activity log: it should be one of the
   fp8-or-better endpoints in the table above, never Tenstorrent, Darkbloom or
   ModelRun. fleet does not surface it here, because the slug has no preferred
