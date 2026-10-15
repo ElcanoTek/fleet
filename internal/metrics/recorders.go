@@ -321,6 +321,21 @@ func RecordProviderFailover(from, to, reason string) {
 		[]string{"from", "to", "reason"}, []string{from, to, reason}, 1)
 }
 
+// RecordModelEscalation counts one step of a "switch to the advanced model"
+// suggestion (docs/CHAT-ESCALATION.md). source is model | signal | classifier;
+// outcome is staged | suppressed | error | dismissed | accepted_<action>.
+func RecordModelEscalation(source, outcome string) {
+	incCounter("fleet_model_escalations_total", "Advanced-model suggestions in chat by who asked (model, signal, classifier) and outcome.",
+		[]string{"source", "outcome"}, []string{source, outcome}, 1)
+}
+
+// RecordEscalationClassifierCheck counts one decision-model struggle check by
+// mode (observe | suggest) and outcome (pushback | ok | error).
+func RecordEscalationClassifierCheck(mode, outcome string) {
+	incCounter("fleet_escalation_classifier_checks_total", "Decision-model struggle checks on chat messages by mode and outcome.",
+		[]string{"mode", "outcome"}, []string{mode, outcome}, 1)
+}
+
 func RecordGuardrailVerdict(source, mode, outcome string) {
 	incCounter("fleet_guardrail_checks_total", "Host-side content guardrail checks by source, mode, and outcome.",
 		[]string{"source", "mode", "outcome"}, []string{source, mode, outcome}, 1)

@@ -54,6 +54,17 @@ const (
 	envEmailS3Prefix     = "EMAIL_S3_PREFIX"
 )
 
+// Escalation classifier modes and default (docs/CHAT-ESCALATION.md).
+const (
+	EscalationClassifierOff     = "off"
+	EscalationClassifierObserve = "observe"
+	EscalationClassifierSuggest = "suggest"
+	// DefaultEscalationClassifierModel is OpenRouter's moving alias for
+	// TypeSafe's Jev decision model, so a new Jev release is picked up with no
+	// config change.
+	DefaultEscalationClassifierModel = "~typesafe/jev-latest"
+)
+
 // DefaultTitleModel is the fallback for FLEET_TITLE_MODEL / CHAT_TITLE_MODEL:
 // the everyday tier itself, so a default-model swap moves titles and the
 // auxiliary jobs below with it (docs/MODEL-DEFAULTS.md).
@@ -189,6 +200,10 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_METADATA_MODEL":                           true,
 	"FLEET_ERROR_ANALYSIS_MODEL":                     true,
 	"FLEET_ERROR_ANALYSIS_ENABLED":                   true,
+	"FLEET_ESCALATION_SIGNALS_ENABLED":               true,
+	"FLEET_ESCALATION_CLASSIFIER_MODE":               true,
+	"FLEET_ESCALATION_CLASSIFIER_MODEL":              true,
+	"FLEET_ESCALATION_CLASSIFIER_THRESHOLD":          true,
 	"FLEET_SELF_IMPROVE_ENABLED":                     true,
 	"FLEET_AUTO_TITLE":                               true,
 	"FLEET_MEMORY_MODEL":                             true,
@@ -819,6 +834,27 @@ type Config struct {
 	// or model call fires on a terminal failure (cost/latency escape hatch); the
 	// raw error_message is still recorded as before.
 	ErrorAnalysisEnabled bool
+	// Chat escalation (docs/CHAT-ESCALATION.md): when fleet itself offers a
+	// conversation on the everyday model the advanced one.
+	//
+	// EscalationSignalsEnabled turns on the free end-of-turn struggle signals
+	// (a tool-error streak, a loop-guard block, a forced compaction, a very
+	// long turn). FLEET_ESCALATION_SIGNALS_ENABLED, default true.
+	EscalationSignalsEnabled bool
+	// EscalationClassifierMode is off | observe | suggest for the decision-model
+	// check on the user's latest message. observe scores and records without
+	// showing a card. FLEET_ESCALATION_CLASSIFIER_MODE, default off: it sends
+	// the tail of the conversation to a second model vendor, so an operator
+	// opts in.
+	EscalationClassifierMode string
+	// EscalationClassifierModel is the OpenRouter decision model
+	// (FLEET_ESCALATION_CLASSIFIER_MODEL, default DefaultEscalationClassifierModel,
+	// a moving alias that tracks Jev's newest release).
+	EscalationClassifierModel string
+	// EscalationClassifierThreshold is the probability, in percent, at or
+	// above which the classifier counts the user as pushing back
+	// (FLEET_ESCALATION_CLASSIFIER_THRESHOLD, default 80).
+	EscalationClassifierThreshold int
 	// AutoTitle gates the LLM auto-titler (#302). FLEET_AUTO_TITLE, default true.
 	// When false, a new conversation keeps its instant heuristic title and no
 	// title-model call is made (cost/latency escape hatch).
@@ -1647,24 +1683,29 @@ func Load(envFile string) (*Config, error) {
 
 		ShutdownGraceSeconds: lp.getenvFleetInt("SHUTDOWN_GRACE_SECONDS", 30),
 
-		TurnTimeoutSeconds:     lp.getenvFleetInt("TURN_TIMEOUT_SECONDS", 1800),
-		Temperature:            lp.getenvFleetFloat("TEMPERATURE", 0.3),
-		LLMMaxTokens:           lp.getenvInt("LLM_MAX_TOKENS", 16384),
-		TitleModel:             getenvFleetDefault("TITLE_MODEL", DefaultTitleModel),
-		MetadataModel:          getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)),
-		ErrorAnalysisModel:     getenvFleetDefault("ERROR_ANALYSIS_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
-		ErrorAnalysisEnabled:   lp.getenvFleetBool("ERROR_ANALYSIS_ENABLED", true),
-		SelfImproveEnabled:     lp.getenvFleetBool("SELF_IMPROVE_ENABLED", false),
-		AutoTitle:              lp.getenvFleetBool("AUTO_TITLE", true),
-		MemoryModel:            getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
-		RecurringTaskModel:     getenvFleetDefault("RECURRING_TASK_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
-		LibraryPromptModel:     getenvFleetDefault("LIBRARY_PROMPT_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
-		MemoryAutoIndexEnabled: lp.getenvFleetBool("MEMORY_AUTOINDEX_ENABLED", false),
-		MemoryGraphModel:       getenvFleetDefault("MEMORY_GRAPH_MODEL", getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)))),
-		MemoryGraphEnabled:     lp.getenvFleetBool("MEMORY_GRAPH_ENABLED", false),
-		ApprovalTimeoutSeconds: lp.getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 3600),
-		AutoApproveInTest:      lp.getenvFleetBool("AUTO_APPROVE_IN_TEST", false),
-		MaxConcurrentAgents:    lp.getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),
+		TurnTimeoutSeconds:   lp.getenvFleetInt("TURN_TIMEOUT_SECONDS", 1800),
+		Temperature:          lp.getenvFleetFloat("TEMPERATURE", 0.3),
+		LLMMaxTokens:         lp.getenvInt("LLM_MAX_TOKENS", 16384),
+		TitleModel:           getenvFleetDefault("TITLE_MODEL", DefaultTitleModel),
+		MetadataModel:        getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)),
+		ErrorAnalysisModel:   getenvFleetDefault("ERROR_ANALYSIS_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
+		ErrorAnalysisEnabled: lp.getenvFleetBool("ERROR_ANALYSIS_ENABLED", true),
+		SelfImproveEnabled:   lp.getenvFleetBool("SELF_IMPROVE_ENABLED", false),
+		AutoTitle:            lp.getenvFleetBool("AUTO_TITLE", true),
+
+		EscalationSignalsEnabled:      lp.getenvFleetBool("ESCALATION_SIGNALS_ENABLED", true),
+		EscalationClassifierMode:      strings.ToLower(getenvFleetDefault("ESCALATION_CLASSIFIER_MODE", EscalationClassifierOff)),
+		EscalationClassifierModel:     getenvFleetDefault("ESCALATION_CLASSIFIER_MODEL", DefaultEscalationClassifierModel),
+		EscalationClassifierThreshold: lp.getenvFleetInt("ESCALATION_CLASSIFIER_THRESHOLD", 80),
+		MemoryModel:                   getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
+		RecurringTaskModel:            getenvFleetDefault("RECURRING_TASK_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
+		LibraryPromptModel:            getenvFleetDefault("LIBRARY_PROMPT_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
+		MemoryAutoIndexEnabled:        lp.getenvFleetBool("MEMORY_AUTOINDEX_ENABLED", false),
+		MemoryGraphModel:              getenvFleetDefault("MEMORY_GRAPH_MODEL", getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)))),
+		MemoryGraphEnabled:            lp.getenvFleetBool("MEMORY_GRAPH_ENABLED", false),
+		ApprovalTimeoutSeconds:        lp.getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 3600),
+		AutoApproveInTest:             lp.getenvFleetBool("AUTO_APPROVE_IN_TEST", false),
+		MaxConcurrentAgents:           lp.getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),
 
 		// ── personas ──
 		PersonaDefault: getenvFleetOrBare("PERSONA_DEFAULT", "assistant"),

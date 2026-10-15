@@ -27,6 +27,9 @@ When to call:
 - You've hit a domain-specific KPI / formula / business rule you're uncertain about and the answer matters (a client's primary KPI in a tracking sheet, a contract-specific margin definition, etc.).
 - The user has corrected you twice on the same point and you suspect the issue is depth of reasoning, not a formatting/presentation glitch.
 - The workload is known to push against your context limits (large workbook + multi-tab analysis, very long historical thread).
+- You have tried several different approaches to the same step and none worked (repeated tool failures, code that keeps erroring for reasons you cannot pin down).
+
+Fleet also watches for these on its own and may show the same card after your reply; that does not change when you should call this.
 
 When NOT to call:
 - Routine questions you can answer directly.

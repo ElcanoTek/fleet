@@ -198,6 +198,8 @@ var envKnobs = []envKnob{
 	{key: "FLEET_ERROR_ANALYSIS_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_SELF_IMPROVE_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_AUTO_TITLE", fleet: true, kind: kindBool},
+	{key: "FLEET_ESCALATION_SIGNALS_ENABLED", fleet: true, kind: kindBool},
+	{key: "FLEET_ESCALATION_CLASSIFIER_THRESHOLD", fleet: true, kind: kindInt},
 	{key: "FLEET_MEMORY_AUTOINDEX_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_MEMORY_GRAPH_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_APPROVAL_TIMEOUT_SECONDS", fleet: true, kind: kindInt},

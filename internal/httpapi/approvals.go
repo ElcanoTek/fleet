@@ -37,6 +37,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/croncount"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -579,22 +580,50 @@ func excerpt(s string, maxChars int) string {
 	return s
 }
 
-// StageSuggestion stages a suggest_advanced_model approval if the
-// per-conversation gate allows it. Suppression rules:
+// StageSuggestion stages a suggest_advanced_model approval the chat model
+// asked for, if the per-conversation gate allows it. Suppression rules
+// (stageSuggestion):
 //
 //   - Conversation already pinned to ADVANCED → skip; the user is already
 //     there and a card would be silly.
-//   - A prior suggest_advanced_model approval is approved → skip; the
-//     user explicitly switched at some point. Don't re-nag even if they
-//     later moved off advanced; one explicit yes is enough.
 //   - A prior suggestion is still pending → skip; a card is already up.
-//   - A prior suggestion is rejected and fewer than
-//     agentcore.SuggestAdvancedCooldownTurns subsequent user turns have passed
-//     → skip (cooldown).
+//   - A prior suggestion was dismissed, or was accepted and the user has since
+//     moved off the advanced model, and fewer than
+//     agentcore.SuggestAdvancedCooldownTurns user turns have passed since it
+//     → skip (cooldown). An accepted suggestion used to suppress the
+//     conversation for good, so a user who switched back to the fast model
+//     for a while was never offered the advanced one again.
 //
 // The agent-facing message reflects the suppression reason so the model
 // knows not to retry.
 func (a *approvalStager) StageSuggestion(reason string) (string, string, error) {
+	id, msg, _, err := a.stageSuggestion(reason, suggestionSourceModel)
+	return id, msg, err
+}
+
+// StageHostSuggestion stages a card fleet decided on itself, from an
+// end-of-turn struggle signal or the classifier (docs/CHAT-ESCALATION.md),
+// under the same gate as a model-requested one. It reports whether a card was
+// staged; a suppressed suggestion is not an error.
+func (a *approvalStager) StageHostSuggestion(source, reason string) (bool, error) {
+	_, _, staged, err := a.stageSuggestion(reason, source)
+	return staged, err
+}
+
+func (a *approvalStager) stageSuggestion(reason, source string) (string, string, bool, error) {
+	id, msg, err := a.stageSuggestionGated(reason, source)
+	switch {
+	case err != nil:
+		metrics.RecordModelEscalation(source, "error")
+	case id == "":
+		metrics.RecordModelEscalation(source, "suppressed")
+	default:
+		metrics.RecordModelEscalation(source, "staged")
+	}
+	return id, msg, id != "", err
+}
+
+func (a *approvalStager) stageSuggestionGated(reason, source string) (string, string, error) {
 	advancedModel := agentcore.CurrentAdvancedModel()
 	conv, err := a.store.Get(a.ctx, a.userEmail, a.conversationID)
 	if err != nil {
@@ -610,27 +639,30 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 	}
 	if prior != nil {
 		switch prior.Status {
-		case "approved":
-			return "", "SUGGESTION_SUPPRESSED: the user has already accepted a model-switch suggestion in this conversation. Do not stage another — keep working with the current model.", nil
 		case "pending":
 			return "", "SUGGESTION_SUPPRESSED: a model-switch suggestion is already pending the user's response. Do not stage another.", nil
-		case "rejected":
+		case "approved", "rejected":
 			n, err := a.store.CountUserMessagesAfterTimestamp(a.ctx, a.conversationID, prior.CreatedAt)
 			if err != nil {
 				return "", "", fmt.Errorf("count user turns: %w", err)
 			}
 			if n < int64(agentcore.SuggestAdvancedCooldownTurns) {
+				what := "dismissed"
+				if prior.Status == "approved" {
+					what = "answered"
+				}
 				return "", fmt.Sprintf(
-					"SUGGESTION_SUPPRESSED: the user dismissed a model-switch suggestion %d user turn(s) ago; cooldown is %d turn(s). Do not stage another suggestion right now — keep working with the current model.",
-					n, agentcore.SuggestAdvancedCooldownTurns,
+					"SUGGESTION_SUPPRESSED: the user %s a model-switch suggestion %d user turn(s) ago; cooldown is %d turn(s). Do not stage another suggestion right now — keep working with the current model.",
+					what, n, agentcore.SuggestAdvancedCooldownTurns,
 				), nil
 			}
 		}
 	}
 
 	// Persist the reason as the args payload so the approval card can
-	// render it on page reload and the audit trail is intact.
-	rawInput, err := json.Marshal(map[string]any{"reason": reason, "recommend_model": advancedModel})
+	// render it on page reload and the audit trail is intact. source records
+	// who asked, for the card and the escalation metrics.
+	rawInput, err := json.Marshal(map[string]any{"reason": reason, "recommend_model": advancedModel, "source": source})
 	if err != nil {
 		return "", "", fmt.Errorf("encode reason: %w", err)
 	}
@@ -953,7 +985,30 @@ func summarizeSuggestAdvancedInput(toolName, rawInput string) map[string]any {
 		"tool":            toolName,
 		"reason":          args.Reason,
 		"recommend_model": suggestedModel(rawInput),
+		"source":          suggestionSource(rawInput),
 	}
+}
+
+// Who staged a suggest_advanced_model card (docs/CHAT-ESCALATION.md): the
+// chat model through the tool, a free end-of-turn struggle signal, or the
+// decision-model classifier. Cards staged before the field existed read as
+// the model's.
+const (
+	suggestionSourceModel      = "model"
+	suggestionSourceSignal     = "signal"
+	suggestionSourceClassifier = "classifier"
+)
+
+func suggestionSource(rawInput string) string {
+	var args struct {
+		Source string `json:"source"`
+	}
+	_ = json.Unmarshal([]byte(rawInput), &args)
+	switch args.Source {
+	case suggestionSourceSignal, suggestionSourceClassifier:
+		return args.Source
+	}
+	return suggestionSourceModel
 }
 
 func suggestedModel(rawInput string) string {
@@ -2108,6 +2163,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 			s.writeResolvedApprovalState(w, r, user, approval.ID)
 			return
 		}
+		metrics.RecordModelEscalation(suggestionSource(approval.ArgsJSON), "dismissed")
 		appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
 			"User dismissed the model-switch suggestion. Continue working with the current model.")
 		// Not a resume tool, but a deferred resume may be waiting on it.
@@ -2131,7 +2187,13 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 		http.Error(w, "suggestion has no frozen model target; dismiss it and request a new suggestion", http.StatusConflict)
 		return
 	}
-	resultText := fmt.Sprintf("User accepted the suggestion. Conversation pinned to %s.", advancedModel)
+	action := req.Action
+	if action == "" {
+		action = "switch_only"
+	}
+	// The action is recorded in the result text so the approvals table tells
+	// a switch-and-retry from a plain switch (docs/CHAT-ESCALATION.md).
+	resultText := fmt.Sprintf("User accepted the suggestion (%s). Conversation pinned to %s.", action, advancedModel)
 	claimed, err := s.store.ClaimApprovalAndSetModel(r.Context(), user, approval.ID, resultText, approval.ConversationID, advancedModel)
 	if err != nil {
 		log.Printf("ClaimApprovalAndSetModel (suggest_advanced approval): %v", err)
@@ -2142,14 +2204,11 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 		s.writeResolvedApprovalState(w, r, user, approval.ID)
 		return
 	}
+	metrics.RecordModelEscalation(suggestionSource(approval.ArgsJSON), "accepted_"+action)
 	appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
 		resultText)
 	s.noteApprovalSettled(approval.ConversationID, approval)
 
-	action := req.Action
-	if action == "" {
-		action = "switch_only"
-	}
 	writeJSON(w, map[string]any{
 		"status":      "approved",
 		"action":      action,

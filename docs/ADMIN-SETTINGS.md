@@ -77,6 +77,10 @@ needs a restart, ever.
 | `connector_recommendations_enabled` | bool | `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | Reactive connector nudges (#512) |
 | `context_handles_enabled` | bool | `FLEET_CONTEXT_HANDLES_ENABLED` | Composer `@url:`/`@file:` handles ([CONTEXT-HANDLES.md](CONTEXT-HANDLES.md)) |
 | `shared_files_max_total_mb` | int 1–16777216, or 0 = unlimited | `FLEET_SHARED_FILES_MAX_TOTAL_MB` | Total-size cap (MB) on the cross-chat shared file library; read per upload ([SHARED-FILES.md](SHARED-FILES.md)) |
+| `escalation_signals_enabled` | bool (default true) | `FLEET_ESCALATION_SIGNALS_ENABLED` | Offer the advanced model after a chat turn that clearly struggled; free ([CHAT-ESCALATION.md](CHAT-ESCALATION.md)) |
+| `escalation_classifier_mode` | `off` \| `observe` \| `suggest` (default off) | `FLEET_ESCALATION_CLASSIFIER_MODE` | The decision-model frustration check on each chat message ([CHAT-ESCALATION.md](CHAT-ESCALATION.md)) |
+| `escalation_classifier_model` | model slug (default `~typesafe/jev-latest`) | `FLEET_ESCALATION_CLASSIFIER_MODEL` | Any OpenRouter decision model; the panel lists them live |
+| `escalation_classifier_threshold` | int 50–99 (default 80) | `FLEET_ESCALATION_CLASSIFIER_THRESHOLD` | Probability, in percent, at which a message counts as frustration |
 
 The registry contract: **every entry must be live-applicable** — its consumer
 re-reads the value per turn, per run, or per tool call. A setting that is bound

@@ -269,7 +269,7 @@ your eye lands on the answer and then on anything that needs you:
 | Interactive cards | A form, picker, checklist, comparison, chart or small calculator the assistant built for this answer. Fill it in and press its button; your answers go back as your next message. See [Interactive cards](#interactive-cards). |
 | Status | Banners for anything unusual about the turn: retrying, cancelled, failed. See [When a turn goes wrong](#11-when-a-turn-goes-wrong). |
 | Cards | Anything asking for your decision: an approval, a proposed memory, a suggested model switch. See [Cards that ask for a decision](#6-cards-that-ask-for-a-decision). |
-| Footer | Five actions on a finished reply: **Copy**, **Regenerate**, **Branch**, **Save as workflow**, and **Save** (the answer, as a memory). Each is covered where it belongs later in the guide. |
+| Footer | The actions on a finished reply: **Copy**, **Regenerate**, **Retry with** the stronger model (when the chat is not already on it), **Branch**, **Save as workflow**, and **Save** (the answer, as a memory). Each is covered where it belongs later in the guide. |
 
 Long conversations collapse their older turns behind **Show N earlier turns**,
 and a minimap along the edge lets you jump between messages.
@@ -356,8 +356,13 @@ provider-prefixed route.
 
 The assistant will sometimes suggest a switch itself: a card offering **Switch &
 retry** when a question is heavier than the current model handles well, or a
-one-line banner when you attach a large spreadsheet to the fast model. Both are
-suggestions. Nothing changes unless you accept.
+one-line banner when you attach a large spreadsheet to the fast model. Fleet can
+show the same card on its own after a reply that clearly struggled (several tool
+calls failing in a row, the same step repeated, or a very long turn) and, if your
+admin has turned it on, when your message reads as pushback on a wrong answer.
+All of these are suggestions. Nothing changes unless you accept. If an answer is
+wrong and you don't want to wait for a suggestion, **Retry with** under the reply
+asks again on the stronger model straight away.
 
 ### Personas and skills
 
@@ -577,8 +582,10 @@ you or your work, it proposes a memory rather than saving one: **Save** or
 preselected and you can flip it. See [Memory and projects](#7-memory-and-projects).
 
 **Model suggestions.** When a question is heavier than the current model handles
-well, a card offers **Switch & retry**, **Just switch**, or **Dismiss**.
-Declining costs nothing.
+well, or a reply clearly struggled, a card offers **Switch & retry**, **Just
+switch**, or **Dismiss**. Declining costs nothing, and after you dismiss one you
+won't see another for a few messages. If you switch and later move back to the
+fast model, a suggestion can appear again.
 
 ### Interactive cards
 
@@ -783,7 +790,8 @@ you hover over it. Here is everything in it.
 
 **Edit message** on any of your own messages lets you change it and resend from
 that point. On any reply, the footer offers **copy**, **regenerate** (ask again,
-optionally on a different model), and **branch**: a new, independent conversation
+optionally on a different model), **Retry with** the stronger model (ask again
+on it, and keep it for the rest of the chat), and **branch**: a new, independent conversation
 that starts with everything up to that reply, so you can explore an alternative
 without disturbing the original. Branch when you want to keep both paths; edit
 when the earlier version was simply wrong. The footer's two save actions, **Save

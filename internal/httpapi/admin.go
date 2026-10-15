@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -34,6 +35,12 @@ type userStat struct {
 	// CacheHitRatePct is cached_tokens / prompt_tokens * 100 — the share of
 	// input tokens served from the prompt cache. 0 when no prompt tokens.
 	CacheHitRatePct float64 `json:"cache_hit_rate_pct"`
+	// Struggle counts (docs/CHAT-ESCALATION.md): messages the classifier
+	// scored as frustration with the assistant, turns a free struggle signal
+	// fired on, and accepted switches to the advanced model.
+	FrustratedMessages int `json:"frustrated_messages"`
+	StruggleSignals    int `json:"struggle_signals"`
+	AdvancedSwitches   int `json:"advanced_switches"`
 }
 
 // isAdmin returns true when the authenticated user is in the ADMIN_EMAILS
@@ -99,9 +106,34 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 			TotalCachedTokens:        row.TotalCachedTokens,
 			TotalCacheCreationTokens: row.TotalCacheCreationTokens,
 			CacheHitRatePct:          hitRate,
+			FrustratedMessages:       row.FrustratedMessages,
+			StruggleSignals:          row.StruggleSignals,
+			AdvancedSwitches:         row.AdvancedSwitches,
 		})
 	}
 	writeJSON(w, adminStats{Users: users})
+}
+
+// listDecisionModels is the OpenRouter decision-model listing, a seam for tests.
+var listDecisionModels = agentcore.ListDecisionModels
+
+// handleAdminDecisionModels lists OpenRouter's paid decision models for the
+// escalation classifier picker (docs/CHAT-ESCALATION.md), so a new model is
+// selectable the day OpenRouter lists it. The listing is public and cached
+// for an hour; a failure returns an empty list with the error, and the
+// picker still accepts a typed slug.
+func (s *Server) handleAdminDecisionModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	models, err := listDecisionModels(r.Context())
+	if err != nil {
+		log.Printf("admin decision models: %s", logSafe(err.Error()))
+		writeJSON(w, map[string]any{"models": []agentcore.DecisionModel{}, "error": "could not load the decision model list from OpenRouter"})
+		return
+	}
+	writeJSON(w, map[string]any{"models": models})
 }
 
 // adminUser is the JSON shape of one row in the admin Users tab (#237).

@@ -173,13 +173,39 @@ const META: Record<string, SettingMeta> = {
   advanced_model: {
     label: "Advanced model",
     description:
-      "The stronger escalation target — what the agent\u2019s \u201Cswitch to the advanced model\u201D suggestion and the spreadsheet nudge move a conversation to, and the second pinned picker row. Same sources as the default model. Applies live, including to suggestion cards already on screen.",
+      "The stronger escalation target — what the agent\u2019s \u201Cswitch to the advanced model\u201D suggestion and the spreadsheet nudge move a conversation to, and the second pinned picker row. Same sources as the default model. Applies to the next suggestion; a card already on screen keeps the model it offered.",
   },
   task_model: {
     label: "Task model",
     description:
       "What Operations Center tasks run on: the model the new-task form pre-fills, the model a task scheduled from chat gets when the agent names none, and what a task with no model of its own runs on. Unset, it follows the advanced model, because a scheduled task is a long unattended run. Set it only to give tasks a different model from chat\u2019s advanced tier. Applies live to new tasks; a task that already has a model keeps it.",
     emptyDefault: "Follows the advanced model",
+  },
+  escalation_signals_enabled: {
+    label: "Offer the advanced model when a turn struggles",
+    description:
+      "After a chat reply on any model but the advanced one, offer the advanced model when the turn clearly struggled: three tool calls in a row failed, the agent repeated the same call and was stopped, the conversation had to be summarized to fit, or the turn took 25 or more tool steps. Free: it reads the turn itself, with no extra model call. The same card, cooldown and limits as the assistant's own suggestion.",
+  },
+  escalation_classifier_mode: {
+    label: "Frustration check",
+    description:
+      "A small decision model reads the end of the conversation after each user message (from the second on) and estimates whether the user is pushing back on a wrong or incomplete answer. Each check costs about $0.00002 with Jev and runs alongside the reply, so it adds no wait. It sends the recent user and assistant text, never tool output or files, to the decision model's provider through OpenRouter; lockdown chats are never checked.",
+    optionHelp: {
+      off: "Off (default): no check, nothing sent.",
+      observe: "Check every message and count frustrated ones on the Users page, without showing a card. Use this first to see how often it fires.",
+      suggest: "Check, count, and offer the advanced model when the user is pushing back.",
+    },
+  },
+  escalation_classifier_model: {
+    label: "Frustration check model",
+    description:
+      "Any OpenRouter decision model. The default, ~typesafe/jev-latest, follows Jev's newest release automatically. The list shows every paid decision model OpenRouter offers today, cheapest first, so new ones appear without a fleet update.",
+  },
+  escalation_classifier_threshold: {
+    label: "Frustration threshold",
+    description:
+      "How sure the check must be before a message counts as frustration. Higher means fewer, surer cards. Jev scored clear pushback at 0.95 to 0.99 and normal follow-ups below 0.15 in testing.",
+    unitHint: "percent — 50 to 99; default 80",
   },
 };
 
@@ -205,6 +231,15 @@ const GROUPS: { title: string; keys: string[] }[] = [
   {
     title: "Model tiers",
     keys: ["default_model", "advanced_model", "task_model"],
+  },
+  {
+    title: "Advanced-model suggestions",
+    keys: [
+      "escalation_signals_enabled",
+      "escalation_classifier_mode",
+      "escalation_classifier_model",
+      "escalation_classifier_threshold",
+    ],
   },
   {
     title: "Workspace features",
@@ -551,6 +586,15 @@ function FeatRow({
             setDraft={setDraft}
             onSave={onSave}
           />
+        ) : setting.key === "escalation_classifier_model" ? (
+          <DecisionModelControl
+            setting={setting}
+            label={meta.label}
+            busy={busy}
+            draft={draft}
+            setDraft={setDraft}
+            onSave={onSave}
+          />
         ) : setting.kind === "model" ? (
           <ModelControl
             setting={setting}
@@ -619,6 +663,89 @@ function UrlControl({
           type="button"
           onClick={() => onSave(value)}
           disabled={busy}
+          data-testid={`save-${setting.key}`}
+          className={btnClass({ sm: true, reveal: true })}
+        >
+          Save
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+type DecisionModelOption = { id: string; name: string; input_per_million: number };
+
+// DecisionModelControl — the escalation classifier's model: a slug field with
+// suggestions from OpenRouter's live decision-model list
+// (GET /api/admin/decision-models), so a model released after this build is
+// still one click away. The chat ModelPicker is the wrong source: decision
+// models are not chat models and are absent from its catalog. Any slug can be
+// typed; the moving default is offered first.
+function DecisionModelControl({
+  setting,
+  label,
+  busy,
+  draft,
+  setDraft,
+  onSave,
+}: {
+  setting: ResolvedSetting;
+  label: string;
+  busy: boolean;
+  draft: string | undefined;
+  setDraft: (v: string) => void;
+  onSave: (value: string) => void;
+}) {
+  const [options, setOptions] = useState<DecisionModelOption[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch("/api/admin/decision-models", { cache: "no-store" });
+        if (!response.ok) return;
+        const data = (await response.json()) as { models?: DecisionModelOption[] };
+        if (!cancelled && Array.isArray(data.models)) setOptions(data.models);
+      } catch {
+        // The field still takes a typed slug.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const value = draft ?? setting.value;
+  const dirty = draft !== undefined && draft !== setting.value;
+  const listId = `decision-models-${setting.key}`;
+  return (
+    <>
+      <input
+        id={`input-${setting.key}`}
+        type="text"
+        list={listId}
+        value={value}
+        disabled={busy}
+        placeholder="~typesafe/jev-latest"
+        aria-label={label}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && dirty && value.trim() !== "") onSave(value.trim());
+        }}
+        data-testid={`input-${setting.key}`}
+        className={`${SETTINGS_INPUT} min-h-[2.2rem]! w-full px-[0.6rem]! py-[0.3rem]! font-[family-name:var(--font-code)] text-[0.74rem]!`}
+      />
+      <datalist id={listId} data-testid={listId}>
+        <option value="~typesafe/jev-latest">Jev, newest release (recommended)</option>
+        {options.map((m) => (
+          <option key={m.id} value={m.id}>
+            {`${m.name} · $${m.input_per_million.toFixed(3)}/M in`}
+          </option>
+        ))}
+      </datalist>
+      {dirty ? (
+        <button
+          type="button"
+          onClick={() => onSave(value.trim())}
+          disabled={busy || value.trim() === ""}
           data-testid={`save-${setting.key}`}
           className={btnClass({ sm: true, reveal: true })}
         >

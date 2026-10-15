@@ -632,6 +632,9 @@ export interface UseTurnStream {
       // Whether the card still holds this send: once it does not (the user
       // pressed Unlock), the server checks for it stop.
       stillHeld?: () => boolean;
+      // Send on this model instead of the selected one: a switch made in the
+      // same click has not re-rendered selectedModel yet.
+      model?: string;
     },
   ) => Promise<boolean>;
   /**
@@ -651,7 +654,9 @@ export interface UseTurnStream {
     userMessageId: number,
     editedContent: string,
   ) => Promise<void>;
-  retryLastUserMessage: () => Promise<void>;
+  // opts.model sends the retry on that model (and pins it, as any turn's
+  // model does), for a switch the selected-model state has not caught up with.
+  retryLastUserMessage: (opts?: { model?: string }) => Promise<void>;
   // #785 pending-input queue: per-conversation snapshot + mutations.
   //
   // A Map, not a Record: the key is a conversation id that arrives from the URL
@@ -3917,7 +3922,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     await submitPrompt(trimmedContent);
   };
 
-  const retryLastUserMessage = async () => {
+  const retryLastUserMessage = async (retryOpts?: { model?: string }) => {
     if (isStreaming) return;
     const targetKey = activeConversationIdRef.current ?? PENDING_CONV_KEY;
     const history = getConvMessages(targetKey);
@@ -3974,13 +3979,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
     }
     if (!answer) {
-      await submitPrompt(lastUser.content);
+      await submitPrompt(lastUser.content, { model: retryOpts?.model });
       return;
     }
     // No mounted card took it: the hold the card would set is kept for it
     // to take over when it scrolls back into view (takeRetryHold).
     let sid = "";
     await submitPrompt(lastUser.content, {
+      model: retryOpts?.model,
       fromCard: true,
       onHeld: (conv, submissionId) => {
         sid = submissionId;
@@ -4130,6 +4136,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // Whether the card still holds this send: once it does not (the user
       // pressed Unlock), the server checks for it stop.
       stillHeld?: () => boolean;
+      // Send on this model instead of the selected one: a switch made in the
+      // same click has not re-rendered selectedModel yet.
+      model?: string;
     },
   ): Promise<boolean> => {
     const value = submittedPrompt.trim();
@@ -4376,7 +4385,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     abortControllersRef.current.set(initialTarget, abortController);
     markConvStreaming(initialTarget);
 
-    const trimmedModel = selectedModel.trim();
+    const trimmedModel = (opts?.model ?? selectedModel).trim();
     const body: Record<string, unknown> = {
       message: value,
       persona: selectedPersona,

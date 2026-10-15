@@ -282,6 +282,50 @@ describe("FeaturesAdminPage", () => {
     expect(screen.queryByTestId("save-task_model")).toBeNull();
   });
 
+  // The classifier model offers OpenRouter's live decision-model list (so a
+  // newly released model is selectable without a fleet update) and still
+  // takes a typed slug.
+  it("lists live decision models for the frustration check and saves a typed slug", async () => {
+    const MODEL_ROW: Resolved = {
+      key: "escalation_classifier_model",
+      kind: "model",
+      env_var: "FLEET_ESCALATION_CLASSIFIER_MODEL",
+      value: "~typesafe/jev-latest",
+      source: "default",
+      default: "~typesafe/jev-latest",
+    };
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === "/api/admin/decision-models") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ models: [{ id: "liquid/d1", name: "Liquid: D1", input_per_million: 0.02 }] }),
+        };
+      }
+      if (init?.method === "PUT") {
+        return { ok: true, status: 200, json: async () => ({ ...MODEL_ROW, value: "liquid/d1", source: "admin" }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ settings: [MODEL_ROW] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FeaturesAdminPage />);
+
+    expect(await screen.findByText("Advanced-model suggestions")).toBeInTheDocument();
+    const list = await screen.findByTestId("decision-models-escalation_classifier_model");
+    await waitFor(() => expect(within(list).getByText(/Liquid: D1/)).toBeInTheDocument());
+    expect(list.querySelector('option[value="~typesafe/jev-latest"]')).not.toBeNull();
+
+    const input = screen.getByTestId("input-escalation_classifier_model");
+    expect(input).toHaveValue("~typesafe/jev-latest");
+    fireEvent.change(input, { target: { value: "liquid/d1" } });
+    fireEvent.click(screen.getByTestId("save-escalation_classifier_model"));
+    await waitFor(() => {
+      const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT");
+      expect(put?.[0]).toBe("/api/admin/settings/escalation_classifier_model");
+      expect(JSON.parse(String(put?.[1]?.body))).toEqual({ value: "liquid/d1" });
+    });
+  });
+
   it("surfaces a server rejection as a row error and keeps the old value", async () => {
     const fetchMock = mockFetch([PII], (url, init) => {
       if (init.method === "PUT") {

@@ -99,6 +99,11 @@ type turnBuffer struct {
 	// by mu). Kept apart from events because the sliding window can evict
 	// early frames, and the tool-call audit ledger needs every call's timing.
 	toolDurations map[string]int64
+
+	// compactions counts the turn's fleet.context_compacted frames (guarded by
+	// mu), an end-of-turn struggle signal (docs/CHAT-ESCALATION.md). Counted
+	// on Emit for the same reason as toolDurations: the window can evict them.
+	compactions int
 }
 
 // bufferedEvent is one already-serialized SSE frame. Data is the
@@ -261,6 +266,9 @@ func (b *turnBuffer) Emit(event string, payload any) {
 	ev := bufferedEvent{ID: id, Name: event, Data: data}
 	b.events = append(b.events, ev)
 	b.noteToolDuration(event, payload)
+	if event == "fleet.context_compacted" {
+		b.compactions++
+	}
 	b.totalBytes += len(data)
 
 	// Sliding-window eviction: drop the oldest events once over the byte cap,
@@ -794,4 +802,11 @@ func (b *turnBuffer) stoppedSteerIDs() []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]string(nil), b.stoppedSteers...)
+}
+
+// compactionCount returns how many times this turn's context was compacted.
+func (b *turnBuffer) compactionCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.compactions
 }

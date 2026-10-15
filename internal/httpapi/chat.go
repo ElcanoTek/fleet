@@ -1348,6 +1348,10 @@ func (s *Server) runTurnAsync(
 	// before the next provider step); the commit pair brackets the turn: the
 	// user entry commits before the first provider call, and the terminal
 	// projection commits before turn.completed / turn.cancelled is advertised.
+	// The escalation classifier (docs/CHAT-ESCALATION.md) runs alongside the
+	// turn so it never delays the reply; escalateAfterTurn reads its answer.
+	check := s.startStruggleCheck(conv, history, userInput, inputKind)
+
 	journal := newTurnJournalWriter(s.store, buf.turnID)
 	commits := &turnCommits{store: s.store, convID: conv.ID, turnID: buf.turnID, journal: journal}
 
@@ -1369,25 +1373,7 @@ func (s *Server) runTurnAsync(
 		ImageAttachments:          imageAttachments,
 		UploadsRoot:               userUploadsRoot(s.cfg.EmailAttachmentDir, user),
 		ThinkingConfig:            resolveThinkingConfig(conv.ThinkingConfig, s.cfg.DefaultThinkingBudgetTokens),
-		ApprovalStager: &approvalStager{
-			ctx:             turnCtx,
-			store:           s.store,
-			conversationID:  conv.ID,
-			userEmail:       user,
-			sink:            buf,
-			mcpBroker:       s.agent.MCPBroker(),
-			mcpCatalog:      s.agent.MCPCatalog(),
-			sessionRegistry: s.sessionApprovals,
-			// Live (admin Features panel > env, #225): read per turn at stager
-			// construction so an edit governs the next staged card, no restart.
-			globalTimeoutSeconds: s.cfg.LiveApprovalTimeoutSeconds(),
-			convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
-			autoApproveInTest:    s.cfg.AutoApproveInTest,
-			push:                 s.push,
-			bg:                   &s.background,
-			taskConnectors:       s.chatTaskConnectorsFor(user, conv.ID),
-			groupID:              buf.turnID,
-		},
+		ApprovalStager:            s.newTurnStager(turnCtx, conv, user, buf),
 		MemoryProposer: &memoryProposer{
 			ctx:            turnCtx,
 			store:          s.store,
@@ -1485,6 +1471,11 @@ func (s *Server) runTurnAsync(
 		metrics.RecordTurnTimeout("interactive")
 	}
 
+	// Offer the advanced model if the turn struggled or the user is pushing
+	// back (docs/CHAT-ESCALATION.md). Before the title call so a card is not
+	// held behind it; the classifier has been running since the turn began.
+	s.escalateAfterTurn(persistCtx, buf, conv, user, res, check)
+
 	// First-turn auto-title: on the opening turn, summarize the exchange
 	// into a 5-7 word sidebar title. Emits via the buffer so both the
 	// initial client and any reattach see it.
@@ -1580,5 +1571,30 @@ func (s *Server) sweepRetention(ctx context.Context) {
 		log.Printf("post-turn turn-ledger sweep error: %v", err)
 	} else if swept > 0 {
 		log.Printf("turn-ledger sweep: %d aged-out turn(s) removed", swept)
+	}
+}
+
+// newTurnStager builds the approval stager for one chat turn. The post-turn
+// escalation check builds a second one with a fresh context, so both stage
+// cards on the same stream under the same timeouts.
+func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, user string, buf *turnBuffer) *approvalStager {
+	return &approvalStager{
+		ctx:             ctx,
+		store:           s.store,
+		conversationID:  conv.ID,
+		userEmail:       user,
+		sink:            buf,
+		mcpBroker:       s.agent.MCPBroker(),
+		mcpCatalog:      s.agent.MCPCatalog(),
+		sessionRegistry: s.sessionApprovals,
+		// Live (admin Features panel > env, #225): read per turn at stager
+		// construction so an edit governs the next staged card, no restart.
+		globalTimeoutSeconds: s.cfg.LiveApprovalTimeoutSeconds(),
+		convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
+		autoApproveInTest:    s.cfg.AutoApproveInTest,
+		push:                 s.push,
+		bg:                   &s.background,
+		taskConnectors:       s.chatTaskConnectorsFor(user, conv.ID),
+		groupID:              buf.turnID,
 	}
 }

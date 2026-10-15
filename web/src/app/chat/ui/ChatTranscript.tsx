@@ -71,6 +71,7 @@ import {
   type Approval,
   type Message,
 } from "./history";
+import { currentAdvancedModel } from "@/app/lib/modelAliases";
 import { AutoContinueNotice, FleetNotices } from "./FleetNotices";
 import { InjectedContextNote } from "./InjectedContextNote";
 import {
@@ -154,7 +155,7 @@ export type ChatTranscriptProps = {
     updater: (message: Message) => Message,
   ) => void;
   resendUserMessage: (userMessageId: number, editedContent: string) => void | Promise<void>;
-  retryLastUserMessage: () => void | Promise<void>;
+  retryLastUserMessage: (opts?: { model?: string }) => void | Promise<void>;
   // An approval card of a critical_tool_resume tool resolved: fleet starts a
   // turn on its own (docs/RESUME-AFTER-APPROVAL.md). executing = the call is
   // still running, so that turn starts only when its result lands.
@@ -1084,7 +1085,7 @@ export function ChatTranscript({
                                         onResolved={onResolved}
                                         onModelSwitched={(model) => setSelectedModel(model)}
                                         onResumeExpected={onResumeExpected}
-                                        onSwitchAndRetry={() => retryLastUserMessage()}
+                                        onSwitchAndRetry={(model) => retryLastUserMessage({ model })}
                                         onAskAgain={(timedOut) => void submitPrompt(askAgainPrompt(timedOut))}
                                         onRetryFailed={(settled, keys) =>
                                           // A card's own request: it neither takes nor clears
@@ -1132,6 +1133,26 @@ export function ChatTranscript({
                                       onClick={() => void regenerateLastAssistant()}
                                     >
                                       Regenerate
+                                    </button>
+                                  ) : null}
+                                  {/* One click from "that's wrong" to a stronger answer
+                                      (docs/CHAT-ESCALATION.md): the same retry, on the
+                                      advanced model, which the conversation then keeps.
+                                      The model is passed explicitly because the switch
+                                      below has not re-rendered selectedModel yet. */}
+                                  {!message.cancelled && !message.failed && canRetry && selectedModel !== currentAdvancedModel() ? (
+                                    <button
+                                      type="button"
+                                      className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                                      title="Run your last message again on the advanced model, and keep it for this chat"
+                                      data-testid="retry-with-advanced"
+                                      onClick={() => {
+                                        const advanced = currentAdvancedModel();
+                                        setSelectedModel(advanced);
+                                        void retryLastUserMessage({ model: advanced });
+                                      }}
+                                    >
+                                      Retry with {shortModelName(currentAdvancedModel())}
                                     </button>
                                   ) : null}
                                   {/* Fork the conversation at this (persisted) message into a

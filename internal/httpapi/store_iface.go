@@ -137,6 +137,7 @@ type chatStore interface {
 	// Tool-call audit ledger (#224): one row per tool invocation, written from
 	// the post-turn persistence path and read by GET /conversations/{id}/audit.
 	RecordToolCalls(ctx context.Context, entries []store.ToolCallEntry) error
+	RecordEscalationEvent(ctx context.Context, e store.EscalationEvent) error
 	ListToolCalls(ctx context.Context, conversationID, toolFilter string, fromUnix int64, limit int) ([]store.ToolCallEntry, error)
 
 	// Projects / Spaces (#509).
