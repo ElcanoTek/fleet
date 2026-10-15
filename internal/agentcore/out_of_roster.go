@@ -57,14 +57,73 @@ const eventToolCallOutOfRoster = "fleet.tool_call_out_of_roster"
 type outOfRoster struct {
 	persona string
 	orch    *orchestrationState // for a narrowed run's stand-in; may be nil
+	gates   mcpGates
 
 	mu     sync.Mutex
 	roster toolRoster
 	notes  map[string]string
 }
 
-func newOutOfRoster(persona string, orch *orchestrationState) *outOfRoster {
-	return &outOfRoster{persona: persona, orch: orch, notes: map[string]string{}}
+func newOutOfRoster(persona string, orch *orchestrationState, gates mcpGates) *outOfRoster {
+	return &outOfRoster{persona: persona, orch: orch, gates: gates, notes: map[string]string{}}
+}
+
+// mcpGates is the run's Gate-1 (opt-in) and Gate-2 (allowlist) configuration.
+// The roster records what these gates dropped from the catalog it was given,
+// but out of process the MCP broker applies a server's allowlist before the
+// catalog arrives (ADR-0042), so a tool the allowlist or a narrowed roster
+// dropped is never seen, or recorded. gateFor applies the same rules to the
+// called name instead.
+type mcpGates struct {
+	allow     mcpAllowlist
+	exclusive bool
+	optional  mcpOptionalSet
+	optIn     map[string]bool
+}
+
+// gateFor is the gate that keeps the mcp_<server>_<tool> name out of the run,
+// by the build loop's own Gate-1 and Gate-2 rules, or "" when neither does
+// (an unknown server, or a tool the allowlist admits but the catalog lacks).
+func (g mcpGates) gateFor(name string, catalogServers map[string]bool) string {
+	server, tool := g.splitMCPName(name, catalogServers)
+	if server == "" {
+		return ""
+	}
+	if key := optionalServerFor(server, g.optional); key != "" && !g.optIn[key] {
+		return gateOptIn
+	}
+	if list := g.allow.gateEntry(server, g.exclusive); (len(list) > 0 || g.exclusive) && !slices.Contains(list, tool) {
+		if g.exclusive {
+			return gateNarrowed
+		}
+		return gateAllowlist
+	}
+	return ""
+}
+
+// splitMCPName splits mcp_<server>_<tool> at the longest server name the run
+// knows: a catalog registration name, an allowlist key or an optional server.
+func (g mcpGates) splitMCPName(name string, catalogServers map[string]bool) (string, string) {
+	best := ""
+	consider := func(server string) {
+		prefix := "mcp_" + server + "_"
+		if len(server) > len(best) && len(name) > len(prefix) && strings.HasPrefix(name, prefix) {
+			best = server
+		}
+	}
+	for s := range catalogServers {
+		consider(s)
+	}
+	for s := range g.allow {
+		consider(s)
+	}
+	for s := range g.optional {
+		consider(s)
+	}
+	if best == "" {
+		return "", ""
+	}
+	return best, strings.TrimPrefix(name, "mcp_"+best+"_")
 }
 
 // setRoster installs the roster the run just built.
@@ -133,6 +192,9 @@ func (o *outOfRoster) classify(call fantasy.ToolCallContent, available []fantasy
 	o.mu.Lock()
 	deferred := o.roster.deferredMCP > 0 && slices.Contains(o.roster.mcp, call.ToolName)
 	gate := o.roster.removed[call.ToolName]
+	if gate == "" && !deferred && strings.HasPrefix(call.ToolName, "mcp_") {
+		gate = o.gates.gateFor(call.ToolName, o.roster.servers)
+	}
 	o.mu.Unlock()
 
 	if deferred && hasTool(available, toolNameToolCall) {

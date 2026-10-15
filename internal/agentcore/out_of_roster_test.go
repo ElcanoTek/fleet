@@ -406,20 +406,20 @@ func TestOutOfRoster_NarrowedNoteNamesTheStandIn(t *testing.T) {
 	withPagesPolicy(t, pagesAliases)
 	orch := newOrchStateForTest()
 	orch.setNarrowedMCPRoster([]string{aliasUploadTool})
-	o := newOutOfRoster("", orch)
+	o := newOutOfRoster("", orch, mcpGates{})
 	want := aliasInlineTool + " is not available in this run and was not called: this run's tools are narrowed to the ones it requires, and " +
 		aliasInlineTool + " is not one of them; the registered stand-in is " + aliasUploadTool + ", call it instead."
 	if got := o.gateNote(aliasInlineTool, gateNarrowed); got != want {
 		t.Fatalf("note = %q, want %q", got, want)
 	}
-	if got := newOutOfRoster("", nil).gateNote("mcp_x_y", gateNarrowed); strings.Contains(got, "stand-in") {
+	if got := newOutOfRoster("", nil, mcpGates{}).gateNote("mcp_x_y", gateNarrowed); strings.Contains(got, "stand-in") {
 		t.Fatalf("no orchestration state, yet a stand-in was named: %q", got)
 	}
 }
 
 // The finalize retry gets the same explanations and the same rerouting.
 func TestOutOfRoster_FinalizeInputCarriesTheRecovery(t *testing.T) {
-	o := newOutOfRoster("", nil)
+	o := newOutOfRoster("", nil, mcpGates{})
 	o.setRoster(toolRoster{deferredMCP: 1, mcp: []string{"mcp_srv_x"}})
 	o.notes["c1"] = "explained"
 	in := finalizeInputFor(ModeInteractive, "", nil, 0, nil, nil, "", nil, panicAttribution{}, nil, nil, 0, o)
@@ -445,5 +445,54 @@ func TestOutOfRoster_FinalizeInputCarriesTheRecovery(t *testing.T) {
 	})
 	if err != nil || repaired == nil || repaired.ToolName != toolNameToolCall || repaired.Input != `{"name":"mcp_srv_x","arguments":{"a":1}}` {
 		t.Fatalf("repaired = %+v, %v; want the call rerouted through tool_call", repaired, err)
+	}
+}
+
+// Out of process, the MCP broker applies the allowlist before the catalog
+// arrives, so the roster never sees what it dropped. The gate is still named,
+// by the run's own Gate-1 and Gate-2 rules applied to the called name.
+func TestOutOfRoster_GateOfAToolTheBrokerAlreadyDropped(t *testing.T) {
+	filtered := func(drop ...string) []mcp.ServerTool {
+		var out []mcp.ServerTool
+		for _, st := range discMCPTools(6) {
+			if !slices.Contains(drop, st.Tool.Name) {
+				out = append(out, st)
+			}
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name, tool, why string
+		cfg             RunConfig
+	}{
+		{"allowlist", "mcp_srv_stripe_refund_charge_2", "its connector's tool allowlist does not include it",
+			RunConfig{Allowlist: mcpAllowlist{"srv": discToolNames(6, "stripe_refund_charge_2")}}},
+		{"narrowed", "mcp_srv_stripe_refund_charge_2", "this run's tools are narrowed to the ones it requires, and mcp_srv_stripe_refund_charge_2 is not one of them",
+			RunConfig{Allowlist: mcpAllowlist{"srv": discToolNames(6, "stripe_refund_charge_2")}, MCPRosterNarrowing: "required_tools_only"}},
+		{"narrowed, a server with no entry", "mcp_other_sync", "this run's tools are narrowed to the ones it requires, and mcp_other_sync is not one of them",
+			// The scheduled driver gives a server with no required tool this
+			// deny-all entry (scheduledrun's rosterNarrowingDeniesAll).
+			RunConfig{Allowlist: mcpAllowlist{"srv": discToolNames(6), "other": {"__roster_narrowing_denies_all_tools__"}}, MCPRosterNarrowing: "required_tools_only"}},
+		{"optional connector", "mcp_opt_lookup", "it belongs to an optional connector this run did not turn on",
+			RunConfig{OptionalServers: mcpOptionalSet{"opt": true}}},
+		{"no gate: a made-up tool", "mcp_srv_made_up", "",
+			RunConfig{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			broker := &fakeBroker{}
+			model := newOORModel("oor-filtered", []oorCall{{"c1", tc.tool, `{}`}})
+			runOOR(t, tc.cfg, Deps{Model: model, MCPCatalog: filtered("stripe_refund_charge_2"), MCPBroker: broker})
+			got := model.resultSeen(2, "c1")
+			if tc.why == "" {
+				if !strings.HasPrefix(got, "tool not found: "+tc.tool+". Available tools: ") {
+					t.Fatalf("result %q, want fantasy's own", got)
+				}
+			} else if want := tc.tool + " is not available in this run and was not called: " + tc.why + "."; got != want {
+				t.Fatalf("result %q, want %q", got, want)
+			}
+			if broker.lastTool != "" {
+				t.Fatalf("a gated tool reached the broker: %s", broker.lastTool)
+			}
+		})
 	}
 }

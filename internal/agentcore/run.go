@@ -543,7 +543,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	if err != nil {
 		return Result{}, fmt.Errorf("build tools: %w", err)
 	}
-	eng.outOfRoster = newOutOfRoster(cfg.PersonaName, usageOrch)
+	eng.outOfRoster = newOutOfRoster(cfg.PersonaName, usageOrch, mcpGates{
+		allow: cfg.Allowlist, exclusive: toolCfg.exclusiveAllowlist, optional: cfg.OptionalServers, optIn: optIn,
+	})
 	eng.outOfRoster.setRoster(roster)
 	// One breadcrumb for a narrowed roster (#1603), at the first build only: a
 	// mid-run MCP rebuild re-applies the same exhaustive allowlist but does not

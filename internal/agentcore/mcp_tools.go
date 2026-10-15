@@ -347,6 +347,9 @@ type toolRoster struct {
 	// gateSchema. A model that calls one of these names is told which gate
 	// removed it, instead of only "tool not found" (out_of_roster.go).
 	removed map[string]string
+	// servers is every registration name in the catalog, before the gates:
+	// the server names an out-of-roster mcp_* call is matched against.
+	servers map[string]bool
 }
 
 // The gates a tool can be removed by, as toolRoster.removed records them.
@@ -406,6 +409,10 @@ func buildFantasyToolsWithRoster(
 	mcpSkippedPersona := 0
 	mcpSkippedSchema := 0
 	for _, st := range mcpServerTools {
+		if roster.servers == nil {
+			roster.servers = map[string]bool{}
+		}
+		roster.servers[st.ServerName] = true
 		// Gate 1: Optional servers only pass if the run opted in. Byte-identical
 		// between modes. The opt-in key is resolved through the ONE keying rule
 		// (optionalServerFor) rather than an exact lookup on the registered

@@ -117,7 +117,12 @@ made-up name, but in the two common cases the tool does exist this run
   in this run and was not called: this run's tools are narrowed to the ones it
   requires, and mcp_pages_deploy_page_upload is not one of them." In a narrowed
   run it also names the registered stand-in, when there is one, by the rule the
-  audit nudges use.
+  audit nudges use. Out of process, the MCP broker applies a server's allowlist
+  before the catalog reaches the run (ADR-0042), so a tool the allowlist or a
+  narrowed roster dropped is never seen or recorded. An `mcp_*` name with no
+  record is therefore matched against the server names the run knows (the
+  catalog's, the allowlist's and the optional connectors') and run through the
+  same opt-in and allowlist rules the build applies.
 - **Any other name** keeps fantasy's result and its list of available tools.
 
 Rerouting cannot widen access. Only a name in the run's deferred registry is
@@ -158,8 +163,10 @@ Not done, deliberately:
 - A direct call to a deferred tool when the persona denies `tool_call` itself
   is not rerouted and keeps fantasy's text. The bridges are exempt from a
   persona's allow list, so only an explicit deny of `tool_call` does this.
-- A tool missing for any other reason, such as a native tool the driver did not
-  register, counts as `unknown`.
+- A tool missing for any other reason counts as `unknown`: a native tool the
+  driver did not register, a tool an allowlist admits but the server does not
+  have, or a tool on a server the run knows nothing about, such as one loaded
+  mid-run with no allowlist entry of its own.
 
 ## BM25 index (`internal/tools/bm25_index.go`)
 
