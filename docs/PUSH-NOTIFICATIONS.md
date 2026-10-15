@@ -126,9 +126,9 @@ link a notification click opens (`/orchestrator/tasks/<id>` for task events,
 which forwards to `/orchestrator?task=<id>` and opens that task's record).
 Without it a task notification carries no link, so its click brings an open
 fleet window forward or opens the app root; chat links are relative and open
-their conversation either way. A click on a link opens it in an open fleet
-tab already in that part of the app, or in a new window (see the click note
-below).
+their conversation either way. A click on a link opens it in an open fleet tab
+already in that part of the app, or in a new window (in Safari, which opens
+none, in the most recently used fleet tab; see the click note below).
 
 ## Trigger matrix
 
@@ -170,22 +170,33 @@ Notes on honest scope:
 - Chat notifications open their conversation: the link is `/chat?c=<id>`
   (under `FLEET_PUBLIC_URL`, or relative to the app), which the chat page opens
   on load, and the pending card re-hydrates there.
-- A click goes to the notification's link, task or chat alike, moved onto
-  the origin the browser subscribed from (`FLEET_PUBLIC_URL` may name another
+- A click goes to the notification's link, task or chat alike, moved onto the
+  origin the browser subscribed from (`FLEET_PUBLIC_URL` may name another
   host, but the session cookie lives on this one). The service worker
   navigates the most recently used fleet tab it controls that is already in
   the link's part of the app (the Operations Center for a task, Chat for a
   conversation). Navigating reloads that tab, so anything unsaved in it (an
   unsent message, a half-written task) is lost. A tab elsewhere in the app is
-  never reloaded: with no matching tab the link opens in a new window. Only
-  top-level tabs count, not a same-origin frame inside a page. The browser
-  grants one window action per click, so the tab is chosen before that action
-  is spent, and the tab is navigated even if focusing it fails. The worker
-  claims the tabs already open when it activates, and skips waiting so an
-  update applies without closing every tab. A link to the app root, or no
-  link, just brings fleet forward, or opens it. Deferred: telling an open tab
-  to show the record in place, without a reload, which would keep unsaved
-  work.
+  not reloaded while the browser can open a window: with no matching tab the
+  link opens in a new window. Safari (26.5 on macOS, tested) answers that
+  request from a notification click with nothing and opens no window, so in
+  WebKit (Safari, and every iOS browser) the click waits a second and then
+  sends the most recently used fleet tab it controls to the link instead,
+  which reloads it. A window that did open late in that second (WebKit is
+  reported to answer before one exists; not seen on macOS) is brought forward
+  instead. With only a tab the worker does not control (after a hard reload),
+  that tab is brought forward but not navigated; with no fleet tab open,
+  Safari opens nothing. Chrome and Firefox keep the new window: Chromium also
+  answers with nothing when the window it opened shows an error page, so
+  reusing a tab there would reload it for nothing. Only Safari on macOS was
+  tested; iOS was not. Only top-level tabs count, not a same-origin frame
+  inside a page. The browser grants one window action per click, so the tab is
+  chosen before that action is spent, and the tab is navigated even if
+  focusing it fails. The worker claims the tabs already open when it
+  activates, and skips waiting so an update applies without closing every tab.
+  A link to the app root, or no link, just brings fleet forward, or opens it.
+  Deferred: telling an open tab to show the record in place, without a reload,
+  which would keep unsaved work.
 
 ## HTTP surface (chat server, auth + member gated)
 

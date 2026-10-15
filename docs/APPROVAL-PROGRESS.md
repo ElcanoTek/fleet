@@ -121,9 +121,10 @@ server's sink keeps only the latest update and wakes a writer goroutine.
 - **A per-conversation deep link.** Chat pushes now open `/chat?c=<id>`, which
   the chat page already consumes on load (the "Discuss this run" bridge), under
   `FLEET_PUBLIC_URL` or relative to the app. That includes the existing
-  "approval needed" push, which used to open the app root. A click navigates
-  an open Chat tab to the conversation, which reloads it, or opens a new
-  window; the click note in `PUSH-NOTIFICATIONS.md` has the rules.
+  "approval needed" push, which used to open the app root. A click navigates an
+  open Chat tab to the conversation, which reloads it, or opens a new window
+  (in Safari, which opens none, it sends the most recently used fleet tab there
+  instead); the click note in `PUSH-NOTIFICATIONS.md` has the rules.
 - Gated like the existing approval push: Web Push configured (the VAPID keys)
   and `FLEET_PUSH_ON_APPROVAL_REQUEST` not off. Sent fire-and-forget on the
   server's background tracker, so shutdown waits for it.

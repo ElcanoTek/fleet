@@ -52,7 +52,8 @@ self.addEventListener("notificationclick", (event) => {
 //   task, Chat for a conversation) is navigated. Navigating reloads the page,
 //   so anything unsaved in that tab is lost; a tab elsewhere in the app is
 //   never reloaded for a link it was not showing. With no such tab the link
-//   opens in a new window.
+//   opens in a new window, or, in a browser that opens none from a click
+//   (Safari), in the most recently used tab (see openOrReuse).
 // - Only top-level windows count: a same-origin frame inside a page (an
 //   email preview, say) is a window client too, but it is not a tab.
 // - The browser grants one window action (focus or open) per click, so the
@@ -70,7 +71,6 @@ async function openNotificationTarget(link) {
   target.search = given.search;
   target.hash = given.hash;
   const section = target.pathname.split("/")[1] || "";
-  const topLevel = (list) => list.filter((c) => c.frameType === "top-level");
   if (!section) {
     // The app root names no destination: bring the app forward wherever it is.
     const [any] = topLevel(await self.clients.matchAll({ type: "window", includeUncontrolled: true }));
@@ -80,7 +80,61 @@ async function openNotificationTarget(link) {
   // controls, most recently focused first.
   const tabs = topLevel(await self.clients.matchAll({ type: "window" }));
   const tab = tabs.find((c) => new URL(c.url).pathname.split("/")[1] === section);
-  if (!tab) return self.clients.openWindow(target.href);
+  if (!tab) return openOrReuse(target.href);
   await tab.focus().catch(() => undefined);
   return tab.navigate(target.href);
+}
+
+// topLevel keeps the window clients that are tabs, dropping same-origin frames.
+const topLevel = (list) => list.filter((c) => c.frameType === "top-level");
+
+// isWebKit says whether this worker runs in WebKit: Safari, and every browser
+// on iOS and iPadOS. Chromium's user agent carries "AppleWebKit" too, so it is
+// told apart by its "Chrome/" (or "Chromium/") token; Firefox carries neither.
+function isWebKit() {
+  const ua = self.navigator.userAgent;
+  return /AppleWebKit\//.test(ua) && !/(Chrome|Chromium)\//.test(ua);
+}
+
+// LATE_WINDOW_MS is how long a click in WebKit waits, after openWindow came
+// back without a window, for one that opens late. It must stay well under
+// WebKit's 2 s user-gesture lifetime for a notification click
+// (ServiceWorkerGlobalScope::userGestureLifetime): past it, focus() is refused
+// and the tab the click reuses would change in the background.
+const LATE_WINDOW_MS = 1000;
+
+// openOrReuse opens href in a new window. In WebKit, where a click's openWindow
+// opens nothing, it sends the most recently used fleet tab there instead.
+//
+// Safari (26.5 on macOS, tested) answers openWindow from a notification click
+// with null and opens no window, so a click there did nothing unless a tab in
+// the link's part of the app was open; focus() and navigate() still work. The
+// fallback is WebKit's alone: Chromium also answers null when the window it
+// opened shows no page of this origin (an error page while fleet is
+// unreachable), and reusing a tab then would reload it for nothing.
+//
+// The windows open before the click are noted first. WebKit is reported to
+// answer openWindow before a window it did open exists (WebKit bug 279456,
+// seen on iOS; not seen on macOS), so after LATE_WINDOW_MS a window that was
+// not there before is taken to be that one, wherever it was redirected, and is
+// brought forward. Otherwise the most recently used tab this worker controls
+// is brought forward and navigated, which reloads it and loses anything
+// unsaved in it, a trade made on purpose over a click that does nothing. With
+// only a tab the worker does not control (after a hard reload), that one is
+// brought forward, since it cannot be navigated.
+async function openOrReuse(href) {
+  if (!isWebKit()) return self.clients.openWindow(href);
+  const listWindows = async () => topLevel(await self.clients.matchAll({ type: "window", includeUncontrolled: true }));
+  const before = new Set((await listWindows()).map((c) => c.id));
+  const opened = await self.clients.openWindow(href).catch(() => null);
+  if (opened) return opened;
+  await new Promise((resolve) => setTimeout(resolve, LATE_WINDOW_MS));
+  const windows = await listWindows();
+  const late = windows.find((c) => !before.has(c.id));
+  if (late) return late.focus().catch(() => null);
+  // Only a tab this worker controls can be navigated; most recent first.
+  const [tab] = topLevel(await self.clients.matchAll({ type: "window" }));
+  if (!tab) return windows[0] ? windows[0].focus().catch(() => null) : null;
+  await tab.focus().catch(() => undefined);
+  return tab.navigate(href);
 }
