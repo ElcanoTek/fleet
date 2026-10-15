@@ -1,6 +1,11 @@
 package agentcore
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+
+	"charm.land/fantasy/providers/openrouter"
+)
 
 // Pins the canonical-upstream table. Families served by more than one upstream
 // are pinned so OpenRouter's implicit per-upstream prompt cache keeps hitting
@@ -235,6 +240,89 @@ func TestOfficialPoolExemptionIsNarrow(t *testing.T) {
 	}
 }
 
+// A per-slug floor (precisionFloorSlugs) covers an open-weights slug whose pool
+// mixes precisions inside a family that cannot take a family-wide floor. The
+// listed slug gets fp8AndAbove with no upstream preference and fallbacks on, so
+// OpenRouter still balances across every endpoint that clears the floor. Its
+// siblings get nothing: the Alibaba-only qwen/ slugs report quantization
+// "unknown" on every endpoint, so a floor there would make them unroutable.
+func TestPrecisionFloorSlugs(t *testing.T) {
+	belowFloor := []string{"fp4", "fp6", "int4", "int8", "unknown"}
+
+	for slug, checked := range precisionFloorSlugs {
+		if checked == "" {
+			t.Errorf("precisionFloorSlugs[%q]: no check date; the floor must be recorded with the endpoint list in hand", slug)
+		}
+		for _, form := range []string{slug, "~" + slug} {
+			p := upstreamPinFor(form)
+			if p == nil {
+				t.Fatalf("upstreamPinFor(%q) = nil, want a serving-precision floor", form)
+			}
+			allowed := make(map[string]bool, len(p.Quantizations))
+			for _, q := range p.Quantizations {
+				allowed[q] = true
+			}
+			if !allowed["fp8"] || !allowed["bf16"] {
+				t.Errorf("upstreamPinFor(%q).Quantizations = %v, want fp8AndAbove", form, p.Quantizations)
+			}
+			for _, q := range belowFloor {
+				if allowed[q] {
+					t.Errorf("upstreamPinFor(%q): floor %v admits %q, which is below fp8", form, p.Quantizations, q)
+				}
+			}
+			if p.AllowFallbacks == nil || !*p.AllowFallbacks {
+				t.Errorf("upstreamPinFor(%q) = %+v: the floor narrows the pool, it must not disable fallbacks within it", form, p)
+			}
+			if len(p.Only) != 0 {
+				t.Errorf("upstreamPinFor(%q).Only = %v, want none: the floor is not a provider allow-list", form, p.Only)
+			}
+		}
+	}
+
+	// qwen/qwen3.8-27b has no family pin, so the floor stands alone: no Order,
+	// and no preferred upstream for served-upstream attribution to compare to.
+	const qwen = "qwen/qwen3.8-27b"
+	if p := upstreamPinFor(qwen); p == nil || len(p.Order) != 0 {
+		t.Errorf("upstreamPinFor(%q) = %+v, want a floor with no Order", qwen, p)
+	}
+	if got := preferredUpstreamFor(qwen); got != "" {
+		t.Errorf("preferredUpstreamFor(%q) = %q, want \"\": a floor is not an upstream pin", qwen, got)
+	}
+
+	// Siblings do not inherit the floor.
+	for _, slug := range []string{"qwen/qwen3.8-max-0902", "qwen/qwen3.8-flash", "qwen/qwen3.6-35b-a3b", "qwen/qwen3.8-27b-instruct"} {
+		if p := upstreamPinFor(slug); p != nil {
+			t.Errorf("upstreamPinFor(%q) = %+v, want nil: only listed slugs carry the floor", slug, p)
+		}
+	}
+}
+
+// RoutingProviderOptions hands one-off calls (compaction, manual summarize) the
+// same routing policy the run loop sends for a slug, and nothing for a slug
+// with no policy, so their requests stay unchanged.
+func TestRoutingProviderOptions(t *testing.T) {
+	for _, slug := range []string{"qwen/qwen3.8-27b", DefaultMaxModel, "deepseek/deepseek-v4.1-flash", "anthropic/claude-opus-5.5"} {
+		opts := RoutingProviderOptions(slug)
+		or, ok := opts[openrouter.Name].(*openrouter.ProviderOptions)
+		if !ok || or.Provider == nil {
+			t.Fatalf("RoutingProviderOptions(%q) = %#v, want an OpenRouter provider policy", slug, opts)
+		}
+		want := upstreamPinFor(slug)
+		if fmt.Sprint(or.Provider.Order, or.Provider.Only, or.Provider.Quantizations, *or.Provider.AllowFallbacks) !=
+			fmt.Sprint(want.Order, want.Only, want.Quantizations, *want.AllowFallbacks) {
+			t.Errorf("RoutingProviderOptions(%q).Provider = %+v, want the run loop's policy %+v", slug, or.Provider, want)
+		}
+		if or.Reasoning != nil || or.ExtraBody != nil {
+			t.Errorf("RoutingProviderOptions(%q) carries %+v, want routing only", slug, or)
+		}
+	}
+	for _, slug := range []string{"x-ai/grok-4.6", "mistralai/mixtral", "qwen/qwen3.8-flash"} {
+		if opts := RoutingProviderOptions(slug); opts != nil {
+			t.Errorf("RoutingProviderOptions(%q) = %#v, want nil: the slug has no routing policy", slug, opts)
+		}
+	}
+}
+
 // The returned Provider must not share backing state with the table: it is
 // handed to the request builder, so a caller appending to Quantizations would
 // otherwise corrupt the floor for every later request in the process.
@@ -254,6 +342,21 @@ func TestUpstreamPinQuantizationsNotAliased(t *testing.T) {
 	}
 	if second.Quantizations[0] != "fp8" {
 		t.Errorf("floor[0] = %q after a caller mutated an earlier pin, want %q", second.Quantizations[0], "fp8")
+	}
+
+	// The per-slug floor is built from fp8AndAbove too: mutating one request's
+	// policy must not reach the shared slice.
+	const perSlug = "qwen/qwen3.8-27b"
+	a := upstreamPinFor(perSlug)
+	if a == nil || len(a.Quantizations) == 0 {
+		t.Fatalf("expected a per-slug floor on %q", perSlug)
+	}
+	a.Quantizations[0] = "fp4"
+	if fp8AndAbove[0] != "fp8" {
+		t.Fatalf("fp8AndAbove[0] = %q after a caller mutated a per-slug floor, want %q", fp8AndAbove[0], "fp8")
+	}
+	if b := upstreamPinFor(perSlug); b.Quantizations[0] != "fp8" {
+		t.Errorf("per-slug floor[0] = %q after a caller mutated an earlier pin, want %q", b.Quantizations[0], "fp8")
 	}
 }
 

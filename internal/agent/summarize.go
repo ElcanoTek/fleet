@@ -87,6 +87,9 @@ func (m *Manager) Summarize(ctx context.Context, in SummarizeInput) (*SummarizeR
 		Messages:        messages,
 		MaxOutputTokens: &maxTokens,
 		Temperature:     &temp,
+		// Same upstream routing as a turn on this model (precision floor,
+		// pin, allow-list).
+		ProviderOptions: agentcore.RoutingProviderOptions(modelSlug),
 	}
 	if in.OnTextDelta != nil {
 		streamCall.OnTextDelta = func(_ string, text string) error {

@@ -286,6 +286,39 @@ var officialPoolSlugs = map[string]officialPoolAllowlist{
 	},
 }
 
+// precisionFloorSlugs lists exact slugs that get the fp8AndAbove serving-
+// precision floor even though their family has no floor, or no canonicalUpstream
+// entry at all. It exists for open-weights models whose OpenRouter pool mixes
+// precisions inside a family that, as a whole, cannot take a floor.
+//
+// The qwen/ family is the case that needs it. Alibaba alone serves most qwen/
+// slugs, and every one of those endpoints reports quantization "unknown", which
+// fp8AndAbove excludes, so a family-wide floor would make them unroutable.
+// Qwen's open-weights slugs are the opposite: third-party hosts serve them at
+// fp4 through bf16. A floor is only safe per slug, read with the endpoint list
+// in hand, and the same per-slug rule as officialPoolSlugs applies: a sibling
+// does not inherit the floor.
+//
+// A listed slug with no canonicalUpstream entry gets the floor alone: no Order,
+// so OpenRouter still balances across every endpoint that clears it, and
+// preferredUpstreamFor stays "" (there is no preferred upstream for the
+// served-upstream attribution to compare against).
+var precisionFloorSlugs = map[string]string{
+	// 2026-10-15: 20 endpoints. fp4 ×3 (Tenstorrent, Darkbloom, ModelRun),
+	// fp8 ×9, bf16 ×1 (DeepInfra), fp16 ×1 (Cerebras), unknown ×6 (Wafer,
+	// DekaLLM, Phala, Novita, Alibaba, Cloudflare). The floor leaves the 11
+	// fp8-and-above endpoints. The fp4 endpoints are among the cheapest in the
+	// pool, so price-weighted routing reaches them often without a floor.
+	"qwen/qwen3.8-27b": "2026-10-15",
+}
+
+// hasPrecisionFloor reports whether the exact slug (alias marker stripped) is
+// listed in precisionFloorSlugs.
+func hasPrecisionFloor(modelSlug string) bool {
+	_, ok := precisionFloorSlugs[strings.TrimPrefix(modelSlug, "~")]
+	return ok
+}
+
 // pinServesOfficialWeightsOnly reports whether the exact slug (alias marker
 // stripped) is listed in officialPoolSlugs.
 func pinServesOfficialWeightsOnly(modelSlug string) bool {
@@ -323,10 +356,39 @@ func upstreamPinFor(modelSlug string) *openrouter.Provider {
 		// request for the family.
 		if len(c.quantizations) > 0 {
 			p.Quantizations = append([]string(nil), c.quantizations...)
+		} else if hasPrecisionFloor(matchSlug) {
+			p.Quantizations = append([]string(nil), fp8AndAbove...)
 		}
 		return p
 	}
+	// No family pin: a slug with a recorded mixed-precision pool still gets the
+	// floor, with OpenRouter's normal balancing across the endpoints that clear it.
+	if hasPrecisionFloor(matchSlug) {
+		fallback := true
+		return &openrouter.Provider{
+			AllowFallbacks: &fallback,
+			Quantizations:  append([]string(nil), fp8AndAbove...),
+		}
+	}
 	return nil
+}
+
+// RoutingProviderOptions returns the OpenRouter routing policy for modelSlug
+// (upstreamPinFor: the upstream pin, the official-pool allow-list, the serving-
+// precision floor) as call options, for one-off model calls made outside the
+// run loop on the run's own model: the compaction summarizer and manual
+// summarize. Without it those calls go out with no provider block, so a slug
+// with a floor could be served below it on exactly the calls that condense a
+// long run's history. It carries routing only; the run loop's thinking and
+// long-context extras stay with engine.providerOptions. Nil when the slug has
+// no policy. Keyed under openrouter.Name like the run loop's options, so a
+// natively routed model ignores it.
+func RoutingProviderOptions(modelSlug string) fantasy.ProviderOptions {
+	p := upstreamPinFor(modelSlug)
+	if p == nil {
+		return nil
+	}
+	return fantasy.ProviderOptions{openrouter.Name: &openrouter.ProviderOptions{Provider: p}}
 }
 
 // anthropicLongContextSlug reports whether a raw slug string is a long-context
