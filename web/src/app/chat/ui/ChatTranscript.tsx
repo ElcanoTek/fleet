@@ -320,7 +320,7 @@ export function ChatTranscript({
   // replays its slide-in — only genuinely new turns animate. See
   // VirtualTranscriptRow for how the gate is applied.
   // Switch & retry, held until the stream closes (docs/CHAT-ESCALATION.md).
-  const switchAndRetry = useQueuedSwitchRetry(isStreaming, retryLastUserMessage);
+  const switchAndRetry = useQueuedSwitchRetry(isStreaming, currentConvKey, retryLastUserMessage);
   // Retry with the advanced model, unless a lockdown allow-list excludes it.
   const canRetryWithAdvanced = advancedRetryAllowed(isLockdown, lockdownAllowedModels, currentAdvancedModel());
 

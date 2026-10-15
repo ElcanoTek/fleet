@@ -1547,7 +1547,7 @@ func (s *Server) runTurnAsync(
 	// classifier has been running since the turn began, so this rarely waits.
 	// Its own context: persistCtx's 10s budget may be spent by now.
 	escCtx, escCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	s.escalateAfterTurn(escCtx, buf, conv, user, res, check)
+	s.escalateAfterTurn(escCtx, buf, conv, user, history, res, check)
 	escCancel()
 }
 
@@ -1601,5 +1601,6 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 		bg:                   &s.background,
 		taskConnectors:       s.chatTaskConnectorsFor(user, conv.ID),
 		groupID:              buf.turnID,
+		modelAllowed:         s.cfg.LockdownAllows,
 	}
 }

@@ -114,6 +114,11 @@ type approvalStager struct {
 	// (RecordActionResult). Guarded by recordMu.
 	recordMu  sync.Mutex
 	recordIDs map[string]string
+	// modelAllowed reports whether a lockdown conversation may use a model
+	// (config.LockdownAllows). A suggestion never offers the advanced model to
+	// a lockdown chat whose allow-list excludes it: accepting would pin a slug
+	// the next turn refuses. nil allows every model (tests, no config).
+	modelAllowed func(model string) bool
 }
 
 var _ agent.MCPScopeBinder = (*approvalStager)(nil)
@@ -631,6 +636,9 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 	}
 	if conv != nil && conv.Model == advancedModel {
 		return "", "SUGGESTION_SUPPRESSED: this conversation is already pinned to the advanced model. Do not call suggest_advanced_model again — proceed with the user's request.", nil
+	}
+	if conv != nil && conv.Lockdown && a.modelAllowed != nil && !a.modelAllowed(advancedModel) {
+		return "", "SUGGESTION_SUPPRESSED: this is a lockdown conversation and its allowed models do not include the advanced model. Do not call suggest_advanced_model again — keep working with the current model.", nil
 	}
 
 	prior, err := a.store.LatestApprovalByTool(a.ctx, a.conversationID, tools.SuggestAdvancedModelToolName)

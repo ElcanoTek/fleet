@@ -93,3 +93,32 @@ func TestSuggestionCooldownCountsFromResolution(t *testing.T) {
 		t.Errorf("legacy row counted since %d, want created_at", st.countedSince)
 	}
 }
+
+// lockdownStore is a lockdown conversation with no prior suggestion.
+type lockdownStore struct{ reofferStore }
+
+func (s *lockdownStore) Get(context.Context, string, string) (*store.Conversation, error) {
+	return &store.Conversation{ID: "c", Model: "fast/model", Lockdown: true}, nil
+}
+
+// A lockdown chat is never offered an advanced model its allow-list
+// excludes, from any source: accepting would pin a slug the next turn
+// refuses.
+func TestSuggestionRespectsLockdownAllowList(t *testing.T) {
+	for _, allowed := range []bool{false, true} {
+		st := &lockdownStore{}
+		a := &approvalStager{ctx: context.Background(), store: st, conversationID: "c", userEmail: "u", sink: &recordingSink{},
+			modelAllowed: func(string) bool { return allowed }}
+		staged, err := a.StageHostSuggestion(suggestionSourceSignal, "r")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if staged != allowed {
+			t.Errorf("allow-list permits advanced = %v: staged = %v", allowed, staged)
+		}
+		_, msg, _ := a.StageSuggestion("model asked")
+		if !allowed && !strings.Contains(msg, "lockdown") {
+			t.Errorf("model-requested suggestion message = %q, want the lockdown suppression", msg)
+		}
+	}
+}

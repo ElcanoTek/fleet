@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -175,7 +176,7 @@ func TestEscalateAfterTurn_SignalStagesAndRecords(t *testing.T) {
 	fail := toolResult(t, "boom", true)
 	res := &TurnResult{Model: "openrouter/auto", NewHistory: []agent.HistoryEntry{fail, fail, fail}}
 
-	s.escalateAfterTurn(context.Background(), buf, conv, user, res, doneCheck(config.EscalationClassifierSuggest, 0.95, nil))
+	s.escalateAfterTurn(context.Background(), buf, conv, user, nil, res, doneCheck(config.EscalationClassifierSuggest, 0.95, nil))
 
 	args := pendingSuggestion(t, s, user, conv.ID)
 	if args == nil || args["source"] != suggestionSourceSignal || !strings.Contains(args["reason"].(string), "3 tool calls in a row failed") {
@@ -223,12 +224,12 @@ func TestEscalateAfterTurn_ClassifierModes(t *testing.T) {
 	conv := seedConv(t, s, user)
 	res := &TurnResult{Model: "openrouter/auto"}
 
-	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t1"), conv, user, res, doneCheck(config.EscalationClassifierObserve, 0.92, nil))
+	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t1"), conv, user, nil, res, doneCheck(config.EscalationClassifierObserve, 0.92, nil))
 	if pendingSuggestion(t, s, user, conv.ID) != nil {
 		t.Fatal("observe mode must not stage a card")
 	}
-	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t2"), conv, user, res, doneCheck(config.EscalationClassifierSuggest, 0.4, nil))
-	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t3"), conv, user, res, doneCheck(config.EscalationClassifierSuggest, 0, errors.New("HTTP 502")))
+	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t2"), conv, user, nil, res, doneCheck(config.EscalationClassifierSuggest, 0.4, nil))
+	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t3"), conv, user, nil, res, doneCheck(config.EscalationClassifierSuggest, 0, errors.New("HTTP 502")))
 	if ev := escalationEvents(t, s, conv.ID); len(ev) != 1 || ev[0].Source != "classifier" || ev[0].Suggested {
 		t.Fatalf("events = %+v, want only the observed yes", ev)
 	}
@@ -237,7 +238,7 @@ func TestEscalateAfterTurn_ClassifierModes(t *testing.T) {
 	}
 
 	// Suggest mode stages a classifier card.
-	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t4"), conv, user, res, doneCheck(config.EscalationClassifierSuggest, 0.81, nil))
+	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t4"), conv, user, nil, res, doneCheck(config.EscalationClassifierSuggest, 0.81, nil))
 	if args := pendingSuggestion(t, s, user, conv.ID); args == nil || args["source"] != suggestionSourceClassifier || args["reason"] != escalationClassifierReason {
 		t.Fatalf("classifier card = %v", args)
 	}
@@ -255,7 +256,7 @@ func TestEscalateAfterTurn_AdvancedModelRecordsOnly(t *testing.T) {
 		t.Fatalf("SetModel: %v", err)
 	}
 	loop := toolResult(t, "LOOP_GUARD (block #1)", true)
-	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t1"), conv, user, &TurnResult{NewHistory: []agent.HistoryEntry{loop}}, nil)
+	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t1"), conv, user, nil, &TurnResult{NewHistory: []agent.HistoryEntry{loop}}, nil)
 	if pendingSuggestion(t, s, user, conv.ID) != nil {
 		t.Fatal("no card on the advanced model")
 	}
@@ -285,5 +286,69 @@ func TestHandleAdminDecisionModels(t *testing.T) {
 	s.handleAdminDecisionModels(rec, httptest.NewRequest(http.MethodGet, "/admin/decision-models", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"models":[]`) || strings.Contains(rec.Body.String(), "refused") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A classifier answer that is late must not hold the finished turn's stream
+// open (the client blocks the next message until it closes): past the grace
+// the result is recorded in the background, without a card.
+func TestEscalateAfterTurn_LateClassifierRecordsWithoutCard(t *testing.T) {
+	s := serverFixture(t)
+	s.agent = &fakeTurnEngine{}
+	const user = "late@x.com"
+	conv := seedConv(t, s, user)
+	late := &struggleCheck{mode: config.EscalationClassifierSuggest, threshold: 0.8, done: make(chan struct{}),
+		verdict: agentcore.StruggleVerdict{Probability: 0.97}}
+	go func() {
+		time.Sleep(struggleCheckGrace + 500*time.Millisecond)
+		close(late.done)
+	}()
+
+	start := time.Now()
+	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t1"), conv, user, nil, &TurnResult{}, late)
+	if waited := time.Since(start); waited > struggleCheckGrace+300*time.Millisecond {
+		t.Fatalf("escalateAfterTurn held the stream for %v, past the %v grace", waited, struggleCheckGrace)
+	}
+	s.background.StopAndWait() // let the late check finish and record
+	if pendingSuggestion(t, s, user, conv.ID) != nil {
+		t.Fatal("a late answer must not stage a card the closed stream cannot show")
+	}
+	if ev := escalationEvents(t, s, conv.ID); len(ev) != 1 || ev[0].Source != "classifier" || ev[0].Suggested {
+		t.Fatalf("events = %+v, want the late frustration recorded without a card", ev)
+	}
+}
+
+// A correction the user steers in while the agent works is classified too,
+// with the turn so far as context.
+func TestEscalateAfterTurn_ClassifiesMidTurnSteer(t *testing.T) {
+	s := serverFixture(t)
+	s.agent = &fakeTurnEngine{}
+	s.cfg.OpenRouterAPIKey = "sk-or-test"
+	s.cfg.EscalationClassifierMode = config.EscalationClassifierSuggest
+	s.cfg.EscalationClassifierModel = "acme/decider"
+	s.cfg.EscalationClassifierThreshold = 80
+	var sent string
+	prev := checkStruggle
+	checkStruggle = func(_ context.Context, _, _, conversation string) (agentcore.StruggleVerdict, error) {
+		sent = conversation
+		return agentcore.StruggleVerdict{Probability: 0.96}, nil
+	}
+	t.Cleanup(func() { checkStruggle = prev })
+
+	const user = "steer@x.com"
+	conv := seedConv(t, s, user)
+	history := []agent.HistoryEntry{textEntry("user", "revenue by month"), textEntry("assistant", "Total is $1M.")}
+	turn := []agent.HistoryEntry{
+		textEntry("user", "by month please"),
+		textEntry("assistant", "Working on the total"),
+		textEntry("user", "no, stop, I said BY MONTH"),
+	}
+	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t1"), conv, user, history, &TurnResult{NewHistory: turn}, nil)
+
+	if !strings.HasSuffix(sent, "User: no, stop, I said BY MONTH") || !strings.Contains(sent, "Assistant: Working on the total") {
+		t.Fatalf("classified conversation = %q, want it to end with the steer", sent)
+	}
+	if args := pendingSuggestion(t, s, user, conv.ID); args == nil || args["source"] != suggestionSourceClassifier {
+		t.Fatalf("card = %v, want a classifier card", args)
 	}
 }

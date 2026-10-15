@@ -5,7 +5,7 @@ import { advancedRetryAllowed, useQueuedSwitchRetry } from "./useQueuedSwitchRet
 describe("useQueuedSwitchRetry", () => {
   it("retries at once when no turn is streaming", () => {
     const retry = vi.fn();
-    const { result } = renderHook(() => useQueuedSwitchRetry(false, retry));
+    const { result } = renderHook(() => useQueuedSwitchRetry(false, "conv-a", retry));
     void result.current("adv/model");
     expect(retry).toHaveBeenCalledWith({ model: "adv/model" });
   });
@@ -14,7 +14,7 @@ describe("useQueuedSwitchRetry", () => {
   // the retry waits for it instead of being dropped.
   it("holds a click made while streaming and sends it once streaming ends", () => {
     const retry = vi.fn();
-    const { result, rerender } = renderHook(({ streaming }) => useQueuedSwitchRetry(streaming, retry), {
+    const { result, rerender } = renderHook(({ streaming }) => useQueuedSwitchRetry(streaming, "conv-a", retry), {
       initialProps: { streaming: true },
     });
     void result.current("adv/model");
@@ -25,6 +25,22 @@ describe("useQueuedSwitchRetry", () => {
     rerender({ streaming: true });
     rerender({ streaming: false });
     expect(retry).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Retry acts on the active conversation, so a click held in one conversation
+// must not run in another the user moved to before the stream closed.
+describe("useQueuedSwitchRetry across conversations", () => {
+  it("drops a held retry when the active conversation changes", () => {
+    const retry = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ streaming, conv }) => useQueuedSwitchRetry(streaming, conv, retry),
+      { initialProps: { streaming: true, conv: "conv-a" } },
+    );
+    void result.current("adv/model");
+    rerender({ streaming: false, conv: "conv-b" });
+    rerender({ streaming: false, conv: "conv-a" });
+    expect(retry).not.toHaveBeenCalled();
   });
 });
 

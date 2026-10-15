@@ -6,26 +6,36 @@ import { useCallback, useEffect, useRef } from "react";
 // before the stream closes, and retryLastUserMessage drops a retry while a
 // turn is in flight, so without this an early click pinned the advanced
 // model but never retried.
+//
+// The held retry belongs to the conversation it was pressed in. Retry acts on
+// whichever conversation is active, so if the user moves to another one
+// before the stream closes, the held retry is dropped rather than run there.
 export function useQueuedSwitchRetry(
   isStreaming: boolean,
+  convKey: string,
   retry: (opts: { model: string }) => void | Promise<void>,
 ): (model: string) => void | Promise<void> {
-  const pending = useRef<string | null>(null);
+  const pending = useRef<{ model: string; convKey: string } | null>(null);
   useEffect(() => {
-    const model = pending.current;
-    if (isStreaming || !model) return;
+    const held = pending.current;
+    if (!held) return;
+    if (held.convKey !== convKey) {
+      pending.current = null;
+      return;
+    }
+    if (isStreaming) return;
     pending.current = null;
-    void retry({ model });
-  }, [isStreaming, retry]);
+    void retry({ model: held.model });
+  }, [isStreaming, convKey, retry]);
   return useCallback(
     (model: string) => {
       if (isStreaming) {
-        pending.current = model;
+        pending.current = { model, convKey };
         return;
       }
       return retry({ model });
     },
-    [isStreaming, retry],
+    [isStreaming, convKey, retry],
   );
 }
 

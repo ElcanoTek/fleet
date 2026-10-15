@@ -160,7 +160,7 @@ func (s *Server) startStruggleCheck(conv *store.Conversation, history []agent.Hi
 
 // escalateAfterTurn reads the finished turn's signals and the classifier's
 // answer, records each struggle per user, and stages at most one card.
-func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *store.Conversation, user string, res *TurnResult, check *struggleCheck) {
+func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *store.Conversation, user string, history []agent.HistoryEntry, res *TurnResult, check *struggleCheck) {
 	if res == nil || res.Cancelled {
 		return
 	}
@@ -180,8 +180,9 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		staged = ok
 		return ok
 	}
+	recordCtx := ctx
 	record := func(source, signal string, p *float64, suggested bool) {
-		err := s.store.RecordEscalationEvent(ctx, store.EscalationEvent{
+		err := s.store.RecordEscalationEvent(recordCtx, store.EscalationEvent{
 			ConversationID: conv.ID,
 			TurnID:         buf.turnID,
 			UserEmail:      user,
@@ -204,24 +205,106 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		}
 	}
 
-	if check == nil {
+	// The classifier: the check started with the turn, plus one on the last
+	// message the user steered in mid-turn, if any (a correction typed while
+	// the agent works is the clearest pushback there is).
+	var checks []*struggleCheck
+	if check != nil {
+		checks = append(checks, check)
+	}
+	if c := s.startSteerCheck(conv, history, res.NewHistory); c != nil {
+		checks = append(checks, c)
+	}
+	if len(checks) == 0 {
 		return
 	}
-	verdict, err := check.wait()
-	if err != nil {
-		metrics.RecordEscalationClassifierCheck(check.mode, "error")
-		log.Printf("escalation: classifier (conv=%s): %s", logSafe(conv.ID), logSafe(err.Error()))
+	// The stream stays open until this returns, and the client blocks the
+	// next message while it is open. So wait a short grace for the answers
+	// (normally already in: the opening check has run alongside the turn);
+	// if they are late, finish in the background and record the result
+	// without a card, which could no longer reach the closed stream.
+	if allDone(checks, struggleCheckGrace) {
+		s.classifierOutcome(checks, stage, record)
 		return
 	}
-	if verdict.Probability < check.threshold {
-		metrics.RecordEscalationClassifierCheck(check.mode, "ok")
+	metrics.RecordEscalationClassifierCheck(checks[0].mode, "late")
+	s.background.Go("escalation.classifier_late", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), agentcore.StruggleCheckTimeout+5*time.Second)
+		defer cancel()
+		recordCtx = ctx
+		s.classifierOutcome(checks, nil, record)
+	})
+}
+
+// struggleCheckGrace bounds how long a finished turn's stream waits for the
+// classifier before closing; past it the result is recorded without a card.
+const struggleCheckGrace = 1500 * time.Millisecond
+
+// allDone reports whether every check finished within d.
+func allDone(checks []*struggleCheck, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	for _, c := range checks {
+		select {
+		case <-c.done:
+		case <-timer.C:
+			return false
+		}
+	}
+	return true
+}
+
+// classifierOutcome turns finished checks into one result: the highest
+// probability among those that answered. stage is nil when a card can no
+// longer be shown (the stream closed while the check was late).
+func (s *Server) classifierOutcome(checks []*struggleCheck, stage func(source, reason string) bool, record func(source, signal string, p *float64, suggested bool)) {
+	mode, threshold := checks[0].mode, checks[0].threshold
+	best, answered := 0.0, false
+	for _, c := range checks {
+		v, err := c.wait()
+		if err != nil {
+			metrics.RecordEscalationClassifierCheck(mode, "error")
+			log.Printf("escalation: classifier: %s", logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the error text.
+			continue
+		}
+		answered = true
+		if v.Probability > best {
+			best = v.Probability
+		}
+	}
+	if !answered {
 		return
 	}
-	metrics.RecordEscalationClassifierCheck(check.mode, "pushback")
+	if best < threshold {
+		metrics.RecordEscalationClassifierCheck(mode, "ok")
+		return
+	}
+	metrics.RecordEscalationClassifierCheck(mode, "pushback")
 	suggested := false
-	if check.mode == config.EscalationClassifierSuggest {
+	if stage != nil && mode == config.EscalationClassifierSuggest {
 		suggested = stage(suggestionSourceClassifier, escalationClassifierReason)
 	}
-	p := verdict.Probability
-	record(suggestionSourceClassifier, escalationSignalFrustration, &p, suggested)
+	record(suggestionSourceClassifier, escalationSignalFrustration, &best, suggested)
+}
+
+// startSteerCheck classifies the last message the user steered into the
+// turn while it ran (persisted as a user text entry after the turn's own
+// opening message), with everything before it as context. nil when the turn
+// had no steer or the classifier would not run.
+func (s *Server) startSteerCheck(conv *store.Conversation, history, turn []agent.HistoryEntry) *struggleCheck {
+	last := -1
+	for i, h := range turn {
+		if i > 0 && h.Role == "user" && h.Type == "text" {
+			last = i
+		}
+	}
+	if last < 0 {
+		return nil
+	}
+	var tc agent.TextContent
+	if err := json.Unmarshal(turn[last].Content, &tc); err != nil {
+		return nil
+	}
+	prior := append(append([]agent.HistoryEntry{}, history...), turn[:last]...)
+	return s.startStruggleCheck(conv, prior, tc.Text, "")
 }

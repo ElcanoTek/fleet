@@ -23,6 +23,7 @@ except **Retry with** use the same card (**Switch & retry**, **Just switch**,
 **The card gate** (`approvalStager.stageSuggestionGated`):
 
 - no card on a conversation already on the advanced model;
+- no card in a lockdown chat whose allow-list excludes the advanced model;
 - no second card while one is pending;
 - after a card is dismissed, or accepted and the user later moved off the
   advanced model, no new card until the user has sent 3 more messages since
@@ -37,16 +38,23 @@ the fast model was never offered the advanced one again.
 stream, so they never interrupt the model. The check is the last post-turn
 step, so the stream closes right after a card lands; a **Switch & retry**
 pressed before it closes is held by the client and sent once it does
-(`useQueuedSwitchRetry`). The card's `args_json` records who
+(`useQueuedSwitchRetry`), unless the user has moved to another conversation,
+in which case it is dropped. The card's `args_json` records who
 asked (`source`: `model`, `signal`, `classifier`), and the reason it shows
 comes from the signal ("3 tool calls in a row failed on this request…").
 
 ### The frustration check
 
 - **When it runs.** It starts with the turn and runs in parallel
-  (`startStruggleCheck`); the evaluation after the reply waits for it, bounded
-  by a 6-second timeout. Measured latency on Jev 1.14 was 0.1–0.6 s, so in
-  practice it finishes before the reply does.
+  (`startStruggleCheck`), so it is normally finished before the reply is.
+  Measured latency on Jev 1.14 was 0.1–0.6 s. A message the user steers in
+  while the agent works is checked too, at the end of the turn, with the turn
+  so far as context; the higher score counts.
+- **It never holds the turn open.** After the reply, the stream waits at most
+  1.5 s for the answers (the client blocks the next message while the stream
+  is open). A later answer is recorded in the background for the per-user
+  count, without a card, since the stream has closed
+  (`fleet_escalation_classifier_checks_total{outcome="late"}`).
 - **What it sends.** The last ~6,000 characters of user and assistant *text*:
   never tool output, attachments or the injected context. It goes through
   OpenRouter's Decisions API (`POST /api/alpha/decisions`), the same path Lens
@@ -100,7 +108,7 @@ comes from the signal ("3 tool calls in a row failed on this request…").
     `staged`, `suppressed`, `error`, `dismissed`, or `accepted_switch_and_retry`
     / `accepted_switch_only`;
   - `fleet_escalation_classifier_checks_total{mode, outcome}`, where outcome is
-    `pushback`, `ok` or `error`.
+    `pushback`, `ok`, `error` or `late`.
 - **The approvals table** now records which accept action was taken, in the
   result text.
 

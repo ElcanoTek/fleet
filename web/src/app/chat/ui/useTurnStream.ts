@@ -3924,6 +3924,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
   const retryLastUserMessage = async (retryOpts?: { model?: string }) => {
     if (isStreaming) return;
+    // Check the send gate BEFORE deleting anything: the retry truncates the
+    // last turn locally and server-side, and a submit that then refused would
+    // lose it. An explicit model bypasses the selected model's error.
+    if (modelError && !retryOpts?.model) return;
     const targetKey = activeConversationIdRef.current ?? PENDING_CONV_KEY;
     const history = getConvMessages(targetKey);
     let lastUser: Message | undefined;
@@ -4150,7 +4154,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     const convId = activeConversationIdRef.current;
     const composerKey = convId ?? PENDING_CONV_KEY;
     if (!value || !userEmail) return false;
-    if (modelError) return false;
+    // modelError is about the SELECTED model; a send that names its own
+    // model (a retry on the advanced model) is not blocked by it.
+    if (modelError && !opts?.model) return false;
     // A generative-UI card's answer is not composer text: it neither clears
     // nor restores what the user is typing, and never takes the composer's
     // pending attachments with it.
