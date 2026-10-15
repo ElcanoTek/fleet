@@ -677,15 +677,17 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// rule's threshold instead, and the breadcrumb and event say so (#1600,
 		// see engine.effectiveResendBudget).
 		//
-		// An interactive engine pauses the same way at the window-compaction
-		// threshold instead (engine.checkpointThreshold): the breadcrumb says
-		// so, and no checkpoint event is streamed — the chat client hears about
-		// the pause through the fleet.context_compacted event that follows.
+		// An interactive engine — or a scheduled one whose operator chose
+		// "compact only near the limit" (engine.windowCheckpointActive) — pauses
+		// the same way at the window-compaction threshold instead
+		// (engine.checkpointThreshold): the breadcrumb says so, and no
+		// checkpoint event is streamed; clients hear about the pause through the
+		// fleet.context_compacted event that follows.
 		if eng.consumeResendCheckpoint(finalResult, outcome.completedSteps+len(finalResult.Steps), messages, activeModel) {
 			messages = append(messages, carryRoundMessages(finalResult)...)
 			resent := lastStepPromptTokens(finalResult)
 			steps := outcome.completedSteps + len(finalResult.Steps)
-			if cfg.RequireCompactionOptIn {
+			if !eng.windowCheckpointActive() {
 				budget := contextResendBudgetTokens(cfg.EnvPrefix)
 				eng.logSession.AddMessage(roleUser, fmt.Sprintf(
 					"[context_checkpoint] resent prompt %d tokens reached %s; the tool loop paused after %d step(s) so the history can be compacted before the next call (checkpoint %d)",

@@ -504,7 +504,7 @@ every model-visible part of the history, tool calls and tool results included,
 plus the system prompt and tool schemas. A text-only estimate once let a chat
 carrying ~850K tokens of tool results look small enough to skip.
 
-**Mid-turn window checkpoint (interactive).** A chat turn is a single round, so
+**Mid-turn window checkpoint (interactive, and scheduled on opt-in).** A chat turn is a single round, so
 the pre-round check above runs once per turn while dozens of tool steps can grow
 the prompt past the window inside it. The interactive engine therefore pauses the
 tool loop after a tool step whose real prompt size reached the compaction
@@ -514,6 +514,10 @@ scheduled resend-budget checkpoint below, sharing its cap of 40 pauses per run;
 the run loop compacts at that same point and resumes the same conversation
 (details: [SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md#the-interactive-window-checkpoint-1754)). No `fleet.context_checkpoint` event
 is streamed to chat clients; they see the `fleet.context_compacted` that follows.
+A scheduled engine uses this same checkpoint instead of the resend budget when
+the operator sets `FLEET_CONTEXT_RESEND_BUDGET_TOKENS=0` and
+`FLEET_SCHEDULED_AUTO_COMPACT=1` — compaction then happens only near the model's
+limit, mid-round as well as between rounds (#1764).
 If a window compaction finds nothing to summarize, the checkpoint goes inert
 until a later compaction (proactive or overflow) removes history. Chat compactions shorten the request only: the stored
 transcript keeps its history, so a later turn that starts over the threshold
