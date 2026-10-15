@@ -42,7 +42,7 @@ describe("ModelPicker", () => {
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
     await waitFor(() => screen.getByText(ADVANCED_MODEL_LABEL));
-    fireEvent.change(input, { target: { value: "luna" } });
+    fireEvent.change(input, { target: { value: "haiku" } });
     await waitFor(() => {
       expect(screen.getByText(DEFAULT_MODEL_LABEL)).toBeInTheDocument();
     });

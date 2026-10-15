@@ -163,15 +163,16 @@ var canonicalUpstream = []struct {
 	// fallbacks) and needs no serving-precision floor — there is no second
 	// upstream to degrade onto.
 	{"google/", upstreamProviderGoogle, true, nil},
-	// The strong tier until 2026-10-14 (Claude Opus 5.5): a soft pin
-	// to Anthropic's own endpoint with graceful degradation onto the cloud
-	// resellers of the same weights. The default-pin guard's exemption for that
+	// This family carries the everyday default (DefaultCoreModel, Claude
+	// Haiku 5.5, since 2026-10-15; Opus 5.5 was the strong tier until
+	// 2026-10-14), so it is the hot path for ordinary chat turns and every
+	// scheduled run: a soft pin to Anthropic's own endpoint with graceful
+	// degradation onto the cloud resellers of the same weights. The default-pin guard's exemption for that
 	// slug — and the allow-list that enforces it — is recorded per SLUG in
 	// officialPoolSlugs, not here.
 	{"anthropic/", upstreamProviderAnthropic, false, nil},
-	// This family carries the recommended everyday default (DefaultCoreModel,
-	// GPT-5.6 Luna Pro), so this is the hot path for ordinary chat turns and
-	// every scheduled run. Soft pin: OpenAI first, Azure and Amazon Bedrock as
+	// This family carried the everyday default until 2026-10-15 (GPT-6 Luna
+	// Pro, GPT-5.6 Luna Pro before it). Soft pin: OpenAI first, Azure and Amazon Bedrock as
 	// fallbacks. No floor: see officialPoolSlugs for the per-slug evidence and
 	// the allow-list that holds the pool to it.
 	{"openai/", upstreamProviderOpenAI, false, nil},
@@ -228,13 +229,26 @@ type officialPoolAllowlist struct {
 // Every name below must be OpenRouter's own routing name for the endpoint —
 // a misspelling narrows the pool to nothing.
 var officialPoolSlugs = map[string]officialPoolAllowlist{
+	// 2026-10-15: Anthropic ×1, Claude Platform on AWS ×1, Amazon Bedrock ×3,
+	// Azure ×2, Google ×3 — ten endpoints, every quantization "unknown".
+	// DefaultCoreModel.
+	"anthropic/claude-haiku-5.5": {
+		checked: "2026-10-15",
+		providers: []string{
+			upstreamProviderAnthropic,
+			upstreamProviderClaudeOnAWS,
+			upstreamProviderAmazonBedrock,
+			upstreamProviderAzure,
+			upstreamProviderGoogle,
+		},
+	},
 	// 2026-09-22: OpenAI ×3, Azure ×2 — every endpoint quantization
 	// "unknown". Amazon Bedrock was in the pool on 2026-09-21 and is not
 	// today; it stays on the allow-list because a reseller of the official
 	// weights coming back must not need a code change, and a name with no
 	// endpoint behind it simply never matches.
 	// 2026-09-22: OpenAI ×3 (openai, openai/flex, openai/fast) — every endpoint
-	// quantization "unknown". DefaultCoreModel. Azure and Amazon Bedrock resell
+	// quantization "unknown". DefaultCoreModel until 2026-10-15. Azure and Amazon Bedrock resell
 	// the official weights for earlier OpenAI models and stay listed so a
 	// reseller endpoint appearing later needs no code change.
 	"openai/gpt-6-luna-pro": {

@@ -13,9 +13,8 @@ func TestUpstreamPinFor(t *testing.T) {
 		wantOrder string // "" = expect nil pin
 		strict    bool
 	}{
-		// The everyday default: Google serves this family alone, so the pin is
-		// strict — there is no second upstream to fall back to.
-		{DefaultCoreModel, "OpenAI", false}, // everyday default: soft pin to OpenAI, official-weights pool
+		{DefaultCoreModel, "Anthropic", false},     // everyday default (Claude Haiku 5.5): soft pin to Anthropic, official-weights pool
+		{"openai/gpt-6-luna-pro", "OpenAI", false}, // previous everyday default: soft pin to OpenAI
 		{"z-ai/glm-5.2", "Z.AI", false},
 		{"z-ai/glm-4.6", "Z.AI", false},
 		{"~z-ai/glm-latest", "Z.AI", false}, // `~` alias inherits the pin
@@ -262,7 +261,8 @@ func TestUpstreamPinQuantizationsNotAliased(t *testing.T) {
 // fallback; it must agree with upstreamPinFor on which family owns a slug.
 func TestPreferredUpstreamFor(t *testing.T) {
 	cases := map[string]string{
-		DefaultCoreModel:            "OpenAI",
+		DefaultCoreModel:            "Anthropic", // everyday default: Claude Haiku 5.5
+		"openai/gpt-6-luna-pro":     "OpenAI",
 		"deepseek/v3":               "DeepSeek",
 		"~z-ai/glm-latest":          "Z.AI",
 		"openai/gpt-5.4":            "OpenAI",
