@@ -64,5 +64,6 @@ internal/redact/redact_test.go:generic-api-key:122
 internal/store/push_subscriptions_test.go:generic-api-key:50
 
 # knobs.go registry row: the flagged "secret" is the env-knob NAME
-# FLEET_A2A_UNARY_WAIT_SECONDS (generic-api-key entropy false positive).
-internal/config/knobs.go:generic-api-key:270
+# FLEET_A2A_UNARY_WAIT_SECONDS (generic-api-key entropy false positive). The
+# fingerprint is line-pinned: rows added above it move it (verified 2026-10-15).
+internal/config/knobs.go:generic-api-key:272
