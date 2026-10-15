@@ -114,18 +114,27 @@ comes from the signal ("3 tool calls in a row failed on this request…").
   - **Struggles**: signal rows;
   - **Switched up**: accepted suggestions.
 
-  Counts are all-time and follow conversation deletion (`ON DELETE CASCADE`,
-  like `turn_metrics`).
+  Counts are all-time and follow conversation deletion: `ON DELETE CASCADE`
+  like `turn_metrics`, and a soft-deleted chat stops counting when it is
+  deleted, like the rest of the page.
 - **Metrics:**
   - `fleet_model_escalations_total{source, outcome}`, where outcome is
     `staged`, `suppressed`, `error`, `dismissed`, or `accepted_switch_and_retry`
     / `accepted_switch_only`;
   - `fleet_escalation_classifier_checks_total{mode, outcome}`, where outcome is
-    `pushback`, `ok` or `error`, once per check;
-  - `fleet_escalation_classifier_late_total{mode}`, checks that answered after
-    the turn's stream closed.
+    `pushback`, `ok` or `error`, once per request sent, including one from a
+    turn the user stopped (that turn shows no card and records nothing);
+  - `fleet_escalation_classifier_late_total{mode}`, once per request still
+    running when the turn's stream closed.
 - **The approvals table** now records which accept action was taken, in the
   result text.
+- **The cooldown is counted in message order.** It counts user messages after
+  the card's answer note in the history, so a message sent while the card was
+  pending never counts, even in the same second as the answer.
+- **Testing.** The fake LLM (`internal/fakellm`) answers the Decisions API:
+  0.95 when the latest user message carries `[[pushback]]`, else 0.05. So the
+  live E2E stack, which runs the default `suggest` mode, gets a real answer on
+  every message, and a spec can raise the card on purpose.
 
 ## Fixed along the way
 

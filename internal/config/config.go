@@ -2566,18 +2566,27 @@ func TaskDefaultMaxRetriesFromEnv() int {
 // validate-config both refuse a bad value. Read leniently, an unknown mode
 // would quietly turn the default-on check off, and a malformed slug would
 // fail at the Decisions API on every message. The rules match what the admin
-// panel accepts. Empty means "use the default".
+// panel accepts. Empty means "use the default". An accepted value is stored
+// normalized (trimmed, mode lower-cased), so what passes here is exactly what
+// LiveEscalationClassifier matches: " suggest " must not validate and then
+// read as off.
 func (c *Config) validateEscalationClassifier() error {
-	switch strings.ToLower(strings.TrimSpace(c.EscalationClassifierMode)) {
-	case "", EscalationClassifierOff, EscalationClassifierObserve, EscalationClassifierSuggest:
+	mode := strings.ToLower(strings.TrimSpace(c.EscalationClassifierMode))
+	switch mode {
+	case "":
+		mode = EscalationClassifierSuggest
+	case EscalationClassifierOff, EscalationClassifierObserve, EscalationClassifierSuggest:
 	default:
 		return fmt.Errorf("FLEET_ESCALATION_CLASSIFIER_MODE must be off, observe or suggest (got %q)", c.EscalationClassifierMode)
 	}
-	if m := strings.TrimSpace(c.EscalationClassifierModel); m != "" {
-		i := strings.Index(m, "/")
-		if i <= 0 || i == len(m)-1 || strings.ContainsAny(m, " \t\n") || len(m) > 200 {
-			return fmt.Errorf("FLEET_ESCALATION_CLASSIFIER_MODEL must be a model slug like provider/model (got %q)", c.EscalationClassifierModel)
-		}
+	model := strings.TrimSpace(c.EscalationClassifierModel)
+	if model == "" {
+		model = DefaultEscalationClassifierModel
 	}
+	i := strings.Index(model, "/")
+	if i <= 0 || i == len(model)-1 || strings.ContainsAny(model, " \t\n") || len(model) > 200 {
+		return fmt.Errorf("FLEET_ESCALATION_CLASSIFIER_MODEL must be a model slug like provider/model (got %q)", c.EscalationClassifierModel)
+	}
+	c.EscalationClassifierMode, c.EscalationClassifierModel = mode, model
 	return nil
 }

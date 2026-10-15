@@ -2670,6 +2670,30 @@ func (s *Store) CountUserMessagesAfterTimestamp(ctx context.Context, convID stri
 	return n, err
 }
 
+// CountUserMessagesAfterResolution counts a conversation's user messages sent
+// after an approval card was answered, for the suggest_advanced_model
+// cooldown. Timestamps are whole seconds, so on their own they cannot order a
+// message against an answer given in the same second. The answer's
+// tool_result note (written under callID right after the claim) is the exact
+// boundary in message order: only user messages with a later id count. The
+// timestamp bound still applies, so a missing note can only make the count
+// smaller (a longer cooldown), never count a message from before the answer
+// second.
+func (s *Store) CountUserMessagesAfterResolution(ctx context.Context, convID, callID string, resolvedAt int64) (int64, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM messages m
+		 WHERE m.conversation_id = $1 AND m.role = 'user' AND m.type = 'text'
+		   AND m.created_at >= $3
+		   AND m.id > COALESCE((
+		         SELECT MAX(r.id) FROM messages r
+		         WHERE r.conversation_id = $1 AND r.type = 'tool_result'
+		           AND r.created_at >= $3 AND r.content::jsonb->>'id' = $2), 0)`,
+		convID, callID, resolvedAt,
+	).Scan(&n)
+	return n, err
+}
+
 // SupersedePendingApprovals marks every pending approval for a
 // (conversation, tool) pair as rejected, with a canned result text
 // explaining it was superseded. Used when the agent stages a fresh
@@ -2911,8 +2935,10 @@ func (s *Store) AdminStats(ctx context.Context) ([]AdminRow, error) {
 		return nil, err
 	}
 
-	// Struggle counts. A user with events but no other row still gets one,
-	// like the turn_metrics pass above.
+	// Struggle counts, from live conversations only: a soft-deleted chat's
+	// events stop counting when it is deleted, as a hard delete's cascade
+	// would. A user with events but no other row still gets one, like the
+	// turn_metrics pass above.
 	rowFor := func(email string) *AdminRow {
 		if row, ok := byEmail[email]; ok {
 			return row
@@ -2922,11 +2948,13 @@ func (s *Store) AdminStats(ctx context.Context) ([]AdminRow, error) {
 		return row
 	}
 	escRows, err := s.db.QueryContext(ctx,
-		`SELECT user_email,
-		        COUNT(*) FILTER (WHERE source = 'classifier'),
-		        COUNT(*) FILTER (WHERE source = 'signal')
-		 FROM escalation_events
-		 GROUP BY user_email`,
+		`SELECT e.user_email,
+		        COUNT(*) FILTER (WHERE e.source = 'classifier'),
+		        COUNT(*) FILTER (WHERE e.source = 'signal')
+		 FROM escalation_events e
+		 JOIN conversations c ON c.id = e.conversation_id
+		 WHERE c.deleted_at IS NULL
+		 GROUP BY e.user_email`,
 	)
 	if err != nil {
 		return nil, err
@@ -2946,10 +2974,12 @@ func (s *Store) AdminStats(ctx context.Context) ([]AdminRow, error) {
 		return nil, err
 	}
 	switchRows, err := s.db.QueryContext(ctx,
-		`SELECT user_email, COUNT(*)
-		 FROM approvals
-		 WHERE tool_name = 'suggest_advanced_model' AND status = 'approved'
-		 GROUP BY user_email`,
+		`SELECT a.user_email, COUNT(*)
+		 FROM approvals a
+		 JOIN conversations c ON c.id = a.conversation_id
+		 WHERE a.tool_name = 'suggest_advanced_model' AND a.status = 'approved'
+		   AND c.deleted_at IS NULL
+		 GROUP BY a.user_email`,
 	)
 	if err != nil {
 		return nil, err

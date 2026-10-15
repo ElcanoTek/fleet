@@ -15,6 +15,8 @@ package config
 // during Load and in tests (nil reload state → direct access, same contract as
 // reload.go's Live* getters).
 
+import "strings"
+
 // liveBool reads a bool field under the runtime read lock.
 func (c *Config) liveBool(read func() bool) bool {
 	if c.reload == nil {
@@ -253,12 +255,13 @@ func (c *Config) LiveEscalationClassifier() (mode, model string, thresholdPct in
 		read()
 		c.reload.mu.RUnlock()
 	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
 	switch mode {
 	case EscalationClassifierObserve, EscalationClassifierSuggest:
 	default:
 		mode = EscalationClassifierOff
 	}
-	if model == "" {
+	if model = strings.TrimSpace(model); model == "" {
 		model = DefaultEscalationClassifierModel
 	}
 	if thresholdPct < 50 || thresholdPct > 99 {

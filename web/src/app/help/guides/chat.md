@@ -269,7 +269,7 @@ your eye lands on the answer and then on anything that needs you:
 | Interactive cards | A form, picker, checklist, comparison, chart or small calculator the assistant built for this answer. Fill it in and press its button; your answers go back as your next message. See [Interactive cards](#interactive-cards). |
 | Status | Banners for anything unusual about the turn: retrying, cancelled, failed. See [When a turn goes wrong](#11-when-a-turn-goes-wrong). |
 | Cards | Anything asking for your decision: an approval, a proposed memory, a suggested model switch. See [Cards that ask for a decision](#6-cards-that-ask-for-a-decision). |
-| Footer | The actions on a finished reply: **Copy**, **Regenerate**, **Retry with** the stronger model (when the chat is not already on it), **Branch**, **Save as workflow**, and **Save** (the answer, as a memory). Each is covered where it belongs later in the guide. |
+| Footer | The actions on a finished reply: **Copy**, **Regenerate** and **Retry with** the stronger model (both under the latest reply only; **Retry with** when the chat is not already on it), **Branch**, **Save as workflow**, and **Save** (the answer, as a memory). Each is covered where it belongs later in the guide. |
 
 Long conversations collapse their older turns behind **Show N earlier turns**,
 and a minimap along the edge lets you jump between messages.
@@ -361,8 +361,8 @@ show the same card on its own after a reply that clearly struggled (several tool
 calls failing in a row, the same step repeated, or a very long turn) and, if your
 admin hasn't turned it off, when your message reads as pushback on a wrong answer.
 All of these are suggestions. Nothing changes unless you accept. If an answer is
-wrong and you don't want to wait for a suggestion, **Retry with** under the reply
-asks again on the stronger model straight away.
+wrong and you don't want to wait for a suggestion, **Retry with** under the latest
+reply asks again on the stronger model straight away.
 
 ### Personas and skills
 
@@ -789,10 +789,11 @@ you hover over it. Here is everything in it.
 ### On the transcript
 
 **Edit message** on any of your own messages lets you change it and resend from
-that point. On any reply, the footer offers **copy**, **regenerate** (ask again,
-optionally on a different model), **Retry with** the stronger model (ask again
-on it, and keep it for the rest of the chat), and **branch**: a new, independent conversation
-that starts with everything up to that reply, so you can explore an alternative
+that point. On any reply, the footer offers **copy** and **branch**; under the
+latest reply it also offers **regenerate** (ask again, optionally on a different
+model) and **Retry with** the stronger model (ask again on it, and keep it for
+the rest of the chat). **Branch** starts a new, independent conversation
+that begins with everything up to that reply, so you can explore an alternative
 without disturbing the original. Branch when you want to keep both paths; edit
 when the earlier version was simply wrong. The footer's two save actions, **Save
 as workflow** and **Save**, are covered in [From chat to a task](#10-from-chat-to-a-task)

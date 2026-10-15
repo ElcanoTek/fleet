@@ -9,7 +9,9 @@
 //   - a terminal choice carrying a non-empty finish_reason (required: fantasy
 //     treats finish_reason:"" with no tool calls as a truncated stream and
 //     retries), and a final usage-only chunk, then data: [DONE],
-//   - GET /api/v1/models returning a tiny canned catalogue.
+//   - GET /api/v1/models returning a tiny canned catalogue,
+//   - POST /api/alpha/decisions, the Decisions API the chat escalation
+//     classifier calls (see handleDecisions for its marker).
 //
 // Fleet is pointed at it by exporting OPENROUTER_BASE_URL=<server URL> (see
 // internal/agentcore/provider.go). The real provider, SSE parser, tool loop,
@@ -212,6 +214,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/chat/completions", s.handleChat)
 	mux.HandleFunc("/api/v1/models", s.handleModels)
 	mux.HandleFunc("/api/v1/key", handleKey)
+	mux.HandleFunc("/api/alpha/decisions", handleDecisions)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "ok")

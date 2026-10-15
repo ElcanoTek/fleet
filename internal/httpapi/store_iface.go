@@ -248,6 +248,7 @@ type chatStore interface {
 	AppendApprovalResumeDroppedNotice(ctx context.Context, convID string) error
 	HasArmedApprovals(ctx context.Context, convID string) (bool, error)
 	CountUserMessagesAfterTimestamp(ctx context.Context, convID string, ts int64) (int64, error)
+	CountUserMessagesAfterResolution(ctx context.Context, convID, callID string, resolvedAt int64) (int64, error)
 
 	// Browser Web Push subscriptions (#292): the POST /push/subscribe upsert,
 	// the owner-scoped DELETE /push/unsubscribe, and the owner-scoped

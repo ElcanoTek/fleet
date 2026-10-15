@@ -182,6 +182,12 @@ func (s *Server) startStruggleCheck(conv *store.Conversation, history []agent.Hi
 // answer, records each struggle per user, and stages at most one card.
 func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *store.Conversation, user string, history []agent.HistoryEntry, res *TurnResult, check *struggleCheck) {
 	if res == nil || res.Cancelled {
+		// A stopped turn shows no card and records no struggle, but the
+		// opening check was already sent (it is detached from the turn), so
+		// it is still counted by its outcome: the metric is once per request.
+		if check != nil {
+			s.background.Go("escalation.classifier_cancelled", func() { countClassifierCheck(check) })
+		}
 		return
 	}
 	var stager *approvalStager
@@ -247,9 +253,15 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		s.classifierOutcome(checks, stage, record)
 		return
 	}
-	// Lateness is its own counter: the check is still counted once, by its
-	// eventual outcome, in the background.
-	metrics.RecordEscalationClassifierLate(checks[0].mode)
+	// Lateness is its own counter, once per request that missed the grace;
+	// each is still counted once, by its eventual outcome, in the background.
+	for _, c := range checks {
+		select {
+		case <-c.done:
+		default:
+			metrics.RecordEscalationClassifierLate(c.mode)
+		}
+	}
 	s.background.Go("escalation.classifier_late", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), agentcore.StruggleCheckTimeout+5*time.Second)
 		defer cancel()
@@ -285,18 +297,11 @@ func (s *Server) classifierOutcome(checks []*struggleCheck, stage func(source, r
 	// per-user record use the highest probability among them.
 	best, answered := 0.0, false
 	for _, c := range checks {
-		v, err := c.wait()
-		if err != nil {
-			metrics.RecordEscalationClassifierCheck(mode, "error")
-			log.Printf("escalation: classifier: %s", logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the error text.
+		v, ok := countClassifierCheck(c)
+		if !ok {
 			continue
 		}
 		answered = true
-		if v.Probability >= threshold {
-			metrics.RecordEscalationClassifierCheck(mode, "pushback")
-		} else {
-			metrics.RecordEscalationClassifierCheck(mode, "ok")
-		}
 		if v.Probability > best {
 			best = v.Probability
 		}
@@ -309,6 +314,23 @@ func (s *Server) classifierOutcome(checks []*struggleCheck, stage func(source, r
 		suggested = stage(suggestionSourceClassifier, escalationClassifierReason)
 	}
 	record(suggestionSourceClassifier, escalationSignalFrustration, &best, suggested)
+}
+
+// countClassifierCheck waits for one check and counts it by its outcome,
+// reporting whether it answered.
+func countClassifierCheck(c *struggleCheck) (agentcore.StruggleVerdict, bool) {
+	v, err := c.wait()
+	switch {
+	case err != nil:
+		metrics.RecordEscalationClassifierCheck(c.mode, "error")
+		log.Printf("escalation: classifier: %s", logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the error text.
+		return v, false
+	case v.Probability >= c.threshold:
+		metrics.RecordEscalationClassifierCheck(c.mode, "pushback")
+	default:
+		metrics.RecordEscalationClassifierCheck(c.mode, "ok")
+	}
+	return v, true
 }
 
 // startSteerCheck classifies the last message the user steered into the

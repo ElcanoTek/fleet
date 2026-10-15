@@ -32,3 +32,24 @@ func TestValidateEscalationClassifier(t *testing.T) {
 		}
 	}
 }
+
+// A value that validates is stored normalized, so the live read sees the mode
+// the operator meant: " Suggest " must not pass boot and then read as off.
+func TestValidateEscalationClassifier_Normalizes(t *testing.T) {
+	cfg := &Config{EscalationClassifierMode: " Suggest ", EscalationClassifierModel: " liquid/d1 ", EscalationClassifierThreshold: 80}
+	if err := cfg.validateEscalationClassifier(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	mode, model, _ := cfg.LiveEscalationClassifier()
+	if mode != EscalationClassifierSuggest || model != "liquid/d1" {
+		t.Fatalf("live = %q, %q; want suggest, liquid/d1", mode, model)
+	}
+
+	empty := &Config{}
+	if err := empty.validateEscalationClassifier(); err != nil {
+		t.Fatalf("validate empty: %v", err)
+	}
+	if mode, model, _ := empty.LiveEscalationClassifier(); mode != EscalationClassifierSuggest || model != DefaultEscalationClassifierModel {
+		t.Fatalf("empty live = %q, %q; want the defaults", mode, model)
+	}
+}

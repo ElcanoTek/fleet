@@ -18,6 +18,7 @@ type reofferStore struct {
 	convModel    string
 	staged       int
 	countedSince int64
+	countedCall  string
 }
 
 func (s *reofferStore) Get(context.Context, string, string) (*store.Conversation, error) {
@@ -28,6 +29,10 @@ func (s *reofferStore) LatestApprovalByTool(context.Context, string, string) (*s
 }
 func (s *reofferStore) CountUserMessagesAfterTimestamp(_ context.Context, _ string, since int64) (int64, error) {
 	s.countedSince = since
+	return s.userTurns, nil
+}
+func (s *reofferStore) CountUserMessagesAfterResolution(_ context.Context, _, callID string, resolvedAt int64) (int64, error) {
+	s.countedSince, s.countedCall = resolvedAt, callID
 	return s.userTurns, nil
 }
 func (s *reofferStore) CreateApproval(ctx context.Context, conv, user, tool, call, args string, expiry int64, seat store.ApprovalSeat) (*store.Approval, error) {
@@ -76,13 +81,13 @@ func TestSuggestionReofferedAfterSwitchingBack(t *testing.T) {
 // since it appeared: a card left pending for a while must not have its
 // cooldown already spent when it is answered.
 func TestSuggestionCooldownCountsFromResolution(t *testing.T) {
-	st := &reofferStore{prior: &store.Approval{Status: "approved", CreatedAt: 100, ResolvedAt: 900}, convModel: "fast/model"}
+	st := &reofferStore{prior: &store.Approval{ID: "ap", ToolCallID: "call_1", Status: "approved", CreatedAt: 100, ResolvedAt: 900}, convModel: "fast/model"}
 	a := &approvalStager{ctx: context.Background(), store: st, conversationID: "c", userEmail: "u", sink: &recordingSink{}}
 	if _, err := a.StageHostSuggestion(suggestionSourceSignal, "r"); err != nil {
 		t.Fatal(err)
 	}
-	if st.countedSince != 899 {
-		t.Errorf("counted since %d, want the second before the resolution (messages in the resolution's own second count)", st.countedSince)
+	if st.countedSince != 900 || st.countedCall != "call_1" {
+		t.Errorf("counted from %d/%q, want the resolution (900) anchored on its note (call_1)", st.countedSince, st.countedCall)
 	}
 	// A row resolved before resolved_at was recorded falls back to created_at.
 	st.prior = &store.Approval{Status: "rejected", CreatedAt: 100}

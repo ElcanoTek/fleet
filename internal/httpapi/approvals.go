@@ -652,18 +652,16 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 		case "approved", "rejected":
 			// The cooldown runs from the user's answer, not from when the card
 			// appeared: messages sent while it sat pending are not "after" it.
-			// Rows resolved before resolved_at was recorded fall back to
-			// created_at.
-			// Timestamps are whole seconds and the count is strictly after,
-			// so count from the second before the resolution: a message sent
-			// in the same second as the answer is after it. (Legacy rows keep
-			// created_at, where the staging turn's own message may share the
-			// second and must not count.)
-			since := prior.ResolvedAt - 1
-			if prior.ResolvedAt <= 0 {
-				since = prior.CreatedAt
+			// Seconds alone cannot order a message against an answer in the
+			// same second, so the store counts from the answer's history note,
+			// in message order. Rows resolved before resolved_at was recorded
+			// fall back to created_at.
+			var n int64
+			if prior.ResolvedAt > 0 {
+				n, err = a.store.CountUserMessagesAfterResolution(a.ctx, a.conversationID, resolutionCallID(prior), prior.ResolvedAt)
+			} else {
+				n, err = a.store.CountUserMessagesAfterTimestamp(a.ctx, a.conversationID, prior.CreatedAt)
 			}
-			n, err := a.store.CountUserMessagesAfterTimestamp(a.ctx, a.conversationID, since)
 			if err != nil {
 				return "", "", fmt.Errorf("count user turns: %w", err)
 			}

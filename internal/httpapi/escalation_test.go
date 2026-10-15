@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -354,5 +356,77 @@ func TestEscalateAfterTurn_ClassifiesMidTurnSteer(t *testing.T) {
 	}
 	if args := pendingSuggestion(t, s, user, conv.ID); args == nil || args["source"] != suggestionSourceClassifier {
 		t.Fatalf("card = %v, want a classifier card", args)
+	}
+}
+
+// counterValue reads one series from the metrics registry (0 when absent).
+func counterValue(t *testing.T, series string) float64 {
+	t.Helper()
+	for _, line := range strings.Split(metrics.Render(), "\n") {
+		if v, ok := strings.CutPrefix(line, series+" "); ok {
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				t.Fatalf("parse %q: %v", line, err)
+			}
+			return f
+		}
+	}
+	return 0
+}
+
+// Every request still running at the grace deadline counts as late, and each
+// is counted once by its eventual outcome.
+func TestEscalateAfterTurn_CountsEachLateCheck(t *testing.T) {
+	s := serverFixture(t)
+	s.agent = &fakeTurnEngine{}
+	s.cfg.OpenRouterAPIKey = "sk-or-test"
+	s.cfg.EscalationClassifierMode = config.EscalationClassifierObserve
+	s.cfg.EscalationClassifierModel = "acme/decider"
+	s.cfg.EscalationClassifierThreshold = 80
+	release := make(chan struct{})
+	prev := checkStruggle
+	checkStruggle = func(context.Context, string, string, string) (agentcore.StruggleVerdict, error) {
+		<-release
+		return agentcore.StruggleVerdict{Probability: 0.1}, nil
+	}
+	t.Cleanup(func() { checkStruggle = prev })
+
+	const user = "twolate@x.com"
+	conv := seedConv(t, s, user)
+	history := []agent.HistoryEntry{textEntry("user", "revenue by month"), textEntry("assistant", "Total is $1M.")}
+	opening := s.startStruggleCheck(conv, history, "by month please", "")
+	turn := []agent.HistoryEntry{textEntry("user", "by month please"), textEntry("assistant", "Working"), textEntry("user", "no, BY MONTH")}
+
+	lateSeries := `fleet_escalation_classifier_late_total{mode="observe"}`
+	okSeries := `fleet_escalation_classifier_checks_total{mode="observe",outcome="ok"}`
+	lateBefore, okBefore := counterValue(t, lateSeries), counterValue(t, okSeries)
+	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t1"), conv, user, history, &TurnResult{NewHistory: turn}, opening)
+	if got := counterValue(t, lateSeries) - lateBefore; got != 2 {
+		t.Errorf("late counted %v times, want 2 (both requests missed the grace)", got)
+	}
+	close(release)
+	s.background.StopAndWait()
+	if got := counterValue(t, okSeries) - okBefore; got != 2 {
+		t.Errorf("outcomes counted %v times, want 2", got)
+	}
+}
+
+// A stopped turn shows no card and records nothing, but the classifier
+// request it already sent is still counted by its outcome.
+func TestEscalateAfterTurn_CancelledTurnCountsCheck(t *testing.T) {
+	s := serverFixture(t)
+	s.agent = &fakeTurnEngine{}
+	const user = "stopped@x.com"
+	conv := seedConv(t, s, user)
+	series := `fleet_escalation_classifier_checks_total{mode="suggest",outcome="pushback"}`
+	before := counterValue(t, series)
+	check := doneCheck(config.EscalationClassifierSuggest, 0.97, nil)
+	s.escalateAfterTurn(context.Background(), newTurnBuffer(conv.ID, "t1"), conv, user, nil, &TurnResult{Cancelled: true}, check)
+	s.background.StopAndWait()
+	if got := counterValue(t, series) - before; got != 1 {
+		t.Errorf("cancelled turn's check counted %v times, want 1", got)
+	}
+	if pendingSuggestion(t, s, user, conv.ID) != nil || len(escalationEvents(t, s, conv.ID)) != 0 {
+		t.Fatal("a stopped turn must not stage a card or record a struggle")
 	}
 }

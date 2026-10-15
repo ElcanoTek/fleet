@@ -297,6 +297,61 @@ func handleKey(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, `{"data":{"label":"fake-llm","usage":0,"is_free_tier":false}}`)
 }
 
+// ── /api/alpha/decisions ──
+
+// PushbackMarker in the latest user message of a decision request's
+// state.conversation makes every yes/no answer 0.95; without it the answer is
+// 0.05. So a live spec can drive the escalation classifier's card
+// (docs/CHAT-ESCALATION.md) deterministically, and every other chat message
+// classifies as normal progress.
+const PushbackMarker = "[[pushback]]"
+
+func handleDecisions(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"error":{"message":"Missing Authentication header","code":401}}`)
+		return
+	}
+	var req struct {
+		Model     string                     `json:"model"`
+		State     map[string]string          `json:"state"`
+		Questions map[string]json.RawMessage `json:"questions"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil || len(req.Questions) == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"message":"invalid decision request","code":400}}`)
+		return
+	}
+	conversation := req.State["conversation"]
+	latest := conversation
+	if i := strings.LastIndex(conversation, "User:"); i >= 0 {
+		latest = conversation[i:]
+	}
+	p := 0.05
+	if strings.Contains(latest, PushbackMarker) {
+		p = 0.95
+	}
+	type answer struct {
+		Type string  `json:"type"`
+		Noul float64 `json:"noul"`
+	}
+	answers := make(map[string]answer, len(req.Questions))
+	for id := range req.Questions {
+		answers[id] = answer{Type: "noul", Noul: p}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"model":    req.Model,
+		"provider": "fake-llm",
+		"answers":  answers,
+		"usage":    map[string]any{"cost": 0},
+	})
+}
+
 // ── /api/v1/models ──
 
 func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
