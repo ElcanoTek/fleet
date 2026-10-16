@@ -255,6 +255,33 @@ same PR.
   scope-and-deviations — so fill it in rather than deleting it. See
   `CONTRIBUTING.md` for branch/PR conventions.
 
+## Dependencies and in-housed code
+
+Prefer the standard library or a small piece of owned code; add a dependency
+only when it earns its keep (a protocol, a large or security-critical body of
+code we should not own). Dependabot proposes updates (daily, 7-day cooldown,
+grouped); a human merges only when the bump earns it — a specific commit we
+need, or a CVE whose code path we actually reach — otherwise it waits. In-housed
+code is not tracked by Dependabot. On a CVE, check reachability first
+(`make govulncheck` is call-graph aware); delete the affected code if it is
+unused, adapt the upstream patch if it is used.
+
+| In-housed | Lives in | Upstream (version) | Licence |
+|-----------|----------|--------------------|---------|
+| cron parser + DST-safe `Next` | `internal/cron` | robfig/cron v3.0.1 | MIT |
+| sched migration runner | `internal/sched/db/migrate.go` | golang-migrate v4.20.1 (state-compatible re-implementation) | MIT |
+| Web Push (RFC 8291/8292) | `internal/webpush/protocol.go` | replaces webpush-go v1.4.0 (own code) | — |
+| HTML → Markdown | `internal/tools/htmlmd` | html-to-markdown v1.6.0 | MIT |
+| rotating log file | `internal/logging/rotate` | lumberjack v2.2.1 | MIT |
+| ClientIPFromXFF, Recoverer, WrapResponseWriter | `internal/httpmw` | chi v5.3.2 `middleware` (chi stays the router) | MIT |
+| code highlighting | `web/src/app/chat/ui/highlight/` | prismjs 1.30.0, refractor 5.0.0, react-syntax-highlighter 16.1.2 | MIT |
+
+Each copied file names its upstream, version and path and carries the licence
+beside it; none of them ships a data file to refresh. What was kept
+byte-for-byte, what changed and the tests pinning it:
+[`docs/IN-HOUSED-DEPENDENCIES.md`](docs/IN-HOUSED-DEPENDENCIES.md). A fix there
+is ours to make — do not re-add the package to pick one up.
+
 ## Where to look
 
 The docs index is [`docs/README.md`](docs/README.md): one bullet per design
