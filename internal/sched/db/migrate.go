@@ -116,11 +116,13 @@ func loadMigrations(fsys fs.FS, dir string) ([]schedMigration, error) {
 		if m == nil {
 			continue
 		}
-		v, err := strconv.ParseUint(m[1], 10, 63)
+		// Atoi refuses a version that does not fit an int (the tracking column
+		// is a bigint), so no conversion can wrap; the pattern already holds it
+		// to digits, so it is never negative.
+		version, err := strconv.Atoi(m[1])
 		if err != nil {
-			return nil, fmt.Errorf("parse version in %s: %w", e.Name(), err)
+			return nil, fmt.Errorf("migration %s: version out of range: %w", e.Name(), err)
 		}
-		version := int(v)
 		key := strconv.Itoa(version) + "/" + m[3]
 		if seen[key] {
 			return nil, fmt.Errorf("duplicate migration file: %s", e.Name())

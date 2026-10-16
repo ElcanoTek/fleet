@@ -116,6 +116,10 @@ func TestLoadMigrations(t *testing.T) {
 	if !reflect.DeepEqual(migs, want) {
 		t.Fatalf("loadMigrations = %+v, want %+v", migs, want)
 	}
+	over := fstest.MapFS{"m/99999999999999999999_huge.up.sql": {Data: []byte("SELECT 1;")}}
+	if _, err := loadMigrations(over, "m"); err == nil || !strings.Contains(err.Error(), "version out of range") {
+		t.Fatalf("over-range version: err = %v", err)
+	}
 	fsys["m/10_ten_again.up.sql"] = &fstest.MapFile{Data: []byte("SELECT 1;")}
 	if _, err := loadMigrations(fsys, "m"); err == nil || !strings.Contains(err.Error(), "duplicate migration file") {
 		t.Fatalf("duplicate version: err = %v", err)
