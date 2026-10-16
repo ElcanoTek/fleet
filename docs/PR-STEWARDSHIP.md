@@ -137,8 +137,8 @@ a flaky test stays flaky for a year.
 ## Where each agent finds this
 
 - **`AGENTS.md`** — the [agents.md](https://agents.md) instructions file every
-  agent reads (Codex, Cursor, opencode, Goose, Gemini CLI; Claude Code via the
-  `CLAUDE.md` symlink). Its "Where to look" index links the skill and this
+  agent reads (Codex, Cursor, opencode, Goose, Gemini CLI, and Claude Code,
+  which loads it directly). Its "Where to look" index links the skill and this
   page.
 - **`.agents/skills/steward/SKILL.md`** — an
   [Agent Skills](https://agentskills.io) skill in the cross-client
@@ -146,8 +146,7 @@ a flaky test stays flaky for a year.
   GitHub Copilot scan natively. Claude Code scans only `.claude/skills/`, so
   `.claude/skills/steward` is a **symlink** to the `.agents/` directory (Claude
   Code follows symlinked skill entries), and its PR-driving loop reads that
-  path before acting on events. The same pattern as `CLAUDE.md → AGENTS.md`;
-  nothing lives under `.claude/` but the link.
+  path before acting on events. Nothing lives under `.claude/` but the link.
 
 Adding an agent that scans only its own directory means one more symlink
 **in that agent's directory** pointing back at `.agents/skills/steward` —
