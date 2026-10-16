@@ -1503,9 +1503,10 @@ paths:
       summary: Migration status — applied vs pending sched-DB migrations (#256).
       description: >-
         Read-only operator view of the scheduler (sched) database's schema
-        migrations: the current golang-migrate version, whether the tracking row
-        is dirty (a prior migration failed mid-flight and needs a `migrate force`
-        + restart), and the applied vs pending migration lists derived from the
+        migrations: the current tracking-row version (golang-migrate's format,
+        hence `runner: golang-migrate`), whether the tracking row is dirty (a
+        prior migration failed mid-flight and needs a `fleet migrate force` +
+        restart), and the applied vs pending migration lists derived from the
         embedded `.up.sql` files. Applies nothing — safe to call any time.
         Admin-only. The chat server exposes the equivalent for its own database
         at the same path on its port.

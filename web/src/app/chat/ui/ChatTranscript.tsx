@@ -191,7 +191,7 @@ export type ChatTranscriptProps = {
 
 // The transcript is virtualized (@tanstack/react-virtual): only the rows near
 // the viewport are mounted, so a long conversation no longer pays to render
-// react-markdown + react-syntax-highlighter for every message on every keystroke
+// react-markdown + the syntax highlighter for every message on every keystroke
 // or scroll. To feed a flat, stable-indexed list to the virtualizer, the former
 // inline `messages.map` — with its compaction-boundary early-returns and the
 // leading summarize card/error — is flattened into an explicit row model, built

@@ -3,6 +3,8 @@ package admincli
 import (
 	"encoding/json"
 	"errors"
+	"flag"
+	"io"
 	"testing"
 
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
@@ -62,5 +64,33 @@ func TestMigrateStatusEnvelope(t *testing.T) {
 	}
 	if got["chat"]["runner"] != "hand-rolled" {
 		t.Errorf("chat report missing: %v", got["chat"])
+	}
+}
+
+func TestParseForceArgs(t *testing.T) {
+	for _, c := range []struct {
+		argv []string
+		want int
+		ok   bool
+	}{
+		{[]string{"73"}, 73, true},
+		{[]string{"-1"}, -1, true},
+		{[]string{"73", "--no-confirm"}, 73, true},
+		{[]string{"--database-url", "postgres://x/5", "73"}, 73, true},
+		{[]string{"--database-url=postgres://x", "--no-confirm", "-1"}, -1, true},
+		{nil, 0, false},
+		{[]string{"73", "74"}, 0, false},
+		{[]string{"seventy"}, 0, false},
+		{[]string{"-2"}, 0, false},
+		{[]string{"73", "--bogus"}, 0, false},
+	} {
+		fs := flag.NewFlagSet("t", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		fs.String("database-url", "", "")
+		fs.Bool("no-confirm", false, "")
+		got, ok := parseForceArgs(fs, c.argv)
+		if ok != c.ok || (ok && got != c.want) {
+			t.Errorf("parseForceArgs(%q) = %d, %v; want %d, %v", c.argv, got, ok, c.want, c.ok)
+		}
 	}
 }

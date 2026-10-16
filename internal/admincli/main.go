@@ -299,6 +299,7 @@ Git worktree isolation hygiene (#180; tasks with worktree_config enabled):
 
 Database migrations (#256):
   fleet migrate status [--database-url <dsn>] [--json]   (read-only: applied vs pending for the chat + sched DBs)
+  fleet migrate force <version> [--database-url <dsn>] [--no-confirm]   (sched DB: clear a dirty row after a failed migration)
 
 Backup / restore (pg_dump -Fc / pg_restore; one dump file per DB):
   fleet backup  [--db=chat|sched|all] [--out DIR]   (writes fleet-<db>-<stamp>.dump; prints each path)

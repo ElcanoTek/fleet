@@ -255,6 +255,7 @@ above fails otherwise.
 - [`HOOKS.md`](HOOKS.md) — Governed lifecycle hooks (#788)
 - [`HOSTED-CONNECTORS-RUNBOOK.md`](HOSTED-CONNECTORS-RUNBOOK.md) — Hosted MCP connectors — operator runbook
 - [`implementation-plans-enhancements.md`](implementation-plans-enhancements.md) — Implementation plans: enhancements (all shipped)
+- [`IN-HOUSED-DEPENDENCIES.md`](IN-HOUSED-DEPENDENCIES.md) — In-housed dependencies
 - [`INPUT-QUEUE.md`](INPUT-QUEUE.md) — Input queue & mid-turn steering (#785)
 - [`INSTALLER.md`](INSTALLER.md) — The public one-line installer (`install.sh`)
 - [`keyboard-shortcuts.md`](keyboard-shortcuts.md) — Keyboard shortcuts

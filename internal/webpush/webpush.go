@@ -2,7 +2,8 @@
 // delivers small, LOW-DETAIL notifications ("task complete", "approval
 // needed", "waiting for your answer") to the browsers a user opted in from,
 // even when the fleet tab is backgrounded or closed, via the Web Push
-// protocol (RFC 8030/8291/8292, github.com/SherClockHolmes/webpush-go).
+// protocol (RFC 8030/8291/8292, implemented on the standard library in
+// protocol.go).
 //
 // Security posture (matches the project invariants):
 //
@@ -46,8 +47,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	webpushgo "github.com/SherClockHolmes/webpush-go"
 
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -176,12 +175,12 @@ type SubscriptionStore interface {
 type Service struct {
 	cfg   Config
 	store SubscriptionStore
-	// client is the HTTP seam handed to webpush-go, overridable in tests so no
-	// real relay is contacted. Defaults to newClient's.
-	client webpushgo.HTTPClient
+	// client is the HTTP seam every send goes through, overridable in tests so
+	// no real relay is contacted. Defaults to newClient's.
+	client HTTPClient
 	// logf is the package logger seam, overridable in tests. It must never be
 	// handed a secret — log lines carry only emails/endpoints hosts, statuses,
-	// and error text from webpush-go (which does not echo keys).
+	// and error text from send (which never quotes a key or an endpoint).
 	logf func(format string, args ...any)
 }
 
@@ -196,7 +195,7 @@ func New(cfg Config, st SubscriptionStore) *Service {
 // send (VAPID signing, payload encryption) with no network. ValidateEndpoint
 // still gates every send, but the redirect policy is the caller's client's, so
 // production code uses New. A nil client gets New's.
-func NewWithHTTPClient(cfg Config, st SubscriptionStore, client webpushgo.HTTPClient) *Service {
+func NewWithHTTPClient(cfg Config, st SubscriptionStore, client HTTPClient) *Service {
 	if !cfg.Enabled() {
 		return nil
 	}
@@ -237,7 +236,7 @@ func newClient() *http.Client {
 // while strings.ToLower folds some letters to ASCII ("İ" to "i"), so a Unicode
 // lookalike of a listed host would match here and dial a domain anyone can
 // register. A push service never issues one. A port is refused too: browsers
-// never send one, and webpush-go signs the VAPID audience from the host as
+// never send one, and the VAPID audience is signed from the host as
 // written, so an explicit ":443" would make a row the push service refuses.
 func ValidateEndpoint(endpoint string) error {
 	u, err := url.Parse(endpoint)
@@ -344,7 +343,7 @@ type pushPayload struct {
 // (404/410) is deleted so dead browsers age out. Returns the first hard error
 // (store read, or a marshal failure) — send failures are best-effort.
 // nil-safe no-op when the service is disabled.
-func (s *Service) sendToUser(ctx context.Context, userEmail, title, body, deepLink string, urgency webpushgo.Urgency) error {
+func (s *Service) sendToUser(ctx context.Context, userEmail, title, body, deepLink string, urgency Urgency) error {
 	if !s.Enabled() || strings.TrimSpace(userEmail) == "" {
 		return nil
 	}
@@ -368,7 +367,7 @@ func (s *Service) sendToUser(ctx context.Context, userEmail, title, body, deepLi
 // sendOne pushes one payload to one subscription, retiring the row when the
 // relay says the endpoint is gone. Errors are logged, never returned — one
 // dead browser must not mask delivery to the user's other browsers.
-func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSubscription, urgency webpushgo.Urgency) {
+func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSubscription, urgency Urgency) {
 	// A row stored before endpoints were checked, or written straight to the
 	// database, is never sent to: the subscribe-time check is not the only
 	// gate. It can never be delivered, so it is retired like an endpoint the
@@ -380,16 +379,16 @@ func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSub
 		}
 		return
 	}
-	resp, err := webpushgo.SendNotificationWithContext(ctx, payload, &webpushgo.Subscription{
-		Endpoint: sub.Endpoint,
-		Keys:     webpushgo.Keys{Auth: sub.KeysAuth, P256dh: sub.KeysP256dh},
-	}, &webpushgo.Options{
-		HTTPClient:      s.client,
-		Subscriber:      vapidSubscriber(s.cfg.Contact),
+	resp, err := send(ctx, s.client, pushMessage{
+		Endpoint:        sub.Endpoint,
+		Auth:            sub.KeysAuth,
+		P256dh:          sub.KeysP256dh,
+		Payload:         payload,
 		TTL:             payloadTTLSeconds,
 		Urgency:         urgency,
 		VAPIDPublicKey:  s.cfg.VAPIDPublicKey,
 		VAPIDPrivateKey: s.cfg.VAPIDPrivateKey,
+		Subscriber:      vapidSubscriber(s.cfg.Contact),
 	})
 	if err != nil {
 		// A transport error is a *url.Error whose text quotes the whole
@@ -428,9 +427,10 @@ func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSub
 	}
 }
 
-// vapidSubscriber is the contact in the form webpush-go expects. webpush-go
-// writes the VAPID token's "sub" claim itself: it keeps a contact that starts
-// with "https:" (lower case only) and puts "mailto:" in front of anything else.
+// vapidSubscriber is the contact in the form the VAPID signer expects. The
+// signer (vapidAuthorization, kept from webpush-go) writes the token's "sub"
+// claim itself: it keeps a contact that starts with "https:" (lower case only)
+// and puts "mailto:" in front of anything else.
 // FLEET_VAPID_CONTACT is documented (and printed by `fleet generate-vapid-keys`)
 // as a whole "mailto:" URI, so passing it through made the claim
 // "mailto:mailto:…". FCM accepts that; Apple's push service refuses every such
@@ -506,7 +506,7 @@ func (s *Service) SendEvent(ctx context.Context, ev notify.Event) error {
 	if !ok {
 		return nil
 	}
-	return s.sendToUser(ctx, ev.Audience, title, "", ev.LogURL, webpushgo.UrgencyNormal)
+	return s.sendToUser(ctx, ev.Audience, title, "", ev.LogURL, UrgencyNormal)
 }
 
 // eventTitle renders the notification title for a task-lifecycle event, or
@@ -549,7 +549,7 @@ func (s *Service) NotifyApprovalRequired(ctx context.Context, userEmail, convers
 	if !s.Enabled() || !s.cfg.OnApprovalRequest {
 		return nil
 	}
-	return s.sendToUser(ctx, userEmail, "⚠ Approval needed: "+toolName, "", s.ConversationLink(conversationID), webpushgo.UrgencyHigh)
+	return s.sendToUser(ctx, userEmail, "⚠ Approval needed: "+toolName, "", s.ConversationLink(conversationID), UrgencyHigh)
 }
 
 // NotifyApprovalFinished tells the conversation owner that an approved call
@@ -562,7 +562,7 @@ func (s *Service) NotifyApprovalFinished(ctx context.Context, userEmail, convers
 	if !s.Enabled() || !s.cfg.OnApprovalRequest {
 		return nil
 	}
-	return s.sendToUser(ctx, userEmail, approvalFinishedTitle(label, failed), "", s.ConversationLink(conversationID), webpushgo.UrgencyNormal)
+	return s.sendToUser(ctx, userEmail, approvalFinishedTitle(label, failed), "", s.ConversationLink(conversationID), UrgencyNormal)
 }
 
 // NotifyResumeSkipped tells the conversation owner that fleet did not carry
@@ -573,7 +573,7 @@ func (s *Service) NotifyResumeSkipped(ctx context.Context, userEmail, conversati
 	if !s.Enabled() || !s.cfg.OnApprovalRequest {
 		return nil
 	}
-	return s.sendToUser(ctx, userEmail, "⏸ Waiting for you: the chat did not continue on its own", "", s.ConversationLink(conversationID), webpushgo.UrgencyHigh)
+	return s.sendToUser(ctx, userEmail, "⏸ Waiting for you: the chat did not continue on its own", "", s.ConversationLink(conversationID), UrgencyHigh)
 }
 
 // approvalFinishedTitle renders the finished-call title. Pure, so the exact

@@ -14,10 +14,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/robfig/cron/v3"
-
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/cron"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 

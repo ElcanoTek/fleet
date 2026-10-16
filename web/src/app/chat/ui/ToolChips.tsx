@@ -26,8 +26,8 @@ import { resolveWorkspaceHref } from "./workspaceHref";
 import { conversationApiPath } from "@/app/lib/conversationApiUrl";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 
-// The syntax highlighter (react-syntax-highlighter + grammars, ~75 KiB
-// transfer) is the single largest dependency of the initial /chat bundle,
+// The syntax highlighter (CodeHighlight: the vendored Prism tokenizer +
+// grammars) would be one of the larger pieces of the initial /chat bundle,
 // but nothing renders it until the user EXPANDS a tool chip — every chip
 // starts collapsed. React.lazy defers the whole module to a separate chunk
 // fetched on first expand; until it arrives CodeBlock shows the same plain

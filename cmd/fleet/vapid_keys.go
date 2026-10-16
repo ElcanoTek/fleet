@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	webpushgo "github.com/SherClockHolmes/webpush-go"
+	"github.com/ElcanoTek/fleet/internal/webpush"
 )
 
 // `fleet generate-vapid-keys` (#292): generate a fresh VAPID (RFC 8292)
@@ -22,7 +22,7 @@ import (
 // on stdout must be an env line the loader will parse — an error message there
 // would land in the env file as a silently-skipped garbage line.
 func runGenerateVAPIDKeys(w, errW io.Writer) int {
-	return generateVAPIDKeysWith(webpushgo.GenerateVAPIDKeys, w, errW)
+	return generateVAPIDKeysWith(webpush.GenerateVAPIDKeys, w, errW)
 }
 
 // generateVAPIDKeysWith is runGenerateVAPIDKeys with the key generator injected,

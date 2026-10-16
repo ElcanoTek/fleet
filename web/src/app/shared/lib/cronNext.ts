@@ -165,7 +165,7 @@ const DAY_MS = 86_400_000;
 // a UTC epoch) is shown by an instant within this window of it. The preview
 // only ever evaluates from now forward, where that holds; historical periods
 // outside it (Guam's pre-1845 UTC-14:21) are the backend's concern, and
-// internal/cronnext handles them without these bounds.
+// internal/cron handles them without these bounds.
 const MAX_AHEAD_MS = 14 * 3_600_000;
 const MAX_BEHIND_MS = 12 * 3_600_000;
 // Probe offsets this far either side of a day: past any transition that can

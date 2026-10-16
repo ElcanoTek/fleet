@@ -39,10 +39,14 @@ permissions:
 # cancellation is scoped to `pull_request`, where the superseding run covers
 # strictly newer code.
 concurrency:
-  # github.ref already differs between a PR (refs/pull/N/merge) and a push to
-  # main (refs/heads/main); event_name is included so the two can never share a
-  # group and cancel each other.
-  group: ci-${{ github.event_name }}-${{ github.ref }}
+  # A PR's runs share one group per ref (refs/pull/N/merge), so a new push
+  # cancels the superseded run. A push to main gets a group per COMMIT: GitHub
+  # keeps at most one running plus one pending run per group and a newly
+  # queued run displaces the pending one even with cancel-in-progress off, so a
+  # shared main group let a third push drop the second's run — and every green
+  # push to main is a release. event_name keeps a PR and a push from ever
+  # sharing a group.
+  group: ci-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

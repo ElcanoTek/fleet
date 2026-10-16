@@ -6,7 +6,7 @@ pattern) across **two separate PostgreSQL databases**, each with its own runner:
 | Database | Package | Runner | Files | Down-migrations |
 |----------|---------|--------|-------|-----------------|
 | **chat** | `internal/store` | hand-rolled (`applyMigrations`) | `NNN_name.sql` | none, by design |
-| **sched** (orchestrator) | `internal/sched/db` | [`golang-migrate`](https://github.com/golang-migrate/migrate) | `NNN_name.up.sql` + `NNN_name.down.sql` | yes |
+| **sched** (orchestrator) | `internal/sched/db` | in-house, [`golang-migrate`](https://github.com/golang-migrate/migrate)-compatible (`migrate.go`) | `NNN_name.up.sql` + `NNN_name.down.sql` | yes |
 
 Both are designed for **single-box deployments**: the fleet process migrates its
 databases at boot, and a deploy is a brief restart, not a rolling multi-node
@@ -41,21 +41,30 @@ To add one:
 2. Write plain DDL. The runner guarantees exactly-once execution.
 3. Never touch a shipped migration — add a new one.
 
-## Sched DB — golang-migrate (`internal/sched/db/migrate.go`)
+## Sched DB — golang-migrate-compatible runner (`internal/sched/db/migrate.go`)
 
 - Migration files are paired `migrations/NNN_name.up.sql` /
   `NNN_name.down.sql`.
-- golang-migrate advances the schema **linearly** and tracks a single
-  `schema_migrations` row: `{version, dirty}`.
+- The runner advances the schema **linearly** and tracks a single
+  `schema_migrations` row: `{version, dirty}`. It was golang-migrate until the
+  runner was in-housed ([`IN-HOUSED-DEPENDENCIES.md`](IN-HOUSED-DEPENDENCIES.md));
+  the table, the advisory-lock key and the dirty-row protocol are byte-for-byte
+  golang-migrate's, so a database migrated by an older release continues
+  cleanly and the external `migrate` CLI still reads it.
+- Each `.up.sql` runs as one multi-statement query on the locked connection,
+  which Postgres executes as a single implicit transaction.
 - If a migration fails mid-flight the row is marked **dirty** and the process
-  refuses to start until an operator inspects the DB and force-sets the last-good
-  version:
+  refuses to start until an operator inspects the DB, undoes whatever the
+  failed file left behind, and force-sets the last version that is actually
+  applied (`-1` for none):
 
   ```sh
-  migrate -path internal/sched/db/migrations -database "$FLEET_SCHED_DATABASE_URL" force <version>
+  fleet migrate force <version>     # asks first; --no-confirm for scripts
   ```
 
-  then restarts fleet.
+  then restarts fleet. `force` runs no SQL beyond the tracking row, refuses a
+  version this build does not ship, and resolves the DSN like
+  `migrate status` (sched DB only).
 
 Every new sched migration must ship both an `.up.sql` and a `.down.sql`.
 
@@ -66,7 +75,7 @@ each server reports **its own** database:
 
 - **chat server** — `GET /admin/migrations` → the chat DB status.
 - **orchestrator** — `GET /admin/migrations` (documented in `docs/openapi.yaml`)
-  → the sched DB status, including the current golang-migrate version and the
+  → the sched DB status, including the current tracking-row version and the
   `dirty` flag.
 
 Both apply nothing and are safe to call any time. From the command line, one verb
@@ -158,7 +167,8 @@ and restore with `fleet restore --db=chat|sched <dump-file>` if needed.
   design; a CLI that reverses a hand-rolled migration would reverse that design
   decision and perform a destructive operation, so it is deferred to its own
   reviewed change. Recover today by writing a corrective forward migration or by
-  restoring a backup. (The sched DB *does* carry `.down.sql` files; reversing it
-  is a manual `migrate … down`/`force` by an operator.)
+  restoring a backup. (The sched DB *does* carry `.down.sql` files; fleet never
+  runs them — reversing a sched migration is an operator applying the
+  `.down.sql` by hand, then `fleet migrate force` to the version below it.)
 - **A pre-migration `--backup-first` auto-dump** folded into the migrate path.
   Use `fleet backup` explicitly for now.

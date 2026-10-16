@@ -1,0 +1,15 @@
+[
+  {"language": "python", "code": "import os\nfrom typing import Any\n\n@dataclass\nclass Foo(Base):\n    \"\"\"Doc string.\n    Two lines.\"\"\"\n    x: int = 0x1F\n\n    def bar(self, y=1.5e3, *args, **kw) -> None:\n        # comment with 'quote'\n        s = f\"{self.x!r:>10} and {{braces}} {y + 1}\"\n        r = rb'\\d+' if y else None\n        return [i ** 2 for i in range(10) if i % 2 == 0]\n\nprint(Foo().bar(), True, False, len(\"x\"))\n"},
+  {"language": "python", "code": "x = 1"},
+  {"language": "python", "code": ""},
+  {"language": "python", "code": "def f():\n\tpass\n\n\n# trailing\n"},
+  {"language": "bash", "code": "#!/usr/bin/env bash\nset -euo pipefail\nfor f in *.txt; do\n  echo \"file: $f ${f%.txt} $(wc -l < \"$f\")\" | grep -v '^#' >> out.log 2>&1\ndone\nif [[ -n \"$HOME\" && $# -gt 0 ]]; then export PATH=\"$HOME/bin:$PATH\"; fi\ncat <<EOF\nheredoc $USER\nEOF\nls -la /tmp && cd - || exit 1\n"},
+  {"language": "shell", "code": "curl -sSL https://example.com/x.sh | sh -s -- --flag=1 # comment\nsudo systemctl restart fleet"},
+  {"language": "json", "code": "{\n  \"name\": \"fleet\",\n  \"n\": -1.5e10,\n  \"ok\": true,\n  \"none\": null,\n  \"list\": [1, \"two\", {\"three\": 3}],\n  \"esc\": \"a \\\"quoted\\\" \\u00e9\"\n}"},
+  {"language": "json", "code": "[]"},
+  {"language": "yaml", "code": "%YAML 1.2\n---\n# comment\nname: fleet\nversion: 1.2\nenabled: true\nnothing: null\ndate: 2026-10-16\nlist:\n  - a\n  - \"b\"\n  - 'c'\nanchor: &a\n  key: value\nref: *a\nblock: |\n  line one\n  line two\nfolded: >-\n  folded text\ntagged: !!str 123\n...\n"},
+  {"language": "markup", "code": "<!DOCTYPE html>\n<html lang=\"en\">\n<!-- a comment -->\n<head><meta charset=\"utf-8\"><title>T &amp; T &lt;3 &#169;</title></head>\n<body class='x' data-y=z>\n  <p>Hello <b>world</b> &nbsp; &copy;</p>\n  <svg:rect xmlns:svg=\"http://www.w3.org/2000/svg\"/>\n  <![CDATA[ raw <stuff> ]]>\n  <?xml-stylesheet href=\"a\"?>\n</body>\n</html>\n"},
+  {"language": "markup", "code": "<note><to>Tove</to></note>"},
+  {"language": "text", "code": "plain text\nsecond line"},
+  {"language": "unknownlang", "code": "no grammar\n"}
+]

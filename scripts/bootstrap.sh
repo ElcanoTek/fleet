@@ -6,7 +6,7 @@
 # sched) layout the unified `fleet` process expects, and ensures the 0600
 # credential env file exists. It NEVER runs application migrations — each service
 # self-migrates on first start (chat's advisory-lock runner; sched's
-# golang-migrate).
+# golang-migrate-compatible runner).
 #
 # It is IDEMPOTENT end to end: re-runs converge on the same state (roles/dbs are
 # created only when missing via \gexec; the env file is refreshed in place; the

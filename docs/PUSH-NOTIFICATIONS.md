@@ -3,7 +3,8 @@
 fleet can alert a user's browser when work needs them — a task finished or
 failed, an approval card is waiting, or a paused task wants an answer — even
 when the fleet tab is backgrounded or closed (#292). It uses the standard
-**Web Push API** (RFC 8030/8291/8292 via `github.com/SherClockHolmes/webpush-go`):
+**Web Push API** (RFC 8030/8291/8292, implemented on Go's standard library in
+`internal/webpush/protocol.go`):
 no native app, no mobile SDK, no third-party account. Chrome, Edge, Firefox,
 and Safari 16.4+ are covered. fleet sends only to those browsers' push
 services, so a browser that uses any other cannot turn notifications on (see

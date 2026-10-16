@@ -13,9 +13,9 @@ import (
 	"text/tabwriter"
 
 	"github.com/google/uuid"
-	"github.com/robfig/cron/v3"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/cron"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"

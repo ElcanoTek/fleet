@@ -16,10 +16,10 @@ import (
 	"unicode/utf8"
 
 	"charm.land/fantasy"
-	md "github.com/JohannesKaufmann/html-to-markdown"
 	"golang.org/x/net/html"
 
 	"github.com/ElcanoTek/fleet/internal/netguard"
+	"github.com/ElcanoTek/fleet/internal/tools/htmlmd"
 	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
@@ -349,15 +349,9 @@ func cleanupMarkdown(content string) string {
 }
 
 // convertHTMLToMarkdown converts HTML content to markdown format
+// (internal/tools/htmlmd, html-to-markdown's CommonMark rules in-housed).
 func convertHTMLToMarkdown(htmlContent string) (string, error) {
-	converter := md.NewConverter("", true, nil)
-
-	markdown, err := converter.ConvertString(htmlContent)
-	if err != nil {
-		return "", err
-	}
-
-	return markdown, nil
+	return htmlmd.Convert(htmlContent)
 }
 
 // formatJSON formats JSON content with proper indentation

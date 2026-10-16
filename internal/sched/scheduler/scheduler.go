@@ -29,8 +29,9 @@ import (
 // Scheduler manages scheduled and recurring tasks. Scheduling is intentionally
 // POLL-based (the 30s runLoop ticker over a DB-backed queue, single-host), not an
 // in-memory cron engine; recurrence timezone/DST math lives in storage/handlers
-// via cronnext.Next(cron.ParseStandard(...), now.In(location)), which fixes
-// robfig's day-skip across fractional-hour DST changes (internal/cronnext).
+// via cron.ParseStandard(...).Next(now.In(location)) — internal/cron's
+// DST-safe walk, which fixes robfig's day-skip across fractional-hour DST
+// changes.
 type Scheduler struct {
 	storage  *storage.Storage
 	location *time.Location

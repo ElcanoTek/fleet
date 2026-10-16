@@ -7,20 +7,16 @@ require (
 	charm.land/bubbletea/v2 v2.0.10
 	charm.land/fantasy v0.45.2
 	charm.land/lipgloss/v2 v2.0.6
-	github.com/JohannesKaufmann/html-to-markdown v1.6.0
-	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/a2aproject/a2a-go/v2 v2.6.0
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/coder/acp-go-sdk v0.13.5
 	github.com/getsentry/sentry-go v0.50.0
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/goccy/go-yaml v1.19.2
-	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/itchyny/gojq v0.12.19
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/robfig/cron/v3 v3.0.1
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/yuin/goldmark v1.8.6
 	go.opentelemetry.io/otel v1.47.0
@@ -31,7 +27,6 @@ require (
 	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.46.0
-	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	k8s.io/client-go v0.37.1
 )
 
@@ -40,9 +35,7 @@ require (
 	cloud.google.com/go/auth v0.23.2 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
-	github.com/PuerkitoBio/goquery v1.9.2 // indirect
 	github.com/alecthomas/chroma/v2 v2.20.0 // indirect
-	github.com/andybalholm/cascadia v1.3.2 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.68.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.45.1 // indirect
@@ -87,7 +80,6 @@ require (
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.21 // indirect
@@ -96,14 +88,12 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/itchyny/timefmt-go v0.1.8 // indirect
-	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kaptinlin/jsonpointer v0.4.28 // indirect
 	github.com/kaptinlin/jsonschema v0.9.9 // indirect
-	github.com/lib/pq v1.12.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.27 // indirect
@@ -145,6 +135,7 @@ require (
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
+	gopkg.in/yaml.v2 v2.4.0 // indirect
 	k8s.io/api v0.37.1 // indirect
 	k8s.io/apimachinery v0.37.1 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect

@@ -9,7 +9,8 @@
 //
 // When an operator sets FLEET_LOG_FILE — typically a container/non-systemd
 // deployment where journald is not doing the rotation — this package additionally
-// tees the standard log output to a lumberjack-rotated file with operator-tunable
+// tees the standard log output to a size-rotated file (internal/logging/rotate,
+// in-housed from lumberjack) with operator-tunable
 // size/age/backup/compress knobs. It deliberately does NOT change the log FORMAT:
 // it rotates the existing log lines as-is. Converting every call site to
 // structured slog JSON is a separate migration (issue #178); this file sink is
@@ -24,7 +25,7 @@ import (
 	"os"
 	"strings"
 
-	lumberjack "gopkg.in/natefinch/lumberjack.v2"
+	"github.com/ElcanoTek/fleet/internal/logging/rotate"
 )
 
 // Config holds the process-log knobs. The zero value (File == "") means the file
@@ -98,14 +99,14 @@ func Configure(cfg Config) (io.Closer, error) {
 	var dest io.Writer = os.Stderr
 	var closer io.Closer
 	if cfg.Enabled() {
-		rotor := &lumberjack.Logger{
+		rotor := &rotate.Logger{
 			Filename:   cfg.File,
 			MaxSize:    cfg.MaxSizeMB,
 			MaxAge:     cfg.MaxAgeDays,
 			MaxBackups: cfg.MaxBackups,
 			Compress:   cfg.Compress,
 		}
-		// Lumberjack creates the file lazily on first write; force-create it now so
+		// The rotator creates the file lazily on first write; force-create it now so
 		// a bad path (unwritable dir) fails loudly at startup rather than silently
 		// dropping every later log line.
 		if _, err := rotor.Write([]byte{}); err != nil {

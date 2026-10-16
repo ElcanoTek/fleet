@@ -9,7 +9,7 @@ package croncount
 import (
 	"time"
 
-	"github.com/robfig/cron/v3"
+	"github.com/ElcanoTek/fleet/internal/cron"
 )
 
 // CountCap bounds the cron-occurrence walk so a per-minute schedule can't
@@ -25,15 +25,21 @@ const CountCap = 1000
 // order-of-magnitude correct, and the real schedule is timezone-resolved at
 // create time by the storage path. Once the walk reaches CountCap the count is
 // a floor — see CountCap.
+//
+// A CRON_TZ= prefix is walked in that zone by the DST-safe internal/cron Next
+// (croncount used to call robfig's own Next, which skips a day — or never
+// returns — across a non-hour offset change such as Australia/Lord_Howe's).
 func EstimateRunsPerMonth(cronExpr string) (int, bool) {
+	return estimateRunsFrom(cronExpr, time.Now().UTC())
+}
+
+// estimateRunsFrom is EstimateRunsPerMonth over the 30 days after start; the
+// 30-day window is the conventional "per month" approximation.
+func estimateRunsFrom(cronExpr string, start time.Time) (int, bool) {
 	schedule, err := cron.ParseStandard(cronExpr)
 	if err != nil {
 		return 0, false
 	}
-	// A fixed reference window keeps this deterministic-ish; time.Now is fine on
-	// the Go side. The 30-day window is the conventional "per month"
-	// approximation.
-	start := time.Now().UTC()
 	end := start.AddDate(0, 0, 30)
 	count := 0
 	for t := schedule.Next(start); !t.IsZero() && !t.After(end); t = schedule.Next(t) {

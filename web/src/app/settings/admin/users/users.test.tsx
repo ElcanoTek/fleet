@@ -879,7 +879,11 @@ describe("AdminUsersPage", () => {
     openKebab(email);
     fireEvent.click(screen.getByRole("button", { name: "Delete user" }));
     fireEvent.click(screen.getByRole("button", { name: /confirm delete/i }));
-    return screen.findByRole("dialog", { name: `Edit ${email}` });
+    const panel = await screen.findByRole("dialog", { name: `Edit ${email}` });
+    // Every caller refuses the delete; wait for the refusal itself, which
+    // lands a render after the panel (a synchronous read raced it under load).
+    await within(panel).findByRole("alert");
+    return panel;
   };
 
   it("shows the delete refusal in the editor panel, never in the row", async () => {
