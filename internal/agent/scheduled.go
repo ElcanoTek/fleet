@@ -98,6 +98,10 @@ type Agent struct {
 	// the review degrades to a no-op (it requires a reviewer model to run).
 	phoneAFriendEnabled bool
 	reviewerModel       fantasy.LanguageModel
+	// verifierModel is the operator's dedicated end-of-run verifier
+	// (FLEET_VERIFIER_MODEL), nil when unset. The verifier then judges with
+	// the run's own model; see endOfRunVerifierModel.
+	verifierModel fantasy.LanguageModel
 	// completionAnySucceeded is Options.CompletionAnySucceeded as a set; empty
 	// means no deterministic completion predicate.
 	completionAnySucceeded map[string]bool
@@ -271,6 +275,12 @@ type Options struct {
 	PhoneAFriendEnabled bool
 	ReviewerModel       fantasy.LanguageModel
 
+	// VerifierModel is the resolved FLEET_VERIFIER_MODEL, the dedicated
+	// end-of-run verifier. Nil (the default) means the run's own Model judges
+	// its completeness; the fallback model is used only to retry a verifier
+	// call that produced no verdict.
+	VerifierModel fantasy.LanguageModel
+
 	// CompletionAnySucceeded is the task's deterministic completion predicate
 	// (#1602): full roster tool names (mcp_<server>_<tool> or native), resolved
 	// by the driver from the EXECUTION REQUIREMENTS completion.any_succeeded
@@ -395,6 +405,7 @@ func NewAgent(opts Options) *Agent {
 		outputSchema:         append(json.RawMessage(nil), opts.OutputSchema...),
 		phoneAFriendEnabled:  opts.PhoneAFriendEnabled,
 		reviewerModel:        opts.ReviewerModel,
+		verifierModel:        opts.VerifierModel,
 		subagent:             newSubagentConfig(opts.Subagent),
 	}
 	if len(opts.CompletionAnySucceeded) > 0 {
@@ -704,7 +715,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	}
 
 	// Gate 1: end-of-run verifier (completeness re-check).
-	if !p.verified && p.agent != nil && p.agent.fallbackModel != nil {
+	if !p.verified && p.agent != nil && p.agent.endOfRunVerifierEnabled() {
 		// The three-call cap counts EVERY verification, including the re-check
 		// of a reviewer-forced repair (verified was reset). A spent cap must not
 		// buy a fourth call — exhaustion never grants success, so the
@@ -721,11 +732,14 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		twoOutages := false
 		if err != nil {
 			// A verifier call that produced no verdict is retried once before
-			// anything else is decided (#1602).
-			log.Printf("verifier failed, retrying once in %s: %v", verifierRetryDelay, err)
+			// anything else is decided (#1602) — on the fallback model when the
+			// run has a different one, so an outage of the judging model does
+			// not decide the run (endOfRunVerifierRetryModel).
+			retryModel := p.agent.endOfRunVerifierRetryModel()
+			log.Printf("verifier failed, retrying once in %s on %s: %v", verifierRetryDelay, retryModel.Model(), err)
 			firstOutage := !errors.Is(err, errVerifierMalformedVerdict) && ctx.Err() == nil
 			if sleepCtx(ctx, verifierRetryDelay) {
-				missing, err = p.agent.runEndOfRunVerifier(ctx, p.task, p.latestRunText(), records)
+				missing, err = p.agent.runEndOfRunVerifierWith(ctx, retryModel, p.task, p.latestRunText(), records)
 				twoOutages = firstOutage && err != nil && ctx.Err() == nil
 			}
 		}

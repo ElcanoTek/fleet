@@ -49,7 +49,7 @@ const errorAnalysisSchema = `{
 
 const (
 	errorAnalysisTimeout   = 30 * time.Second
-	errorAnalysisMaxTokens = 1024
+	errorAnalysisMaxTokens = 2048
 	// Input caps so a pathological prompt/log can't blow the cheap model's context.
 	errorAnalysisMaxPromptChars  = 1000
 	errorAnalysisMaxErrChars     = 1500

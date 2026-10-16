@@ -682,6 +682,24 @@ func configureRunWorkspace(ctx context.Context, sb *sandbox.Sandbox, wtPath, sha
 	return artifactCtx, release, effectiveRoot, nil
 }
 
+// resolveVerifierModel resolves the dedicated end-of-run verifier
+// (FLEET_VERIFIER_MODEL). Unset — or a slug that does not resolve — returns
+// nil, and the verifier judges with the run's own model; the fallback model
+// only retries a verifier call that produced no verdict
+// (agent.endOfRunVerifierModel).
+func (r *Runner) resolveVerifierModel(ctx context.Context, task *models.Task) fantasy.LanguageModel {
+	slug := strings.TrimSpace(r.cfg.VerifierModel)
+	if slug == "" {
+		return nil
+	}
+	vm, err := r.mgr.Resolve(ctx, slug)
+	if err != nil {
+		log.Printf("scheduled task %s: verifier model %q unresolved (%v); the run's own model will verify", task.ID, slug, err)
+		return nil
+	}
+	return vm
+}
+
 // runWorker executes ONE worker pass: it resolves the model, acquires the
 // sandbox + MCP, runs the agent to completion, and (when lc != nil) evaluates
 // the loop exit condition while the sandbox is still live. extraPrompt carries a
@@ -741,6 +759,8 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 			}
 		}
 	}
+
+	verifier := r.resolveVerifierModel(ctx, task)
 
 	// Acquire the execution sandbox for this task. Scheduled runs are
 	// network-SEALED by default (--network=none, same as interactive lockdown)
@@ -997,6 +1017,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		Overlay:             remoteOverlay,
 		PhoneAFriendEnabled: phoneAFriend,
 		ReviewerModel:       reviewer,
+		VerifierModel:       verifier,
 		// Deterministic completion predicate (#1602): the producer-declared
 		// EXECUTION REQUIREMENTS completion.any_succeeded, resolved against this
 		// run's roster at dispatch. nil = none declared, verifier as before.

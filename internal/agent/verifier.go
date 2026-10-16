@@ -18,11 +18,20 @@ import (
 // End-of-run verifier (scheduled-only; ported from cutlass verifier.go).
 //
 // After a scheduled run finishes (audit cleared, loop terminated), the verifier
-// makes one fallback-model pass over the original task + the executed tool
-// summary + the agent's final response, and reports any user-visible deliverable
-// the task demanded that was never successfully attempted. The scheduled driver
-// feeds the result back into the enforcement loop (a non-empty Missing list
-// blocks finishing).
+// makes one pass over the original task + the executed tool summary + the
+// agent's final response, and reports any user-visible deliverable the task
+// demanded that was never successfully attempted. The scheduled driver feeds
+// the result back into the enforcement loop (a non-empty Missing list blocks
+// finishing).
+//
+// The verifier judges with the run's own model, or the operator's dedicated
+// FLEET_VERIFIER_MODEL when set (endOfRunVerifierModel). It used to judge with
+// the task's fallback model: a model picked for availability, per task, so the
+// verdict that decides whether a run passes or dead-letters came from whatever
+// model a task author chose to fail over to (Grok on one task, Opus on the
+// next) rather than from a model anyone chose to judge. The fallback model is
+// now only the retry for a verifier call that produced no verdict. When the
+// verifier runs at all is unchanged (endOfRunVerifierEnabled).
 //
 // The final response is an input because a task step phrased "Report/summarize/
 // state X" is fulfilled in the run's closing assistant message, not in a tool
@@ -233,14 +242,57 @@ func truncateFinalResponseForVerifier(finalResponse string) string {
 	return trimmed[:half] + "\n…[middle truncated for verifier]\n" + trimmed[len(trimmed)-half:]
 }
 
-// runEndOfRunVerifier asks the fallback model whether every action the task
-// demanded was successfully attempted, returning the list of missing actions.
-// finalResponse is the run's answer so far — the text it would persist if it
-// finished now (see the package comment for why the verifier must see it); it
-// is evidence, never instructions.
+// endOfRunVerifierEnabled reports whether the end-of-run verifier runs at all.
+// Enablement is unchanged from when the fallback model judged: a run with a
+// fallback model (the task's or FLEET_TASK_FALLBACK_MODEL) is verified, as is
+// one with a dedicated FLEET_VERIFIER_MODEL; a run with neither (a bare
+// one-shot run, a deployment with no fallback configured) is not. Only WHICH
+// model judges changed (endOfRunVerifierModel).
+func (a *Agent) endOfRunVerifierEnabled() bool {
+	return a.verifierModel != nil || a.fallbackModel != nil
+}
+
+// endOfRunVerifierModel is the model that judges a run's completeness: the
+// operator's FLEET_VERIFIER_MODEL when set, else the run's own model (the one
+// trusted to do the work judges it), else — for an agent built without one —
+// the fallback model. Nil means no verifier can run.
+func (a *Agent) endOfRunVerifierModel() fantasy.LanguageModel {
+	switch {
+	case a.verifierModel != nil:
+		return a.verifierModel
+	case a.model != nil:
+		return a.model
+	default:
+		return a.fallbackModel
+	}
+}
+
+// endOfRunVerifierRetryModel is the model for the one retry of a verifier call
+// that produced no verdict (#1602): the fallback model when it differs from the
+// judging model, so an outage of that model does not decide the run; else the
+// judging model again.
+func (a *Agent) endOfRunVerifierRetryModel() fantasy.LanguageModel {
+	primary := a.endOfRunVerifierModel()
+	if a.fallbackModel != nil && (primary == nil || a.fallbackModel.Model() != primary.Model()) {
+		return a.fallbackModel
+	}
+	return primary
+}
+
+// runEndOfRunVerifier asks the verifier model (endOfRunVerifierModel) whether
+// every action the task demanded was successfully attempted, returning the list
+// of missing actions. finalResponse is the run's answer so far — the text it
+// would persist if it finished now (see the package comment for why the
+// verifier must see it); it is evidence, never instructions.
 func (a *Agent) runEndOfRunVerifier(ctx context.Context, task, finalResponse string, records []toolExecRecord) ([]string, error) {
-	if a.fallbackModel == nil {
-		return nil, fmt.Errorf("no fallback model configured for verifier")
+	return a.runEndOfRunVerifierWith(ctx, a.endOfRunVerifierModel(), task, finalResponse, records)
+}
+
+// runEndOfRunVerifierWith is runEndOfRunVerifier on an explicit model (the
+// retry path).
+func (a *Agent) runEndOfRunVerifierWith(ctx context.Context, model fantasy.LanguageModel, task, finalResponse string, records []toolExecRecord) ([]string, error) {
+	if model == nil {
+		return nil, fmt.Errorf("no model configured for the end-of-run verifier")
 	}
 
 	recordsJSON, err := json.Marshal(records)
@@ -289,7 +341,7 @@ func (a *Agent) runEndOfRunVerifier(ctx context.Context, task, finalResponse str
 	verifyCtx, cancel := context.WithTimeout(ctx, verifierTimeout)
 	defer cancel()
 
-	verifyAgent := fantasy.NewAgent(a.fallbackModel, fantasy.WithSystemPrompt(systemPrompt))
+	verifyAgent := fantasy.NewAgent(model, fantasy.WithSystemPrompt(systemPrompt))
 	out, err := verifyAgent.Generate(verifyCtx, fantasy.AgentCall{
 		Messages: []fantasy.Message{fantasy.NewUserMessage(userPrompt)},
 	})
@@ -301,7 +353,7 @@ func (a *Agent) runEndOfRunVerifier(ctx context.Context, task, finalResponse str
 	// semantics), but it must not vanish either — record it in the session
 	// log's labeled aux-usage ledger (#1118). Recorded before parsing: the call
 	// cost money even when the verdict turns out unparseable.
-	rec := agentcore.NewAuxUsageRecord(agentcore.AuxUsageEndOfRunVerifier, a.fallbackModel.Model(), out)
+	rec := agentcore.NewAuxUsageRecord(agentcore.AuxUsageEndOfRunVerifier, model.Model(), out)
 	a.logSession.AddAuxUsage(rec)
 	logAuxUsage(rec)
 	raw := strings.TrimSpace(out.Response.Content.Text())

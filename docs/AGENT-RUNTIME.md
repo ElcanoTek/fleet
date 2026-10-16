@@ -1340,10 +1340,23 @@ wording.
 
 ## The scheduled end-of-run verifier
 
+**Which model judges.** The verifier judges with the run's own model (the one
+trusted to do the work), or with `FLEET_VERIFIER_MODEL` when an operator sets
+one. The task's fallback model is only the retry for a verifier call that
+produced no verdict (#1602's one retry), and only when it differs from the
+judging model. Until 2026-10 the verifier judged with the fallback model: a
+model picked per task for availability, so a run's pass/dead-letter verdict
+came from whatever model its author chose to fail over to. When the verifier
+runs is unchanged: a run with a fallback model (the task's or
+`FLEET_TASK_FALLBACK_MODEL`) or a `FLEET_VERIFIER_MODEL` is verified; a run
+with neither is not. The aux-usage record names the model that actually
+judged.
+
 Scheduled runs layer an extra host-side LLM re-check on top of the shared
 audit/finish enforcement. When the scheduled policy clears a run, the
-`runEndOfRunVerifier` runs on fleet's fallback model (host-side creds — the
-verifier's model call is just another host LLM call) over three inputs — the
+`runEndOfRunVerifier` runs on the run's own model — or on `FLEET_VERIFIER_MODEL`
+when an operator sets one — (host-side creds — the verifier's model call is just
+another host LLM call) over three inputs — the
 original task text, the bounded redacted tool-execution summary, and the run's
 **final response** (the closing assistant message) — and returns any missing
 required actions, which the loop turns into a repair round before it

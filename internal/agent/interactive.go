@@ -341,6 +341,7 @@ func buildInteractiveFinalize(tc TurnConfig) agentcore.FinalizeHook {
 func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.FinalizeInput) (string, error) {
 	convo := append(append([]fantasy.Message{}, in.Messages...), fantasy.NewUserMessage(interactiveLeakedToolCallNudge))
 	prepare := chainPrepareSteps(
+		agentcore.ToolCallInputSanitizeStep(),
 		agentcore.ModelContextBudgetStep(in.SystemPrompt, in.Tools, tc.MaxTokens),
 		agentcore.PromptCachingStep(tc.Model.Model()),
 	)
@@ -426,6 +427,7 @@ func streamForceFinalSummary(ctx context.Context, tc TurnConfig, in agentcore.Fi
 	agent := fantasy.NewAgent(tc.Model,
 		fantasy.WithSystemPrompt(in.SystemPrompt),
 		fantasy.WithPrepareStep(chainPrepareSteps(
+			agentcore.ToolCallInputSanitizeStep(),
 			agentcore.ModelContextBudgetStep(in.SystemPrompt, nil, tc.MaxTokens),
 			agentcore.PromptCachingStep(tc.Model.Model()),
 		)),
