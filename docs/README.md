@@ -260,6 +260,7 @@ above fails otherwise.
 - [`keyboard-shortcuts.md`](keyboard-shortcuts.md) — Keyboard shortcuts
 - [`KUBERNETES-LIVE-TEST.md`](KUBERNETES-LIVE-TEST.md) — Real-cluster sandbox integration test
 - [`LEGACY-IMPORT.md`](LEGACY-IMPORT.md) — Legacy import — migrating chat + moc data into fleet
+- [`LENS.md`](LENS.md) — Lens jobs from fleet: the bundle-declared connector and the two generic seams it uses (#1506)
 - [`LIVE-RUNS.md`](LIVE-RUNS.md) — Live run visibility & take-over
 - [`LLM-PROVIDERS.md`](LLM-PROVIDERS.md) — Admin-managed LLM providers
 - [`LOAD-TESTING.md`](LOAD-TESTING.md) — Load testing & benchmarks (#296)
