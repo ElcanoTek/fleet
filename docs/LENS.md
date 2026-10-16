@@ -15,7 +15,7 @@ Pages:
 |---|---|---|
 | `POST /mcp`, `/api/v1`, scoped tokens | `ElcanoTek/lens` (`lens_mcp.py`, `lens_api.py`, `api_tokens.py`; contract in its `docs/API.md`) | A stateless Streamable-HTTP MCP server with JSON responses. Tools: `create_job`, `get_job`, `list_jobs`, `get_job_results`, `get_download_link`, `cancel_job`, `list_input_files`, `get_options` |
 | `lens` connector | each `*-config` bundle's `manifest.yaml` | `type: http`, `url: ${LENS_MCP_URL:-https://lens.invalid/mcp}`, a bearer `LENS_API_TOKEN` header, `enabled_env: [LENS_MCP_URL, LENS_API_TOKEN]` |
-| Approval policy | the same `agent_policy` | `mcp_lens_create_job` is critical in `notify` mode, with a `cancel_job` undo hint; `mcp_lens_cancel_job` is critical in `approve` mode; the six reads are `parallel_safe_tools` |
+| Approval policy | the same `agent_policy` | `mcp_lens_create_job` and `mcp_lens_cancel_job` are critical in the default `approve` mode (a started job's OpenRouter spend can't be refunded, so `notify` would not have the complete undo it requires); scheduled runs pass the usual `confirm_audit` gate. The six reads are `parallel_safe_tools` |
 | Workflow guidance | `skills/lens-classification/` in each bundle | When to send `items` or a file, polling without duplicate jobs, reading the summary, downloading the CSV |
 
 This follows the coupling doctrine in `AGENTS.md`: bundles are data, fleet is
