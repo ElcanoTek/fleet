@@ -216,7 +216,7 @@ func bodyLimitMiddleware(next http.Handler) http.Handler {
 // recoverMiddleware converts a panic in a SYNCHRONOUS chat handler into a 500
 // rather than letting it crash the single-host process. (The detached turn
 // goroutine has its own recovery; see runTurnAsync.) This mirrors the chi
-// middleware.Recoverer the orchestrator router already uses.
+// httpmw.Recoverer the orchestrator router already uses.
 func recoverMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {

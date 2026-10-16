@@ -27,11 +27,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/cron"
+	"github.com/ElcanoTek/fleet/internal/httpmw"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
@@ -492,12 +492,12 @@ func readJSON(r *http.Request, v interface{}) error {
 }
 
 // getClientIP extracts the client IP from the request.
-// Prefers the IP resolved by chi's ClientIPFromXFF middleware (see main.go),
+// Prefers the IP resolved by the ClientIPFromXFF middleware (internal/httpmw) (see main.go),
 // which walks X-Forwarded-For right-to-left past trusted proxy hops and never
 // trusts client-supplied values. Falls back to the connection's RemoteAddr for
 // direct (proxyless) access, e.g. local development.
 func getClientIP(r *http.Request) string {
-	if ip := middleware.GetClientIP(r.Context()); ip != "" {
+	if ip := httpmw.GetClientIP(r.Context()); ip != "" {
 		return ip
 	}
 	// Direct connection: parse RemoteAddr.

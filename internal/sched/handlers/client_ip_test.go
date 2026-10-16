@@ -8,14 +8,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/go-chi/chi/v5/middleware"
+	"github.com/ElcanoTek/fleet/internal/httpmw"
 )
 
 // TestGetClientIP exercises getClientIP behind the same ClientIPFromXFF
 // configuration wired up in main.go: loopback (Caddy) is the only trusted
 // hop, and client-supplied X-Forwarded-For entries must not win.
 func TestGetClientIP(t *testing.T) {
-	clientIPMiddleware := middleware.ClientIPFromXFF("127.0.0.1/32", "::1/128")
+	clientIPMiddleware := httpmw.ClientIPFromXFF("127.0.0.1/32", "::1/128")
 
 	resolve := func(remoteAddr string, xff ...string) string {
 		var got string

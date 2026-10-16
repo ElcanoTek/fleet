@@ -7,12 +7,13 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	chimw "github.com/go-chi/chi/v5/middleware"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/ElcanoTek/fleet/internal/httpmw"
 )
 
 // healthPaths are low-value, high-frequency probe endpoints excluded from
@@ -56,7 +57,7 @@ func Middleware(next http.Handler) http.Handler {
 		reqID := requestIDFromSpan(span)
 		w.Header().Set("X-Request-Id", reqID)
 
-		ww := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
+		ww := httpmw.NewWrapResponseWriter(w, r.ProtoMajor)
 		// Pass the trace-context request DOWN; the router populates its
 		// pattern on THIS request value, which we read back after it returns.
 		r = r.WithContext(ctx)

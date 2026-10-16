@@ -42,7 +42,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
 	a2abridge "github.com/ElcanoTek/fleet/internal/a2a"
@@ -59,6 +58,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/guardrail"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
+	"github.com/ElcanoTek/fleet/internal/httpmw"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/metrics"
@@ -1547,13 +1547,13 @@ func buildA2AConfig(cfg *config.Config, bundle *clientconfig.Bundle, pushEnabled
 // auth groups, plus the P6b notes CRUD + proposal-decision routes (admin-gated).
 func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, reloadConfig, reloadMCP http.HandlerFunc, accountEvents *accountevents.Recorder) http.Handler {
 	r := chi.NewRouter()
-	// ClientIPFromXFF replaces the deprecated, spoofable middleware.RealIP
+	// ClientIPFromXFF replaces chi's deprecated, spoofable middleware.RealIP
 	// (GHSA-3fxj-6jh8-hvhx et al.): with no trusted prefixes it reads the
 	// rightmost (closest-hop) X-Forwarded-For entry and never trusts the
 	// client-supplied leftmost values, storing the result for GetClientIP —
 	// exactly what getClientIP() already expects.
-	r.Use(middleware.ClientIPFromXFF())
-	r.Use(middleware.Recoverer)
+	r.Use(httpmw.ClientIPFromXFF())
+	r.Use(httpmw.Recoverer)
 	r.Use(otelsetup.Middleware)          // #186: server span + X-Request-Id (no-op when tracing disabled)
 	r.Use(orchestratorMetricsMiddleware) // #176: record request count + latency
 	r.Use(h.SecurityHeadersMiddleware)
@@ -2517,7 +2517,7 @@ func logDiskGuard(guard *diskguard.Guard, cfg *config.Config) {
 func orchestratorMetricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		ww := httpmw.NewWrapResponseWriter(w, r.ProtoMajor)
 		next.ServeHTTP(ww, r)
 		route := chi.RouteContext(r.Context()).RoutePattern()
 		if route == "" {
