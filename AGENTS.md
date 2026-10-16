@@ -3,7 +3,7 @@
 Operating guide for AI coding agents (Claude Code, Codex, Cursor, opencode, Goose,
 Gemini CLI, …) working in the **fleet** repository. It follows the
 [agents.md](https://agents.md) convention; Claude Code and every other
-`AGENTS.md`-aware tool read this file directly. Do not add a `CLAUDE.md` or `CLAUDE.local.md` here (or above the checkout): Claude Code then loads those instead and skips this file.
+`AGENTS.md`-aware tool read this file directly. Do not add a `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` here, or a `CLAUDE.md` above the checkout: Claude Code then loads those instead and skips this file.
 
 Humans, start with [`README.md`](README.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md);
 this file is the agent-facing distillation, not a replacement for them.

@@ -203,7 +203,7 @@ func TestBuildSystemPrompt_Layering(t *testing.T) {
 // It also pins the repo boundary: fleet's prompt must not name the fast.io
 // helper tools. Those live in the client bundle now, along with the ELC account
 // -code convention and the DSP folder shape they encode, because fleet is
-// client-agnostic ground (CLAUDE.md: "do not add client-specific content to this
+// client-agnostic ground (AGENTS.md: "do not add client-specific content to this
 // repo"). The bundle's protocol file carries that guidance; fleet only decides
 // whether to surface it.
 func TestBuildSystemPrompt_FastIOGated(t *testing.T) {
