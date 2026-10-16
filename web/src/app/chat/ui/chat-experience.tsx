@@ -1057,12 +1057,6 @@ export function ChatExperience({
   const activeConversationIdRef = useRef<string | null>(
     restoredSession?.activeConversationId ?? null,
   );
-  // Cache-bust drift flag. Set when /api/version reports a new build id.
-  // We never reload the page automatically — instead we surface an
-  // "Update available" button in the sidebar so the user chooses when
-  // to refresh. State (not a ref) so the sidebar re-renders on change.
-  const [updateAvailable, setUpdateAvailable] = useState(false);
-
   useEffect(() => {
     messagesByConvRef.current = messagesByConv;
   }, [messagesByConv]);
@@ -1484,45 +1478,14 @@ export function ChatExperience({
     // it keeps exhaustive-deps honest without changing the mount-once run.
   }, [abortControllersRef]);
 
-  // Cache-bust detection. Every response carries X-App-Version set to
-  // the server's current build id (see middleware.ts). The client's
-  // bundle has that id baked in via NEXT_PUBLIC_BUILD_ID. We probe
-  // /api/version on mount, visibilitychange, focus, online, and a
-  // 5-minute interval so a long-lived focused tab still notices deploys.
-  //
-  // We never reload the page automatically. Earlier we did, and it
-  // surfaced as "every click jumps me to the top" — once a probe set
-  // the flag, the next stream-end finally block would force-reload
-  // mid-interaction. Now we just flip `updateAvailable` and the sidebar
-  // shows a manual "Update available" button.
+  // Keep the tab's client config current. Tiers and the lockdown list they
+  // drive are re-read on mount, visibilitychange, focus, online, and a
+  // 5-minute interval, so a long-lived tab picks up an operator's change
+  // without a reload. (Deploy detection used to ride on these same events
+  // here; it is app-wide now — shared/deployDrift.ts, surfaced by
+  // shared/UpdateNotice.tsx — so every page notices a deploy, not just chat.)
   useEffect(() => {
-    const clientBuildId = process.env.NEXT_PUBLIC_BUILD_ID ?? "dev";
-    if (clientBuildId === "dev") {
-      // In dev, the build id changes on every HMR update; skipping
-      // the check keeps the tab stable during a `next dev` session.
-      return;
-    }
-
-    let cancelled = false;
-
-    const probe = async () => {
-      if (typeof document === "undefined") return;
-      try {
-        const res = await fetch("/api/version", { cache: "no-store" });
-        if (!res.ok) return;
-        const { buildId: serverBuildId } = (await res.json()) as {
-          buildId: string;
-        };
-        if (cancelled) return;
-        if (serverBuildId && serverBuildId !== clientBuildId) {
-          setUpdateAvailable(true);
-        }
-      } catch {
-        // Network flake — try again on the next event or interval tick.
-      }
-    };
     const handle = () => {
-      void probe();
       // Tiers and the lockdown list they drive move as ONE snapshot: refresh
       // client-config first (it publishes the live tiers module-wide), and
       // only install the new allow-list if that succeeded. Taking the new
@@ -1533,16 +1496,12 @@ export function ChatExperience({
         if (ok) void refreshServerConfig();
       });
     };
-    // Fire once on mount in case the user left the tab open across a
-    // deploy and we're starting fresh against an already-updated
-    // server.
     handle();
     document.addEventListener("visibilitychange", handle);
     window.addEventListener("focus", handle);
     window.addEventListener("online", handle);
     const interval = window.setInterval(handle, 5 * 60 * 1000);
     return () => {
-      cancelled = true;
       document.removeEventListener("visibilitychange", handle);
       window.removeEventListener("focus", handle);
       window.removeEventListener("online", handle);
@@ -5504,7 +5463,6 @@ export function ChatExperience({
           archivedConversations={archivedConversations}
           showArchived={showArchived}
           setShowArchived={setShowArchived}
-          updateAvailable={updateAvailable}
           setConfirmBulkDelete={setConfirmBulkDelete}
           selectMode={selectMode}
           selectedIds={selectedIds}
