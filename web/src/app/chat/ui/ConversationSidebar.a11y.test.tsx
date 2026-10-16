@@ -82,7 +82,6 @@ function renderSidebar(overrides: Record<string, unknown> = {}) {
     archivedConversations: [],
     showArchived: false,
     setShowArchived: noop,
-    updateAvailable: false,
     setConfirmBulkDelete: noop,
     selectMode: false,
     selectedIds: new Set<string>(),

@@ -315,6 +315,7 @@ above fails otherwise.
 - [`SESSION-EPOCH.md`](SESSION-EPOCH.md) — Per-user session epoch (password reset ends outstanding sessions)
 - [`SHARED-FILES.md`](SHARED-FILES.md) — Shared files: the cross-chat file library
 - [`SKILLS.md`](SKILLS.md) — Skills (#513, phase 1)
+- [`STALE-CLIENTS.md`](STALE-CLIENTS.md) — Stale clients after a deploy: the update notice and the error pages
 - [`STRUCTURED-OUTPUT.md`](STRUCTURED-OUTPUT.md) — Structured output contracts
 - [`SUBAGENTS.md`](SUBAGENTS.md) — Sub-agents: default-on, parent decides, typed children (#1043)
 - [`TASK-PROMPT-CAP.md`](TASK-PROMPT-CAP.md) — Task prompt size cap (250,000 bytes)

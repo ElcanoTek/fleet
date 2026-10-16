@@ -72,6 +72,11 @@ again, rendered in your browser's own zone. So when a schedule and a row seem to
 disagree, they are usually both right and reading different clocks — the
 tooltip is what settles it.
 
+When a newer version of the app is released while the board is open, a notice
+at the top of the page says the app **was updated**. Press **Reload** to load
+it, or dismiss the notice with **×**; it never reloads the board by itself. A
+page that says **Something went wrong** offers **Reload** too.
+
 ### The tabs
 
 | Tab | What it shows |

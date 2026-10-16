@@ -5,6 +5,7 @@ import {
   getServerBranding,
 } from "@/app/lib/serverBranding";
 import { PushKeyRenewal } from "@/app/shared/PushKeyRenewal";
+import { UpdateNotice } from "@/app/shared/UpdateNotice";
 import "./globals.css";
 
 // force-dynamic is LOAD-BEARING for white-labeling, and it applies to this
@@ -206,11 +207,14 @@ const themeInitScript = `(() => {
   }
 })();`;
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // The update notice names the deployment ("Reklaim was updated"), so it
+  // reads the same memoized branding generateMetadata does.
+  const b = await branding();
   return (
     <html
       lang="en"
@@ -236,6 +240,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         {children}
         <PushKeyRenewal />
+        <UpdateNotice appName={b.appName} />
       </body>
     </html>
   );

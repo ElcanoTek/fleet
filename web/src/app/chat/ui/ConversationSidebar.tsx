@@ -1028,7 +1028,6 @@ export function ConversationSidebar({
   archivedConversations,
   showArchived,
   setShowArchived,
-  updateAvailable,
   setConfirmBulkDelete,
   selectMode,
   selectedIds,
@@ -1108,7 +1107,6 @@ export function ConversationSidebar({
   archivedConversations: ConversationSummary[];
   showArchived: boolean;
   setShowArchived: Dispatch<SetStateAction<boolean>>;
-  updateAvailable: boolean;
   setConfirmBulkDelete: Dispatch<SetStateAction<boolean>>;
   // Select mode (#279, redesigned): entered via a row kebab's "Select…" item —
   // that is the only way checkboxes appear. Bulk actions live in the compact
@@ -1693,17 +1691,6 @@ export function ConversationSidebar({
             " ",
           )}
         >
-          {updateAvailable ? (
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-2 py-1.5 text-left text-[0.75rem] font-medium text-[var(--color-accent)] transition hover:bg-[var(--color-accent)]/20 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
-              onClick={() => window.location.reload()}
-              title="A newer version of the app has been deployed. Click to refresh and load it."
-            >
-              <Icon name="refresh" className="size-3.5 shrink-0" />
-              Chat has been updated — click to refresh
-            </button>
-          ) : null}
           {conversations.some((c) => !c.pinned) ? (
             <button
               type="button"
