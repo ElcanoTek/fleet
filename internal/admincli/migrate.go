@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
@@ -14,14 +15,16 @@ import (
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
-const migrateUsage = "usage: fleet migrate status [--database-url <dsn>] [--json]"
+const migrateUsage = "usage: fleet migrate status [--database-url <dsn>] [--json]\n" +
+	"       fleet migrate force <version> [--database-url <dsn>] [--no-confirm]   (sched DB only)"
 
-// cmdMigrate implements `fleet migrate <subcommand>`. Only the READ-ONLY
-// `status` subcommand exists today: it reports applied vs pending migrations for
-// both the chat and sched databases without touching either schema. Automated
-// rollback and pre-migration backup are a documented follow-on (see
-// docs/MIGRATIONS.md) — the chat DB deliberately ships no down-migrations, so a
-// destructive rollback path warrants its own review.
+// cmdMigrate implements `fleet migrate <subcommand>`. `status` is READ-ONLY: it
+// reports applied vs pending migrations for both the chat and sched databases
+// without touching either schema. `force` is the sched DB's dirty-row repair —
+// what the external golang-migrate CLI's `migrate force` did before the runner
+// was in-housed. Automated rollback and pre-migration backup are a documented
+// follow-on (see docs/MIGRATIONS.md) — the chat DB deliberately ships no
+// down-migrations, so a destructive rollback path warrants its own review.
 func cmdMigrate(argv []string) int {
 	if len(argv) == 0 {
 		fmt.Fprintln(os.Stderr, migrateUsage)
@@ -30,12 +33,80 @@ func cmdMigrate(argv []string) int {
 	switch argv[0] {
 	case "status":
 		return cmdMigrateStatus(argv[1:])
+	case "force":
+		return cmdMigrateForce(argv[1:])
 	case "-h", "--help", "help":
 		fmt.Fprintln(os.Stderr, migrateUsage)
 		return 0
 	default:
-		return errf(1, "unknown migrate subcommand %q (only \"status\" is supported)", argv[0])
+		return errf(1, "unknown migrate subcommand %q (\"status\" or \"force\")", argv[0])
 	}
+}
+
+// cmdMigrateForce sets the sched DB's tracking row to <version>, clean, without
+// running any migration: after a migration failed mid-run (the row is dirty and
+// fleet refuses to start), the operator inspects the database, repairs or
+// rolls back what the failed file did, and records the last version that is
+// actually applied (-1: none). It writes, so it asks first unless
+// --no-confirm, and refuses a non-TTY without it.
+func cmdMigrateForce(argv []string) int {
+	fs := flag.NewFlagSet("migrate force", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "sched Postgres DSN (default FLEET_SCHED_DATABASE_URL / DATABASE_URL)")
+	noConfirm := fs.Bool("no-confirm", false, "skip the interactive confirmation (for scripted repairs)")
+	version, ok := parseForceArgs(fs, argv)
+	if !ok {
+		fmt.Fprintln(os.Stderr, migrateUsage)
+		return 1
+	}
+	dsn, err := schedDSN(*dbURL)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	if code := confirmBulkMutation(*noConfirm, fmt.Sprintf("this will record sched migration version %d as applied and clean, running nothing.", version)); code != 0 {
+		return code
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return errf(1, "sched DB: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := scheddb.ForceVersion(ctx, db, version); err != nil {
+		return errf(1, "sched DB: force %d: %v", version, err)
+	}
+	fmt.Printf("sched database: version forced to %d (clean). Restart fleet to apply the remaining migrations.\n", version)
+	return 0
+}
+
+// parseForceArgs accepts the version before or after the flags; "-1" is a
+// version, not a flag. ok is false for a missing, extra or non-integer
+// version, or a bad flag.
+func parseForceArgs(fs *flag.FlagSet, argv []string) (int, bool) {
+	var positional, flags []string
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		switch {
+		case a == "-1" || (a != "" && a[0] != '-'):
+			positional = append(positional, a)
+		case a == "--database-url" || a == "-database-url":
+			flags = append(flags, a)
+			if i+1 < len(argv) {
+				i++
+				flags = append(flags, argv[i])
+			}
+		default:
+			flags = append(flags, a)
+		}
+	}
+	if err := fs.Parse(flags); err != nil || fs.NArg() != 0 || len(positional) != 1 {
+		return 0, false
+	}
+	v, err := strconv.Atoi(positional[0])
+	if err != nil || v < -1 {
+		return 0, false
+	}
+	return v, true
 }
 
 // cmdMigrateStatus opens each database read-only and prints (or emits as JSON)
@@ -194,11 +265,8 @@ func printSchedMigrations(r scheddb.MigrationReport) {
 	fmt.Printf("sched database (%s runner, table %s)\n", r.Runner, r.MigrationTable)
 	fmt.Printf("  current version: %s\n", cur)
 	if r.Dirty {
-		// `fleet migrate` has only `status`; the force-set is the golang-migrate
-		// CLI's, so name that command exactly rather than a subcommand that
-		// does not exist.
-		fmt.Printf("  DIRTY: a prior migration failed mid-flight — inspect the DB, then force-set the last good version with the golang-migrate CLI:\n")
-		fmt.Printf("         migrate -path internal/sched/db/migrations -database \"$FLEET_SCHED_DATABASE_URL\" force <version>\n")
+		fmt.Printf("  DIRTY: a prior migration failed mid-flight — inspect the DB, then force-set the last good version:\n")
+		fmt.Printf("         fleet migrate force <version>\n")
 		fmt.Printf("         and restart fleet (see docs/MIGRATIONS.md)\n")
 	}
 	fmt.Printf("  applied: %d   pending: %d\n", len(r.Applied), len(r.Pending))

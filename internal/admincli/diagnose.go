@@ -269,7 +269,7 @@ func configEnvNames(processEnv, fileEnv []string) []string {
 
 // collectDB reports the migration version of both databases via READ-ONLY SQL
 // against the same `schema_migrations` table each migration system maintains
-// (chat: MAX(version); sched/golang-migrate: the single version + dirty row). It
+// (chat: MAX(version); sched: the single golang-migrate-format version + dirty row). It
 // opens a bare pgx connection — it never runs migrations and never writes — and
 // echoes only the host of the DSN (userinfo stripped by redactDSN), never the
 // password.
@@ -283,7 +283,7 @@ func (dc *diagnoseCollector) collectDB(ctx context.Context) string {
 }
 
 // dbVersion runs query against the named DB and renders a one-line version
-// summary. chat returns a single version int; sched (golang-migrate) returns
+// summary. chat returns a single version int; sched (golang-migrate format) returns
 // (version, dirty). The query is detected by its column count so one helper serves
 // both. Any failure (DSN unresolved, DB unreachable, table absent) becomes an
 // "ERROR" line, never a fatal — a box with one DB down still yields a bundle.
