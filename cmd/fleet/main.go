@@ -44,7 +44,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
-	"github.com/robfig/cron/v3"
 
 	a2abridge "github.com/ElcanoTek/fleet/internal/a2a"
 	"github.com/ElcanoTek/fleet/internal/accountevents"
@@ -55,7 +54,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/apiversion"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
-	"github.com/ElcanoTek/fleet/internal/cronnext"
+	"github.com/ElcanoTek/fleet/internal/cron"
 	"github.com/ElcanoTek/fleet/internal/datasets"
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/guardrail"
@@ -2788,7 +2787,7 @@ func applyTaskMutation(ctx context.Context, schedStorage *storage.Storage, t *sc
 				loc = tzLoc
 			}
 		}
-		next := cronnext.Next(schedule, time.Now().In(loc)).UTC()
+		next := schedule.Next(time.Now().In(loc)).UTC()
 		edit.Recurrence = req.Cron
 		edit.ScheduledFor = &next
 		changed = append(changed, "schedule "+req.Cron)

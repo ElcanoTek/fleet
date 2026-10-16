@@ -155,7 +155,7 @@ Each rule comes from a real fleet test that once passed while proving nothing.
   within 20s.
 - **Prove the guard can fire.** When a test exists to catch a regression,
   break the code once locally and watch it fail. The PR that adds it says so.
-- **Keep the oracle independent of the code under test.** `cronnext` checks
+- **Keep the oracle independent of the code under test.** `internal/cron` checks
   its scheduler against a brute-force walk. The contract replays parse the
   recordings with their own small parser, not the app's. A test that computes
   its expectation with the function under test can only agree with it.

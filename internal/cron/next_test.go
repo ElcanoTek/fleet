@@ -1,20 +1,16 @@
-package cronnext
+package cron
 
 import (
 	"math/rand/v2"
 	"testing"
 	"time"
-
-	"github.com/robfig/cron/v3"
 )
-
-const starBit = 1 << 63
 
 func bit(field uint64, v int) bool { return field&(1<<uint(v)) != 0 }
 
-// dayMatches is robfig's rule: when either day field is "*" both must match,
+// bruteDayMatches is robfig's rule: when either day field is "*" both must match,
 // otherwise either may.
-func dayMatches(s *cron.SpecSchedule, day time.Time) bool {
+func bruteDayMatches(s *SpecSchedule, day time.Time) bool {
 	domMatch := bit(s.Dom, day.Day())
 	dowMatch := bit(s.Dow, int(day.Weekday()))
 	if s.Dom&starBit > 0 || s.Dow&starBit > 0 {
@@ -31,7 +27,7 @@ func offsetAt(at time.Time, loc *time.Location) time.Duration {
 // bruteNext is the ground truth for zones on whole-minute offsets (every
 // modern zone): step one minute at a time from just after t and return the
 // first real instant whose wall clock in loc matches s.
-func bruteNext(s *cron.SpecSchedule, t time.Time, loc *time.Location) time.Time {
+func bruteNext(s *SpecSchedule, t time.Time, loc *time.Location) time.Time {
 	at := t.Truncate(time.Minute).Add(time.Minute)
 	for i := 0; i < 60*24*40; i, at = i+1, at.Add(time.Minute) {
 		if matchesAt(s, at.In(loc)) {
@@ -44,7 +40,7 @@ func bruteNext(s *cron.SpecSchedule, t time.Time, loc *time.Location) time.Time 
 // bruteNextSeconds is the ground truth for historical offsets with a seconds
 // part, which put local minute boundaries off the UTC minute grid: step one
 // second at a time, for at most three days.
-func bruteNextSeconds(s *cron.SpecSchedule, t time.Time, loc *time.Location) time.Time {
+func bruteNextSeconds(s *SpecSchedule, t time.Time, loc *time.Location) time.Time {
 	at := t.Truncate(time.Second).Add(time.Second)
 	for i := 0; i < 60*60*24*3; i, at = i+1, at.Add(time.Second) {
 		if matchesAt(s, at.In(loc)) {
@@ -54,14 +50,26 @@ func bruteNextSeconds(s *cron.SpecSchedule, t time.Time, loc *time.Location) tim
 	return time.Time{}
 }
 
-func matchesAt(s *cron.SpecSchedule, lt time.Time) bool {
-	return lt.Second() == 0 && bit(s.Month, int(lt.Month())) && dayMatches(s, lt) &&
+func matchesAt(s *SpecSchedule, lt time.Time) bool {
+	return lt.Second() == 0 && bit(s.Month, int(lt.Month())) && bruteDayMatches(s, lt) &&
 		bit(s.Hour, lt.Hour()) && bit(s.Minute, lt.Minute())
 }
 
-func mustParse(t *testing.T, expr string) cron.Schedule {
+// ourNext is the DST-safe SpecSchedule.Next under test.
+func ourNext(s Schedule, t time.Time) time.Time { return s.Next(t) }
+
+// robfigNext is upstream robfig/cron's own Next — the wall-clock walk kept as
+// wallNext — the reference these tests compare against wherever it is right.
+func robfigNext(s Schedule, t time.Time) time.Time {
+	if spec, ok := s.(*SpecSchedule); ok {
+		return spec.wallNext(t)
+	}
+	return s.Next(t)
+}
+
+func mustParse(t *testing.T, expr string) Schedule {
 	t.Helper()
-	s, err := cron.ParseStandard(expr)
+	s, err := ParseStandard(expr)
 	if err != nil {
 		t.Fatalf("parse %q: %v", expr, err)
 	}
@@ -82,10 +90,10 @@ func TestNext_LordHoweDoesNotSkipADay(t *testing.T) {
 	loc := mustLoad(t, "Australia/Lord_Howe")
 	s := mustParse(t, "0 3 * * *")
 	from := time.Date(2026, 4, 3, 16, 0, 0, 0, time.UTC) // 03:00 Apr 4, +11
-	if robfig := s.Next(from.In(loc)).UTC(); !robfig.Equal(time.Date(2026, 4, 5, 16, 30, 0, 0, time.UTC)) {
+	if robfig := robfigNext(s, from.In(loc)).UTC(); !robfig.Equal(time.Date(2026, 4, 5, 16, 30, 0, 0, time.UTC)) {
 		t.Logf("robfig no longer skips (got %s); this test still pins the right answer", robfig)
 	}
-	got := Next(s, from.In(loc)).UTC()
+	got := ourNext(s, from.In(loc)).UTC()
 	want := time.Date(2026, 4, 4, 16, 30, 0, 0, time.UTC) // 03:00 Apr 5, +10:30
 	if !got.Equal(want) {
 		t.Fatalf("Next = %s, want %s", got, want)
@@ -116,7 +124,7 @@ func TestNext_MatchesBruteForceAroundTransitions(t *testing.T) {
 		}
 		for _, e := range exprs {
 			s := mustParse(t, e)
-			spec := s.(*cron.SpecSchedule)
+			spec := s.(*SpecSchedule)
 			for _, tr := range transitions {
 				// The samples are ascending, so the previous brute-force answer
 				// stays the answer while it is still ahead of this sample's
@@ -128,11 +136,11 @@ func TestNext_MatchesBruteForceAroundTransitions(t *testing.T) {
 					if start := from.Truncate(time.Minute).Add(time.Minute); want.IsZero() || want.Before(start) {
 						want = bruteNext(spec, from, loc)
 					}
-					got := Next(s, from.In(loc)).UTC()
+					got := ourNext(s, from.In(loc)).UTC()
 					if !got.Equal(want) {
 						t.Fatalf("%s %q from %s: Next = %s, brute force = %s", z, e, from, got, want)
 					}
-					if robfig := s.Next(from.In(loc)).UTC(); robfig.Equal(want) && !got.Equal(robfig) {
+					if robfig := robfigNext(s, from.In(loc)).UTC(); robfig.Equal(want) && !got.Equal(robfig) {
 						t.Fatalf("%s %q from %s: diverges from a correct robfig result", z, e, from)
 					}
 				}
@@ -144,30 +152,30 @@ func TestNext_MatchesBruteForceAroundTransitions(t *testing.T) {
 func TestNext_KeepsCallerLocationAndCronTZ(t *testing.T) {
 	ny := mustLoad(t, "America/New_York")
 	from := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC).In(ny) // 08:00 EDT
-	got := Next(mustParse(t, "0 8 * * 1-5"), from)
+	got := ourNext(mustParse(t, "0 8 * * 1-5"), from)
 	if got.Location() != ny || !got.Equal(time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)) {
 		t.Fatalf("Next = %s (%v)", got, got.Location())
 	}
 	// CRON_TZ= overrides the caller's zone, as in robfig.
 	tz := mustParse(t, "CRON_TZ=Asia/Tokyo 0 8 * * *")
-	if got, want := Next(tz, from).UTC(), tz.Next(from).UTC(); !got.Equal(want) {
+	if got, want := ourNext(tz, from).UTC(), robfigNext(tz, from).UTC(); !got.Equal(want) {
 		t.Fatalf("CRON_TZ: Next = %s, robfig = %s", got, want)
 	}
 }
 
 func TestNext_DelegatesNonStandardSchedules(t *testing.T) {
-	every, err := cron.ParseStandard("@every 90s")
+	every, err := ParseStandard("@every 90s")
 	if err != nil {
 		t.Fatal(err)
 	}
 	from := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
-	if got, want := Next(every, from), every.Next(from); !got.Equal(want) {
+	if got, want := ourNext(every, from), every.Next(from); !got.Equal(want) {
 		t.Fatalf("@every: Next = %s, want %s", got, want)
 	}
 }
 
 func TestNext_ImpossibleScheduleIsZero(t *testing.T) {
-	if got := Next(mustParse(t, "0 0 30 2 *"), time.Now()); !got.IsZero() {
+	if got := ourNext(mustParse(t, "0 0 30 2 *"), time.Now()); !got.IsZero() {
 		t.Fatalf("Feb 30 = %s, want zero", got)
 	}
 }
@@ -180,7 +188,7 @@ func TestNext_SkippedCalendarDayIsNotAMatch(t *testing.T) {
 	loc := mustLoad(t, "Pacific/Apia")
 	s := mustParse(t, "0 12 30 12 *")
 	from := time.Date(2011, 12, 29, 13, 0, 0, 0, loc)
-	got := Next(s, from)
+	got := ourNext(s, from)
 	want := time.Date(2012, 12, 30, 12, 0, 0, 0, loc)
 	if !got.Equal(want) {
 		t.Fatalf("Next = %s, want %s", got, want)
@@ -209,8 +217,8 @@ func TestNext_DenseScheduleIsCheapToChain(t *testing.T) {
 		}
 		return time.Since(started)
 	}
-	ours := chain(func(at time.Time) time.Time { return Next(s, at) })
-	robfig := chain(s.Next)
+	ours := chain(func(at time.Time) time.Time { return ourNext(s, at) })
+	robfig := chain(func(at time.Time) time.Time { return robfigNext(s, at) })
 	if ours > 5*robfig+50*time.Millisecond {
 		t.Fatalf("200x366 chained Next took %s; robfig took %s", ours, robfig)
 	}
@@ -235,11 +243,11 @@ func TestNext_HistoricalOffsets(t *testing.T) {
 		loc := mustLoad(t, c.zone)
 		from := time.Date(c.from.Year(), c.from.Month(), c.from.Day(), c.from.Hour(), c.from.Minute(), 0, 0, loc)
 		s := mustParse(t, c.expr)
-		want := bruteNextSeconds(s.(*cron.SpecSchedule), from, loc)
+		want := bruteNextSeconds(s.(*SpecSchedule), from, loc)
 		if want.IsZero() {
 			t.Fatalf("%s %q from %s: brute force found nothing within three days", c.zone, c.expr, from)
 		}
-		if got := Next(s, from); !got.Equal(want) {
+		if got := ourNext(s, from); !got.Equal(want) {
 			t.Errorf("%s %q from %s: Next = %s, brute force = %s", c.zone, c.expr, from, got, want.In(loc))
 		}
 	}
@@ -262,7 +270,7 @@ func TestNext_HorizonMatchesRobfig(t *testing.T) {
 		{"0 0 30 2 *", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 	} {
 		s := mustParse(t, c.expr)
-		if got, want := Next(s, c.from), s.Next(c.from); !got.Equal(want) {
+		if got, want := ourNext(s, c.from), robfigNext(s, c.from); !got.Equal(want) {
 			t.Errorf("%q from %s: Next = %s, robfig = %s", c.expr, c.from, got, want)
 		}
 	}
@@ -288,7 +296,7 @@ func TestNext_EqualsRobfigWithoutTransitions(t *testing.T) {
 			from = time.Date(from.Year(), 12, 31, 23, 59, 59, rng.IntN(1e9), loc)
 		}
 		s := mustParse(t, e)
-		if got, want := Next(s, from), s.Next(from); !got.Equal(want) {
+		if got, want := ourNext(s, from), robfigNext(s, from); !got.Equal(want) {
 			t.Fatalf("%q from %s: Next = %s, robfig = %s", e, from.Format(time.RFC3339Nano), got, want)
 		}
 	}

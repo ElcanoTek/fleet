@@ -20,7 +20,6 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/itchyny/gojq v0.12.19
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/robfig/cron/v3 v3.0.1
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/yuin/goldmark v1.8.6
 	go.opentelemetry.io/otel v1.47.0

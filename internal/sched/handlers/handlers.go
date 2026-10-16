@@ -29,10 +29,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
-	"github.com/robfig/cron/v3"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
-	"github.com/ElcanoTek/fleet/internal/cronnext"
+	"github.com/ElcanoTek/fleet/internal/cron"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
@@ -1071,7 +1070,7 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error { //nolint:go
 			// cron trigger time so the task waits instead of running immediately.
 			// scheduled_for is always stored as an absolute UTC instant.
 			if tc.ScheduledFor == nil {
-				next := cronnext.Next(schedule, time.Now().In(loc)).UTC()
+				next := schedule.Next(time.Now().In(loc)).UTC()
 				tc.ScheduledFor = &next
 			}
 		}
@@ -2013,7 +2012,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 			if lerr != nil {
 				loc = h.storage.Location()
 			}
-			nextUTC := cronnext.Next(schedule, time.Now().In(loc)).UTC()
+			nextUTC := schedule.Next(time.Now().In(loc)).UTC()
 			tc.ScheduledFor = &nextUTC
 		}
 	}
@@ -2406,7 +2405,7 @@ func buildRerunTaskCreate(source *models.Task, keepRecurrence bool, o taskRerunO
 		if loc == nil {
 			loc = time.UTC
 		}
-		next := cronnext.Next(schedule, time.Now().In(loc)).UTC()
+		next := schedule.Next(time.Now().In(loc)).UTC()
 		tc.ScheduledFor = &next
 	} else {
 		tc.ScheduledFor = nil // immediate run-now
