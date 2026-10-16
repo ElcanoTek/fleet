@@ -1,40 +1,28 @@
 "use client";
 
-// Syntax-highlighted code block body — the ONLY module that imports
-// react-syntax-highlighter. It is loaded lazily (React.lazy in
-// ToolChips.tsx) because the highlighter + grammars are the single
-// largest dependency in the initial /chat bundle (~75 KiB transfer)
-// while nothing on screen needs them until the user expands a tool
-// chip: CodeBlock renders a plain <pre> until this chunk arrives.
+// Syntax-highlighted code block body. It is loaded lazily (React.lazy in
+// ToolChips.tsx and orchestrator/LogTimeline.tsx) because the tokenizer +
+// grammars are the largest piece of the /chat UI that nothing on screen needs
+// until the user expands a tool chip: CodeBlock renders a plain <pre> until
+// this chunk arrives.
 //
-// Prism light build so we only ship the languages we actually render.
-// PrismLight shares a single module-level grammar registry across
-// imports, so registering the languages here (the only module that
-// renders a SyntaxHighlighter) makes them available wherever the
-// highlighter is used. Keep the registered set in sync with
-// syntaxSupportedLanguages in ToolChips.tsx — that set gates which
-// languages reach this component at all (it stays there so the gate
-// doesn't statically pull this module back into the initial bundle).
+// The highlighter is fleet's own (./highlight): Prism's tokenizer and the five
+// grammars we render, vendored, and a renderer that lays the tokens out exactly
+// as react-syntax-highlighter's PrismLight did (pinned by
+// highlight/highlight.test.tsx). Keep the registered set in sync with
+// syntaxSupportedLanguages in ToolChips.tsx — that set gates which languages
+// reach this component at all (it stays there so the gate doesn't statically
+// pull this module back into the initial bundle).
 
-import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
-import pythonGrammar from "react-syntax-highlighter/dist/esm/languages/prism/python";
-import bashGrammar from "react-syntax-highlighter/dist/esm/languages/prism/bash";
-import jsonGrammar from "react-syntax-highlighter/dist/esm/languages/prism/json";
-import yamlGrammar from "react-syntax-highlighter/dist/esm/languages/prism/yaml";
-import markupGrammar from "react-syntax-highlighter/dist/esm/languages/prism/markup";
-SyntaxHighlighter.registerLanguage("python", pythonGrammar);
-SyntaxHighlighter.registerLanguage("bash", bashGrammar);
-SyntaxHighlighter.registerLanguage("shell", bashGrammar);
-SyntaxHighlighter.registerLanguage("json", jsonGrammar);
-SyntaxHighlighter.registerLanguage("yaml", yamlGrammar);
-// HTML/XML: the Operations Center log shows email bodies and files an agent
-// viewed or wrote (orchestrator/LogTimeline.tsx).
-SyntaxHighlighter.registerLanguage("markup", markupGrammar);
+import type { CSSProperties } from "react";
+import { grammarFor } from "./highlight/languages";
+import { tokenize } from "./highlight/prism";
+import { renderCode } from "./highlight/render";
 
-// syntaxStyle is a react-syntax-highlighter style object: keys are
-// Prism token classes, values are CSS-in-JS objects. We use CSS var
+// syntaxStyle maps Prism token classes to CSS-in-JS objects (the shape
+// react-syntax-highlighter styles took). We use CSS var
 // references so the colors flip with the app's light/dark theme.
-const syntaxStyle: Record<string, React.CSSProperties> = {
+const syntaxStyle: Record<string, CSSProperties> = {
   'code[class*="language-"]': {
     color: "var(--color-text-primary)",
     background: "transparent",
@@ -100,22 +88,19 @@ export default function HighlightedCode({
   showLineNumbers?: boolean;
   wrapLongLines?: boolean;
 }) {
+  const grammar = grammarFor(language);
+  let tokens = null;
+  if (grammar) {
+    try {
+      tokens = tokenize(code, grammar);
+    } catch {
+      tokens = null; // a grammar that throws renders the code plain, as before
+    }
+  }
   return (
-    <SyntaxHighlighter
-      language={language}
-      style={syntaxStyle}
-      PreTag="pre"
-      CodeTag="code"
-      wrapLongLines={wrapLongLines}
-      showLineNumbers={showLineNumbers}
-      lineNumberStyle={{
-        minWidth: "2.25em",
-        paddingRight: "0.9em",
-        textAlign: "right",
-        color: "var(--color-text-disabled)",
-        userSelect: "none",
-      }}
-      customStyle={{
+    <pre
+      style={{
+        ...syntaxStyle['pre[class*="language-"]'],
         background: "transparent",
         padding: 0,
         margin: 0,
@@ -123,9 +108,20 @@ export default function HighlightedCode({
         lineHeight: 1.4,
         fontFamily: "var(--font-code)",
       }}
-      codeTagProps={{ style: { fontFamily: "var(--font-code)" } }}
     >
-      {code}
-    </SyntaxHighlighter>
+      <code style={{ whiteSpace: wrapLongLines ? "pre-wrap" : "pre", fontFamily: "var(--font-code)" }}>
+        {renderCode(code, tokens, syntaxStyle, {
+          showLineNumbers,
+          wrapLongLines,
+          lineNumberStyle: {
+            minWidth: "2.25em",
+            paddingRight: "0.9em",
+            textAlign: "right",
+            color: "var(--color-text-disabled)",
+            userSelect: "none",
+          },
+        })}
+      </code>
+    </pre>
   );
 }
