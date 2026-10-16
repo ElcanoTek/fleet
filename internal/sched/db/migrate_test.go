@@ -266,7 +266,7 @@ func TestMigrateUp_ContinuesGolangMigrateState(t *testing.T) {
 }
 
 // TestMigrateUp_FailureLeavesDirtyThenForce: a failing migration leaves the row
-// dirty at its version; every later run refuses with ErrDirty; forcing the
+// dirty at its version; every later run refuses with DirtyError; forcing the
 // last good version lets the (fixed) set continue.
 func TestMigrateUp_FailureLeavesDirtyThenForce(t *testing.T) {
 	db, _ := migrationSchemaDB(t)
@@ -287,9 +287,9 @@ func TestMigrateUp_FailureLeavesDirtyThenForce(t *testing.T) {
 	if _, err := db.Exec(`SELECT 1 FROM b`); err == nil {
 		t.Fatal("first statement of the failed migration was committed")
 	}
-	var de ErrDirty
+	var de DirtyError
 	if err := migrateUp(ctx, db, testMigrations, "m"); !errors.As(err, &de) || de.Version != 2 {
-		t.Fatalf("dirty DB: err = %v, want ErrDirty{2}", err)
+		t.Fatalf("dirty DB: err = %v, want DirtyError{2}", err)
 	}
 	if err := forceVersion(ctx, db, testMigrations, "m", 7); err == nil {
 		t.Fatal("forcing an unknown version should fail")

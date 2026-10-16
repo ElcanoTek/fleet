@@ -203,7 +203,7 @@ func encrypt(payload, authSecret, uaPublic []byte, asPrivate *ecdh.PrivateKey, s
 	header := make([]byte, 0, 16+4+1+len(asPublic))
 	header = append(header, salt...)
 	header = binary.BigEndian.AppendUint32(header, recordSize)
-	header = append(header, byte(len(asPublic)))
+	header = append(header, byte(len(asPublic))) //nolint:gosec // G115: an uncompressed P-256 point is always 65 octets
 	header = append(header, asPublic...)
 
 	plaintext := make([]byte, 0, recordSize)

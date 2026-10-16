@@ -67,13 +67,13 @@ var migrationLockTimeout = 15 * time.Second
 // ErrNoChange reports that there was nothing to apply.
 var ErrNoChange = errors.New("no change")
 
-// ErrDirty reports that a previous migration failed mid-run, leaving the
+// DirtyError reports that a previous migration failed mid-run, leaving the
 // tracking row dirty at Version. Its text is golang-migrate's.
-type ErrDirty struct {
+type DirtyError struct {
 	Version int
 }
 
-func (e ErrDirty) Error() string {
+func (e DirtyError) Error() string {
 	return fmt.Sprintf("Dirty database version %v. Fix and force version.", e.Version)
 }
 
@@ -155,7 +155,7 @@ func RunMigrations(conn *sql.DB) error {
 	if err == nil || errors.Is(err, ErrNoChange) {
 		return nil
 	}
-	var dirty ErrDirty
+	var dirty DirtyError
 	if errors.As(err, &dirty) {
 		return fmt.Errorf("sched migrations are DIRTY at version %d — a previous migration failed mid-run, "+
 			"so the process refuses to start. Inspect the DB, then force the last-good version with "+
@@ -206,7 +206,7 @@ func migrateUp(ctx context.Context, conn *sql.DB, fsys fs.FS, dir string) error 
 			return err
 		}
 		if dirty {
-			return ErrDirty{Version: current}
+			return DirtyError{Version: current}
 		}
 		next := 0
 		if current != nilVersion {
@@ -397,7 +397,7 @@ func (r *migrationRun) setVersion(ctx context.Context, version int, dirty bool) 
 		return fmt.Errorf("set version: truncate: %w", err)
 	}
 	if version >= 0 || (version == nilVersion && dirty) {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO `+r.table+` (version, dirty) VALUES ($1, $2)`, version, dirty); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO `+r.table+` (version, dirty) VALUES ($1, $2)`, version, dirty); err != nil { //nolint:gosec // G202: r.table is quoteIdentifier'd current_schema() and a constant; the values are bind parameters
 			return fmt.Errorf("set version: insert: %w", err)
 		}
 	}

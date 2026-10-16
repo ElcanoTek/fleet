@@ -336,8 +336,9 @@ func nodeName(n *html.Node) string {
 		return "#document"
 	case html.CommentNode:
 		return "#comment"
+	default: // html.RawNode has no name in goquery either
+		return ""
 	}
-	return ""
 }
 
 // isElement reports whether n is an element named one of names (a goquery
