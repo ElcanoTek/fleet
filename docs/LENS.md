@@ -39,7 +39,14 @@ Both already existed and are generic. Nothing was added for Lens.
   the CSV in the workspace through the SSRF-guarded host fetch. The bearer
   token never leaves the broker. The signed link does pass through the model's
   context, so it is deliberately short-lived, scoped to one file of one job,
-  and invalidated when its token is revoked.
+  and invalidated when its token is revoked. **The link must resolve to a
+  public address.** `download_url` goes through the SSRF-guarded dialer, which
+  refuses loopback, RFC 1918 and link-local targets, so a Lens reachable only
+  on a private network can take jobs but not hand back files. Lens builds the
+  link from its `LENS_PUBLIC_URL` (or the `Host` it was called on), so point
+  `LENS_MCP_URL` at the Lens's public hostname. Every current deployment does
+  (`lens.<deployment domain>`, public DNS). A private-only Lens would need a
+  brokered download path; that is not built.
 
 ## Credentials and scope
 
@@ -68,5 +75,7 @@ back to another organisation's Lens.
 - No push notification when a Lens job finishes. The agent polls `get_job`,
   sleeping in bash between checks in scheduled runs.
 - No uploads larger than the 2 MiB workspace-file cap through the agent.
+- No file download from a Lens that only resolves to a private address (see
+  "Files out").
 - No per-user job isolation inside one Lens instance (the Lens dashboard has
   none either); customers are separated by running separate Lens hosts.
