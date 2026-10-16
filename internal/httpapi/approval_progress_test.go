@@ -13,8 +13,6 @@ import (
 	"testing"
 	"time"
 
-	webpushgo "github.com/SherClockHolmes/webpush-go"
-
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -282,7 +280,7 @@ func (relaySubscriptions) DeletePushSubscription(context.Context, string) error 
 func newPushRelay(t *testing.T) (*pushRelay, *webpush.Service) {
 	t.Helper()
 	relay := &pushRelay{}
-	priv, pub, err := webpushgo.GenerateVAPIDKeys()
+	priv, pub, err := webpush.GenerateVAPIDKeys()
 	if err != nil {
 		t.Fatal(err)
 	}

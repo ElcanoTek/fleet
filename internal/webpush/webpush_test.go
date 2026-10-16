@@ -19,17 +19,15 @@ import (
 	"sync/atomic"
 	"testing"
 
-	webpushgo "github.com/SherClockHolmes/webpush-go"
-
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // testConfig returns an enabled Config with a freshly generated VAPID pair —
-// real keys so webpush-go's VAPID signing + RFC 8291 encryption actually run.
+// real keys so VAPID signing + RFC 8291 encryption actually run.
 func testConfig(t *testing.T) Config {
 	t.Helper()
-	priv, pub, err := webpushgo.GenerateVAPIDKeys()
+	priv, pub, err := GenerateVAPIDKeys()
 	if err != nil {
 		t.Fatalf("GenerateVAPIDKeys: %v", err)
 	}
@@ -90,7 +88,7 @@ func (f *fakeStore) DeletePushSubscription(_ context.Context, endpoint string) e
 	return nil
 }
 
-// fakeRelay is the HTTP seam handed to webpush-go: it records every request
+// fakeRelay is the HTTP seam every send goes through: it records every request
 // and answers with a per-endpoint status (default 201, a real relay's accept).
 type fakeRelay struct {
 	mu       sync.Mutex
@@ -183,7 +181,7 @@ func TestNilServiceIsNoOp(t *testing.T) {
 	if svc.PublicKey() != "" {
 		t.Error("nil service must have no public key")
 	}
-	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "b", "", webpushgo.UrgencyNormal); err != nil {
+	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "b", "", UrgencyNormal); err != nil {
 		t.Errorf("nil SendToUser: %v", err)
 	}
 	if err := svc.SendEvent(context.Background(), notify.Event{Status: notify.StatusSuccess, Audience: "u@x.com"}); err != nil {
@@ -205,7 +203,7 @@ func TestSendToUser_FansOutEncrypted(t *testing.T) {
 	relay := &fakeRelay{}
 	svc := newTestService(t, st, relay)
 
-	if err := svc.sendToUser(context.Background(), "u@x.com", "secret-title", "secret-body", "https://fleet.example.com/x", webpushgo.UrgencyNormal); err != nil {
+	if err := svc.sendToUser(context.Background(), "u@x.com", "secret-title", "secret-body", "https://fleet.example.com/x", UrgencyNormal); err != nil {
 		t.Fatalf("SendToUser: %v", err)
 	}
 	if len(relay.requests) != 2 {
@@ -229,7 +227,7 @@ func TestSendToUser_FansOutEncrypted(t *testing.T) {
 		t.Errorf("healthy sends must not delete subscriptions: %v", st.deleted)
 	}
 	// No subscriptions for another user: a clean no-op, no extra requests.
-	if err := svc.sendToUser(context.Background(), "nobody@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+	if err := svc.sendToUser(context.Background(), "nobody@x.com", "t", "", "", UrgencyNormal); err != nil {
 		t.Fatalf("SendToUser (no subs): %v", err)
 	}
 	if len(relay.requests) != 2 {
@@ -252,7 +250,7 @@ func TestSendToUser_ExpiredSubscriptionDeleted(t *testing.T) {
 	}}
 	svc := newTestService(t, st, relay)
 
-	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", UrgencyNormal); err != nil {
 		t.Fatalf("SendToUser: %v", err)
 	}
 	if len(relay.requests) != 4 {
@@ -482,7 +480,7 @@ func TestSendOne_RefusedVAPIDKeepsTheRowAndNamesBothCauses(t *testing.T) {
 			var logged []string
 			svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
 
-			if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+			if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", UrgencyNormal); err != nil {
 				t.Fatalf("sendToUser: %v", err)
 			}
 			if len(st.deleted) != 0 {
@@ -524,7 +522,7 @@ func vapidSubject(t *testing.T, req *http.Request) string {
 }
 
 // The VAPID token carries exactly one "mailto:", however the operator wrote
-// FLEET_VAPID_CONTACT. webpush-go adds the scheme itself, so the documented
+// FLEET_VAPID_CONTACT. The VAPID signer adds the scheme itself, so the documented
 // "mailto:…" form used to go out as "mailto:mailto:…", which Apple's push
 // service refuses (403 BadJwtToken): Safari got no notifications at all.
 func TestSendOne_VAPIDSubjectHasOneScheme(t *testing.T) {
@@ -535,7 +533,7 @@ func TestSendOne_VAPIDSubjectHasOneScheme(t *testing.T) {
 		{"space after scheme", "mailto: ops@example.com", "mailto:ops@example.com"},
 		{"bare address", "ops@example.com", "mailto:ops@example.com"},
 		{"https", "https://ops.example.com/abuse", "https://ops.example.com/abuse"},
-		{"HTTPS", "HTTPS://ops.example.com/abuse", "https://ops.example.com/abuse"}, // webpush-go checks for lower-case https: only
+		{"HTTPS", "HTTPS://ops.example.com/abuse", "https://ops.example.com/abuse"}, // the signer checks for lower-case https: only
 		{"Https", "Https://ops.example.com/abuse", "https://ops.example.com/abuse"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -544,7 +542,7 @@ func TestSendOne_VAPIDSubjectHasOneScheme(t *testing.T) {
 			svc := newTestService(t, st, relay)
 			svc.cfg.Contact = tc.contact
 
-			if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+			if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", UrgencyNormal); err != nil {
 				t.Fatalf("sendToUser: %v", err)
 			}
 			if len(relay.requests) != 1 {
@@ -578,7 +576,7 @@ func TestSendOne_RefusalLogsThePushServicesReason(t *testing.T) {
 			var logged []string
 			svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
 
-			if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+			if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", UrgencyNormal); err != nil {
 				t.Fatalf("sendToUser: %v", err)
 			}
 			if len(logged) != 1 {
@@ -721,7 +719,7 @@ func TestSendToUser_NeverSendsOffAPushServiceAndRetiresTheRow(t *testing.T) {
 	var logged []string
 	svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
 
-	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", UrgencyNormal); err != nil {
 		t.Fatalf("sendToUser: %v", err)
 	}
 	if len(relay.requests) != 1 || relay.requests[0].URL.String() != good.Endpoint {
@@ -763,7 +761,7 @@ func TestSendOne_TransportErrorLogsNoEndpoint(t *testing.T) {
 	var logged []string
 	svc.logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
 
-	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", webpushgo.UrgencyNormal); err != nil {
+	if err := svc.sendToUser(context.Background(), "u@x.com", "t", "", "", UrgencyNormal); err != nil {
 		t.Fatalf("sendToUser: %v", err)
 	}
 	if len(logged) != 1 || !strings.Contains(logged[0], "fcm.googleapis.com") || !strings.Contains(logged[0], "i/o timeout") || strings.Contains(logged[0], "secret-token") {
