@@ -115,6 +115,46 @@ func failUnlessOutagef(t *testing.T, err error, format string, args ...any) {
 	t.Fatal(msg)
 }
 
+// fixtureKeyRefusedMarker starts the skip message of an api_key fixture whose
+// own (real) key the vendor refused. The workflow greps for it to annotate the
+// run, so keep the two in step.
+const fixtureKeyRefusedMarker = "FIXTURE KEY REFUSED"
+
+// fixtureKeyRefused reports whether a probe with a fixture's real key failed
+// because the vendor refused that key: an HTTP 401 or 403 in any of the
+// transport's error forms, or a key rejected at the read-only verification
+// call. Outages are sorted out first (vendorOutage), so a 5xx never lands here.
+//
+// The secret lives in a third-party account fleet does not control: trials
+// lapse, plans drop the permission a token needs, someone revokes the token.
+// None of that is the listing being wrong, and #1776 (the PagerDuty EU key
+// refused two nights running, no fleet change in between) showed a red lane
+// for it reads as a fleet regression.
+func fixtureKeyRefused(err error) bool {
+	switch httpStatusOf(err) {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return true
+	}
+	var kr *keyRejectedError
+	return errors.As(err, &kr)
+}
+
+// failFixturef fails an api_key fixture's real-key probe on err, except that
+// an outage skips it with a vendorOutageMarker warning and a refused fixture
+// key skips it with a fixtureKeyRefusedMarker warning, both unless
+// FLEET_CATALOG_STRICT=1. What it costs: a vendor that changes its auth
+// scheme also reads as a refused key here, and only warns. The invalid-key
+// control probe still fails a vendor that stops checking keys, the offline
+// keyprobe tests pin how fleet attaches a key, and TestCatalogLiveAPIKeyFixtures
+// fails when no armed fixture gets through at all.
+func failFixturef(t *testing.T, err error, format string, args ...any) {
+	t.Helper()
+	if fixtureKeyRefused(err) && !vendorOutage(err) && os.Getenv(catalogStrictEnv) != "1" {
+		t.Skipf("%s (warning: rotate the fixture's repository secret, or delete it to skip the fixture; %s=1 fails it): %s", fixtureKeyRefusedMarker, catalogStrictEnv, fmt.Sprintf(format, args...))
+	}
+	failUnlessOutagef(t, err, format, args...)
+}
+
 // catalogLiveService is the smallest Service that can run probeServer: the
 // same SSRF-safe client and timeout the real one is built with, no store. The
 // entries are the directory AS SHIPPED, not a bundle's merged view, so an
@@ -285,12 +325,25 @@ func catalogKeyEnv(entry, variant string) string {
 // vendor checks the key at the handshake, an obviously wrong key must be
 // refused with a credential-shaped error — the only way to know the header
 // shape (and not just the URL) is right.
+//
+// A refused real key only warns (failFixturef), so, as with the open entries,
+// the parent fails when two or more fixtures were armed and none got through:
+// one dead secret is an account lapsing, every armed key refused at once is
+// fleet no longer sending keys the way vendors expect. With a single armed
+// fixture the two cannot be told apart, and it only warns.
 func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 	svc, entries := catalogLiveService(t)
 	byName := make(map[string]clientconfig.RemoteMCPCatalogEntry, len(entries))
 	for _, e := range entries {
 		byName[e.Name] = e
 	}
+	var armed, succeeded atomic.Int32
+	// Cleanup runs after the parallel subtests have all finished.
+	t.Cleanup(func() {
+		if n := armed.Load(); n >= 2 && succeeded.Load() == 0 {
+			t.Errorf("none of the %d armed api_key fixtures completed a handshake; every real key was refused or hit an outage, which is fleet's key handling or the runner, not %d vendors at once", n, n)
+		}
+	})
 	for _, f := range catalogKeyFixtures {
 		t.Run(fixtureName(f.Entry, f.Variant), func(t *testing.T) {
 			t.Parallel()
@@ -309,13 +362,15 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			if key == "" {
 				t.Skipf("%s not set; skipping the %s fixture", envName, fixtureName(f.Entry, f.Variant))
 			}
+			armed.Add(1)
 			tools, err := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, key)
 			if err != nil {
-				failUnlessOutagef(t, err, "%s: handshake with the fixture key failed: %v", fixtureName(f.Entry, f.Variant), err)
+				failFixturef(t, err, "%s: handshake with the fixture key failed: %v", fixtureName(f.Entry, f.Variant), err)
 			}
 			if tools == 0 {
 				t.Fatalf("%s: handshake succeeded but the server lists no tools", fixtureName(f.Entry, f.Variant))
 			}
+			succeeded.Add(1)
 			t.Logf("%s: %d tools", fixtureName(f.Entry, f.Variant), tools)
 			if !f.RejectsBadKey {
 				return

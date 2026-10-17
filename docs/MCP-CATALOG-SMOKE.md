@@ -111,8 +111,7 @@ awk shows up in the PR gate, not as a silently smaller nightly.
   *shape* is right and not merely that the endpoint is up. Where the vendor does not (F14 in the
   status page: 25 of the 51 built-in api_key vendors check the key only at the
   first tool call), the fixture proves reachability and the tool list, and the
-  table says so. No secret is configured yet; the fixtures are ready for the
-  first one.
+  table says so.
 
 ### Outages warn, rot fails
 
@@ -149,8 +148,41 @@ skipped as an outage, `TestCatalogLiveOpenEntries` fails anyway: twelve vendors
 are not down at once. That is the runner losing its network, DNS failing for
 everyone, or a regression in fleet's own client, and it must alarm.
 
+### A refused fixture key warns too
+
+An api_key fixture's secret is a token in a vendor account fleet does not
+control. Trials lapse, a plan loses the permission the token needs, someone
+revokes it. The second alarm (#1776, 2026-10-16) was exactly that: PagerDuty's
+EU host answered the `FLEET_CATALOG_KEY_PAGERDUTY_EU` token with HTTP 401 "No
+permission" two nights running, with no change to fleet, the entry or the
+workflow in between.
+
+So when the vendor refuses a fixture's **real** key (HTTP 401 or 403 in any
+error form, or a key rejected at the read-only verification call), the
+subtest is skipped with a `FIXTURE KEY REFUSED` message instead of failing.
+The workflow annotates the run and lists it in the job summary under
+"Fixture keys refused". The fix is to rotate that repository secret, or to
+delete it, which skips the fixture.
+
+What still fails:
+
+- the **invalid-key control probe** getting through on a vendor that checks
+  keys at the handshake (the vendor or fleet stopped sending the key where it
+  is checked);
+- **every armed fixture** failing to complete a handshake, whether refused
+  or down, when two or more are armed. Several vendor accounts do not lapse
+  on one night; that is fleet's key handling or the runner. With one armed
+  fixture the two cannot be told apart, so it only warns;
+- anything the open entries fail on (404, 501, not MCP, no tools, host gone).
+
+What this costs: a vendor that changes its auth scheme so that fleet's
+`api_key_header`/`api_key_prefix` is now wrong also reads as a refused key,
+and only warns. The offline `keyprobe` tests still pin how fleet attaches a
+key; the vendor-side change shows as a warning on every run until someone
+looks.
+
 The `strict_smoke` dispatch input (`FLEET_CATALOG_STRICT=1`) turns outage
-warnings into failures for a deliberate sweep, as `strict_links` does for the
+and refused-key warnings into failures for a deliberate sweep, as `strict_links` does for the
 link lint. What this costs: **a vendor that stays down every night only ever
 warns.** It shows on each run's page and summary but files no issue. If that
 starts to matter, a consecutive-nights rule needs state the lane does not keep
