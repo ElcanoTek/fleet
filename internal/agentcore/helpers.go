@@ -15,7 +15,7 @@ import (
 )
 
 // Shared orchestration helpers extracted from chat + cutlass orchestration.go.
-// openrouterCost is byte-identical between the two repos. hashString lives in
+// hashString lives in
 // chat's orchestration.go; cutlass uses the same shape. sendEmail* + recipient
 // parsing come from cutlass (its sendEmailSucceeded is the JSON-parsing version
 // the lifted orchestration tests rely on).
@@ -29,18 +29,38 @@ func hashString(s string) string {
 	return hex.EncodeToString(h[:])[:16]
 }
 
-// openrouterCost extracts the USD cost from OpenRouter's provider metadata.
-// Byte-identical between chat and cutlass.
-func openrouterCost(metadata fantasy.ProviderMetadata) *float64 {
-	raw, ok := metadata[openrouter.Name]
-	if !ok {
-		return nil
+// openrouterMetadata returns OpenRouter's provider metadata from a step or
+// response, or nil. fantasy keys it under openrouter.Name on the streaming path
+// but under openai.Name ("openai") on the non-streaming Generate path (the
+// OpenRouter adapter wraps the OpenAI provider, whose Response constructor uses
+// its own Name constant). Looking only under openrouter.Name priced every
+// Generate call — the end-of-run verifier, error analysis, the summarizer — at
+// $0, so the typed value is found under whichever key holds it.
+func openrouterMetadata(metadata fantasy.ProviderMetadata) *openrouter.ProviderMetadata {
+	if opts, ok := metadata[openrouter.Name].(*openrouter.ProviderMetadata); ok && opts != nil {
+		return opts
 	}
-	opts, ok := raw.(*openrouter.ProviderMetadata)
-	if !ok {
+	for _, raw := range metadata {
+		if opts, ok := raw.(*openrouter.ProviderMetadata); ok && opts != nil {
+			return opts
+		}
+	}
+	return nil
+}
+
+// openrouterCost extracts the USD cost from OpenRouter's provider metadata.
+func openrouterCost(metadata fantasy.ProviderMetadata) *float64 {
+	opts := openrouterMetadata(metadata)
+	if opts == nil {
 		return nil
 	}
 	return &opts.Usage.Cost
+}
+
+// OpenRouterCost is openrouterCost for callers outside agentcore that price a
+// Generate result themselves (the conversation summarizer).
+func OpenRouterCost(metadata fantasy.ProviderMetadata) *float64 {
+	return openrouterCost(metadata)
 }
 
 // openrouterServedProvider extracts the upstream that ACTUALLY served a step
@@ -50,12 +70,8 @@ func openrouterCost(metadata fantasy.ProviderMetadata) *float64 {
 // indistinguishable from the model itself being bad, which is precisely the
 // question you need answered when a turn comes back wrong.
 func openrouterServedProvider(metadata fantasy.ProviderMetadata) string {
-	raw, ok := metadata[openrouter.Name]
-	if !ok {
-		return ""
-	}
-	opts, ok := raw.(*openrouter.ProviderMetadata)
-	if !ok {
+	opts := openrouterMetadata(metadata)
+	if opts == nil {
 		return ""
 	}
 	served := strings.TrimSpace(opts.Provider)

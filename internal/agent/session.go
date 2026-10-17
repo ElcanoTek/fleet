@@ -378,10 +378,15 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 			if err := json.Unmarshal(e.Content, &c); err != nil {
 				return nil, err
 			}
+			// A stored input that is not a JSON object (the model streamed
+			// one) would 400 every later turn of this conversation on
+			// Anthropic/Bedrock; replay a normalized copy (agentcore
+			// tool_input_sanitize.go explains the failure).
+			input, _ := agentcore.NormalizeToolCallInput(c.Input)
 			pendingAssistant = append(pendingAssistant, fantasy.ToolCallPart{
 				ToolCallID: c.ID,
 				ToolName:   c.Name,
-				Input:      c.Input,
+				Input:      input,
 			})
 		case "tool_result":
 			// Close the current assistant step; flushAssistant emits the

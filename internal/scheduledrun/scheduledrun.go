@@ -682,6 +682,32 @@ func configureRunWorkspace(ctx context.Context, sb *sandbox.Sandbox, wtPath, sha
 	return artifactCtx, release, effectiveRoot, nil
 }
 
+// resolveVerifierModel resolves the dedicated end-of-run verifier
+// (FLEET_VERIFIER_MODEL). Unset returns nil, and the verifier judges with the
+// run's own model; the fallback model only retries a verifier call that
+// produced no verdict (agent.endOfRunVerifierModel). A configured slug that
+// does not resolve returns runModel: configuring a verifier enables
+// verification, so a bad slug must not silently switch it off on a run with no
+// fallback model.
+func (r *Runner) resolveVerifierModel(ctx context.Context, task *models.Task, runModel fantasy.LanguageModel) fantasy.LanguageModel {
+	return verifierModelFor(ctx, r.cfg.VerifierModel, task.ID.String(), runModel, r.mgr.Resolve)
+}
+
+// verifierModelFor is resolveVerifierModel with the slug and resolver passed
+// in, so the unresolved-slug branch is testable without a Manager.
+func verifierModelFor(ctx context.Context, slug, taskID string, runModel fantasy.LanguageModel, resolve func(context.Context, string) (fantasy.LanguageModel, error)) fantasy.LanguageModel {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return nil
+	}
+	vm, err := resolve(ctx, slug)
+	if err != nil {
+		log.Printf("scheduled task %s: verifier model %q unresolved (%v); the run's own model will verify", taskID, slug, err)
+		return runModel
+	}
+	return vm
+}
+
 // runWorker executes ONE worker pass: it resolves the model, acquires the
 // sandbox + MCP, runs the agent to completion, and (when lc != nil) evaluates
 // the loop exit condition while the sandbox is still live. extraPrompt carries a
@@ -741,6 +767,8 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 			}
 		}
 	}
+
+	verifier := r.resolveVerifierModel(ctx, task, model)
 
 	// Acquire the execution sandbox for this task. Scheduled runs are
 	// network-SEALED by default (--network=none, same as interactive lockdown)
@@ -997,6 +1025,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		Overlay:             remoteOverlay,
 		PhoneAFriendEnabled: phoneAFriend,
 		ReviewerModel:       reviewer,
+		VerifierModel:       verifier,
 		// Deterministic completion predicate (#1602): the producer-declared
 		// EXECUTION REQUIREMENTS completion.any_succeeded, resolved against this
 		// run's roster at dispatch. nil = none declared, verifier as before.

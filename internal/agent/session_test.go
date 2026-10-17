@@ -90,6 +90,40 @@ func TestReplayHistory_DropsReasoning(t *testing.T) {
 
 // TestReplayHistory_ToolErrorPreserved — error tool results round-trip as
 // ToolResultOutputContentError.
+// TestReplayHistory_NormalizesNonObjectToolInput: a stored tool-call input the
+// model streamed as a non-object (here an array) is replayed as a JSON object,
+// so a resumed conversation does not 400 on every later turn
+// ("tool_use.input: Input should be a valid dictionary"). The pairing with
+// its result is kept.
+func TestReplayHistory_NormalizesNonObjectToolInput(t *testing.T) {
+	entries := []HistoryEntry{
+		mustEntry("user", "text", TextContent{Text: "run it"}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "c1", Name: "run_python", Input: `["print(1)"]`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "c1", Name: "run_python", Text: "invalid arguments", IsErr: true}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "c2", Name: "bash", Input: `{"command":"ls"}`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "c2", Name: "bash", Text: "ok"}),
+	}
+	msgs, err := replayHistory(entries, "")
+	if err != nil {
+		t.Fatalf("replayHistory: %v", err)
+	}
+	assertWellFormedToolPairs(t, msgs)
+	inputs := map[string]string{}
+	for _, m := range msgs {
+		for _, part := range m.Content {
+			if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok {
+				inputs[tc.ToolCallID] = tc.Input
+			}
+		}
+	}
+	if inputs["c1"] != "{}" {
+		t.Errorf("non-object input replayed as %q, want {}", inputs["c1"])
+	}
+	if inputs["c2"] != `{"command":"ls"}` {
+		t.Errorf("valid input changed to %q", inputs["c2"])
+	}
+}
+
 func TestReplayHistory_ToolErrorPreserved(t *testing.T) {
 	entries := []HistoryEntry{
 		mustEntry("user", "text", TextContent{Text: "run it"}),

@@ -1441,6 +1441,10 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// hard ceiling in budgetGuardedStep above still blocks first once
 			// the budget is fully spent.
 			budgetWindDownStep(r.engine.envPrefix, r.orch, sink),
+			// Tool-call inputs that are not JSON objects are normalized before
+			// any provider sees them (a raw one 400s the whole request on
+			// Anthropic/Bedrock); before the reducers, which size the final slice.
+			toolCallInputSanitizeStep(),
 			// Prompt-cache markers must be attached to the reduced message
 			// slice, and no provider call may observe the pre-reduction
 			// history. opts.Model makes fallback swaps use their own window.

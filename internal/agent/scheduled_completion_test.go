@@ -109,7 +109,7 @@ func TestScheduledCompletionRechecksRepairsAndBoundsUnresolvedReviews(t *testing
 				}, nil
 			}}
 			a := newTestScheduledAgent(t, model)
-			a.fallbackModel = reviewer
+			a.verifierModel = reviewer
 			err := a.Execute(context.Background(), "Inspect inventory. No mutation is needed when unchanged.")
 			if (err != nil) != tc.wantError || (tc.wantError && !errors.Is(err, agentcore.ErrCompletionUnverified)) {
 				t.Fatalf("completion result: %v", err)
@@ -190,7 +190,7 @@ func TestScheduledReviewerRepairReverifies(t *testing.T) {
 		}, nil
 	}}
 	a := newTestScheduledAgent(t, model)
-	a.fallbackModel = verifier
+	a.verifierModel = verifier
 	a.reviewerModel = reviewer
 	a.phoneAFriendEnabled = true
 
@@ -273,7 +273,7 @@ func TestScheduledVerifierRepairThatRestatesTheReportPersistsItOnce(t *testing.T
 		}, nil
 	}}
 	a := newTestScheduledAgent(t, model)
-	a.fallbackModel = verifier
+	a.verifierModel = verifier
 	if err := a.Execute(context.Background(), "Refresh the page, then report the coverage window and any report dates skipped."); err != nil {
 		t.Fatalf("run rejected: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestScheduledReviewerRepairExhaustsVerificationCap(t *testing.T) {
 		}, nil
 	}}
 	a := newTestScheduledAgent(t, model)
-	a.fallbackModel = verifier
+	a.verifierModel = verifier
 	a.reviewerModel = reviewer
 	a.phoneAFriendEnabled = true
 
@@ -407,7 +407,7 @@ func TestScheduledVerifierTextlessRepairRoundKeepsJudgedAnswer(t *testing.T) {
 		}, nil
 	}}
 	a := newTestScheduledAgent(t, model)
-	a.fallbackModel = verifier
+	a.verifierModel = verifier
 	a.mcpBroker = completionBroker{`{"ok":true,"revision":92}`}
 	a.mcpCatalog = []mcp.ServerTool{
 		{ServerName: "reports", Tool: mcp.Tool{Name: "verify", Description: "Verify the live report"}},
@@ -495,7 +495,7 @@ func TestScheduledVerifierRepairSupplementPassesOnCombinedAnswer(t *testing.T) {
 		}, nil
 	}}
 	a := newTestScheduledAgent(t, model)
-	a.fallbackModel = verifier
+	a.verifierModel = verifier
 
 	err := a.Execute(context.Background(), "Refresh the page, then report the coverage window and any report dates skipped.")
 	if err != nil {
@@ -534,7 +534,7 @@ func TestScheduledVerifierTextlessRunSeesNoResponseMarker(t *testing.T) {
 		}, nil
 	}}
 	a := newTestScheduledAgent(t, model)
-	a.fallbackModel = verifier
+	a.verifierModel = verifier
 
 	if err := a.Execute(context.Background(), "Reconcile the report and state the outcome."); err != nil {
 		t.Fatalf("run rejected: %v", err)
@@ -622,7 +622,7 @@ func TestScheduledCompletionAfterCommittedWrite(t *testing.T) {
 				}, nil
 			}}
 			a := newTestScheduledAgent(t, model)
-			a.fallbackModel = reviewer
+			a.verifierModel = reviewer
 			a.mcpBroker = broker
 			a.mcpCatalog = []mcp.ServerTool{
 				{ServerName: "reports", Tool: mcp.Tool{Name: "publish_report", Description: "Publish the reconciled report"}},

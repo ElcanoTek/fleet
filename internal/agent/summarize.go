@@ -7,23 +7,9 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-	"charm.land/fantasy/providers/openrouter"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
-
-// openrouterCost extracts the USD cost from OpenRouter provider metadata.
-func openrouterCost(metadata fantasy.ProviderMetadata) *float64 {
-	raw, ok := metadata[openrouter.Name]
-	if !ok {
-		return nil
-	}
-	opts, ok := raw.(*openrouter.ProviderMetadata)
-	if !ok {
-		return nil
-	}
-	return &opts.Usage.Cost
-}
 
 // summarizeSystemPrompt drives the summarize-and-continue compaction call. Kept
 // short + explicit so output is stable across providers. The result is treated
@@ -110,7 +96,7 @@ func (m *Manager) Summarize(ctx context.Context, in SummarizeInput) (*SummarizeR
 	// Price the summarize step under the operator's pricing policy (#297) so a
 	// per-model override applies here too, not just in the governed run loop. With
 	// no overrides installed this is exactly the OpenRouter-returned cost.
-	cost := agentcore.ResolveStepCost(modelSlug, result.TotalUsage, openrouterCost(result.Response.ProviderMetadata))
+	cost := agentcore.ResolveStepCost(modelSlug, result.TotalUsage, agentcore.OpenRouterCost(result.Response.ProviderMetadata))
 
 	return &SummarizeResult{
 		Text:             text,

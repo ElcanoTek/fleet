@@ -64,7 +64,7 @@ func TestScheduledAliasedWriteDischargesTheDeclaredCommitment(t *testing.T) {
 	broker := &pagesWriteBroker{calls: map[string]int{}}
 	reviewer := &cleanReviewer{}
 	a := newTestScheduledAgent(t, model)
-	a.fallbackModel = reviewer
+	a.verifierModel = reviewer
 	a.mcpBroker = broker
 	a.mcpCatalog = []mcp.ServerTool{
 		{ServerName: "pages", Tool: mcp.Tool{Name: "update_page_data", Description: "Replace a page's data inline"}},

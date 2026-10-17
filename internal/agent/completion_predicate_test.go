@@ -116,7 +116,10 @@ func scriptedRun(t *testing.T, steps []struct{ tool, input string }, verifier, r
 	}}
 	a := newTestScheduledAgent(t, model)
 	if verifier != nil {
-		a.fallbackModel = verifier
+		a.verifierModel = verifier
+	}
+	if scriptedRunFallback != nil {
+		a.fallbackModel = scriptedRunFallback
 	}
 	if reviewer != nil {
 		a.phoneAFriendEnabled = true
@@ -139,6 +142,10 @@ func scriptedRun(t *testing.T, steps []struct{ tool, input string }, verifier, r
 	err := a.Execute(agentcore.WithStreamObserver(context.Background(), rec), "Refresh the page; when the source has no new coverage, record a refresh check instead of publishing.")
 	return a, rec, calls, err
 }
+
+// scriptedRunFallback, when set, is the fallback model scriptedRun installs
+// (nil, the default, installs none).
+var scriptedRunFallback fantasy.LanguageModel
 
 var pagesPredicate = []string{"mcp_pages_update_page_data", "mcp_pages_update_page_data_upload", "mcp_pages_record_refresh_check"}
 
@@ -372,7 +379,7 @@ func TestVerifierOutageNeedsThisPolicysAuditToFailOpen(t *testing.T) {
 	withFastVerifierRetry(t)
 	verifier := &scriptedVerifier{replies: []string{"ERR"}}
 	a := newTestScheduledAgent(t, &itMockModel{})
-	a.fallbackModel = verifier
+	a.verifierModel = verifier
 	p := &scheduledPolicy{
 		inner:  agentcore.NewDelegatedPolicy(a.logSession, 50, 0, 0),
 		agent:  a,

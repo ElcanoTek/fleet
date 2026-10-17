@@ -303,6 +303,8 @@ var allowedEnvVars = map[string]bool{
 	"CUTLASS_TASK_MODEL":          true,
 	"FLEET_TASK_FALLBACK_MODEL":   true,
 	"CUTLASS_TASK_FALLBACK_MODEL": true,
+	// Dedicated end-of-run verifier model (empty = the run's own model).
+	"FLEET_VERIFIER_MODEL": true,
 
 	// ── model tiers (#1187): env defaults of the default_model /
 	// advanced_model admin settings ──
@@ -944,6 +946,11 @@ type Config struct {
 	TaskFallbackModel string
 	SystemPrompt      string
 	Persona           string
+	// VerifierModel (FLEET_VERIFIER_MODEL) is an optional dedicated model for
+	// the end-of-run completeness verifier. Empty (the default) means the
+	// verifier judges with the run's own model; TaskFallbackModel is only its
+	// retry when a verifier call produces no verdict.
+	VerifierModel string
 
 	// ── model tiers (#1187) ──
 	// DefaultModel / AdvancedModel seed the workspace's two role slots — what a
@@ -1721,6 +1728,7 @@ func Load(envFile string) (*Config, error) {
 		// with "no model configured" (#1015).
 		TaskModel:         getenvFleet("TASK_MODEL"),
 		TaskFallbackModel: getenvFleet("TASK_FALLBACK_MODEL"),
+		VerifierModel:     getenvFleet("VERIFIER_MODEL"),
 
 		// ── model tiers (#1187) ──
 		DefaultModel:  getenvFleet("DEFAULT_MODEL"),

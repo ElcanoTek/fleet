@@ -704,6 +704,17 @@ func fleetProviderName(model fantasy.LanguageModel) string {
 	return model.Provider()
 }
 
+// SameModelRoute reports whether a and b are the same model ROUTE: the same
+// slug through the same configured provider. Same-slug failover across
+// providers (fallback_providers) is a different route, exactly as
+// canSwapFallback treats it. Nil models are never the same route.
+func SameModelRoute(a, b fantasy.LanguageModel) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Model() == b.Model() && fleetProviderName(a) == fleetProviderName(b)
+}
+
 // streamRoundOutcome bundles everything the loop needs back after a resilient
 // stream attempt, including state mutated during recovery.
 type streamRoundOutcome struct {

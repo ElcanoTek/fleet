@@ -108,7 +108,13 @@ submission — and echoed as one host-log line:
 Labels: `end_of_run_verifier`, `phone_a_friend_review`, `loop_exit_verifier`
 (exported constants in `internal/agentcore/session_log.go`). Records are
 priced through `agentcore.ResolveStepCost`, so per-model overrides (#297)
-apply to overhead too. Records are appended **before** verdict parsing — an
+apply to overhead too. The OpenRouter cost comes from the response's provider
+metadata, which fantasy keys under `"openrouter"` on the streaming path but
+under `"openai"` on the non-streaming `Generate` path every aux call uses (the
+OpenRouter adapter wraps the OpenAI provider). Until 2026-10 the lookup read
+only `"openrouter"`, so every aux record and log line said `cost=$0.0000`;
+`openrouterMetadata` (`internal/agentcore/helpers.go`) now finds it under
+either key. Records are appended **before** verdict parsing — an
 unparseable verdict still cost money. The headline session totals
 (`prompt_tokens`/`completion_tokens`/`cost`) remain pure run spend; the
 ledger is additive and `omitempty`, so a run with no aux calls serializes
