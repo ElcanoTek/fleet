@@ -222,6 +222,7 @@ above fails otherwise.
 - [`BROWSERBASE.md`](BROWSERBASE.md) — Browserbase: hosted browser sessions with a human handoff (#987)
 - [`BUILDING-ON-FLEET.md`](BUILDING-ON-FLEET.md) — Building on fleet: the API as your automation substrate
 - [`BUNDLE-PREFLIGHT.md`](BUNDLE-PREFLIGHT.md) — Bundle preflight in CI — the reusable gate and the `mcp_catalog` check
+- [`BOOTSTRAP-HOST-HYGIENE.md`](BOOTSTRAP-HOST-HYGIENE.md) — Bootstrap host hygiene: no Cockpit, a real hostname
 - [`BUNDLE-STAGING.md`](BUNDLE-STAGING.md) — Staging the default bundle for a bare install on an SELinux host (#1655)
 - [`CHAT-EXPORT.md`](CHAT-EXPORT.md) — Downloading a chat
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn

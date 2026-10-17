@@ -269,7 +269,8 @@ it, and replaces the old hostname on the `127.0.0.1`/`::1` lines in `/etc/hosts`
 with `<fqdn> <short>`, keeping every other alias on the line (localhost names
 are never replaced). When no line names the FQDN, it appends both loopback lines. It is idempotent,
 honours `--dry-run`, never fails the bootstrap, and `fleet update` never renames
-a box. (`scripts/lib/hostname.sh`)
+a box. (`scripts/lib/hostname.sh`; design note:
+[`BOOTSTRAP-HOST-HYGIENE.md`](BOOTSTRAP-HOST-HYGIENE.md))
 
 ## version — which build is this box running?
 
