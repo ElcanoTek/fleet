@@ -171,4 +171,4 @@ exactly what ran and what came back.
 Bundle repos can run `fleet mcp test --all --json` in their own CI against
 staging credentials, so a broken server sync or a manifest env-key typo fails
 the bundle PR instead of a customer's chat turn (per the engine/bundle
-boundary in `CLAUDE.md`, contract checks live with the bundle).
+boundary in `AGENTS.md`, contract checks live with the bundle).
