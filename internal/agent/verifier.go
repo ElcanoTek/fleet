@@ -268,12 +268,13 @@ func (a *Agent) endOfRunVerifierModel() fantasy.LanguageModel {
 }
 
 // endOfRunVerifierRetryModel is the model for the one retry of a verifier call
-// that produced no verdict (#1602): the fallback model when it differs from the
-// judging model, so an outage of that model does not decide the run; else the
-// judging model again.
+// that produced no verdict (#1602): the fallback model when it is a different
+// route from the judging model (another slug, or the same slug through another
+// provider — agentcore.SameModelRoute), so an outage of that route does not
+// decide the run; else the judging model again.
 func (a *Agent) endOfRunVerifierRetryModel() fantasy.LanguageModel {
 	primary := a.endOfRunVerifierModel()
-	if a.fallbackModel != nil && (primary == nil || a.fallbackModel.Model() != primary.Model()) {
+	if a.fallbackModel != nil && !agentcore.SameModelRoute(a.fallbackModel, primary) {
 		return a.fallbackModel
 	}
 	return primary
@@ -344,6 +345,10 @@ func (a *Agent) runEndOfRunVerifierWith(ctx context.Context, model fantasy.Langu
 	verifyAgent := fantasy.NewAgent(model, fantasy.WithSystemPrompt(systemPrompt))
 	out, err := verifyAgent.Generate(verifyCtx, fantasy.AgentCall{
 		Messages: []fantasy.Message{fantasy.NewUserMessage(userPrompt)},
+		// The verdict is judged under the same upstream routing policy (allow
+		// list, pin, precision floor) the run's own calls use, as the
+		// summarizers do — not by an endpoint the run itself excludes.
+		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("verifier call failed: %w", err)

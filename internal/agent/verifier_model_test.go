@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openrouter"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
@@ -14,10 +15,18 @@ import (
 // tell which model judged.
 type namedVerifier struct {
 	scriptedVerifier
-	name string
+	name     string
+	provider string
 }
 
 func (m *namedVerifier) Model() string { return m.name }
+
+func (m *namedVerifier) Provider() string {
+	if m.provider == "" {
+		return "mock"
+	}
+	return m.provider
+}
 
 func TestEndOfRunVerifierModel_Selection(t *testing.T) {
 	main := &namedVerifier{name: "main"}
@@ -32,7 +41,7 @@ func TestEndOfRunVerifierModel_Selection(t *testing.T) {
 		{"main model judges, fallback retries", &Agent{model: main, fallbackModel: fallback}, "main", "fallback"},
 		{"dedicated verifier wins", &Agent{model: main, fallbackModel: fallback, verifierModel: dedicated}, "dedicated", "fallback"},
 		{"no fallback: retry on the judge", &Agent{model: main}, "main", "main"},
-		{"fallback same slug as judge: retry on the judge", &Agent{model: main, fallbackModel: &namedVerifier{name: "main"}}, "main", "main"},
+		{"fallback same route as judge: retry on the judge", &Agent{model: main, fallbackModel: &namedVerifier{name: "main"}}, "main", "main"},
 		{"agent without a model falls back", &Agent{fallbackModel: fallback}, "fallback", "fallback"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -46,6 +55,38 @@ func TestEndOfRunVerifierModel_Selection(t *testing.T) {
 	}
 	if (&Agent{}).endOfRunVerifierModel() != nil {
 		t.Error("an agent with no models must have no verifier")
+	}
+}
+
+// Same-slug failover through another provider (fallback_providers) is a
+// different route, so the verifier's retry takes it rather than re-asking the
+// route that just failed.
+func TestEndOfRunVerifierRetryModel_SameSlugOtherProvider(t *testing.T) {
+	judge := &namedVerifier{name: "anthropic/claude-opus-5.5", provider: "openrouter"}
+	sameSlugOtherProvider := &namedVerifier{name: "anthropic/claude-opus-5.5", provider: "bedrock-direct"}
+	a := &Agent{model: judge, fallbackModel: sameSlugOtherProvider}
+	if got := a.endOfRunVerifierRetryModel(); got != fantasy.LanguageModel(sameSlugOtherProvider) {
+		t.Fatalf("retry model = %v (provider %s), want the other-provider fallback", got.Model(), got.Provider())
+	}
+}
+
+// The verifier's one-off call carries the judging model's routing policy, like
+// the summarizers, so the verdict is not served by an endpoint the run itself
+// excludes.
+func TestRunEndOfRunVerifier_CarriesRoutingPolicy(t *testing.T) {
+	model := &optionsCapturingModel{itMockModel: itMockModel{generateText: `{"missing_actions": []}`}, slug: floorSlug}
+	a := &Agent{model: model, fallbackModel: model, logSession: NewLogSession()}
+	if _, err := a.runEndOfRunVerifier(context.Background(), "send the report", "sent", nil); err != nil {
+		t.Fatalf("runEndOfRunVerifier: %v", err)
+	}
+	model.omu.Lock()
+	defer model.omu.Unlock()
+	if len(model.opts) != 1 {
+		t.Fatalf("verifier made %d calls, want 1", len(model.opts))
+	}
+	or, ok := model.opts[0][openrouter.Name].(*openrouter.ProviderOptions)
+	if !ok || or.Provider == nil {
+		t.Fatalf("verifier call options = %#v, want an OpenRouter provider policy", model.opts[0])
 	}
 }
 

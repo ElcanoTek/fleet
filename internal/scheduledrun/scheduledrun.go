@@ -683,19 +683,27 @@ func configureRunWorkspace(ctx context.Context, sb *sandbox.Sandbox, wtPath, sha
 }
 
 // resolveVerifierModel resolves the dedicated end-of-run verifier
-// (FLEET_VERIFIER_MODEL). Unset — or a slug that does not resolve — returns
-// nil, and the verifier judges with the run's own model; the fallback model
-// only retries a verifier call that produced no verdict
-// (agent.endOfRunVerifierModel).
-func (r *Runner) resolveVerifierModel(ctx context.Context, task *models.Task) fantasy.LanguageModel {
-	slug := strings.TrimSpace(r.cfg.VerifierModel)
+// (FLEET_VERIFIER_MODEL). Unset returns nil, and the verifier judges with the
+// run's own model; the fallback model only retries a verifier call that
+// produced no verdict (agent.endOfRunVerifierModel). A configured slug that
+// does not resolve returns runModel: configuring a verifier enables
+// verification, so a bad slug must not silently switch it off on a run with no
+// fallback model.
+func (r *Runner) resolveVerifierModel(ctx context.Context, task *models.Task, runModel fantasy.LanguageModel) fantasy.LanguageModel {
+	return verifierModelFor(ctx, r.cfg.VerifierModel, task.ID.String(), runModel, r.mgr.Resolve)
+}
+
+// verifierModelFor is resolveVerifierModel with the slug and resolver passed
+// in, so the unresolved-slug branch is testable without a Manager.
+func verifierModelFor(ctx context.Context, slug, taskID string, runModel fantasy.LanguageModel, resolve func(context.Context, string) (fantasy.LanguageModel, error)) fantasy.LanguageModel {
+	slug = strings.TrimSpace(slug)
 	if slug == "" {
 		return nil
 	}
-	vm, err := r.mgr.Resolve(ctx, slug)
+	vm, err := resolve(ctx, slug)
 	if err != nil {
-		log.Printf("scheduled task %s: verifier model %q unresolved (%v); the run's own model will verify", task.ID, slug, err)
-		return nil
+		log.Printf("scheduled task %s: verifier model %q unresolved (%v); the run's own model will verify", taskID, slug, err)
+		return runModel
 	}
 	return vm
 }
@@ -760,7 +768,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		}
 	}
 
-	verifier := r.resolveVerifierModel(ctx, task)
+	verifier := r.resolveVerifierModel(ctx, task, model)
 
 	// Acquire the execution sandbox for this task. Scheduled runs are
 	// network-SEALED by default (--network=none, same as interactive lockdown)
