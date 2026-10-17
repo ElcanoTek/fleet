@@ -120,6 +120,12 @@
 #                              is replaced with a copy kept beside it (#1657).
 #   --dry-run                  print the plan; touch nothing.
 #
+# With --enable-web --domain <fqdn>, bootstrap also names the box <fqdn> when
+# its hostname is an unset cloud default (vultr.guest, localhost,
+# localhost.localdomain): hostnamectl, cloud-init preserve_hostname, and the
+# /etc/hosts loopback lines. Any other hostname is left alone with a hint.
+# FLEET_SET_HOSTNAME=1 forces the rename; FLEET_SET_HOSTNAME=0 skips it.
+#
 # Env knobs (all optional; sensible local defaults):
 #   FLEET_ENV_FILE          credential env file to write/refresh (default: /etc/fleet/fleet.env
 #                           under --enable-service — matches deploy/fleet.service —
@@ -169,6 +175,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # on every update) and doctor.sh (which checks it).
 # shellcheck source=lib/cockpit.sh
 . "$SCRIPT_DIR/lib/cockpit.sh"
+# Name the box after its --domain (bootstrap only; update never renames).
+# shellcheck source=lib/hostname.sh
+. "$SCRIPT_DIR/lib/hostname.sh"
 
 POSTGRES_MODE="local"
 DRY_RUN=0
@@ -896,6 +905,17 @@ fi
 # A no-op where cockpit is not installed; never fails the bootstrap.
 step "Keeping the Cockpit web console off (cockpit.socket masked, :9090 closed)"
 cockpit_keep_off
+
+# ── host identity: hostname = the public domain ───────────────────────────
+# A Vultr box comes up as "vultr.guest", so every prompt reads root@vultr.
+# With --enable-web --domain, rename it to that FQDN — only from an unset
+# cloud-image default (vultr.guest, localhost[.localdomain]); any other name
+# is left alone with a hint. FLEET_SET_HOSTNAME=1 forces, =0 skips
+# (scripts/lib/hostname.sh). Never fatal.
+if [[ "$ENABLE_WEB" == "1" && -n "$WEB_DOMAIN" ]]; then
+  step "Setting the hostname to ${WEB_DOMAIN} (from an unset cloud default only)"
+  fleet_set_hostname "$WEB_DOMAIN"
+fi
 
 # ── dedicated service user + rootless-Podman setup (--enable-service path) ──
 # Done early (before the sandbox build) because the image is built INTO this

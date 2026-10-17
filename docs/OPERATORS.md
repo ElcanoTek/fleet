@@ -256,6 +256,21 @@ roles/databases idempotently via `\gexec` (local) or validate the DSNs (external
 optionally `enable --now` the systemd unit. Local-mode role passwords are
 generated when unset; set `CHAT_DB_PASSWORD`/`SCHED_DB_PASSWORD` to pin them.
 
+With `--enable-web --domain <fqdn>`, bootstrap also names the box after that
+domain, so prompts stop reading `root@vultr`. It renames only when the current
+static hostname is an unset cloud-image default (`vultr.guest`, `localhost`,
+`localhost.localdomain`); any other name, a short one like a laptop's included,
+is left alone and bootstrap prints the `hostnamectl set-hostname <fqdn>` to run.
+`FLEET_SET_HOSTNAME=1` forces the rename, `FLEET_SET_HOSTNAME=0` skips the step.
+A rename runs `hostnamectl set-hostname`, writes
+`/etc/cloud/cloud.cfg.d/99-preserve-hostname.cfg` (`preserve_hostname: true`,
+`manage_etc_hosts: false`) when `/etc/cloud` exists so cloud-init does not undo
+it, and rewrites the `127.0.0.1`/`::1` lines in `/etc/hosts` that named the old
+hostname to `<addr> <fqdn> <short>` (appending both when no line names the
+FQDN; a line that names `localhost` is never rewritten). It is idempotent,
+honours `--dry-run`, never fails the bootstrap, and `fleet update` never renames
+a box. (`scripts/lib/hostname.sh`)
+
 ## version — which build is this box running?
 
 ```
