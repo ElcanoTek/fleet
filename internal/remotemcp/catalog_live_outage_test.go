@@ -57,3 +57,33 @@ func TestVendorOutageSeparatesOutagesFromRot(t *testing.T) {
 		}
 	}
 }
+
+// TestFixtureKeyRefused pins which failures of an api_key fixture's real-key
+// probe read as the fixture's secret going bad (a warning) rather than the
+// listing being wrong. Only a credential refusal qualifies; a 404, a non-MCP
+// reply or a dead host still fails the fixture.
+func TestFixtureKeyRefused(t *testing.T) {
+	handshake := func(err error) error {
+		return fmt.Errorf("failed to initialize server: initialize call failed: %w", err)
+	}
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"401 at initialize (PagerDuty EU, #1776)", handshake(&mcp.HTTPStatusError{StatusCode: 401, Body: `{"error":"unauthorized","error_description":"No permission -- see authorization schemes"}`}), true},
+		{"403 at initialize", handshake(&mcp.HTTPStatusError{StatusCode: 403}), true},
+		{"JSON-RPC error on a 401", handshake(&mcp.RPCError{Code: -32001, Message: "Unauthorized", HTTPStatus: 401}), true},
+		{"unattributed JSON-RPC error on a 403", handshake(&mcp.UnattributedResponseError{ResponseID: "null", WantID: 1, Raw: `{"code":-32001,"message":"Forbidden"}`, HTTPStatus: 403}), true},
+		{"key rejected at the verification call", &keyRejectedError{tool: "list_things", reason: "invalid api key"}, true},
+		{"404", handshake(&mcp.HTTPStatusError{StatusCode: 404}), false},
+		{"503", handshake(&mcp.HTTPStatusError{StatusCode: 503}), false},
+		{"JSON-RPC error on a 2xx", handshake(&mcp.RPCError{Code: -32603, Message: "Internal error"}), false},
+		{"not an MCP server", handshake(errors.New("MCP http: unparsable response")), false},
+	}
+	for _, c := range cases {
+		if got := fixtureKeyRefused(c.err); got != c.want {
+			t.Errorf("%s: fixtureKeyRefused = %v, want %v (err: %v)", c.name, got, c.want, c.err)
+		}
+	}
+}

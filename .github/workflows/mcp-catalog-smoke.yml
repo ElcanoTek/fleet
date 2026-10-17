@@ -43,7 +43,7 @@ on:
         type: boolean
         default: false
       strict_smoke:
-        description: 'Fail the smoke job on a vendor outage (5xx but 501, 429, timeout) too'
+        description: 'Fail the smoke job on a vendor outage (5xx but 501, 429, timeout) or a refused fixture key too'
         required: false
         type: boolean
         default: false
@@ -116,13 +116,15 @@ jobs:
         # refused connection) skips its entry with a VENDOR OUTAGE warning
         # instead of failing the job — one third-party service having a bad
         # night is not catalog rot, and an alarm that cries wolf gets ignored
-        # (#1683). strict_smoke turns those warnings into failures.
+        # (#1683). An api_key fixture whose own key the vendor refuses (401/403)
+        # skips with a FIXTURE KEY REFUSED warning the same way: the secret
+        # lives in a third-party account that can lapse, which is not catalog
+        # rot either (#1776). strict_smoke turns both kinds into failures.
         env:
           FLEET_CATALOG_LIVE: '1'
           FLEET_CATALOG_STRICT: ${{ inputs.strict_smoke == true && '1' || '' }}
           FLEET_CATALOG_KEY_TAVILY: ${{ secrets.FLEET_CATALOG_KEY_TAVILY }}
           FLEET_CATALOG_KEY_PAGERDUTY: ${{ secrets.FLEET_CATALOG_KEY_PAGERDUTY }}
-          FLEET_CATALOG_KEY_PAGERDUTY_EU: ${{ secrets.FLEET_CATALOG_KEY_PAGERDUTY_EU }}
           FLEET_CATALOG_KEY_EXA: ${{ secrets.FLEET_CATALOG_KEY_EXA }}
           FLEET_CATALOG_KEY_BROWSERBASE: ${{ secrets.FLEET_CATALOG_KEY_BROWSERBASE }}
           FLEET_CATALOG_KEY_FIRECRAWL: ${{ secrets.FLEET_CATALOG_KEY_FIRECRAWL }}
@@ -140,6 +142,12 @@ jobs:
           while IFS= read -r line; do
             [ -n "$line" ] && echo "::warning title=MCP catalog vendor outage::$line"
           done <<< "$outages"
+          # Likewise a refused fixture key (fixtureKeyRefusedMarker): the fix
+          # is rotating that repository secret, not a code change.
+          refused="$(grep -E 'FIXTURE KEY REFUSED' catalog-smoke.log | sed -E 's/^[[:space:]]*catalog_live_test\.go:[0-9]+: //' || true)"
+          while IFS= read -r line; do
+            [ -n "$line" ] && echo "::warning title=MCP catalog fixture key refused::$line"
+          done <<< "$refused"
           {
             echo "### Live catalog handshake (go test exit $rc)"
             echo '```'
@@ -149,6 +157,12 @@ jobs:
               echo "#### Vendor outages (warnings, not failures)"
               echo '```'
               echo "$outages"
+              echo '```'
+            fi
+            if [ -n "$refused" ]; then
+              echo "#### Fixture keys refused (rotate the secret; warnings, not failures)"
+              echo '```'
+              echo "$refused"
               echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
