@@ -286,9 +286,8 @@ var catalogKeyFixtures = []struct {
 	Variant       string
 	RejectsBadKey bool
 }{
-	{Entry: "tavily", RejectsBadKey: true},                   // Authorization: Bearer
-	{Entry: "pagerduty", RejectsBadKey: true},                // "Token token=" prefix under a named Authorization header, US host
-	{Entry: "pagerduty", Variant: "eu", RejectsBadKey: true}, // the same, EU service region
+	{Entry: "tavily", RejectsBadKey: true},    // Authorization: Bearer
+	{Entry: "pagerduty", RejectsBadKey: true}, // "Token token=" prefix under a named Authorization header, US host
 	{Entry: "exa"},         // x-api-key header
 	{Entry: "browserbase"}, // browserbaseApiKey query parameter
 	{Entry: "firecrawl"},   // Authorization: Bearer, versioned path

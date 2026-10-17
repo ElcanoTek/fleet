@@ -86,8 +86,8 @@ awk shows up in the PR gate, not as a silently smaller nightly.
   no `{placeholder}` (12 as of 2026-09-16) must complete an unauthenticated
   handshake and list at least one tool. One subtest per entry, so a single
   dead vendor names itself.
-- **`TestCatalogLiveAPIKeyFixtures`** — a table of six fixtures over five
-  `api_key` entries (an entry with `url_variants` gets one row per
+- **`TestCatalogLiveAPIKeyFixtures`** — a table of five fixtures over five
+  `api_key` entries (an entry with `url_variants` can get one row per
   endpoint), each armed by its own repository secret: `FLEET_CATALOG_KEY_<ENTRY>`
   (the entry name upper-cased, `-` → `_`) for the entry's own URL, or
   `FLEET_CATALOG_KEY_<ENTRY>_<ID>` for one of its `url_variants`, which the
@@ -98,7 +98,6 @@ awk shows up in the PR gate, not as a silently smaller nightly.
   |---|---|---|---|
   | tavily | `FLEET_CATALOG_KEY_TAVILY` | `Authorization: Bearer` (the default) | yes |
   | pagerduty | `FLEET_CATALOG_KEY_PAGERDUTY` | the bare User API token of a US-region account; the entry's `api_key_prefix` makes it `Authorization: Token token=<key>` | yes |
-  | pagerduty (EU endpoint) | `FLEET_CATALOG_KEY_PAGERDUTY_EU` | the bare User API token of an EU-region account, probed against the entry's `eu` url variant — one fixture per listed endpoint, each armed by its own secret | yes |
   | exa | `FLEET_CATALOG_KEY_EXA` | `x-api-key` header | no |
   | browserbase | `FLEET_CATALOG_KEY_BROWSERBASE` | `browserbaseApiKey` query parameter | no |
   | firecrawl | `FLEET_CATALOG_KEY_FIRECRAWL` | `Authorization: Bearer`, versioned path | no |
@@ -155,7 +154,9 @@ control. Trials lapse, a plan loses the permission the token needs, someone
 revokes it. The second alarm (#1776, 2026-10-16) was exactly that: PagerDuty's
 EU host answered the `FLEET_CATALOG_KEY_PAGERDUTY_EU` token with HTTP 401 "No
 permission" two nights running, with no change to fleet, the entry or the
-workflow in between.
+workflow in between; a made-up token got the identical answer. The account
+was not being kept, so that fixture was removed (the `pagerduty` entry and
+its `eu` endpoint stay listed; the US fixture stays, unarmed).
 
 So when the vendor refuses a fixture's **real** key (HTTP 401 or 403 in any
 error form, or a key rejected at the read-only verification call), the
