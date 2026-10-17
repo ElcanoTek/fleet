@@ -53,9 +53,11 @@ PermitRootLogin prohibit-password
   without `sshd` or `/etc/ssh/sshd_config.d`.
 - Lockout guard: it counts the authorized keys of root and every `/home/*`
   user, honouring the effective `AuthorizedKeysFile` from `sshd -T` (`%h` and
-  `%u`), the way keel's `deploy/harden-host.sh` does. With 0 keys it warns and
-  changes nothing.
-- When the file already has exactly this content it does nothing. Otherwise it
+  `%u`), the way keel's `deploy/harden-host.sh` does. When `sshd -T` reports
+  `pubkeyauthentication no` it counts 0. With 0 keys it warns and changes
+  nothing.
+- When the file already has exactly this content it writes and reloads
+  nothing, and only runs the `sshd -T` check below. Otherwise it
   writes the file with `install -m 0600`, then runs `sshd -t`. If that fails, it
   removes the file (or puts back the different file that was there) and warns.
   If it passes, it reloads `sshd`, falling back to `ssh` (Debian), and prints

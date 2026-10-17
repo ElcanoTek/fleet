@@ -57,7 +57,7 @@ func newSSHBox(t *testing.T, withSSHD bool) *sshBox {
 	if withSSHD {
 		stub("sshd", `case "$1" in
   -t) exit "${STUB_T_RC:-0}" ;;
-  -T) printf 'authorizedkeysfile .ssh/authorized_keys /etc/ssh/keys/%%u\npasswordauthentication %s\npermitrootlogin prohibit-password\n' "${STUB_PA:-no}" ;;
+  -T) printf 'pubkeyauthentication %s\nauthorizedkeysfile .ssh/authorized_keys /etc/ssh/keys/%%u\npasswordauthentication %s\npermitrootlogin prohibit-password\n' "${STUB_PK:-yes}" "${STUB_PA:-no}" ;;
 esac
 `)
 	}
@@ -123,6 +123,10 @@ func TestSSHKeyOnly(t *testing.T) {
 		if strings.TrimSpace(out) != "RC=0" || strings.Contains(calls, "systemctl") || strings.Contains(calls, "sshd -t") {
 			t.Errorf("second run should do nothing\ncalls:\n%s\n%s", calls, out)
 		}
+		// Already in place, but an earlier directive still wins: warn anyway.
+		if out, calls := b.run(t, "STUB_PA=yes"); !strings.Contains(out, "WARN sshd still accepts passwords") || strings.Contains(calls, "systemctl") {
+			t.Errorf("in place + earlier directive: want a warning, no reload\ncalls:\n%s\n%s", calls, out)
+		}
 	})
 
 	t.Run("AuthorizedKeysFile from sshd -T with %u", func(t *testing.T) {
@@ -141,6 +145,14 @@ func TestSSHKeyOnly(t *testing.T) {
 		}
 		if _, err := os.Stat(b.conf); err == nil {
 			t.Error("drop-in written with no keys")
+		}
+	})
+
+	t.Run("pubkey auth off counts as no keys", func(t *testing.T) {
+		b := newSSHBox(t, true)
+		b.addKey(t, "root/.ssh/authorized_keys")
+		if out, _ := b.run(t, "STUB_PK=no"); !strings.Contains(out, "WARN no SSH authorized keys") {
+			t.Errorf("pubkeyauthentication no: want the lockout warning\n%s", out)
 		}
 	})
 

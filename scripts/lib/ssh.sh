@@ -18,9 +18,16 @@ PermitRootLogin prohibit-password"
 # (keel's deploy/harden-host.sh count_authorized_keys). The lockout guard.
 # FLEET_SSH_ROOT prefixes every path (for the tests only).
 ssh_count_authorized_keys() {
-  local root="${FLEET_SSH_ROOT:-}" line home rel f path count=0
+  local root="${FLEET_SSH_ROOT:-}" eff line home rel f path count=0
   local -a files=()
-  line="$(sshd -T 2>/dev/null | grep -i '^authorizedkeysfile ' || true)"
+  # Capture first: under pipefail, `sshd -T | grep -q` can read as no-match.
+  eff="$(sshd -T 2>/dev/null || true)"
+  # With pubkey auth off no key works, so there is nothing to count.
+  if grep -qix 'pubkeyauthentication no' <<<"$eff"; then
+    printf '0'
+    return 0
+  fi
+  line="$(grep -i '^authorizedkeysfile ' <<<"$eff" || true)"
   [[ -n "$line" ]] && read -ra files <<<"${line#* }"
   [[ ${#files[@]} -eq 0 ]] && files=(.ssh/authorized_keys .ssh/authorized_keys2)
   for home in "$root"/root "$root"/home/*; do
@@ -54,6 +61,7 @@ ssh_key_only() {
   local conf="$dir/01-no-password-login.conf" keys tmp old=""
   command -v sshd >/dev/null 2>&1 && [[ -d "$dir" ]] || return 0
   if [[ -f "$conf" ]] && printf '%s\n' "$SSH_KEY_ONLY_CONF" | cmp -s - "$conf"; then
+    _ssh_key_only_still_open
     return 0
   fi
   keys="$(ssh_count_authorized_keys)"
@@ -88,8 +96,16 @@ ssh_key_only() {
   else
     warn "wrote $conf but could not reload sshd — run: systemctl reload sshd"
   fi
-  if sshd -T 2>/dev/null | grep -qiE '^(passwordauthentication|permitrootlogin) yes$'; then
+  _ssh_key_only_still_open
+  return 0
+}
+
+# _ssh_key_only_still_open — warn when, with the drop-in in place, `sshd -T`
+# still reports password or root-password login (an earlier directive wins).
+_ssh_key_only_still_open() {
+  local eff
+  eff="$(sshd -T 2>/dev/null || true)"
+  if grep -qiE '^(passwordauthentication|permitrootlogin) yes$' <<<"$eff"; then
     warn "sshd still accepts passwords: an earlier directive wins (e.g. 'PermitRootLogin yes' above the Include line in /etc/ssh/sshd_config) — fix it by hand"
   fi
-  return 0
 }
