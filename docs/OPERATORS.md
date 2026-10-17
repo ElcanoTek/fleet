@@ -247,7 +247,7 @@ so the one-command deploy writes secrets where the unit picks them up. Set
 End to end, every run: uninstall Cockpit when `cockpit-ws` is installed
 (`dnf -y remove 'cockpit*'`: the Vultr Fedora image ships its root-capable web
 login on :9090, and fleet boxes are administered over ssh only;
-`FLEET_KEEP_COCKPIT=1` keeps it; never fatal) → ensure the 0600 env file → resolve the client bundle
+`FLEET_KEEP_COCKPIT=1` keeps it; never fatal) → make SSH key-only (below) → ensure the 0600 env file → resolve the client bundle
 (`--client-config`) → **build the sandbox image from the bundle** (calls
 `scripts/build-sandbox-image.sh` with `FLEET_CLIENT_CONFIG_DIR`; skipped when the
 manifest pins a prebuilt `sandbox.image`) → provision both `chat`+`sched`
@@ -271,6 +271,20 @@ are never replaced). When no line names the FQDN, it appends both loopback lines
 honours `--dry-run`, never fails the bootstrap, and `fleet update` never renames
 a box. (`scripts/lib/hostname.sh`; design note:
 [`BOOTSTRAP-HOST-HYGIENE.md`](BOOTSTRAP-HOST-HYGIENE.md))
+
+Bootstrap also makes SSH key-only. Vultr's cloud-init writes
+`PasswordAuthentication yes`, so a fresh box takes root password guesses. When
+`sshd` and `/etc/ssh/sshd_config.d` exist, bootstrap installs
+`/etc/ssh/sshd_config.d/01-no-password-login.conf` (0600:
+`PasswordAuthentication no`, `KbdInteractiveAuthentication no`,
+`PermitRootLogin prohibit-password`), checks it with `sshd -t`, and reloads
+`sshd` (or `ssh`). It skips with a warning when root and `/home/*` have no
+authorized key, since that would lock everyone out; it removes the file again
+when `sshd -t` fails, and warns when `sshd -T` still says passwords are on (an
+earlier directive in `sshd_config` wins). `FLEET_KEEP_SSH_PASSWORDS=1` skips it.
+It is idempotent, honours `--dry-run`, never fails the bootstrap, and
+`fleet update` never touches sshd (`scripts/lib/ssh.sh`). Run as root,
+`fleet status` and `fleet doctor` warn when sshd still accepts passwords.
 
 ## version — which build is this box running?
 
@@ -405,6 +419,8 @@ migrations), the **sandbox image is present + runnable** (a throwaway
 `podman run --rm <ref> true`, where `<ref>` is resolved exactly as the running
 process resolves it — `FLEET_SANDBOX_IMAGE` env wins, else the bundle's
 `ResolvedImageRef()`), and the systemd unit state when a unit is installed.
+Run as root on a box with `sshd`, it also warns (never fails) when `sshd -T`
+reports `passwordauthentication yes` or `permitrootlogin yes`.
 DSN passwords are redacted in the output.
 
 > **Sandbox check + the dedicated service user.** The systemd unit runs `fleet`
