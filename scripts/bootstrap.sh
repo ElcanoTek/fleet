@@ -120,6 +120,15 @@
 #                              is replaced with a copy kept beside it (#1657).
 #   --dry-run                  print the plan; touch nothing.
 #
+# With --enable-web --domain <fqdn>, bootstrap also names the box <fqdn> when
+# its hostname is an unset cloud default (vultr.guest, localhost,
+# localhost.localdomain): hostnamectl, cloud-init preserve_hostname, and the
+# /etc/hosts loopback lines. Any other hostname is left alone with a hint.
+# FLEET_SET_HOSTNAME=1 forces the rename; FLEET_SET_HOSTNAME=0 skips it.
+#
+# When cockpit-ws is installed, bootstrap removes Cockpit (dnf -y remove
+# 'cockpit*'); FLEET_KEEP_COCKPIT=1 keeps it.
+#
 # Env knobs (all optional; sensible local defaults):
 #   FLEET_ENV_FILE          credential env file to write/refresh (default: /etc/fleet/fleet.env
 #                           under --enable-service — matches deploy/fleet.service —
@@ -165,6 +174,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$SCRIPT_DIR/lib/caddyfile.sh"
 # shellcheck source=lib/bundle.sh
 . "$SCRIPT_DIR/lib/bundle.sh"
+# Uninstall Cockpit (bootstrap only).
+# shellcheck source=lib/cockpit.sh
+. "$SCRIPT_DIR/lib/cockpit.sh"
+# Name the box after its --domain (bootstrap only; update never renames).
+# shellcheck source=lib/hostname.sh
+. "$SCRIPT_DIR/lib/hostname.sh"
 
 POSTGRES_MODE="local"
 DRY_RUN=0
@@ -883,6 +898,20 @@ if command -v dnf >/dev/null 2>&1; then
 else
   warn "dnf not found — skipping dependency install. Ensure these are present before continuing: ${FLEET_DEPS[*]}"
   warn "  the web tier needs node >= ${NODE_MAJOR} (declared in web/.nvmrc)."
+fi
+
+# The Vultr Fedora image ships Cockpit's root-capable web login on :9090; our boxes are administered over ssh only.
+cockpit_uninstall
+
+# ── host identity: hostname = the public domain ───────────────────────────
+# A Vultr box comes up as "vultr.guest", so every prompt reads root@vultr.
+# With --enable-web --domain, rename it to that FQDN — only from an unset
+# cloud-image default (vultr.guest, localhost[.localdomain]); any other name
+# is left alone with a hint. FLEET_SET_HOSTNAME=1 forces, =0 skips
+# (scripts/lib/hostname.sh). Never fatal.
+if [[ "$ENABLE_WEB" == "1" && -n "$WEB_DOMAIN" ]]; then
+  step "Setting the hostname to ${WEB_DOMAIN} (from an unset cloud default only)"
+  fleet_set_hostname "$WEB_DOMAIN"
 fi
 
 # ── dedicated service user + rootless-Podman setup (--enable-service path) ──

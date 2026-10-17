@@ -244,7 +244,10 @@ file defaults to `/etc/fleet/fleet.env` — the path `deploy/fleet.service` read
 so the one-command deploy writes secrets where the unit picks them up. Set
 `FLEET_ENV_FILE` to override; plain local/dev runs still default to `.env.local`.
 
-End to end, every run: ensure the 0600 env file → resolve the client bundle
+End to end, every run: uninstall Cockpit when `cockpit-ws` is installed
+(`dnf -y remove 'cockpit*'`: the Vultr Fedora image ships its root-capable web
+login on :9090, and fleet boxes are administered over ssh only;
+`FLEET_KEEP_COCKPIT=1` keeps it; never fatal) → ensure the 0600 env file → resolve the client bundle
 (`--client-config`) → **build the sandbox image from the bundle** (calls
 `scripts/build-sandbox-image.sh` with `FLEET_CLIENT_CONFIG_DIR`; skipped when the
 manifest pins a prebuilt `sandbox.image`) → provision both `chat`+`sched`
@@ -252,6 +255,22 @@ roles/databases idempotently via `\gexec` (local) or validate the DSNs (external
 → write the resolved DSNs + `FLEET_CLIENT_CONFIG_DIR` into the env file →
 optionally `enable --now` the systemd unit. Local-mode role passwords are
 generated when unset; set `CHAT_DB_PASSWORD`/`SCHED_DB_PASSWORD` to pin them.
+
+With `--enable-web --domain <fqdn>`, bootstrap also names the box after that
+domain, so prompts stop reading `root@vultr`. It renames only when the current
+static hostname is an unset cloud-image default (`vultr.guest`, `localhost`,
+`localhost.localdomain`); any other name, a short one like a laptop's included,
+is left alone and bootstrap prints the `hostnamectl set-hostname <fqdn>` to run.
+`FLEET_SET_HOSTNAME=1` forces the rename, `FLEET_SET_HOSTNAME=0` skips the step.
+A rename runs `hostnamectl set-hostname`, writes
+`/etc/cloud/cloud.cfg.d/99-preserve-hostname.cfg` (`preserve_hostname: true`,
+`manage_etc_hosts: false`) when `/etc/cloud` exists so cloud-init does not undo
+it, and replaces the old hostname on the `127.0.0.1`/`::1` lines in `/etc/hosts`
+with `<fqdn> <short>`, keeping every other alias on the line (localhost names
+are never replaced). When no line names the FQDN, it appends both loopback lines. It is idempotent,
+honours `--dry-run`, never fails the bootstrap, and `fleet update` never renames
+a box. (`scripts/lib/hostname.sh`; design note:
+[`BOOTSTRAP-HOST-HYGIENE.md`](BOOTSTRAP-HOST-HYGIENE.md))
 
 ## version — which build is this box running?
 
