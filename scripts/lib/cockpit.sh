@@ -16,6 +16,50 @@
 # unit (containers, Debian/Ubuntu without cockpit) it is a one-line no-op —
 # including the firewall half. Idempotent: an already-masked socket is skipped.
 
+# Masking leaves cockpit's login-banner notice ("Activate the web console
+# with: systemctl enable --now cockpit.socket") in the MOTD: /etc/motd.d/cockpit
+# links to /run/cockpit/issue, which the package's tmpfiles.d entry recreates at
+# every boot. A same-named /etc/tmpfiles.d copy overrides it (and survives
+# cockpit-ws upgrades); deploy/cockpit-ws.tmpfiles.conf keeps the notice empty.
+# Paths are overridable for the tests only. Pure bash on purpose: sourcing must
+# not depend on PATH.
+COCKPIT_PKG_TMPFILES="${COCKPIT_PKG_TMPFILES:-/usr/lib/tmpfiles.d/cockpit-ws.conf}"
+COCKPIT_ETC_TMPFILES="${COCKPIT_ETC_TMPFILES:-/etc/tmpfiles.d/cockpit-ws.conf}"
+_cockpit_lib_dir="${BASH_SOURCE[0]%/*}"
+[[ "${BASH_SOURCE[0]}" == */* ]] || _cockpit_lib_dir=.
+COCKPIT_TMPFILES_SRC="${COCKPIT_TMPFILES_SRC:-${_cockpit_lib_dir}/../../deploy/cockpit-ws.tmpfiles.conf}"
+unset _cockpit_lib_dir
+
+# cockpit_banner_current — succeed when there is nothing to do: no cockpit-ws
+# tmpfiles entry, no systemd-tmpfiles, or the override already installed.
+# Read-only.
+cockpit_banner_current() {
+  [[ -f "$COCKPIT_PKG_TMPFILES" ]] || return 0
+  command -v systemd-tmpfiles >/dev/null 2>&1 || return 0
+  cmp -s "$COCKPIT_TMPFILES_SRC" "$COCKPIT_ETC_TMPFILES"
+}
+
+# cockpit_banner_quiet — install the override and apply it now. Uses the
+# caller's run/ok/warn; never fails the caller.
+cockpit_banner_quiet() {
+  if cockpit_banner_current; then
+    [[ -f "$COCKPIT_PKG_TMPFILES" ]] && command -v systemd-tmpfiles >/dev/null 2>&1 \
+      && ok "cockpit's login-banner notice already blank (${COCKPIT_ETC_TMPFILES})"
+    return 0
+  fi
+  if [[ ! -f "$COCKPIT_TMPFILES_SRC" ]]; then
+    warn "missing ${COCKPIT_TMPFILES_SRC} — cockpit's login-banner notice stays"
+    return 0
+  fi
+  if run install -D -m 0644 "$COCKPIT_TMPFILES_SRC" "$COCKPIT_ETC_TMPFILES" \
+    && run systemd-tmpfiles --create "$COCKPIT_ETC_TMPFILES"; then
+    [[ "${DRY_RUN:-0}" == "1" ]] || ok "blanked cockpit's login-banner notice (${COCKPIT_ETC_TMPFILES})"
+  else
+    warn "could not blank cockpit's login-banner notice — run: install -m 0644 ${COCKPIT_TMPFILES_SRC} ${COCKPIT_ETC_TMPFILES} && systemd-tmpfiles --create ${COCKPIT_ETC_TMPFILES}"
+  fi
+  return 0
+}
+
 # cockpit_socket_state — print `absent` (no cockpit.socket unit, or no
 # systemd), `masked` (already off for good), or `live` (installed and not
 # masked: listening now, or one `systemctl enable` away from it). Read-only.
@@ -50,8 +94,9 @@ cockpit_firewall_zones() {
   done
 }
 
-# cockpit_keep_off — disable + stop + mask cockpit.socket, and drop the
-# cockpit service from every firewalld zone that allows it. Uses the CALLER's
+# cockpit_keep_off — disable + stop + mask cockpit.socket, blank its
+# login-banner notice, and drop the cockpit service from every firewalld zone
+# that allows it. Uses the CALLER's
 # run/ok/info/warn helpers (bootstrap.sh and update.sh define all four, and
 # their `run` honours --dry-run). Never fails the caller: a box where this
 # cannot be done (no root, systemctl error) gets a warning with the exact
@@ -73,6 +118,7 @@ cockpit_keep_off() {
       fi
       ;;
   esac
+  cockpit_banner_quiet
   zones="$(cockpit_firewall_zones)"
   [[ -n "$zones" ]] || return 0
   for zone in $zones; do

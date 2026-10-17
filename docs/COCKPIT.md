@@ -28,7 +28,16 @@ All three share one implementation, `scripts/lib/cockpit.sh`. It mirrors keel's
 2. When `cockpit.socket` is not already masked: `systemctl disable --now
    cockpit.socket`, then `systemctl mask cockpit.socket`. When it is already
    masked, nothing changes.
-3. When `firewall-cmd` exists, `firewall-cmd --state` says `running`, and a
+3. Masking leaves Cockpit's login-banner notice ("Activate the web console
+   with: systemctl enable --now cockpit.socket") in the MOTD: `/etc/motd.d/cockpit`
+   links to `/run/cockpit/issue`, which the package's
+   `/usr/lib/tmpfiles.d/cockpit-ws.conf` recreates at every boot. When that file
+   exists and `systemd-tmpfiles` is available, `deploy/cockpit-ws.tmpfiles.conf`
+   is installed as `/etc/tmpfiles.d/cockpit-ws.conf` (the same name overrides the
+   package copy and survives cockpit-ws upgrades) and applied with
+   `systemd-tmpfiles --create`. It's skipped when the installed copy already
+   matches (`cmp`).
+4. When `firewall-cmd` exists, `firewall-cmd --state` says `running`, and a
    zone's permanent config lists the `cockpit` service: `firewall-cmd
    --permanent --zone=<zone> --remove-service=cockpit` for each such zone, then
    `firewall-cmd --reload`.
@@ -52,5 +61,5 @@ Under `--dry-run` the commands are printed, not run.
 `internal/admincli/cockpit_lib_test.go` runs `cockpit_keep_off` against stub
 `systemctl` and `firewall-cmd` binaries for every case above (no systemd,
 cockpit absent, live, already masked, firewalld stopped, dry run, a failing
-command), and pins that both installers call it. The bootstrap and update
+command, the banner override installed once and then left alone), and pins that both installers call it. The bootstrap and update
 dry-run smoke tests assert the step is in each plan.

@@ -48,6 +48,22 @@ case "$1" in
 esac
 `)
 	}
+	// The banner override needs systemd-tmpfiles (stubbed: it logs) plus the
+	// real cmp and install. Linked only alongside systemctl, so the
+	// no-systemd case keeps a PATH with nothing on it.
+	if withSystemctl {
+		write("systemd-tmpfiles", `printf 'systemd-tmpfiles %s\n' "$*" >> "$STUB_LOG"
+`)
+		for _, tool := range []string{"cmp", "install"} {
+			resolved, err := exec.LookPath(tool)
+			if err != nil {
+				t.Skipf("%s not available", tool)
+			}
+			if err := os.Symlink(resolved, filepath.Join(dir, tool)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	if withFirewall {
 		write("firewall-cmd", `printf 'firewall-cmd %s\n' "$*" >> "$STUB_LOG"
 for a in "$@"; do
@@ -83,7 +99,14 @@ printf 'RC=%s\n' "$?"
 `
 	bash, _ := exec.LookPath("bash")
 	cmd := exec.Command(bash, "-c", script, "cockpit", lib)
-	cmd.Env = append([]string{"PATH=" + stubDir, "STUB_LOG=" + logPath}, env...)
+	// No cockpit-ws tmpfiles entry unless a case provides one: never the
+	// host's real /usr/lib or /etc paths.
+	scratch := t.TempDir()
+	cmd.Env = append([]string{
+		"PATH=" + stubDir, "STUB_LOG=" + logPath,
+		"COCKPIT_PKG_TMPFILES=" + filepath.Join(scratch, "absent.conf"),
+		"COCKPIT_ETC_TMPFILES=" + filepath.Join(scratch, "etc", "cockpit-ws.conf"),
+	}, env...)
 	b, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("cockpit_keep_off exited non-zero: %v\n%s", err, b)
@@ -97,7 +120,7 @@ printf 'RC=%s\n' "$?"
 func mutating(calls []string) []string {
 	var m []string
 	for _, c := range calls {
-		for _, verb := range []string{"systemctl disable", "systemctl mask", "--remove-service", "--reload"} {
+		for _, verb := range []string{"systemctl disable", "systemctl mask", "--remove-service", "--reload", "systemd-tmpfiles --create"} {
 			if strings.Contains(c, verb) {
 				m = append(m, c)
 				break
@@ -177,6 +200,37 @@ func TestCockpitKeepOff(t *testing.T) {
 			if !strings.Contains(out, want) {
 				t.Errorf("dry-run plan missing %q\n%s", want, out)
 			}
+		}
+	})
+
+	t.Run("login-banner notice is blanked once", func(t *testing.T) {
+		dir := t.TempDir()
+		pkg := filepath.Join(dir, "usr-lib-cockpit-ws.conf")
+		etc := filepath.Join(dir, "etc", "tmpfiles.d", "cockpit-ws.conf")
+		if err := os.WriteFile(pkg, []byte("L /run/cockpit/issue - - - - active.issue\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		stubs := cockpitStubs(t, true, false)
+		env := []string{"STUB_COCKPIT=masked", "COCKPIT_PKG_TMPFILES=" + pkg, "COCKPIT_ETC_TMPFILES=" + etc}
+		out, calls := runCockpitKeepOff(t, stubs, env...)
+		if got := mutating(calls); len(got) != 1 || got[0] != "systemd-tmpfiles --create "+etc {
+			t.Errorf("want one systemd-tmpfiles --create %s, got %v\n%s", etc, got, out)
+		}
+		installed, err := os.ReadFile(etc)
+		if err != nil {
+			t.Fatalf("override not installed: %v\n%s", err, out)
+		}
+		shipped, err := os.ReadFile(filepath.Join(repoRootFromTest(t), "deploy", "cockpit-ws.tmpfiles.conf"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(installed) != string(shipped) {
+			t.Errorf("installed override differs from deploy/cockpit-ws.tmpfiles.conf")
+		}
+		// Idempotent: the second run finds it current and applies nothing.
+		out, calls = runCockpitKeepOff(t, stubs, env...)
+		if got := mutating(calls); len(got) != 0 || !strings.Contains(out, "already blank") {
+			t.Errorf("second run should be a no-op, got %v\n%s", got, out)
 		}
 	})
 

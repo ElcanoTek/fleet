@@ -245,7 +245,8 @@ so the one-command deploy writes secrets where the unit picks them up. Set
 `FLEET_ENV_FILE` to override; plain local/dev runs still default to `.env.local`.
 
 End to end, every run: keep the Cockpit web console off (`cockpit.socket`
-disabled, stopped and masked; the `cockpit` service dropped from firewalld; a
+disabled, stopped and masked; its login-banner notice blanked; the `cockpit`
+service dropped from firewalld; a
 no-op where cockpit is not installed — [`COCKPIT.md`](COCKPIT.md)) → ensure the 0600 env file → resolve the client bundle
 (`--client-config`) → **build the sandbox image from the bundle** (calls
 `scripts/build-sandbox-image.sh` with `FLEET_CLIENT_CONFIG_DIR`; skipped when the
