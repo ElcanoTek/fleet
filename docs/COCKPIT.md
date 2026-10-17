@@ -27,7 +27,9 @@ All three share one implementation, `scripts/lib/cockpit.sh`. It mirrors keel's
    without systemd, and Debian/Ubuntu without cockpit.
 2. When `cockpit.socket` is not already masked: `systemctl disable --now
    cockpit.socket`, then `systemctl mask cockpit.socket`. When it is already
-   masked, nothing changes.
+   masked, nothing changes, unless it is still listening: masking does not
+   stop a running unit, so a socket masked by hand while active gets
+   `systemctl stop cockpit.socket`.
 3. Masking leaves Cockpit's login-banner notice ("Activate the web console
    with: systemctl enable --now cockpit.socket") in the MOTD: `/etc/motd.d/cockpit`
    links to `/run/cockpit/issue`, which the package's
@@ -38,9 +40,11 @@ All three share one implementation, `scripts/lib/cockpit.sh`. It mirrors keel's
    `systemd-tmpfiles --create`. It's skipped when the installed copy already
    matches (`cmp`).
 4. When `firewall-cmd` exists, `firewall-cmd --state` says `running`, and a
-   zone's permanent config lists the `cockpit` service: `firewall-cmd
-   --permanent --zone=<zone> --remove-service=cockpit` for each such zone, then
-   `firewall-cmd --reload`.
+   zone lists the `cockpit` service: `firewall-cmd --permanent --zone=<zone>
+   --remove-service=cockpit` for each zone whose permanent config lists it, and
+   `firewall-cmd --zone=<zone> --remove-service=cockpit` for each whose runtime
+   config does. There's no `firewall-cmd --reload`: a reload would also discard
+   any unrelated runtime-only rule an operator had added.
 
 Under `--dry-run` the commands are printed, not run.
 

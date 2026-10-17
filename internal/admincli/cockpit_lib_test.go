@@ -18,7 +18,8 @@ import (
 //	STUB_ACTIVE   1 → `systemctl is-active cockpit.socket` succeeds
 //	STUB_FAIL     1 → every mutating systemctl call fails
 //	STUB_FW       running | stopped        (firewall-cmd --state)
-//	STUB_ZONES    space-separated zones; STUB_SVC_<zone> their permanent services
+//	STUB_ZONES    space-separated zones; STUB_SVC_<zone> their permanent
+//	              services, STUB_RT_<zone> their runtime ones
 //
 // Builtins only, so the PATH can hold nothing but the stubs.
 func cockpitStubs(t *testing.T, withSystemctl, withFirewall bool) string {
@@ -44,7 +45,7 @@ case "$1" in
     esac ;;
   is-enabled) [[ "$STUB_COCKPIT" == masked ]] && { printf 'masked\n'; exit 1; }; printf 'disabled\n'; exit 1 ;;
   is-active) [[ "${STUB_ACTIVE:-0}" == 1 ]] ;;
-  disable|mask) [[ "${STUB_FAIL:-0}" != 1 ]] ;;
+  disable|mask|stop) [[ "${STUB_FAIL:-0}" != 1 ]] ;;
 esac
 `)
 	}
@@ -66,12 +67,14 @@ esac
 	}
 	if withFirewall {
 		write("firewall-cmd", `printf 'firewall-cmd %s\n' "$*" >> "$STUB_LOG"
+perm=0
+for a in "$@"; do [[ "$a" == --permanent ]] && perm=1; done
 for a in "$@"; do
   case "$a" in
     --state) [[ "$STUB_FW" == running ]] && { printf 'running\n'; exit 0; }; printf 'not running\n'; exit 252 ;;
     --get-zones) printf '%s\n' "$STUB_ZONES"; exit 0 ;;
     --zone=*) zone="${a#--zone=}" ;;
-    --list-services) v="STUB_SVC_${zone}"; printf '%s\n' "${!v}"; exit 0 ;;
+    --list-services) if [[ $perm == 1 ]]; then v="STUB_SVC_${zone}"; else v="STUB_RT_${zone}"; fi; printf '%s\n' "${!v}"; exit 0 ;;
   esac
 done
 exit 0
@@ -120,7 +123,7 @@ printf 'RC=%s\n' "$?"
 func mutating(calls []string) []string {
 	var m []string
 	for _, c := range calls {
-		for _, verb := range []string{"systemctl disable", "systemctl mask", "--remove-service", "--reload", "systemd-tmpfiles --create"} {
+		for _, verb := range []string{"systemctl disable", "systemctl mask", "systemctl stop", "--remove-service", "--reload", "systemd-tmpfiles --create"} {
 			if strings.Contains(c, verb) {
 				m = append(m, c)
 				break
@@ -137,7 +140,7 @@ func mutating(calls []string) []string {
 // cockpit, or no running firewalld, when it is already masked, or under
 // --dry-run. It never fails its caller.
 func TestCockpitKeepOff(t *testing.T) {
-	fwCockpit := []string{"STUB_FW=running", "STUB_ZONES=public trusted", "STUB_SVC_public=ssh dhcpv6-client cockpit", "STUB_SVC_trusted=ssh"}
+	fwCockpit := []string{"STUB_FW=running", "STUB_ZONES=public trusted", "STUB_SVC_public=ssh dhcpv6-client cockpit", "STUB_SVC_trusted=ssh", "STUB_RT_public=ssh cockpit", "STUB_RT_trusted=ssh"}
 
 	t.Run("no systemd, no firewalld", func(t *testing.T) {
 		out, calls := runCockpitKeepOff(t, cockpitStubs(t, false, false))
@@ -163,8 +166,10 @@ func TestCockpitKeepOff(t *testing.T) {
 		want := []string{
 			"systemctl disable --now cockpit.socket",
 			"systemctl mask cockpit.socket",
+			// Permanent and runtime edited directly: no --reload, which would
+			// drop unrelated runtime-only rules.
 			"firewall-cmd -q --permanent --zone=public --remove-service=cockpit",
-			"firewall-cmd -q --reload",
+			"firewall-cmd -q --zone=public --remove-service=cockpit",
 		}
 		if got := mutating(calls); strings.Join(got, "|") != strings.Join(want, "|") {
 			t.Errorf("mutations:\n got %v\nwant %v\n%s", got, want, out)
@@ -181,6 +186,13 @@ func TestCockpitKeepOff(t *testing.T) {
 		}
 		if !strings.Contains(out, "already masked") {
 			t.Errorf("want an already-masked line\n%s", out)
+		}
+	})
+
+	t.Run("a masked socket that is still listening is stopped", func(t *testing.T) {
+		out, calls := runCockpitKeepOff(t, cockpitStubs(t, true, false), "STUB_COCKPIT=masked", "STUB_ACTIVE=1")
+		if got := mutating(calls); strings.Join(got, "|") != "systemctl stop cockpit.socket" {
+			t.Errorf("want only systemctl stop cockpit.socket, got %v\n%s", got, out)
 		}
 	})
 
