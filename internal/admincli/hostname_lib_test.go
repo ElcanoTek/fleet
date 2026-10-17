@@ -113,6 +113,15 @@ func TestSetHostname(t *testing.T) {
 		}
 	})
 
+	t.Run("other aliases on the loopback line are kept", func(t *testing.T) {
+		b := newHostnameBox(t, "vultr.guest", "127.0.0.1 localhost\n127.0.0.1 vultr.guest vultr myalias # note\n", true)
+		b.run(t, "fleet.example.com")
+		want := "127.0.0.1 localhost\n127.0.0.1 fleet.example.com fleet myalias # note\n"
+		if got := b.read(t, b.hostsFile); got != want {
+			t.Errorf("hosts:\n got %q\nwant %q", got, want)
+		}
+	})
+
 	t.Run("a localhost line is never rewritten", func(t *testing.T) {
 		b := newHostnameBox(t, "localhost", "127.0.0.1 localhost\n::1 localhost\n", true)
 		b.run(t, "fleet.example.com")

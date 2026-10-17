@@ -78,11 +78,6 @@
 #                          no --check) when you want that answer as an exit code.
 #   -h | --help            this help
 #
-# Every run also keeps the Cockpit web console off (cockpit.socket disabled,
-# stopped and masked; the cockpit service dropped from firewalld) — the same
-# step bootstrap.sh runs, re-applied so existing boxes stay healed. A no-op
-# where cockpit is not installed; never fatal (scripts/lib/cockpit.sh).
-#
 # Re-run safe (idempotent): when nothing changed it exits early; the web/binary
 # builds are deterministic from the checkout; the sandbox rebuild is gated on the
 # Containerfile hash + resolved image tag (and the tag's presence in the service
@@ -106,9 +101,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Idempotent safe.directory trust for the root-run git calls below.
 # shellcheck source=lib/git.sh
 . "$SCRIPT_DIR/lib/git.sh"
-# Keep the Cockpit web console off — the same step bootstrap.sh runs.
-# shellcheck source=lib/cockpit.sh
-. "$SCRIPT_DIR/lib/cockpit.sh"
 
 SRC_DIR="${SRC_DIR:-$REPO_ROOT}"
 # Client bundle dir: env/flag wins; else the dir bootstrap persisted under the
@@ -603,17 +595,6 @@ if [[ -n "$svc_client_dir" && "$CLIENT_DIR_EXPLICIT" != "1" ]]; then
     fi
   fi
 fi
-
-# ── host hardening: keep the Cockpit web console off ──────────────────────
-# bootstrap.sh masks cockpit.socket on a new box; re-applying it on every
-# update heals a box provisioned before that, or one where a package update or
-# a hand-run `systemctl enable` brought :9090 back. Here, after step 1, so it
-# runs once per update: a run that re-execs itself leaves before this point and
-# the fresh copy runs it. Before the build, so a failed build still leaves the
-# box healed. Idempotent, a no-op without cockpit, and never fatal
-# (scripts/lib/cockpit.sh).
-step "Host: keeping the Cockpit web console off"
-cockpit_keep_off
 
 # Bundle freshness is reported at the END alongside fleet's own SHA. A stale
 # bundle is not a build failure, so it must not abort the update — but it is the

@@ -244,10 +244,10 @@ file defaults to `/etc/fleet/fleet.env` — the path `deploy/fleet.service` read
 so the one-command deploy writes secrets where the unit picks them up. Set
 `FLEET_ENV_FILE` to override; plain local/dev runs still default to `.env.local`.
 
-End to end, every run: keep the Cockpit web console off (`cockpit.socket`
-disabled, stopped and masked; its login-banner notice blanked; the `cockpit`
-service dropped from firewalld; a
-no-op where cockpit is not installed — [`COCKPIT.md`](COCKPIT.md)) → ensure the 0600 env file → resolve the client bundle
+End to end, every run: uninstall Cockpit when `cockpit-ws` is installed
+(`dnf -y remove 'cockpit*'`: the Vultr Fedora image ships its root-capable web
+login on :9090, and fleet boxes are administered over ssh only;
+`FLEET_KEEP_COCKPIT=1` keeps it; never fatal) → ensure the 0600 env file → resolve the client bundle
 (`--client-config`) → **build the sandbox image from the bundle** (calls
 `scripts/build-sandbox-image.sh` with `FLEET_CLIENT_CONFIG_DIR`; skipped when the
 manifest pins a prebuilt `sandbox.image`) → provision both `chat`+`sched`
@@ -265,9 +265,9 @@ is left alone and bootstrap prints the `hostnamectl set-hostname <fqdn>` to run.
 A rename runs `hostnamectl set-hostname`, writes
 `/etc/cloud/cloud.cfg.d/99-preserve-hostname.cfg` (`preserve_hostname: true`,
 `manage_etc_hosts: false`) when `/etc/cloud` exists so cloud-init does not undo
-it, and rewrites the `127.0.0.1`/`::1` lines in `/etc/hosts` that named the old
-hostname to `<addr> <fqdn> <short>` (appending both when no line names the
-FQDN; a line that names `localhost` is never rewritten). It is idempotent,
+it, and replaces the old hostname on the `127.0.0.1`/`::1` lines in `/etc/hosts`
+with `<fqdn> <short>`, keeping every other alias on the line (localhost names
+are never replaced). When no line names the FQDN, it appends both loopback lines. It is idempotent,
 honours `--dry-run`, never fails the bootstrap, and `fleet update` never renames
 a box. (`scripts/lib/hostname.sh`)
 
@@ -354,11 +354,6 @@ untouched; if the sandbox build fails and the resolved image is absent from the
 service user's store, `update` refuses to restart rather than bring the box up
 reporting healthy with every sandboxed tool call failing. Roll back with
 `git checkout <sha> && fleet update --no-pull`.
-
-Every update also re-applies bootstrap's Cockpit step right after the fleet
-pull, so a box provisioned before it, or one where Cockpit came back, ends up
-with `cockpit.socket` masked and `cockpit` out of firewalld. It is a no-op where
-cockpit is not installed and never fails the update. See [`COCKPIT.md`](COCKPIT.md).
 
 ## upgrade — drain, swap, health-gate, auto-roll-back
 
@@ -475,9 +470,7 @@ production-only bug. The pass covers, in order:
    `fleet-web`, `caddy` active; then the `/healthz` + `/readyz` probes, and
    `https://<domain>/api-info` fetched **through** Caddy (pinned to this box
    with `--resolve`) — the proof that the API is routed, not just that the
-   process is up. Last, the Cockpit web console: `cockpit.socket` masked and
-   `cockpit` absent from firewalld (`--check` fails a listening socket; a fix
-   run masks it — [`COCKPIT.md`](COCKPIT.md)).
+   process is up.
 7. **Scheduled backups** — `fleet-backup.timer` installed, enabled *and
    active*, and its last run succeeded. A missing timer is an *advisory*, never
    a failure (an operator who backs up at the volume or hypervisor layer is not

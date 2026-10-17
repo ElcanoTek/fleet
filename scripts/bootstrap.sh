@@ -126,6 +126,9 @@
 # /etc/hosts loopback lines. Any other hostname is left alone with a hint.
 # FLEET_SET_HOSTNAME=1 forces the rename; FLEET_SET_HOSTNAME=0 skips it.
 #
+# When cockpit-ws is installed, bootstrap removes Cockpit (dnf -y remove
+# 'cockpit*'); FLEET_KEEP_COCKPIT=1 keeps it.
+#
 # Env knobs (all optional; sensible local defaults):
 #   FLEET_ENV_FILE          credential env file to write/refresh (default: /etc/fleet/fleet.env
 #                           under --enable-service — matches deploy/fleet.service —
@@ -171,8 +174,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$SCRIPT_DIR/lib/caddyfile.sh"
 # shellcheck source=lib/bundle.sh
 . "$SCRIPT_DIR/lib/bundle.sh"
-# Keep the Cockpit web console off — shared with update.sh (which re-applies it
-# on every update) and doctor.sh (which checks it).
+# Uninstall Cockpit (bootstrap only).
 # shellcheck source=lib/cockpit.sh
 . "$SCRIPT_DIR/lib/cockpit.sh"
 # Name the box after its --domain (bootstrap only; update never renames).
@@ -898,13 +900,8 @@ else
   warn "  the web tier needs node >= ${NODE_MAJOR} (declared in web/.nvmrc)."
 fi
 
-# ── host hardening: no Cockpit web console ─────────────────────────────────
-# The Vultr Fedora image ships cockpit, whose socket serves a root-capable web
-# login on :9090. A fleet box is administered over ssh only, so it is disabled,
-# stopped and masked, and dropped from firewalld (scripts/lib/cockpit.sh).
-# A no-op where cockpit is not installed; never fails the bootstrap.
-step "Keeping the Cockpit web console off (cockpit.socket masked, :9090 closed)"
-cockpit_keep_off
+# The Vultr Fedora image ships Cockpit's root-capable web login on :9090; our boxes are administered over ssh only.
+cockpit_uninstall
 
 # ── host identity: hostname = the public domain ───────────────────────────
 # A Vultr box comes up as "vultr.guest", so every prompt reads root@vultr.
