@@ -1103,7 +1103,9 @@ fi
 # (scripts/lib/ssh.sh) is the safety net. Advisory only — doctor never edits
 # sshd. Silent without sshd; `sshd -T` needs root (the host keys).
 if command -v sshd >/dev/null 2>&1 && [[ $EUID -eq 0 ]]; then
-  if sshd -T 2>/dev/null | grep -qiE '^(passwordauthentication|permitrootlogin) yes$'; then
+  if ! sshd_eff="$(sshd -T 2>/dev/null)" || [[ -z "$sshd_eff" ]]; then
+    advise "sshd -T failed — cannot tell whether sshd accepts passwords (run: sshd -t)"
+  elif grep -qiE '^(passwordauthentication|permitrootlogin) yes$' <<<"$sshd_eff"; then
     advise "sshd accepts passwords — see production-support README, Access: SSH keys"
   else
     pass "sshd is key-only (no password login)"

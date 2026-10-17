@@ -76,7 +76,9 @@ ssh_key_only() {
   fi
   rm -f "$tmp"
   if ! sshd -t >/dev/null 2>&1; then
-    if [[ -n "$old" ]]; then mv -f "$old" "$conf"; else rm -f "$conf"; fi
+    # cp into the file install just made keeps its sshd_config.d SELinux label
+    # (a mv would carry the temp file's label over).
+    if [[ -n "$old" ]]; then cp -f "$old" "$conf"; rm -f "$old"; else rm -f "$conf"; fi
     warn "sshd -t rejected the key-only drop-in — reverted $conf; sshd left as it was"
     return 0
   fi

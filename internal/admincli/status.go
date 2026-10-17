@@ -302,9 +302,9 @@ func checkService(r *report, name string) {
 	}
 }
 
-// sshdPasswordsMsg is the advisory both `fleet status` and scripts/doctor.sh
+// sshdKeyOnlyAdvice is the advisory both `fleet status` and scripts/doctor.sh
 // print when sshd still takes passwords.
-const sshdPasswordsMsg = "sshd accepts passwords — see production-support README, Access: SSH keys"
+const sshdKeyOnlyAdvice = "sshd accepts passwords — see production-support README, Access: SSH keys"
 
 // checkSSHPasswords warns (never fails) when the effective sshd config still
 // accepts passwords: Vultr's cloud-init turns PasswordAuthentication on, and
@@ -328,7 +328,7 @@ func checkSSHPasswords(r *report) {
 		return
 	}
 	if sshdAcceptsPasswords(string(out)) {
-		r.warnLine("sshd", sshdPasswordsMsg)
+		r.warnLine("sshd", sshdKeyOnlyAdvice)
 		return
 	}
 	r.pass("sshd", "key-only (no password login)")
