@@ -23,8 +23,9 @@ import (
 // check, exiting non-zero if ANY required check failed. It is safe to run any
 // time: it pings the databases (no migrations, no writes), runs a throwaway
 // `podman run ... true` for the sandbox, loads + validates the client bundle,
-// reports required env-var presence, and reports the systemd unit state when a
-// unit is installed.
+// reports required env-var presence, reports the systemd unit state when a
+// unit is installed, and (as root, where sshd exists) warns when sshd still
+// accepts passwords.
 //
 // Exit codes: 0 healthy · 6 unhealthy (one or more required checks failed) ·
 // 1 usage.
@@ -61,6 +62,9 @@ func cmdStatus(argv []string) int {
 
 	// 5. systemd unit state (informational unless the unit is installed + failed).
 	checkService(r, serviceName(*service))
+
+	// 6. sshd key-only (advisory; root only — sshd -T needs the host keys).
+	checkSSHPasswords(r)
 
 	return r.finish()
 }
@@ -296,6 +300,50 @@ func checkService(r *report, name string) {
 	default:
 		r.fail("systemd unit", fmt.Sprintf("%s.service is %q — journalctl -u %s -n 50", name, state, name))
 	}
+}
+
+// sshdKeyOnlyAdvice is the advisory both `fleet status` and scripts/doctor.sh
+// print when sshd still takes passwords.
+const sshdKeyOnlyAdvice = "sshd accepts passwords — see production-support README, Access: SSH keys"
+
+// checkSSHPasswords warns (never fails) when the effective sshd config still
+// accepts passwords: Vultr's cloud-init turns PasswordAuthentication on, and
+// bootstrap's key-only drop-in (scripts/lib/ssh.sh) is the safety net. Silent
+// without sshd; skipped when not root, since `sshd -T` must read the host keys.
+func checkSSHPasswords(r *report) {
+	sshd, err := exec.LookPath("sshd")
+	if err != nil {
+		return
+	}
+	if os.Geteuid() != 0 {
+		r.skip("sshd", "skipped (run as root to check password login)")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	//nolint:gosec // G204: sshd resolved from PATH; the one argument is the fixed "-T".
+	out, err := exec.CommandContext(ctx, sshd, "-T").Output()
+	if err != nil {
+		r.skip("sshd", "sshd -T failed: "+firstLine(errString(err)))
+		return
+	}
+	if sshdAcceptsPasswords(string(out)) {
+		r.warnLine("sshd", sshdKeyOnlyAdvice)
+		return
+	}
+	r.pass("sshd", "key-only (no password login)")
+}
+
+// sshdAcceptsPasswords reports whether `sshd -T` output says
+// passwordauthentication yes or permitrootlogin yes.
+func sshdAcceptsPasswords(effective string) bool {
+	for _, line := range strings.Split(effective, "\n") {
+		f := strings.Fields(strings.ToLower(line))
+		if len(f) == 2 && f[1] == "yes" && (f[0] == "passwordauthentication" || f[0] == "permitrootlogin") {
+			return true
+		}
+	}
+	return false
 }
 
 // ── small report accumulator ────────────────────────────────────────────────

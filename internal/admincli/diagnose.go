@@ -388,6 +388,7 @@ func captureHealth(ctx context.Context, chatURL, schedURL, bundleDir, service st
 		checkSandbox(r, bundle)
 	}
 	checkService(r, serviceName(service))
+	checkSSHPasswords(r)
 	r.finish()
 
 	_ = ctx // checks use their own short per-call timeouts; ctx reserved for parity with other collectors.

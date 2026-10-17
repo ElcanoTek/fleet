@@ -129,6 +129,11 @@
 # When cockpit-ws is installed, bootstrap removes Cockpit (dnf -y remove
 # 'cockpit*'); FLEET_KEEP_COCKPIT=1 keeps it.
 #
+# SSH is made key-only: /etc/ssh/sshd_config.d/01-no-password-login.conf
+# (PasswordAuthentication no, PermitRootLogin prohibit-password), checked with
+# sshd -t, then sshd is reloaded. Skipped with a warning when no authorized key
+# is installed (it would lock everyone out); FLEET_KEEP_SSH_PASSWORDS=1 skips it.
+#
 # Env knobs (all optional; sensible local defaults):
 #   FLEET_ENV_FILE          credential env file to write/refresh (default: /etc/fleet/fleet.env
 #                           under --enable-service — matches deploy/fleet.service —
@@ -177,6 +182,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Uninstall Cockpit (bootstrap only).
 # shellcheck source=lib/cockpit.sh
 . "$SCRIPT_DIR/lib/cockpit.sh"
+# Key-only SSH safety net (bootstrap only; update never touches sshd).
+# shellcheck source=lib/ssh.sh
+. "$SCRIPT_DIR/lib/ssh.sh"
 # Name the box after its --domain (bootstrap only; update never renames).
 # shellcheck source=lib/hostname.sh
 . "$SCRIPT_DIR/lib/hostname.sh"
@@ -902,6 +910,10 @@ fi
 
 # The Vultr Fedora image ships Cockpit's root-capable web login on :9090; our boxes are administered over ssh only.
 cockpit_uninstall
+
+# Vultr's cloud-init turns SSH password login on; make it key-only unless no
+# key is installed yet (scripts/lib/ssh.sh). Never fatal.
+ssh_key_only
 
 # ── host identity: hostname = the public domain ───────────────────────────
 # A Vultr box comes up as "vultr.guest", so every prompt reads root@vultr.
