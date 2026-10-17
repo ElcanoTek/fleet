@@ -92,6 +92,9 @@ MAINT_TIMER="fleet-maintenance.timer"
 # Idempotent safe.directory trust for the root-run git calls below.
 # shellcheck source=lib/git.sh
 . "$SCRIPT_DIR/lib/git.sh"
+# The Cockpit probes bootstrap.sh + update.sh act on (step 6 checks them).
+# shellcheck source=lib/cockpit.sh
+. "$SCRIPT_DIR/lib/cockpit.sh"
 NODE_FLOOR="$(fleet_node_major_want "$SRC_DIR" || true)"
 if [[ -z "$NODE_FLOOR" ]]; then
   # No silent default. A hardcoded fallback would point at whatever major was
@@ -135,7 +138,8 @@ deploy/, the 0600 env files, the fleet-managed /etc/caddy/Caddyfile's layout
 caddy), the /healthz + /readyz probes and https://<domain>/api-info THROUGH
 caddy, the scheduled-backup and host-maintenance
 timers, free disk on the data dir + image store, and a sandbox smoke (podman run
-as the fleet user). Reports when the source checkout is behind upstream but never
+as the fleet user), and the Cockpit web console kept off (cockpit.socket masked,
+not in firewalld). Reports when the source checkout is behind upstream but never
 pulls or rebuilds — that stays `fleet update`.
 
 `fleet status` is the quick read-only in-process report; doctor is the deep
@@ -273,7 +277,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, the client bundle service-owned and outside the checkout (a bare install runs on the staged copy under ${SERVICE_HOME}/bundle), containers.conf (cgroupfs), /run/${SERVICE_USER}, podman info as ${SERVICE_USER} (a stale pause process is reported with what to do — doctor never runs podman system migrate, which deletes a live fleet's sandbox pool)"
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed; ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload); an operator-managed Caddyfile only gets an advisory when it routes no /v1"
-  info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active, then the running server's record of MCP tool schema findings (fleet mcp schema-issues: invalid = withheld from the model, rewritten = older JSON Schema draft translated) is read and each finding advised"
+  info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active, then the running server's record of MCP tool schema findings (fleet mcp schema-issues: invalid = withheld from the model, rewritten = older JSON Schema draft translated) is read and each finding advised; the Cockpit web console off — cockpit.socket masked (disable --now + mask when it is not) and the cockpit service absent from every firewalld zone (a no-op without cockpit)"
   info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor; disk hygiene: root build caches (go build/module, npm, dnf — filled by fleet update as root, never reached by the maintenance timer) reclaimed above 3 GiB, the journal capped at 1G via journald.conf.d/60-fleet-journal-cap.conf (persistent + volatile) unless the operator set a limit in journald's merged config, and images left in root's podman store reported"
   info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
   info "[dry-run] 9/9 Source freshness + build identity: report commits behind upstream, the installed binary's stamped version vs what ${SRC_DIR} would build now (a release tag fetched after the last build), and the paths that make the checkout read '.dirty' (fix stays 'fleet update' — doctor never pulls or rebuilds)"
@@ -1233,6 +1237,47 @@ if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "${SERVIC
         fi
       done < <(jq -r '.issues[] | [.status, .server, .tool, (.detail | gsub("[\t\n]"; " "))] | @tsv' <<<"$schema_json")
       info "details: fleet mcp schema-issues (record since ${schema_since})"
+    fi
+  fi
+fi
+
+# The Cockpit web console: bootstrap.sh and update.sh mask cockpit.socket and
+# drop the cockpit firewalld service (scripts/lib/cockpit.sh). A socket that is
+# LISTENING is a root-capable web login on :9090 — a failure under --check; an
+# installed-but-unmasked one is one `systemctl enable` away, so an advisory.
+# Fix mode applies the same repair update does. No cockpit, no finding.
+cockpit_state="$(cockpit_socket_state)"
+cockpit_zones="$(cockpit_firewall_zones)"
+if [[ "$cockpit_state" == "live" ]]; then
+  cockpit_listening=0
+  systemctl is-active --quiet cockpit.socket 2>/dev/null && cockpit_listening=1
+  if [[ "$CHECK_ONLY" == "1" ]]; then
+    if [[ "$cockpit_listening" == "1" ]]; then
+      fail "cockpit.socket is LISTENING — a root-capable web login on :9090: sudo fleet doctor (or systemctl disable --now cockpit.socket && systemctl mask cockpit.socket)"
+    else
+      advise "cockpit.socket is installed but not masked — one systemctl enable from a web login on :9090: systemctl disable --now cockpit.socket && systemctl mask cockpit.socket"
+    fi
+  elif systemctl disable --now cockpit.socket >/dev/null 2>&1 && systemctl mask cockpit.socket >/dev/null 2>&1; then
+    fixed "cockpit.socket disabled, stopped and masked — no web console on :9090"
+  else
+    fail "could not mask cockpit.socket — run: systemctl disable --now cockpit.socket && systemctl mask cockpit.socket"
+  fi
+elif [[ "$cockpit_state" == "masked" ]]; then
+  pass "cockpit.socket masked — no web console on :9090"
+fi
+if [[ -n "$cockpit_zones" ]]; then
+  if [[ "$CHECK_ONLY" == "1" ]]; then
+    advise "firewalld still allows the cockpit service (zones: ${cockpit_zones//$'\n'/ }): firewall-cmd --permanent --zone=<zone> --remove-service=cockpit && firewall-cmd --reload"
+  else
+    cockpit_fw_ok=1
+    for z in $cockpit_zones; do
+      firewall-cmd -q --permanent --zone="$z" --remove-service=cockpit 2>/dev/null || cockpit_fw_ok=0
+    done
+    firewall-cmd -q --reload 2>/dev/null || cockpit_fw_ok=0
+    if [[ "$cockpit_fw_ok" == "1" ]]; then
+      fixed "removed the cockpit service from firewalld (zones: ${cockpit_zones//$'\n'/ })"
+    else
+      fail "could not remove cockpit from firewalld (zones: ${cockpit_zones//$'\n'/ }) — firewall-cmd --permanent --zone=<zone> --remove-service=cockpit && firewall-cmd --reload"
     fi
   fi
 fi

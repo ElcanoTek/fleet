@@ -165,6 +165,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$SCRIPT_DIR/lib/caddyfile.sh"
 # shellcheck source=lib/bundle.sh
 . "$SCRIPT_DIR/lib/bundle.sh"
+# Keep the Cockpit web console off — shared with update.sh (which re-applies it
+# on every update) and doctor.sh (which checks it).
+# shellcheck source=lib/cockpit.sh
+. "$SCRIPT_DIR/lib/cockpit.sh"
 
 POSTGRES_MODE="local"
 DRY_RUN=0
@@ -884,6 +888,14 @@ else
   warn "dnf not found — skipping dependency install. Ensure these are present before continuing: ${FLEET_DEPS[*]}"
   warn "  the web tier needs node >= ${NODE_MAJOR} (declared in web/.nvmrc)."
 fi
+
+# ── host hardening: no Cockpit web console ─────────────────────────────────
+# The Vultr Fedora image ships cockpit, whose socket serves a root-capable web
+# login on :9090. A fleet box is administered over ssh only, so it is disabled,
+# stopped and masked, and dropped from firewalld (scripts/lib/cockpit.sh).
+# A no-op where cockpit is not installed; never fails the bootstrap.
+step "Keeping the Cockpit web console off (cockpit.socket masked, :9090 closed)"
+cockpit_keep_off
 
 # ── dedicated service user + rootless-Podman setup (--enable-service path) ──
 # Done early (before the sandbox build) because the image is built INTO this

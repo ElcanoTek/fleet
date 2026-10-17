@@ -84,6 +84,7 @@ func TestBootstrapDryRunSmoke(t *testing.T) {
 		// renders on a dnf host, and CI runs on a non-dnf (apt) runner where the
 		// step prints the "install these yourself" warning instead.
 		"Installing system dependencies",
+		"Keeping the Cockpit web console off", // scripts/lib/cockpit.sh; a no-op line where cockpit is absent
 		"client bundle manifest found",
 		"pg_hba",                                 // the scram-sha-256 loopback rewrite step (#78)
 		"Building + installing the fleet binary", // the binary build+install step (#71)
@@ -425,7 +426,8 @@ func TestUpdateDryRunSmoke(t *testing.T) {
 	for _, want := range []string{
 		"make build",
 		"would install fleet", // the install-to-ExecStart step (#71)
-		"would remove a leftover fleet-admin shim", // the retired shim's eviction (ADR-0060)
+		"would remove a leftover fleet-admin shim",  // the retired shim's eviction (ADR-0060)
+		"Host: keeping the Cockpit web console off", // re-applied on every update (scripts/lib/cockpit.sh)
 		"Restarting",
 	} {
 		if !strings.Contains(out, want) {
