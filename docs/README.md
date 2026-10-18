@@ -148,7 +148,7 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   and how to arm an api_key fixture):
   [`docs/MCP-CATALOG-SMOKE.md`](MCP-CATALOG-SMOKE.md)
 - **Bundle-managed SES/S3 email-report infrastructure:** use the external
-  canonical [new-client email-report runbook](https://github.com/ElcanoTek/ses-s3-setup/blob/main/docs/NEW-CLIENT-EMAIL-SETUP.md);
+  canonical [new-client email-report runbook](https://github.com/ElcanoTek/production-support/blob/main/ses-s3/docs/NEW-CLIENT-EMAIL-SETUP.md);
   keep client-specific inventory in the external client bundle.
 - **White-labeling from a bundle** (`branding:` — strings, `logo`, the themable
   color tokens, what stays build-time env, and the trust class of the two brand

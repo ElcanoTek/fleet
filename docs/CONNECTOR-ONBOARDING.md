@@ -14,7 +14,7 @@ connectable in place or honestly, visibly documented on the card.
 An SES-to-S3 email-report archive is not a connector-directory entry and is not
 provisioned by Fleet. It combines external AWS/DNS resources with a read-only
 MCP server owned by the client-config bundle. Use the external canonical
-[new-client email-report runbook](https://github.com/ElcanoTek/ses-s3-setup/blob/main/docs/NEW-CLIENT-EMAIL-SETUP.md)
+[new-client email-report runbook](https://github.com/ElcanoTek/production-support/blob/main/ses-s3/docs/NEW-CLIENT-EMAIL-SETUP.md)
 for domain/MX decisions, tenant infrastructure, IAM separation, bundle wiring,
 historical mailbox migration, validation, and rollback. Keep real client
 identifiers in that client's bundle deployment record, never in this engine
