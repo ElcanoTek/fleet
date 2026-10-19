@@ -146,7 +146,10 @@ var pushDescribedAs = map[string][]string{
 	"⚠ Approval needed":         {"needs your approval"},
 	"✓ Done":                    {"an approved one finishes"},
 	"✗ Not applied":             {"an approved one finishes"},
-	"⏸ Waiting for you":         {"does not continue on its own"}, // the chat, after approvals
+	// The chat, after any settled card of an action that carries on by itself
+	// (noteApprovalSettled runs on a decline and a time-out too), so the
+	// description must not tie it to approvals alone.
+	"⏸ Waiting for you": {"does not continue on its own", "approved, declined or timed out"},
 }
 
 // backtickedSpan is one `code span` in a Markdown table cell.

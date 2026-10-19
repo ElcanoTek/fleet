@@ -238,9 +238,9 @@ export function BrowserNotificationsRow() {
           one when a task you created finishes, is waiting for your answer, or sends a progress
           note while it runs; when an action in one of your chats needs your approval, and, for
           some actions, when an approved one finishes or the chat does not continue on its own
-          afterwards; and when you create a task while your spending is past your budget&apos;s
-          soft limit. An alert shows only a short title, such as the start of the task&apos;s
-          prompt, never the conversation or a result.
+          once its card is approved, declined or timed out; and when you create a task while your
+          spending is past your budget&apos;s soft limit. An alert shows only a short title, such
+          as the start of the task&apos;s prompt, never the conversation or a result.
           {note ? <span className="mt-[0.3rem] block">{note}</span> : null}
         </>
       }
