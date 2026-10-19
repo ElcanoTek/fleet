@@ -6,6 +6,7 @@ package boxdoctor
 import (
 	"errors"
 	"io/fs"
+	"net"
 	"os"
 	"strings"
 )
@@ -74,5 +75,64 @@ func checkCaddyfile(path, orchAddr string) Check {
 		c.Detail = path + " is operator-managed and routes no /v1 to " + orchAddr + " — API clients get the web tier's 404 unless another front serves the API"
 		c.Fix = "merge the @fleet_api + @fleet_chat_webhooks blocks from deploy/Caddyfile into it, then: systemctl reload caddy"
 	}
+	return c
+}
+
+// trustedProxiesFromEnv parses FLEET_TRUSTED_PROXIES the way config.Load does
+// (comma-separated bare IPs), for a caller that did not hand Run the process
+// config. A malformed entry is skipped here rather than failing: config.Load
+// already refuses to boot on one, so this path only ever sees valid input.
+func trustedProxiesFromEnv() []net.IP {
+	var out []net.IP
+	for _, p := range strings.Split(os.Getenv("FLEET_TRUSTED_PROXIES"), ",") {
+		if ip := net.ParseIP(strings.TrimSpace(p)); ip != nil {
+			out = append(out, ip)
+		}
+	}
+	return out
+}
+
+// checkTrustedProxies reports whether, behind a fleet-managed Caddy front,
+// the running process trusts Caddy for X-Forwarded-For. Caddy dials both Go
+// listeners from 127.0.0.1, so without it in FLEET_TRUSTED_PROXIES every
+// client looks like 127.0.0.1: per-client rate limits share one bucket and
+// FLEET_IP_ALLOWLIST/DENYLIST judge Caddy. That degrades the box without
+// breaking it — requests are still served — so it is a WARN, like the other
+// degraded-not-down checks, never a fail. trusted is the process's own
+// cfg.TrustedProxies (what it actually resolves client IPs with), so an env
+// file edited since the last restart reads as not yet applied, which is true.
+// An operator-managed front is skipped: its proxy addresses are the
+// operator's to name, and doctor.sh never writes them either.
+func checkTrustedProxies(path string, trusted []net.IP) Check {
+	c := Check{Name: "caddy: trusted proxies"}
+	body, err := os.ReadFile(path) //nolint:gosec // G304: operator-configured path (FLEET_CADDYFILE or the fixed default), never request input.
+	if errors.Is(err, fs.ErrNotExist) {
+		c.Status, c.Detail = StatusSkip, path+" absent (no Caddy front on this box)"
+		return c
+	}
+	if err != nil {
+		c.Status, c.Detail = StatusSkip, path+" not readable from this process: "+firstLine(err.Error())
+		return c
+	}
+	if !strings.Contains(string(body), CaddyMarker) {
+		c.Status, c.Detail = StatusSkip, path+" is operator-managed — FLEET_TRUSTED_PROXIES should name the addresses that front connects from"
+		return c
+	}
+	loopback := net.IPv4(127, 0, 0, 1)
+	names := make([]string, 0, len(trusted))
+	for _, ip := range trusted {
+		names = append(names, ip.String())
+		if ip.Equal(loopback) {
+			c.Status, c.Detail = StatusOK, "FLEET_TRUSTED_PROXIES includes Caddy's 127.0.0.1 — the backends read the client IP it forwards"
+			return c
+		}
+	}
+	c.Status = StatusWarn
+	if len(trusted) == 0 {
+		c.Detail = "FLEET_TRUSTED_PROXIES is unset in the running process behind the fleet-managed Caddy front — every client looks like 127.0.0.1 (shared rate limits; the IP allow/deny filter judges Caddy)"
+	} else {
+		c.Detail = "FLEET_TRUSTED_PROXIES=" + strings.Join(names, ",") + " does not include Caddy's 127.0.0.1 — behind the fleet-managed front every client looks like 127.0.0.1 (shared rate limits; the IP allow/deny filter judges Caddy)"
+	}
+	c.Fix = sudoDoctorFix + "   (adds 127.0.0.1,::1 when the key is absent, then restarts fleet; or: sudo fleet config set-env FLEET_TRUSTED_PROXIES --value 127.0.0.1,::1 && sudo fleet restart)"
 	return c
 }

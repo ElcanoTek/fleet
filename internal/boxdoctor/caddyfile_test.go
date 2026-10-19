@@ -4,6 +4,8 @@
 package boxdoctor
 
 import (
+	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,5 +88,78 @@ func TestCaddyfilePathAndOrchestratorAddr(t *testing.T) {
 	}
 	if got := orchestratorAddr(); got != "127.0.0.1:9000" {
 		t.Errorf("override orch addr = %q", got)
+	}
+}
+
+// TestCheckTrustedProxies pins the verdicts: behind a fleet-managed front the
+// running process must trust Caddy's 127.0.0.1 (ok), else it is a WARN with
+// the doctor / set-env fix — degraded rate limiting and IP lists, not a down
+// box. No Caddyfile, or an operator's own, is a skip.
+func TestCheckTrustedProxies(t *testing.T) {
+	managed := writeCaddyfile(t, CaddyMarker+"\nfleet.example.com {\n\treverse_proxy 127.0.0.1:3000\n}\n")
+	ips := func(ss ...string) []net.IP {
+		out := make([]net.IP, 0, len(ss))
+		for _, s := range ss {
+			out = append(out, net.ParseIP(s))
+		}
+		return out
+	}
+
+	if c := checkTrustedProxies(filepath.Join(t.TempDir(), "missing"), nil); c.Status != StatusSkip {
+		t.Errorf("absent Caddyfile: got %s (%s), want skip", c.Status, c.Detail)
+	}
+	foreign := writeCaddyfile(t, "fleet.example.com {\n\treverse_proxy 127.0.0.1:3000\n}\n")
+	if c := checkTrustedProxies(foreign, nil); c.Status != StatusSkip {
+		t.Errorf("operator-managed Caddyfile: got %s (%s), want skip", c.Status, c.Detail)
+	}
+	for _, ok := range [][]net.IP{ips("127.0.0.1", "::1"), ips("::1", "127.0.0.1"), ips("10.0.0.5", "127.0.0.1"), ips("::ffff:127.0.0.1")} {
+		if c := checkTrustedProxies(managed, ok); c.Status != StatusOK {
+			t.Errorf("trusted=%v: got %s (%s), want ok", ok, c.Status, c.Detail)
+		}
+	}
+	for _, bad := range [][]net.IP{nil, ips("::1"), ips("10.0.0.5")} {
+		c := checkTrustedProxies(managed, bad)
+		if c.Status != StatusWarn || !strings.Contains(c.Fix, "sudo fleet doctor") ||
+			!strings.Contains(c.Fix, "fleet config set-env FLEET_TRUSTED_PROXIES --value 127.0.0.1,::1") {
+			t.Errorf("trusted=%v: got %s fix=%q, want warn with the doctor + set-env fix (%s)", bad, c.Status, c.Fix, c.Detail)
+		}
+	}
+}
+
+// TestTrustedProxiesFromEnv — the fallback when Run is not handed the process
+// config parses FLEET_TRUSTED_PROXIES as config.Load does.
+func TestTrustedProxiesFromEnv(t *testing.T) {
+	t.Setenv("FLEET_TRUSTED_PROXIES", "")
+	if got := trustedProxiesFromEnv(); len(got) != 0 {
+		t.Errorf("unset: got %v, want none", got)
+	}
+	t.Setenv("FLEET_TRUSTED_PROXIES", " 127.0.0.1, ::1 ,")
+	got := trustedProxiesFromEnv()
+	if len(got) != 2 || !got[0].Equal(net.ParseIP("127.0.0.1")) || !got[1].Equal(net.ParseIP("::1")) {
+		t.Errorf("got %v, want [127.0.0.1 ::1]", got)
+	}
+}
+
+// TestRunReportsTrustedProxies — Run includes the check and prefers the
+// process config over the environment when it is handed one.
+func TestRunReportsTrustedProxies(t *testing.T) {
+	t.Setenv("FLEET_CADDYFILE", writeCaddyfile(t, CaddyMarker+"\nfleet.example.com {\n}\n"))
+	t.Setenv("FLEET_TRUSTED_PROXIES", "127.0.0.1")
+	find := func(r *Report) Check {
+		for _, c := range r.Checks {
+			if c.Name == "caddy: trusted proxies" {
+				return c
+			}
+		}
+		t.Fatal("Run did not report caddy: trusted proxies")
+		return Check{}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // only the file-reading checks matter here; skip the slow probes
+	if c := find(Run(ctx, Options{})); c.Status != StatusOK {
+		t.Errorf("env fallback with 127.0.0.1: got %s (%s), want ok", c.Status, c.Detail)
+	}
+	if c := find(Run(ctx, Options{HaveTrustedProxies: true})); c.Status != StatusWarn {
+		t.Errorf("process config with no proxies must win over the env: got %s (%s), want warn", c.Status, c.Detail)
 	}
 }

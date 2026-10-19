@@ -39,7 +39,12 @@ Two halves of one feature, split by privilege:
    sibling unit states (`fleet-web`, `postgresql`, `caddy`), whether the
    Caddyfile routes the API (a fleet-managed one that predates the `/v1`
    routes is a **fail**; an operator's own front that routes no `/v1` is a
-   warn), and the scheduled-backup timer. Every warn/fail
+   warn), whether the running process trusts Caddy for `X-Forwarded-For`
+   behind a fleet-managed front (its `FLEET_TRUSTED_PROXIES` must include
+   `127.0.0.1`; otherwise a **warn** — rate limits and IP lists degrade but
+   nothing stops serving — with `sudo fleet doctor` or
+   `fleet config set-env FLEET_TRUSTED_PROXIES --value 127.0.0.1,::1` as the
+   fix; skipped for an operator's own front), and the scheduled-backup timer. Every warn/fail
    carries the on-box fix command (almost always `sudo fleet doctor`).
    `?deep=1` additionally launches a throwaway
    `podman run --rm --network=none <image> true` — the definitive smoke, but
