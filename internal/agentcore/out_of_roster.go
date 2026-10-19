@@ -359,8 +359,11 @@ func repairJSON(call fantasy.ToolCallContent) *fantasy.ToolCallContent {
 // tool_call the model wrote would carry. Empty input is no arguments;
 // malformed JSON gets jsonrepair. ok is false when tool_call would refuse the
 // arguments anyway (normalizeDeferredArguments: an object, null, or a
-// one-object array).
+// one-object array), or when name is not a plain tool name (plainToolName).
 func deferredCallInput(name, input string) (string, bool) {
+	if !plainToolName(name) {
+		return "", false
+	}
 	args := strings.TrimSpace(input)
 	if args == "" {
 		args = "{}"
@@ -375,11 +378,26 @@ func deferredCallInput(name, input string) (string, bool) {
 	if _, err := normalizeDeferredArguments(json.RawMessage(args)); err != nil {
 		return "", false
 	}
-	quoted, err := json.Marshal(name)
-	if err != nil {
-		return "", false
+	return `{"name":"` + name + `","arguments":` + args + `}`, true
+}
+
+// plainToolName reports whether name uses only the MCP spec's tool-name
+// characters (ASCII letters, digits, '_', '-' and '.'). JSON escapes none of
+// them, so deferredCallInput writes such a name between quotes as it is. A
+// deferred tool with any other character in its name is not rerouted; its
+// result says to call tool_call.
+func plainToolName(name string) bool {
+	if name == "" {
+		return false
 	}
-	return `{"name":` + string(quoted) + `,"arguments":` + args + `}`, true
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // explainStep is a PrepareStep that sends the model, for each refused call

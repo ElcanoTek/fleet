@@ -749,6 +749,51 @@ func TestOutOfRoster_DeferredArgumentsAsToolCallTakesThem(t *testing.T) {
 	}
 }
 
+// tool_call's input carries the name between quotes as it is, so only a
+// name of the MCP spec's tool-name characters is rerouted; the arguments keep
+// their own bytes.
+func TestOutOfRoster_DeferredCallInputTakesOnlyPlainNames(t *testing.T) {
+	if got, ok := deferredCallInput("mcp_srv-1_get.page_2", `{ "a": "<b>" }`); !ok || got != `{"name":"mcp_srv-1_get.page_2","arguments":{ "a": "<b>" }}` {
+		t.Fatalf("plain name: %q, %t", got, ok)
+	}
+	for _, name := range []string{"", `mcp_srv_a"b`, `mcp_srv_a\b`, "mcp_srv_a b", "mcp_srv_é", "mcp_srv_a\nb"} {
+		if got, ok := deferredCallInput(name, `{}`); ok {
+			t.Errorf("%q was rerouted as %q", name, got)
+		}
+	}
+}
+
+// A deferred tool whose name is not plain is not rerouted. Its result says
+// to call tool_call, counted as deferred and not rerouted, and a tool_call
+// written as it says runs the tool.
+func TestOutOfRoster_DeferredToolWithAnOddNameIsExplained(t *testing.T) {
+	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "5")
+	const odd = "mcp_srv_files/read"
+	catalog := append(discMCPTools(20), mcp.ServerTool{ServerName: "srv", Tool: mcp.Tool{
+		Name: "files/read", Description: "Read a file", InputSchema: map[string]interface{}{"type": "object"},
+	}})
+	broker := &fakeBroker{}
+	obs := &oorEvents{}
+	model := newOORModel("oor-odd-name",
+		[]oorCall{{"c1", odd, `{}`}},
+		[]oorCall{{"c2", toolNameToolCall, `{"name":"` + odd + `","arguments":{}}`}},
+	)
+	runOOR(t, RunConfig{NativeTools: discNative(3)}, Deps{Model: model, MCPCatalog: catalog, MCPBroker: broker, Observer: obs})
+	want := odd + ` was not called: it is reachable only through tool_call. ` +
+		`Call tool_call with {"name": "` + odd + `", "arguments": {...}}, with the arguments as a JSON object.`
+	if got := model.resultSeen(2, "c1"); got != want {
+		t.Fatalf("result %q, want %q", got, want)
+	}
+	if broker.lastTool != "files/read" {
+		t.Fatalf("the tool_call the result asks for did not run the tool: broker got %q", broker.lastTool)
+	}
+	obs.mu.Lock()
+	defer obs.mu.Unlock()
+	if len(obs.events) != 1 || obs.events[0]["reason"] != "deferred" || obs.events[0]["rerouted_to"] != nil {
+		t.Fatalf("events = %v, want one deferred, not rerouted", obs.events)
+	}
+}
+
 // When the persona denies tool_call itself, nothing reroutes: the prompt does
 // not promise it, and a direct call to a deferred tool says why it failed.
 func TestOutOfRoster_PersonaDeniesTheBridge(t *testing.T) {

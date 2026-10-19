@@ -92,104 +92,11 @@ plus the `fast_io` and `fastio_helpers` tools, to the eight or so it names.
 
 ## Calls to tools not in the list (#1744)
 
-A model sometimes calls a tool name that is not in its tool list. Fantasy, the
-agent framework, answers every such call with `tool not found: X. Available
-tools: …` as a failed tool result, and the run goes on. That is right for a
-made-up name, but it misleads when the name is a real tool that was deferred,
-or that a gate kept out of the run (`internal/agentcore/out_of_roster.go`):
-
-- **A deferred tool called by name.** Models still call `mcp_*` names above
-  the threshold, and in #1006 one concluded from the refusal that the connector
-  was down. Now a direct call to a name in this run's deferred registry is
-  rewritten into `tool_call {name, arguments}`, with the same call ID and the
-  model's own argument bytes. It then runs through the bridge exactly as a
-  `tool_call` the model wrote: persona and allowlist, credential allowlist,
-  approval staging, audit and output governance, and the transcript records it
-  as a `tool_call`. A test pins that the policy calls, staged approvals, broker
-  dispatch and transcript are identical for the two, arguments with spacing and
-  HTML characters included. Arguments get `tool_call`'s own leniency (malformed
-  JSON is repaired; `null` and a one-object array are taken); others are not
-  rerouted, and the result says how to call `tool_call`. If the persona denies
-  `tool_call` itself, nothing is rerouted: the live registry does not promise
-  it, and the call's result says the tool is reachable only through
-  `tool_call`, which is not in the tool list.
-- **A tool a gate removed.** The roster records which gate kept each catalog
-  tool out: an optional connector the run did not turn on (`opt_in`), a
-  connector's tool allowlist (`allowlist`), a narrowed roster (`narrowed`,
-  #1603), the persona's tool policy (`persona`, MCP and native tools), or an
-  invalid input schema (`schema`). A call to one of these names is never run,
-  and its result names the gate: "mcp_pages_deploy_page_upload is not available
-  in this run and was not called: this run's tools are narrowed to the ones it
-  requires, and mcp_pages_deploy_page_upload is not one of them." In a narrowed
-  run it also names the registered stand-in, when there is one, by the rule the
-  audit nudges use.
-- **A tool the broker already dropped.** Out of process, the MCP broker
-  applies a server's allowlist before the catalog reaches the run (ADR-0042),
-  so a tool the allowlist or a narrowed roster dropped is never seen or
-  recorded. An `mcp_*` name with no record is matched against the server names
-  the run knows (the catalog's and the optional connectors', and in a narrowed
-  run the allowlist's, which name the servers with no required tool) and run
-  through the same opt-in and allowlist rules the build applies. A name alone
-  cannot tell a dropped tool from a made-up one on the same connector, so the
-  result keeps fantasy's text, with its list of tools to correct a typo from,
-  and adds a sentence true of both: "The srv connector's tool allowlist does not
-  include that name.", or the narrowing (with its stand-in) or the optional
-  connector. The metric counts such a call as `unknown`, and the event names
-  the gate it inferred.
-- **Any other name** keeps fantasy's result and its list of available tools.
-
-Rerouting cannot widen access. Only a name in the run's deferred registry is
-rewritten, and only into `tool_call`, which checks the name against that
-registry again and dispatches through the governed tool. A gated name never is:
-the gates run before the registry is built, so it is never in it.
-
-**How the explanation reaches the model.** Fantasy's repair hook can rewrite a
-call, but cannot change the error of a call it leaves invalid. So the
-explanation is kept by call ID, tool name, and the exact text fantasy refused
-the call with, and replaces only a result that still has that text. A
-provider may reuse a call ID, within a run and across turns, and the history
-the model is sent includes earlier turns. Keyed by the ID and tool alone, the
-failure of an earlier or later call that did run would read "was not called".
-The run's transcript, and with it the next turn's history, records the
-explanation in place of fantasy's text. Every later model call of
-the run is sent it too: a prepare step rewrites a copy of each step's
-messages, and the transcript a round carries on, to the next round, the
-finalize hook, the terminal structured output and compaction, is rewritten
-the same way. It is the same text every time, and the model first sees the
-result on the step after the call, already explained, so the prompt-cache
-prefix does not change.
-
-**Counted per model.** `fleet_tool_call_out_of_roster_total{model, reason}` on
-`/metrics` counts every such call the model emits; `reason` is `deferred`, a
-gate the roster recorded, or `unknown`. Fantasy repairs a step's calls before
-it dispatches them, and dispatches only when the step finished with tool
-calls: a call in a step that finished for another reason (a provider's `stop`,
-say) is counted, and reported as rerouted, though nothing ran. A step cut
-short by length or a content filter is not repaired, so its calls are not
-counted. The tool name is not a label, since catalog names can be
-user-controlled. It is in the `fleet.tool_call_out_of_roster` Observer event
-(`id`, `tool`, `reason`, `model`, `rerouted_to` when rerouted, and
-`inferred_gate` for a dropped tool's gate), which chat streams as an event the
-web client ignores, and in a log line.
-
-Two details of the hook. Fantasy reads it from the stream call, not the agent,
-so it is set on every stream, including the leaked-call finalize retry, which
-streams with the run's tools and also sends the explanations. And installing a
-hook turns off fantasy's default repair, `jsonrepair` of a registered tool's
-malformed arguments; the run's hook keeps it.
-
-Not done, deliberately:
-
-- The stand-in sentences in the narrowed run's audit nudges stay. They say more
-  than the explanation (which records to call the stand-in with), and the issue
-  expects the explanation to replace them only over time.
-- No mapping of other harnesses' tool names (`str_replace_editor` →
-  `edit_file`) and no per-model rosters; both are out of the issue's scope, and
-  the metric is the data either would need.
-- A tool missing for any other reason counts as `unknown`: a native tool the
-  driver did not register, a tool an allowlist admits but the server does not
-  have, or a tool on a server the run knows nothing about, such as one loaded
-  mid-run with no allowlist entry of its own.
+A direct call to a deferred tool is rerouted through `tool_call` (with a few
+exceptions), under the same gates as a `tool_call` the model wrote, and a call
+to a tool a gate removed is never run and its result names the gate. Each such
+call is counted per model. See
+[`OUT-OF-ROSTER-TOOL-CALLS.md`](OUT-OF-ROSTER-TOOL-CALLS.md).
 
 ## BM25 index (`internal/tools/bm25_index.go`)
 

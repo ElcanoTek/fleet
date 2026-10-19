@@ -285,6 +285,7 @@ above fails otherwise.
 - [`OPERATORS.md`](OPERATORS.md) — Operating fleet
 - [`OPS-CENTER-LOG-TIMELINE.md`](OPS-CENTER-LOG-TIMELINE.md) — Operations Center log timeline — one readable step per tool call
 - [`OPS-CONNECTOR-DEFAULTS.md`](OPS-CONNECTOR-DEFAULTS.md) — Operations connector defaults
+- [`OUT-OF-ROSTER-TOOL-CALLS.md`](OUT-OF-ROSTER-TOOL-CALLS.md) — Calls to tools not in the tool list: deferred tools rerouted through `tool_call`, gated tools explained, counted per model (#1744)
 - [`CHAT-ESCALATION.md`](CHAT-ESCALATION.md) — When chat offers the advanced model: the assistant's own suggestion, free end-of-turn struggle signals, the optional Jev frustration check, **Retry with**, and the per-user frustration counts on the admin Users page
 - [`TASK-MODEL-TIER.md`](TASK-MODEL-TIER.md) — The task model tier: Operations Center tasks default to the advanced model (admin-settable), while chat keeps the fast default
 - [`PINNED-MODELS.md`](PINNED-MODELS.md) — Pinned and relabelled picker models (`FLEET_PINNED_MODELS`): a display alias, not a secrecy boundary
@@ -331,7 +332,7 @@ above fails otherwise.
 - [`TESTING-STRATEGY.md`](TESTING-STRATEGY.md) — Testing strategy — the layers, where a test goes, contracts
 - [`TESTING.md`](TESTING.md) — Testing fleet
 - [`TIMERS.md`](TIMERS.md) — `fleet timers install` — one-command setup for the scheduled-maintenance timers
-- [`TOOL-DISCLOSURE.md`](TOOL-DISCLOSURE.md) — BM25 progressive tool disclosure, and calls to tools not in the tool list (#1744)
+- [`TOOL-DISCLOSURE.md`](TOOL-DISCLOSURE.md) — BM25 progressive tool disclosure
 - [`TOOL-OUTPUT-BOUNDARY.md`](TOOL-OUTPUT-BOUNDARY.md) — Bounded model-visible tool output
 - [`TOOL-PANIC-CONTAINMENT.md`](TOOL-PANIC-CONTAINMENT.md) — Agent tool panic containment
 - [`TOOL-TIMING.md`](TOOL-TIMING.md) — Per-call tool timing: `duration_ms` on `tool.result` and in the tool-call audit ledger
