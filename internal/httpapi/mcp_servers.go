@@ -47,9 +47,10 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 	// same response so chat can report the actual live discovery state beside
 	// the optional controls without ever persisting them as conversation
 	// choices.
+	cats := s.connectorCategories()
 	servers := s.alwaysOnMCPServerCatalogEntries()
 	for _, info := range catalog {
-		avail, defaultOn, _ := bundledPrefFor(prefs, info)
+		avail, defaultOn, seat := bundledPrefFor(prefs, info)
 		if !avail {
 			continue
 		}
@@ -68,8 +69,11 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 			"data_sources": info.DataSources,
 			// Provisioned credential-account seat names (never secret values).
 			"accounts": info.Accounts,
-			"category": s.connectorCategory(info.Name),
-			"status":   optionalConnectorStatus(info),
+			// The user's Settings > Connections default seat ("" = the
+			// deployment's own), so the picker names what "default" means.
+			"default_account": seat,
+			"category":        categoryFor(cats, info.Name),
+			"status":          optionalConnectorStatus(info),
 		})
 	}
 	servers = append(servers, s.needsSetupCatalogEntries()...)
@@ -110,15 +114,24 @@ func optionalConnectorStatus(info agent.OptionalServerInfo) string {
 	return connectorStatusAvailable
 }
 
-// connectorCategory is a bundled connector's picker category: its manifest
-// category, else Misc Tools (untagged connectors are warned about at startup).
-func (s *Server) connectorCategory(name string) string {
+// connectorCategories maps each bundled connector to its picker category
+// (Misc Tools when untagged; untagged connectors are warned about at
+// startup). Built once per request; look names up with categoryFor.
+func (s *Server) connectorCategories() map[string]string {
+	out := map[string]string{}
 	if s.clientConfig != nil {
 		for _, m := range s.clientConfig.ConnectorMeta() {
-			if m.Name == name {
-				return m.Category
-			}
+			out[m.Name] = m.Category
 		}
+	}
+	return out
+}
+
+// categoryFor is a connector's category from connectorCategories, else Misc
+// Tools (the native image entry, or a server the bundle does not declare).
+func categoryFor(cats map[string]string, name string) string {
+	if c, ok := cats[name]; ok {
+		return c
 	}
 	return clientconfig.MiscConnectorCategory
 }
@@ -200,6 +213,7 @@ func (s *Server) alwaysOnMCPServerCatalogEntries() []map[string]any {
 		return []map[string]any{}
 	}
 	catalog := provider.AlwaysOnMCPServerCatalog()
+	cats := s.connectorCategories()
 	servers := make([]map[string]any, 0, len(catalog))
 	for _, info := range catalog {
 		status := connectorStatusAvailable
@@ -214,7 +228,7 @@ func (s *Server) alwaysOnMCPServerCatalogEntries() []map[string]any {
 			"tool_count":   info.ToolCount,
 			"enabled":      info.Available,
 			"always_on":    true,
-			"category":     s.connectorCategory(info.Name),
+			"category":     categoryFor(cats, info.Name),
 			"status":       status,
 		})
 	}
@@ -394,9 +408,11 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 	if perr != nil {
 		prefs = nil
 	}
+	cats := s.connectorCategories()
 	servers := s.alwaysOnMCPServerCatalogEntries()
 	for _, info := range s.agent.MCPServerCatalog() {
-		if avail, _, _ := bundledPrefFor(prefs, info); !avail && !enabled[info.Name] {
+		avail, _, seat := bundledPrefFor(prefs, info)
+		if !avail && !enabled[info.Name] {
 			// Hidden unless the conversation already opted it in before the
 			// user disabled it (then it stays visible so it can be turned off).
 			continue
@@ -414,10 +430,11 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 			"enabled_by_default": info.EnabledByDefault,
 			// Seat pick (#988): provisioned seats + this conversation's
 			// override ("" = the user's connections-page default).
-			"accounts": info.Accounts,
-			"account":  conv.MCPAccounts[info.Name],
-			"category": s.connectorCategory(info.Name),
-			"status":   optionalConnectorStatus(info),
+			"accounts":        info.Accounts,
+			"account":         conv.MCPAccounts[info.Name],
+			"default_account": seat,
+			"category":        categoryFor(cats, info.Name),
+			"status":          optionalConnectorStatus(info),
 		})
 	}
 	servers = append(servers, s.needsSetupCatalogEntries()...)

@@ -41,6 +41,7 @@ import {
   type BadgeVariant,
 } from "../ui/atoms";
 import { useIsAdmin } from "../useIsAdmin";
+import { useClientConfig } from "@/app/lib/useClientConfig";
 import {
   ConnEmpty,
   ConnField,
@@ -353,12 +354,48 @@ function DataSourceChips({ sources }: { sources?: string[] }) {
   );
 }
 
+// The anchor the chat Tools library links to ("Manage in Settings",
+// "Set up in Settings"): /settings/connections#connector-<name>.
+export const connectorAnchor = (name: string) => `connector-${name}`;
+
+// A bundled card's frame; scroll-margin keeps a deep-linked card clear of the
+// page header, and :target rings the card the link landed on.
+const BUNDLED_CARD =
+  "flex scroll-mt-24 flex-col gap-[0.55rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.9rem] py-[0.8rem] target:border-[var(--color-accent)] target:shadow-[0_0_0_1px_var(--color-accent)]";
+
+// A connector the workspace declares but this deployment has no credentials
+// for. Nothing to toggle; the copy says who can fix it. Connector credentials
+// are set on the server, not in this app, so the admin copy says so rather
+// than offering a form that does not exist.
+function NeedsSetupCard({ entry, isAdmin }: { entry: CatalogBundled; isAdmin: boolean }) {
+  const label = entry.display_name || entry.name;
+  return (
+    <div id={connectorAnchor(entry.name)} data-testid={`bundled-card-${entry.name}`} className={BUNDLED_CARD}>
+      <div className="flex flex-wrap items-center gap-[0.55rem]">
+        <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
+          {label}
+        </span>
+        <ConnBadge variant="warn">Needs setup</ConnBadge>
+      </div>
+      {entry.description ? (
+        <ClampText text={entry.description} className="text-[var(--color-text-muted)]!" />
+      ) : null}
+      <div className="rounded-[var(--radius-md)] border border-[var(--color-warning-border)] bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)] px-[0.75rem] py-[0.5rem] text-[0.75rem] leading-[1.5] text-[var(--color-text-secondary)]">
+        {isAdmin
+          ? "Needs setup before it can be used. Its credentials are added on the server by whoever deploys this workspace."
+          : "An admin needs to set this up."}
+      </div>
+    </div>
+  );
+}
+
 function BundledCard({
   entry,
   pref,
   on,
   autoOn,
   busy,
+  appName,
   onToggle,
   onToggleAuto,
   onPickAccount,
@@ -369,6 +406,8 @@ function BundledCard({
   on: boolean;
   autoOn: boolean;
   busy: boolean;
+  // The deployment's name: the default seat's label ("Elcano").
+  appName: string;
   onToggle: () => void;
   onToggleAuto: () => void;
   onPickAccount: (account: string) => void;
@@ -376,10 +415,7 @@ function BundledCard({
 }) {
   const label = entry.display_name || entry.name;
   return (
-    <div
-      data-testid={`bundled-card-${entry.name}`}
-      className="flex flex-col gap-[0.55rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.9rem] py-[0.8rem]"
-    >
+    <div id={connectorAnchor(entry.name)} data-testid={`bundled-card-${entry.name}`} className={BUNDLED_CARD}>
       <div className="flex flex-wrap items-center gap-[0.55rem]">
         <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
           {label}
@@ -425,7 +461,7 @@ function BundledCard({
                 disabled={busy}
                 aria-label={`${entry.name} credential account`}
               >
-                <option value="">Default seat</option>
+                <option value="">{appName}</option>
                 {(entry.accounts ?? []).map((a) => (
                   <option key={a} value={a}>
                     {a}
@@ -983,6 +1019,8 @@ function ConnectionsPageInner() {
   // Admin visibility only (authorization stays server-side): picks which
   // "remote MCP isn't configured" explanation to show.
   const adminState = useIsAdmin();
+  // The deployment's name labels the default credential seat ("Elcano").
+  const { branding } = useClientConfig();
   const [servers, setServers] = useState<RemoteServer[] | null>(null);
   const [shares, setShares] = useState<Record<string, string[]>>({});
   const [sharedWithMe, setSharedWithMe] = useState<SharedServer[]>([]);
@@ -1650,6 +1688,16 @@ function ConnectionsPageInner() {
     />
   );
 
+  // A link from the chat Tools library (#connector-<name>) lands on a card
+  // that only exists once the catalog has loaded, so the browser's own
+  // fragment scroll misses it; scroll once it is there.
+  useEffect(() => {
+    if (!catalog || typeof window === "undefined") return;
+    const hash = window.location.hash.slice(1);
+    if (!hash.startsWith("connector-")) return;
+    document.getElementById(decodeURIComponent(hash))?.scrollIntoView({ behavior: "auto", block: "center" });
+  }, [catalog]);
+
   // Once the directory has loaded, bring the deep-linked card into view. The
   // spotlight card is usually the only hit (the search box was seeded with its
   // name), but scroll anyway: the page has three groups above the directory.
@@ -1707,14 +1755,14 @@ function ConnectionsPageInner() {
             </ConnPanelSub>
             <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
               {catalog.bundled.map((b) => {
+                if (b.needs_setup) {
+                  return <NeedsSetupCard key={b.name} entry={b} isAdmin={adminState === "admin"} />;
+                }
                 if (b.optional === false) {
                   // Always-on: operator-wired into every turn; shown locked so
                   // nothing is invisibly enabled.
                   return (
-                    <div
-                      key={b.name}
-                      className="flex flex-col gap-[0.55rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.9rem] py-[0.8rem]"
-                    >
+                    <div key={b.name} id={connectorAnchor(b.name)} className={BUNDLED_CARD}>
                       <div className="flex flex-wrap items-center gap-[0.55rem]">
                         <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
                           {b.display_name || b.name}
@@ -1746,6 +1794,7 @@ function ConnectionsPageInner() {
                   <BundledCard
                     key={b.name}
                     entry={b}
+                    appName={branding.app_name}
                     pref={pref}
                     on={on}
                     autoOn={autoOn}

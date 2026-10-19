@@ -119,9 +119,12 @@ branding:
 #     optional: true
 #     display_name: "PubMatic"          # the vendor's own name and casing
 #     description: "Create and manage PubMatic curated deals and pull delivery
-#       reporting. Appears once PUBMATIC_ACCESS_TOKEN is set."
-#     #                ^ capability first, in the imperative; then the gating
-#     #                  clause, naming the real enabled_env/enabled_groups vars
+#       reporting."
+#     #                ^ capability first, in the imperative; no setup text:
+#     #                  unset credentials show as "Needs setup" in the picker
+#     category: ssps
+#     #                ^ the Tools-picker group, by ID (docs/MCP-CATALOG.md,
+#     #                  "Category"); untagged = Misc Tools + a boot warning
 #     approved_call_timeout_seconds: 300
 #     #                ^ OPTIONAL. Budget, in seconds (1-1800), for ONE call of
 #     #                  this server's tools that a person approved on a chat

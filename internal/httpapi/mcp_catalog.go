@@ -112,6 +112,7 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 	if resp.RemoteMCPEnabled {
 		resp.OAuthRedirectURI = s.remoteMCP.RedirectURI()
 	}
+	cats := s.connectorCategories()
 	if s.agent != nil {
 		for _, info := range s.agent.MCPServerCatalog() {
 			resp.Bundled = append(resp.Bundled, mcpCatalogBundledEntry{
@@ -124,7 +125,7 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 				Accounts:         info.Accounts,
 				EnabledByDefault: info.EnabledByDefault,
 				DataSources:      append([]string(nil), info.DataSources...),
-				Category:         s.connectorCategory(info.Name),
+				Category:         categoryFor(cats, info.Name),
 				Trust:            "bundled",
 			})
 		}
@@ -139,7 +140,7 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 				DisplayName: a.DisplayName,
 				Description: a.Description,
 				Optional:    false,
-				Category:    s.connectorCategory(a.Name),
+				Category:    categoryFor(cats, a.Name),
 				Trust:       "bundled",
 			})
 		}

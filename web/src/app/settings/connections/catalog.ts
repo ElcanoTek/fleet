@@ -63,6 +63,12 @@ export type CatalogBundled = {
   // false = an always-on connector: wired into every turn by the operator,
   // rendered as a visible-but-locked row (no per-user toggle).
   optional?: boolean;
+  // Tools-picker category ID ("ssps", "deal-management", …).
+  category?: string;
+  // Declared by the workspace but its credentials are not set on this
+  // deployment: it never started, so the card has no toggles. The chat
+  // Tools library's "Set up in Settings" link lands here.
+  needs_setup?: boolean;
 };
 
 // A user's explicit availability choice for one connector (absence = operator

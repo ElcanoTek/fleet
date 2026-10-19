@@ -53,22 +53,43 @@ characters. No underscores, and none of the words "MCP", "server", or
    email reports stored by Amazon SES in the tenant S3 archive." Not "This
    server provides…", not "An MCP server for…", not "Tools for…", and not a
    restatement of the display name.
-2. **Then gating, if any.** A connector behind `enabled_env` /
-   `enabled_groups` ends with one clause naming the real variables:
-   "Appears once `MAGNITE_ACCESS_KEY` and `MAGNITE_SECRET_KEY` are set."
-   (A long family of variables may collapse to a prefix — "once the
-   `FEEDS_AWS_*` credentials are set" — but never to a vague "once
-   configured".) Never write that clause for an ungated connector: the
-   picker shows it regardless and the sentence becomes a lie. An ungated
-   connector either stops after the capability sentence or says so plainly —
-   "No credentials required."
+2. **No setup text.** Do not add a gating clause ("Appears once
+   `MAGNITE_ACCESS_KEY` is set") or setup steps. A connector whose
+   `enabled_env` / `enabled_groups` are not satisfied is listed in the Tools
+   picker and on Settings → Connections as **Needs setup**, with copy that
+   depends on whether the reader is an admin, so the status says it and the
+   description stays about what the connector does. Env variable names are
+   for the people deploying the bundle; they belong in its own docs.
 
 No markdown, no emoji, no trailing whitespace; end with a period. Keep
 example prompts out of it: the row is a two-line label, and onboarding
 guidance belongs in `setup_hint` (directory entries) or the bundle's own
 docs.
 
-The same two fields, with the same style, are **required** on
+### Category — `category`
+
+Each `mcp_servers` entry names the Tools-picker group it belongs to by ID:
+
+```yaml
+- name: indexexchange
+  category: ssps        # SSPs
+```
+
+The list is fixed in `internal/clientconfig/connector_categories.go`, in
+display order: `ssps` (SSPs), `deal-management` (Deal Management),
+`data-storage` (Data & Storage), then the directory's slugs (`development`,
+`databases`, `communication`, `crm-sales`, … the ones
+`builtin_remote_catalog.yaml` uses), and `misc` (Misc Tools) last. It is an ID,
+not free text, so "SSP" and "SSPs" can never split one group into two: an
+unknown ID **fails the load**. An entry without one shows under Misc Tools and
+boot logs one `warning: client config: … no category` line naming every
+untagged connector, so it gets tagged. An Agent Plugin's fleet extension can
+set `category` too; there an unknown ID is a reported problem and the server
+lands in Misc Tools. A hosted (remote) connection takes the category of the
+directory entry it was added from, matched by endpoint, else Misc Tools. The
+picker shows only categories that have a connection in them.
+
+The same two copy fields, with the same style, are **required** on
 `remote_mcp_catalog` entries and on every built-in directory entry — there
 the load fails outright on a gap, because a directory listing has no other
 identity to fall back on.

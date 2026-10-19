@@ -3,7 +3,7 @@ import {
   droppedOptionalMcpServerNames,
   enabledOptionalMcpServerNames,
   reconcileMcpSelection,
-  setAllOptionalMcpServers,
+  setOptionalMcpServersEnabled,
 } from "./mcpSelection";
 
 describe("enabledOptionalMcpServerNames", () => {
@@ -94,16 +94,17 @@ describe("droppedOptionalMcpServerNames", () => {
   });
 });
 
-describe("setAllOptionalMcpServers", () => {
+describe("setOptionalMcpServersEnabled", () => {
   const rows = [
     { name: "email", enabled: true, always_on: true },
     { name: "broken", enabled: false, always_on: true },
     { name: "gamma", enabled: true },
     { name: "xandr", enabled: false },
   ];
+  const all = rows.map((r) => r.name);
 
-  it("turns every optional row on and leaves always-on rows as they are", () => {
-    expect(setAllOptionalMcpServers(rows, true)).toEqual([
+  it("turns every named optional row on and leaves always-on rows as they are", () => {
+    expect(setOptionalMcpServersEnabled(rows, all, true)).toEqual([
       { name: "email", enabled: true, always_on: true },
       { name: "broken", enabled: false, always_on: true },
       { name: "gamma", enabled: true },
@@ -111,8 +112,8 @@ describe("setAllOptionalMcpServers", () => {
     ]);
   });
 
-  it("turns every optional row off and leaves always-on rows as they are", () => {
-    expect(setAllOptionalMcpServers(rows, false)).toEqual([
+  it("turns every named optional row off and leaves always-on rows as they are", () => {
+    expect(setOptionalMcpServersEnabled(rows, all, false)).toEqual([
       { name: "email", enabled: true, always_on: true },
       { name: "broken", enabled: false, always_on: true },
       { name: "gamma", enabled: false },
@@ -120,14 +121,36 @@ describe("setAllOptionalMcpServers", () => {
     ]);
   });
 
+  // The popover's "All 2 on" with a search active covers only the rows shown.
+  it("only touches the rows it is given", () => {
+    expect(setOptionalMcpServersEnabled(rows, ["gamma"], false)).toEqual([
+      { name: "email", enabled: true, always_on: true },
+      { name: "broken", enabled: false, always_on: true },
+      { name: "gamma", enabled: false },
+      { name: "xandr", enabled: false },
+    ]);
+  });
+
+  // A connector with no switch can never be opted in, even when named.
+  it("skips rows that need setup or are unavailable", () => {
+    const withStatus = [
+      { name: "bq", enabled: false, status: "needs_setup" as const },
+      { name: "tl", enabled: false, status: "unavailable" as const },
+      { name: "ix", enabled: false, status: "available" as const },
+    ];
+    const out = setOptionalMcpServersEnabled(withStatus, ["bq", "tl", "ix"], true);
+    expect(out.map((r) => r.enabled)).toEqual([false, false, true]);
+    expect(out[0]).toBe(withStatus[0]);
+  });
+
   // The handler skips the state write and the POST when every row came back
   // by identity — a keyboard user can still activate a no-op button.
   it("keeps the identity of rows it does not change, so a no-op flip is detectable", () => {
-    const out = setAllOptionalMcpServers(rows, true);
+    const out = setOptionalMcpServersEnabled(rows, all, true);
     expect(out[0]).toBe(rows[0]);
     expect(out[2]).toBe(rows[2]);
     expect(out[3]).not.toBe(rows[3]);
-    const again = setAllOptionalMcpServers(out, true);
+    const again = setOptionalMcpServersEnabled(out, all, true);
     expect(again.every((row, i) => row === out[i])).toBe(true);
   });
 
@@ -139,9 +162,10 @@ describe("setAllOptionalMcpServers", () => {
       { name: "github", enabled: false, account: "work" },
       { name: "notion", enabled: true, account: "" },
     ];
-    const next = setAllOptionalMcpServers(seated, true);
+    const names = seated.map((r) => r.name);
+    const next = setOptionalMcpServersEnabled(seated, names, true);
     expect(enabledOptionalMcpServerNames(next)).toEqual(["github", "notion"]);
     expect(next[1]).toEqual({ name: "github", enabled: true, account: "work" });
-    expect(enabledOptionalMcpServerNames(setAllOptionalMcpServers(seated, false))).toEqual([]);
+    expect(enabledOptionalMcpServerNames(setOptionalMcpServersEnabled(seated, names, false))).toEqual([]);
   });
 });

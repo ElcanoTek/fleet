@@ -556,6 +556,46 @@ describe("ConnectionsPage availability toggle", () => {
   });
 });
 
+// A connector the workspace declares but this deployment has no credentials
+// for: the chat Tools library's "Set up in Settings" link lands on its card
+// (#connector-<name>), which has no toggles and says who can fix it.
+describe("ConnectionsPage needs-setup connectors", () => {
+  const BQ = {
+    name: "bigquery",
+    display_name: "BigQuery Reporting",
+    description: "Query the reporting warehouse.",
+    tool_count: 2,
+    optional: true,
+    needs_setup: true,
+    category: "data-storage",
+  };
+
+  it("renders an anchored card with no toggles and the member copy", async () => {
+    vi.stubGlobal("fetch", mockFetch(undefined, { ...CATALOG, bundled: [BUNDLED_IMG, BQ] }));
+    visit("");
+    const card = await screen.findByTestId("bundled-card-bigquery");
+    expect(card).toHaveAttribute("id", "connector-bigquery");
+    expect(card).toHaveTextContent("Needs setup");
+    expect(card).toHaveTextContent("An admin needs to set this up.");
+    expect(within(card).queryByRole("switch")).toBeNull();
+    // A configured connector's card carries the same anchor scheme.
+    expect(await screen.findByTestId("bundled-card-image_generation")).toHaveAttribute(
+      "id",
+      "connector-image_generation",
+    );
+  });
+
+  it("scrolls a #connector- deep link into view once the catalog loads", async () => {
+    vi.stubGlobal("fetch", mockFetch(undefined, { ...CATALOG, bundled: [BQ] }));
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    window.history.replaceState({}, "", "/settings/connections#connector-bigquery");
+    render(<ConnectionsPage />);
+    await screen.findByTestId("bundled-card-bigquery");
+    await waitFor(() => expect(scroll).toHaveBeenCalled());
+  });
+});
+
 // Multiple logins per connection (#988). One visual group per name, one row
 // per seat with its account badge; the default seat is marked; "Set default"
 // only appears on non-default seats of a multi-seat group; adding a second

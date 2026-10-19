@@ -334,6 +334,7 @@ above fails otherwise.
 - [`TIMERS.md`](TIMERS.md) — `fleet timers install` — one-command setup for the scheduled-maintenance timers
 - [`TOOL-DISCLOSURE.md`](TOOL-DISCLOSURE.md) — BM25 progressive tool disclosure
 - [`TOOL-OUTPUT-BOUNDARY.md`](TOOL-OUTPUT-BOUNDARY.md) — Bounded model-visible tool output
+- [`TOOLS-PICKER.md`](TOOLS-PICKER.md) — Chat Tools picker: search, categories, connection statuses and the library
 - [`TOOL-PANIC-CONTAINMENT.md`](TOOL-PANIC-CONTAINMENT.md) — Agent tool panic containment
 - [`TOOL-TIMING.md`](TOOL-TIMING.md) — Per-call tool timing: `duration_ms` on `tool.result` and in the tool-call audit ledger
 - [`TURN-JOURNAL.md`](TURN-JOURNAL.md) — Durable turn journal & commit-gated terminal success (#798)
