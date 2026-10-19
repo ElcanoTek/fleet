@@ -533,13 +533,24 @@ func (c *Client) HasServer(name string) bool {
 	return ok
 }
 
-// GetAllTools returns all tools from all connected servers, preserving server names.
+// GetAllTools returns all tools from all connected servers, preserving server
+// names. Servers come in sorted-name order and each server's tools in its own
+// tools/list order, so the same set of servers always yields the same slice.
+// That order reaches the model's tool roster, which the prompt-cache contract
+// requires to be byte-stable turn to turn (docs/PROMPT-CACHE-CONTRACT.md);
+// ranging the map directly reshuffled it on every new client.
 func (c *Client) GetAllTools() []ServerTool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	names := make([]string, 0, len(c.servers))
+	for name := range c.servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	var allTools []ServerTool
-	for _, server := range c.servers {
+	for _, name := range names {
+		server := c.servers[name]
 		for _, tool := range server.toolsSnapshot() {
 			allTools = append(allTools, ServerTool{
 				ServerName: server.name,

@@ -58,6 +58,13 @@ turn (and one process) to the next for the same conversation/config.
   golden — a format change (field order, added field, whitespace) fails it and
   forces a conscious update + a re-check of this contract.
 
+Those three feed `buildFantasyTools` a fixed catalog, so they cannot see where
+the catalog comes from. Its source is `mcp.Client.GetAllTools`, which lists
+servers in sorted-name order and each server's tools in its own `tools/list`
+order; `TestGetAllToolsOrderIsStable` (`internal/mcp`) fences that. Every chat
+turn binds a fresh client, so before that sort the per-turn catalog followed Go
+map order and changed between turns.
+
 ### System prompt (driver-owned — contract, not yet golden-guarded)
 
 The drivers (`internal/agent` interactive + scheduled) must keep the system

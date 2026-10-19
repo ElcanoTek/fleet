@@ -251,8 +251,10 @@ var ConnectRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second}
 
 // MaxConnectRetryBudget bounds the time the connect retry may add to one run,
 // across every server it registers: the pauses plus the retried attempts.
-// Servers bind one after another, so without a run-wide cap a run whose
-// owner has many connections could wait the per-server pauses for each.
+// A retrying run binds its servers one after another (BindMCPSelectionReport
+// keeps it sequential so this allowance is charged per wait), so without a
+// run-wide cap a run whose owner has many connections could wait the
+// per-server pauses for each.
 const MaxConnectRetryBudget = 15 * time.Second
 
 // connectRetryBudget is the run's remaining retry allowance (see
