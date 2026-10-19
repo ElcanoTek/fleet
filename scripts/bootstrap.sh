@@ -72,8 +72,9 @@
 #                              card, /triggers/*, /webhooks/*) to the Go backends
 #                              (scripts/lib/caddyfile.sh; see deploy/Caddyfile),
 #                              and FLEET_TRUSTED_PROXIES=127.0.0.1,::1 is set in
-#                              the env file when absent so the backends read
-#                              the client IP Caddy forwards.
+#                              the env file when absent (and both backends are
+#                              on loopback) so the API backends read the client
+#                              IP Caddy forwards.
 #   --admin <email[,email...]> register these emails as full admins (web login +
 #                              chat-admin + Operations Center) at the end of an
 #                              --enable-service run; passwords are prompted per
@@ -804,15 +805,31 @@ deploy_web_tier() {
   if command -v caddy >/dev/null 2>&1 && ! caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
     warn "caddy validate rejected the rendered /etc/caddy/Caddyfile — check: caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile"
   fi
-  # Caddy reaches both Go listeners over loopback, so the backends must trust
-  # it for X-Forwarded-For or every client looks like 127.0.0.1 (one shared
-  # rate-limit bucket; the IP allow/deny filter judging Caddy). Written only
-  # when the key is ABSENT: a value the operator set — even an empty one — is
-  # theirs. The backend is restarted so the running process reads it.
-  if [[ "$(caddy_trusted_proxies_state "$ENV_FILE")" == "unset" ]]; then
+  # Caddy proxies the public API (/v1/*, /api-info, /a2a, /triggers/*,
+  # /webhooks/*) straight to the Go listeners, so the backends must trust it
+  # for X-Forwarded-For or every API caller looks like Caddy's address (one
+  # shared rate-limit bucket; the IP allow/deny filter judging Caddy). Browser
+  # traffic is NOT helped by this: Next proxies it over loopback without
+  # X-Forwarded-For, so it keys on 127.0.0.1 either way. 127.0.0.1,::1 is only
+  # right while both upstreams are loopback — a listener moved to an interface
+  # address is dialled from that interface, so then nothing is written and the
+  # operator names the address. Written only when the key is ABSENT: a value
+  # the operator set — even an empty one — is theirs. The backend is restarted
+  # so the running process reads it, and a failed restart is said out loud.
+  if ! caddy_upstreams_loopback "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)"; then
+    if [[ "$(caddy_trusted_proxies_state "$ENV_FILE")" == "unset" ]]; then
+      warn "Caddy proxies to a non-loopback backend (FLEET_SERVER_ADDR=$(env_get FLEET_SERVER_ADDR) FLEET_ORCHESTRATOR_ADDR=$(env_get FLEET_ORCHESTRATOR_ADDR)), so it connects from this host's interface address, not loopback — FLEET_TRUSTED_PROXIES was NOT written."
+      warn "  set it to the address Caddy connects from: sudo fleet config set-env FLEET_TRUSTED_PROXIES --value <ip> && sudo fleet restart"
+    else
+      info "FLEET_TRUSTED_PROXIES already set in ${ENV_FILE} ($(env_get FLEET_TRUSTED_PROXIES)) — leaving it (Caddy proxies to a non-loopback backend: it must name the address Caddy connects from)"
+    fi
+  elif [[ "$(caddy_trusted_proxies_state "$ENV_FILE")" == "unset" ]]; then
     upsert_env FLEET_TRUSTED_PROXIES "$CADDY_TRUSTED_PROXIES"
-    systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1 || true
-    ok "FLEET_TRUSTED_PROXIES=${CADDY_TRUSTED_PROXIES} in ${ENV_FILE} — the backends read X-Forwarded-For from Caddy (and only from Caddy)"
+    if systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1; then
+      ok "FLEET_TRUSTED_PROXIES=${CADDY_TRUSTED_PROXIES} in ${ENV_FILE} (${SERVICE_NAME} restarted if it was running) — the backends read X-Forwarded-For from Caddy (and only from Caddy)"
+    else
+      warn "wrote FLEET_TRUSTED_PROXIES=${CADDY_TRUSTED_PROXIES} to ${ENV_FILE}, but restarting ${SERVICE_NAME} FAILED — the running process does not have it: journalctl -u ${SERVICE_NAME} -n 50, then: sudo fleet restart"
+    fi
   else
     info "FLEET_TRUSTED_PROXIES already set in ${ENV_FILE} ($(env_get FLEET_TRUSTED_PROXIES)) — leaving it"
   fi
@@ -1718,7 +1735,9 @@ if [[ "$ENABLE_WEB" == "1" ]]; then
     if [[ -n "$WEB_DOMAIN" ]]; then
       info "[dry-run] would build web/ for https://${WEB_DOMAIN} → /opt/fleet/web, write fleet-web.env, enable fleet-web, install Caddy + open 80/443."
       info "[dry-run] would write /etc/caddy/Caddyfile from scripts/lib/caddyfile.sh: https://${WEB_DOMAIN} → web tier (127.0.0.1:3000); /v1/*, /api-info, /.well-known/agent-card.json, /a2a, /triggers/* → orchestrator (127.0.0.1:8000); /webhooks/* → chat (127.0.0.1:8080); then reload caddy (an already-running caddy is reloaded, not just enabled)."
-      if [[ "$(caddy_trusted_proxies_state "$ENV_FILE")" == "unset" ]]; then
+      if ! caddy_upstreams_loopback "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)"; then
+        info "[dry-run] would NOT write FLEET_TRUSTED_PROXIES: Caddy proxies to a non-loopback backend (FLEET_SERVER_ADDR / FLEET_ORCHESTRATOR_ADDR), so set it to the address Caddy connects from"
+      elif [[ "$(caddy_trusted_proxies_state "$ENV_FILE")" == "unset" ]]; then
         info "[dry-run] would set FLEET_TRUSTED_PROXIES=${CADDY_TRUSTED_PROXIES} in ${ENV_FILE} (Caddy is the loopback proxy in front of both backends) + restart ${SERVICE_NAME}"
       else
         info "[dry-run] FLEET_TRUSTED_PROXIES already set in ${ENV_FILE} — would leave it"

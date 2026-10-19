@@ -97,6 +97,7 @@ func TestCaddyfilePathAndOrchestratorAddr(t *testing.T) {
 // box. No Caddyfile, or an operator's own, is a skip.
 func TestCheckTrustedProxies(t *testing.T) {
 	managed := writeCaddyfile(t, CaddyMarker+"\nfleet.example.com {\n\treverse_proxy 127.0.0.1:3000\n}\n")
+	const lc, lo = "127.0.0.1:8080", "127.0.0.1:8000"
 	ips := func(ss ...string) []net.IP {
 		out := make([]net.IP, 0, len(ss))
 		for _, s := range ss {
@@ -105,23 +106,44 @@ func TestCheckTrustedProxies(t *testing.T) {
 		return out
 	}
 
-	if c := checkTrustedProxies(filepath.Join(t.TempDir(), "missing"), nil); c.Status != StatusSkip {
+	if c := checkTrustedProxies(filepath.Join(t.TempDir(), "missing"), nil, lc, lo); c.Status != StatusSkip {
 		t.Errorf("absent Caddyfile: got %s (%s), want skip", c.Status, c.Detail)
 	}
 	foreign := writeCaddyfile(t, "fleet.example.com {\n\treverse_proxy 127.0.0.1:3000\n}\n")
-	if c := checkTrustedProxies(foreign, nil); c.Status != StatusSkip {
+	if c := checkTrustedProxies(foreign, nil, lc, lo); c.Status != StatusSkip {
 		t.Errorf("operator-managed Caddyfile: got %s (%s), want skip", c.Status, c.Detail)
 	}
 	for _, ok := range [][]net.IP{ips("127.0.0.1", "::1"), ips("::1", "127.0.0.1"), ips("10.0.0.5", "127.0.0.1"), ips("::ffff:127.0.0.1")} {
-		if c := checkTrustedProxies(managed, ok); c.Status != StatusOK {
+		if c := checkTrustedProxies(managed, ok, lc, lo); c.Status != StatusOK {
 			t.Errorf("trusted=%v: got %s (%s), want ok", ok, c.Status, c.Detail)
 		}
 	}
 	for _, bad := range [][]net.IP{nil, ips("::1"), ips("10.0.0.5")} {
-		c := checkTrustedProxies(managed, bad)
+		c := checkTrustedProxies(managed, bad, lc, lo)
 		if c.Status != StatusWarn || !strings.Contains(c.Fix, "sudo fleet doctor") ||
 			!strings.Contains(c.Fix, "fleet config set-env FLEET_TRUSTED_PROXIES --value 127.0.0.1,::1") {
 			t.Errorf("trusted=%v: got %s fix=%q, want warn with the doctor + set-env fix (%s)", bad, c.Status, c.Fix, c.Detail)
+		}
+	}
+}
+
+// TestCheckTrustedProxiesNonLoopbackUpstream — with a backend listener moved
+// to an interface address Caddy dials from that interface, so 127.0.0.1 in
+// FLEET_TRUSTED_PROXIES is no evidence either way: the check skips (with the
+// advice in its detail) instead of warning or passing.
+func TestCheckTrustedProxiesNonLoopbackUpstream(t *testing.T) {
+	managed := writeCaddyfile(t, CaddyMarker+"\nfleet.example.com {\n}\n")
+	for _, addrs := range [][2]string{{"10.0.0.5:8080", "127.0.0.1:8000"}, {"127.0.0.1:8080", "[2001:db8::1]:8000"}, {"0.0.0.0:8080", "127.0.0.1:8000"}} {
+		for _, trusted := range [][]net.IP{nil, {net.ParseIP("127.0.0.1")}} {
+			c := checkTrustedProxies(managed, trusted, addrs[0], addrs[1])
+			if c.Status != StatusSkip || !strings.Contains(c.Detail, "non-loopback") {
+				t.Errorf("upstreams %v trusted=%v: got %s (%s), want a non-loopback skip", addrs, trusted, c.Status, c.Detail)
+			}
+		}
+	}
+	for _, a := range []string{"127.0.0.1:8080", "[::1]:8000", "localhost:8000"} {
+		if !isLoopbackAddr(a) {
+			t.Errorf("isLoopbackAddr(%q) = false", a)
 		}
 	}
 }
@@ -145,6 +167,8 @@ func TestTrustedProxiesFromEnv(t *testing.T) {
 func TestRunReportsTrustedProxies(t *testing.T) {
 	t.Setenv("FLEET_CADDYFILE", writeCaddyfile(t, CaddyMarker+"\nfleet.example.com {\n}\n"))
 	t.Setenv("FLEET_TRUSTED_PROXIES", "127.0.0.1")
+	t.Setenv("FLEET_SERVER_ADDR", "")
+	t.Setenv("FLEET_ORCHESTRATOR_ADDR", "")
 	find := func(r *Report) Check {
 		for _, c := range r.Checks {
 			if c.Name == "caddy: trusted proxies" {

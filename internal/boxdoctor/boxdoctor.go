@@ -139,7 +139,7 @@ func Run(ctx context.Context, opts Options) *Report {
 	if !opts.HaveTrustedProxies {
 		trusted = trustedProxiesFromEnv()
 	}
-	add(checkTrustedProxies(caddyfilePath(), trusted))
+	add(checkTrustedProxies(caddyfilePath(), trusted, chatAddr(), orchestratorAddr()))
 	for _, c := range checkRestartChurn(ctx, serviceName(opts.ServiceName)) {
 		add(c)
 	}

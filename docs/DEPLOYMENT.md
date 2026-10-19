@@ -478,14 +478,27 @@ each piece yourself):
    `deploy/Caddyfile` yourself.
 
    Behind this proxy the backends need `FLEET_TRUSTED_PROXIES=127.0.0.1,::1`
-   (below) to see real client IPs rather than Caddy's loopback address.
+   (below) to see the real caller's IP, rather than Caddy's loopback address,
+   on the paths Caddy routes **straight to a backend**: `/v1/*`, `/api-info`,
+   `/.well-known/agent-card.json`, `/a2a`, `/triggers/*` (orchestrator) and
+   `/webhooks/*` (chat). It does **not** change browser traffic: the browser
+   reaches the backends through the Next.js tier, which calls them over
+   loopback without forwarding `X-Forwarded-For`, so every browser-originated
+   request is keyed — rate limits, the IP allow/deny filter — as `127.0.0.1`
+   whatever this is set to.
+
    Bootstrap writes it into `fleet.env` alongside the Caddyfile when the key
    is absent; on a box provisioned before that, `sudo fleet doctor` adds it
    (`--check` reports it) and `sudo fleet update` offers to (or does under
    `--adopt-units`) — both only when a fleet-managed Caddyfile is installed
-   and the key is absent, then restart fleet to apply it. A value you set
-   yourself, even an empty one, is never replaced. With a proxy fleet did not
-   set up — your own Caddyfile, nginx, a load balancer, a Kubernetes ingress
+   and the key is absent, then restart fleet to apply it. All three write it
+   only while both backends listen on loopback (`FLEET_SERVER_ADDR` /
+   `FLEET_ORCHESTRATOR_ADDR` unset or on `127.0.0.1`, `::1` or `localhost`):
+   with a listener moved to an interface address, Caddy connects from that
+   interface, so nothing is written and they tell you to set it to the
+   address Caddy connects from. A value you set yourself, even an empty one,
+   is never replaced. With a proxy fleet did not set up — your own Caddyfile,
+   nginx, a load balancer, a Kubernetes ingress
    ([DEPLOYMENT-KUBERNETES.md](DEPLOYMENT-KUBERNETES.md)) — set it yourself
    to the addresses that proxy connects from.
 
@@ -532,7 +545,12 @@ each piece yourself):
      proxy's address until you name it here. Both servers resolve the client
      IP with the same code (`internal/httpmw`), so they always agree. The
      single-box install sets `127.0.0.1,::1` for its own Caddy front (above);
-     for any other proxy you set it.
+     for any other proxy you set it. It only helps requests that reach a
+     backend **from** that proxy: browser traffic arrives through the Next.js
+     tier on loopback without `X-Forwarded-For`, so on the single-box install
+     the IP lists see every browser request as `127.0.0.1` (allowlist it, or
+     the web UI is blocked) and cannot restrict browser users — they apply to
+     the Caddy-routed API and webhook paths only.
 
    Blocked requests get a uniform `403 Access denied` (plain text, no reason
    leaked); `/healthz` is exempt so load-balancer probes keep working; a

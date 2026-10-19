@@ -55,8 +55,35 @@ CADDY_DEFAULT_ORCH_ADDR="127.0.0.1:8000"
 # right-to-left past them (internal/httpmw), so a client that reaches a
 # listener directly still cannot pick its own address. bootstrap writes it
 # with the Caddyfile; doctor and update add it to a box whose fleet-managed
-# Caddyfile predates that. A value the operator set is never replaced.
+# Caddyfile predates that — all three only while both Go upstreams are
+# loopback (caddy_upstreams_loopback). A value the operator set is never
+# replaced.
 CADDY_TRUSTED_PROXIES="127.0.0.1,::1"
+
+# caddy_addr_is_loopback ADDR — true when the host of a host:port listener
+# address ([v6]:port accepted) is 127.0.0.1, ::1 or localhost.
+caddy_addr_is_loopback() {
+  local a="$1" h
+  case "$a" in
+    \[*\]:*) h="${a%%]*}"; h="${h#[}" ;;
+    *:*)     h="${a%:*}" ;;
+    *)       h="$a" ;;
+  esac
+  [[ "$h" == "127.0.0.1" || "$h" == "::1" || "$h" == "localhost" ]]
+}
+
+# caddy_upstreams_loopback [CHAT_ADDR] [ORCH_ADDR] — true when both Go
+# upstreams the fleet-managed Caddyfile proxies to are loopback, resolving
+# empty arguments to the same defaults render_fleet_caddyfile uses (callers
+# pass the env-file values verbatim, as they do to the renderer). Only then
+# does Caddy connect from 127.0.0.1/::1, so only then is CADDY_TRUSTED_PROXIES
+# the right value: with a listener moved to an interface address Caddy dials
+# it from that interface, and the operator must name that address instead —
+# nothing writes a guess.
+caddy_upstreams_loopback() {
+  local chat="${1:-$CADDY_DEFAULT_CHAT_ADDR}" orch="${2:-$CADDY_DEFAULT_ORCH_ADDR}"
+  caddy_addr_is_loopback "$chat" && caddy_addr_is_loopback "$orch"
+}
 
 # caddy_trusted_proxies_state ENV_FILE — how ENV_FILE's FLEET_TRUSTED_PROXIES
 # relates to CADDY_TRUSTED_PROXIES. Prints one word:

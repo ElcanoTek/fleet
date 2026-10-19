@@ -472,18 +472,24 @@ func TestOperatorScriptsSetTrustedProxies(t *testing.T) {
 	root := repoRootFromTest(t)
 	for name, wants := range map[string][]string{
 		"bootstrap.sh": {
-			`if [[ "$(caddy_trusted_proxies_state "$ENV_FILE")" == "unset" ]]; then`,
+			`if ! caddy_upstreams_loopback "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)"; then`,
+			`elif [[ "$(caddy_trusted_proxies_state "$ENV_FILE")" == "unset" ]]; then`,
 			`upsert_env FLEET_TRUSTED_PROXIES "$CADDY_TRUSTED_PROXIES"`,
-			`systemctl try-restart "$SERVICE_NAME"`,
+			// The restart that applies it is checked, not swallowed.
+			`if systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1; then`,
+			`but restarting ${SERVICE_NAME} FAILED`,
 		},
 		"doctor.sh": {
 			`trusted_state="$(caddy_trusted_proxies_state "$ENV_FILE")"`,
+			`if ! caddy_upstreams_loopback "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)"; then`,
+			`and Caddy proxies to a non-loopback backend`,
 			`fail "FLEET_TRUSTED_PROXIES unset in $ENV_FILE`,
 			`upsert_env_key "$ENV_FILE" FLEET_TRUSTED_PROXIES "$CADDY_TRUSTED_PROXIES"`,
 			`fixed "FLEET_TRUSTED_PROXIES=${CADDY_TRUSTED_PROXIES} added to $ENV_FILE`,
 			`advise "FLEET_TRUSTED_PROXIES is set to '${trusted_val}'`,
 		},
 		"update.sh": {
+			`&& ! caddy_upstreams_loopback "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" "$(env_get FLEET_ORCHESTRATOR_ADDR "$backend_env_file")"; then`,
 			`"$(caddy_trusted_proxies_state "$backend_env_file")" == "unset" ]]; then`,
 			`upsert_env_file "$backend_env_file" FLEET_TRUSTED_PROXIES "$CADDY_TRUSTED_PROXIES"`,
 		},
@@ -497,6 +503,10 @@ func TestOperatorScriptsSetTrustedProxies(t *testing.T) {
 			if !strings.Contains(s, want) {
 				t.Errorf("%s must contain %q", name, want)
 			}
+		}
+		if strings.Contains(s, `systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+    ok "FLEET_TRUSTED_PROXIES`) {
+			t.Errorf("%s swallows the restart that applies FLEET_TRUSTED_PROXIES and reports success anyway", name)
 		}
 		// Only ever written through the predicate: no unconditional write.
 		if n, m := strings.Count(s, "FLEET_TRUSTED_PROXIES \"$CADDY_TRUSTED_PROXIES\""), strings.Count(s, "caddy_trusted_proxies_state"); n == 0 || m < n {
@@ -538,5 +548,48 @@ func TestBootstrapDryRunPlansTrustedProxies(t *testing.T) {
 	}
 	if strings.Contains(out, "would set FLEET_TRUSTED_PROXIES") || !strings.Contains(out, "FLEET_TRUSTED_PROXIES already set") {
 		t.Errorf("an operator's FLEET_TRUSTED_PROXIES must be left alone\n--- output ---\n%s", out)
+	}
+}
+
+// TestCaddyUpstreamsLoopback — 127.0.0.1,::1 is the right FLEET_TRUSTED_PROXIES
+// only while Caddy dials both Go listeners over loopback. Empty arguments mean
+// the renderer's defaults (callers pass env-file values verbatim); a listener
+// on an interface address — or on every interface — is not loopback.
+func TestCaddyUpstreamsLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		chat, orch string
+		want       bool
+	}{
+		{"", "", true},
+		{"127.0.0.1:9080", "127.0.0.1:9000", true},
+		{"[::1]:8080", "localhost:8000", true},
+		{"10.0.0.5:8080", "", false},
+		{"", "192.0.2.10:8000", false},
+		{"0.0.0.0:8080", "", false},
+		{":8080", "", false},
+		{"", "[2001:db8::1]:8000", false},
+	} {
+		_, err := runCaddyfileFn(t, nil, "caddy_upstreams_loopback", tc.chat, tc.orch)
+		if got := err == nil; got != tc.want {
+			t.Errorf("caddy_upstreams_loopback(%q, %q) = %v, want %v", tc.chat, tc.orch, got, tc.want)
+		}
+	}
+}
+
+// TestBootstrapDryRunNonLoopbackUpstreamWritesNothing — a backend listener
+// moved off loopback means Caddy connects from an interface address, so the
+// plan must not claim it writes 127.0.0.1,::1.
+func TestBootstrapDryRunNonLoopbackUpstreamWritesNothing(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, []byte("FLEET_ORCHESTRATOR_ADDR=10.0.0.5:8000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh",
+		"--dry-run", "--postgres=local", "--enable-web", "--domain", "fleet.example.com")
+	if err != nil {
+		t.Fatalf("bootstrap --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if strings.Contains(out, "would set FLEET_TRUSTED_PROXIES") || !strings.Contains(out, "would NOT write FLEET_TRUSTED_PROXIES") {
+		t.Errorf("non-loopback upstream: plan must not write FLEET_TRUSTED_PROXIES\n--- output ---\n%s", out)
 	}
 }

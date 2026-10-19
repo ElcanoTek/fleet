@@ -63,7 +63,8 @@
 #                          reloads caddy — same consent rule, same prompt.
 #                          Likewise sets FLEET_TRUSTED_PROXIES=127.0.0.1,::1
 #                          in the env file behind a fleet-managed Caddyfile
-#                          when the key is absent (never replaces a value).
+#                          when the key is absent and both backends are on
+#                          loopback (never replaces a value).
 #   --yes / -y             skip the confirm prompt (env FLEET_UPDATE_YES=1)
 #   --no-timers            don't offer to install a missing fleet-backup /
 #                          fleet-maintenance timer pair, and don't hint about
@@ -1650,15 +1651,24 @@ if command -v systemctl >/dev/null 2>&1; then
         fi
       fi
     fi
-    # The front's other half: Caddy reaches both Go listeners over loopback, so
-    # the backends need FLEET_TRUSTED_PROXIES naming it or every client looks
-    # like 127.0.0.1 (one shared rate-limit bucket; the IP allow/deny filter
-    # judging Caddy). bootstrap writes it with the Caddyfile; a box provisioned
-    # before it did has none. Same consent rule as the Caddyfile above, and
-    # only when the key is ABSENT — a value the operator set (even an empty
-    # one) is theirs. The step-5 restart makes the running process read it.
-    if [[ -r "$backend_env_file" && "$(caddy_trusted_proxies_state "$backend_env_file")" == "unset" ]]; then
-      warn "FLEET_TRUSTED_PROXIES is unset in ${backend_env_file} behind the fleet-managed Caddy front — every client looks like 127.0.0.1 to the backends (shared rate limits; the IP allow/deny filter judges Caddy)."
+    # The front's other half: Caddy proxies the public API (/v1/*, /a2a,
+    # /triggers/*, /webhooks/*) straight to the Go listeners, so the backends
+    # need FLEET_TRUSTED_PROXIES naming it or every API caller looks like
+    # Caddy's address (one shared rate-limit bucket; the IP allow/deny filter
+    # judging Caddy). Browser traffic goes through Next, which sends no
+    # X-Forwarded-For, so it keys on 127.0.0.1 either way. bootstrap writes
+    # 127.0.0.1,::1 with the Caddyfile; a box provisioned before it did has
+    # none. Same consent rule as the Caddyfile above, and only when the key is
+    # ABSENT — a value the operator set (even an empty one) is theirs — and
+    # both upstreams are loopback: Caddy dials a listener moved to an interface
+    # address from that interface, so then this only says what to set. The
+    # step-5 restart (which dies loudly on failure) makes the process read it.
+    if [[ -r "$backend_env_file" && "$(caddy_trusted_proxies_state "$backend_env_file")" == "unset" ]] \
+        && ! caddy_upstreams_loopback "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" "$(env_get FLEET_ORCHESTRATOR_ADDR "$backend_env_file")"; then
+      warn "FLEET_TRUSTED_PROXIES is unset in ${backend_env_file}, and Caddy proxies to a non-loopback backend — it connects from this host's interface address, which update does not guess; nothing written."
+      warn "  set it: sudo fleet config set-env FLEET_TRUSTED_PROXIES --value <address Caddy connects from>"
+    elif [[ -r "$backend_env_file" && "$(caddy_trusted_proxies_state "$backend_env_file")" == "unset" ]]; then
+      warn "FLEET_TRUSTED_PROXIES is unset in ${backend_env_file} behind the fleet-managed Caddy front — every API caller looks like 127.0.0.1 to the backends (shared rate limits; the IP allow/deny filter judges Caddy)."
       do_adopt=0
       if [[ "$DRY_RUN" == "1" ]]; then
         info "[dry-run] would offer to set FLEET_TRUSTED_PROXIES=${CADDY_TRUSTED_PROXIES} in ${backend_env_file} (applied by the step-5 restart)"

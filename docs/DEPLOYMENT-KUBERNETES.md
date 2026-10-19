@@ -219,13 +219,25 @@ podman backend guarantees (#796).
    plane stays on your general nodes. This is the horizontal scaling story:
    more runner capacity is a bigger pool, never a second fleet.
 9. **Client IPs behind the Ingress.** The chart sets no
-   `FLEET_TRUSTED_PROXIES`, so by default the control plane sees whatever
-   connects to the fleet Service (the ingress controller, or the web pod) as
-   the client: per-client rate limits share that address and
-   `FLEET_IP_ALLOWLIST`/`DENYLIST` judge it. To use the real caller's IP, set
-   `config.env.FLEET_TRUSTED_PROXIES` to the addresses that proxy connects
-   from. It takes single IPs, not CIDRs, so it suits a proxy with stable
-   addresses; X-Forwarded-For is read only from those peers.
+   `FLEET_TRUSTED_PROXIES`, and the chart's Ingress sends every path (`/`) to
+   one Service, so what the setting can achieve depends on that Service:
+   - **`web.enabled=true`** — the Ingress points at the web Service, and
+     the web tier calls chat and the orchestrator itself without forwarding
+     `X-Forwarded-For`. The control plane's peer is the web pod and there is
+     no header to read, so **no** value of `FLEET_TRUSTED_PROXIES` (ingress
+     controller or web pod) recovers the real caller: per-client rate limits
+     and `FLEET_IP_ALLOWLIST`/`DENYLIST` see every browser request as the
+     web pod's address.
+   - **`web.enabled=false`** — the Ingress points at the chat port, so the
+     peer is the ingress controller. Setting
+     `config.env.FLEET_TRUSTED_PROXIES` to the controller's addresses lets
+     the chat server's IP lists read the caller from the
+     `X-Forwarded-For` the controller sends (most controllers set one; check
+     yours appends rather than passes a client's header through unchecked). It takes single IPs, not CIDRs, so it suits a
+     controller with stable pod addresses. The orchestrator is not exposed
+     by this Ingress at all.
+   - A route you add yourself straight to the orchestrator port (the public
+     `/v1` API) is the same case: name the proxy that connects to it.
 10. **Run `fleet validate-config`** (`kubectl -n fleet exec deploy/fleet --
     fleet validate-config`) after any config change: it runs the same
     fail-closed preflight boot does, plus everything else the verb checks.

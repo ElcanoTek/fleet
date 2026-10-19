@@ -19,8 +19,9 @@ Two halves of one feature, split by privilege:
    timestamped backup, `caddy validate` and `systemctl reload caddy`; an
    operator's own Caddyfile only gets an advisory) and, behind that
    fleet-managed front, `FLEET_TRUSTED_PROXIES` (added as `127.0.0.1,::1`
-   when the key is absent, so the backends see real client IPs; a value the
-   operator set is left alone), service health + the
+   when the key is absent and both backends are on loopback, so the
+   Caddy-routed API paths see real client IPs; an advisory when a backend
+   listens elsewhere; a value the operator set is left alone), service health + the
    `/healthz` + `/readyz` probes **and** `https://<domain>/api-info` fetched
    *through* Caddy (`--resolve` pinned to this box, so it tests the proxy's
    routing rather than DNS), the scheduled-backup timer, and a sandbox smoke run **as
@@ -44,7 +45,8 @@ Two halves of one feature, split by privilege:
    `127.0.0.1`; otherwise a **warn** — rate limits and IP lists degrade but
    nothing stops serving — with `sudo fleet doctor` or
    `fleet config set-env FLEET_TRUSTED_PROXIES --value 127.0.0.1,::1` as the
-   fix; skipped for an operator's own front), and the scheduled-backup timer. Every warn/fail
+   fix; skipped for an operator's own front, and when a backend listens off
+   loopback — Caddy then connects from an address it cannot know), and the scheduled-backup timer. Every warn/fail
    carries the on-box fix command (almost always `sudo fleet doctor`).
    `?deep=1` additionally launches a throwaway
    `podman run --rm --network=none <image> true` — the definitive smoke, but
