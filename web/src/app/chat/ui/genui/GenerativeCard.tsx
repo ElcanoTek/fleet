@@ -99,9 +99,24 @@ const numOr = (v: unknown): number | undefined => (typeof v === "number" && Numb
 const TONE: Record<Tone, { border: string; fg: string; bg: string }> = {
   neutral: { border: "var(--color-border-strong)", fg: "var(--color-text-secondary)", bg: "var(--color-overlay-soft)" },
   info: { border: "var(--color-accent)", fg: "var(--color-text-primary)", bg: "var(--color-overlay-soft)" },
-  success: { border: "var(--color-success-border)", fg: "var(--color-success)", bg: "var(--color-success-soft)" },
-  warning: { border: "var(--color-warning-border)", fg: "var(--color-warning-strong)", bg: "var(--color-warning-soft)" },
-  danger: { border: "var(--color-danger-border)", fg: "var(--color-danger)", bg: "var(--color-danger-soft)" },
+  // The status tones follow the chip/banner palette (DESIGN.md): a -strong
+  // border and 15% tint, with -soft as the foreground. -soft is a TEXT color;
+  // painting it as the fill put pale text on a solid pastel (1.1:1).
+  success: {
+    border: "var(--color-success-strong)",
+    fg: "var(--color-success-soft)",
+    bg: "color-mix(in srgb, var(--color-success-strong) 15%, transparent)",
+  },
+  warning: {
+    border: "var(--color-warning-strong)",
+    fg: "var(--color-warning-soft)",
+    bg: "color-mix(in srgb, var(--color-warning-strong) 15%, transparent)",
+  },
+  danger: {
+    border: "var(--color-danger-strong)",
+    fg: "var(--color-danger-soft)",
+    bg: "color-mix(in srgb, var(--color-danger-strong) 15%, transparent)",
+  },
 };
 
 function tone(v: unknown, fallback: Tone = "neutral"): Tone {
@@ -1420,7 +1435,10 @@ function Tabs({ c }: { c: Component }) {
               ) : null}
               {t.label}
               {n > 0 ? (
-                <span className="rounded-full bg-[var(--color-danger-soft)] px-1.5 text-[0.65rem] text-[var(--color-danger)]" aria-label={`${n} to fix`}>
+                <span
+                  className="rounded-full bg-[color-mix(in_srgb,var(--color-danger-strong)_15%,transparent)] px-1.5 text-[0.65rem] text-[var(--color-danger-soft)]"
+                  aria-label={`${n} to fix`}
+                >
                   {n}
                 </span>
               ) : null}

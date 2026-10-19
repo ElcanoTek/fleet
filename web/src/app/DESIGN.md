@@ -113,8 +113,10 @@ Known, deliberate exceptions:
   - `--color-{success,warning,danger}-strong` / `-soft`: the chip/badge/banner
     palette. `-strong` anchors borders and tinted fills (via
     `color-mix(in srgb, var(--color-*-strong) 15%, transparent)`); `-soft` is
-    the readable foreground on those tints. Light-theme values are darker,
-    AA-contrast counterparts, mirroring the base status tokens.
+    the readable foreground on those tints — a text color, never a fill.
+    Every `-soft` value clears WCAG AA (4.5:1) on its own 15–20% tint over
+    every surface fleet and its bundles ship, in both themes; status colors
+    are not bundle-themable, so `designTokens.test.ts` pins this.
 - **Syntax** — `--color-syntax-*` for code highlighting.
 - **Geometry & motion** — `--radius-md` (0.625rem), `--radius-lg` (0.875rem),
   `--radius-xl` (1.125rem), `--radius-pill`; `--space-*`; `--shadow-sm/md/lg`;
