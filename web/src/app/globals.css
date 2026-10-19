@@ -376,6 +376,38 @@
   --transition-fast: var(--motion-fast) ease;
   --transition-base: var(--motion-base) ease;
   --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
+
+  /* Connection picker components (the chat Tools popover and library):
+     switch, compact search, small pill, status kicker, group header, match
+     highlight, state panels, scrim. Mirrors flag's design-tokens.css
+     "Connection picker components" block, values from the Tools picker
+     design. */
+  --color-accent-strong: #5956d5;
+  --color-on-accent-strong: #b9c0f2;
+  --color-text-subtle: #9c96ae;
+  --color-divider: #3a3147;
+  --color-selected-bg: rgba(89, 86, 213, 0.2);
+  --color-selected-border: rgba(157, 167, 239, 0.4);
+  --color-pill-border: rgba(255, 255, 255, 0.14);
+  --color-pill-hover-bg: rgba(255, 255, 255, 0.06);
+  --color-switch-track-on: var(--color-accent-strong);
+  --color-switch-track-off: rgba(255, 255, 255, 0.14);
+  --color-switch-knob: #f4f5f9;
+  --shadow-switch-knob: none;
+  --color-match-bg: rgba(157, 167, 239, 0.22);
+  --color-state-ok: #4ecb8f;
+  --color-state-warn: #e0a94a;
+  --color-state-deny: #e08aa3;
+  --color-panel-ok-bg: rgba(78, 203, 143, 0.12);
+  --color-panel-ok-border: rgba(78, 203, 143, 0.3);
+  --color-panel-warn-bg: rgba(224, 169, 74, 0.12);
+  --color-panel-warn-border: rgba(224, 169, 74, 0.32);
+  --color-panel-deny-bg: rgba(224, 138, 163, 0.12);
+  --color-panel-deny-border: rgba(224, 138, 163, 0.32);
+  --color-icon-tile: rgba(157, 167, 239, 0.14);
+  --color-rail-bg: rgba(0, 0, 0, 0.16);
+  --color-scrim: rgba(26, 11, 30, 0.55);
+  --shadow-popover: 0 24px 60px -22px rgba(0, 0, 0, 0.55);
 }
 
 :root[data-theme="dark"] {
@@ -633,6 +665,37 @@
   --shadow-md: 0 10px 18px rgba(38, 55, 92, 0.16);
   --shadow-lg: 0 16px 34px rgba(38, 55, 92, 0.2);
   --focus-ring: 0 0 0 2px var(--color-white), 0 0 0 4px var(--color-accent);
+
+  /* Connection picker components (the chat Tools popover and library):
+     switch, compact search, small pill, status kicker, group header, match
+     highlight, state panels, scrim. Mirrors flag's design-tokens.css
+     "Connection picker components" block, values from the Tools picker
+     design. */
+  --color-accent-strong: #6262a0;
+  --color-on-accent-strong: #ffffff;
+  --color-text-subtle: #586f7c;
+  --color-divider: #d9deec;
+  --color-selected-bg: #eaedf5;
+  --color-selected-border: #c7cbec;
+  --color-pill-border: #d7d5e6;
+  --color-pill-hover-bg: #f1f2f8;
+  --color-switch-track-off: #e4e5ee;
+  --color-switch-knob: #ffffff;
+  --shadow-switch-knob: 0 1px 2px rgba(26, 11, 30, 0.28);
+  --color-match-bg: #9da7ef;
+  --color-state-ok: #1f8a5b;
+  --color-state-warn: #c98a2b;
+  --color-state-deny: #b26079;
+  --color-panel-ok-bg: #f0f9f4;
+  --color-panel-ok-border: #cfe8da;
+  --color-panel-warn-bg: #fcf5e8;
+  --color-panel-warn-border: #f0debe;
+  --color-panel-deny-bg: rgba(178, 96, 121, 0.12);
+  --color-panel-deny-border: rgba(178, 96, 121, 0.32);
+  --color-icon-tile: #eef0fb;
+  --color-rail-bg: #fafafd;
+  --color-scrim: rgba(252, 252, 253, 0.55);
+  --shadow-popover: 0 24px 60px -22px rgba(36, 27, 49, 0.2);
 }
 
 @theme inline {

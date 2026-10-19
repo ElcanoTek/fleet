@@ -45,10 +45,10 @@ export type ToolsPopoverProps = {
 // natively disabled element drops focus, which would break Escape-closes /
 // focus-returns-to-the-wrench for a keyboard user mid-gesture.
 const SMALL_PILL =
-  "h-[1.375rem] shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] border border-[var(--color-border)] px-[0.55rem] text-[0.72rem] text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
+  "h-[1.375rem] shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] border border-[var(--color-pill-border)] px-[0.55rem] text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
 
 const GROUP_LABEL =
-  "font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-muted)]";
+  "font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]";
 
 export function ToolsPopover({
   servers,
@@ -163,14 +163,14 @@ export function ToolsPopover({
 
   return (
     <div
-      className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 flex max-h-[min(32.5rem,calc(100dvh-7rem))] flex-col overflow-hidden rounded-[0.75rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] text-left shadow-[var(--shadow-md)] motion-safe:animate-pop-up sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.55rem)] sm:left-[-10rem] sm:w-[21.75rem]"
+      className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 flex max-h-[min(32.5rem,calc(100dvh-7rem))] flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-selected-border)] bg-[var(--color-surface-2)] text-left shadow-[var(--shadow-popover)] motion-safe:animate-pop-up sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.55rem)] sm:left-[-10rem] sm:w-[21.75rem]"
       data-testid="chat-tools-popover"
     >
       <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-2">
         <div className="relative flex min-w-0 flex-1 items-center">
           <Icon
             name="search"
-            className="pointer-events-none absolute left-2.5 size-[0.9rem] text-[var(--color-text-muted)]"
+            className="pointer-events-none absolute left-2.5 size-[0.9rem] text-[var(--color-text-subtle)]"
           />
           <input
             ref={inputRef}
@@ -183,14 +183,14 @@ export function ToolsPopover({
             onKeyDown={onKey}
             placeholder="Search tools…"
             aria-label="Search tools"
-            className="h-[2.125rem] w-full rounded-[0.5rem] border border-[var(--color-border-strong)] bg-[var(--color-bg)] pl-8 pr-8 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
+            className="h-[2.125rem] w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-8 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)]"
           />
           {query ? (
             <button
               type="button"
               aria-label="Clear search"
               onClick={clearQuery}
-              className="absolute right-1.5 inline-flex size-[1.375rem] items-center justify-center rounded-[0.375rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+              className="absolute right-1.5 inline-flex size-[1.375rem] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-subtle)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             >
               <Icon name="close" className="size-3" />
             </button>
@@ -201,17 +201,17 @@ export function ToolsPopover({
           title="Open tool library"
           aria-label="Open tool library"
           onClick={() => onOpenLibrary()}
-          className="inline-flex size-[2.125rem] shrink-0 items-center justify-center rounded-[0.5rem] border border-[var(--color-border)] text-[var(--color-text-muted)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="inline-flex size-[2.125rem] shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-pill-border)] text-[var(--color-text-subtle)] transition hover:border-[var(--color-selected-border)] hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
-          <MaximizeIcon className="size-[0.9rem]" />
+          <Icon name="maximize" className="size-[0.9rem]" />
         </button>
       </div>
 
       <div
-        className="flex items-center gap-1.5 border-b border-[var(--color-border)] pb-1.5 pl-3 pr-2.5 pt-0.5"
+        className="flex items-center gap-1.5 border-b border-[var(--color-divider)] pb-1.5 pl-3 pr-2.5 pt-0.5"
         data-testid="chat-mcp-all-actions"
       >
-        <span className="min-w-0 flex-1 truncate text-[0.75rem] tabular-nums text-[var(--color-text-muted)]">
+        <span className="min-w-0 flex-1 truncate text-[0.75rem] tabular-nums text-[var(--color-text-subtle)]">
           {q ? `${resultCount} ${resultCount === 1 ? "result" : "results"} · ${onCount} on` : `${onCount} on`}
         </span>
         {n > 0 ? (
@@ -247,13 +247,13 @@ export function ToolsPopover({
         className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-1.5 pl-1.5 pr-1 pt-1 [scrollbar-gutter:stable] [scrollbar-width:thin]"
       >
         {loading && servers.length === 0 ? (
-          <div className="px-2.5 py-2 text-[0.75rem] text-[var(--color-text-muted)]">Loading…</div>
+          <div className="px-2.5 py-2 text-[0.75rem] text-[var(--color-text-subtle)]">Loading…</div>
         ) : null}
         {sections.map((section, si) => (
           <div key={section.key} className="flex flex-col" role="group" aria-label={section.label}>
             <div className="flex min-h-6 items-center gap-1.5 px-1.5 pb-1 pt-2">
               <span className={GROUP_LABEL}>{section.label}</span>
-              <span className="ml-auto pr-1 text-[0.75rem] tabular-nums text-[var(--color-text-muted)]">
+              <span className="ml-auto pr-1 text-[0.75rem] tabular-nums text-[var(--color-text-subtle)]">
                 {section.count}
               </span>
             </div>
@@ -292,7 +292,7 @@ export function ToolsPopover({
             <div className="text-[0.875rem] text-[var(--color-text-primary)]">
               {q ? `No tools match ‘${q}’` : "No tools in this chat"}
             </div>
-            <div className="max-w-60 text-[0.78rem] text-[var(--color-text-muted)]">
+            <div className="max-w-60 text-[0.78rem] text-[var(--color-text-subtle)]">
               Try another word, or browse everything in the library.
             </div>
             <div className="flex gap-3.5 text-[0.8rem]">
@@ -307,7 +307,7 @@ export function ToolsPopover({
                 <button
                   type="button"
                   onClick={clearQuery}
-                  className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                  className="text-[var(--color-text-subtle)] transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 >
                   Clear search
                 </button>
@@ -317,14 +317,14 @@ export function ToolsPopover({
         ) : null}
       </div>
 
-      <div className="flex items-center justify-end border-t border-[var(--color-border)] px-3 py-1.5">
+      <div className="flex items-center justify-end border-t border-[var(--color-divider)] px-3 py-1.5">
         <button
           type="button"
           onClick={() => onOpenLibrary()}
           className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-accent)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
           Open library
-          <MaximizeIcon className="size-[0.7rem]" />
+          <Icon name="maximize" className="size-[0.7rem]" />
         </button>
       </div>
     </div>
@@ -377,10 +377,10 @@ function PopoverRow({
       onClick={() => {
         if (clickable) onActivate();
       }}
-      className={`flex items-start gap-2.5 rounded-[0.5rem] py-[0.45rem] pl-2.5 pr-2 transition ${
+      className={`flex items-start gap-2.5 rounded-[var(--radius-sm)] py-[0.45rem] pl-2.5 pr-2 transition ${
         clickable ? "cursor-pointer" : "cursor-default"
-      } ${active ? "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]" : ""} ${
-        ring ? "shadow-[inset_0_0_0_1px_var(--color-border-strong)]" : ""
+      } ${active ? "bg-[var(--color-selected-bg)]" : ""} ${
+        ring ? "shadow-[inset_0_0_0_1px_var(--color-selected-border)]" : ""
       }`}
     >
       <div className={`flex min-w-0 flex-1 flex-col gap-0.5 ${dimmed ? "opacity-55" : ""}`}>
@@ -391,7 +391,7 @@ function PopoverRow({
           <StatusKicker status={status} label={status === "always" ? statusKicker(status) : ""} />
           {c.beta ? (
             <span
-              className="shrink-0 rounded-sm border border-[var(--color-border-strong)] px-1 font-[family-name:var(--font-code)] text-[0.55rem] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]"
+              className="shrink-0 rounded-sm border border-[var(--color-pill-border)] px-1 font-[family-name:var(--font-code)] text-[0.55rem] font-semibold uppercase tracking-wider text-[var(--color-text-subtle)]"
               title="This connector is in beta — it works but still has rough edges."
             >
               beta
@@ -399,11 +399,11 @@ function PopoverRow({
           ) : null}
         </div>
         {c.description ? (
-          <div className="line-clamp-2 text-[0.78rem] leading-[1.4] text-[var(--color-text-muted)]">
+          <div className="line-clamp-2 text-[0.78rem] leading-[1.4] text-[var(--color-text-subtle)]">
             <Highlight text={c.description} query={query} />
           </div>
         ) : null}
-        <div className="flex min-w-0 items-center gap-2 text-[0.6875rem] text-[var(--color-text-muted)]">
+        <div className="flex min-w-0 items-center gap-2 text-[0.6875rem] text-[var(--color-text-subtle)]">
           {c.tool_count > 0 ? (
             <span className="shrink-0 whitespace-nowrap font-[family-name:var(--font-code)]">
               {toolCountLabel(c.tool_count)}
@@ -425,7 +425,7 @@ function PopoverRow({
         {status === "always" ? (
           <span
             title="Always on in every chat."
-            className="flex h-[1.125rem] w-[1.875rem] items-center justify-center text-[var(--color-text-muted)]"
+            className="flex h-[1.125rem] w-[1.875rem] items-center justify-center text-[var(--color-text-subtle)]"
             data-testid={`chat-mcp-always-on-${c.name}`}
           >
             <Icon name="lock" className="size-3.5" />
@@ -445,34 +445,12 @@ function PopoverRow({
           </button>
         ) : null}
         {status === "setup" && !isAdmin ? (
-          <span className="whitespace-nowrap text-[0.75rem] text-[var(--color-text-muted)]">Needs admin setup</span>
+          <span className="whitespace-nowrap text-[0.75rem] text-[var(--color-text-subtle)]">Needs admin setup</span>
         ) : null}
         {status === "unavailable" ? (
-          <span className="whitespace-nowrap text-[0.75rem] text-[var(--color-text-muted)]">Unavailable</span>
+          <span className="whitespace-nowrap text-[0.75rem] text-[var(--color-text-subtle)]">Unavailable</span>
         ) : null}
       </div>
     </div>
-  );
-}
-
-// The design's "open the full view" glyph (two diagonal arrows). The sprite's
-// `expand` is the vertical up/down chevron pair, which reads as "sort".
-function MaximizeIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.8}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M14 4h6v6" />
-      <path d="M20 4l-7 7" />
-      <path d="M10 20H4v-6" />
-      <path d="M4 20l7-7" />
-    </svg>
   );
 }

@@ -437,4 +437,27 @@
     <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
     <circle cx="12" cy="10" r="3"></circle>
   </symbol>
+
+  <symbol id="tools" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L4 16.8V20h3.2l5.3-5.3a4 4 0 0 0 5.2-5.4l-2.6 2.6-2.4-.6-.6-2.4z"></path>
+  </symbol>
+
+  <symbol id="maximize" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14 4h6v6"></path>
+    <path d="M20 4l-7 7"></path>
+    <path d="M10 20H4v-6"></path>
+    <path d="M4 20l7-7"></path>
+  </symbol>
+
+  <symbol id="alert-circle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="9"></circle>
+    <path d="M12 8v5"></path>
+    <path d="M12 16v.5"></path>
+  </symbol>
+
+  <symbol id="alert-triangle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 4L2.5 20h19z"></path>
+    <path d="M12 10v4"></path>
+    <path d="M12 17v.5"></path>
+  </symbol>
 </svg>

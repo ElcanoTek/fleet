@@ -53,14 +53,14 @@ export type ToolsLibraryProps = {
 };
 
 const RAIL_LABEL =
-  "basis-full px-2 pb-1.5 md:basis-auto font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-muted)]";
+  "basis-full px-2 pb-1.5 md:basis-auto font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]";
 // Below md the rail's filters wrap as chips so the list stays in view on a
 // phone; from md they stack as the design's rail.
 const RAIL_NAV = "flex flex-wrap gap-1 md:flex-col md:flex-nowrap md:gap-0.5";
 const GROUP_LABEL =
-  "px-3 pb-1 pt-3 font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-muted)]";
+  "px-3 pb-1 pt-3 font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]";
 const SMALL_PILL =
-  "h-6 shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] border border-[var(--color-border)] px-2.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
+  "h-6 shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] border border-[var(--color-pill-border)] px-2.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
 const LINK =
   "inline-flex items-center gap-1 text-[var(--color-accent)] hover:underline hover:underline-offset-[3px] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]";
 
@@ -122,7 +122,7 @@ export function ToolsLibrary({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[1200] flex items-center justify-center bg-[var(--color-overlay-strong)] p-0 backdrop-blur-[3px] sm:p-4"
+      className="fixed inset-0 z-[1200] flex items-center justify-center bg-[var(--color-scrim)] p-0 backdrop-blur-[3px] sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-label="Tools and connections"
@@ -130,17 +130,17 @@ export function ToolsLibrary({
       <div
         ref={panelRef}
         data-testid="chat-tools-library"
-        className="flex h-[100dvh] w-full flex-col overflow-hidden border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] shadow-2xl sm:h-[min(43.75rem,92vh)] sm:w-[min(70rem,96vw)] sm:rounded-2xl"
+        className="flex h-[100dvh] w-full flex-col overflow-hidden border border-[var(--color-selected-border)] bg-[var(--color-surface-1)] shadow-[var(--shadow-popover)] sm:h-[min(43.75rem,92vh)] sm:w-[min(70rem,96vw)] sm:rounded-[var(--radius-xl)]"
       >
-        <header className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] bg-[var(--gradient-surface-panel)] px-4 py-3">
+        <header className="flex flex-wrap items-center gap-3 border-b border-[var(--color-divider)] px-4 py-3.5">
           <span
             aria-hidden="true"
-            className="flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+            className="flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-[var(--color-icon-tile)] text-[var(--color-accent)]"
           >
-            <Icon name="wrench" className="size-4" />
+            <Icon name="tools" className="size-[1.06rem]" />
           </span>
-          <h2 className="m-0 text-base font-semibold text-[var(--color-text-primary)]">Tools &amp; connections</h2>
-          <span className="text-[0.8rem] tabular-nums text-[var(--color-text-muted)]">
+          <h2 className="m-0 text-[1.0625rem] font-semibold text-[var(--color-text-primary)]">Tools &amp; connections</h2>
+          <span className="text-[0.8rem] tabular-nums text-[var(--color-text-subtle)]">
             {countOn(servers)} of {servers.length} on
           </span>
           <span className="flex-1" />
@@ -154,11 +154,11 @@ export function ToolsLibrary({
         </header>
 
         <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto md:grid-cols-[14.5rem_minmax(0,1fr)] md:overflow-hidden">
-          <aside className="flex flex-col gap-3.5 border-b border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2.5 py-3 md:min-h-0 md:overflow-y-auto md:border-b-0 md:border-r">
+          <aside className="flex flex-col gap-3.5 border-b border-[var(--color-divider)] bg-[var(--color-rail-bg)] px-2.5 py-3 md:min-h-0 md:overflow-y-auto md:border-b-0 md:border-r">
             <div className="relative flex items-center">
               <Icon
                 name="search"
-                className="pointer-events-none absolute left-2.5 size-[0.9rem] text-[var(--color-text-muted)]"
+                className="pointer-events-none absolute left-2.5 size-[0.9rem] text-[var(--color-text-subtle)]"
               />
               <input
                 ref={searchRef}
@@ -167,7 +167,7 @@ export function ToolsLibrary({
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Search tools…"
                 aria-label="Search tools"
-                className="h-9 w-full rounded-[0.5rem] border border-[var(--color-border-strong)] bg-[var(--color-bg)] pl-8 pr-2.5 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
+                className="h-9 w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-2.5 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)]"
               />
             </div>
             <nav aria-label="Categories" className={RAIL_NAV}>
@@ -200,23 +200,23 @@ export function ToolsLibrary({
           <div className="grid grid-cols-1 md:min-h-0 md:overflow-y-auto lg:grid-cols-[minmax(0,1fr)_23.25rem] lg:overflow-hidden">
             <section
               aria-label="Connections"
-              className="flex flex-col border-b border-[var(--color-border)] lg:min-h-0 lg:border-b-0 lg:border-r"
+              className="flex flex-col border-b border-[var(--color-divider)] lg:min-h-0 lg:border-b-0 lg:border-r"
             >
               <div className="px-4 pb-2.5 pt-3.5">
                 <div className="text-base font-semibold text-[var(--color-text-primary)]">
                   {(catObj ? catObj.name : "All connections") + (statusObj ? ` · ${statusObj.label}` : "")}
                 </div>
-                <div className="mt-0.5 text-[0.78rem] text-[var(--color-text-muted)]">
+                <div className="mt-0.5 text-[0.78rem] text-[var(--color-text-subtle)]">
                   {`${flat.length} ${flat.length === 1 ? "connection" : "connections"} · ${flat.filter(isOn).length} on`}
                   {q ? ` · matching ‘${q}’` : ""}
                 </div>
               </div>
               {toggleable.length > 0 ? (
                 <div
-                  className="mx-4 mb-2.5 flex items-center gap-1.5 rounded-[0.5rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] py-1.5 pl-3 pr-1.5"
+                  className="mx-4 mb-2.5 flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-divider)] bg-[var(--color-rail-bg)] py-1.5 pl-3 pr-1.5"
                   data-testid="chat-tools-library-bulk"
                 >
-                  <span className="min-w-0 flex-1 text-[0.78rem] text-[var(--color-text-muted)]">
+                  <span className="min-w-0 flex-1 text-[0.78rem] text-[var(--color-text-subtle)]">
                     {libraryBulkScope(toggleable.length, {
                       filtered: !!q || !!status,
                       categoryName: catObj?.name,
@@ -264,7 +264,7 @@ export function ToolsLibrary({
                   </div>
                 ))}
                 {flat.length === 0 ? (
-                  <div className="px-5 py-12 text-center text-[0.875rem] text-[var(--color-text-muted)]">
+                  <div className="px-5 py-12 text-center text-[0.875rem] text-[var(--color-text-subtle)]">
                     {q ? `No tools match ‘${q}’` : "Nothing here with this filter"}
                   </div>
                 ) : null}
@@ -312,15 +312,15 @@ function RailButton({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`flex h-8 items-center gap-2 rounded-[0.5rem] border border-[var(--color-border)] px-2.5 text-left text-[0.84rem] transition md:border-transparent hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+      className={`flex h-8 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-pill-border)] px-2.5 text-left text-[0.84rem] transition md:border-transparent hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
         active
-          ? "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-text-primary)] shadow-[inset_0_0_0_1px_var(--color-border-strong)]"
+          ? "bg-[var(--color-selected-bg)] text-[var(--color-text-primary)] shadow-[inset_0_0_0_1px_var(--color-selected-border)]"
           : "text-[var(--color-text-secondary)]"
       }`}
     >
       {dot ? <StatusDot status={dot === "on" ? "on" : dot} /> : null}
       <span className="flex-1 truncate">{label}</span>
-      <span className="text-[0.75rem] tabular-nums text-[var(--color-text-muted)]">{count}</span>
+      <span className="text-[0.75rem] tabular-nums text-[var(--color-text-subtle)]">{count}</span>
     </button>
   );
 }
@@ -342,8 +342,8 @@ function LibraryRow({
   const name = connectorLabel(c);
   return (
     <div
-      className={`flex items-center gap-3 rounded-[0.625rem] py-2 pl-3 pr-2.5 transition hover:bg-[var(--rail-hover)] ${
-        selected ? "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] shadow-[inset_0_0_0_1px_var(--color-border-strong)]" : ""
+      className={`flex items-center gap-3 rounded-[var(--radius-md)] py-2 pl-3 pr-2.5 transition hover:bg-[var(--color-pill-hover-bg)] ${
+        selected ? "bg-[var(--color-selected-bg)] shadow-[inset_0_0_0_1px_var(--color-selected-border)]" : ""
       } ${status === "unavailable" ? "opacity-60" : ""}`}
       data-testid={`chat-tools-library-row-${c.name}`}
     >
@@ -360,11 +360,11 @@ function LibraryRow({
           <StatusKicker status={status} label={statusKicker(status)} />
         </span>
         {c.description ? (
-          <span className="truncate text-[0.78rem] text-[var(--color-text-muted)]">{c.description}</span>
+          <span className="truncate text-[0.78rem] text-[var(--color-text-subtle)]">{c.description}</span>
         ) : null}
       </button>
       {c.tool_count > 0 ? (
-        <span className="shrink-0 whitespace-nowrap font-[family-name:var(--font-code)] text-[0.6875rem] text-[var(--color-text-muted)]">
+        <span className="shrink-0 whitespace-nowrap font-[family-name:var(--font-code)] text-[0.6875rem] text-[var(--color-text-subtle)]">
           {toolCountLabel(c.tool_count)}
         </span>
       ) : null}
@@ -408,14 +408,14 @@ function Detail({
   return (
     <div className="flex flex-col gap-4" data-testid="chat-tools-library-detail">
       <div className="flex flex-col gap-1.5">
-        <div className="font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-muted)]">
+        <div className="font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]">
           {categoryName(categoryOf(c, categories), categories)}
         </div>
         <div className="flex items-center gap-3">
           <h3 className="m-0 flex-1 text-[1.3rem] font-semibold leading-tight text-[var(--color-text-primary)]">{name}</h3>
           {toggleable ? <ToolSwitch on={status === "on"} label={name} onToggle={onToggle} large /> : null}
         </div>
-        <div className="flex items-center gap-2 text-[0.78rem] text-[var(--color-text-muted)]">
+        <div className="flex items-center gap-2 text-[0.78rem] text-[var(--color-text-subtle)]">
           <StatusDot status={status} />
           <span className="text-[var(--color-text-secondary)]">{statusText(status)}</span>
           {c.tool_count > 0 ? (
@@ -437,12 +437,12 @@ function Detail({
       ) : null}
       {hasSeats ? (
         <div className="flex flex-col gap-1.5">
-          <div className="text-[0.75rem] text-[var(--color-text-muted)]">Account for this chat</div>
+          <div className="text-[0.75rem] text-[var(--color-text-subtle)]">Account for this chat</div>
           <SeatMenu connector={c} appName={appName} variant="field" onChange={onSetAccount} />
         </div>
       ) : null}
       {status === "setup" ? (
-        <div className="flex flex-col items-start gap-1.5 rounded-[0.625rem] border border-[var(--color-warning-border)] bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)] px-3.5 py-2.5 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
+        <div className="flex flex-col items-start gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-panel-warn-border)] bg-[var(--color-panel-warn-bg)] px-3.5 py-2.5 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
           {isAdmin ? (
             <>
               <span>Needs setup before it can be used.</span>
@@ -457,12 +457,12 @@ function Detail({
         </div>
       ) : null}
       {status === "always" ? (
-        <div className="rounded-[0.625rem] border border-[var(--color-success-border)] bg-[color-mix(in_srgb,var(--color-success)_12%,transparent)] px-3.5 py-2.5 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
+        <div className="rounded-[var(--radius-md)] border border-[var(--color-panel-ok-border)] bg-[var(--color-panel-ok-bg)] px-3.5 py-2.5 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
           Always on in every chat.
         </div>
       ) : null}
       {status === "unavailable" ? (
-        <div className="rounded-[0.625rem] border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] px-3.5 py-2.5 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
+        <div className="rounded-[var(--radius-md)] border border-[var(--color-panel-deny-border)] bg-[var(--color-panel-deny-bg)] px-3.5 py-2.5 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
           Unavailable right now. Try again later.
         </div>
       ) : null}
@@ -472,7 +472,7 @@ function Detail({
             type="button"
             aria-expanded={toolsOpen}
             onClick={onToggleTools}
-            className="inline-flex items-center gap-1 self-start text-[0.78rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            className="inline-flex items-center gap-1 self-start text-[0.78rem] text-[var(--color-text-subtle)] transition hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           >
             {toolsOpen ? "Hide tools" : `Show ${tools.length} ${tools.length === 1 ? "tool" : "tools"}`}
             <Icon name="chevron-down" className={`size-3 transition-transform ${toolsOpen ? "rotate-180" : ""}`} />
@@ -482,7 +482,7 @@ function Detail({
               {tools.map((t) => (
                 <li
                   key={t}
-                  className="flex h-6 items-center font-[family-name:var(--font-code)] text-[0.75rem] text-[var(--color-text-muted)]"
+                  className="flex h-6 items-center font-[family-name:var(--font-code)] text-[0.75rem] text-[var(--color-text-subtle)]"
                 >
                   <Highlight text={t} query={query} />
                 </li>

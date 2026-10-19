@@ -380,7 +380,7 @@ function NeedsSetupCard({ entry, isAdmin }: { entry: CatalogBundled; isAdmin: bo
       {entry.description ? (
         <ClampText text={entry.description} className="text-[var(--color-text-muted)]!" />
       ) : null}
-      <div className="rounded-[var(--radius-md)] border border-[var(--color-warning-border)] bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)] px-[0.75rem] py-[0.5rem] text-[0.75rem] leading-[1.5] text-[var(--color-text-secondary)]">
+      <div className="rounded-[var(--radius-md)] border border-[var(--color-panel-warn-border)] bg-[var(--color-panel-warn-bg)] px-[0.75rem] py-[0.5rem] text-[0.75rem] leading-[1.5] text-[var(--color-text-secondary)]">
         {isAdmin
           ? "Needs setup before it can be used. Its credentials are added on the server by whoever deploys this workspace."
           : "An admin needs to set this up."}

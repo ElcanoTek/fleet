@@ -99,11 +99,17 @@ connection. Settings → Connections' own default option reads the same way.
   per-connector plain-words hint in the manifest.
 - **Unavailable has no reason.** Discovery does not record one, so the copy
   is the design's generic sentence.
-- **Tokens.** The design is on Elcano Design System 2.0; this is built from
-  the app's own tokens (`--color-*`). The design's new components (switch,
-  compact search, small pill, status kicker, group header, match highlight,
-  warn/deny panels) live in `ToolsPickerParts.tsx` and the two surfaces, not
-  in a shared design-system package.
+- **Tokens.** The design is on Elcano Design System 2.0. Its component
+  colors are now tokens in flag (COMPONENTS.md "Connection Picker") and in
+  `globals.css`, with the design's values, so the switch, pills, kickers,
+  panels, selected rows, match highlight, scrim and popover shadow match it.
+  The app's base surfaces and text levels stay flag's; the design's dimmer
+  description grey is the new `--color-text-subtle`. Light mode (the design
+  shows dark only): the switch knob is white with a soft shadow and the count
+  badge digits are white, for contrast. Radii are on flag's scale (popover
+  14px and modal 18px against the design's 12px and 16px).
+- **Icons** come from the sprite, drawn as the design draws them: `tools`
+  (the wrench), `maximize`, `alert-circle`, `alert-triangle` are new.
 
 ## Deferred
 

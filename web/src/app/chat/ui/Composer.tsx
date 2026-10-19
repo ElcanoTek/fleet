@@ -96,10 +96,14 @@ const CODE_NUDGE_TIMEOUT_MS = 6000;
 
 // ── Design toolbar building blocks (unified shell .composer-toolbar) ────────
 // The design's .tool-btn: a 1.95rem radius-md icon button that tints with the
-// accent on hover; TOOL_BTN_ACTIVE marks an engaged control (tools with
-// servers enabled, send-on-Enter on).
+// accent on hover; TOOL_BTN_ACTIVE marks an engaged control (a persona
+// picked, send-on-Enter on).
 const TOOL_BTN =
   "relative inline-flex h-[1.95rem] w-[1.95rem] shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-secondary)] transition hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40";
+// The tools trigger while its popover is open: the design's neutral pressed
+// fill (chip border) rather than the accent tint the other toggles use.
+const TOOLS_BTN_OPEN =
+  "bg-[var(--color-pill-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-pill-border)]";
 const TOOL_BTN_ACTIVE =
   "bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)] hover:bg-[color-mix(in_srgb,var(--color-accent)_22%,transparent)]";
 
@@ -1176,7 +1180,7 @@ export function Composer({
                   aria-expanded={mcpPickerOpen}
                   disabled={isStreaming}
                   data-tip-top={`Tools, ${toolsBadge} on`}
-                  className={`${TOOL_BTN} ${mcpPickerOpen ? TOOL_BTN_ACTIVE : ""}`}
+                  className={`${TOOL_BTN} ${mcpPickerOpen ? TOOLS_BTN_OPEN : ""}`}
                   onClick={() => {
                     const next = !mcpPickerOpen;
                     if (next) setHeldToolsOn(liveToolsOn);
@@ -1189,14 +1193,14 @@ export function Composer({
                     }
                   }}
                 >
-                  <Icon name="wrench" className="size-3.5" />
+                  <Icon name="tools" className="size-[1.0625rem]" />
                   {/* The design's .tool-badge: how many connections are on
                       in this chat, always-on included, pinned to the
                       button's top-right corner. */}
                   {toolsBadge > 0 ? (
                     <span
                       data-testid="chat-tools-badge"
-                      className="pointer-events-none absolute right-0 top-0 inline-flex h-[0.875rem] min-w-[0.875rem] -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-accent)] px-[2px] font-[family-name:var(--font-code)] text-[0.56rem] font-medium tabular-nums text-[var(--color-bg)]"
+                      className="pointer-events-none absolute -right-[5px] -top-[7px] inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-accent-strong)] px-[3px] text-[0.6rem] font-semibold tabular-nums text-[var(--color-on-accent-strong)]"
                     >
                       {toolsBadge}
                     </span>

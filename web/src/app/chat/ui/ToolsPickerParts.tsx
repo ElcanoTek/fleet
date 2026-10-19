@@ -23,7 +23,7 @@ export function Highlight({ text, query }: { text: string; query: string }) {
         seg.match ? (
           <mark
             key={i}
-            className="rounded-[3px] bg-[color-mix(in_srgb,var(--color-accent)_30%,transparent)] text-[var(--color-text-primary)]"
+            className="rounded-[3px] bg-[var(--color-match-bg)] text-[var(--color-text-primary)]"
           >
             {seg.text}
           </mark>
@@ -66,22 +66,22 @@ export function ToolSwitch({
       }}
       className={`relative shrink-0 rounded-full transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
         large ? "h-[1.375rem] w-[2.375rem]" : "h-[1.125rem] w-[1.875rem]"
-      } ${on ? "bg-[var(--color-primary)]" : "bg-[color-mix(in_srgb,var(--color-primary)_32%,transparent)]"}`}
+      } ${on ? "bg-[var(--color-switch-track-on)]" : "bg-[var(--color-switch-track-off)]"}`}
     >
       <span
         aria-hidden="true"
         className={`absolute rounded-full transition-transform ${
           large ? "left-[3px] top-[3px] size-4" : "left-[2px] top-[2px] size-[0.875rem]"
-        } ${on ? `bg-white ${large ? "translate-x-4" : "translate-x-3"}` : "bg-[var(--color-text-muted)]"}`}
+        } bg-[var(--color-switch-knob)] shadow-[var(--shadow-switch-knob)] ${on ? (large ? "translate-x-4" : "translate-x-3") : ""}`}
       />
     </button>
   );
 }
 
 const KICKER_COLOR: Partial<Record<ConnectorStatus, string>> = {
-  always: "text-[var(--color-success)]",
-  setup: "text-[var(--color-warning)]",
-  unavailable: "text-[var(--color-danger)]",
+  always: "text-[var(--color-state-ok)]",
+  setup: "text-[var(--color-state-warn)]",
+  unavailable: "text-[var(--color-state-deny)]",
 };
 
 /** Mono status label beside a name: ALWAYS ON / NEEDS SETUP / UNAVAILABLE. */
@@ -98,10 +98,10 @@ export function StatusKicker({ status, label }: { status: ConnectorStatus; label
 
 const DOT_COLOR: Record<ConnectorStatus, string> = {
   on: "bg-[var(--color-accent)]",
-  off: "bg-[var(--color-text-muted)]",
-  always: "bg-[var(--color-success)]",
-  setup: "bg-[var(--color-warning)]",
-  unavailable: "bg-[var(--color-danger)]",
+  off: "bg-[var(--color-text-subtle)]",
+  always: "bg-[var(--color-state-ok)]",
+  setup: "bg-[var(--color-state-warn)]",
+  unavailable: "bg-[var(--color-state-deny)]",
 };
 
 export function StatusDot({ status }: { status: ConnectorStatus }) {
@@ -112,22 +112,22 @@ export function StatusDot({ status }: { status: ConnectorStatus }) {
 export function StatusIcon({ status }: { status: ConnectorStatus }) {
   if (status === "always") {
     return (
-      <span title="Always on in every chat." className="text-[var(--color-text-muted)]">
+      <span title="Always on in every chat." className="text-[var(--color-text-subtle)]">
         <Icon name="lock" className="size-3.5" />
       </span>
     );
   }
   if (status === "setup") {
     return (
-      <span title="Needs setup" className="text-[var(--color-warning)]">
-        <Icon name="info" className="size-[0.95rem]" />
+      <span title="Needs setup" className="text-[var(--color-state-warn)]">
+        <Icon name="alert-circle" className="size-[0.95rem]" />
       </span>
     );
   }
   if (status === "unavailable") {
     return (
-      <span title="Unavailable" className="text-[var(--color-danger)]">
-        <Icon name="warning" className="size-[0.95rem]" />
+      <span title="Unavailable" className="text-[var(--color-state-deny)]">
+        <Icon name="alert-triangle" className="size-[0.95rem]" />
       </span>
     );
   }
@@ -266,16 +266,16 @@ export function SeatMenu({
         onKeyDown={onTriggerKey}
         className={
           variant === "compact"
-            ? "inline-flex h-[1.125rem] min-w-0 max-w-[10rem] items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--color-border)] px-[0.45rem] font-[family-name:var(--font-sans)] text-[0.66rem] text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-            : "flex h-9 w-full items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-left text-[0.82rem] text-[var(--color-text-primary)] transition hover:border-[var(--color-border-strong)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            ? "inline-flex h-[1.125rem] min-w-0 max-w-[10rem] items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--color-pill-border)] px-[0.45rem] font-[family-name:var(--font-sans)] text-[0.66rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            : "flex h-9 w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] px-3 text-left text-[0.82rem] text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         }
       >
         {variant === "field" ? (
-          <Icon name="persona" className="size-3.5 shrink-0 text-[var(--color-text-muted)]" />
+          <Icon name="persona" className="size-3.5 shrink-0 text-[var(--color-text-subtle)]" />
         ) : null}
         <span className="min-w-0 flex-1 truncate">{selected.label}</span>
         {variant === "field" && selected.isDefault ? (
-          <span className="shrink-0 text-[0.7rem] text-[var(--color-text-muted)]">Default</span>
+          <span className="shrink-0 text-[0.7rem] text-[var(--color-text-subtle)]">Default</span>
         ) : null}
         <Icon
           name="chevron-down"
@@ -295,9 +295,9 @@ export function SeatMenu({
               onKeyDown={onListKey}
               onClick={(event) => event.stopPropagation()}
               style={{ left: pos.left, top: pos.top, bottom: pos.bottom, minWidth: pos.width }}
-              className="fixed z-[1300] grid max-h-64 max-w-[18rem] gap-[0.1rem] overflow-y-auto rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-[0.3rem] shadow-[var(--shadow-md)] outline-none motion-safe:animate-pop-up"
+              className="fixed z-[1300] grid max-h-64 max-w-[18rem] gap-[0.1rem] overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-selected-border)] bg-[var(--color-surface-2)] p-[0.3rem] shadow-[var(--shadow-popover)] outline-none motion-safe:animate-pop-up"
             >
-              <div className="px-[0.55rem] pb-[0.2rem] pt-[0.15rem] font-[family-name:var(--font-code)] text-[0.62rem] uppercase tracking-[0.12em] text-[var(--color-text-muted)]">
+              <div className="px-[0.55rem] pb-[0.2rem] pt-[0.15rem] font-[family-name:var(--font-code)] text-[0.62rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]">
                 Account
               </div>
               {options.map((o, i) => {
@@ -313,12 +313,12 @@ export function SeatMenu({
                     onClick={() => choose(o.value)}
                     onKeyDown={() => undefined}
                     className={`flex cursor-pointer items-center gap-2 rounded-[0.45rem] px-[0.55rem] py-[0.35rem] text-[0.78rem] ${
-                      i === active ? "bg-[var(--rail-hover)]" : ""
+                      i === active ? "bg-[var(--color-selected-bg)]" : ""
                     } ${isSel ? "text-[var(--color-text-primary)]" : "text-[var(--color-text-secondary)]"}`}
                   >
                     <span className="min-w-0 flex-1 truncate">{o.label}</span>
                     {o.isDefault ? (
-                      <span className="shrink-0 text-[0.66rem] text-[var(--color-text-muted)]">Default</span>
+                      <span className="shrink-0 text-[0.66rem] text-[var(--color-text-subtle)]">Default</span>
                     ) : null}
                     <span className="flex size-3.5 shrink-0 items-center justify-center text-[var(--color-accent)]">
                       {isSel ? <Icon name="check" className="size-3.5" /> : null}
