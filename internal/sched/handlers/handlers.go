@@ -493,8 +493,9 @@ func readJSON(r *http.Request, v interface{}) error {
 
 // getClientIP extracts the client IP from the request.
 // Prefers the IP resolved by the ClientIPFromXFF middleware (internal/httpmw),
-// which buildOrchestratorMux (cmd/fleet/main.go) installs only when
-// FLEET_TRUSTED_PROXIES is set: it reads X-Forwarded-For only when the TCP peer
+// which buildOrchestratorMux (cmd/fleet/main.go) installs through
+// httpmw.TrustedProxies.Middleware only when FLEET_TRUSTED_PROXIES is set (the
+// chat server's IP filter resolves with the same TrustedProxies.ClientIP): it reads X-Forwarded-For only when the TCP peer
 // is one of those proxies, walking the chain right-to-left past trusted hops,
 // and otherwise stores the peer itself. Falls back to the connection's
 // RemoteAddr when no IP was stored — always so with FLEET_TRUSTED_PROXIES

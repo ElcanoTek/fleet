@@ -4,6 +4,7 @@
 package handlers
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -80,5 +81,43 @@ func TestGetClientIP(t *testing.T) {
 				t.Errorf("getClientIP() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestGetClientIPMatchesSharedResolver — the orchestrator's real client-IP
+// path (httpmw.TrustedProxies.Middleware, then getClientIP with its own
+// RemoteAddr fallback) names the same address as TrustedProxies.ClientIP, the
+// resolver the chat server's IP filter uses, with and without trusted proxies.
+func TestGetClientIPMatchesSharedResolver(t *testing.T) {
+	for _, trusted := range [][]net.IP{nil, {net.ParseIP("127.0.0.1"), net.ParseIP("::1")}} {
+		trust := httpmw.NewTrustedProxies(trusted)
+		for _, tc := range []struct{ remoteAddr, xff string }{
+			{"203.0.113.9:1", ""},
+			{"203.0.113.9:1", "1.2.3.4"},
+			{"127.0.0.1:1", ""},
+			{"127.0.0.1:1", "6.6.6.6, 203.0.113.7"},
+			{"127.0.0.1:1", "203.0.113.7, 127.0.0.1"},
+			{"127.0.0.1:1", "203.0.113.7, not-an-ip"},
+			{"[::1]:1", "2001:db8::7"},
+			{"[2001:db8::1]:1", "1.2.3.4"},
+			{"[::ffff:127.0.0.1]:1", "203.0.113.7"},
+		} {
+			newReq := func() *http.Request {
+				req := httptest.NewRequest("GET", "/", nil)
+				req.RemoteAddr = tc.remoteAddr
+				if tc.xff != "" {
+					req.Header.Set("X-Forwarded-For", tc.xff)
+				}
+				return req
+			}
+			var got string
+			trust.Middleware()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				got = getClientIP(r)
+			})).ServeHTTP(httptest.NewRecorder(), newReq())
+			want := trust.ClientIP(newReq())
+			if !net.ParseIP(got).Equal(net.IP(want.AsSlice())) {
+				t.Errorf("trusted=%v RemoteAddr=%s XFF=%q: getClientIP = %q, shared resolver = %v", trusted, tc.remoteAddr, tc.xff, got, want)
+			}
+		}
 	}
 }

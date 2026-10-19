@@ -1,4 +1,4 @@
-// Copied from github.com/go-chi/chi/v5 v5.4.0, middleware/client_ip.go (modified: only ClientIPFromXFF and its readers kept).
+// Copied from github.com/go-chi/chi/v5 v5.4.0, middleware/client_ip.go (modified: only ClientIPFromXFF and its readers kept; its per-request walk is lifted into xffClientIP so trusted_proxies.go shares it).
 // Copyright (c) 2015-present Peter Kieltyka, Google Inc.; see LICENSE.
 // SPDX-License-Identifier: MIT
 
@@ -71,28 +71,37 @@ func ClientIPFromXFF(trustedIPPrefixes ...string) func(http.Handler) http.Handle
 	prefixes := mustParsePrefixes(trustedIPPrefixes)
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var found netip.Addr
-			if peer, untrusted := untrustedPeer(r, prefixes); untrusted {
-				found = peer
-			} else {
-				walkXFF(r.Header[xForwardedForHeader], func(v string) bool {
-					ip, ok := parseHeaderAddr(v)
-					if !ok {
-						return true // fail-closed; leave found unset
-					}
-					if inAnyPrefix(ip, prefixes) {
-						return false // trusted hop; keep walking left
-					}
-					found = ip
-					return true
-				})
-			}
-			if found.IsValid() {
+			if found := xffClientIP(r, prefixes); found.IsValid() {
 				r = r.WithContext(context.WithValue(r.Context(), clientIPCtxKey, found))
 			}
 			h.ServeHTTP(w, r)
 		})
 	}
+}
+
+// xffClientIP is ClientIPFromXFF's per-request resolution (upstream inlines
+// it in the handler; fleet lifts it out so TrustedProxies.ClientIP runs the
+// very same walk): the untrusted TCP peer, else the first untrusted
+// X-Forwarded-For hop from the right, else the zero Addr (an unparseable
+// RemoteAddr or entry, or a chain of only trusted hops).
+func xffClientIP(r *http.Request, prefixes []netip.Prefix) netip.Addr {
+	var found netip.Addr
+	if peer, untrusted := untrustedPeer(r, prefixes); untrusted {
+		found = peer
+	} else {
+		walkXFF(r.Header[xForwardedForHeader], func(v string) bool {
+			ip, ok := parseHeaderAddr(v)
+			if !ok {
+				return true // fail-closed; leave found unset
+			}
+			if inAnyPrefix(ip, prefixes) {
+				return false // trusted hop; keep walking left
+			}
+			found = ip
+			return true
+		})
+	}
+	return found
 }
 
 // GetClientIP returns the client IP as a string, as set by

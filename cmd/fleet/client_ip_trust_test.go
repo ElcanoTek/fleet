@@ -53,14 +53,3 @@ func TestOrchestratorClientIPHonorsTrustedProxies(t *testing.T) {
 		t.Errorf("trusted peer: %d of 21 throttled, want 0 (keyed by each XFF client)", got)
 	}
 }
-
-func TestTrustedProxyPrefixes(t *testing.T) {
-	got := trustedProxyPrefixes([]net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1"), net.ParseIP("::ffff:10.0.0.1")})
-	want := []string{"127.0.0.1/32", "::1/128", "10.0.0.1/32"}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Errorf("trustedProxyPrefixes = %v, want %v", got, want)
-	}
-	if got := trustedProxyPrefixes(nil); len(got) != 0 {
-		t.Errorf("trustedProxyPrefixes(nil) = %v, want empty", got)
-	}
-}

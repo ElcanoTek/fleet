@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/httpmw"
 )
 
 // mustCIDR parses an IP or CIDR into a network for table setup, coercing a bare
@@ -160,6 +161,18 @@ func TestIPFilterMiddleware(t *testing.T) {
 			wantCode:   http.StatusForbidden, // peer 127.0.0.1 is not allowlisted
 		},
 		{
+			name:       "XFF trusted: unparseable entry stops the walk, TCP peer judged",
+			allow:      cidrs(t, "192.168.1.0/24"),
+			trusted:    []net.IP{net.ParseIP("127.0.0.1")},
+			remoteAddr: "127.0.0.1:9999",
+			// Before the shared resolver this filter SKIPPED the garbage and
+			// allowed 192.168.1.42; it now stops there as ClientIPFromXFF does
+			// (nothing left of garbage is trusted) and judges the peer, which
+			// is not allowlisted.
+			xff:      "192.168.1.42, not-an-ip",
+			wantCode: http.StatusForbidden,
+		},
+		{
 			name:  "XFF untrusted: header ignored, real peer NOT allowlisted, blocked (anti-spoof)",
 			allow: cidrs(t, "192.168.1.0/24"),
 			// No trusted proxies: a client claiming to be 192.168.1.42 via XFF must
@@ -266,6 +279,10 @@ func TestClientIP(t *testing.T) {
 		{name: "untrusted peer ignores XFF", remoteAddr: "8.8.8.8:1234", xff: "1.2.3.4", trusted: trusted, want: "8.8.8.8"},
 		{name: "trusted peer, empty XFF falls back to peer", remoteAddr: "127.0.0.1:80", xff: "", trusted: trusted, want: "127.0.0.1"},
 		{name: "trusted peer, garbage XFF falls back to peer", remoteAddr: "127.0.0.1:80", xff: "not-an-ip", trusted: trusted, want: "127.0.0.1"},
+		// Changed with the shared resolver: an unparseable entry used to be
+		// skipped (→ 9.9.9.9); the walk now stops there and falls back to the peer.
+		{name: "trusted peer, garbage mid-chain stops the walk", remoteAddr: "127.0.0.1:80", xff: "9.9.9.9, not-an-ip", trusted: trusted, want: "127.0.0.1"},
+		{name: "v4-mapped trusted peer reads XFF", remoteAddr: "[::ffff:127.0.0.1]:80", xff: "9.9.9.9", trusted: trusted, want: "9.9.9.9"},
 		{name: "bare-IP RemoteAddr (no port)", remoteAddr: "9.9.9.9", want: "9.9.9.9"},
 		{name: "unparseable RemoteAddr returns nil", remoteAddr: "garbage", want: ""},
 	}
@@ -276,7 +293,7 @@ func TestClientIP(t *testing.T) {
 			if tc.xff != "" {
 				req.Header.Set("X-Forwarded-For", tc.xff)
 			}
-			got := clientIP(req, tc.trusted)
+			got := clientIP(req, httpmw.NewTrustedProxies(tc.trusted))
 			if tc.want == "" {
 				if got != nil {
 					t.Fatalf("clientIP = %v, want nil", got)
@@ -285,6 +302,61 @@ func TestClientIP(t *testing.T) {
 			}
 			if got == nil || !got.Equal(net.ParseIP(tc.want)) {
 				t.Fatalf("clientIP = %v, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestClientIPAgreesWithOrchestrator — the chat server's IP filter and the
+// orchestrator API name the same client for every request: clientIP here
+// against the orchestrator's path (httpmw.TrustedProxies.Middleware, then
+// the stored IP or — as handlers.getClientIP falls back — the TCP peer).
+// They were two implementations of one contract until they shared
+// httpmw.TrustedProxies, and differed on an unparseable X-Forwarded-For entry.
+func TestClientIPAgreesWithOrchestrator(t *testing.T) {
+	loop := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	multi := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("10.0.0.1")}
+	for _, tc := range []struct {
+		remoteAddr, xff string
+		trusted         []net.IP
+	}{
+		{"203.0.113.9:1", "", nil},
+		{"203.0.113.9:1", "1.2.3.4", nil},
+		{"127.0.0.1:1", "1.2.3.4", nil},
+		{"203.0.113.9:1", "1.2.3.4", loop},
+		{"127.0.0.1:1", "", loop},
+		{"127.0.0.1:1", "6.6.6.6, 203.0.113.7", loop},
+		{"127.0.0.1:1", "203.0.113.7, 127.0.0.1", loop},
+		{"[::1]:1", "2001:db8::7", loop},
+		{"127.0.0.1:1", "6.6.6.6, 203.0.113.7, 10.0.0.1", multi},
+		{"127.0.0.1:1", "10.0.0.1, 127.0.0.1", multi},
+		{"127.0.0.1:1", "not-an-ip", loop},
+		{"127.0.0.1:1", "203.0.113.7, not-an-ip", loop},
+		{"[::ffff:127.0.0.1]:1", "203.0.113.7", loop},
+		{"127.0.0.1:1", "::ffff:203.0.113.7", loop},
+		{"[2001:db8::1]:1", "1.2.3.4", loop},
+	} {
+		t.Run(tc.remoteAddr+" xff="+tc.xff, func(t *testing.T) {
+			newReq := func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "/", nil)
+				req.RemoteAddr = tc.remoteAddr
+				if tc.xff != "" {
+					req.Header.Set("X-Forwarded-For", tc.xff)
+				}
+				return req
+			}
+			trust := httpmw.NewTrustedProxies(tc.trusted)
+			chat := clientIP(newReq(), trust)
+
+			var orch string
+			trust.Middleware()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				orch = httpmw.GetClientIP(r.Context())
+			})).ServeHTTP(httptest.NewRecorder(), newReq())
+			if orch == "" {
+				orch, _, _ = net.SplitHostPort(tc.remoteAddr)
+			}
+			if chat == nil || !chat.Equal(net.ParseIP(orch)) {
+				t.Fatalf("chat filter resolved %v, orchestrator %q", chat, orch)
 			}
 		})
 	}
