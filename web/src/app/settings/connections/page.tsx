@@ -1695,7 +1695,13 @@ function ConnectionsPageInner() {
     if (!catalog || typeof window === "undefined") return;
     const hash = window.location.hash.slice(1);
     if (!hash.startsWith("connector-")) return;
-    document.getElementById(decodeURIComponent(hash))?.scrollIntoView({ behavior: "auto", block: "center" });
+    let id: string;
+    try {
+      id = decodeURIComponent(hash);
+    } catch {
+      return; // a malformed escape is an unusable link, not a page error
+    }
+    document.getElementById(id)?.scrollIntoView({ behavior: "auto", block: "center" });
   }, [catalog]);
 
   // Once the directory has loaded, bring the deep-linked card into view. The
@@ -1909,8 +1915,10 @@ function ConnectionsPageInner() {
                 return (
                   <div
                     key={group.name}
+                    // The chat Tools library's "Manage in Settings" lands here.
+                    id={connectorAnchor(group.name)}
                     data-testid={`remote-group-${group.name}`}
-                    className="border-b border-[var(--color-border-subtle)] last:border-b-0"
+                    className="scroll-mt-24 border-b border-[var(--color-border-subtle)] last:border-b-0 target:shadow-[inset_0_0_0_1px_var(--color-accent)]"
                   >
                     <ConnRows>
                     {group.seats.map((s) => {

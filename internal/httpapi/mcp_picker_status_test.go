@@ -171,3 +171,37 @@ func TestRemoteConnectionCategoryFromDirectory(t *testing.T) {
 		}
 	}
 }
+
+// metaEngine adds the Manager's reload-fresh connector metadata to the fake.
+type metaEngine struct {
+	*catalogEngine
+	meta []clientconfig.ConnectorMeta
+}
+
+func (m metaEngine) ConnectorMeta() []clientconfig.ConnectorMeta { return m.meta }
+
+// After an MCP reload the Manager's snapshot, not the boot bundle, decides
+// categories and needs-setup rows.
+func TestPickerPrefersReloadedConnectorMeta(t *testing.T) {
+	srv := pickerStatusServer(t)
+	srv.agent = metaEngine{catalogEngine: srv.agent.(*catalogEngine), meta: []clientconfig.ConnectorMeta{
+		{Name: "ix", Category: "house", Configured: true, Optional: true},
+		{Name: "tl", Category: "ssps", Configured: true, Optional: true},
+		{Name: "email", Category: "misc", Configured: true},
+		// bq is now configured, so it is no longer a needs-setup row.
+		{Name: "bq", Category: "data-storage", Configured: true, Optional: true},
+	}}
+	req := httptest.NewRequest(http.MethodGet, "/mcp-servers", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@x.com"))
+	w := httptest.NewRecorder()
+	srv.listMCPServerCatalog(w, req)
+	servers := decodeServerCatalog(t, w)
+	if ix := catalogEntry(t, servers, "ix"); ix["category"] != "house" {
+		t.Errorf("ix category = %v, want the reloaded house", ix["category"])
+	}
+	for _, e := range servers {
+		if e["name"] == "bq" {
+			t.Errorf("bq is configured after the reload but still listed: %v", e)
+		}
+	}
+}

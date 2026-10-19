@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
@@ -178,6 +179,27 @@ func (m *Manager) MCPServerCatalog() []OptionalServerInfo {
 	m.mcpGatingMu.RLock()
 	defer m.mcpGatingMu.RUnlock()
 	return m.optionalServerMetadata
+}
+
+// SetConnectorMeta publishes the Tools picker's connector metadata (every
+// manifest connector, enabled or not). The boot path calls it with the
+// bundle's ConnectorMeta, and the local reload path after a reload; an
+// injected credential owner's reload result carries its own.
+func (m *Manager) SetConnectorMeta(meta []clientconfig.ConnectorMeta) {
+	m.mcpGatingMu.Lock()
+	m.connectorMeta = append([]clientconfig.ConnectorMeta(nil), meta...)
+	m.mcpGatingMu.Unlock()
+}
+
+// ConnectorMeta returns the current connector metadata snapshot, nil until
+// SetConnectorMeta or a reload provides one.
+func (m *Manager) ConnectorMeta() []clientconfig.ConnectorMeta {
+	m.mcpGatingMu.RLock()
+	defer m.mcpGatingMu.RUnlock()
+	if m.connectorMeta == nil {
+		return nil
+	}
+	return append([]clientconfig.ConnectorMeta(nil), m.connectorMeta...)
 }
 
 // AlwaysOnMCPServerCatalog returns enabled non-optional servers plus their live

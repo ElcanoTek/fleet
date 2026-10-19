@@ -144,7 +144,7 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 				Trust:       "bundled",
 			})
 		}
-		for _, m := range s.clientConfig.ConnectorMeta() {
+		for _, m := range s.connectorMeta() {
 			if m.Configured {
 				continue
 			}

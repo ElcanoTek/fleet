@@ -272,10 +272,32 @@ func (r *productionMCPRuntime) reload(ctx context.Context) (*agent.MCPReloadResu
 			Restarted: append([]string(nil), result.Summary.Restarted...),
 			Unchanged: append([]string(nil), result.Summary.Unchanged...),
 		},
-		Catalog:  brokerToolCatalog(result.Tools),
-		Accounts: cloneAccountInventory(result.Accounts),
-		Specs:    publicSpecsFromDescriptors(result.Servers),
+		Catalog:    brokerToolCatalog(result.Tools),
+		Accounts:   cloneAccountInventory(result.Accounts),
+		Specs:      publicSpecsFromDescriptors(result.Servers),
+		Connectors: connectorMetaFromDescriptors(result.Connectors),
 	}, nil
+}
+
+// connectorMetaFromDescriptors maps the child's public connector metadata;
+// nil (an older child, or a test reloader) keeps the previous snapshot.
+func connectorMetaFromDescriptors(descriptors []mcpbroker.ConnectorDescriptor) []clientconfig.ConnectorMeta {
+	if descriptors == nil {
+		return nil
+	}
+	out := make([]clientconfig.ConnectorMeta, 0, len(descriptors))
+	for _, d := range descriptors {
+		out = append(out, clientconfig.ConnectorMeta{
+			Name:        d.Name,
+			DisplayName: d.DisplayName,
+			Description: d.Description,
+			Category:    d.Category,
+			Optional:    d.Optional,
+			Configured:  d.Configured,
+			Tools:       append([]string(nil), d.Tools...),
+		})
+	}
+	return out
 }
 
 func brokerToolCatalog(descriptors []mcpbroker.ToolDescriptor) []mcp.ServerTool {

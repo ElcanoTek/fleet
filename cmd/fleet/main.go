@@ -664,6 +664,9 @@ func run() error {
 		return fmt.Errorf("build interactive engine: %w", err)
 	}
 	defer mgr.Close()
+	// The Tools picker's connector metadata (categories, needs-setup rows),
+	// owned by the Manager so an MCP reload refreshes it with the catalog.
+	mgr.SetConnectorMeta(bundle.ConnectorMeta())
 
 	// Host disk headroom guard: measures the filesystem holding the data dir and
 	// decides whether the box should shed BACKGROUND load. One guard, three
@@ -1345,7 +1348,12 @@ func reloadMCPServers(ctx context.Context, mgr *agent.Manager) (*mcp.ReloadSumma
 		return nil, fmt.Errorf("reload client-config bundle: %w", err)
 	}
 	specs := scheduledrun.BuildMCPSpecs(&config.Config{MCPServers: bundle.MCPServerConfigs()})
-	return mgr.ReloadMCPServers(ctx, specs)
+	summary, err := mgr.ReloadMCPServers(ctx, specs)
+	if err == nil {
+		// The picker's categories and needs-setup rows follow the same read.
+		mgr.SetConnectorMeta(bundle.ConnectorMeta())
+	}
+	return summary, err
 }
 
 // mcpSchemaIssuesResponse is the GET /admin/mcp-servers/schema-issues body.

@@ -62,7 +62,7 @@ const GROUP_LABEL =
 const SMALL_PILL =
   "h-6 shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] border border-[var(--color-pill-border)] px-2.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
 const LINK =
-  "inline-flex items-center gap-1 text-[var(--color-accent)] hover:underline hover:underline-offset-[3px] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]";
+  "inline-flex items-center gap-1 text-[var(--color-link)] hover:underline hover:underline-offset-[3px] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]";
 
 const settingsHref = (name?: string) =>
   name ? `/settings/connections#connector-${encodeURIComponent(name)}` : "/settings/connections";
@@ -167,7 +167,7 @@ export function ToolsLibrary({
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Search tools…"
                 aria-label="Search tools"
-                className="h-9 w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-2.5 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)]"
+                className="h-9 w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-2.5 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
               />
             </div>
             <nav aria-label="Categories" className={RAIL_NAV}>

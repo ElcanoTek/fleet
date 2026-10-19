@@ -585,6 +585,19 @@ describe("ConnectionsPage needs-setup connectors", () => {
     );
   });
 
+  it("ignores a malformed #connector- fragment instead of throwing", async () => {
+    vi.stubGlobal("fetch", mockFetch(undefined, { ...CATALOG, bundled: [BQ] }));
+    window.history.replaceState({}, "", "/settings/connections#connector-%E0%A4%A");
+    render(<ConnectionsPage />);
+    expect(await screen.findByTestId("bundled-card-bigquery")).toBeInTheDocument();
+  });
+
+  it("anchors hosted connections for the Tools library's Manage link", async () => {
+    vi.stubGlobal("fetch", mockFetch(undefined, CATALOG, { ...EMPTY_LIST, servers: [GAMMA_PRIMARY] }));
+    visit("");
+    expect(await screen.findByTestId("remote-group-gamma")).toHaveAttribute("id", "connector-gamma");
+  });
+
   it("scrolls a #connector- deep link into view once the catalog loads", async () => {
     vi.stubGlobal("fetch", mockFetch(undefined, { ...CATALOG, bundled: [BQ] }));
     const scroll = vi.fn();

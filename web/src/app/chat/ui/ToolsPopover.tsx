@@ -183,7 +183,7 @@ export function ToolsPopover({
             onKeyDown={onKey}
             placeholder="Search tools…"
             aria-label="Search tools"
-            className="h-[2.125rem] w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-8 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)]"
+            className="h-[2.125rem] w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-8 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
           />
           {query ? (
             <button
@@ -299,7 +299,7 @@ export function ToolsPopover({
               <button
                 type="button"
                 onClick={() => onOpenLibrary()}
-                className="text-[var(--color-accent)] underline underline-offset-[3px] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                className="text-[var(--color-link)] underline underline-offset-[3px] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
               >
                 Open the full library
               </button>
@@ -321,7 +321,7 @@ export function ToolsPopover({
         <button
           type="button"
           onClick={() => onOpenLibrary()}
-          className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-accent)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-link)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
           Open library
           <Icon name="maximize" className="size-[0.7rem]" />
@@ -438,7 +438,7 @@ function PopoverRow({
               event.stopPropagation();
               onOpenLibrary();
             }}
-            className="inline-flex items-center gap-0.5 whitespace-nowrap text-[0.75rem] text-[var(--color-accent)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            className="inline-flex items-center gap-0.5 whitespace-nowrap text-[0.75rem] text-[var(--color-link)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           >
             Set up
             <Icon name="chevron-right" className="size-3" />

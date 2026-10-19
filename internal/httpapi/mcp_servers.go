@@ -114,15 +114,34 @@ func optionalConnectorStatus(info agent.OptionalServerInfo) string {
 	return connectorStatusAvailable
 }
 
+// connectorMetaProvider is the Manager's live connector metadata, refreshed by
+// an MCP reload. Narrow like alwaysOnMCPServerCatalogProvider so transport
+// fakes need not grow it.
+type connectorMetaProvider interface {
+	ConnectorMeta() []clientconfig.ConnectorMeta
+}
+
+// connectorMeta is every manifest connector's picker metadata: the Manager's
+// reload-fresh snapshot when it has one, else the boot bundle's.
+func (s *Server) connectorMeta() []clientconfig.ConnectorMeta {
+	if p, ok := s.agent.(connectorMetaProvider); ok {
+		if meta := p.ConnectorMeta(); meta != nil {
+			return meta
+		}
+	}
+	if s.clientConfig != nil {
+		return s.clientConfig.ConnectorMeta()
+	}
+	return nil
+}
+
 // connectorCategories maps each bundled connector to its picker category
 // (Misc Tools when untagged; untagged connectors are warned about at
 // startup). Built once per request; look names up with categoryFor.
 func (s *Server) connectorCategories() map[string]string {
 	out := map[string]string{}
-	if s.clientConfig != nil {
-		for _, m := range s.clientConfig.ConnectorMeta() {
-			out[m.Name] = m.Category
-		}
+	for _, m := range s.connectorMeta() {
+		out[m.Name] = m.Category
 	}
 	return out
 }
@@ -142,11 +161,8 @@ func categoryFor(cats map[string]string, name string) string {
 // copy that depends on whether the viewer is an admin. Tool names are the
 // manifest allowlist, the only ones known without launching the server.
 func (s *Server) needsSetupCatalogEntries() []map[string]any {
-	if s.clientConfig == nil {
-		return nil
-	}
 	var out []map[string]any
-	for _, m := range s.clientConfig.ConnectorMeta() {
+	for _, m := range s.connectorMeta() {
 		if m.Configured {
 			continue
 		}
