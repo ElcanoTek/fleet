@@ -119,7 +119,10 @@ version, upstream path, that it was modified, and its SPDX id.
   and `ClientIPFromRemoteAddr`, and their tests (plus the halves of advisory
   tests that exercise them).
 - **Changed:** Recoverer prints `panic: <value>` and Go's stack, not chi's
-  coloured pretty-stack.
+  coloured pretty-stack. `ClientIPFromXFF`'s per-request walk is lifted out of
+  the handler into `xffClientIP` (same code, same semantics) so fleet's own
+  `trusted_proxies.go` — the one client-IP resolver both the orchestrator API
+  and the chat server's IP filter use — runs that exact walk.
 
 ### Syntax highlighting (`web/src/app/chat/ui/highlight/`)
 

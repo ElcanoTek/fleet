@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/httpmw"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 )
 
@@ -27,12 +28,15 @@ import (
 // X-Forwarded-For is honored ONLY when the immediate TCP peer is a configured
 // trusted proxy (FLEET_TRUSTED_PROXIES). The chain is then walked from the
 // RIGHT, skipping hops that are themselves trusted proxies, and the first
-// untrusted address is the client. A chain of only trusted addresses falls
-// back to the TCP peer. With no trusted proxies configured the header is
-// never read, so an untrusted client cannot spoof an allowlisted source by
-// setting X-Forwarded-For itself. (The leftmost-entry convention is
-// attacker-controlled: a client sends `X-Forwarded-For: <spoof>` and a
-// correctly-appending proxy forwards `<spoof>, <real>` — see #1111.)
+// untrusted address is the client. A chain of only trusted addresses, or one
+// with an unparseable entry (the walk stops there: nothing left of garbage is
+// trusted), falls back to the TCP peer. With no trusted proxies configured
+// the header is never read, so an untrusted client cannot spoof an
+// allowlisted source by setting X-Forwarded-For itself. (The leftmost-entry
+// convention is attacker-controlled: a client sends `X-Forwarded-For:
+// <spoof>` and a correctly-appending proxy forwards `<spoof>, <real>` — see
+// #1111.) The resolution is httpmw.TrustedProxies — the same code the
+// orchestrator API keys its rate limits on — not a copy of it.
 
 // logIPFilter emits the active filter state once at construction so an operator
 // can confirm their config loaded. Silent when neither list is set — silence
@@ -67,6 +71,7 @@ func (s *Server) ipFilterMiddleware(next http.Handler) http.Handler {
 	if len(cfg.allow) == 0 && len(cfg.deny) == 0 {
 		return next
 	}
+	trust := httpmw.NewTrustedProxies(cfg.trustedProxies)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// /healthz is exempt: probes from a load balancer / uptime monitor may
 		// originate outside the operator's allowlist.
@@ -74,7 +79,7 @@ func (s *Server) ipFilterMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		ip := clientIP(r, cfg.trustedProxies)
+		ip := clientIP(r, trust)
 		switch {
 		case ip == nil:
 			// Unparseable RemoteAddr is treated as untrusted: fail closed when an
@@ -106,66 +111,16 @@ func blockIP(w http.ResponseWriter, reason string) {
 	_, _ = w.Write([]byte("Access denied\n"))
 }
 
-// clientIP resolves the real client IP for filtering. It starts from the
-// immediate TCP peer (r.RemoteAddr). Only when that peer is a configured
-// trusted proxy does it consult X-Forwarded-For, walking the chain from the
-// right and skipping hops that are themselves trusted proxies (#1111). A
-// chain of only trusted (or unparseable) entries falls back to the TCP
-// peer. With no trusted proxies, the header is ignored entirely — closing
-// the spoofing bypass where an untrusted client sets X-Forwarded-For to an
-// allowlisted address. Returns nil when RemoteAddr cannot be parsed.
-func clientIP(r *http.Request, trustedProxies []net.IP) net.IP {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		// RemoteAddr may already be a bare IP (e.g. in tests / unix sockets).
-		host = r.RemoteAddr
-	}
-	peer := net.ParseIP(strings.TrimSpace(host))
-	if peer == nil {
+// clientIP resolves the real client IP for filtering through the shared
+// resolver (httpmw.TrustedProxies.ClientIP — see the contract above), as a
+// net.IP for the CIDR lists. Returns nil when RemoteAddr cannot be parsed,
+// which the filter treats as untrusted (fail closed under an allowlist).
+func clientIP(r *http.Request, trust httpmw.TrustedProxies) net.IP {
+	ip := trust.ClientIP(r)
+	if !ip.IsValid() {
 		return nil
 	}
-	if !isTrustedProxy(peer, trustedProxies) {
-		return peer
-	}
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff == "" {
-		return peer
-	}
-	if client := rightmostUntrusted(xff, trustedProxies); client != nil {
-		return client
-	}
-	return peer
-}
-
-// rightmostUntrusted walks the X-Forwarded-For chain from the right
-// (closest hop), skipping entries that are themselves trusted proxies or
-// unparseable, and returns the first untrusted address. Returns nil when
-// every parseable hop is trusted so the caller can fall back to the TCP
-// peer. Matches the orchestrator's chi ClientIPFromXFF convention
-// (cmd/fleet/main.go) and the #1111 contract.
-func rightmostUntrusted(xff string, trusted []net.IP) net.IP {
-	parts := strings.Split(xff, ",")
-	for i := len(parts) - 1; i >= 0; i-- {
-		ip := net.ParseIP(strings.TrimSpace(parts[i]))
-		if ip == nil {
-			continue
-		}
-		if isTrustedProxy(ip, trusted) {
-			continue
-		}
-		return ip
-	}
-	return nil
-}
-
-// isTrustedProxy reports whether peer is one of the configured trusted proxy IPs.
-func isTrustedProxy(peer net.IP, trusted []net.IP) bool {
-	for _, t := range trusted {
-		if t.Equal(peer) {
-			return true
-		}
-	}
-	return false
+	return net.IP(ip.AsSlice())
 }
 
 // matchesCIDRList reports whether ip falls inside any network in list.

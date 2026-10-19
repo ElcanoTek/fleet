@@ -114,8 +114,15 @@ is a valid key of the wrong type for the route.
   file kept `0600` with its owner unchanged ([ENV-CLI.md](ENV-CLI.md)).
   Hand-editing is how a duplicate line took a deployment down: the server
   reads the **last** occurrence.
-- `FLEET_TRUSTED_PROXIES=127.0.0.1,::1` so per-client rate limits and IP
-  lists see the real caller behind Caddy ([DEPLOYMENT.md](DEPLOYMENT.md)).
+- `FLEET_TRUSTED_PROXIES=127.0.0.1,::1` is what lets per-client rate limits
+  and IP lists see the real API caller behind Caddy (on the paths Caddy
+  routes to a backend: `/v1/*`, `/a2a`, `/triggers/*`, `/webhooks/*`;
+  browser traffic goes through the web tier and stays keyed as `127.0.0.1`).
+  Bootstrap writes it with the fleet-managed Caddyfile, and
+  `sudo fleet doctor` / `sudo fleet update` add it to an older box that
+  lacks it — while both backends are on loopback; behind any other proxy,
+  or with a backend moved off loopback, set it to the address that proxy
+  connects from yourself ([DEPLOYMENT.md](DEPLOYMENT.md)).
 - `sudo fleet status` probes the sandbox image in the **service user's**
   podman store (root's store is a different namespace; the old root-run
   report said "missing" for an image doctor had just verified).

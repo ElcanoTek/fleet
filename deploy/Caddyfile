@@ -32,8 +32,13 @@
 # to the loopback backends and CHAT_SERVER_TOKEN to FLEET_SERVER_TOKEN.
 #
 # Replace fleet.example.com with your domain; Caddy auto-provisions the cert.
-# Behind this proxy, set FLEET_TRUSTED_PROXIES=127.0.0.1,::1 in fleet.env so the
-# backends read the real client IP from X-Forwarded-For (rate limits, IP lists).
+# Behind this proxy the backends need FLEET_TRUSTED_PROXIES=127.0.0.1,::1 in
+# fleet.env to read the real client IP from X-Forwarded-For (rate limits, IP
+# lists) on the routes below that reach a backend directly; browser traffic
+# goes through Next, which does not forward the header, and stays 127.0.0.1.
+# Bootstrap writes it with this file when the key is absent and the backends
+# are on loopback, and `fleet doctor` / `fleet update --adopt-units` add it to
+# an older box; a hand-installed copy of this file needs it set by hand.
 
 fleet.example.com {
 	encode zstd gzip

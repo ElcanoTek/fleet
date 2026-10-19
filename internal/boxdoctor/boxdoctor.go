@@ -26,6 +26,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/user"
@@ -94,6 +95,11 @@ type Options struct {
 	// DataDir is the writable root whose disk headroom is checked (default
 	// the process working directory — /var/lib/fleet under the shipped unit).
 	DataDir string
+	// TrustedProxies is the process's cfg.TrustedProxies (FLEET_TRUSTED_PROXIES
+	// as config.Load parsed it), consulted when HaveTrustedProxies is set;
+	// otherwise the check parses FLEET_TRUSTED_PROXIES from the environment.
+	TrustedProxies     []net.IP
+	HaveTrustedProxies bool
 	// Deep additionally launches a throwaway sandbox container
 	// (`podman run --rm --network=none <image> true`) — the definitive smoke,
 	// but seconds-slow, so the UI requests it explicitly.
@@ -129,6 +135,11 @@ func Run(ctx context.Context, opts Options) *Report {
 		add(c)
 	}
 	add(checkCaddyfile(caddyfilePath(), orchestratorAddr()))
+	trusted := opts.TrustedProxies
+	if !opts.HaveTrustedProxies {
+		trusted = trustedProxiesFromEnv()
+	}
+	add(checkTrustedProxies(caddyfilePath(), trusted, chatAddr(), orchestratorAddr()))
 	for _, c := range checkRestartChurn(ctx, serviceName(opts.ServiceName)) {
 		add(c)
 	}

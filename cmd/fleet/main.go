@@ -30,7 +30,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -1544,23 +1543,6 @@ func buildA2AConfig(cfg *config.Config, bundle *clientconfig.Bundle, pushEnabled
 	}, nil
 }
 
-// trustedProxyPrefixes turns FLEET_TRUSTED_PROXIES (single IPs) into the
-// host prefixes (/32 or /128) httpmw.ClientIPFromXFF takes. IPv4 addresses
-// parsed into 16-byte form are unmapped first so they become /32 prefixes,
-// matching how ClientIPFromXFF folds v4-mapped peers and hops.
-func trustedProxyPrefixes(ips []net.IP) []string {
-	out := make([]string, 0, len(ips))
-	for _, ip := range ips {
-		addr, ok := netip.AddrFromSlice(ip)
-		if !ok {
-			continue
-		}
-		addr = addr.Unmap()
-		out = append(out, netip.PrefixFrom(addr, addr.BitLen()).String())
-	}
-	return out
-}
-
 // buildOrchestratorMux registers the orchestrator routes (chi), mirroring moc's
 // auth groups, plus the P6b notes CRUD + proposal-decision routes (admin-gated).
 //
@@ -1569,18 +1551,18 @@ func trustedProxyPrefixes(ips []net.IP) []string {
 func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, reloadConfig, reloadMCP http.HandlerFunc, accountEvents *accountevents.Recorder, trustedProxies []net.IP) http.Handler {
 	r := chi.NewRouter()
 	// The client IP keys login and API rate limiting (getClientIP), so it
-	// follows the FLEET_TRUSTED_PROXIES contract the chat server's IP filter
-	// already implements (internal/httpapi/ipfilter.go): empty, the default,
-	// means X-Forwarded-For is NEVER consulted and getClientIP falls back to
-	// the TCP peer in r.RemoteAddr; set, it is read only when that peer is
-	// one of the named proxies. ClientIPFromXFF treats r.RemoteAddr as the
+	// follows the FLEET_TRUSTED_PROXIES contract, resolved by the same
+	// httpmw.TrustedProxies the chat server's IP filter uses
+	// (internal/httpapi/ipfilter.go) so the two servers always name the same
+	// client: empty, the default, means X-Forwarded-For is NEVER consulted
+	// (Middleware is a pass-through) and getClientIP falls back to the TCP
+	// peer in r.RemoteAddr; set, it is read only when that peer is one of the
+	// named proxies. ClientIPFromXFF treats r.RemoteAddr as the
 	// rightmost hop, so a client reaching fleet directly cannot pick its own
 	// identity by sending the header (GHSA-j6qf-3m9c-vwj3); behind a trusted
 	// proxy it walks the chain right-to-left past trusted hops, so a
 	// prepended spoof never wins either (GHSA-3fxj-6jh8-hvhx et al.).
-	if prefixes := trustedProxyPrefixes(trustedProxies); len(prefixes) > 0 {
-		r.Use(httpmw.ClientIPFromXFF(prefixes...))
-	}
+	r.Use(httpmw.NewTrustedProxies(trustedProxies).Middleware())
 	r.Use(httpmw.Recoverer)
 	r.Use(otelsetup.Middleware)          // #186: server span + X-Request-Id (no-op when tracing disabled)
 	r.Use(orchestratorMetricsMiddleware) // #176: record request count + latency

@@ -47,6 +47,70 @@ CADDY_DEFAULT_WEB_ADDR="127.0.0.1:3000"
 CADDY_DEFAULT_CHAT_ADDR="127.0.0.1:8080"
 CADDY_DEFAULT_ORCH_ADDR="127.0.0.1:8000"
 
+# The FLEET_TRUSTED_PROXIES value the fleet-managed front needs. Caddy dials
+# every backend over loopback, so without it both Go listeners see 127.0.0.1
+# as every client: per-client rate limits collapse into one shared bucket and
+# FLEET_IP_ALLOWLIST/DENYLIST judge Caddy instead of the caller. Set, the
+# backends read X-Forwarded-For — but only from these peers, walking the chain
+# right-to-left past them (internal/httpmw), so a client that reaches a
+# listener directly still cannot pick its own address. bootstrap writes it
+# with the Caddyfile; doctor and update add it to a box whose fleet-managed
+# Caddyfile predates that — all three only while both Go upstreams are
+# loopback (caddy_upstreams_loopback). A value the operator set is never
+# replaced.
+CADDY_TRUSTED_PROXIES="127.0.0.1,::1"
+
+# caddy_addr_is_loopback ADDR — true when the host of a host:port listener
+# address ([v6]:port accepted) is 127.0.0.1, ::1 or localhost.
+caddy_addr_is_loopback() {
+  local a="$1" h
+  case "$a" in
+    \[*\]:*) h="${a%%]*}"; h="${h#[}" ;;
+    *:*)     h="${a%:*}" ;;
+    *)       h="$a" ;;
+  esac
+  [[ "$h" == "127.0.0.1" || "$h" == "::1" || "$h" == "localhost" ]]
+}
+
+# caddy_upstreams_loopback [CHAT_ADDR] [ORCH_ADDR] — true when both Go
+# upstreams the fleet-managed Caddyfile proxies to are loopback, resolving
+# empty arguments to the same defaults render_fleet_caddyfile uses (callers
+# pass the env-file values verbatim, as they do to the renderer). Only then
+# does Caddy connect from 127.0.0.1/::1, so only then is CADDY_TRUSTED_PROXIES
+# the right value: with a listener moved to an interface address Caddy dials
+# it from that interface, and the operator must name that address instead —
+# nothing writes a guess.
+caddy_upstreams_loopback() {
+  local chat="${1:-$CADDY_DEFAULT_CHAT_ADDR}" orch="${2:-$CADDY_DEFAULT_ORCH_ADDR}"
+  caddy_addr_is_loopback "$chat" && caddy_addr_is_loopback "$orch"
+}
+
+# caddy_trusted_proxies_state ENV_FILE — how ENV_FILE's FLEET_TRUSTED_PROXIES
+# relates to CADDY_TRUSTED_PROXIES. Prints one word:
+#   unset — no FLEET_TRUSTED_PROXIES= line at all (the gap to repair)
+#   ok    — the same address set (order, spaces and quotes ignored)
+#   other — anything else, including an explicit empty value: the
+#           operator's choice, reported but never rewritten
+# Read without sourcing the file (it holds secrets); last assignment wins, as
+# systemd's EnvironmentFile= applies it. A missing or unreadable file is
+# "unset" — callers decide whether there is a file to write.
+caddy_trusted_proxies_state() {
+  local f="$1" line val have want
+  line="$(grep -E '^FLEET_TRUSTED_PROXIES=' "$f" 2>/dev/null | tail -n1 || true)"
+  if [[ -z "$line" ]]; then
+    printf 'unset\n'; return 0
+  fi
+  val="${line#FLEET_TRUSTED_PROXIES=}"
+  val="$(printf '%s' "$val" | sed -e 's/^["'\'']//' -e 's/["'\'']$//')"
+  have="$(printf '%s' "$val" | tr ',' '\n' | sed 's/[[:space:]]//g' | grep -v '^$' | sort -u | paste -sd, - || true)"
+  want="$(printf '%s' "$CADDY_TRUSTED_PROXIES" | tr ',' '\n' | sort -u | paste -sd, -)"
+  if [[ -n "$have" && "$have" == "$want" ]]; then
+    printf 'ok\n'
+  else
+    printf 'other\n'
+  fi
+}
+
 # caddyfile_is_managed [FILE] — true when FILE carries the fleet marker.
 caddyfile_is_managed() {
   local f="${1:-/etc/caddy/Caddyfile}"

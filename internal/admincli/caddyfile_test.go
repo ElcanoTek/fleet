@@ -403,3 +403,193 @@ func TestCaddyfilePackageDefaultIsNotForeign(t *testing.T) {
 		t.Fatal("a fleet-managed file was treated as foreign")
 	}
 }
+
+// TestCaddyTrustedProxiesState — the predicate bootstrap, doctor and update
+// all decide on: only an ABSENT FLEET_TRUSTED_PROXIES is "unset" (the gap they
+// fill); the loopback pair in any order/spacing/quoting is "ok"; anything else
+// — including an explicit empty value — is the operator's "other", which none
+// of them rewrites. Last assignment wins, as systemd's EnvironmentFile= does.
+func TestCaddyTrustedProxiesState(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"no file", "", "unset"},
+		{"key absent", "OPENROUTER_API_KEY=x\n# FLEET_TRUSTED_PROXIES=127.0.0.1,::1\n", "unset"},
+		{"shipped value", "FLEET_TRUSTED_PROXIES=127.0.0.1,::1\n", "ok"},
+		{"reordered, spaced, quoted", "FLEET_TRUSTED_PROXIES=\"::1, 127.0.0.1\"\n", "ok"},
+		{"explicit empty is the operator's", "FLEET_TRUSTED_PROXIES=\n", "other"},
+		{"v4 only", "FLEET_TRUSTED_PROXIES=127.0.0.1\n", "other"},
+		{"an extra proxy", "FLEET_TRUSTED_PROXIES=127.0.0.1,::1,10.0.0.5\n", "other"},
+		{"last assignment wins", "FLEET_TRUSTED_PROXIES=10.0.0.5\nFLEET_TRUSTED_PROXIES=127.0.0.1,::1\n", "ok"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := filepath.Join(dir, strings.ReplaceAll(tc.name, " ", "_")+".env")
+			if tc.body != "" {
+				if err := os.WriteFile(f, []byte(tc.body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := strings.TrimSpace(renderCaddyfile(t, "caddy_trusted_proxies_state", f)); got != tc.want {
+				t.Errorf("caddy_trusted_proxies_state = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCaddyTrustedProxiesValueParity — the value the scripts write is the one
+// deploy/Caddyfile and deploy/fleet.service tell an operator about, and it
+// names exactly the loopback peers the rendered Caddyfile dials from.
+func TestCaddyTrustedProxiesValueParity(t *testing.T) {
+	root := repoRootFromTest(t)
+	lib, err := os.ReadFile(filepath.Join(root, "scripts", "lib", "caddyfile.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^CADDY_TRUSTED_PROXIES="(.*)"$`).FindStringSubmatch(string(lib))
+	if m == nil {
+		t.Fatal(`scripts/lib/caddyfile.sh must define CADDY_TRUSTED_PROXIES="…"`)
+	}
+	if m[1] != "127.0.0.1,::1" {
+		t.Errorf("CADDY_TRUSTED_PROXIES = %q, want the loopback pair 127.0.0.1,::1", m[1])
+	}
+	for _, f := range []string{"Caddyfile", "fleet.service"} {
+		body, err := os.ReadFile(filepath.Join(root, "deploy", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), "FLEET_TRUSTED_PROXIES="+m[1]) {
+			t.Errorf("deploy/%s must name FLEET_TRUSTED_PROXIES=%s (the value bootstrap writes)", f, m[1])
+		}
+	}
+}
+
+// TestOperatorScriptsSetTrustedProxies — bootstrap writes FLEET_TRUSTED_PROXIES
+// with the Caddyfile; doctor (repair; --check reports) and update (consent:
+// --adopt-units or a TTY yes) add it to an older fleet-managed front. All three
+// decide through the shared predicate and write only when it says "unset".
+func TestOperatorScriptsSetTrustedProxies(t *testing.T) {
+	root := repoRootFromTest(t)
+	for name, wants := range map[string][]string{
+		"bootstrap.sh": {
+			`if ! caddy_upstreams_loopback "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)"; then`,
+			`elif [[ "$(caddy_trusted_proxies_state "$ENV_FILE")" == "unset" ]]; then`,
+			`upsert_env FLEET_TRUSTED_PROXIES "$CADDY_TRUSTED_PROXIES"`,
+			// The restart that applies it is checked, not swallowed.
+			`if systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1; then`,
+			`but restarting ${SERVICE_NAME} FAILED`,
+		},
+		"doctor.sh": {
+			`trusted_state="$(caddy_trusted_proxies_state "$ENV_FILE")"`,
+			`if ! caddy_upstreams_loopback "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)"; then`,
+			`and Caddy proxies to a non-loopback backend`,
+			`fail "FLEET_TRUSTED_PROXIES unset in $ENV_FILE`,
+			`upsert_env_key "$ENV_FILE" FLEET_TRUSTED_PROXIES "$CADDY_TRUSTED_PROXIES"`,
+			`fixed "FLEET_TRUSTED_PROXIES=${CADDY_TRUSTED_PROXIES} added to $ENV_FILE`,
+			`advise "FLEET_TRUSTED_PROXIES is set to '${trusted_val}'`,
+		},
+		"update.sh": {
+			`&& ! caddy_upstreams_loopback "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" "$(env_get FLEET_ORCHESTRATOR_ADDR "$backend_env_file")"; then`,
+			`"$(caddy_trusted_proxies_state "$backend_env_file")" == "unset" ]]; then`,
+			`upsert_env_file "$backend_env_file" FLEET_TRUSTED_PROXIES "$CADDY_TRUSTED_PROXIES"`,
+		},
+	} {
+		body, err := os.ReadFile(filepath.Join(root, "scripts", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(body)
+		for _, want := range wants {
+			if !strings.Contains(s, want) {
+				t.Errorf("%s must contain %q", name, want)
+			}
+		}
+		if strings.Contains(s, `systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+    ok "FLEET_TRUSTED_PROXIES`) {
+			t.Errorf("%s swallows the restart that applies FLEET_TRUSTED_PROXIES and reports success anyway", name)
+		}
+		// Only ever written through the predicate: no unconditional write.
+		if n, m := strings.Count(s, "FLEET_TRUSTED_PROXIES \"$CADDY_TRUSTED_PROXIES\""), strings.Count(s, "caddy_trusted_proxies_state"); n == 0 || m < n {
+			t.Errorf("%s: %d writes of FLEET_TRUSTED_PROXIES but %d state checks — every write must be gated on the predicate", name, n, m)
+		}
+	}
+	// update's write sits under the same consent gate as the Caddyfile rewrite.
+	upd, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := sliceBetween(t, string(upd), `"$(caddy_trusted_proxies_state "$backend_env_file")" == "unset" ]]; then`, "# ── offer to install missing scheduled-maintenance timer pairs")
+	for _, want := range []string{`elif [[ "$ADOPT_UNITS" == "1" ]]; then`, `elif [[ -t 0 && "$ASSUME_YES" != "1" ]]; then`, `if [[ "$do_adopt" == "1" ]]; then`} {
+		if !strings.Contains(block, want) {
+			t.Errorf("update.sh FLEET_TRUSTED_PROXIES block must gate on consent (missing %q)", want)
+		}
+	}
+}
+
+// TestBootstrapDryRunPlansTrustedProxies — with --domain the plan says it will
+// write FLEET_TRUSTED_PROXIES when the env file lacks it, and that it leaves
+// an operator's value alone when present.
+func TestBootstrapDryRunPlansTrustedProxies(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	args := []string{"--dry-run", "--postgres=local", "--enable-web", "--domain", "fleet.example.com"}
+	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", args...)
+	if err != nil {
+		t.Fatalf("bootstrap --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if !strings.Contains(out, "would set FLEET_TRUSTED_PROXIES=127.0.0.1,::1 in "+envFile) {
+		t.Errorf("plan must say it sets FLEET_TRUSTED_PROXIES for the Caddy front\n--- output ---\n%s", out)
+	}
+	if err := os.WriteFile(envFile, []byte("FLEET_TRUSTED_PROXIES=10.0.0.5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", args...)
+	if err != nil {
+		t.Fatalf("bootstrap --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if strings.Contains(out, "would set FLEET_TRUSTED_PROXIES") || !strings.Contains(out, "FLEET_TRUSTED_PROXIES already set") {
+		t.Errorf("an operator's FLEET_TRUSTED_PROXIES must be left alone\n--- output ---\n%s", out)
+	}
+}
+
+// TestCaddyUpstreamsLoopback — 127.0.0.1,::1 is the right FLEET_TRUSTED_PROXIES
+// only while Caddy dials both Go listeners over loopback. Empty arguments mean
+// the renderer's defaults (callers pass env-file values verbatim); a listener
+// on an interface address — or on every interface — is not loopback.
+func TestCaddyUpstreamsLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		chat, orch string
+		want       bool
+	}{
+		{"", "", true},
+		{"127.0.0.1:9080", "127.0.0.1:9000", true},
+		{"[::1]:8080", "localhost:8000", true},
+		{"10.0.0.5:8080", "", false},
+		{"", "192.0.2.10:8000", false},
+		{"0.0.0.0:8080", "", false},
+		{":8080", "", false},
+		{"", "[2001:db8::1]:8000", false},
+	} {
+		_, err := runCaddyfileFn(t, nil, "caddy_upstreams_loopback", tc.chat, tc.orch)
+		if got := err == nil; got != tc.want {
+			t.Errorf("caddy_upstreams_loopback(%q, %q) = %v, want %v", tc.chat, tc.orch, got, tc.want)
+		}
+	}
+}
+
+// TestBootstrapDryRunNonLoopbackUpstreamWritesNothing — a backend listener
+// moved off loopback means Caddy connects from an interface address, so the
+// plan must not claim it writes 127.0.0.1,::1.
+func TestBootstrapDryRunNonLoopbackUpstreamWritesNothing(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, []byte("FLEET_ORCHESTRATOR_ADDR=10.0.0.5:8000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh",
+		"--dry-run", "--postgres=local", "--enable-web", "--domain", "fleet.example.com")
+	if err != nil {
+		t.Fatalf("bootstrap --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if strings.Contains(out, "would set FLEET_TRUSTED_PROXIES") || !strings.Contains(out, "would NOT write FLEET_TRUSTED_PROXIES") {
+		t.Errorf("non-loopback upstream: plan must not write FLEET_TRUSTED_PROXIES\n--- output ---\n%s", out)
+	}
+}

@@ -32,6 +32,7 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.cfg != nil {
 		opts.SandboxImage = s.cfg.SandboxImage
+		opts.TrustedProxies, opts.HaveTrustedProxies = s.cfg.TrustedProxies, true
 	}
 	if opts.SandboxImage == "" && s.clientConfig != nil {
 		opts.SandboxImage = s.clientConfig.Sandbox().ResolvedImageRef()
