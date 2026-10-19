@@ -70,7 +70,10 @@
 #                              Caddyfile routes the browser to the web tier and
 #                              the public API (/v1/*, /api-info, the A2A agent
 #                              card, /triggers/*, /webhooks/*) to the Go backends
-#                              (scripts/lib/caddyfile.sh; see deploy/Caddyfile).
+#                              (scripts/lib/caddyfile.sh; see deploy/Caddyfile),
+#                              and FLEET_TRUSTED_PROXIES=127.0.0.1,::1 is set in
+#                              the env file when absent so the backends read
+#                              the client IP Caddy forwards.
 #   --admin <email[,email...]> register these emails as full admins (web login +
 #                              chat-admin + Operations Center) at the end of an
 #                              --enable-service run; passwords are prompted per
@@ -800,6 +803,18 @@ deploy_web_tier() {
     > /etc/caddy/Caddyfile
   if command -v caddy >/dev/null 2>&1 && ! caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
     warn "caddy validate rejected the rendered /etc/caddy/Caddyfile — check: caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile"
+  fi
+  # Caddy reaches both Go listeners over loopback, so the backends must trust
+  # it for X-Forwarded-For or every client looks like 127.0.0.1 (one shared
+  # rate-limit bucket; the IP allow/deny filter judging Caddy). Written only
+  # when the key is ABSENT: a value the operator set — even an empty one — is
+  # theirs. The backend is restarted so the running process reads it.
+  if [[ "$(caddy_trusted_proxies_state "$ENV_FILE")" == "unset" ]]; then
+    upsert_env FLEET_TRUSTED_PROXIES "$CADDY_TRUSTED_PROXIES"
+    systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+    ok "FLEET_TRUSTED_PROXIES=${CADDY_TRUSTED_PROXIES} in ${ENV_FILE} — the backends read X-Forwarded-For from Caddy (and only from Caddy)"
+  else
+    info "FLEET_TRUSTED_PROXIES already set in ${ENV_FILE} ($(env_get FLEET_TRUSTED_PROXIES)) — leaving it"
   fi
   if command -v firewall-cmd >/dev/null 2>&1; then
     firewall-cmd --add-service=http --add-service=https --permanent >/dev/null 2>&1 || true
@@ -1703,6 +1718,11 @@ if [[ "$ENABLE_WEB" == "1" ]]; then
     if [[ -n "$WEB_DOMAIN" ]]; then
       info "[dry-run] would build web/ for https://${WEB_DOMAIN} → /opt/fleet/web, write fleet-web.env, enable fleet-web, install Caddy + open 80/443."
       info "[dry-run] would write /etc/caddy/Caddyfile from scripts/lib/caddyfile.sh: https://${WEB_DOMAIN} → web tier (127.0.0.1:3000); /v1/*, /api-info, /.well-known/agent-card.json, /a2a, /triggers/* → orchestrator (127.0.0.1:8000); /webhooks/* → chat (127.0.0.1:8080); then reload caddy (an already-running caddy is reloaded, not just enabled)."
+      if [[ "$(caddy_trusted_proxies_state "$ENV_FILE")" == "unset" ]]; then
+        info "[dry-run] would set FLEET_TRUSTED_PROXIES=${CADDY_TRUSTED_PROXIES} in ${ENV_FILE} (Caddy is the loopback proxy in front of both backends) + restart ${SERVICE_NAME}"
+      else
+        info "[dry-run] FLEET_TRUSTED_PROXIES already set in ${ENV_FILE} — would leave it"
+      fi
       if caddyfile_is_package_default; then
         info "[dry-run] would replace the caddy package's stock /etc/caddy/Caddyfile (unmodified default, no drop-in sites) — a copy kept beside it"
       fi

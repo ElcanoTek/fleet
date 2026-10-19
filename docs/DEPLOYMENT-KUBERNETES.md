@@ -218,9 +218,17 @@ podman backend guarantees (#796).
    chart — sandbox pods pin there and autoscale the pool, while the control
    plane stays on your general nodes. This is the horizontal scaling story:
    more runner capacity is a bigger pool, never a second fleet.
-9. **Run `fleet validate-config`** (`kubectl -n fleet exec deploy/fleet --
-   fleet validate-config`) after any config change: it runs the same
-   fail-closed preflight boot does, plus everything else the verb checks.
+9. **Client IPs behind the Ingress.** The chart sets no
+   `FLEET_TRUSTED_PROXIES`, so by default the control plane sees whatever
+   connects to the fleet Service (the ingress controller, or the web pod) as
+   the client: per-client rate limits share that address and
+   `FLEET_IP_ALLOWLIST`/`DENYLIST` judge it. To use the real caller's IP, set
+   `config.env.FLEET_TRUSTED_PROXIES` to the addresses that proxy connects
+   from. It takes single IPs, not CIDRs, so it suits a proxy with stable
+   addresses; X-Forwarded-For is read only from those peers.
+10. **Run `fleet validate-config`** (`kubectl -n fleet exec deploy/fleet --
+    fleet validate-config`) after any config change: it runs the same
+    fail-closed preflight boot does, plus everything else the verb checks.
 
 ## Day-2 operations
 

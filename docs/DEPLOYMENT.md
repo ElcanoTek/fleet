@@ -475,9 +475,19 @@ each piece yourself):
    `https://<domain>/api-info` through Caddy; `sudo fleet update` offers the
    same rewrite (or does it under `--adopt-units`). A Caddyfile fleet did not
    write is never rewritten — merge the two `handle` blocks from
-   `deploy/Caddyfile` yourself. Behind this proxy, set
-   `FLEET_TRUSTED_PROXIES=127.0.0.1,::1` (below) so the backends see real
-   client IPs.
+   `deploy/Caddyfile` yourself.
+
+   Behind this proxy the backends need `FLEET_TRUSTED_PROXIES=127.0.0.1,::1`
+   (below) to see real client IPs rather than Caddy's loopback address.
+   Bootstrap writes it into `fleet.env` alongside the Caddyfile when the key
+   is absent; on a box provisioned before that, `sudo fleet doctor` adds it
+   (`--check` reports it) and `sudo fleet update` offers to (or does under
+   `--adopt-units`) — both only when a fleet-managed Caddyfile is installed
+   and the key is absent, then restart fleet to apply it. A value you set
+   yourself, even an empty one, is never replaced. With a proxy fleet did not
+   set up — your own Caddyfile, nginx, a load balancer, a Kubernetes ingress
+   ([DEPLOYMENT-KUBERNETES.md](DEPLOYMENT-KUBERNETES.md)) — set it yourself
+   to the addresses that proxy connects from.
 
    For deployments that terminate TLS **directly at the Fleet chat process**
    instead of a fronting proxy, the chat server can serve HTTPS itself via
@@ -511,13 +521,18 @@ each piece yourself):
      one of these does fleet read the real client IP from `X-Forwarded-For`,
      walking the chain from the right and skipping hops that are themselves
      trusted proxies (so a client-supplied leftmost value cannot spoof the
-     allowlist). A chain of only trusted addresses is treated as the TCP peer.
+     allowlist). A chain of only trusted addresses is treated as the TCP peer,
+     and so is a chain with an unparseable entry: the walk stops there
+     (fail-closed — nothing left of garbage is trusted).
      **Without this set, `X-Forwarded-For` is never consulted**, so an untrusted
      client cannot spoof an allowlisted address via the header — you must
      explicitly opt in by naming your proxy IPs. The same setting decides the
      client IP the orchestrator API keys its login and per-IP rate limits on:
-     unset, that is the TCP peer, so behind Caddy every caller shares the
-     proxy's `127.0.0.1` bucket until you name it here.
+     unset, that is the TCP peer, so behind a proxy every caller shares the
+     proxy's address until you name it here. Both servers resolve the client
+     IP with the same code (`internal/httpmw`), so they always agree. The
+     single-box install sets `127.0.0.1,::1` for its own Caddy front (above);
+     for any other proxy you set it.
 
    Blocked requests get a uniform `403 Access denied` (plain text, no reason
    leaked); `/healthz` is exempt so load-balancer probes keep working; a

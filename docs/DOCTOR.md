@@ -17,7 +17,10 @@ Two halves of one feature, split by privilege:
    route to the Go backends, not 404 at the web tier — a drifted
    fleet-managed file is rewritten from `scripts/lib/caddyfile.sh` with a
    timestamped backup, `caddy validate` and `systemctl reload caddy`; an
-   operator's own Caddyfile only gets an advisory), service health + the
+   operator's own Caddyfile only gets an advisory) and, behind that
+   fleet-managed front, `FLEET_TRUSTED_PROXIES` (added as `127.0.0.1,::1`
+   when the key is absent, so the backends see real client IPs; a value the
+   operator set is left alone), service health + the
    `/healthz` + `/readyz` probes **and** `https://<domain>/api-info` fetched
    *through* Caddy (`--resolve` pinned to this box, so it tests the proxy's
    routing rather than DNS), the scheduled-backup timer, and a sandbox smoke run **as

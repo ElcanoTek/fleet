@@ -69,6 +69,7 @@
 #   # FLEET_IP_ALLOWLIST=192.168.1.0/24,10.0.0.0/8 # if set, ONLY these IPs/CIDRs may connect
 #   # FLEET_IP_DENYLIST=45.33.32.156             # always blocked (deny overrides allow)
 #   # FLEET_TRUSTED_PROXIES=127.0.0.1,::1        # only these peers' X-Forwarded-For is trusted
+#   #   (bootstrap --domain writes this for its Caddy front; doctor/update add it when absent)
 #   # Task-completion notifications (#208) — host-side outbound email/webhook on a
 #   # scheduled task reaching a terminal status. ALL OFF by default: with none of
 #   # these set, no notifications fire and behavior is unchanged. Secrets

@@ -61,6 +61,9 @@
 #                          whose layout drifted from scripts/lib/caddyfile.sh
 #                          (e.g. one that predates the /v1 API routes) and
 #                          reloads caddy — same consent rule, same prompt.
+#                          Likewise sets FLEET_TRUSTED_PROXIES=127.0.0.1,::1
+#                          in the env file behind a fleet-managed Caddyfile
+#                          when the key is absent (never replaces a value).
 #   --yes / -y             skip the confirm prompt (env FLEET_UPDATE_YES=1)
 #   --no-timers            don't offer to install a missing fleet-backup /
 #                          fleet-maintenance timer pair, and don't hint about
@@ -1645,6 +1648,37 @@ if command -v systemctl >/dev/null 2>&1; then
           warn "  review: diff $CADDYFILE <(bash -c '. $SRC_DIR/scripts/lib/caddyfile.sh; render_fleet_caddyfile ${caddy_domain}')"
           warn "  adopt:  sudo fleet update --adopt-units   (or: sudo fleet doctor, which rewrites a drifted fleet-managed Caddyfile without asking)"
         fi
+      fi
+    fi
+    # The front's other half: Caddy reaches both Go listeners over loopback, so
+    # the backends need FLEET_TRUSTED_PROXIES naming it or every client looks
+    # like 127.0.0.1 (one shared rate-limit bucket; the IP allow/deny filter
+    # judging Caddy). bootstrap writes it with the Caddyfile; a box provisioned
+    # before it did has none. Same consent rule as the Caddyfile above, and
+    # only when the key is ABSENT — a value the operator set (even an empty
+    # one) is theirs. The step-5 restart makes the running process read it.
+    if [[ -r "$backend_env_file" && "$(caddy_trusted_proxies_state "$backend_env_file")" == "unset" ]]; then
+      warn "FLEET_TRUSTED_PROXIES is unset in ${backend_env_file} behind the fleet-managed Caddy front — every client looks like 127.0.0.1 to the backends (shared rate limits; the IP allow/deny filter judges Caddy)."
+      do_adopt=0
+      if [[ "$DRY_RUN" == "1" ]]; then
+        info "[dry-run] would offer to set FLEET_TRUSTED_PROXIES=${CADDY_TRUSTED_PROXIES} in ${backend_env_file} (applied by the step-5 restart)"
+      elif [[ "$ADOPT_UNITS" == "1" ]]; then
+        do_adopt=1
+      elif [[ -t 0 && "$ASSUME_YES" != "1" ]]; then
+        printf '%s?%s Set %sFLEET_TRUSTED_PROXIES=%s%s in %s? %s(Caddy is the loopback proxy in front of both backends; applied by the step-5 restart) (y/N)%s ' \
+          "$c_cyan" "$c_reset" "$c_bold" "$CADDY_TRUSTED_PROXIES" "$c_reset" "$backend_env_file" "$c_dim" "$c_reset"
+        read -r answer
+        case "${answer,,}" in y|yes) do_adopt=1 ;; esac
+      fi
+      if [[ "$do_adopt" == "1" ]]; then
+        if upsert_env_file "$backend_env_file" FLEET_TRUSTED_PROXIES "$CADDY_TRUSTED_PROXIES" 2>/dev/null \
+            && [[ "$(caddy_trusted_proxies_state "$backend_env_file")" == "ok" ]]; then
+          ok "set FLEET_TRUSTED_PROXIES=${CADDY_TRUSTED_PROXIES} in ${backend_env_file} — the backends read X-Forwarded-For from Caddy (and only from Caddy) after the restart"
+        else
+          warn "could not set FLEET_TRUSTED_PROXIES in ${backend_env_file} (need root?) — add: FLEET_TRUSTED_PROXIES=${CADDY_TRUSTED_PROXIES}"
+        fi
+      elif [[ "$DRY_RUN" != "1" ]]; then
+        warn "  adopt:  sudo fleet update --adopt-units   (or: sudo fleet doctor, which adds it without asking; or: sudo fleet config set-env FLEET_TRUSTED_PROXIES --value ${CADDY_TRUSTED_PROXIES})"
       fi
     fi
   fi
