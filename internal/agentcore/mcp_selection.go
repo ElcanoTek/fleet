@@ -7,9 +7,11 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // MCPVariantClientEnvVar is injected into every ACCOUNT-VARIANT stdio
@@ -268,7 +270,22 @@ func NewMCPConnectFailure(server string, err error) MCPConnectFailure {
 // budget; a timeout is not retried) before it is skipped — production lost
 // whole runs to a one-minute DNS blip and to a vendor's "temporarily
 // unavailable" handshake reply. A stdio server is started once, as before.
+//
+// Binding runs in two phases. The whole selection is resolved first, so a
+// configuration error (an unknown server, a refused account variant) aborts
+// before anything is spawned. The servers then connect concurrently, at most
+// mcpBindConcurrency at a time: every interactive turn opens a fresh scope,
+// and connecting one server after another made the turn wait for the SUM of
+// their start-up times instead of roughly the slowest one. Results are
+// reported in selection order regardless of which server finished first, and
+// the error returned for a Required failure is the first one that happened.
+// A run that retries connects (WithConnectRetry) still binds sequentially, so
+// its shared retry allowance is charged as before. Repeating one choice binds
+// it once; two different choices that resolve to the same registration name
+// are refused.
 func BindMCPSelectionReport(ctx context.Context, client *mcp.Client, selection MCPSelection, bases map[string]MCPServerBase, workdir string) (registered []string, failed []MCPConnectFailure, err error) {
+	plans := make([]mcpBindPlan, 0, len(selection))
+	byName := make(map[string]MCPChoice, len(selection))
 	for _, choice := range selection {
 		base, ok := bases[choice.Server]
 		if !ok {
@@ -278,7 +295,7 @@ func BindMCPSelectionReport(ctx context.Context, client *mcp.Client, selection M
 			// — its <VAR>_<ACCOUNT> set but the bare <VAR> empty — is excluded by
 			// the enable gate). Surface both so the operator knows to check the
 			// default-seat env, not just the spelling.
-			return registered, failed, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"mcp selection references server %q which is not in the active catalog — "+
 					"it is either misspelled or configured-but-gated-off (its default-seat "+
 					"credentials are unset; every connector needs its bare default-seat env "+
@@ -287,56 +304,171 @@ func BindMCPSelectionReport(ctx context.Context, client *mcp.Client, selection M
 
 		name, variantEnv, err := resolveMCPVariant(choice.Server, base, choice.Account)
 		if err != nil {
-			return registered, failed, err
+			return nil, nil, err
 		}
-
-		// HTTP servers register via headers (no env overlay, no account variants).
-		if base.HTTPURL != "" {
-			if err := mcp.RetryTransientConnect(ctx, name, func(attemptCtx context.Context) error {
-				return client.AddHTTPServerWithOptions(attemptCtx, name, base.HTTPURL, mcp.HTTPServerOptions{Headers: base.HTTPHeaders, TLS: base.HTTPTLS})
-			}); err != nil {
-				if base.Required {
-					return registered, failed, fmt.Errorf("register http server %q: %w", name, err)
-				}
-				log.Printf("mcp: skipping best-effort http server %q — failed to register: %v", name, err)
-				failed = append(failed, NewMCPConnectFailure(name, err))
+		// Two different choices can resolve to one registration name ({foo, bar}
+		// and {foo_bar, ""} both register as foo_bar). Binding both would race
+		// two servers onto one client entry; refuse rather than pick one, since
+		// the scope's authorization is keyed by the choice, not the name.
+		if prev, dup := byName[name]; dup {
+			if creds.CanonicalAccount(prev.Account) == creds.CanonicalAccount(choice.Account) && prev.Server == choice.Server {
 				continue
 			}
-			registered = append(registered, name)
-			continue
+			return nil, nil, fmt.Errorf("mcp selection entries {%s, %q} and {%s, %q} both register as %q",
+				prev.Server, prev.Account, choice.Server, choice.Account, name)
 		}
+		byName[name] = choice
+		plans = append(plans, mcpBindPlan{name: name, base: base, env: variantEnv})
+	}
 
-		// NewStdioTransport sets variantEnv on cmd.Env — credentials are never on
-		// argv and never enter the sandbox container. The subprocess launches in
-		// this scope's workspace when it has one (StdioCwd), else base.Dir;
-		// script args are absolutized at bundle load, so neither choice affects
-		// whether the server starts.
-		//
-		// Graceful degradation (#182): a best-effort server that fails to start
-		// (transport error, bad command, init timeout) is logged and SKIPPED so the
-		// rest of the selection still registers and the run proceeds with the tools
-		// that did come up. A Required server still aborts the run.
-		variantEnv = ExpandWorkspaceEnv(variantEnv, workdir)
-		// ${FLEET_TASK_ID}: the scheduled per-run path already substituted the
-		// real task ID into BaseEnv (scheduledrun), so this is a no-op there.
-		// Every other caller has no task identity — drop token-bearing keys
-		// instead of leaking the literal placeholder to the connector.
-		variantEnv = ExpandTaskIDEnv(variantEnv, "")
-		// ${FLEET_WORKSPACE_ROOT}: the deployment root, offered on every path
-		// (per-run, load-on-demand and broker scopes all bind through here).
-		variantEnv = ExpandWorkspaceRootEnv(variantEnv)
-		cwd := StdioCwd(base.Dir, base.DirPinned, workdir)
-		if err := client.AddStdioServer(ctx, name, base.Command, base.Args, variantEnv, cwd); err != nil {
-			if base.Required {
-				return registered, failed, fmt.Errorf("register server %q: %w", name, err)
+	// A Required failure cancels the connects still in flight; the run is
+	// aborting, so finishing them only delays the error. Every worker is still
+	// joined before returning, so no registration lands after the caller has
+	// seen the result (and closed the client).
+	bindCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// Each slot starts as a failure, so a worker that panics (safe.Go recovers
+	// it) can never be reported as registered.
+	outcomes := make([]error, len(plans))
+	for i := range outcomes {
+		outcomes[i] = errMCPBindIncomplete
+	}
+	var (
+		requiredMu  sync.Mutex
+		requiredErr error
+	)
+	bind := func(i int) {
+		// Deferred so a panicking connect (recovered by safe.Go) still records
+		// a Required failure and cancels its siblings at once, instead of
+		// surfacing only after the slowest of them finishes.
+		defer func() {
+			if outcomes[i] == nil || !plans[i].base.Required {
+				return
 			}
-			log.Printf("mcp: skipping best-effort server %q — failed to register: %v", name, err)
-			failed = append(failed, NewMCPConnectFailure(name, err))
+			requiredMu.Lock()
+			// The first Required failure is the cause; a later one may be only
+			// the cancellation it triggered.
+			if requiredErr == nil {
+				requiredErr = outcomes[i]
+				if errors.Is(requiredErr, errMCPBindIncomplete) {
+					requiredErr = fmt.Errorf("register server %q: %w", plans[i].name, requiredErr)
+				}
+				cancel()
+			}
+			requiredMu.Unlock()
+		}()
+		// A worker that waited for a slot re-checks: a Required failure or the
+		// caller ending the run while it queued means nothing more is spawned.
+		if err := bindCtx.Err(); err != nil {
+			outcomes[i] = fmt.Errorf("register server %q: %w", plans[i].name, err)
+			return
+		}
+		outcomes[i] = bindMCPServer(bindCtx, client, plans[i], workdir)
+	}
+	if mcp.ConnectRetryBudgetLeft(ctx) > 0 {
+		// A run that retries connects (scheduled runs) binds one server at a
+		// time, as it always has: the retry allowance is charged per pause, so
+		// concurrent retries would each be billed for the same wall-clock wait
+		// and starve one another. Only interactive turns, which never retry,
+		// take the concurrent path.
+		for i := range plans {
+			bind(i)
+		}
+	} else {
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, mcpBindConcurrency)
+		for i := range plans {
+			wg.Add(1)
+			safe.Go("mcp.bind."+plans[i].name, func() {
+				defer wg.Done()
+				select {
+				case sem <- struct{}{}:
+				case <-bindCtx.Done():
+					outcomes[i] = bindCtx.Err()
+					return
+				}
+				defer func() { <-sem }()
+				bind(i)
+			})
+		}
+		wg.Wait()
+	}
+
+	for i, plan := range plans {
+		if outcomes[i] == nil {
+			registered = append(registered, plan.name)
 			continue
 		}
-		registered = append(registered, name)
+		if plan.base.Required {
+			// A Required server that never reported (its worker panicked, or
+			// the caller's ctx ended before it started) still fails the bind.
+			if requiredErr == nil {
+				requiredErr = fmt.Errorf("register server %q: %w", plan.name, outcomes[i])
+			}
+			continue
+		}
+		log.Printf("mcp: skipping best-effort server %q — failed to register: %v", plan.name, outcomes[i])
+		failed = append(failed, NewMCPConnectFailure(plan.name, outcomes[i]))
+	}
+	if requiredErr != nil {
+		return registered, failed, requiredErr
 	}
 	return registered, failed, nil
+}
+
+// errMCPBindIncomplete marks a server whose connect never reported back.
+var errMCPBindIncomplete = errors.New("mcp: server connect did not complete")
+
+// mcpBindConcurrency caps how many servers one selection connects at once, so
+// a large selection does not fork its whole catalog in a single burst.
+const mcpBindConcurrency = 8
+
+// mcpBindPlan is one resolved selection entry: the name it registers under and
+// the default-seat or account-variant env it starts with.
+type mcpBindPlan struct {
+	name string
+	base MCPServerBase
+	env  map[string]string
+}
+
+// bindMCPServer connects one resolved server onto client. Errors carry the
+// server name; a Required server's error aborts the whole bind.
+func bindMCPServer(ctx context.Context, client *mcp.Client, plan mcpBindPlan, workdir string) error {
+	name, base := plan.name, plan.base
+	// HTTP servers register via headers (no env overlay, no account variants).
+	if base.HTTPURL != "" {
+		if err := mcp.RetryTransientConnect(ctx, name, func(attemptCtx context.Context) error {
+			return client.AddHTTPServerWithOptions(attemptCtx, name, base.HTTPURL, mcp.HTTPServerOptions{Headers: base.HTTPHeaders, TLS: base.HTTPTLS})
+		}); err != nil {
+			return fmt.Errorf("register http server %q: %w", name, err)
+		}
+		return nil
+	}
+
+	// NewStdioTransport sets the env on cmd.Env — credentials are never on
+	// argv and never enter the sandbox container. The subprocess launches in
+	// this scope's workspace when it has one (StdioCwd), else base.Dir;
+	// script args are absolutized at bundle load, so neither choice affects
+	// whether the server starts.
+	//
+	// Graceful degradation (#182): a best-effort server that fails to start
+	// (transport error, bad command, init timeout) is logged and SKIPPED by the
+	// caller so the rest of the selection still registers and the run proceeds
+	// with the tools that did come up. A Required server still aborts the run.
+	env := ExpandWorkspaceEnv(plan.env, workdir)
+	// ${FLEET_TASK_ID}: the scheduled per-run path already substituted the
+	// real task ID into BaseEnv (scheduledrun), so this is a no-op there.
+	// Every other caller has no task identity — drop token-bearing keys
+	// instead of leaking the literal placeholder to the connector.
+	env = ExpandTaskIDEnv(env, "")
+	// ${FLEET_WORKSPACE_ROOT}: the deployment root, offered on every path
+	// (per-run, load-on-demand and broker scopes all bind through here).
+	env = ExpandWorkspaceRootEnv(env)
+	cwd := StdioCwd(base.Dir, base.DirPinned, workdir)
+	if err := client.AddStdioServer(ctx, name, base.Command, base.Args, env, cwd); err != nil {
+		return fmt.Errorf("register server %q: %w", name, err)
+	}
+	return nil
 }
 
 func upperAccount(account string) string {
