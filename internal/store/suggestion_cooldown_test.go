@@ -31,6 +31,12 @@ func TestCountUserMessagesAfterResolution_SameSecond(t *testing.T) {
 			t.Fatalf("AppendHistory: %v", err)
 		}
 	}
+	// AppendHistory stamps the wall clock, which a slow run (-race) can carry
+	// into the next second; pin every row to the answer's second, which is the
+	// case under test.
+	if _, err := s.db.ExecContext(ctx, `UPDATE messages SET created_at = $1 WHERE conversation_id = $2`, resolvedAt, conv.ID); err != nil {
+		t.Fatal(err)
+	}
 	n, err := s.CountUserMessagesAfterResolution(ctx, conv.ID, "call_1", resolvedAt)
 	if err != nil {
 		t.Fatalf("CountUserMessagesAfterResolution: %v", err)
