@@ -298,3 +298,19 @@ func TestReloadMCPServers_InjectedBrokerRefreshesConnectorMeta(t *testing.T) {
 		t.Fatalf("a reload without connector metadata must keep the snapshot, got %+v", got)
 	}
 }
+
+// A reload that removes every connector replaces the snapshot with an empty
+// one; it must not read as "no data" and keep the removed connectors listed.
+func TestReloadMCPServers_EmptyConnectorMetaReplacesSnapshot(t *testing.T) {
+	m := &Manager{mcpBroker: inertMCPBroker{}}
+	m.SetConnectorMeta([]clientconfig.ConnectorMeta{{Name: "A"}})
+	m.reloadMCP = func(context.Context) (*MCPReloadResult, error) {
+		return &MCPReloadResult{Specs: map[string]MCPServerSpec{}, Connectors: []clientconfig.ConnectorMeta{}}, nil
+	}
+	if _, err := m.ReloadMCPServers(context.Background(), nil); err != nil {
+		t.Fatalf("ReloadMCPServers: %v", err)
+	}
+	if got := m.ConnectorMeta(); got == nil || len(got) != 0 {
+		t.Fatalf("connector meta = %#v, want an empty non-nil snapshot", got)
+	}
+}

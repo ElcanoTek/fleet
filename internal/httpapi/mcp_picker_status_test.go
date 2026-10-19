@@ -205,3 +205,28 @@ func TestPickerPrefersReloadedConnectorMeta(t *testing.T) {
 		}
 	}
 }
+
+// After a reload turns an always-on connector's credentials off, Settings lists
+// it once, as needs-setup, not also as the boot-time always-on card.
+func TestMCPCatalogAlwaysOnFollowsReloadedMeta(t *testing.T) {
+	srv := pickerStatusServer(t)
+	srv.agent = metaEngine{catalogEngine: srv.agent.(*catalogEngine), meta: []clientconfig.ConnectorMeta{
+		{Name: "ix", Category: "ssps", Configured: true, Optional: true},
+		{Name: "email", Category: "misc", Configured: false},
+	}}
+	w := httptest.NewRecorder()
+	srv.mcpCatalog(w, httptest.NewRequest(http.MethodGet, "/mcp-catalog", nil))
+	var resp mcpCatalogResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	var cards []mcpCatalogBundledEntry
+	for _, e := range resp.Bundled {
+		if e.Name == "email" {
+			cards = append(cards, e)
+		}
+	}
+	if len(cards) != 1 || !cards[0].NeedsSetup {
+		t.Fatalf("email cards = %+v, want exactly one needs-setup card", cards)
+	}
+}

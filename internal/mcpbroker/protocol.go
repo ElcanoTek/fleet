@@ -180,7 +180,10 @@ type ReloadResult struct {
 	// enabled or not, from the child's fresh bundle read: the child's
 	// environment decides "configured", which a scrubbed parent cannot.
 	// Names, copy, category and tool allowlist only; never env or values.
-	Connectors []ConnectorDescriptor `json:"connectors,omitempty"`
+	// No omitempty: a bundle with no connectors sends [] (replace the
+	// snapshot with nothing), which must stay distinct from an older child
+	// that sends no field at all (keep the snapshot).
+	Connectors []ConnectorDescriptor `json:"connectors"`
 }
 
 // ConnectorDescriptor is one manifest connector's public picker metadata.

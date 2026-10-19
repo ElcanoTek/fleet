@@ -134,7 +134,7 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 		// Always-on (non-Optional) connectors render as visible-but-locked
 		// rows: no toggle, no opt-in — they are wired into every turn, and
 		// users should be able to see that.
-		for _, a := range s.clientConfig.AlwaysOnServers() {
+		for _, a := range s.alwaysOnDirectoryRows() {
 			resp.Bundled = append(resp.Bundled, mcpCatalogBundledEntry{
 				Name:        a.Name,
 				DisplayName: a.DisplayName,
@@ -164,6 +164,26 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, resp)
+}
+
+// alwaysOnDirectoryRows lists the enabled always-on connectors for the
+// directory from the same snapshot as its needs-setup rows: the Manager's
+// reload-fresh connector metadata when it has one, so a connector that a
+// reload turned on or off is listed once, as a card or as needs-setup, never
+// both or neither. Without it, the boot bundle's list.
+func (s *Server) alwaysOnDirectoryRows() []clientconfig.AlwaysOnServer {
+	if p, ok := s.agent.(connectorMetaProvider); ok {
+		if meta := p.ConnectorMeta(); meta != nil {
+			var out []clientconfig.AlwaysOnServer
+			for _, m := range meta {
+				if !m.Optional && m.Configured {
+					out = append(out, clientconfig.AlwaysOnServer{Name: m.Name, DisplayName: m.DisplayName, Description: m.Description})
+				}
+			}
+			return out
+		}
+	}
+	return s.clientConfig.AlwaysOnServers()
 }
 
 // thirdPartyCatalogEntry maps a manifest catalog entry to the wire shape,

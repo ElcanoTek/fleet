@@ -253,7 +253,9 @@ func (m *Manager) reloadInjectedMCP(ctx context.Context) (*mcp.ReloadSummary, er
 	m.optionalServerMetadata = metadata
 	m.alwaysOnServerMetadata = alwaysOnMetadata
 	if result.Connectors != nil {
-		m.connectorMeta = append([]clientconfig.ConnectorMeta(nil), result.Connectors...)
+		// make, not append-to-nil: an empty (not nil) list must replace the
+		// snapshot rather than read as "no data" to ConnectorMeta's callers.
+		m.connectorMeta = append(make([]clientconfig.ConnectorMeta, 0, len(result.Connectors)), result.Connectors...)
 	}
 	m.mcpGatingMu.Unlock()
 	return summary, nil

@@ -187,7 +187,7 @@ func (m *Manager) MCPServerCatalog() []OptionalServerInfo {
 // injected credential owner's reload result carries its own.
 func (m *Manager) SetConnectorMeta(meta []clientconfig.ConnectorMeta) {
 	m.mcpGatingMu.Lock()
-	m.connectorMeta = append([]clientconfig.ConnectorMeta(nil), meta...)
+	m.connectorMeta = append(make([]clientconfig.ConnectorMeta, 0, len(meta)), meta...)
 	m.mcpGatingMu.Unlock()
 }
 
@@ -199,7 +199,8 @@ func (m *Manager) ConnectorMeta() []clientconfig.ConnectorMeta {
 	if m.connectorMeta == nil {
 		return nil
 	}
-	return append([]clientconfig.ConnectorMeta(nil), m.connectorMeta...)
+	// Non-nil even when empty: "no connectors" is a snapshot, nil is "none yet".
+	return append(make([]clientconfig.ConnectorMeta, 0, len(m.connectorMeta)), m.connectorMeta...)
 }
 
 // AlwaysOnMCPServerCatalog returns enabled non-optional servers plus their live
