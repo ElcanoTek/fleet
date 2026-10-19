@@ -66,9 +66,12 @@ channel consumes.
    **on** only when the server holds this browser's subscription for the
    signed-in user (`POST /push/status`): a subscription the browser holds for
    another account, or one the server has dropped, reads **off** and the
-   browser lets it go. Signing out from the account menu (every surface's
-   menu goes through the one `signOut`) also lets it go and deletes the
-   stored row.
+   browser lets it go. Signing out (every surface's account menu, and the
+   **Sign out** on the no-access pages, goes through the one `signOut`) also
+   lets it go and deletes the stored row, except for someone who is not a
+   member, as on `/no-access`: the server refuses their delete, and the row
+   goes at the next send, when the push service answers that the endpoint is
+   gone.
 
    A Viewer account may not store a subscription (the `/push/*` writes sit
    behind the read-only gate), so for a Viewer the switch is greyed out up
@@ -304,17 +307,27 @@ unconfigured. The browser reaches them through the Next.js proxies under
   push service.
 - **A browser is not an account.** The browser holds one subscription, but
   the account that stored it is whoever turned notifications on there.
-  Sign-out through the account menu (`signOut`) unsubscribes the browser and
-  deletes the row, so the next person to use it does not get the signed-out
-  account's alerts, and the settings page lets go of a subscription the
-  server does not hold for the signed-in user. A session that ends any other
-  way runs none of this: one that expires, one revoked server-side, a
-  central-Auth back-channel logout, or the sign-out form on the no-access
-  page. Until someone opens Settings in that browser or turns notifications
-  on there, the previous account's alerts can still arrive in it. After a key
-  rotation, the next account's first page load in that browser also lets the
-  previous account's subscription go, since the renewal is not that
-  account's to make.
+  Signing out through `signOut` (the account menu on every surface, and the
+  **Sign out** on `/no-access` and on the Operations Center's no-access card)
+  unsubscribes the browser and, for a member, deletes the row, so the next
+  person to use it does not get the signed-out account's alerts, and the
+  settings page lets go of a subscription the server does not hold for the
+  signed-in user. For someone who is not a member, as on `/no-access`, the
+  server refuses the delete, since only members can manage push rows, but the
+  browser's own unsubscribe is what stops delivery, and the relay's
+  `404`/`410` retires the row on the next send. A session that ends without
+  a sign-out runs none of this: one that expires, one revoked server-side (a
+  password change, say), or a central-Auth back-channel logout. Auth's
+  logout ends every session of the account, so with central Auth that last
+  one is also what ends this browser's session when the same person signs
+  out in another browser. No stored row records which session made it, so
+  the server cannot tell which row a session's end should delete, and the
+  browser lets go only when a Fleet page in it does: until someone opens
+  Settings in that browser, turns notifications on there, or signs out from
+  a no-access page in it, the previous account's alerts can still arrive in
+  it. After a key rotation, the next account's first page load in that
+  browser also lets the previous account's subscription go, since the
+  renewal is not that account's to make.
 - **Subscription hygiene:** a `404`/`410` from the relay deletes the expired
   row during the send fan-out, and a row whose endpoint is not on a push
   service is deleted there without a send (see above).
