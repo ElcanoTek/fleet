@@ -299,10 +299,13 @@ export function BrowserNotificationsRow() {
       label="Browser notifications"
       desc={
         <>
-          By default, get an alert when a task you created finishes or is waiting for your answer,
-          or when an action in one of your chats needs your approval — even when this tab is in
-          the background. An alert shows only a short title, such as the start of the task&apos;s
-          prompt, never the conversation or a result.
+          Get alerts in this browser, even when this tab is in the background. By default you get
+          one when a task you created finishes, is waiting for your answer, or sends a progress
+          note while it runs; when an action in one of your chats needs your approval, and, for
+          some actions, when an approved one finishes or the chat does not continue on its own
+          once its card is approved, declined or timed out; and when you create a task while your
+          spending is past your budget&apos;s soft limit. An alert shows only a short title, such
+          as the start of the task&apos;s prompt, never the conversation or a result.
           {note ? <span className="mt-[0.3rem] block">{note}</span> : null}
         </>
       }
