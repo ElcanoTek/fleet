@@ -35,7 +35,12 @@ type mcpCatalogBundledEntry struct {
 	Accounts         []string `json:"accounts,omitempty"` // credential-account seat names (never values)
 	EnabledByDefault bool     `json:"enabled_by_default"`
 	DataSources      []string `json:"data_sources,omitempty"`
-	Trust            string   `json:"trust"` // always "bundled"
+	Category         string   `json:"category"`
+	// NeedsSetup marks a manifest connector whose credentials are not set on
+	// this box: listed so the chat picker's "Set up in Settings" link lands on
+	// its card, with no toggles (it never launched).
+	NeedsSetup bool   `json:"needs_setup,omitempty"`
+	Trust      string `json:"trust"` // always "bundled"
 }
 
 type mcpCatalogURLVariant struct {
@@ -119,6 +124,7 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 				Accounts:         info.Accounts,
 				EnabledByDefault: info.EnabledByDefault,
 				DataSources:      append([]string(nil), info.DataSources...),
+				Category:         s.connectorCategory(info.Name),
 				Trust:            "bundled",
 			})
 		}
@@ -133,6 +139,22 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 				DisplayName: a.DisplayName,
 				Description: a.Description,
 				Optional:    false,
+				Category:    s.connectorCategory(a.Name),
+				Trust:       "bundled",
+			})
+		}
+		for _, m := range s.clientConfig.ConnectorMeta() {
+			if m.Configured {
+				continue
+			}
+			resp.Bundled = append(resp.Bundled, mcpCatalogBundledEntry{
+				Name:        m.Name,
+				DisplayName: m.DisplayName,
+				Description: m.Description,
+				ToolCount:   len(m.Tools),
+				Optional:    m.Optional,
+				Category:    m.Category,
+				NeedsSetup:  true,
 				Trust:       "bundled",
 			})
 		}

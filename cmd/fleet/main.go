@@ -374,6 +374,10 @@ func run() error {
 	// The MCP catalog comes from the bundle manifest, gated on the now-loaded
 	// process env.
 	cfg.MCPServers = bundle.MCPServerConfigs()
+	if untagged := bundle.UncategorizedConnectors(); len(untagged) > 0 {
+		log.Printf("warning: client config: %d connector(s) have no category and show under Misc Tools in the Tools picker; add category: to their mcp_servers entry: %s",
+			len(untagged), strings.Join(untagged, ", "))
+	}
 	// Inline http_tools (issue #261): resolved host-side (auth headers expanded from
 	// the process env) and registered onto the credentialed MCP client alongside the
 	// MCP catalog. Empty in the generic bundle.

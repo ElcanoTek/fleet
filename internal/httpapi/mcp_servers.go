@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -66,8 +68,11 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 			"data_sources": info.DataSources,
 			// Provisioned credential-account seat names (never secret values).
 			"accounts": info.Accounts,
+			"category": s.connectorCategory(info.Name),
+			"status":   optionalConnectorStatus(info),
 		})
 	}
+	servers = append(servers, s.needsSetupCatalogEntries()...)
 	// Per-user remote (hosted) MCP servers (#443): merge the caller's connected
 	// servers into the Optional-server catalog so they show up in the Tools picker
 	// as toggleable, default-on entries (gated per conversation like a bundle
@@ -76,13 +81,105 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 		user := userFromCtx(r.Context())
 		if conns, err := s.remoteMCP.ConnectedServersForUser(r.Context(), user); err == nil {
 			for _, g := range agent.GroupRemoteMCPSeats(conns) {
-				servers = append(servers, remoteCatalogEntry(g, true, ""))
+				servers = append(servers, s.remoteCatalogEntry(g, true, ""))
 			}
 		} else {
 			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
 		}
 	}
-	writeJSON(w, map[string]any{"servers": servers})
+	writeJSON(w, map[string]any{"servers": servers, "categories": clientconfig.ConnectorCategories()})
+}
+
+// Connection statuses for the Tools picker. "available" connectors get a
+// switch (or the always-on lock); the other two never do. "needs_setup" is a
+// manifest connector whose credentials are not set on this box, so it never
+// launched; "unavailable" launched (or was meant to) but exposes no tools.
+const (
+	connectorStatusAvailable   = "available"
+	connectorStatusNeedsSetup  = "needs_setup"
+	connectorStatusUnavailable = "unavailable"
+)
+
+// optionalConnectorStatus is an Optional connector's picker status: a bundled
+// server that started but exposed no tools has nothing to turn on. The native
+// image-generation entry has no MCP tools by design and is always available.
+func optionalConnectorStatus(info agent.OptionalServerInfo) string {
+	if info.ToolCount == 0 && info.Name != agent.OptionalNativeImageGenName {
+		return connectorStatusUnavailable
+	}
+	return connectorStatusAvailable
+}
+
+// connectorCategory is a bundled connector's picker category: its manifest
+// category, else Misc Tools (untagged connectors are warned about at startup).
+func (s *Server) connectorCategory(name string) string {
+	if s.clientConfig != nil {
+		for _, m := range s.clientConfig.ConnectorMeta() {
+			if m.Name == name {
+				return m.Category
+			}
+		}
+	}
+	return clientconfig.MiscConnectorCategory
+}
+
+// needsSetupCatalogEntries lists the manifest connectors whose credentials
+// are not set on this box. They never launched, so they have no switch and no
+// opt-in; the picker shows them only in search (and the library always), with
+// copy that depends on whether the viewer is an admin. Tool names are the
+// manifest allowlist, the only ones known without launching the server.
+func (s *Server) needsSetupCatalogEntries() []map[string]any {
+	if s.clientConfig == nil {
+		return nil
+	}
+	var out []map[string]any
+	for _, m := range s.clientConfig.ConnectorMeta() {
+		if m.Configured {
+			continue
+		}
+		tools := append([]string{}, m.Tools...)
+		sort.Strings(tools)
+		out = append(out, map[string]any{
+			"name":         m.Name,
+			"display_name": m.DisplayName,
+			"description":  m.Description,
+			"tools":        tools,
+			"tool_count":   len(tools),
+			"enabled":      false,
+			"always_on":    !m.Optional,
+			"category":     m.Category,
+			"status":       connectorStatusNeedsSetup,
+		})
+	}
+	return out
+}
+
+// remoteConnectionCategory groups a hosted connection under the directory
+// category of the catalog entry it was added from (matched by endpoint), so
+// it shows under the same heading the Connections directory uses. A URL the
+// directory does not list, or a slug outside the picker's list, is Misc Tools.
+func (s *Server) remoteConnectionCategory(url string) string {
+	if s.clientConfig == nil {
+		return clientconfig.MiscConnectorCategory
+	}
+	canon := func(u string) string {
+		u = strings.TrimSpace(u)
+		if c, err := mcpoauth.CanonicalResourceURI(u); err == nil {
+			return c
+		}
+		return u
+	}
+	want := canon(url)
+	for _, e := range s.clientConfig.RemoteMCPCatalog {
+		match := canon(e.URL) == want
+		for _, v := range e.URLVariants {
+			match = match || canon(v.URL) == want
+		}
+		if match {
+			return clientconfig.ConnectorCategoryOr(e.Category)
+		}
+	}
+	return clientconfig.MiscConnectorCategory
 }
 
 // alwaysOnMCPServerCatalogProvider is deliberately narrower than turnEngine.
@@ -105,6 +202,10 @@ func (s *Server) alwaysOnMCPServerCatalogEntries() []map[string]any {
 	catalog := provider.AlwaysOnMCPServerCatalog()
 	servers := make([]map[string]any, 0, len(catalog))
 	for _, info := range catalog {
+		status := connectorStatusAvailable
+		if !info.Available {
+			status = connectorStatusUnavailable
+		}
 		servers = append(servers, map[string]any{
 			"name":         info.Name,
 			"display_name": info.DisplayName,
@@ -113,6 +214,8 @@ func (s *Server) alwaysOnMCPServerCatalogEntries() []map[string]any {
 			"tool_count":   info.ToolCount,
 			"enabled":      info.Available,
 			"always_on":    true,
+			"category":     s.connectorCategory(info.Name),
+			"status":       status,
 		})
 	}
 	return servers
@@ -122,7 +225,7 @@ func (s *Server) alwaysOnMCPServerCatalogEntries() []map[string]any {
 // (#988): its labeled seats, the default seat, and — on the per-conversation
 // route — this conversation's override. Seats carry labels only, never
 // credentials.
-func remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, account string) map[string]any {
+func (s *Server) remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, account string) map[string]any {
 	return map[string]any{
 		"name":               g.Name,
 		"display_name":       g.Name,
@@ -136,6 +239,8 @@ func remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, account string
 		"default_account":    g.DefaultAccount,
 		"account":            account,
 		"remote":             true,
+		"category":           s.remoteConnectionCategory(g.URL),
+		"status":             connectorStatusAvailable,
 	}
 }
 
@@ -311,8 +416,11 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 			// override ("" = the user's connections-page default).
 			"accounts": info.Accounts,
 			"account":  conv.MCPAccounts[info.Name],
+			"category": s.connectorCategory(info.Name),
+			"status":   optionalConnectorStatus(info),
 		})
 	}
+	servers = append(servers, s.needsSetupCatalogEntries()...)
 	// Per-user remote (hosted) MCP servers (#443): merge the caller's
 	// connected servers so the per-conversation Tools picker can toggle
 	// them — mirroring the startup catalog (listMCPServerCatalog), which
@@ -325,13 +433,13 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 	if s.remoteMCP != nil && s.remoteMCP.Enabled() {
 		if conns, err := s.remoteMCP.ConnectedServersForUser(r.Context(), user); err == nil {
 			for _, g := range agent.GroupRemoteMCPSeats(conns) {
-				servers = append(servers, remoteCatalogEntry(g, enabled[strings.ToLower(g.Name)], conv.MCPAccounts[strings.ToLower(g.Name)]))
+				servers = append(servers, s.remoteCatalogEntry(g, enabled[strings.ToLower(g.Name)], conv.MCPAccounts[strings.ToLower(g.Name)]))
 			}
 		} else {
 			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
 		}
 	}
-	writeJSON(w, map[string]any{"servers": servers})
+	writeJSON(w, map[string]any{"servers": servers, "categories": clientconfig.ConnectorCategories()})
 }
 
 // handleConversationMCPServersSet serves POST /conversations/{id}/mcp-servers.
