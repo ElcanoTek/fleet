@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useSyncExternalStore, type ReactNode } from "react";
 import type { LogSession, Task, TaskStreamFrame } from "@/app/shared/lib/orchestratorApi";
 import { OrchestratorClient } from "./orchestrator-client";
@@ -144,6 +144,7 @@ beforeEach(() => {
   boardTasks = [];
   reload.mockClear();
   task.mockReset();
+  sendFrame = () => {};
   streamTaskActivity.mockReset();
   streamTaskActivity.mockImplementation((_id: string, onFrame: (f: TaskStreamFrame) => void) => {
     sendFrame = onFrame;
@@ -165,7 +166,11 @@ function openLink(id: string) {
   render(<OrchestratorClient magicLinkLoginEnabled={false} />);
 }
 
-function endRun(status = "succeeded") {
+// The live view opens its stream in an effect, which a loaded runner can run
+// after the dialog is already on screen; a frame sent before then reaches the
+// no-op and is lost, so wait for the stream first.
+async function endRun(status = "succeeded") {
+  await waitFor(() => expect(streamTaskActivity).toHaveBeenCalled());
   act(() => {
     sendFrame({ type: "status", status } as TaskStreamFrame);
   });
@@ -179,7 +184,7 @@ describe("a record open when its live run ends", () => {
     expect(await screen.findByRole("dialog", { name: "Live task activity" })).toBeTruthy();
     expect(screen.queryByText(RUNNING.prompt!, { selector: "#tasksTable *" })).toBeNull();
 
-    endRun();
+    await endRun();
 
     // The finished record: its transcript loaded (Discuss in chat shows only
     // for a transcript with messages) and its action strip.
@@ -202,7 +207,7 @@ describe("a record open when its live run ends", () => {
 
     // Newer tasks pushed the row off the page before the run ended.
     setBoard([]);
-    endRun("failed");
+    await endRun("failed");
 
     expect(await screen.findByRole("dialog", { name: "Task Logs" })).toBeTruthy();
     expect(task).toHaveBeenCalledWith(TASK_ID);
@@ -220,7 +225,7 @@ describe("a record open when its live run ends", () => {
     fireEvent.click(await screen.findByText(RUNNING.prompt!, { selector: "#tasksTable *" }));
     await screen.findByRole("dialog", { name: "Live task activity" });
 
-    endRun();
+    await endRun();
 
     expect(await screen.findByRole("dialog", { name: "Task Logs" })).toBeTruthy();
     expect(reload).toHaveBeenCalled();
@@ -235,7 +240,7 @@ describe("a record open when its live run ends", () => {
     render(<OrchestratorClient magicLinkLoginEnabled={false} />);
     fireEvent.click(await screen.findByText(RUNNING.prompt!, { selector: "#tasksTable *" }));
     await screen.findByRole("dialog", { name: "Live task activity" });
-    endRun("failed");
+    await endRun("failed");
     await screen.findByRole("dialog", { name: "Task Logs" });
 
     setBoard([{ ...RUNNING }]);
@@ -253,7 +258,7 @@ describe("a record open when its live run ends", () => {
     openLink(TASK_ID);
     const live = await screen.findByRole("dialog", { name: "Live task activity" });
 
-    endRun();
+    await endRun();
     fireEvent.click(within(live).getByRole("button", { name: "Close modal" }));
     await act(async () => answer(FINISHED));
 
@@ -265,7 +270,7 @@ describe("a record open when its live run ends", () => {
     openLink(TASK_ID);
     await screen.findByRole("dialog", { name: "Live task activity" });
 
-    endRun();
+    await endRun();
     await act(async () => {});
 
     const live = screen.getByRole("dialog", { name: "Live task activity" });
