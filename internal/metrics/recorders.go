@@ -317,10 +317,11 @@ func RecordTurnTimeout(kind string) {
 }
 
 // RecordToolCallOutOfRoster counts a model's call to a tool name that was not
-// in its tool list (#1744), by model and bounded reason: deferred (rerouted
-// through tool_call), the gate that removed the tool (narrowed, persona,
-// opt_in, allowlist, schema) or unknown. The tool name is not a label: catalog
-// names can be user-controlled.
+// in its tool list (#1744), by model and bounded reason: deferred (a deferred
+// tool called by name: rerouted through tool_call, or explained when it could
+// not be; the Observer event's rerouted_to tells the two apart), the gate that
+// removed the tool (narrowed, persona, opt_in, allowlist, schema) or unknown.
+// The tool name is not a label: catalog names can be user-controlled.
 func RecordToolCallOutOfRoster(model, reason string) {
 	incCounter("fleet_tool_call_out_of_roster_total", "Model tool calls to a name not in the run's tool list, by model and reason.",
 		[]string{"model", "reason"}, []string{model, reason}, 1)

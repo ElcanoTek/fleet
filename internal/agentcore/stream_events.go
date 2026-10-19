@@ -269,7 +269,7 @@ func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
 	// not fantasy's "tool not found" (#1744); explainStep sends the model the
 	// same text.
 	if isErr {
-		if note, ok := s.outOfRoster.note(id, name); ok {
+		if note, ok := s.outOfRoster.note(id, name, text); ok {
 			text = note
 		}
 	}

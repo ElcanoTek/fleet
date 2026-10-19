@@ -1447,8 +1447,9 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 				return ctx, fantasy.PrepareStepResult{}, nil
 			},
 			// A refused out-of-roster call's result says which gate removed
-			// the tool (#1744). First, so the recovery checkpoint, the
-			// reducers and the cache markers all see the explained history.
+			// the tool (#1744). Ahead of the recovery checkpoint, the
+			// reducers and the cache markers, so they all see the explained
+			// history.
 			r.engine.outOfRoster.explainStep,
 			// Steering (#785) runs before the reducers so an injected user
 			// message is budget-accounted and cache-marked like any other

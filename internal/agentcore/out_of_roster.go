@@ -64,11 +64,14 @@ type outOfRoster struct {
 	notes  map[noteKey]string
 }
 
-// noteKey is a refused call: its ID and its tool name. A provider may reuse a
-// call ID across steps, so the ID alone would put one call's explanation on
-// another tool's result: a write that ran and failed would read "was not
-// called", and invite a retry.
-type noteKey struct{ id, tool string }
+// noteKey is a refused call: its ID, its tool name, and the text fantasy
+// answered it with (its ValidationError). A provider may reuse a call ID,
+// within a run and across turns, and the history the model is sent includes
+// earlier turns replayed from the session log. So the ID and tool alone would
+// put one call's explanation on another call's result: a write that ran and
+// failed would read "was not called", and invite a retry. Only fantasy's
+// refusal of the call carries that exact text.
+type noteKey struct{ id, tool, refused string }
 
 func newOutOfRoster(persona string, orch *orchestrationState, gates mcpGates) *outOfRoster {
 	return &outOfRoster{persona: persona, orch: orch, gates: gates, notes: map[noteKey]string{}}
@@ -149,15 +152,24 @@ func (o *outOfRoster) setRoster(r toolRoster) {
 	o.mu.Unlock()
 }
 
-// note is the explanation recorded for the refused call callID to tool, if any.
-func (o *outOfRoster) note(callID, tool string) (string, bool) {
+// note is the explanation recorded for the refused call callID to tool whose
+// result fantasy gave as refused, if any.
+func (o *outOfRoster) note(callID, tool, refused string) (string, bool) {
 	if o == nil || callID == "" {
 		return "", false
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	n, ok := o.notes[noteKey{callID, tool}]
+	n, ok := o.notes[noteKey{callID, tool, refused}]
 	return n, ok
+}
+
+// refusalText is the text of fantasy's result for a call it refused with err.
+func refusalText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // snapshotNotes copies the recorded explanations; nil when there are none.
@@ -196,7 +208,7 @@ func (o *outOfRoster) repair(modelSlug string, sink *streamSink) fantasy.RepairT
 		reason, repaired := got.reason, got.repaired
 		if got.note != "" && call.ToolCallID != "" {
 			o.mu.Lock()
-			o.notes[noteKey{call.ToolCallID, call.ToolName}] = got.note
+			o.notes[noteKey{call.ToolCallID, call.ToolName, refusalText(opts.ValidationError)}] = got.note
 			o.mu.Unlock()
 		}
 		model := modelSlug
@@ -257,9 +269,11 @@ func (o *outOfRoster) classify(call fantasy.ToolCallContent, available []fantasy
 			repaired.Input = input
 			return outOfRosterOutcome{reason: outOfRosterDeferred, repaired: &repaired}
 		}
+		// The note does not describe the arguments: the replayed call shows
+		// them normalized (toolCallInputSanitizeStep), often as {}.
 		return outOfRosterOutcome{reason: outOfRosterDeferred, note: fmt.Sprintf(
-			"%s was not called: it is reachable only through tool_call, and its arguments were not a JSON object. "+
-				"Call tool_call with {\"name\": %q, \"arguments\": {...}}.", call.ToolName, call.ToolName)}
+			"%s was not called: it is reachable only through tool_call. "+
+				"Call tool_call with {\"name\": %q, \"arguments\": {...}}, with the arguments as a JSON object.", call.ToolName, call.ToolName)}
 	case gate != "":
 		return outOfRosterOutcome{reason: gate, note: o.gateNote(call.ToolName, gate)}
 	case inferred != "":
@@ -393,8 +407,9 @@ func (o *outOfRoster) explain(msgs []fantasy.Message) []fantasy.Message {
 }
 
 // explainResults replaces the error output of each tool result that has a
-// note, by its call ID and the tool the preceding assistant message called,
-// copying only what it changes. changed is false when nothing changed.
+// note, by its call ID, the tool the preceding assistant message called, and
+// its text, which must still be fantasy's refusal, copying only what it
+// changes. changed is false when nothing changed.
 func explainResults(msgs []fantasy.Message, notes map[noteKey]string) ([]fantasy.Message, bool) {
 	if len(notes) == 0 {
 		return nil, false
@@ -420,12 +435,14 @@ func explainResults(msgs []fantasy.Message, notes map[noteKey]string) ([]fantasy
 			if !ok {
 				continue
 			}
-			n, ok := notes[noteKey{tr.ToolCallID, called[tr.ToolCallID]}]
-			if !ok {
+			e, isErr := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Output)
+			if !isErr {
 				continue
 			}
-			e, isErr := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Output)
-			if !isErr || (e.Error != nil && e.Error.Error() == n) {
+			// An explained result no longer has fantasy's text, so it is
+			// never rewritten twice.
+			n, ok := notes[noteKey{tr.ToolCallID, called[tr.ToolCallID], refusalText(e.Error)}]
+			if !ok {
 				continue
 			}
 			if parts == nil {

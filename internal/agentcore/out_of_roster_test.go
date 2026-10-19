@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -317,16 +318,14 @@ func TestOutOfRoster_CountedPerModelAndReason(t *testing.T) {
 		{"c1", "mcp_srv_slack_send_message_0", `{"text":"hi"}`},
 		{"c2", "str_replace_editor", `{}`},
 	})
+	deferred, unknown := oorCount("oor-metric-model", "deferred"), oorCount("oor-metric-model", "unknown")
 	runOOR(t, RunConfig{NativeTools: discNative(3)}, Deps{Model: model, MCPCatalog: discMCPTools(20), Observer: obs, LogSession: session})
 
-	out := metrics.Render()
-	for _, line := range []string{
-		`fleet_tool_call_out_of_roster_total{model="oor-metric-model",reason="deferred"} 1`,
-		`fleet_tool_call_out_of_roster_total{model="oor-metric-model",reason="unknown"} 1`,
-	} {
-		if !strings.Contains(out, line) {
-			t.Errorf("metrics lack %s", line)
-		}
+	if got := oorCount("oor-metric-model", "deferred"); got != deferred+1 {
+		t.Errorf("deferred count went from %v to %v, want one more", deferred, got)
+	}
+	if got := oorCount("oor-metric-model", "unknown"); got != unknown+1 {
+		t.Errorf("unknown count went from %v to %v, want one more", unknown, got)
 	}
 	obs.mu.Lock()
 	events := obs.events
@@ -361,16 +360,16 @@ func TestOutOfRoster_DeferredCallWithBadArguments(t *testing.T) {
 	broker := &fakeBroker{}
 	model := newOORModel("oor-badargs", []oorCall{{"c1", "mcp_srv_slack_send_message_0", `["hi"]`}})
 	runOOR(t, RunConfig{NativeTools: discNative(3)}, Deps{Model: model, MCPCatalog: discMCPTools(20), MCPBroker: broker})
-	want := `mcp_srv_slack_send_message_0 was not called: it is reachable only through tool_call, and its arguments were not a JSON object. ` +
-		`Call tool_call with {"name": "mcp_srv_slack_send_message_0", "arguments": {...}}.`
+	want := `mcp_srv_slack_send_message_0 was not called: it is reachable only through tool_call. ` +
+		`Call tool_call with {"name": "mcp_srv_slack_send_message_0", "arguments": {...}}, with the arguments as a JSON object.`
 	if got := model.resultSeen(2, "c1"); got != want || broker.lastTool != "" {
 		t.Fatalf("result %q (broker %q), want %q", got, broker.lastTool, want)
 	}
 }
 
 // explainResults rewrites copies: the run's own history keeps fantasy's
-// result, and results without a note for their call ID and tool, or that are
-// not errors, are untouched.
+// result, and results without a note for their call ID, tool and refusal
+// text, or that are not errors, are untouched.
 func TestOutOfRoster_ExplainResultsCopies(t *testing.T) {
 	notFound := fantasy.ToolResultOutputContentError{Error: errors.New("tool not found: x")}
 	msgs := []fantasy.Message{
@@ -378,14 +377,19 @@ func TestOutOfRoster_ExplainResultsCopies(t *testing.T) {
 			fantasy.ToolCallPart{ToolCallID: "a", ToolName: "x"},
 			fantasy.ToolCallPart{ToolCallID: "b", ToolName: "x"},
 			fantasy.ToolCallPart{ToolCallID: "c", ToolName: "x"},
+			fantasy.ToolCallPart{ToolCallID: "d", ToolName: "x"},
 		}},
 		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
 			fantasy.ToolResultPart{ToolCallID: "a", Output: notFound},
 			fantasy.ToolResultPart{ToolCallID: "b", Output: notFound},
 			fantasy.ToolResultPart{ToolCallID: "c", Output: fantasy.ToolResultOutputContentText{Text: "ok"}},
+			fantasy.ToolResultPart{ToolCallID: "d", Output: fantasy.ToolResultOutputContentError{Error: errors.New("it ran and failed")}},
 		}},
 	}
-	out, changed := explainResults(msgs, map[noteKey]string{{"a", "x"}: "explained", {"c", "x"}: "never", {"b", "other"}: "wrong tool"})
+	out, changed := explainResults(msgs, map[noteKey]string{
+		{"a", "x", "tool not found: x"}: "explained", {"c", "x", "ok"}: "never", {"b", "other", "tool not found: x"}: "wrong tool",
+		{"d", "x", "tool not found: x"}: "not this refusal",
+	})
 	if !changed {
 		t.Fatal("want a change")
 	}
@@ -397,16 +401,16 @@ func TestOutOfRoster_ExplainResultsCopies(t *testing.T) {
 		txt, _ := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentText](tr.Output)
 		return txt.Text
 	}
-	if text(out, 0) != "explained" || text(out, 1) != "tool not found: x" || text(out, 2) != "ok" {
-		t.Errorf("rewritten = %q, %q, %q", text(out, 0), text(out, 1), text(out, 2))
+	if text(out, 0) != "explained" || text(out, 1) != "tool not found: x" || text(out, 2) != "ok" || text(out, 3) != "it ran and failed" {
+		t.Errorf("rewritten = %q, %q, %q, %q", text(out, 0), text(out, 1), text(out, 2), text(out, 3))
 	}
 	if text(msgs, 0) != "tool not found: x" {
 		t.Errorf("the original history was changed: %q", text(msgs, 0))
 	}
-	if _, changed := explainResults(msgs, map[noteKey]string{{"z", "x"}: "n"}); changed {
+	if _, changed := explainResults(msgs, map[noteKey]string{{"z", "x", "tool not found: x"}: "n"}); changed {
 		t.Error("no note matched, yet a change was reported")
 	}
-	if again, changed := explainResults(out, map[noteKey]string{{"a", "x"}: "explained"}); changed || len(again) != 0 {
+	if again, changed := explainResults(out, map[noteKey]string{{"a", "x", "tool not found: x"}: "explained"}); changed || len(again) != 0 {
 		t.Error("an already explained result was copied again")
 	}
 }
@@ -432,7 +436,7 @@ func TestOutOfRoster_NarrowedNoteNamesTheStandIn(t *testing.T) {
 func TestOutOfRoster_FinalizeInputCarriesTheRecovery(t *testing.T) {
 	o := newOutOfRoster("", nil, mcpGates{})
 	o.setRoster(toolRoster{deferredMCP: 1, mcp: []string{"mcp_srv_x"}})
-	o.notes[noteKey{"c1", "mcp_y"}] = "explained"
+	o.notes[noteKey{"c1", "mcp_y", "tool not found: mcp_y"}] = "explained"
 	in := finalizeInputFor(ModeInteractive, "", nil, 0, nil, nil, "", nil, panicAttribution{}, nil, nil, 0, o)
 
 	msgs := []fantasy.Message{
@@ -580,6 +584,98 @@ func TestOutOfRoster_AReusedCallIDKeepsEachResult(t *testing.T) {
 	}
 }
 
+// promptLog records the prompt of every model call made through a wrapped
+// oorModel.
+type promptLog struct {
+	mu      sync.Mutex
+	prompts []fantasy.Prompt
+}
+
+func (l *promptLog) wrap(m *oorModel) {
+	inner := m.streamFunc
+	m.streamFunc = func(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+		l.mu.Lock()
+		l.prompts = append(l.prompts, call.Prompt)
+		l.mu.Unlock()
+		return inner(ctx, call)
+	}
+}
+
+// parts is every result text and call input for call id in the prompt of
+// model call n (1-based), in order.
+func (l *promptLog) parts(n int, id string) (results, inputs []string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if n > len(l.prompts) {
+		return nil, nil
+	}
+	for _, m := range l.prompts[n-1] {
+		for _, p := range m.Content {
+			if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](p); ok && tc.ToolCallID == id {
+				inputs = append(inputs, tc.Input)
+			}
+			if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](p); ok && tr.ToolCallID == id {
+				if e, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Output); ok {
+					results = append(results, e.Error.Error())
+				}
+			}
+		}
+	}
+	return results, inputs
+}
+
+// The history the model is sent includes earlier turns, and a provider may
+// reuse a call ID across them. An explanation replaces only fantasy's refusal
+// of its own call: an earlier turn's call with the same ID and tool, which ran
+// and failed, keeps its error, and the prompt-cache prefix holds.
+func TestOutOfRoster_AnEarlierTurnsResultKeepsItsText(t *testing.T) {
+	const failed = "upstream 500: write may have partially applied"
+	history := []fantasy.Message{
+		fantasy.NewUserMessage("send it"),
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: "write_thing", Input: `{}`},
+		}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+			fantasy.ToolResultPart{ToolCallID: "call_0", Output: fantasy.ToolResultOutputContentError{Error: errors.New(failed)}},
+		}},
+		fantasy.NewUserMessage("try again"),
+	}
+	model := newOORModel("oor-earlier-turn", []oorCall{{"call_0", "write_thing", `{}`}})
+	prompts := &promptLog{}
+	prompts.wrap(model)
+	runOOR(t, RunConfig{
+		NativeTools:   []fantasy.AgentTool{failTool{name: "write_thing", msg: failed}},
+		PersonaPolicy: &PersonaToolPermissions{Deny: []string{"write_thing"}},
+	}, Deps{Model: model, Input: historyInput{system: "s", msgs: history, label: "oor"}})
+
+	const explained = "write_thing is not available in this run and was not called: this persona's tool policy does not allow it."
+	first, _ := prompts.parts(1, "call_0")
+	second, _ := prompts.parts(2, "call_0")
+	if want := []string{failed}; !reflect.DeepEqual(first, want) {
+		t.Fatalf("first call was sent %q, want %q", first, want)
+	}
+	if want := []string{failed, explained}; !reflect.DeepEqual(second, want) {
+		t.Fatalf("second call was sent %q, want the earlier failure kept and this turn's refusal explained %q", second, want)
+	}
+}
+
+// A refused call whose input is not a JSON object is replayed both ways
+// fixed: its input normalized (#1783) and its result explained.
+func TestOutOfRoster_ExplainedWithItsInputSanitized(t *testing.T) {
+	model := newOORModel("oor-sanitized", []oorCall{{"c1", "secret_tool", `["x"]`}})
+	prompts := &promptLog{}
+	prompts.wrap(model)
+	runOOR(t, RunConfig{
+		NativeTools:   []fantasy.AgentTool{echoTool{name: "secret_tool", out: "ran"}},
+		PersonaPolicy: &PersonaToolPermissions{Deny: []string{"secret_tool"}},
+	}, Deps{Model: model})
+	results, inputs := prompts.parts(2, "c1")
+	const explained = "secret_tool is not available in this run and was not called: this persona's tool policy does not allow it."
+	if !reflect.DeepEqual(inputs, []string{"{}"}) || !reflect.DeepEqual(results, []string{explained}) {
+		t.Fatalf("the model was sent input %q and result %q; want {} and %q", inputs, results, explained)
+	}
+}
+
 // The terminal structured-output phase, which takes the round's transcript
 // from the carry rather than a stream, is sent the explanation too.
 func TestOutOfRoster_TerminalOutputSeesTheExplanation(t *testing.T) {
@@ -610,21 +706,23 @@ func TestOutOfRoster_TerminalOutputSeesTheExplanation(t *testing.T) {
 	t.Fatal("the terminal phase was not sent the refused call's result")
 }
 
-// The sink substitutes the explanation only for an error result: a call that
-// succeeded keeps its own text whatever note shares its ID and tool.
+// The sink substitutes the explanation only for fantasy's refusal of the
+// call: a call that succeeded, or ran and failed, keeps its own text whatever
+// note shares its ID and tool.
 func TestOutOfRoster_SinkExplainsOnlyErrors(t *testing.T) {
 	o := newOutOfRoster("", nil, mcpGates{})
-	o.notes[noteKey{"c1", "t"}] = "explained"
+	o.notes[noteKey{"c1", "t", "tool not found: t"}] = "explained"
 	sink := newStreamSink(nil)
 	sink.outOfRoster = o
-	sink.onToolResult("c1", "t", "ok", false)
+	sink.onToolResult("c1", "t", "tool not found: t", false)
 	sink.onToolResult("c1", "t", "tool not found: t", true)
-	sink.onToolResult("c1", "other", "boom", true)
+	sink.onToolResult("c1", "other", "tool not found: t", true)
+	sink.onToolResult("c1", "t", "boom", true)
 	got := make([]string, 0, len(sink.entries))
 	for _, e := range sink.entries {
 		got = append(got, e.Text)
 	}
-	if want := []string{"ok", "explained", "boom"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"tool not found: t", "explained", "tool not found: t", "boom"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("recorded %v, want %v", got, want)
 	}
 }
@@ -697,11 +795,26 @@ func TestOutOfRoster_CountsTheFallbackModel(t *testing.T) {
 		return nil, &fantasy.ProviderError{StatusCode: http.StatusServiceUnavailable, Message: "capacity"}
 	}
 	fallback := newOORModel("oor-fallback-model", []oorCall{{"c1", "mcp_srv_slack_send_message_0", `{}`}})
+	before := oorCount("oor-fallback-model", "deferred")
 	runOOR(t, RunConfig{NativeTools: discNative(3)}, Deps{Model: primary, FallbackModel: fallback, MCPCatalog: discMCPTools(20)})
 	counts := grepLines(metrics.Render(), "fleet_tool_call_out_of_roster_total{")
-	if !strings.Contains(counts, `{model="oor-fallback-model",reason="deferred"} 1`) || strings.Contains(counts, `model="oor-primary"`) {
+	if oorCount("oor-fallback-model", "deferred") != before+1 || strings.Contains(counts, `model="oor-primary"`) {
 		t.Fatalf("want the call counted under the fallback model:\n%s", counts)
 	}
+}
+
+// oorCount is the out-of-roster count for model and reason so far. The
+// metrics registry is process-global, so tests compare counts before and
+// after a run rather than expect an absolute value.
+func oorCount(model, reason string) float64 {
+	prefix := `fleet_tool_call_out_of_roster_total{model="` + model + `",reason="` + reason + `"} `
+	for _, l := range strings.Split(metrics.Render(), "\n") {
+		if v, ok := strings.CutPrefix(l, prefix); ok {
+			n, _ := strconv.ParseFloat(v, 64)
+			return n
+		}
+	}
+	return 0
 }
 
 type otherProviderModel struct{ namedMockModel }

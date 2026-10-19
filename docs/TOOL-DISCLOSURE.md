@@ -145,10 +145,13 @@ the gates run before the registry is built, so it is never in it.
 
 **How the explanation reaches the model.** Fantasy's repair hook can rewrite a
 call, but cannot change the error of a call it leaves invalid. So the
-explanation is kept by call ID and tool name. A provider may reuse a call ID,
-and keyed by the ID alone a later failure of a tool that did run would read
-"was not called". The run's transcript, and with it the next turn's history,
-records the explanation in place of fantasy's text. Every later model call of
+explanation is kept by call ID, tool name, and the exact text fantasy refused
+the call with, and replaces only a result that still has that text. A
+provider may reuse a call ID, within a run and across turns, and the history
+the model is sent includes earlier turns. Keyed by the ID and tool alone, the
+failure of an earlier or later call that did run would read "was not called".
+The run's transcript, and with it the next turn's history, records the
+explanation in place of fantasy's text. Every later model call of
 the run is sent it too: a prepare step rewrites a copy of each step's
 messages, and the transcript a round carries on, to the next round, the
 finalize hook, the terminal structured output and compaction, is rewritten

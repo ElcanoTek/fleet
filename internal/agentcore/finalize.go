@@ -20,8 +20,9 @@ type FinalizeInput struct {
 	FinalText string
 	// Messages is the conversation as it stands when the run finishes: the
 	// finishing round's INPUT plus that round's completed assistant/tool
-	// transcript (carryRoundMessages — the same carry the enforcement loop and
-	// the terminal structured-output phase use). A recovery call replays it so
+	// transcript (engine.roundCarry — the same carry the enforcement loop and
+	// the terminal structured-output phase use, with refused out-of-roster
+	// calls explained, #1744). A recovery call replays it so
 	// it sees the current user question and the tool results it is asked to
 	// write up; the round input alone lacks the tool transcript (it lives in
 	// the round's AgentResult.Steps), which left the forced summary fabricating
