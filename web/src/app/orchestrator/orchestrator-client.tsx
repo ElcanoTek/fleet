@@ -160,10 +160,43 @@ function OrchestratorInner({
   // taken on click: nothing else re-synced logTask, so once a run finished the
   // modal stayed in Live activity with no way to the transcript short of
   // closing and reopening. Falls back to the snapshot for a row the current
-  // page no longer lists (a filter change, a deleted row).
+  // page no longer lists (a filter change, a deleted row), or never listed (a
+  // task opened from a link or from History).
+  //
+  // The one row that does not win is the copy the board still holds from
+  // before the open task's run ended (endedRun, set by refreshEndedRun): it
+  // reads "running", while logTask is the task fetched after the end. The
+  // board replaces its rows only when a list request succeeds, so that row can
+  // outlive the run for as long as the list keeps failing. Rows the board
+  // loads later were requested after the end (the reload in refreshEndedRun
+  // supersedes any older request still in flight), so they win again, and a
+  // task that starts running again (a retry, a wake) still goes live.
+  const [endedRun, setEndedRun] = useState<{ id: string; board: Task[] } | null>(null);
+  const boardRowPredatesEnd =
+    !!endedRun && endedRun.id === logTask?.id && endedRun.board === dashboard.tasks;
   const liveLogTask = logTask
-    ? (dashboard.tasks.find((t) => t.id === logTask.id) ?? logTask)
+    ? ((boardRowPredatesEnd ? undefined : dashboard.tasks.find((t) => t.id === logTask.id)) ??
+      logTask)
     : null;
+  // A snapshot taken while the run was live still reads "running" after the
+  // run ends, so the modal would stay in Live activity for good: the board's
+  // poll refreshes only rows on its current page. When the live view reports
+  // the end of the run, the task is fetched again by id and replaces the
+  // snapshot, unless the modal was closed or moved to another task meanwhile.
+  // The board reloads too, so its row and counters catch up now rather than at
+  // the next poll. A failed fetch leaves the live view, which already shows how
+  // the run ended.
+  const refreshEndedRun = (taskId: string) => {
+    const boardAtEnd = dashboard.tasks;
+    void dashboard.reload();
+    orchestratorApi.task(taskId).then(
+      (fresh) => {
+        setLogTask((current) => (current?.id === taskId ? fresh : current));
+        setEndedRun({ id: taskId, board: boardAtEnd });
+      },
+      () => {},
+    );
+  };
   // "Run now" (#1019): the task awaiting the kick-off confirm, and the in-flight
   // guard that keeps a double-click from submitting two runs.
   const [runNowTask, setRunNowTask] = useState<Task | null>(null);
@@ -745,6 +778,7 @@ function OrchestratorInner({
         }}
         onSelectTask={setLogTask}
         onDelete={setDeleteTask}
+        onRunEnded={refreshEndedRun}
       />
     </div>
   );
