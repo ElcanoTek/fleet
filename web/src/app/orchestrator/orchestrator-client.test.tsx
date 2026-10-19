@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import type { LogSession, Task, TaskStreamFrame } from "@/app/shared/lib/orchestratorApi";
 import { OrchestratorClient } from "./orchestrator-client";
 
@@ -43,13 +43,29 @@ vi.mock("@/app/shared/hooks/useOrchestratorSession", () => ({
   }),
 }));
 
-// The board: boardTasks is the current page of Recent Tasks.
+// The board: boardTasks is the current page of Recent Tasks. setBoard is a
+// list load that succeeded (new rows, and a re-render). reload changes
+// nothing, which is what useDashboardData does when its list request fails:
+// it keeps the rows it has.
 let boardTasks: Task[] = [];
+const boardListeners = new Set<() => void>();
+function subscribeBoard(listener: () => void) {
+  boardListeners.add(listener);
+  return () => {
+    boardListeners.delete(listener);
+  };
+}
+function setBoard(tasks: Task[]) {
+  act(() => {
+    boardTasks = tasks;
+    boardListeners.forEach((listener) => listener());
+  });
+}
 const reload = vi.fn(async () => {});
 vi.mock("@/app/shared/hooks/useDashboardData", () => ({
   useDashboardData: () => ({
     stats: null,
-    tasks: boardTasks,
+    tasks: useSyncExternalStore(subscribeBoard, () => boardTasks),
     total: boardTasks.length,
     page: 1,
     pageSize: 20,
@@ -185,13 +201,48 @@ describe("a record open when its live run ends", () => {
     expect(await screen.findByRole("dialog", { name: "Live task activity" })).toBeTruthy();
 
     // Newer tasks pushed the row off the page before the run ended.
-    boardTasks = [];
+    setBoard([]);
     endRun("failed");
 
     expect(await screen.findByRole("dialog", { name: "Task Logs" })).toBeTruthy();
     expect(task).toHaveBeenCalledWith(TASK_ID);
     // The board catches up now too, not at its next poll.
     expect(reload).toHaveBeenCalled();
+  });
+
+  // The board's copy of a listed task wins over the record, except the copy
+  // from before the run ended: while the board cannot load its list again, it
+  // keeps that row, which still reads "running".
+  it("swaps a listed row while the board cannot reload its list", async () => {
+    boardTasks = [RUNNING];
+    task.mockResolvedValueOnce(FINISHED);
+    render(<OrchestratorClient magicLinkLoginEnabled={false} />);
+    fireEvent.click(await screen.findByText(RUNNING.prompt!, { selector: "#tasksTable *" }));
+    await screen.findByRole("dialog", { name: "Live task activity" });
+
+    endRun();
+
+    expect(await screen.findByRole("dialog", { name: "Task Logs" })).toBeTruthy();
+    expect(reload).toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Live task activity" })).toBeNull();
+  });
+
+  // Rows the board loads after the end win again, so a task that runs again
+  // under the same id (a retry of a failed attempt, a wake) goes live.
+  it("goes live again when the board later lists the task running again", async () => {
+    boardTasks = [RUNNING];
+    task.mockResolvedValueOnce({ ...RUNNING, status: "pending" });
+    render(<OrchestratorClient magicLinkLoginEnabled={false} />);
+    fireEvent.click(await screen.findByText(RUNNING.prompt!, { selector: "#tasksTable *" }));
+    await screen.findByRole("dialog", { name: "Live task activity" });
+    endRun("failed");
+    await screen.findByRole("dialog", { name: "Task Logs" });
+
+    setBoard([{ ...RUNNING }]);
+
+    expect(await screen.findByRole("dialog", { name: "Live task activity" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Task Logs" })).toBeNull();
+    expect(streamTaskActivity).toHaveBeenCalledTimes(2);
   });
 
   it("does not reopen a record closed before the fetch answers", async () => {
