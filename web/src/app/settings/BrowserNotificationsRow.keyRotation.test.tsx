@@ -70,6 +70,9 @@ function stubBrowser(opts: { start: "old" | "none"; renewed?: boolean | number }
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
+      // The account read (a member here) is made on every load and is not a
+      // step of the renewal, so it stays out of the log.
+      if (url === "/api/me/team") return Response.json({ role: "member" });
       if (url !== "/api/push/vapid-public-key") {
         browser.events.push(`${init?.method ?? "GET"} ${url}`);
         lockedAt[url] = locks.holding;

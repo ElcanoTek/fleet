@@ -70,6 +70,19 @@ channel consumes.
    menu goes through the one `signOut`) also lets it go and deletes the
    stored row.
 
+   A Viewer account may not store a subscription (the `/push/*` writes sit
+   behind the read-only gate), so for a Viewer the switch is greyed out up
+   front, with a note saying so, instead of failing once pressed. The role
+   comes from the account read Settings → Team also makes (`GET /me/team`),
+   and it is presentation only: the server's refusal stays the authority. The
+   checks above still run for a Viewer, so another account's subscription is
+   still let go, and one the server still holds for the account from before
+   it became a Viewer reads on and can be turned off. The server refuses the
+   Viewer's delete, but the browser lets the subscription go, and the server
+   retires the row once the push service reports the endpoint gone. If the
+   role read fails, the switch is offered, and the server's `read_only`
+   refusal of the store ends in the same note.
+
 **Rotating the keys.** A browser subscription is bound to the VAPID key it was
 made with, so after the operator replaces the `FLEET_VAPID_*` pair every
 existing subscription is refused by the push service. Which status a refusal

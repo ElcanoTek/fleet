@@ -9,9 +9,14 @@ import { BrowserNotificationsRow } from "./BrowserNotificationsRow";
 
 const ENDPOINT = "https://relay.example/ep";
 
+// The push writes the server refuses a Viewer account, as routes.go gates
+// them; /api/push/status is a read and answers a Viewer too.
+const VIEWER_REFUSED = new Set(["/api/push/subscribe", "/api/push/unsubscribe", "/api/push/renew"]);
+
 function stubBrowser(opts: {
   sub: { endpoint: string; unsubscribe: () => Promise<boolean> } | null;
   status?: { subscribed: boolean } | number;
+  role?: "member" | "viewer";
 }) {
   const requests: string[] = [];
   vi.stubGlobal("PushManager", function PushManager() {});
@@ -35,6 +40,10 @@ function stubBrowser(opts: {
     vi.fn(async (url: string, init?: RequestInit) => {
       requests.push(`${init?.method ?? "GET"} ${url}${init?.body ? ` ${String(init.body)}` : ""}`);
       if (url === "/api/push/vapid-public-key") return Response.json({ key: "BKEY" });
+      if (url === "/api/me/team") return Response.json({ role: opts.role ?? "member" });
+      if (opts.role === "viewer" && VIEWER_REFUSED.has(url)) {
+        return Response.json({ error: "read_only" }, { status: 403 });
+      }
       if (url === "/api/push/status") {
         return typeof opts.status === "number"
           ? new Response("boom", { status: opts.status })
@@ -92,6 +101,48 @@ describe("BrowserNotificationsRow reflects the server's record", () => {
     expect(sw).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText(/Failed to check notifications: 500/)).toBeInTheDocument();
     expect(unsubscribe).not.toHaveBeenCalled();
+  });
+
+  it("lets go of another account's subscription for a Viewer too, then greys the switch out", async () => {
+    // A member turned notifications on in this browser, then a Viewer signed
+    // in: the Viewer cannot turn them on, but that must not keep the member's
+    // alerts arriving here.
+    const unsubscribe = vi.fn(async () => true);
+    const { requests } = stubBrowser({
+      sub: { endpoint: ENDPOINT, unsubscribe },
+      status: { subscribed: false },
+      role: "viewer",
+    });
+    render(<BrowserNotificationsRow />);
+    expect(await screen.findByText(/Viewer accounts are read-only/)).toBeInTheDocument();
+    const sw = screen.getByTestId("browser-notifications-switch");
+    expect(sw).toBeDisabled();
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(requests).toContain(`POST /api/push/status {"endpoint":"${ENDPOINT}"}`);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a Viewer turn off a subscription the server still holds for it", async () => {
+    // Turned on while the account was a member. The server refuses the
+    // Viewer's delete, but dropping the browser's subscription still stops
+    // the alerts here; after that the switch cannot come back on.
+    const unsubscribe = vi.fn(async () => true);
+    const { requests } = stubBrowser({
+      sub: { endpoint: ENDPOINT, unsubscribe },
+      status: { subscribed: true },
+      role: "viewer",
+    });
+    render(<BrowserNotificationsRow />);
+    const sw = await settledSwitch();
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByText(/Viewer accounts/)).toBeNull();
+
+    fireEvent.click(sw);
+    expect(await screen.findByText(/Viewer accounts are read-only/)).toBeInTheDocument();
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(sw).toBeDisabled();
+    expect(requests).toContain(`DELETE /api/push/unsubscribe {"endpoint":"${ENDPOINT}"}`);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it("asks nothing of the server when the browser holds no subscription", async () => {

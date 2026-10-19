@@ -31,12 +31,19 @@ type Opts = {
   grant?: NotificationPermission;
   vapidStatus?: number;
   subscribeStatus?: number;
+  // The body of a refused store; the default is a plain-text server error.
+  subscribeBody?: string;
+  // The signed-in account's role from GET /api/me/team ("member" by default),
+  // or an HTTP status for a read that fails. With roleGate, the read answers
+  // only once the gate resolves.
+  role?: string | number;
+  roleGate?: Promise<void>;
 };
 
 // stubBrowser fakes the Push API, the service worker container and fetch, and
-// records each step the switch takes in `events`, in order. The VAPID key read
-// is left out of the log: it happens on every load and is not a step of either
-// flow.
+// records each step the switch takes in `events`, in order. The VAPID key and
+// account reads are left out of the log: they happen on every load and are not
+// a step of either flow.
 function stubBrowser(opts: Opts = {}) {
   const events: string[] = [];
   let registered = opts.registered ?? true;
@@ -91,9 +98,18 @@ function stubBrowser(opts: Opts = {}) {
           ? new Response(JSON.stringify({ error: "push_disabled" }), { status: opts.vapidStatus })
           : Response.json({ key: KEY });
       }
+      if (url === "/api/me/team") {
+        await opts.roleGate;
+        const role = opts.role ?? "member";
+        return typeof role === "number"
+          ? new Response("boom", { status: role })
+          : Response.json({ email: "e2e@example.com", role, team_id: "", admin: false });
+      }
       events.push(`${init?.method ?? "GET"} ${url} ${String(init?.body ?? "")}`);
       if (url === "/api/push/subscribe" && opts.subscribeStatus) {
-        return new Response("could not store the subscription", { status: opts.subscribeStatus });
+        return new Response(opts.subscribeBody ?? "could not store the subscription", {
+          status: opts.subscribeStatus,
+        });
       }
       return new Response(null, { status: 204 });
     }),
@@ -129,6 +145,62 @@ describe("BrowserNotificationsRow", () => {
     render(<BrowserNotificationsRow />);
     expect(await screen.findByText(/Notifications are blocked for this site/)).toBeInTheDocument();
     expect(switchEl()).toBeDisabled();
+  });
+
+  it("explains, with the switch disabled, a Viewer account, without offering the switch first", async () => {
+    // The account read answers only after the browser checks have settled:
+    // the switch must not come on in between, or a Viewer could press it.
+    let answer = () => {};
+    const roleGate = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    const { events } = stubBrowser({ role: "viewer", roleGate });
+    render(<BrowserNotificationsRow />);
+    // Long enough for the browser checks, all fakes, to settle.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(switchEl()).toBeDisabled();
+
+    answer();
+    expect(await screen.findByText(/Viewer accounts are read-only/)).toBeInTheDocument();
+    expect(switchEl()).toBeDisabled();
+    expect(switchEl()).toHaveAttribute("aria-checked", "false");
+    expect(events).toEqual([]);
+  });
+
+  it("tells a Viewer about the account, not about a browser setting that would not help", async () => {
+    // Allowing notifications in the browser would still leave a Viewer unable
+    // to turn them on, so that advice is not given.
+    stubBrowser({ permission: "denied", role: "viewer" });
+    render(<BrowserNotificationsRow />);
+    expect(await screen.findByText(/Viewer accounts are read-only/)).toBeInTheDocument();
+    expect(screen.queryByText(/blocked for this site/)).toBeNull();
+    expect(switchEl()).toBeDisabled();
+  });
+
+  it("explains a Viewer the account read missed once the server refuses the store", async () => {
+    // The read failed (or the role changed after the page loaded), so the
+    // switch was offered; the server's refusal ends in the same note, not in
+    // its raw JSON.
+    stubBrowser({ role: 500, subscribeStatus: 403, subscribeBody: JSON.stringify({ error: "read_only" }) });
+    render(<BrowserNotificationsRow />);
+    await waitFor(() => expect(switchEl()).not.toBeDisabled());
+    fireEvent.click(switchEl());
+    expect(await screen.findByText(/Viewer accounts are read-only/)).toBeInTheDocument();
+    expect(switchEl()).toBeDisabled();
+    expect(switchEl()).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByText(/read_only/)).toBeNull();
+  });
+
+  it("does not take another 403 for a Viewer: it is reported as it came", async () => {
+    // The web app's own origin check also answers 403; that is no reason to
+    // grey the switch out for good.
+    stubBrowser({ subscribeStatus: 403, subscribeBody: JSON.stringify({ error: "forbidden" }) });
+    render(<BrowserNotificationsRow />);
+    await waitFor(() => expect(switchEl()).not.toBeDisabled());
+    fireEvent.click(switchEl());
+    expect(await screen.findByText('{"error":"forbidden"}')).toBeInTheDocument();
+    expect(screen.queryByText(/Viewer accounts/)).toBeNull();
+    await waitFor(() => expect(switchEl()).not.toBeDisabled());
   });
 
   it("turns on: permission, the service worker, a subscription on the server's key, stored", async () => {

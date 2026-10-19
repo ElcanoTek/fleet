@@ -11,8 +11,8 @@
 // signed-in user, not merely that the browser holds one; signing out lets the
 // browser's subscription go (shared/signOut). The extra real-world states the
 // design doesn't show (unsupported browser / operator hasn't configured VAPID
-// / permission denied) render as a note under the description with the switch
-// disabled.
+// / permission denied / a Viewer account) render as a note under the
+// description with the switch disabled.
 
 import { useEffect, useState } from "react";
 import {
@@ -64,6 +64,36 @@ async function serverHoldsSubscription(endpoint: string): Promise<boolean> {
   return data.subscribed === true;
 }
 
+// isViewerAccount reports whether the signed-in account is a Viewer, from the
+// account read Settings → Team also makes (GET /api/me/team). The push routes
+// refuse a Viewer's writes, so the switch is greyed out up front instead of
+// failing once pressed. This is presentation only: the server's refusal stays
+// the authority, and a failed read counts as "not a Viewer", leaving the
+// switch to meet that refusal (which enable() turns into the same note).
+async function isViewerAccount(): Promise<boolean> {
+  try {
+    const res = await fetch("/api/me/team", { cache: "no-store" });
+    if (!res.ok) return false;
+    const me = (await res.json()) as { role?: string };
+    return me.role === "viewer";
+  } catch {
+    return false;
+  }
+}
+
+// readOnlyRefusal reports whether a 403 is the server's Viewer refusal
+// ({"error":"read_only"}) rather than another 403, such as the web app's
+// origin check. It reads a clone, so the caller can still read the body.
+async function readOnlyRefusal(res: Response): Promise<boolean> {
+  if (res.status !== 403) return false;
+  try {
+    const { error } = (await res.clone().json()) as { error?: unknown };
+    return error === "read_only";
+  } catch {
+    return false;
+  }
+}
+
 // RENEWAL_PENDING explains a switch that reads off because this browser's
 // renewal after a key change is still waiting on the server.
 const RENEWAL_PENDING =
@@ -73,9 +103,19 @@ export function BrowserNotificationsRow() {
   const [state, setState] = useState<PushState>("loading");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A Viewer account may not store a subscription. It is kept apart from
+  // `state`, which still says what the browser and the server hold: the
+  // checks below run for a Viewer too, so a subscription left in this browser
+  // by an account that turned them on is still let go, and one the server
+  // still holds for this account (from before it became a Viewer) still reads
+  // on and can be turned off.
+  const [viewer, setViewer] = useState(false);
 
   useEffect(() => {
     let stale = false;
+    // Asked alongside the checks and applied with their result, so the switch
+    // never offers a Viewer a moment in which to press it.
+    const viewerRead = isViewerAccount();
     (async () => {
       if (!pushSupported()) return "unsupported" as const;
       const key = await fetchVapidKey();
@@ -105,11 +145,16 @@ export function BrowserNotificationsRow() {
         return "disabled" as const;
       });
     })()
-      .then((next) => {
-        if (!stale) setState(next);
-      })
-      .catch((e: unknown) => {
+      .then(async (next) => {
+        const isViewer = await viewerRead;
         if (stale) return;
+        setViewer(isViewer);
+        setState(next);
+      })
+      .catch(async (e: unknown) => {
+        const isViewer = await viewerRead;
+        if (stale) return;
+        setViewer(isViewer);
         setState("disabled");
         setError(e instanceof Error ? e.message : "Something went wrong.");
       });
@@ -170,6 +215,13 @@ export function BrowserNotificationsRow() {
         setState("unconfigured");
         return;
       }
+      if (await readOnlyRefusal(res)) {
+        // A Viewer the account read missed (it failed, or the role changed
+        // after this page loaded): the same note as one it caught.
+        setViewer(true);
+        setState("disabled");
+        return;
+      }
       if (!res.ok && res.status !== 204) {
         throw new Error((await res.text()) || `Subscribe failed: ${res.status}`);
       }
@@ -194,7 +246,9 @@ export function BrowserNotificationsRow() {
       const sub = await reg?.pushManager.getSubscription();
       if (sub) {
         // Best-effort server delete first (we still have the endpoint), then
-        // drop the browser-side subscription.
+        // drop the browser-side subscription. A Viewer's delete is refused,
+        // but dropping the subscription still stops the alerts here, and the
+        // server retires the row once the push service reports it gone.
         await fetch("/api/push/unsubscribe", {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
@@ -210,8 +264,19 @@ export function BrowserNotificationsRow() {
     }
   };
 
+  // What a press can do: turn off whatever reads on, and turn on only for an
+  // account the server lets store a subscription.
+  const canEnable = state === "disabled" && !viewer;
+
+  // A Viewer is told first: allowing notifications in the browser, another
+  // browser, or the operator setting push up would not let it turn them on.
   const note =
-    state === "unsupported" ? (
+    viewer && state !== "enabled" ? (
+      <span className="text-[var(--color-text-muted)]">
+        Viewer accounts are read-only and can&apos;t turn notifications on — ask an admin if you
+        need them.
+      </span>
+    ) : state === "unsupported" ? (
       <span className="text-[var(--color-text-muted)]">
         This browser doesn&apos;t support Web Push notifications. Chrome, Edge, Firefox, and Safari
         16.4+ do.
@@ -247,9 +312,9 @@ export function BrowserNotificationsRow() {
         onToggle={() => {
           if (busy) return;
           if (state === "enabled") void disable();
-          else if (state === "disabled") void enable();
+          else if (canEnable) void enable();
         }}
-        disabled={busy || !(state === "enabled" || state === "disabled")}
+        disabled={busy || !(state === "enabled" || canEnable)}
         label="Browser notifications"
         testId="browser-notifications-switch"
       />
