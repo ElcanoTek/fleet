@@ -492,10 +492,14 @@ func readJSON(r *http.Request, v interface{}) error {
 }
 
 // getClientIP extracts the client IP from the request.
-// Prefers the IP resolved by the ClientIPFromXFF middleware (internal/httpmw) (see main.go),
-// which walks X-Forwarded-For right-to-left past trusted proxy hops and never
-// trusts client-supplied values. Falls back to the connection's RemoteAddr for
-// direct (proxyless) access, e.g. local development.
+// Prefers the IP resolved by the ClientIPFromXFF middleware (internal/httpmw),
+// which buildOrchestratorMux (cmd/fleet/main.go) installs only when
+// FLEET_TRUSTED_PROXIES is set: it reads X-Forwarded-For only when the TCP peer
+// is one of those proxies, walking the chain right-to-left past trusted hops,
+// and otherwise stores the peer itself. Falls back to the connection's
+// RemoteAddr when no IP was stored — always so with FLEET_TRUSTED_PROXIES
+// unset (the default, X-Forwarded-For never consulted), and when the XFF chain
+// is unparseable or all-trusted (the proxy's own address is used then).
 func getClientIP(r *http.Request) string {
 	if ip := httpmw.GetClientIP(r.Context()); ip != "" {
 		return ip

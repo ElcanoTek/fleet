@@ -273,7 +273,7 @@ unused, adapt the upstream patch if it is used.
 | Web Push (RFC 8291/8292) | `internal/webpush/protocol.go` | replaces webpush-go v1.4.0 (own code) | — |
 | HTML → Markdown | `internal/tools/htmlmd` | html-to-markdown v1.6.0 | MIT |
 | rotating log file | `internal/logging/rotate` | lumberjack v2.2.1 | MIT |
-| ClientIPFromXFF, Recoverer, WrapResponseWriter | `internal/httpmw` | chi v5.3.2 `middleware` (chi stays the router) | MIT |
+| ClientIPFromXFF, Recoverer, WrapResponseWriter | `internal/httpmw` | chi `middleware`: v5.4.0 (ClientIPFromXFF), v5.3.2 (Recoverer, WrapResponseWriter); chi stays the router | MIT |
 | code highlighting | `web/src/app/chat/ui/highlight/` | prismjs 1.30.0, refractor 5.0.0, react-syntax-highlighter 16.1.2 | MIT |
 
 Each copied file names its upstream, version and path and carries the licence

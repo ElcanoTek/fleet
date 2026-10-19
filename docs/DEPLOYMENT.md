@@ -514,7 +514,10 @@ each piece yourself):
      allowlist). A chain of only trusted addresses is treated as the TCP peer.
      **Without this set, `X-Forwarded-For` is never consulted**, so an untrusted
      client cannot spoof an allowlisted address via the header — you must
-     explicitly opt in by naming your proxy IPs.
+     explicitly opt in by naming your proxy IPs. The same setting decides the
+     client IP the orchestrator API keys its login and per-IP rate limits on:
+     unset, that is the TCP peer, so behind Caddy every caller shares the
+     proxy's `127.0.0.1` bucket until you name it here.
 
    Blocked requests get a uniform `403 Access denied` (plain text, no reason
    leaked); `/healthz` is exempt so load-balancer probes keep working; a

@@ -11,9 +11,10 @@ import (
 	"github.com/ElcanoTek/fleet/internal/httpmw"
 )
 
-// TestGetClientIP exercises getClientIP behind the same ClientIPFromXFF
-// configuration wired up in main.go: loopback (Caddy) is the only trusted
-// hop, and client-supplied X-Forwarded-For entries must not win.
+// TestGetClientIP exercises getClientIP behind the ClientIPFromXFF
+// configuration main.go wires up for FLEET_TRUSTED_PROXIES=127.0.0.1,::1:
+// loopback (Caddy) is the only trusted hop, and client-supplied
+// X-Forwarded-For entries must not win.
 func TestGetClientIP(t *testing.T) {
 	clientIPMiddleware := httpmw.ClientIPFromXFF("127.0.0.1/32", "::1/128")
 
@@ -58,6 +59,12 @@ func TestGetClientIP(t *testing.T) {
 		{
 			name:       "direct connection falls back to RemoteAddr",
 			remoteAddr: "192.0.2.5:9999",
+			want:       "192.0.2.5",
+		},
+		{
+			name:       "direct connection cannot spoof via XFF (GHSA-j6qf-3m9c-vwj3)",
+			remoteAddr: "192.0.2.5:9999",
+			xff:        []string{"10.0.0.7, 127.0.0.1"},
 			want:       "192.0.2.5",
 		},
 		{
