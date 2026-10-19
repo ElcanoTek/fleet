@@ -46,7 +46,8 @@ channel consumes.
    `@` or nothing on one side of it, a scheme other than `mailto:` or
    `https:` (an `http:` URL, say), a space or angle brackets
    (`mailto: <you@example.com>`), and an `https:` URL with no host. It names
-   a wrong scheme but never quotes the rest of the value. Push stays on
+   a wrong scheme only when it is a well-known one (`http:`, say), and never
+   quotes the value itself. Push stays on
    because the push services differ: Apple's, which delivers to Safari, may
    refuse every notification signed with such a contact (it answers `403`
    with reason `BadJwtToken`), while others may still deliver them. The check

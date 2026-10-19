@@ -517,12 +517,12 @@ func contactProblem(contact string) string {
 			return `has no address after "mailto:"`
 		}
 		if scheme, ok := uriScheme(addr); ok {
-			return fmt.Sprintf(`has %q after "mailto:" where the address belongs`, scheme)
+			return fmt.Sprintf(`has %s after "mailto:" where the address belongs`, schemeName(scheme))
 		}
 		return addressProblem(addr)
 	}
 	if scheme, ok := uriScheme(c); ok {
-		return fmt.Sprintf(`starts with %q rather than "mailto:" or "https:"`, scheme)
+		return fmt.Sprintf(`starts with %s rather than "mailto:" or "https:"`, schemeName(scheme))
 	}
 	return addressProblem(c)
 }
@@ -552,8 +552,9 @@ func hasSpaceOrAngle(s string) bool {
 // uriScheme returns the "scheme:" s starts with, lowercased, if it starts with
 // one (RFC 3986: a letter, then letters, digits, "+", "-" or "."). A valid
 // e-mail address never does: a ":" in one comes after its "@" or inside a
-// quoted local part, and neither "@" nor a quote is a scheme character. Being
-// made of those characters only, the scheme is safe to log.
+// quoted local part, and neither "@" nor a quote is a scheme character. What it
+// returns is still the value's own text, so it is logged only through
+// schemeName.
 func uriScheme(s string) (string, bool) {
 	i := strings.IndexByte(s, ':')
 	if i < 1 {
@@ -567,6 +568,23 @@ func uriScheme(s string) (string, bool) {
 		}
 	}
 	return strings.ToLower(s[:i+1]), true
+}
+
+// namedSchemes are the schemes the startup warning names. Anything before a
+// ":" looks like a scheme to uriScheme, including a token or key pasted in by
+// mistake ("AKIA…:secret"), so only these well-known ones are quoted.
+var namedSchemes = map[string]bool{
+	"http:": true, "https:": true, "mailto:": true, "ftp:": true, "ftps:": true,
+	"tel:": true, "sms:": true, "file:": true, "ws:": true, "wss:": true, "urn:": true,
+}
+
+// schemeName is how contactProblem names a scheme uriScheme found: quoted when
+// it is a well-known one, otherwise without its text.
+func schemeName(scheme string) string {
+	if namedSchemes[scheme] {
+		return fmt.Sprintf("%q", scheme)
+	}
+	return "a scheme"
 }
 
 // maxReasonBytes bounds how much of a refusal's body relayReason reads, and

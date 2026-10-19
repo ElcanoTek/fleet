@@ -841,6 +841,10 @@ func TestContactProblem(t *testing.T) {
 		{"tel:+15551234567", `starts with "tel:" rather than "mailto:" or "https:"`},
 		{"mailto:mailto:ops@example.com", `has "mailto:" after "mailto:" where the address belongs`},
 		{"mailto:https://example.com", `has "https:" after "mailto:" where the address belongs`},
+		// Text before a ":" that is not a well-known scheme may be a token or
+		// key pasted in by mistake: it is not quoted.
+		{"AKIAIOSFODNN7EXAMPLE:wJalrXUtnFEMIK7MDENG", `starts with a scheme rather than "mailto:" or "https:"`},
+		{"mailto:svc-token.v2:abc@example.com", `has a scheme after "mailto:" where the address belongs`},
 		{"admin", `has no "@", so it is not an e-mail address`},
 		{"example.com", `has no "@", so it is not an e-mail address`},
 		{"mailto:admin", `has no "@", so it is not an e-mail address`},
