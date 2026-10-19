@@ -113,3 +113,95 @@ describe("design tokens", () => {
     );
   });
 });
+
+/**
+ * Status-tint contrast (genui callout bug). GenerativeCard painted
+ * `--color-warning-soft` — a TEXT color — as a callout's fill, so a warning
+ * callout rendered pale text on a solid pastel: 1.14:1 for its title and 1.38:1
+ * for its body. And the -soft values themselves did not all clear AA on the
+ * 15% -strong tint DESIGN.md prescribes for them (light warning 3.4:1, dark
+ * danger 4.0:1), so NoticeBanner and StatusChip carried the same gap at a
+ * smaller scale.
+ *
+ * Status colors are deliberately NOT bundle-themable (config/default
+ * manifest.yaml), but the surfaces they sit on are. So the check runs against
+ * fleet's own surfaces plus the darkest and lightest surfaces the shipped
+ * client bundles declare (elcano, raptive, omnicom, reklaim, zeta and the two
+ * public examples, as of 2026-10-19): a bundle that themes a surface outside
+ * this envelope should add it here.
+ */
+const STATUS_SURFACES = {
+  dark: ["#1a0b1e", "#241b31", "#2f2741", "#07071c", "#0a0908", "#1e2330", "#19193a"],
+  light: ["#f4f6fb", "#ffffff", "#e9eefc", "#e9e9e9", "#ebebeb", "#f0edeb", "#f2f0ed"],
+} as const;
+
+function hexRGB(hex: string): [number, number, number] {
+  const h = hex.replace("#", "");
+  return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as [number, number, number];
+}
+
+function luminance([r, g, b]: [number, number, number]): number {
+  const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+function contrast(a: [number, number, number], b: [number, number, number]): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** `color-mix(in srgb, fg <alpha>, transparent)` composited over bg. */
+function tint(fg: [number, number, number], bg: [number, number, number], alpha: number): [number, number, number] {
+  return fg.map((c, i) => c * alpha + bg[i] * (1 - alpha)) as [number, number, number];
+}
+
+/** The status tokens declared in one top-level globals.css block. */
+function statusTokens(css: string, selector: string): Record<string, string> {
+  const start = css.indexOf(`${selector} {`);
+  expect(start, `${selector} block in globals.css`).toBeGreaterThanOrEqual(0);
+  const block = css.slice(start, css.indexOf("\n}", start));
+  const out: Record<string, string> = {};
+  for (const m of block.matchAll(/--color-(success|warning|danger)-(strong|soft):\s*(#[0-9a-fA-F]{6})\s*;/g)) {
+    out[`${m[1]}-${m[2]}`] = m[3];
+  }
+  return out;
+}
+
+describe("status tint contrast", () => {
+  const css = readFileSync(join(APP_DIR, "globals.css"), "utf8");
+  const themes = { dark: statusTokens(css, ":root"), light: statusTokens(css, ':root[data-theme="light"]') };
+
+  it.each(["dark", "light"] as const)("every -soft clears AA on its own -strong tint (%s)", (mode) => {
+    const tokens = themes[mode];
+    const failures: string[] = [];
+    for (const tone of ["success", "warning", "danger"]) {
+      const strong = tokens[`${tone}-strong`];
+      const soft = tokens[`${tone}-soft`];
+      expect(strong && soft, `${mode} ${tone} -strong/-soft parsed`).toBeTruthy();
+      // 15% is the documented tint; 20% covers the heavier tints in use (18%).
+      for (const alpha of [0.15, 0.2]) {
+        for (const surface of STATUS_SURFACES[mode]) {
+          const ratio = contrast(hexRGB(soft), tint(hexRGB(strong), hexRGB(surface), alpha));
+          if (ratio < 4.5) failures.push(`${tone}-soft ${soft} on ${alpha * 100}% ${strong} over ${surface}: ${ratio.toFixed(2)}:1`);
+        }
+      }
+    }
+    expect(failures, "WCAG AA is 4.5:1 for body text").toEqual([]);
+  });
+
+  it("no .tsx paints a -soft status token as a fill — it is a text color", () => {
+    const res = [
+      /bg-\[var\(--color-(success|warning|danger)-soft\)\]/,
+      /\b(bg|background|backgroundColor)\s*:\s*["'`]var\(--color-(success|warning|danger)-soft\)/,
+    ];
+    const offenders: string[] = [];
+    for (const file of tsxFiles(APP_DIR)) {
+      readFileSync(file, "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (res.some((re) => re.test(line))) offenders.push(`${file.replace(APP_DIR, "")}:${i + 1}`);
+        });
+    }
+    expect(offenders).toEqual([]);
+  });
+});

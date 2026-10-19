@@ -104,7 +104,10 @@
   --color-warning-strong: #e0a060;
   --color-warning-soft: #e0b080;
   --color-danger-strong: #e08080;
-  --color-danger-soft: #e08080;
+  /* Lifted from #e08080 (== -strong, so 4.0:1 on its own tint): the -soft
+     values are pinned to >= 4.5:1 on a 15-20% -strong tint over every
+     surface fleet and its bundles ship (designTokens.test.ts). */
+  --color-danger-soft: #e79b9b;
   /* Syntax-highlighting palette for code blocks. Prism themes are
      rebuilt on top of these via CSS vars so code colors track
      light/dark automatically without a JS theme swap. */
@@ -438,11 +441,14 @@
      the light tinted fills — mirroring how the base status tokens above
      deepen for the light theme. */
   --color-success-strong: #2f8f5e;
-  --color-success-soft: #137b47;
+  /* -soft deepened from #137b47 / #9a6a00 / #b02a2a, which measured
+     3.4-4.5:1 on their own 15% tints over light surfaces; pinned to
+     >= 4.5:1 by designTokens.test.ts. */
+  --color-success-soft: #10673c;
   --color-warning-strong: #b07a24;
-  --color-warning-soft: #9a6a00;
+  --color-warning-soft: #795300;
   --color-danger-strong: #c14f4f;
-  --color-danger-soft: #b02a2a;
+  --color-danger-soft: #a42727;
   --color-syntax-keyword: #7c3aed;
   --color-syntax-string: #0f7f3e;
   --color-syntax-number: #a85a00;
