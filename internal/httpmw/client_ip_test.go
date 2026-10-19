@@ -302,7 +302,6 @@ func TestAdvisory_GHSA_j6qf_3m9c_vwj3(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 // "Multiple XFF headers" attack — Go's http.Header.Get returns only the first
