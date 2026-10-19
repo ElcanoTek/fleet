@@ -91,10 +91,31 @@ func TestConnectorCategoriesMiscLast(t *testing.T) {
 	if cats[len(cats)-1].ID != MiscConnectorCategory {
 		t.Errorf("last category = %q, want misc", cats[len(cats)-1].ID)
 	}
-	if cats[0].ID != "ssps" {
-		t.Errorf("first category = %q, want ssps", cats[0].ID)
+	if cats[0].ID != HouseConnectorCategory || cats[1].ID != "ssps" {
+		t.Errorf("first categories = %q, %q, want house, ssps", cats[0].ID, cats[1].ID)
 	}
 	if ConnectorCategoryOr("crm-sales") != "crm-sales" || ConnectorCategoryOr("ad-tech") != MiscConnectorCategory {
 		t.Error("ConnectorCategoryOr must keep known slugs and send unknown ones to misc")
+	}
+}
+
+func TestBundleNamesTheHouseCategory(t *testing.T) {
+	for _, tc := range []struct {
+		branding Branding
+		want     string
+	}{
+		{Branding{AppName: "Elcano", HouseToolsName: "Elcano Tools"}, "Elcano Tools"},
+		{Branding{AppName: "Reklaim"}, "Reklaim Tools"},
+		{Branding{}, "House Tools"},
+	} {
+		b := &Bundle{Branding: tc.branding}
+		if got := b.ConnectorCategories()[0]; got.ID != HouseConnectorCategory || got.Name != tc.want {
+			t.Errorf("branding %+v: house category = %+v, want %q", tc.branding, got, tc.want)
+		}
+	}
+	// The package list is never renamed by a bundle.
+	_ = (&Bundle{Branding: Branding{HouseToolsName: "Elcano Tools"}}).ConnectorCategories()
+	if ConnectorCategories()[0].Name != "House Tools" {
+		t.Error("Bundle.ConnectorCategories must not mutate the shared list")
 	}
 }

@@ -679,6 +679,10 @@ type Branding struct {
 	LoginTagline     string `yaml:"login_tagline"`
 	ShareTitle       string `yaml:"share_title"`
 	ShareDescription string `yaml:"share_description"`
+	// HouseToolsName names the Tools picker's "house" category: the
+	// connectors the deployment's own team builds (e.g. "Elcano Tools"),
+	// listed first so they stand out. Empty means "<app_name> Tools".
+	HouseToolsName string `yaml:"house_tools_name"`
 	// Colors lets a bundle theme the actual web UI (not just text) by overriding
 	// the CSS custom properties globals.css defines. Served as a render-blocking
 	// stylesheet by httpapi's /theme.css so the shell — including the pre-auth
@@ -1846,8 +1850,8 @@ func (b *Bundle) validate() error {
 		if err := validateIdentityEnv(s); err != nil {
 			return err
 		}
-		if s.Category = strings.TrimSpace(s.Category); s.Category != "" && !IsConnectorCategory(s.Category) {
-			return fmt.Errorf("mcp_servers[%q]: unknown category %q (want one of the connector category IDs, e.g. ssps, deal-management, data-storage, misc)", s.Name, s.Category)
+		if err := validateCategory(s); err != nil {
+			return err
 		}
 		if err := validateBatchSecondsPerDeal(s); err != nil {
 			return err
@@ -1936,6 +1940,16 @@ func validateIdentityEnv(s *ServerDef) error {
 		if _, ok := s.Env[trimmed]; !ok {
 			return fmt.Errorf("mcp_servers[%q]: identity_env var %q is not a key of the server's env map", s.Name, trimmed)
 		}
+	}
+	return nil
+}
+
+// validateCategory normalizes the Tools-picker category and fails the load on
+// an unknown ID ("SSP" vs "ssps" would otherwise split one group into two).
+func validateCategory(s *ServerDef) error {
+	s.Category = strings.TrimSpace(s.Category)
+	if s.Category != "" && !IsConnectorCategory(s.Category) {
+		return fmt.Errorf("mcp_servers[%q]: unknown category %q (want one of the connector category IDs, e.g. ssps, deal-management, data-storage, misc)", s.Name, s.Category)
 	}
 	return nil
 }
@@ -2337,6 +2351,19 @@ func (b *Bundle) ConnectorMeta() []ConnectorMeta {
 		})
 	}
 	return out
+}
+
+// ConnectorCategories is the picker's category list for this deployment:
+// the fixed list with the house category named from branding.
+func (b *Bundle) ConnectorCategories() []ConnectorCategory {
+	name := ""
+	if b != nil {
+		name = strings.TrimSpace(b.Branding.HouseToolsName)
+		if name == "" && strings.TrimSpace(b.Branding.AppName) != "" {
+			name = strings.TrimSpace(b.Branding.AppName) + " Tools"
+		}
+	}
+	return connectorCategoriesNamed(name)
 }
 
 // UncategorizedConnectors names the manifest connectors with no category, for

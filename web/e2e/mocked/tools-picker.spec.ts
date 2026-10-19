@@ -8,6 +8,7 @@ import { mockChatBoot } from "./_mocks";
 // library modal. Screenshots land in test-results/ for a visual check.
 
 const CATEGORIES = [
+  { id: "house", name: "Elcano Tools" },
   { id: "ssps", name: "SSPs" },
   { id: "deal-management", name: "Deal Management" },
   { id: "data-storage", name: "Data & Storage" },
@@ -15,9 +16,15 @@ const CATEGORIES = [
 ];
 
 const SERVERS = [
-  { name: "dealsheet", display_name: "Deal Sheet", category: "deal-management", always_on: true, enabled: true,
+  { name: "dealsheet", display_name: "Deal Sheet", category: "house", always_on: true, enabled: true,
     description: "Build a branded XLSX deal sheet from a batch of created deals, ready to forward to the trader and the client.",
     tools: [], tool_count: 12 },
+  { name: "lens", display_name: "Lens", category: "house", enabled: false,
+    description: "Classify websites, apps and CTV apps into ad quality tiers with Lens, then read and download the results.",
+    tools: ["lens_classify", "lens_list_runs", "lens_download"], tool_count: 3 },
+  { name: "pages", display_name: "Pages", category: "house", enabled: false,
+    description: "Build, deploy and publish versioned client dashboards from templates.",
+    tools: ["pages_deploy", "pages_publish"], tool_count: 2 },
   { name: "deallib", display_name: "Deal Library", category: "deal-management", enabled: false,
     description: "Search, read and update deals stored in the Manifest Deal Library.",
     tools: ["search_deals", "get_deal", "update_deal"], tool_count: 3 },
@@ -71,7 +78,7 @@ test("tools popover: badge, On section, headings, search and account menu", asyn
   await expect(popover).toBeVisible();
   await expect(popover).toHaveCSS("opacity", "1");
   await expect(page.getByRole("textbox", { name: "Search tools" })).toBeFocused();
-  await expect(popover.getByRole("group")).toHaveText([/^On/, /^SSPs/, /^Deal Management/, /^Misc Tools/]);
+  await expect(popover.getByRole("group")).toHaveText([/^On/, /^Elcano Tools/, /^SSPs/, /^Deal Management/, /^Misc Tools/]);
   await expect(popover.getByTestId("chat-tools-row-bigquery")).toHaveCount(0);
   await expect(popover.getByTestId("chat-tools-row-triplelift")).toHaveCount(0);
   await expect(page.getByTestId("mcp-seat-indexexchange")).toHaveText(/Elcano/);
@@ -88,7 +95,10 @@ test("tools popover: badge, On section, headings, search and account menu", asyn
 
   const search = page.getByRole("textbox", { name: "Search tools" });
   await search.fill("deal");
-  await expect(popover.getByRole("group").first()).toHaveText(/^Deal Management/);
+  // Deal Sheet and Deal Library tie on a name prefix; the house group wins
+  // the tie on category order.
+  await expect(popover.getByRole("group").first()).toHaveText(/^Elcano Tools/);
+  await expect(popover.getByRole("group").nth(1)).toHaveText(/^Deal Management/);
   await page.screenshot({ path: "test-results/tools-popover-search.png" });
 
   await search.fill("clone");
@@ -121,7 +131,7 @@ test("tools library: counts, filters, detail and admin setup link", async ({ pag
   await page.getByRole("button", { name: /Set up/ }).click();
   const library = page.getByTestId("chat-tools-library");
   await expect(library).toBeVisible();
-  await expect(library).toContainText("3 of 9 on");
+  await expect(library).toContainText("3 of 11 on");
   const detail = page.getByTestId("chat-tools-library-detail");
   await expect(detail).toContainText("Needs setup before it can be used.");
   await expect(detail.getByRole("link", { name: /Set up in Settings/ })).toHaveAttribute(

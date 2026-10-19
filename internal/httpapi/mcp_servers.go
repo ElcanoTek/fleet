@@ -91,7 +91,7 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
 		}
 	}
-	writeJSON(w, map[string]any{"servers": servers, "categories": clientconfig.ConnectorCategories()})
+	writeJSON(w, map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()})
 }
 
 // Connection statuses for the Tools picker. "available" connectors get a
@@ -456,7 +456,7 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
 		}
 	}
-	writeJSON(w, map[string]any{"servers": servers, "categories": clientconfig.ConnectorCategories()})
+	writeJSON(w, map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()})
 }
 
 // handleConversationMCPServersSet serves POST /conversations/{id}/mcp-servers.

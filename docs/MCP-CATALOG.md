@@ -76,7 +76,9 @@ Each `mcp_servers` entry names the Tools-picker group it belongs to by ID:
 ```
 
 The list is fixed in `internal/clientconfig/connector_categories.go`, in
-display order: `ssps` (SSPs), `deal-management` (Deal Management),
+display order: `house` (the deployment's own tools, listed first so they stand
+out; named by `branding.house_tools_name`, default "<app_name> Tools", e.g.
+"Elcano Tools"), `ssps` (SSPs), `deal-management` (Deal Management),
 `data-storage` (Data & Storage), then the directory's slugs (`development`,
 `databases`, `communication`, `crm-sales`, … the ones
 `builtin_remote_catalog.yaml` uses), and `misc` (Misc Tools) last. It is an ID,

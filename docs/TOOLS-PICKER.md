@@ -54,6 +54,12 @@ tested):
 
 A dimmed search row opens that connection in the library.
 
+**House tools.** The `house` category holds the deployment's own tools
+(for Elcano: Lens, Pages, Keel, Deal Sheet and Deal Planner) and is listed
+first, after On, so they stand out. Fleet carries no client name: the bundle
+names the group with `branding.house_tools_name` ("Elcano Tools"), and
+without it the name is "<app_name> Tools".
+
 **Server side.** `mcp_servers` entries take `category:` (an ID from
 `internal/clientconfig/connector_categories.go`; see docs/MCP-CATALOG.md,
 "Category"). An unknown ID fails the load, and an untagged entry lands in

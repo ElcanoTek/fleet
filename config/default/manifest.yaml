@@ -61,6 +61,9 @@ branding:
   login_tagline: "Sign in to your workspace and pick up where you left off."
   share_title: "Fleet — your team's AI workspace"
   share_description: "Persistent multi-turn conversations with real tool use across files, data, and the web."
+  # The Tools picker's first group, for connectors your own team builds
+  # (category: house). Empty = "<app_name> Tools".
+  # house_tools_name: "Acme Tools"
   # Optional: the brand mark the navigation rail renders on every page. A
   # bundle-relative path to an .svg/.png/.webp/.jpg/.jpeg/.ico file; served by
   # chat-server /brand/logo (proxied to the browser as /api/brand/logo), so a

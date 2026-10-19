@@ -9,7 +9,10 @@ import "strings"
 // ID fails the load. A connector without one lands in Misc Tools and startup
 // logs a warning so it gets tagged.
 //
-// The ad-ops categories come first, then the remote directory's curated slugs
+// The house category comes first: the deployment's own tools (Lens, Pages, …),
+// named per bundle (branding.house_tools_name, default "<app_name> Tools") so
+// fleet carries no client name. Then the ad-ops categories, then the remote
+// directory's curated slugs
 // (builtin_remote_catalog.yaml) so a hosted connection groups under the same
 // name the Connections directory shows. Misc Tools is always last.
 
@@ -22,7 +25,11 @@ type ConnectorCategory struct {
 // MiscConnectorCategory is the fallback group for anything untagged.
 const MiscConnectorCategory = "misc"
 
+// HouseConnectorCategory groups the deployment's own tools, listed first.
+const HouseConnectorCategory = "house"
+
 var connectorCategories = []ConnectorCategory{
+	{ID: HouseConnectorCategory, Name: "House Tools"},
 	{ID: "ssps", Name: "SSPs"},
 	{ID: "deal-management", Name: "Deal Management"},
 	{ID: "data-storage", Name: "Data & Storage"},
@@ -48,10 +55,22 @@ var connectorCategories = []ConnectorCategory{
 	{ID: MiscConnectorCategory, Name: "Misc Tools"},
 }
 
-// ConnectorCategories returns every picker category in display order, Misc
-// Tools last. The picker hides the ones with no connection in them.
+// ConnectorCategories returns every picker category in display order, the
+// house category first and Misc Tools last, with the generic house name. The
+// picker hides the ones with no connection in them; serve
+// Bundle.ConnectorCategories, which names the house category.
 func ConnectorCategories() []ConnectorCategory {
-	return append([]ConnectorCategory(nil), connectorCategories...)
+	return connectorCategoriesNamed("")
+}
+
+// connectorCategoriesNamed is the list with the house category renamed
+// (empty keeps "House Tools").
+func connectorCategoriesNamed(house string) []ConnectorCategory {
+	out := append([]ConnectorCategory(nil), connectorCategories...)
+	if house != "" {
+		out[0].Name = house
+	}
+	return out
 }
 
 // IsConnectorCategory reports whether id names a known category.
