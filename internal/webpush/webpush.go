@@ -47,6 +47,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -105,7 +106,8 @@ type Config struct {
 	VAPIDPrivateKey string
 	// Contact is the RFC 8292 subject (mailto: or https: URL) push relays may
 	// use to reach the operator about misbehaving senders. A bare address is
-	// taken as a mailto: one (see vapidSubscriber).
+	// taken as a mailto: one (see vapidSubscriber); New warns about a contact
+	// that cannot be either (see contactProblem).
 	Contact string
 	// OnTaskComplete gates the runner-side task lifecycle pushes (terminal
 	// success/failure + paused-awaiting-input/progress). Default ON when the
@@ -186,6 +188,13 @@ type Service struct {
 
 // New builds a Service, or returns nil (feature off, all methods no-op) when
 // cfg is not fully configured. st must be non-nil when cfg is enabled.
+//
+// A contact that cannot work (contactProblem) is logged once, when the
+// Service is built (by New or NewWithHTTPClient), as a WARNING, and push is
+// still enabled. The push services differ in what they accept: FCM took the
+// "mailto:mailto:…" claim Apple's refused (see vapidSubscriber), and Mozilla's
+// autopush today only counts a malformed one in its metrics. Refusing to start
+// push could take notifications away from browsers that get them today.
 func New(cfg Config, st SubscriptionStore) *Service {
 	return NewWithHTTPClient(cfg, st, nil)
 }
@@ -196,18 +205,31 @@ func New(cfg Config, st SubscriptionStore) *Service {
 // still gates every send, but the redirect policy is the caller's client's, so
 // production code uses New. A nil client gets New's.
 func NewWithHTTPClient(cfg Config, st SubscriptionStore, client HTTPClient) *Service {
+	return newService(cfg, st, client, log.Printf)
+}
+
+// newService is NewWithHTTPClient with the logger injected too, so the startup
+// warning goes through the same seam the sends log through and is testable
+// there.
+func newService(cfg Config, st SubscriptionStore, client HTTPClient, logf func(format string, args ...any)) *Service {
 	if !cfg.Enabled() {
 		return nil
 	}
 	if client == nil {
 		client = newClient()
 	}
-	return &Service{
+	s := &Service{
 		cfg:    cfg,
 		store:  st,
 		client: client,
-		logf:   log.Printf,
+		logf:   logf,
 	}
+	if problem := contactProblem(cfg.Contact); problem != "" {
+		// Only the problem is logged, never the value: an env-file whose lines
+		// slipped can put the private key here.
+		s.logf(`webpush: WARNING FLEET_VAPID_CONTACT is not a usable contact: it %s. Every push is signed with it (the VAPID "sub" claim), and a push service may refuse every notification over it: Apple's, which delivers to Safari, answers 403 with reason BadJwtToken. Set it to a mailto: address such as mailto:you@example.com, or an https: URL with a host such as https://example.com/contact, and restart fleet`, problem)
+	}
+	return s
 }
 
 // newClient is the sender's HTTP client. Its transport is the default one, so
@@ -439,15 +461,130 @@ func (s *Service) sendOne(ctx context.Context, payload []byte, sub store.PushSub
 // claim then carries exactly one scheme for a mailto: address, a bare address
 // or an https: URL.
 func vapidSubscriber(contact string) string {
-	const mailto, https = "mailto:", "https:"
 	c := strings.TrimSpace(contact)
 	switch {
-	case len(c) >= len(mailto) && strings.EqualFold(c[:len(mailto)], mailto):
-		return strings.TrimSpace(c[len(mailto):])
-	case len(c) >= len(https) && strings.EqualFold(c[:len(https)], https):
-		return https + c[len(https):]
+	case hasPrefixFold(c, schemeMailto):
+		return strings.TrimSpace(c[len(schemeMailto):])
+	case hasPrefixFold(c, schemeHTTPS):
+		return schemeHTTPS + c[len(schemeHTTPS):]
 	}
 	return c
+}
+
+// The two contact schemes RFC 8292 names for the VAPID "sub" claim.
+const schemeMailto, schemeHTTPS = "mailto:", "https:"
+
+// hasPrefixFold reports whether s starts with prefix in any case.
+func hasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
+}
+
+// contactProblem says what makes FLEET_VAPID_CONTACT unusable, worded to
+// follow "it" in New's startup warning, or "" when it is usable. It reads the
+// contact as vapidSubscriber does (trimmed, either scheme in any case, a bare
+// value taken as an address), so it judges what is sent. RFC 8292 asks for a
+// mailto: or an https: URI, and Apple's push service refuses a token whose
+// contact it does not accept (403 BadJwtToken).
+//
+// Only what cannot be a mailto: address or an https: URL counts: no address,
+// no "@" or nothing on one side of it, another scheme (http:, say), a space or
+// angle brackets (a URI cannot hold them unencoded, and Apple's has refused
+// "mailto: <address>"), or an https: URL with no host. Everything else passes —
+// plus-addressing, subdomains, internationalized domains, a ?subject= on the
+// mailto: — because a warning on a contact that works teaches operators to
+// ignore it. Whether a push service accepts the domain is not checked.
+func contactProblem(contact string) string {
+	c := strings.TrimSpace(contact)
+	switch {
+	case c == "":
+		return "is empty"
+	case hasPrefixFold(c, schemeHTTPS):
+		rest := c[len(schemeHTTPS):]
+		if hasSpaceOrAngle(rest) {
+			return "contains a space or angle brackets"
+		}
+		u, err := url.Parse(schemeHTTPS + rest)
+		if err != nil {
+			return "is not a valid https: URL"
+		}
+		if u.Hostname() == "" {
+			return "is an https: URL with no host"
+		}
+		return ""
+	case hasPrefixFold(c, schemeMailto):
+		addr := strings.TrimSpace(c[len(schemeMailto):])
+		if addr == "" {
+			return `has no address after "mailto:"`
+		}
+		if scheme, ok := uriScheme(addr); ok {
+			return fmt.Sprintf(`has %s after "mailto:" where the address belongs`, schemeName(scheme))
+		}
+		return addressProblem(addr)
+	}
+	if scheme, ok := uriScheme(c); ok {
+		return fmt.Sprintf(`starts with %s rather than "mailto:" or "https:"`, schemeName(scheme))
+	}
+	return addressProblem(c)
+}
+
+// addressProblem is contactProblem for the e-mail address of a mailto: or
+// bare contact. Deliberately shallow; see contactProblem.
+func addressProblem(addr string) string {
+	if hasSpaceOrAngle(addr) {
+		return "contains a space or angle brackets"
+	}
+	at := strings.LastIndexByte(addr, '@')
+	switch {
+	case at < 0:
+		return `has no "@", so it is not an e-mail address`
+	case at == 0:
+		return `has nothing before the "@"`
+	case at == len(addr)-1:
+		return `has nothing after the "@"`
+	}
+	return ""
+}
+
+func hasSpaceOrAngle(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool { return unicode.IsSpace(r) || r == '<' || r == '>' })
+}
+
+// uriScheme returns the "scheme:" s starts with, lowercased, if it starts with
+// one (RFC 3986: a letter, then letters, digits, "+", "-" or "."). A valid
+// e-mail address never does: a ":" in one comes after its "@" or inside a
+// quoted local part, and neither "@" nor a quote is a scheme character. What it
+// returns is still the value's own text, so it is logged only through
+// schemeName.
+func uriScheme(s string) (string, bool) {
+	i := strings.IndexByte(s, ':')
+	if i < 1 {
+		return "", false
+	}
+	for j, r := range s[:i] {
+		letter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+		other := r >= '0' && r <= '9' || r == '+' || r == '-' || r == '.'
+		if !letter && (j == 0 || !other) {
+			return "", false
+		}
+	}
+	return strings.ToLower(s[:i+1]), true
+}
+
+// namedSchemes are the schemes the startup warning names. Anything before a
+// ":" looks like a scheme to uriScheme, including a token or key pasted in by
+// mistake ("AKIA…:secret"), so only these well-known ones are quoted.
+var namedSchemes = map[string]bool{
+	"http:": true, "https:": true, "mailto:": true, "ftp:": true, "ftps:": true,
+	"tel:": true, "sms:": true, "file:": true, "ws:": true, "wss:": true, "urn:": true,
+}
+
+// schemeName is how contactProblem names a scheme uriScheme found: quoted when
+// it is a well-known one, otherwise without its text.
+func schemeName(scheme string) string {
+	if namedSchemes[scheme] {
+		return fmt.Sprintf("%q", scheme)
+	}
+	return "a scheme"
 }
 
 // maxReasonBytes bounds how much of a refusal's body relayReason reads, and
