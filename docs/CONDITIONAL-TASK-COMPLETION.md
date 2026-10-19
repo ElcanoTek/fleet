@@ -262,9 +262,10 @@ EXECUTION REQUIREMENTS (JSON):
   `critical_actions_being_unblocked` text is accepted when its critical suffix
   shares an alias class with, or is substituted by, a registered tool's suffix.
   The model re-audits with tools from its list. Accepting any other declaration
-  would create an approval nothing could discharge: the call answers
-  `tool not found`, so finish would be refused until the run failed.
-- **Removed tools.** A call to a removed tool is answered `tool not found`.
+  would create an approval nothing could discharge: the call is refused, so
+  finish would be refused until the run failed.
+- **Removed tools.** A call to a removed tool is refused, and its result says
+  the run's tools are narrowed to the ones it requires (#1744).
   The run log carries one `[roster] required_tools_only: N mcp tools
   registered` breadcrumb.
 - **Unknown values.** Any other `roster` value, the empty string included, is

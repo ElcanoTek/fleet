@@ -61,11 +61,11 @@ catalogs).
 `agentcore.Run` *after* `buildFantasyTools` returns, from what it actually
 registered (`internal/agentcore/live_registry.go`): below the threshold it
 lists the `mcp_*` names verbatim; above it, it says how many tools sit behind
-the bridges, names the connectors, and tells the model that a direct `mcp_*`
-call will fail and `tool_call` is the way in. The section used to be written
-by the driver before the roster existed, so above the threshold it listed
-every name as callable — the model called one, got "tool not found", and gave
-up on a working connector (#1006, four hosted connectors = 159 tools).
+the bridges, names the connectors, and tells the model to use `tool_call` (a
+direct `mcp_*` call is rerouted through it, see below). The section used to
+be written by the driver before the roster existed, so above the threshold it
+listed every name as callable — the model called one, got "tool not found",
+and gave up on a working connector (#1006, four hosted connectors = 159 tools).
 
 ## Narrowing the roster instead (#1603)
 
@@ -89,6 +89,14 @@ threshold count all see the narrowed roster. A narrowed roster usually lands
 well under the threshold. A Pages data refresh drops from the 44 Pages tools
 (about 135 KB of descriptions and schemas, ≈34K tokens resent on every step),
 plus the `fast_io` and `fastio_helpers` tools, to the eight or so it names.
+
+## Calls to tools not in the list (#1744)
+
+A direct call to a deferred tool is rerouted through `tool_call` (with a few
+exceptions), under the same gates as a `tool_call` the model wrote, and a call
+to a tool a gate removed is never run and its result names the gate. Each such
+call is counted per model. See
+[`OUT-OF-ROSTER-TOOL-CALLS.md`](OUT-OF-ROSTER-TOOL-CALLS.md).
 
 ## BM25 index (`internal/tools/bm25_index.go`)
 

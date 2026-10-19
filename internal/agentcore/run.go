@@ -509,6 +509,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// the pre-load catalog — mcp_load appeared to succeed and changed
 	// nothing). An injected deps.MCPCatalog stays static by design: the
 	// injector owns its lifecycle.
+	eng.outOfRoster = newOutOfRoster(cfg.PersonaName, usageOrch, mcpGates{
+		allow: cfg.Allowlist, exclusive: toolCfg.exclusiveAllowlist, optional: cfg.OptionalServers, optIn: optIn,
+	})
 	buildTools := func() ([]fantasy.AgentTool, toolRoster, error) {
 		catalog := deps.MCPCatalog
 		if catalog == nil {
@@ -532,10 +535,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// a zero-overhead passthrough (current behavior). Re-applied on every
 		// rebuild (the mcp_load_servers dirty path) via this closure.
 		if cfg.PersonaPolicy != nil {
-			tools = resolvePersonaTools(cfg.PersonaName, *cfg.PersonaPolicy, tools, deps.Observer)
+			tools = resolvePersonaRoster(cfg.PersonaName, *cfg.PersonaPolicy, tools, &roster, deps.Observer)
 		}
 		// A narrowed run's audit gate reads the live roster (#1603).
 		recordNarrowedRoster(deps.Policy, cfg.MCPRosterNarrowing, roster)
+		// So does out-of-roster recovery (#1744), on every build: the first
+		// and each mid-run MCP rebuild.
+		eng.outOfRoster.setRoster(roster)
 		return tools, roster, observerBoundary.Err()
 	}
 
@@ -543,6 +549,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	if err != nil {
 		return Result{}, fmt.Errorf("build tools: %w", err)
 	}
+
 	// One breadcrumb for a narrowed roster (#1603), at the first build only: a
 	// mid-run MCP rebuild re-applies the same exhaustive allowlist but does not
 	// repeat the line.
@@ -571,6 +578,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// rounds so a multi-round scheduled run builds one coherent transcript.
 	sink := newStreamSink(deps.Observer, panicAttribution)
 	sink.logSession = logSession
+	sink.outOfRoster = eng.outOfRoster
 	// Auxiliary model-call metering (#1118). Two seams, both capability
 	// closures over usageOrch (the state itself never escapes Run), so every
 	// model call an aux path makes on behalf of this run lands in the SAME
@@ -684,7 +692,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// checkpoint event is streamed; clients hear about the pause through the
 		// fleet.context_compacted event that follows.
 		if eng.consumeResendCheckpoint(finalResult, outcome.completedSteps+len(finalResult.Steps), messages, activeModel) {
-			messages = append(messages, carryRoundMessages(finalResult)...)
+			messages = append(messages, eng.roundCarry(finalResult)...)
 			resent := lastStepPromptTokens(finalResult)
 			steps := outcome.completedSteps + len(finalResult.Steps)
 			if !eng.windowCheckpointActive() {
@@ -760,10 +768,11 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 				// carry as the enforcement loop and the terminal structured-
 				// output phase; copied so the loop's own slice stays the round
 				// input (completeRun appends the carry itself).
-				finalizeMessages := append(append([]fantasy.Message(nil), messages...), carryRoundMessages(finalResult)...)
+				finalizeMessages := append(append([]fantasy.Message(nil), messages...), eng.roundCarry(finalResult)...)
 				finalText, err = finalizeWithPanicBoundary(ctx, deps.Finalize, finalizeInputFor(
 					mode, finalText, finalizeMessages, sink.toolEventCount()-roundToolMark,
 					fantasyTools, deps.Observer, systemPrompt, sink, panicAttribution, usageOrch, activeModel, cfg.MaxIterations,
+					eng.outOfRoster,
 				), observerBoundary)
 				if err != nil {
 					return Result{}, err
@@ -814,7 +823,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// this round's text.delta events; completeRun emits text.replace with
 		// the authoritative final answer so they drop the superseded draft
 		// without discarding abort-path transcripts.
-		messages = append(messages, carryRoundMessages(finalResult)...)
+		messages = append(messages, eng.roundCarry(finalResult)...)
 		messages, err = appendEnforcementMessages(messages, enforcementMsgs, deps.Observer, observerBoundary)
 		if err != nil {
 			return Result{}, err
@@ -905,7 +914,7 @@ func completeRun(ctx context.Context, in runCompletion) (Result, error) {
 		// messages is the input to the last ordinary round. Carry its completed
 		// assistant/tool transcript so terminal formatting uses work already done.
 		terminalMessages := append([]fantasy.Message(nil), in.messages...)
-		terminalMessages = append(terminalMessages, carryRoundMessages(in.finalResult)...)
+		terminalMessages = append(terminalMessages, in.engine.roundCarry(in.finalResult)...)
 		var err error
 		outputJSON, err = in.engine.generateTerminalStructuredOutput(
 			ctx, in.activeModel, in.systemPrompt, terminalMessages,
@@ -1125,6 +1134,7 @@ func lastStepPromptTokens(result *fantasy.AgentResult) int {
 func finalizeInputFor(mode Mode, finalText string, messages []fantasy.Message, roundToolEvents int,
 	fantasyTools []fantasy.AgentTool, observer Observer, systemPrompt string, sink *streamSink,
 	panicAttribution panicAttribution, usageOrch *orchestrationState, activeModel fantasy.LanguageModel, maxIterations int,
+	outOfRoster *outOfRoster,
 ) FinalizeInput {
 	return FinalizeInput{
 		Mode:            mode,
@@ -1137,10 +1147,16 @@ func finalizeInputFor(mode Mode, finalText string, messages []fantasy.Message, r
 		OnToolCall:      finalizeToolCallCallback(sink, panicAttribution),
 		OnToolResult:    finalizeToolResultCallback(sink, panicAttribution),
 		GuardStep: func(inner fantasy.PrepareStepFunction) fantasy.PrepareStepFunction {
+			// Refused out-of-roster calls are explained before the retry's own
+			// steps (context budget, cache markers) see the history (#1744).
+			step := chainPrepareStepFunctions(outOfRoster.explainStep, inner)
 			if usageOrch == nil {
-				return inner
+				return step
 			}
-			return budgetGuardedStep(usageOrch, inner)
+			return budgetGuardedStep(usageOrch, step)
+		},
+		RepairToolCall: func(modelSlug string) fantasy.RepairToolCallFunction {
+			return outOfRoster.repair(modelSlug, sink)
 		},
 		StopWhen: stepStopConditions(maxIterations),
 		RecordUsage: func(u fantasy.Usage, md fantasy.ProviderMetadata) {

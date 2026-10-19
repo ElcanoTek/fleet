@@ -446,6 +446,21 @@ func (o *orchestrationState) setNarrowedMCPRoster(names []string) {
 	o.narrowedMCPRoster = set
 }
 
+// narrowedStandInFor is the registered tool a narrowed run offers in place of
+// tool (narrowedStandIn), for the explanation an out-of-roster call to tool
+// gets (#1744); "" when the run is not narrowed or nothing stands in. nil-safe.
+func (o *orchestrationState) narrowedStandInFor(tool string) string {
+	if o == nil {
+		return ""
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(o.narrowedMCPRoster) == 0 {
+		return ""
+	}
+	return o.narrowedStandIn(tool, criticalSuffixFor(tool), false)
+}
+
 // setCeilings configures the per-turn guardrails (interactive).
 func (o *orchestrationState) setCeilings(maxCostUSD float64, maxTotalTokens int) {
 	o.mu.Lock()

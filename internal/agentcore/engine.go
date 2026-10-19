@@ -31,6 +31,11 @@ type engine struct {
 	fallbackModel  fantasy.LanguageModel
 	fallbackModels []fantasy.LanguageModel
 
+	// outOfRoster recovers the model's calls to names not in its tool list
+	// (#1744): the stream's RepairToolCall and the explainStep below. nil in
+	// the lifted parity tests that build an engine directly (nil-safe).
+	outOfRoster *outOfRoster
+
 	resilience resilienceConfig
 	logSession *LogSession
 	onRetry    fantasy.OnRetryCallback
@@ -760,6 +765,15 @@ func carryRoundMessages(result *fantasy.AgentResult) []fantasy.Message {
 	return out
 }
 
+// roundCarry is carryRoundMessages with the run's out-of-roster explanations
+// in place of fantasy's "tool not found" (#1744). Every consumer of a round's
+// transcript (the next round, the finalize hook, the terminal structured
+// output, compaction) takes it from here, so each later model call is sent the
+// text the model was first sent, and the cached prefix holds.
+func (e *engine) roundCarry(result *fantasy.AgentResult) []fantasy.Message {
+	return e.outOfRoster.explain(carryRoundMessages(result))
+}
+
 // Replay keeps tool evidence while dropping provider-specific reasoning blocks.
 // Copy content slices so a later reducer cannot mutate the original transcript.
 func messagesForReplay(messages []fantasy.Message) []fantasy.Message {
@@ -1339,6 +1353,9 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		ProviderOptions: r.engine.providerOptions(modelSlug),
 		MaxRetries:      &maxRetries,
 		StopWhen:        r.engine.roundStopConditions(stepLimit, messages, activeModel),
+		// Set on the call, not the agent: Stream reads the call's repair
+		// function only (#1744).
+		RepairToolCall: r.engine.outOfRoster.repair(modelSlug, sink),
 		// Fantasy's inner backoff-and-retry, surfaced two ways: turn.retry to
 		// the Observer (the web client's inline "retrying" badge; journal
 		// recovery resets accumulated text on it) and the engine's session-log
@@ -1429,6 +1446,11 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 				}
 				return ctx, fantasy.PrepareStepResult{}, nil
 			},
+			// A refused out-of-roster call's result says which gate removed
+			// the tool (#1744). Ahead of the recovery checkpoint, the
+			// reducers and the cache markers, so they all see the explained
+			// history.
+			r.engine.outOfRoster.explainStep,
 			// Steering (#785) runs before the reducers so an injected user
 			// message is budget-accounted and cache-marked like any other
 			// history — and never observed by a provider before its durable

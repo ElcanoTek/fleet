@@ -20,8 +20,9 @@ type FinalizeInput struct {
 	FinalText string
 	// Messages is the conversation as it stands when the run finishes: the
 	// finishing round's INPUT plus that round's completed assistant/tool
-	// transcript (carryRoundMessages — the same carry the enforcement loop and
-	// the terminal structured-output phase use). A recovery call replays it so
+	// transcript (engine.roundCarry — the same carry the enforcement loop and
+	// the terminal structured-output phase use, with refused out-of-roster
+	// calls explained, #1744). A recovery call replays it so
 	// it sees the current user question and the tool results it is asked to
 	// write up; the round input alone lacks the tool transcript (it lives in
 	// the round's AgentResult.Steps), which left the forced summary fabricating
@@ -53,6 +54,12 @@ type FinalizeInput struct {
 	// completions past the ceiling. Nil-safe: when unset the inner step runs
 	// unguarded.
 	GuardStep func(fantasy.PrepareStepFunction) fantasy.PrepareStepFunction
+	// RepairToolCall is the run's out-of-roster recovery (#1744) for a finalize
+	// retry that streams with tools, given the retry's model slug. Set it on
+	// the retry's AgentStreamCall: Stream ignores an agent-level repair
+	// function. GuardStep already sends the model the refused calls'
+	// explanations. Nil-safe: nil leaves fantasy's default.
+	RepairToolCall func(modelSlug string) fantasy.RepairToolCallFunction
 	// StopWhen carries the run's step-cap conditions (MaxIterations) into a
 	// finalize retry's stream — the retry re-runs WITH tools, so without it a
 	// model that keeps issuing (policy-blocked) tool calls loops paid steps

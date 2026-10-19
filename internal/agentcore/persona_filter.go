@@ -91,6 +91,26 @@ func resolvePersonaTools(persona string, policy PersonaToolPermissions, all []fa
 	return out
 }
 
+// resolvePersonaRoster is resolvePersonaTools over the registered roster,
+// also recording in roster what the persona removed (#1744), so a call to one
+// of those names is told why it is missing.
+func resolvePersonaRoster(persona string, policy PersonaToolPermissions, all []fantasy.AgentTool, roster *toolRoster, obs Observer) []fantasy.AgentTool {
+	kept := resolvePersonaTools(persona, policy, all, obs)
+	if len(kept) == len(all) {
+		return kept
+	}
+	offered := make(map[string]bool, len(kept))
+	for _, t := range kept {
+		offered[t.Info().Name] = true
+	}
+	for _, t := range all {
+		if name := t.Info().Name; !offered[name] {
+			roster.noteRemoved(name, gatePersona)
+		}
+	}
+	return kept
+}
+
 // personaBlocksTool is the single Gate-4 decision: it reports whether the
 // policy suppresses toolName, and the audit reason ("deny" | "not_in_allow").
 // Extracted so the SAME semantics apply at both enforcement points — the
