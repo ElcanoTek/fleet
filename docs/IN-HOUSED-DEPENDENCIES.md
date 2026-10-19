@@ -26,7 +26,7 @@ lowlight and their dependencies.
 | `github.com/SherClockHolmes/webpush-go` v1.4.0 | `internal/webpush/protocol.go` | re-implemented on the standard library | — (own code) |
 | `github.com/JohannesKaufmann/html-to-markdown` v1.6.0 | `internal/tools/htmlmd` | CommonMark rules ported from goquery to `x/net/html` | MIT, `internal/tools/htmlmd/LICENSE` |
 | `gopkg.in/natefinch/lumberjack.v2` v2.2.1 | `internal/logging/rotate` | copied, trimmed | MIT, `internal/logging/rotate/LICENSE` |
-| `github.com/go-chi/chi/v5/middleware` (chi v5.3.2) | `internal/httpmw` | ClientIPFromXFF/GetClientIP, Recoverer, WrapResponseWriter copied; chi stays as the router | MIT, `internal/httpmw/LICENSE` |
+| `github.com/go-chi/chi/v5/middleware` (chi v5.4.0 for ClientIPFromXFF/GetClientIP; v5.3.2 for Recoverer, WrapResponseWriter) | `internal/httpmw` | ClientIPFromXFF/GetClientIP, Recoverer, WrapResponseWriter copied; chi stays as the router | MIT, `internal/httpmw/LICENSE` |
 | `react-syntax-highlighter` 16.1.2 (+ refractor 5.0.0, prismjs 1.30.0) | `web/src/app/chat/ui/highlight/` | Prism tokenizer + 5 grammars vendored; renderer ported | MIT, three `LICENSE.*` files there |
 
 Every copied or adapted file starts with a header naming the package,
@@ -109,6 +109,15 @@ version, upstream path, that it was modified, and its SPDX id.
 - **Kept:** `ClientIPFromXFF` / `GetClientIP` (with upstream's XFF advisory
   regression tests), `NewWrapResponseWriter`, and Recoverer's recover /
   re-panic `http.ErrAbortHandler` / 500 logic.
+- **Versions:** `client_ip.go` is re-synced to v5.4.0, which fixed
+  GHSA-j6qf-3m9c-vwj3 (`ClientIPFromXFF` now treats `r.RemoteAddr` as the
+  rightmost hop and requires at least one trusted prefix). Recoverer and
+  WrapResponseWriter remain v5.3.2 copies: v5.4.0 changed `wrap_writer.go`
+  (Flush commits the status through a shared `basicWriter.flush`) and only
+  spelled `interface{}` as `any` in `recoverer.go`.
+- **Dropped:** upstream's `ClientIPFromHeader`, `ClientIPFromXFFTrustedProxies`
+  and `ClientIPFromRemoteAddr`, and their tests (plus the halves of advisory
+  tests that exercise them).
 - **Changed:** Recoverer prints `panic: <value>` and Go's stack, not chi's
   coloured pretty-stack.
 
