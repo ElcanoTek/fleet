@@ -179,7 +179,7 @@ func TestHandleApproval_NarrowedRunsOnlyTheApprovedValues(t *testing.T) {
 	if narrowed == nil || !reflect.DeepEqual(narrowed["approved"], []any{"a", "c"}) {
 		t.Fatalf("reply narrowed = %v", body["narrowed"])
 	}
-	if !strings.HasPrefix(st.result, `{"success":true}`) || !strings.Contains(st.result, `approved 2 of the 3 staged deal_ids and left out "b"`) {
+	if !strings.HasPrefix(st.result, `{"success":true}`) || !strings.Contains(st.result, `of the 3 staged deal_ids in its arguments, only positions 2 ("b") were left out; the other 2 were approved and sent`) {
 		t.Fatalf("recorded result = %q, want the tool's text then fleet's note", st.result)
 	}
 }
@@ -399,4 +399,23 @@ func (g *narrowGroupStore) ClaimApprovalNarrowed(ctx context.Context, user, id, 
 		g.mu.Unlock()
 	}
 	return ok, err
+}
+
+// A long tool result is truncated to the output bound, but fleet's narrowing
+// line is governed and bounded on its own after it, so the truncation cannot
+// cut it.
+func TestAppendFleetNote_SurvivesResultTruncation(t *testing.T) {
+	narrowPolicy(t)
+	agentcore.SetMaxToolOutputBytes(1024)
+	t.Cleanup(func() { agentcore.SetMaxToolOutputBytes(-1) })
+	row := narrowApprovalRow()
+	bounded, _, _ := governApprovalResult(context.Background(), &row, strings.Repeat("x", 64<<10), false)
+	if len(bounded) > 2048 {
+		t.Fatalf("the result was not bounded (%d bytes)", len(bounded))
+	}
+	note := narrowingNote(&approvalNarrowing{Arg: "deal_ids", Staged: []string{"a", "b", "c"}, Approved: []string{"a", "c"}})
+	got := appendFleetNote(context.Background(), &row, bounded, note)
+	if !strings.HasPrefix(got, bounded) || !strings.HasSuffix(got, note) {
+		t.Fatalf("result = %q, want the bounded result then the whole note", got)
+	}
 }

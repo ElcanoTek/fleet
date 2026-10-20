@@ -98,23 +98,30 @@ func TestRecoverStrandedApprovals_KeepsTheNarrowing(t *testing.T) {
 		t.Fatalf("LoadHistory = %d entries, %v", len(history), err)
 	}
 	last := string(history[len(history)-1].Content)
-	if !strings.Contains(last, "Execution outcome unknown") || !strings.Contains(last, `approved 2 of the 3 staged deal_ids and left out \"b\"`) {
+	if !strings.Contains(last, "Execution outcome unknown") || !strings.Contains(last, `only positions 2 (\"b\") were left out; the other 2 were approved and sent`) {
 		t.Fatalf("recovery breadcrumb = %s, want the unknown outcome and the narrowing", last)
 	}
 }
 
-// The note names at most narrowingNoteMaxNamed left-out values and counts the
-// rest, so a long staged list cannot blow up the model-visible result.
-func TestNarrowingNote_IsBounded(t *testing.T) {
+// The note names the smaller side exactly, by position (and by value when
+// short), so it stays small and exact whatever the staged list held.
+func TestNarrowingNote_IsExactAndBounded(t *testing.T) {
 	staged := make([]string, 0, 60)
 	for i := range 60 {
 		staged = append(staged, strings.Repeat("v", 150)+string(rune('A'+i%26))+strings.Repeat("x", i))
 	}
-	note := NarrowingNote("deal_ids", staged, staged[:1])
-	if !strings.Contains(note, "approved 1 of the 60 staged deal_ids") || !strings.Contains(note, " and 39 more.") {
-		t.Fatalf("note = %q", note)
+	one := NarrowingNote("deal_ids", staged, staged[:1])
+	if !strings.Contains(one, "of the 60 staged deal_ids in its arguments, only positions 1 (") || !strings.Contains(one, "were approved and sent; the other 59 were left out") {
+		t.Fatalf("note = %q", one)
 	}
-	if len(note) > 8<<10 {
-		t.Fatalf("note is %d bytes, want it bounded", len(note))
+	half := NarrowingNote("deal_ids", staged, staged[10:40])
+	if strings.Contains(half, `"vvv`) {
+		t.Fatalf("a 30-value side must be named by position only: %q", half)
+	}
+	if !strings.Contains(half, "only positions 11, 12,") || !strings.Contains(half, ", 40 were approved and sent; the other 30 were left out") {
+		t.Fatalf("note = %q", half)
+	}
+	if len(half) > 4<<10 {
+		t.Fatalf("note is %d bytes, want it small", len(half))
 	}
 }

@@ -133,13 +133,16 @@ The approved-call budget is computed for the narrowed arguments (a smaller
 ### The outcome
 
 - The result breadcrumb in the conversation (what the model reads) is the
-  tool's text followed by fleet's line: `[fleet] The person approved 2 of the 3
-  staged deal_ids and left out "k2". Only the approved ones were sent to the
-  tool. Do not run the left-out ones unless the person asks. (Written by fleet,
-  not the tool.)` It names at most 20 left-out values and counts the rest. It
+  tool's governed, bounded text followed by fleet's line: `[fleet] The person
+  narrowed this call: of the 3 staged deal_ids in its arguments, only
+  positions 2 ("k2") were left out; the other 2 were approved and sent. Do not
+  run the left-out ones unless the person asks. (Written by fleet, not the
+  tool.)` It names the smaller side exactly by its positions in the staged
+  list (which the recorded tool call holds), and by value too when that side
+  has at most 20 values, so it is exact and small (at most 250 positions). It
   follows the tool's text, so a result card, which is read from the start of
-  the result, is untouched, and it is added before the result's governance, so
-  the whole text the model reads passes the same boundary and size bound.
+  the result, is untouched, and it passes the governance and output bound on
+  its own, so truncating a long result never cuts it.
 - A narrowed call cut off by a restart keeps the line too:
   `RecoverStrandedApprovals` reads `narrowed_json` and adds it after the
   "outcome unknown" breadcrumb, because the recorded tool call holds the whole
