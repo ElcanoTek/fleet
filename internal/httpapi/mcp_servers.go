@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -45,9 +47,10 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 	// same response so chat can report the actual live discovery state beside
 	// the optional controls without ever persisting them as conversation
 	// choices.
+	cats := s.connectorCategories()
 	servers := s.alwaysOnMCPServerCatalogEntries()
 	for _, info := range catalog {
-		avail, defaultOn, _ := bundledPrefFor(prefs, info)
+		avail, defaultOn, seat := bundledPrefFor(prefs, info)
 		if !avail {
 			continue
 		}
@@ -66,8 +69,14 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 			"data_sources": info.DataSources,
 			// Provisioned credential-account seat names (never secret values).
 			"accounts": info.Accounts,
+			// The user's Settings > Connections default seat ("" = the
+			// deployment's own), so the picker names what "default" means.
+			"default_account": seat,
+			"category":        categoryFor(cats, info.Name),
+			"status":          optionalConnectorStatus(info),
 		})
 	}
+	servers = append(servers, s.needsSetupCatalogEntries()...)
 	// Per-user remote (hosted) MCP servers (#443): merge the caller's connected
 	// servers into the Optional-server catalog so they show up in the Tools picker
 	// as toggleable, default-on entries (gated per conversation like a bundle
@@ -76,13 +85,130 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 		user := userFromCtx(r.Context())
 		if conns, err := s.remoteMCP.ConnectedServersForUser(r.Context(), user); err == nil {
 			for _, g := range agent.GroupRemoteMCPSeats(conns) {
-				servers = append(servers, remoteCatalogEntry(g, true, ""))
+				servers = append(servers, s.remoteCatalogEntry(g, true, ""))
 			}
 		} else {
 			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
 		}
 	}
-	writeJSON(w, map[string]any{"servers": servers})
+	writeJSON(w, map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()})
+}
+
+// Connection statuses for the Tools picker. "available" connectors get a
+// switch (or the always-on lock); the other two never do. "needs_setup" is a
+// manifest connector whose credentials are not set on this box, so it never
+// launched; "unavailable" launched (or was meant to) but exposes no tools.
+const (
+	connectorStatusAvailable   = "available"
+	connectorStatusNeedsSetup  = "needs_setup"
+	connectorStatusUnavailable = "unavailable"
+)
+
+// optionalConnectorStatus is an Optional connector's picker status: a bundled
+// server that started but exposed no tools has nothing to turn on. The native
+// image-generation entry has no MCP tools by design and is always available.
+func optionalConnectorStatus(info agent.OptionalServerInfo) string {
+	if info.ToolCount == 0 && info.Name != agent.OptionalNativeImageGenName {
+		return connectorStatusUnavailable
+	}
+	return connectorStatusAvailable
+}
+
+// connectorMetaProvider is the Manager's live connector metadata, refreshed by
+// an MCP reload. Narrow like alwaysOnMCPServerCatalogProvider so transport
+// fakes need not grow it.
+type connectorMetaProvider interface {
+	ConnectorMeta() []clientconfig.ConnectorMeta
+}
+
+// connectorMeta is every manifest connector's picker metadata: the Manager's
+// reload-fresh snapshot when it has one, else the boot bundle's.
+func (s *Server) connectorMeta() []clientconfig.ConnectorMeta {
+	if p, ok := s.agent.(connectorMetaProvider); ok {
+		if meta := p.ConnectorMeta(); meta != nil {
+			return meta
+		}
+	}
+	if s.clientConfig != nil {
+		return s.clientConfig.ConnectorMeta()
+	}
+	return nil
+}
+
+// connectorCategories maps each bundled connector to its picker category
+// (Misc Tools when untagged; untagged connectors are warned about at
+// startup). Built once per request; look names up with categoryFor.
+func (s *Server) connectorCategories() map[string]string {
+	out := map[string]string{}
+	for _, m := range s.connectorMeta() {
+		out[m.Name] = m.Category
+	}
+	return out
+}
+
+// categoryFor is a connector's category from connectorCategories, else Misc
+// Tools (the native image entry, or a server the bundle does not declare).
+func categoryFor(cats map[string]string, name string) string {
+	if c, ok := cats[name]; ok {
+		return c
+	}
+	return clientconfig.MiscConnectorCategory
+}
+
+// needsSetupCatalogEntries lists the manifest connectors whose credentials
+// are not set on this box. They never launched, so they have no switch and no
+// opt-in; the picker shows them only in search (and the library always), with
+// copy that depends on whether the viewer is an admin. Tool names are the
+// manifest allowlist, the only ones known without launching the server.
+func (s *Server) needsSetupCatalogEntries() []map[string]any {
+	var out []map[string]any
+	for _, m := range s.connectorMeta() {
+		if m.Configured {
+			continue
+		}
+		tools := append([]string{}, m.Tools...)
+		sort.Strings(tools)
+		out = append(out, map[string]any{
+			"name":         m.Name,
+			"display_name": m.DisplayName,
+			"description":  m.Description,
+			"tools":        tools,
+			"tool_count":   len(tools),
+			"enabled":      false,
+			"always_on":    !m.Optional,
+			"category":     m.Category,
+			"status":       connectorStatusNeedsSetup,
+		})
+	}
+	return out
+}
+
+// remoteConnectionCategory groups a hosted connection under the directory
+// category of the catalog entry it was added from (matched by endpoint), so
+// it shows under the same heading the Connections directory uses. A URL the
+// directory does not list, or a slug outside the picker's list, is Misc Tools.
+func (s *Server) remoteConnectionCategory(url string) string {
+	if s.clientConfig == nil {
+		return clientconfig.MiscConnectorCategory
+	}
+	canon := func(u string) string {
+		u = strings.TrimSpace(u)
+		if c, err := mcpoauth.CanonicalResourceURI(u); err == nil {
+			return c
+		}
+		return u
+	}
+	want := canon(url)
+	for _, e := range s.clientConfig.RemoteMCPCatalog {
+		match := canon(e.URL) == want
+		for _, v := range e.URLVariants {
+			match = match || canon(v.URL) == want
+		}
+		if match {
+			return clientconfig.ConnectorCategoryOr(e.Category)
+		}
+	}
+	return clientconfig.MiscConnectorCategory
 }
 
 // alwaysOnMCPServerCatalogProvider is deliberately narrower than turnEngine.
@@ -103,8 +229,13 @@ func (s *Server) alwaysOnMCPServerCatalogEntries() []map[string]any {
 		return []map[string]any{}
 	}
 	catalog := provider.AlwaysOnMCPServerCatalog()
+	cats := s.connectorCategories()
 	servers := make([]map[string]any, 0, len(catalog))
 	for _, info := range catalog {
+		status := connectorStatusAvailable
+		if !info.Available {
+			status = connectorStatusUnavailable
+		}
 		servers = append(servers, map[string]any{
 			"name":         info.Name,
 			"display_name": info.DisplayName,
@@ -113,6 +244,8 @@ func (s *Server) alwaysOnMCPServerCatalogEntries() []map[string]any {
 			"tool_count":   info.ToolCount,
 			"enabled":      info.Available,
 			"always_on":    true,
+			"category":     categoryFor(cats, info.Name),
+			"status":       status,
 		})
 	}
 	return servers
@@ -122,7 +255,7 @@ func (s *Server) alwaysOnMCPServerCatalogEntries() []map[string]any {
 // (#988): its labeled seats, the default seat, and — on the per-conversation
 // route — this conversation's override. Seats carry labels only, never
 // credentials.
-func remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, account string) map[string]any {
+func (s *Server) remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, account string) map[string]any {
 	return map[string]any{
 		"name":               g.Name,
 		"display_name":       g.Name,
@@ -136,6 +269,8 @@ func remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, account string
 		"default_account":    g.DefaultAccount,
 		"account":            account,
 		"remote":             true,
+		"category":           s.remoteConnectionCategory(g.URL),
+		"status":             connectorStatusAvailable,
 	}
 }
 
@@ -289,9 +424,11 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 	if perr != nil {
 		prefs = nil
 	}
+	cats := s.connectorCategories()
 	servers := s.alwaysOnMCPServerCatalogEntries()
 	for _, info := range s.agent.MCPServerCatalog() {
-		if avail, _, _ := bundledPrefFor(prefs, info); !avail && !enabled[info.Name] {
+		avail, _, seat := bundledPrefFor(prefs, info)
+		if !avail && !enabled[info.Name] {
 			// Hidden unless the conversation already opted it in before the
 			// user disabled it (then it stays visible so it can be turned off).
 			continue
@@ -309,10 +446,14 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 			"enabled_by_default": info.EnabledByDefault,
 			// Seat pick (#988): provisioned seats + this conversation's
 			// override ("" = the user's connections-page default).
-			"accounts": info.Accounts,
-			"account":  conv.MCPAccounts[info.Name],
+			"accounts":        info.Accounts,
+			"account":         conv.MCPAccounts[info.Name],
+			"default_account": seat,
+			"category":        categoryFor(cats, info.Name),
+			"status":          optionalConnectorStatus(info),
 		})
 	}
+	servers = append(servers, s.needsSetupCatalogEntries()...)
 	// Per-user remote (hosted) MCP servers (#443): merge the caller's
 	// connected servers so the per-conversation Tools picker can toggle
 	// them — mirroring the startup catalog (listMCPServerCatalog), which
@@ -325,13 +466,13 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 	if s.remoteMCP != nil && s.remoteMCP.Enabled() {
 		if conns, err := s.remoteMCP.ConnectedServersForUser(r.Context(), user); err == nil {
 			for _, g := range agent.GroupRemoteMCPSeats(conns) {
-				servers = append(servers, remoteCatalogEntry(g, enabled[strings.ToLower(g.Name)], conv.MCPAccounts[strings.ToLower(g.Name)]))
+				servers = append(servers, s.remoteCatalogEntry(g, enabled[strings.ToLower(g.Name)], conv.MCPAccounts[strings.ToLower(g.Name)]))
 			}
 		} else {
 			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
 		}
 	}
-	writeJSON(w, map[string]any{"servers": servers})
+	writeJSON(w, map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()})
 }
 
 // handleConversationMCPServersSet serves POST /conversations/{id}/mcp-servers.

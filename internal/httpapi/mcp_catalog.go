@@ -35,7 +35,12 @@ type mcpCatalogBundledEntry struct {
 	Accounts         []string `json:"accounts,omitempty"` // credential-account seat names (never values)
 	EnabledByDefault bool     `json:"enabled_by_default"`
 	DataSources      []string `json:"data_sources,omitempty"`
-	Trust            string   `json:"trust"` // always "bundled"
+	Category         string   `json:"category"`
+	// NeedsSetup marks a manifest connector whose credentials are not set on
+	// this box: listed so the chat picker's "Set up in Settings" link lands on
+	// its card, with no toggles (it never launched).
+	NeedsSetup bool   `json:"needs_setup,omitempty"`
+	Trust      string `json:"trust"` // always "bundled"
 }
 
 type mcpCatalogURLVariant struct {
@@ -107,6 +112,7 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 	if resp.RemoteMCPEnabled {
 		resp.OAuthRedirectURI = s.remoteMCP.RedirectURI()
 	}
+	cats := s.connectorCategories()
 	if s.agent != nil {
 		for _, info := range s.agent.MCPServerCatalog() {
 			resp.Bundled = append(resp.Bundled, mcpCatalogBundledEntry{
@@ -119,6 +125,7 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 				Accounts:         info.Accounts,
 				EnabledByDefault: info.EnabledByDefault,
 				DataSources:      append([]string(nil), info.DataSources...),
+				Category:         categoryFor(cats, info.Name),
 				Trust:            "bundled",
 			})
 		}
@@ -127,12 +134,28 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 		// Always-on (non-Optional) connectors render as visible-but-locked
 		// rows: no toggle, no opt-in — they are wired into every turn, and
 		// users should be able to see that.
-		for _, a := range s.clientConfig.AlwaysOnServers() {
+		for _, a := range s.alwaysOnDirectoryRows() {
 			resp.Bundled = append(resp.Bundled, mcpCatalogBundledEntry{
 				Name:        a.Name,
 				DisplayName: a.DisplayName,
 				Description: a.Description,
 				Optional:    false,
+				Category:    categoryFor(cats, a.Name),
+				Trust:       "bundled",
+			})
+		}
+		for _, m := range s.connectorMeta() {
+			if m.Configured {
+				continue
+			}
+			resp.Bundled = append(resp.Bundled, mcpCatalogBundledEntry{
+				Name:        m.Name,
+				DisplayName: m.DisplayName,
+				Description: m.Description,
+				ToolCount:   len(m.Tools),
+				Optional:    m.Optional,
+				Category:    m.Category,
+				NeedsSetup:  true,
 				Trust:       "bundled",
 			})
 		}
@@ -141,6 +164,26 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, resp)
+}
+
+// alwaysOnDirectoryRows lists the enabled always-on connectors for the
+// directory from the same snapshot as its needs-setup rows: the Manager's
+// reload-fresh connector metadata when it has one, so a connector that a
+// reload turned on or off is listed once, as a card or as needs-setup, never
+// both or neither. Without it, the boot bundle's list.
+func (s *Server) alwaysOnDirectoryRows() []clientconfig.AlwaysOnServer {
+	if p, ok := s.agent.(connectorMetaProvider); ok {
+		if meta := p.ConnectorMeta(); meta != nil {
+			var out []clientconfig.AlwaysOnServer
+			for _, m := range meta {
+				if !m.Optional && m.Configured {
+					out = append(out, clientconfig.AlwaysOnServer{Name: m.Name, DisplayName: m.DisplayName, Description: m.Description})
+				}
+			}
+			return out
+		}
+	}
+	return s.clientConfig.AlwaysOnServers()
 }
 
 // thirdPartyCatalogEntry maps a manifest catalog entry to the wire shape,

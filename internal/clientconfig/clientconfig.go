@@ -124,6 +124,9 @@ type Bundle struct {
 	// scrubbedAlwaysOnServers preserves only the public availability rows after
 	// ScrubConnectorRuntimeDefinitions removes the credential-bearing catalog.
 	scrubbedAlwaysOnServers []AlwaysOnServer
+	// scrubbedConnectorMeta likewise keeps the public picker metadata
+	// (ConnectorMeta) once the catalog is scrubbed.
+	scrubbedConnectorMeta []ConnectorMeta
 
 	Branding   Branding
 	Models     Models
@@ -676,6 +679,10 @@ type Branding struct {
 	LoginTagline     string `yaml:"login_tagline"`
 	ShareTitle       string `yaml:"share_title"`
 	ShareDescription string `yaml:"share_description"`
+	// HouseToolsName names the Tools picker's "house" category: the
+	// connectors the deployment's own team builds (e.g. "Elcano Tools"),
+	// listed first so they stand out. Empty means "<app_name> Tools".
+	HouseToolsName string `yaml:"house_tools_name"`
 	// Colors lets a bundle theme the actual web UI (not just text) by overriding
 	// the CSS custom properties globals.css defines. Served as a render-blocking
 	// stylesheet by httpapi's /theme.css so the shell — including the pre-auth
@@ -896,6 +903,12 @@ type ServerDef struct {
 	Description      string `yaml:"description"`
 	Beta             bool   `yaml:"beta"`
 	EnabledByDefault bool   `yaml:"enabled_by_default"`
+
+	// Category groups the connector in the chat Tools picker: a
+	// ConnectorCategories ID ("ssps", "deal-management", …), never free text.
+	// Empty lands it in Misc Tools with a startup warning; an unknown ID fails
+	// the load.
+	Category string `yaml:"category"`
 
 	// DataSources names the external data this connector reads or writes —
 	// bucket/endpoint identifiers like "s3://index-omnicom-reporting" or
@@ -1837,6 +1850,9 @@ func (b *Bundle) validate() error {
 		if err := validateIdentityEnv(s); err != nil {
 			return err
 		}
+		if err := validateCategory(s); err != nil {
+			return err
+		}
 		if err := validateBatchSecondsPerDeal(s); err != nil {
 			return err
 		}
@@ -1924,6 +1940,16 @@ func validateIdentityEnv(s *ServerDef) error {
 		if _, ok := s.Env[trimmed]; !ok {
 			return fmt.Errorf("mcp_servers[%q]: identity_env var %q is not a key of the server's env map", s.Name, trimmed)
 		}
+	}
+	return nil
+}
+
+// validateCategory normalizes the Tools-picker category and fails the load on
+// an unknown ID ("SSP" vs "ssps" would otherwise split one group into two).
+func validateCategory(s *ServerDef) error {
+	s.Category = strings.TrimSpace(s.Category)
+	if s.Category != "" && !IsConnectorCategory(s.Category) {
+		return fmt.Errorf("mcp_servers[%q]: unknown category %q (want one of the connector category IDs, e.g. ssps, deal-management, data-storage, misc)", s.Name, s.Category)
 	}
 	return nil
 }
@@ -2278,6 +2304,79 @@ func (b *Bundle) AlwaysOnServers() []AlwaysOnServer {
 			continue
 		}
 		out = append(out, AlwaysOnServer{Name: sd.Name, DisplayName: sd.DisplayName, Description: sd.Description})
+	}
+	return out
+}
+
+// ConnectorMeta is the public picker view of one manifest connector, enabled
+// or not: its category, and whether its credentials are set. The Tools picker
+// shows an unconfigured connector as "Needs setup" instead of dropping it, so
+// people can find out it exists and who has to set it up. Tools is the
+// manifest allowlist (the only tool names known without launching it). No
+// env names or values: the copy rule is "no setup steps in the picker".
+type ConnectorMeta struct {
+	Name        string
+	DisplayName string
+	Description string
+	Category    string
+	Optional    bool
+	Configured  bool
+	Tools       []string
+}
+
+// ConnectorMeta returns every manifest connector's picker metadata in manifest
+// order, Category resolved (Misc Tools when untagged).
+func (b *Bundle) ConnectorMeta() []ConnectorMeta {
+	if b == nil {
+		return nil
+	}
+	if b.MCPCatalog == nil && b.scrubbedConnectorMeta != nil {
+		return append([]ConnectorMeta(nil), b.scrubbedConnectorMeta...)
+	}
+	out := make([]ConnectorMeta, 0, len(b.MCPCatalog))
+	for i := range b.MCPCatalog {
+		sd := &b.MCPCatalog[i]
+		cat := sd.Category
+		if cat == "" {
+			cat = MiscConnectorCategory
+		}
+		out = append(out, ConnectorMeta{
+			Name:        sd.Name,
+			DisplayName: sd.DisplayName,
+			Description: sd.Description,
+			Category:    cat,
+			Optional:    sd.Optional,
+			Configured:  sd.enabled(),
+			Tools:       append([]string(nil), sd.Tools...),
+		})
+	}
+	return out
+}
+
+// ConnectorCategories is the picker's category list for this deployment:
+// the fixed list with the house category named from branding.
+func (b *Bundle) ConnectorCategories() []ConnectorCategory {
+	name := ""
+	if b != nil {
+		name = strings.TrimSpace(b.Branding.HouseToolsName)
+		if name == "" && strings.TrimSpace(b.Branding.AppName) != "" {
+			name = strings.TrimSpace(b.Branding.AppName) + " Tools"
+		}
+	}
+	return connectorCategoriesNamed(name)
+}
+
+// UncategorizedConnectors names the manifest connectors with no category, for
+// the startup warning that gets them tagged.
+func (b *Bundle) UncategorizedConnectors() []string {
+	if b == nil {
+		return nil
+	}
+	var out []string
+	for i := range b.MCPCatalog {
+		if b.MCPCatalog[i].Category == "" {
+			out = append(out, b.MCPCatalog[i].Name)
+		}
 	}
 	return out
 }
@@ -3153,6 +3252,7 @@ func (b *Bundle) ScrubConnectorRuntimeDefinitions() {
 		return
 	}
 	b.scrubbedAlwaysOnServers = append([]AlwaysOnServer{}, b.AlwaysOnServers()...)
+	b.scrubbedConnectorMeta = append([]ConnectorMeta{}, b.ConnectorMeta()...)
 	for i := range b.MCPCatalog {
 		b.MCPCatalog[i] = ServerDef{}
 	}

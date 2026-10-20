@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
@@ -265,5 +266,51 @@ func TestReloadMCPServers_RefreshesGating(t *testing.T) {
 	}
 	if _, optional := m.mcpGates(); optional["B"] {
 		t.Error("B should no longer be optional after removal")
+	}
+}
+
+// The Tools picker's connector metadata (categories, needs-setup rows) must
+// follow an injected reload, or a reloaded manifest's new connector shows under
+// Misc and a newly configured one appears twice. A child that sends none (an
+// older broker) leaves the boot snapshot in place.
+func TestReloadMCPServers_InjectedBrokerRefreshesConnectorMeta(t *testing.T) {
+	m := &Manager{mcpBroker: inertMCPBroker{}}
+	m.SetConnectorMeta([]clientconfig.ConnectorMeta{{Name: "A", Category: "misc"}})
+	next := []clientconfig.ConnectorMeta{{Name: "A", Category: "ssps", Configured: true}, {Name: "B", Category: "data-storage"}}
+	m.reloadMCP = func(context.Context) (*MCPReloadResult, error) {
+		return &MCPReloadResult{Specs: map[string]MCPServerSpec{}, Connectors: next}, nil
+	}
+	if _, err := m.ReloadMCPServers(context.Background(), nil); err != nil {
+		t.Fatalf("ReloadMCPServers: %v", err)
+	}
+	got := m.ConnectorMeta()
+	if len(got) != 2 || got[0].Category != "ssps" || !got[0].Configured || got[1].Name != "B" {
+		t.Fatalf("connector meta after reload = %+v, want %+v", got, next)
+	}
+
+	m.reloadMCP = func(context.Context) (*MCPReloadResult, error) {
+		return &MCPReloadResult{Specs: map[string]MCPServerSpec{}}, nil
+	}
+	if _, err := m.ReloadMCPServers(context.Background(), nil); err != nil {
+		t.Fatalf("ReloadMCPServers: %v", err)
+	}
+	if got := m.ConnectorMeta(); len(got) != 2 {
+		t.Fatalf("a reload without connector metadata must keep the snapshot, got %+v", got)
+	}
+}
+
+// A reload that removes every connector replaces the snapshot with an empty
+// one; it must not read as "no data" and keep the removed connectors listed.
+func TestReloadMCPServers_EmptyConnectorMetaReplacesSnapshot(t *testing.T) {
+	m := &Manager{mcpBroker: inertMCPBroker{}}
+	m.SetConnectorMeta([]clientconfig.ConnectorMeta{{Name: "A"}})
+	m.reloadMCP = func(context.Context) (*MCPReloadResult, error) {
+		return &MCPReloadResult{Specs: map[string]MCPServerSpec{}, Connectors: []clientconfig.ConnectorMeta{}}, nil
+	}
+	if _, err := m.ReloadMCPServers(context.Background(), nil); err != nil {
+		t.Fatalf("ReloadMCPServers: %v", err)
+	}
+	if got := m.ConnectorMeta(); got == nil || len(got) != 0 {
+		t.Fatalf("connector meta = %#v, want an empty non-nil snapshot", got)
 	}
 }

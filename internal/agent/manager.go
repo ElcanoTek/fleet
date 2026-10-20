@@ -323,6 +323,10 @@ type MCPReloadResult struct {
 	Catalog  []mcp.ServerTool
 	Accounts map[string][]string
 	Specs    map[string]MCPServerSpec
+	// Connectors is the reloaded bundle's public picker metadata (category,
+	// configured or not), derived by the credential owner, whose environment
+	// decides "configured". Nil keeps the previous snapshot.
+	Connectors []clientconfig.ConnectorMeta
 }
 
 // MCPReloader reloads credential-bearing MCP configuration behind the injected

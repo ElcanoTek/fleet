@@ -176,6 +176,25 @@ type ReloadResult struct {
 	// Servers is the freshly enabled public bundle catalog. It lets a scrubbed
 	// parent refresh gating without re-reading credential-bearing definitions.
 	Servers []ServerDescriptor `json:"servers,omitempty"`
+	// Connectors is the Tools picker's view of every manifest connector,
+	// enabled or not, from the child's fresh bundle read: the child's
+	// environment decides "configured", which a scrubbed parent cannot.
+	// Names, copy, category and tool allowlist only; never env or values.
+	// No omitempty: a bundle with no connectors sends [] (replace the
+	// snapshot with nothing), which must stay distinct from an older child
+	// that sends no field at all (keep the snapshot).
+	Connectors []ConnectorDescriptor `json:"connectors"`
+}
+
+// ConnectorDescriptor is one manifest connector's public picker metadata.
+type ConnectorDescriptor struct {
+	Name        string   `json:"name"`
+	DisplayName string   `json:"displayName,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Category    string   `json:"category,omitempty"`
+	Optional    bool     `json:"optional,omitempty"`
+	Configured  bool     `json:"configured,omitempty"`
+	Tools       []string `json:"tools,omitempty"`
 }
 
 // ServerDescriptor is the non-secret subset of one enabled bundle MCP server

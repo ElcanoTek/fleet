@@ -140,6 +140,12 @@ type Manager struct {
 	// Operations task picker. Unlike the optional roster, it includes live
 	// availability so a failed mandatory connector is not presented as healthy.
 	alwaysOnServerMetadata []AlwaysOnServerInfo
+	// connectorMeta is the Tools picker's view of every manifest connector,
+	// enabled or not: category and whether its credentials are set. Set from
+	// the bundle at boot (SetConnectorMeta) and replaced by an MCP reload, so a
+	// reloaded manifest's categories and needs-setup rows match the reloaded
+	// catalog. Guarded by mcpGatingMu.
+	connectorMeta []clientconfig.ConnectorMeta
 
 	// Source directories for persona + protocol + skill + system-prompt files.
 	// These are read on every turn because operators may edit them in place

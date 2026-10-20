@@ -133,13 +133,14 @@ type fleetServerOverride struct {
 	Beta             *bool
 	DisplayName      *string
 	Description      *string
+	Category         *string
 	DataSources      []string
 	Disabled         bool
 }
 
 var fleetServerOverrideFields = map[string]bool{
 	"tools": true, "probe": true, "optional": true, "enabled_by_default": true, "beta": true,
-	"display_name": true, "description": true, "data_sources": true, "disabled": true,
+	"display_name": true, "description": true, "category": true, "data_sources": true, "disabled": true,
 }
 
 // parseFleetExtension decodes extensions["com.elcanotek.fleet"]. It never
@@ -257,6 +258,9 @@ func parseFleetServerOverride(label string, raw json.RawMessage) (fleetServerOve
 	if ov.Description, err = strPtr("description"); err != nil {
 		return ov, problems, err
 	}
+	if ov.Category, err = strPtr("category"); err != nil {
+		return ov, problems, err
+	}
 	if rawP, ok := fields["probe"]; ok {
 		var pf map[string]json.RawMessage
 		if err := json.Unmarshal(rawP, &pf); err != nil || pf == nil {
@@ -321,6 +325,13 @@ func applyFleetOverride(sd *ServerDef, ov fleetServerOverride, label string, pro
 	}
 	if ov.Description != nil && strings.TrimSpace(*ov.Description) != "" {
 		sd.Description = strings.TrimSpace(*ov.Description)
+	}
+	if ov.Category != nil {
+		if cat := strings.TrimSpace(*ov.Category); IsConnectorCategory(cat) {
+			sd.Category = cat
+		} else if cat != "" {
+			*problems = append(*problems, fmt.Sprintf("%s: unknown category %q; shown under Misc Tools", label, cat))
+		}
 	}
 	if len(ov.DataSources) > 0 {
 		sd.DataSources = append([]string(nil), ov.DataSources...)

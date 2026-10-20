@@ -150,15 +150,36 @@ func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCP
 // server definitions never need to cross the broker protocol; credential env
 // changes deliberately require a process restart.
 func loadMCPBrokerConfig() (*config.Config, error) {
+	cfg, _, err := loadMCPBrokerBundle()
+	return cfg, err
+}
+
+// loadMCPBrokerBundle is loadMCPBrokerConfig plus the bundle's public
+// connector metadata from the same read, so a reload's picker view always
+// describes the catalog it reloaded.
+func loadMCPBrokerBundle() (*config.Config, []mcpbroker.ConnectorDescriptor, error) {
 	bundle, err := clientconfig.Load(clientconfig.Dir())
 	if err != nil {
-		return nil, fmt.Errorf("load client config bundle: %w", err)
+		return nil, nil, fmt.Errorf("load client config bundle: %w", err)
+	}
+	meta := bundle.ConnectorMeta()
+	connectors := make([]mcpbroker.ConnectorDescriptor, 0, len(meta))
+	for _, m := range meta {
+		connectors = append(connectors, mcpbroker.ConnectorDescriptor{
+			Name:        m.Name,
+			DisplayName: m.DisplayName,
+			Description: m.Description,
+			Category:    m.Category,
+			Optional:    m.Optional,
+			Configured:  m.Configured,
+			Tools:       append([]string(nil), m.Tools...),
+		})
 	}
 	return &config.Config{
 		MCPServers: bundle.MCPServerConfigs(),
 		HTTPTools:  bundle.HTTPToolConfigs(),
 		A2APeers:   bundle.A2APeerConfigs(),
-	}, nil
+	}, connectors, nil
 }
 
 // brokerBackend is the mcpbroker.Backend the broker process serves: calls run
@@ -401,11 +422,16 @@ func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, er
 	b.reloadMu.Lock()
 	defer b.reloadMu.Unlock()
 
-	load := b.reloadConfig
-	if load == nil {
-		load = loadMCPBrokerConfig
+	var (
+		cfg        *config.Config
+		connectors []mcpbroker.ConnectorDescriptor
+		err        error
+	)
+	if b.reloadConfig != nil {
+		cfg, err = b.reloadConfig()
+	} else {
+		cfg, connectors, err = loadMCPBrokerBundle()
 	}
-	cfg, err := load()
 	if err != nil {
 		return nil, err
 	}
@@ -448,9 +474,10 @@ func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, er
 			Restarted: append([]string(nil), summary.Restarted...),
 			Unchanged: append([]string(nil), summary.Unchanged...),
 		},
-		Tools:    describeTools(b.client),
-		Accounts: accounts,
-		Servers:  servers,
+		Tools:      describeTools(b.client),
+		Accounts:   accounts,
+		Servers:    servers,
+		Connectors: connectors,
 	}, nil
 }
 

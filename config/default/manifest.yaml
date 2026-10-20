@@ -61,6 +61,9 @@ branding:
   login_tagline: "Sign in to your workspace and pick up where you left off."
   share_title: "Fleet — your team's AI workspace"
   share_description: "Persistent multi-turn conversations with real tool use across files, data, and the web."
+  # The Tools picker's first group, for connectors your own team builds
+  # (category: house). Empty = "<app_name> Tools".
+  # house_tools_name: "Acme Tools"
   # Optional: the brand mark the navigation rail renders on every page. A
   # bundle-relative path to an .svg/.png/.webp/.jpg/.jpeg/.ico file; served by
   # chat-server /brand/logo (proxied to the browser as /api/brand/logo), so a
@@ -119,9 +122,12 @@ branding:
 #     optional: true
 #     display_name: "PubMatic"          # the vendor's own name and casing
 #     description: "Create and manage PubMatic curated deals and pull delivery
-#       reporting. Appears once PUBMATIC_ACCESS_TOKEN is set."
-#     #                ^ capability first, in the imperative; then the gating
-#     #                  clause, naming the real enabled_env/enabled_groups vars
+#       reporting."
+#     #                ^ capability first, in the imperative; no setup text:
+#     #                  unset credentials show as "Needs setup" in the picker
+#     category: ssps
+#     #                ^ the Tools-picker group, by ID (docs/MCP-CATALOG.md,
+#     #                  "Category"); untagged = Misc Tools + a boot warning
 #     approved_call_timeout_seconds: 300
 #     #                ^ OPTIONAL. Budget, in seconds (1-1800), for ONE call of
 #     #                  this server's tools that a person approved on a chat

@@ -288,7 +288,7 @@ The toolbar beneath the message box is a row of icons. Left to right:
 | Persona | A saved working style for the assistant, shown when your deployment ships personas. **Default** is right for nearly everything. |
 | Prompt library | Opens the shared library to insert or save a prompt. See [The prompt library](#9-the-prompt-library). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
-| Connectors | Shows a count of the connected sources live in this conversation. See [Connectors in a conversation](#5-connectors-in-a-conversation). |
+| Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
 | Context ring | Appears once the conversation has content and fills as it grows. Click it to compact. See [Long conversations](#long-conversations). |
 | Send on Enter | The toggle on the right. On, `Enter` sends and `Shift Enter` adds a line. Off, `Enter` adds a line and `⌘Enter` or `Ctrl Enter` sends. The same setting lives in **Settings**. |
 | Send | At the far right. While the assistant is working it becomes **Stop**. |
@@ -414,12 +414,33 @@ Center.
 | Layer | Where | What it decides |
 | --- | --- | --- |
 | Availability | **Settings → Connections** | Which connectors exist for you at all, whether each is on by default in new chats, and which account it uses when a connector has more than one. Set once, lasts. |
-| Selection | The **Connectors** picker in the composer | Which of your available connectors are live in *this* conversation. Narrow it when a chat only needs one source; the assistant cannot reach what is not selected. |
+| Selection | The **Tools** menu (the wrench) in the composer, and its library | Which of your available connectors are live in *this* conversation. Narrow it when a chat only needs one source; the assistant cannot reach what is not selected. |
 | Binding | The task form in the Operations Center | Which connectors a scheduled task may use, fixed when the task is created. A later change to your preferences never rewrites an existing task. |
 
-The picker also offers **All on** and **All off**, which switch every
-optional connector in the conversation at once; the count beside them says
-how many are on. Fleet mounts at most eight third-party connections in one
+The Tools menu opens with its search field ready: type to filter by a
+connector's name, its description, its category, or the name of one of its
+tools (a match inside a connector shows under it, as in `↳ ix_clone_deal`).
+Connectors that are on sit first under **On**, and the rest under their
+category headings, such as **SSPs** or **Deal Management**, with **Misc
+Tools** last. The **On** list keeps its order while the menu is open, so a
+row does not jump as you switch it. `↑` and `↓` move through the list,
+`Space` or `Enter` switches the highlighted connector, and `Esc` clears the
+search, then closes the menu. A connector that needs setup, or is
+unavailable right now, is hidden until a search finds it; it is shown dimmed,
+with no switch, and selecting it opens it in the library. **All on** and
+**All off** switch every connector the menu is showing, so with a search
+they cover only the matches ("All 3 on"); the count beside them says how
+many are on. The expand icon beside the search, or **Open library** at the
+foot of the menu, opens the **Tools & connections** library: every
+connector with a category and status filter on the left, the list in the
+middle, and the selected connector on the right with its switch, its status,
+**Show N tools** for the names of its tools, and **Manage in Settings** for
+whether it starts on in new chats. When a connector has more than one
+account, an **Account** menu on its row and in the library picks the one this
+conversation uses; the default reads as your deployment's name, or as the
+account you chose in **Settings → Connections**. A connector that **Needs
+setup** has credentials your administrator adds on the server; an
+administrator's **Set up in Settings** link opens its card there. Fleet mounts at most eight third-party connections in one
 turn — the ones you signed into yourself and any shared with you together
 (Bundled ones do not count); turn on more and the turn tells the assistant
 which were left out — the first ten by name and a count of the rest — so it

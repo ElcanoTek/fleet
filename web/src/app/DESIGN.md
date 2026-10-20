@@ -56,6 +56,17 @@ Known, deliberate exceptions:
 
 ## Token families (globals.css `:root` + light overrides)
 
+- **Connection picker** — `--color-accent-strong`/`--color-on-accent-strong`
+  (switch on, count badge), `--color-text-subtle` (row descriptions, group
+  headers, counts), `--color-divider`, `--color-selected-bg/-border` (active
+  row, selected filter, popover/modal border), `--color-pill-border` /
+  `--color-pill-hover-bg`, `--color-switch-track-on/-off`, `--color-switch-knob`
+  (+ `--shadow-switch-knob`), `--color-match-bg`, `--color-state-ok/-warn/-deny`
+  (kickers, dots, status icons), `--color-panel-{ok,warn,deny}-{bg,border}`,
+  `--color-icon-tile`, `--color-rail-bg`, `--color-scrim`, `--shadow-popover`.
+  A copy of flag's "Connection picker components" block (flag
+  COMPONENTS.md "Connection Picker"); values from the Tools picker design.
+
 - **Type scale** — `--font-size-display/title/subtitle/body-lg/body/caption/
   overline` with matching `--line-height-*`; families `--font-heading/body/
   code/code-ui`. Small UI text steps used in markup: `0.875rem` (controls,

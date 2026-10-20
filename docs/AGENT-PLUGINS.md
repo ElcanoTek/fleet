@@ -163,6 +163,7 @@ by the server's `mcp.json` name.
 | `tools` | `ServerDef.Tools` — the per-server **allowlist** the ADR-0042 child authorizer enforces | Trimmed, de-duplicated; empty = every advertised tool, as for a manifest server. |
 | `probe` | `ServerDef.Probe` — the `fleet mcp test --deep` canary | `tool` required; `contains` and `args` optional. Must be inside `tools` when an allowlist is set (the manifest rule), else the probe is dropped with a report. |
 | `optional`, `enabled_by_default`, `beta`, `display_name`, `description`, `data_sources` | the same-named `ServerDef` fields | The Optional-server semantics and settings-UI metadata a manifest server has. |
+| `category` | `ServerDef.Category` — the Tools-picker group ID | One of the connector category IDs (docs/MCP-CATALOG.md, "Category"). An unknown ID is reported and the server shows under Misc Tools. |
 | `disabled` | — | `true` drops the entry without editing `mcp.json` — how an operator vendoring a third-party plugin turns off a server they don't want. Not reported (it is an explicit choice). |
 
 Deliberately **not** expressible here: anything credential-shaped (`env`,

@@ -17,7 +17,7 @@
 // Enter-vs-Shift+Enter, attachments, model/persona/MCP pickers, Stop — are
 // unchanged.
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { Icon } from "./Icon";
@@ -48,6 +48,9 @@ import {
   type SkillInfo,
 } from "./skillSlash";
 import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
+import { ToolsLibrary } from "./ToolsLibrary";
+import { ToolsPopover } from "./ToolsPopover";
+import { countOn, orderedCategories, type PickerCategory } from "./toolsPicker";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 
 // isNewlyReleased was a module-level helper in chat-experience; its only
@@ -93,10 +96,14 @@ const CODE_NUDGE_TIMEOUT_MS = 6000;
 
 // ── Design toolbar building blocks (unified shell .composer-toolbar) ────────
 // The design's .tool-btn: a 1.95rem radius-md icon button that tints with the
-// accent on hover; TOOL_BTN_ACTIVE marks an engaged control (tools with
-// servers enabled, send-on-Enter on).
+// accent on hover; TOOL_BTN_ACTIVE marks an engaged control (a persona
+// picked, send-on-Enter on).
 const TOOL_BTN =
   "relative inline-flex h-[1.95rem] w-[1.95rem] shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-secondary)] transition hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40";
+// The tools trigger while its popover is open: the design's neutral pressed
+// fill (chip border) rather than the accent tint the other toggles use.
+const TOOLS_BTN_OPEN =
+  "bg-[var(--color-pill-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-pill-border)]";
 const TOOL_BTN_ACTIVE =
   "bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)] hover:bg-[color-mix(in_srgb,var(--color-accent)_22%,transparent)]";
 
@@ -115,60 +122,14 @@ const COMPOSER_POP_BASE =
 const COMPOSER_POP = `${COMPOSER_POP_BASE} sm:w-[15.5rem]`;
 const COMPOSER_POP_WIDE = `${COMPOSER_POP_BASE} sm:w-[19rem]`;
 
-// The design's .pop-row / .pop-title / .pop-desc type ramp. Padding lives on
-// the composed variants (never stacked as competing utilities): POP_ROW is
-// the design's row; the tools popover uses the tighter variant because its
-// rows carry two extra content lines.
+// The design's .pop-row / .pop-title type ramp, for the composer's simple
+// menus (the tools popover has its own denser rows, ToolsPopover).
 const POP_ROW_BASE =
   "flex w-full items-center justify-between gap-2 rounded-[0.5rem] text-left text-[0.82rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--rail-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]";
 const POP_ROW = `${POP_ROW_BASE} px-[0.6rem] py-[0.45rem]`;
-const POP_ROW_TIGHT = `${POP_ROW_BASE} items-start px-[0.6rem] py-[0.3rem]`;
-const POP_STATUS_ROW_TIGHT =
-  "flex w-full items-start justify-between gap-2 rounded-[0.5rem] px-[0.6rem] py-[0.3rem] text-left text-[0.82rem] text-[var(--color-text-secondary)]";
 const POP_ROW_SELECTED =
   "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]";
 const POP_TITLE = "text-[0.82rem] font-medium text-[var(--color-text-primary)]";
-const POP_DESC = "text-[0.7rem] text-[var(--color-text-muted)]";
-// A small pill action inside a popover (the tools popover's "All on" /
-// "All off"): the design's pill outline at the pop-desc type size, so it
-// reads as a control for the list rather than as one of its rows. When the
-// action would change nothing it is marked aria-disabled and dimmed, NOT
-// natively disabled: the button that was just activated is the one that
-// becomes a no-op, and a natively disabled element drops focus, which would
-// break the popover's Escape-closes / focus-returns-to-trigger contract for
-// a keyboard user mid-gesture.
-const POP_ACTION_BTN =
-  "rounded-[var(--radius-md)] border border-[var(--color-border)] px-[0.55rem] py-[0.1rem] text-[0.68rem] font-medium text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
-
-// The design's .mini-switch: the visual toggle knob inside a tools pop-row.
-// Purely decorative — the row <button> carries the aria-pressed state.
-type MiniSwitchState = "off" | "on" | "always-on";
-
-function MiniSwitch({ state }: { state: MiniSwitchState }) {
-  return (
-    <span
-      aria-hidden="true"
-      data-state={state}
-      className={`relative mt-[0.2rem] h-[0.875rem] w-6 shrink-0 rounded-full transition ${
-        state === "on"
-          ? "bg-[var(--color-primary)]"
-          : state === "always-on"
-            ? "bg-[var(--color-connector-always-on-track)]"
-            : "bg-[color-mix(in_srgb,var(--color-primary)_32%,transparent)]"
-      }`}
-    >
-      <span
-        className={`absolute left-[2px] top-[2px] size-[0.625rem] rounded-full transition ${
-          state === "on"
-            ? "translate-x-[0.625rem] bg-white"
-            : state === "always-on"
-              ? "translate-x-[0.625rem] bg-[var(--color-connector-always-on-knob)]"
-              : "bg-[var(--color-text-muted)]"
-        }`}
-      />
-    </span>
-  );
-}
 
 export type ComposerProps = {
   // Textarea value + draft handling
@@ -258,12 +219,19 @@ export type ComposerProps = {
     conversationId: string | null,
     name: string,
   ) => void | Promise<void>;
-  // "All on" / "All off": every optional connector in this conversation at
-  // once; always-on rows are never part of it.
-  setAllMcpServers: (
+  // "All on" / "All off": the named connectors (the ones the popover or
+  // library is showing) at once; rows with no switch are never part of it.
+  setMcpServersEnabled: (
     conversationId: string | null,
+    names: string[],
     enabled: boolean,
   ) => void | Promise<void>;
+  // The picker's category headings, in order ([] = the built-in fallback).
+  mcpCategories: PickerCategory[];
+  // The deployment's name ("Elcano"): the default account's label.
+  appName: string;
+  // Shows the library's admin-only links (visibility only).
+  isAdmin: boolean;
   // Credential-seat override for one server in this conversation (#988);
   // "" = back to the user's default seat.
   setMcpServerAccount: (
@@ -338,7 +306,10 @@ export function Composer({
   isLoadingMcpServers,
   loadMcpServerCatalog,
   toggleMcpServer,
-  setAllMcpServers,
+  setMcpServersEnabled,
+  mcpCategories,
+  appName,
+  isAdmin,
   setMcpServerAccount,
   activeConversationId,
   messages,
@@ -399,6 +370,17 @@ export function Composer({
   const modelChipRef = useRef<HTMLButtonElement | null>(null);
   const personaButtonRef = useRef<HTMLButtonElement | null>(null);
   const mcpButtonRef = useRef<HTMLButtonElement | null>(null);
+  // The Tools library modal (null = closed), optionally opened on one
+  // connection from a dimmed popover row.
+  const [toolsLibrary, setToolsLibrary] = useState<{ selected?: string } | null>(null);
+  const pickerCategories = useMemo(() => orderedCategories(mcpCategories), [mcpCategories]);
+  // The wrench badge: connections on in this chat, always-on included. It
+  // holds the count from when the popover opened while the popover or
+  // library is open and catches up when they close, so it never changes
+  // under the pointer mid-toggle.
+  const liveToolsOn = countOn(mcpServers);
+  const [heldToolsOn, setHeldToolsOn] = useState(liveToolsOn);
+  const toolsBadge = mcpPickerOpen || toolsLibrary ? heldToolsOn : liveToolsOn;
 
   const openModelPicker = () => {
     setModelPickerOpen(true);
@@ -1175,7 +1157,9 @@ export function Composer({
             {mcpServers.length > 0 ? (
               // Positioning anchor only (see the model picker above):
               // presentational wrapper, Escape delegated so it works from
-              // the trigger button or from any row of the open popover.
+              // the trigger button or from any row of the open popover. The
+              // popover's search field handles its own Escape (clear first,
+              // then close) and stops it here.
               <div
                 ref={mcpPickerRef}
                 role="presentation"
@@ -1188,238 +1172,83 @@ export function Composer({
                   }
                 }}
               >
-                {(() => {
-                  // The badge counts choices the user made. Always-on rows
-                  // remain visible in the popover but do not inflate it.
-                  const enabledCount = mcpServers.filter(
-                    (s) => s.enabled && !s.always_on,
-                  ).length;
-                  return (
-                    <button
-                      ref={mcpButtonRef}
-                      type="button"
-                      aria-label="Connectors"
-                      aria-haspopup="true"
-                      aria-expanded={mcpPickerOpen}
-                      disabled={isStreaming}
-                      data-tip-top="Connectors for this conversation"
-                      className={`${TOOL_BTN} ${enabledCount > 0 ? TOOL_BTN_ACTIVE : ""}`}
-                      onClick={() => {
-                        const next = !mcpPickerOpen;
-                        setMcpPickerOpen(next);
-                        // Pre-chat: the preview catalog loaded at
-                        // startup is already in state — no per-conv
-                        // row to fetch yet.
-                        if (next && activeConversationId) {
-                          void loadMcpServerCatalog(activeConversationId);
-                        }
-                      }}
+                <button
+                  ref={mcpButtonRef}
+                  type="button"
+                  aria-label="Tools"
+                  aria-haspopup="true"
+                  aria-expanded={mcpPickerOpen}
+                  disabled={isStreaming}
+                  data-tip-top={`Tools, ${toolsBadge} on`}
+                  className={`${TOOL_BTN} ${mcpPickerOpen ? TOOLS_BTN_OPEN : ""}`}
+                  onClick={() => {
+                    const next = !mcpPickerOpen;
+                    if (next) setHeldToolsOn(liveToolsOn);
+                    setMcpPickerOpen(next);
+                    // Pre-chat: the preview catalog loaded at
+                    // startup is already in state — no per-conv
+                    // row to fetch yet.
+                    if (next && activeConversationId) {
+                      void loadMcpServerCatalog(activeConversationId);
+                    }
+                  }}
+                >
+                  <Icon name="tools" className="size-[1.0625rem]" />
+                  {/* The design's .tool-badge: how many connections are on
+                      in this chat, always-on included, pinned to the
+                      button's top-right corner. */}
+                  {toolsBadge > 0 ? (
+                    <span
+                      data-testid="chat-tools-badge"
+                      className="pointer-events-none absolute -right-[5px] -top-[7px] inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-accent-strong)] px-[3px] text-[0.6rem] font-semibold tabular-nums text-[var(--color-on-accent-strong)]"
                     >
-                      <Icon name="wrench" className="size-3.5" />
-                      {/* The design's .tool-badge: enabled-count bubble
-                                pinned to the button's top-right corner. */}
-                      {enabledCount > 0 ? (
-                        <span className="pointer-events-none absolute right-0 top-0 inline-flex h-[0.875rem] min-w-[0.875rem] -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-accent)] px-[2px] font-[family-name:var(--font-code)] text-[0.56rem] font-medium tabular-nums text-[var(--color-bg)]">
-                          {enabledCount}
-                        </span>
-                      ) : null}
-                    </button>
-                  );
-                })()}
+                      {toolsBadge}
+                    </span>
+                  ) : null}
+                </button>
                 {mcpPickerOpen && !isStreaming ? (
-                  <div className={COMPOSER_POP}>
-                    {(() => {
-                      // "All on" / "All off" act on the optional rows only,
-                      // so they are offered only when there is at least one
-                      // and each is disabled when it would change nothing —
-                      // the count between them says which state the list
-                      // is in without reading every switch.
-                      if (isLoadingMcpServers) return null;
-                      const optional = mcpServers.filter((s) => !s.always_on);
-                      if (optional.length === 0) return null;
-                      const on = optional.filter((s) => s.enabled).length;
-                      return (
-                        <div
-                          className="flex items-center gap-[0.3rem] px-[0.6rem] pb-[0.3rem] pt-[0.15rem]"
-                          data-testid="chat-mcp-all-actions"
-                        >
-                          <span className={`${POP_DESC} mr-auto tabular-nums`}>
-                            {on} of {optional.length} on
-                          </span>
-                          <button
-                            type="button"
-                            className={POP_ACTION_BTN}
-                            aria-disabled={on === optional.length || undefined}
-                            onClick={() => {
-                              if (on === optional.length) return;
-                              void setAllMcpServers(activeConversationId, true);
-                            }}
-                          >
-                            All on
-                          </button>
-                          <button
-                            type="button"
-                            className={POP_ACTION_BTN}
-                            aria-disabled={on === 0 || undefined}
-                            onClick={() => {
-                              if (on === 0) return;
-                              void setAllMcpServers(activeConversationId, false);
-                            }}
-                          >
-                            All off
-                          </button>
-                        </div>
-                      );
-                    })()}
-                    {/* Optional rows remain per-conversation controls;
-                              always-on rows are locked live-status indicators. */}
-                    <div className="grid max-h-80 grid-cols-[minmax(0,1fr)] gap-[0.1rem] overflow-y-auto">
-                      {isLoadingMcpServers ? (
-                        <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">
-                          Loading...
-                        </div>
-                      ) : (
-                        mcpServers.map((server) => {
-                          const seats = server.accounts ?? [];
-                          if (server.always_on) {
-                            const available = server.enabled;
-                            return (
-                              <div
-                                key={server.name}
-                                className={POP_STATUS_ROW_TIGHT}
-                                aria-label={`${server.display_name || server.name}: ${available ? "always on" : "unavailable"}`}
-                                data-testid={`chat-mcp-always-on-${server.name}`}
-                              >
-                                <span className="grid min-w-0 gap-[0.1rem]">
-                                  <span className="flex items-center gap-1.5">
-                                    <span className={POP_TITLE}>
-                                      {server.display_name || server.name}
-                                    </span>
-                                    <span
-                                      className={`text-[0.55rem] font-semibold uppercase tracking-wider ${
-                                        available
-                                          ? "text-[var(--color-success)]"
-                                          : "text-[var(--color-danger)]"
-                                      }`}
-                                    >
-                                      {available ? "Always on" : "Unavailable"}
-                                    </span>
-                                  </span>
-                                  {server.description ? (
-                                    <span
-                                      className={`${POP_DESC} leading-snug`}
-                                    >
-                                      {server.description}
-                                    </span>
-                                  ) : null}
-                                  {available ? (
-                                    <span className="text-[0.65rem] text-[var(--color-text-muted)]">
-                                      {server.tool_count} tool
-                                      {server.tool_count === 1 ? "" : "s"}
-                                    </span>
-                                  ) : (
-                                    <span className="text-[0.65rem] text-[var(--color-danger)]">
-                                      Connector did not expose any tools
-                                    </span>
-                                  )}
-                                </span>
-                                <MiniSwitch
-                                  state={available ? "always-on" : "off"}
-                                />
-                              </div>
-                            );
-                          }
-                          const row = (
-                            <button
-                              key={server.name}
-                              type="button"
-                              aria-pressed={server.enabled}
-                              title={(server.tools ?? []).join(", ")}
-                              className={POP_ROW_TIGHT}
-                              onClick={() => {
-                                void toggleMcpServer(
-                                  activeConversationId,
-                                  server.name,
-                                );
-                              }}
-                            >
-                              <span className="grid min-w-0 gap-[0.1rem]">
-                                <span className="flex items-center gap-1.5">
-                                  <span className={POP_TITLE}>
-                                    {server.display_name || server.name}
-                                  </span>
-                                  {server.beta ? (
-                                    <span
-                                      className="rounded-sm border border-[var(--color-border-strong)] px-1 py-px text-[0.55rem] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]"
-                                      title="This connector is in beta — it works but still has rough edges."
-                                    >
-                                      beta
-                                    </span>
-                                  ) : null}
-                                </span>
-                                {server.description ? (
-                                  <span className={`${POP_DESC} leading-snug`}>
-                                    {server.description}
-                                  </span>
-                                ) : null}
-                                <span className="text-[0.65rem] text-[var(--color-text-muted)]">
-                                  {server.tool_count} tool
-                                  {server.tool_count === 1 ? "" : "s"}
-                                </span>
-                              </span>
-                              <MiniSwitch
-                                state={server.enabled ? "on" : "off"}
-                              />
-                            </button>
-                          );
-                          if (seats.length === 0) return row;
-                          // Seat picker (#988): which login this server
-                          // uses in THIS conversation. Rendered as a
-                          // sibling under the toggle row — a <select>
-                          // nested inside the row <button> would be
-                          // invalid interactive content that browsers
-                          // handle inconsistently — and shielded with
-                          // stopPropagation so picking a seat never
-                          // flips the toggle or closes the popover.
-                          return (
-                            <div key={server.name} className="grid">
-                              {row}
-                              <label className="flex items-center gap-1.5 px-[0.6rem] pb-[0.35rem] text-[0.65rem] text-[var(--color-text-muted)]">
-                                <span>Account</span>
-                                <select
-                                  className="min-w-0 max-w-[10rem] flex-1 truncate rounded-sm border border-[var(--color-border)] bg-transparent px-1 py-px text-[0.68rem] text-[var(--color-text-secondary)] outline-none focus-visible:border-[var(--color-border-strong)]"
-                                  value={server.account ?? ""}
-                                  aria-label={`Account for ${server.display_name || server.name}`}
-                                  data-testid={`mcp-seat-${server.name}`}
-                                  onClick={(event) => event.stopPropagation()}
-                                  onChange={(event) => {
-                                    event.stopPropagation();
-                                    void setMcpServerAccount(
-                                      activeConversationId,
-                                      server.name,
-                                      event.target.value,
-                                    );
-                                  }}
-                                >
-                                  <option value="">
-                                    Default
-                                    {server.default_account
-                                      ? ` (${server.default_account})`
-                                      : ""}
-                                  </option>
-                                  {seats.map((seat) => (
-                                    <option key={seat} value={seat}>
-                                      {seat}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </div>
+                  <ToolsPopover
+                    servers={mcpServers}
+                    categories={pickerCategories}
+                    appName={appName}
+                    isAdmin={isAdmin}
+                    loading={isLoadingMcpServers}
+                    onToggle={(name) => void toggleMcpServer(activeConversationId, name)}
+                    onSetEnabled={(names, enabled) =>
+                      void setMcpServersEnabled(activeConversationId, names, enabled)
+                    }
+                    onSetAccount={(name, account) =>
+                      void setMcpServerAccount(activeConversationId, name, account)
+                    }
+                    onClose={() => {
+                      setMcpPickerOpen(false);
+                      mcpButtonRef.current?.focus();
+                    }}
+                    onOpenLibrary={(name) => {
+                      setMcpPickerOpen(false);
+                      setToolsLibrary({ selected: name });
+                    }}
+                  />
+                ) : null}
+                {toolsLibrary ? (
+                  <ToolsLibrary
+                    servers={mcpServers}
+                    categories={pickerCategories}
+                    appName={appName}
+                    isAdmin={isAdmin}
+                    initialSelected={toolsLibrary.selected}
+                    onClose={() => {
+                      setToolsLibrary(null);
+                      mcpButtonRef.current?.focus();
+                    }}
+                    onToggle={(name) => void toggleMcpServer(activeConversationId, name)}
+                    onSetEnabled={(names, enabled) =>
+                      void setMcpServersEnabled(activeConversationId, names, enabled)
+                    }
+                    onSetAccount={(name, account) =>
+                      void setMcpServerAccount(activeConversationId, name, account)
+                    }
+                  />
                 ) : null}
               </div>
             ) : null}

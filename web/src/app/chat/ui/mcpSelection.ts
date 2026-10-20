@@ -6,6 +6,8 @@ export type ChatConnectorSelectionRow = {
   name: string;
   enabled: boolean;
   always_on?: boolean;
+  /** Server-side availability; only "available" (or absent) rows switch. */
+  status?: "available" | "needs_setup" | "unavailable";
 };
 
 export function enabledOptionalMcpServerNames(
@@ -68,13 +70,21 @@ export function droppedOptionalMcpServerNames(
 }
 
 /**
- * Every optional row set to `enabled` at once — the picker's "All on" /
- * "All off". Always-on rows are returned untouched for the same reason
- * reconcileMcpSelection leaves them alone: they are status, not a choice.
+ * The named optional rows set to `enabled` at once — the picker's "All on" /
+ * "All off", scoped to what the popover or library is showing. Always-on rows
+ * are returned untouched for the same reason reconcileMcpSelection leaves them
+ * alone (they are status, not a choice), and so are rows with no switch: a
+ * connector that needs setup or is unavailable can never be opted in.
  */
-export function setAllOptionalMcpServers<T extends ChatConnectorSelectionRow>(
+export function setOptionalMcpServersEnabled<T extends ChatConnectorSelectionRow>(
   rows: readonly T[],
+  names: readonly string[],
   enabled: boolean,
 ): T[] {
-  return rows.map((row) => (row.always_on || row.enabled === enabled ? row : { ...row, enabled }));
+  const scope = new Set(names);
+  return rows.map((row) =>
+    row.always_on || (row.status && row.status !== "available") || !scope.has(row.name) || row.enabled === enabled
+      ? row
+      : { ...row, enabled },
+  );
 }

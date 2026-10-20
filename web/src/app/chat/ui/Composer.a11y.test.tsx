@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useEffect, useRef, useState } from "react";
 import { Composer } from "./Composer";
 
@@ -43,6 +43,7 @@ function Host({
       const target = event.target;
       if (!(target instanceof Node)) return;
       if (mcpPickerRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest("[data-seat-menu]")) return;
       setMcpPickerOpen(false);
     };
     window.addEventListener("mousedown", onPointerDown);
@@ -103,7 +104,10 @@ function Host({
     isLoadingMcpServers: false,
     loadMcpServerCatalog: noop,
     toggleMcpServer: noop,
-    setAllMcpServers: noop,
+    setMcpServersEnabled: noop,
+    mcpCategories: [],
+    appName: "Elcano",
+    isAdmin: false,
     setMcpServerAccount: noop,
     activeConversationId: null,
     messages: [],
@@ -152,67 +156,97 @@ describe("Composer — model picker focus and Escape", () => {
 });
 
 // Multi-login seats in the tools popover (#988): a server with labeled seats
-// gets a compact Account select beneath its toggle row. Changing it must reach
-// setMcpServerAccount and must NOT flip the row (the select is a sibling of
-// the row button and stops propagation), while the row itself still toggles.
-describe("Composer — tools popover seat picker", () => {
-  it("changing the seat calls setMcpServerAccount without toggling the row", async () => {
+// gets a compact Account menu in its row. Choosing from it must reach
+// setMcpServerAccount and must NOT flip the row, while the row itself still
+// toggles. The default seat reads as the connection's named default, or the
+// deployment's name when it has none.
+describe("Composer — tools popover seat menu", () => {
+  const SEATED = [
+    {
+      name: "gamma",
+      display_name: "Gamma",
+      description: "Decks and docs.",
+      tools: ["create_deck"],
+      tool_count: 1,
+      enabled: true,
+      accounts: ["personal", "work"],
+      default_account: "work",
+      remote: true,
+    },
+    {
+      name: "ix",
+      display_name: "Index Exchange",
+      description: "PMP deals.",
+      tools: ["ix_get_deal"],
+      tool_count: 1,
+      enabled: false,
+      accounts: ["OMG_USD", "OMG_GBP"],
+    },
+    {
+      name: "solo",
+      description: "No seats.",
+      tools: [],
+      tool_count: 2,
+      enabled: false,
+    },
+  ];
+
+  it("choosing a seat calls setMcpServerAccount without toggling the row", async () => {
     const toggleMcpServer = vi.fn();
     const setMcpServerAccount = vi.fn();
-    render(
-      <Host
-        overrides={{
-          mcpServers: [
-            {
-              name: "gamma",
-              display_name: "Gamma",
-              description: "Decks and docs.",
-              tools: ["create_deck"],
-              tool_count: 1,
-              enabled: true,
-              accounts: ["personal", "work"],
-              default_account: "work",
-              remote: true,
-            },
-            {
-              name: "solo",
-              description: "No seats.",
-              tools: [],
-              tool_count: 2,
-              enabled: false,
-            },
-          ],
-          toggleMcpServer,
-          setMcpServerAccount,
-        }}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Connectors" }));
-    const select = (await screen.findByTestId("mcp-seat-gamma")) as HTMLSelectElement;
-    // Only the server with seats gets a picker; the Default option names the
-    // default seat.
+    render(<Host overrides={{ mcpServers: SEATED, toggleMcpServer, setMcpServerAccount }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    // Only servers with seats get a menu.
     expect(screen.queryByTestId("mcp-seat-solo")).not.toBeInTheDocument();
-    expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
-      "Default (work)",
-      "personal",
-      "work",
-    ]);
+    const trigger = await screen.findByTestId("mcp-seat-gamma");
+    expect(trigger).toHaveTextContent("work");
 
-    fireEvent.click(select);
-    fireEvent.change(select, { target: { value: "personal" } });
+    fireEvent.click(trigger);
+    const list = screen.getByRole("listbox", { name: "Account for Gamma" });
+    // The named default is listed once, first, marked Default.
+    expect(Array.from(list.querySelectorAll('[role="option"]')).map((o) => o.textContent)).toEqual([
+      "workDefault",
+      "personal",
+    ]);
+    expect(toggleMcpServer).not.toHaveBeenCalled();
+    fireEvent.mouseDown(screen.getByRole("option", { name: /personal/ }));
+    fireEvent.click(screen.getByRole("option", { name: /personal/ }));
     expect(setMcpServerAccount).toHaveBeenCalledWith(null, "gamma", "personal");
     expect(toggleMcpServer).not.toHaveBeenCalled();
+    // The popover is still open.
+    expect(screen.getByTestId("chat-tools-popover")).toBeInTheDocument();
 
-    // The row is still the toggle it always was.
-    fireEvent.click(screen.getByRole("button", { name: /Decks and docs/ }));
+    // The row's switch is still the toggle it always was.
+    fireEvent.click(screen.getByRole("switch", { name: "Gamma" }));
     expect(toggleMcpServer).toHaveBeenCalledWith(null, "gamma");
+  });
+
+  it("labels a bundled connector's default seat with the deployment name", async () => {
+    render(<Host overrides={{ mcpServers: SEATED }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    const trigger = await screen.findByTestId("mcp-seat-ix");
+    expect(trigger).toHaveTextContent("Elcano");
+    fireEvent.click(trigger);
+    expect(
+      Array.from(screen.getByRole("listbox").querySelectorAll('[role="option"]')).map((o) => o.textContent),
+    ).toEqual(["ElcanoDefault", "OMG_USD", "OMG_GBP"]);
+  });
+
+  it("Escape in the seat menu closes only the menu", async () => {
+    render(<Host overrides={{ mcpServers: SEATED }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    fireEvent.click(await screen.findByTestId("mcp-seat-ix"));
+    const list = screen.getByRole("listbox");
+    fireEvent.keyDown(list, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-tools-popover")).toBeInTheDocument();
   });
 });
 
-// "All on" / "All off" in the tools popover: one control for the whole
-// optional list, never touching always-on rows, and never offered when there
-// is nothing optional to flip. The visible text IS the accessible name
-// (WCAG 2.5.3): no aria-label restates it.
+// "All on" / "All off" in the tools popover: scoped to the toggleable rows
+// shown, never touching always-on rows, and never offered when there is
+// nothing to flip. The visible text IS the accessible name (WCAG 2.5.3): no
+// aria-label restates it.
 describe("Composer — all connectors on / off", () => {
   const ROWS = [
     {
@@ -230,190 +264,212 @@ describe("Composer — all connectors on / off", () => {
   const allOn = () => screen.getByRole("button", { name: "All on" });
   const allOff = () => screen.getByRole("button", { name: "All off" });
 
-  it("offers both actions, shows the count, and calls setAllMcpServers with the direction", () => {
-    const setAllMcpServers = vi.fn();
-    render(<Host overrides={{ mcpServers: ROWS, setAllMcpServers }} />);
-    fireEvent.click(screen.getByRole("button", { name: "Connectors" }));
-    expect(screen.getByTestId("chat-mcp-all-actions")).toHaveTextContent("1 of 2 on");
+  it("offers both actions, shows the on count, and sends the toggleable rows", () => {
+    const setMcpServersEnabled = vi.fn();
+    render(<Host overrides={{ mcpServers: ROWS, setMcpServersEnabled }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    // Always-on counts as on.
+    expect(screen.getByTestId("chat-mcp-all-actions")).toHaveTextContent("2 on");
     expect(allOn()).not.toHaveAttribute("aria-disabled");
     expect(allOff()).not.toHaveAttribute("aria-disabled");
     fireEvent.click(allOn());
-    expect(setAllMcpServers).toHaveBeenCalledWith(null, true);
+    expect(setMcpServersEnabled).toHaveBeenCalledWith(null, expect.arrayContaining(["gamma", "xandr"]), true);
     fireEvent.click(allOff());
-    expect(setAllMcpServers).toHaveBeenCalledWith(null, false);
-    expect(setAllMcpServers).toHaveBeenCalledTimes(2);
+    expect(setMcpServersEnabled).toHaveBeenLastCalledWith(null, expect.arrayContaining(["gamma", "xandr"]), false);
+    expect(setMcpServersEnabled.mock.calls[0][1]).toHaveLength(2);
+    expect(setMcpServersEnabled).toHaveBeenCalledTimes(2);
   });
 
   it("marks the action that would change nothing aria-disabled and ignores its click", () => {
-    const setAllMcpServers = vi.fn();
+    const setMcpServersEnabled = vi.fn();
     const everyOn = ROWS.map((r) => (r.always_on ? r : { ...r, enabled: true }));
-    const { unmount } = render(<Host overrides={{ mcpServers: everyOn, setAllMcpServers }} />);
-    fireEvent.click(screen.getByRole("button", { name: "Connectors" }));
-    expect(screen.getByTestId("chat-mcp-all-actions")).toHaveTextContent("2 of 2 on");
+    const { unmount } = render(<Host overrides={{ mcpServers: everyOn, setMcpServersEnabled }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
     expect(allOn()).toHaveAttribute("aria-disabled", "true");
     expect(allOff()).not.toHaveAttribute("aria-disabled");
     fireEvent.click(allOn());
-    expect(setAllMcpServers).not.toHaveBeenCalled();
+    expect(setMcpServersEnabled).not.toHaveBeenCalled();
     unmount();
 
     const everyOff = ROWS.map((r) => (r.always_on ? r : { ...r, enabled: false }));
-    render(<Host overrides={{ mcpServers: everyOff, setAllMcpServers }} />);
-    fireEvent.click(screen.getByRole("button", { name: "Connectors" }));
-    expect(screen.getByTestId("chat-mcp-all-actions")).toHaveTextContent("0 of 2 on");
+    render(<Host overrides={{ mcpServers: everyOff, setMcpServersEnabled }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
     expect(allOn()).not.toHaveAttribute("aria-disabled");
     expect(allOff()).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(allOff());
-    expect(setAllMcpServers).not.toHaveBeenCalled();
+    expect(setMcpServersEnabled).not.toHaveBeenCalled();
   });
 
   it("keeps a no-op action focusable so Escape still closes the popover and returns focus", () => {
     const everyOn = ROWS.map((r) => (r.always_on ? r : { ...r, enabled: true }));
     render(<Host overrides={{ mcpServers: everyOn }} />);
-    const trigger = screen.getByRole("button", { name: "Connectors" });
+    const trigger = screen.getByRole("button", { name: "Tools" });
     fireEvent.click(trigger);
     const button = allOn();
     expect(button).toHaveAttribute("aria-disabled", "true");
     button.focus();
     expect(document.activeElement).toBe(button);
     fireEvent.keyDown(button, { key: "Escape" });
-    expect(screen.queryByTestId("chat-mcp-all-actions")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("chat-tools-popover")).not.toBeInTheDocument();
     expect(document.activeElement).toBe(trigger);
   });
 
   it("stays open on a mousedown inside the bar and closes on one outside", () => {
     render(<Host overrides={{ mcpServers: ROWS }} />);
-    fireEvent.click(screen.getByRole("button", { name: "Connectors" }));
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
     fireEvent.mouseDown(allOff());
-    expect(screen.getByTestId("chat-mcp-all-actions")).toBeInTheDocument();
+    expect(screen.getByTestId("chat-tools-popover")).toBeInTheDocument();
     fireEvent.mouseDown(document.body);
-    expect(screen.queryByTestId("chat-mcp-all-actions")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("chat-tools-popover")).not.toBeInTheDocument();
   });
 
   it("is not offered when every row is always-on", () => {
     render(<Host overrides={{ mcpServers: ROWS.filter((r) => r.always_on) }} />);
-    fireEvent.click(screen.getByRole("button", { name: "Connectors" }));
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
     expect(screen.getByTestId("chat-mcp-always-on-email")).toBeInTheDocument();
-    expect(screen.queryByTestId("chat-mcp-all-actions")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "All on" })).not.toBeInTheDocument();
   });
 });
 
-describe("Composer — always-on connector status", () => {
-  it("shows available and unavailable rows as locked status, with a dimmed available switch", async () => {
+// The redesigned popover: search pinned and focused, the "On" section first,
+// static category headings, ranked search, dimmed needs-setup rows, and
+// Escape that clears before it closes.
+describe("Composer — tools popover search and grouping", () => {
+  const CATS = [
+    { id: "ssps", name: "SSPs" },
+    { id: "deal-management", name: "Deal Management" },
+    { id: "misc", name: "Misc Tools" },
+  ];
+  const ROWS = [
+    {
+      name: "ix",
+      display_name: "Index Exchange",
+      description: "Create and edit PMP deals.",
+      tools: ["ix_get_deal", "ix_clone_deal"],
+      tool_count: 2,
+      enabled: true,
+      category: "ssps",
+    },
+    {
+      name: "magnite",
+      display_name: "Magnite",
+      description: "Streaming and DV+ deals.",
+      tools: ["mg_get_deal"],
+      tool_count: 1,
+      enabled: false,
+      category: "ssps",
+    },
+    {
+      name: "dealsheet",
+      display_name: "Deal Sheet",
+      description: "Branded XLSX deal sheets.",
+      tools: [],
+      tool_count: 12,
+      enabled: true,
+      always_on: true,
+      category: "deal-management",
+    },
+    {
+      name: "bq",
+      display_name: "BigQuery Reporting",
+      description: "Query the reporting warehouse.",
+      tools: ["bq_query"],
+      tool_count: 1,
+      enabled: false,
+      category: "misc",
+      status: "needs_setup" as const,
+    },
+  ];
+
+  const open = (overrides = {}) => {
+    render(<Host overrides={{ mcpServers: ROWS, mcpCategories: CATS, ...overrides }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    return screen.getByRole("textbox", { name: "Search tools" });
+  };
+  const groups = () => screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"));
+
+  it("focuses search, pins the On section, then static headings, hiding needs-setup", async () => {
+    const search = open();
+    await waitFor(() => expect(search).toHaveFocus());
+    expect(groups()).toEqual(["On", "SSPs"]);
+    expect(screen.getByTestId("chat-tools-row-ix")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-tools-row-bq")).not.toBeInTheDocument();
+  });
+
+  it("the badge counts always-on and holds while open", () => {
     const toggleMcpServer = vi.fn();
-    render(
-      <Host
-        overrides={{
-          mcpServers: [
-            {
-              name: "email",
-              display_name: "Email",
-              description: "Inbound reports.",
-              tools: [],
-              tool_count: 10,
-              enabled: true,
-              always_on: true,
-            },
-            {
-              name: "broken",
-              description: "Expected connector.",
-              tools: [],
-              tool_count: 0,
-              enabled: false,
-              always_on: true,
-            },
-            {
-              name: "gamma",
-              description: "Decks and docs.",
-              tools: ["create_deck"],
-              tool_count: 1,
-              enabled: true,
-            },
-          ],
-          toggleMcpServer,
-        }}
-      />,
-    );
-
-    const trigger = screen.getByRole("button", { name: "Connectors" });
-    // Only the selected Optional connector contributes to the badge.
-    expect(trigger).toHaveTextContent("1");
-    fireEvent.click(trigger);
-
-    const email = await screen.findByTestId("chat-mcp-always-on-email");
-    expect(email).toHaveTextContent("Always on");
-    expect(email.querySelector('[data-state="always-on"]')).toHaveClass(
-      "bg-[var(--color-connector-always-on-track)]",
-    );
-    const broken = screen.getByTestId("chat-mcp-always-on-broken");
-    expect(broken).toHaveTextContent("Unavailable");
-    expect(broken.querySelector('[data-state="off"]')).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Inbound reports/ })).not.toBeInTheDocument();
-    expect(toggleMcpServer).not.toHaveBeenCalled();
+    render(<Host overrides={{ mcpServers: ROWS, mcpCategories: CATS, toggleMcpServer }} />);
+    expect(screen.getByTestId("chat-tools-badge")).toHaveTextContent("2");
+    expect(screen.getByRole("button", { name: "Tools" })).toHaveAttribute("data-tip-top", "Tools, 2 on");
   });
-});
 
-// The search field's text is a draft, not the selection. It used to be written
-// into selectedModel on every keystroke, so typing "cla" and then pressing
-// Escape or clicking away — both of which only close the popover — left "cla"
-// as the model and the next send failed. selectedModel changes only on a
-// commit (Enter or a row pick); a dismiss leaves the prior selection untouched.
-describe("Composer — model search text is a draft until committed", () => {
-  const selectedModel = () => screen.getByTestId("host-selected-model").textContent;
+  it("search reveals needs-setup dimmed with member copy, and shows inner tool hits", () => {
+    const search = open();
+    fireEvent.change(search, { target: { value: "bigquery" } });
+    expect(screen.getByTestId("chat-tools-row-bq")).toHaveTextContent("Needs admin setup");
+    expect(screen.queryByRole("switch", { name: "BigQuery Reporting" })).not.toBeInTheDocument();
 
-  it("does not change the selected model while typing, and Escape leaves it alone", async () => {
-    render(<Host />);
-    fireEvent.click(screen.getByRole("button", { name: /Model One/ }));
-    const search = await screen.findByRole("combobox", { name: "Model" });
-    fireEvent.change(search, { target: { value: "cla" } });
-    expect(search).toHaveValue("cla");
-    expect(selectedModel()).toBe("vendor/one");
+    fireEvent.change(search, { target: { value: "clone" } });
+    expect(screen.getByTestId("chat-tools-row-ix")).toHaveTextContent("↳ ix_clone_deal");
+    expect(screen.getByTestId("chat-mcp-all-actions")).toHaveTextContent("1 result · 2 on");
+    expect(screen.getByRole("button", { name: "All 1 on" })).toHaveAttribute("title", "Applies to 1 connection shown");
+  });
 
+  it("admins get Set up › which opens the library on that connection", () => {
+    const search = open({ isAdmin: true });
+    fireEvent.change(search, { target: { value: "bigquery" } });
+    fireEvent.click(screen.getByRole("button", { name: /Set up/ }));
+    expect(screen.queryByTestId("chat-tools-popover")).not.toBeInTheDocument();
+    const detail = screen.getByTestId("chat-tools-library-detail");
+    expect(detail).toHaveTextContent("BigQuery Reporting");
+    expect(detail).toHaveTextContent("Needs setup before it can be used.");
+    expect(screen.getByRole("link", { name: /Set up in Settings/ })).toHaveAttribute(
+      "href",
+      "/settings/connections#connector-bq",
+    );
+  });
+
+  it("arrow keys move the active row and Enter toggles it", () => {
+    const toggleMcpServer = vi.fn();
+    const search = open({ toggleMcpServer });
+    fireEvent.change(search, { target: { value: "magn" } });
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(toggleMcpServer).toHaveBeenCalledWith(null, "magnite");
+  });
+
+  it("Escape clears the search first, then closes", () => {
+    const search = open();
+    fireEvent.change(search, { target: { value: "ix" } });
     fireEvent.keyDown(search, { key: "Escape" });
-    await waitFor(() =>
-      expect(screen.queryByRole("combobox", { name: "Model" })).not.toBeInTheDocument(),
-    );
-    expect(selectedModel()).toBe("vendor/one");
+    expect(search).toHaveValue("");
+    expect(screen.getByTestId("chat-tools-popover")).toBeInTheDocument();
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(screen.queryByTestId("chat-tools-popover")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tools" })).toHaveFocus();
   });
 
-  it("commits the highlighted row on Enter", async () => {
-    render(<Host />);
-    fireEvent.click(screen.getByRole("button", { name: /Model One/ }));
-    const search = await screen.findByRole("combobox", { name: "Model" });
-    fireEvent.change(search, { target: { value: "two" } });
-    // The host hands in a fixed roster, so ArrowDown moves the highlight to
-    // the second row and Enter takes it.
-    fireEvent.keyDown(search, { key: "ArrowDown" });
-    fireEvent.keyDown(search, { key: "Enter" });
-    await waitFor(() => expect(selectedModel()).toBe("vendor/two"));
+  it("no results offers the library and clear search", () => {
+    const search = open();
+    fireEvent.change(search, { target: { value: "xyz" } });
+    expect(screen.getByText("No tools match ‘xyz’")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Clear search"));
+    expect(search).toHaveValue("");
   });
 
-  it("commits the typed text as a free slug on Enter when no row matches", async () => {
-    render(<Host overrides={{ filteredRankedModels: [] }} />);
-    fireEvent.click(screen.getByRole("button", { name: /Model One/ }));
-    const search = await screen.findByRole("combobox", { name: "Model" });
-    fireEvent.change(search, { target: { value: "  custom/slug " } });
-    fireEvent.keyDown(search, { key: "Enter" });
-    await waitFor(() => expect(selectedModel()).toBe("custom/slug"));
-  });
-});
-
-// submitPrompt refuses to send while modelError is set, so an enabled Send
-// button was a click that did nothing. It must be disabled, and say why.
-describe("Composer — Send while the model is rejected", () => {
-  it("disables Send and puts the rejection in its title", () => {
-    const modelError = {
-      message: "This model's completion price exceeds the workspace cap.",
-      modelsUrl: "https://openrouter.ai/models",
-    };
-    render(<Host overrides={{ prompt: "hello", modelError }} />);
-    const send = screen.getByRole("button", { name: "Send message" });
-    expect(send).toBeDisabled();
-    expect(send).toHaveAttribute("title", modelError.message);
+  it("the library counts every connection and filters by status", () => {
+    open({ isAdmin: true });
+    fireEvent.click(screen.getByRole("button", { name: "Open library" }));
+    const library = screen.getByTestId("chat-tools-library");
+    expect(library).toHaveTextContent("2 of 4 on");
+    expect(screen.getByRole("link", { name: /Manage connections in Settings/ })).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Status" })).getByRole("button", { name: /Needs setup/ }));
+    expect(screen.getByTestId("chat-tools-library-row-bq")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-tools-library-row-ix")).not.toBeInTheDocument();
   });
 
-  it("keeps Send enabled for the same prompt once the error clears", () => {
-    render(<Host overrides={{ prompt: "hello", modelError: null }} />);
-    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+  it("members do not see the admin Settings link in the library", () => {
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "Open library" }));
+    expect(screen.queryByRole("link", { name: /Manage connections in Settings/ })).not.toBeInTheDocument();
   });
 });

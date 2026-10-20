@@ -62,10 +62,12 @@ import { mcpAccountOverrides } from "./mcpAccounts";
 import { allocMessageIds } from "./messageIds";
 import {
   droppedOptionalMcpServerNames,
-  setAllOptionalMcpServers,
+  setOptionalMcpServersEnabled,
   enabledOptionalMcpServerNames,
   reconcileMcpSelection,
 } from "./mcpSelection";
+import { isToggleable, type PickerCategory } from "./toolsPicker";
+import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import { bootstrapFailureDestination } from "./bootstrapFailure";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
@@ -315,6 +317,13 @@ export type MCPServerInfo = {
   /** A non-optional bundle connector. Informational and never persisted in
    *  the conversation's enabled_optional selection. */
   always_on?: boolean;
+  /** Tools-picker category ID ("ssps", "deal-management", …); absent or
+   *  unknown groups under Misc Tools. */
+  category?: string;
+  /** "needs_setup": declared but its credentials are not set on this box;
+   *  "unavailable": no tools reachable. Neither has a switch. Absent =
+   *  available. */
+  status?: "available" | "needs_setup" | "unavailable";
 };
 
 // NEW_MODEL_WINDOW_DAYS + isNewlyReleased moved into ./Composer alongside
@@ -694,6 +703,9 @@ export function ChatExperience({
   // cards, fetched from the member-gated /api/client-config so the UI is
   // client-agnostic. Falls back to neutral defaults on error / while loading.
   const { branding, pills, models: workspaceModelTiers } = useClientConfig();
+  // Visibility only (the Tools library's admin-only links); the server
+  // authorizes every admin action on its own.
+  const adminState = useIsAdmin();
   // selectedModel is the routed model slug for the active conversation.
   // Every turn requires a non-empty choice. It can be edited mid-chat;
   // submitPrompt forwards the current value with every turn so the backend
@@ -755,6 +767,9 @@ export function ChatExperience({
   // MCPServerInfo shape is declared at module scope (and exported) so the
   // extracted Composer can type its prop against it.
   const [mcpServers, setMcpServers] = useState<MCPServerInfo[]>([]);
+  // The Tools picker's category headings, in order, from the same catalog
+  // responses (empty until the first one answers; the picker falls back).
+  const [mcpCategories, setMcpCategories] = useState<PickerCategory[]>([]);
   const [mcpPickerOpen, setMcpPickerOpen] = useState(false);
   // Bundle skill roster for the composer "/" autocomplete (#513). Fetched
   // once at startup — the roster is bundle-owned and static for the session.
@@ -1138,6 +1153,9 @@ export function ChatExperience({
       const target = event.target;
       if (!(target instanceof Node)) return;
       if (mcpPickerRef.current?.contains(target)) return;
+      // A row's account menu is portalled to <body>; choosing from it is
+      // still inside the picker.
+      if (target instanceof Element && target.closest("[data-seat-menu]")) return;
       setMcpPickerOpen(false);
     };
     window.addEventListener("mousedown", onPointerDown);
@@ -1931,8 +1949,12 @@ export function ChatExperience({
     try {
       const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) return;
-      const data = (await response.json()) as { servers?: MCPServerInfo[] };
+      const data = (await response.json()) as {
+        servers?: MCPServerInfo[];
+        categories?: PickerCategory[];
+      };
       setMcpServers(data.servers ?? []);
+      if (data.categories?.length) setMcpCategories(data.categories);
     } catch {
       /* non-fatal — picker just stays empty */
     } finally {
@@ -1961,12 +1983,16 @@ export function ChatExperience({
     try {
       const response = await fetch("/api/mcp-servers", { cache: "no-store" });
       if (!response.ok) return;
-      const data = (await response.json()) as { servers?: MCPServerInfo[] };
+      const data = (await response.json()) as {
+        servers?: MCPServerInfo[];
+        categories?: PickerCategory[];
+      };
       const servers = data.servers ?? [];
       seededEnabledRef.current = new Map(
         servers.map((s) => [s.name, s.enabled]),
       );
       setMcpServers(servers);
+      if (data.categories?.length) setMcpCategories(data.categories);
     } catch {
       /* non-fatal */
     }
@@ -1991,7 +2017,9 @@ export function ChatExperience({
     name: string,
   ) => {
     const prev = mcpServers;
-    if (prev.find((server) => server.name === name)?.always_on) return;
+    const row = prev.find((server) => server.name === name);
+    // Always-on, needs-setup and unavailable rows have no switch.
+    if (!row || !isToggleable(row)) return;
     const nextServers = prev.map((s) =>
       s.name === name ? { ...s, enabled: !s.enabled } : s,
     );
@@ -2000,17 +2028,19 @@ export function ChatExperience({
     await postMcpServerState(conversationId, nextServers, prev);
   };
 
-  // setAllMcpServers is the picker's "All on" / "All off": every optional
-  // row flipped in one optimistic update and one full-state POST, so a
-  // user with a dozen connectors is not clicking twelve rows and the server
-  // sees one selection change, not twelve. Always-on rows are untouched.
-  // Same pre-chat rule as the toggle: no conversation yet, no POST.
-  const setAllMcpServers = async (
+  // setMcpServersEnabled is the picker's "All on" / "All off": the rows the
+  // popover or library is showing (`names`) flipped in one optimistic update
+  // and one full-state POST, so a user with a dozen connectors is not
+  // clicking twelve rows and the server sees one selection change, not
+  // twelve. Rows with no switch are untouched. Same pre-chat rule as the
+  // toggle: no conversation yet, no POST.
+  const setMcpServersEnabled = async (
     conversationId: string | null,
+    names: string[],
     enabled: boolean,
   ) => {
     const prev = mcpServers;
-    const nextServers = setAllOptionalMcpServers(prev, enabled);
+    const nextServers = setOptionalMcpServersEnabled(prev, names, enabled);
     // The helper keeps the identity of rows it does not change, so a flip
     // that changes nothing (the bar marks the button aria-disabled, but a
     // keyboard user can still activate it) neither re-renders nor POSTs.
@@ -6703,7 +6733,10 @@ export function ChatExperience({
                 isLoadingMcpServers={isLoadingMcpServers}
                 loadMcpServerCatalog={loadMcpServerCatalog}
                 toggleMcpServer={toggleMcpServer}
-                setAllMcpServers={setAllMcpServers}
+                setMcpServersEnabled={setMcpServersEnabled}
+                mcpCategories={mcpCategories}
+                appName={branding.app_name}
+                isAdmin={adminState === "admin"}
                 setMcpServerAccount={setMcpServerAccount}
                 activeConversationId={activeConversationId}
                 messages={messages}
