@@ -591,6 +591,12 @@ func base64RunHasEncodedShape(run string) bool {
 			categories |= 2
 		case b >= '0' && b <= '9':
 			categories |= 4
+		case b == '+' || b == '/':
+			// Standard base64 punctuation (+ and /, e.g. an all-0xff run of
+			// '/') is a strong encoding signal once URLs have been excluded;
+			// '-', '_', and '=' are exempted here so markdown dividers and
+			// single-case snake_case/kebab-case identifiers are not flagged.
+			return true
 		}
 		word, bit := b/64, uint64(1)<<(b%64)
 		if seen[word]&bit == 0 {

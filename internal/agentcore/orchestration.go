@@ -1290,7 +1290,8 @@ func (o *orchestrationState) recordDealOutcomes(toolName, rawInput string, outco
 	callDigest := valuesDigestArg(rawInput)
 	for _, oc := range outcomes {
 		id := strings.TrimSpace(oc.dealID)
-		if len(approved) > 0 && oc.success && !approved[id] && (invokedBatch || !o.hasSingleDealCommitment(toolName, id)) {
+		singleCanaryMatch := !invokedBatch && singleID != "" && id == singleID && o.hasSingleDealCommitment(toolName, id)
+		if len(approved) > 0 && oc.success && !approved[id] && !singleCanaryMatch {
 			log.Printf("Enforcement: ignoring batch result for unapproved record id %q on %q (not in the audit's approved set)",
 				oc.dealID, toolName)
 			continue

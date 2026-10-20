@@ -363,10 +363,14 @@ func TestContainsEncodedBinary_DoesNotSuppressURLsCursorsDividersOrDocPlaceholde
 		})
 	}
 
-	// Real data URIs and oversized cursor smuggling (>1024 bytes) must still
-	// be classified as encoded binary.
+	// Real data URIs, standard base64 '+'/'/' runs (e.g. all-0xff bytes), and
+	// oversized cursor smuggling (>1024 bytes) must still be classified as
+	// encoded binary.
 	if !containsEncodedBinary(`{"src":"data:image/png;base64,iVBORw0KGgo="}`) {
 		t.Fatal("real data URI should still be classified as encoded binary")
+	}
+	if !containsEncodedBinary(`{"payload":"` + strings.Repeat("/", 300) + `"}`) {
+		t.Fatal("all-0xff standard base64 ('/' run) should still be classified as encoded binary")
 	}
 	if !containsEncodedBinary(`{"next_cursor":"` + strings.Repeat(pageMarker, 5) + `"}`) {
 		t.Fatal("oversized >1024-byte base64 blob under next_cursor should still be classified as encoded binary")

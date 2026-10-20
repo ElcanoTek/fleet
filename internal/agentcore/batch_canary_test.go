@@ -313,4 +313,19 @@ func TestBatchCanary_SingleRecordCanaryCommitmentDischargesAlongsideBatch(t *tes
 	if got := o.committedCriticalActions["merge_deal_domains"]; got != 0 {
 		t.Fatalf("after remaining batch: outstanding=%d, want 0 (summary: %v)", got, o.outstandingCommitmentSummary())
 	}
+
+	// A record-less call riding an unbound commitment must NOT discharge a
+	// sibling record-bound commitment when its results[] echoes that record id.
+	o2 := newOrchStateForTest()
+	registerTyped(t, o2,
+		criticalActionStruct{Tool: canaryMergeTool, DealID: "1"},
+		criticalActionStruct{Tool: canaryMergeTool, DealIDs: []string{"2", "3"}, ValuesDigest: canaryDigest},
+		criticalActionStruct{Tool: canaryMergeTool},
+	)
+	o2.recordToolResult(canaryMergeTool, `{"values":["safe.example"]}`, successRows("1"), true)
+	for _, c := range o2.typedCommitments {
+		if c.dealID == "1" && c.remaining != 1 {
+			t.Fatalf("record-less call discharged record-bound commitment for '1': remaining=%d", c.remaining)
+		}
+	}
 }
