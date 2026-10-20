@@ -546,10 +546,11 @@ func TestElideBeforeSummary_SkipsATinySaving(t *testing.T) {
 	}
 }
 
-// The estimate after elision is never below a direct estimate of the elided
-// request: when the in-round guard was already stubbing old results on the
-// wire, the measured size is smaller than the history and the stubs' savings
-// would otherwise count twice.
+// With no floor measured (so no rate), the estimate after elision falls back
+// to the measured size less the savings plus the paused step's output, and is
+// never below a direct estimate of the elided request: when the in-round
+// guard was already stubbing old results on the wire, the measured size is
+// smaller than the history and the stubs' savings would otherwise count twice.
 func TestElideBeforeSummary_NeverBelowTheDirectEstimate(t *testing.T) {
 	e := newMockEngine(t, &namedMockModel{name: "elide-direct"})
 	e.envPrefix = CanonicalEnvPrefix
@@ -610,6 +611,22 @@ func TestHistoryTokenRate(t *testing.T) {
 	if got := e.historyTokenRate(history, 10_000+seen/10, true); got != minHistoryTokenRate {
 		t.Errorf("rate %v, want the clamp %v", got, minHistoryTokenRate)
 	}
+	if got := e.historyTokenRate(history, 10_000, true); got != 1 {
+		t.Errorf("a size no larger than the prefix: rate %v, want 1", got)
+	}
+
+	// A media result goes out as a short envelope on every call
+	// (reduceHistoricalPayloadsToHardCap): the provider never counted its
+	// bytes, so they must not dilute the rate of the dense results around it.
+	image := elisionExchange("image", `{}`, fantasy.ToolResultOutputContentMedia{Data: strings.Repeat("i", 256_000), MediaType: "image/png"})
+	withImage := append(append(elisionHistory(0, 0), image...), history[2:]...)
+	sent := wireTokens(withImage[1 : len(withImage)-2])
+	if got := e.historyTokenRate(withImage, 10_000+2*sent, true); got != 2 {
+		t.Errorf("with a 256 KB image: rate %v, want 2 measured against what was sent", got)
+	}
+	if sent >= estimateModelMessagesTokens(withImage[1:len(withImage)-2])/2 {
+		t.Fatalf("fixture: the image's bytes are not what dominates the carried history")
+	}
 }
 
 // Dense output costs the provider more tokens per character than the
@@ -658,4 +675,54 @@ func TestRun_Elision_SizedInTheProvidersTokens(t *testing.T) {
 		t.Fatalf("%d summaries with elision (%d elisions), %d without: want elision to clear the budget at most pauses", len(summaries), len(elisions), len(summarizedOnly))
 	}
 	t.Logf("%d pauses with the summary alone; with elision %d elisions and %d summaries", len(summarizedOnly), len(elisions), len(summaries))
+}
+
+// The 2% minimum is of the budget in the provider's tokens: a saving under 2%
+// at the estimator's 4 characters a token is still made when the run's
+// measured rate puts it over.
+func TestElideBeforeSummary_MinimumSavingAtTheRunsRate(t *testing.T) {
+	const budget = 100_000
+	// The shortest history whose elision, with the window at rate 2, saves
+	// 1-2% of the budget in estimated tokens: under the minimum at rate 1,
+	// over it at rate 2.
+	var history []fantasy.Message
+	for n := 2; n < 200 && history == nil; n++ {
+		h := elisionHistory(n, 3_000)
+		if saved := elideStaleToolResults(h, int(budget*elisionRecentFraction/2)).savedTokens; saved < budget/50 && 2*saved >= budget/50 {
+			history = h
+		}
+	}
+	if history == nil {
+		t.Fatal("fixture: no history saves 1-2% of the budget")
+	}
+	e := newMockEngine(t, &namedMockModel{name: "elide-min-rate"})
+	e.envPrefix = CanonicalEnvPrefix
+	e.requireCompactionOptIn = true
+	e.resendPrefix = 10_000
+	seen := wireTokens(history[1 : len(history)-2])
+	el, ok := e.elideBeforeSummary(history, 10_000+2*seen, true, budget, budget)
+	if !ok || el.rate != 2 {
+		t.Fatalf("at rate 2 the saving clears 2%%: made=%t rate=%v", ok, el.rate)
+	}
+}
+
+// The estimate after elision counts the history as it is sent: a media result
+// the elision leaves alone goes out as its envelope, so its bytes are not in
+// the estimate.
+func TestElideBeforeSummary_EstimatesTheSentHistory(t *testing.T) {
+	image := elisionExchange("image", `{}`, fantasy.ToolResultOutputContentMedia{Data: strings.Repeat("i", 256_000), MediaType: "image/png"})
+	history := append(append(elisionHistory(0, 0), image...), elisionHistory(10, 40_000)[2:]...)
+	e := newMockEngine(t, &namedMockModel{name: "elide-sent"})
+	e.envPrefix = CanonicalEnvPrefix
+	e.requireCompactionOptIn = true
+	e.resendPrefix = 10_000
+	used := 10_000 + 2*wireTokens(history[1:len(history)-2])
+	el, ok := e.elideBeforeSummary(history, used, true, used, 80_000)
+	if !ok {
+		t.Fatal("fixture: no elision")
+	}
+	want := e.resendPrefix + int(el.rate*float64(wireTokens(el.messages[1:])))
+	if el.usedAfter != want || el.usedAfter >= e.resendPrefix+int(el.rate*float64(estimateModelMessagesTokens(el.messages[1:])))-10_000 {
+		t.Fatalf("estimated after %d, want %d: the image's bytes are not sent and must not be counted", el.usedAfter, want)
+	}
 }

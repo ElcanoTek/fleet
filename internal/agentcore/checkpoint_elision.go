@@ -186,8 +186,10 @@ func unseenTokens(messages []fantasy.Message) int {
 	return 0
 }
 
-// Bounds on historyTokenRate: past them the measurement is more likely
-// skewed (a rebuilt tool roster, a swapped model's tokenizer) than the data.
+// Bounds on historyTokenRate: past them the measurement is degenerate (a
+// history of a few tokens, a size taken across a compaction) rather than a
+// property of the data. Real text runs from about 1 (prose) to about 3
+// (base64).
 const (
 	minHistoryTokenRate = 0.5
 	maxHistoryTokenRate = 4.0
@@ -197,29 +199,49 @@ const (
 // in-round guard's estimator (about 4 characters a token) counts, for this
 // run's history: the measured resent size used, less the prefix (the
 // smallest floor, measured before any history existed, #1600), over the
-// estimate of the history that call carried (everything after the pinned
-// head up to the latest assistant message, see unseenTokens). It is 1 when
-// there is nothing to calibrate against: used is itself an estimate, or no
-// floor has been measured.
+// estimate of the history that call carried as it was sent (everything after
+// the pinned head up to the latest assistant message, see unseenTokens and
+// wireTokens). It is 1 when there is nothing to calibrate against: used is
+// itself an estimate, or no floor has been measured.
 //
 // The estimator is close for prose, but digits, punctuation and base64 cost
 // the provider far more tokens per character: a live run of numeric
 // run_python output measured about 2.3, and with an uncalibrated estimate a
 // 30%-of-budget recent window held some 60% of the budget, and the stubs'
-// savings looked half their size. When the in-round guard is already
-// stubbing old results on the wire, used is smaller than the history and so
-// is the rate, which keeps those savings from counting twice.
+// savings looked half their size.
+//
+// Two shapes it does not see, both bounded. The rate is one average over the
+// history: when the old results that get elided cost the provider fewer
+// tokens per character than the rest (prose first, dense data later), their
+// savings are over-counted and the estimate after can come out low, so the
+// run may pause again a step or two later; that elision then cannot free
+// enough, and the summary runs. And the prefix is the one measured first:
+// when a mid-run tool-roster rebuild or a fallback model's tokenizer grows
+// the real prefix, the growth is taken for history; it shifts the estimate
+// by part of that growth, well inside the headroom for ordinary rosters.
 func (e *engine) historyTokenRate(messages []fantasy.Message, used int, measured bool) float64 {
 	if !measured || e.resendPrefix <= 0 || used <= e.resendPrefix {
 		return 1
 	}
 	head := compactionHeadLen(messages)
 	seenEnd := max(head, lastAssistantIndex(messages))
-	est := estimateModelMessagesTokens(messages[head:seenEnd])
+	est := wireTokens(messages[head:seenEnd])
 	if est <= 0 {
 		return 1
 	}
 	return min(maxHistoryTokenRate, max(minHistoryTokenRate, float64(used-e.resendPrefix)/float64(est)))
+}
+
+// wireTokens is estimateModelMessagesTokens of messages as the in-round guard
+// sends them: a media result, and a result or tool-call input over the hard
+// cap, go out as their stubs on every call (reduceHistoricalPayloadsToHardCap),
+// so the provider's count holds the stub, not the payload. Counting the
+// payload would dilute the rate: one large screenshot in the history would
+// make dense results look cheap, and the recent window grow past the budget.
+func wireTokens(messages []fantasy.Message) int {
+	sent := cloneFantasyMessages(messages)
+	reduceHistoricalPayloadsToHardCap(sent, toolNamesByCallID(sent))
+	return estimateModelMessagesTokens(sent)
 }
 
 // elisionOutcome is elideBeforeSummary's result: the elision, the estimated
@@ -243,10 +265,10 @@ type elisionOutcome struct {
 //
 // The window and the savings are sized in the provider's tokens, through
 // historyTokenRate. The size after elision is then the measured prefix plus
-// the elided history at that rate; it includes what the paused step itself
-// added, which used does not yet (unseenTokens). With no floor measured it
-// falls back to used, less the savings, plus that unseen part, and never
-// below the estimator's own count of the elided request.
+// the elided history, as sent, at that rate; it includes what the paused step
+// itself added, which used does not yet (unseenTokens). With no floor
+// measured it falls back to used, less the savings, plus that unseen part,
+// and never below the estimator's own count of the elided request.
 //
 // ok is false, and nothing changes, for an interactive engine (a chat's
 // history is the user's to keep, and its windows are large), when the
@@ -271,7 +293,7 @@ func (e *engine) elideBeforeSummary(messages []fantasy.Message, used int, measur
 	case !measured:
 		after = e.estimateRequestTokens(res.messages)
 	case e.resendPrefix > 0 && used > e.resendPrefix:
-		history := estimateModelMessagesTokens(res.messages[compactionHeadLen(res.messages):])
+		history := wireTokens(res.messages[compactionHeadLen(res.messages):])
 		after = e.resendPrefix + int(rate*float64(history))
 	default:
 		after = max(used-res.savedTokens+unseenTokens(res.messages), e.estimateRequestTokens(res.messages))

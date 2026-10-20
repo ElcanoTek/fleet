@@ -617,9 +617,9 @@ repeated just to see it, and that only a tool that reads data should be re-run,
 with narrower output). The recent window is the newest 30% of the budget, and
 never fewer than the last two assistant turns. Both it and the savings are
 measured in the provider's tokens: each elision first takes the run's own rate
-of provider tokens per estimated token from the call that fired, since dense
-output such as digits costs far more than the estimator's 4 characters a
-token. Results of 2 KiB or less, media,
+of provider tokens per estimated token from the call that fired, against the
+history as it was sent, since dense output such as digits costs far more than
+the estimator's 4 characters a token. Results of 2 KiB or less, media,
 results the in-round guard already stubs on every call, and the results of
 `spawn_subagent` and `task_tracker` are left alone. The run then estimates the
 resent size again (the measured prefix plus the elided history at that rate,

@@ -311,9 +311,11 @@ fewer summarizer calls; making the elided content recallable added nothing.
   elision never freed enough. So each elision measures the run's own rate
   first: the provider's count for the call that fired, less the prefix measured
   before any history existed (#1600), over the estimate of the history that
-  call carried. It sizes the window, the savings and the estimate below at that
-  rate, clamped to 0.5–4, and is 1 when there is nothing to measure against (no
-  floor yet, or a size that is itself an estimate).
+  call carried, counted as it was sent (a media result, and a result or input
+  over the hard cap, at the stub the in-round guard sends in its place). It
+  sizes the window, the savings and the estimate below at that rate, clamped to
+  0.5–4, and is 1 when there is nothing to measure against (no floor yet, or a
+  size that is itself an estimate).
 - **Left alone.** Results of 2 KiB or less; media; results over the 128 KiB
   hard cap, because the in-round guard already sends a stub of the same size in
   their place on every call; and the results of `spawn_subagent` (a child run's
@@ -324,19 +326,19 @@ fewer summarizer calls; making the elided content recallable added nothing.
   the history is copied, never written in place. An elision that would save
   less than 2% of the budget is not made at all: it could not skip the summary.
 - **Then.** The resent size is estimated again: the measured prefix plus the
-  elided history at the run's rate. That includes what the provider's count for
-  the paused call did not yet include (the step's own assistant message and
-  results, and anything appended after them). When the in-round guard was
-  already stubbing old results on the wire, the measured rate is lower, so
-  those savings are not counted twice. With no floor measured, it falls back to
-  that count, less the stubs' savings, plus the paused step's output, and never
-  below the estimator's own count of the elided request. On the #1600 fixture
-  the estimate came within 20 tokens of what the next step resent, and on a
-  fixture counting tool output at twice the estimator's rate, within 3%. The
-  summary is bought only if the estimate is not at least 30% of the budget
-  below the threshold: a run that elides gets room for several more steps
-  before its next pause, rather than pausing again on the next one. When the
-  summary does run, it is written from the history as it stood before this
+  elided history, as sent, at the run's rate. That includes what the provider's
+  count for the paused call did not yet include (the step's own assistant
+  message and results, and anything appended after them). When the in-round
+  guard was also stubbing old results to fit the window, the measured rate is
+  lower, so those savings are not counted twice. With no floor measured, it
+  falls back to that count, less the stubs' savings, plus the paused step's
+  output, and never below the estimator's own count of the elided request. On
+  the #1600 fixture the estimate came within 20 tokens of what the next step
+  resent, and on a fixture counting tool output at twice the estimator's rate,
+  within 3%. The summary is bought only if the estimate is not at least 30% of
+  the budget below the threshold: a run that elides gets room for several more
+  steps before its next pause, rather than pausing again on the next one. When
+  the summary does run, it is written from the history as it stood before this
   pass's stubs, so the identifiers it is asked to keep are not lost to a
   preview just made; only the kept half carries this pass's stubs. A result
   stubbed at an earlier pause is a preview by then, in the summary's input as
@@ -376,8 +378,41 @@ run pauses six times; with elision it pauses four times and never summarizes
 (`TestRun_Elision_SizedInTheProvidersTokens`). Those are fixtures, not
 measurements; see [Measured](#measured) for real runs.
 
+### Measured
+
+On a local fleet instance, 2026-10-20, with `anthropic/claude-haiku-5.5` and a
+synthetic scheduled task: one `run_python` call per seed, each printing about
+17 KB of seeded random numbers, then a table of one number per seed. Each row
+is one run, so model variance is in it (the step counts differ by one or two).
+It is not the issue's "real recurring scheduled task": that measurement needs a
+production run after release.
+
+| Budget, seeds | Elision | Pauses | Summaries | Prompt tokens (cached) | Completion | Cost |
+|---|---|---|---|---|---|---|
+| 80K (default), 30 | off | 8 | 9 | 2,599,736 (1,336,452) | 31,357 | $0.170 |
+| 80K (default), 30 | on | 6 | 2 | 2,076,830 (1,248,154) | 14,987 | $0.113 |
+| 16K, 14 | off | 4 | 5 | 1,096,959 (506,073) | 14,319 | $0.078 |
+| 16K, 14 | on, before calibration | 4 | 4 | 875,558 (437,600) | 15,694 | $0.061 |
+
+At the default budget, elision cut the summaries from nine to two, completion
+tokens by half and cost by a third. The run measured 2.31–2.38 provider
+tokens per estimated token, and elided four or five results at each pause; the
+two summaries came when the stubs had piled up enough that elision alone no
+longer cleared the target. A first 80K run with elision on, built before the
+calibration above, elided only one or two results per pause, never freed
+enough, and bought nine summaries like the run without it; that run then
+failed its own self-audit, because the model would not vouch for values it had
+only from compaction summaries (the run without elision passed the same
+audit). The 16K pair also ran before the calibration. There, each result is
+about a third of the budget, so even calibrated elision would rarely clear the
+target. Even so, the floor settled near 41K instead of climbing to 62K, and
+prompt tokens fell by a fifth.
+
 ### Deviations from the issue
 
+- The before/after numbers come from a synthetic task on a local instance
+  ([Measured](#measured)), not a production recurring task; those need a
+  production run after release.
 - The breadcrumb is `[context_elided]`, as asked, but the event is the existing
   `fleet.context_compacted` with `trigger: "elision"`, so the scheduler stream
   forwards it with no change.
@@ -393,6 +428,14 @@ measurements; see [Measured](#measured) for real runs.
 
 ### Not done
 
+- A rate per result, and a re-measured prefix. The rate is one average over the
+  history: when the old results that get elided cost the provider fewer tokens
+  per character than the rest (prose first, dense data later), their savings
+  are over-counted, the estimate comes out low, and the run pauses again a step
+  or two later, when the summary runs. And the prefix is the one measured at
+  the first step: a mid-run tool-roster rebuild or a fallback model's tokenizer
+  that grows it is taken for history, which shifts the estimate by part of that
+  growth, well inside the headroom for ordinary rosters.
 - Getting an elided result back into the history. Once a result is a stub,
   the full output is in the session log (and, when the tool output boundary
   saved it, in the workspace file the stub names), not in what the model is
