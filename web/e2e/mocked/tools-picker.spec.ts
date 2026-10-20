@@ -214,6 +214,13 @@ test.describe("on a touch phone", () => {
       .locator('[data-testid^="chat-tools-library-row-"]')
       .evaluateAll((rows) => rows.map((r) => r.getBoundingClientRect().height));
     expect(Math.min(...heights)).toBeGreaterThanOrEqual(44);
+    // The row's tap target is its full height, and the filter chips are 44px.
+    const tapHeights = await library
+      .locator('[data-testid^="chat-tools-library-row-"] > button')
+      .evaluateAll((btns) => btns.map((b) => b.getBoundingClientRect().height));
+    expect(Math.min(...tapHeights)).toBeGreaterThanOrEqual(44);
+    const chip = (await library.getByRole("navigation", { name: "Categories" }).getByRole("button").first().boundingBox())!;
+    expect(chip.height).toBeGreaterThanOrEqual(44);
     // The close button stays in the top-right corner when the admin link wraps.
     const close = (await page.getByRole("button", { name: "Close tools library" }).boundingBox())!;
     expect(390 - (close.x + close.width)).toBeLessThan(24);

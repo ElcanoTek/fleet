@@ -184,14 +184,14 @@ export function ToolsPopover({
             onKeyDown={onKey}
             placeholder="Search tools…"
             aria-label="Search tools"
-            className="h-[2.125rem] w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-8 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
+            className="h-[2.125rem] w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-8 text-[0.875rem] pointer-coarse:h-11 pointer-coarse:pr-11 text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
           />
           {query ? (
             <button
               type="button"
               aria-label="Clear search"
               onClick={clearQuery}
-              className="absolute right-1.5 inline-flex size-[1.375rem] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-subtle)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+              className="absolute right-1.5 inline-flex size-[1.375rem] items-center pointer-coarse:right-0 pointer-coarse:size-11 justify-center rounded-[var(--radius-sm)] text-[var(--color-text-subtle)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             >
               <Icon name="close" className="size-3" />
             </button>
@@ -202,7 +202,7 @@ export function ToolsPopover({
           title="Open tool library"
           aria-label="Open tool library"
           onClick={() => onOpenLibrary()}
-          className="inline-flex size-[2.125rem] shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-pill-border)] text-[var(--color-text-subtle)] transition hover:border-[var(--color-selected-border)] hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="inline-flex size-[2.125rem] shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-pill-border)] pointer-coarse:size-11 text-[var(--color-text-subtle)] transition hover:border-[var(--color-selected-border)] hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
           <Icon name="maximize" className="size-[0.9rem]" />
         </button>
