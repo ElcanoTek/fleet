@@ -256,3 +256,19 @@ test("narrow window: opening a connector from the menu focuses the detail's back
   await expect(library.getByTestId("chat-tools-library-detail")).toBeInViewport();
   await expect(page.getByRole("button", { name: "All connections" })).toBeFocused();
 });
+
+test("tablet: a rail filter beside an open detail returns to the filtered list", async ({ page, context }) => {
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await loginViaCookie(context);
+  await boot(page, { admin: true });
+  await page.getByRole("button", { name: "Tools", exact: true }).click();
+  await page.getByRole("button", { name: "Open library" }).click();
+  const library = page.getByTestId("chat-tools-library");
+  await library.getByTestId("chat-tools-library-row-magnite").getByRole("button").first().click();
+  await expect(library.getByRole("region", { name: "Connections" })).toBeHidden();
+  // Magnite is off, so "On" filters it out: the list comes back, filtered.
+  await library.getByRole("navigation", { name: "Status" }).getByRole("button", { name: /^On/ }).click();
+  await expect(library.getByRole("region", { name: "Connections" })).toBeVisible();
+  await expect(library.getByTestId("chat-tools-library-row-magnite")).toHaveCount(0);
+  await expect(library.getByTestId("chat-tools-library-row-indexexchange")).toBeVisible();
+});

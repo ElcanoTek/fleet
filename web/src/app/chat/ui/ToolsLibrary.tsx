@@ -109,6 +109,21 @@ export function ToolsLibrary({
     detailOpenRef.current = detailOpen;
   }, [query, detailOpen]);
 
+
+  const q = query.trim();
+  const matched = useMemo(() => matchAll(servers, q, categories), [servers, q, categories]);
+  const list = matched.filter((r) => inCategory(r.connector, cat, categories) && matchesStatus(r.connector, status));
+  const groups = groupConnectors(list, categories, !!q);
+  const flat = groups.flatMap((g) => g.rows.map((r) => r.connector));
+  const current = flat.find((c) => c.name === selected) ?? flat[0] ?? null;
+
+  const presentCats = categories.filter((c) => servers.some((s) => categoryOf(s, categories) === c.id));
+  const catObj = cat === "all" ? null : categories.find((c) => c.id === cat) ?? null;
+  const statusObj = LIBRARY_STATUSES.find((s) => s.id === status) ?? null;
+  const toggleable = flat.filter(isToggleable);
+  const toggleableOn = toggleable.filter((c) => c.enabled).length;
+  const bulkNames = toggleable.map((c) => c.name);
+
   const stacked = () => typeof window !== "undefined" && window.matchMedia?.(STACKED).matches;
   // Each view starts at its top, and focus follows the view change so a
   // keyboard or screen-reader user lands in it.
@@ -123,13 +138,22 @@ export function ToolsLibrary({
       backRef.current?.focus();
     });
   };
+  // Back to the list, focusing the row whose detail was showing (current, not
+  // selected: a filter may have hidden the selected row).
   const closeDetail = () => {
+    const shown = current?.name;
     setDetailOpen(false);
     requestAnimationFrame(() => {
       panelRef.current
-        ?.querySelector<HTMLElement>(`[data-testid="chat-tools-library-row-${CSS.escape(selected ?? "")}"] button`)
+        ?.querySelector<HTMLElement>(`[data-testid="chat-tools-library-row-${CSS.escape(shown ?? "")}"] button`)
         ?.focus();
     });
+  };
+  // A filter change from the tablet rail (visible beside a stacked detail)
+  // returns to the list it just changed.
+  const filterBy = (next: () => void) => {
+    next();
+    setDetailOpen(false);
   };
 
   // Escape steps back from a stacked detail view, then clears the search, then
@@ -157,20 +181,6 @@ export function ToolsLibrary({
     // Shift+Tab from there stays inside.
     { initialFocusRef: detailOpen && stacked() ? backRef : isTouchPrimary() ? panelRef : searchRef },
   );
-
-  const q = query.trim();
-  const matched = useMemo(() => matchAll(servers, q, categories), [servers, q, categories]);
-  const list = matched.filter((r) => inCategory(r.connector, cat, categories) && matchesStatus(r.connector, status));
-  const groups = groupConnectors(list, categories, !!q);
-  const flat = groups.flatMap((g) => g.rows.map((r) => r.connector));
-  const current = flat.find((c) => c.name === selected) ?? flat[0] ?? null;
-
-  const presentCats = categories.filter((c) => servers.some((s) => categoryOf(s, categories) === c.id));
-  const catObj = cat === "all" ? null : categories.find((c) => c.id === cat) ?? null;
-  const statusObj = LIBRARY_STATUSES.find((s) => s.id === status) ?? null;
-  const toggleable = flat.filter(isToggleable);
-  const toggleableOn = toggleable.filter((c) => c.enabled).length;
-  const bulkNames = toggleable.map((c) => c.name);
 
   return createPortal(
     <div
@@ -246,7 +256,7 @@ export function ToolsLibrary({
                   active={cat === c.id}
                   label={c.name}
                   count={matched.filter((r) => inCategory(r.connector, c.id, categories) && matchesStatus(r.connector, status)).length}
-                  onClick={() => setCat(c.id)}
+                  onClick={() => filterBy(() => setCat(c.id))}
                 />
               ))}
             </nav>
@@ -259,7 +269,7 @@ export function ToolsLibrary({
                   label={s.label}
                   dot={s.id}
                   count={matched.filter((r) => inCategory(r.connector, cat, categories) && matchesStatus(r.connector, s.id)).length}
-                  onClick={() => setStatus(status === s.id ? null : s.id)}
+                  onClick={() => filterBy(() => setStatus(status === s.id ? null : s.id))}
                 />
               ))}
             </nav>
