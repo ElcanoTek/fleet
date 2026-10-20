@@ -69,8 +69,9 @@ const (
 	evtFieldRemovedTurns  = "removed_turns"
 	evtFieldSummaryTokens = "summary_tokens"
 	// evtFieldTrigger names why a compaction fired: "window" (context-window
-	// pressure) or "resend_budget" (the cost-aware per-call prompt budget,
-	// #1534), or that it was an "elision" of stale tool results (#1742);
+	// pressure), "resend_budget" (the cost-aware per-call prompt budget,
+	// #1534) or "overflow" (the provider rejected the prompt size), or that it
+	// was an "elision" of stale tool results (#1742);
 	// evtFieldResendBudget carries that budget in tokens.
 	evtFieldTrigger      = "trigger"
 	evtFieldResendBudget = "resend_budget_tokens"
@@ -82,8 +83,10 @@ const (
 	evtFieldResendFloor     = "resend_floor_tokens"
 	evtFieldEffectiveBudget = "effective_budget_tokens"
 	// The elision fields ride the fleet.context_compacted event whose trigger
-	// is "elision" (#1742): the tool results replaced with stubs, the output
-	// bytes that removed, and the estimated resent size after it.
+	// is "elision" (#1742): what fired it ("resend_budget" or "window"), the
+	// tool results replaced with stubs, the output bytes that removed, and the
+	// estimated resent size after it.
+	evtFieldElisionTrigger = "elision_trigger"
 	evtFieldElidedResults  = "elided_results"
 	evtFieldElidedBytes    = "elided_bytes"
 	evtFieldEstimatedAfter = "estimated_tokens_after"

@@ -3,7 +3,9 @@ package agentcore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -39,6 +41,21 @@ func elisionHistory(exchanges, resultChars int) []fantasy.Message {
 		msgs = append(msgs, elisionExchange(id, `{"page":"`+id+`"}`, elisionText(resultChars))...)
 	}
 	return msgs
+}
+
+// stubbedResults counts the tool results in msgs that are a stub.
+func stubbedResults(msgs []fantasy.Message) int {
+	n := 0
+	for _, m := range msgs {
+		for _, part := range m.Content {
+			if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
+				if text, _ := toolResultOutputText(tr.Output); strings.HasPrefix(text, "[tool output truncated]") {
+					n++
+				}
+			}
+		}
+	}
+	return n
 }
 
 func resultOf(t *testing.T, part fantasy.MessagePart) (fantasy.ToolResultPart, string) {
@@ -105,11 +122,11 @@ func TestElideStaleToolResults(t *testing.T) {
 				t.Errorf("result %s lost its call ID", orig.ToolCallID)
 			}
 			if !strings.HasPrefix(stub, "[tool output truncated]\ntool: fetch\n") ||
-				!strings.Contains(stub, "recovery_action: Re-run fetch with narrower output.") || !strings.Contains(stub, "\npreview:\n") {
+				!strings.Contains(stub, "recovery_action: "+elisionRecovery) || !strings.Contains(stub, "\npreview:\n") {
 				t.Errorf("result %s stub = %q, want the envelope with a preview and a recovery action", tr.ToolCallID, stub)
 			}
-			if len(stub) > elisionPreviewBytes {
-				t.Errorf("result %s stub is %d bytes, want at most %d", tr.ToolCallID, len(stub), elisionPreviewBytes)
+			if len(stub) > elisionStubBytes {
+				t.Errorf("result %s stub is %d bytes, want at most %d", tr.ToolCallID, len(stub), elisionStubBytes)
 			}
 			_, wasErr := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](orig.Output)
 			_, isErr := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Output)
@@ -182,7 +199,7 @@ func TestRun_Elision_ClearsTheBudgetWithoutASummary(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	const budget = 80_000
 	var summaries atomic.Int32
-	sr := &sizedRun{prefix: 140_000, toolSteps: 16, resultChars: 40_000,
+	sr := &sizedRun{prefix: 140_000, toolSteps: 26, resultChars: 40_000,
 		summarizer: func(context.Context, CompactionSummarizeInput) fantasy.Message {
 			summaries.Add(1)
 			return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
@@ -192,21 +209,39 @@ func TestRun_Elision_ClearsTheBudgetWithoutASummary(t *testing.T) {
 	if n := summaries.Load(); n != 0 {
 		t.Fatalf("the summarizer ran %d times, want 0", n)
 	}
-	paused := checkpointedSteps(obs)
-	compactions := payloadsOf(obs, evtContextCompacted)
-	if len(paused) == 0 || len(compactions) != len(paused) {
-		t.Fatalf("checkpoints after steps %v, compactions %v: want one elision per pause", paused, compactions)
-	}
+	// The #1600 cadence holds with elision: a pause exactly when a step has
+	// resent a full budget over the floor measured at the latest floor point
+	// (the first step, and the first step after each elision), and the floor
+	// each elision names is that floor.
+	var want, floors []int
 	floor := sr.sizes[0]
-	for _, p := range compactions {
-		if p[evtFieldTrigger] != "elision" || p[evtFieldElidedResults].(int) == 0 || p[evtFieldElidedBytes].(int) == 0 {
-			t.Fatalf("want only elisions, got %v", p)
+	for step := 2; step <= sr.toolSteps; step++ {
+		if len(want) > 0 && want[len(want)-1] == step-1 {
+			floor = sr.sizes[step-1]
+			continue
 		}
-		if p[evtFieldResendBudget] != budget || p[evtFieldResendFloor] != floor || p[evtFieldEffectiveBudget] != floor+budget {
-			t.Errorf("an elision must name the budget, floor and effective budget, got %v", p)
+		if sr.sizes[step-1] >= floor+budget {
+			want = append(want, step)
+			floors = append(floors, floor)
 		}
-		if after := p[evtFieldEstimatedAfter].(int); after > floor+budget-budget*3/10 {
-			t.Errorf("estimated %d after elision, want at most %d to skip the summary", after, floor+budget-budget*3/10)
+	}
+	paused := checkpointedSteps(obs)
+	if len(want) < 2 || fmt.Sprint(paused) != fmt.Sprint(want) {
+		t.Fatalf("checkpoints after steps %v, want %v: two or more, each after a full budget over the latest floor (sizes=%v)", paused, want, sr.sizes)
+	}
+	compactions := payloadsOf(obs, evtContextCompacted)
+	if len(compactions) != len(paused) {
+		t.Fatalf("compactions %v: want one elision per pause", compactions)
+	}
+	for i, p := range compactions {
+		if p[evtFieldTrigger] != "elision" || p[evtFieldElisionTrigger] != "resend_budget" || p[evtFieldElidedResults].(int) == 0 || p[evtFieldElidedBytes].(int) == 0 {
+			t.Fatalf("want only resend-budget elisions, got %v", p)
+		}
+		if p[evtFieldResendBudget] != budget || p[evtFieldResendFloor] != floors[i] || p[evtFieldEffectiveBudget] != floors[i]+budget {
+			t.Errorf("elision %d must name the budget, its floor %d and effective budget, got %v", i+1, floors[i], p)
+		}
+		if after := p[evtFieldEstimatedAfter].(int); after > floors[i]+budget-budget*3/10 {
+			t.Errorf("estimated %d after elision %d, want at most %d to skip the summary", after, i+1, floors[i]+budget-budget*3/10)
 		}
 	}
 	at := paused[0]
@@ -253,8 +288,10 @@ func TestRun_Elision_LowersThePostCompactionFloor(t *testing.T) {
 }
 
 // When elision does not free enough — here the history is mostly tool-call
-// inputs, which are never elided — the summary is bought too, on the elided
-// history, and both are recorded in that order.
+// inputs, which are never elided — the summary is bought too, and both are
+// recorded in that order. The summary is written from the full results (a
+// stub's preview may have cut an identifier the run still needs), while the
+// kept half carries the stubs on.
 func TestCheckContextPressure_ElisionThenSummaryWhenNotEnough(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	model := &namedMockModel{name: "elide-not-enough"}
@@ -267,9 +304,9 @@ func TestCheckContextPressure_ElisionThenSummaryWhenNotEnough(t *testing.T) {
 		droppable = in.Droppable
 		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
 	}
-	msgs := make([]fantasy.Message, 0, 13)
+	msgs := make([]fantasy.Message, 0, 17)
 	msgs = append(msgs, fantasy.NewUserMessage("task"))
-	for i := range 6 {
+	for i := range 8 {
 		id := string(rune('a' + i))
 		msgs = append(msgs, elisionExchange(id, `{"rows":"`+strings.Repeat("r", 40_000)+`"}`, elisionText(4_000))...)
 	}
@@ -284,18 +321,11 @@ func TestCheckContextPressure_ElisionThenSummaryWhenNotEnough(t *testing.T) {
 	if len(res.messages) >= len(msgs) {
 		t.Fatal("the summary did not shorten the history")
 	}
-	stubbed := false
-	for _, m := range droppable {
-		for _, part := range m.Content {
-			if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
-				if text, _ := toolResultOutputText(tr.Output); strings.HasPrefix(text, "[tool output truncated]") {
-					stubbed = true
-				}
-			}
-		}
+	if n := stubbedResults(droppable); n != 0 {
+		t.Errorf("the summarizer was handed %d stubs, want the full results", n)
 	}
-	if !stubbed {
-		t.Error("the summarizer was handed the history before elision")
+	if n := stubbedResults(res.messages); n == 0 {
+		t.Error("the kept half lost its stubs")
 	}
 	crumbs := sessionLines(e.logSession, "[context_")
 	if len(crumbs) != 2 || !strings.HasPrefix(crumbs[0], "[context_elided] trigger=resend_budget used=100000 budget=80000 elided_results=") ||
@@ -321,17 +351,24 @@ func TestCheckContextPressure_ElisionJustUnderTheBudgetStillSummarizes(t *testin
 		e.checkContextPressure(context.Background(), elisionHistory(8, 40_000), model, newStreamSink(obs), false)
 		return payloadsOf(obs, evtContextCompacted)
 	}
-	// Measure what the fixture's elision saves, then place used so that the
-	// size after it lands between the target and the threshold, and under it.
-	saved := elideStaleToolResults(elisionHistory(8, 40_000), 24_000).savedTokens
+	// Measure what the fixture's elision saves and what the paused step added
+	// after its measured input (unseenTokens), then place used so that the
+	// size after elision lands just over the 56K target, and just under it.
+	history := elisionHistory(8, 40_000)
+	saved := elideStaleToolResults(history, 24_000).savedTokens
 	if saved < 10_000 {
 		t.Fatalf("fixture: elision saves only %d tokens", saved)
 	}
-	between := run(80_000 - 24_000 + saved + 1_000) // after: 57K, over the 56K target
+	const target = 80_000 - 24_000
+	unseen := unseenTokens(history)
+	between := run(target + saved - unseen + 1_000)
 	if len(between) != 2 || between[0][evtFieldTrigger] != "elision" || between[1][evtFieldTrigger] != "resend_budget" {
 		t.Fatalf("after elision 1K over the target: want the summary too, got %v", between)
 	}
-	under := run(80_000 - 24_000 + saved - 1_000) // after: 55K, under the target
+	if got := between[0][evtFieldEstimatedAfter]; got != target+1_000 {
+		t.Fatalf("estimated after = %v, want used - saved + the paused step's own output = %d", got, target+1_000)
+	}
+	under := run(target + saved - unseen - 1_000)
 	if len(under) != 1 || under[0][evtFieldTrigger] != "elision" {
 		t.Fatalf("after elision 1K under the target: want the elision alone, got %v", under)
 	}
@@ -341,19 +378,6 @@ func TestCheckContextPressure_ElisionJustUnderTheBudgetStillSummarizes(t *testin
 // engine's window compaction and a scheduled one with the knob off summarize
 // exactly as before, and no result anywhere is stubbed.
 func TestCheckContextPressure_ElisionIsScheduledOnlyAndKnobGated(t *testing.T) {
-	stubbedResults := func(msgs []fantasy.Message) int {
-		n := 0
-		for _, m := range msgs {
-			for _, part := range m.Content {
-				if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
-					if text, _ := toolResultOutputText(tr.Output); strings.HasPrefix(text, "[tool output truncated]") {
-						n++
-					}
-				}
-			}
-		}
-		return n
-	}
 	msgs := elisionHistory(14, 40_000)
 
 	t.Run("interactive", func(t *testing.T) {
@@ -428,5 +452,137 @@ func TestCheckContextPressure_ScheduledWindowCompactionElidesFirst(t *testing.T)
 	}
 	if crumbs := sessionLines(e.logSession, "[context_elided] trigger=window used=180000 window=200000 "); len(crumbs) != 1 {
 		t.Fatalf("want one window [context_elided] breadcrumb, got %v", e.logSession.Messages)
+	}
+}
+
+// A history already elided has nothing left to elide outside the window: a
+// stub is never stubbed again.
+func TestElideStaleToolResults_NeverTwice(t *testing.T) {
+	once := elideStaleToolResults(elisionHistory(8, 40_000), 0)
+	if once.stubs == 0 {
+		t.Fatal("fixture: nothing elided")
+	}
+	if again := elideStaleToolResults(once.messages, 0); again.stubs != 0 {
+		t.Fatalf("a second elision made %d more stubs", again.stubs)
+	}
+}
+
+// A result the tool output boundary already saved to a governed artifact keeps
+// that path in its stub, and its recovery is view_file on it.
+func TestElideStaleToolResults_KeepsTheArtifactPath(t *testing.T) {
+	const path = ".fleet/tool-output/slot-03/artifact-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.txt"
+	bounded := "[tool output truncated]\ntool: fetch\noriginal_bytes: 500000\nshown_bytes: 60000\nformat: text\ntruncated: true\n" +
+		"artifact_path: " + path + "\nrecovery_action: Use view_file.\npreview:\n" + strings.Repeat("x", 60_000)
+	history := append(elisionHistory(0, 0), elisionExchange("saved", `{}`, fantasy.ToolResultOutputContentText{Text: bounded})...)
+	history = append(history, elisionHistory(2, 40_000)[2:]...)
+	res := elideStaleToolResults(history, 0)
+	if res.stubs != 1 {
+		t.Fatalf("stubs = %d, want the saved result's", res.stubs)
+	}
+	_, stub := resultOf(t, res.messages[3].Content[0])
+	if !strings.Contains(stub, "artifact_path: "+path) || !strings.Contains(stub, fmt.Sprintf("Use view_file with path %q", path)) ||
+		!strings.Contains(stub, "original_bytes: 500000") {
+		t.Fatalf("stub = %q, want the artifact path, its view_file recovery and the original size", stub)
+	}
+}
+
+// A subagent's answer and the task plan are conclusions the run continues
+// from, never data to fetch again: they are not elided.
+func TestElideStaleToolResults_KeepsSubagentAnswersAndThePlan(t *testing.T) {
+	history := elisionHistory(0, 0)
+	for _, tool := range []string{"spawn_subagent", toolNameTaskTracker, "fetch"} {
+		ex := elisionExchange(tool+"-1", `{}`, elisionText(40_000))
+		ex[0].Content[0] = fantasy.ToolCallPart{ToolCallID: tool + "-1", ToolName: tool, Input: `{}`}
+		history = append(history, ex...)
+	}
+	history = append(history, elisionHistory(2, 40_000)[2:]...)
+	res := elideStaleToolResults(history, 0)
+	if res.stubs != 1 {
+		t.Fatalf("stubs = %d, want only the fetch result", res.stubs)
+	}
+	for i, id := range []string{"spawn_subagent-1", toolNameTaskTracker + "-1"} {
+		if !reflect.DeepEqual(res.messages[3+2*i], history[3+2*i]) {
+			t.Errorf("%s's result was elided", id)
+		}
+	}
+}
+
+func TestUnseenTokens(t *testing.T) {
+	history := elisionHistory(3, 4_000)
+	if got, want := unseenTokens(history), estimateModelMessagesTokens(history[len(history)-2:]); got != want {
+		t.Errorf("unseen = %d, want the last exchange's %d", got, want)
+	}
+	nudged := append(slices.Clone(history), fantasy.NewUserMessage("finish the report"))
+	if got, want := unseenTokens(nudged), estimateModelMessagesTokens(nudged[len(nudged)-3:]); got != want {
+		t.Errorf("unseen = %d, want the last exchange and the nudge after it, %d", got, want)
+	}
+	if got := unseenTokens(elisionHistory(0, 0)); got != 0 {
+		t.Errorf("no assistant message: unseen = %d, want 0", got)
+	}
+}
+
+// An elision that saves less than elisionMinSavingFraction of the budget is
+// not made: it could not skip the summary, and changes nothing.
+func TestElideBeforeSummary_SkipsATinySaving(t *testing.T) {
+	const budget = 100_000
+	elide := func(history []fantasy.Message) (int, bool) {
+		e := newMockEngine(t, &namedMockModel{name: "elide-tiny"})
+		e.envPrefix = CanonicalEnvPrefix
+		e.requireCompactionOptIn = true
+		saved := elideStaleToolResults(history, int(budget*elisionRecentFraction)).savedTokens
+		_, ok := e.elideBeforeSummary(history, budget, 0, budget, budget)
+		if ok != e.resendFloorStale {
+			t.Errorf("made=%t but floorStale=%t: only a made elision marks the floor", ok, e.resendFloorStale)
+		}
+		return saved, ok
+	}
+	// 3000-byte results save a few hundred tokens each: a few outside the
+	// window save well under 2% of the budget, many save well over it.
+	if saved, ok := elide(elisionHistory(40, 3_000)); saved == 0 || saved >= budget/50 || ok {
+		t.Fatalf("saving %d of %d: made=%t, want a small saving skipped", saved, budget, ok)
+	}
+	if saved, ok := elide(elisionHistory(100, 3_000)); saved < budget/50 || !ok {
+		t.Fatalf("saving %d of %d: made=%t, want it made", saved, budget, ok)
+	}
+}
+
+// The estimate after elision is never below a direct estimate of the elided
+// request: when the in-round guard was already stubbing old results on the
+// wire, the measured size is smaller than the history and the stubs' savings
+// would otherwise count twice.
+func TestElideBeforeSummary_NeverBelowTheDirectEstimate(t *testing.T) {
+	e := newMockEngine(t, &namedMockModel{name: "elide-direct"})
+	e.envPrefix = CanonicalEnvPrefix
+	e.requireCompactionOptIn = true
+	history := elisionHistory(10, 40_000)
+	el, ok := e.elideBeforeSummary(history, 30_000, 0, 30_000, 30_000)
+	if !ok {
+		t.Fatal("fixture: no elision")
+	}
+	if direct := e.estimateRequestTokens(el.messages); el.usedAfter != direct || direct <= 30_000-el.savedTokens {
+		t.Fatalf("estimated after = %d, want the direct estimate %d (the measured size less the savings is %d)", el.usedAfter, direct, 30_000-el.savedTokens)
+	}
+}
+
+// When no step has been measured yet, the size is an estimate of the whole
+// history, which already counts the latest step's output: nothing unseen is
+// added, and the estimate after elision is the elided history's own.
+func TestCheckContextPressure_ElisionFromAnEstimateAddsNothingUnseen(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	model := &namedMockModel{name: "elide-estimated"}
+	recordContextMax(model.name, 10_000_000)
+	e := newMockEngine(t, model)
+	e.envPrefix = CanonicalEnvPrefix
+	e.requireCompactionOptIn = true
+	msgs := elisionHistory(14, 40_000)
+	obs := &payloadObserver{}
+	e.checkContextPressure(context.Background(), msgs, model, newStreamSink(obs), false)
+	p := obs.payloadOf(evtContextCompacted)
+	if p == nil || p[evtFieldTrigger] != "elision" {
+		t.Fatalf("want an elision, got %v", obs.events)
+	}
+	want := e.estimateRequestTokens(elideStaleToolResults(msgs, 24_000).messages)
+	if p[evtFieldUsedTokens] != e.estimateRequestTokens(msgs) || p[evtFieldEstimatedAfter] != want {
+		t.Fatalf("used %v, estimated after %v; want the history's estimate and the elided history's %d", p[evtFieldUsedTokens], p[evtFieldEstimatedAfter], want)
 	}
 }

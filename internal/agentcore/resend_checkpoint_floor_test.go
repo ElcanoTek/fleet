@@ -219,7 +219,9 @@ func TestRun_ResendCheckpoint_FloorAboveBudgetWaitsForABudgetOfHistory(t *testin
 // every tool step whose resent prompt reached the plain budget and after no
 // other, and its payload and breadcrumb are the pre-#1600 ones. The fixture's
 // compactions are real (the sized model reports what it was sent), so this is
-// the plain rule cycling through several pause/compact/resume rounds.
+// the plain rule cycling through several pause/compact/resume rounds. With
+// elision on (#1742), its ~3K-token results are trimmed at each pause before
+// any summary; the plain rule holds either way.
 func TestRun_ResendCheckpoint_SmallPrefixKeepsThePlainBudget(t *testing.T) {
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "20000")

@@ -10,12 +10,12 @@ import (
 // Elision before the summary (#1742). When a scheduled run's compaction fires
 // (the resend-budget checkpoint, or the opted-in window compaction), the run
 // first replaces the bulky tool results outside a recent window with the
-// stub the near-overflow reducer already uses (aggregateResultEnvelope: a
-// preview plus how to get the full output back), and buys the LLM summary only
-// if that did not free enough. In a data-heavy run the old tool payloads are
-// most of what is resent, and a summary of them costs a model call (about 7K
-// completion tokens, docs/SCHEDULED-COMPACTION-CHECKPOINTS.md) where a stub
-// costs nothing.
+// stub the near-overflow reducer already builds (aggregateResultEnvelope: the
+// head and tail of the output plus how to get it back), and buys the LLM
+// summary only if that did not free enough. In a data-heavy run the old tool
+// payloads are most of what is resent, and a summary of them costs a model
+// call (about 7K completion tokens, docs/SCHEDULED-COMPACTION-CHECKPOINTS.md)
+// where a stub costs nothing.
 //
 // The stubs are written into the carried history at the moment the run
 // already rewrites it, never per step: a mid-history rewrite on every step
@@ -34,9 +34,22 @@ const (
 	// alone must bring the resent size below the threshold for the summary to
 	// be skipped. Just under the threshold, the next step would pause again.
 	elisionHeadroomFraction = 0.3
-	// elisionPreviewBytes is the stub's preview: the near-overflow reducer's.
-	elisionPreviewBytes = innerResultPreviewBytes
+	// elisionMinSavingFraction is the least an elision must save, as a share of
+	// the budget, to be made at all. Less cannot skip the summary, and is not
+	// worth rewriting the history and recording an event for.
+	elisionMinSavingFraction = 0.02
+	// elisionStubBytes caps a whole stub, its preview included (about half),
+	// at the near-overflow reducer's preview size.
+	elisionStubBytes = innerResultPreviewBytes
 )
+
+// elisionKeptTools are the tools whose results are never elided: what they
+// return is a conclusion the run continues from, not data it can fetch again.
+// spawn_subagent (internal/agent) returns a child run's answer, which only a
+// whole new child run could reproduce; task_tracker returns the plan the
+// finish gate holds the run to (a summary re-announces it after a compaction,
+// an elision does not).
+var elisionKeptTools = map[string]bool{"spawn_subagent": true, toolNameTaskTracker: true}
 
 // elisionResult is what elideStaleToolResults did.
 type elisionResult struct {
@@ -54,7 +67,8 @@ type elisionResult struct {
 // A result over HardMaxToolOutputBytes is left alone: the in-round context
 // guard already sends the provider the same stub in its place on every call
 // (reduceHistoricalPayloadsToHardCap), so replacing it would save nothing.
-// Media results are left alone for the same reason.
+// Media results are left alone for the same reason, and elisionKeptTools'
+// results always.
 func elideStaleToolResults(messages []fantasy.Message, recentTokens int) elisionResult {
 	res := elisionResult{messages: messages}
 	head := compactionHeadLen(messages)
@@ -68,7 +82,7 @@ func elideStaleToolResults(messages []fantasy.Message, recentTokens int) elision
 		var parts []fantasy.MessagePart
 		for pi, part := range messages[mi].Content {
 			p, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part)
-			if !ok {
+			if !ok || elisionKeptTools[toolNames[p.ToolCallID]] {
 				continue
 			}
 			stub, text, ok := elisionStub(p.Output, toolNames[p.ToolCallID])
@@ -98,6 +112,14 @@ func elideStaleToolResults(messages []fantasy.Message, recentTokens int) elision
 	return res
 }
 
+// elisionRecovery is a stub's recovery action when the output was not saved
+// to a governed artifact. The near-overflow reducer's "Re-run <tool> with
+// narrower output" is wrong advice for a call with side effects, and elision
+// stubs results routinely, so the stub says the call is done and to re-run
+// only a tool that reads.
+const elisionRecovery = "This earlier result was shortened to save context, and the call is done: do not repeat it just to see this again. " +
+	"If you need more of it and the tool only reads data, re-run it with narrower output."
+
 // elisionStub is the stub for one tool-result output and the text it replaces,
 // or ok=false when the output is left as it is: media, a result the in-round
 // guard already stubs, or one no longer than its own stub would be.
@@ -106,10 +128,10 @@ func elisionStub(output fantasy.ToolResultOutputContent, toolName string) (stub,
 		return "", "", false
 	}
 	text, ok = toolResultOutputText(output)
-	if !ok || len(text) <= elisionPreviewBytes || len(text) > HardMaxToolOutputBytes {
+	if !ok || len(text) <= elisionStubBytes || len(text) > HardMaxToolOutputBytes {
 		return "", "", false
 	}
-	stub = aggregateResultEnvelope(toolName, text, elisionPreviewBytes)
+	stub = aggregateResultEnvelopeWithRecovery(toolName, text, elisionStubBytes, elisionRecovery)
 	if len(stub) >= len(text) {
 		return "", "", false
 	}
@@ -138,6 +160,20 @@ func recentWindowStart(messages []fantasy.Message, head, recentTokens int) int {
 	return max(head, snapCutBackward(messages, start))
 }
 
+// unseenTokens estimates what a provider-measured resent size does not yet
+// include: the latest assistant message onward. The size is that call's
+// input, and the call's own output (its assistant message and tool results),
+// plus anything the run appended after it, are in the history the next call
+// will send.
+func unseenTokens(messages []fantasy.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == fantasy.MessageRoleAssistant {
+			return estimateModelMessagesTokens(messages[i:])
+		}
+	}
+	return 0
+}
+
 // elisionOutcome is elideBeforeSummary's result: the elision, the estimated
 // resent size after it, and whether that is enough to skip the summary.
 type elisionOutcome struct {
@@ -151,43 +187,52 @@ type elisionOutcome struct {
 // budget is what the trigger allows (the resend budget, or the window
 // compaction point): the recent window is elisionRecentFraction of it, and
 // the summary is skipped only when the estimated size after elision is at
-// least elisionHeadroomFraction of it below threshold. used is the provider's
-// own count; the estimate subtracts the tokens the stubs removed from it.
+// least elisionHeadroomFraction of it below threshold.
+//
+// The estimate starts from used, the provider's own count, less the tokens
+// the stubs removed, plus unseen (what used does not yet include, see
+// unseenTokens; 0 when used is itself an estimate of the whole history). It
+// is never below the in-round guard's direct estimate of the elided request:
+// when the guard was already stubbing old results on the wire, used is
+// smaller than the history and the savings would otherwise count twice.
 //
 // ok is false, and nothing changes, for an interactive engine (a chat's
 // history is the user's to keep, and its windows are large), when the
-// operator turned it off (FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY=0), or when no
-// result was worth a stub. An elision is a clean reduction like
-// proactiveCompact's: it resets the consecutive-compaction count, and the
-// next step re-measures the resend-checkpoint floor (#1600).
-func (e *engine) elideBeforeSummary(messages []fantasy.Message, used, threshold, budget int) (elisionOutcome, bool) {
+// operator turned it off (FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY=0), or when it
+// would save less than elisionMinSavingFraction of the budget. An elision is
+// a clean reduction like proactiveCompact's: it resets the
+// consecutive-compaction count, and the next step re-measures the
+// resend-checkpoint floor (#1600).
+func (e *engine) elideBeforeSummary(messages []fantasy.Message, used, unseen, threshold, budget int) (elisionOutcome, bool) {
 	if !e.requireCompactionOptIn || budget <= 0 || !contextElideBeforeSummary(e.envPrefix) {
 		return elisionOutcome{}, false
 	}
 	res := elideStaleToolResults(messages, int(float64(budget)*elisionRecentFraction))
-	if res.stubs == 0 {
+	if res.stubs == 0 || res.savedTokens < int(float64(budget)*elisionMinSavingFraction) {
 		return elisionOutcome{}, false
 	}
 	e.consecutiveCompactions = 0
 	e.resendFloorStale = true
-	after := max(0, used-res.savedTokens)
+	after := max(used-res.savedTokens+unseen, e.estimateRequestTokens(res.messages))
 	target := threshold - int(float64(budget)*elisionHeadroomFraction)
 	return elisionOutcome{elisionResult: res, usedAfter: after, enough: after <= target}, true
 }
 
 // noteElision records an elision the way a compaction is recorded: a
-// [context_elided] breadcrumb in the session log, opening with crumbFields
-// (what fired it), and a fleet.context_compacted event with trigger
-// "elision", built on payload (the firing trigger's own fields).
-func (e *engine) noteElision(sink *streamSink, el elisionOutcome, used int, crumbFields string, payload map[string]any) {
+// [context_elided] breadcrumb in the session log, opening with what fired it
+// (trigger, then crumbFields), and a fleet.context_compacted event with
+// trigger "elision" and elision_trigger naming what fired it, built on
+// payload (the firing trigger's own fields).
+func (e *engine) noteElision(sink *streamSink, el elisionOutcome, used int, trigger, crumbFields string, payload map[string]any) {
 	next := "that freed enough, so no summary was needed"
 	if !el.enough {
 		next = "that did not free enough, so the oldest half of the history is summarized next"
 	}
 	e.logSession.AddMessage(roleUser, fmt.Sprintf(
-		"[context_elided] %s elided_results=%d elided_bytes=%d estimated_after=%d — tool results older than the recent window were replaced with short previews that say how to get the full output back; %s",
-		crumbFields, el.stubs, el.elidedBytes, el.usedAfter, next), nil, nil)
+		"[context_elided] trigger=%s used=%d %s elided_results=%d elided_bytes=%d estimated_after=%d — tool results older than the recent window were replaced with short previews; %s",
+		trigger, used, crumbFields, el.stubs, el.elidedBytes, el.usedAfter, next), nil, nil)
 	payload[evtFieldTrigger] = "elision"
+	payload[evtFieldElisionTrigger] = trigger
 	payload[evtFieldUsedTokens] = used
 	payload[evtFieldElidedResults] = el.stubs
 	payload[evtFieldElidedBytes] = el.elidedBytes

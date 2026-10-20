@@ -288,25 +288,42 @@ fewer summarizer calls; making the elided content recallable added nothing.
   (checkpoint or between rounds), or the window one on the
   `FLEET_SCHEDULED_AUTO_COMPACT` opt-in. That is the moment the history is
   rewritten anyway, so the stubs cost no extra prompt-cache miss. Nothing
-  happens per step.
+  happens per step. A subagent runs the scheduled loop, including one a chat
+  spawns, so it elides too; an interactive chat turn never does.
 - **What.** Every tool result after the pinned head and before the recent
   window is replaced with its stub, when the stub is shorter: the start and end
-  of the output (2 KiB in all), its original size, and the recovery action
-  (`view_file` on the governed saved output when the result carried an
-  `artifact_path`, else "Re-run <tool> with narrower output"). The recent window
-  is the newest messages that fit 30% of the budget, extended to at least the
-  last two assistant turns and moved back so it never starts on a tool message.
-  Left alone: results of 2 KiB or less; media; and results over the 128 KiB hard
-  cap, because the in-round guard already sends the same stub for them on every
-  call. Assistant text, tool-call inputs, the pinned head and any summary are
-  byte-identical, every result keeps its call ID (#1106), and the history is
-  copied, never written in place.
+  of the output (about 1 KiB, the whole stub at most 2 KiB), its original size,
+  and a recovery action. A result whose full output the tool output boundary
+  saved keeps its `artifact_path`, and its recovery is `view_file` on it. Any
+  other says the call is done and should not be repeated just to see it again,
+  and that only a tool that reads data should be re-run, with narrower output:
+  the in-round guard's plain "Re-run <tool>" is wrong advice for a call with
+  side effects, and elision stubs results routinely, not only near overflow.
+  The recent window is the newest messages that fit 30% of the budget, extended
+  to at least the last two assistant turns and moved back so it never starts on
+  a tool message.
+- **Left alone.** Results of 2 KiB or less; media; results over the 128 KiB
+  hard cap, because the in-round guard already sends the same stub for them on
+  every call; and the results of `spawn_subagent` (a child run's answer, which
+  only a whole new child run could reproduce) and `task_tracker` (the plan the
+  finish gate holds the run to, which a summary re-announces and an elision
+  does not). Assistant text, tool-call inputs, the pinned head and any summary
+  are byte-identical, every result keeps its call ID (#1106), and the history
+  is copied, never written in place. An elision that would save less than 2% of
+  the budget is not made at all: it could not skip the summary.
 - **Then.** The resent size is estimated again: the provider's own count for
-  the step that fired, less what the stubs removed by the in-round guard's
-  estimator. The summary is bought only if that is not at least 30% of the
-  budget below the threshold, so a run that elides lands far enough under it
-  that the next step does not pause again. When the summary does run, it
-  summarizes the elided history.
+  the call that fired, less what the stubs removed by the in-round guard's
+  estimator, plus what that count did not yet include (the paused step's own
+  assistant message and results, and anything appended after them), and never
+  below the guard's direct estimate of the elided request, so savings the guard
+  had already made on the wire are not counted twice. On the #1600 fixture the
+  estimate came within 20 tokens of what the next step resent. The summary is
+  bought only if the estimate is not at least 30% of the budget below the
+  threshold: a run that elides gets room for several more steps before its next
+  pause, rather than pausing again on the next one. When the summary does run,
+  it is written from the full results of the oldest half, as before, so the
+  identifiers it is asked to keep are not lost to a preview; only the kept half
+  carries the stubs.
 - **Budget.** For the resend budget it is the budget; under the floor rule the
   threshold is floor + budget, so the target is floor + 70% of the budget. For
   the window path it is the compaction point (window × the compaction
@@ -315,25 +332,27 @@ fewer summarizer calls; making the elided content recallable added nothing.
   compaction: it resets the consecutive-compaction count, clears the stalled
   window flag, and marks the floor for re-measurement at the next step.
 - **Visible as.** `fleet.context_compacted` with `trigger: "elision"`,
-  `elided_results`, `elided_bytes`, `used_tokens` and `estimated_tokens_after`,
-  plus the firing trigger's fields (`resend_budget_tokens` and, under the floor
-  rule, `resend_floor_tokens` and `effective_budget_tokens`; or `window_size`).
-  The session log gets `[context_elided] trigger=… used=… elided_results=…
+  `elision_trigger` (`resend_budget` or `window`), `elided_results`,
+  `elided_bytes`, `used_tokens` and `estimated_tokens_after`, plus the firing
+  trigger's fields (`resend_budget_tokens` and, under the floor rule,
+  `resend_floor_tokens` and `effective_budget_tokens`; or `window_size`). The
+  session log gets `[context_elided] trigger=… used=… elided_results=…
   elided_bytes=… estimated_after=… — …`, ending with whether the summary was
   still needed; the Operations Center timeline shows it as **Older tool results
-  trimmed**. A summary that follows is recorded exactly as before.
+  trimmed**, and as a gap in the overview strip. A summary that follows is
+  recorded exactly as before.
 - **Knob.** `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY`, on by default; `0` or `false`
   turns it off and restores the summary-only behaviour. It takes
   `strconv.ParseBool` tokens and is registered with `fleet validate-config`.
-  Interactive engines never elide, whatever the knob says.
 
-On the #1600 fixture (a 140K prefix, an 80K budget, 16 steps of ~10K-token
-results), the first pause elides seven results and needs no summary, and the
-next step resends 162K tokens where the summary-only run resends 190K: 22K of
-carried history over the prefix instead of 50K
-(`TestRun_Elision_ClearsTheBudgetWithoutASummary`,
+On the #1600 fixture (a 140K prefix, an 80K budget, ~10K-token results), the
+first pause elides seven results and needs no summary, and the next step
+resends 162K tokens where the summary-only run resends 190K: 22K of carried
+history over the prefix instead of 50K. Run on to 26 steps, the fixture pauses
+twice, each time after a full budget over the latest floor, and never buys a
+summary (`TestRun_Elision_ClearsTheBudgetWithoutASummary`,
 `TestRun_Elision_LowersThePostCompactionFloor`). That is a fixture, not a
-measurement; see below for a real run.
+measurement; see [Measured](#measured) for a real run.
 
 ### Deviations from the issue
 

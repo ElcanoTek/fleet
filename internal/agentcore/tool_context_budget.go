@@ -465,6 +465,14 @@ func replaceToolResultOutput(original fantasy.ToolResultOutputContent, replaceme
 }
 
 func aggregateResultEnvelope(toolName, content string, maxBytes int) string {
+	return aggregateResultEnvelopeWithRecovery(toolName, content, maxBytes,
+		fmt.Sprintf("Re-run %s with narrower output.", boundedToolName(toolName)))
+}
+
+// aggregateResultEnvelopeWithRecovery is aggregateResultEnvelope with the
+// recovery action for output that was not saved to a governed artifact (one
+// that was is always recovered with view_file).
+func aggregateResultEnvelopeWithRecovery(toolName, content string, maxBytes int, rerun string) string {
 	format := "text"
 	if json.Valid([]byte(strings.TrimSpace(content))) {
 		format = "json"
@@ -473,7 +481,7 @@ func aggregateResultEnvelope(toolName, content string, maxBytes int) string {
 	if originalBytes <= 0 {
 		originalBytes = len(content)
 	}
-	recovery := fmt.Sprintf("Re-run %s with narrower output.", boundedToolName(toolName))
+	recovery := rerun
 	if artifactPath != "" {
 		recovery = fmt.Sprintf("Use view_file with path %q to inspect the governed full output.", artifactPath)
 	}

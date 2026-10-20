@@ -610,24 +610,29 @@ of 40. The measurements and the reasoning behind the half-budget switch are in
 of what is resent is old tool output, and a summary of it costs a model call.
 So when a scheduled run's resend-budget compaction fires, or its window
 compaction on the `FLEET_SCHEDULED_AUTO_COMPACT` opt-in, the run first replaces
-every tool result older than a recent window with the stub the in-round guard
-already uses: the start and end of the output, its size, and how to get it back
-(`view_file` on the saved output when there is one, else re-running the tool
+every tool result older than a recent window with a stub: the start and end of
+the output, its size, and how to get it back (`view_file` on the saved output
+when there is one; otherwise a note that the call is done and must not be
+repeated just to see it, and that only a tool that reads data should be re-run,
 with narrower output). The recent window is the newest 30% of the budget, and
 never fewer than the last two assistant turns. Results of 2 KiB or less, media,
-and results the in-round guard already stubs on every call are left alone. The
-run then estimates the resent size again, and buys the summary only if elision
-did not bring it at least 30% of the budget below the threshold; otherwise the
-next step would pause again. The stubs are carried in the history from then on,
-written at the moment the compaction already rewrites it, so they cost no extra
-prompt-cache miss. Assistant text, tool-call inputs, the pinned head and any
-summary are never changed, and every result keeps its call ID. Each elision
-emits `fleet.context_compacted` with `trigger: "elision"`, `elided_results`,
-`elided_bytes` and `estimated_tokens_after`, plus the firing trigger's own
-fields, and writes a `[context_elided]` session-log breadcrumb. Like a
-proactive compaction, it marks the floor for re-measurement and does not count
-toward the consecutive-compaction cap. `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY=0`
-turns it off; interactive chats never elide. Details:
+results the in-round guard already stubs on every call, and the results of
+`spawn_subagent` and `task_tracker` are left alone. The run then estimates the
+resent size again (the measured size, less what the stubs removed, plus the
+paused step's own output), and buys the summary only if elision did not bring
+it at least 30% of the budget below the threshold. A summary that still runs is
+written from the full results of the oldest half, as before. The stubs are
+carried in the history from then on, written at the moment the compaction
+already rewrites it, so they cost no extra prompt-cache miss. Assistant text,
+tool-call inputs, the pinned head and any summary are never changed, and every
+result keeps its call ID. Each elision emits `fleet.context_compacted` with
+`trigger: "elision"`, `elision_trigger`, `elided_results`, `elided_bytes` and
+`estimated_tokens_after`, plus the firing trigger's own fields, and writes a
+`[context_elided]` session-log breadcrumb. Like a proactive compaction, it
+marks the floor for re-measurement and does not count toward the
+consecutive-compaction cap. `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY=0` turns it
+off. An interactive chat turn never elides; a subagent, including one a chat
+spawns, runs the scheduled loop and does. Details:
 [SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md#stale-tool-results-before-the-summary-1742).
 
 **Scheduled runs summarize for real.** The scheduled driver now wires a

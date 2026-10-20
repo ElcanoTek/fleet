@@ -159,10 +159,11 @@ Two things to know about that strictness:
 - **A few kill-switches take the narrower Go `strconv.ParseBool` token set**
   (`1/0/t/f/true/false`, plus `TRUE`/`True`) because that is what their reader
   honors: `FLEET_DISABLE_PROMPT_CACHE`, `FLEET_DISABLE_OPENROUTER_MODELS`,
-  `FLEET_SCHEDULED_AUTO_COMPACT`, `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY`,
-  `FLEET_PUSH_ON_TASK_COMPLETE`, `FLEET_PUSH_ON_APPROVAL_REQUEST`. `…=on` or
-  `…=yes` is refused with a message
+  `FLEET_SCHEDULED_AUTO_COMPACT`, `FLEET_PUSH_ON_TASK_COMPLETE`,
+  `FLEET_PUSH_ON_APPROVAL_REQUEST`. `…=on` or `…=yes` is refused with a message
   saying so, instead of being read as `false` the way it used to be.
+  `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY` takes the same token set and is refused
+  the same way; it is on unless set to a false value.
 - **One knob is deliberately lenient:** `FLEET_OTEL_SAMPLE_RATIO`. A malformed
   ratio does not stop the service (unset/unparseable/`NaN`/`≥1` all mean "sample
   everything", `≤0` means "sample nothing"), because refusing to boot over a
