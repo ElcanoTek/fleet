@@ -650,21 +650,15 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 		// checkpoint paused the tool loop mid-turn).
 		used = e.runOrch.lastStepInputTokens()
 	}
-	// A provider-measured size is the last call's input: what the call itself
-	// added to the history is not in it yet (unseenTokens). An estimate of the
-	// whole history already counts everything.
+	// A provider-measured size is the last call's input, in the provider's
+	// tokens; an estimate counts the whole history in the estimator's. An
+	// elision sizes itself differently for each (elideBeforeSummary).
 	measured := used > 0
 	if used <= 0 {
 		used = e.estimateRequestTokens(messages)
 	}
 	if used <= 0 {
 		return out
-	}
-	unseen := func() int {
-		if !measured {
-			return 0
-		}
-		return unseenTokens(messages)
 	}
 	// summarize is the history a summary after an elision is written from:
 	// the one before the stubs (proactiveCompactKeeping).
@@ -687,7 +681,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 			pressure := e.withResendFloorFields(map[string]any{evtFieldUsedTokens: used, evtFieldResendBudget: budget, evtFieldTrigger: "resend_budget"}, budget)
 			// Stale bulky tool results are replaced with stubs first (#1742);
 			// the summary is bought only if that did not free enough.
-			if el, ok := e.elideBeforeSummary(messages, used, unseen(), e.effectiveResendBudget(budget), budget); ok {
+			if el, ok := e.elideBeforeSummary(messages, used, measured, e.effectiveResendBudget(budget), budget); ok {
 				messages = el.messages
 				out.messages = messages
 				out.warned = false
@@ -753,7 +747,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 		// A scheduled run that opted into window compaction elides first too
 		// (#1742), with the compaction point as its budget; an interactive
 		// engine never does (elideBeforeSummary).
-		if el, ok := e.elideBeforeSummary(messages, used, unseen(), compactAt, compactAt); ok {
+		if el, ok := e.elideBeforeSummary(messages, used, measured, compactAt, compactAt); ok {
 			messages = el.messages
 			out.messages = messages
 			out.warned = false

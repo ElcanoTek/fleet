@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -18,9 +19,12 @@ import (
 // sizedPromptTokens sizes a call the way a provider bills it, for fixtures that
 // need a compaction to actually shrink the resent prompt: a fixed prefix (the
 // system prompt and tool schemas, which no compaction can shed) plus ~4 chars
-// per token of every message's text, tool-call input and tool-result output.
-func sizedPromptTokens(prefix int, call fantasy.Call) int {
-	chars := 0
+// per token of every message's text and tool-call input, and
+// resultCharsPerToken chars per token of tool-result output (4 for prose;
+// dense data such as digits or base64 costs a provider more tokens than the
+// in-round guard's 4-character estimate).
+func sizedPromptTokens(prefix int, call fantasy.Call, resultCharsPerToken int) int {
+	chars, resultChars := 0, 0
 	for _, m := range call.Prompt {
 		if m.Role == fantasy.MessageRoleSystem {
 			continue
@@ -34,19 +38,22 @@ func sizedPromptTokens(prefix int, call fantasy.Call) int {
 			}
 			if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
 				if out, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentText](tr.Output); ok {
-					chars += len(out.Text)
+					resultChars += len(out.Text)
 				}
 			}
 		}
 	}
-	return prefix + chars/4
+	return prefix + chars/4 + resultChars/resultCharsPerToken
 }
 
-// sizedRun is a scheduled run whose model reports sizedPromptTokens(prefix)
-// for every call and asks for toolSteps tick calls (each returning resultChars
+// sizedRun is a scheduled run whose model reports sizedPromptTokens for every
+// call and asks for toolSteps tick calls (each returning resultChars
 // of output) before it answers.
 type sizedRun struct {
 	prefix, toolSteps, resultChars int
+	// resultCharsPerToken is how densely the model counts tool output
+	// (sizedPromptTokens); 0 is the estimator's 4.
+	resultCharsPerToken int
 	// summarizer, when set, is the run's compaction summarizer; nil keeps the
 	// engine's placeholder.
 	summarizer func(ctx context.Context, in CompactionSummarizeInput) fantasy.Message
@@ -70,7 +77,7 @@ func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSessio
 	var calls atomic.Int32
 	model.streamFunc = func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
 		n := calls.Add(1)
-		size := sizedPromptTokens(sr.prefix, call)
+		size := sizedPromptTokens(sr.prefix, call, cmp.Or(sr.resultCharsPerToken, 4))
 		sr.mu.Lock()
 		sr.sizes = append(sr.sizes, size)
 		sr.mu.Unlock()

@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"fmt"
+	"math"
 	"slices"
 
 	"charm.land/fantasy"
@@ -160,6 +161,17 @@ func recentWindowStart(messages []fantasy.Message, head, recentTokens int) int {
 	return max(head, snapCutBackward(messages, start))
 }
 
+// lastAssistantIndex is the index of the latest assistant message, or
+// len(messages) when there is none.
+func lastAssistantIndex(messages []fantasy.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == fantasy.MessageRoleAssistant {
+			return i
+		}
+	}
+	return len(messages)
+}
+
 // unseenTokens estimates what a provider-measured resent size does not yet
 // include: the latest assistant message onward. The size is that call's
 // input, and the call's own output (its assistant message and tool results),
@@ -168,20 +180,56 @@ func recentWindowStart(messages []fantasy.Message, head, recentTokens int) int {
 // the replay drops it and this counts the step before as well: an
 // over-estimate, which can only make the summary run, never skip it.
 func unseenTokens(messages []fantasy.Message) int {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == fantasy.MessageRoleAssistant {
-			return estimateModelMessagesTokens(messages[i:])
-		}
+	if i := lastAssistantIndex(messages); i < len(messages) {
+		return estimateModelMessagesTokens(messages[i:])
 	}
 	return 0
 }
 
+// Bounds on historyTokenRate: past them the measurement is more likely
+// skewed (a rebuilt tool roster, a swapped model's tokenizer) than the data.
+const (
+	minHistoryTokenRate = 0.5
+	maxHistoryTokenRate = 4.0
+)
+
+// historyTokenRate is how many tokens the provider counts per token the
+// in-round guard's estimator (about 4 characters a token) counts, for this
+// run's history: the measured resent size used, less the prefix (the
+// smallest floor, measured before any history existed, #1600), over the
+// estimate of the history that call carried (everything after the pinned
+// head up to the latest assistant message, see unseenTokens). It is 1 when
+// there is nothing to calibrate against: used is itself an estimate, or no
+// floor has been measured.
+//
+// The estimator is close for prose, but digits, punctuation and base64 cost
+// the provider far more tokens per character: a live run of numeric
+// run_python output measured about 2.3, and with an uncalibrated estimate a
+// 30%-of-budget recent window held some 60% of the budget, and the stubs'
+// savings looked half their size. When the in-round guard is already
+// stubbing old results on the wire, used is smaller than the history and so
+// is the rate, which keeps those savings from counting twice.
+func (e *engine) historyTokenRate(messages []fantasy.Message, used int, measured bool) float64 {
+	if !measured || e.resendPrefix <= 0 || used <= e.resendPrefix {
+		return 1
+	}
+	head := compactionHeadLen(messages)
+	seenEnd := max(head, lastAssistantIndex(messages))
+	est := estimateModelMessagesTokens(messages[head:seenEnd])
+	if est <= 0 {
+		return 1
+	}
+	return min(maxHistoryTokenRate, max(minHistoryTokenRate, float64(used-e.resendPrefix)/float64(est)))
+}
+
 // elisionOutcome is elideBeforeSummary's result: the elision, the estimated
-// resent size after it, and whether that is enough to skip the summary.
+// resent size after it, whether that is enough to skip the summary, and the
+// history token rate it was measured at.
 type elisionOutcome struct {
 	elisionResult
 	usedAfter int
 	enough    bool
+	rate      float64
 }
 
 // elideBeforeSummary elides stale tool results from a scheduled run's history
@@ -189,14 +237,16 @@ type elisionOutcome struct {
 // budget is what the trigger allows (the resend budget, or the window
 // compaction point): the recent window is elisionRecentFraction of it, and
 // the summary is skipped only when the estimated size after elision is at
-// least elisionHeadroomFraction of it below threshold.
+// least elisionHeadroomFraction of it below threshold. measured reports
+// whether used is the provider's count for the latest call rather than an
+// estimate of the whole history.
 //
-// The estimate starts from used, the provider's own count, less the tokens
-// the stubs removed, plus unseen (what used does not yet include, see
-// unseenTokens; 0 when used is itself an estimate of the whole history). It
-// is never below the in-round guard's direct estimate of the elided request:
-// when the guard was already stubbing old results on the wire, used is
-// smaller than the history and the savings would otherwise count twice.
+// The window and the savings are sized in the provider's tokens, through
+// historyTokenRate. The size after elision is then the measured prefix plus
+// the elided history at that rate; it includes what the paused step itself
+// added, which used does not yet (unseenTokens). With no floor measured it
+// falls back to used, less the savings, plus that unseen part, and never
+// below the estimator's own count of the elided request.
 //
 // ok is false, and nothing changes, for an interactive engine (a chat's
 // history is the user's to keep, and its windows are large), when the
@@ -205,19 +255,29 @@ type elisionOutcome struct {
 // a clean reduction like proactiveCompact's: it resets the
 // consecutive-compaction count, and the next step re-measures the
 // resend-checkpoint floor (#1600).
-func (e *engine) elideBeforeSummary(messages []fantasy.Message, used, unseen, threshold, budget int) (elisionOutcome, bool) {
+func (e *engine) elideBeforeSummary(messages []fantasy.Message, used int, measured bool, threshold, budget int) (elisionOutcome, bool) {
 	if !e.requireCompactionOptIn || budget <= 0 || !contextElideBeforeSummary(e.envPrefix) {
 		return elisionOutcome{}, false
 	}
-	res := elideStaleToolResults(messages, int(float64(budget)*elisionRecentFraction))
-	if res.stubs == 0 || res.savedTokens < int(float64(budget)*elisionMinSavingFraction) {
+	rate := e.historyTokenRate(messages, used, measured)
+	res := elideStaleToolResults(messages, int(float64(budget)*elisionRecentFraction/rate))
+	if res.stubs == 0 || float64(res.savedTokens)*rate < float64(budget)*elisionMinSavingFraction {
 		return elisionOutcome{}, false
 	}
 	e.consecutiveCompactions = 0
 	e.resendFloorStale = true
-	after := max(used-res.savedTokens+unseen, e.estimateRequestTokens(res.messages))
+	var after int
+	switch {
+	case !measured:
+		after = e.estimateRequestTokens(res.messages)
+	case e.resendPrefix > 0 && used > e.resendPrefix:
+		history := estimateModelMessagesTokens(res.messages[compactionHeadLen(res.messages):])
+		after = e.resendPrefix + int(rate*float64(history))
+	default:
+		after = max(used-res.savedTokens+unseenTokens(res.messages), e.estimateRequestTokens(res.messages))
+	}
 	target := threshold - int(float64(budget)*elisionHeadroomFraction)
-	return elisionOutcome{elisionResult: res, usedAfter: after, enough: after <= target}, true
+	return elisionOutcome{elisionResult: res, usedAfter: after, enough: after <= target, rate: rate}, true
 }
 
 // noteElision records an elision the way a compaction is recorded: a
@@ -231,13 +291,14 @@ func (e *engine) noteElision(sink *streamSink, el elisionOutcome, used int, trig
 		next = "that did not free enough, so the oldest half of the history is summarized next"
 	}
 	e.logSession.AddMessage(roleUser, fmt.Sprintf(
-		"[context_elided] trigger=%s used=%d %s elided_results=%d elided_bytes=%d estimated_after=%d — tool results older than the recent window were replaced with short previews; %s",
-		trigger, used, crumbFields, el.stubs, el.elidedBytes, el.usedAfter, next), nil, nil)
+		"[context_elided] trigger=%s used=%d %s elided_results=%d elided_bytes=%d estimated_after=%d token_rate=%.2f — tool results older than the recent window were replaced with short previews; %s",
+		trigger, used, crumbFields, el.stubs, el.elidedBytes, el.usedAfter, el.rate, next), nil, nil)
 	payload[evtFieldTrigger] = "elision"
 	payload[evtFieldElisionTrigger] = trigger
 	payload[evtFieldUsedTokens] = used
 	payload[evtFieldElidedResults] = el.stubs
 	payload[evtFieldElidedBytes] = el.elidedBytes
 	payload[evtFieldEstimatedAfter] = el.usedAfter
+	payload[evtFieldHistoryTokenRate] = math.Round(el.rate*100) / 100
 	sink.emit(evtContextCompacted, payload)
 }

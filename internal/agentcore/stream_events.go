@@ -84,12 +84,14 @@ const (
 	evtFieldEffectiveBudget = "effective_budget_tokens"
 	// The elision fields ride the fleet.context_compacted event whose trigger
 	// is "elision" (#1742): what fired it ("resend_budget" or "window"), the
-	// tool results replaced with stubs, the output bytes that removed, and the
-	// estimated resent size after it.
-	evtFieldElisionTrigger = "elision_trigger"
-	evtFieldElidedResults  = "elided_results"
-	evtFieldElidedBytes    = "elided_bytes"
-	evtFieldEstimatedAfter = "estimated_tokens_after"
+	// tool results replaced with stubs, the output bytes that removed, the
+	// estimated resent size after it, and the provider tokens per estimated
+	// token it was sized at (historyTokenRate).
+	evtFieldElisionTrigger   = "elision_trigger"
+	evtFieldHistoryTokenRate = "history_token_rate"
+	evtFieldElidedResults    = "elided_results"
+	evtFieldElidedBytes      = "elided_bytes"
+	evtFieldEstimatedAfter   = "estimated_tokens_after"
 )
 
 // Context-window pressure SSE event names (#209). Emitted from the enforcement

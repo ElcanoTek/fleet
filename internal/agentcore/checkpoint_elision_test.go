@@ -530,7 +530,7 @@ func TestElideBeforeSummary_SkipsATinySaving(t *testing.T) {
 		e.envPrefix = CanonicalEnvPrefix
 		e.requireCompactionOptIn = true
 		saved := elideStaleToolResults(history, int(budget*elisionRecentFraction)).savedTokens
-		_, ok := e.elideBeforeSummary(history, budget, 0, budget, budget)
+		_, ok := e.elideBeforeSummary(history, budget, true, budget, budget)
 		if ok != e.resendFloorStale {
 			t.Errorf("made=%t but floorStale=%t: only a made elision marks the floor", ok, e.resendFloorStale)
 		}
@@ -555,7 +555,7 @@ func TestElideBeforeSummary_NeverBelowTheDirectEstimate(t *testing.T) {
 	e.envPrefix = CanonicalEnvPrefix
 	e.requireCompactionOptIn = true
 	history := elisionHistory(10, 40_000)
-	el, ok := e.elideBeforeSummary(history, 30_000, 0, 30_000, 30_000)
+	el, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000)
 	if !ok {
 		t.Fatal("fixture: no elision")
 	}
@@ -585,4 +585,77 @@ func TestCheckContextPressure_ElisionFromAnEstimateAddsNothingUnseen(t *testing.
 	if p[evtFieldUsedTokens] != e.estimateRequestTokens(msgs) || p[evtFieldEstimatedAfter] != want {
 		t.Fatalf("used %v, estimated after %v; want the history's estimate and the elided history's %d", p[evtFieldUsedTokens], p[evtFieldEstimatedAfter], want)
 	}
+}
+
+// The rate is the provider's tokens for the history the measured call carried
+// (its size less the measured prefix) per estimated token, clamped; 1 when
+// there is nothing to calibrate against.
+func TestHistoryTokenRate(t *testing.T) {
+	e := newMockEngine(t, &namedMockModel{name: "elide-rate"})
+	history := elisionHistory(4, 4_000)
+	seen := estimateModelMessagesTokens(history[1 : len(history)-2]) // after the head, before the latest exchange
+	if got := e.historyTokenRate(history, 50_000, true); got != 1 {
+		t.Errorf("no prefix measured: rate %v, want 1", got)
+	}
+	e.resendPrefix = 10_000
+	if got := e.historyTokenRate(history, 50_000, false); got != 1 {
+		t.Errorf("an estimated size: rate %v, want 1", got)
+	}
+	if got, want := e.historyTokenRate(history, 10_000+2*seen, true), 2.0; got != want {
+		t.Errorf("history billed at twice the estimate: rate %v, want %v", got, want)
+	}
+	if got := e.historyTokenRate(history, 10_000+20*seen, true); got != maxHistoryTokenRate {
+		t.Errorf("rate %v, want the clamp %v", got, maxHistoryTokenRate)
+	}
+	if got := e.historyTokenRate(history, 10_000+seen/10, true); got != minHistoryTokenRate {
+		t.Errorf("rate %v, want the clamp %v", got, minHistoryTokenRate)
+	}
+}
+
+// Dense output costs the provider more tokens per character than the
+// estimator counts. Sized at the measured rate, the recent window holds 30%
+// of the budget in the provider's tokens and the savings are counted at full
+// value, so elision clears the budget where an uncalibrated one could not.
+// The fixture is a live run's shape: an 80K budget, a 16K prefix, ~17 KB
+// results counted at 2 characters a token.
+func TestRun_Elision_SizedInTheProvidersTokens(t *testing.T) {
+	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	var sr *sizedRun
+	var paused []int
+	run := func(slug string) (elisions, summaries []map[string]any) {
+		sr = &sizedRun{prefix: 16_000, toolSteps: 30, resultChars: 17_000, resultCharsPerToken: 2}
+		obs, _ := sr.run(t, slug)
+		paused = checkpointedSteps(obs)
+		for _, p := range payloadsOf(obs, evtContextCompacted) {
+			if p[evtFieldTrigger] == "elision" {
+				elisions = append(elisions, p)
+			} else {
+				summaries = append(summaries, p)
+			}
+		}
+		return elisions, summaries
+	}
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "0")
+	_, summarizedOnly := run("elide-dense-off")
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "")
+	elisions, summaries := run("elide-dense-on")
+	if len(elisions) == 0 || len(elisions) != len(paused) {
+		t.Fatalf("%d elisions over pauses after steps %v: want one per pause", len(elisions), paused)
+	}
+	for i, p := range elisions {
+		if rate := p[evtFieldHistoryTokenRate].(float64); rate < 1.6 || rate > 2.2 {
+			t.Errorf("history_token_rate = %v, want about 2", rate)
+		}
+		// The estimate is in the provider's tokens: within 3% of what the
+		// call after the pause actually resent.
+		after, next := p[evtFieldEstimatedAfter].(int), sr.sizes[paused[i]]
+		if diff := after - next; diff*33 > next || -diff*33 > next {
+			t.Errorf("elision %d estimated %d after, the next call resent %d", i+1, after, next)
+		}
+	}
+	if len(summaries) >= len(summarizedOnly) || len(summaries) > len(elisions)/2 {
+		t.Fatalf("%d summaries with elision (%d elisions), %d without: want elision to clear the budget at most pauses", len(summaries), len(elisions), len(summarizedOnly))
+	}
+	t.Logf("%d pauses with the summary alone; with elision %d elisions and %d summaries", len(summarizedOnly), len(elisions), len(summaries))
 }
