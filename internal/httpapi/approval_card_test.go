@@ -515,6 +515,32 @@ func TestStage_DescriberHonorsPersonaAndHooks(t *testing.T) {
 	}
 }
 
+// A describer the bundle hides from interactive chat
+// (agent_policy.interactive_hidden_tools) is not called either: the card is
+// staged by a chat turn, which could not call it.
+func TestStage_DescriberHiddenFromChatIsNotCalled(t *testing.T) {
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
+		CriticalToolSuffixes:       []string{"update_deal", "create_deal"},
+		ParallelSafeTools:          []string{"mcp_deals_describe_deal_update"},
+		CriticalToolCardDescribers: map[string]string{"update_deal": "describe_deal_update"},
+		InteractiveHiddenTools:     []string{"describe_deal_update"},
+	})
+	broker := &describerBroker{text: goodCard}
+	sink := &eventSink{}
+	a := &approvalStager{ctx: context.Background(), store: &cardStageStore{}, conversationID: "c1", userEmail: "u@e.com", sink: sink}
+	a.BindTurnMCPScope(agent.TurnMCPScope{Broker: broker, Catalog: describerCatalog, Selection: agentcore.MCPSelection{{Server: "deals"}}})
+	if _, err := a.Stage("mcp_deals_update_deal", "call-1", describedArgs); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(broker.called()); n != 0 {
+		t.Fatalf("a hidden describer was called %d time(s)", n)
+	}
+	if fb := eventNamed(sink, "tool.approval_card_fallback"); fb == nil || fb["reason"] != cardFallbackGated {
+		t.Fatalf("fallback = %v, want %q", fb, cardFallbackGated)
+	}
+}
+
 // supersedeOrderStore records whether the describer ran before the previous
 // card was superseded (Codex P2 on #1717).
 type supersedeOrderStore struct {

@@ -1889,11 +1889,14 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		Selection:             selection,
 		Persona:               persona,
 		PersonaPolicy:         m.personaPolicy(persona),
-		MaxCostUSD:            m.config.LiveMaxCostUSD(),
-		MaxTotalTokens:        m.config.LiveMaxTotalTokens(),
-		ApprovalStager:        in.ApprovalStager,
-		MemoryProposer:        in.MemoryProposer,
-		NoteProposer:          m.noteProposer,
+		// agent_policy.interactive_hidden_tools: tools a chat turn neither
+		// offers nor calls (scheduled runs keep them).
+		HiddenToolSuffixes: agentcore.InteractiveHiddenTools(),
+		MaxCostUSD:         m.config.LiveMaxCostUSD(),
+		MaxTotalTokens:     m.config.LiveMaxTotalTokens(),
+		ApprovalStager:     in.ApprovalStager,
+		MemoryProposer:     in.MemoryProposer,
+		NoteProposer:       m.noteProposer,
 		// The finish nudge / BLOCKED texts name protocols/self-audit.md only when
 		// this bundle actually ships it.
 		AuditProtocolRef: AuditProtocolRef(m.protocolsDir),

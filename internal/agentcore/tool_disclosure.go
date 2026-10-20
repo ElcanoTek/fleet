@@ -90,6 +90,10 @@ type deferredToolRegistry struct {
 	byName map[string]fantasy.AgentTool
 	descs  map[string]string // name → full description (for tool_describe)
 	index  *tools.BM25Index
+	// hidden names the MCP tools agent_policy.interactive_hidden_tools kept
+	// out of this run (interactive_hidden.go). They are not in byName, so they
+	// stay uncallable; tool_call only uses this to say why. nil = none.
+	hidden map[string]bool
 }
 
 func newDeferredToolRegistry(deferred []fantasy.AgentTool) *deferredToolRegistry {
@@ -250,6 +254,9 @@ func (t *deferredToolCall) Run(ctx context.Context, tc fantasy.ToolCall) (fantas
 
 	name := strings.TrimSpace(p.Name)
 	tool, ok := t.registry.byName[name]
+	if !ok && t.registry.hidden[name] {
+		return fantasy.NewTextErrorResponse(interactiveHiddenRefusal(name)), nil
+	}
 	if !ok {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("tool_call: no tool named %q — use tool_search to find the right name.", name)), nil
 	}

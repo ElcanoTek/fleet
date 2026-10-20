@@ -29,7 +29,8 @@ import (
 //     tool_call the model wrote itself.
 //   - a tool a gate removed: a narrowed roster (#1603), the persona policy
 //     (#294), an optional connector the run did not turn on, a connector's
-//     allowlist, or an invalid schema. Such a call is never run; its result
+//     allowlist, an invalid schema, or agent_policy.interactive_hidden_tools
+//     in a chat turn. Such a call is never run; its result
 //     names the gate (and, in a narrowed run, the registered stand-in).
 //
 // Every out-of-roster call is counted per model and reason
@@ -325,6 +326,8 @@ func (o *outOfRoster) gateNote(tool, gate string) string {
 		why = "its connector's tool allowlist does not include it"
 	case gateSchema:
 		why = "its input schema is not valid JSON Schema, so it is not offered to the model"
+	case gateInteractiveHidden:
+		return interactiveHiddenRefusal(tool)
 	default:
 		return ""
 	}

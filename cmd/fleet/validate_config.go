@@ -1168,6 +1168,13 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolSuffixes:    p.CriticalToolSuffixes,
 		CriticalToolResultCards: p.CriticalToolResultCards,
 	})...)
+	// interactive_hidden_tools: a member the boot install drops (blank, or a
+	// character no tool name has), and one that provably matches no tool, so
+	// a typo would quietly leave the raw tool callable from chat.
+	problems = append(problems, agentcore.InteractiveHiddenToolProblems(agentcore.AgentPolicy{
+		InteractiveHiddenTools: p.InteractiveHiddenTools,
+	})...)
+	problems = append(problems, interactiveHiddenUnmatched(bundle, p.InteractiveHiddenTools)...)
 	if len(problems) > 0 {
 		res.Status = statusFail
 		res.Detail = strings.Join(problems, "; ")
@@ -1180,6 +1187,50 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		res.Detail = "no critical_tool_aliases declared"
 	}
 	return res
+}
+
+// interactiveHiddenUnmatched reports the interactive_hidden_tools members
+// that select no tool the bundle declares. It can only prove that when every
+// mcp_servers entry lists its tools (an entry without a tools: allowlist
+// offers whatever its server advertises) and there are no a2a_peers; then the
+// candidates are mcp_<server>_<tool> for each listed tool plus the http_tools,
+// matched by the critical_tools suffix rule the gate uses. A per-user hosted
+// connector's tools are not in the bundle and are not checked.
+func interactiveHiddenUnmatched(bundle *clientconfig.Bundle, members []string) []string {
+	if len(members) == 0 || len(bundle.A2APeers) > 0 {
+		return nil
+	}
+	var names []string
+	for i := range bundle.MCPCatalog {
+		s := &bundle.MCPCatalog[i]
+		if len(s.Tools) == 0 {
+			return nil
+		}
+		for _, t := range s.Tools {
+			names = append(names, "mcp_"+s.Name+"_"+strings.TrimSpace(t))
+		}
+	}
+	for i := range bundle.HTTPTools {
+		names = append(names, "mcp_"+clientconfig.HTTPToolServerName+"_"+strings.TrimSpace(bundle.HTTPTools[i].Name))
+	}
+	var problems []string
+	for _, m := range members {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue // reported by InteractiveHiddenToolProblems
+		}
+		matched := false
+		for _, n := range names {
+			if n == m || strings.HasSuffix(n, "_"+m) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			problems = append(problems, fmt.Sprintf("interactive_hidden_tools member %q matches no tool in any mcp_servers tools: allowlist or http_tools, so it hides nothing", m))
+		}
+	}
+	return problems
 }
 
 // ── 4. database (blocking) ──

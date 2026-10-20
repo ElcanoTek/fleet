@@ -436,6 +436,19 @@ type AgentPolicy struct {
 	//	agent_policy:
 	//	  critical_tool_result_cards: [execute_plan]
 	CriticalToolResultCards []string `yaml:"critical_tool_result_cards"`
+	// InteractiveHiddenTools is an OPTIONAL list of tool-name suffixes (same
+	// suffix matching as critical_tools) whose MCP tools interactive chat
+	// never sees or calls: not in the tool list, not findable through
+	// tool_search, refused by tool_call and by a direct call, and not
+	// reachable from a sub-agent a chat turn spawns. Scheduled and Operations
+	// Center runs keep them. Use it for raw writes a scheduled protocol needs
+	// but chat must reach through a reviewed flow (a plan with one approval
+	// card) instead. Absent = chat and scheduled runs see the same tools. See
+	// docs/INTERACTIVE-HIDDEN-TOOLS.md.
+	//
+	//	agent_policy:
+	//	  interactive_hidden_tools: [ox_create_deal, ix_merge_deal_domains]
+	InteractiveHiddenTools []string `yaml:"interactive_hidden_tools"`
 	// BatchSecondsPerDeal is DERIVED, never read from agent_policy: Bundle.AgentPolicy
 	// collects each mcp_servers[].batch_seconds_per_deal into it, keyed by
 	// server name, so the per-record batch budget reaches agentcore on the same
@@ -2919,6 +2932,7 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		CriticalToolGroupApproval:     append([]string(nil), b.AgentPolicyConfig.CriticalToolGroupApproval...),
 		CriticalToolProgress:          append([]string(nil), b.AgentPolicyConfig.CriticalToolProgress...),
 		CriticalToolResultCards:       append([]string(nil), b.AgentPolicyConfig.CriticalToolResultCards...),
+		InteractiveHiddenTools:        append([]string(nil), b.AgentPolicyConfig.InteractiveHiddenTools...),
 	}
 	// An http_tool flagged `critical: true` opts into the SAME critical-tool audit
 	// gate as the manifest's critical_tools suffixes. The tool is registered as
