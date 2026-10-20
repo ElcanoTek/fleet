@@ -378,7 +378,7 @@ function PopoverRow({
       onClick={() => {
         if (clickable) onActivate();
       }}
-      className={`flex items-start gap-2.5 rounded-[var(--radius-sm)] py-[0.45rem] pl-2.5 pr-2 transition ${
+      className={`flex items-start gap-2.5 rounded-[var(--radius-sm)] py-[0.45rem] pl-2.5 pr-2 transition pointer-coarse:min-h-11 ${
         clickable ? "cursor-pointer" : "cursor-default"
       } ${active ? "bg-[var(--color-selected-bg)]" : ""} ${
         ring ? "shadow-[inset_0_0_0_1px_var(--color-selected-border)]" : ""

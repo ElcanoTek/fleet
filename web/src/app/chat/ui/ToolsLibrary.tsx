@@ -100,7 +100,6 @@ export function ToolsLibrary({
   const [detailOpen, setDetailOpen] = useState(!!initialSelected);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
-  const titleRef = useRef<HTMLHeadingElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const backRef = useRef<HTMLButtonElement | null>(null);
   const queryRef = useRef(query);
@@ -151,9 +150,10 @@ export function ToolsLibrary({
       }
       onClose();
     },
-    // On a touch screen the title takes focus instead of the search field, so
-    // the keyboard does not open over the list.
-    { initialFocusRef: isTouchPrimary() ? titleRef : searchRef },
+    // On a touch screen the sheet itself takes focus instead of the search
+    // field, so the keyboard does not open over the list. The trap treats the
+    // container as the wrap point, so Shift+Tab from there stays inside.
+    { initialFocusRef: isTouchPrimary() ? panelRef : searchRef },
   );
 
   const q = query.trim();
@@ -179,8 +179,9 @@ export function ToolsLibrary({
     >
       <div
         ref={panelRef}
+        tabIndex={-1}
         data-testid="chat-tools-library"
-        className="flex h-[100dvh] w-full flex-col overflow-hidden border border-[var(--color-selected-border)] bg-[var(--color-surface-1)] shadow-[var(--shadow-popover)] sm:h-[min(43.75rem,92vh)] sm:w-[min(70rem,96vw)] sm:rounded-[var(--radius-xl)]"
+        className="flex h-[100dvh] outline-none w-full flex-col overflow-hidden border border-[var(--color-selected-border)] bg-[var(--color-surface-1)] shadow-[var(--shadow-popover)] sm:h-[min(43.75rem,92vh)] sm:w-[min(70rem,96vw)] sm:rounded-[var(--radius-xl)]"
       >
         {/* The close button is its own column, so it stays top-right however
             the title block wraps; the admin link drops under the title on a
@@ -193,13 +194,7 @@ export function ToolsLibrary({
             <Icon name="tools" className="size-[1.06rem]" />
           </span>
           <div className="flex min-h-8 min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5">
-            <h2
-              ref={titleRef}
-              tabIndex={-1}
-              className="m-0 text-[1.0625rem] font-semibold text-[var(--color-text-primary)] focus:outline-none"
-            >
-              Tools &amp; connections
-            </h2>
+            <h2 className="m-0 text-[1.0625rem] font-semibold text-[var(--color-text-primary)]">Tools &amp; connections</h2>
             <span className="text-[0.8rem] tabular-nums text-[var(--color-text-subtle)]">
               {countOn(servers)} of {servers.length} on
             </span>
@@ -429,7 +424,7 @@ function LibraryRow({
   const name = connectorLabel(c);
   return (
     <div
-      className={`flex items-center gap-3 rounded-[var(--radius-md)] py-2 pl-3 pr-2.5 transition hover:bg-[var(--color-pill-hover-bg)] ${
+      className={`flex items-center gap-3 rounded-[var(--radius-md)] py-2 pl-3 pr-2.5 transition hover:bg-[var(--color-pill-hover-bg)] pointer-coarse:min-h-11 ${
         selected ? "bg-[var(--color-selected-bg)] shadow-[inset_0_0_0_1px_var(--color-selected-border)]" : ""
       } ${status === "unavailable" ? "opacity-60" : ""}`}
       data-testid={`chat-tools-library-row-${c.name}`}

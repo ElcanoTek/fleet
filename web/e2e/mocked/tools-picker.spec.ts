@@ -202,6 +202,14 @@ test.describe("on a touch phone", () => {
     await expect(library).toBeVisible();
     await expect(library.getByLabel("Search tools")).not.toBeFocused();
     await expect(library.getByLabel("Search tools")).toBeVisible();
+    // A hardware keyboard's Shift+Tab from the focused sheet stays inside it.
+    await page.keyboard.press("Shift+Tab");
+    expect(await library.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+    // Rows are at least 44px tall, so neighbouring switches' touch boxes never overlap.
+    const heights = await library
+      .locator('[data-testid^="chat-tools-library-row-"]')
+      .evaluateAll((rows) => rows.map((r) => r.getBoundingClientRect().height));
+    expect(Math.min(...heights)).toBeGreaterThanOrEqual(44);
     // The close button stays in the top-right corner when the admin link wraps.
     const close = (await page.getByRole("button", { name: "Close tools library" }).boundingBox())!;
     expect(390 - (close.x + close.width)).toBeLessThan(24);

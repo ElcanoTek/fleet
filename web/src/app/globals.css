@@ -927,7 +927,9 @@
 /* .hit-area-touch does the same for a touch screen only, to Apple's 44px
    minimum (2.75rem), and never shrinks a control already larger. The Tools
    picker's switches, pills and links are 18-24px tall for the mouse-sized
-   design; a finger needs the larger box, a mouse would only gain overlap. */
+   design; a finger needs the larger box, a mouse would only gain overlap.
+   Rows holding these controls are at least 2.75rem tall on a coarse pointer
+   (pointer-coarse:min-h-11), so two rows' boxes never overlap. */
 @media (pointer: coarse) {
   .hit-area-touch {
     position: relative;
