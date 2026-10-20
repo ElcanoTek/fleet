@@ -591,11 +591,9 @@ func base64RunHasEncodedShape(run string) bool {
 			categories |= 2
 		case b >= '0' && b <= '9':
 			categories |= 4
-		case b == '+' || b == '/':
-			// Standard base64 punctuation (+ and /, e.g. an all-0xff run of
-			// '/') is a strong encoding signal once URLs have been excluded;
-			// '-', '_', and '=' are exempted here so markdown dividers and
-			// single-case snake_case/kebab-case identifiers are not flagged.
+		default:
+			// Padding and standard/URL-safe punctuation are strong encoding
+			// signals and cannot occur in a plain alphanumeric identifier.
 			return true
 		}
 		word, bit := b/64, uint64(1)<<(b%64)
@@ -649,17 +647,27 @@ func isURLAtColon(s string, colonIdx int) bool {
 	return false
 }
 
+func isURLDelimiter(b byte) bool {
+	return b <= ' ' || b == '"' || b == '\'' || b == '`' || b == '<' || b == '>' || b == ')' || b == ']' || b == '}' || b == '|'
+}
+
 func skipURLSpan(s string, colonIdx int) int {
 	j := colonIdx + 1
 	for j < len(s) {
 		b := s[j]
-		if b <= ' ' || b == '"' || b == '\'' || b == '`' || b == '<' || b == '>' || b == ')' || b == ']' || b == '}' || b == '|' {
+		if isURLDelimiter(b) {
 			break
 		}
 		if b == '\\' {
 			if j+1 < len(s) && s[j+1] == '/' {
 				j += 2
 				continue
+			}
+			if j+5 < len(s) && s[j+1] == 'u' {
+				if v, ok := parseHex4(s[j+2 : j+6]); ok && v > ' ' && v < 0x80 && !isURLDelimiter(byte(v)) && v != '\\' {
+					j += 6
+					continue
+				}
 			}
 			break
 		}

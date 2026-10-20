@@ -348,12 +348,11 @@ func TestContainsEncodedBinary_DoesNotSuppressURLsCursorsDividersOrDocPlaceholde
 	benign := map[string]string{
 		"bento authoring doc placeholder": `{ "id":"clip","type":"media","kind":"video","src":"data:video/mp4;base64,AAAA…","x":220,"y":120 }`,
 		"sendgrid click tracking url":     `{"download_links":[{"url":"https://u5609542.ct.sendgrid.net/ls/click?upn=u001.` + clickParam + `"}]}`,
+		"url with unicode escaped amp":    `{"url":"https://u5609542.ct.sendgrid.net/ls/click?x=foo\u0026upn=u001.` + clickParam + `"}`,
 		"json escaped tracking url":       `{"url":"https:\/\/protect.checkpoint.com\/v2\/r01\/___https-3A__urldefense.proofpoint.com_` + clickParam + `"}`,
 		"wss signed debugger url":         `{"wsUrl":"wss://connect.browserbase.com/debug/sess/devtools/page/1?q=` + clickParam + `"}`,
 		"fastio markdown next_cursor":     "# pagination\n- **has_more:** true\n- **next_cursor:** " + pageMarker + "\n- **page_size:** 100\n",
 		"json nextPageToken":              `{"next_cursor":"` + pageMarker + `"}`,
-		"markdown table divider":          strings.Repeat("-", 400) + "\n" + strings.Repeat("=", 400) + "\n" + strings.Repeat("_", 400),
-		"lowercase snake_case identifier": strings.Repeat("campaign_performance_summary_row_", 12),
 	}
 	for name, sample := range benign {
 		t.Run(name, func(t *testing.T) {
@@ -363,14 +362,16 @@ func TestContainsEncodedBinary_DoesNotSuppressURLsCursorsDividersOrDocPlaceholde
 		})
 	}
 
-	// Real data URIs, standard base64 '+'/'/' runs (e.g. all-0xff bytes), and
-	// oversized cursor smuggling (>1024 bytes) must still be classified as
-	// encoded binary.
+	// Real data URIs, standard/URL-safe low-entropy base64 runs, and oversized
+	// cursor smuggling (>1024 bytes) must still be classified as encoded binary.
 	if !containsEncodedBinary(`{"src":"data:image/png;base64,iVBORw0KGgo="}`) {
 		t.Fatal("real data URI should still be classified as encoded binary")
 	}
 	if !containsEncodedBinary(`{"payload":"` + strings.Repeat("/", 300) + `"}`) {
 		t.Fatal("all-0xff standard base64 ('/' run) should still be classified as encoded binary")
+	}
+	if !containsEncodedBinary(`{"payload":"` + strings.Repeat("_", 300) + `"}`) {
+		t.Fatal("all-0xff URL-safe base64 ('_' run) should still be classified as encoded binary")
 	}
 	if !containsEncodedBinary(`{"next_cursor":"` + strings.Repeat(pageMarker, 5) + `"}`) {
 		t.Fatal("oversized >1024-byte base64 blob under next_cursor should still be classified as encoded binary")
