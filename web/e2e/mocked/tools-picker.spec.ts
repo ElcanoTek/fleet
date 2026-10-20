@@ -258,6 +258,19 @@ test.describe("on a touch phone", () => {
     await expect(library).toHaveCount(0);
   });
 
+  test("account menu options are 44px touch targets", async ({ page, context }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loginViaCookie(context);
+    await boot(page, { admin: true });
+    await page.getByRole("button", { name: "Tools", exact: true }).tap();
+    await page.getByTestId("mcp-seat-indexexchange").tap();
+    const list = page.getByRole("listbox", { name: "Account for Index Exchange" });
+    await expect(list).toBeVisible();
+    const heights = await list.getByRole("option").evaluateAll((o) => o.map((n) => n.getBoundingClientRect().height));
+    expect(heights.length).toBeGreaterThan(1);
+    expect(Math.min(...heights)).toBeGreaterThanOrEqual(44);
+  });
+
   test("a hardware keyboard on a touch device still lands in search", async ({ page, context }) => {
     await page.setViewportSize({ width: 820, height: 1180 });
     await loginViaCookie(context);

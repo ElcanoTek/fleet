@@ -312,7 +312,7 @@ export function SeatMenu({
                     onMouseEnter={() => setActive(i)}
                     onClick={() => choose(o.value)}
                     onKeyDown={() => undefined}
-                    className={`flex cursor-pointer items-center gap-2 rounded-[0.45rem] px-[0.55rem] py-[0.35rem] text-[0.78rem] ${
+                    className={`flex cursor-pointer items-center gap-2 rounded-[0.45rem] px-[0.55rem] py-[0.35rem] text-[0.78rem] any-pointer-coarse:min-h-11 ${
                       i === active ? "bg-[var(--color-selected-bg)]" : ""
                     } ${isSel ? "text-[var(--color-text-primary)]" : "text-[var(--color-text-secondary)]"}`}
                   >
