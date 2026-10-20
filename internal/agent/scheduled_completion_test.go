@@ -624,7 +624,11 @@ func TestIsSingleJSONValue(t *testing.T) {
 		`{"a":1}{"b":2}`:          false,
 		`{"a":1} and more`:        false,
 		`Report: {"a":1}`:         false,
-		`"just a string"`:         false,
+		`"just a string"`:         true,
+		`42`:                      true,
+		`null`:                    true,
+		`"a" "b"`:                 false,
+		`Done.`:                   false,
 		`{"a":`:                   false,
 		"":                        false,
 	} {

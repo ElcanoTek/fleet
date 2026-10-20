@@ -623,8 +623,9 @@ func (p *scheduledPolicy) keepJudgedAnswer() {
 	p.replaceJudged = p.agent != nil && len(p.agent.outputSchema) > 0 && isSingleJSONValue(p.judgedAnswer)
 }
 
-// isSingleJSONValue reports whether text is exactly one JSON object or array,
-// optionally inside one Markdown code fence.
+// isSingleJSONValue reports whether text is exactly one JSON value (object,
+// array or scalar — a scalar output schema asks for one), optionally inside
+// one Markdown code fence.
 func isSingleJSONValue(text string) bool {
 	text = strings.TrimSpace(text)
 	if body, ok := strings.CutPrefix(text, "```"); ok {
@@ -635,7 +636,7 @@ func isSingleJSONValue(text string) bool {
 			text = strings.TrimSpace(inner)
 		}
 	}
-	if text == "" || (text[0] != '{' && text[0] != '[') {
+	if text == "" {
 		return false
 	}
 	dec := json.NewDecoder(strings.NewReader(text))
