@@ -487,9 +487,56 @@ func (o *orchestrationState) outstandingCriticalActions() []string {
 	return out
 }
 
+func (o *orchestrationState) taskTrackerPendingMessage() string {
+	msg := fmt.Sprintf("Task tracker: %d todo, %d in progress. Complete or mark done before finishing.",
+		o.latestTaskTracker.Todo, o.latestTaskTracker.InProgress)
+	if o.latestTaskTrackerRendered != "" {
+		msg += "\n\n" + o.latestTaskTrackerRendered
+	}
+	return msg
+}
+
 func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+
+	finishReason := o.lastRoundFinishReason
+	o.lastRoundFinishReason = ""
+
+	if o.auditTerminalFailure {
+		// An aborted email-last run still owes its reader the single
+		// failure-summary email (bounded nudges; the abort stays the verdict).
+		if allowed, msgs := o.abortNotifyFinishNudge(); !allowed {
+			return false, msgs
+		}
+		log.Println("Task ended with terminal audit failure")
+		return true, nil
+	}
+
+	// Check FinishReasonLength and open task_tracker items BEFORE the
+	// self-audit ritual. A round that stopped because its last step hit
+	// max_output_tokens (finish_reason=length) — or while the agent's own
+	// task_tracker plan still has todo/in_progress items — has not finished the
+	// work yet. Flipping selfAuditRequested and demanding confirm_audit here
+	// hands the self-audit ritual (often to a fallback model that just took
+	// over after a primary timeout) instead of the remaining work, forcing it
+	// to audit an incomplete workspace and abort with confirm_audit(success=false).
+	hasPendingTasks := o.latestTaskTracker.Seen && (o.latestTaskTracker.Todo > 0 || o.latestTaskTracker.InProgress > 0)
+	if finishReason == fantasy.FinishReasonLength {
+		log.Println("Enforcement: Round ended on FinishReasonLength (max_output_tokens). Rejecting finish.")
+		msgs := []string{
+			"Your previous response hit the output token limit (finish_reason=length) and was cut off before completing, so any tool call in that response did not execute. Continue the remaining work in smaller steps (for example, write helper scripts or HTML/data files in smaller chunks rather than one large inline payload) before finishing.",
+		}
+		if hasPendingTasks {
+			msgs = append(msgs, o.taskTrackerPendingMessage())
+		}
+		return false, msgs
+	}
+
+	if hasPendingTasks {
+		log.Println("Enforcement: Task tracker has pending work. Rejecting finish.")
+		return false, []string{o.taskTrackerPendingMessage()}
+	}
 
 	if !o.delegatedFinish {
 		if !o.selfAuditRequested {
@@ -506,22 +553,6 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 			log.Println("Enforcement: Self Audit not confirmed. Rejecting finish.")
 			return false, []string{"Audit not confirmed. Call confirm_audit(...) with evidence to proceed."}
 		}
-	}
-
-	if o.auditTerminalFailure {
-		// An aborted email-last run still owes its reader the single
-		// failure-summary email (bounded nudges; the abort stays the verdict).
-		if allowed, msgs := o.abortNotifyFinishNudge(); !allowed {
-			return false, msgs
-		}
-		log.Println("Task ended with terminal audit failure")
-		return true, nil
-	}
-
-	if o.latestTaskTracker.Seen && (o.latestTaskTracker.Todo > 0 || o.latestTaskTracker.InProgress > 0) {
-		log.Println("Enforcement: Task tracker has pending work. Rejecting finish.")
-		return false, []string{fmt.Sprintf("Task tracker: %d todo, %d in progress. Complete or mark done before finishing.",
-			o.latestTaskTracker.Todo, o.latestTaskTracker.InProgress)}
 	}
 
 	if len(o.pendingCriticalActions) > 0 && o.auditConfirmed {

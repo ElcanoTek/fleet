@@ -12,6 +12,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"charm.land/fantasy"
 )
 
 func newOrchStateForTest() *orchestrationState {
@@ -656,10 +658,61 @@ func TestOrchestrationTerminalAuditFailure(t *testing.T) {
 	orch.selfAuditRequested = true
 	orch.selfAuditConfirmedOnce = true
 	orch.auditTerminalFailure = true
+	// Even when task_tracker still has open items, an explicit abort via
+	// confirm_audit(success=false) is a terminal conclusion and must be allowed
+	// to finish.
+	orch.taskTrackerUsed = true
+	orch.latestTaskTracker = taskTrackerSnapshot{Seen: true, Total: 3, Todo: 1, InProgress: 1, Done: 1}
 
 	canFinish, _ := orch.checkFinishEnforcement()
 	if !canFinish {
-		t.Fatal("terminal audit failure should allow finish")
+		t.Fatal("terminal audit failure should allow finish even with open task_tracker items")
+	}
+}
+
+func TestOrchestrationFinishEnforcementLengthTruncation(t *testing.T) {
+	orch := newOrchestrationState(NewLogSession(), 100)
+	orch.taskTrackerUsed = true
+	orch.latestTaskTracker = taskTrackerSnapshot{Seen: true, Total: 4, Todo: 1, InProgress: 1, Done: 2}
+	orch.latestTaskTrackerRendered = "Task List:\n  [~] 3. Build HTML email\n  [ ] 4. Send email"
+	orch.noteRoundFinishReason(fantasy.FinishReasonLength)
+
+	canFinish, msgs := orch.checkFinishEnforcement()
+	if canFinish {
+		t.Fatal("should not finish when round ended on FinishReasonLength")
+	}
+	if orch.selfAuditRequested {
+		t.Fatal("FinishReasonLength cutoff must not flip selfAuditRequested")
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 nudges (length truncation + task tracker), got %d: %v", len(msgs), msgs)
+	}
+	if !strings.Contains(msgs[0], "finish_reason=length") {
+		t.Fatalf("expected length truncation nudge first, got: %s", msgs[0])
+	}
+	if !strings.Contains(msgs[1], "Task tracker: 1 todo, 1 in progress.") || !strings.Contains(msgs[1], "3. Build HTML email") {
+		t.Fatalf("expected task tracker nudge with rendered plan second, got: %s", msgs[1])
+	}
+
+	// Without task_tracker open items, FinishReasonLength still blocks finish
+	// without flipping selfAuditRequested, and consumes lastRoundFinishReason so
+	// a subsequent normal stop proceeds to the self-audit gate.
+	orch.latestTaskTracker = taskTrackerSnapshot{Seen: true, Total: 4, Todo: 0, InProgress: 0, Done: 4}
+	orch.noteRoundFinishReason(fantasy.FinishReasonLength)
+	canFinish, msgs = orch.checkFinishEnforcement()
+	if canFinish || len(msgs) != 1 || !strings.Contains(msgs[0], "finish_reason=length") {
+		t.Fatalf("expected single length-truncation nudge, got canFinish=%t msgs=%v", canFinish, msgs)
+	}
+	if orch.selfAuditRequested {
+		t.Fatal("selfAuditRequested must still be false after length cutoff without pending tasks")
+	}
+
+	canFinish, msgs = orch.checkFinishEnforcement()
+	if canFinish || len(msgs) != 1 || !strings.Contains(msgs[0], "confirm_audit") {
+		t.Fatalf("expected normal stop after length recovery to request confirm_audit, got canFinish=%t msgs=%v", canFinish, msgs)
+	}
+	if !orch.selfAuditRequested {
+		t.Fatal("expected selfAuditRequested=true on subsequent normal stop")
 	}
 }
 

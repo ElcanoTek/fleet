@@ -745,6 +745,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// (RunAnswerProvider); the consultation returns that composed answer
 		// when it grants completion, so what the gates approved is exactly what
 		// the result carries, the driver persists and live clients are shown.
+		usageOrch.noteRoundFinishReason(lastStepFinishReason(finalResult))
 		canFinish, enforcementMsgs, answer, policyErr := callPolicyCanFinish(deps.Policy, round, finalText, panicAttribution)
 		if policyErr != nil {
 			res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round+1)
@@ -1118,6 +1119,15 @@ func lastStepPromptTokens(result *fantasy.AgentResult) int {
 	}
 	u := result.Steps[len(result.Steps)-1].Usage
 	return int(u.InputTokens + u.CacheReadTokens)
+}
+
+// lastStepFinishReason returns the FinishReason of a round's final step, or ""
+// when the round produced no steps.
+func lastStepFinishReason(result *fantasy.AgentResult) fantasy.FinishReason {
+	if result == nil || len(result.Steps) == 0 {
+		return ""
+	}
+	return result.Steps[len(result.Steps)-1].FinishReason
 }
 
 // finalizeInputFor assembles the interactive finalize hook's input. The hook's

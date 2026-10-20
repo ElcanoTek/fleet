@@ -241,6 +241,15 @@ type orchestrationState struct {
 	// it — the flag is never model-reachable.
 	delegatedFinish bool
 
+	// lastRoundFinishReason is the FinishReason of the round's final step, set
+	// by Run immediately before consulting Policy.CanFinish and consumed by
+	// checkFinishEnforcement. When a round ended on FinishReasonLength
+	// (max_output_tokens), any tool call in that step was truncated and never
+	// executed — the model did not choose to finish, so checkFinishEnforcement
+	// rejects the finish with a truncation nudge instead of flipping
+	// selfAuditRequested and demanding confirm_audit over incomplete work.
+	lastRoundFinishReason fantasy.FinishReason
+
 	// ── ceilings (interactive); zero means unlimited ──
 	maxCostUSD     float64
 	maxTotalTokens int
@@ -431,6 +440,17 @@ func (o *orchestrationState) setDelegatedFinish(v bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.delegatedFinish = v
+}
+
+// noteRoundFinishReason records the FinishReason of a finished round's last
+// step before Policy.CanFinish is consulted. Nil-safe.
+func (o *orchestrationState) noteRoundFinishReason(reason fantasy.FinishReason) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.lastRoundFinishReason = reason
 }
 
 // setNarrowedMCPRoster records a narrowed run's registered MCP tool names
