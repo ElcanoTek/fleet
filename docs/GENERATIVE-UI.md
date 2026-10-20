@@ -76,8 +76,10 @@ instead:
   bridge counts under the tool it ran. Given both, they must agree. Only
   results the model can see are searched: this turn's replayed history plus
   the run's own results so far. A call in the same step as `show_ui` has not
-  returned yet, so it cannot be referenced. The newest match is final: an
-  older success never stands in for a newer error.
+  returned yet, so it cannot be referenced. "Newest" means the latest call,
+  not the latest to finish, so parallel calls resolve the same way live and
+  after a reload. The newest match is final: an older success never stands in
+  for a newer error.
 - **Where in it.** `path` is dot-separated keys into the result's JSON, and
   defaults to `show_ui`. A JSON string met on the way is decoded and walked
   into, so a card a script printed works too (bash's result:
@@ -87,7 +89,7 @@ instead:
   Any other key beside `from_result` (`title`, `components`, …) is refused.
 - **Checks.** The resolved card goes through `genui.Validate` and the
   secret-redaction check exactly as an inline card does, with the same limits.
-  It is also refused when it holds a redaction marker (`[REDACTED…]`), that
+  It is also refused when it holds a redaction marker (`[REDACTED…]`, also when JSON-escaped), that
   is, a value the result's governance already scrubbed. An error result, a
   result that is not JSON, a missing key and an unknown call are all
   `UI_INVALID` tool errors that name the problem. When the tool's card itself
