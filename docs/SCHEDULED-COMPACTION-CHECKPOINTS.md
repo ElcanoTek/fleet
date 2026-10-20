@@ -1,7 +1,8 @@
 # Scheduled runs: compaction checkpoints inside the tool loop
 
 **Status:** shipped 2026-09-21; the prompt-floor rule (#1600) shipped
-2026-09-22. Design note for the change that makes the cost-aware compaction
+2026-09-22; eliding stale tool results before the summary (#1742) shipped
+2026-10. Design note for the change that makes the cost-aware compaction
 (#1534) recur inside a scheduled run's tool loop and gives scheduled runs a real
 compaction summary.
 
@@ -260,6 +261,102 @@ scheduled opt-in `TestWindowCheckpointActive` and
   budget, then pauses once, and does not pause again after the post-compaction
   re-measurement
   (`TestRun_ResendCheckpoint_FloorAboveBudgetWaitsForABudgetOfHistory`).
+
+## Stale tool results before the summary (#1742)
+
+### Why
+
+Every scheduled compaction above bought an LLM summary: about 7K completion
+tokens and a cold cache per pause, measured on the prod Pages refreshes in
+[The prompt floor](#the-prompt-floor-1600). In a data-heavy run most of what is
+resent is old tool output (7–50 KB `get_page_data` payloads), and those stayed
+verbatim while they were in the kept recent half, which is what pushes the
+post-compaction floor toward prefix + 2 × budget. Fleet already had a
+deterministic stub for a tool result, the in-round guard's
+`aggregateResultEnvelope`, but it ran only as a near-overflow backstop on a
+per-request copy, so it never cut cost. The harness-design study the issue
+cites (arXiv 2609.20804, §2.3, §3.2, Fig. 5) found that eliding stale bulky
+observations first and summarizing only past a hard threshold had the lowest
+cost per task at every window budget it tried, with comparable success and
+fewer summarizer calls; making the elided content recallable added nothing.
+
+### What shipped
+
+`internal/agentcore/checkpoint_elision.go`, called from `checkContextPressure`:
+
+- **When.** Only when a scheduled run's compaction fires: the resend-budget one
+  (checkpoint or between rounds), or the window one on the
+  `FLEET_SCHEDULED_AUTO_COMPACT` opt-in. That is the moment the history is
+  rewritten anyway, so the stubs cost no extra prompt-cache miss. Nothing
+  happens per step.
+- **What.** Every tool result after the pinned head and before the recent
+  window is replaced with its stub, when the stub is shorter: the start and end
+  of the output (2 KiB in all), its original size, and the recovery action
+  (`view_file` on the governed saved output when the result carried an
+  `artifact_path`, else "Re-run <tool> with narrower output"). The recent window
+  is the newest messages that fit 30% of the budget, extended to at least the
+  last two assistant turns and moved back so it never starts on a tool message.
+  Left alone: results of 2 KiB or less; media; and results over the 128 KiB hard
+  cap, because the in-round guard already sends the same stub for them on every
+  call. Assistant text, tool-call inputs, the pinned head and any summary are
+  byte-identical, every result keeps its call ID (#1106), and the history is
+  copied, never written in place.
+- **Then.** The resent size is estimated again: the provider's own count for
+  the step that fired, less what the stubs removed by the in-round guard's
+  estimator. The summary is bought only if that is not at least 30% of the
+  budget below the threshold, so a run that elides lands far enough under it
+  that the next step does not pause again. When the summary does run, it
+  summarizes the elided history.
+- **Budget.** For the resend budget it is the budget; under the floor rule the
+  threshold is floor + budget, so the target is floor + 70% of the budget. For
+  the window path it is the compaction point (window × the compaction
+  threshold, clamped to the in-round allowance).
+- **Bookkeeping.** An elision is a clean reduction like the proactive
+  compaction: it resets the consecutive-compaction count, clears the stalled
+  window flag, and marks the floor for re-measurement at the next step.
+- **Visible as.** `fleet.context_compacted` with `trigger: "elision"`,
+  `elided_results`, `elided_bytes`, `used_tokens` and `estimated_tokens_after`,
+  plus the firing trigger's fields (`resend_budget_tokens` and, under the floor
+  rule, `resend_floor_tokens` and `effective_budget_tokens`; or `window_size`).
+  The session log gets `[context_elided] trigger=… used=… elided_results=…
+  elided_bytes=… estimated_after=… — …`, ending with whether the summary was
+  still needed; the Operations Center timeline shows it as **Older tool results
+  trimmed**. A summary that follows is recorded exactly as before.
+- **Knob.** `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY`, on by default; `0` or `false`
+  turns it off and restores the summary-only behaviour. It takes
+  `strconv.ParseBool` tokens and is registered with `fleet validate-config`.
+  Interactive engines never elide, whatever the knob says.
+
+On the #1600 fixture (a 140K prefix, an 80K budget, 16 steps of ~10K-token
+results), the first pause elides seven results and needs no summary, and the
+next step resends 162K tokens where the summary-only run resends 190K: 22K of
+carried history over the prefix instead of 50K
+(`TestRun_Elision_ClearsTheBudgetWithoutASummary`,
+`TestRun_Elision_LowersThePostCompactionFloor`). That is a fixture, not a
+measurement; see below for a real run.
+
+### Deviations from the issue
+
+- The breadcrumb is `[context_elided]`, as asked, but the event is the existing
+  `fleet.context_compacted` with `trigger: "elision"`, so the scheduler stream
+  forwards it with no change.
+- "Elide down to a target" became the headroom rule above: elision alone must
+  get 30% of the budget under the threshold, else the summary runs too.
+- The acceptance tests use the package's scripted mock model, like the #1600
+  checkpoint tests, not the `internal/fakellm` HTTP server.
+- `TestRun_ResendCheckpoint_FloorAboveBudgetWaitsForABudgetOfHistory` now runs
+  with elision off: it pins the floor rule with the summary compaction, and its
+  fixture, run with elision on, is the acceptance test above.
+- A re-fetch the model makes after reading a stub is an ordinary tool step: it
+  counts against the step cap like any other.
+
+### Not done
+
+- Eliding tool-call inputs. Only results change; the in-round guard still
+  evicts oversized inputs near the window as before.
+- A way to recall elided output other than the stub's recovery action, which
+  the study found unused.
+- Eliding per step, and eliding in interactive chat (out of scope in the issue).
 
 ## Deferred
 

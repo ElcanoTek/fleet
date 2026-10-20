@@ -47,6 +47,9 @@ func sizedPromptTokens(prefix int, call fantasy.Call) int {
 // of output) before it answers.
 type sizedRun struct {
 	prefix, toolSteps, resultChars int
+	// summarizer, when set, is the run's compaction summarizer; nil keeps the
+	// engine's placeholder.
+	summarizer func(ctx context.Context, in CompactionSummarizeInput) fantasy.Message
 
 	mu    sync.Mutex
 	sizes []int // the resent size of each call, in call order
@@ -81,11 +84,12 @@ func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSessio
 	res, err := Run(context.Background(), ModeScheduled,
 		RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
 		Deps{
-			Input:      historyInput{system: "s", msgs: fillerMessages(1, 400), label: "refresh"},
-			Observer:   obs,
-			Policy:     finishableScheduledPolicy(session),
-			Model:      model,
-			LogSession: session,
+			Input:                historyInput{system: "s", msgs: fillerMessages(1, 400), label: "refresh"},
+			Observer:             obs,
+			Policy:               finishableScheduledPolicy(session),
+			Model:                model,
+			LogSession:           session,
+			CompactionSummarizer: sr.summarizer,
 		})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -143,10 +147,13 @@ func sessionLines(session *LogSession, marker string) []string {
 // the run takes no pause until the history alone has grown by a full budget,
 // then exactly one pause and one compaction — and the floor is re-measured
 // after it, so the post-compaction steps, which resend well past the ORIGINAL
-// floor + budget, run on without pausing again.
+// floor + budget, run on without pausing again. Elision (#1742) is off: this
+// pins the floor rule with the summary compaction; the same fixture with
+// elision is TestRun_Elision_ClearsTheBudgetWithoutASummary.
 func TestRun_ResendCheckpoint_FloorAboveBudgetWaitsForABudgetOfHistory(t *testing.T) {
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "0")
 	const budget = 80_000
 	sr := &sizedRun{prefix: 140_000, toolSteps: 16, resultChars: 40_000} // ~10K tokens per result
 	obs, session := sr.run(t, "cp-floor-high")

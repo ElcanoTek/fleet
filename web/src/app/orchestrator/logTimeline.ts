@@ -394,6 +394,7 @@ const EVENT_TITLES: Record<string, { title: string; tone: RuntimeEvent["tone"] }
   context_checkpoint_floor: { title: "Context budget floor set", tone: "info" },
   context_checkpoint: { title: "Context checkpoint", tone: "info" },
   context_compacted: { title: "History compacted", tone: "info" },
+  context_elided: { title: "Older tool results trimmed", tone: "info" },
   context_pressure: { title: "Context pressure", tone: "warn" },
   fatal: { title: "Run aborted", tone: "danger" },
   "plan state after compaction": { title: "Plan re-announced", tone: "info" },

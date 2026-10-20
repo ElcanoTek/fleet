@@ -719,6 +719,13 @@ const TIMELINE_SESSION: LogSession = {
       created_at: 1752500005,
     },
     { id: "s1", role: "user", message_type: "compaction_summary", content: "[context compaction] ## Progress\nCounted 1293 rows.", created_at: 1752500005 },
+    {
+      id: "e2",
+      role: "user",
+      content:
+        "[context_elided] trigger=resend_budget used=220205 budget=80000 elided_results=7 elided_bytes=271684 estimated_after=152284 — tool results older than the recent window were replaced with short previews that say how to get the full output back; that freed enough, so no summary was needed",
+      created_at: 1752500005,
+    },
     { id: "a2", role: "assistant", content: "Report built.", created_at: 1752500006 },
     { id: "f1", role: "user", message_type: "error", content: "[fatal] run aborted by its own self-audit: no send", created_at: 1752500007 },
   ],
@@ -756,6 +763,12 @@ describe("LogViewer transcript timeline", () => {
     const events = await screen.findAllByTestId("log-event");
     expect(events[0]).toHaveTextContent("History compacted");
     expect(events[0]).toHaveTextContent("30 turns summarized");
+    expect(events[1]).toHaveTextContent("Older tool results trimmed");
+    expect(events[1]).toHaveTextContent("7 results trimmed");
+    // Both rewrites of the history show as gaps in the overview strip.
+    const strip = screen.getByTestId("log-step-strip");
+    const gaps = Array.from(strip.querySelectorAll(".lt-strip-gap")).map((g) => g.getAttribute("title"));
+    expect(gaps).toEqual(["History compacted", "Older tool results trimmed"]);
     expect(screen.getByTestId("log-compaction-summary")).toHaveTextContent("Compaction summary");
     expect(screen.getByRole("alert")).toHaveTextContent("Run aborted");
     expect(screen.getByRole("alert")).toHaveTextContent("run aborted by its own self-audit: no send");
@@ -778,7 +791,7 @@ describe("LogViewer transcript timeline", () => {
     const search = await screen.findByRole("searchbox", { name: "Search the transcript" });
     fireEvent.change(search, { target: { value: "magnite.csv" } });
     await waitFor(() => expect(screen.getAllByTestId("log-tool-step")).toHaveLength(1));
-    expect(screen.getByTestId("log-filters")).toHaveTextContent("Showing 2 of 9 messages");
+    expect(screen.getByTestId("log-filters")).toHaveTextContent("Showing 2 of 10 messages");
 
     fireEvent.click(within(screen.getByTestId("log-filters")).getByRole("button", { name: "Clear all" }));
     fireEvent.click(within(screen.getByTestId("log-filters")).getByRole("button", { name: /^Errors/ }));

@@ -364,6 +364,10 @@ var envKnobs = []envKnob{
 	// prompt budget in tokens; 0 disables. Read lazily per check in agentcore.
 	{key: "FLEET_CONTEXT_RESEND_BUDGET_TOKENS", fleet: true, kind: kindInt, min: bound(0),
 		scope: scopeExternal, readBy: "internal/agentcore (cost-aware context compaction)"},
+	// Scheduled compaction elides stale tool results before buying a summary
+	// (#1742); on unless set false. strconv.ParseBool, like the knobs below.
+	{key: "FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", fleet: true, kind: kindStrconvBool,
+		scope: scopeExternal, readBy: "internal/agentcore (scheduled compaction elision)"},
 	{key: "FLEET_CONTEXT_COMPACTION_THRESHOLD", fleet: true, kind: kindFloat,
 		scope: scopeExternal, readBy: "internal/agentcore (context compaction)"},
 	// Clamped by the consumer to (0,1] like the two context thresholds above;

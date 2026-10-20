@@ -70,7 +70,8 @@ const (
 	evtFieldSummaryTokens = "summary_tokens"
 	// evtFieldTrigger names why a compaction fired: "window" (context-window
 	// pressure) or "resend_budget" (the cost-aware per-call prompt budget,
-	// #1534); evtFieldResendBudget carries that budget in tokens.
+	// #1534), or that it was an "elision" of stale tool results (#1742);
+	// evtFieldResendBudget carries that budget in tokens.
 	evtFieldTrigger      = "trigger"
 	evtFieldResendBudget = "resend_budget_tokens"
 	// evtFieldResendFloor and evtFieldEffectiveBudget ride the resend-budget
@@ -80,6 +81,12 @@ const (
 	// under the plain budget, so those payloads are unchanged.
 	evtFieldResendFloor     = "resend_floor_tokens"
 	evtFieldEffectiveBudget = "effective_budget_tokens"
+	// The elision fields ride the fleet.context_compacted event whose trigger
+	// is "elision" (#1742): the tool results replaced with stubs, the output
+	// bytes that removed, and the estimated resent size after it.
+	evtFieldElidedResults  = "elided_results"
+	evtFieldElidedBytes    = "elided_bytes"
+	evtFieldEstimatedAfter = "estimated_tokens_after"
 )
 
 // Context-window pressure SSE event names (#209). Emitted from the enforcement

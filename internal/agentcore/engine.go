@@ -659,6 +659,19 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 	if e.requireCompactionOptIn {
 		if budget := contextResendBudgetTokens(e.envPrefix); budget > 0 && used >= e.effectiveResendBudget(budget) {
 			pressure := e.withResendFloorFields(map[string]any{evtFieldUsedTokens: used, evtFieldResendBudget: budget, evtFieldTrigger: "resend_budget"}, budget)
+			// Stale bulky tool results are replaced with stubs first (#1742);
+			// the summary is bought only if that did not free enough.
+			if el, ok := e.elideBeforeSummary(messages, used, e.effectiveResendBudget(budget), budget); ok {
+				messages = el.messages
+				out.messages = messages
+				out.warned = false
+				e.noteElision(sink, el, used,
+					fmt.Sprintf("trigger=resend_budget used=%d budget=%d%s", used, budget, e.resendFloorCrumb(budget)),
+					e.withResendFloorFields(map[string]any{evtFieldResendBudget: budget}, budget))
+				if el.enough {
+					return out
+				}
+			}
 			if res := e.proactiveCompact(ctx, messages); res.compacted {
 				out.messages = res.messages
 				out.warned = false
@@ -710,6 +723,21 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 				out.warned = true
 			}
 			return out
+		}
+		// A scheduled run that opted into window compaction elides first too
+		// (#1742), with the compaction point as its budget; an interactive
+		// engine never does (elideBeforeSummary).
+		if el, ok := e.elideBeforeSummary(messages, used, compactAt, compactAt); ok {
+			messages = el.messages
+			out.messages = messages
+			out.warned = false
+			e.windowCompactionStalled = false
+			e.noteElision(sink, el, used,
+				fmt.Sprintf("trigger=window used=%d window=%d", used, window),
+				map[string]any{evtFieldWindowSize: window})
+			if el.enough {
+				return out
+			}
 		}
 		if res := e.proactiveCompact(ctx, messages); res.compacted {
 			out.messages = res.messages

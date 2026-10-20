@@ -492,6 +492,7 @@ after a `context_length_exceeded` error:
 | `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | `0.75` | Emit a `fleet.context_pressure` SSE event (the chat UI shows a non-blocking "conversation is N% full" banner). |
 | `FLEET_CONTEXT_COMPACTION_THRESHOLD` | `0.90` | Proactively summarize the **oldest half** of the history (pinned head + recent half kept verbatim) and emit `fleet.context_compacted`. |
 | `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | `80000` | **Scheduled runs only** (#1534). Compact the same way once the prompt resent on every call exceeds this many tokens, whatever the model's window; `0` disables. When the prompt floor (system prompt + tool schemas + task prompt) takes more than half of it, it applies to the history on top of the floor instead (#1600). |
+| `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY` | on | **Scheduled runs only** (#1742). When either compaction above fires, first replace bulky tool results older than the recent window with short previews, and summarize only if that did not free enough; `0` (or `false`) turns it off. |
 
 Both honor the usual `CHAT_`/`CUTLASS_` prefix aliases, and a value outside
 `(0,1]` falls back to its default. The size signal is the **per-call** input
@@ -604,6 +605,30 @@ recent half, so across many compactions the pause point settles near
 prefix + 2 × budget. What the rule buys is a handful of pauses per run instead
 of 40. The measurements and the reasoning behind the half-budget switch are in
 [SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md#the-prompt-floor-1600).
+
+**Stale tool results go before the summary (#1742).** In a data-heavy run most
+of what is resent is old tool output, and a summary of it costs a model call.
+So when a scheduled run's resend-budget compaction fires, or its window
+compaction on the `FLEET_SCHEDULED_AUTO_COMPACT` opt-in, the run first replaces
+every tool result older than a recent window with the stub the in-round guard
+already uses: the start and end of the output, its size, and how to get it back
+(`view_file` on the saved output when there is one, else re-running the tool
+with narrower output). The recent window is the newest 30% of the budget, and
+never fewer than the last two assistant turns. Results of 2 KiB or less, media,
+and results the in-round guard already stubs on every call are left alone. The
+run then estimates the resent size again, and buys the summary only if elision
+did not bring it at least 30% of the budget below the threshold; otherwise the
+next step would pause again. The stubs are carried in the history from then on,
+written at the moment the compaction already rewrites it, so they cost no extra
+prompt-cache miss. Assistant text, tool-call inputs, the pinned head and any
+summary are never changed, and every result keeps its call ID. Each elision
+emits `fleet.context_compacted` with `trigger: "elision"`, `elided_results`,
+`elided_bytes` and `estimated_tokens_after`, plus the firing trigger's own
+fields, and writes a `[context_elided]` session-log breadcrumb. Like a
+proactive compaction, it marks the floor for re-measurement and does not count
+toward the consecutive-compaction cap. `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY=0`
+turns it off; interactive chats never elide. Details:
+[SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md#stale-tool-results-before-the-summary-1742).
 
 **Scheduled runs summarize for real.** The scheduled driver now wires a
 `CompactionSummarizer` (the same governed LLM summary the chat path uses,

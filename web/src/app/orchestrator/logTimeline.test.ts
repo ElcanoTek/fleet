@@ -112,6 +112,15 @@ describe("parseRuntimeEvent", () => {
     expect(ev?.detail).toBe("the oldest half of the history was summarized");
   });
 
+  it("reads the elision breadcrumb as its own event", () => {
+    const ev = parseRuntimeEvent(
+      "[context_elided] trigger=resend_budget used=220205 budget=80000 elided_results=7 elided_bytes=271684 estimated_after=152284 — tool results older than the recent window were replaced with short previews",
+    );
+    expect(ev).toMatchObject({ tag: "context_elided", title: "Older tool results trimmed", tone: "info" });
+    expect(ev?.fields).toContainEqual(["elided_results", "7"]);
+    expect(ev?.detail).toBe("tool results older than the recent window were replaced with short previews");
+  });
+
   it("numbers checkpoints and marks a fatal abort", () => {
     expect(parseRuntimeEvent("[context_checkpoint] resent prompt 1 tokens reached X (checkpoint 2)")?.title).toBe("Context checkpoint 2");
     expect(parseRuntimeEvent("[fatal] run aborted by its own self-audit: no send")).toMatchObject({
