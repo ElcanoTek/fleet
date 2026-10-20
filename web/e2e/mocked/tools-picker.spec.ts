@@ -183,3 +183,45 @@ test("tools picker fits a phone without sideways scroll", async ({ page, context
   expect(await library.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   await page.screenshot({ path: "test-results/tools-library-phone.png" });
 });
+
+test.describe("on a touch phone", () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test("library: close top-right, detail is its own view, no keyboard on open", async ({ page, context }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loginViaCookie(context);
+    await boot(page, { admin: true });
+    await page.getByRole("button", { name: "Tools", exact: true }).click();
+    const popover = page.getByTestId("chat-tools-popover");
+    await expect(popover).toHaveCSS("opacity", "1");
+    // Focusing the search field would open the keyboard over the list.
+    await expect(page.getByRole("textbox", { name: "Search tools" })).not.toBeFocused();
+    await page.getByRole("button", { name: "Open library" }).tap();
+
+    const library = page.getByTestId("chat-tools-library");
+    await expect(library).toBeVisible();
+    await expect(library.getByLabel("Search tools")).not.toBeFocused();
+    await expect(library.getByLabel("Search tools")).toBeVisible();
+    // The close button stays in the top-right corner when the admin link wraps.
+    const close = (await page.getByRole("button", { name: "Close tools library" }).boundingBox())!;
+    expect(390 - (close.x + close.width)).toBeLessThan(24);
+    expect(close.y).toBeLessThan(24);
+
+    // Tapping a row opens its detail in place of the list, with a way back.
+    await library.getByTestId("chat-tools-library-row-magnite").getByRole("button").first().tap();
+    const detail = page.getByTestId("chat-tools-library-detail");
+    await expect(detail).toBeInViewport();
+    await expect(library.getByRole("region", { name: "Connections" })).toBeHidden();
+    await page.screenshot({ path: "test-results/tools-library-phone-detail.png" });
+    await page.getByRole("button", { name: "All connections" }).tap();
+    await expect(library.getByTestId("chat-tools-library-row-magnite")).toBeInViewport();
+
+    // Escape steps back from the detail before it closes the library.
+    await library.getByTestId("chat-tools-library-row-indexexchange").getByRole("button").first().tap();
+    await page.keyboard.press("Escape");
+    await expect(library.getByRole("region", { name: "Connections" })).toBeVisible();
+    await expect(library).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(library).toHaveCount(0);
+  });
+});

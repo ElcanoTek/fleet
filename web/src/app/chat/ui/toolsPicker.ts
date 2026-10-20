@@ -363,3 +363,10 @@ export function seatLabel(c: PickerConnector, appName: string): string {
   const opts = seatOptions(c, appName);
   return (opts.find((o) => o.value === (c.account ?? "")) ?? opts[0]).label;
 }
+
+/** True on a touch-first screen. The picker skips focusing its search field
+ * there: focusing an input on a phone opens the keyboard over half the list
+ * before anyone asked to type. */
+export function isTouchPrimary(): boolean {
+  return typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
+}

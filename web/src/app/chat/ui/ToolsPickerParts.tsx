@@ -64,7 +64,7 @@ export function ToolSwitch({
         event.stopPropagation();
         onToggle();
       }}
-      className={`relative shrink-0 rounded-full transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+      className={`hit-area-touch relative shrink-0 rounded-full transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
         large ? "h-[1.375rem] w-[2.375rem]" : "h-[1.125rem] w-[1.875rem]"
       } ${on ? "bg-[var(--color-switch-track-on)]" : "bg-[var(--color-switch-track-off)]"}`}
     >
@@ -266,7 +266,7 @@ export function SeatMenu({
         onKeyDown={onTriggerKey}
         className={
           variant === "compact"
-            ? "inline-flex h-[1.125rem] min-w-0 max-w-[10rem] items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--color-pill-border)] px-[0.45rem] font-[family-name:var(--font-sans)] text-[0.66rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            ? "hit-area-touch inline-flex h-[1.125rem] min-w-0 max-w-[10rem] items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--color-pill-border)] px-[0.45rem] font-[family-name:var(--font-sans)] text-[0.66rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             : "flex h-9 w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] px-3 text-left text-[0.82rem] text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         }
       >

@@ -8,6 +8,7 @@ import {
   connectorStatus,
   countOn,
   isToggleable,
+  isTouchPrimary,
   onSnapshot,
   popoverSections,
   statusKicker,
@@ -45,7 +46,7 @@ export type ToolsPopoverProps = {
 // natively disabled element drops focus, which would break Escape-closes /
 // focus-returns-to-the-wrench for a keyboard user mid-gesture.
 const SMALL_PILL =
-  "h-[1.375rem] shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] border border-[var(--color-pill-border)] px-[0.55rem] text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
+  "hit-area-touch h-[1.375rem] shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] border border-[var(--color-pill-border)] px-[0.55rem] text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
 
 const GROUP_LABEL =
   "font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]";
@@ -75,7 +76,7 @@ export function ToolsPopover({
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    inputRef.current?.focus({ preventScroll: true });
+    if (!isTouchPrimary()) inputRef.current?.focus({ preventScroll: true });
   }, []);
 
   const q = query.trim();
@@ -321,7 +322,7 @@ export function ToolsPopover({
         <button
           type="button"
           onClick={() => onOpenLibrary()}
-          className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-link)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="hit-area-touch inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-link)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
           Open library
           <Icon name="maximize" className="size-[0.7rem]" />
@@ -438,7 +439,7 @@ function PopoverRow({
               event.stopPropagation();
               onOpenLibrary();
             }}
-            className="inline-flex items-center gap-0.5 whitespace-nowrap text-[0.75rem] text-[var(--color-link)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            className="hit-area-touch inline-flex items-center gap-0.5 whitespace-nowrap text-[0.75rem] text-[var(--color-link)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           >
             Set up
             <Icon name="chevron-right" className="size-3" />
