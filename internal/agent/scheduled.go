@@ -610,10 +610,30 @@ func (p *scheduledPolicy) RunAnswer(roundText string) string {
 
 // keepJudgedAnswer records that a model finish gate judged the current answer
 // and sent the run back for repair: the repair round's text is composed with
-// it (composeRunAnswer) rather than replacing it.
+// it (composeRunAnswer) rather than replacing it — except on a task with an
+// output schema, whose answer is one machine-readable object. A supplement
+// appended to that object is a second object, which the verifier rejects as
+// "not exactly one JSON object" on every remaining check until the run
+// dead-letters, so there the repair round's text replaces the judged answer
+// (a textless repair round still keeps it).
 func (p *scheduledPolicy) keepJudgedAnswer() {
 	p.judgedAnswer = p.latestRunText()
-	p.replaceJudged = false
+	p.replaceJudged = p.structuredAnswer()
+}
+
+// structuredAnswer reports whether the task declared an output schema.
+func (p *scheduledPolicy) structuredAnswer() bool {
+	return p.agent != nil && len(p.agent.outputSchema) > 0
+}
+
+// verifierRepairAnswerNote is the note the verifier's repair nudge carries:
+// repairAnswerNote, or for a structured task (keepJudgedAnswer replaces there)
+// the reviewer's whole-answer note.
+func (p *scheduledPolicy) verifierRepairAnswerNote() string {
+	if p.structuredAnswer() {
+		return reviewerRepairAnswerNote
+	}
+	return repairAnswerNote
 }
 
 // composeRunAnswer combines the answer judged so far with a round's closing
@@ -652,6 +672,7 @@ const repairAnswerNote = "Your closing text so far stays part of this run's fina
 
 // reviewerRepairAnswerNote is the reviewer's counterpart: the repair round's
 // text replaces the reviewed answer, so it must be the whole corrected answer.
+// A verifier repair on a structured-output task uses it too.
 const reviewerRepairAnswerNote = "Your next closing text replaces your previous answer, so write the complete corrected answer."
 
 // The core hands the policy each round's closing text before consulting
@@ -1026,7 +1047,7 @@ func (p *scheduledPolicy) verificationFailed(detail string, records []toolExecRe
 			agentcore.ErrCompletionUnverified, p.verificationAttempts, detail, successfulConnectorCalls(records))
 		return false, nil
 	}
-	return false, []string{detail + " Check the existing tool evidence and complete genuinely missing work. Do not repeat successful external actions merely to supply evidence; use read-only verification instead. " + repairAnswerNote + " Completion will be checked again."}
+	return false, []string{detail + " Check the existing tool evidence and complete genuinely missing work. Do not repeat successful external actions merely to supply evidence; use read-only verification instead. " + p.verifierRepairAnswerNote() + " Completion will be checked again."}
 }
 
 // successfulConnectorCalls renders the connector (mcp_*) calls that succeeded

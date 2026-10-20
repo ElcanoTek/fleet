@@ -43,6 +43,14 @@ which concatenates every round, contained every requested item.
 - The verifier's repair nudge says the earlier text stays and the next is
   appended (write only what was missing). The reviewer's nudge says the next
   text replaces the answer (write the whole corrected answer).
+- **A task with an output schema** (amended 2026-10-19): a verifier repair
+  *replaces* the judged answer too, and its nudge is the reviewer's (write the
+  whole corrected answer). That answer is one machine-readable object, so a
+  supplement appended after it made two objects, and the verifier rejected the
+  composition as "not exactly one JSON object" on every remaining check until
+  the run dead-lettered. Manifest's deep-audit tasks hit this on most repaired
+  runs from 2026-10-05. A textless repair round still keeps the judged object.
+  `TestScheduledVerifierRepairReplacesStructuredAnswer`.
 - The `(no final response text)` marker still stands in when the run has
   produced no text at all. Truncation is unchanged
   (`truncateFinalResponseForVerifier`).
