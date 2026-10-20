@@ -104,7 +104,9 @@ func resolveShowUIRef(ctx context.Context, input map[string]json.RawMessage) ([]
 	if ref.CallID == "" && ref.Tool == "" {
 		return fail("from_result needs call_id (the id of the tool call whose result holds the card) or tool (the tool whose newest result holds it).")
 	}
-	if ref.Tool == ShowUIToolName || strings.HasSuffix(ref.Tool, "_"+ShowUIToolName) {
+	// Only the native tool: an MCP tool that happens to be called show_ui
+	// registers as mcp_<server>_show_ui and may well build cards.
+	if ref.Tool == ShowUIToolName {
 		return fail("from_result names a tool's result that holds a card, never an earlier %s call. To change a card you showed, call %s again with replaces.", ShowUIToolName, ShowUIToolName)
 	}
 	seam, ok := showUISeamFrom(ctx)

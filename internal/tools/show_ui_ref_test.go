@@ -40,13 +40,15 @@ func runShowUIWith(t *testing.T, seam *ShowUISeam, args string) fantasy.ToolResp
 // transcript, not to the model.
 func TestShowUIRef_ShowsTheToolsCard(t *testing.T) {
 	results := []PriorToolResult{
+		{CallID: "c3", Tool: "mcp_cards_show_ui", Text: `{"show_ui":` + refCard + `}`},
 		{CallID: "c2", Tool: "mcp_deal_plan_intake_card", Text: `{"ok":true,"show_ui":` + refCard + `}`},
 		{CallID: "c1", Tool: "mcp_deal_plan_intake_card", Text: `{"show_ui":{"title":"Old","components":[]}}`},
 	}
 	for name, args := range map[string]string{
-		"call id":     `{"from_result":{"call_id":"c2"}}`,
-		"tool":        `{"from_result":{"tool":"mcp_deal_plan_intake_card"}}`,
-		"tool suffix": `{"from_result":{"tool":"intake_card","path":"show_ui"}}`,
+		"call id":                   `{"from_result":{"call_id":"c2"}}`,
+		"an MCP tool named show_ui": `{"from_result":{"tool":"mcp_cards_show_ui"}}`,
+		"tool":                      `{"from_result":{"tool":"mcp_deal_plan_intake_card"}}`,
+		"tool suffix":               `{"from_result":{"tool":"intake_card","path":"show_ui"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			shown := shownCards{}
