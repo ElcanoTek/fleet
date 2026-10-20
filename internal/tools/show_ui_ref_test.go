@@ -124,6 +124,7 @@ func TestShowUIRef_Refusals(t *testing.T) {
 		{CallID: "prose", Tool: "mcp_p_notes", Text: "not json"},
 		{CallID: "bad", Tool: "mcp_p_bad", Text: `{"show_ui":{"title":"T","components":[{"type":"nope"}]}}`},
 		{CallID: "secret", Tool: "mcp_p_secret", Text: `{"show_ui":{"title":"[REDACTED]","components":[]}}`},
+		{CallID: "escaped", Tool: "mcp_p_escaped", Text: `{"show_ui":{"title":"T","components":[{"type":"select","id":"s","options":["a","\u005bREDACTED\u005d"]}]}}`},
 		{CallID: "ui_0", Tool: ShowUIToolName, Text: "UI_DISPLAYED card_id=ui_0"},
 		{CallID: "old", Tool: "mcp_p_intake_card", Text: `{"show_ui":` + refCard + `}`},
 	}
@@ -135,6 +136,7 @@ func TestShowUIRef_Refusals(t *testing.T) {
 		"no such key":                   {`{"from_result":{"call_id":"ok","path":"card"}}`, `no key "card"`},
 		"referenced card invalid":       {`{"from_result":{"call_id":"bad"}}`, "the card in the referenced result has"},
 		"redacted value":                {`{"from_result":{"call_id":"secret"}}`, "redacted value"},
+		"JSON-escaped redacted value":   {`{"from_result":{"call_id":"escaped"}}`, "redacted value"},
 		"an earlier show_ui call":       {`{"from_result":{"call_id":"ui_0"}}`, "no result of call"},
 		"show_ui named as the tool":     {`{"from_result":{"tool":"show_ui"}}`, "never an earlier show_ui call"},
 		"neither call id nor tool":      {`{"from_result":{"path":"show_ui"}}`, "needs call_id"},

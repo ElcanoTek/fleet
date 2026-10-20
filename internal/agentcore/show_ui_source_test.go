@@ -164,3 +164,32 @@ func TestShowUISource_CardOnlyOnTheSuccess(t *testing.T) {
 		t.Fatalf("held cards leak: %v", s.shownCards)
 	}
 }
+
+// "Newest" is the later CALL, not the later finish: two parallel calls to the
+// same card tool that complete out of order resolve to the same result in
+// this run as after replay, where results follow call order (Codex P2 on
+// #1819).
+func TestShowUISource_NewestMeansTheLaterCall(t *testing.T) {
+	s := newStreamSink(nil)
+	s.onToolCall("early", "mcp_p_intake_card", `{}`)
+	s.onToolCall("late", "mcp_p_intake_card", `{}`)
+	s.onToolResult("late", "mcp_p_intake_card", `{"n":2}`, false)  // finishes first
+	s.onToolResult("early", "mcp_p_intake_card", `{"n":1}`, false) // finishes last
+	run := s.priorToolResults()
+	if len(run) != 2 || run[1].CallID != "late" {
+		t.Fatalf("this run's results oldest call first = %+v", run)
+	}
+	seed := priorToolResultsFromMessages([]fantasy.Message{
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ToolCallPart{ToolCallID: "early", ToolName: "mcp_p_intake_card", Input: `{}`},
+			fantasy.ToolCallPart{ToolCallID: "late", ToolName: "mcp_p_intake_card", Input: `{}`},
+		}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+			fantasy.ToolResultPart{ToolCallID: "late", Output: fantasy.ToolResultOutputContentText{Text: `{"n":2}`}},
+			fantasy.ToolResultPart{ToolCallID: "early", Output: fantasy.ToolResultOutputContentText{Text: `{"n":1}`}},
+		}},
+	})
+	if len(seed) != 2 || seed[1].CallID != "late" || seed[1].Tool != "mcp_p_intake_card" {
+		t.Fatalf("replayed results oldest call first = %+v", seed)
+	}
+}

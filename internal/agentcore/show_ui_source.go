@@ -3,6 +3,7 @@ package agentcore
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"charm.land/fantasy"
@@ -61,22 +62,71 @@ func bridgedToolName(name, input string) string {
 	return name
 }
 
+// callOrdered collects tool results in the order their CALLS were made, not
+// the order they finished: two parallel calls to the same card tool finish in
+// any order, and "newest" must mean the later call, the same way whether the
+// results come from this run (completion order) or from replayed history
+// (call order) (Codex P2 on #1819). A result whose call is not seen sorts at
+// its own position.
+type callOrdered struct {
+	seq     int
+	callSeq map[string]int
+	names   map[string]string
+	out     []orderedResult
+}
+
+type orderedResult struct {
+	pos int
+	r   tools.PriorToolResult
+}
+
+func newCallOrdered() *callOrdered {
+	return &callOrdered{callSeq: map[string]int{}, names: map[string]string{}}
+}
+
+func (c *callOrdered) call(id, name, input string) {
+	c.seq++
+	c.callSeq[id] = c.seq
+	c.names[id] = bridgedToolName(name, input)
+}
+
+func (c *callOrdered) result(r tools.PriorToolResult) {
+	c.seq++
+	pos, ok := c.callSeq[r.CallID]
+	if !ok {
+		pos = c.seq
+	}
+	if name := c.names[r.CallID]; name != "" {
+		r.Tool = name
+	}
+	c.out = append(c.out, orderedResult{pos: pos, r: r})
+}
+
+// oldestFirst returns the results in call order.
+func (c *callOrdered) oldestFirst() []tools.PriorToolResult {
+	sort.SliceStable(c.out, func(i, j int) bool { return c.out[i].pos < c.out[j].pos })
+	out := make([]tools.PriorToolResult, len(c.out))
+	for i, o := range c.out {
+		out[i] = o.r
+	}
+	return out
+}
+
 // priorToolResultsFromMessages lists the tool results in the replayed
-// history, oldest first, each named by its call.
+// history, oldest call first, each named by its call.
 func priorToolResultsFromMessages(msgs []fantasy.Message) []tools.PriorToolResult {
-	names := map[string]string{}
-	var out []tools.PriorToolResult
+	c := newCallOrdered()
 	for _, m := range msgs {
 		for _, part := range m.Content {
 			if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok {
-				names[tc.ToolCallID] = bridgedToolName(tc.ToolName, tc.Input)
+				c.call(tc.ToolCallID, tc.ToolName, tc.Input)
 				continue
 			}
 			tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part)
 			if !ok {
 				continue
 			}
-			r := tools.PriorToolResult{CallID: tr.ToolCallID, Tool: names[tr.ToolCallID]}
+			r := tools.PriorToolResult{CallID: tr.ToolCallID}
 			if e, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Output); ok {
 				r.IsErr = true
 				if e.Error != nil {
@@ -87,32 +137,27 @@ func priorToolResultsFromMessages(msgs []fantasy.Message) []tools.PriorToolResul
 			} else {
 				continue // media: never a card
 			}
-			out = append(out, r)
+			c.result(r)
 		}
 	}
-	return out
+	return c.oldestFirst()
 }
 
-// priorToolResults lists this run's tool results so far, oldest first, each
-// named by its call.
+// priorToolResults lists this run's tool results so far, oldest call first,
+// each named by its call.
 func (s *streamSink) priorToolResults() []tools.PriorToolResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	names := map[string]string{}
-	var out []tools.PriorToolResult
+	c := newCallOrdered()
 	for _, e := range s.entries {
 		switch e.Type {
 		case "tool_call":
-			names[e.ToolCallID] = bridgedToolName(e.ToolName, e.ToolInput)
+			c.call(e.ToolCallID, e.ToolName, e.ToolInput)
 		case "tool_result":
-			name := names[e.ToolCallID]
-			if name == "" {
-				name = e.ToolName
-			}
-			out = append(out, tools.PriorToolResult{CallID: e.ToolCallID, Tool: name, Text: e.Text, IsErr: e.IsErr})
+			c.result(tools.PriorToolResult{CallID: e.ToolCallID, Tool: e.ToolName, Text: e.Text, IsErr: e.IsErr})
 		}
 	}
-	return out
+	return c.oldestFirst()
 }
 
 // noteShownCard holds the validated spec show_ui resolved for callID until

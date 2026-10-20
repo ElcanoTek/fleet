@@ -141,7 +141,7 @@ func resolveShowUIRef(ctx context.Context, input map[string]json.RawMessage) ([]
 	}
 	// A value the redaction already scrubbed from the result would show as
 	// "[REDACTED]" and, in an option, collapse two choices into one.
-	if bytes.Contains(out, []byte(redact.MarkerPrefix)) {
+	if hasRedactionMarker(out) {
 		return fail("the card in the result of %s contains a redacted value, so it cannot be shown as built. Ask the tool for a card without secrets.", res.Tool)
 	}
 	return out, nil
@@ -212,4 +212,23 @@ func unwrapJSONString(v json.RawMessage) json.RawMessage {
 		return json.RawMessage(strings.TrimSpace(s))
 	}
 	return v
+}
+
+// hasRedactionMarker reports whether a card carries the redactor's marker in
+// its wire text or in any string it decodes to, key or value, at any depth:
+// a JSON escape ("\u005bREDACTED\u005d") hides it from a scan of the raw
+// bytes, but the browser shows the decoded text (Codex P2 on #1819).
+func hasRedactionMarker(card []byte) bool {
+	if bytes.Contains(card, []byte(redact.MarkerPrefix)) {
+		return true
+	}
+	// decodedRedacted asks "would this function change any decoded string";
+	// a probe that changes exactly the strings holding the marker answers
+	// "does any decoded string hold it".
+	return decodedRedacted(card, func(s string) string {
+		if strings.Contains(s, redact.MarkerPrefix) {
+			return ""
+		}
+		return s
+	})
 }
