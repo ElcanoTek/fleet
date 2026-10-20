@@ -92,6 +92,16 @@ func contractScenarios() []contractScenario {
 			},
 		},
 		{
+			name:  "show-ui-by-reference",
+			about: "a tool returns a card and show_ui shows it by reference; the validated spec rides the show_ui result as `card` (docs/GENERATIVE-UI.md)",
+			steps: []fakellm.Step{
+				fakellm.BashStep("call_contract_card", `printf '%s' '{"show_ui":{"title":"Contract card","components":[{"type":"text_input","id":"name","label":"Name"}],"actions":[{"id":"send","label":"Send"}]}}'`),
+				fakellm.ToolStep(fakellm.ToolCall{ID: "call_contract_ui", Name: "show_ui",
+					Arguments: `{"from_result":{"call_id":"call_contract_card","path":"stdout.show_ui"}}`}),
+				fakellm.TextStep("The card is on screen."),
+			},
+		},
+		{
 			name:   "cancelled",
 			about:  "the user stops the turn while the model is stalled",
 			steps:  []fakellm.Step{{Kind: fakellm.StepText, Text: "never sent", Delay: time.Minute}},

@@ -250,7 +250,7 @@ above fails otherwise.
 - [`FEATURE-NOTES.md`](FEATURE-NOTES.md) — Feature design notes
 - [`FILE-EDIT-SAFETY.md`](FILE-EDIT-SAFETY.md) — File-edit safety (#787, #1745)
 - [`generating-demo-gif.md`](generating-demo-gif.md) — Generating the demo GIFs (TUI + web)
-- [`GENERATIVE-UI.md`](GENERATIVE-UI.md) — Generative UI: interactive cards the agent builds in chat (`show_ui`)
+- [`GENERATIVE-UI.md`](GENERATIVE-UI.md) — Generative UI: interactive cards the agent builds in chat (`show_ui`), inline or by reference to a tool's result (ADR-0080, ADR-0086)
 - [`GROUPED-APPROVALS.md`](GROUPED-APPROVALS.md) — Grouped approvals: the cards one turn stages for opted-in tools render as one card with a checkbox per call
 - [`GUARDRAILS.md`](GUARDRAILS.md) — Prompt-injection guardrails (#702)
 - [`HOOKS.md`](HOOKS.md) — Governed lifecycle hooks (#788)

@@ -11,6 +11,15 @@ export type ToolCall = {
   name: string;
   input: string;
   resultText?: string;
+  /**
+   * A show_ui card drawn by reference to a tool's result (`from_result`,
+   * docs/GENERATIVE-UI.md): the spec fleet loaded from that result and
+   * validated, as JSON text. It rides the show_ui result (the `card` field of
+   * the tool.result event and of the persisted tool_result row), so a reload
+   * and a second tab draw the same card. Absent for an inline card, whose
+   * spec is `input`.
+   */
+  card?: string;
   state: ToolCallState;
   /**
    * Live sub-agent activity for a `spawn_subagent` call (#1043 follow-up).
@@ -1316,7 +1325,7 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
   // would stay stuck on "APPROVAL_REQUIRED" even though the send succeeded
   // ("looks like nothing happened"). We re-apply these against tool_calls in
   // ANY message in a post-pass below.
-  const orphanResults: Array<{ id: string; name: string; text: string; is_err: boolean }> = [];
+  const orphanResults: Array<{ id: string; name: string; text: string; is_err: boolean; card?: unknown }> = [];
 
   const flush = () => {
     if (current) {
@@ -1483,11 +1492,9 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       // Track the highest persisted messages.id in this assistant group as its
       // branch point (#454); undefined until a persisted entry contributes one.
       current.dbId = Math.max(current.dbId ?? 0, e.id ?? 0) || undefined;
-      const c = e.content as { id: string; name: string; text: string; is_err: boolean };
+      const c = e.content as { id: string; name: string; text: string; is_err: boolean; card?: unknown };
       if ((current.toolCalls ?? []).some((t) => t.id === c.id)) {
-        current.toolCalls = (current.toolCalls ?? []).map((t) =>
-          t.id === c.id ? { ...t, resultText: c.text, state: c.is_err ? "error" : "done" } : t,
-        );
+        current.toolCalls = (current.toolCalls ?? []).map((t) => (t.id === c.id ? withResult(t, c) : t));
       } else {
         // No matching call in the open message — defer to the post-pass,
         // which resolves it against tool_calls in any message (or drops it
@@ -1518,13 +1525,23 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       m.toolCalls = m.toolCalls.map((t) => {
         if (t.id !== c.id) return t;
         matched = true;
-        return { ...t, resultText: c.text, state: c.is_err ? "error" : "done" };
+        return withResult(t, c);
       });
       if (matched) break;
     }
   }
 
   return messages;
+}
+
+/**
+ * A tool call with its persisted result applied: the text, the state, and a
+ * by-reference show_ui card's validated spec when the row carries one.
+ */
+function withResult(t: ToolCall, c: { text: string; is_err: boolean; card?: unknown }): ToolCall {
+  const next: ToolCall = { ...t, resultText: c.text, state: c.is_err ? "error" : "done" };
+  if (typeof c.card === "string" && c.card) next.card = c.card;
+  return next;
 }
 
 /** Map an MCP tool name like `mcp_email_search_emails` to a display string. */

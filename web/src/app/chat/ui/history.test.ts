@@ -164,6 +164,21 @@ describe("historyToMessages", () => {
     expect(msgs[1].toolCalls?.[0].state).toBe("error");
   });
 
+  it("carries a by-reference show_ui card's spec from its result row; other rows get none", () => {
+    const spec = JSON.stringify({ title: "Intake", components: [{ type: "text", text: "x" }] });
+    const msgs = historyToMessages([
+      user("go"),
+      toolCall("b1", "bash"),
+      toolResult("b1", "bash", "ok"),
+      toolCall("u1", "show_ui", JSON.stringify({ from_result: { call_id: "b1" } })),
+      { role: "tool", type: "tool_result", content: { id: "u1", name: "show_ui", text: "UI_DISPLAYED card_id=u1", is_err: false, card: spec } },
+      asText("done"),
+    ]);
+    const [bash, ui] = msgs[1].toolCalls ?? [];
+    expect(ui.card).toBe(spec);
+    expect(bash.card).toBeUndefined();
+  });
+
   it("ignores a tool_result whose id has no matching call (no retroactive creation)", () => {
     const msgs = historyToMessages([
       user("go"),

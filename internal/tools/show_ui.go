@@ -32,12 +32,17 @@ const UIReplyPrefix = "[UI reply]"
 // component catalog that genui.Validate enforces, which a portable tool
 // schema cannot express. The description below is the model's catalog.
 type ShowUIParams struct {
-	Title       string `json:"title" description:"Short card title (a few words)."`
-	Description string `json:"description,omitempty" description:"Optional one-line subtitle. May contain {{ expr }} templates."`
-	Components  []any  `json:"components" description:"The card body: an array of component objects, each with a \"type\" from the catalog in the tool description."`
-	Actions     []any  `json:"actions,omitempty" description:"Footer buttons: [{id, label, kind: submit|message, style: primary|secondary|danger, message, validate, confirm, visible_if, disabled_if}]. Required (with at least one kind=submit) when the card has inputs."`
-	Replaces    string `json:"replaces,omitempty" description:"card_id of an earlier card this one updates. The old card collapses to a 'replaced' note so only the newest version is interactive."`
-	FieldErrors []any  `json:"field_errors,omitempty" description:"Inline errors to show next to inputs: [{field: \"id\" or \"repeater_id[i].field_id\", message}], where i is the item's 0-based position in the repeater's array (the first item is [0], unlike the 1-based index in expressions). Use when re-showing a card after checking the user's answers; the field must be editable (not disabled)."`
+	// FromResult shows a card a tool already built (show_ui_ref.go). With
+	// it, the card's own fields come from that result, so title and
+	// components are not required by the schema; genui.Validate still
+	// requires them of an inline card.
+	FromResult  *ShowUIRef `json:"from_result,omitempty" description:"Show the card a tool already returned instead of writing it out: {call_id or tool, path?}. Fleet loads it from that tool result, checks it and shows it as built. Use this whenever a tool result contains a ready-made card; then give no title/components/actions (replaces and field_errors may be added)."`
+	Title       string     `json:"title,omitempty" description:"Short card title (a few words). Required unless from_result is given."`
+	Description string     `json:"description,omitempty" description:"Optional one-line subtitle. May contain {{ expr }} templates."`
+	Components  []any      `json:"components,omitempty" description:"The card body: an array of component objects, each with a \"type\" from the catalog in the tool description. Required unless from_result is given."`
+	Actions     []any      `json:"actions,omitempty" description:"Footer buttons: [{id, label, kind: submit|message, style: primary|secondary|danger, message, validate, confirm, visible_if, disabled_if}]. Required (with at least one kind=submit) when the card has inputs."`
+	Replaces    string     `json:"replaces,omitempty" description:"card_id of an earlier card this one updates. The old card collapses to a 'replaced' note so only the newest version is interactive."`
+	FieldErrors []any      `json:"field_errors,omitempty" description:"Inline errors to show next to inputs: [{field: \"id\" or \"repeater_id[i].field_id\", message}], where i is the item's 0-based position in the repeater's array (the first item is [0], unlike the 1-based index in expressions). Use when re-showing a card after checking the user's answers; the field must be editable (not disabled)."`
 }
 
 const showUIDescription = `Show the user an interactive card inline in the chat — a form, a picker, a multi-item editor, a comparison, a checklist, a small calculator or a chart — built on the fly from a fixed component catalog. Use it when a visual or interactive answer serves the user better than prose: collecting several related values at once (instead of asking one question per message), letting them choose among options you fetched, editing a list of items, reviewing proposed changes, or showing numbers they will want to compare or tweak. Plain questions still get plain text.
@@ -48,6 +53,8 @@ HOW IT FLOWS
 - The card itself never performs actions. YOU act on the submission with your normal tools (MCP tools, files, email, schedule_task…) — their usual approvals still apply.
 - To refine (e.g. after validating the answers against a live system), call show_ui again with replaces=<old card_id>, the user's values prefilled via "value", and field_errors for what needs fixing.
 - NEVER invent option values that come from an external system (ids, accounts, catalog names). Fetch them with your tools first, then offer them as options; if you cannot fetch them, use a text_input and say so.
+
+A CARD A TOOL BUILT — when a tool result already contains a ready-made card (for example {"show_ui": {...}}), do NOT copy it out. Call show_ui with only {"from_result": {"tool": "<that tool's name>"}} (or "call_id": "<its call id>" instead of tool; "path" defaults to "show_ui"). Fleet loads the card from that result, checks it and shows it exactly as the tool built it. It is the card to show: do not rebuild it, redraw it, or describe how it was made. To refine it, add "replaces" and/or "field_errors" beside from_result.
 
 COMPONENTS — every component is {"type": ..., ...props}; any component may also take "visible_if": "<expr>" (a condition must read an editable input and be able to hold; a constant or self-contradictory one is refused).
 Layout: section {title?, description?, children, collapsible?, collapsed?} · columns {children (2-4, one per column)} · tabs {tabs:[{label, children}], variant?: tabs|steps} · divider {}
@@ -69,9 +76,37 @@ The spec is validated: a mistake comes back as a tool error naming the path — 
 // there is no staging row, no new SSE event and nothing to replay on reload.
 func NewShowUITool() fantasy.AgentTool {
 	return fantasy.NewAgentTool(ShowUIToolName, showUIDescription,
-		func(_ context.Context, _ ShowUIParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return ShowUIResult(call.ID, []byte(call.Input)), nil
+		func(ctx context.Context, _ ShowUIParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return showUI(ctx, call.ID, []byte(call.Input)), nil
 		})
+}
+
+// showUI validates an inline card, or resolves and validates the card a
+// from_result reference names and hands it to the transcript as display data.
+func showUI(ctx context.Context, callID string, input []byte) fantasy.ToolResponse {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(input, &top) != nil || top["from_result"] == nil {
+		return ShowUIResult(callID, input)
+	}
+	spec, refusal := resolveShowUIRef(ctx, top)
+	if refusal != nil {
+		return *refusal
+	}
+	resp := ShowUIResult(callID, spec)
+	if resp.IsError {
+		// The tool's card itself is invalid: say so, and that it was the
+		// referenced card, so the model does not try to repair a spec it
+		// never wrote by copying it.
+		resp.Content = strings.NewReplacer(
+			"the spec has", "the card in the referenced result has",
+			"Fix them and call "+ShowUIToolName+" again:", "Do not copy and repair it: report the problems so the tool that built it can be fixed, or pass a card of your own inline:",
+		).Replace(resp.Content)
+		return resp
+	}
+	if seam, ok := showUISeamFrom(ctx); ok {
+		seam.ShowCard(callID, string(spec))
+	}
+	return resp
 }
 
 // ShowUIRedactor is the secret scrubber the agent loop applies to every tool

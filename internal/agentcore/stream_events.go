@@ -42,6 +42,11 @@ type RunEntry struct {
 	ToolName   string
 	ToolInput  string // raw JSON the model emitted (tool_call only)
 	IsErr      bool   // tool_result only
+	// Card is the validated spec of a card show_ui drew by reference
+	// (from_result, show_ui_source.go): display data on that show_ui
+	// result's entry, persisted so a reload redraws the card. Never sent to
+	// the model. Empty for every other entry.
+	Card string
 
 	// SteerID marks a mid-turn injected user message (#785, Type "user_text");
 	// the sink dedupes on it across resilience re-drives.
@@ -57,6 +62,9 @@ const (
 	evtFieldInput = "input"
 	evtFieldText  = "text"
 	evtFieldIsErr = "is_err"
+	// evtFieldCard rides tool.result for a show_ui card drawn by reference:
+	// the validated spec, as JSON text (RunEntry.Card).
+	evtFieldCard = "card"
 	// evtFieldDurationMS rides tool.result: wall-clock milliseconds from the
 	// tool's dispatch (the outermost Run wrapper) to its result. Absent when
 	// the call never reached dispatch (invalid / not-found / provider-executed).
@@ -158,6 +166,9 @@ type streamSink struct {
 	// provider's streaming time is excluded: fantasy dispatches a step's tools
 	// only after that step's stream has ended.
 	toolStarts map[string]time.Time
+	// shownCards holds, per show_ui call id, the validated spec a by-reference
+	// card resolved to until its result is recorded (show_ui_source.go).
+	shownCards map[string]string
 }
 
 func newStreamSink(obs Observer, attribution ...panicAttribution) *streamSink {
@@ -285,9 +296,10 @@ func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
 	if isErr {
 		s.failedToolResults++
 	}
+	card := s.takeShownCard(id, name, text, isErr)
 	s.entries = append(s.entries, RunEntry{
 		Role: roleTool, Type: "tool_result",
-		ToolCallID: id, ToolName: name, Text: text, IsErr: isErr,
+		ToolCallID: id, ToolName: name, Text: text, IsErr: isErr, Card: card,
 	})
 	started, timed := s.toolStarts[id]
 	delete(s.toolStarts, id)
@@ -303,6 +315,10 @@ func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
 	}
 	if timed {
 		payload[evtFieldDurationMS] = time.Since(started).Milliseconds()
+	}
+	if card != "" {
+		// Whole, unlike text: the browser draws the card from it.
+		payload[evtFieldCard] = card
 	}
 	s.emit("tool.result", payload)
 }

@@ -2532,6 +2532,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         name: string;
         text: string;
         is_err: boolean;
+        // A show_ui card drawn by reference: its validated spec (JSON text).
+        card?: string;
       };
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => {
         const toolCalls = (m.toolCalls ?? []).map((tc) =>
@@ -2540,6 +2542,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
                 ...tc,
                 resultText: p.text,
                 state: (p.is_err ? "error" : "done") as ToolCallState,
+                ...(typeof p.card === "string" && p.card ? { card: p.card } : {}),
               }
             : tc,
         );
