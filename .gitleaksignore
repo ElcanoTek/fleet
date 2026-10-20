@@ -30,7 +30,7 @@
 
 # fake: fabricated "sk-or-v1-..."-shaped string fed to redactSecrets() in
 # TestRedactSecretsInLog (asserts the value gets redacted).
-internal/agentcore/orchestration_test.go:generic-api-key:695
+internal/agentcore/orchestration_test.go:generic-api-key:748
 
 # fake: fabricated sk- fixture in TestBoundModelOutputToolsGovernsRawAuxiliaryRouteBeforeArtifact
 # (#793), fed through output governance to assert the secret is redacted before
