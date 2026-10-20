@@ -43,11 +43,13 @@ type ShowUISeam struct {
 	// Results returns the tool results the model can see in this
 	// conversation, newest first.
 	Results func() []PriorToolResult
-	// ShowCard records the validated spec for callID's show_ui result. The
-	// loop attaches it to that result's transcript entry and stream event
-	// (only when the result is the UI_DISPLAYED success), never to what the
-	// model is sent.
-	ShowCard func(callID, spec string)
+	// ShowCard records the validated spec for callID's show_ui result, with
+	// the acknowledgement show_ui returns alongside it (ack), which ties the
+	// spec to that occurrence when a provider reuses the call id. The loop
+	// attaches it to that result's transcript entry and stream event (only
+	// when the result is that UI_DISPLAYED success), never to what the model
+	// is sent.
+	ShowCard func(callID, ack, spec string)
 }
 
 type showUISeamKey struct{}

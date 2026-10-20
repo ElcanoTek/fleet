@@ -3,6 +3,7 @@ package agentcore
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 
@@ -160,36 +161,53 @@ func (s *streamSink) priorToolResults() []tools.PriorToolResult {
 	return c.oldestFirst()
 }
 
+// shownCard is one validated spec waiting for its show_ui result: the
+// acknowledgement show_ui returned with it, and the spec.
+type shownCard struct{ ack, spec string }
+
 // noteShownCard holds the validated spec show_ui resolved for callID until
-// that call's result is recorded (onToolResult).
-func (s *streamSink) noteShownCard(callID, spec string) {
+// that call's result is recorded (onToolResult). A provider may reuse a call
+// id, even for parallel calls, so each occurrence is queued with the
+// acknowledgement it returned rather than overwriting the last (Codex P2 on
+// #1819).
+func (s *streamSink) noteShownCard(callID, ack, spec string) {
 	if callID == "" || spec == "" {
 		return
 	}
 	s.mu.Lock()
 	if s.shownCards == nil {
-		s.shownCards = map[string]string{}
+		s.shownCards = map[string][]shownCard{}
 	}
-	s.shownCards[callID] = spec
+	s.shownCards[callID] = append(s.shownCards[callID], shownCard{ack: ack, spec: spec})
 	s.mu.Unlock()
 }
 
 // takeShownCard returns and forgets the card held for a show_ui result. It is
-// attached only to the success it was resolved for: a result that is an
-// error, or does not start with UI_DISPLAYED (a governance rewrite, a
-// contained panic), gets none. A spec the secret redaction would change is
-// dropped rather than shown altered. Caller holds s.mu.
+// attached only to the success it was resolved for: the held occurrence whose
+// acknowledgement is this result's text (the first, when occurrences of a
+// reused id returned the same text). A result that is an error, or whose text
+// no held acknowledgement matches (a governance rewrite, a contained panic),
+// gets none. A spec the secret redaction would change is dropped rather than
+// shown altered. Caller holds s.mu.
 func (s *streamSink) takeShownCard(id, name, text string, isErr bool) string {
-	spec, ok := s.shownCards[id]
-	if !ok {
+	held := s.shownCards[id]
+	if len(held) == 0 || isErr || name != tools.ShowUIToolName || !strings.HasPrefix(text, "UI_DISPLAYED") {
 		return ""
 	}
-	delete(s.shownCards, id)
-	if isErr || name != tools.ShowUIToolName || !strings.HasPrefix(text, "UI_DISPLAYED") {
-		return ""
+	for i, c := range held {
+		if c.ack != text {
+			continue
+		}
+		held = slices.Delete(held, i, i+1)
+		if len(held) > 0 {
+			s.shownCards[id] = held
+		} else {
+			delete(s.shownCards, id)
+		}
+		if toolRedactor().Redact(c.spec) != c.spec {
+			return ""
+		}
+		return c.spec
 	}
-	if toolRedactor().Redact(spec) != spec {
-		return ""
-	}
-	return spec
+	return ""
 }

@@ -104,7 +104,7 @@ func showUI(ctx context.Context, callID string, input []byte) fantasy.ToolRespon
 		return resp
 	}
 	if seam, ok := showUISeamFrom(ctx); ok {
-		seam.ShowCard(callID, string(spec))
+		seam.ShowCard(callID, resp.Content, string(spec))
 	}
 	return resp
 }

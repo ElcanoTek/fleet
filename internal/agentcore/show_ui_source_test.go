@@ -146,22 +146,42 @@ func jsonEqual(t *testing.T, a, b string) bool {
 }
 
 // The sink attaches a held card only to the show_ui success it was resolved
-// for.
+// for, matched by its acknowledgement; a failure or a rewritten result gets
+// none.
 func TestShowUISource_CardOnlyOnTheSuccess(t *testing.T) {
 	s := newStreamSink(nil)
-	s.noteShownCard("a", sourceCard)
+	s.noteShownCard("a", "UI_DISPLAYED card_id=a", sourceCard)
 	s.onToolResult("a", tools.ShowUIToolName, "UI_INVALID: governance said no", true)
-	s.noteShownCard("b", sourceCard)
-	s.onToolResult("b", "bash", "UI_DISPLAYED", false)
-	s.noteShownCard("c", sourceCard)
+	s.noteShownCard("b", "UI_DISPLAYED card_id=b", sourceCard)
+	s.onToolResult("b", "bash", "UI_DISPLAYED card_id=b", false)
+	s.noteShownCard("c", "UI_DISPLAYED card_id=c", sourceCard)
 	s.onToolResult("c", tools.ShowUIToolName, "UI_DISPLAYED card_id=c", false)
 	for _, e := range s.entries {
 		if (e.ToolCallID == "c") != (e.Card != "") {
 			t.Fatalf("entry %s card = %q", e.ToolCallID, e.Card)
 		}
 	}
-	if len(s.shownCards) != 0 {
-		t.Fatalf("held cards leak: %v", s.shownCards)
+	if len(s.shownCards["c"]) != 0 {
+		t.Fatalf("the consumed card is still held: %v", s.shownCards)
+	}
+}
+
+// Two parallel by-reference show_ui calls that share a reused id each get
+// their own card, whatever order they finish in (Codex P2 on #1819).
+func TestShowUISource_ReusedIDKeepsEachCard(t *testing.T) {
+	s := newStreamSink(nil)
+	one := `UI_DISPLAYED card_id=dup: the user can now see the card "One".`
+	two := `UI_DISPLAYED card_id=dup: the user can now see the card "Two".`
+	s.noteShownCard("dup", one, `{"title":"One"}`)
+	s.noteShownCard("dup", two, `{"title":"Two"}`)
+	s.onToolResult("dup", tools.ShowUIToolName, two, false)
+	s.onToolResult("dup", tools.ShowUIToolName, one, false)
+	got := make([]string, 0, len(s.entries))
+	for _, e := range s.entries {
+		got = append(got, e.Card)
+	}
+	if len(got) != 2 || got[0] != `{"title":"Two"}` || got[1] != `{"title":"One"}` {
+		t.Fatalf("cards = %q", got)
 	}
 }
 

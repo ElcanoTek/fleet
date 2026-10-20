@@ -166,9 +166,10 @@ type streamSink struct {
 	// provider's streaming time is excluded: fantasy dispatches a step's tools
 	// only after that step's stream has ended.
 	toolStarts map[string]time.Time
-	// shownCards holds, per show_ui call id, the validated spec a by-reference
-	// card resolved to until its result is recorded (show_ui_source.go).
-	shownCards map[string]string
+	// shownCards holds, per show_ui call id, the validated specs by-reference
+	// cards resolved to until their results are recorded, one per occurrence
+	// of the id (show_ui_source.go).
+	shownCards map[string][]shownCard
 }
 
 func newStreamSink(obs Observer, attribution ...panicAttribution) *streamSink {
