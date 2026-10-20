@@ -72,7 +72,7 @@ export function ToolSwitch({
         aria-hidden="true"
         className={`absolute rounded-full transition-transform ${
           large ? "left-[3px] top-[3px] size-4" : "left-[2px] top-[2px] size-[0.875rem]"
-        } bg-[var(--color-switch-knob)] shadow-[var(--shadow-switch-knob)] ${on ? (large ? "translate-x-4" : "translate-x-3") : ""}`}
+        } shadow-[var(--shadow-switch-knob)] ${on ? `bg-[var(--color-switch-knob-on)] ${large ? "translate-x-4" : "translate-x-3"}` : "bg-[var(--color-switch-knob)]"}`}
       />
     </button>
   );

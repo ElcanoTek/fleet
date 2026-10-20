@@ -397,6 +397,9 @@
   --color-switch-track-on: var(--color-accent-strong);
   --color-switch-track-off: rgba(255, 255, 255, 0.14);
   --color-switch-knob: #f4f5f9;
+  /* The knob on a checked track. A bundle whose primary is light (Reklaim's
+     yellow) gets its on_primary here, so the knob stays visible. */
+  --color-switch-knob-on: #f4f5f9;
   --shadow-switch-knob: none;
   --color-match-bg: rgba(157, 167, 239, 0.22);
   --color-state-ok: #4ecb8f;
@@ -689,6 +692,7 @@
   --color-pill-hover-bg: #f1f2f8;
   --color-switch-track-off: #e4e5ee;
   --color-switch-knob: #ffffff;
+  --color-switch-knob-on: #ffffff;
   --shadow-switch-knob: 0 1px 2px rgba(26, 11, 30, 0.28);
   --color-match-bg: #9da7ef;
   --color-state-ok: #1b7950;

@@ -223,11 +223,31 @@ colors on every hard refresh before the brand rules could match.
 | Structure | `border`, `border_strong`, `border_subtle` |
 | Scrims | `overlay_soft`, `overlay_strong` |
 | Nav rail | `rail_hover`, `rail_active` |
+| Tools picker | `accent_strong`, `on_accent_strong`, `switch_knob_on`, `link`, `text_subtle`, `divider`, `selected_bg`, `selected_border`, `match_bg`, `icon_tile`, `scrim` |
 
 Set the structure, scrim, and rail tokens alongside the core ones. `globals.css`
 hand-tints its defaults from fleet's own primary hue rather than deriving them,
 so a bundle that overrides only `primary` leaves fleet-tinted emphasis borders
 and rail rows beside its own palette.
+
+The Tools picker tokens are optional. Each one you leave unset follows the
+palette key it is derived from, whenever the bundle sets that key:
+
+| Picker token | Follows |
+|---|---|
+| `accent_strong` (switch on, count badge) | `primary` |
+| `on_accent_strong` (badge digits), `switch_knob_on` (knob on a checked switch) | `on_primary` (fleet's, when the bundle sets `primary`) |
+| `link` | `accent` |
+| `text_subtle` (row descriptions, group headers) | `text_muted` |
+| `divider` | `border_subtle` |
+| `selected_bg` (active row, selected filter) | `rail_active` |
+| `selected_border` (active row ring, popover border) | `border_strong` |
+| `match_bg` (search highlight) | `primary` at 22% (40% in light) |
+| `icon_tile` | `accent` at 14% |
+| `scrim` | `overlay_strong` |
+
+Pin a picker token only to hold an exact design value; Elcano's bundle pins
+all eleven to the Tools picker design's purples.
 
 Values may be hex or `rgb()`/`rgba()`/`hsl()`/`hsla()`. Anything else — and any
 token name fleet does not theme — is dropped at render time, and that one token

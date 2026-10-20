@@ -334,3 +334,43 @@ func TestClientConfig_CarriesPinnedModels(t *testing.T) {
 		t.Errorf("body %s must carry the pinned rows %s", w.Body.String(), want)
 	}
 }
+
+// A rebranded palette repaints the Tools picker's tokens from its own colors
+// (Reklaim's picker was fleet purple), and a pinned picker token wins.
+func TestRenderThemeCSS_PickerTokensFollowPalette(t *testing.T) {
+	css := renderThemeCSS(clientconfig.BrandColors{
+		Dark: map[string]string{
+			"primary":       "#FFDF03",
+			"on_primary":    "#0C0A09",
+			"accent":        "#5BA7FF",
+			"border_strong": "rgba(255, 223, 3, 0.32)",
+			"rail_active":   "rgba(255, 223, 3, 0.16)",
+			"link":          "#123456", // pinned: not derived
+		},
+		Light: map[string]string{"primary": "#FFDF03"},
+	})
+	for _, want := range []string{
+		"--color-accent-strong:var(--color-primary);",
+		"--color-on-accent-strong:var(--color-on-primary);",
+		"--color-switch-knob-on:var(--color-on-primary);",
+		"--color-selected-bg:var(--rail-active);",
+		"--color-selected-border:var(--color-border-strong);",
+		"--color-match-bg:color-mix(in srgb, var(--color-primary) 22%, transparent);",
+		"--color-icon-tile:color-mix(in srgb, var(--color-accent) 14%, transparent);",
+		"--color-link:#123456;",
+		"--color-match-bg:color-mix(in srgb, var(--color-primary) 40%, transparent);",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("missing %q in %q", want, css)
+		}
+	}
+	// Nothing derives from a key the bundle did not set.
+	for _, unwanted := range []string{"--color-text-subtle:", "--color-divider:", "--color-scrim:"} {
+		if strings.Contains(css, unwanted) {
+			t.Errorf("derived %q without its source key: %q", unwanted, css)
+		}
+	}
+	if strings.Count(css, "--color-link:") != 1 {
+		t.Errorf("light block derived a link without accent: %q", css)
+	}
+}
