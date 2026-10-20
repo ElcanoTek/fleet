@@ -150,10 +150,12 @@ export function ToolsLibrary({
       }
       onClose();
     },
-    // On a touch screen the sheet itself takes focus instead of the search
-    // field, so the keyboard does not open over the list. The trap treats the
-    // container as the wrap point, so Shift+Tab from there stays inside.
-    { initialFocusRef: isTouchPrimary() ? panelRef : searchRef },
+    // Opening straight into a stacked detail view focuses its back button (the
+    // search field is hidden there). Otherwise, on a touch screen the sheet
+    // itself takes focus instead of the search field, so the keyboard does not
+    // open over the list; the trap treats the container as the wrap point, so
+    // Shift+Tab from there stays inside.
+    { initialFocusRef: detailOpen && stacked() ? backRef : isTouchPrimary() ? panelRef : searchRef },
   );
 
   const q = query.trim();

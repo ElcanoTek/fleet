@@ -233,3 +233,15 @@ test.describe("on a touch phone", () => {
     await expect(library).toHaveCount(0);
   });
 });
+
+test("narrow window: opening a connector from the menu focuses the detail's back button", async ({ page, context }) => {
+  await page.setViewportSize({ width: 600, height: 800 });
+  await loginViaCookie(context);
+  await boot(page, { admin: true });
+  await page.getByRole("button", { name: "Tools", exact: true }).click();
+  await page.getByRole("textbox", { name: "Search tools" }).fill("bigquery");
+  await page.getByRole("button", { name: /Set up/ }).click();
+  const library = page.getByTestId("chat-tools-library");
+  await expect(library.getByTestId("chat-tools-library-detail")).toBeInViewport();
+  await expect(page.getByRole("button", { name: "All connections" })).toBeFocused();
+});
