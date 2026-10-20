@@ -318,7 +318,9 @@ export function ToolsPopover({
         ) : null}
       </div>
 
-      <div className="flex items-center justify-end border-t border-[var(--color-divider)] px-3 py-1.5">
+      {/* 44px tall on a touch screen, so the link's 2.75rem touch box is not
+          clipped by the popover's overflow. */}
+      <div className="flex items-center justify-end border-t border-[var(--color-divider)] px-3 py-1.5 pointer-coarse:min-h-11 pointer-coarse:py-0">
         <button
           type="button"
           onClick={() => onOpenLibrary()}

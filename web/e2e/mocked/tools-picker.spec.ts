@@ -196,6 +196,10 @@ test.describe("on a touch phone", () => {
     await expect(popover).toHaveCSS("opacity", "1");
     // Focusing the search field would open the keyboard over the list.
     await expect(page.getByRole("textbox", { name: "Search tools" })).not.toBeFocused();
+    // The footer is tall enough that "Open library"'s 44px touch box is not clipped.
+    const footerLink = (await page.getByRole("button", { name: "Open library" }).boundingBox())!;
+    const pop = (await popover.boundingBox())!;
+    expect(pop.y + pop.height - (footerLink.y + footerLink.height / 2)).toBeGreaterThanOrEqual(22);
     await page.getByRole("button", { name: "Open library" }).tap();
 
     const library = page.getByTestId("chat-tools-library");
