@@ -285,4 +285,10 @@ test("tablet: a rail filter beside an open detail returns to the filtered list",
   await expect(library.getByRole("region", { name: "Connections" })).toBeVisible();
   await expect(library.getByTestId("chat-tools-library-row-magnite")).toHaveCount(0);
   await expect(library.getByTestId("chat-tools-library-row-indexexchange")).toBeVisible();
+  // A search from the rail does the same, even one that matches nothing.
+  await library.getByTestId("chat-tools-library-row-indexexchange").getByRole("button").first().click();
+  await expect(library.getByRole("region", { name: "Connections" })).toBeHidden();
+  await library.getByLabel("Search tools").fill("zzz");
+  await expect(library.getByRole("region", { name: "Connections" })).toBeVisible();
+  await expect(library).toContainText("No tools match ‘zzz’");
 });

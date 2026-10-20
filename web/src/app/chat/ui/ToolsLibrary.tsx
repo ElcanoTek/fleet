@@ -139,18 +139,20 @@ export function ToolsLibrary({
     });
   };
   // Back to the list, focusing the row whose detail was showing (current, not
-  // selected: a filter may have hidden the selected row).
+  // selected: a filter may have hidden the selected row), or the search field
+  // when nothing is left to show.
   const closeDetail = () => {
     const shown = current?.name;
     setDetailOpen(false);
     requestAnimationFrame(() => {
-      panelRef.current
-        ?.querySelector<HTMLElement>(`[data-testid="chat-tools-library-row-${CSS.escape(shown ?? "")}"] button`)
-        ?.focus();
+      const row = shown
+        ? panelRef.current?.querySelector<HTMLElement>(`[data-testid="chat-tools-library-row-${CSS.escape(shown)}"] button`)
+        : null;
+      (row ?? searchRef.current)?.focus();
     });
   };
-  // A filter change from the tablet rail (visible beside a stacked detail)
-  // returns to the list it just changed.
+  // A search or filter change from the tablet rail (visible beside a stacked
+  // detail) returns to the list it just changed.
   const filterBy = (next: () => void) => {
     next();
     setDetailOpen(false);
@@ -242,7 +244,10 @@ export function ToolsLibrary({
                 ref={searchRef}
                 type="search"
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  filterBy(() => setQuery(next));
+                }}
                 placeholder="Search tools…"
                 aria-label="Search tools"
                 className="h-9 w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-2.5 pointer-coarse:h-11 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
