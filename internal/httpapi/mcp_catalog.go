@@ -144,8 +144,13 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 				Trust:       "bundled",
 			})
 		}
+		listed := make(map[string]bool, len(resp.Bundled))
+		for _, e := range resp.Bundled {
+			listed[e.Name] = true
+		}
 		for _, m := range s.connectorMeta() {
-			if m.Configured {
+			// A connector that is running is configured, whatever the snapshot says.
+			if m.Configured || listed[m.Name] {
 				continue
 			}
 			resp.Bundled = append(resp.Bundled, mcpCatalogBundledEntry{

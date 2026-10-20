@@ -127,6 +127,7 @@ type Bundle struct {
 	// scrubbedConnectorMeta likewise keeps the public picker metadata
 	// (ConnectorMeta) once the catalog is scrubbed.
 	scrubbedConnectorMeta []ConnectorMeta
+	connectorMetaPinned   bool
 
 	Branding   Branding
 	Models     Models
@@ -3242,17 +3243,35 @@ func (b *Bundle) ConnectorEnvironmentKeys(environ []string) []string {
 	return out
 }
 
+// PinConnectorMetadata records the public connector views (the always-on list
+// and the picker metadata) from the live bundle and environment. Both read each
+// connector's enable gate from the environment, so the broker parent calls this
+// BEFORE it unsets the connector variables: pinned afterwards, every gated
+// connector reads as unconfigured, and the Tools picker lists it as Needs setup
+// next to its running row. ScrubConnectorRuntimeDefinitions keeps a pinned
+// snapshot.
+func (b *Bundle) PinConnectorMetadata() {
+	if b == nil || b.MCPCatalog == nil {
+		return
+	}
+	b.scrubbedAlwaysOnServers = append([]AlwaysOnServer{}, b.AlwaysOnServers()...)
+	b.scrubbedConnectorMeta = append([]ConnectorMeta{}, b.ConnectorMeta()...)
+	b.connectorMetaPinned = true
+}
+
 // ScrubConnectorRuntimeDefinitions removes the interpolated connector sections
 // from an already loaded bundle. Call only after all public metadata has been
-// extracted and the credential-owning child has inherited the environment.
+// extracted (PinConnectorMetadata, while the connector environment is still
+// set) and the credential-owning child has inherited the environment.
 // Branding, providers, webhook triggers, remote directory entries, policies,
 // templates, and content paths remain intact for parent-side consumers.
 func (b *Bundle) ScrubConnectorRuntimeDefinitions() {
 	if b == nil {
 		return
 	}
-	b.scrubbedAlwaysOnServers = append([]AlwaysOnServer{}, b.AlwaysOnServers()...)
-	b.scrubbedConnectorMeta = append([]ConnectorMeta{}, b.ConnectorMeta()...)
+	if !b.connectorMetaPinned {
+		b.PinConnectorMetadata()
+	}
 	for i := range b.MCPCatalog {
 		b.MCPCatalog[i] = ServerDef{}
 	}

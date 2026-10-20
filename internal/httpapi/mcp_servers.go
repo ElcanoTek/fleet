@@ -76,7 +76,7 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 			"status":          optionalConnectorStatus(info),
 		})
 	}
-	servers = append(servers, s.needsSetupCatalogEntries()...)
+	servers = append(servers, s.needsSetupCatalogEntries(servers)...)
 	// Per-user remote (hosted) MCP servers (#443): merge the caller's connected
 	// servers into the Optional-server catalog so they show up in the Tools picker
 	// as toggleable, default-on entries (gated per conversation like a bundle
@@ -160,10 +160,18 @@ func categoryFor(cats map[string]string, name string) string {
 // opt-in; the picker shows them only in search (and the library always), with
 // copy that depends on whether the viewer is an admin. Tool names are the
 // manifest allowlist, the only ones known without launching the server.
-func (s *Server) needsSetupCatalogEntries() []map[string]any {
+// listed is the rows already built; a name there is never repeated.
+func (s *Server) needsSetupCatalogEntries(listed []map[string]any) []map[string]any {
+	seen := make(map[string]bool, len(listed))
+	for _, e := range listed {
+		if name, _ := e["name"].(string); name != "" {
+			seen[name] = true
+		}
+	}
 	var out []map[string]any
 	for _, m := range s.connectorMeta() {
-		if m.Configured {
+		// A connector that is running is configured, whatever the snapshot says.
+		if m.Configured || seen[m.Name] {
 			continue
 		}
 		tools := append([]string{}, m.Tools...)
@@ -453,7 +461,7 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 			"status":          optionalConnectorStatus(info),
 		})
 	}
-	servers = append(servers, s.needsSetupCatalogEntries()...)
+	servers = append(servers, s.needsSetupCatalogEntries(servers)...)
 	// Per-user remote (hosted) MCP servers (#443): merge the caller's
 	// connected servers so the per-conversation Tools picker can toggle
 	// them — mirroring the startup catalog (listMCPServerCatalog), which

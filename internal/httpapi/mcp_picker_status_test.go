@@ -230,3 +230,40 @@ func TestMCPCatalogAlwaysOnFollowsReloadedMeta(t *testing.T) {
 		t.Fatalf("email cards = %+v, want exactly one needs-setup card", cards)
 	}
 }
+
+// A running connector is never also a needs-setup row, even when the metadata
+// snapshot says it is unconfigured (as a broker parent's did before the pin).
+func TestNeedsSetupSkipsListedConnectors(t *testing.T) {
+	srv := pickerStatusServer(t)
+	srv.agent = metaEngine{catalogEngine: srv.agent.(*catalogEngine), meta: []clientconfig.ConnectorMeta{
+		{Name: "ix", Category: "ssps", Optional: true},
+		{Name: "tl", Category: "ssps", Optional: true},
+		{Name: "email", Category: "misc"},
+		{Name: "bq", Category: "data-storage", Optional: true},
+	}}
+	req := httptest.NewRequest(http.MethodGet, "/mcp-servers", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@x.com"))
+	w := httptest.NewRecorder()
+	srv.listMCPServerCatalog(w, req)
+	count := map[string]int{}
+	for _, e := range decodeServerCatalog(t, w) {
+		count[e["name"].(string)]++
+	}
+	if count["ix"] != 1 || count["tl"] != 1 || count["bq"] != 1 {
+		t.Errorf("picker rows per connector = %v, want ix, tl and bq once each", count)
+	}
+
+	w = httptest.NewRecorder()
+	srv.mcpCatalog(w, httptest.NewRequest(http.MethodGet, "/mcp-catalog", nil))
+	var resp mcpCatalogResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	dir := map[string]int{}
+	for _, e := range resp.Bundled {
+		dir[e.Name]++
+	}
+	if dir["ix"] != 1 || dir["tl"] != 1 {
+		t.Errorf("directory rows per connector = %v, want ix and tl once each", dir)
+	}
+}

@@ -519,6 +519,9 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 }
 
 func scrubParentConnectorState(bundle *clientconfig.Bundle, cfg *config.Config, resolvedSpecs map[string]agent.MCPServerSpec) error {
+	// Before the unset below: which connectors are configured is read from
+	// this environment.
+	bundle.PinConnectorMetadata()
 	reloadExcluded := append(bundle.ConnectorEnvVarNames(), bundle.ConnectorAccountEnvVarNames()...)
 	if err := cfg.ExcludeEnvVarsFromReload(reloadExcluded...); err != nil {
 		return fmt.Errorf("exclude connector environment from parent reload: %w", err)

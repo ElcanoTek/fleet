@@ -594,3 +594,51 @@ func TestLoadMCPBrokerConfigUsesBootEnvironmentSnapshot(t *testing.T) {
 		t.Fatalf("broker config load mutated process environment to %q", got)
 	}
 }
+
+// The broker parent unsets connector env, so it must record which connectors
+// are configured first. Recorded afterwards, every gated connector read as
+// needs-setup and the Tools picker listed it twice (running + Needs setup).
+func TestScrubParentConnectorState_PinsConfiguredConnectorsFirst(t *testing.T) {
+	t.Setenv("PINTEST_SSP_TOKEN", "pintest-token-7c2e")
+	t.Setenv("PINTEST_EMAIL_TOKEN", "pintest-token-91ab")
+	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: ssp
+    type: stdio
+    command: /bin/true
+    optional: true
+    category: ssps
+    enabled_env: [PINTEST_SSP_TOKEN]
+    env:
+      TOKEN: "${PINTEST_SSP_TOKEN}"
+  - name: email
+    type: stdio
+    command: /bin/true
+    enabled_env: [PINTEST_EMAIL_TOKEN]
+    env:
+      TOKEN: "${PINTEST_EMAIL_TOKEN}"
+  - name: unset
+    type: stdio
+    command: /bin/true
+    optional: true
+    enabled_env: [PINTEST_NEVER_SET]
+`))
+	if err != nil {
+		t.Fatalf("load bundle: %v", err)
+	}
+	if err := scrubParentConnectorState(bundle, &config.Config{}, map[string]agent.MCPServerSpec{}); err != nil {
+		t.Fatalf("scrubParentConnectorState: %v", err)
+	}
+	if os.Getenv("PINTEST_SSP_TOKEN") != "" {
+		t.Fatal("connector environment survived scrub")
+	}
+	configured := map[string]bool{}
+	for _, m := range bundle.ConnectorMeta() {
+		configured[m.Name] = m.Configured
+	}
+	if !configured["ssp"] || !configured["email"] || configured["unset"] {
+		t.Fatalf("configured after scrub = %v, want ssp and email configured, unset not", configured)
+	}
+	if on := bundle.AlwaysOnServers(); len(on) != 1 || on[0].Name != "email" {
+		t.Fatalf("always-on after scrub = %+v, want [email]", on)
+	}
+}
