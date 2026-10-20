@@ -54,6 +54,47 @@ var themeTokenOrder = []struct{ key, cssVar string }{
 	{"overlay_strong", "--color-overlay-strong"},
 	{"rail_hover", "--rail-hover"},
 	{"rail_active", "--rail-active"},
+	// The Tools picker's component tokens. globals.css ships them in fleet's own
+	// purples (the picker design); a bundle can pin each exactly, and any it
+	// leaves unset follows the bundle's palette (pickerDerivations) rather than
+	// staying purple.
+	{"accent_strong", "--color-accent-strong"},
+	{"on_accent_strong", "--color-on-accent-strong"},
+	{"switch_knob_on", "--color-switch-knob-on"},
+	{"link", "--color-link"},
+	{"text_subtle", "--color-text-subtle"},
+	{"divider", "--color-divider"},
+	{"selected_bg", "--color-selected-bg"},
+	{"selected_border", "--color-selected-border"},
+	{"match_bg", "--color-match-bg"},
+	{"icon_tile", "--color-icon-tile"},
+	{"scrim", "--color-scrim"},
+}
+
+// pickerDerivations ties each picker token to the palette keys it follows when
+// the bundle sets any of them but leaves the picker token itself unset, so a
+// rebranded deployment's switches, badge, selection and links wear its own
+// colors. The value is a var()/color-mix() of the overridden token, never the
+// raw manifest string, so it inherits the same validation. match_bg is stronger
+// in light, where a 22% tint on white barely shows.
+var pickerDerivations = []struct {
+	key         string
+	from        []string
+	dark, light string
+}{
+	{"accent_strong", []string{"primary"}, "var(--color-primary)", "var(--color-primary)"},
+	// The foregrounds follow a primary change (fleet's own on_primary then
+	// applies) and an on_primary change on its own.
+	{"on_accent_strong", []string{"primary", "on_primary"}, "var(--color-on-primary)", "var(--color-on-primary)"},
+	{"switch_knob_on", []string{"primary", "on_primary"}, "var(--color-on-primary)", "var(--color-on-primary)"},
+	{"link", []string{"accent"}, "var(--color-accent)", "var(--color-accent)"},
+	{"text_subtle", []string{"text_muted"}, "var(--color-text-muted)", "var(--color-text-muted)"},
+	{"divider", []string{"border_subtle"}, "var(--color-border-subtle)", "var(--color-border-subtle)"},
+	{"selected_bg", []string{"rail_active"}, "var(--rail-active)", "var(--rail-active)"},
+	{"selected_border", []string{"border_strong"}, "var(--color-border-strong)", "var(--color-border-strong)"},
+	{"match_bg", []string{"primary"}, "color-mix(in srgb, var(--color-primary) 22%, transparent)", "color-mix(in srgb, var(--color-primary) 40%, transparent)"},
+	{"icon_tile", []string{"accent"}, "color-mix(in srgb, var(--color-accent) 14%, transparent)", "color-mix(in srgb, var(--color-accent) 14%, transparent)"},
+	{"scrim", []string{"overlay_strong"}, "var(--color-overlay-strong)", "var(--color-overlay-strong)"},
 }
 
 // Semantic status colors (--color-success/-danger/-warning and their borders)
@@ -74,17 +115,41 @@ var colorValueRe = regexp.MustCompile(`^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-
 // writeThemeBlock appends a single `selector{...}` rule for the non-empty,
 // valid tokens in colors. It writes nothing (not even an empty rule) when no
 // token survives validation.
-func writeThemeBlock(b *strings.Builder, selector string, colors map[string]string) {
+func writeThemeBlock(b *strings.Builder, selector string, colors map[string]string, light bool) {
 	if len(colors) == 0 {
 		return
 	}
-	var decls strings.Builder
-	for _, t := range themeTokenOrder {
-		v := strings.TrimSpace(colors[t.key])
-		if v == "" || !colorValueRe.MatchString(v) {
+	valid := func(key string) bool {
+		v := strings.TrimSpace(colors[key])
+		return v != "" && colorValueRe.MatchString(v)
+	}
+	derived := map[string]string{}
+	for _, d := range pickerDerivations {
+		// Only an UNSET picker token is derived. A malformed pin is dropped like
+		// any other invalid value, so that token keeps its built-in default.
+		if strings.TrimSpace(colors[d.key]) != "" {
 			continue
 		}
-		fmt.Fprintf(&decls, "%s:%s;", t.cssVar, v)
+		for _, from := range d.from {
+			if valid(from) {
+				derived[d.key] = d.dark
+				if light {
+					derived[d.key] = d.light
+				}
+				break
+			}
+		}
+	}
+	var decls strings.Builder
+	for _, t := range themeTokenOrder {
+		if v, ok := derived[t.key]; ok {
+			fmt.Fprintf(&decls, "%s:%s;", t.cssVar, v)
+			continue
+		}
+		if !valid(t.key) {
+			continue
+		}
+		fmt.Fprintf(&decls, "%s:%s;", t.cssVar, strings.TrimSpace(colors[t.key]))
 	}
 	if decls.Len() == 0 {
 		return
@@ -99,8 +164,8 @@ func writeThemeBlock(b *strings.Builder, selector string, colors map[string]stri
 func renderThemeCSS(colors clientconfig.BrandColors) string {
 	var b strings.Builder
 	b.WriteString("/* fleet brand theme (client-config bundle) */")
-	writeThemeBlock(&b, `html:root[data-theme="light"]`, colors.Light)
-	writeThemeBlock(&b, `html:root[data-theme="dark"]`, colors.Dark)
+	writeThemeBlock(&b, `html:root[data-theme="light"]`, colors.Light, true)
+	writeThemeBlock(&b, `html:root[data-theme="dark"]`, colors.Dark, false)
 	return b.String()
 }
 
