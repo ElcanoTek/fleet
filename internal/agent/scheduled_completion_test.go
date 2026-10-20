@@ -516,6 +516,128 @@ func TestScheduledVerifierRepairSupplementPassesOnCombinedAnswer(t *testing.T) {
 	}
 }
 
+// recordingVerifier answers from a script (the last reply repeats) and records
+// every prompt it judged.
+type recordingVerifier struct {
+	itMockModel
+	replies []string
+	prompts []string
+}
+
+func (m *recordingVerifier) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	raw, _ := json.Marshal(call.Prompt)
+	m.prompts = append(m.prompts, string(raw))
+	reply := m.replies[min(len(m.prompts)-1, len(m.replies)-1)]
+	return &fantasy.Response{Content: []fantasy.Content{fantasy.TextContent{Text: reply}}, FinishReason: fantasy.FinishReasonStop}, nil
+}
+
+// A task with an output schema answers with one machine-readable object, so a
+// verifier repair must REPLACE that answer: appended after it, the corrected
+// object made the answer two objects, which the verifier rejected as "not
+// exactly one JSON object" on every remaining check until the run dead-lettered
+// (production: Manifest deep-audit tasks, 2026-10). A textless repair round
+// still keeps the judged object.
+func TestScheduledVerifierRepairReplacesStructuredAnswer(t *testing.T) {
+	verifier := &recordingVerifier{replies: []string{
+		`{"missing_actions":["report the not_found segments"],"reasoning":"the summary contradicts the tool"}`,
+		`{"missing_actions":["report the not_found segments"],"reasoning":"still missing"}`,
+		`{"missing_actions":[],"reasoning":"one consistent object"}`,
+	}}
+	a := newTestScheduledAgent(t, &itMockModel{})
+	a.verifierModel = verifier
+	a.outputSchema = json.RawMessage(`{"type":"object"}`)
+	p := &scheduledPolicy{
+		inner:  agentcore.NewDelegatedPolicy(a.logSession, 50, 0, 0),
+		agent:  a,
+		task:   "Deep audit; answer with one JSON object.",
+		runCtx: context.Background(),
+	}
+
+	p.SetRoundFinalText(`{"summary":"draft-one"}`)
+	ok, msgs := p.CanFinish(1)
+	if ok {
+		t.Fatal("the first check must send the run back for repair")
+	}
+	if nudge := strings.Join(msgs, " "); !strings.Contains(nudge, reviewerRepairAnswerNote) || strings.Contains(nudge, repairAnswerNote) {
+		t.Fatalf("a structured repair nudge must ask for the whole corrected answer, got %q", nudge)
+	}
+
+	// A textless repair round keeps the judged object.
+	p.SetRoundFinalText("")
+	if ok, _ := p.CanFinish(2); ok {
+		t.Fatal("the second check must still reject")
+	}
+	if !strings.Contains(verifier.prompts[1], "draft-one") {
+		t.Error("a textless repair round lost the judged answer")
+	}
+
+	p.SetRoundFinalText(`{"summary":"draft-two"}`)
+	if ok, _ := p.CanFinish(3); !ok {
+		t.Fatalf("the corrected object must pass: %v", p.TerminalError())
+	}
+	if !strings.Contains(verifier.prompts[2], "draft-two") || strings.Contains(verifier.prompts[2], "draft-one") {
+		t.Errorf("the re-check must judge the corrected object alone: %s", verifier.prompts[2])
+	}
+	if got := p.RunAnswer(`{"summary":"draft-two"}`); got != `{"summary":"draft-two"}` {
+		t.Errorf("run answer = %q, want the corrected object alone", got)
+	}
+}
+
+// An output schema does not make the round's answer JSON: a schema task that
+// answers in prose still gets the supplement composition (its JSON is produced
+// afterwards by completeRun), so a repair that adds only the missing detail
+// passes on the combined answer.
+func TestScheduledVerifierRepairAppendsProseAnswerOnSchemaTask(t *testing.T) {
+	verifier := &recordingVerifier{replies: []string{
+		`{"missing_actions":["report the coverage window"],"reasoning":"missing"}`,
+		`{"missing_actions":[],"reasoning":"complete"}`,
+	}}
+	a := newTestScheduledAgent(t, &itMockModel{})
+	a.verifierModel = verifier
+	a.outputSchema = json.RawMessage(`{"type":"object"}`)
+	p := &scheduledPolicy{
+		inner:  agentcore.NewDelegatedPolicy(a.logSession, 50, 0, 0),
+		agent:  a,
+		task:   "Refresh the page and report the coverage window.",
+		runCtx: context.Background(),
+	}
+	p.SetRoundFinalText("Refresh published.")
+	ok, msgs := p.CanFinish(1)
+	if ok || !strings.Contains(strings.Join(msgs, " "), repairAnswerNote) {
+		t.Fatalf("a prose answer must be sent back with the append note, got ok=%v %q", ok, msgs)
+	}
+	p.SetRoundFinalText("Coverage 2026-09-01..2026-09-15.")
+	if ok, _ := p.CanFinish(2); !ok {
+		t.Fatalf("the supplemented answer must pass: %v", p.TerminalError())
+	}
+	want := "Refresh published.\n\nCoverage 2026-09-01..2026-09-15."
+	if got := p.RunAnswer("Coverage 2026-09-01..2026-09-15."); got != want {
+		t.Errorf("run answer = %q, want the combined prose %q", got, want)
+	}
+}
+
+func TestIsSingleJSONValue(t *testing.T) {
+	for text, want := range map[string]bool{
+		`{"a":1}`:                 true,
+		"  [1,2]\n":               true,
+		"```json\n{\"a\":1}\n```": true,
+		`{"a":1}{"b":2}`:          false,
+		`{"a":1} and more`:        false,
+		`Report: {"a":1}`:         false,
+		`"just a string"`:         true,
+		`42`:                      true,
+		`null`:                    true,
+		`"a" "b"`:                 false,
+		`Done.`:                   false,
+		`{"a":`:                   false,
+		"":                        false,
+	} {
+		if got := isSingleJSONValue(text); got != want {
+			t.Errorf("isSingleJSONValue(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
 // TestScheduledVerifierTextlessRunSeesNoResponseMarker keeps the explicit
 // marker for a run that produced no assistant text in any round: the gate must
 // be able to flag a demanded report that is genuinely absent.

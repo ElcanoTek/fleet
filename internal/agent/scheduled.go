@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"path/filepath"
 	"sort"
@@ -610,10 +611,51 @@ func (p *scheduledPolicy) RunAnswer(roundText string) string {
 
 // keepJudgedAnswer records that a model finish gate judged the current answer
 // and sent the run back for repair: the repair round's text is composed with
-// it (composeRunAnswer) rather than replacing it.
+// it (composeRunAnswer) rather than replacing it — except when the task has an
+// output schema AND the judged answer is itself one JSON value. A supplement
+// appended to that value is a second value, which the verifier rejects as
+// "not exactly one JSON object" on every remaining check until the run
+// dead-letters, so there the repair round's text replaces the judged answer
+// (a textless repair round still keeps it). A prose answer on a schema task
+// keeps the append: its JSON is produced afterwards by completeRun.
 func (p *scheduledPolicy) keepJudgedAnswer() {
 	p.judgedAnswer = p.latestRunText()
-	p.replaceJudged = false
+	p.replaceJudged = p.agent != nil && len(p.agent.outputSchema) > 0 && isSingleJSONValue(p.judgedAnswer)
+}
+
+// isSingleJSONValue reports whether text is exactly one JSON value (object,
+// array or scalar — a scalar output schema asks for one), optionally inside
+// one Markdown code fence.
+func isSingleJSONValue(text string) bool {
+	text = strings.TrimSpace(text)
+	if body, ok := strings.CutPrefix(text, "```"); ok {
+		if nl := strings.IndexByte(body, '\n'); nl >= 0 {
+			body = body[nl+1:]
+		}
+		if inner, ok := strings.CutSuffix(strings.TrimSpace(body), "```"); ok {
+			text = strings.TrimSpace(inner)
+		}
+	}
+	if text == "" {
+		return false
+	}
+	dec := json.NewDecoder(strings.NewReader(text))
+	var v json.RawMessage
+	if dec.Decode(&v) != nil {
+		return false
+	}
+	_, err := dec.Token()
+	return errors.Is(err, io.EOF)
+}
+
+// verifierRepairAnswerNote is the note the verifier's repair nudge carries:
+// repairAnswerNote, or the reviewer's whole-answer note when keepJudgedAnswer
+// chose to replace.
+func (p *scheduledPolicy) verifierRepairAnswerNote() string {
+	if p.replaceJudged {
+		return reviewerRepairAnswerNote
+	}
+	return repairAnswerNote
 }
 
 // composeRunAnswer combines the answer judged so far with a round's closing
@@ -652,6 +694,7 @@ const repairAnswerNote = "Your closing text so far stays part of this run's fina
 
 // reviewerRepairAnswerNote is the reviewer's counterpart: the repair round's
 // text replaces the reviewed answer, so it must be the whole corrected answer.
+// A verifier repair on a structured-output task uses it too.
 const reviewerRepairAnswerNote = "Your next closing text replaces your previous answer, so write the complete corrected answer."
 
 // The core hands the policy each round's closing text before consulting
@@ -1026,7 +1069,7 @@ func (p *scheduledPolicy) verificationFailed(detail string, records []toolExecRe
 			agentcore.ErrCompletionUnverified, p.verificationAttempts, detail, successfulConnectorCalls(records))
 		return false, nil
 	}
-	return false, []string{detail + " Check the existing tool evidence and complete genuinely missing work. Do not repeat successful external actions merely to supply evidence; use read-only verification instead. " + repairAnswerNote + " Completion will be checked again."}
+	return false, []string{detail + " Check the existing tool evidence and complete genuinely missing work. Do not repeat successful external actions merely to supply evidence; use read-only verification instead. " + p.verifierRepairAnswerNote() + " Completion will be checked again."}
 }
 
 // successfulConnectorCalls renders the connector (mcp_*) calls that succeeded
