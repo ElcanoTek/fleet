@@ -144,14 +144,29 @@ describe("historyToMessages", () => {
     expect(msgs[1].pythonStreams?.[0].stdout).toBe("not json");
   });
 
-  it("joins multiple reasoning deltas with a newline", () => {
+  // Separate reasoning blocks are separate paragraphs, as they stream live: a
+  // single newline is a soft break in Markdown, and rendered "first second".
+  it("joins multiple reasoning blocks as paragraphs", () => {
     const msgs = historyToMessages([
       user("go"),
       reasoning("first"),
       reasoning("second"),
       asText("ok"),
     ]);
-    expect(msgs[1].reasoning).toBe("first\nsecond");
+    expect(msgs[1].reasoning).toBe("first\n\nsecond");
+  });
+
+  // Journal recovery persists one text row per step; read back they must not
+  // run together as "deal.Found it."
+  it("joins multiple assistant text rows as paragraphs", () => {
+    const msgs = historyToMessages([
+      user("go"),
+      asText("Let me check the deal."),
+      toolCall("c1", "bash"),
+      toolResult("c1", "bash", "ok"),
+      asText("Found it."),
+    ]);
+    expect(msgs[1].content).toBe("Let me check the deal.\n\nFound it.");
   });
 
   it("marks a tool_result as errored when is_err=true", () => {

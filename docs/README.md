@@ -89,6 +89,10 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
 - **Chat stream recovery** (why a lost SSE socket reconciles against Postgres
   instead of stamping a terminal state — the walk-away-and-come-back case):
   [`docs/CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md)
+- **The chat view while the agent works** (the status line that replaces the
+  model's between-tool-call narration in the default view, the Working notes
+  under Show details, and the paragraph break between model steps):
+  [`docs/CHAT-WORKING-STATUS.md`](CHAT-WORKING-STATUS.md)
 - **What became of one turn** (the per-turn outcome endpoint the client reads
   instead of inferring from a liveness probe plus a transcript, and why a
   pre-answer failure now offers Retry): [`docs/TURN-OUTCOME.md`](TURN-OUTCOME.md)
@@ -226,6 +230,7 @@ above fails otherwise.
 - [`BUNDLE-STAGING.md`](BUNDLE-STAGING.md) — Staging the default bundle for a bare install on an SELinux host (#1655)
 - [`CHAT-EXPORT.md`](CHAT-EXPORT.md) — Downloading a chat
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn
+- [`CHAT-WORKING-STATUS.md`](CHAT-WORKING-STATUS.md) — The chat view while the agent works
 - [`CODEQL.md`](CODEQL.md) — CodeQL: advanced setup, and the Go analysis that had stopped working
 - [`COMPLETED-STEP-RECOVERY.md`](COMPLETED-STEP-RECOVERY.md) — Provider recovery after completed tool steps and preservation of verifier evidence.
 - [`CONDITIONAL-TASK-COMPLETION.md`](CONDITIONAL-TASK-COMPLETION.md) — Conditional scheduled tasks

@@ -1,3 +1,5 @@
+import { joinTextSegments } from "./textSegments";
+
 // Pure functions shared with chat-experience.tsx — extracted so they can be
 // unit-tested under vitest without pulling in React/Next.js.
 //
@@ -1006,6 +1008,18 @@ export type Message = {
   notSent?: boolean;
   state: MessageState;
   reasoning?: string;
+  /**
+   * Client-only: the text a live turn streamed in its earlier steps — the
+   * model's narration ahead of each tool call — moved out of `content` when
+   * the call arrived (turnNarration.ts). Rendered only under "Show details".
+   * Never set on a history row: the server persists the final answer alone.
+   */
+  narration?: string;
+  /**
+   * Client-only: text.replace delivered the turn's authoritative answer, so
+   * `content` is that answer rather than an in-progress step (turnNarration.ts).
+   */
+  finalAnswer?: boolean;
   toolCalls?: ToolCall[];
   pythonStreams?: PythonStream[];
   approvals?: Approval[];
@@ -1367,7 +1381,12 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       // Track the highest persisted messages.id in this assistant group as its
       // branch point (#454); undefined until a persisted entry contributes one.
       current.dbId = Math.max(current.dbId ?? 0, e.id ?? 0) || undefined;
-      current.content += String((e.content as { text?: string }).text ?? "");
+      // Separate rows are separately written text (journal recovery flushes
+      // one per step), so they join as paragraphs, never "deal.Found it."
+      current.content = joinTextSegments(
+        current.content,
+        String((e.content as { text?: string }).text ?? ""),
+      );
       continue;
     }
     if (e.type === "reasoning") {
@@ -1378,7 +1397,7 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       // branch point (#454); undefined until a persisted entry contributes one.
       current.dbId = Math.max(current.dbId ?? 0, e.id ?? 0) || undefined;
       const txt = String((e.content as { text?: string }).text ?? "");
-      current.reasoning = (current.reasoning ?? "") + (current.reasoning ? "\n" : "") + txt;
+      current.reasoning = joinTextSegments(current.reasoning ?? "", txt);
       continue;
     }
     if (e.type === "tool_call") {

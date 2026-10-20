@@ -62,8 +62,10 @@ func TestTranslatorReplaysRecordedContract(t *testing.T) {
 
 			// A turn that ends without text reports its outcome through the
 			// prompt response, not as agent text, so only streamed text counts.
-			if streamed := strings.TrimSpace(want.Text); streamed != "" && text.String() != want.Text {
-				t.Errorf("editor shows %q, the producer streamed %q", text.String(), want.Text)
+			// ACP cannot retract a chunk, so narration the model streamed ahead
+			// of its tool calls stays in the editor, ahead of the answer.
+			if streamed := strings.TrimSpace(want.Text); streamed != "" && text.String() != want.AppendOnlyText() {
+				t.Errorf("editor shows %q, the producer streamed %q", text.String(), want.AppendOnlyText())
 			}
 			for _, tool := range want.Tools {
 				if started[tool.ID] != tool.Name {

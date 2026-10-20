@@ -144,6 +144,10 @@ type streamSink struct {
 	// finalText accumulates the assistant's user-visible text across the run so
 	// the loop can recover it for the finalize hook + the Result.
 	finalText strings.Builder
+	// stepEnded is set when a model step finishes after text was streamed; the
+	// next step's first text chunk then carries a paragraph break
+	// (StepTextSeparator) so separate steps never run together.
+	stepEnded bool
 	// reasoningBufs buffers reasoning deltas per id; committed on End.
 	reasoningBufs map[string]*strings.Builder
 	// toolEvents counts observable tool side effects (tool_call/tool_result).
@@ -199,12 +203,30 @@ func (s *streamSink) onUserInjected(id, text string) {
 	s.emit("user.message", map[string]any{evtFieldText: text, "steered": true, "input_id": id})
 }
 
-// onTextDelta forwards a text chunk to the Observer and accumulates it.
+// onTextDelta forwards a text chunk to the Observer and accumulates it. The
+// first chunk after a finished step is prefixed with the paragraph break that
+// separates it from the previous step's text, in the event itself, so every
+// consumer of the stream (web, TUI, ACP, the turn journal) gets the same
+// readable string instead of each re-deriving step boundaries it cannot see.
 func (s *streamSink) onTextDelta(text string) {
 	s.mu.Lock()
+	if s.stepEnded && text != "" {
+		text = StepTextSeparator(s.finalText.String(), text) + text
+		s.stepEnded = false
+	}
 	s.finalText.WriteString(text)
 	s.mu.Unlock()
 	s.emit("text.delta", map[string]any{evtFieldText: text})
+}
+
+// onStepFinish marks a model-step boundary for onTextDelta. Nil-safe.
+func (s *streamSink) onStepFinish() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.stepEnded = s.finalText.Len() > 0
+	s.mu.Unlock()
 }
 
 // onReasoningStart begins a reasoning block; some providers ship the whole
@@ -396,6 +418,9 @@ func (s *streamSink) rollbackTo(m sinkMark) {
 	}
 	s.toolEvents = m.toolEvents
 	s.failedToolResults = m.failedToolResults
+	// A mark sits at a step boundary, so the re-driven attempt's first text
+	// is a new step's and needs the same break the abandoned one carried.
+	s.stepEnded = s.finalText.Len() > 0
 	clear(s.reasoningBufs)
 }
 
