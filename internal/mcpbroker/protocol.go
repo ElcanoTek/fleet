@@ -240,6 +240,12 @@ type request struct {
 	// this ID before the final one. Off unless the parent's call context
 	// carries a progress sink, so every other call is unchanged.
 	Progress bool `json:"progress,omitempty"`
+	// Meta carries the methodCall's fleet `_meta` entries (mcp.WithRequestMeta),
+	// e.g. that an approved call was narrowed. The child keeps only
+	// mcp.RequestMetaPrefix keys and re-attaches them to the call's context,
+	// so they reach the request exactly as in-process. Public call metadata,
+	// never a credential; absent for every call that carries none.
+	Meta map[string]any `json:"meta,omitempty"`
 	// Scope is an opaque broker-issued per-run scope ID. It is set on scoped calls
 	// and scope_close; scope_open carries ScopeSpec instead.
 	Scope     string    `json:"scope,omitempty"`

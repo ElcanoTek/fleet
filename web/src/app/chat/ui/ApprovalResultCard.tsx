@@ -262,6 +262,7 @@ export function ApprovalResultCardView({
   approval,
   result,
   approvedTitle,
+  approvedNote,
   approvedRecords,
   toolDetails,
   recorded,
@@ -270,6 +271,9 @@ export function ApprovalResultCardView({
   approval: Approval;
   result: ApprovalResultCardData;
   approvedTitle?: string;
+  // "Approved 3 of 5 · 2 left out" for a narrowed approval
+  // (docs/APPROVAL-NARROWING.md); absent for a whole one.
+  approvedNote?: string;
   approvedRecords?: ReactNode;
   toolDetails?: ReactNode;
   recorded: boolean;
@@ -317,6 +321,11 @@ export function ApprovalResultCardView({
             {approvedTitle ? (
               <div data-testid="approval-result-approved" className="min-w-0 break-words text-[0.75rem] text-[var(--color-text-muted)]">
                 {recorded ? approvedTitle : `Approved: ${approvedTitle}`}
+              </div>
+            ) : null}
+            {approvedNote && !recorded ? (
+              <div data-testid="approval-narrowed-summary" className="min-w-0 break-words text-[0.75rem] text-[var(--color-text-secondary)]">
+                {approvedNote}
               </div>
             ) : null}
           </div>

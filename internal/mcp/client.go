@@ -839,6 +839,19 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 		ctx = pctx
 		params["_meta"] = meta
 	}
+	// Fleet's own `_meta` entries for this call (WithRequestMeta), e.g. that
+	// an approved call was narrowed. Only `fleet/` keys, so they never
+	// replace the progress token.
+	if extra := RequestMeta(ctx); len(extra) > 0 {
+		meta, _ := params["_meta"].(map[string]any)
+		if meta == nil {
+			meta = make(map[string]any, len(extra))
+		}
+		for k, v := range extra {
+			meta[k] = v
+		}
+		params["_meta"] = meta
+	}
 	result, err := s.transport.Call(ctx, "tools/call", params)
 	if err != nil {
 		// If this is a stdio server and the error looks like a broken pipe / EOF,

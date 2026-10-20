@@ -575,6 +575,19 @@ The countdown shows the earliest deadline among them. Once decided, each action
 shows its own outcome card (running, applied, declined), exactly as if you had
 decided it on its own card.
 
+A deployment can also let you **leave records out** of one action that covers
+several (a plan that updates many deals, for example). Its plain-words card
+then has a checkbox on each record, all ticked, and a count such as **3 of 3
+selected**. Untick a record to leave it out: it greys out and reads **Left
+out**, and the button becomes **Approve 2 of 3**, which runs the action for the
+ticked records only, in one click. Nothing else about the action changes, and
+it can never add a record you did not see. Unticking every record turns the
+button into **Decline**. On a grouped card each action's records have their own
+checkboxes, and an action with none ticked is declined. After you approve, the
+card says **Approved 2 of 3 · 1 left out** and marks the left-out record, and
+the assistant is told which ones you left out. In terminal chat, `/approve`
+approves the whole action.
+
 A deployment can also have the assistant **carry on by itself** once you decide
 a card for chosen actions (updating a record in an external system, for
 example), so it can check the result and continue without you typing "done".

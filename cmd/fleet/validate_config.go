@@ -1168,6 +1168,14 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolSuffixes:    p.CriticalToolSuffixes,
 		CriticalToolResultCards: p.CriticalToolResultCards,
 	})...)
+	// critical_tool_narrowable_args: the key must stage a card for an MCP
+	// call and the argument must be a plain top-level name; a typo would
+	// quietly leave the card all or nothing.
+	problems = append(problems, agentcore.NarrowableArgProblems(agentcore.AgentPolicy{
+		CriticalToolSuffixes:       p.CriticalToolSuffixes,
+		CriticalToolModes:          p.CriticalToolModes,
+		CriticalToolNarrowableArgs: p.NarrowableArgNames(),
+	})...)
 	if len(problems) > 0 {
 		res.Status = statusFail
 		res.Detail = strings.Join(problems, "; ")

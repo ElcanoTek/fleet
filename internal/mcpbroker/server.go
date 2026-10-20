@@ -174,6 +174,9 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				// Re-attach the parent's per-call budget (request.CallTimeoutMs):
 				// mcp.Server.callTool starts it once it holds the server mutex.
 				runCtx := mcp.WithCallTimeout(callCtx, time.Duration(req.CallTimeoutMs)*time.Millisecond)
+				// Re-attach the parent's fleet `_meta` entries (request.Meta);
+				// WithRequestMeta keeps only the fleet/ namespace.
+				runCtx = mcp.WithRequestMeta(runCtx, req.Meta)
 				// The parent listens for progress (request.Progress): forward
 				// the call's progress notifications as intermediate frames,
 				// throttled, and stop before the final frame so none follows it.

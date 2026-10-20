@@ -269,6 +269,26 @@ type Bundle struct {
 	pluginRootProblems []string
 }
 
+// NarrowableArgConfig is one critical_tool_narrowable_args entry: the
+// top-level list argument a person may narrow on the card. A mapping (not a
+// bare string) so the entry can grow without a breaking change.
+type NarrowableArgConfig struct {
+	Arg string `yaml:"arg"`
+}
+
+// NarrowableArgNames flattens critical_tool_narrowable_args to the
+// suffix → argument-name map agentcore installs (nil when none is declared).
+func (p AgentPolicy) NarrowableArgNames() map[string]string {
+	if len(p.CriticalToolNarrowableArgs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(p.CriticalToolNarrowableArgs))
+	for k, v := range p.CriticalToolNarrowableArgs {
+		out[k] = v.Arg
+	}
+	return out
+}
+
 // AgentPolicy is the bundle's client-configurable agent tool-behavior policy. It
 // is a plain data struct (no dependency on internal/agentcore) so clientconfig
 // stays a low-level package; cmd/fleet translates it into agentcore.AgentPolicy.
@@ -436,6 +456,19 @@ type AgentPolicy struct {
 	//	agent_policy:
 	//	  critical_tool_result_cards: [execute_plan]
 	CriticalToolResultCards []string `yaml:"critical_tool_result_cards"`
+	// CriticalToolNarrowableArgs is an OPTIONAL map from a critical suffix
+	// (same suffix matching as critical_tools; the longest match wins) to the
+	// ONE top-level list argument a person may narrow on its approval card:
+	// the describer card's rows carry a `key` naming a staged value, the
+	// person unticks rows, and fleet approves the call with that argument
+	// replaced by the ticked values (a non-empty subset of the staged ones,
+	// staged order, nothing else changed). The key must stage a card for an
+	// MCP call (docs/APPROVAL-NARROWING.md, ADR-0085).
+	//
+	//	agent_policy:
+	//	  critical_tool_narrowable_args:
+	//	    execute_plan: {arg: deal_ids}
+	CriticalToolNarrowableArgs map[string]NarrowableArgConfig `yaml:"critical_tool_narrowable_args"`
 	// BatchSecondsPerDeal is DERIVED, never read from agent_policy: Bundle.AgentPolicy
 	// collects each mcp_servers[].batch_seconds_per_deal into it, keyed by
 	// server name, so the per-record batch budget reaches agentcore on the same
@@ -2971,6 +3004,12 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		p.CriticalToolCardDescribers = make(map[string]string, len(b.AgentPolicyConfig.CriticalToolCardDescribers))
 		for k, v := range b.AgentPolicyConfig.CriticalToolCardDescribers {
 			p.CriticalToolCardDescribers[k] = v
+		}
+	}
+	if len(b.AgentPolicyConfig.CriticalToolNarrowableArgs) > 0 {
+		p.CriticalToolNarrowableArgs = make(map[string]NarrowableArgConfig, len(b.AgentPolicyConfig.CriticalToolNarrowableArgs))
+		for k, v := range b.AgentPolicyConfig.CriticalToolNarrowableArgs {
+			p.CriticalToolNarrowableArgs[k] = v
 		}
 	}
 	if len(b.AgentPolicyConfig.CriticalToolAliases) > 0 {

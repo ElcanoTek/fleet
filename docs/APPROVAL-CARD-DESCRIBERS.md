@@ -135,6 +135,12 @@ approval row. The model's tool result for the staged call is the same
 - **Strings are text.** Labels and titles are at most 200 characters, other
   text at most 2000. No string may contain a control character, a
   bidirectional-formatting character or a line/paragraph separator.
+- **Keys.** An item may carry `key`, the staged value of the tool's
+  narrowable list argument the row stands for
+  ([APPROVAL-NARROWING.md](APPROVAL-NARROWING.md)): at most 200 characters,
+  under the text rules, unique within the card. A row whose key names a staged
+  value gets a checkbox; any other key is shown, not selectable. An older
+  fleet refuses a card that carries it.
 - **Links.** A `link` must be an absolute `https` URL with a host and no
   credentials. The optional `link_label` names it ("Open in PubMatic"); it is
   allowed only with a `link` (added with

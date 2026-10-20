@@ -88,6 +88,8 @@ func (c *Client) callMCP(ctx context.Context, scope, server, tool string, args m
 	// So does a progress sink: the child forwards the call's progress
 	// notifications as intermediate frames, which readLoop hands to it.
 	req.Progress = mcp.ProgressSink(ctx) != nil
+	// And the call's fleet `_meta` entries (mcp.WithRequestMeta).
+	req.Meta = mcp.RequestMeta(ctx)
 	resp, err := c.roundtrip(ctx, req)
 	if err != nil {
 		return "", false, err

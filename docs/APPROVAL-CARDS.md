@@ -226,6 +226,19 @@ time** (the individual cards) and **Cancel all**. Each call is still decided by
 the same code as its own card, with its own claim and execution. See
 [GROUPED-APPROVALS.md](GROUPED-APPROVALS.md).
 
+## Leave records out of one call
+
+For tools a bundle lists in `agent_policy.critical_tool_narrowable_args` (with
+the list argument a person may narrow, e.g. `execute_plan: {arg: deal_ids}`),
+a readable card's rows whose `key` names a staged value get a checkbox. The
+person unticks the ones to leave out ("Left out") and presses **Approve 2 of
+3**; the call runs with only that argument narrowed to the ticked values, in
+staged order, and nothing else changed. Nothing ticked declines. The grouped
+card does the same per call. The approval records both lists, the server is
+told the staged list in `_meta["fleet/narrowed"]`, and the settled card says
+**Approved 2 of 3 · 1 left out**. See
+[APPROVAL-NARROWING.md](APPROVAL-NARROWING.md) and ADR-0085.
+
 ## A running call shows its progress
 
 For tools a bundle lists in `agent_policy.critical_tool_progress`, an approved

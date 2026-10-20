@@ -1,0 +1,14 @@
+-- 079_approval_narrowed.sql — what a person approved when they narrowed a
+-- card (agent_policy.critical_tool_narrowable_args, docs/APPROVAL-NARROWING.md,
+-- ADR-0085).
+--
+-- Canonical JSON {"arg", "staged", "approved"}: the declared list argument,
+-- every value the call was staged with (args_json keeps the whole staged call
+-- unchanged) and the non-empty subset the person approved, in staged order.
+-- Written in the same UPDATE as the claim that approves the card, so a card
+-- is never approved narrowed without this record, and execution runs the
+-- staged arguments with only that argument replaced. NULL is every other row
+-- (a card approved whole, a declined or timed-out card, a tool that did not
+-- opt in, and every row written before this column existed), which executes
+-- exactly as before, so a nullable ADD with no backfill is the old behaviour.
+ALTER TABLE approvals ADD COLUMN narrowed_json TEXT;

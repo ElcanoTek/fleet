@@ -442,7 +442,24 @@ remote_mcp_catalog: []
 #                               must be in critical_tools. See
 #                               docs/APPROVAL-RESULT-CARDS.md. Example:
 #                                 critical_tool_result_cards: [execute_plan]
-#   critical_tool_timeouts:     OPTIONAL per-tool approval default-deny window
+#   critical_tool_narrowable_args:
+#                               OPTIONAL map from a critical suffix (same
+#                               suffix matching; the longest match wins) to the
+#                               ONE top-level list argument a person may narrow
+#                               on its approval card. The describer card's rows
+#                               carry a `key` naming a staged value; unticked
+#                               rows are left out, and fleet approves the call
+#                               with that argument replaced by the ticked
+#                               values (a non-empty subset of the staged ones,
+#                               staged order, every other argument unchanged;
+#                               the server gets the staged list in
+#                               _meta["fleet/narrowed"]). The key must be in
+#                               critical_tools (not notify mode, not a
+#                               handler-only card). See
+#                               docs/APPROVAL-NARROWING.md. Example:
+#                                 critical_tool_narrowable_args:
+#                                   execute_plan: {arg: deal_ids}
+#   critical_tool_timeouts:    OPTIONAL per-tool approval default-deny window
 #                               (#225), keyed by the same bare tool-name suffix
 #                               as critical_tools, in seconds. Highest-priority
 #                               layer of the approval-timeout resolution chain

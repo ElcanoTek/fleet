@@ -143,6 +143,15 @@ type AgentPolicy struct {
 	// card (see ResultCardProblems). Empty = every settled card renders as
 	// before.
 	CriticalToolResultCards []string
+	// CriticalToolNarrowableArgs maps a critical suffix to the ONE top-level
+	// list argument a person may narrow on its approval card
+	// (docs/APPROVAL-NARROWING.md, ADR-0085): on approve, the chat server may
+	// replace that argument with a non-empty subset of the staged values, in
+	// staged order, and nothing else. Keys match like CriticalToolSuffixes
+	// (longest suffix wins); a key must stage a card for an MCP call (see
+	// NarrowableArgProblems). Empty = every card approves its call whole, as
+	// before.
+	CriticalToolNarrowableArgs map[string]string
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -232,6 +241,9 @@ var (
 	// activeResultCards is the set of critical suffixes whose results may
 	// carry an outcome card. Empty by default: no result is read for one.
 	activeResultCards = map[string]bool{}
+	// activeNarrowableArgs maps a critical suffix to the list argument a
+	// person may narrow on its card. Empty by default: nothing is narrowed.
+	activeNarrowableArgs = map[string]string{}
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -379,6 +391,8 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	activeProgress = progress
 
 	activeResultCards = installResultCardSet(p.CriticalToolResultCards, seen)
+
+	activeNarrowableArgs = installNarrowableArgs(p.CriticalToolNarrowableArgs, p.CriticalToolModes, seen)
 }
 
 // suffixMatches reports whether a tool (or a suffix standing for one) is

@@ -17,6 +17,7 @@
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import type { ApprovalCardData, ApprovalCardItem } from "./history";
+import type { RowSelection } from "./approvalNarrowing";
 import { Icon } from "./Icon";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 
@@ -33,11 +34,29 @@ export function FlagBadge({ label, code }: { label: string; code: string }) {
   );
 }
 
-function CardItem({ item }: { item: ApprovalCardItem }) {
+// LeftOutTag marks a row the person unticked before approving
+// (docs/APPROVAL-NARROWING.md): the value was not sent.
+export function LeftOutTag({ settled = false }: { settled?: boolean }) {
   return (
-    <li data-testid="approval-card-item" className="min-w-0 border-t border-[var(--color-border-subtle)] py-1.5 first:border-t-0">
+    <span
+      data-testid="approval-card-left-out"
+      className="shrink-0 rounded-full border border-[var(--color-border-strong)] px-1.5 text-[0.68rem] font-medium text-[var(--color-text-secondary)]"
+    >
+      {settled ? "Left out · unchecked before approval" : "Left out"}
+    </span>
+  );
+}
+
+function CardItem({ item, leftOut = false }: { item: ApprovalCardItem; leftOut?: boolean }) {
+  return (
+    <li
+      data-testid="approval-card-item"
+      data-left-out={leftOut || undefined}
+      className="min-w-0 border-t border-[var(--color-border-subtle)] py-1.5 first:border-t-0"
+    >
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <span className="break-words font-medium text-[var(--color-text-primary)]">{item.label}</span>
+        <span className={`break-words font-medium ${leftOut ? "text-[var(--color-text-secondary)]" : "text-[var(--color-text-primary)]"}`}>{item.label}</span>
+        {leftOut ? <LeftOutTag settled /> : null}
         {item.id ? (
           <span className="break-all font-mono text-[0.72rem] text-[var(--color-text-muted)]">{item.id}</span>
         ) : null}
@@ -103,7 +122,7 @@ function matches(item: ApprovalCardItem, needle: string): boolean {
 // ApprovalCardItems renders the record list: the first CARD_ITEMS_VISIBLE,
 // then "Show N more"; above CARD_SEARCH_THRESHOLD items, a search box narrows
 // the list by name, id or flag.
-export function ApprovalCardItems({ items }: { items: ApprovalCardItem[] }) {
+export function ApprovalCardItems({ items, leftOut }: { items: ApprovalCardItem[]; leftOut?: ReadonlySet<string> }) {
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState("");
   const searchable = items.length > CARD_SEARCH_THRESHOLD;
@@ -129,7 +148,7 @@ export function ApprovalCardItems({ items }: { items: ApprovalCardItem[] }) {
       ) : null}
       <ul className="min-w-0">
         {shown.map((it, i) => (
-          <CardItem key={`${it.id ?? ""}-${i}`} item={it} />
+          <CardItem key={`${it.id ?? ""}-${i}`} item={it} leftOut={it.key !== undefined && leftOut?.has(it.key) === true} />
         ))}
       </ul>
       {searchable && query.trim() && filtered.length === 0 ? (
@@ -150,13 +169,28 @@ export function ApprovalCardItems({ items }: { items: ApprovalCardItem[] }) {
 }
 
 // ApprovalReadableBody is the pending card's body: subtitle, records, footer.
-export function ApprovalReadableBody({ card }: { card: ApprovalCardData }) {
+export function ApprovalReadableBody({
+  card,
+  leftOut,
+  selection,
+}: {
+  card: ApprovalCardData;
+  // Rows the person left out of a narrowed approval (settled cards).
+  leftOut?: ReadonlySet<string>;
+  // A narrowable pending card's ticks (docs/APPROVAL-NARROWING.md): its rows
+  // render with checkboxes.
+  selection?: RowSelection;
+}) {
   return (
     <div data-testid="approval-card-readable" className="min-w-0 text-[0.8125rem]">
       {card.subtitle ? (
         <p className="mb-1 break-words text-[0.78rem] text-[var(--color-text-secondary)]">{card.subtitle}</p>
       ) : null}
-      <ApprovalCardItems items={card.items} />
+      {selection ? (
+        <ReadablePendingRecords items={card.items} selection={selection} />
+      ) : (
+        <ApprovalCardItems items={card.items} leftOut={leftOut} />
+      )}
       {card.footer ? (
         <p className="mt-1.5 break-words text-[0.72rem] text-[var(--color-text-muted)]">{card.footer}</p>
       ) : null}
@@ -311,13 +345,36 @@ export function RecordBox({
 
 // PlanRow is one record of a several-record card: name, id and link on the
 // left, its single change's before → after on the right, flags below.
-function PlanRow({ item }: { item: ApprovalCardItem }) {
+function PlanRow({ item, selection }: { item: ApprovalCardItem; selection?: RowSelection }) {
   const single = item.changes && item.changes.length === 1 && !(item.settings && item.settings.length) ? item.changes[0] : null;
+  // A row of a narrowable card (docs/APPROVAL-NARROWING.md): a checkbox, and
+  // once unticked the row greys out and reads "Left out".
+  const selectable = selection !== undefined && item.key !== undefined && selection.selectable(item.key);
+  const out = selectable && selection.isLeftOut(item.key);
   return (
-    <li data-testid="approval-card-item" className="min-w-0 border-t border-[var(--color-border-subtle)] py-2 first:border-t-0">
+    <li
+      data-testid="approval-card-item"
+      data-left-out={out || undefined}
+      className="min-w-0 border-t border-[var(--color-border-subtle)] py-2 first:border-t-0"
+    >
       <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="break-words [overflow-wrap:anywhere] text-[0.82rem] font-medium text-[var(--color-text-primary)]">{item.label}</div>
+        {selectable && item.key !== undefined ? (
+          <input
+            type="checkbox"
+            data-testid="approval-card-row-check"
+            checked={!out}
+            disabled={selection.disabled}
+            onChange={() => selection.toggle(item.key as string)}
+            aria-label={`Include ${item.label}${item.id ? ` (${item.id})` : ""}`}
+            className="mt-1 size-3.5 shrink-0 accent-[var(--color-primary)]"
+          />
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <div
+            className={`break-words [overflow-wrap:anywhere] text-[0.82rem] font-medium ${out ? "text-[var(--color-text-secondary)]" : "text-[var(--color-text-primary)]"}`}
+          >
+            {item.label}
+          </div>
           {item.id || item.link ? (
             <div className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-3">
               {item.id ? <span className="break-all font-mono text-[0.72rem] text-[var(--color-text-muted)]">{item.id}</span> : null}
@@ -325,7 +382,9 @@ function PlanRow({ item }: { item: ApprovalCardItem }) {
             </div>
           ) : null}
         </div>
-        {single ? (
+        {out ? (
+          <LeftOutTag />
+        ) : single ? (
           <span data-testid="approval-card-change" className="shrink-0 text-[0.8rem]">
             <span className="sr-only">{single.label}: </span>
             <ChangeValue before={single.before} after={single.after} />
@@ -339,7 +398,7 @@ function PlanRow({ item }: { item: ApprovalCardItem }) {
           ))}
         </div>
       ) : null}
-      {single ? null : <CardRows changes={item.changes} settings={item.settings} />}
+      {single || out ? null : <CardRows changes={item.changes} settings={item.settings} />}
     </li>
   );
 }
@@ -347,7 +406,7 @@ function PlanRow({ item }: { item: ApprovalCardItem }) {
 // ReadablePendingRecords is the pending card's record area: one record in
 // its inner box with its rows below, or a list of records (collapsing after
 // CARD_ITEMS_VISIBLE, searchable above CARD_SEARCH_THRESHOLD).
-export function ReadablePendingRecords({ items }: { items: ApprovalCardItem[] }) {
+export function ReadablePendingRecords({ items, selection }: { items: ApprovalCardItem[]; selection?: RowSelection }) {
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState("");
   const searchable = items.length > CARD_SEARCH_THRESHOLD;
@@ -356,7 +415,9 @@ export function ReadablePendingRecords({ items }: { items: ApprovalCardItem[] })
     [items, query, searchable],
   );
   if (items.length === 0) return null;
-  if (items.length === 1) {
+  // One record reads in its inner box, unless it is a row the person may
+  // untick: then it keeps the row layout, checkbox included.
+  if (items.length === 1 && !(selection && selection.selectable(items[0].key))) {
     const it = items[0];
     return (
       <div className="mt-3 grid min-w-0 gap-2">
@@ -382,7 +443,7 @@ export function ReadablePendingRecords({ items }: { items: ApprovalCardItem[] })
       ) : null}
       <ul className="min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-1)] px-3">
         {shown.map((it, i) => (
-          <PlanRow key={`${it.id ?? ""}-${i}`} item={it} />
+          <PlanRow key={`${it.key ?? it.id ?? ""}-${i}`} item={it} selection={selection} />
         ))}
       </ul>
       {searchable && query.trim() && filtered.length === 0 ? (

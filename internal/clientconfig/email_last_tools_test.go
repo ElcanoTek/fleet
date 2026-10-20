@@ -159,3 +159,40 @@ agent_policy:
 		t.Errorf("AgentPolicy() must return a copy; the bundle now says %v", again.CriticalToolResultCards)
 	}
 }
+
+// agent_policy.critical_tool_narrowable_args parses as {suffix: {arg: name}},
+// is copied, and flattens to the map agentcore installs; an unknown key in an
+// entry is refused by the strict decoder.
+func TestAgentPolicyNarrowableArgs(t *testing.T) {
+	dir := writeManifest(t, `
+agent_policy:
+  critical_tools: [execute_plan]
+  critical_tool_narrowable_args:
+    execute_plan: {arg: deal_ids}
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	p := b.AgentPolicy()
+	if got := p.NarrowableArgNames(); len(got) != 1 || got["execute_plan"] != "deal_ids" {
+		t.Fatalf("NarrowableArgNames = %v, want {execute_plan: deal_ids}", got)
+	}
+	p.CriticalToolNarrowableArgs["execute_plan"] = NarrowableArgConfig{Arg: "mutated"}
+	if again := b.AgentPolicy(); again.CriticalToolNarrowableArgs["execute_plan"].Arg != "deal_ids" {
+		t.Errorf("AgentPolicy() must return a copy; the bundle now says %v", again.CriticalToolNarrowableArgs)
+	}
+	if (AgentPolicy{}).NarrowableArgNames() != nil {
+		t.Error("no declaration flattens to nil")
+	}
+
+	bad := writeManifest(t, `
+agent_policy:
+  critical_tools: [execute_plan]
+  critical_tool_narrowable_args:
+    execute_plan: {arg: deal_ids, args: [x]}
+`)
+	if _, err := Load(bad); err == nil {
+		t.Fatal("an unknown key inside an entry must fail the load")
+	}
+}

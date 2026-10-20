@@ -260,6 +260,12 @@ export type MemoryProposal = {
 
 /** One record on a readable approval card (docs/APPROVAL-CARD-DESCRIBERS.md). */
 export type ApprovalCardItem = {
+  /**
+   * The staged value of the tool's narrowable list argument this row stands
+   * for (docs/APPROVAL-NARROWING.md). A row whose key is one of the card's
+   * `narrowable.values` gets a checkbox; unticking it leaves that value out.
+   */
+  key?: string;
   label: string;
   /** Buyer-facing id, shown in monospace. */
   id?: string;
@@ -364,16 +370,23 @@ export function parseApprovalCardData(value: unknown): ApprovalCardData | undefi
   const footer = optString(v.footer);
   if (subtitle === null || footer === null) return undefined;
   const items: ApprovalCardItem[] = [];
+  const keys = new Set<string>();
   for (const raw of v.items) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
     const it = raw as Record<string, unknown>;
     if (!isString(it.label)) return undefined;
     const id = optString(it.id);
     if (id === null) return undefined;
+    const key = optString(it.key);
+    if (key === null || (key && keys.has(key))) return undefined;
     const link = parseCardLink(it);
     const rows = parseCardRows(it);
     if (!link || !rows) return undefined;
     const item: ApprovalCardItem = { label: it.label };
+    if (key) {
+      keys.add(key);
+      item.key = key;
+    }
     if (id) item.id = id;
     Object.assign(item, link, rows);
     items.push(item);
@@ -633,12 +646,60 @@ export type Approval = {
   /** The latest progress the running call reported, when it reported any. */
   progress?: ApprovalProgress;
   /**
+   * The list argument a person may narrow on this pending card and its staged
+   * values, for a tool the bundle lists in
+   * agent_policy.critical_tool_narrowable_args (docs/APPROVAL-NARROWING.md).
+   * The readable card's rows whose key is one of the values get a checkbox.
+   */
+  narrowable?: ApprovalNarrowable;
+  /** What the person approved, on a card they approved narrowed. */
+  narrowed?: ApprovalNarrowed;
+  /**
    * Why a grouped decision could not decide this card (the group endpoint's
    * per-card error). The card stays pending; its own card shows this once the
    * group no longer holds it. Client-side only.
    */
   decisionError?: string;
 };
+
+/** The narrowable list argument of a pending card and its staged values. */
+export type ApprovalNarrowable = { arg: string; values: string[] };
+
+/** A narrowed approval: every staged value and the subset approved, in staged order. */
+export type ApprovalNarrowed = { arg: string; staged: string[]; approved: string[] };
+
+function stringList(v: unknown): string[] | null {
+  if (!Array.isArray(v) || v.length === 0) return null;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const e of v) {
+    if (typeof e !== "string" || e === "" || seen.has(e)) return null;
+    seen.add(e);
+    out.push(e);
+  }
+  return out;
+}
+
+/** Re-checks a pending card's `narrowable`: an argument name and two or more distinct values. */
+export function parseApprovalNarrowable(value: unknown): ApprovalNarrowable | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  const values = stringList(v.values);
+  if (typeof v.arg !== "string" || v.arg === "" || !values || values.length < 2) return undefined;
+  return { arg: v.arg, values };
+}
+
+/** Re-checks a settled card's `narrowed`: approved is a strict, non-empty subset of staged. */
+export function parseApprovalNarrowed(value: unknown): ApprovalNarrowed | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  const staged = stringList(v.staged);
+  const approved = stringList(v.approved);
+  if (typeof v.arg !== "string" || v.arg === "" || !staged || !approved || approved.length >= staged.length) return undefined;
+  const inStaged = new Set(staged);
+  if (!approved.every((a) => inStaged.has(a))) return undefined;
+  return { arg: v.arg, staged, approved };
+}
 
 /** One MCP progress update of a running approved call. */
 export type ApprovalProgress = {
@@ -693,6 +754,8 @@ export type ApprovalOutcomePayload = {
   execution_unknown?: boolean;
   /** The result's outcome card (critical_tool_result_cards); success only. */
   result_card?: unknown;
+  /** What a narrowed approval approved (docs/APPROVAL-NARROWING.md). */
+  narrowed?: unknown;
 };
 
 /**
@@ -751,9 +814,11 @@ export function hydrateResolvedApproval(p: {
   group_id?: string;
   progress_updates?: boolean;
   progress?: unknown;
+  narrowed?: unknown;
 }): Approval {
   const executing = p.executing === true;
   return {
+    narrowed: parseApprovalNarrowed(p.narrowed),
     groupId: p.group_id || undefined,
     progressUpdates: p.progress_updates === true || undefined,
     progress: executing ? parseApprovalProgress(p.progress) : undefined,

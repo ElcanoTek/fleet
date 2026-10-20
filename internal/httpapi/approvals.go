@@ -879,6 +879,13 @@ func approvalClientFields(toolName, rawInput, convID string) map[string]any {
 		// Only present when true, so every other card's payload is unchanged.
 		out["progress_updates"] = true
 	}
+	if n := narrowablePayload(toolName, rawInput); n != nil {
+		// critical_tool_narrowable_args: the list argument a person may
+		// narrow on this card and its staged values; the describer card's
+		// rows that name one get a checkbox (docs/APPROVAL-NARROWING.md).
+		// Only present for such a card, so every other payload is unchanged.
+		out["narrowable"] = n
+	}
 	if resumesAfterApproval(toolName) {
 		// critical_tool_resume: once this card is settled fleet starts a turn
 		// on its own (docs/RESUME-AFTER-APPROVAL.md), so the client follows the
@@ -1507,6 +1514,12 @@ type approvalRequest struct {
 	// approving, instead of blindly accepting or starting over. nil field =
 	// keep the staged value. Ignored for every other tool kind.
 	Edits *scheduleTaskEdits `json:"edits,omitempty"`
+	// ApprovedValues narrows the approval (docs/APPROVAL-NARROWING.md): the
+	// values of the tool's declared narrowable list argument the person
+	// approved, a non-empty subset of the staged ones. Absent (nil) approves
+	// the call whole. Only with approved=true and scope once; anything else is
+	// refused before a claim.
+	ApprovedValues []string `json:"approved_values,omitempty"`
 }
 
 // prevalidateStagedTaskPrompt checks the prompt of a schedule_task or
@@ -1703,6 +1716,14 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	if scope := strings.TrimSpace(req.Scope); scope != "" && scope != "once" && !agentcore.SessionApprovalAllowed(approval.ToolName) {
 		return approvalError(http.StatusBadRequest, "this action needs its own decision for each call, so it cannot be approved or denied for the rest of the chat; use scope once")
 	}
+	// A narrowed approval (agent_policy.critical_tool_narrowable_args): the
+	// person approved only some of the staged values of the declared list
+	// argument. Checked whole before anything is claimed; a bad request
+	// leaves the card pending (approval_narrowing.go).
+	narrowing, err := requestedNarrowing(approval, req)
+	if err != nil {
+		return approvalError(http.StatusBadRequest, err.Error())
+	}
 
 	// A click that lands after the default-deny deadline but before the sweep's
 	// next tick resolves the row as timed out RIGHT NOW instead of losing the
@@ -1781,8 +1802,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	// retry) both send the email and only collide on the status write
 	// afterwards. Losing the claim means someone else is running it —
 	// return their resolved state instead of re-firing.
-	claimed, err := s.store.ClaimApproval(ctx, user, approvalID, "approved",
-		approvalExecutingSentinel)
+	claimed, err := s.claimApproved(ctx, user, convID, approval, narrowing)
 	if err != nil {
 		return approvalError(http.StatusInternalServerError, err.Error())
 	}
@@ -1949,6 +1969,12 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	isErr := toolErr != nil
 	var governed string
 	resultText, isErr, governed = governApprovalResult(execCtx, approval, resultText, isErr)
+	// A narrowed approval: fleet's line naming what the person approved and
+	// left out, after the tool's own text (so a result card, which is read
+	// from the start of the governed text, is untouched).
+	if narrowed, nerr := parseApprovalNarrowing(approval.NarrowedJSON); approval.NarrowedJSON != "" && nerr == nil {
+		resultText = strings.TrimRight(resultText, "\n") + "\n\n" + narrowingNote(narrowed)
+	}
 	// A tool in critical_tool_result_cards: the outcome card its own result
 	// carries, stored on the still-executing row just before the outcome, so
 	// the settled card and its reply carry both. Only for a call that ran and
@@ -1981,6 +2007,7 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	if resultCard != nil {
 		reply["result_card"] = resultCard
 	}
+	withApprovalNarrowed(reply, approval)
 	return s.resumeReplyFlag(execCtx, reply, approval)
 }
 
@@ -2122,8 +2149,9 @@ func (s *Server) approvalClientState(a *store.Approval) map[string]any {
 	}
 	// The outcome card the call's own result carried, for a tool in
 	// critical_tool_result_cards whose success fleet recorded. Absent for
-	// every other row, so its payload is unchanged.
-	return s.withApprovalResultCard(out, a)
+	// every other row, so its payload is unchanged. So is what a narrowed
+	// approval approved (approval_narrowing.go).
+	return withApprovalNarrowed(s.withApprovalResultCard(out, a), a)
 }
 
 // writeResolvedApprovalState answers a request that lost the claim race
@@ -2365,9 +2393,12 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	if !strings.HasPrefix(approval.ToolName, "mcp_") {
 		return "", fmt.Errorf("unsupported tool for approval: %s", approval.ToolName)
 	}
-	var args map[string]any
-	if err := decodeJSONNumbers([]byte(approval.ArgsJSON), &args); err != nil {
-		return "", fmt.Errorf("parse args: %w", err)
+	// The staged arguments, with the narrowed argument replaced when the
+	// person approved only some of its values (approval_narrowing.go). A
+	// narrowing record that does not match the staged call refuses the run.
+	args, narrowing, err := approvalExecutionArgs(approval)
+	if err != nil {
+		return "", err
 	}
 	// Reopen the seat the card was staged under (#167 residual 2). The turn
 	// scope that staged it is long gone, so this is a fresh short-lived scope
@@ -2398,9 +2429,21 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	// agent loop's MCP calls do. The approval runs on a fresh per-approval
 	// scope, so no other call queues ahead of it; the outer deadline is the
 	// budget itself.
-	budget, _ := agentcore.ApprovedCallBudget(server, approval.ArgsJSON)
+	budgetArgs := approval.ArgsJSON
+	if narrowing != nil {
+		// Budget the call that runs: a narrowed deal_ids batch is smaller.
+		if b, merr := json.Marshal(args); merr == nil {
+			budgetArgs = string(b)
+		}
+	}
+	budget, _ := agentcore.ApprovedCallBudget(server, budgetArgs)
 	callCtx, cancel := context.WithTimeout(mcp.WithCallTimeout(ctx, budget), budget)
 	defer cancel()
+	if narrowing != nil {
+		// Tell the server which values were staged, so it can check its
+		// other arguments against what the person reviewed.
+		callCtx = mcp.WithRequestMeta(callCtx, narrowingRequestMeta(narrowing))
+	}
 	// A tool in critical_tool_progress asks its server for progress while it
 	// runs (approval_progress.go); the executing card shows it. Stopped when
 	// the call returns, before its outcome is recorded.
