@@ -1967,14 +1967,15 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 		resultText = fmt.Sprintf("%s failed: %v", actionVerb(approval.ToolName), toolErr)
 	}
 	isErr := toolErr != nil
-	var governed string
-	resultText, isErr, governed = governApprovalResult(execCtx, approval, resultText, isErr)
 	// A narrowed approval: fleet's line naming what the person approved and
 	// left out, after the tool's own text (so a result card, which is read
-	// from the start of the governed text, is untouched).
+	// from the start of the result, is untouched) and BEFORE governance, so
+	// the whole text the model reads passes the same boundary and bound.
 	if narrowed, nerr := parseApprovalNarrowing(approval.NarrowedJSON); approval.NarrowedJSON != "" && nerr == nil {
 		resultText = strings.TrimRight(resultText, "\n") + "\n\n" + narrowingNote(narrowed)
 	}
+	var governed string
+	resultText, isErr, governed = governApprovalResult(execCtx, approval, resultText, isErr)
 	// A tool in critical_tool_result_cards: the outcome card its own result
 	// carries, stored on the still-executing row just before the outcome, so
 	// the settled card and its reply carry both. Only for a call that ran and

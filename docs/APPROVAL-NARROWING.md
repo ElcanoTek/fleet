@@ -62,8 +62,9 @@ from the card.
 
 `narrowable: {arg, values}` rides the live `tool.approval_required` event, each
 `pending_approvals` row and the one-card GET, for a declared tool whose staged
-value of `arg` is a list of 2 to 500 distinct non-empty strings
-(`stagedNarrowable`). Any other card carries no key.
+value of `arg` is a list of 2 to 500 distinct non-empty strings of at most 200
+characters each (a row's `key` must equal the value, and keys are bounded the
+same; `stagedNarrowable`). Any other card carries no key.
 
 On the readable card (`GenericActionCard` with `ReadablePendingRecords`):
 
@@ -93,7 +94,7 @@ The approve POST takes `approved_values`, the ticked values:
 refuses with 400, leaving the card pending, when:
 
 - the tool declares no narrowable argument, or its staged value is not a list
-  of 2 to 500 distinct non-empty strings;
+  of 2 to 500 distinct non-empty strings of at most 200 characters;
 - the list is empty (decline instead), names a value that was not staged, or
   names one twice;
 - it comes with `approved: false`, or with a scope other than `once`.
@@ -135,8 +136,14 @@ The approved-call budget is computed for the narrowed arguments (a smaller
   tool's text followed by fleet's line: `[fleet] The person approved 2 of the 3
   staged deal_ids and left out "k2". Only the approved ones were sent to the
   tool. Do not run the left-out ones unless the person asks. (Written by fleet,
-  not the tool.)` It follows the tool's text, so a result card, which is read
-  from the start of the result, is untouched.
+  not the tool.)` It names at most 20 left-out values and counts the rest. It
+  follows the tool's text, so a result card, which is read from the start of
+  the result, is untouched, and it is added before the result's governance, so
+  the whole text the model reads passes the same boundary and size bound.
+- A narrowed call cut off by a restart keeps the line too:
+  `RecoverStrandedApprovals` reads `narrowed_json` and adds it after the
+  "outcome unknown" breadcrumb, because the recorded tool call holds the whole
+  staged list.
 - `narrowed: {arg, staged, approved}` rides the approve POST answer, its
   idempotent replays, each `resolved_approvals` row and the one-card GET.
 - The settled card says **Approved 2 of 3 · 1 left out** (under the result
@@ -152,10 +159,13 @@ an approved card's id to its ticked values:
 {"approve": ["ap-ix", "ap-mg"], "decline": [], "narrow": {"ap-ix": ["k2", "k3"]}}
 ```
 
-Every id in `narrow` must be in `approve`, and each narrowing is checked with
-the same code as the single-card POST before any card is claimed; a bad one
-refuses the whole decision. Each card is then decided with its own values. The
-body limit is now 1 MiB (it was 64 KiB) to fit up to 500 values per card.
+Every id in `narrow` must be in `approve`, the values across all cards are at
+most 5000 (the card row budget), and each narrowing is checked with the same
+code as the single-card POST before any card is claimed; a bad one refuses the
+whole decision. Each card is then decided with its own values. The body limit
+is now 8 MiB (it was 64 KiB), which holds 5000 values of 200 characters even
+fully JSON-escaped; a larger narrowing is refused and the person can decide the
+cards one at a time.
 
 On the grouped card each narrowable call shows its rows with their own
 checkboxes and count. A checked call with every row unticked is declined, like

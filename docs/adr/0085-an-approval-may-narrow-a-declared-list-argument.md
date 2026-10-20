@@ -36,7 +36,7 @@ may narrow on its card (`agent_policy.critical_tool_narrowable_args`, e.g.
 1. **Only that argument, only smaller.** On approve, the person may name a
    subset of the staged values (`approved_values`). Fleet checks, before any
    claim, that the staged value is a list of 2 to 500 distinct non-empty
-   strings and that the named values are a non-empty subset of it, each named
+   strings of at most 200 characters and that the named values are a non-empty subset of it, each named
    once. The call then runs with that argument replaced by the named values in
    their staged order, and with every other argument exactly as staged. A
    narrowing can only leave values out: it cannot add, repeat or reorder one,

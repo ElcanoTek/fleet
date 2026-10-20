@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -68,5 +69,52 @@ func TestClaimApprovalNarrowed(t *testing.T) {
 	}
 	if got, err := s.GetApproval(ctx, "alice@example.com", whole.ID); err != nil || got.NarrowedJSON != "" {
 		t.Fatalf("whole approval narrowed = %q err=%v", got.NarrowedJSON, err)
+	}
+}
+
+// A narrowed call cut off by a restart keeps its narrowing in the recovery
+// breadcrumb: the recorded tool call holds the whole staged list, so the
+// model must be told which values were approved and which were left out.
+func TestRecoverStrandedApprovals_KeepsTheNarrowing(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	a, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "mcp_ix_execute_plan", "call_1", `{"deal_ids":["a","b","c"]}`, 0, ApprovalSeat{Server: "ix"})
+	if err != nil {
+		t.Fatalf("CreateApproval: %v", err)
+	}
+	if ok, err := s.ClaimApprovalNarrowed(ctx, "alice@example.com", a.ID, ApprovalExecutingSentinel,
+		`{"arg":"deal_ids","staged":["a","b","c"],"approved":["a","c"]}`); err != nil || !ok {
+		t.Fatalf("ClaimApprovalNarrowed: %v %v", ok, err)
+	}
+	if n, err := s.RecoverStrandedApprovals(ctx); err != nil || n != 1 {
+		t.Fatalf("RecoverStrandedApprovals = %d, %v", n, err)
+	}
+	history, err := s.LoadHistory(ctx, conv.ID)
+	if err != nil || len(history) == 0 {
+		t.Fatalf("LoadHistory = %d entries, %v", len(history), err)
+	}
+	last := string(history[len(history)-1].Content)
+	if !strings.Contains(last, "Execution outcome unknown") || !strings.Contains(last, `approved 2 of the 3 staged deal_ids and left out \"b\"`) {
+		t.Fatalf("recovery breadcrumb = %s, want the unknown outcome and the narrowing", last)
+	}
+}
+
+// The note names at most narrowingNoteMaxNamed left-out values and counts the
+// rest, so a long staged list cannot blow up the model-visible result.
+func TestNarrowingNote_IsBounded(t *testing.T) {
+	staged := make([]string, 0, 60)
+	for i := range 60 {
+		staged = append(staged, strings.Repeat("v", 150)+string(rune('A'+i%26))+strings.Repeat("x", i))
+	}
+	note := NarrowingNote("deal_ids", staged, staged[:1])
+	if !strings.Contains(note, "approved 1 of the 60 staged deal_ids") || !strings.Contains(note, " and 39 more.") {
+		t.Fatalf("note = %q", note)
+	}
+	if len(note) > 8<<10 {
+		t.Fatalf("note is %d bytes, want it bounded", len(note))
 	}
 }

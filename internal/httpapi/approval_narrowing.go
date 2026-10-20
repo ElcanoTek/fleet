@@ -36,6 +36,7 @@ import (
 	"io"
 	"log"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -46,6 +47,10 @@ import (
 // approvalCardMaxItems rows, so a longer list could never be reviewed row by
 // row anyway.
 const maxNarrowableValues = approvalCardMaxItems
+
+// maxNarrowableValueRunes bounds one narrowable value: the card row that
+// names it carries it as its `key`, whose limit is the same.
+const maxNarrowableValueRunes = approvalCardMaxTitle
 
 // narrowedRequestMetaKey is the `_meta` entry fleet adds to a narrowed
 // approved call: {"arg": <name>, "staged": [<every staged value, in order>]}.
@@ -83,8 +88,10 @@ func stagedNarrowable(toolName, argsJSON string) (arg string, values []string, o
 	return arg, values, true
 }
 
-// narrowableValues reads a staged list argument: distinct non-empty strings,
-// at most maxNarrowableValues of them.
+// narrowableValues reads a staged list argument: distinct non-empty strings
+// of at most maxNarrowableValueRunes characters (a card row's key, which must
+// equal the value to be selectable, is bounded the same), at most
+// maxNarrowableValues of them.
 func narrowableValues(v any) ([]string, bool) {
 	list, ok := v.([]any)
 	if !ok || len(list) == 0 || len(list) > maxNarrowableValues {
@@ -94,7 +101,7 @@ func narrowableValues(v any) ([]string, bool) {
 	out := make([]string, 0, len(list))
 	for _, e := range list {
 		s, isString := e.(string)
-		if !isString || s == "" || seen[s] {
+		if !isString || s == "" || seen[s] || utf8.RuneCountInString(s) > maxNarrowableValueRunes {
 			return nil, false
 		}
 		seen[s] = true
@@ -269,19 +276,10 @@ func (n *approvalNarrowing) leftOut() []string {
 }
 
 // narrowingNote is fleet's line under a narrowed call's result, in the
-// history the model reads: what the person approved and what they left out,
-// so the agent neither reports the left-out values as done nor runs them
-// again unasked. Written by fleet, and says so.
+// history the model reads (store.NarrowingNote, shared with the restart
+// recovery): what the person approved and what they left out.
 func narrowingNote(n *approvalNarrowing) string {
-	quoted := func(vs []string) string {
-		parts := make([]string, len(vs))
-		for i, v := range vs {
-			parts[i] = fmt.Sprintf("%q", v)
-		}
-		return strings.Join(parts, ", ")
-	}
-	return fmt.Sprintf("[fleet] The person approved %d of the %d staged %s and left out %s. Only the approved ones were sent to the tool. Do not run the left-out ones unless the person asks. (Written by fleet, not the tool.)",
-		len(n.Approved), len(n.Staged), n.Arg, quoted(n.leftOut()))
+	return store.NarrowingNote(n.Arg, n.Staged, n.Approved)
 }
 
 // narrowablePayload is the pending card's `narrowable` field: the argument a

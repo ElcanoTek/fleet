@@ -219,6 +219,7 @@ func TestHandleApproval_RefusesABadNarrowingBeforeTheClaim(t *testing.T) {
 		{name: "one staged value", body: `{"approved":true,"approved_values":["a"]}`, args: `{"deal_ids":["a"]}`, policy: true},
 		{name: "staged list repeats a value", body: `{"approved":true,"approved_values":["a"]}`, args: `{"deal_ids":["a","a","b"]}`, policy: true},
 		{name: "staged list holds a number", body: `{"approved":true,"approved_values":["a"]}`, args: `{"deal_ids":["a",7]}`, policy: true},
+		{name: "staged value too long for a row key", body: `{"approved":true,"approved_values":["a"]}`, args: `{"deal_ids":["a","` + strings.Repeat("x", 201) + `"]}`, policy: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -365,10 +366,11 @@ func TestApprovalGroup_Narrowing(t *testing.T) {
 	}
 
 	for _, body := range []string{
-		`{"approve":["ap-pm"],"decline":["ap-mg"],"narrow":{"ap-mg":["x"]}}`, // narrowing a declined card
-		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":["q"]}}`,             // not a staged value
-		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":[]}}`,                // empty
-		`{"approve":["ap-pm"],"narrow":{"ap-pm":null}}`,                      // null
+		`{"approve":["ap-pm"],"decline":["ap-mg"],"narrow":{"ap-mg":["x"]}}`,                                                                   // narrowing a declined card
+		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":["q"]}}`,                                                                               // not a staged value
+		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":[]}}`,                                                                                  // empty
+		`{"approve":["ap-pm"],"narrow":{"ap-pm":null}}`,                                                                                        // null
+		`{"approve":["ap-pm"],"narrow":{"ap-pm":[` + strings.TrimSuffix(strings.Repeat(`"x",`, maxApprovalGroupNarrowedValues+1), ",") + `]}}`, // over the group's value budget
 	} {
 		st := &narrowGroupStore{groupStore: newGroupStore(rows()...), narrowed: map[string]string{}}
 		if rec := post(st, body); rec.Code != 400 {
