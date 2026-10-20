@@ -61,6 +61,12 @@ func PositionRanges(pos []int) string {
 	return strings.Join(parts, ", ")
 }
 
+// ApprovalStopNote is fleet's line for a call the person stopped while it ran
+// (docs/APPROVAL-STOP.md). The chat server appends it after the call's
+// result; RecoverStrandedApprovals appends it to an interrupted call's
+// breadcrumb.
+const ApprovalStopNote = "[fleet] The person pressed Stop while this call ran. Its server was asked to stop after the item it was working on; the result above says what ran and what did not. Do not run the remaining items unless the person asks. (Written by fleet, not the tool.)"
+
 // narrowingNoteFor is NarrowingNote for a stored narrowed_json record, or ""
 // when there is none or it does not read.
 func narrowingNoteFor(narrowedJSON string) string {

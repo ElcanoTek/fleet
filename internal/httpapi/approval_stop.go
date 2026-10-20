@@ -36,6 +36,7 @@ import (
 type approvalStopHandle struct {
 	ch   chan struct{}
 	once sync.Once
+	refs int // guarded by approvalStopRegistry.mu
 }
 
 // stop closes the signal; a second call does nothing.
@@ -61,31 +62,59 @@ func approvalStoppable(toolName string) bool {
 	return strings.HasPrefix(toolName, "mcp_") && !handlerOnlyApproval(toolName) && agentcore.ApprovalStop(toolName)
 }
 
-// armApprovalStop registers a claimed call's stop signal. It is called right
-// after the claim, before the call starts, so a Stop that lands while the
-// call's scope is still opening is not lost.
-func (s *Server) armApprovalStop(approvalID string) {
-	s.approvalStops.LoadOrStore(approvalID, &approvalStopHandle{ch: make(chan struct{})})
+// approvalStopRegistry holds the stop signal of each running stoppable call,
+// by approval id. A signal is shared by everyone who armed it and lives until
+// the last of them disarms it: the request that wins the claim keeps it for
+// the call, while a concurrent request that loses the claim drops only its
+// own reference, never the winner's. The zero value is ready.
+type approvalStopRegistry struct {
+	mu sync.Mutex
+	m  map[string]*approvalStopHandle
+}
+
+// armApprovalStop takes a reference on a call's stop signal, creating it if
+// needed. decideApproval arms it before the claim makes the row executing,
+// so the stop route always finds it for a running call.
+func (s *Server) armApprovalStop(approvalID string) *approvalStopHandle {
+	r := &s.approvalStops
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.m == nil {
+		r.m = make(map[string]*approvalStopHandle)
+	}
+	h, ok := r.m[approvalID]
+	if !ok {
+		h = &approvalStopHandle{ch: make(chan struct{})}
+		r.m[approvalID] = h
+	}
+	h.refs++
+	return h
 }
 
 // approvalStopFor returns a running call's stop signal, or nil.
 func (s *Server) approvalStopFor(approvalID string) *approvalStopHandle {
-	v, ok := s.approvalStops.Load(approvalID)
-	if !ok {
-		return nil
-	}
-	h, _ := v.(*approvalStopHandle)
-	return h
+	r := &s.approvalStops
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.m[approvalID]
 }
 
-// disarmApprovalStop drops a call's stop signal once its outcome is recorded.
+// disarmApprovalStop drops one reference; the signal is forgotten with the
+// last one (the call's outcome is recorded, or the claim was lost).
 func (s *Server) disarmApprovalStop(approvalID string) {
-	s.approvalStops.Delete(approvalID)
+	r := &s.approvalStops
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if h, ok := r.m[approvalID]; ok {
+		if h.refs--; h.refs <= 0 {
+			delete(r.m, approvalID)
+		}
+	}
 }
 
 // approvalStopNote is fleet's line after a stopped call's result, in the
-// history the model reads.
-const approvalStopNote = "[fleet] The person pressed Stop while this call ran. Its server was asked to stop after the item it was working on; the result above says what ran and what did not. Do not run the remaining items unless the person asks. (Written by fleet, not the tool.)"
+// history the model reads (shared with the restart recovery).
+const approvalStopNote = store.ApprovalStopNote
 
 // withApprovalStop adds the stop fields to a card payload: `stoppable` for a
 // tool in critical_tool_stop, `stopping` on a running call the person
@@ -142,8 +171,14 @@ func (s *Server) handleApprovalStop(w http.ResponseWriter, r *http.Request, conv
 		http.Error(w, "could not record the stop", http.StatusInternalServerError)
 		return
 	}
+	// The signal is armed before the claim, so a running call has one. A
+	// stale request racing the end of the call may arm a fresh one here; it
+	// is closed at once and holds nothing open.
 	if h := s.approvalStopFor(approvalID); h != nil {
 		h.stop()
+	} else if h := s.armApprovalStop(approvalID); h != nil {
+		h.stop()
+		s.disarmApprovalStop(approvalID)
 	}
 	if marked {
 		//nolint:gosec // G706: every interpolated value is rendered with %q, which escapes any CR/LF.

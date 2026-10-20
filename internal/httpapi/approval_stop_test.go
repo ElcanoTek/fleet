@@ -197,7 +197,7 @@ func TestApprovalStop_StopsARunningCallAndRecordsIt(t *testing.T) {
 	// The signal is dropped when the execution goroutine ends, just after
 	// the outcome write.
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if _, ok := s.approvalStops.Load("ap1"); !ok {
+		if s.approvalStopFor("ap1") == nil {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -302,4 +302,76 @@ func TestApprovalStopPayloads(t *testing.T) {
 	if _, ok := approvalClientFields("mcp_pages_deploy_page", `{}`, "c1")["stoppable"]; ok {
 		t.Fatal("another tool's card carries no stoppable key")
 	}
+}
+
+// armCheckStore fails the test if the claim runs before the call's stop
+// signal exists: a Stop that lands right after the claim must find it.
+type armCheckStore struct {
+	*stopStore
+	s       *Server
+	armedAt bool
+}
+
+func (a *armCheckStore) ClaimApproval(ctx context.Context, user, id, status, text string) (bool, error) {
+	a.armedAt = a.s.approvalStopFor(id) != nil
+	return a.stopStore.ClaimApproval(ctx, user, id, status, text)
+}
+
+// The stop signal is armed before the claim makes the row executing, and a
+// request that loses the claim drops only its own reference.
+func TestApprovalStop_ArmedBeforeTheClaim(t *testing.T) {
+	stopPolicy(t)
+	inner := &stopStore{approval: stopRow(), resulted: make(chan struct{})}
+	st := &armCheckStore{stopStore: inner}
+	child := &stopChild{}
+	s := stopServerFor(t, st, child)
+	st.s = s
+	if rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once"}`); rec.Code != 200 {
+		t.Fatalf("approve = %d %s", rec.Code, rec.Body.String())
+	}
+	if !st.armedAt {
+		t.Fatal("the claim ran before the stop signal was armed")
+	}
+
+	// A losing request: the row is no longer pending, so its claim fails
+	// and it must not drop a running winner's signal.
+	winner := s.armApprovalStop("ap9")
+	lost := &stopStore{approval: store.Approval{ID: "ap9", ConversationID: "c1", UserEmail: "u@example.com", ToolName: "mcp_ix_execute_plan", ArgsJSON: `{}`, Status: "pending"}}
+	lost.approval.Status = "pending"
+	s2 := &Server{store: &claimLosingStore{stopStore: lost}}
+	s2.approvalStops.m = map[string]*approvalStopHandle{"ap9": winner}
+	winner.refs = 1
+	d := s2.decideApproval(context.Background(), nil, "u@example.com", "c1", "ap9", approvalRequest{Approved: true, Scope: "once"})
+	if d.status != 0 && d.status != 409 {
+		t.Fatalf("losing decision = %+v", d)
+	}
+	if s2.approvalStopFor("ap9") != winner {
+		t.Fatal("a lost claim dropped the winner's stop signal")
+	}
+}
+
+// claimLosingStore loses every claim, as when another request won it.
+type claimLosingStore struct{ *stopStore }
+
+func (c *claimLosingStore) ClaimApproval(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+// The registry shares one signal between references and forgets it with the
+// last one.
+func TestApprovalStopRegistry_RefCounts(t *testing.T) {
+	s := &Server{}
+	a := s.armApprovalStop("x")
+	if b := s.armApprovalStop("x"); a != b {
+		t.Fatal("a second arm must share the signal")
+	}
+	s.disarmApprovalStop("x")
+	if s.approvalStopFor("x") != a {
+		t.Fatal("dropping one of two references must keep the signal")
+	}
+	s.disarmApprovalStop("x")
+	if s.approvalStopFor("x") != nil {
+		t.Fatal("the last reference must forget the signal")
+	}
+	s.disarmApprovalStop("x") // no panic on an unknown id
 }

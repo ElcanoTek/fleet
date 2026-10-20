@@ -1807,18 +1807,25 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	// retry) both send the email and only collide on the status write
 	// afterwards. Losing the claim means someone else is running it —
 	// return their resolved state instead of re-firing.
+	// A tool in critical_tool_stop: its stop signal exists BEFORE the claim
+	// makes the row executing, so a Stop that lands at any point after that
+	// finds it (approval_stop.go). Dropped once the outcome is recorded, or
+	// right away when this request does not win the claim.
+	stoppable := approvalStoppable(approval.ToolName)
+	if stoppable {
+		s.armApprovalStop(approvalID)
+	}
 	claimed, err := s.claimApproved(ctx, user, convID, approval, narrowing)
+	if err != nil || !claimed {
+		if stoppable {
+			s.disarmApprovalStop(approvalID)
+		}
+	}
 	if err != nil {
 		return approvalError(http.StatusInternalServerError, err.Error())
 	}
 	if !claimed {
 		return s.resolvedApprovalDecision(ctx, user, approvalID)
-	}
-	// A tool in critical_tool_stop: its stop signal exists from the claim on,
-	// so a Stop pressed while the call is still starting is not lost
-	// (approval_stop.go). Dropped once the outcome is recorded.
-	if approvalStoppable(approval.ToolName) {
-		s.armApprovalStop(approvalID)
 	}
 
 	// The user already committed to the action, so it runs on the detached

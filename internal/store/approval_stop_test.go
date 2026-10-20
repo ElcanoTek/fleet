@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -62,5 +63,36 @@ func TestMarkApprovalStopRequested(t *testing.T) {
 	}
 	if ok, err := s.MarkApprovalStopRequested(ctx, "alice@example.com", b.ID); err != nil || ok {
 		t.Fatalf("a settled card: ok=%v err=%v, want refused", ok, err)
+	}
+}
+
+// A stopped call cut off by a restart says in its recovery breadcrumb that
+// the person stopped it.
+func TestRecoverStrandedApprovals_KeepsTheStop(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	a, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "mcp_ix_execute_plan", "call_1", `{}`, 0, ApprovalSeat{Server: "ix"})
+	if err != nil {
+		t.Fatalf("CreateApproval: %v", err)
+	}
+	if ok, err := s.ClaimApproval(ctx, "alice@example.com", a.ID, "approved", ApprovalExecutingSentinel); err != nil || !ok {
+		t.Fatalf("ClaimApproval: %v %v", ok, err)
+	}
+	if ok, err := s.MarkApprovalStopRequested(ctx, "alice@example.com", a.ID); err != nil || !ok {
+		t.Fatalf("MarkApprovalStopRequested: %v %v", ok, err)
+	}
+	if n, err := s.RecoverStrandedApprovals(ctx); err != nil || n != 1 {
+		t.Fatalf("RecoverStrandedApprovals = %d, %v", n, err)
+	}
+	history, err := s.LoadHistory(ctx, conv.ID)
+	if err != nil || len(history) == 0 {
+		t.Fatalf("LoadHistory = %d, %v", len(history), err)
+	}
+	if last := string(history[len(history)-1].Content); !strings.Contains(last, "pressed Stop") {
+		t.Fatalf("recovery breadcrumb = %s, want the stop", last)
 	}
 }

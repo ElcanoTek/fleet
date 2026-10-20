@@ -62,9 +62,14 @@ Elcano bundle's deal-plan execute does this).
 
 ### The chat server
 
-- **Armed at the claim.** An approved call of an opted-in tool gets a stop
-  signal (`armApprovalStop`) right after its claim, before the call starts,
-  and loses it when its outcome is recorded.
+- **Armed before the claim.** An approved call of an opted-in tool gets a
+  stop signal (`armApprovalStop`) before its claim makes the row executing, so
+  the stop route always finds it for a running call. It is reference-counted:
+  a concurrent request that loses the claim drops only its own reference, and
+  the winner's goes when the outcome is recorded.
+- **A restart keeps the stop.** A stopped call cut off by a restart gets the
+  same fleet line after `RecoverStrandedApprovals`' "outcome unknown"
+  breadcrumb.
 - **`POST /conversations/{id}/approvals/{approvalId}/stop`** (web proxy
   `/api/conversations/{id}/approvals/{approvalId}/stop`):
   - 404 for an unknown card or another conversation, 400 for a tool that did
@@ -82,7 +87,8 @@ Elcano bundle's deal-plan execute does this).
   ran", recorded as a failure.
 - **The outcome is the call's.** Whatever the server answers is recorded by
   the same code as any approved call (governance, result card, history,
-  resume, finish push). After the tool's text fleet adds: `[fleet] The person
+  resume, finish push). After the tool's text, and before the result's
+  governance (so the whole text is bounded), fleet adds: `[fleet] The person
   pressed Stop while this call ran. Its server was asked to stop after the
   item it was working on; the result above says what ran and what did not. Do
   not run the remaining items unless the person asks. (Written by fleet, not

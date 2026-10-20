@@ -54,7 +54,7 @@ type Server struct {
 	// approvalStops holds the stop signal of each running call of a tool in
 	// critical_tool_stop, by approval id (approval_stop.go): armed at the
 	// claim, dropped when the call's outcome is recorded.
-	approvalStops sync.Map
+	approvalStops approvalStopRegistry
 	cfg           *config.Config
 	agent         turnEngine
 	store         chatStore

@@ -2230,14 +2230,14 @@ func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
 	rows, err := tx.QueryContext(ctx, `UPDATE approvals SET result_text = $1
 		WHERE status = 'approved' AND is_err IS NULL AND result_text = $2
 		AND NOT EXISTS (SELECT 1 FROM turns WHERE turns.conversation_id = approvals.conversation_id AND turns.status = 'running')
-		RETURNING id, conversation_id, tool_name, COALESCE(tool_call_id, ''), COALESCE(narrowed_json, '')`, outcome, ApprovalExecutingSentinel)
+		RETURNING id, conversation_id, tool_name, COALESCE(tool_call_id, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0)`, outcome, ApprovalExecutingSentinel)
 	if err != nil {
 		return 0, err
 	}
 	var recovered []Approval
 	for rows.Next() {
 		var a Approval
-		if err := rows.Scan(&a.ID, &a.ConversationID, &a.ToolName, &a.ToolCallID, &a.NarrowedJSON); err != nil {
+		if err := rows.Scan(&a.ID, &a.ConversationID, &a.ToolName, &a.ToolCallID, &a.NarrowedJSON, &a.StopRequestedAt); err != nil {
 			_ = rows.Close()
 			return 0, err
 		}
@@ -2261,6 +2261,10 @@ func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
 		// says which values were approved and which were left out.
 		if note := narrowingNoteFor(a.NarrowedJSON); note != "" {
 			text += "\n\n" + note
+		}
+		// So does a stop the person pressed before the restart cut it off.
+		if a.StopRequestedAt > 0 {
+			text += "\n\n" + ApprovalStopNote
 		}
 		payload, err := json.Marshal(map[string]any{"id": callID, "name": a.ToolName, "text": text, "is_err": true})
 		if err != nil {
