@@ -351,7 +351,7 @@ export function ToolsLibrary({
                 ref={backRef}
                 type="button"
                 onClick={closeDetail}
-                className="-ml-2 mb-2 inline-flex h-10 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-[0.875rem] text-[var(--color-link)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] lg:hidden"
+                className="-ml-2 mb-1 inline-flex h-11 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-[0.875rem] text-[var(--color-link)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] lg:hidden"
               >
                 <Icon name="chevron-right" className="size-4 rotate-180" />
                 {catObj ? catObj.name : "All connections"}
