@@ -300,7 +300,7 @@ export function ToolsPopover({
               <button
                 type="button"
                 onClick={() => onOpenLibrary()}
-                className="text-[var(--color-link)] underline underline-offset-[3px] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                className="hit-area-touch text-[var(--color-link)] underline underline-offset-[3px] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
               >
                 Open the full library
               </button>
@@ -308,7 +308,7 @@ export function ToolsPopover({
                 <button
                   type="button"
                   onClick={clearQuery}
-                  className="text-[var(--color-text-subtle)] transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                  className="hit-area-touch text-[var(--color-text-subtle)] transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 >
                   Clear search
                 </button>

@@ -554,7 +554,7 @@ function Detail({
           {isAdmin ? (
             <>
               <span>Needs setup before it can be used.</span>
-              <a href={settingsHref(c.name)} className={LINK}>
+              <a href={settingsHref(c.name)} className={`${LINK} hit-area-touch`}>
                 Set up in Settings
                 <Icon name="external-link" className="size-3" />
               </a>
