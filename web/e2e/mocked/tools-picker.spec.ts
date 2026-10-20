@@ -196,6 +196,9 @@ test.describe("on a touch phone", () => {
     await expect(popover).toHaveCSS("opacity", "1");
     // Focusing the search field would open the keyboard over the list.
     await expect(page.getByRole("textbox", { name: "Search tools" })).not.toBeFocused();
+    // The bulk strip is 44px tall, so All on / All off stay out of the search row.
+    const strip = (await page.getByTestId("chat-mcp-all-actions").boundingBox())!;
+    expect(strip.height).toBeGreaterThanOrEqual(44);
     // The footer is tall enough that "Open library"'s 44px touch box is not clipped.
     const footerLink = (await page.getByRole("button", { name: "Open library" }).boundingBox())!;
     const pop = (await popover.boundingBox())!;

@@ -209,7 +209,7 @@ export function ToolsPopover({
       </div>
 
       <div
-        className="flex items-center gap-1.5 border-b border-[var(--color-divider)] pb-1.5 pl-3 pr-2.5 pt-0.5"
+        className="flex items-center gap-1.5 border-b border-[var(--color-divider)] pb-1.5 pl-3 pr-2.5 pt-0.5 pointer-coarse:min-h-11 pointer-coarse:py-0"
         data-testid="chat-mcp-all-actions"
       >
         <span className="min-w-0 flex-1 truncate text-[0.75rem] tabular-nums text-[var(--color-text-subtle)]">

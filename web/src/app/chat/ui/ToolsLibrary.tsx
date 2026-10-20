@@ -296,7 +296,7 @@ export function ToolsLibrary({
               </div>
               {toggleable.length > 0 ? (
                 <div
-                  className="mx-4 mb-2.5 flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-divider)] bg-[var(--color-rail-bg)] py-1.5 pl-3 pr-1.5"
+                  className="mx-4 mb-2.5 flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-divider)] bg-[var(--color-rail-bg)] py-1.5 pl-3 pr-1.5 pointer-coarse:min-h-11 pointer-coarse:py-0"
                   data-testid="chat-tools-library-bulk"
                 >
                   <span className="min-w-0 flex-1 text-[0.78rem] text-[var(--color-text-subtle)]">
