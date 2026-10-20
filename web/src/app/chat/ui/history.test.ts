@@ -4,6 +4,7 @@ import {
   applyContextPressure,
   applyModelRequired,
   applyRetryNotice,
+  applyToolResult,
   applyTurnOutcome,
   cachedPercent,
   clearRetryNotice,
@@ -177,6 +178,36 @@ describe("historyToMessages", () => {
     const [bash, ui] = msgs[1].toolCalls ?? [];
     expect(ui.card).toBe(spec);
     expect(bash.card).toBeUndefined();
+  });
+
+  it("binds each result to its own occurrence of a reused call id (Codex P2 on #1819)", () => {
+    const spec = (title: string) => JSON.stringify({ title, components: [{ type: "text", text: "x" }] });
+    const ref = JSON.stringify({ from_result: { tool: "intake_card" } });
+    const msgs = historyToMessages([
+      user("go"),
+      toolCall("dup", "show_ui", ref),
+      { role: "tool", type: "tool_result", content: { id: "dup", name: "show_ui", text: "UI_DISPLAYED card_id=dup", is_err: false, card: spec("First") } },
+      toolCall("dup", "show_ui", ref),
+      { role: "tool", type: "tool_result", content: { id: "dup", name: "show_ui", text: "UI_DISPLAYED card_id=dup", is_err: false, card: spec("Second") } },
+      asText("done"),
+    ]);
+    const [first, second] = msgs[1].toolCalls ?? [];
+    expect(JSON.parse(first.card ?? "{}").title).toBe("First");
+    expect(JSON.parse(second.card ?? "{}").title).toBe("Second");
+  });
+
+  it("applyToolResult: first waiting occurrence, else every call with the id", () => {
+    const calls = [
+      { id: "a", name: "t", input: "{}", state: "done" as const },
+      { id: "a", name: "t", input: "{}", state: "done" as const },
+    ];
+    const once = applyToolResult(calls, "a", (t) => ({ ...t, resultText: "r1" }));
+    expect(once.map((t) => t.resultText)).toEqual(["r1", undefined]);
+    const twice = applyToolResult(once, "a", (t) => ({ ...t, resultText: "r2" }));
+    expect(twice.map((t) => t.resultText)).toEqual(["r1", "r2"]);
+    // Both answered: a later row (an approval resolution) replaces them all.
+    const resolved = applyToolResult(twice, "a", (t) => ({ ...t, resultText: "final" }));
+    expect(resolved.map((t) => t.resultText)).toEqual(["final", "final"]);
   });
 
   it("ignores a tool_result whose id has no matching call (no retroactive creation)", () => {

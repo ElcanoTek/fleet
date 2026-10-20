@@ -1494,7 +1494,7 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       current.dbId = Math.max(current.dbId ?? 0, e.id ?? 0) || undefined;
       const c = e.content as { id: string; name: string; text: string; is_err: boolean; card?: unknown };
       if ((current.toolCalls ?? []).some((t) => t.id === c.id)) {
-        current.toolCalls = (current.toolCalls ?? []).map((t) => (t.id === c.id ? withResult(t, c) : t));
+        current.toolCalls = applyToolResult(current.toolCalls ?? [], c.id, (t) => withResult(t, c));
       } else {
         // No matching call in the open message — defer to the post-pass,
         // which resolves it against tool_calls in any message (or drops it
@@ -1520,18 +1520,26 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
   // "no retroactive creation" invariant.
   for (const c of orphanResults) {
     for (const m of messages) {
-      if (!m.toolCalls) continue;
-      let matched = false;
-      m.toolCalls = m.toolCalls.map((t) => {
-        if (t.id !== c.id) return t;
-        matched = true;
-        return withResult(t, c);
-      });
-      if (matched) break;
+      if (!m.toolCalls?.some((t) => t.id === c.id)) continue;
+      m.toolCalls = applyToolResult(m.toolCalls, c.id, (t) => withResult(t, c));
+      break;
     }
   }
 
   return messages;
+}
+
+/**
+ * Applies one result to the call it answers. A provider may reuse a call id
+ * within a turn, so a result goes to the FIRST call with that id that has no
+ * result yet: each occurrence keeps its own result (and, for a by-reference
+ * show_ui card, its own spec). When every call with the id already has one,
+ * the result replaces them all, as before: an appended approval resolution is
+ * the authoritative outcome over the placeholder the call landed with.
+ */
+export function applyToolResult(calls: ToolCall[], id: string, apply: (t: ToolCall) => ToolCall): ToolCall[] {
+  const open = calls.findIndex((t) => t.id === id && t.resultText === undefined);
+  return calls.map((t, i) => ((open >= 0 ? i === open : t.id === id) ? apply(t) : t));
 }
 
 /**
