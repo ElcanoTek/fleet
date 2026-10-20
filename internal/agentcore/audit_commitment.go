@@ -1228,6 +1228,34 @@ func (o *orchestrationState) legacySuffixAuthorized(execSuffix string) bool {
 	return false
 }
 
+// hasSingleDealCommitment reports whether an outstanding record-bound
+// commitment on toolName explicitly authorizes discharging dealID from a
+// single-record (non-deal_ids) call whose response uses a per-record results[]
+// envelope. A single-record canary declared alongside a batch on the same
+// suffix (e.g. {tool: T, deal_id: "1"} + {tool: T, deal_ids: ["2","3"]}) is not
+// in the batch-approved set o.approvedDealIDs[suffix], which only records
+// deal_ids declarations for checkBatchBinding. Unbound commitments are
+// deliberately excluded so a record-less call cannot ride an unbound unit and
+// discharge a sibling record-bound commitment via a results[] echo. Callers
+// must hold o.mu.
+func (o *orchestrationState) hasSingleDealCommitment(toolName, dealID string) bool {
+	if dealID == "" {
+		return false
+	}
+	for _, c := range o.typedCommitments {
+		if c.remaining <= 0 || !c.nameMatches(toolName) {
+			continue
+		}
+		if c.dealID == dealID {
+			return true
+		}
+		if len(c.dealIDs) > 0 && c.digest == "" && c.dealIDs[dealID] && !c.discharged[dealID] {
+			return true
+		}
+	}
+	return false
+}
+
 // outstandingCommitmentSummary renders every outstanding commitment for
 // enforcement messages, sorted for determinism. Callers must hold o.mu.
 func (o *orchestrationState) outstandingCommitmentSummary() []string {

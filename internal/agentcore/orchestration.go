@@ -1168,70 +1168,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 		outcomes, ok := parseDealOutcomes(resultText)
 		switch {
 		case ok:
-			// Batch result: discharge one commitment per SUCCEEDED record,
-			// idempotently. dischargedDeals dedups by record id, so a resume
-			// that idempotently skips already-done records (reporting them
-			// success again) does NOT double-discharge — the outstanding count
-			// tracks only the records that still genuinely need work. Forward
-			// progress (>=1 newly discharged record) resets the retry budget;
-			// an attempt with failures and no new progress counts against it.
-			// This lets a partial batch resume to completion without wedging
-			// the budget on the unchanged full-batch args.
-			// Keyed by alias class (#1604) like the approvals below, so one
-			// record reported by either twin discharges exactly once.
-			suffix := criticalAliasClassOf(criticalSuffixFor(toolName))
-			done := o.dischargedDeals[suffix]
-			if done == nil {
-				done = make(map[string]bool)
-				o.dischargedDeals[suffix] = done
-			}
-			// When the audit batch-bound an approved record set for this
-			// suffix, ONLY a record in that set may discharge a commitment. A
-			// success reported for an id the audit never approved — a server
-			// results[] echoing an unexpected id, or any future path that
-			// bypassed the input batch-binding gate — must NOT discharge a
-			// DIFFERENT approved record's commitment (which would silently
-			// mark an un-done approved record as complete and let the audit
-			// auto-lock early). With no approved set (non-batch / legacy
-			// audit) behavior is unchanged: discharge per succeeded record by
-			// suffix.
-			//
-			// The approved set is the alias-class UNION (#1604), so it is not
-			// enough on its own: one audit may approve two disjoint batches, one
-			// per twin, and a response to the first batch's call that reports a
-			// record of the SECOND batch would discharge the second commitment
-			// though its action never ran. A call that carried deal_ids may
-			// therefore discharge only the records it named — the ones the
-			// input gate (checkBatchBinding + commitmentAuthorizes) bound to
-			// this call's own declaration and digest.
-			approved := o.approvedDealIDs[suffix]
-			invoked, invokedBatch := batchDealIDs(rawInput)
-			inCall := make(map[string]bool, len(invoked))
-			for _, id := range invoked {
-				inCall[id] = true
-			}
-			callDigest := valuesDigestArg(rawInput)
-			newly, failed := 0, 0
-			for _, oc := range outcomes {
-				if len(approved) > 0 && oc.success && !approved[strings.TrimSpace(oc.dealID)] {
-					log.Printf("Enforcement: ignoring batch result for unapproved record id %q on %q (not in the audit's approved set)",
-						oc.dealID, toolName)
-					continue
-				}
-				if invokedBatch && oc.success && !inCall[strings.TrimSpace(oc.dealID)] {
-					log.Printf("Enforcement: ignoring batch result for record id %q on %q (not in this call's deal_ids)",
-						oc.dealID, toolName)
-					continue
-				}
-				switch {
-				case oc.success && !done[dischargedDealKey(toolName, oc.dealID)]:
-					done[dischargedDealKey(toolName, oc.dealID)] = true
-					o.markCommittedExecuted(toolName, oc.dealID, callDigest, "")
-					newly++
-				case !oc.success:
-					failed++
-				}
-			}
+			newly, failed := o.recordDealOutcomes(toolName, rawInput, outcomes)
 			// A canary must be a SUCCESSFUL call: a transport error or an
 			// isError response is no proof of the operation, even when its
 			// body still carries a success row for the requested record.
@@ -1304,6 +1241,81 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			o.latestTaskTrackerRendered = rendered
 		}
 	}
+}
+
+// recordDealOutcomes discharges one commitment per SUCCEEDED record in outcomes,
+// idempotently. dischargedDeals dedups by record id, so a resume that
+// idempotently skips already-done records (reporting them success again) does
+// NOT double-discharge — the outstanding count tracks only the records that
+// still genuinely need work. Forward progress (>=1 newly discharged record)
+// resets the retry budget; an attempt with failures and no new progress counts
+// against it. This lets a partial batch resume to completion without wedging
+// the budget on the unchanged full-batch args. Keyed by alias class (#1604)
+// like the approvals below, so one record reported by either twin discharges
+// exactly once. Callers must hold o.mu.
+func (o *orchestrationState) recordDealOutcomes(toolName, rawInput string, outcomes []dealOutcome) (newly, failed int) {
+	suffix := criticalAliasClassOf(criticalSuffixFor(toolName))
+	done := o.dischargedDeals[suffix]
+	if done == nil {
+		done = make(map[string]bool)
+		o.dischargedDeals[suffix] = done
+	}
+	// When the audit batch-bound an approved record set for this suffix, ONLY a
+	// record in that set (or covered by a single-record commitment on a
+	// non-batch call) may discharge a commitment. A success reported for an id
+	// the audit never approved — a server results[] echoing an unexpected id,
+	// or any future path that bypassed the input batch-binding gate — must NOT
+	// discharge a DIFFERENT approved record's commitment (which would silently
+	// mark an un-done approved record as complete and let the audit auto-lock
+	// early). With no approved set (non-batch / legacy audit) behavior is
+	// unchanged: discharge per succeeded record by suffix.
+	//
+	// The approved set is the alias-class UNION (#1604), so it is not enough on
+	// its own: one audit may approve two disjoint batches, one per twin, and a
+	// response to the first batch's call that reports a record of the SECOND
+	// batch would discharge the second commitment though its action never ran.
+	// A call that carried deal_ids may therefore discharge only the records it
+	// named — the ones the input gate (checkBatchBinding + commitmentAuthorizes)
+	// bound to this call's own declaration and digest.
+	approved := o.approvedDealIDs[suffix]
+	invoked, invokedBatch := batchDealIDs(rawInput)
+	singleID := ""
+	if !invokedBatch {
+		singleID = callDealID(rawInput)
+	}
+	inCall := make(map[string]bool, len(invoked))
+	for _, id := range invoked {
+		inCall[id] = true
+	}
+	callDigest := valuesDigestArg(rawInput)
+	for _, oc := range outcomes {
+		id := strings.TrimSpace(oc.dealID)
+		singleCanaryMatch := !invokedBatch && singleID != "" && id == singleID && o.hasSingleDealCommitment(toolName, id)
+		if len(approved) > 0 && oc.success && !approved[id] && !singleCanaryMatch {
+			log.Printf("Enforcement: ignoring batch result for unapproved record id %q on %q (not in the audit's approved set)",
+				oc.dealID, toolName)
+			continue
+		}
+		if invokedBatch && oc.success && !inCall[id] {
+			log.Printf("Enforcement: ignoring batch result for record id %q on %q (not in this call's deal_ids)",
+				oc.dealID, toolName)
+			continue
+		}
+		if !invokedBatch && singleID != "" && oc.success && id != singleID {
+			log.Printf("Enforcement: ignoring batch result for record id %q on %q (not this call's record %q)",
+				oc.dealID, toolName, singleID)
+			continue
+		}
+		switch {
+		case oc.success && !done[dischargedDealKey(toolName, oc.dealID)]:
+			done[dischargedDealKey(toolName, oc.dealID)] = true
+			o.markCommittedExecuted(toolName, oc.dealID, callDigest, "")
+			newly++
+		case !oc.success:
+			failed++
+		}
+	}
+	return newly, failed
 }
 
 // maxTaskTrackerRenderedBytes bounds the plan rendering kept for the

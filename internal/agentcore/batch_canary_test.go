@@ -272,3 +272,60 @@ func TestBatchCanary_SingleRecordDigestBlockPointsAtOneRecordBatch(t *testing.T)
 		t.Fatalf("the one-record batch the message names was refused: %s", msg)
 	}
 }
+
+// TestBatchCanary_SingleRecordCanaryCommitmentDischargesAlongsideBatch pins the
+// production pattern where confirm_audit declares the canary as a single-record
+// commitment ({tool, deal_id: "1"}) and the remaining records as a batch
+// commitment ({tool, deal_ids: ["2","3"], values_digest}) on the same critical
+// suffix. When the single-record canary call returns a per-record results[]
+// envelope, it must both credit the canary and discharge the single-record
+// commitment — not be rejected because "1" is absent from the batch-approved
+// set o.approvedDealIDs[suffix].
+func TestBatchCanary_SingleRecordCanaryCommitmentDischargesAlongsideBatch(t *testing.T) {
+	withMergePolicy(t)
+	o := newOrchStateForTest()
+	registerTyped(t, o,
+		criticalActionStruct{Tool: canaryMergeTool, DealID: "1"},
+		criticalActionStruct{Tool: canaryMergeTool, DealIDs: []string{"2", "3"}, ValuesDigest: canaryDigest},
+	)
+	if got := o.committedCriticalActions["merge_deal_domains"]; got != 3 {
+		t.Fatalf("initial outstanding=%d, want 3", got)
+	}
+
+	canaryInput := `{"deal_id":"1","values":["safe.example"]}`
+	if blocked, msg := o.checkCriticalTool(canaryMergeTool, "", canaryInput); blocked {
+		t.Fatalf("single-record canary blocked: %s", msg)
+	}
+	// Even if the response echoes a sibling record ("2"), a single-record call
+	// for "1" must discharge only "1".
+	o.recordToolResult(canaryMergeTool, canaryInput, successRows("1", "2"), true)
+	if got := o.committedCriticalActions["merge_deal_domains"]; got != 2 {
+		t.Fatalf("after single-record canary: outstanding=%d, want 2 (only canary discharged)", got)
+	}
+
+	// Credit the digest-bound batch canary and run the remaining batch.
+	o.creditCanary(canaryMergeTool, batchArgs(canaryDigest, "2", "3"))
+	batchInput := batchArgs(canaryDigest, "2", "3")
+	if blocked, msg := o.checkCriticalTool(canaryMergeTool, "", batchInput); blocked {
+		t.Fatalf("remaining batch blocked: %s", msg)
+	}
+	o.recordToolResult(canaryMergeTool, batchInput, successRows("2", "3"), true)
+	if got := o.committedCriticalActions["merge_deal_domains"]; got != 0 {
+		t.Fatalf("after remaining batch: outstanding=%d, want 0 (summary: %v)", got, o.outstandingCommitmentSummary())
+	}
+
+	// A record-less call riding an unbound commitment must NOT discharge a
+	// sibling record-bound commitment when its results[] echoes that record id.
+	o2 := newOrchStateForTest()
+	registerTyped(t, o2,
+		criticalActionStruct{Tool: canaryMergeTool, DealID: "1"},
+		criticalActionStruct{Tool: canaryMergeTool, DealIDs: []string{"2", "3"}, ValuesDigest: canaryDigest},
+		criticalActionStruct{Tool: canaryMergeTool},
+	)
+	o2.recordToolResult(canaryMergeTool, `{"values":["safe.example"]}`, successRows("1"), true)
+	for _, c := range o2.typedCommitments {
+		if c.dealID == "1" && c.remaining != 1 {
+			t.Fatalf("record-less call discharged record-bound commitment for '1': remaining=%d", c.remaining)
+		}
+	}
+}
