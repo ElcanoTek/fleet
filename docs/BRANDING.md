@@ -236,7 +236,7 @@ palette key it is derived from, whenever the bundle sets that key:
 | Picker token | Follows |
 |---|---|
 | `accent_strong` (switch on, count badge) | `primary` |
-| `on_accent_strong` (badge digits), `switch_knob_on` (knob on a checked switch) | `on_primary` (fleet's, when the bundle sets `primary`) |
+| `on_accent_strong` (badge digits), `switch_knob_on` (knob on a checked switch) | `on_primary`, when the bundle sets `primary` or `on_primary` |
 | `link` | `accent` |
 | `text_subtle` (row descriptions, group headers) | `text_muted` |
 | `divider` | `border_subtle` |
@@ -246,7 +246,9 @@ palette key it is derived from, whenever the bundle sets that key:
 | `icon_tile` | `accent` at 14% |
 | `scrim` | `overlay_strong` |
 
-Pin a picker token only to hold an exact design value; Elcano's bundle pins
+A pinned value that is not a valid color is dropped and that token keeps
+fleet's default; it is not replaced by the derived value. Pin a picker token
+only to hold an exact design value; Elcano's bundle pins
 all eleven to the Tools picker design's purples.
 
 Values may be hex or `rgb()`/`rgba()`/`hsl()`/`hsla()`. Anything else — and any

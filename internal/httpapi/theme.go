@@ -71,24 +71,30 @@ var themeTokenOrder = []struct{ key, cssVar string }{
 	{"scrim", "--color-scrim"},
 }
 
-// pickerDerivations ties each picker token to the palette key it follows when
-// the bundle sets that key but not the picker token itself, so a rebranded
-// deployment's switches, badge, selection and links wear its own colors. The
-// value is a var()/color-mix() of the overridden token, never the raw manifest
-// string, so it inherits the same validation. match_bg is stronger in light,
-// where a 22% tint on white barely shows.
-var pickerDerivations = []struct{ key, from, dark, light string }{
-	{"accent_strong", "primary", "var(--color-primary)", "var(--color-primary)"},
-	{"on_accent_strong", "primary", "var(--color-on-primary)", "var(--color-on-primary)"},
-	{"switch_knob_on", "primary", "var(--color-on-primary)", "var(--color-on-primary)"},
-	{"link", "accent", "var(--color-accent)", "var(--color-accent)"},
-	{"text_subtle", "text_muted", "var(--color-text-muted)", "var(--color-text-muted)"},
-	{"divider", "border_subtle", "var(--color-border-subtle)", "var(--color-border-subtle)"},
-	{"selected_bg", "rail_active", "var(--rail-active)", "var(--rail-active)"},
-	{"selected_border", "border_strong", "var(--color-border-strong)", "var(--color-border-strong)"},
-	{"match_bg", "primary", "color-mix(in srgb, var(--color-primary) 22%, transparent)", "color-mix(in srgb, var(--color-primary) 40%, transparent)"},
-	{"icon_tile", "accent", "color-mix(in srgb, var(--color-accent) 14%, transparent)", "color-mix(in srgb, var(--color-accent) 14%, transparent)"},
-	{"scrim", "overlay_strong", "var(--color-overlay-strong)", "var(--color-overlay-strong)"},
+// pickerDerivations ties each picker token to the palette keys it follows when
+// the bundle sets any of them but leaves the picker token itself unset, so a
+// rebranded deployment's switches, badge, selection and links wear its own
+// colors. The value is a var()/color-mix() of the overridden token, never the
+// raw manifest string, so it inherits the same validation. match_bg is stronger
+// in light, where a 22% tint on white barely shows.
+var pickerDerivations = []struct {
+	key         string
+	from        []string
+	dark, light string
+}{
+	{"accent_strong", []string{"primary"}, "var(--color-primary)", "var(--color-primary)"},
+	// The foregrounds follow a primary change (fleet's own on_primary then
+	// applies) and an on_primary change on its own.
+	{"on_accent_strong", []string{"primary", "on_primary"}, "var(--color-on-primary)", "var(--color-on-primary)"},
+	{"switch_knob_on", []string{"primary", "on_primary"}, "var(--color-on-primary)", "var(--color-on-primary)"},
+	{"link", []string{"accent"}, "var(--color-accent)", "var(--color-accent)"},
+	{"text_subtle", []string{"text_muted"}, "var(--color-text-muted)", "var(--color-text-muted)"},
+	{"divider", []string{"border_subtle"}, "var(--color-border-subtle)", "var(--color-border-subtle)"},
+	{"selected_bg", []string{"rail_active"}, "var(--rail-active)", "var(--rail-active)"},
+	{"selected_border", []string{"border_strong"}, "var(--color-border-strong)", "var(--color-border-strong)"},
+	{"match_bg", []string{"primary"}, "color-mix(in srgb, var(--color-primary) 22%, transparent)", "color-mix(in srgb, var(--color-primary) 40%, transparent)"},
+	{"icon_tile", []string{"accent"}, "color-mix(in srgb, var(--color-accent) 14%, transparent)", "color-mix(in srgb, var(--color-accent) 14%, transparent)"},
+	{"scrim", []string{"overlay_strong"}, "var(--color-overlay-strong)", "var(--color-overlay-strong)"},
 }
 
 // Semantic status colors (--color-success/-danger/-warning and their borders)
@@ -119,10 +125,18 @@ func writeThemeBlock(b *strings.Builder, selector string, colors map[string]stri
 	}
 	derived := map[string]string{}
 	for _, d := range pickerDerivations {
-		if !valid(d.key) && valid(d.from) {
-			derived[d.key] = d.dark
-			if light {
-				derived[d.key] = d.light
+		// Only an UNSET picker token is derived. A malformed pin is dropped like
+		// any other invalid value, so that token keeps its built-in default.
+		if strings.TrimSpace(colors[d.key]) != "" {
+			continue
+		}
+		for _, from := range d.from {
+			if valid(from) {
+				derived[d.key] = d.dark
+				if light {
+					derived[d.key] = d.light
+				}
+				break
 			}
 		}
 	}

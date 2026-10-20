@@ -374,3 +374,27 @@ func TestRenderThemeCSS_PickerTokensFollowPalette(t *testing.T) {
 		t.Errorf("light block derived a link without accent: %q", css)
 	}
 }
+
+// on_primary alone repaints the picker's foregrounds, and a malformed picker
+// pin falls back to its default instead of being replaced by a derived value.
+func TestRenderThemeCSS_PickerDerivationEdges(t *testing.T) {
+	css := renderThemeCSS(clientconfig.BrandColors{
+		Dark: map[string]string{"on_primary": "#0C0A09"},
+		Light: map[string]string{
+			"primary":       "#FFDF03",
+			"accent_strong": "red; } body{display:none", // malformed pin
+		},
+	})
+	dark := css[strings.Index(css, `data-theme="dark"`):]
+	for _, want := range []string{"--color-on-accent-strong:var(--color-on-primary);", "--color-switch-knob-on:var(--color-on-primary);"} {
+		if !strings.Contains(dark, want) {
+			t.Errorf("on_primary alone did not derive %q: %q", want, css)
+		}
+	}
+	if strings.Contains(css, "--color-accent-strong:") {
+		t.Errorf("malformed accent_strong pin was replaced, want the default: %q", css)
+	}
+	if strings.Contains(css, "display:none") {
+		t.Errorf("malformed value emitted: %q", css)
+	}
+}
