@@ -187,6 +187,17 @@ test("tools picker fits a phone without sideways scroll", async ({ page, context
 test.describe("on a touch phone", () => {
   test.use({ hasTouch: true, isMobile: true });
 
+  test("tablet rail filters keep 44px touch targets", async ({ page, context }) => {
+    await page.setViewportSize({ width: 820, height: 1180 });
+    await loginViaCookie(context);
+    await boot(page, { admin: true });
+    await page.getByRole("button", { name: "Tools", exact: true }).click();
+    await page.getByRole("button", { name: "Open library" }).tap();
+    const rail = page.getByTestId("chat-tools-library").getByRole("navigation", { name: "Status" });
+    const heights = await rail.getByRole("button").evaluateAll((b) => b.map((n) => n.getBoundingClientRect().height));
+    expect(Math.min(...heights)).toBeGreaterThanOrEqual(44);
+  });
+
   test("library: close top-right, detail is its own view, no keyboard on open", async ({ page, context }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await loginViaCookie(context);

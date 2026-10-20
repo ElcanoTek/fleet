@@ -406,7 +406,7 @@ function RailButton({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-[var(--radius-pill)] max-md:pointer-coarse:h-11 border border-[var(--color-pill-border)] px-3 text-left text-[0.84rem] transition md:h-8 md:rounded-[var(--radius-sm)] md:border-transparent md:px-2.5 hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+      className={`flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-[var(--radius-pill)] pointer-coarse:h-11 md:pointer-coarse:h-11 border border-[var(--color-pill-border)] px-3 text-left text-[0.84rem] transition md:h-8 md:rounded-[var(--radius-sm)] md:border-transparent md:px-2.5 hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
         active
           ? "bg-[var(--color-selected-bg)] text-[var(--color-text-primary)] shadow-[inset_0_0_0_1px_var(--color-selected-border)]"
           : "text-[var(--color-text-secondary)]"
