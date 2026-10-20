@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Icon } from "@/app/shared/ui/Icon";
 import {
   bulkScope,
@@ -77,6 +77,39 @@ export function ToolsPopover({
 
   useEffect(() => {
     if (!openedByTouch()) inputRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  // From `sm` the popover hangs above the wrench inside the chat column,
+  // which clips its overflow and starts below the chat header. The CSS cap
+  // (100dvh - 7rem) assumes the whole window is free above it, so a short
+  // window cut off the search row. Cap it to the room actually left between
+  // its bottom and the top of the nearest clipping ancestor. Measured from
+  // layout offsets, not the bounding box, so the entrance animation's rise
+  // does not skew it. Below `sm` it is fixed to the viewport and the CSS
+  // cap holds.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [room, setRoom] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const fit = () => {
+      const el = rootRef.current;
+      const parent = el?.offsetParent;
+      if (!el || !parent || getComputedStyle(el).position !== "absolute") {
+        setRoom(null);
+        return;
+      }
+      const bottom = parent.getBoundingClientRect().top + el.offsetTop + el.offsetHeight;
+      let top = 0;
+      for (let a = el.parentElement; a; a = a.parentElement) {
+        if (getComputedStyle(a).overflowY !== "visible") {
+          top = Math.max(0, a.getBoundingClientRect().top);
+          break;
+        }
+      }
+      setRoom(Math.floor(bottom - top - 8));
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
   }, []);
 
   const q = query.trim();
@@ -164,6 +197,8 @@ export function ToolsPopover({
 
   return (
     <div
+      ref={rootRef}
+      style={room === null ? undefined : { maxHeight: `min(32.5rem, ${room}px)` }}
       className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 flex max-h-[min(32.5rem,calc(100dvh-7rem))] flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-selected-border)] bg-[var(--color-surface-2)] text-left shadow-[var(--shadow-popover)] motion-safe:animate-pop-up sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.55rem)] sm:left-[-10rem] sm:w-[21.75rem]"
       data-testid="chat-tools-popover"
     >

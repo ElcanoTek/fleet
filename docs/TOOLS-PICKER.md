@@ -29,7 +29,10 @@ on / All off** cover the toggleable rows on screen: with a search they say
 how many ("All 3 on") and the tooltip says "Applies to 3 connections shown".
 The keys are `↑ ↓` to move, `Space`/`Enter` to switch, and `Esc` to clear,
 then close. With no matches it reads "No tools match ‘xyz’" and offers "Open
-the full library" and "Clear search".
+the full library" and "Clear search". On a window wider than `sm` the popover's height is capped
+(520px at most) to the space between the wrench and the bottom of the chat
+header, measured on open and on resize. The chat column clips overflow, so in
+a short window the search row used to be cut off.
 
 **Library** (`ToolsLibrary.tsx`): the Prompt library's sheet (portalled,
 full-bleed on phones, `useDialogA11y`). The header shows "Tools &
