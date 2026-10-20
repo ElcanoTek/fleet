@@ -385,7 +385,10 @@ func TestRenderThemeCSS_PickerDerivationEdges(t *testing.T) {
 			"accent_strong": "red; } body{display:none", // malformed pin
 		},
 	})
-	dark := css[strings.Index(css, `data-theme="dark"`):]
+	_, dark, ok := strings.Cut(css, `data-theme="dark"`)
+	if !ok {
+		t.Fatalf("no dark block: %q", css)
+	}
 	for _, want := range []string{"--color-on-accent-strong:var(--color-on-primary);", "--color-switch-knob-on:var(--color-on-primary);"} {
 		if !strings.Contains(dark, want) {
 			t.Errorf("on_primary alone did not derive %q: %q", want, css)
