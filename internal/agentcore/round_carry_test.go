@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 func TestCarryRoundMessages(t *testing.T) {
@@ -381,5 +383,223 @@ func TestRunFinalizeInputCarriesRoundTranscriptAndToolEvents(t *testing.T) {
 	}
 	if !sawCall || !sawResult {
 		t.Errorf("FinalizeInput.Messages lacks the round's tool transcript (call=%v result=%v) — a recovery call would fabricate from stale context", sawCall, sawResult)
+	}
+}
+
+func TestCarryRoundMessages_DropsOrphanedToolCalls(t *testing.T) {
+	res := &fantasy.AgentResult{
+		Steps: []fantasy.StepResult{
+			{
+				FinishReason: fantasy.FinishReasonToolCalls,
+				Messages: []fantasy.Message{
+					{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+						fantasy.ToolCallPart{ToolCallID: "c1", ToolName: "bash", Input: `{"command":"ls"}`},
+					}},
+					{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+						fantasy.ToolResultPart{ToolCallID: "c1", Output: fantasy.ToolResultOutputContentText{Text: "ok"}},
+					}},
+				},
+			},
+			{
+				// Step cut off by max_output_tokens (FinishReasonLength): provider
+				// emitted text + a ToolCallPart, but fantasy did not execute the
+				// tool call so no ToolResultPart exists.
+				FinishReason: fantasy.FinishReasonLength,
+				Messages: []fantasy.Message{
+					{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+						fantasy.TextPart{Text: "Starting HTML build"},
+						fantasy.ToolCallPart{ToolCallID: "orphan-1", ToolName: "run_python", Input: `{"code":"print('truncated`},
+					}},
+					{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+						fantasy.ReasoningPart{Text: "thinking"},
+						fantasy.ToolCallPart{ToolCallID: "orphan-2", ToolName: "run_python", Input: `{}`},
+					}},
+				},
+			},
+		},
+	}
+
+	out := carryRoundMessages(res)
+	if len(out) != 3 {
+		t.Fatalf("carried %d messages, want 3 (step 1 assistant+tool, step 2 text-only assistant): %+v", len(out), out)
+	}
+	for _, m := range out {
+		for _, part := range m.Content {
+			if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok && strings.HasPrefix(tc.ToolCallID, "orphan-") {
+				t.Fatalf("orphaned ToolCallPart %q leaked into carried round messages", tc.ToolCallID)
+			}
+		}
+	}
+	if got := msgText(out[2]); got != "Starting HTML build" {
+		t.Fatalf("step 2 assistant text = %q, want %q", got, "Starting HTML build")
+	}
+}
+
+// TestRun_ScheduledLengthCutoffDoesNotTriggerPrematureSelfAudit reproduces the
+// Reklaim Daily Health Scan failure (task f4c58656): when a step in a scheduled
+// run hits FinishReasonLength (max_output_tokens) mid-tool-call while
+// task_tracker still has open items, Run must NOT flip selfAuditRequested and
+// hand the model the self-audit ritual on the next round. Instead it must tell
+// the model that its previous response hit finish_reason=length, show the open
+// task_tracker items, strip any unexecuted ToolCallPart from the carried
+// transcript, and hold the self-audit request until the tasks are marked done.
+func TestRun_ScheduledLengthCutoffDoesNotTriggerPrematureSelfAudit(t *testing.T) {
+	session := NewLogSession()
+	pol := NewScheduledPolicy(session, 100, 0, 0)
+	tracker := tools.NewTaskTrackerTool()
+
+	var (
+		mu       sync.Mutex
+		stepCall int
+		prompts  [][]fantasy.Message
+	)
+	model := &mockModel{
+		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+			mu.Lock()
+			idx := stepCall
+			stepCall++
+			prompts = append(prompts, append([]fantasy.Message(nil), call.Prompt...))
+			mu.Unlock()
+
+			return func(yield func(fantasy.StreamPart) bool) {
+				switch idx {
+				case 0:
+					// Round 0, step 0: register a task_tracker plan with open work.
+					yield(fantasy.StreamPart{
+						Type:          fantasy.StreamPartTypeToolCall,
+						ID:            "tc-plan",
+						ToolCallName:  toolNameTaskTracker,
+						ToolCallInput: `{"command":"plan","task_list":` + pendingTaskListJSON + `}`,
+					})
+					yield(fantasy.StreamPart{
+						Type:         fantasy.StreamPartTypeFinish,
+						FinishReason: fantasy.FinishReasonToolCalls,
+						Usage:        fantasy.Usage{InputTokens: 50, OutputTokens: 20},
+					})
+				case 1:
+					// Round 0, step 1: model hits max_output_tokens mid-tool-call.
+					yield(fantasy.StreamPart{
+						Type:          fantasy.StreamPartTypeToolCall,
+						ID:            "tc-truncated",
+						ToolCallName:  "bash",
+						ToolCallInput: `{"command":"echo truncated"}`,
+					})
+					yield(fantasy.StreamPart{
+						Type:         fantasy.StreamPartTypeFinish,
+						FinishReason: fantasy.FinishReasonLength,
+						Usage:        fantasy.Usage{InputTokens: 60, OutputTokens: 16384},
+					})
+				case 2:
+					// Round 1, step 0: after receiving the length + task_tracker
+					// nudges, model marks all tasks done.
+					allDone := `[
+						{"id":"1","title":"download the report","status":"done"},
+						{"id":"2","title":"compute the rollup","status":"done"},
+						{"id":"3","title":"email the summary","status":"done"}]`
+					yield(fantasy.StreamPart{
+						Type:          fantasy.StreamPartTypeToolCall,
+						ID:            "tc-done",
+						ToolCallName:  toolNameTaskTracker,
+						ToolCallInput: `{"command":"plan","task_list":` + allDone + `}`,
+					})
+					yield(fantasy.StreamPart{
+						Type:         fantasy.StreamPartTypeFinish,
+						FinishReason: fantasy.FinishReasonToolCalls,
+						Usage:        fantasy.Usage{InputTokens: 70, OutputTokens: 20},
+					})
+				case 3:
+					// Round 1, step 1: model finishes the work and stops.
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: "t1"})
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "t1", Delta: "Work complete, ready for audit."})
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "t1"})
+					yield(fantasy.StreamPart{
+						Type:         fantasy.StreamPartTypeFinish,
+						FinishReason: fantasy.FinishReasonStop,
+						Usage:        fantasy.Usage{InputTokens: 80, OutputTokens: 10},
+					})
+				case 4:
+					// Round 2, step 0: after receiving the self-audit request,
+					// model calls confirm_audit(success=true, critical_actions=[]).
+					yield(fantasy.StreamPart{
+						Type:          fantasy.StreamPartTypeToolCall,
+						ID:            "tc-audit",
+						ToolCallName:  toolNameConfirmAudit,
+						ToolCallInput: `{"success":true,"reasoning":"verified all outputs","artifacts_checked":["report.html"],"workflow_sections_checked":["delivery"],"critical_actions":[],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`,
+					})
+					yield(fantasy.StreamPart{
+						Type:         fantasy.StreamPartTypeFinish,
+						FinishReason: fantasy.FinishReasonToolCalls,
+						Usage:        fantasy.Usage{InputTokens: 90, OutputTokens: 30},
+					})
+				default:
+					// Round 2, step 1: final summary.
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: "t2"})
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "t2", Delta: "Report delivered cleanly."})
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "t2"})
+					yield(fantasy.StreamPart{
+						Type:         fantasy.StreamPartTypeFinish,
+						FinishReason: fantasy.FinishReasonStop,
+						Usage:        fantasy.Usage{InputTokens: 100, OutputTokens: 10},
+					})
+				}
+			}, nil
+		},
+	}
+
+	res, err := Run(context.Background(), ModeScheduled, RunConfig{
+		EnvPrefix:           CanonicalEnvPrefix,
+		IncludeConfirmAudit: true,
+		NativeTools:         []fantasy.AgentTool{tracker},
+	}, Deps{
+		Input:      historyInput{system: "sys", msgs: []fantasy.Message{fantasy.NewUserMessage("run daily scan")}, label: "reklaim-scan"},
+		Policy:     pol,
+		Executor:   &stubExecutor{},
+		Model:      model,
+		LogSession: session,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.FinalText != "Report delivered cleanly." {
+		t.Fatalf("FinalText = %q, want %q", res.FinalText, "Report delivered cleanly.")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(prompts) < 5 {
+		t.Fatalf("expected at least 5 model calls across 3 rounds, got %d", len(prompts))
+	}
+
+	// Inspect the prompt sent at the start of Round 1 (call index 2):
+	// - must NOT contain the orphaned tc-truncated tool call
+	// - must NOT demand confirm_audit yet
+	// - MUST contain both the finish_reason=length nudge and the task_tracker nudge
+	round1Prompt := prompts[2]
+	var sawLengthNudge, sawTrackerNudge, sawPrematureAudit bool
+	for _, m := range round1Prompt {
+		for _, part := range m.Content {
+			if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok && tc.ToolCallID == "tc-truncated" {
+				t.Fatal("Round 1 prompt carried orphaned ToolCallPart tc-truncated from FinishReasonLength step")
+			}
+		}
+		text := msgText(m)
+		if strings.Contains(text, "finish_reason=length") {
+			sawLengthNudge = true
+		}
+		if strings.Contains(text, "Task tracker: 1 todo, 1 in progress.") && strings.Contains(text, "Task List:") {
+			sawTrackerNudge = true
+		}
+		if strings.Contains(text, "Before finishing:") {
+			sawPrematureAudit = true
+		}
+	}
+	if !sawLengthNudge {
+		t.Fatal("Round 1 prompt missing finish_reason=length truncation nudge")
+	}
+	if !sawTrackerNudge {
+		t.Fatal("Round 1 prompt missing task_tracker pending-work nudge with rendered plan")
+	}
+	if sawPrematureAudit {
+		t.Fatal("Round 1 prompt prematurely requested self-audit while work remained")
 	}
 }

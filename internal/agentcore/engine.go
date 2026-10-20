@@ -774,15 +774,39 @@ func (e *engine) roundCarry(result *fantasy.AgentResult) []fantasy.Message {
 	return e.outOfRoster.explain(carryRoundMessages(result))
 }
 
-// Replay keeps tool evidence while dropping provider-specific reasoning blocks.
+// Replay keeps tool evidence while dropping provider-specific reasoning blocks
+// and any unexecuted ToolCallParts (e.g. a step terminated by FinishReasonLength
+// before fantasy dispatched the call, which would otherwise leave an orphaned
+// tool_use in the next round's prompt that providers reject with HTTP 400).
 // Copy content slices so a later reducer cannot mutate the original transcript.
 func messagesForReplay(messages []fantasy.Message) []fantasy.Message {
+	var answered map[string]struct{}
+	for _, msg := range messages {
+		if msg.Role != fantasy.MessageRoleTool {
+			continue
+		}
+		for _, part := range msg.Content {
+			if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok && tr.ToolCallID != "" {
+				if answered == nil {
+					answered = make(map[string]struct{})
+				}
+				answered[tr.ToolCallID] = struct{}{}
+			}
+		}
+	}
 	out := make([]fantasy.Message, 0, len(messages))
 	for _, msg := range messages {
 		parts := make([]fantasy.MessagePart, 0, len(msg.Content))
 		for _, part := range msg.Content {
 			if _, isReasoning := part.(fantasy.ReasoningPart); isReasoning && msg.Role == fantasy.MessageRoleAssistant {
 				continue
+			}
+			if msg.Role == fantasy.MessageRoleAssistant {
+				if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok {
+					if _, hasResult := answered[tc.ToolCallID]; !hasResult {
+						continue
+					}
+				}
 			}
 			parts = append(parts, part)
 		}

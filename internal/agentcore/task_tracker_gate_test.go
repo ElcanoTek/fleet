@@ -131,3 +131,55 @@ func TestTaskTrackerFinishGate_CouplesToRealToolOutput(t *testing.T) {
 		t.Fatalf("finish gate must release once the real tool reports all done: %v", msgs)
 	}
 }
+
+// TestTaskTrackerFinishGate_FiresBeforeSelfAuditRequest pins the ordering in
+// checkFinishEnforcement: when task_tracker has open items (todo > 0 or
+// in_progress > 0), the pending-work gate must reject the finish BEFORE
+// selfAuditRequested is flipped, and must include the rendered task list so a
+// fallback model that took over mid-run sees the remaining plan items instead
+// of being handed the self-audit ritual over an incomplete workspace.
+func TestTaskTrackerFinishGate_FiresBeforeSelfAuditRequest(t *testing.T) {
+	pol := NewScheduledPolicy(NewLogSession(), 100, 0, 0)
+	guarded := &policyGuardedTool{inner: tools.NewTaskTrackerTool(), policy: pol}
+
+	if _, err := guarded.Run(context.Background(), fantasy.ToolCall{
+		ID: "tc-1", Input: `{"command":"plan","task_list":` + pendingTaskListJSON + `}`,
+	}); err != nil {
+		t.Fatalf("guarded task_tracker run: %v", err)
+	}
+
+	canFinish, msgs := pol.CanFinish(0)
+	if canFinish || len(msgs) != 1 {
+		t.Fatalf("CanFinish(0) = (%t, %v), want (false, 1 message)", canFinish, msgs)
+	}
+	if pol.orch.selfAuditRequested {
+		t.Fatal("selfAuditRequested must remain false while task_tracker still has pending work")
+	}
+	if !strings.Contains(msgs[0], "Task tracker: 1 todo, 1 in progress.") {
+		t.Fatalf("expected task tracker summary in nudge, got:\n%s", msgs[0])
+	}
+	if !strings.Contains(msgs[0], "Task List:") || !strings.Contains(msgs[0], "email the finished summary") {
+		t.Fatalf("expected rendered task list in nudge so fallback models see open items, got:\n%s", msgs[0])
+	}
+
+	allDone := `[
+		{"id":"1","title":"download the report","status":"done"},
+		{"id":"2","title":"compute the rollup","status":"done"},
+		{"id":"3","title":"email the summary","status":"done"}]`
+	if _, err := guarded.Run(context.Background(), fantasy.ToolCall{
+		ID: "tc-2", Input: `{"command":"plan","task_list":` + allDone + `}`,
+	}); err != nil {
+		t.Fatalf("guarded task_tracker run: %v", err)
+	}
+
+	canFinish, msgs = pol.CanFinish(1)
+	if canFinish || len(msgs) != 1 {
+		t.Fatalf("CanFinish(1) = (%t, %v), want (false, self-audit nudge)", canFinish, msgs)
+	}
+	if !pol.orch.selfAuditRequested {
+		t.Fatal("selfAuditRequested should flip to true once all task_tracker items are done")
+	}
+	if !strings.Contains(msgs[0], "confirm_audit") {
+		t.Fatalf("expected self-audit request after tasks completed, got:\n%s", msgs[0])
+	}
+}
