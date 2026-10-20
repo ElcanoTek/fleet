@@ -39,18 +39,21 @@ export function approvalFromPoll(
   const row = data?.resolved_approvals?.find((r) => r.approval_id === current.id);
   if (!row) return null;
   if (row.executing === true) {
-    const progress = parseApprovalProgress(row.progress);
-    if (!progress) return null;
+    const progress = parseApprovalProgress(row.progress) ?? current.progress;
+    // Stop (docs/APPROVAL-STOP.md): a stop pressed in another tab shows here.
+    const stopping = current.stopping === true || row.stopping === true;
     const prev = current.progress;
-    if (
-      prev &&
-      prev.progress === progress.progress &&
-      prev.total === progress.total &&
-      prev.message === progress.message
-    ) {
+    const sameProgress =
+      progress === prev ||
+      (prev !== undefined &&
+        progress !== undefined &&
+        prev.progress === progress.progress &&
+        prev.total === progress.total &&
+        prev.message === progress.message);
+    if (sameProgress && stopping === (current.stopping === true)) {
       return null;
     }
-    return { ...current, status: "pending", executing: true, progress };
+    return { ...current, status: "pending", executing: true, progress, stopping: stopping || undefined };
   }
   const status = approvalStatusFromOutcome(row);
   if (status === null) return null;
@@ -63,6 +66,9 @@ export function approvalFromPoll(
     progress: undefined,
     // A narrowed approval's record rides the row (docs/APPROVAL-NARROWING.md).
     narrowed: parseApprovalNarrowed(row.narrowed) ?? current.narrowed,
+    stopping: undefined,
+    // Only a stop the server recorded (docs/APPROVAL-STOP.md).
+    stopped: row.stopped === true || undefined,
   };
 }
 

@@ -305,6 +305,12 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 
 	// Approval resolution lives at /conversations/{id}/approvals/{approvalId}.
 	if sub == "approvals" && subArg != "" {
+		// Stop a running approved call (docs/APPROVAL-STOP.md):
+		// /conversations/{id}/approvals/{approvalId}/stop.
+		if approvalID, ok := strings.CutSuffix(subArg, "/stop"); ok && approvalID != "" && !strings.Contains(approvalID, "/") {
+			s.handleApprovalStop(w, r, id, approvalID)
+			return
+		}
 		s.handleApproval(w, r, id, subArg)
 		return
 	}

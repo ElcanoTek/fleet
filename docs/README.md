@@ -210,6 +210,7 @@ above fails otherwise.
 - [`APPROVAL-CARD-DESCRIBERS.md`](APPROVAL-CARD-DESCRIBERS.md) — Approval-card describers: a bundle-declared read turns a critical call into a readable card (ADR-0082)
 - [`APPROVAL-RESULT-CARDS.md`](APPROVAL-RESULT-CARDS.md) — Approval result cards: a settled card reads the outcome card the call's own result carries (ids, status, link, Retry failed), and the readable pending card's layout (ADR-0084)
 - [`APPROVAL-PROGRESS.md`](APPROVAL-PROGRESS.md) — Approval progress: a running approved call shows its MCP progress, and a push says when it ends or the chat waits
+- [`APPROVAL-STOP.md`](APPROVAL-STOP.md) — Stopping a running approved call: Stop sends the MCP cancellation and waits for the server's answer after its current item (ADR-0086)
 - [`APPROVAL-NARROWING.md`](APPROVAL-NARROWING.md) — Approval narrowing: untick records on a readable card and approve the rest of one call in one click (ADR-0085)
 - [`APPROVED-CALL-BUDGET.md`](APPROVED-CALL-BUDGET.md) — Approved-call budget: how long an approved card's MCP call may run, and the early "executing" reply
 - [`ASK-NOTIFY.md`](ASK-NOTIFY.md) — ask / notify + paused-awaiting-human run state

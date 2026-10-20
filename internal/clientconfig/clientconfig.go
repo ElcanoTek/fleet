@@ -469,6 +469,16 @@ type AgentPolicy struct {
 	//	  critical_tool_narrowable_args:
 	//	    execute_plan: {arg: deal_ids}
 	CriticalToolNarrowableArgs map[string]NarrowableArgConfig `yaml:"critical_tool_narrowable_args"`
+	// CriticalToolStop is an OPTIONAL list of critical suffixes (same suffix
+	// matching as critical_tools) whose RUNNING approved call offers Stop:
+	// fleet sends the MCP notifications/cancelled for the request and keeps
+	// waiting for the server's answer, which a cooperating server gives after
+	// its current item (with a stopped reason in its own result). Members
+	// must be in critical_tools and not notify mode (docs/APPROVAL-STOP.md).
+	//
+	//	agent_policy:
+	//	  critical_tool_stop: [execute_plan]
+	CriticalToolStop []string `yaml:"critical_tool_stop"`
 	// BatchSecondsPerDeal is DERIVED, never read from agent_policy: Bundle.AgentPolicy
 	// collects each mcp_servers[].batch_seconds_per_deal into it, keyed by
 	// server name, so the per-record batch budget reaches agentcore on the same
@@ -2952,6 +2962,7 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		CriticalToolGroupApproval:     append([]string(nil), b.AgentPolicyConfig.CriticalToolGroupApproval...),
 		CriticalToolProgress:          append([]string(nil), b.AgentPolicyConfig.CriticalToolProgress...),
 		CriticalToolResultCards:       append([]string(nil), b.AgentPolicyConfig.CriticalToolResultCards...),
+		CriticalToolStop:              append([]string(nil), b.AgentPolicyConfig.CriticalToolStop...),
 	}
 	// An http_tool flagged `critical: true` opts into the SAME critical-tool audit
 	// gate as the manifest's critical_tools suffixes. The tool is registered as

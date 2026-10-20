@@ -277,6 +277,16 @@ the stored history are the same, and every other chip renders as before. The
 check is generic (fleet's own gate text, not a bundle's), so it applies to every
 bundle's staged calls, email sends and risky shell commands included.
 
+## A running call can be stopped
+
+For tools a bundle lists in `agent_policy.critical_tool_stop`, a running
+approved call's card shows **Stop** ("Stopping finishes the current item, then
+halts"). Fleet records the stop on the row, sends the MCP
+`notifications/cancelled` for the request and keeps waiting for the server's
+answer; a cooperating server finishes its current item and answers with what
+it did not run, and the settled card offers **Run the remaining N**. See
+[APPROVAL-STOP.md](APPROVAL-STOP.md) and ADR-0086.
+
 ## A settled card reads the call's own outcome
 
 For tools a bundle lists in `agent_policy.critical_tool_result_cards`, the

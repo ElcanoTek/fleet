@@ -1176,6 +1176,13 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolModes:          p.CriticalToolModes,
 		CriticalToolNarrowableArgs: p.NarrowableArgNames(),
 	})...)
+	// critical_tool_stop: a member must stage a card for an MCP call; a typo
+	// would quietly leave the running card without Stop.
+	problems = append(problems, agentcore.ApprovalStopProblems(agentcore.AgentPolicy{
+		CriticalToolSuffixes: p.CriticalToolSuffixes,
+		CriticalToolModes:    p.CriticalToolModes,
+		CriticalToolStop:     p.CriticalToolStop,
+	})...)
 	if len(problems) > 0 {
 		res.Status = statusFail
 		res.Detail = strings.Join(problems, "; ")

@@ -39,6 +39,13 @@ const (
 	// the ID of the request to cancel (not a new request); it is fire-and-forget
 	// (no response is sent for a cancel).
 	methodCancel method = "cancel"
+	// methodStop asks the server to STOP an in-flight methodCall cooperatively
+	// (mcp.WithStop, docs/APPROVAL-STOP.md): its ID is the call's, it is
+	// fire-and-forget, and unlike methodCancel it does not cancel the call's
+	// context. The child closes the call's stop signal, so the MCP transport
+	// sends notifications/cancelled to the server and keeps waiting for the
+	// call's normal answer, which still arrives as the call's final frame.
+	methodStop method = "stop"
 	// methodListTools returns the discovered MCP tool catalog (server, tool,
 	// description, schema). Once the broker owns the credentialed client, the
 	// main process can no longer call GetAllTools locally, so it reads the catalog
@@ -246,6 +253,10 @@ type request struct {
 	// so they reach the request exactly as in-process. Public call metadata,
 	// never a credential; absent for every call that carries none.
 	Meta map[string]any `json:"meta,omitempty"`
+	// Stoppable marks a methodCall whose caller may stop it (mcp.WithStop):
+	// the child attaches a stop signal to the call, which a later methodStop
+	// frame with this ID closes. Off for every other call.
+	Stoppable bool `json:"stoppable,omitempty"`
 	// Scope is an opaque broker-issued per-run scope ID. It is set on scoped calls
 	// and scope_close; scope_open carries ScopeSpec instead.
 	Scope     string    `json:"scope,omitempty"`

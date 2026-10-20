@@ -90,6 +90,9 @@ func (c *Client) callMCP(ctx context.Context, scope, server, tool string, args m
 	req.Progress = mcp.ProgressSink(ctx) != nil
 	// And the call's fleet `_meta` entries (mcp.WithRequestMeta).
 	req.Meta = mcp.RequestMeta(ctx)
+	// And whether the caller may stop it: roundtrip forwards the stop signal
+	// as a methodStop frame once the call has been sent.
+	req.Stoppable = mcp.StopSignal(ctx) != nil
 	resp, err := c.roundtrip(ctx, req)
 	if err != nil {
 		return "", false, err
@@ -463,25 +466,37 @@ func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
 		return response{}, fmt.Errorf("mcpbroker: send: %w", err)
 	}
 
-	select {
-	case resp := <-ch:
-		return resp, nil
-	case <-ctx.Done():
-		// Best-effort: ask the server to stop the in-flight call so it doesn't keep
-		// running an MCP request whose result nobody will read.
-		_ = c.send(request{ID: req.ID, Method: methodCancel})
-		if req.Method == methodOpenScope {
-			// Keep this pending slot alive: cancellation can race the backend creating
-			// the scope. If a late response owns an ID, release it instead of losing
-			// the only handle and leaking its subprocesses until broker shutdown.
-			//nolint:gosec // cleanup must outlive the request context that triggered it.
-			go c.closeAbandonedScope(ch)
-		} else {
-			c.discard(req.ID)
+	// A stoppable call (request.Stoppable): its stop signal becomes ONE
+	// methodStop frame, sent after the call itself, and the wait goes on for
+	// the call's answer.
+	var stop <-chan struct{}
+	if req.Stoppable {
+		stop = mcp.StopSignal(ctx)
+	}
+	for {
+		select {
+		case resp := <-ch:
+			return resp, nil
+		case <-stop:
+			stop = nil
+			_ = c.send(request{ID: req.ID, Method: methodStop})
+		case <-ctx.Done():
+			// Best-effort: ask the server to stop the in-flight call so it doesn't keep
+			// running an MCP request whose result nobody will read.
+			_ = c.send(request{ID: req.ID, Method: methodCancel})
+			if req.Method == methodOpenScope {
+				// Keep this pending slot alive: cancellation can race the backend creating
+				// the scope. If a late response owns an ID, release it instead of losing
+				// the only handle and leaking its subprocesses until broker shutdown.
+				//nolint:gosec // cleanup must outlive the request context that triggered it.
+				go c.closeAbandonedScope(ch)
+			} else {
+				c.discard(req.ID)
+			}
+			return response{}, ctx.Err()
+		case <-c.done:
+			return response{}, c.closedErr()
 		}
-		return response{}, ctx.Err()
-	case <-c.done:
-		return response{}, c.closedErr()
 	}
 }
 

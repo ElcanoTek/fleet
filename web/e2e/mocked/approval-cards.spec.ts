@@ -662,3 +662,84 @@ test("a narrowable card leaves an unticked deal out and approves the rest in one
   await expect(pending.getByTestId("approval-narrowed-summary")).toHaveText("Approved 2 of 3 · 1 left out");
   expect(posted).toEqual({ approved: true, scope: "once", approved_values: ["k1", "k3"] });
 });
+
+// Stopping a running call (docs/APPROVAL-STOP.md): a running card of a tool in
+// agent_policy.critical_tool_stop shows Stop; pressing it posts to the stop
+// route and the card reads Stopping; the poll then finds the call settled as
+// stopped, and its result card offers "Run the remaining N".
+test("a running card stops after its current item and offers to run the rest", async ({ page }) => {
+  const conv = "conv-stop";
+  await mockChatBoot(page, { conversations: [{ id: conv, title: "Plan run" }] });
+  await page.route(`**/api/conversations/${conv}`, (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation: { id: conv, title: "Plan run", persona: "default", model: "test-model", pinned: false },
+        history: [
+          { id: 1, role: "user", type: "text", content: { text: "raise the floors" } },
+          { id: 2, role: "assistant", type: "text", content: { text: "Updating." } },
+        ],
+        pending_approvals: [],
+        resolved_approvals: [
+          {
+            approval_id: "ap-stop",
+            tool: "mcp_ix_execute_plan",
+            summary: { tool: "mcp_ix_execute_plan", args: [{ key: "deal_ids", value: '["k1","k2","k3"]' }] },
+            status: "approved",
+            executing: true,
+            stoppable: true,
+            result_text: "Approved — executing…",
+            card: { title: "Update floor on 3 Index Exchange deals", items: [] },
+          },
+        ],
+        pending_memory_proposals: [],
+      },
+    });
+  });
+  let stopped = false;
+  await page.route(`**/api/conversations/${conv}/approvals/ap-stop/stop`, (r: Route) => {
+    stopped = true;
+    return r.fulfill({ json: { status: "approved", executing: true, stopping: true, stoppable: true, result_text: "Approved — executing…" } });
+  });
+  await page.route(`**/api/conversations/${conv}/approvals/ap-stop`, (r: Route) =>
+    r.fulfill({
+      json: {
+        pending_approvals: [],
+        resolved_approvals: [
+          stopped
+            ? {
+                approval_id: "ap-stop",
+                tool: "mcp_ix_execute_plan",
+                status: "approved",
+                is_err: false,
+                stoppable: true,
+                stopped: true,
+                result_text: '{"stopped_reason":"stopped_by_user"}',
+                result_card: {
+                  outcome: "partial",
+                  title: "Stopped after 1 of 3 · 1 updated",
+                  items: [
+                    { key: "k1", label: "Deal one", status: "done" },
+                    { key: "k2", label: "Deal two", status: "not_run" },
+                    { key: "k3", label: "Deal three", status: "not_run" },
+                  ],
+                  retry: { keys: ["k2", "k3"] },
+                },
+              }
+            : { approval_id: "ap-stop", tool: "mcp_ix_execute_plan", status: "approved", executing: true, stoppable: true },
+        ],
+      },
+    }),
+  );
+  await page.goto("/chat");
+  const row = page.locator(`[data-conversation-id="${conv}"]`);
+  await row.waitFor({ timeout: 15_000 });
+  await row.click();
+
+  const card = page.locator('[data-approval-id="ap-stop"]');
+  await expect(card.getByTestId("generic-action-title")).toHaveText("Running · Update floor on 3 Index Exchange deals");
+  await card.getByRole("button", { name: "Stop" }).click();
+  await expect(card.getByTestId("approval-stopping")).toBeVisible();
+  await expect(card.getByTestId("generic-action-title")).toHaveText("Stopped after 1 of 3 · 1 updated", { timeout: 10_000 });
+  await expect(card.getByTestId("approval-retry-failed")).toHaveText("Run the remaining 2");
+});

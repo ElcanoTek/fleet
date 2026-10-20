@@ -152,6 +152,13 @@ type AgentPolicy struct {
 	// NarrowableArgProblems). Empty = every card approves its call whole, as
 	// before.
 	CriticalToolNarrowableArgs map[string]string
+	// CriticalToolStop lists critical suffixes whose RUNNING approved call the
+	// person may stop (docs/APPROVAL-STOP.md): the chat server sends the MCP
+	// notifications/cancelled for the request and keeps waiting for the
+	// server's answer. Matched by suffix exactly like CriticalToolSuffixes;
+	// members must stage a card for an MCP call (see ApprovalStopProblems).
+	// Empty = no running card offers Stop, as before.
+	CriticalToolStop []string
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -244,6 +251,9 @@ var (
 	// activeNarrowableArgs maps a critical suffix to the list argument a
 	// person may narrow on its card. Empty by default: nothing is narrowed.
 	activeNarrowableArgs = map[string]string{}
+	// activeStop is the set of critical suffixes whose running approved calls
+	// offer Stop. Empty by default.
+	activeStop = map[string]bool{}
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -393,6 +403,7 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	activeResultCards = installResultCardSet(p.CriticalToolResultCards, seen)
 
 	activeNarrowableArgs = installNarrowableArgs(p.CriticalToolNarrowableArgs, p.CriticalToolModes, seen)
+	activeStop = installStagedCardSuffixSet("critical_tool_stop", p.CriticalToolStop, p.CriticalToolModes, seen)
 }
 
 // suffixMatches reports whether a tool (or a suffix standing for one) is

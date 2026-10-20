@@ -839,6 +839,11 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 		ctx = pctx
 		params["_meta"] = meta
 	}
+	// A caller that may stop the call (WithStop) says so, so the server knows
+	// this client keeps reading for the response after it cancels.
+	if StopSignal(ctx) != nil {
+		ctx = WithRequestMeta(ctx, map[string]any{CooperativeCancelMetaKey: true})
+	}
 	// Fleet's own `_meta` entries for this call (WithRequestMeta), e.g. that
 	// an approved call was narrowed. Only `fleet/` keys, so they never
 	// replace the progress token.
@@ -1204,6 +1209,10 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 	// buffered channel — so cancelling mid-read leaves at most one
 	// orphaned reader, and the broken flag guarantees no future Call
 	// races it on t.reader before the transport is restarted.
+	// A caller that may stop the call (WithStop): when the signal fires, send
+	// the spec's notifications/cancelled for this request, once, and keep
+	// reading for its response (docs/APPROVAL-STOP.md).
+	stop := StopSignal(ctx)
 	for {
 		resultChan := make(chan result, 1)
 		go func() {
@@ -1212,33 +1221,42 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 		}()
 
 		var line []byte
-		select {
-		case <-ctx.Done():
-			// The subprocess may still write the response for this
-			// request; the orphaned goroutine above may consume an
-			// arbitrary later line. Poison the transport so the next
-			// call restarts the subprocess instead of reading garbage.
-			t.broken = true
-			return nil, ctx.Err()
-		case res := <-resultChan:
-			if res.err != nil {
-				return nil, res.err
+		var res result
+		for got := false; !got; {
+			select {
+			case <-ctx.Done():
+				// The subprocess may still write the response for this
+				// request; the orphaned goroutine above may consume an
+				// arbitrary later line. Poison the transport so the next
+				// call restarts the subprocess instead of reading garbage.
+				t.broken = true
+				return nil, ctx.Err()
+			case <-stop:
+				stop = nil
+				if err := t.writeLocked(ctx, append(cancelledNotification(id), '\n')); err != nil {
+					log.Printf("MCP stdio: could not send the stop for request %d: %v", id, err)
+				}
+			case res = <-resultChan:
+				got = true
 			}
-			if res.discarded > 0 {
-				// The line overran the cap, so its JSON cannot be parsed —
-				// fail this call loudly rather than hand anyone a truncated
-				// response. The reader drained to the newline, so the stream
-				// is still framed and the transport stays usable: no broken
-				// flag, and the message must not match isTransportDeadError's
-				// markers (the subprocess is healthy — a restart would fix
-				// nothing). If the oversized line was an interleaved
-				// notification rather than this call's response, the real
-				// response is consumed by a later call's id match and
-				// discarded there — defined either way.
-				return nil, fmt.Errorf("MCP stdio: response line exceeded %d bytes (%d bytes discarded) and was dropped — narrow the query or page the tool's results", stdioResponseCaptureCap, res.discarded)
-			}
-			line = res.line
 		}
+		if res.err != nil {
+			return nil, res.err
+		}
+		if res.discarded > 0 {
+			// The line overran the cap, so its JSON cannot be parsed —
+			// fail this call loudly rather than hand anyone a truncated
+			// response. The reader drained to the newline, so the stream
+			// is still framed and the transport stays usable: no broken
+			// flag, and the message must not match isTransportDeadError's
+			// markers (the subprocess is healthy — a restart would fix
+			// nothing). If the oversized line was an interleaved
+			// notification rather than this call's response, the real
+			// response is consumed by a later call's id match and
+			// discarded there — defined either way.
+			return nil, fmt.Errorf("MCP stdio: response line exceeded %d bytes (%d bytes discarded) and was dropped — narrow the query or page the tool's results", stdioResponseCaptureCap, res.discarded)
+		}
+		line = res.line
 
 		var response stdioResponse
 		if err := json.Unmarshal(line, &response); err != nil {
@@ -1460,6 +1478,14 @@ func (t *HTTPTransport) Call(ctx context.Context, method string, params interfac
 	// Custom headers can override defaults if needed
 	for key, value := range t.headers {
 		httpReq.Header.Set(key, value)
+	}
+
+	// A caller that may stop the call (WithStop): the cancellation is its own
+	// POST on the session, sent while this response is still being read.
+	if stop := StopSignal(ctx); stop != nil {
+		done := make(chan struct{})
+		defer close(done)
+		go t.notifyStopHTTP(ctx, stop, done, id)
 	}
 
 	resp, err := t.client.Do(httpReq)

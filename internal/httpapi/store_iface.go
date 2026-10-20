@@ -218,6 +218,9 @@ type chatStore interface {
 	// writing what they approved in the same claim
 	// (docs/APPROVAL-NARROWING.md).
 	ClaimApprovalNarrowed(ctx context.Context, userEmail, approvalID, resultText, narrowedJSON string) (bool, error)
+	// MarkApprovalStopRequested records, once, that the person pressed Stop
+	// on a still-executing call (docs/APPROVAL-STOP.md).
+	MarkApprovalStopRequested(ctx context.Context, userEmail, approvalID string) (bool, error)
 	// ClaimApprovalAndSetModel is the suggest_advanced_model resolution: the
 	// approved claim and the conversation's model pin in one transaction, so a
 	// failed pin leaves the approval pending (retryable) rather than resolved

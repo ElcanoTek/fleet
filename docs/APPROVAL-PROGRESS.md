@@ -96,6 +96,9 @@ server's sink keeps only the latest update and wakes a writer goroutine.
   latest `progress` (`{progress, total, message, updated_at}`). The one-card
   GET (`/conversations/{id}?approval_id=…`) answers the same. Every other card's
   payload is unchanged.
+- **A stoppable call polls too.** A running card of a tool in
+  `critical_tool_stop` polls the same way, so it settles on its own after a
+  Stop ([APPROVAL-STOP.md](APPROVAL-STOP.md)).
 - **The web polls.** An approval runs outside any turn, and fleet has no
   conversation-level live channel (RESUME-AFTER-APPROVAL.md, "Deviations"), so
   a running card with `progress_updates` polls the one-card GET (web proxy

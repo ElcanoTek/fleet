@@ -24,6 +24,7 @@ import {
   type MemoryProposal,
   approvalIsExecuting,
   approvalProgressText,
+  type ApprovalOutcomePayload,
   approvalStatusFromOutcome,
   parseApprovalNarrowed,
   resultCardFromOutcome,
@@ -47,7 +48,7 @@ import {
   ReadablePendingRecords,
 } from "./ApprovalReadableCard";
 import { ApprovalResultCardView } from "./ApprovalResultCard";
-import { conversationApprovalApiUrl } from "@/app/lib/conversationApiUrl";
+import { conversationApiPath, conversationApprovalApiUrl } from "@/app/lib/conversationApiUrl";
 import { Segmented } from "@/app/shared/ui/Segmented";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 
@@ -285,24 +286,55 @@ function ApprovalExecutingControls({
   submitting,
   submitError,
   onCheck,
+  onStop,
+  stopping = false,
 }: {
   progress?: ApprovalProgress;
   submitting: "send" | "cancel" | null;
   submitError: string | null;
   onCheck: () => void;
+  // A tool in critical_tool_stop (docs/APPROVAL-STOP.md): Stop asks the call
+  // to halt after its current item. Absent = no Stop button.
+  onStop?: () => void;
+  stopping?: boolean;
 }) {
+  const stopHintId = useId();
   return (
     <div className="mt-3 flex flex-col gap-2" data-testid="approval-executing">
       {progress ? <ApprovalProgressBar progress={progress} /> : null}
-      <button
-        type="button"
-        data-testid="approval-check-result"
-        className="w-fit rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
-        disabled={submitting !== null}
-        onClick={onCheck}
-      >
-        {submitting === "send" ? "Checking…" : "Check result"}
-      </button>
+      {stopping ? (
+        <p data-testid="approval-stopping" role="status" className="text-[0.75rem] text-[var(--color-text-secondary)]">
+          Stopping: the current item finishes, then it halts.
+        </p>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          data-testid="approval-check-result"
+          className="w-fit rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+          disabled={submitting !== null}
+          onClick={onCheck}
+        >
+          {submitting === "send" ? "Checking…" : "Check result"}
+        </button>
+        {onStop && !stopping ? (
+          <>
+            <button
+              type="button"
+              data-testid="approval-stop"
+              aria-describedby={stopHintId}
+              className="w-fit rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              disabled={submitting !== null}
+              onClick={onStop}
+            >
+              {submitting === "cancel" ? "Stopping…" : "Stop"}
+            </button>
+            <span id={stopHintId} className="text-[0.72rem] text-[var(--color-text-muted)]">
+              Stopping finishes the current item, then halts.
+            </span>
+          </>
+        ) : null}
+      </div>
       <ApprovalSubmitError
         message={submitError}
         running="This action is still running. Check result to see the outcome without running it again."
@@ -450,7 +482,9 @@ export function ApprovalCard({
   // A running call of a tool in critical_tool_progress: poll the card for
   // its progress and outcome (docs/APPROVAL-PROGRESS.md). Called before the
   // per-kind early returns to satisfy the rules of hooks.
-  useApprovalProgressPoll(card, conversationId, executing && approval.progressUpdates === true, (next) => {
+  // A stoppable call polls too, so the card settles on its own after a Stop
+  // (docs/APPROVAL-STOP.md).
+  useApprovalProgressPoll(card, conversationId, executing && (approval.progressUpdates === true || approval.stoppable === true), (next) => {
     if (next.status !== "pending") setHeldExecuting(false);
     onResolved(next);
   });
@@ -506,6 +540,8 @@ export function ApprovalCard({
         resume?: boolean;
         result_card?: unknown;
         narrowed?: unknown;
+        stoppable?: boolean;
+        stopped?: boolean;
       };
       const nextStatus = approvalStatusFromOutcome(data);
       const narrowed = parseApprovalNarrowed(data.narrowed) ?? approval.narrowed;
@@ -519,6 +555,7 @@ export function ApprovalCard({
           resultText: data.result_text,
           decisionError: undefined,
           narrowed,
+          stoppable: data.stoppable === true || approval.stoppable,
         });
         return;
       }
@@ -531,12 +568,53 @@ export function ApprovalCard({
         executing: false,
         decisionError: undefined,
         narrowed,
+        stopped: data.stopped === true || undefined,
       });
     } catch (err) {
       // Network failure: nothing reached the server, same posture as a non-2xx.
       setSubmitError(
         `Couldn't reach the server (${err instanceof Error ? err.message : "request failed"}).`,
       );
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  // Stop a running call (docs/APPROVAL-STOP.md): the server asks the tool to
+  // stop after its current item; the card shows "Stopping" until it settles.
+  const stop = async () => {
+    if (submitting || !executing || !conversationId) return;
+    setSubmitting("cancel");
+    setSubmitError(null);
+    try {
+      const url = conversationApiPath(conversationId, "approvals", approval.id, "stop");
+      if (!url) {
+        setSubmitError("This approval has an invalid id and can't be sent.");
+        return;
+      }
+      const response = await fetch(url, { method: "POST" });
+      if (!response.ok) {
+        setSubmitError(await describeSubmitFailure(response));
+        return;
+      }
+      const data = (await response.json()) as ApprovalOutcomePayload;
+      const nextStatus = approvalStatusFromOutcome(data);
+      if (nextStatus === null) {
+        onResolved({ ...approval, status: "pending", executing: true, stopping: true });
+        return;
+      }
+      setHeldExecuting(false);
+      onResolved({
+        ...approval,
+        status: nextStatus,
+        resultText: data.result_text,
+        resultCard: resultCardFromOutcome(data),
+        executing: false,
+        stopping: undefined,
+        stopped: data.stopped === true || undefined,
+      });
+    } catch (err) {
+      setSubmitError(`Couldn't reach the server (${err instanceof Error ? err.message : "request failed"}).`);
     } finally {
       setSubmitting(null);
     }
@@ -602,6 +680,7 @@ export function ApprovalCard({
         submitting={submitting}
         submitError={submitError}
         onResolve={(approved, approvedValues) => void resolve(approved, undefined, approvedValues)}
+        onStop={() => void stop()}
         applyAll={applyAll}
         onApplyAllChange={setApplyAll}
         onAskAgain={onAskAgain}
@@ -912,6 +991,7 @@ function GenericActionCard({
   submitting,
   submitError,
   onResolve,
+  onStop,
   applyAll,
   onApplyAllChange,
   onAskAgain,
@@ -922,6 +1002,8 @@ function GenericActionCard({
   submitError: string | null;
   // approvedValues narrows the approval (docs/APPROVAL-NARROWING.md).
   onResolve: (approved: boolean, approvedValues?: string[]) => void;
+  // Stop a running call of a tool in critical_tool_stop (docs/APPROVAL-STOP.md).
+  onStop?: () => void;
   applyAll: boolean;
   onApplyAllChange: (v: boolean) => void;
   onAskAgain?: (approval: Approval) => void;
@@ -1193,6 +1275,8 @@ function GenericActionCard({
             submitting={submitting}
             submitError={submitError}
             onCheck={() => onResolve(true)}
+            onStop={approval.stoppable ? onStop : undefined}
+            stopping={approval.stopping === true}
           />
         ) : (
         <div className="mt-3 flex flex-col gap-2">
