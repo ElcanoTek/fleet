@@ -621,7 +621,8 @@ results the in-round guard already stubs on every call, and the results of
 resent size again (the measured size, less what the stubs removed, plus the
 paused step's own output), and buys the summary only if elision did not bring
 it at least 30% of the budget below the threshold. A summary that still runs is
-written from the full results of the oldest half, as before. The stubs are
+written from the history as it stood before this pass's stubs (a result stubbed
+at an earlier pause is a preview by then). The stubs are
 carried in the history from then on, written at the moment the compaction
 already rewrites it, so they cost no extra prompt-cache miss. Assistant text,
 tool-call inputs, the pinned head and any summary are never changed, and every

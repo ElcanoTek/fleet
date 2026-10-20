@@ -164,7 +164,9 @@ func recentWindowStart(messages []fantasy.Message, head, recentTokens int) int {
 // include: the latest assistant message onward. The size is that call's
 // input, and the call's own output (its assistant message and tool results),
 // plus anything the run appended after it, are in the history the next call
-// will send.
+// will send. When the last step's assistant message carried only reasoning,
+// the replay drops it and this counts the step before as well: an
+// over-estimate, which can only make the summary run, never skip it.
 func unseenTokens(messages []fantasy.Message) int {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == fantasy.MessageRoleAssistant {

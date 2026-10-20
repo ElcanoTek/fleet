@@ -723,7 +723,7 @@ const TIMELINE_SESSION: LogSession = {
       id: "e2",
       role: "user",
       content:
-        "[context_elided] trigger=resend_budget used=220205 budget=80000 elided_results=7 elided_bytes=271684 estimated_after=152284 — tool results older than the recent window were replaced with short previews that say how to get the full output back; that freed enough, so no summary was needed",
+        "[context_elided] trigger=resend_budget used=220205 budget=80000 floor=140191 effective_budget=220191 elided_results=7 elided_bytes=270529 estimated_after=162595 — tool results older than the recent window were replaced with short previews; that freed enough, so no summary was needed",
       created_at: 1752500005,
     },
     { id: "a2", role: "assistant", content: "Report built.", created_at: 1752500006 },

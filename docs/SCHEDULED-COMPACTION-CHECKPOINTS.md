@@ -303,8 +303,8 @@ fewer summarizer calls; making the elided content recallable added nothing.
   to at least the last two assistant turns and moved back so it never starts on
   a tool message.
 - **Left alone.** Results of 2 KiB or less; media; results over the 128 KiB
-  hard cap, because the in-round guard already sends the same stub for them on
-  every call; and the results of `spawn_subagent` (a child run's answer, which
+  hard cap, because the in-round guard already sends a stub of the same size in
+  their place on every call; and the results of `spawn_subagent` (a child run's answer, which
   only a whole new child run could reproduce) and `task_tracker` (the plan the
   finish gate holds the run to, which a summary re-announces and an elision
   does not). Assistant text, tool-call inputs, the pinned head and any summary
@@ -321,13 +321,15 @@ fewer summarizer calls; making the elided content recallable added nothing.
   bought only if the estimate is not at least 30% of the budget below the
   threshold: a run that elides gets room for several more steps before its next
   pause, rather than pausing again on the next one. When the summary does run,
-  it is written from the full results of the oldest half, as before, so the
-  identifiers it is asked to keep are not lost to a preview; only the kept half
-  carries the stubs.
+  it is written from the history as it stood before this pass's stubs, so the
+  identifiers it is asked to keep are not lost to a preview just made; only the
+  kept half carries this pass's stubs. A result stubbed at an earlier pause is
+  a preview by then, in the summary's input as everywhere else.
 - **Budget.** For the resend budget it is the budget; under the floor rule the
   threshold is floor + budget, so the target is floor + 70% of the budget. For
-  the window path it is the compaction point (window × the compaction
-  threshold, clamped to the in-round allowance).
+  the window path it is the compaction point: window × the compaction
+  threshold, clamped to the in-round allowance when the window checkpoint is
+  the run's checkpoint (the resend budget turned off).
 - **Bookkeeping.** An elision is a clean reduction like the proactive
   compaction: it resets the consecutive-compaction count, clears the stalled
   window flag, and marks the floor for re-measurement at the next step.
@@ -371,10 +373,13 @@ measurement; see [Measured](#measured) for a real run.
 
 ### Not done
 
+- Getting an elided result back into the history. Once a result is a stub,
+  the full output is in the session log (and, when the tool output boundary
+  saved it, in the workspace file the stub names), not in what the model is
+  sent; an identifier deep inside it is gone unless the model wrote it down.
+  The study found recall of elided output almost never used.
 - Eliding tool-call inputs. Only results change; the in-round guard still
   evicts oversized inputs near the window as before.
-- A way to recall elided output other than the stub's recovery action, which
-  the study found unused.
 - Eliding per step, and eliding in interactive chat (out of scope in the issue).
 
 ## Deferred
