@@ -1480,19 +1480,21 @@ func (t *HTTPTransport) Call(ctx context.Context, method string, params interfac
 		httpReq.Header.Set(key, value)
 	}
 
-	// A caller that may stop the call (WithStop): the cancellation is its own
-	// POST on the session, sent while this response is still being read.
-	if stop := StopSignal(ctx); stop != nil {
-		done := make(chan struct{})
-		defer close(done)
-		go t.notifyStopHTTP(ctx, stop, done, id)
-	}
-
 	resp, err := t.client.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	// A caller that may stop the call (WithStop): the cancellation is its own
+	// POST on the session, sent while this response is still being read. It
+	// starts only once the server has answered the request's headers, so the
+	// cancellation can never reach the server before the call it cancels.
+	if stop := StopSignal(ctx); stop != nil {
+		done := make(chan struct{})
+		defer close(done)
+		go t.notifyStopHTTP(ctx, stop, done, id)
+	}
 
 	// Capture MCP session ID from response (try multiple header name variants)
 	t.captureSessionID(resp.Header)

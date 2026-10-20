@@ -45,7 +45,9 @@ agent_policy:
    "params":{"requestId":<id>,"reason":"stopped_by_user"}}` on the call's pipe,
    once, and goes on reading for the call's response. The HTTP transport
    sends the same notification as its own POST on the session while the
-   call's response is still open.
+   call's response is still open, and only once the server has answered the
+   call's headers, so the cancellation never reaches the server before the
+   call it cancels.
 3. **The broker carries it.** The parent marks the call `stoppable` and,
    once the call frame is sent, turns the signal into one `stop` frame with
    the call's id. The child closes the call's stop signal; unlike the
@@ -75,6 +77,10 @@ Elcano bundle's deal-plan execute does this).
   - 404 for an unknown card or another conversation, 400 for a tool that did
     not opt in, 409 for a card still pending (decline it instead);
   - a card already settled answers its outcome, and nothing is recorded;
+  - a running card whose outcome is already being recorded (its stop window
+    is finalized, or its signal is gone) answers its state and records
+    nothing: accepting a stop and finalizing the outcome take the same lock,
+    so the row's stop mark and the outcome's stop line always agree;
   - a running card: `store.MarkApprovalStopRequested` writes
     `approvals.stop_requested_at` (migration 080) once, only on the owner's
     row while it is executing; the call's signal closes; an `audit:` line
@@ -87,8 +93,8 @@ Elcano bundle's deal-plan execute does this).
   ran", recorded as a failure.
 - **The outcome is the call's.** Whatever the server answers is recorded by
   the same code as any approved call (governance, result card, history,
-  resume, finish push). After the tool's text, and before the result's
-  governance (so the whole text is bounded), fleet adds: `[fleet] The person
+  resume, finish push). After the tool's governed, bounded text fleet adds,
+  governed and bounded on its own: `[fleet] The person
   pressed Stop while this call ran. Its server was asked to stop after the
   item it was working on; the result above says what ran and what did not. Do
   not run the remaining items unless the person asks. (Written by fleet, not

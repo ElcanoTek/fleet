@@ -140,8 +140,8 @@ func stopRow() store.Approval {
 	}
 }
 
-func postStop(s *Server, conv, id string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest("POST", "/conversations/"+conv+"/approvals/"+id+"/stop", nil)
+func postStop(s *Server, conv string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("POST", "/conversations/"+conv+"/approvals/ap1/stop", nil)
 	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@example.com"))
 	rec := httptest.NewRecorder()
 	s.conversationByID(rec, req)
@@ -174,7 +174,7 @@ func TestApprovalStop_StopsARunningCallAndRecordsIt(t *testing.T) {
 		t.Fatal("the call never reached the server")
 	}
 
-	rec := postStop(s, "c1", "ap1")
+	rec := postStop(s, "c1")
 	if rec.Code != 200 {
 		t.Fatalf("stop = %d %s", rec.Code, rec.Body.String())
 	}
@@ -264,7 +264,7 @@ func TestHandleApprovalStop_Refusals(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := &stopStore{approval: tc.row()}
 			s := &Server{store: st}
-			rec := postStop(s, tc.conv, "ap1")
+			rec := postStop(s, tc.conv)
 			if rec.Code != tc.code {
 				t.Fatalf("stop = %d %s, want %d", rec.Code, rec.Body.String(), tc.code)
 			}
@@ -280,8 +280,9 @@ func TestHandleApprovalStop_Refusals(t *testing.T) {
 	a.Status, a.ResultText = "approved", approvalExecutingSentinel
 	st := &stopStore{approval: a}
 	s := &Server{store: st}
+	s.armApprovalStop("ap1") // as decideApproval does before the claim
 	for range 2 {
-		rec := postStop(s, "c1", "ap1")
+		rec := postStop(s, "c1")
 		var body map[string]any
 		_ = json.Unmarshal(rec.Body.Bytes(), &body)
 		if rec.Code != 200 || body["executing"] != true || body["stopping"] != true {
@@ -374,4 +375,44 @@ func TestApprovalStopRegistry_RefCounts(t *testing.T) {
 		t.Fatal("the last reference must forget the signal")
 	}
 	s.disarmApprovalStop("x") // no panic on an unknown id
+}
+
+// Accepting a stop and finalizing the outcome are ordered: a Stop accepted
+// first is marked AND reported by finalize; once finalized, a Stop is refused
+// and nothing is marked, so the row and the outcome's stop line agree. A
+// running row with no armed signal is past finalizing too.
+func TestApprovalStop_OrderedAgainstTheOutcome(t *testing.T) {
+	stopPolicy(t)
+	running := func() *stopStore {
+		a := stopRow()
+		a.Status, a.ResultText = "approved", approvalExecutingSentinel
+		return &stopStore{approval: a}
+	}
+
+	st := running()
+	s := &Server{store: st}
+	s.armApprovalStop("ap1")
+	if rec := postStop(s, "c1"); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"stopping":true`) {
+		t.Fatalf("stop = %d %s", rec.Code, rec.Body.String())
+	}
+	if !s.finalizeApprovalStop("ap1") || st.marks != 1 {
+		t.Fatalf("a stop accepted first must be marked (%d) and reported by finalize", st.marks)
+	}
+
+	st = running()
+	s = &Server{store: st}
+	s.armApprovalStop("ap1")
+	if s.finalizeApprovalStop("ap1") {
+		t.Fatal("no stop was asked for")
+	}
+	rec := postStop(s, "c1")
+	if rec.Code != 200 || st.marks != 0 || strings.Contains(rec.Body.String(), `"stopping":true`) {
+		t.Fatalf("a stop after finalizing = %d %s, marks %d; want refused and unmarked", rec.Code, rec.Body.String(), st.marks)
+	}
+
+	st = running()
+	s = &Server{store: st}
+	if rec := postStop(s, "c1"); rec.Code != 200 || st.marks != 0 {
+		t.Fatalf("no armed signal: %d %s, marks %d; want no mark", rec.Code, rec.Body.String(), st.marks)
+	}
 }

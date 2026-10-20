@@ -22,6 +22,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -37,6 +38,11 @@ type approvalStopHandle struct {
 	ch   chan struct{}
 	once sync.Once
 	refs int // guarded by approvalStopRegistry.mu
+	// mu orders accepting a stop (the durable mark plus the signal) against
+	// finalizing the outcome: whichever takes it first decides, so the row's
+	// stop mark and the outcome's stop line always agree.
+	mu        sync.Mutex
+	finalized bool
 }
 
 // stop closes the signal; a second call does nothing.
@@ -112,6 +118,38 @@ func (s *Server) disarmApprovalStop(approvalID string) {
 	}
 }
 
+// acceptApprovalStop records and signals a Stop unless the call's outcome was
+// already finalized without one. accepted is whether the stop took (now or by
+// an earlier request); marked is whether this request wrote the durable mark.
+func (s *Server) acceptApprovalStop(ctx context.Context, h *approvalStopHandle, user, approvalID string) (marked, accepted bool, err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.finalized {
+		return false, h.stopped(), nil
+	}
+	marked, err = s.store.MarkApprovalStopRequested(ctx, user, approvalID)
+	if err != nil {
+		return false, false, err
+	}
+	h.stop()
+	return marked, true, nil
+}
+
+// finalizeApprovalStop closes a call's stop window as its outcome is about to
+// be recorded and reports whether a stop was accepted before it. A Stop that
+// arrives later is refused (acceptApprovalStop), so the outcome's stop line
+// and the row's stop mark cannot diverge.
+func (s *Server) finalizeApprovalStop(approvalID string) bool {
+	h := s.approvalStopFor(approvalID)
+	if h == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.finalized = true
+	return h.stopped()
+}
+
 // approvalStopNote is fleet's line after a stopped call's result, in the
 // history the model reads (shared with the restart recovery).
 const approvalStopNote = store.ApprovalStopNote
@@ -166,23 +204,28 @@ func (s *Server) handleApprovalStop(w http.ResponseWriter, r *http.Request, conv
 		writeJSON(w, s.approvalClientState(a))
 		return
 	}
-	marked, err := s.store.MarkApprovalStopRequested(r.Context(), user, approvalID)
+	// The call's signal is armed before its claim and dropped only after its
+	// outcome is recorded, so a running call has one. None means the outcome
+	// is being or has been recorded: nothing to stop, answer the state.
+	h := s.approvalStopFor(approvalID)
+	if h == nil {
+		s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w)
+		return
+	}
+	marked, accepted, err := s.acceptApprovalStop(r.Context(), h, user, approvalID)
 	if err != nil {
 		http.Error(w, "could not record the stop", http.StatusInternalServerError)
 		return
 	}
-	// The signal is armed before the claim, so a running call has one. A
-	// stale request racing the end of the call may arm a fresh one here; it
-	// is closed at once and holds nothing open.
-	if h := s.approvalStopFor(approvalID); h != nil {
-		h.stop()
-	} else if h := s.armApprovalStop(approvalID); h != nil {
-		h.stop()
-		s.disarmApprovalStop(approvalID)
-	}
 	if marked {
 		//nolint:gosec // G706: every interpolated value is rendered with %q, which escapes any CR/LF.
 		log.Printf("audit: %q stopped running approval %q (%q) in conversation %q", user, approvalID, a.ToolName, convID)
+	}
+	if !accepted {
+		// The call finished first: its outcome is being recorded without a
+		// stop, and the row is not marked.
+		s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w)
+		return
 	}
 	s.resolvedApprovalDecision(r.Context(), user, approvalID).write(w)
 }

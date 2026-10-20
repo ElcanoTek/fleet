@@ -125,12 +125,18 @@ func TestHTTPTransport_StopPostsCancelledDuringTheCall(t *testing.T) {
 	var mu sync.Mutex
 	var cancelled map[string]any
 	gotCancel := make(chan struct{})
+	callArrived := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var msg map[string]any
 		_ = json.Unmarshal(body, &msg)
 		switch msg["method"] {
 		case "notifications/cancelled":
+			select {
+			case <-callArrived:
+			default:
+				t.Errorf("the stop reached the server before the call it cancels")
+			}
 			if r.Header.Get("Mcp-Session-Id") != "sess-1" {
 				t.Errorf("stop sent without the session id")
 			}
@@ -140,6 +146,7 @@ func TestHTTPTransport_StopPostsCancelledDuringTheCall(t *testing.T) {
 			close(gotCancel)
 			w.WriteHeader(http.StatusAccepted)
 		case "tools/call":
+			close(callArrived)
 			params, _ := msg["params"].(map[string]any)
 			meta, _ := params["_meta"].(map[string]any)
 			if meta[CooperativeCancelMetaKey] != true {
@@ -159,13 +166,12 @@ func TestHTTPTransport_StopPostsCancelledDuringTheCall(t *testing.T) {
 	defer srv.Close()
 	tr := NewHTTPTransport(srv.URL)
 	tr.sessionID = "sess-1"
+	// The stop is already pressed when the call starts: the cancellation
+	// must still follow the call, never precede it.
 	stop := make(chan struct{})
+	close(stop)
 	ctx, cancel := context.WithTimeout(WithStop(context.Background(), stop), 10*time.Second)
 	defer cancel()
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		close(stop)
-	}()
 	raw, err := tr.Call(ctx, "tools/call", map[string]any{"name": "run_items", "arguments": map[string]any{}, "_meta": map[string]any{CooperativeCancelMetaKey: true}})
 	if err != nil || !strings.Contains(string(raw), "stopped after item 1") {
 		t.Fatalf("Call = %s, %v", raw, err)
