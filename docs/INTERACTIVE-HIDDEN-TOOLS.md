@@ -78,12 +78,13 @@ never lists a hidden tool.
 
 At boot, a blank member or one with a character no MCP tool name can contain
 (anything but ASCII letters, digits, `_`, `-`, `.`) is dropped and logged.
-`fleet validate-config` reports the same members under `agent_policy`. It also
-reports a member that matches no tool, when it can prove that: every
-`mcp_servers` entry lists its `tools:` and there are no `a2a_peers`, so the
-candidates are known. A per-user hosted connector's tools are not in the
-bundle and are not checked. The check is non-blocking, like the rest of
-`agent_policy`.
+`fleet validate-config` fails `agent_policy` on the same members. It warns
+(never fails) on a member that matches no tool the bundle declares, when it
+can tell: every `mcp_servers` entry lists its `tools:` and there are no
+`a2a_peers`, so the candidates are known. Such a member is most likely a
+typo, but it may be meant for a per-user hosted connector's tool, which users
+add at runtime and the bundle cannot list. The check is non-blocking, like
+the rest of `agent_policy`.
 
 ## Code
 

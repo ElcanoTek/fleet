@@ -1169,15 +1169,22 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolResultCards: p.CriticalToolResultCards,
 	})...)
 	// interactive_hidden_tools: a member the boot install drops (blank, or a
-	// character no tool name has), and one that provably matches no tool, so
-	// a typo would quietly leave the raw tool callable from chat.
+	// character no tool name has) fails the check.
 	problems = append(problems, agentcore.InteractiveHiddenToolProblems(agentcore.AgentPolicy{
 		InteractiveHiddenTools: p.InteractiveHiddenTools,
 	})...)
-	problems = append(problems, interactiveHiddenUnmatched(bundle, p.InteractiveHiddenTools)...)
 	if len(problems) > 0 {
 		res.Status = statusFail
 		res.Detail = strings.Join(problems, "; ")
+		return res
+	}
+	// A member that matches no tool the bundle declares only warns: it is
+	// most likely a typo that leaves the raw tool callable from chat, but it
+	// may be meant for a per-user hosted connector's tool, which the bundle
+	// cannot list (users add hosted connections at runtime).
+	if warnings := interactiveHiddenUnmatched(bundle, p.InteractiveHiddenTools); len(warnings) > 0 {
+		res.Status = statusWarn
+		res.Detail = strings.Join(warnings, "; ")
 		return res
 	}
 	res.Status = statusOK
@@ -1189,13 +1196,14 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 	return res
 }
 
-// interactiveHiddenUnmatched reports the interactive_hidden_tools members
-// that select no tool the bundle declares. It can only prove that when every
+// interactiveHiddenUnmatched lists the interactive_hidden_tools members that
+// select no tool the bundle declares. It can only tell when every
 // mcp_servers entry lists its tools (an entry without a tools: allowlist
 // offers whatever its server advertises) and there are no a2a_peers; then the
 // candidates are mcp_<server>_<tool> for each listed tool plus the http_tools,
 // matched by the critical_tools suffix rule the gate uses. A per-user hosted
-// connector's tools are not in the bundle and are not checked.
+// connector's tools are not in the bundle, so a miss is a warning, never a
+// failure: the member may be meant for one of them.
 func interactiveHiddenUnmatched(bundle *clientconfig.Bundle, members []string) []string {
 	if len(members) == 0 || len(bundle.A2APeers) > 0 {
 		return nil
@@ -1227,7 +1235,7 @@ func interactiveHiddenUnmatched(bundle *clientconfig.Bundle, members []string) [
 			}
 		}
 		if !matched {
-			problems = append(problems, fmt.Sprintf("interactive_hidden_tools member %q matches no tool in any mcp_servers tools: allowlist or http_tools, so it hides nothing", m))
+			problems = append(problems, fmt.Sprintf("interactive_hidden_tools member %q matches no tool in any mcp_servers tools: allowlist or http_tools; unless it is meant for a per-user hosted connector's tool, it hides nothing (a typo?)", m))
 		}
 	}
 	return problems
