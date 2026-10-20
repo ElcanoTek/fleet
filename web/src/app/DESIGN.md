@@ -133,6 +133,24 @@ Known, deliberate exceptions:
     Every `-soft` value clears WCAG AA (4.5:1) on its own 15–20% tint over
     every surface fleet and its bundles ship, in both themes; status colors
     are not bundle-themable, so `designTokens.test.ts` pins this.
+  - `--color-{success,warning,danger}-text`: status **words** on a card
+    ("Not applied:", "Timed out", a failed card's title). The base status
+    color with 25–30% of `--color-text-primary` mixed in, so it is darker in
+    light and lighter in dark; the base tokens fail 4.5:1 on tinted cards.
+    `--color-{success,warning,danger}-tint` is the 15% wash behind a status
+    icon; the icon keeps the base color and needs 3:1 on it.
+- **Approval cards** (`chat/ui/Approval*.tsx`) — one fill token per state:
+  `--color-card-bg` (neutral: pending without a plain-words layout, plan,
+  running, declined, expired), `--color-card-pending-bg` (a card asking for a
+  decision), `--color-card-{success,warning,danger}-bg` (outcomes; the danger
+  wash is 4% in dark, 7% in light) and `--color-card-record-bg` (a notify
+  record). Muted text and links on those fills use `--color-card-text-muted`
+  and `--color-card-link`: the themable muted/accent with 20% of the strongest
+  text mixed in, because a tinted card costs them ~0.5:1. Don't mix a card
+  fill or paint a base status color as text inline in those files:
+  `approvalCardContrast.test.ts` measures every state's pairs (4.5:1 text,
+  3:1 icons, both themes, over `--color-bg`..`--color-surface-2`) from these
+  tokens and bans the inline forms.
 - **Syntax** — `--color-syntax-*` for code highlighting.
 - **Geometry & motion** — `--radius-md` (0.625rem), `--radius-lg` (0.875rem),
   `--radius-xl` (1.125rem), `--radius-pill`; `--space-*`; `--shadow-sm/md/lg`;

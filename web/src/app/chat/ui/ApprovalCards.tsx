@@ -116,7 +116,7 @@ export function ApprovalSeatBadge({ server, account, verb = "Sending as" }: {
     <div
       data-testid="approval-seat"
       className="flex items-center gap-1.5 text-[0.72rem]"
-      style={{ color: "var(--color-text-muted)" }}
+      style={{ color: "var(--color-card-text-muted)" }}
     >
       <span>
         {verb} <span className="font-mono">{account}</span> on{" "}
@@ -199,7 +199,7 @@ export function ApprovalCountdown({
     <div
       data-testid="approval-countdown"
       className="flex items-center gap-1.5 text-[0.72rem]"
-      style={{ color: expired ? "var(--color-danger)" : "var(--color-text-muted)" }}
+      style={{ color: expired ? "var(--color-danger-text)" : "var(--color-card-text-muted)" }}
     >
       {expired ? (
         <span>⏱ Timed out — the action was not taken.</span>
@@ -260,7 +260,7 @@ export function ApprovalSubmitError({
           role="alert"
           data-testid="approval-submit-error"
           className="text-[0.72rem] leading-[1.45]"
-          style={{ color: "var(--color-danger)" }}
+          style={{ color: "var(--color-danger-text)" }}
         >
           {message} Try again.
         </p>
@@ -317,7 +317,7 @@ export function ApprovalProgressBar({ progress }: { progress: ApprovalProgress }
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={pct}
-          className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-overlay-strong)]"
+          className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-overlay-soft)]"
         >
           <div className="h-full rounded-full bg-[var(--color-primary)] transition-[width]" style={{ width: `${pct}%` }} />
         </div>
@@ -346,7 +346,7 @@ function ApprovalResult({ text }: { text: string }) {
   return (
     <pre
       data-testid="approval-result"
-      className="mt-2 max-h-60 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-inset)] p-2 text-[0.72rem] leading-[1.45] text-[var(--color-text-muted)]"
+      className="mt-2 max-h-60 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-inset)] p-2 text-[0.72rem] leading-[1.45] text-[var(--color-card-text-muted)]"
       style={{ fontFamily: "var(--font-code)" }}
     >
       {text}
@@ -631,12 +631,12 @@ export function ApprovalCard({
       ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
       : approval.status === "approved"
       ? isPreviewOnly
-        ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
-        : { borderColor: "var(--color-success-border)", color: "var(--color-success)" }
+        ? { borderColor: "var(--color-border-strong)", color: "var(--color-card-text-muted)" }
+        : { borderColor: "var(--color-success-border)", color: "var(--color-success-text)" }
       : approval.status === "rejected"
-        ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
+        ? { borderColor: "var(--color-border-strong)", color: "var(--color-card-text-muted)" }
         : approval.status === "failed"
-          ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger)" }
+          ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger-text)" }
           : approval.status === "execution_unknown"
             ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
           : isPreviewOnly
@@ -645,7 +645,7 @@ export function ApprovalCard({
                 borderColor: "var(--color-accent)",
                 color: "var(--color-text-primary)",
                 background:
-                  "color-mix(in srgb, var(--color-accent) 14%, var(--color-overlay-soft))",
+                  "var(--color-card-pending-bg)",
               };
 
   // Lead the title with an uppercase intent tag so a skimmer's eye
@@ -687,7 +687,7 @@ export function ApprovalCard({
   // existing soft overlay.
   const bgClass = approval.status === "pending" && !isPreviewOnly && !executing
     ? ""
-    : " bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)]";
+    : " bg-[var(--color-card-bg)]";
 
   return (
     <div
@@ -703,7 +703,7 @@ export function ApprovalCard({
         {hasBody ? (
           <button
             type="button"
-            className="text-[0.72rem] underline text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+            className="text-[0.72rem] underline text-[var(--color-card-text-muted)] hover:text-[var(--color-text-primary)]"
             onClick={() => setExpanded((v) => !v)}
           >
             {/*
@@ -721,11 +721,11 @@ export function ApprovalCard({
       </div>
 
       <div className="grid gap-0.5 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
-        {toLine ? <div data-testid="email-to"><span className="text-[var(--color-text-muted)]">To: </span>{toLine}</div> : null}
-        {ccLine ? <div data-testid="email-cc"><span className="text-[var(--color-text-muted)]">Cc: </span>{ccLine}</div> : null}
-        {bccLine ? <div data-testid="email-bcc"><span className="text-[var(--color-text-muted)]">Bcc: </span>{bccLine}</div> : null}
-        <div><span className="text-[var(--color-text-muted)]">Subject: </span>{subject}</div>
-        {from ? <div><span className="text-[var(--color-text-muted)]">From: </span>{from}</div> : null}
+        {toLine ? <div data-testid="email-to"><span className="text-[var(--color-card-text-muted)]">To: </span>{toLine}</div> : null}
+        {ccLine ? <div data-testid="email-cc"><span className="text-[var(--color-card-text-muted)]">Cc: </span>{ccLine}</div> : null}
+        {bccLine ? <div data-testid="email-bcc"><span className="text-[var(--color-card-text-muted)]">Bcc: </span>{bccLine}</div> : null}
+        <div><span className="text-[var(--color-card-text-muted)]">Subject: </span>{subject}</div>
+        {from ? <div><span className="text-[var(--color-card-text-muted)]">From: </span>{from}</div> : null}
       </div>
 
       {/* Attachments sit OUTSIDE the collapsible body so a collapsed send card
@@ -737,7 +737,7 @@ export function ApprovalCard({
           data-testid="email-attachments"
           className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-2.5 py-1.5 text-[0.78rem]"
         >
-          <div className="mb-1 text-[var(--color-text-muted)]">
+          <div className="mb-1 text-[var(--color-card-text-muted)]">
             📎 {attachments.length} attachment{attachments.length === 1 ? "" : "s"}
           </div>
           <ul className="grid gap-0.5">
@@ -750,7 +750,7 @@ export function ApprovalCard({
                   </StatusChip>
                 ) : null}
                 {a.path !== a.name ? (
-                  <span className="ml-1.5 text-[0.72rem] text-[var(--color-text-muted)]">{a.path}</span>
+                  <span className="ml-1.5 text-[0.72rem] text-[var(--color-card-text-muted)]">{a.path}</span>
                 ) : null}
               </li>
             ))}
@@ -820,7 +820,7 @@ export function ApprovalCard({
                 calls for the conversation so the agent isn't gated per call.
                 Withheld when the bundle requires a decision per call. */}
             {approval.noSessionApproval ? null : (
-              <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
+              <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-card-text-muted)]">
                 <input
                   type="checkbox"
                   data-testid="approval-apply-all"
@@ -947,11 +947,11 @@ function GenericActionCard({
       : approval.status === "approved"
       ? recorded
         ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
-        : { borderColor: "var(--color-success-border)", color: "var(--color-success)" }
+        : { borderColor: "var(--color-success-border)", color: "var(--color-success-text)" }
       : approval.status === "rejected"
-        ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
+        ? { borderColor: "var(--color-border-strong)", color: "var(--color-card-text-muted)" }
         : approval.status === "failed"
-          ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger)" }
+          ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger-text)" }
           : approval.status === "execution_unknown"
             ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
           : { borderColor: "var(--color-accent)", color: "var(--color-text-primary)" };
@@ -959,7 +959,7 @@ function GenericActionCard({
   // The raw identity and arguments: the whole body of the generic card, and
   // the collapsed "Details" of a readable one.
   const toolHeader = server ? (
-    <div className="mb-1 text-[0.72rem] text-[var(--color-text-muted)]">
+    <div className="mb-1 text-[0.72rem] text-[var(--color-card-text-muted)]">
       via <span className="font-mono">{server}</span>
       <span className="mx-1">·</span>
       <span className="font-mono">{approval.tool}</span>
@@ -970,7 +970,7 @@ function GenericActionCard({
       <div className="grid gap-0.5 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
         {args.map((row) => (
           <div key={row.key} className="min-w-0">
-            <span className="text-[var(--color-text-muted)]">{row.key}: </span>
+            <span className="text-[var(--color-card-text-muted)]">{row.key}: </span>
             <span className="break-all">{row.value}</span>
           </div>
         ))}
@@ -1022,13 +1022,13 @@ function GenericActionCard({
         className="rounded-[var(--radius-lg)] border px-4 py-3 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]"
         style={{
           borderColor: "color-mix(in srgb, var(--color-accent) 55%, transparent)",
-          background: "color-mix(in srgb, var(--color-accent) 7%, var(--color-overlay-soft))",
+          background: "var(--color-card-pending-bg)",
         }}
       >
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <span
             data-testid="approval-eyebrow"
-            className="text-[0.68rem] font-medium uppercase tracking-[0.18em] text-[var(--color-accent)]"
+            className="text-[0.68rem] font-medium uppercase tracking-[0.18em] text-[var(--color-card-link)]"
             style={{ fontFamily: "var(--font-mono)" }}
           >
             Approval needed
@@ -1044,7 +1044,7 @@ function GenericActionCard({
           ) : null}
           <ReadablePendingRecords items={readable.items} />
           {readable.footer ? (
-            <p className="mt-2 min-w-0 break-words text-[0.72rem] text-[var(--color-text-muted)]">{readable.footer}</p>
+            <p className="mt-2 min-w-0 break-words text-[0.72rem] text-[var(--color-card-text-muted)]">{readable.footer}</p>
           ) : null}
         </div>
         <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-2 border-t border-[var(--color-border-subtle)] pt-3">
@@ -1075,7 +1075,7 @@ function GenericActionCard({
           <ApprovalSubmitError message={submitError} />
           {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
           {approval.noSessionApproval ? null : (
-            <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
+            <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-card-text-muted)]">
               <input
                 type="checkbox"
                 data-testid="approval-apply-all"
@@ -1097,7 +1097,7 @@ function GenericActionCard({
       data-approval-id={approval.id}
       data-tool={approval.tool}
       data-testid="generic-action-card"
-      className="rounded-[var(--radius-lg)] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
+      className="rounded-[var(--radius-lg)] border bg-[var(--color-card-bg)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
       style={statusStyle}
     >
       <div className="mb-2 flex min-w-0 items-center gap-2">
@@ -1158,7 +1158,7 @@ function GenericActionCard({
           {/* Batch approval (#300), same contract as the email card —
               withheld when the bundle requires a decision per call. */}
           {approval.noSessionApproval ? null : (
-            <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
+            <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-card-text-muted)]">
               <input
                 type="checkbox"
                 data-testid="approval-apply-all"
@@ -1205,18 +1205,18 @@ function BashApprovalCard({
     executing
       ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
       : approval.status === "approved"
-      ? { borderColor: "var(--color-success-border)", color: "var(--color-success)" }
+      ? { borderColor: "var(--color-success-border)", color: "var(--color-success-text)" }
       : approval.status === "rejected"
-        ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
+        ? { borderColor: "var(--color-border-strong)", color: "var(--color-card-text-muted)" }
         : approval.status === "failed"
-          ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger)" }
+          ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger-text)" }
           : approval.status === "execution_unknown"
             ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
           : { borderColor: "var(--color-accent)", color: "var(--color-text-primary)" };
 
   return (
     <div
-      className="rounded-[var(--radius-lg)] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
+      className="rounded-[var(--radius-lg)] border bg-[var(--color-card-bg)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
       style={statusStyle}
     >
       <div className="mb-2 flex items-center gap-2">
@@ -1241,7 +1241,7 @@ function BashApprovalCard({
       </pre>
 
       {(workingDir || timeoutSec) ? (
-        <div className="mt-1 grid gap-0.5 text-[0.72rem] text-[var(--color-text-muted)]">
+        <div className="mt-1 grid gap-0.5 text-[0.72rem] text-[var(--color-card-text-muted)]">
           {workingDir ? <div>cwd: {workingDir}</div> : null}
           {timeoutSec ? <div>timeout: {timeoutSec}s</div> : null}
         </div>
@@ -1364,11 +1364,11 @@ function ScheduleTaskCard({
     executing
       ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
       : approval.status === "approved"
-      ? { borderColor: "var(--color-success-border)", color: "var(--color-success)" }
+      ? { borderColor: "var(--color-success-border)", color: "var(--color-success-text)" }
       : approval.status === "rejected"
-        ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
+        ? { borderColor: "var(--color-border-strong)", color: "var(--color-card-text-muted)" }
         : approval.status === "failed"
-          ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger)" }
+          ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger-text)" }
           : approval.status === "execution_unknown"
             ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
           : { borderColor: "var(--color-accent)", color: "var(--color-text-primary)" };
@@ -1390,7 +1390,7 @@ function ScheduleTaskCard({
     <div
       data-approval-id={approval.id}
       data-tool="schedule_task"
-      className="rounded-[var(--radius-lg)] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
+      className="rounded-[var(--radius-lg)] border bg-[var(--color-card-bg)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
       style={statusStyle}
     >
       <div className="mb-2 flex items-center gap-2">
@@ -1401,35 +1401,35 @@ function ScheduleTaskCard({
       <div className="grid gap-0.5 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
         {name ? (
           <div>
-            <span className="text-[var(--color-text-muted)]">Name: </span>
+            <span className="text-[var(--color-card-text-muted)]">Name: </span>
             {name}
           </div>
         ) : null}
         <div>
-          <span className="text-[var(--color-text-muted)]">Schedule: </span>
+          <span className="text-[var(--color-card-text-muted)]">Schedule: </span>
           {scheduleLine}
         </div>
         {frequencyLine ? (
           <div>
-            <span className="text-[var(--color-text-muted)]">Frequency: </span>
+            <span className="text-[var(--color-card-text-muted)]">Frequency: </span>
             {frequencyLine}
           </div>
         ) : null}
         {s.model ? (
           <div>
-            <span className="text-[var(--color-text-muted)]">Model: </span>
+            <span className="text-[var(--color-card-text-muted)]">Model: </span>
             {s.model}
           </div>
         ) : null}
         {s.allow_network ? (
           <div>
-            <span className="text-[var(--color-text-muted)]">Network: </span>
+            <span className="text-[var(--color-card-text-muted)]">Network: </span>
             egress allowed
           </div>
         ) : null}
         {connectorsLine ? (
           <div data-testid="schedule-connectors">
-            <span className="text-[var(--color-text-muted)]">Connectors: </span>
+            <span className="text-[var(--color-card-text-muted)]">Connectors: </span>
             {connectorsLine}
           </div>
         ) : null}
@@ -1439,7 +1439,7 @@ function ScheduleTaskCard({
         <div
           data-testid="schedule-no-connectors"
           role="note"
-          className="mt-2 rounded-md border border-[var(--color-warning-border,var(--color-border-strong))] px-2 py-1.5 text-[0.75rem] text-[var(--color-warning,var(--color-text-primary))]"
+          className="mt-2 rounded-md border border-[var(--color-warning-border)] px-2 py-1.5 text-[0.75rem] text-[var(--color-warning-text)]"
         >
           <span aria-hidden>⚠️ </span>
           <span className="font-medium">No connectors.</span> This task will run without any email,
@@ -1451,7 +1451,7 @@ function ScheduleTaskCard({
 
       {editing && approval.status === "pending" && !executing ? (
         <div className="mt-2 grid gap-2">
-          <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-muted)]">
+          <label className="grid gap-1 text-[0.72rem] text-[var(--color-card-text-muted)]">
             Name
             <input
               value={editName}
@@ -1460,7 +1460,7 @@ function ScheduleTaskCard({
             />
           </label>
           {s.recurring ? (
-            <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-muted)]">
+            <label className="grid gap-1 text-[0.72rem] text-[var(--color-card-text-muted)]">
               Cron schedule
               <input
                 value={editCron}
@@ -1469,7 +1469,7 @@ function ScheduleTaskCard({
               />
             </label>
           ) : null}
-          <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-muted)]">
+          <label className="grid gap-1 text-[0.72rem] text-[var(--color-card-text-muted)]">
             Prompt
             <textarea
               value={editPrompt}
@@ -1628,7 +1628,7 @@ function ManageTasksCard({
       data-approval-id={approval.id}
       data-tool="manage_tasks"
       data-destructive={stopping ? "true" : undefined}
-      className="rounded-[var(--radius-lg)] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
+      className="rounded-[var(--radius-lg)] border bg-[var(--color-card-bg)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
       style={statusStyle}
     >
       <div className="mb-2 flex items-center gap-2">
@@ -1639,7 +1639,7 @@ function ManageTasksCard({
       <div className="grid gap-0.5 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
         {ids.length > 0 ? (
           <div>
-            <span className="text-[var(--color-text-muted)]">
+            <span className="text-[var(--color-card-text-muted)]">
               {ids.length === 1 ? "Task: " : `Tasks (${ids.length}): `}
             </span>
             <code className="text-[0.72rem]">{ids.join(", ")}</code>
@@ -1647,10 +1647,10 @@ function ManageTasksCard({
         ) : null}
         {match.length > 0 ? (
           <div>
-            <span className="text-[var(--color-text-muted)]">Applies to every task where: </span>
+            <span className="text-[var(--color-card-text-muted)]">Applies to every task where: </span>
             {match.join("; ")}
             {s.max_tasks ? (
-              <span className="text-[var(--color-text-muted)]">
+              <span className="text-[var(--color-card-text-muted)]">
                 {" "}
                 (refused above {s.max_tasks} matches)
               </span>
@@ -1828,11 +1828,11 @@ function SuggestAdvancedModelCard({
 
   const statusStyle: React.CSSProperties =
     approval.status === "approved"
-      ? { borderColor: "var(--color-success-border)", color: "var(--color-success)" }
+      ? { borderColor: "var(--color-success-border)", color: "var(--color-success-text)" }
       : approval.status === "rejected"
-        ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
+        ? { borderColor: "var(--color-border-strong)", color: "var(--color-card-text-muted)" }
         : approval.status === "failed"
-          ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger)" }
+          ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger-text)" }
           : approval.status === "execution_unknown"
             ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
           : { borderColor: "var(--color-accent)", color: "var(--color-text-primary)" };
@@ -1852,7 +1852,7 @@ function SuggestAdvancedModelCard({
     <div
       data-approval-id={approval.id}
       data-tool="suggest_advanced_model"
-      className="rounded-[var(--radius-lg)] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
+      className="rounded-[var(--radius-lg)] border bg-[var(--color-card-bg)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
       style={statusStyle}
     >
       <div className="mb-2 flex items-center gap-2">
@@ -1881,7 +1881,7 @@ function SuggestAdvancedModelCard({
           </button>
           <button
             type="button"
-            className="rounded-[var(--radius-md)] border border-transparent px-3 py-1.5 text-[0.75rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+            className="rounded-[var(--radius-md)] border border-transparent px-3 py-1.5 text-[0.75rem] text-[var(--color-card-text-muted)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
             disabled={pending !== null}
             onClick={() => void submit("dismiss")}
           >
@@ -2026,7 +2026,7 @@ function EmailPreview({
     return (
       <div className="mt-2 min-w-0 max-w-full">
         {overflowNotice ? (
-          <p className="mb-1 text-[0.7rem] text-[var(--color-text-muted)]">{overflowNotice}</p>
+          <p className="mb-1 text-[0.7rem] text-[var(--color-card-text-muted)]">{overflowNotice}</p>
         ) : null}
         <pre
           className="max-h-[16rem] min-w-0 max-w-full overflow-auto rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1.5 text-[0.75rem] leading-[1.45] text-[var(--color-text-secondary)] whitespace-pre-wrap break-all"
@@ -2055,7 +2055,7 @@ function EmailPreview({
         </div>
         <button
           type="button"
-          className="underline text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+          className="underline text-[var(--color-card-text-muted)] hover:text-[var(--color-text-primary)]"
           onClick={() => onShowRawChange(!showRaw)}
         >
           {showRaw ? "Hide source" : "Show source"}
@@ -2063,7 +2063,7 @@ function EmailPreview({
       </div>
 
       {overflowNotice ? (
-        <p className="border-b border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-1 text-[0.7rem] text-[var(--color-text-muted)]">
+        <p className="border-b border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-1 text-[0.7rem] text-[var(--color-card-text-muted)]">
           {overflowNotice}
         </p>
       ) : null}
@@ -2224,7 +2224,7 @@ function darkenBorder(c: string): string | null {
 function SegGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="inline-flex items-center gap-1.5">
-      <span className="text-[0.68rem] uppercase tracking-wide text-[var(--color-text-muted)]">{label}</span>
+      <span className="text-[0.68rem] uppercase tracking-wide text-[var(--color-card-text-muted)]">{label}</span>
       <div role="group" aria-label={label} className="seg">
         {children}
       </div>
@@ -2355,7 +2355,7 @@ export function MemoryDestinationPicker({
   // <span> is invalid markup React will complain about at hydration.
   return (
     <span className="mb-2 flex flex-wrap items-center gap-1.5">
-      <span className="text-[0.7rem] text-[var(--color-text-muted)]">Save to:</span>
+      <span className="text-[0.7rem] text-[var(--color-card-text-muted)]">Save to:</span>
       <Segmented
         label="Where to save this memory"
         value={value}
@@ -2363,7 +2363,7 @@ export function MemoryDestinationPicker({
         onChange={onChange}
         disabled={disabled}
       />
-      <span className="text-[0.68rem] text-[var(--color-text-muted)]">
+      <span className="text-[0.68rem] text-[var(--color-card-text-muted)]">
         {value === "project"
           ? `everyone in ${project.name}`
           : "only you, in every chat"}
@@ -2489,7 +2489,7 @@ export function MemoryProposalCard({
         {proposal.content}
       </p>
       {proposal.supersedesContent ? (
-        <p className="mb-3 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
+        <p className="mb-3 text-[0.75rem] leading-[1.5] text-[var(--color-card-text-muted)]">
           Replaces: <span className="line-through">{proposal.supersedesContent}</span>
           <span className="ml-1">(the older fact is retired only if you save)</span>
         </p>
@@ -2508,7 +2508,7 @@ export function MemoryProposalCard({
       {error ? (
         <p
           role="alert"
-          className="mb-2 text-[0.75rem] leading-[1.5] text-[var(--color-danger)]"
+          className="mb-2 text-[0.75rem] leading-[1.5] text-[var(--color-danger-text)]"
         >
           {error}
         </p>
@@ -2533,7 +2533,7 @@ export function MemoryProposalCard({
           </button>
         </div>
       ) : (
-        <div className="text-[0.75rem] text-[var(--color-text-muted)]">
+        <div className="text-[0.75rem] text-[var(--color-card-text-muted)]">
           {proposal.status === "saved"
             ? `${proposal.savedTo ? `Saved to ${proposal.savedTo}’s team learnings.` : "Saved to memories."}${proposal.resolutionNote ? " " + proposal.resolutionNote : ""}`
             : "Dismissed."}
