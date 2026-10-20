@@ -435,7 +435,9 @@ foot of the menu, opens the **Tools & connections** library: every
 connector with a category and status filter on the left, the list in the
 middle, and the selected connector on the right with its switch, its status,
 **Show N tools** for the names of its tools, and **Manage in Settings** for
-whether it starts on in new chats. When a connector has more than one
+whether it starts on in new chats. On a phone or a narrow window the filters
+scroll sideways as chips, and tapping a connector opens its details on their
+own screen; the back button at the top (or `Esc`) returns to the list. When a connector has more than one
 account, an **Account** menu on its row and in the library picks the one this
 conversation uses; the default reads as your deployment's name, or as the
 account you chose in **Settings → Connections**. A connector that **Needs

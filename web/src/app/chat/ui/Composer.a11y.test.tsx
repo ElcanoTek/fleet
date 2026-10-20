@@ -401,6 +401,9 @@ describe("Composer — tools popover search and grouping", () => {
     render(<Host overrides={{ mcpServers: ROWS, mcpCategories: CATS, toggleMcpServer }} />);
     expect(screen.getByTestId("chat-tools-badge")).toHaveTextContent("2");
     expect(screen.getByRole("button", { name: "Tools" })).toHaveAttribute("data-tip-top", "Tools, 2 on");
+    // Open, the tooltip would sit over the menu (and stick after a tap).
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    expect(screen.getByRole("button", { name: "Tools" })).not.toHaveAttribute("data-tip-top");
   });
 
   it("search reveals needs-setup dimmed with member copy, and shows inner tool hits", () => {

@@ -1179,7 +1179,9 @@ export function Composer({
                   aria-haspopup="true"
                   aria-expanded={mcpPickerOpen}
                   disabled={isStreaming}
-                  data-tip-top={`Tools, ${toolsBadge} on`}
+                  // No tooltip while the menu is open: it would sit over the
+                  // menu's footer, and a tap leaves it showing on a phone.
+                  data-tip-top={mcpPickerOpen ? undefined : `Tools, ${toolsBadge} on`}
                   className={`${TOOL_BTN} ${mcpPickerOpen ? TOOLS_BTN_OPEN : ""}`}
                   onClick={() => {
                     const next = !mcpPickerOpen;

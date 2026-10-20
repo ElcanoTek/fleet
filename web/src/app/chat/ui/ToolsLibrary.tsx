@@ -14,6 +14,7 @@ import {
   groupConnectors,
   inCategory,
   isOn,
+  openedByTouch,
   isToggleable,
   LIBRARY_STATUSES,
   libraryBulkScope,
@@ -38,6 +39,11 @@ import { Highlight, SeatMenu, StatusDot, StatusIcon, StatusKicker, ToolSwitch } 
 //
 // Like PromptLibrary it is not on DialogShell: it is the full-bleed sheet
 // shape (fills the viewport below sm:) and traps focus via useDialogA11y.
+//
+// Below lg the list and the detail cannot sit side by side, so they take
+// turns: tapping a connection opens its detail as its own view, with a back
+// button (Escape goes back too). Below md the filters scroll sideways as one
+// row of chips each, so the list starts near the top of a phone screen.
 
 export type ToolsLibraryProps = {
   servers: PickerConnector[];
@@ -52,15 +58,21 @@ export type ToolsLibraryProps = {
   onSetAccount: (name: string, account: string) => void;
 };
 
+// The rail's headings; below md the chips speak for themselves (each nav keeps
+// its aria-label), so the headings are hidden to save two rows.
 const RAIL_LABEL =
-  "basis-full px-2 pb-1.5 md:basis-auto font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]";
-// Below md the rail's filters wrap as chips so the list stays in view on a
-// phone; from md they stack as the design's rail.
-const RAIL_NAV = "flex flex-wrap gap-1 md:flex-col md:flex-nowrap md:gap-0.5";
+  "hidden px-2 pb-1.5 md:block font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]";
+// Below md each filter set is one sideways-scrolling row of chips, bled to the
+// sheet's edges; from md they stack as the design's rail.
+const RAIL_NAV =
+  "-mx-2.5 flex gap-1.5 overflow-x-auto px-2.5 [scrollbar-width:none] md:mx-0 md:flex-col md:gap-0.5 md:overflow-visible md:px-0 [&::-webkit-scrollbar]:hidden";
+// Below lg the list and detail stack; this query decides whether Escape steps
+// back from the detail view before closing.
+const STACKED = "(max-width: 1023.98px)";
 const GROUP_LABEL =
   "px-3 pb-1 pt-3 font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]";
 const SMALL_PILL =
-  "h-6 shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] border border-[var(--color-pill-border)] px-2.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
+  "hit-area-touch h-6 shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] border border-[var(--color-pill-border)] px-2.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
 const LINK =
   "inline-flex items-center gap-1 text-[var(--color-link)] hover:underline hover:underline-offset-[3px] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]";
 
@@ -83,35 +95,34 @@ export function ToolsLibrary({
   const [status, setStatus] = useState<LibraryStatusFilter | null>(null);
   const [selected, setSelected] = useState<string | null>(initialSelected ?? null);
   const [toolsOpen, setToolsOpen] = useState(false);
+  // The stacked layout's detail view. Opening on a connection ("Set up ›")
+  // starts there; it has no effect from lg, where both panes show.
+  const [detailOpen, setDetailOpen] = useState(!!initialSelected);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const backRef = useRef<HTMLButtonElement | null>(null);
   const queryRef = useRef(query);
+  const detailOpenRef = useRef(detailOpen);
   useEffect(() => {
     queryRef.current = query;
-  }, [query]);
+    detailOpenRef.current = detailOpen;
+  }, [query, detailOpen]);
 
-  // Escape clears the search first, then closes — and never closes while an
-  // account menu is open (that Escape closes the menu).
-  useDialogA11y(
-    true,
-    panelRef,
-    () => {
-      if (document.activeElement?.closest("[data-seat-menu]")) return;
-      if (queryRef.current) {
-        setQuery("");
-        return;
-      }
-      onClose();
-    },
-    { initialFocusRef: searchRef },
-  );
 
   const q = query.trim();
   const matched = useMemo(() => matchAll(servers, q, categories), [servers, q, categories]);
   const list = matched.filter((r) => inCategory(r.connector, cat, categories) && matchesStatus(r.connector, status));
   const groups = groupConnectors(list, categories, !!q);
   const flat = groups.flatMap((g) => g.rows.map((r) => r.connector));
-  const current = flat.find((c) => c.name === selected) ?? flat[0] ?? null;
+  // A stacked detail stays on the connection it opened even when that
+  // connection leaves the filtered list (switched off under an "On" filter);
+  // otherwise the view would silently swap to another row.
+  const current =
+    flat.find((c) => c.name === selected) ??
+    (detailOpen ? servers.find((c) => c.name === selected) : undefined) ??
+    flat[0] ??
+    null;
 
   const presentCats = categories.filter((c) => servers.some((s) => categoryOf(s, categories) === c.id));
   const catObj = cat === "all" ? null : categories.find((c) => c.id === cat) ?? null;
@@ -119,6 +130,66 @@ export function ToolsLibrary({
   const toggleable = flat.filter(isToggleable);
   const toggleableOn = toggleable.filter((c) => c.enabled).length;
   const bulkNames = toggleable.map((c) => c.name);
+
+  const stacked = () => typeof window !== "undefined" && window.matchMedia?.(STACKED).matches;
+  // Each view starts at its top, and focus follows the view change so a
+  // keyboard or screen-reader user lands in it.
+  const openDetail = (name: string) => {
+    setSelected(name);
+    setToolsOpen(false);
+    if (!stacked()) return;
+    setDetailOpen(true);
+    requestAnimationFrame(() => {
+      bodyRef.current?.scrollTo({ top: 0 });
+      bodyRef.current?.querySelector<HTMLElement>("[data-library-column]")?.scrollTo({ top: 0 });
+      backRef.current?.focus();
+    });
+  };
+  // Back to the list, focusing the row whose detail was showing (current, not
+  // selected: a filter may have hidden the selected row), or the search field
+  // when nothing is left to show.
+  const closeDetail = () => {
+    const shown = current?.name;
+    setDetailOpen(false);
+    requestAnimationFrame(() => {
+      const row = shown
+        ? panelRef.current?.querySelector<HTMLElement>(`[data-testid="chat-tools-library-row-${CSS.escape(shown)}"] button`)
+        : null;
+      (row ?? searchRef.current)?.focus();
+    });
+  };
+  // A search or filter change from the tablet rail (visible beside a stacked
+  // detail) returns to the list it just changed.
+  const filterBy = (next: () => void) => {
+    next();
+    setDetailOpen(false);
+  };
+
+  // Escape steps back from a stacked detail view, then clears the search, then
+  // closes — and never closes while an account menu is open (that Escape
+  // closes the menu).
+  useDialogA11y(
+    true,
+    panelRef,
+    () => {
+      if (document.activeElement?.closest("[data-seat-menu]")) return;
+      if (detailOpenRef.current && stacked()) {
+        closeDetail();
+        return;
+      }
+      if (queryRef.current) {
+        setQuery("");
+        return;
+      }
+      onClose();
+    },
+    // Opening straight into a stacked detail view focuses its back button (the
+    // search field is hidden there). Otherwise, opened by a tap, the sheet
+    // itself takes focus instead of the search field, so the keyboard does not
+    // open over the list; the trap treats the container as the wrap point, so
+    // Shift+Tab from there stays inside.
+    { initialFocusRef: detailOpen && stacked() ? backRef : openedByTouch() ? panelRef : searchRef },
+  );
 
   return createPortal(
     <div
@@ -129,32 +200,48 @@ export function ToolsLibrary({
     >
       <div
         ref={panelRef}
+        tabIndex={-1}
         data-testid="chat-tools-library"
-        className="flex h-[100dvh] w-full flex-col overflow-hidden border border-[var(--color-selected-border)] bg-[var(--color-surface-1)] shadow-[var(--shadow-popover)] sm:h-[min(43.75rem,92vh)] sm:w-[min(70rem,96vw)] sm:rounded-[var(--radius-xl)]"
+        className="flex h-[100dvh] outline-none w-full flex-col overflow-hidden border border-[var(--color-selected-border)] bg-[var(--color-surface-1)] shadow-[var(--shadow-popover)] sm:h-[min(43.75rem,92vh)] sm:w-[min(70rem,96vw)] sm:rounded-[var(--radius-xl)]"
       >
-        <header className="flex flex-wrap items-center gap-3 border-b border-[var(--color-divider)] px-4 py-3.5">
+        {/* The close button is its own column, so it stays top-right however
+            the title block wraps; the admin link drops under the title on a
+            phone and sits beside the close button from md. */}
+        <header className="flex items-start gap-3 border-b border-[var(--color-divider)] px-4 pb-3.5 pt-[max(0.875rem,env(safe-area-inset-top))] sm:pt-3.5">
           <span
             aria-hidden="true"
             className="flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-[var(--color-icon-tile)] text-[var(--color-accent)]"
           >
             <Icon name="tools" className="size-[1.06rem]" />
           </span>
-          <h2 className="m-0 text-[1.0625rem] font-semibold text-[var(--color-text-primary)]">Tools &amp; connections</h2>
-          <span className="text-[0.8rem] tabular-nums text-[var(--color-text-subtle)]">
-            {countOn(servers)} of {servers.length} on
-          </span>
-          <span className="flex-1" />
-          {isAdmin ? (
-            <a href={settingsHref()} title="Settings › Connections" className={`${LINK} mr-1 text-[0.8rem]`}>
-              Manage connections in Settings
-              <Icon name="external-link" className="size-3" />
-            </a>
-          ) : null}
-          <CloseButton label="Close tools library" onClick={onClose} />
+          <div className="flex min-h-8 min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5">
+            <h2 className="m-0 text-[1.0625rem] font-semibold text-[var(--color-text-primary)]">Tools &amp; connections</h2>
+            <span className="text-[0.8rem] tabular-nums text-[var(--color-text-subtle)]">
+              {countOn(servers)} of {servers.length} on
+            </span>
+            {isAdmin ? (
+              <a
+                href={settingsHref()}
+                title="Settings › Connections"
+                className={`${LINK} hit-area-touch basis-full text-[0.8rem] md:ml-auto md:mr-1 md:basis-auto`}
+              >
+                Manage connections in Settings
+                <Icon name="external-link" className="size-3" />
+              </a>
+            ) : null}
+          </div>
+          <CloseButton label="Close tools library" onClick={onClose} className="any-pointer-coarse:size-11" />
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto md:grid-cols-[14.5rem_minmax(0,1fr)] md:overflow-hidden">
-          <aside className="flex flex-col gap-3.5 border-b border-[var(--color-divider)] bg-[var(--color-rail-bg)] px-2.5 py-3 md:min-h-0 md:overflow-y-auto md:border-b-0 md:border-r">
+        <div
+          ref={bodyRef}
+          className="grid min-h-0 flex-1 grid-cols-1 content-start overflow-y-auto overscroll-contain md:grid-cols-[14.5rem_minmax(0,1fr)] md:content-stretch md:overflow-hidden"
+        >
+          <aside
+            className={`flex flex-col gap-2.5 border-b border-[var(--color-divider)] bg-[var(--color-rail-bg)] px-2.5 py-3 md:min-h-0 md:gap-3.5 md:overflow-y-auto md:border-b-0 md:border-r ${
+              detailOpen ? "max-md:hidden" : ""
+            }`}
+          >
             <div className="relative flex items-center">
               <Icon
                 name="search"
@@ -164,10 +251,13 @@ export function ToolsLibrary({
                 ref={searchRef}
                 type="search"
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  filterBy(() => setQuery(next));
+                }}
                 placeholder="Search tools…"
                 aria-label="Search tools"
-                className="h-9 w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-2.5 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
+                className="h-9 w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-2.5 any-pointer-coarse:h-11 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
               />
             </div>
             <nav aria-label="Categories" className={RAIL_NAV}>
@@ -178,7 +268,7 @@ export function ToolsLibrary({
                   active={cat === c.id}
                   label={c.name}
                   count={matched.filter((r) => inCategory(r.connector, c.id, categories) && matchesStatus(r.connector, status)).length}
-                  onClick={() => setCat(c.id)}
+                  onClick={() => filterBy(() => setCat(c.id))}
                 />
               ))}
             </nav>
@@ -191,16 +281,21 @@ export function ToolsLibrary({
                   label={s.label}
                   dot={s.id}
                   count={matched.filter((r) => inCategory(r.connector, cat, categories) && matchesStatus(r.connector, s.id)).length}
-                  onClick={() => setStatus(status === s.id ? null : s.id)}
+                  onClick={() => filterBy(() => setStatus(status === s.id ? null : s.id))}
                 />
               ))}
             </nav>
           </aside>
 
-          <div className="grid grid-cols-1 md:min-h-0 md:overflow-y-auto lg:grid-cols-[minmax(0,1fr)_23.25rem] lg:overflow-hidden">
+          <div
+            data-library-column
+            className="grid grid-cols-1 content-start md:min-h-0 md:overflow-y-auto md:overscroll-contain lg:grid-cols-[minmax(0,1fr)_23.25rem] lg:content-stretch lg:overflow-hidden"
+          >
             <section
               aria-label="Connections"
-              className="flex flex-col border-b border-[var(--color-divider)] lg:min-h-0 lg:border-b-0 lg:border-r"
+              className={`flex flex-col pb-[env(safe-area-inset-bottom)] lg:min-h-0 lg:border-r lg:border-[var(--color-divider)] lg:pb-0 ${
+                detailOpen ? "max-lg:hidden" : ""
+              }`}
             >
               <div className="px-4 pb-2.5 pt-3.5">
                 <div className="text-base font-semibold text-[var(--color-text-primary)]">
@@ -213,7 +308,7 @@ export function ToolsLibrary({
               </div>
               {toggleable.length > 0 ? (
                 <div
-                  className="mx-4 mb-2.5 flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-divider)] bg-[var(--color-rail-bg)] py-1.5 pl-3 pr-1.5"
+                  className="mx-4 mb-2.5 flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-divider)] bg-[var(--color-rail-bg)] py-1.5 pl-3 pr-1.5 any-pointer-coarse:min-h-11 any-pointer-coarse:py-0"
                   data-testid="chat-tools-library-bulk"
                 >
                   <span className="min-w-0 flex-1 text-[0.78rem] text-[var(--color-text-subtle)]">
@@ -254,10 +349,7 @@ export function ToolsLibrary({
                         connector={c}
                         query={q}
                         selected={current?.name === c.name}
-                        onSelect={() => {
-                          setSelected(c.name);
-                          setToolsOpen(false);
-                        }}
+                        onSelect={() => openDetail(c.name)}
                         onToggle={() => onToggle(c.name)}
                       />
                     ))}
@@ -271,7 +363,21 @@ export function ToolsLibrary({
               </div>
             </section>
 
-            <section aria-label="Connection details" className="px-5 pb-6 pt-4.5 lg:min-h-0 lg:overflow-y-auto">
+            <section
+              aria-label="Connection details"
+              className={`px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-3 lg:min-h-0 lg:overflow-y-auto lg:pb-6 lg:pt-4.5 ${
+                detailOpen ? "" : "max-lg:hidden"
+              }`}
+            >
+              <button
+                ref={backRef}
+                type="button"
+                onClick={closeDetail}
+                className="-ml-2 mb-1 inline-flex h-11 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-[0.875rem] text-[var(--color-link)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] lg:hidden"
+              >
+                <Icon name="chevron-right" className="size-4 rotate-180" />
+                {catObj ? catObj.name : "All connections"}
+              </button>
               {current ? (
                 <Detail
                   connector={current}
@@ -312,14 +418,14 @@ function RailButton({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`flex h-8 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-pill-border)] px-2.5 text-left text-[0.84rem] transition md:border-transparent hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+      className={`flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-[var(--radius-pill)] any-pointer-coarse:h-11 md:any-pointer-coarse:h-11 border border-[var(--color-pill-border)] px-3 text-left text-[0.84rem] transition md:h-8 md:rounded-[var(--radius-sm)] md:border-transparent md:px-2.5 hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
         active
           ? "bg-[var(--color-selected-bg)] text-[var(--color-text-primary)] shadow-[inset_0_0_0_1px_var(--color-selected-border)]"
           : "text-[var(--color-text-secondary)]"
       }`}
     >
       {dot ? <StatusDot status={dot === "on" ? "on" : dot} /> : null}
-      <span className="flex-1 truncate">{label}</span>
+      <span className="md:flex-1 md:truncate">{label}</span>
       <span className="text-[0.75rem] tabular-nums text-[var(--color-text-subtle)]">{count}</span>
     </button>
   );
@@ -342,7 +448,7 @@ function LibraryRow({
   const name = connectorLabel(c);
   return (
     <div
-      className={`flex items-center gap-3 rounded-[var(--radius-md)] py-2 pl-3 pr-2.5 transition hover:bg-[var(--color-pill-hover-bg)] ${
+      className={`flex items-center gap-3 rounded-[var(--radius-md)] pl-3 pr-2.5 transition hover:bg-[var(--color-pill-hover-bg)] any-pointer-coarse:min-h-11 ${
         selected ? "bg-[var(--color-selected-bg)] shadow-[inset_0_0_0_1px_var(--color-selected-border)]" : ""
       } ${status === "unavailable" ? "opacity-60" : ""}`}
       data-testid={`chat-tools-library-row-${c.name}`}
@@ -351,7 +457,7 @@ function LibraryRow({
         type="button"
         onClick={onSelect}
         aria-current={selected || undefined}
-        className="flex min-w-0 flex-1 flex-col gap-0.5 text-left focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+        className="flex min-w-0 flex-1 flex-col justify-center gap-0.5 self-stretch py-2 text-left focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
       >
         <span className="flex min-w-0 items-baseline gap-2">
           <span className="truncate text-[0.875rem] font-semibold text-[var(--color-text-primary)]">
@@ -360,11 +466,13 @@ function LibraryRow({
           <StatusKicker status={status} label={statusKicker(status)} />
         </span>
         {c.description ? (
-          <span className="truncate text-[0.78rem] text-[var(--color-text-subtle)]">{c.description}</span>
+          <span className="line-clamp-2 text-[0.78rem] text-[var(--color-text-subtle)] sm:line-clamp-none sm:truncate">
+            {c.description}
+          </span>
         ) : null}
       </button>
       {c.tool_count > 0 ? (
-        <span className="shrink-0 whitespace-nowrap font-[family-name:var(--font-code)] text-[0.6875rem] text-[var(--color-text-subtle)]">
+        <span className="hidden shrink-0 whitespace-nowrap font-[family-name:var(--font-code)] text-[0.6875rem] text-[var(--color-text-subtle)] sm:inline">
           {toolCountLabel(c.tool_count)}
         </span>
       ) : null}
@@ -430,7 +538,7 @@ function Detail({
         <p className="m-0 text-[0.875rem] leading-[1.55] text-[var(--color-text-secondary)]">{c.description}</p>
       ) : null}
       {toggleable ? (
-        <a href={settingsHref(c.name)} className={`${LINK} -mt-1.5 self-start text-[0.78rem]`}>
+        <a href={settingsHref(c.name)} className={`${LINK} hit-area-touch -mt-1.5 self-start text-[0.78rem]`}>
           Manage in Settings
           <Icon name="external-link" className="size-3" />
         </a>
@@ -446,7 +554,7 @@ function Detail({
           {isAdmin ? (
             <>
               <span>Needs setup before it can be used.</span>
-              <a href={settingsHref(c.name)} className={LINK}>
+              <a href={settingsHref(c.name)} className={`${LINK} hit-area-touch`}>
                 Set up in Settings
                 <Icon name="external-link" className="size-3" />
               </a>
@@ -472,7 +580,7 @@ function Detail({
             type="button"
             aria-expanded={toolsOpen}
             onClick={onToggleTools}
-            className="inline-flex items-center gap-1 self-start text-[0.78rem] text-[var(--color-text-subtle)] transition hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            className="hit-area-touch inline-flex items-center gap-1 self-start text-[0.78rem] text-[var(--color-text-subtle)] transition hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           >
             {toolsOpen ? "Hide tools" : `Show ${tools.length} ${tools.length === 1 ? "tool" : "tools"}`}
             <Icon name="chevron-down" className={`size-3 transition-transform ${toolsOpen ? "rotate-180" : ""}`} />

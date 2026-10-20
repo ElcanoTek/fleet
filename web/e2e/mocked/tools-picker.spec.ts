@@ -183,3 +183,157 @@ test("tools picker fits a phone without sideways scroll", async ({ page, context
   expect(await library.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   await page.screenshot({ path: "test-results/tools-library-phone.png" });
 });
+
+test.describe("on a touch phone", () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test("tablet rail filters keep 44px touch targets", async ({ page, context }) => {
+    await page.setViewportSize({ width: 820, height: 1180 });
+    await loginViaCookie(context);
+    await boot(page, { admin: true });
+    await page.getByRole("button", { name: "Tools", exact: true }).tap();
+    await page.getByRole("button", { name: "Open library" }).tap();
+    const rail = page.getByTestId("chat-tools-library").getByRole("navigation", { name: "Status" });
+    const heights = await rail.getByRole("button").evaluateAll((b) => b.map((n) => n.getBoundingClientRect().height));
+    expect(Math.min(...heights)).toBeGreaterThanOrEqual(44);
+  });
+
+  test("library: close top-right, detail is its own view, no keyboard on open", async ({ page, context }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loginViaCookie(context);
+    await boot(page, { admin: true });
+    await page.getByRole("button", { name: "Tools", exact: true }).tap();
+    const popover = page.getByTestId("chat-tools-popover");
+    await expect(popover).toHaveCSS("opacity", "1");
+    // Focusing the search field would open the keyboard over the list.
+    await expect(page.getByRole("textbox", { name: "Search tools" })).not.toBeFocused();
+    // The bulk strip is 44px tall, so All on / All off stay out of the search row.
+    const strip = (await page.getByTestId("chat-mcp-all-actions").boundingBox())!;
+    expect(strip.height).toBeGreaterThanOrEqual(44);
+    // The footer is tall enough that "Open library"'s 44px touch box is not clipped.
+    const footerLink = (await page.getByRole("button", { name: "Open library" }).boundingBox())!;
+    const pop = (await popover.boundingBox())!;
+    expect(pop.y + pop.height - (footerLink.y + footerLink.height / 2)).toBeGreaterThanOrEqual(22);
+    await page.getByRole("button", { name: "Open library" }).tap();
+
+    const library = page.getByTestId("chat-tools-library");
+    await expect(library).toBeVisible();
+    await expect(library.getByLabel("Search tools")).not.toBeFocused();
+    await expect(library.getByLabel("Search tools")).toBeVisible();
+    // A hardware keyboard's Shift+Tab from the focused sheet stays inside it.
+    await page.keyboard.press("Shift+Tab");
+    expect(await library.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+    // Rows are at least 44px tall, so neighbouring switches' touch boxes never overlap.
+    const heights = await library
+      .locator('[data-testid^="chat-tools-library-row-"]')
+      .evaluateAll((rows) => rows.map((r) => r.getBoundingClientRect().height));
+    expect(Math.min(...heights)).toBeGreaterThanOrEqual(44);
+    // The row's tap target is its full height, and the filter chips are 44px.
+    const tapHeights = await library
+      .locator('[data-testid^="chat-tools-library-row-"] > button')
+      .evaluateAll((btns) => btns.map((b) => b.getBoundingClientRect().height));
+    expect(Math.min(...tapHeights)).toBeGreaterThanOrEqual(44);
+    const chip = (await library.getByRole("navigation", { name: "Categories" }).getByRole("button").first().boundingBox())!;
+    expect(chip.height).toBeGreaterThanOrEqual(44);
+    // The close button stays in the top-right corner when the admin link wraps.
+    const close = (await page.getByRole("button", { name: "Close tools library" }).boundingBox())!;
+    expect(390 - (close.x + close.width)).toBeLessThan(24);
+    expect(close.y).toBeLessThan(24);
+
+    // Tapping a row opens its detail in place of the list, with a way back.
+    await library.getByTestId("chat-tools-library-row-magnite").getByRole("button").first().tap();
+    const detail = page.getByTestId("chat-tools-library-detail");
+    await expect(detail).toBeInViewport();
+    await expect(library.getByRole("region", { name: "Connections" })).toBeHidden();
+    await page.screenshot({ path: "test-results/tools-library-phone-detail.png" });
+    await page.getByRole("button", { name: "All connections" }).tap();
+    await expect(library.getByTestId("chat-tools-library-row-magnite")).toBeInViewport();
+
+    // Escape steps back from the detail before it closes the library.
+    await library.getByTestId("chat-tools-library-row-indexexchange").getByRole("button").first().tap();
+    await page.keyboard.press("Escape");
+    await expect(library.getByRole("region", { name: "Connections" })).toBeVisible();
+    await expect(library).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(library).toHaveCount(0);
+  });
+
+  test("account menu options are 44px touch targets", async ({ page, context }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loginViaCookie(context);
+    await boot(page, { admin: true });
+    await page.getByRole("button", { name: "Tools", exact: true }).tap();
+    await expect(page.getByTestId("chat-tools-popover")).toHaveCSS("opacity", "1");
+    // The menu closes on any scroll outside it. tap() first scrolls the pill
+    // into view, and that scroll's event can fire a frame later, just after the
+    // menu opens. Scroll first and let the event pass, then tap.
+    const seat = page.getByTestId("mcp-seat-indexexchange");
+    await seat.scrollIntoViewIfNeeded();
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    await seat.tap();
+    const list = page.getByRole("listbox", { name: "Account for Index Exchange" });
+    await expect(list).toBeVisible();
+    const heights = await list.getByRole("option").evaluateAll((o) => o.map((n) => n.getBoundingClientRect().height));
+    expect(heights.length).toBeGreaterThan(1);
+    expect(Math.min(...heights)).toBeGreaterThanOrEqual(44);
+  });
+
+  test("a hardware keyboard on a touch device still lands in search", async ({ page, context }) => {
+    await page.setViewportSize({ width: 820, height: 1180 });
+    await loginViaCookie(context);
+    await boot(page, { admin: true });
+    await page.getByRole("button", { name: "Tools", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("textbox", { name: "Search tools" })).toBeFocused();
+  });
+
+  test("switching a connector out of the status filter keeps its detail open", async ({ page, context }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loginViaCookie(context);
+    await boot(page, { admin: true });
+    await page.getByRole("button", { name: "Tools", exact: true }).tap();
+    await page.getByRole("button", { name: "Open library" }).tap();
+    const library = page.getByTestId("chat-tools-library");
+    await library.getByRole("navigation", { name: "Status" }).getByRole("button", { name: /^On/ }).tap();
+    await library.getByTestId("chat-tools-library-row-indexexchange").locator("> button").tap();
+    const detail = page.getByTestId("chat-tools-library-detail");
+    await expect(detail).toContainText("Index Exchange");
+    await detail.getByRole("switch", { name: "Index Exchange" }).tap();
+    await expect(detail).toContainText("Index Exchange");
+    await expect(detail).toContainText("Off for this chat");
+  });
+});
+
+test("narrow window: opening a connector from the menu focuses the detail's back button", async ({ page, context }) => {
+  await page.setViewportSize({ width: 600, height: 800 });
+  await loginViaCookie(context);
+  await boot(page, { admin: true });
+  await page.getByRole("button", { name: "Tools", exact: true }).click();
+  await page.getByRole("textbox", { name: "Search tools" }).fill("bigquery");
+  await page.getByRole("button", { name: /Set up/ }).click();
+  const library = page.getByTestId("chat-tools-library");
+  await expect(library.getByTestId("chat-tools-library-detail")).toBeInViewport();
+  await expect(page.getByRole("button", { name: "All connections" })).toBeFocused();
+});
+
+test("tablet: a rail filter beside an open detail returns to the filtered list", async ({ page, context }) => {
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await loginViaCookie(context);
+  await boot(page, { admin: true });
+  await page.getByRole("button", { name: "Tools", exact: true }).click();
+  await page.getByRole("button", { name: "Open library" }).click();
+  const library = page.getByTestId("chat-tools-library");
+  await library.getByTestId("chat-tools-library-row-magnite").getByRole("button").first().click();
+  await expect(library.getByRole("region", { name: "Connections" })).toBeHidden();
+  // Magnite is off, so "On" filters it out: the list comes back, filtered.
+  await library.getByRole("navigation", { name: "Status" }).getByRole("button", { name: /^On/ }).click();
+  await expect(library.getByRole("region", { name: "Connections" })).toBeVisible();
+  await expect(library.getByTestId("chat-tools-library-row-magnite")).toHaveCount(0);
+  await expect(library.getByTestId("chat-tools-library-row-indexexchange")).toBeVisible();
+  // A search from the rail does the same, even one that matches nothing.
+  await library.getByTestId("chat-tools-library-row-indexexchange").getByRole("button").first().click();
+  await expect(library.getByRole("region", { name: "Connections" })).toBeHidden();
+  await library.getByLabel("Search tools").fill("zzz");
+  await expect(library.getByRole("region", { name: "Connections" })).toBeVisible();
+  await expect(library).toContainText("No tools match ‘zzz’");
+});

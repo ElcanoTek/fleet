@@ -363,3 +363,37 @@ export function seatLabel(c: PickerConnector, appName: string): string {
   const opts = seatOptions(c, appName);
   return (opts.find((o) => o.value === (c.account ?? "")) ?? opts[0]).label;
 }
+
+/** True on a touch-first screen. */
+export function isTouchPrimary(): boolean {
+  return typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
+}
+
+// The most recent input, so the picker can tell a tap from a keypress on the
+// same device (a tablet with a hardware keyboard). null until the first one.
+let lastInput: "touch" | "mouse" | "keyboard" | null = null;
+if (typeof window !== "undefined") {
+  window.addEventListener(
+    "pointerdown",
+    (event) => {
+      lastInput = event.pointerType === "mouse" ? "mouse" : "touch";
+    },
+    { capture: true, passive: true },
+  );
+  window.addEventListener(
+    "keydown",
+    () => {
+      lastInput = "keyboard";
+    },
+    { capture: true, passive: true },
+  );
+}
+
+/** Whether the picker was just opened by a finger or pen. It skips focusing
+ * its search field then: focusing an input on a touch screen opens the
+ * keyboard over half the list before anyone asked to type. Opened from a
+ * keyboard (even on a tablet) the search field takes focus as usual, since the
+ * popover's arrow-key navigation lives on it. */
+export function openedByTouch(): boolean {
+  return lastInput === null ? isTouchPrimary() : lastInput === "touch";
+}

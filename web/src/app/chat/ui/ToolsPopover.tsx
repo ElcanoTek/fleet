@@ -8,6 +8,7 @@ import {
   connectorStatus,
   countOn,
   isToggleable,
+  openedByTouch,
   onSnapshot,
   popoverSections,
   statusKicker,
@@ -45,7 +46,7 @@ export type ToolsPopoverProps = {
 // natively disabled element drops focus, which would break Escape-closes /
 // focus-returns-to-the-wrench for a keyboard user mid-gesture.
 const SMALL_PILL =
-  "h-[1.375rem] shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] border border-[var(--color-pill-border)] px-[0.55rem] text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
+  "hit-area-touch h-[1.375rem] shrink-0 whitespace-nowrap rounded-[var(--radius-pill)] border border-[var(--color-pill-border)] px-[0.55rem] text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
 
 const GROUP_LABEL =
   "font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]";
@@ -75,7 +76,7 @@ export function ToolsPopover({
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    inputRef.current?.focus({ preventScroll: true });
+    if (!openedByTouch()) inputRef.current?.focus({ preventScroll: true });
   }, []);
 
   const q = query.trim();
@@ -183,14 +184,14 @@ export function ToolsPopover({
             onKeyDown={onKey}
             placeholder="Search tools…"
             aria-label="Search tools"
-            className="h-[2.125rem] w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-8 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
+            className="h-[2.125rem] w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-8 text-[0.875rem] any-pointer-coarse:h-11 any-pointer-coarse:pr-11 text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
           />
           {query ? (
             <button
               type="button"
               aria-label="Clear search"
               onClick={clearQuery}
-              className="absolute right-1.5 inline-flex size-[1.375rem] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-subtle)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+              className="absolute right-1.5 inline-flex size-[1.375rem] items-center any-pointer-coarse:right-0 any-pointer-coarse:size-11 justify-center rounded-[var(--radius-sm)] text-[var(--color-text-subtle)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             >
               <Icon name="close" className="size-3" />
             </button>
@@ -201,14 +202,14 @@ export function ToolsPopover({
           title="Open tool library"
           aria-label="Open tool library"
           onClick={() => onOpenLibrary()}
-          className="inline-flex size-[2.125rem] shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-pill-border)] text-[var(--color-text-subtle)] transition hover:border-[var(--color-selected-border)] hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="inline-flex size-[2.125rem] shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-pill-border)] any-pointer-coarse:size-11 text-[var(--color-text-subtle)] transition hover:border-[var(--color-selected-border)] hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
           <Icon name="maximize" className="size-[0.9rem]" />
         </button>
       </div>
 
       <div
-        className="flex items-center gap-1.5 border-b border-[var(--color-divider)] pb-1.5 pl-3 pr-2.5 pt-0.5"
+        className="flex items-center gap-1.5 border-b border-[var(--color-divider)] pb-1.5 pl-3 pr-2.5 pt-0.5 any-pointer-coarse:min-h-11 any-pointer-coarse:py-0"
         data-testid="chat-mcp-all-actions"
       >
         <span className="min-w-0 flex-1 truncate text-[0.75rem] tabular-nums text-[var(--color-text-subtle)]">
@@ -299,7 +300,7 @@ export function ToolsPopover({
               <button
                 type="button"
                 onClick={() => onOpenLibrary()}
-                className="text-[var(--color-link)] underline underline-offset-[3px] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                className="hit-area-touch text-[var(--color-link)] underline underline-offset-[3px] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
               >
                 Open the full library
               </button>
@@ -307,7 +308,7 @@ export function ToolsPopover({
                 <button
                   type="button"
                   onClick={clearQuery}
-                  className="text-[var(--color-text-subtle)] transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                  className="hit-area-touch text-[var(--color-text-subtle)] transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 >
                   Clear search
                 </button>
@@ -317,11 +318,13 @@ export function ToolsPopover({
         ) : null}
       </div>
 
-      <div className="flex items-center justify-end border-t border-[var(--color-divider)] px-3 py-1.5">
+      {/* 44px tall on a touch screen, so the link's 2.75rem touch box is not
+          clipped by the popover's overflow. */}
+      <div className="flex items-center justify-end border-t border-[var(--color-divider)] px-3 py-1.5 any-pointer-coarse:min-h-11 any-pointer-coarse:py-0">
         <button
           type="button"
           onClick={() => onOpenLibrary()}
-          className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-link)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="hit-area-touch inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-link)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
           Open library
           <Icon name="maximize" className="size-[0.7rem]" />
@@ -377,7 +380,7 @@ function PopoverRow({
       onClick={() => {
         if (clickable) onActivate();
       }}
-      className={`flex items-start gap-2.5 rounded-[var(--radius-sm)] py-[0.45rem] pl-2.5 pr-2 transition ${
+      className={`flex items-start gap-2.5 rounded-[var(--radius-sm)] py-[0.45rem] pl-2.5 pr-2 transition any-pointer-coarse:min-h-11 ${
         clickable ? "cursor-pointer" : "cursor-default"
       } ${active ? "bg-[var(--color-selected-bg)]" : ""} ${
         ring ? "shadow-[inset_0_0_0_1px_var(--color-selected-border)]" : ""
@@ -438,7 +441,7 @@ function PopoverRow({
               event.stopPropagation();
               onOpenLibrary();
             }}
-            className="inline-flex items-center gap-0.5 whitespace-nowrap text-[0.75rem] text-[var(--color-link)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            className="hit-area-touch inline-flex items-center gap-0.5 whitespace-nowrap text-[0.75rem] text-[var(--color-link)] hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           >
             Set up
             <Icon name="chevron-right" className="size-3" />

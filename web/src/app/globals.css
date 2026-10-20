@@ -924,6 +924,28 @@
   transform: translate(-50%, -50%);
 }
 
+/* .hit-area-touch does the same wherever a touch screen is present (any
+   pointer, so a touchscreen laptop driven by its trackpad counts), to Apple's
+   44px minimum (2.75rem), and never shrinks a control already larger. The
+   Tools picker's switches, pills and links are 18-24px tall for the
+   mouse-sized design; a finger needs the larger box. Rows holding these
+   controls are at least 2.75rem tall there too (any-pointer-coarse:min-h-11),
+   so two rows' boxes never overlap. */
+@media (any-pointer: coarse) {
+  .hit-area-touch {
+    position: relative;
+  }
+  .hit-area-touch::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 2.75rem);
+    height: max(100%, 2.75rem);
+    transform: translate(-50%, -50%);
+  }
+}
+
 /* Explainer tooltip surface (sealed-chat lock, the Recent-section info note).
    Positioned inline by the opener in fixed viewport coords — the rail's
    backdrop-filter/transform would capture position:fixed, so openers portal
