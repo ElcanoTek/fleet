@@ -535,11 +535,14 @@ func containsEncodedBinary(content string) bool {
 	if !utf8.ValidString(content) || strings.IndexByte(content, 0) >= 0 {
 		return true
 	}
-	return containsEscapedJSONControl(content) || containsFoldASCII(content, ";base64,") || containsJSONBase64Key(content) || looksLikeBase64(content)
+	return containsEscapedJSONControl(content) || containsDataURIBase64(content) || containsJSONBase64Key(content) || looksLikeBase64(content)
 }
 
 func looksLikeBase64(s string) bool {
-	const minimumRun = 256
+	const (
+		minimumRun   = 256
+		maxCursorRun = 1024
+	)
 	runStart := 0
 	run := 0
 	for i := 0; i < len(s); i++ {
@@ -548,17 +551,31 @@ func looksLikeBase64(s string) bool {
 				runStart = i
 			}
 			run++
-			if run == minimumRun && base64RunHasEncodedShape(s[runStart:i+1]) {
+			if run == minimumRun && !isCursorPrefix(s, runStart) && base64RunHasEncodedShape(s[runStart:i+1]) {
+				return true
+			}
+			if run == maxCursorRun+1 && base64RunHasEncodedShape(s[runStart:i+1]) {
 				return true
 			}
 			continue
 		}
-		if run > minimumRun && base64RunHasEncodedShape(s[runStart:i]) {
+		minLen := minimumRun
+		if run >= minimumRun && isCursorPrefix(s, runStart) {
+			minLen = maxCursorRun
+		}
+		if run > minLen && base64RunHasEncodedShape(s[runStart:i]) {
 			return true
 		}
 		run = 0
+		if s[i] == ':' && isURLAtColon(s, i) {
+			i = skipURLSpan(s, i) - 1
+		}
 	}
-	return run > minimumRun && base64RunHasEncodedShape(s[runStart:])
+	minLen := minimumRun
+	if run >= minimumRun && isCursorPrefix(s, runStart) {
+		minLen = maxCursorRun
+	}
+	return run > minLen && base64RunHasEncodedShape(s[runStart:])
 }
 
 func base64RunHasEncodedShape(run string) bool {
@@ -574,10 +591,6 @@ func base64RunHasEncodedShape(run string) bool {
 			categories |= 2
 		case b >= '0' && b <= '9':
 			categories |= 4
-		default:
-			// Padding and standard/URL-safe punctuation are strong encoding
-			// signals and cannot occur in a plain alphanumeric identifier.
-			return true
 		}
 		word, bit := b/64, uint64(1)<<(b%64)
 		if seen[word]&bit == 0 {
@@ -605,6 +618,130 @@ func base64RunHasEncodedShape(run string) bool {
 		if periodic {
 			return true
 		}
+	}
+	return false
+}
+
+// isURLAtColon reports whether s[colonIdx] is the ':' of an http(s):// or
+// ws(s):// URL (including JSON-escaped \/\/). URLs in email bodies, link
+// manifests, and API responses legitimately carry long click-tracking or
+// signed query tokens (SendGrid upn=, Proofpoint/CheckPoint, presigned URLs)
+// that are navigation links, not inline binary payloads.
+func isURLAtColon(s string, colonIdx int) bool {
+	if colonIdx+2 >= len(s) {
+		return false
+	}
+	rest := s[colonIdx+1:]
+	if !strings.HasPrefix(rest, "//") && !strings.HasPrefix(rest, `\/\/`) {
+		return false
+	}
+	for _, scheme := range []string{"https", "http", "wss", "ws"} {
+		if colonIdx >= len(scheme) && foldEqualASCII(s[colonIdx-len(scheme):colonIdx], scheme) {
+			return true
+		}
+	}
+	return false
+}
+
+func skipURLSpan(s string, colonIdx int) int {
+	j := colonIdx + 1
+	for j < len(s) {
+		b := s[j]
+		if b <= ' ' || b == '"' || b == '\'' || b == '`' || b == '<' || b == '>' || b == ')' || b == ']' || b == '}' || b == '|' {
+			break
+		}
+		if b == '\\' {
+			if j+1 < len(s) && s[j+1] == '/' {
+				j += 2
+				continue
+			}
+			break
+		}
+		j++
+	}
+	return j
+}
+
+// isCursorPrefix reports whether runStart is immediately preceded by a
+// pagination cursor or page-token field label (e.g. `- **next_cursor:** <tok>`
+// in Fast.io markdown or `"next_cursor":"<tok>"` in JSON).
+func isCursorPrefix(s string, runStart int) bool {
+	k := runStart
+	for k > 0 && (s[k-1] == ' ' || s[k-1] == '\t' || s[k-1] == '"' || s[k-1] == '\'' || s[k-1] == '*') {
+		k--
+	}
+	if k == 0 || s[k-1] != ':' {
+		return false
+	}
+	k--
+	for k > 0 && (s[k-1] == ' ' || s[k-1] == '\t' || s[k-1] == '"' || s[k-1] == '\'' || s[k-1] == '*') {
+		k--
+	}
+	end := k
+	for k > 0 && end-k < 32 {
+		b := s[k-1]
+		if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_' || b == '-' {
+			k--
+			continue
+		}
+		break
+	}
+	key := s[k:end]
+	return foldHasSuffixASCII(key, "cursor") || foldHasSuffixASCII(key, "pagetoken") || foldHasSuffixASCII(key, "page_token") || foldHasSuffixASCII(key, "continuation_token")
+}
+
+func foldEqualASCII(s, target string) bool {
+	if len(s) != len(target) {
+		return false
+	}
+	for i := 0; i < len(target); i++ {
+		a := s[i]
+		if a >= 'A' && a <= 'Z' {
+			a += 'a' - 'A'
+		}
+		if a != target[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func foldHasSuffixASCII(s, suffix string) bool {
+	return len(s) >= len(suffix) && foldEqualASCII(s[len(s)-len(suffix):], suffix)
+}
+
+// containsDataURIBase64 detects `;base64,` data-URI markers followed by an
+// actual base64 payload (>=12 base64 bytes, such as `iVBORw0KGgo=`), while
+// ignoring short documentation placeholders like `data:video/mp4;base64,AAAA…`
+// in skill reference files.
+func containsDataURIBase64(s string) bool {
+	const (
+		marker     = ";base64,"
+		minPayload = 12
+	)
+	if len(s) < len(marker)+minPayload {
+		return false
+	}
+	for offset := 0; offset <= len(s)-len(marker)-minPayload; {
+		rel := strings.IndexByte(s[offset:], ';')
+		if rel < 0 {
+			return false
+		}
+		i := offset + rel
+		if i > len(s)-len(marker)-minPayload {
+			return false
+		}
+		if foldEqualASCII(s[i:i+len(marker)], marker) {
+			payloadStart := i + len(marker)
+			n := 0
+			for payloadStart+n < len(s) && n < minPayload && isBase64Byte(s[payloadStart+n]) {
+				n++
+			}
+			if n >= minPayload {
+				return true
+			}
+		}
+		offset = i + 1
 	}
 	return false
 }
@@ -660,44 +797,6 @@ func containsFoldASCIIKey(s, needle string) bool {
 func isBase64Byte(b byte) bool {
 	return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' || b >= '0' && b <= '9' ||
 		b == '+' || b == '/' || b == '=' || b == '-' || b == '_'
-}
-
-func containsFoldASCII(s, needle string) bool {
-	if needle == "" || len(s) < len(needle) {
-		return false
-	}
-	for offset := 0; offset <= len(s)-len(needle); {
-		// All current callers use a punctuation-leading marker. IndexByte uses
-		// the runtime's optimized byte search and avoids an O(n*m) mixed-case scan
-		// over ordinary multi-megabyte prose.
-		rel := strings.IndexByte(s[offset:], needle[0])
-		if rel < 0 {
-			return false
-		}
-		i := offset + rel
-		if i > len(s)-len(needle) {
-			return false
-		}
-		matched := true
-		for j := range needle {
-			a, b := s[i+j], needle[j]
-			if a >= 'A' && a <= 'Z' {
-				a += 'a' - 'A'
-			}
-			if b >= 'A' && b <= 'Z' {
-				b += 'a' - 'A'
-			}
-			if a != b {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			return true
-		}
-		offset = i + 1
-	}
-	return false
 }
 
 // escControl is ESC (0x1b). A JSON encoder emits it as , and that is the

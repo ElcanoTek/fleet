@@ -340,3 +340,35 @@ func TestLooksLikeJSONDocument_TieredClassification(t *testing.T) {
 		})
 	}
 }
+
+func TestContainsEncodedBinary_DoesNotSuppressURLsCursorsDividersOrDocPlaceholders(t *testing.T) {
+	clickParam := strings.Repeat("AbCdEfGhIjKlMnOp1234-2F", 30) // >600 chars
+	pageMarker := strings.Repeat("AbCdEfGhIjKlMnOp1234", 15)    // 300 chars
+
+	benign := map[string]string{
+		"bento authoring doc placeholder": `{ "id":"clip","type":"media","kind":"video","src":"data:video/mp4;base64,AAAA…","x":220,"y":120 }`,
+		"sendgrid click tracking url":     `{"download_links":[{"url":"https://u5609542.ct.sendgrid.net/ls/click?upn=u001.` + clickParam + `"}]}`,
+		"json escaped tracking url":       `{"url":"https:\/\/protect.checkpoint.com\/v2\/r01\/___https-3A__urldefense.proofpoint.com_` + clickParam + `"}`,
+		"wss signed debugger url":         `{"wsUrl":"wss://connect.browserbase.com/debug/sess/devtools/page/1?q=` + clickParam + `"}`,
+		"fastio markdown next_cursor":     "# pagination\n- **has_more:** true\n- **next_cursor:** " + pageMarker + "\n- **page_size:** 100\n",
+		"json nextPageToken":              `{"next_cursor":"` + pageMarker + `"}`,
+		"markdown table divider":          strings.Repeat("-", 400) + "\n" + strings.Repeat("=", 400) + "\n" + strings.Repeat("_", 400),
+		"lowercase snake_case identifier": strings.Repeat("campaign_performance_summary_row_", 12),
+	}
+	for name, sample := range benign {
+		t.Run(name, func(t *testing.T) {
+			if containsEncodedBinary(sample) {
+				t.Fatalf("containsEncodedBinary(%s) = true on benign text/JSON output", name)
+			}
+		})
+	}
+
+	// Real data URIs and oversized cursor smuggling (>1024 bytes) must still
+	// be classified as encoded binary.
+	if !containsEncodedBinary(`{"src":"data:image/png;base64,iVBORw0KGgo="}`) {
+		t.Fatal("real data URI should still be classified as encoded binary")
+	}
+	if !containsEncodedBinary(`{"next_cursor":"` + strings.Repeat(pageMarker, 5) + `"}`) {
+		t.Fatal("oversized >1024-byte base64 blob under next_cursor should still be classified as encoded binary")
+	}
+}
