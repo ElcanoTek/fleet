@@ -13,7 +13,8 @@ behaviour and copy.
 ## What shipped
 
 **Popover** (`web/src/app/chat/ui/ToolsPopover.tsx`). Search pinned at the
-top and focused on open ("Search tools…"), with the expand icon beside it
+top and focused on open ("Search tools…"; not after a tap, see "Phones and
+touch screens" below), with the expand icon beside it
 that opens the library. The header reads "4 on", or "9 results · 4 on" while
 searching; that count includes always-on connections. While browsing, an
 **On** section comes first. It is a snapshot taken when the popover opens, so
@@ -41,6 +42,24 @@ with headings in All and a bulk bar ("Applies to 10 connections" / "… in
 SSPs" / "… shown"). The right is the detail pane: category kicker, name, a
 large switch, the status line, the full description, "Manage in Settings",
 the account menu, the state panel, and a quiet "Show N tools".
+
+**Phones and touch screens** (#1809). Below `lg` the list and the detail
+take turns: tapping a connection opens its detail as its own view with a
+"‹ All connections" (or category) back button, and `Esc` steps back before
+it closes the library. A search or filter change from the tablet rail
+returns to the list, and a detail stays on the connection it opened even if
+switching it removes it from a status filter. Below `md` the rail's
+headings hide and Categories and Status are one sideways-scrolling row of
+chips each. The header keeps the close button in its own top-right column;
+the admin link drops under the title. Wherever a touch screen is present
+(`any-pointer: coarse`), every control in the popover and the library has a
+touch target of at least 44px (`.hit-area-touch`, or 44px heights for rows,
+strips, chips, fields and buttons), and no two overlap. The search field is
+not focused when a tap opened the picker, because that would open the
+phone keyboard over the list; a keypress (a tablet's hardware keyboard
+included) still lands in search, since the popover's arrow keys live there.
+The Tools button's tooltip is hidden while its menu is open. Rows give
+descriptions two lines on phones and move the tool count to the detail.
 
 **Statuses** (`toolsPicker.ts` is the one place the rules live, and is unit
 tested):

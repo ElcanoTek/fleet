@@ -230,7 +230,7 @@ export function ToolsLibrary({
               </a>
             ) : null}
           </div>
-          <CloseButton label="Close tools library" onClick={onClose} className="pointer-coarse:size-11" />
+          <CloseButton label="Close tools library" onClick={onClose} className="any-pointer-coarse:size-11" />
         </header>
 
         <div
@@ -257,7 +257,7 @@ export function ToolsLibrary({
                 }}
                 placeholder="Search tools…"
                 aria-label="Search tools"
-                className="h-9 w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-2.5 pointer-coarse:h-11 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
+                className="h-9 w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-2.5 any-pointer-coarse:h-11 text-[0.875rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
               />
             </div>
             <nav aria-label="Categories" className={RAIL_NAV}>
@@ -308,7 +308,7 @@ export function ToolsLibrary({
               </div>
               {toggleable.length > 0 ? (
                 <div
-                  className="mx-4 mb-2.5 flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-divider)] bg-[var(--color-rail-bg)] py-1.5 pl-3 pr-1.5 pointer-coarse:min-h-11 pointer-coarse:py-0"
+                  className="mx-4 mb-2.5 flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-divider)] bg-[var(--color-rail-bg)] py-1.5 pl-3 pr-1.5 any-pointer-coarse:min-h-11 any-pointer-coarse:py-0"
                   data-testid="chat-tools-library-bulk"
                 >
                   <span className="min-w-0 flex-1 text-[0.78rem] text-[var(--color-text-subtle)]">
@@ -418,7 +418,7 @@ function RailButton({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-[var(--radius-pill)] pointer-coarse:h-11 md:pointer-coarse:h-11 border border-[var(--color-pill-border)] px-3 text-left text-[0.84rem] transition md:h-8 md:rounded-[var(--radius-sm)] md:border-transparent md:px-2.5 hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+      className={`flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-[var(--radius-pill)] any-pointer-coarse:h-11 md:any-pointer-coarse:h-11 border border-[var(--color-pill-border)] px-3 text-left text-[0.84rem] transition md:h-8 md:rounded-[var(--radius-sm)] md:border-transparent md:px-2.5 hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
         active
           ? "bg-[var(--color-selected-bg)] text-[var(--color-text-primary)] shadow-[inset_0_0_0_1px_var(--color-selected-border)]"
           : "text-[var(--color-text-secondary)]"
@@ -448,7 +448,7 @@ function LibraryRow({
   const name = connectorLabel(c);
   return (
     <div
-      className={`flex items-center gap-3 rounded-[var(--radius-md)] pl-3 pr-2.5 transition hover:bg-[var(--color-pill-hover-bg)] pointer-coarse:min-h-11 ${
+      className={`flex items-center gap-3 rounded-[var(--radius-md)] pl-3 pr-2.5 transition hover:bg-[var(--color-pill-hover-bg)] any-pointer-coarse:min-h-11 ${
         selected ? "bg-[var(--color-selected-bg)] shadow-[inset_0_0_0_1px_var(--color-selected-border)]" : ""
       } ${status === "unavailable" ? "opacity-60" : ""}`}
       data-testid={`chat-tools-library-row-${c.name}`}

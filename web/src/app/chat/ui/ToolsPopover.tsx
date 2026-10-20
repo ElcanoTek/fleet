@@ -184,14 +184,14 @@ export function ToolsPopover({
             onKeyDown={onKey}
             placeholder="Search tools…"
             aria-label="Search tools"
-            className="h-[2.125rem] w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-8 text-[0.875rem] pointer-coarse:h-11 pointer-coarse:pr-11 text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
+            className="h-[2.125rem] w-full rounded-[var(--radius-sm)] border border-[var(--color-selected-border)] bg-[var(--color-bg)] pl-8 pr-8 text-[0.875rem] any-pointer-coarse:h-11 any-pointer-coarse:pr-11 text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]"
           />
           {query ? (
             <button
               type="button"
               aria-label="Clear search"
               onClick={clearQuery}
-              className="absolute right-1.5 inline-flex size-[1.375rem] items-center pointer-coarse:right-0 pointer-coarse:size-11 justify-center rounded-[var(--radius-sm)] text-[var(--color-text-subtle)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+              className="absolute right-1.5 inline-flex size-[1.375rem] items-center any-pointer-coarse:right-0 any-pointer-coarse:size-11 justify-center rounded-[var(--radius-sm)] text-[var(--color-text-subtle)] transition hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             >
               <Icon name="close" className="size-3" />
             </button>
@@ -202,14 +202,14 @@ export function ToolsPopover({
           title="Open tool library"
           aria-label="Open tool library"
           onClick={() => onOpenLibrary()}
-          className="inline-flex size-[2.125rem] shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-pill-border)] pointer-coarse:size-11 text-[var(--color-text-subtle)] transition hover:border-[var(--color-selected-border)] hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="inline-flex size-[2.125rem] shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-pill-border)] any-pointer-coarse:size-11 text-[var(--color-text-subtle)] transition hover:border-[var(--color-selected-border)] hover:bg-[var(--color-pill-hover-bg)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
           <Icon name="maximize" className="size-[0.9rem]" />
         </button>
       </div>
 
       <div
-        className="flex items-center gap-1.5 border-b border-[var(--color-divider)] pb-1.5 pl-3 pr-2.5 pt-0.5 pointer-coarse:min-h-11 pointer-coarse:py-0"
+        className="flex items-center gap-1.5 border-b border-[var(--color-divider)] pb-1.5 pl-3 pr-2.5 pt-0.5 any-pointer-coarse:min-h-11 any-pointer-coarse:py-0"
         data-testid="chat-mcp-all-actions"
       >
         <span className="min-w-0 flex-1 truncate text-[0.75rem] tabular-nums text-[var(--color-text-subtle)]">
@@ -320,7 +320,7 @@ export function ToolsPopover({
 
       {/* 44px tall on a touch screen, so the link's 2.75rem touch box is not
           clipped by the popover's overflow. */}
-      <div className="flex items-center justify-end border-t border-[var(--color-divider)] px-3 py-1.5 pointer-coarse:min-h-11 pointer-coarse:py-0">
+      <div className="flex items-center justify-end border-t border-[var(--color-divider)] px-3 py-1.5 any-pointer-coarse:min-h-11 any-pointer-coarse:py-0">
         <button
           type="button"
           onClick={() => onOpenLibrary()}
@@ -380,7 +380,7 @@ function PopoverRow({
       onClick={() => {
         if (clickable) onActivate();
       }}
-      className={`flex items-start gap-2.5 rounded-[var(--radius-sm)] py-[0.45rem] pl-2.5 pr-2 transition pointer-coarse:min-h-11 ${
+      className={`flex items-start gap-2.5 rounded-[var(--radius-sm)] py-[0.45rem] pl-2.5 pr-2 transition any-pointer-coarse:min-h-11 ${
         clickable ? "cursor-pointer" : "cursor-default"
       } ${active ? "bg-[var(--color-selected-bg)]" : ""} ${
         ring ? "shadow-[inset_0_0_0_1px_var(--color-selected-border)]" : ""
