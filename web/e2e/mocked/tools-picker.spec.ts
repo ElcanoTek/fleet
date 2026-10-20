@@ -263,7 +263,14 @@ test.describe("on a touch phone", () => {
     await loginViaCookie(context);
     await boot(page, { admin: true });
     await page.getByRole("button", { name: "Tools", exact: true }).tap();
-    await page.getByTestId("mcp-seat-indexexchange").tap();
+    await expect(page.getByTestId("chat-tools-popover")).toHaveCSS("opacity", "1");
+    // The menu closes on any scroll outside it. tap() first scrolls the pill
+    // into view, and that scroll's event can fire a frame later, just after the
+    // menu opens. Scroll first and let the event pass, then tap.
+    const seat = page.getByTestId("mcp-seat-indexexchange");
+    await seat.scrollIntoViewIfNeeded();
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    await seat.tap();
     const list = page.getByRole("listbox", { name: "Account for Index Exchange" });
     await expect(list).toBeVisible();
     const heights = await list.getByRole("option").evaluateAll((o) => o.map((n) => n.getBoundingClientRect().height));
