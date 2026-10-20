@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"path/filepath"
 	"sort"
@@ -610,27 +611,47 @@ func (p *scheduledPolicy) RunAnswer(roundText string) string {
 
 // keepJudgedAnswer records that a model finish gate judged the current answer
 // and sent the run back for repair: the repair round's text is composed with
-// it (composeRunAnswer) rather than replacing it — except on a task with an
-// output schema, whose answer is one machine-readable object. A supplement
-// appended to that object is a second object, which the verifier rejects as
+// it (composeRunAnswer) rather than replacing it — except when the task has an
+// output schema AND the judged answer is itself one JSON value. A supplement
+// appended to that value is a second value, which the verifier rejects as
 // "not exactly one JSON object" on every remaining check until the run
 // dead-letters, so there the repair round's text replaces the judged answer
-// (a textless repair round still keeps it).
+// (a textless repair round still keeps it). A prose answer on a schema task
+// keeps the append: its JSON is produced afterwards by completeRun.
 func (p *scheduledPolicy) keepJudgedAnswer() {
 	p.judgedAnswer = p.latestRunText()
-	p.replaceJudged = p.structuredAnswer()
+	p.replaceJudged = p.agent != nil && len(p.agent.outputSchema) > 0 && isSingleJSONValue(p.judgedAnswer)
 }
 
-// structuredAnswer reports whether the task declared an output schema.
-func (p *scheduledPolicy) structuredAnswer() bool {
-	return p.agent != nil && len(p.agent.outputSchema) > 0
+// isSingleJSONValue reports whether text is exactly one JSON object or array,
+// optionally inside one Markdown code fence.
+func isSingleJSONValue(text string) bool {
+	text = strings.TrimSpace(text)
+	if body, ok := strings.CutPrefix(text, "```"); ok {
+		if nl := strings.IndexByte(body, '\n'); nl >= 0 {
+			body = body[nl+1:]
+		}
+		if inner, ok := strings.CutSuffix(strings.TrimSpace(body), "```"); ok {
+			text = strings.TrimSpace(inner)
+		}
+	}
+	if text == "" || (text[0] != '{' && text[0] != '[') {
+		return false
+	}
+	dec := json.NewDecoder(strings.NewReader(text))
+	var v json.RawMessage
+	if dec.Decode(&v) != nil {
+		return false
+	}
+	_, err := dec.Token()
+	return errors.Is(err, io.EOF)
 }
 
 // verifierRepairAnswerNote is the note the verifier's repair nudge carries:
-// repairAnswerNote, or for a structured task (keepJudgedAnswer replaces there)
-// the reviewer's whole-answer note.
+// repairAnswerNote, or the reviewer's whole-answer note when keepJudgedAnswer
+// chose to replace.
 func (p *scheduledPolicy) verifierRepairAnswerNote() string {
-	if p.structuredAnswer() {
+	if p.replaceJudged {
 		return reviewerRepairAnswerNote
 	}
 	return repairAnswerNote

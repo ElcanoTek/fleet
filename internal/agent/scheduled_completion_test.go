@@ -583,6 +583,57 @@ func TestScheduledVerifierRepairReplacesStructuredAnswer(t *testing.T) {
 	}
 }
 
+// An output schema does not make the round's answer JSON: a schema task that
+// answers in prose still gets the supplement composition (its JSON is produced
+// afterwards by completeRun), so a repair that adds only the missing detail
+// passes on the combined answer.
+func TestScheduledVerifierRepairAppendsProseAnswerOnSchemaTask(t *testing.T) {
+	verifier := &recordingVerifier{replies: []string{
+		`{"missing_actions":["report the coverage window"],"reasoning":"missing"}`,
+		`{"missing_actions":[],"reasoning":"complete"}`,
+	}}
+	a := newTestScheduledAgent(t, &itMockModel{})
+	a.verifierModel = verifier
+	a.outputSchema = json.RawMessage(`{"type":"object"}`)
+	p := &scheduledPolicy{
+		inner:  agentcore.NewDelegatedPolicy(a.logSession, 50, 0, 0),
+		agent:  a,
+		task:   "Refresh the page and report the coverage window.",
+		runCtx: context.Background(),
+	}
+	p.SetRoundFinalText("Refresh published.")
+	ok, msgs := p.CanFinish(1)
+	if ok || !strings.Contains(strings.Join(msgs, " "), repairAnswerNote) {
+		t.Fatalf("a prose answer must be sent back with the append note, got ok=%v %q", ok, msgs)
+	}
+	p.SetRoundFinalText("Coverage 2026-09-01..2026-09-15.")
+	if ok, _ := p.CanFinish(2); !ok {
+		t.Fatalf("the supplemented answer must pass: %v", p.TerminalError())
+	}
+	want := "Refresh published.\n\nCoverage 2026-09-01..2026-09-15."
+	if got := p.RunAnswer("Coverage 2026-09-01..2026-09-15."); got != want {
+		t.Errorf("run answer = %q, want the combined prose %q", got, want)
+	}
+}
+
+func TestIsSingleJSONValue(t *testing.T) {
+	for text, want := range map[string]bool{
+		`{"a":1}`:                 true,
+		"  [1,2]\n":               true,
+		"```json\n{\"a\":1}\n```": true,
+		`{"a":1}{"b":2}`:          false,
+		`{"a":1} and more`:        false,
+		`Report: {"a":1}`:         false,
+		`"just a string"`:         false,
+		`{"a":`:                   false,
+		"":                        false,
+	} {
+		if got := isSingleJSONValue(text); got != want {
+			t.Errorf("isSingleJSONValue(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
 // TestScheduledVerifierTextlessRunSeesNoResponseMarker keeps the explicit
 // marker for a run that produced no assistant text in any round: the gate must
 // be able to flag a demanded report that is genuinely absent.
