@@ -337,3 +337,27 @@ test("tablet: a rail filter beside an open detail returns to the filtered list",
   await expect(library.getByRole("region", { name: "Connections" })).toBeVisible();
   await expect(library).toContainText("No tools match ‘zzz’");
 });
+
+test("short window: the popover fits below the chat header instead of being clipped", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1280, height: 500 });
+  await loginViaCookie(context);
+  await boot(page, { admin: true });
+  await page.getByRole("button", { name: "Tools", exact: true }).click();
+  const popover = page.getByTestId("chat-tools-popover");
+  await expect(popover).toHaveCSS("opacity", "1");
+  // The chat column clips its overflow and starts below the header, so the
+  // popover's top edge (and its search row) must stay inside it.
+  const { top, clipTop } = await popover.evaluate((el) => {
+    let clip = 0;
+    for (let a = el.parentElement; a; a = a.parentElement) {
+      if (getComputedStyle(a).overflowY !== "visible") {
+        clip = a.getBoundingClientRect().top;
+        break;
+      }
+    }
+    return { top: el.getBoundingClientRect().top, clipTop: clip };
+  });
+  expect(clipTop).toBeGreaterThan(0);
+  expect(top).toBeGreaterThanOrEqual(clipTop);
+  await expect(page.getByRole("textbox", { name: "Search tools" })).toBeInViewport({ ratio: 1 });
+});
