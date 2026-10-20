@@ -299,9 +299,9 @@ fewer summarizer calls; making the elided content recallable added nothing.
   and that only a tool that reads data should be re-run, with narrower output:
   the in-round guard's plain "Re-run <tool>" is wrong advice for a call with
   side effects, and elision stubs results routinely, not only near overflow.
-  The recent window is the newest messages that fit 30% of the budget, extended
-  to at least the last two assistant turns and moved back so it never starts on
-  a tool message.
+  The recent window is the newest messages that fit 30% of the budget as they
+  are sent, extended to at least the last two assistant turns and moved back so
+  it never starts on a tool message.
 - **In the provider's tokens.** The in-round guard's estimator counts about 4
   characters a token, which is close for prose but not for dense output:
   digits, punctuation and base64 cost a provider far more tokens per character.
@@ -328,21 +328,19 @@ fewer summarizer calls; making the elided content recallable added nothing.
 - **Then.** The resent size is estimated again: the measured prefix plus the
   elided history, as sent, at the run's rate. That includes what the provider's
   count for the paused call did not yet include (the step's own assistant
-  message and results, and anything appended after them). When the in-round
-  guard was also stubbing old results to fit the window, the measured rate is
-  lower, so those savings are not counted twice. With no floor measured, it
-  falls back to that count, less the stubs' savings, plus the paused step's
-  output, and never below the estimator's own count of the elided request. On
-  the #1600 fixture the estimate came within 20 tokens of what the next step
-  resent, and on a fixture counting tool output at twice the estimator's rate,
-  within 3%. The summary is bought only if the estimate is not at least 30% of
-  the budget below the threshold: a run that elides gets room for several more
-  steps before its next pause, rather than pausing again on the next one. When
-  the summary does run, it is written from the history as it stood before this
-  pass's stubs, so the identifiers it is asked to keep are not lost to a
-  preview just made; only the kept half carries this pass's stubs. A result
-  stubbed at an earlier pause is a preview by then, in the summary's input as
-  everywhere else.
+  message and results, and anything appended after them). With no floor
+  measured, it falls back to that count, less the stubs' savings, plus the
+  paused step's output, and never below the estimator's own count of the elided
+  request. On the #1600 fixture the estimate came within 20 tokens of what the
+  next step resent, and on a fixture counting tool output at twice the
+  estimator's rate, within 3%. The summary is bought only if the estimate is
+  not at least 30% of the budget below the threshold: a run that elides gets
+  room for several more steps before its next pause, rather than pausing again
+  on the next one. When the summary does run, it is written from the history as
+  it stood before this pass's stubs, so the identifiers it is asked to keep are
+  not lost to a preview just made; only the kept half carries this pass's
+  stubs. A result stubbed at an earlier pause is a preview by then, in the
+  summary's input as everywhere else.
 - **Budget.** For the resend budget it is the budget; under the floor rule the
   threshold is floor + budget, so the target is floor + 70% of the budget. For
   the window path it is the compaction point: window × the compaction
@@ -395,7 +393,9 @@ production run after release.
 | 16K, 14 | on, before calibration | 4 | 4 | 875,558 (437,600) | 15,694 | $0.061 |
 
 At the default budget, elision cut the summaries from nine to two, completion
-tokens by half and cost by a third. The run measured 2.31–2.38 provider
+tokens by half and cost by a third. That run used the build before the last
+change, which only counts media and oversized results as sent; the task had
+neither. The run measured 2.31–2.38 provider
 tokens per estimated token, and elided four or five results at each pause; the
 two summaries came when the stubs had piled up enough that elision alone no
 longer cleared the target. A first 80K run with elision on, built before the
@@ -428,14 +428,17 @@ prompt tokens fell by a fifth.
 
 ### Not done
 
-- A rate per result, and a re-measured prefix. The rate is one average over the
-  history: when the old results that get elided cost the provider fewer tokens
-  per character than the rest (prose first, dense data later), their savings
-  are over-counted, the estimate comes out low, and the run pauses again a step
-  or two later, when the summary runs. And the prefix is the one measured at
-  the first step: a mid-run tool-roster rebuild or a fallback model's tokenizer
-  that grows it is taken for history, which shifts the estimate by part of that
-  growth, well inside the headroom for ordinary rosters.
+- A rate per result, a re-measured prefix, and a mirror of the in-round guard's
+  trimming. The rate is one average over the history: when the old results that
+  get elided cost the provider fewer tokens per character than the rest (prose
+  first, dense data later), their savings are over-counted. The prefix is the
+  one measured at the first step: a mid-run tool-roster rebuild or a fallback
+  model's tokenizer that grows it is taken for history. And the rate is
+  measured against the history as the guard always sends it, but not as it
+  trims it to fit the model's input allowance, which happens near the window
+  (the window path, not the resend budget). In each case the estimate after
+  elision can come out low; the run then pauses again a step or two later, that
+  pause cannot free enough, and the summary runs: one extra pause, no more.
 - Getting an elided result back into the history. Once a result is a stub,
   the full output is in the session log (and, when the tool output boundary
   saved it, in the workspace file the stub names), not in what the model is

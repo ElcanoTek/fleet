@@ -177,6 +177,16 @@ func TestRecentWindowStart(t *testing.T) {
 		t.Errorf("room for everything: window starts at %d, want the head boundary 1", got)
 	}
 
+	// The window counts what is sent: a recent screenshot goes out as a short
+	// envelope, so it does not end the window at itself.
+	withImage := elisionHistory(4, 4000)
+	withImage[9] = fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+		fantasy.ToolResultPart{ToolCallID: "page-d", Output: fantasy.ToolResultOutputContentMedia{Data: strings.Repeat("i", 256_000), MediaType: "image/png"}},
+	}}
+	if got := recentWindowStart(withImage, 1, wireTokens(withImage[4:])); got != 4 {
+		t.Errorf("room for three exchanges as sent, the newest a screenshot: window starts at %d, want 4", got)
+	}
+
 	// A boundary on a tool message moves back onto the assistant message that
 	// made the calls: a result is never in the window without its call.
 	wordy := elisionExchange("x", `{}`, elisionText(100))

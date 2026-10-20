@@ -140,15 +140,17 @@ func elisionStub(output fantasy.ToolResultOutputContent, toolName string) (stub,
 }
 
 // recentWindowStart is the index of the first message of the recent window:
-// the newest messages whose estimated size fits recentTokens, extended to at
-// least elisionMinRecentExchanges assistant turns, and moved back off any
-// tool-role message onto the assistant message that made those calls, so an
-// exchange is never split between the window and what is elided.
+// the newest messages whose estimated size as sent (wireTokens) fits
+// recentTokens, extended to at least elisionMinRecentExchanges assistant
+// turns, and moved back off any tool-role message onto the assistant message
+// that made those calls, so an exchange is never split between the window and
+// what is elided. Counted as stored, one recent screenshot would end the
+// window at itself and leave the results around it to be stubbed.
 func recentWindowStart(messages []fantasy.Message, head, recentTokens int) int {
 	start := len(messages)
 	tokens, exchanges := 0, 0
 	for i := len(messages) - 1; i >= head; i-- {
-		size := estimateModelMessagesTokens(messages[i : i+1])
+		size := wireTokens(messages[i : i+1])
 		if exchanges >= elisionMinRecentExchanges && tokens+size > recentTokens {
 			break
 		}
@@ -210,15 +212,21 @@ const (
 // 30%-of-budget recent window held some 60% of the budget, and the stubs'
 // savings looked half their size.
 //
-// Two shapes it does not see, both bounded. The rate is one average over the
-// history: when the old results that get elided cost the provider fewer
-// tokens per character than the rest (prose first, dense data later), their
-// savings are over-counted and the estimate after can come out low, so the
-// run may pause again a step or two later; that elision then cannot free
-// enough, and the summary runs. And the prefix is the one measured first:
-// when a mid-run tool-roster rebuild or a fallback model's tokenizer grows
-// the real prefix, the growth is taken for history; it shifts the estimate
-// by part of that growth, well inside the headroom for ordinary rosters.
+// Three shapes it does not see, each bounded:
+//   - The rate is one average over the history. When the old results that
+//     get elided cost the provider fewer tokens per character than the rest
+//     (prose first, dense data later), their savings are over-counted.
+//   - The prefix is the one measured first. A mid-run tool-roster rebuild or
+//     a fallback model's tokenizer that grows the real prefix is taken for
+//     history, shifting the estimate by part of that growth.
+//   - wireTokens mirrors only the in-round guard's unconditional reduction.
+//     When the call that fired was also trimmed to fit the model's input
+//     allowance (compactOldToolResults, near the window: the window path, not
+//     the resend budget), used holds the trimmed history and the rate is low.
+//
+// In each, the estimate after elision can come out low, and the run pauses
+// again a step or two later; that pause cannot free enough by elision, so the
+// summary runs. One extra pause, no more: the next one re-measures the rate.
 func (e *engine) historyTokenRate(messages []fantasy.Message, used int, measured bool) float64 {
 	if !measured || e.resendPrefix <= 0 || used <= e.resendPrefix {
 		return 1
