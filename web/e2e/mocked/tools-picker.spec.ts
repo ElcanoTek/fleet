@@ -191,7 +191,7 @@ test.describe("on a touch phone", () => {
     await page.setViewportSize({ width: 820, height: 1180 });
     await loginViaCookie(context);
     await boot(page, { admin: true });
-    await page.getByRole("button", { name: "Tools", exact: true }).click();
+    await page.getByRole("button", { name: "Tools", exact: true }).tap();
     await page.getByRole("button", { name: "Open library" }).tap();
     const rail = page.getByTestId("chat-tools-library").getByRole("navigation", { name: "Status" });
     const heights = await rail.getByRole("button").evaluateAll((b) => b.map((n) => n.getBoundingClientRect().height));
@@ -202,7 +202,7 @@ test.describe("on a touch phone", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await loginViaCookie(context);
     await boot(page, { admin: true });
-    await page.getByRole("button", { name: "Tools", exact: true }).click();
+    await page.getByRole("button", { name: "Tools", exact: true }).tap();
     const popover = page.getByTestId("chat-tools-popover");
     await expect(popover).toHaveCSS("opacity", "1");
     // Focusing the search field would open the keyboard over the list.
@@ -256,6 +256,31 @@ test.describe("on a touch phone", () => {
     await expect(library).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(library).toHaveCount(0);
+  });
+
+  test("a hardware keyboard on a touch device still lands in search", async ({ page, context }) => {
+    await page.setViewportSize({ width: 820, height: 1180 });
+    await loginViaCookie(context);
+    await boot(page, { admin: true });
+    await page.getByRole("button", { name: "Tools", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("textbox", { name: "Search tools" })).toBeFocused();
+  });
+
+  test("switching a connector out of the status filter keeps its detail open", async ({ page, context }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loginViaCookie(context);
+    await boot(page, { admin: true });
+    await page.getByRole("button", { name: "Tools", exact: true }).tap();
+    await page.getByRole("button", { name: "Open library" }).tap();
+    const library = page.getByTestId("chat-tools-library");
+    await library.getByRole("navigation", { name: "Status" }).getByRole("button", { name: /^On/ }).tap();
+    await library.getByTestId("chat-tools-library-row-indexexchange").locator("> button").tap();
+    const detail = page.getByTestId("chat-tools-library-detail");
+    await expect(detail).toContainText("Index Exchange");
+    await detail.getByRole("switch", { name: "Index Exchange" }).tap();
+    await expect(detail).toContainText("Index Exchange");
+    await expect(detail).toContainText("Off for this chat");
   });
 });
 

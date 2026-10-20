@@ -8,7 +8,7 @@ import {
   connectorStatus,
   countOn,
   isToggleable,
-  isTouchPrimary,
+  openedByTouch,
   onSnapshot,
   popoverSections,
   statusKicker,
@@ -76,7 +76,7 @@ export function ToolsPopover({
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!isTouchPrimary()) inputRef.current?.focus({ preventScroll: true });
+    if (!openedByTouch()) inputRef.current?.focus({ preventScroll: true });
   }, []);
 
   const q = query.trim();

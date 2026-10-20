@@ -14,7 +14,7 @@ import {
   groupConnectors,
   inCategory,
   isOn,
-  isTouchPrimary,
+  openedByTouch,
   isToggleable,
   LIBRARY_STATUSES,
   libraryBulkScope,
@@ -115,7 +115,14 @@ export function ToolsLibrary({
   const list = matched.filter((r) => inCategory(r.connector, cat, categories) && matchesStatus(r.connector, status));
   const groups = groupConnectors(list, categories, !!q);
   const flat = groups.flatMap((g) => g.rows.map((r) => r.connector));
-  const current = flat.find((c) => c.name === selected) ?? flat[0] ?? null;
+  // A stacked detail stays on the connection it opened even when that
+  // connection leaves the filtered list (switched off under an "On" filter);
+  // otherwise the view would silently swap to another row.
+  const current =
+    flat.find((c) => c.name === selected) ??
+    (detailOpen ? servers.find((c) => c.name === selected) : undefined) ??
+    flat[0] ??
+    null;
 
   const presentCats = categories.filter((c) => servers.some((s) => categoryOf(s, categories) === c.id));
   const catObj = cat === "all" ? null : categories.find((c) => c.id === cat) ?? null;
@@ -177,11 +184,11 @@ export function ToolsLibrary({
       onClose();
     },
     // Opening straight into a stacked detail view focuses its back button (the
-    // search field is hidden there). Otherwise, on a touch screen the sheet
+    // search field is hidden there). Otherwise, opened by a tap, the sheet
     // itself takes focus instead of the search field, so the keyboard does not
     // open over the list; the trap treats the container as the wrap point, so
     // Shift+Tab from there stays inside.
-    { initialFocusRef: detailOpen && stacked() ? backRef : isTouchPrimary() ? panelRef : searchRef },
+    { initialFocusRef: detailOpen && stacked() ? backRef : openedByTouch() ? panelRef : searchRef },
   );
 
   return createPortal(
