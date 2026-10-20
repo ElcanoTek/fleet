@@ -5,6 +5,8 @@ import {
   NARRATION_HOLD_CHARS,
   assistantDisplayContent,
   foldNarration,
+  settleDone,
+  settleDoneMessages,
   settleNarration,
 } from "./turnNarration";
 
@@ -58,6 +60,21 @@ describe("settleNarration", () => {
     const m = settleNarration(msg({ content: "Now updat", narration: "Let me check." }));
     expect(m.content).toBe("Let me check.\n\nNow updat");
     expect(m.narration).toBeUndefined();
+  });
+});
+
+describe("settleDone", () => {
+  it("settles a slot that reached done by any path, and only then", () => {
+    const live = msg({ content: "", narration: "Let me check." });
+    expect(settleDone(live)).toBe(live);
+    expect(settleDone({ ...live, state: "done" }).content).toBe("Let me check.");
+  });
+
+  it("returns the same transcript when nothing needed settling", () => {
+    const list = [msg({ state: "done", content: "Done." })];
+    expect(settleDoneMessages(list)).toBe(list);
+    const stopped = [msg({ state: "done", narration: "Let me check." })];
+    expect(settleDoneMessages(stopped)[0].content).toBe("Let me check.");
   });
 });
 

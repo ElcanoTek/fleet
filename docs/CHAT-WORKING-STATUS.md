@@ -50,8 +50,10 @@ provider may split one sentence across blocks
   the narration in a **Working notes** block under the reasoning.
 - `text.replace` marks the reply final (`finalAnswer`); the narration stays
   behind "Show details". A turn that ends without one — stopped, failed, the
-  round cap — keeps its whole partial transcript as the reply, as before
-  (`settleNarration`).
+  round cap, a recovered outcome — keeps its whole partial transcript as the
+  reply, as before (`settleNarration`). That holds on every path that marks a
+  slot done, including Stop before the `turn.cancelled` frame arrives:
+  `useTurnStream` runs each transcript write through `settleDone`.
 - Reasoning blocks (`reasoning.start`) and persisted text/reasoning rows join
   as paragraphs too (`textSegments.ts`), so live and reloaded transcripts read
   the same.

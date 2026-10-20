@@ -91,6 +91,55 @@ describe("useTurnStream narration", () => {
     expect(m.narration).toBeUndefined();
   });
 
+  // Stop before the turn.cancelled frame arrives: the client marks the slot
+  // done itself, on a path no terminal frame reaches (Codex review, #1817).
+  it("keeps the narration when the user stops before any terminal frame", async () => {
+    const h = createTurnStreamHarness({
+      conversationId: CONV,
+      overrides: { loadConversation: async () => {} },
+    });
+    const body = sse([
+      { event: "text.delta", data: { text: "Let me check the deal." } },
+      call("c1"),
+    ]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/chat") {
+          const stream = new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(new TextEncoder().encode(body));
+              init?.signal?.addEventListener("abort", () =>
+                c.error(new DOMException("Aborted", "AbortError")),
+              );
+            },
+          });
+          return new Response(stream, {
+            status: 200,
+            headers: { "content-type": "text/event-stream", "X-Fleet-Conversation-Id": CONV },
+          });
+        }
+        if (url.includes("/queue")) return Response.json({ items: [] });
+        if (url.includes("/inflight")) return Response.json({ inflight: false });
+        return Response.json({});
+      }),
+    );
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await act(async () => {
+      const turn = result.current.submitPrompt("go");
+      await new Promise((r) => setTimeout(r, 400));
+      const slot = (h.store.get(CONV) ?? []).findLast((m) => m.role === "assistant");
+      expect(slot?.narration).toBe("Let me check the deal.");
+      h.deps.abortControllersRef.current.get(CONV)?.abort();
+      await turn;
+    });
+    const m = (h.store.get(CONV) ?? []).findLast((x) => x.role === "assistant");
+    expect(m?.cancelled).toBe(true);
+    expect(m?.content).toBe("Let me check the deal.");
+    expect(m?.narration).toBeUndefined();
+  });
+
   it("starts each reasoning block on its own paragraph", async () => {
     const m = await replay([
       { event: "reasoning.start", data: { id: "r1", text: "" } },

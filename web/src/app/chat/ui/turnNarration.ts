@@ -20,7 +20,8 @@ import { joinTextSegments } from "./textSegments";
 //     narration (assistantDisplayContent). "Show details" shows everything.
 //   - A turn that ends WITHOUT text.replace (stopped, failed, round cap) keeps
 //     its partial transcript, as before: the narration is folded back into the
-//     content (settleNarration).
+//     content (settleNarration) — on every path that marks the slot done,
+//     because useTurnStream runs each transcript write through settleDone.
 //
 // The server separates steps itself (agentcore.StepTextSeparator), so these
 // joins are also the fallback for a stream from an older server.
@@ -52,6 +53,25 @@ export function foldNarration(m: Message): Message {
 export function settleNarration(m: Message): Message {
   if (m.finalAnswer || !m.narration) return m;
   return { ...m, content: joinTextSegments(m.narration, m.content), narration: undefined };
+}
+
+/**
+ * settleDone applies settleNarration to a message that has reached `done` by
+ * any path; useTurnStream runs every transcript write through it.
+ */
+export function settleDone(m: Message): Message {
+  return m.state === "done" ? settleNarration(m) : m;
+}
+
+/** settleDoneMessages is settleDone over a transcript; unchanged → same array. */
+export function settleDoneMessages(messages: Message[]): Message[] {
+  let changed = false;
+  const out = messages.map((m) => {
+    const next = settleDone(m);
+    if (next !== m) changed = true;
+    return next;
+  });
+  return changed ? out : messages;
 }
 
 /**
