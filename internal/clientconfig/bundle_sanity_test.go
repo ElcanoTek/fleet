@@ -110,6 +110,7 @@ func TestRealBundleSanity(t *testing.T) {
 					reserved := func(v string) string {
 						v = strings.ReplaceAll(v, "${FLEET_WORKSPACE_ROOT}", "")
 						v = strings.ReplaceAll(v, "${FLEET_WORKSPACE}", "")
+						v = strings.ReplaceAll(v, "${FLEET_USER_EMAIL}", "")
 						return strings.ReplaceAll(v, "${FLEET_TASK_ID}", "")
 					}
 					for name, cfg := range b.MCPServerConfigs() {

@@ -1501,6 +1501,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			return nil
 		},
 		OnStepFinish: func(step fantasy.StepResult) error {
+			sink.onStepFinish()
 			r.orch.updateUsage(modelSlug, step.Usage, step.ProviderMetadata)
 			r.engine.noteResendFloor(step.Usage)
 			if r.engine.usageReporter != nil {

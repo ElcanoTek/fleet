@@ -118,7 +118,7 @@ func (f *gatedEngine) OpenApprovalRemoteMCPScope(context.Context, string, string
 	return nil, nil
 }
 
-func (f *gatedEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string) (*agent.MCPScope, error) {
+func (f *gatedEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string, agentcore.MCPUserIdentity) (*agent.MCPScope, error) {
 	return nil, nil
 }
 func (f *gatedEngine) SandboxPool() *sandbox.Pool                   { return nil }

@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1168,9 +1169,29 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolSuffixes:    p.CriticalToolSuffixes,
 		CriticalToolResultCards: p.CriticalToolResultCards,
 	})...)
+	// interactive_hidden_tools: a member the boot install drops (a blank one)
+	// fails the check.
+	problems = append(problems, agentcore.InteractiveHiddenToolProblems(agentcore.AgentPolicy{
+		InteractiveHiddenTools: p.InteractiveHiddenTools,
+	})...)
 	if len(problems) > 0 {
 		res.Status = statusFail
 		res.Detail = strings.Join(problems, "; ")
+		return res
+	}
+	// A member that matches no tool the bundle declares only warns: it is
+	// most likely a typo that leaves the raw tool callable from chat, but it
+	// may be meant for a per-user hosted connector's tool, which the bundle
+	// cannot list (users add hosted connections at runtime).
+	//
+	// A member that pins a connector's name also warns: a named-account seat
+	// registers as mcp_<server>_<account>_<tool>, which such a member's suffix
+	// does not select, so the raw tool stays callable from chat on that seat.
+	warnings := interactiveHiddenUnmatched(bundle, p.InteractiveHiddenTools)
+	warnings = append(warnings, interactiveHiddenServerPinned(bundle, p.InteractiveHiddenTools)...)
+	if len(warnings) > 0 {
+		res.Status = statusWarn
+		res.Detail = strings.Join(warnings, "; ")
 		return res
 	}
 	res.Status = statusOK
@@ -1180,6 +1201,73 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		res.Detail = "no critical_tool_aliases declared"
 	}
 	return res
+}
+
+// interactiveHiddenUnmatched lists the interactive_hidden_tools members that
+// select no tool the bundle declares. It can only tell when every
+// mcp_servers entry lists its tools (an entry without a tools: allowlist
+// offers whatever its server advertises) and there are no a2a_peers; then the
+// candidates are mcp_<server>_<tool> for each listed tool plus the http_tools.
+// Names and matching are agentcore's own (MCPToolName, InteractiveHiddenIn),
+// the functions the run gate and the chat Tools picker use, so this check
+// cannot drift from what a chat turn actually hides. A per-user hosted
+// connector's tools are not in the bundle, so a miss is a warning, never a
+// failure: the member may be meant for one of them.
+func interactiveHiddenUnmatched(bundle *clientconfig.Bundle, members []string) []string {
+	if len(members) == 0 || len(bundle.A2APeers) > 0 {
+		return nil
+	}
+	var names []string
+	for i := range bundle.MCPCatalog {
+		s := &bundle.MCPCatalog[i]
+		if len(s.Tools) == 0 {
+			return nil
+		}
+		for _, t := range s.Tools {
+			names = append(names, agentcore.MCPToolName(s.Name, strings.TrimSpace(t)))
+		}
+	}
+	for i := range bundle.HTTPTools {
+		names = append(names, agentcore.MCPToolName(clientconfig.HTTPToolServerName, strings.TrimSpace(bundle.HTTPTools[i].Name)))
+	}
+	var problems []string
+	for _, m := range members {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue // reported by InteractiveHiddenToolProblems
+		}
+		member := []string{m}
+		if !slices.ContainsFunc(names, func(n string) bool { return agentcore.InteractiveHiddenIn(member, n) }) {
+			problems = append(problems, fmt.Sprintf("interactive_hidden_tools member %q matches no tool in any mcp_servers tools: allowlist or http_tools; unless it is meant for a per-user hosted connector's tool, it hides nothing (a typo?)", m))
+		}
+	}
+	return problems
+}
+
+// interactiveHiddenServerPinned lists the interactive_hidden_tools members
+// that pin one of the bundle's connectors by name: "<server>_<tool>" or
+// "mcp_<server>_<tool>" for a tool the server lists, when the member is not
+// itself one of that server's tool names. Suffix matching selects
+// mcp_<server>_<tool> but not a named-account seat's
+// mcp_<server>_<account>_<tool>, so such a member leaves the tool callable
+// from chat on every named seat. Listing the tool name alone hides it on all
+// of them.
+func interactiveHiddenServerPinned(bundle *clientconfig.Bundle, members []string) []string {
+	var problems []string
+	for _, raw := range members {
+		m := strings.TrimSpace(raw)
+		bare := strings.TrimPrefix(m, "mcp_")
+		for i := range bundle.MCPCatalog {
+			s := &bundle.MCPCatalog[i]
+			tool, ok := strings.CutPrefix(bare, s.Name+"_")
+			if !ok || tool == "" || slices.Contains(s.Tools, m) || !slices.Contains(s.Tools, tool) {
+				continue
+			}
+			problems = append(problems, fmt.Sprintf("interactive_hidden_tools member %q names connector %q: a named-account seat registers as mcp_%s_<account>_%s, which this member does not hide; list %q instead", m, s.Name, s.Name, tool, tool))
+			break
+		}
+	}
+	return problems
 }
 
 // ── 4. database (blocking) ──

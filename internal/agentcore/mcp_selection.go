@@ -12,6 +12,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
 
 // MCPVariantClientEnvVar is injected into every ACCOUNT-VARIANT stdio
@@ -108,6 +109,19 @@ type MCPServerBase struct {
 	// the owner id would otherwise transact in the DEFAULT client's seat under
 	// the named account's label (the cutlass inherited-routing-identity guard).
 	IdentityEnv []string
+	// User is the signed-in user of the interactive scope this base is bound
+	// into (ADR-0087), substituted for ${FLEET_USER_EMAIL} at spawn (SpawnEnv)
+	// AFTER the account overlay and its guard. Only the broker child's
+	// interactive OpenScope sets it; every other path leaves it zero, which
+	// drops the token-bearing keys.
+	User MCPUserIdentity
+	// TaskID is the scheduled task this base is bound for, substituted for
+	// ${FLEET_TASK_ID} at spawn (SpawnEnv). Only the scheduled per-run paths
+	// (scheduledrun, the broker child's task scope) set it; every other path
+	// leaves it empty, which drops the token-bearing keys. Stamped rather
+	// than pre-substituted into BaseEnv so every reserved token is applied
+	// by the one helper, in its one order.
+	TaskID string
 }
 
 // resolveMCPVariant computes the per-run registration name + credentialed env
@@ -142,11 +156,24 @@ func resolveMCPVariant(server string, base MCPServerBase, account string) (name 
 
 	name = server
 	if account != "" {
+		// The signed-in-user token is honoured only where the bundle writes it
+		// (ADR-0087). A <VAR>_<ACCOUNT> overlay comes from the process env —
+		// the credential store, an operator export — so one that names the
+		// token would otherwise be filled with whoever is at the keyboard at
+		// spawn, an identity_env key included, routing a seat or money by the
+		// user. Refuse the seat rather than spawn it.
+		suffix := "_" + upperAccount(account)
+		for v := range base.BaseEnv {
+			if usertoken.Mentions(os.Getenv(v + suffix)) {
+				return "", nil, fmt.Errorf(
+					"refusing to spawn server %q under account %q: %s%s names the reserved signed-in-user token, which fleet substitutes only where the bundle manifest writes it",
+					server, account, v, suffix)
+			}
+		}
 		// Inherited-routing-identity guard: a partially-suffixed account (API
 		// key overridden, owner/member id not) must be refused, not spawned —
 		// it would transact in the DEFAULT seat's identity under the named
 		// account's label. Mirrors the cutlass mcp_loader guard.
-		suffix := "_" + upperAccount(account)
 		for _, v := range base.IdentityEnv {
 			if strings.TrimSpace(base.BaseEnv[v]) == "" {
 				continue // identity var unset on the default seat: nothing to inherit
@@ -455,20 +482,40 @@ func bindMCPServer(ctx context.Context, client *mcp.Client, plan mcpBindPlan, wo
 	// (transport error, bad command, init timeout) is logged and SKIPPED by the
 	// caller so the rest of the selection still registers and the run proceeds
 	// with the tools that did come up. A Required server still aborts the run.
-	env := ExpandWorkspaceEnv(plan.env, workdir)
-	// ${FLEET_TASK_ID}: the scheduled per-run path already substituted the
-	// real task ID into BaseEnv (scheduledrun), so this is a no-op there.
-	// Every other caller has no task identity — drop token-bearing keys
-	// instead of leaking the literal placeholder to the connector.
-	env = ExpandTaskIDEnv(env, "")
-	// ${FLEET_WORKSPACE_ROOT}: the deployment root, offered on every path
-	// (per-run, load-on-demand and broker scopes all bind through here).
-	env = ExpandWorkspaceRootEnv(env)
+	env := SpawnEnv(plan.env, workdir, base.TaskID, base.User)
 	cwd := StdioCwd(base.Dir, base.DirPinned, workdir)
 	if err := client.AddStdioServer(ctx, name, base.Command, base.Args, env, cwd); err != nil {
 		return fmt.Errorf("register server %q: %w", name, err)
 	}
 	return nil
+}
+
+// SpawnEnv applies fleet's reserved spawn-time tokens to a server's resolved
+// env in the one safe order. It is the ONLY place they are applied — the
+// per-run and broker-scope binder (after resolveMCPVariant's account overlay
+// and identity guard), the boot-time shared spawn, hot reload's diff and
+// `fleet mcp test` all call it, so a reload compares exactly what the first
+// spawn produced:
+//
+//  1. ${FLEET_USER_EMAIL} FIRST (ADR-0087), on the values the bundle wrote:
+//     the signed-in user an interactive broker scope stamped on the base
+//     (cmd/fleet OpenScope), so a named seat gets the user exactly like the
+//     default seat. Every other caller — scheduled runs, load-on-demand onto
+//     a shared client — passes the zero user, which drops the keys. Running
+//     it before the path substitutions below means a workspace path that
+//     happens to contain the token text can never turn a key the bundle did
+//     not write the token into (an identity_env key included) into a
+//     user-dependent one; such text stays literal. The email itself can
+//     never contain '$', '{' or '}', so it cannot form a later token.
+//  2. ${FLEET_WORKSPACE}: workdir (empty drops the keys).
+//  3. ${FLEET_TASK_ID}: taskID for a scheduled run's own bases; every other
+//     caller passes "" (no task identity), which drops the keys.
+//  4. ${FLEET_WORKSPACE_ROOT}: the deployment root, offered on every path.
+func SpawnEnv(env map[string]string, workdir, taskID string, user MCPUserIdentity) map[string]string {
+	env = ExpandUserEnv(env, user)
+	env = ExpandWorkspaceEnv(env, workdir)
+	env = ExpandTaskIDEnv(env, taskID)
+	return ExpandWorkspaceRootEnv(env)
 }
 
 func upperAccount(account string) string {

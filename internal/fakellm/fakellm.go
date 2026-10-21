@@ -88,7 +88,9 @@ type ToolCall struct {
 // Step is one scripted model turn.
 type Step struct {
 	Kind StepKind
-	// Text is the assistant message for StepText.
+	// Text is the assistant message for StepText. On a StepToolCalls step it
+	// is optional narration streamed ahead of the calls ("Let me check the
+	// deal."), the way real models introduce a tool call.
 	Text string
 	// ToolCalls are the calls to emit for StepToolCalls.
 	ToolCalls []ToolCall
@@ -341,10 +343,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	case StepToolCalls:
 		if !req.Stream {
-			s.jsonToolCalls(w, req.Model, step.ToolCalls, promptTokens)
+			s.jsonToolCalls(w, req.Model, step.Text, step.ToolCalls, promptTokens)
 			return
 		}
-		s.streamToolCalls(w, r, req.Model, step.ToolCalls, step.Delay, promptTokens)
+		s.streamToolCalls(w, r, req.Model, step.Text, step.ToolCalls, step.Delay, promptTokens)
 		return
 	default: // StepText (and any unrecognized kind falls back to text)
 		if !req.Stream {
