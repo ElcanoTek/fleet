@@ -39,8 +39,8 @@ The interactive driver reads the installed list at the start of each turn
 
 | Path the model could use | What happens |
 | --- | --- |
-| The tool list sent to the model | The tool is not in it. It is dropped in `buildFantasyToolsWithRoster`, after Gates 1 and 2 and before the persona policy and the disclosure decision. |
-| `tool_search` / `tool_describe` | The tool never enters the deferred registry, so search does not find it and describe refuses it. |
+| The tool list sent to the model | The tool is not in it. It is dropped in `buildFantasyToolsWithRoster` before the disclosure decision, as the last gate: after the opt-in, allowlist, persona and schema gates. |
+| `tool_search` / `tool_describe` | The tool never enters the deferred registry, so search does not find it. `tool_describe` answers with the explanation below, not "no tool named". |
 | `tool_call {name: …}` | Refused with the explanation below. The broker is never reached. |
 | A direct call to the hidden name | The out-of-roster recovery (#1744) records the gate as `interactive_hidden` and answers with the same explanation. The metric's `reason` label is `interactive_hidden`. |
 | `spawn_subagent` from the chat turn | The child inherits the list at every depth (`buildChild`), so delegating cannot reach the tool. |
@@ -54,8 +54,29 @@ The explanation is the same text everywhere:
 > (agent_policy.interactive_hidden_tools). Do not look for another way to call
 > it; use the workflow your instructions give for this action in chat.`
 
-The system prompt's live-registry section is built from the roster, so it
-never lists a hidden tool.
+**Precedence.** A tool another gate also removes is reported under that gate,
+not as hidden. The hidden list is the last gate because it is the narrowest:
+the persona policy and the schema check remove a tool in every mode, so for a
+tool the persona denies, "reserved for scheduled runs" would be false. Every
+enforcement point agrees, because each reads the first gate recorded
+(`roster.removed`, and the registry's hidden set holds only tools no earlier
+gate removed): the out-of-roster answer, `tool_describe` and `tool_call`.
+
+**What the per-turn prompt says.** The model is not told about a hidden tool
+anywhere in a chat turn:
+
+- The system prompt's live-registry section is built from the gated roster, so
+  it never names or counts a hidden tool
+  (`TestInteractiveHidden_LiveRegistryOmitsHiddenTools`).
+- The chat prompt's tool-gated sections read `activeMCPToolNames`, which
+  subtracts the hidden list. Today that is the `protocols/fastio-mcp.md`
+  entry: it is listed while at least one fast.io tool is visible to chat, and
+  left out when every one is hidden.
+- The per-turn "Possibly-relevant connectors" note (#512) does not recommend a
+  connector whose every tool is hidden, because connecting it would give the
+  chat nothing. The picker does not list such a connector either.
+- Text a bundle writes in its persona or protocols is the bundle's to keep
+  consistent with its own list.
 
 ## What the chat Tools picker shows
 
@@ -116,7 +137,11 @@ the rest of `agent_policy`.
 - `internal/agentcore/interactive_hidden.go`: the list, its validation and
   the refusal text.
 - `internal/agentcore/mcp_tools.go`: the registration drop and the call gate.
-- `internal/agentcore/tool_disclosure.go`: the `tool_call` explanation.
+- `internal/agentcore/tool_disclosure.go`: the `tool_describe` and
+  `tool_call` explanations.
+- `internal/agent/prompt.go`: `activeMCPToolNames`, the chat prompt's view of
+  the roster.
+- `internal/httpapi/connector_recommend.go`: the connector recommendation.
 - `internal/agentcore/out_of_roster.go`: the direct-call explanation.
 - `internal/agent/manager.go`, `interactive.go`, `subagent.go`,
   `scheduled.go`: the turn's list and its inheritance by sub-agents.

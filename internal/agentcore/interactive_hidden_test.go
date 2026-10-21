@@ -168,3 +168,98 @@ func TestInteractiveHidden_RunHidesAndExplains(t *testing.T) {
 		t.Fatalf("without the list the tool did not run: %q", broker.lastTool)
 	}
 }
+
+// tool_describe on a hidden tool gives the same fixed explanation tool_call
+// and a direct call give, not "no tool named": told only that, the model
+// hunts for the tool under another name instead of using its chat flow. A
+// name that never existed keeps the ordinary answer.
+func TestInteractiveHidden_DescribeExplains(t *testing.T) {
+	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "5")
+	const hidden = "mcp_srv_stripe_refund_charge_2"
+	got, _, err := buildFantasyToolsWithRoster(discNative(3), discMCPTools(20), &fakeBroker{}, nil, nil, nil, nil,
+		toolBuildConfig{hiddenSuffixes: []string{"stripe_refund_charge_2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	describe := findTool(got, "tool_describe")
+	resp, _ := describe.Run(context.Background(), fantasy.ToolCall{Input: `{"name":"` + hidden + `"}`})
+	if !resp.IsError || resp.Content != interactiveHiddenRefusal(hidden) {
+		t.Fatalf("tool_describe on a hidden tool: %+v", resp)
+	}
+	if resp, _ := describe.Run(context.Background(), fantasy.ToolCall{Input: `{"name":"nope"}`}); !strings.Contains(resp.Content, "no tool named") {
+		t.Fatalf("unknown name: %q", resp.Content)
+	}
+}
+
+// Precedence: interactive_hidden_tools is the LAST gate. A tool the persona
+// also denies is reported as persona-removed in every enforcement point that
+// reads the gate (roster.removed for a direct call, tool_describe and
+// tool_call in deferred mode), because the persona removes it in every mode
+// and "reserved for scheduled runs" would be false for it. A tool only the
+// hidden list removes is still reported as hidden.
+func TestInteractiveHidden_PersonaGateWinsOverHidden(t *testing.T) {
+	const both = "mcp_srv_stripe_refund_charge_2"
+	const onlyHidden = "mcp_srv_stripe_refund_charge_5"
+	cfg := toolBuildConfig{
+		hiddenSuffixes: []string{"stripe_refund_charge_2", "stripe_refund_charge_5"},
+		personaName:    "trader",
+		personaPolicy:  &PersonaToolPermissions{Deny: []string{both}},
+	}
+	for _, threshold := range []string{"5", "128"} {
+		t.Run("threshold="+threshold, func(t *testing.T) {
+			t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", threshold)
+			got, roster, err := buildFantasyToolsWithRoster(discNative(3), discMCPTools(20), &fakeBroker{}, nil, nil, nil, nil, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if roster.removed[both] != gatePersona || roster.removed[onlyHidden] != gateInteractiveHidden {
+				t.Fatalf("removed[%s]=%q, removed[%s]=%q", both, roster.removed[both], onlyHidden, roster.removed[onlyHidden])
+			}
+			if threshold != "5" {
+				return
+			}
+			for _, bridge := range []string{"tool_describe", "tool_call"} {
+				resp, _ := findTool(got, bridge).Run(context.Background(), fantasy.ToolCall{ID: "c", Input: `{"name":"` + both + `","arguments":{}}`})
+				if resp.Content == interactiveHiddenRefusal(both) || !strings.Contains(resp.Content, "no tool named") {
+					t.Fatalf("%s on a persona-denied tool: %q", bridge, resp.Content)
+				}
+				resp, _ = findTool(got, bridge).Run(context.Background(), fantasy.ToolCall{ID: "c", Input: `{"name":"` + onlyHidden + `","arguments":{}}`})
+				if resp.Content != interactiveHiddenRefusal(onlyHidden) {
+					t.Fatalf("%s on a hidden-only tool: %q", bridge, resp.Content)
+				}
+			}
+		})
+	}
+}
+
+// The system prompt's live-registry section is derived from the gated roster,
+// so it never names a hidden tool (direct mode) or counts one (deferred
+// mode). Pinned so a future change that renders it from the catalog instead
+// fails here.
+func TestInteractiveHidden_LiveRegistryOmitsHiddenTools(t *testing.T) {
+	const hidden = "mcp_srv_jira_create_issue_1"
+	cfg := toolBuildConfig{hiddenSuffixes: []string{"jira_create_issue_1"}}
+
+	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "128")
+	_, direct, err := buildFantasyToolsWithRoster(discNative(2), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := direct.liveRegistrySection()
+	if strings.Contains(section, hidden) || !strings.Contains(section, "mcp_srv_slack_send_message_0") {
+		t.Fatalf("direct live registry:\n%s", section)
+	}
+
+	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "3")
+	_, deferred, err := buildFantasyToolsWithRoster(discNative(2), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deferred.deferredMCP != 4 {
+		t.Fatalf("deferred = %d, want 4 (5 tools, 1 hidden)", deferred.deferredMCP)
+	}
+	section = deferred.liveRegistrySection()
+	if strings.Contains(section, hidden) || !strings.Contains(section, "4 MCP tools are available") {
+		t.Fatalf("deferred live registry:\n%s", section)
+	}
+}

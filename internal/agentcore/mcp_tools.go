@@ -464,21 +464,6 @@ func buildFantasyToolsWithRoster(
 			readWorkspaceFile: cfg.readWorkspaceFile,
 			hiddenSuffixes:    cfg.hiddenSuffixes,
 		}
-		// Interactive-hidden tools (agent_policy.interactive_hidden_tools,
-		// interactive_hidden.go): a chat turn, and a sub-agent spawned from
-		// one, drops these HERE, before the disclosure decision, for the same
-		// reason Gate-4 is applied here (#570): a tool that deferred behind
-		// the bridges would otherwise stay discoverable via tool_search and
-		// callable via tool_call. Scheduled runs pass no list.
-		if hiddenByList(mt.Name(), cfg.hiddenSuffixes) {
-			mcpSkippedHidden++
-			roster.noteRemoved(mt.Name(), gateInteractiveHidden)
-			if hiddenNames == nil {
-				hiddenNames = map[string]bool{}
-			}
-			hiddenNames[mt.Name()] = true
-			continue
-		}
 		// Gate 4 (persona tool allowlist, #294): applied HERE — to the logical
 		// mcp_<server>_<tool> identity, before the disclosure decision below —
 		// and not only over the registered roster (run.go), because above the
@@ -511,6 +496,29 @@ func buildFantasyToolsWithRoster(
 			emitToolSchemaInvalid(cfg.observer, mt.Name(), issue.Detail)
 			mcpSkippedSchema++
 			roster.noteRemoved(mt.Name(), gateSchema)
+			continue
+		}
+		// Interactive-hidden tools (agent_policy.interactive_hidden_tools,
+		// interactive_hidden.go): a chat turn, and a sub-agent spawned from
+		// one, drops these HERE, before the disclosure decision, for the same
+		// reason Gate-4 is applied here (#570): a tool that deferred behind
+		// the bridges would otherwise stay discoverable via tool_search and
+		// callable via tool_call. Scheduled runs pass no list.
+		//
+		// It is the LAST gate, after the persona policy and the schema check.
+		// Those remove a tool in every mode; this one only in chat. A tool two
+		// gates remove is reported under the first one (roster.removed,
+		// out_of_roster.go), so the broader gate wins: "reserved for scheduled
+		// runs" would be false for a tool the persona denies everywhere. Only a
+		// tool every mode-wide gate kept lands in hiddenNames, which is what
+		// tool_describe and tool_call explain with interactiveHiddenRefusal.
+		if hiddenByList(mt.Name(), cfg.hiddenSuffixes) {
+			mcpSkippedHidden++
+			roster.noteRemoved(mt.Name(), gateInteractiveHidden)
+			if hiddenNames == nil {
+				hiddenNames = map[string]bool{}
+			}
+			hiddenNames[mt.Name()] = true
 			continue
 		}
 		// Install the final model-visible boundary before the tool enters the

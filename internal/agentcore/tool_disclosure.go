@@ -167,6 +167,13 @@ func (r *deferredToolRegistry) describeTool() fantasy.AgentTool {
 		func(_ context.Context, p toolDescribeParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			name := strings.TrimSpace(p.Name)
 			t, ok := r.byName[name]
+			// A tool interactive_hidden_tools kept out of this run gets the
+			// same fixed explanation tool_call and a direct call give, not
+			// "no tool named": told only that, a model goes looking for the
+			// tool under another name instead of switching to its chat flow.
+			if !ok && r.hidden[name] {
+				return fantasy.NewTextErrorResponse(interactiveHiddenRefusal(name)), nil
+			}
 			if !ok {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("tool_describe: no tool named %q — use tool_search to find the right name.", name)), nil
 			}

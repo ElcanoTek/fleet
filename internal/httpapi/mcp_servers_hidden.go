@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
@@ -81,6 +82,26 @@ func hideInteractiveHiddenTools(rows []map[string]any) []map[string]any {
 		cp["tools"] = visible
 		cp["tool_count"] = len(visible)
 		out = append(out, cp)
+	}
+	return out
+}
+
+// chatVisibleConnectors drops the Optional connectors whose every tool the
+// hidden list keeps out of chat, for the per-turn connector recommendation
+// (connector_recommend.go): recommending one would steer the user to connect
+// a connector that gives the chat nothing, which the picker does not list
+// either. A connector with no tool names (not yet known) is kept, as the
+// picker keeps it. The input is not modified.
+func chatVisibleConnectors(catalog []agent.OptionalServerInfo, hidden []string) []agent.OptionalServerInfo {
+	if len(hidden) == 0 {
+		return catalog
+	}
+	out := make([]agent.OptionalServerInfo, 0, len(catalog))
+	for _, srv := range catalog {
+		if len(srv.Tools) > 0 && chatHiddenCount(hidden, srv.Name, srv.Tools) == len(srv.Tools) {
+			continue
+		}
+		out = append(out, srv)
 	}
 	return out
 }

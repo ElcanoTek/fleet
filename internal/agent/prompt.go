@@ -314,10 +314,15 @@ func (m *Manager) fastIOEnabledForTurn(enabledOptIns []string) bool {
 // activeMCPToolNames returns the prefixed (`mcp_<server>_<tool>`) tool names
 // the system prompt advertises to the model for this turn. It starts from the
 // frozen startup roster, then filters Optional servers unless the conversation
-// opted in. This keeps prompt guidance aligned with buildFantasyTools.
+// opted in, and drops the tools agent_policy.interactive_hidden_tools keeps out
+// of chat (this prompt is the chat prompt; the run gate drops the same tools
+// from the turn, agentcore/interactive_hidden.go). This keeps prompt guidance
+// aligned with buildFantasyTools: a section gated on a connector's tools (the
+// fast.io protocol entry) is not written for tools the model cannot call.
 func (m *Manager) activeMCPToolNames(enabledOptIns []string) []string {
 	optionalServers, roster := m.mcpRosterSnapshot()
-	if len(optionalServers) == 0 {
+	hidden := agentcore.InteractiveHiddenTools()
+	if len(optionalServers) == 0 && len(hidden) == 0 {
 		return roster
 	}
 	enabled := make(map[string]bool, len(enabledOptIns))
@@ -327,6 +332,9 @@ func (m *Manager) activeMCPToolNames(enabledOptIns []string) []string {
 	out := make([]string, 0, len(roster))
 	for _, name := range roster {
 		if optionalServer := longestOptionalServerFor(name, optionalServers); optionalServer != "" && !enabled[optionalServer] {
+			continue
+		}
+		if agentcore.InteractiveHiddenIn(hidden, name) {
 			continue
 		}
 		out = append(out, name)

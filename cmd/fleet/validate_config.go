@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1200,8 +1201,10 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 // select no tool the bundle declares. It can only tell when every
 // mcp_servers entry lists its tools (an entry without a tools: allowlist
 // offers whatever its server advertises) and there are no a2a_peers; then the
-// candidates are mcp_<server>_<tool> for each listed tool plus the http_tools,
-// matched by the critical_tools suffix rule the gate uses. A per-user hosted
+// candidates are mcp_<server>_<tool> for each listed tool plus the http_tools.
+// Names and matching are agentcore's own (MCPToolName, InteractiveHiddenIn),
+// the functions the run gate and the chat Tools picker use, so this check
+// cannot drift from what a chat turn actually hides. A per-user hosted
 // connector's tools are not in the bundle, so a miss is a warning, never a
 // failure: the member may be meant for one of them.
 func interactiveHiddenUnmatched(bundle *clientconfig.Bundle, members []string) []string {
@@ -1215,11 +1218,11 @@ func interactiveHiddenUnmatched(bundle *clientconfig.Bundle, members []string) [
 			return nil
 		}
 		for _, t := range s.Tools {
-			names = append(names, "mcp_"+s.Name+"_"+strings.TrimSpace(t))
+			names = append(names, agentcore.MCPToolName(s.Name, strings.TrimSpace(t)))
 		}
 	}
 	for i := range bundle.HTTPTools {
-		names = append(names, "mcp_"+clientconfig.HTTPToolServerName+"_"+strings.TrimSpace(bundle.HTTPTools[i].Name))
+		names = append(names, agentcore.MCPToolName(clientconfig.HTTPToolServerName, strings.TrimSpace(bundle.HTTPTools[i].Name)))
 	}
 	var problems []string
 	for _, m := range members {
@@ -1227,14 +1230,8 @@ func interactiveHiddenUnmatched(bundle *clientconfig.Bundle, members []string) [
 		if m == "" {
 			continue // reported by InteractiveHiddenToolProblems
 		}
-		matched := false
-		for _, n := range names {
-			if n == m || strings.HasSuffix(n, "_"+m) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
+		member := []string{m}
+		if !slices.ContainsFunc(names, func(n string) bool { return agentcore.InteractiveHiddenIn(member, n) }) {
 			problems = append(problems, fmt.Sprintf("interactive_hidden_tools member %q matches no tool in any mcp_servers tools: allowlist or http_tools; unless it is meant for a per-user hosted connector's tool, it hides nothing (a typo?)", m))
 		}
 	}

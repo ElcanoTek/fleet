@@ -44,9 +44,11 @@ suffix rule, applied to MCP tool names only.
 3. **Uncallable, not just unlisted.** The tool is dropped before the
    disclosure decision, so it is in neither the tool list nor the deferred
    registry. `mcpTool.Run` refuses a hidden name before the policy gate, so no
-   card is staged and nothing is journaled or dispatched. `tool_call` and the
-   out-of-roster recovery both answer a call to it with a fixed explanation
-   instead of "not found".
+   card is staged and nothing is journaled or dispatched. `tool_describe`,
+   `tool_call` and the out-of-roster recovery all answer with a fixed
+   explanation instead of "not found". It is the last gate: a tool the
+   persona policy or the schema check also removes is reported under that
+   gate, which holds in every mode.
 4. **Delegation inherits it.** A sub-agent spawned from a chat turn carries the
    list at every depth (monotonic privilege, ADR-0007).
 5. **Host-side reads for a chat turn honor it.** The approval-card describer
