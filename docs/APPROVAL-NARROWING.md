@@ -214,7 +214,12 @@ is now 16 MiB (it was 64 KiB; the route is exempt from the server's global
 1 MiB JSON cap, and its handler applies this one), which holds 5000 values of
 200 characters even when every character is written as an escaped surrogate
 pair (12 bytes); a larger narrowing is refused and the person can decide the
-cards one at a time.
+cards one at a time. Because a body that size could also hold millions of
+short strings, the lists are counted while they are decoded
+(`approval_bounded_json.go`): `approve` and `decline` past 100 ids each,
+`narrow` past 100 cards or 5000 values, `narrow_args` past 100 entries, and
+the single-card `approved_values` past 500 values are refused as soon as the
+count passes, before the rest is read into memory.
 
 On the grouped card each narrowable call shows its rows with their own
 checkboxes and count. A checked call with every row unticked is declined, like

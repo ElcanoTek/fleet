@@ -330,8 +330,12 @@ func (f *approvedValuesField) UnmarshalJSON(b []byte) error {
 		f.values = nil
 		return nil
 	}
-	var values []string
-	if err := json.Unmarshal(b, &values); err != nil {
+	// Bounded while decoding (approval_bounded_json.go): no card stages more
+	// than maxNarrowableValues values, and the body could otherwise hold
+	// hundreds of thousands of short strings, all materialized before the
+	// count check.
+	values, err := decodeBoundedStrings(json.NewDecoder(bytes.NewReader(b)), maxNarrowableValues, errTooManyApprovedValues)
+	if err != nil {
 		return err
 	}
 	if values == nil {
