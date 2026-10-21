@@ -61,7 +61,10 @@ suffix rule, applied to MCP tool names only.
 6. **The chat Tools picker matches the turn.** The picker's listing routes
    drop a hidden tool from each connector's tools and count, and do not list a
    connector whose every tool is hidden, so the UI never offers what the run
-   gate refuses.
+   gate refuses. A per-user hosted connector is the exception: its row carries
+   no tool names (its catalog is known only once a turn opens it), so it is
+   listed even when every tool it exposes is hidden; it names no hidden tool,
+   and the run gate still drops them from the turn.
 7. **Absent key, no change.** Without the key the list is nil and every run
    is built exactly as before.
 

@@ -11,7 +11,7 @@ import (
 )
 
 // validate-config fails on an interactive_hidden_tools member the install
-// drops (blank, or a character no tool name has) and, when every server lists
+// drops (a blank one) and, when every server lists
 // its tools, warns on one that matches none of them. A server without a
 // tools: allowlist makes "matches nothing" unknowable, so it is not reported
 // then.
@@ -37,9 +37,15 @@ mcp_servers:
 agent_policy:
   interactive_hidden_tools: [%s]
 `
-	res := checkAgentPolicy(load(fmt.Sprintf(listed, `ox_create_deal, "bad name"`)), nil)
-	if res.Status != statusFail || !strings.Contains(res.Detail, `"bad name"`) || strings.Contains(res.Detail, `"ox_create_deal"`) {
-		t.Fatalf("want a fail naming the bad name only, got %q: %s", res.Status, res.Detail)
+	res := checkAgentPolicy(load(fmt.Sprintf(listed, `ox_create_deal, " "`)), nil)
+	if res.Status != statusFail || !strings.Contains(res.Detail, "blank interactive_hidden_tools member") || strings.Contains(res.Detail, `"ox_create_deal"`) {
+		t.Fatalf("want a fail naming the blank member only, got %q: %s", res.Status, res.Detail)
+	}
+	// A member outside the MCP spec's name set is kept (a connector may
+	// advertise files/read, which tool_call reaches; Codex P2 on #1816), so it
+	// does not fail; matching nothing in this bundle, it only warns.
+	if res := checkAgentPolicy(load(fmt.Sprintf(listed, `ox_create_deal, "files/read"`)), nil); res.Status != statusWarn || !strings.Contains(res.Detail, `"files/read" matches no tool`) {
+		t.Fatalf("a nonstandard member must warn, not fail, got %q: %s", res.Status, res.Detail)
 	}
 	// A member that matches no bundle tool may be meant for a per-user hosted
 	// connector (Codex P2 on #1816): it warns, and never fails the check.

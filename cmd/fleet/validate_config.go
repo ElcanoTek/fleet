@@ -1169,8 +1169,8 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolSuffixes:    p.CriticalToolSuffixes,
 		CriticalToolResultCards: p.CriticalToolResultCards,
 	})...)
-	// interactive_hidden_tools: a member the boot install drops (blank, or a
-	// character no tool name has) fails the check.
+	// interactive_hidden_tools: a member the boot install drops (a blank one)
+	// fails the check.
 	problems = append(problems, agentcore.InteractiveHiddenToolProblems(agentcore.AgentPolicy{
 		InteractiveHiddenTools: p.InteractiveHiddenTools,
 	})...)

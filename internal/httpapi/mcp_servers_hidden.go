@@ -22,7 +22,11 @@ import (
 //     subtracted by name on the server and never sent);
 //   - a connector whose every tool is hidden is not listed at all: it has
 //     nothing to offer in chat, and a switch that turns on nothing would
-//     mislead. Its scheduled tasks still use it.
+//     mislead. Its scheduled tasks still use it. The exception is a
+//     per-user hosted connector (remote row): it carries no tool names (its
+//     catalog is known only once a turn opens it), so it is listed even when
+//     the policy hides every tool it exposes. It names no hidden tool, and the
+//     run gate still drops them from that turn.
 //
 // Turning a connector on can never expose a hidden tool either: the run gate
 // (agentcore buildFantasyToolsWithRoster) drops it from every chat turn

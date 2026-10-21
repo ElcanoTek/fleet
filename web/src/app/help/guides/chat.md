@@ -442,9 +442,10 @@ own screen; the back button at the top (or `Esc`) returns to the list.
 A deployment can reserve some connector tools for scheduled tasks, typically a
 raw write that Chat reaches through a reviewed flow instead. Chat leaves those
 tools out of the Tools menu, its search, the library's **Show N tools** list
-and every tool count, and does not list a connector whose every tool is
-reserved. The assistant cannot call them in a conversation, whatever you turn
-on; a scheduled task still can, so the Operations Center task form may show
+and every tool count, and does not list a **Bundled** connector whose every
+tool is reserved. A third-party connector you signed into yourself is listed
+either way, because its tools are only known once a conversation opens it. The
+assistant cannot call a reserved tool in a conversation, whatever you turn on; a scheduled task still can, so the Operations Center task form may show
 tools and connectors that Chat does not. When a connector has more than one
 account, an **Account** menu on its row and in the library picks the one this
 conversation uses; the default reads as your deployment's name, or as the

@@ -8,17 +8,21 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
-// The list is normalized at install: trimmed, de-duplicated, and a member
-// that could never match a tool is dropped and reported (the same problems
-// validate-config prints).
+// The list is normalized at install: trimmed, de-duplicated, and a blank
+// member is dropped and reported (the same problems validate-config prints).
+// A member outside the MCP spec's name set (files/read) is kept: the deferred
+// bridge reaches such a tool, so the list must be able to hide it (Codex P2
+// on #1816).
 func TestInteractiveHidden_ListIsNormalizedAndBadMembersReported(t *testing.T) {
-	got, problems := buildInteractiveHiddenList([]string{" ox_create_deal ", "", "ox_create_deal", "bad name", "mcp_ix_ix_merge_deal_domains"})
-	if want := []string{"ox_create_deal", "mcp_ix_ix_merge_deal_domains"}; !reflect.DeepEqual(got, want) {
+	got, problems := buildInteractiveHiddenList([]string{" ox_create_deal ", "", "ox_create_deal", "files/read", "mcp_ix_ix_merge_deal_domains"})
+	if want := []string{"ox_create_deal", "files/read", "mcp_ix_ix_merge_deal_domains"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("list = %v, want %v", got, want)
 	}
-	if len(problems) != 2 || !strings.Contains(problems[0], "blank") || !strings.Contains(problems[1], `"bad name"`) {
+	if len(problems) != 1 || !strings.Contains(problems[0], "blank") {
 		t.Fatalf("problems = %q", problems)
 	}
 	if p := InteractiveHiddenToolProblems(AgentPolicy{InteractiveHiddenTools: []string{"ok_tool"}}); len(p) != 0 {
@@ -86,6 +90,33 @@ func TestInteractiveHidden_DeferredToolIsUnreachable(t *testing.T) {
 	// A name that never existed keeps the ordinary answer.
 	if r, _ := findTool(got, "tool_call").Run(context.Background(), fantasy.ToolCall{Input: `{"name":"nope"}`}); !strings.Contains(r.Content, "no tool named") {
 		t.Fatalf("unknown name: %q", r.Content)
+	}
+}
+
+// A tool named outside the MCP spec's name set (files/read) is held by the
+// deferred registry and reached by tool_call, so naming it in the list must
+// keep it out of the registry and refuse it by name (Codex P2 on #1816).
+func TestInteractiveHidden_NonstandardToolNameIsHidden(t *testing.T) {
+	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "5")
+	const hidden = "mcp_srv_files/read"
+	catalog := append(discMCPTools(10), mcp.ServerTool{ServerName: "srv", Tool: mcp.Tool{
+		Name: "files/read", Description: "Read a file", InputSchema: map[string]interface{}{"type": "object"},
+	}})
+	list, problems := buildInteractiveHiddenList([]string{"files/read"})
+	if len(problems) != 0 {
+		t.Fatalf("problems = %q", problems)
+	}
+	broker := &fakeBroker{}
+	got, roster, err := buildFantasyToolsWithRoster(discNative(3), catalog, broker, nil, nil, nil, nil, toolBuildConfig{hiddenSuffixes: list})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roster.removed[hidden] != gateInteractiveHidden || slices.Contains(roster.mcp, hidden) || roster.deferredMCP != 10 {
+		t.Fatalf("roster: removed=%q, in mcp=%t, deferred=%d", roster.removed[hidden], slices.Contains(roster.mcp, hidden), roster.deferredMCP)
+	}
+	cresp, _ := findTool(got, "tool_call").Run(context.Background(), fantasy.ToolCall{ID: "tc-1", Input: `{"name":"` + hidden + `","arguments":{}}`})
+	if !cresp.IsError || cresp.Content != interactiveHiddenRefusal(hidden) || broker.lastTool != "" {
+		t.Fatalf("tool_call: %+v (broker reached %q)", cresp, broker.lastTool)
 	}
 }
 

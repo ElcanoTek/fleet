@@ -88,7 +88,8 @@ anywhere in a chat turn:
   policy reload mid-turn cannot split them.
 - The per-turn "Possibly-relevant connectors" note (#512) does not recommend a
   connector whose every tool is hidden, because connecting it would give the
-  chat nothing. The picker does not list such a connector either. Both use
+  chat nothing. The picker does not list such a connector either (a per-user
+  hosted connector excepted; see below). Both use
   one visibility rule (`chatVisibleTools`). A partly hidden connector is
   still recommended: what remains is usually the chat flow itself (a plan
   connector's `preview_plan` / `execute_plan` beside its hidden raw writes).
@@ -109,6 +110,13 @@ so a trader is never shown a tool chat will refuse:
   to offer in chat, and a switch that turns on nothing would mislead. A
   conversation that opted into it earlier keeps the opt-in, which reaches no
   tool.
+- **Exception: a per-user hosted connector is always listed.** Its row
+  carries no tool names (`tools: []`, `tool_count: 0`): its catalog is only
+  known once a turn opens the connection, so the picker cannot tell that every
+  tool is hidden, and lists it even when the policy matches all of them. It
+  shows no hidden tool name or count either way, and the run gate still drops
+  every hidden tool from the turn that opens it, so it is a switch that may
+  turn on nothing callable in chat, never a path to a hidden tool.
 - Turning a connector on can never expose a hidden tool by another path: the
   run gate above drops it from every chat turn, whatever the conversation
   opted into (`TestInteractiveHidden_ManagerRunTurnHidesTheTool` runs the turn
@@ -139,9 +147,11 @@ come from the row's `tools`), so the filtering is all server-side.
 
 ## Validation
 
-At boot, a blank member or one with a character no MCP tool name can contain
-(anything but ASCII letters, digits, `_`, `-`, `.`) is dropped and logged.
-`fleet validate-config` fails `agent_policy` on the same members. It warns
+At boot, a blank member is dropped and logged, and `fleet validate-config`
+fails `agent_policy` on one. Any other member is kept as written, whatever its
+characters: a connector may advertise a tool outside the MCP spec's name set,
+such as `files/read`, which the deferred registry still holds and `tool_call`
+still reaches, so `files/read` (or `mcp_<server>_files/read`) hides it. It warns
 (never fails) on a member that matches no tool the bundle declares, when it
 can tell: every `mcp_servers` entry lists its `tools:` and there are no
 `a2a_peers`, so the candidates are known. Such a member is most likely a

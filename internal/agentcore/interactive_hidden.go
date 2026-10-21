@@ -49,9 +49,12 @@ import (
 const gateInteractiveHidden = "interactive_hidden"
 
 // buildInteractiveHiddenList normalizes interactive_hidden_tools: trimmed,
-// de-duplicated, in declaration order. A blank member, or one with a character
-// no MCP tool name can contain (so it could never match anything), is dropped
-// and reported.
+// de-duplicated, in declaration order. A blank member is dropped and
+// reported. Any other member is kept as written, whatever its characters: a
+// connector may advertise a tool outside the MCP spec's name set (files/read),
+// and the deferred bridge still registers it and tool_call reaches it, so the
+// list must be able to name it (Codex P2 on #1816). A member that matches
+// nothing hides nothing; validate-config warns on one when it can tell.
 func buildInteractiveHiddenList(members []string) ([]string, []string) {
 	out := make([]string, 0, len(members))
 	seen := make(map[string]bool, len(members))
@@ -61,9 +64,6 @@ func buildInteractiveHiddenList(members []string) ([]string, []string) {
 		switch {
 		case s == "":
 			problems = append(problems, "ignoring a blank interactive_hidden_tools member")
-			continue
-		case !validToolNameSuffix(s):
-			problems = append(problems, fmt.Sprintf("ignoring interactive_hidden_tools member %q: a tool name holds only ASCII letters, digits, '_', '-' and '.', so it can never match a tool", s))
 			continue
 		case seen[s]:
 			continue
@@ -82,19 +82,6 @@ func installInteractiveHiddenList(members []string) []string {
 		log.Printf("agent_policy: %s", problem)
 	}
 	return list
-}
-
-// validToolNameSuffix reports whether s uses only the MCP spec's tool-name
-// characters (ASCII letters, digits, '_', '-', '.').
-func validToolNameSuffix(s string) bool {
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
-		default:
-			return false
-		}
-	}
-	return s != ""
 }
 
 // InteractiveHiddenToolProblems is the preflight face of
