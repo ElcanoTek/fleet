@@ -178,6 +178,12 @@ func narrowApproval(a *store.Approval, approved []string, shownArg string) (*app
 	if len(approved) == 0 {
 		return nil, fmt.Errorf("approved_values is empty: to leave every %s out, decline the action", arg)
 	}
+	// A subset names at most every staged value once: anything longer is
+	// refused before a map is sized by the client's count (the body may hold
+	// hundreds of thousands of short repeats).
+	if len(approved) > len(staged) {
+		return nil, fmt.Errorf("approved_values names %d values, more than the %d staged %s", len(approved), len(staged), arg)
+	}
 	inStaged := make(map[string]bool, len(staged))
 	for _, v := range staged {
 		inStaged[v] = true
