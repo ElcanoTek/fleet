@@ -22,12 +22,17 @@ import { contrastRatio, over, paint, resolveColor, themesFrom, toHex, type RGB, 
  * gradient, which never leaves the range --color-bg .. --color-surface-2, so
  * every pair is checked over bg, surface-1 and surface-2.
  *
- * Scope: fleet's own palette (which the elcano bundle repeats exactly). The
- * primary button (on-primary on --color-primary, both bundle-owned brand
- * colors) is not a card token and is not checked here. Text, accent and
- * surface tokens are bundle-themable; the card tokens derive
+ * Scope: fleet's own palette (which the elcano bundle repeats exactly). Text,
+ * accent and surface tokens are bundle-themable; the card tokens derive
  * from them, so a bundle's palette gets the same lift, but a bundle's values
  * are checked in its own repo, not here.
+ *
+ * Filled buttons (Approve, Check result, Retry failed, Approve 2 of 3) paint
+ * --color-on-primary on --color-primary-fill, at rest and on hover. The brand
+ * pair itself is not held to contrast (white on fleet's #7272ab is 4.46:1),
+ * so the fill is the primary nudged until the pair reaches 4.5:1. For a
+ * bundle palette /theme.css emits that fill (internal/httpapi
+ * theme_contrast.go); the bundle-trait suite below re-measures what it emits.
  */
 
 const APP_DIR = join(import.meta.dirname ?? __dirname, "..", "..");
@@ -80,6 +85,15 @@ const PROGRESS: Pair = {
   min: GRAPHIC,
 };
 
+// A filled button's label on its fill, at rest and hovered. The fill is
+// opaque, so the card under it does not change the pair.
+function filledButton(label: string): Pair[] {
+  return [
+    { what: `${label} button label`, fg: v("color-on-primary"), layers: [v("color-primary-fill")], min: TEXT },
+    { what: `${label} button label, hovered`, fg: v("color-on-primary"), layers: [v("color-primary-fill-hover")], min: TEXT },
+  ];
+}
+
 const CARD = v("color-card-bg");
 const PENDING = v("color-card-pending-bg");
 const SUCCESS = v("color-card-success-bg");
@@ -93,20 +107,23 @@ const BOX = v("color-surface-1");
 const STATES: Record<string, Pair[]> = {
   pending: [
     ...textOn(CARD),
+    ...filledButton("Approve"),
     statusWords("danger", CARD, "Couldn't submit your decision"),
   ],
   "pending, plain words": [
     ...textOn(PENDING),
+    ...filledButton("Approve"),
     chip("warning", PENDING, '"Deal is Active"'),
     chip("danger", PENDING, "danger flag"),
     ...textOn(BOX),
     chip("warning", BOX, '"Deal is Active" in the record box'),
   ],
-  "pending email send": [...textOn(PENDING)],
-  plan: [...textOn(CARD), chip("warning", CARD, "flag on a plan row")],
+  "pending email send": [...textOn(PENDING), ...filledButton("Approve")],
+  plan: [...textOn(CARD), chip("warning", CARD, "flag on a plan row"), ...filledButton("Approve 2 of 3")],
   running: [
     ...textOn(CARD),
     PROGRESS,
+    ...filledButton("Check result"),
   ],
   completed: [
     ...textOn(CARD),
@@ -120,6 +137,7 @@ const STATES: Record<string, Pair[]> = {
   ],
   failed: [
     ...textOn(CARD),
+    ...filledButton("Retry failed"),
     statusWords("danger", CARD, "Send failed title"),
     ...textOn(DANGER),
     statusWords("danger", DANGER, '"Not applied:" / "1 failed"'),
@@ -220,6 +238,8 @@ describe("approval cards use the measured tokens", () => {
     [/\btext-\[var\(--color-accent\)\]/, "link text on a card is --color-card-link"],
     [/rounded-full bg-\[var\(--color-primary\)\]/, "a progress bar is --color-progress (a bundle primary can be light)"],
     [/fg:\s*"var\(--color-warning\)"/, "a warning icon is --color-warning-icon"],
+    [/\bbg-\[var\(--color-primary\)\]/, "a filled button is --color-primary-fill (the brand pair can miss 4.5:1)"],
+    [/text-\[var\(--color-on-primary\)\][^"]*hover:opacity-/, "a hover that fades a filled button lowers its contrast: use --color-primary-fill-hover"],
   ];
 
   it.each(FILES)("%s", (file) => {
@@ -273,6 +293,45 @@ describe("bundle palette traits fleet must survive", () => {
 
   it.each(Object.keys(STRESS))("%s", (name) => {
     expect(failuresFor(STRESS[name], PAIRS)).toEqual([]);
+  });
+
+  // What /theme.css emits as a bundle's button fill, recorded from the Go
+  // derivation (internal/httpapi TestPrimaryFillContract). Each palette trait
+  // is re-measured here with this file's own evaluator, on every card fill.
+  const FILLS: { name: string; primary: string; on_primary: string; fill: string; hover: string }[] = JSON.parse(
+    readFileSync(join(APP_DIR, "..", "..", "..", "testdata", "contracts", "theme-primary-fill.json"), "utf8"),
+  );
+  const BUTTON_FILLS = [CARD, PENDING, SUCCESS, WARNING, DANGER, RECORD];
+
+  it.each(FILLS.map((f) => [f.name, f] as const))("filled buttons on %s reach AA", (_name, f) => {
+    for (const mode of ["light", "dark"] as const) {
+      const theme: Theme = {
+        ...themes[mode],
+        "--color-primary": f.primary,
+        "--color-on-primary": f.on_primary,
+        "--color-primary-fill": f.fill,
+        "--color-primary-fill-hover": f.hover,
+      };
+      // A fill is opaque: a button never takes its color from what it sits on.
+      expect(resolveColor(f.fill, theme)[3]).toBe(1);
+      expect(resolveColor(f.hover, theme)[3]).toBe(1);
+      const pairs = BUTTON_FILLS.flatMap((fill) =>
+        filledButton("button").map((p) => ({ ...p, layers: [fill, ...p.layers] })),
+      );
+      expect(failuresFor(theme, pairs)).toEqual([]);
+    }
+  });
+
+  it("fleet's own fill in globals.css is the one the server derives", () => {
+    const own = FILLS.find((f) => f.name === "fleet's own palette");
+    expect(own).toBeDefined();
+    for (const mode of ["light", "dark"] as const) {
+      expect(themes[mode]["--color-primary"]).toBe(own?.primary);
+      expect(themes[mode]["--color-on-primary"]).toBe(own?.on_primary);
+      const bg = over(resolveColor(v("color-bg"), themes[mode]), [0, 0, 0]);
+      expect(toHex(over(resolveColor(v("color-primary-fill"), themes[mode]), bg))).toBe(own?.fill);
+      expect(toHex(over(resolveColor(v("color-primary-fill-hover"), themes[mode]), bg))).toBe(own?.hover);
+    }
   });
 
   it("the help guides paint links in --color-link, never the primary", () => {

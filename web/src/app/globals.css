@@ -47,6 +47,17 @@
      literal #fff — with a literal, a yellow-primary bundle rendered white on
      yellow at 1.33:1. */
   --color-on-primary: #ffffff;
+  /* The background of a filled button (Approve, Check result, Retry failed)
+     under --color-on-primary text. The brand pair is not held to contrast:
+     white on fleet's #7272ab is 4.46:1, just under WCAG AA. So the fill is
+     the primary mixed toward black (or white) by the smallest step that
+     reaches 4.5:1, and its hover a further 10 points the same way, so a hover
+     only ever raises the contrast. These are fleet's own values; when a
+     bundle sets primary or on_primary, /theme.css emits the fill measured for
+     that pair (internal/httpapi/theme_contrast.go), so no palette can push a
+     button label below AA. Not themable on purpose. */
+  --color-primary-fill: color-mix(in srgb, var(--color-primary) 99%, #000);
+  --color-primary-fill-hover: color-mix(in srgb, var(--color-primary) 89%, #000);
   --color-secondary: #586f7c;
   --color-accent: #9da7ef;
   --color-white: #ffffff;

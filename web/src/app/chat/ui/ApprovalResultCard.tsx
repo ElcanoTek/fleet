@@ -363,7 +363,7 @@ export function ApprovalResultCardView({
               type="button"
               data-testid="approval-retry-failed"
               disabled={retry !== "idle"}
-              className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3.5 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+              className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3.5 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
               onClick={async () => {
                 setRetry("sending");
                 let accepted: void | boolean = undefined;

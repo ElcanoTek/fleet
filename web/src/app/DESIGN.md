@@ -153,7 +153,13 @@ Known, deliberate exceptions:
   progress bar is `--color-progress` (the card link color), never
   `--color-primary`: a bundle's primary can be a light brand fill (a yellow
   with dark button text) that cannot reach 3:1 on the track. For the same
-  reason the help guides paint links in `--color-link`. Don't mix a card
+  reason the help guides paint links in `--color-link`. Filled buttons
+  (Approve, Check result, Retry failed, Approve 2 of 3) paint
+  `--color-on-primary` on `--color-primary-fill` and hover to
+  `--color-primary-fill-hover`, never `--color-primary` or a faded
+  `hover:opacity-*`: the brand pair can miss 4.5:1 (fleet's own is 4.46:1),
+  so the fill is the primary nudged until it passes, measured per bundle by
+  `/theme.css` (see `docs/BRANDING.md`). Don't mix a card
   fill or paint a base status color as text inline in those files:
   `approvalCardContrast.test.ts` measures every state's pairs (4.5:1 text,
   3:1 icons, both themes, over `--color-bg`..`--color-surface-2`) from these
