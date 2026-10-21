@@ -62,6 +62,15 @@
      with the fill (a translucent on_primary could not reach AA on any fill). */
   --color-on-primary-fill: var(--color-on-primary);
   --color-secondary: #586f7c;
+  /* The far end of the action gradient (--gradient-action-fill) under
+     --color-on-primary-fill. Every point of a blend carries the label, and
+     with dark text an sRGB blend can dip darker mid-way than either end, so
+     /theme.css measures the whole blend from the primary fill (and the hover
+     blend from the primary hover) and mixes the secondary toward the fill's
+     extreme by the smallest step that keeps all of it at 4.5:1. Fleet's own
+     secondary needs no mix. Not themable on purpose. */
+  --color-secondary-fill: var(--color-secondary);
+  --color-secondary-fill-hover: color-mix(in srgb, var(--color-secondary) 90%, #000);
   --color-accent: #9da7ef;
   --color-white: #ffffff;
   --color-bg: #1a0b1e;
@@ -345,6 +354,21 @@
     140deg,
     var(--color-primary),
     var(--color-secondary)
+  );
+  /* The action gradient a label sits on (the composer's Send circle, the
+     empty-state prompt's Run button): primary → secondary like the one above,
+     but between the measured stops, so the label holds 4.5:1 on every point
+     for any bundle palette. The raw gradient above is for what carries no
+     label (a selected option's ring). */
+  --gradient-action-fill: linear-gradient(
+    140deg,
+    var(--color-primary-fill),
+    var(--color-secondary-fill)
+  );
+  --gradient-action-fill-hover: linear-gradient(
+    140deg,
+    var(--color-primary-fill-hover),
+    var(--color-secondary-fill-hover)
   );
   --gradient-featured-top-accent: linear-gradient(
     90deg,
@@ -681,6 +705,14 @@
     140deg,
     var(--color-primary-hover),
     color-mix(in srgb, var(--color-secondary) 85%, #000)
+  );
+  /* Light keeps the deeper action surface with the measured stops: the hover
+     pair, which moves away from the label (fleet's own runs #656598 →
+     #4f6470, beside the raw #5f5f97 → #4b5e69 above). */
+  --gradient-action-fill: linear-gradient(
+    140deg,
+    var(--color-primary-fill-hover),
+    var(--color-secondary-fill-hover)
   );
   --gradient-featured-top-accent: linear-gradient(
     90deg,
@@ -1852,12 +1884,16 @@ button {
   font-size: 0.8125rem;
   white-space: nowrap;
 }
+/* The measured fill pair (see --color-primary-fill): the raw brand primary
+   can miss 4.5:1 under its label, and --color-primary-hover is LIGHTER than
+   the primary in dark, so hovering to it faded the label (white on fleet's
+   dark #8686c4 is 3.38:1). */
 .btn-primary {
-  background: var(--color-primary);
-  color: var(--color-on-primary);
+  background: var(--color-primary-fill);
+  color: var(--color-on-primary-fill);
 }
 .btn-primary:hover:not(:disabled) {
-  background: var(--color-primary-hover);
+  background: var(--color-primary-fill-hover);
 }
 .btn-secondary {
   border-color: var(--color-border);
@@ -3677,12 +3713,15 @@ tr.sla-row-fail {
     left var(--motion-fast) ease,
     background var(--motion-fast) ease;
 }
+/* The ON track and knob are the measured fill pair, so the knob holds 4.5:1
+   on its track for any bundle palette (a white knob on a yellow primary was
+   1.07:1). */
 .ui-switch:checked {
-  background: var(--color-primary);
+  background: var(--color-primary-fill);
 }
 .ui-switch:checked::before {
   left: calc(100% - 1.03rem);
-  background: var(--color-on-primary);
+  background: var(--color-on-primary-fill);
 }
 .ui-switch.ui-switch--always-on:checked {
   /* Keep locked availability only slightly stronger than off, and neutral
@@ -4211,8 +4250,8 @@ tr.sla-row-fail {
   .seg-option[aria-pressed="true"],
   .seg-option[aria-checked="true"],
   .seg-option[aria-selected="true"] {
-    background: var(--color-primary);
-    color: var(--color-on-primary);
+    background: var(--color-primary-fill);
+    color: var(--color-on-primary-fill);
   }
   .seg-option:focus-visible {
     outline: none;
@@ -4479,6 +4518,58 @@ tr.sla-row-fail {
 }
 .task-chipfield.has-error {
   border-color: var(--color-danger);
+}
+/* Remembered-recipient suggestions under the Email results chip box
+   (TaskCreateModal): a listbox floating over the form, not pushing it down. */
+.task-suggest-anchor {
+  position: relative;
+}
+.task-suggest {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  max-height: 16rem;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0.625rem;
+  background: var(--color-surface-1);
+  box-shadow: var(--shadow-md);
+}
+.task-suggest-option {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  border-radius: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+.task-suggest-option.is-active {
+  background: var(--color-overlay-soft);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+.task-suggest-email {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-suggest-meta {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
 }
 .task-chip {
   display: inline-flex;

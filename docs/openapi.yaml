@@ -994,6 +994,31 @@ paths:
                   properties:
                     tag: { type: string }
                     task_count: { type: integer }
+  /tasks/recipients:
+    get:
+      summary: >-
+        List the email addresses that visible tasks already deliver their
+        reports to (the CRITICAL ACTION recipients block the task form appends),
+        for the form's Email results suggestions. Most recently used first, at
+        most 200, from tasks created in the last 180 days; task_count counts
+        distinct jobs, so a recurring task counts once. Visibility matches
+        /tasks/tags (#1082): a non-admin user or scoped API key gets only the
+        addresses on tasks it created.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    email: { type: string }
+                    task_count: { type: integer }
+                    last_used: { type: string, format: date-time }
+        "403": { $ref: "#/components/responses/Error" }
   /tasks/export:
     get:
       summary: Export task DEFINITIONS (not runs/logs) as a versioned JSON or YAML envelope for backup, cross-box migration, and cloning (#238).

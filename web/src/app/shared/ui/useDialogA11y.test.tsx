@@ -73,3 +73,25 @@ describe("useDialogA11y stacking", () => {
     expect(screen.getByRole("dialog", { name: "outer" })).not.toBe(document.activeElement);
   });
 });
+
+describe("useDialogA11y and an open combobox", () => {
+  it("leaves Escape to an expanded combobox, then closes on the next one", () => {
+    const close = vi.fn();
+    const { rerender } = render(
+      <Dialog name="form" onClose={close}>
+        <input aria-label="Recipients" role="combobox" aria-expanded="true" aria-controls="x" />
+      </Dialog>,
+    );
+    const box = screen.getByLabelText("Recipients");
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(close).not.toHaveBeenCalled();
+
+    rerender(
+      <Dialog name="form" onClose={close}>
+        <input aria-label="Recipients" role="combobox" aria-expanded="false" aria-controls="x" />
+      </Dialog>,
+    );
+    fireEvent.keyDown(screen.getByLabelText("Recipients"), { key: "Escape" });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});
