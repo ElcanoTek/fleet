@@ -170,13 +170,14 @@ The approved-call budget is computed for the narrowed arguments (a smaller
   what the output limit leaves after it
   (`agentcore.GovernAndBoundModelVisibleToolTextWithTrailer`), so the whole
   stays within the limit. The tool's text keeps at least 256 bytes (enough
-  for the truncation envelope that says where the full output went); when
-  the line would not fit beside that (an operator limit near the 1 KiB
-  minimum and a long, scattered narrowing, up to 250 separate positions),
-  fleet writes the compact line instead (`store.NarrowingNoteCompact`): the
-  counts and the rule, with the positions left to the approval card. It is
-  never cut, because a truncated line could let the agent run a value the
-  person left out, and the whole result stays within the configured limit.
+  for the truncation envelope that says where the full output went). The
+  line is never shortened or cut, because the model must never read a
+  left-out value as approved, so a narrowing whose exact line would not fit
+  beside those 256 bytes (an operator limit near the 1 KiB minimum and a
+  long, scattered selection) is refused at decision (400, nothing claimed):
+  select fewer separate ranges, or approve or decline the action whole. The
+  restart breadcrumb (the short "outcome unknown" text plus the same line)
+  fits the same room.
 - A narrowed call cut off by a restart keeps the line too:
   `RecoverStrandedApprovals` reads `narrowed_json` and adds it after the
   "outcome unknown" breadcrumb, because the recorded tool call holds the whole
