@@ -104,11 +104,14 @@ func TestParseApprovalResultCard_Refusals(t *testing.T) {
 		"retry repeats a key":     strings.TrimSuffix(item(""), "}") + `,"retry":{"keys":["B","B"]}}`,
 		"retry an unclear row":    `{"outcome":"unclear","title":"t","items":[{"key":"U","label":"U","status":"unclear"}],"retry":{"keys":["U"]}}`,
 		"retry a mismatched row":  `{"outcome":"mismatch","title":"t","items":[{"key":"M","label":"M","status":"mismatch"}],"retry":{"keys":["M"]}}`,
-		"done with needs_check":   `{"outcome":"done","title":"t","items":[{"label":"A","status":"needs_check"}]}`,
-		"failed with needs_check": `{"outcome":"failed","title":"t","items":[{"label":"A","status":"needs_check"}]}`,
-		"retry a needs_check row": `{"outcome":"mismatch","title":"t","items":[{"key":"N","label":"N","status":"needs_check"}],"retry":{"keys":["N"]}}`,
-		"bad flag code":           `{"outcome":"done","title":"t","items":[{"label":"A","status":"done","flags":[{"code":"Bad Code","label":"x"}]}]}`,
-		"change without after":    `{"outcome":"done","title":"t","items":[{"label":"A","status":"done","changes":[{"label":"Floor","before":"$1"}]}]}`,
+		"done with needs_check":   `{"outcome":"done","title":"t","items":[{"label":"A","status":"needs_check","note":"n"}]}`,
+		"failed with needs_check": `{"outcome":"failed","title":"t","items":[{"label":"A","status":"needs_check","note":"n"}]}`,
+		"retry a needs_check row": `{"outcome":"mismatch","title":"t","items":[{"key":"N","label":"N","status":"needs_check","note":"n"}],"retry":{"keys":["N"]}}`,
+		// A needs_check row says what needs checking (Codex review, #1828).
+		"needs_check without a note":    `{"outcome":"mismatch","title":"t","items":[{"label":"A","status":"needs_check"}]}`,
+		"needs_check with a blank note": `{"outcome":"mismatch","title":"t","items":[{"label":"A","status":"needs_check","note":"  "}]}`,
+		"bad flag code":                 `{"outcome":"done","title":"t","items":[{"label":"A","status":"done","flags":[{"code":"Bad Code","label":"x"}]}]}`,
+		"change without after":          `{"outcome":"done","title":"t","items":[{"label":"A","status":"done","changes":[{"label":"Floor","before":"$1"}]}]}`,
 	}
 	for name, raw := range cases {
 		if _, _, err := parseApprovalResultCard([]byte(raw)); err == nil {

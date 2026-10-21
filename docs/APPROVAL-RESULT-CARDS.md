@@ -104,7 +104,8 @@ The tool's result is a JSON object. Its top-level `result_card` key holds:
 - **`title`** (required) is the one-line outcome, at most 200 characters.
   `subtitle` and `footer` are optional, at most 2000 each.
 - **`items`** (required, may be empty, at most 500) has one row per record:
-  - `label` and `status` are required.
+  - `label` and `status` are required, and so is a non-blank `note` on a
+    `needs_check` row: it is what the person should check.
   - `status` is one of `done`, `failed` (confirmed not applied), `mismatch`
     (applied, but the read-back differs), `needs_check` (applied, but
     something after it needs a person's check, such as a follow-up step of the

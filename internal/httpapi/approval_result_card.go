@@ -199,7 +199,9 @@ func validateResultCard(c *ApprovalResultCard) error {
 			{"id", it.ID, approvalCardMaxTitle, false},
 			{"internal_id", it.InternalID, approvalCardMaxTitle, false},
 			{"link_label", it.LinkLabel, approvalCardMaxTitle, false},
-			{"note", it.Note, approvalCardMaxText, false},
+			// A needs_check row was applied but needs a person's look:
+			// its note is what to look at, so it is required.
+			{"note", it.Note, approvalCardMaxText, it.Status == resultItemNeedsCheck},
 		} {
 			if err := cardText(at+"."+f.name, f.v, f.max, f.required); err != nil {
 				return err

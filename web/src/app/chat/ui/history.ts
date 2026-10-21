@@ -455,6 +455,8 @@ export function parseApprovalResultCardData(value: unknown): ApprovalResultCardD
     const strs = [optString(it.key), optString(it.id), optString(it.internal_id), optString(it.note)];
     if (strs.some((x) => x === null)) return undefined;
     const [key, id, internalId, note] = strs as Array<string | undefined>;
+    // A needs_check row says what needs checking (the server requires it too).
+    if (it.status === "needs_check" && !note?.trim()) return undefined;
     const link = parseCardLink(it);
     const rows = parseCardRows(it);
     if (!link || !rows) return undefined;

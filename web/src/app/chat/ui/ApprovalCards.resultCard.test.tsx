@@ -182,7 +182,7 @@ describe("the completed card from a result card", () => {
           { key: "A", label: "A", status: "done" },
           { key: "M", label: "M", status: "mismatch" },
           { key: "U", label: "U", status: "unclear" },
-          { key: "N", label: "N", status: "needs_check" },
+          { key: "N", label: "N", status: "needs_check", note: "A later step failed." },
         ],
       }),
     });
@@ -286,9 +286,12 @@ describe("parseApprovalResultCardData", () => {
       { outcome: "partial", title: "t", items: [{ key: "B", label: "B", status: "failed" }], retry: { keys: ["Z"] } },
       { outcome: "unclear", title: "t", items: [{ key: "U", label: "U", status: "unclear" }], retry: { keys: ["U"] } },
       { outcome: "mismatch", title: "t", items: [{ key: "M", label: "M", status: "mismatch" }], retry: { keys: ["M"] } },
-      { outcome: "done", title: "t", items: [{ label: "A", status: "needs_check" }] },
-      { outcome: "failed", title: "t", items: [{ label: "A", status: "needs_check" }] },
-      { outcome: "mismatch", title: "t", items: [{ key: "N", label: "N", status: "needs_check" }], retry: { keys: ["N"] } },
+      { outcome: "done", title: "t", items: [{ label: "A", status: "needs_check", note: "n" }] },
+      { outcome: "failed", title: "t", items: [{ label: "A", status: "needs_check", note: "n" }] },
+      { outcome: "mismatch", title: "t", items: [{ key: "N", label: "N", status: "needs_check", note: "n" }], retry: { keys: ["N"] } },
+      // A needs_check row says what needs checking.
+      { outcome: "mismatch", title: "t", items: [{ label: "A", status: "needs_check" }] },
+      { outcome: "mismatch", title: "t", items: [{ label: "A", status: "needs_check", note: "  " }] },
     ]) {
       expect(parseApprovalResultCardData(bad), JSON.stringify(bad)).toBeUndefined();
     }
