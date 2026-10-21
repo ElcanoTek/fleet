@@ -65,9 +65,14 @@ func (h *approvalStopHandle) stopped() bool {
 var errStoppedBeforeSend = mcp.ErrStoppedBeforeSend
 
 // approvalStoppable reports whether a running approved call of toolName offers
-// Stop: an MCP tool in critical_tool_stop (handler-only cards never).
+// Stop: an MCP tool in critical_tool_stop (handler-only cards never). A tool
+// of a synthetic server (inline http_tools, a2a peers) never does, whatever
+// key matches it: those transports neither observe the stop signal nor send a
+// cancellation (Notify is a no-op), so the call would always run on while the
+// card and the model's line said its server was asked to stop.
 func approvalStoppable(toolName string) bool {
-	return strings.HasPrefix(toolName, "mcp_") && !handlerOnlyApproval(toolName) && agentcore.ApprovalStop(toolName)
+	return strings.HasPrefix(toolName, "mcp_") && !handlerOnlyApproval(toolName) &&
+		!onSyntheticTransport(toolName) && agentcore.ApprovalStop(toolName)
 }
 
 // approvalStopRegistry holds the stop signal of each running stoppable call,

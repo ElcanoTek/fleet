@@ -154,6 +154,12 @@ cooperative stop.
 
 ## Deviations
 
+- **Never a synthetic-transport tool.** An inline `http_tools` entry
+  (`mcp__http_*`) or an a2a peer tool (`mcp__a2a_*`) never offers Stop,
+  whatever key matches it: those transports neither observe the stop signal
+  nor send a cancellation, so the card would claim a stop that never reached
+  anything. Its card carries no `stoppable` key and the stop route answers
+  400.
 - **"Halted on a shared failure" (6d) is the bundle's,** not fleet's: it is
   the server's own stop reason in its result card.
 - **No Stop in the terminal client.** It shows the running state and

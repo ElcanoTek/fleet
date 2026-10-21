@@ -305,6 +305,38 @@ func TestApprovalStopPayloads(t *testing.T) {
 	}
 }
 
+// A synthetic-transport tool (inline http_tools, a2a peers) never offers
+// Stop, whatever key matches it: its transport cannot cancel, so the card
+// carries no stoppable key and the stop route refuses and records nothing.
+func TestApprovalStop_NeverASyntheticTransportTool(t *testing.T) {
+	stopPolicy(t)
+	for _, tool := range []string{
+		"mcp_" + mcp.HTTPToolServerName + "_execute_plan",
+		"mcp_" + mcp.A2AToolServerName + "_execute_plan",
+	} {
+		if approvalStoppable(tool) {
+			t.Errorf("%s: a synthetic-transport tool must never be stoppable", tool)
+		}
+		if _, ok := approvalClientFields(tool, `{}`, "c1")["stoppable"]; ok {
+			t.Errorf("%s: its card must carry no stoppable key", tool)
+		}
+		a := stopRow()
+		a.ToolName, a.Status, a.ResultText = tool, "approved", approvalExecutingSentinel
+		st := &stopStore{approval: a}
+		s := &Server{store: st}
+		s.armApprovalStop("ap1")
+		if rec := postStop(s, "c1"); rec.Code != 400 {
+			t.Errorf("%s: stop = %d %s, want 400", tool, rec.Code, rec.Body.String())
+		}
+		if st.marks != 0 {
+			t.Errorf("%s: no stop may be recorded", tool)
+		}
+	}
+	if !approvalStoppable("mcp_ix_execute_plan") {
+		t.Fatal("the same key must still offer Stop on an MCP tool")
+	}
+}
+
 // armCheckStore fails the test if the claim runs before the call's stop
 // signal exists: a Stop that lands right after the claim must find it.
 type armCheckStore struct {
