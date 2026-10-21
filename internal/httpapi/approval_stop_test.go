@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
@@ -590,5 +591,66 @@ func TestNarrowing_StoppedResultFitsALimitLoweredWhileItRan(t *testing.T) {
 		if len(res) > agentcore.MinMaxToolOutputBytes {
 			t.Fatalf("result is %d bytes, over the %d-byte limit live at settlement", len(res), agentcore.MinMaxToolOutputBytes)
 		}
+	}
+}
+
+// closeHookEngine opens a per-approval scope whose Close runs onClose first:
+// a scope teardown that takes a while, during which a Stop may arrive.
+type closeHookEngine struct {
+	*fakeEngine
+	scope   agent.MCPScope
+	onClose func()
+}
+
+func (e *closeHookEngine) MCPBroker() agentcore.MCPBroker { return nil }
+func (e *closeHookEngine) MCPCatalog() []mcp.ServerTool   { return nil }
+func (e *closeHookEngine) OpenApprovalRemoteMCPScope(context.Context, string, string, string) (*agent.RemoteMCPOverlay, error) {
+	return nil, nil
+}
+
+func (e *closeHookEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string, agentcore.MCPUserIdentity) (*agent.MCPScope, error) {
+	scope := e.scope
+	scope.Close = func(context.Context) error {
+		e.onClose()
+		return nil
+	}
+	return &scope, nil
+}
+
+// The stop window closes as soon as the call returns, before its scope is
+// torn down: a Stop pressed while the scope is still closing (up to
+// approvalScopeCloseTimeout) is refused and never marked, so the outcome
+// never claims a stop that no transport was listening for.
+func TestRunStagedTool_ClosesTheStopWindowBeforeTheScope(t *testing.T) {
+	stopPolicy(t)
+	a := stopRow()
+	a.MCPServer = "ix"
+	running := a
+	running.Status, running.ResultText = "approved", approvalExecutingSentinel
+	st := &stopStore{approval: running}
+	engine := &closeHookEngine{
+		fakeEngine: &fakeEngine{},
+		scope: agent.MCPScope{
+			Broker:  &fakeMCPBroker{text: `{"success":true}`},
+			Catalog: []mcp.ServerTool{{ServerName: "ix", Tool: mcp.Tool{Name: "execute_plan"}}},
+		},
+	}
+	s := &Server{store: st, agent: engine}
+	var during *httptest.ResponseRecorder
+	engine.onClose = func() { during = postStop(s, "c1") }
+	s.armApprovalStop(a.ID)
+
+	text, err := s.runStagedTool(context.Background(), &a)
+	if err != nil || text != `{"success":true}` {
+		t.Fatalf("runStagedTool = %q, %v", text, err)
+	}
+	if during == nil {
+		t.Fatal("test setup: the scope was not closed")
+	}
+	if during.Code != 200 || strings.Contains(during.Body.String(), `"stopping":true`) || st.marks != 0 {
+		t.Fatalf("a Stop during the scope's close = %d %s, marks %d; want refused and unmarked", during.Code, during.Body.String(), st.marks)
+	}
+	if s.finalizeApprovalStop(a.ID) {
+		t.Fatal("the outcome must not report a stop that arrived after the call returned")
 	}
 }

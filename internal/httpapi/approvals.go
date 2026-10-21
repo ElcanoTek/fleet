@@ -2491,6 +2491,14 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 		return "", err
 	}
 	defer release()
+	// Close the stop window the moment this returns, before the scope is
+	// torn down (deferred calls run last-in first-out): release may block up
+	// to approvalScopeCloseTimeout, and a Stop accepted then would be marked
+	// and written into the outcome although no transport was listening any
+	// more. executeClaimedApproval's own finalize reads the same answer.
+	if approvalStoppable(approval.ToolName) {
+		defer s.finalizeApprovalStop(approval.ID)
+	}
 
 	server, tool, err := resolveMCPTool(catalog, approval.ToolName)
 	if err != nil {
