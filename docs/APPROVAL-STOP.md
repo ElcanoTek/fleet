@@ -144,7 +144,7 @@ Elcano bundle's deal-plan execute does this).
   says so ("The action finished before it could be stopped; its outcome is
   being recorded.") and does not claim a stop; a settled card reads "stopped"
   only when the server recorded one.
-- After Stop it reads "Stop requested: the server was asked to stop after its current item. The result says what ran."
+- After Stop it reads "Stop requested: unless the call had already finished, its server is asked to stop after its current item. The result says what ran."
   (a status region) and offers no second Stop; the poll settles it.
 - A settled stopped call shows its result card (the bundle writes "Stopped
   after 12 of 24"). When every retry key names a record marked **Not run**,

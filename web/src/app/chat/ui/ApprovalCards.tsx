@@ -314,8 +314,10 @@ function ApprovalExecutingControls({
   submitting: "send" | "cancel" | null;
   submitError: string | null;
   onCheck: () => void;
-  // A tool in critical_tool_stop (docs/APPROVAL-STOP.md): Stop asks the call
-  // to halt after its current item. Absent = no Stop button.
+  // A tool in critical_tool_stop (docs/APPROVAL-STOP.md): Stop asks the
+  // server to stop the call after its current item, unless the call has
+  // already finished (the status says so, never that a stop was delivered).
+  // Absent = no Stop button.
   onStop?: () => void;
   stopping?: boolean;
 }) {
@@ -325,7 +327,7 @@ function ApprovalExecutingControls({
       {progress ? <ApprovalProgressBar progress={progress} /> : null}
       {stopping ? (
         <p data-testid="approval-stopping" role="status" className="text-[0.75rem] text-[var(--color-text-secondary)]">
-          Stop requested: the server was asked to stop after its current item. The result says what ran.
+          Stop requested: unless the call had already finished, its server is asked to stop after its current item. The result says what ran.
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-2">

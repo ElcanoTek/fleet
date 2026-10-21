@@ -52,7 +52,7 @@ describe("the running card's Stop", () => {
 
   it("reads Stopping and offers no second Stop once stopping", () => {
     render(<ApprovalCard approval={running({ stopping: true })} conversationId="conv_1" onResolved={vi.fn()} />);
-    expect(screen.getByTestId("approval-stopping")).toHaveTextContent("Stop requested: the server was asked to stop after its current item. The result says what ran.");
+    expect(screen.getByTestId("approval-stopping")).toHaveTextContent("Stop requested: unless the call had already finished, its server is asked to stop after its current item. The result says what ran.");
     expect(screen.queryByTestId("approval-stop")).toBeNull();
   });
 
