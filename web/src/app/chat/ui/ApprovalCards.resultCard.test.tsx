@@ -153,6 +153,29 @@ describe("the completed card from a result card", () => {
     expect(screen.getByTestId("approval-card-change")).toHaveTextContent("Floor$55.00→$0.10");
   });
 
+  // The row glyphs paint the tokens approvalCardContrast.test.ts measures:
+  // a warning row is --color-warning-icon, never the base amber (Codex
+  // review, #1815).
+  it("paints each record's status glyph in its measured icon token", () => {
+    renderCard({
+      resultCard: parseApprovalResultCardData({
+        outcome: "partial",
+        title: "1 of 3 updated",
+        items: [
+          { key: "A", label: "A", status: "done" },
+          { key: "M", label: "M", status: "mismatch" },
+          { key: "U", label: "U", status: "unclear" },
+        ],
+      }),
+    });
+    const glyph = (status: string) =>
+      (screen.getAllByTestId("approval-result-item").find((li) => li.dataset.status === status)
+        ?.firstElementChild as HTMLElement | null)?.style.color;
+    expect(glyph("done")).toBe("var(--color-success)");
+    expect(glyph("mismatch")).toBe("var(--color-warning-icon)");
+    expect(glyph("unclear")).toBe("var(--color-warning-icon)");
+  });
+
   it("shows each record's flags on a several-record card too", () => {
     renderCard({
       resultCard: parseApprovalResultCardData({

@@ -94,9 +94,11 @@ function statusFamily(status: ApprovalResultItemStatus): StatusFamily {
 
 // statusColor is a record's status ICON color (3:1 on its wash); statusText
 // is the same status as words ("Not applied:"), which need 4.5:1 and so use
-// the -text token; statusTint is the icon's wash.
+// the -text token; statusTint is the icon's wash. The warning glyph has its
+// own deeper token: the base amber falls under 3:1 on a mid-gray surface.
 function statusColor(status: ApprovalResultItemStatus): string {
   const f = statusFamily(status);
+  if (f === "warning") return "var(--color-warning-icon)";
   return f ? `var(--color-${f})` : "var(--color-card-text-muted)";
 }
 
