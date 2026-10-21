@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
 	"encoding/base64"
@@ -182,9 +181,13 @@ func fileOpOutputBound(req FileOpRequest) int64 {
 // discards (and still reports a full write, so the pipe copier never stalls
 // the helper) and remembers that it overflowed. Mutex-guarded for the same
 // abandoned-copier reason as cappedBuffer.
+//
+// A plain slice rather than a bytes.Buffer: Buffer's doubling can allocate
+// nearly twice the bound, and the MCP workspace-file budget (ADR-0085) counts
+// on the buffer never exceeding it. Growth here is capped at the bound.
 type fileOpSink struct {
 	mu    sync.Mutex
-	buf   bytes.Buffer
+	data  []byte
 	limit int64
 	over  bool
 	done  bool
@@ -200,12 +203,19 @@ func (s *fileOpSink) Write(p []byte) (int, error) {
 	if s.done || s.over {
 		return len(p), nil
 	}
-	if s.limit > 0 && int64(s.buf.Len())+int64(len(p)) > s.limit {
+	need := int64(len(s.data)) + int64(len(p))
+	if s.limit > 0 && need > s.limit {
 		s.over = true
-		s.buf = bytes.Buffer{}
+		s.data = nil
 		return len(p), nil
 	}
-	return s.buf.Write(p)
+	if s.limit > 0 && need > int64(cap(s.data)) {
+		grown := make([]byte, len(s.data), min(max(2*int64(cap(s.data)), need), s.limit))
+		copy(grown, s.data)
+		s.data = grown
+	}
+	s.data = append(s.data, p...)
+	return len(p), nil
 }
 
 // output returns the collected bytes, or ErrFileOpOutputTooLarge. Later
@@ -217,7 +227,7 @@ func (s *fileOpSink) output(op FileOpKind) ([]byte, error) {
 	if s.over {
 		return nil, fmt.Errorf("fileop %s: %w (more than %d bytes)", op, ErrFileOpOutputTooLarge, s.limit)
 	}
-	return s.buf.Bytes(), nil
+	return s.data, nil
 }
 
 // FileOpStaleError carries the executor's explanation of a stale-content
@@ -234,6 +244,22 @@ func (e *FileOpStaleError) Error() string {
 }
 func (e *FileOpStaleError) Is(target error) bool {
 	return target == ErrFileOpStale
+}
+
+// FileOpTooLargeError is a read refused by MaxSize. Size is the file size the
+// helper's fstat reported when the refusal came from that check, and 0 when
+// the file ran over the cap while it was being read. It comes from the
+// sandbox, so a caller may use it only to size a later, still-bounded read.
+type FileOpTooLargeError struct {
+	Size int64
+	Msg  string
+}
+
+func (e *FileOpTooLargeError) Error() string {
+	return fmt.Sprintf("%s (%s)", ErrFileOpTooLarge.Error(), e.Msg)
+}
+func (e *FileOpTooLargeError) Is(target error) bool {
+	return target == ErrFileOpTooLarge
 }
 
 // FileOpAmbiguousError carries the match count + the executor's guidance for an
@@ -461,7 +487,7 @@ func decodeFileOpResponse(out []byte) (FileOpResult, error) {
 		case "unsafe_path":
 			return FileOpResult{}, ErrFileOpUnsafePath
 		case "too_large":
-			return FileOpResult{}, fmt.Errorf("%w (%s)", ErrFileOpTooLarge, resp.Err)
+			return FileOpResult{}, &FileOpTooLargeError{Size: resp.Size, Msg: resp.Err}
 		default:
 			return FileOpResult{}, errors.New(resp.Err)
 		}

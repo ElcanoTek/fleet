@@ -52,11 +52,35 @@ actually sends.
    same reference is a slice of those bytes. On a miss (eviction, expiry, a
    new turn), Fleet re-reads and re-verifies. A file that fails verification
    is never cached.
-4. **The helper runs in Python isolated mode from `/`** on every backend
+4. **Every miss is admitted against one process-wide memory budget of
+   320 MiB.** The budget covers cached files plus the reservations of reads in
+   flight, and that total never exceeds it.
+   - **Identical misses share one read.** Concurrent misses for the same key
+     wait for a single read rather than each reading the file.
+   - **Size probe.** Before a read starts, a cheap probe gets the file's size.
+     It is a FileOp read with `MaxSize` 1, which the helper answers from fstat
+     without hashing.
+   - **Reservation.** The read then reserves `4 × size + 128 KiB`. That covers
+     its peak: the FileOp output buffer, which holds at most base64(size) +
+     64 KiB and grows no further; the JSON-decoded copy of that buffer; and
+     the decoded bytes.
+   - **Untrusted probe, still bounded.** The read's `MaxSize` is the probed
+     size. The helper refuses a larger file, and the output sink refuses
+     longer output. So a lying probe cannot push a read past its reservation.
+   - **Making room.** A reservation first evicts cached files, least recently
+     used first. If that is not enough, it waits for reads in flight to
+     finish, and honours cancellation while it waits.
+   - **Settling.** When the read ends, its reservation is released. If the
+     file verified, its bytes are charged to the cache instead.
+   - **Oversize requests.** A request whose cost exceeds the whole budget
+     fails at once rather than waiting.
+   - **What fits.** One 64 MiB file costs 256 MiB + 128 KiB, which fits
+     alongside up to 64 MiB of cached files.
+5. **The helper runs in Python isolated mode from `/`** on every backend
    (podman `exec --workdir / python3 -I -c`, kubernetes `cd / && python3 -I`,
    the host test executor `python3 -I -c`). This is defence in depth: a
    workspace file cannot shadow a stdlib module the helper imports.
-5. Every other part of ADR-0066 still holds: the path must stay inside the
+6. Every other part of ADR-0066 still holds: the path must stay inside the
    active workspace, symlinks are rejected, an exact range and the server's
    `maxLength` are enforced before reading, governance runs before the read,
    the broker authorizes the call, and the journal and approval card record the
@@ -71,6 +95,12 @@ actually sends.
 - `TestWorkspaceFileReaderRejectsForgedHelperDigest` (`internal/tools`): a
   helper that returns altered bytes while claiming the approved hash is
   refused every time, and nothing is cached.
+- `TestWorkspaceFileReaderConcurrentIdenticalMisses`: 16 concurrent references
+  to one file read it once.
+- `TestWorkspaceFileReaderBudget`: concurrent misses on different large files
+  never exceed the budget, measured by the peak of cached plus reserved bytes.
+  A waiting miss honours cancellation. A file whose read cannot fit the budget
+  fails at once, without a read.
 - `TestVerifiedWorkspaceFileCache`: covers a hit (several windows, one read),
   a miss across reader instances, LRU eviction by entry and byte bounds, TTL
   expiry, and an over-budget file that is never cached.
@@ -96,8 +126,13 @@ actually sends.
 - The dispatched bytes are always the version the approved hash names. A file
   rewritten mid-upload keeps sending the verified version until the entry
   leaves the cache, and after that the reference fails its hash check.
-- Host memory: the cache holds at most 128 MiB. A miss briefly holds one file
-  of up to 64 MiB plus its base64 and decode copies. The helper writes the
+- Host memory: cached files plus in-flight reads stay within 320 MiB,
+  with at most 128 MiB of that cached. What the budget does not count:
+  - the copy of a window being base64-encoded and sent at that moment, which
+    the server's `maxLength` bounds per call;
+  - verified bytes a caller is still using after the cache has evicted them.
+
+  Concurrent large misses queue rather than multiply. The helper writes the
   base64 payload straight to stdout instead of copying it again into a dumped
   JSON string.
 - No other limit on the path was in the way. The broker's JSON framing, the

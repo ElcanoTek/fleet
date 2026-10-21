@@ -18,7 +18,11 @@ sandbox. It reads the file once per reference, and later windows are sliced
 from those verified bytes, kept for the run or turn in a bounded cache (two files, 128 MiB, five
 minutes), so a chunked upload does not re-read the file per chunk
 ([ADR-0085](adr/0085-mcp-workspace-file-cap-and-windowed-reads.md)). A cache
-miss re-reads and re-verifies. A file rewritten mid-upload keeps sending the
+miss re-reads and re-verifies. Every read is admitted against one 320 MiB
+process-wide budget covering cached files and reads in flight. A read of an
+S-byte file reserves 4S + 128 KiB before it starts. Identical concurrent
+references share one read. Others queue, evicting cached files first, and a
+request that could never fit fails at once. A file rewritten mid-upload keeps sending the
 verified version until the entry ages out, after which the reference fails its
 hash check. The size cap is enforced on the bytes actually read, so a file
 that grows mid-read is refused, and Fleet buffers no more helper output than

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -112,39 +113,93 @@ func TestWorkspaceFileReaderChunkedLargeFile(t *testing.T) {
 	}
 }
 
+// fakeSource serves files from a map. It counts reads and can block them on
+// gate (closed = never block) so tests can hold reads in flight.
+type fakeSource struct {
+	mu       sync.Mutex
+	files    map[string][]byte
+	reads    map[string]int
+	probes   int
+	gate     chan struct{}
+	started  chan string
+	override func(path string) []byte // bytes a compromised helper returns
+}
+
+func newFakeSource(files map[string][]byte) *fakeSource {
+	gate := make(chan struct{})
+	close(gate)
+	return &fakeSource{files: files, reads: map[string]int{}, gate: gate, started: make(chan string, 64)}
+}
+
+func (f *fakeSource) source() *workspaceFileSource {
+	return &workspaceFileSource{
+		size: func(_ context.Context, _, path string) (int64, error) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.probes++
+			return int64(len(f.files[path])), nil
+		},
+		read: func(ctx context.Context, _, path string, maxBytes int64) ([]byte, error) {
+			f.mu.Lock()
+			f.reads[path]++
+			gate, started := f.gate, f.started
+			f.mu.Unlock()
+			started <- path
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			if f.override != nil {
+				return f.override(path), nil
+			}
+			data := f.files[path]
+			if int64(len(data)) > maxBytes {
+				return nil, errors.New("too large")
+			}
+			return data, nil
+		},
+	}
+}
+
+func (f *fakeSource) readCount(path string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads[path]
+}
+
+func testStore(budget int64) *workspaceFileStore {
+	return newWorkspaceFileStore(budget, budget, 2, time.Minute, time.Now)
+}
+
 // TestWorkspaceFileReaderRejectsForgedHelperDigest simulates a compromised
 // sandbox helper (a planted hashlib.py, say) that reports the approved hash
 // while returning altered bytes. Fleet ignores anything the helper says about
 // the bytes and hashes them itself, so nothing is returned.
 func TestWorkspaceFileReaderRejectsForgedHelperDigest(t *testing.T) {
 	approved := []byte("approved contents")
-	reads := 0
-	raw := func(context.Context, string, string, int64) ([]byte, error) {
-		reads++
-		return []byte("altered contents!"), nil // helper would claim hexSum(approved)
-	}
-	reader := newVerifiedWorkspaceReader(raw, newVerifiedFileCache(1<<20, 2, time.Minute, time.Now))
+	src := newFakeSource(map[string][]byte{"f": approved})
+	src.override = func(string) []byte { return []byte("altered contents!") } // helper would claim hexSum(approved)
+	store := testStore(1 << 20)
+	reader := newVerifiedWorkspaceReader(src.source(), store)
 	ctx := WithForcedWorkingDir(context.Background(), "/ws")
 	for offset := int64(0); offset < 3; offset++ {
 		if _, err := reader(ctx, "f", hexSum(approved), offset, 4, 1<<20); !errors.Is(err, ErrWorkspaceFileHashMismatch) {
 			t.Fatalf("forged digest let altered bytes through: %v", err)
 		}
 	}
-	if reads != 3 {
-		t.Fatalf("a refused file was cached: %d reads", reads)
+	if src.readCount("f") != 3 || store.order.Len() != 0 || store.reserved != 0 {
+		t.Fatalf("a refused file was cached or its reservation leaked: %d reads, %d entries, %d reserved",
+			src.readCount("f"), store.order.Len(), store.reserved)
 	}
 }
 
 func TestVerifiedWorkspaceFileCache(t *testing.T) {
 	files := map[string][]byte{"a": bytes.Repeat([]byte("a"), 400), "b": bytes.Repeat([]byte("b"), 400), "c": bytes.Repeat([]byte("c"), 400)}
-	reads := map[string]int{}
-	raw := func(_ context.Context, _ string, path string, _ int64) ([]byte, error) {
-		reads[path]++
-		return files[path], nil
-	}
+	src := newFakeSource(files)
 	now := time.Unix(0, 0)
-	cache := newVerifiedFileCache(1000, 2, time.Minute, func() time.Time { return now })
-	reader := newVerifiedWorkspaceReader(raw, cache)
+	store := newWorkspaceFileStore(1<<20, 1000, 2, time.Minute, func() time.Time { return now })
+	reader := newVerifiedWorkspaceReader(src.source(), store)
 	ctx := WithForcedWorkingDir(context.Background(), "/ws")
 	read := func(r WorkspaceFileReadFunc, path string, offset int64) []byte {
 		t.Helper()
@@ -161,42 +216,165 @@ func TestVerifiedWorkspaceFileCache(t *testing.T) {
 			t.Fatal("window not sliced from verified bytes")
 		}
 	}
-	if reads["a"] != 1 {
-		t.Fatalf("hit re-read the file: %d reads", reads["a"])
+	if src.readCount("a") != 1 {
+		t.Fatalf("hit re-read the file: %d reads", src.readCount("a"))
 	}
 	// Miss: another reader (another run) never sees this run's entry.
-	read(newVerifiedWorkspaceReader(raw, cache), "a", 0)
-	if reads["a"] != 2 {
-		t.Fatalf("cache shared across readers: %d reads", reads["a"])
+	read(newVerifiedWorkspaceReader(src.source(), store), "a", 0)
+	if src.readCount("a") != 2 {
+		t.Fatalf("cache shared across readers: %d reads", src.readCount("a"))
 	}
 	// Eviction: entry and byte bounds evict least-recently used first.
 	read(reader, "b", 0)
 	read(reader, "c", 0)
-	if cache.order.Len() > 2 || cache.bytes > 1000 {
-		t.Fatalf("cache over bounds: %d entries, %d bytes", cache.order.Len(), cache.bytes)
+	if store.order.Len() > 2 || store.cached > 1000 {
+		t.Fatalf("cache over bounds: %d entries, %d bytes", store.order.Len(), store.cached)
 	}
-	before := reads["b"]
+	before := src.readCount("b")
 	read(reader, "b", 0) // most recent two are b and c
-	if reads["b"] != before {
+	if src.readCount("b") != before {
 		t.Fatal("recent entry was evicted")
 	}
-	before = reads["a"]
+	before = src.readCount("a")
 	read(reader, "a", 0)
-	if reads["a"] != before+1 {
+	if src.readCount("a") != before+1 {
 		t.Fatal("least recently used entry was not evicted")
 	}
 	// TTL: an expired entry is a miss and is re-verified.
 	now = now.Add(2 * time.Minute)
-	before = reads["a"]
+	before = src.readCount("a")
 	read(reader, "a", 0)
-	if reads["a"] != before+1 {
+	if src.readCount("a") != before+1 {
 		t.Fatal("expired entry served")
 	}
-	// A file larger than the whole budget is never cached.
+	// A file larger than the cache's byte bound is never cached.
 	files["big"] = bytes.Repeat([]byte("z"), 1001)
 	read(reader, "big", 0)
 	read(reader, "big", 0)
-	if reads["big"] != 2 {
-		t.Fatalf("over-budget file cached: %d reads", reads["big"])
+	if src.readCount("big") != 2 {
+		t.Fatalf("over-budget file cached: %d reads", src.readCount("big"))
+	}
+	if store.reserved != 0 {
+		t.Fatalf("reservations leaked: %d", store.reserved)
+	}
+}
+
+// TestWorkspaceFileReaderConcurrentIdenticalMisses: concurrent references to
+// the same file share one read.
+func TestWorkspaceFileReaderConcurrentIdenticalMisses(t *testing.T) {
+	body := bytes.Repeat([]byte("p"), 64<<10)
+	src := newFakeSource(map[string][]byte{"f": body})
+	src.gate = make(chan struct{})
+	reader := newVerifiedWorkspaceReader(src.source(), testStore(4<<20))
+	ctx := WithForcedWorkingDir(context.Background(), "/ws")
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for i := range 16 {
+		wg.Go(func() {
+			window, err := reader(ctx, "f", hexSum(body), int64(i)*1024, 1024, 1<<20)
+			if err == nil && !bytes.Equal(window, body[i*1024:(i+1)*1024]) {
+				err = errors.New("wrong window")
+			}
+			errs <- err
+		})
+	}
+	<-src.started
+	time.Sleep(50 * time.Millisecond) // let the others queue on the flight
+	close(src.gate)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := src.readCount("f"); got != 1 {
+		t.Fatalf("identical concurrent misses read %d times, want 1", got)
+	}
+}
+
+// TestWorkspaceFileReaderBudget: concurrent misses on different large files
+// never hold more than the budget (cached + in-flight reservations), waiting
+// misses honor cancellation, and a file whose read could never fit fails at
+// once instead of waiting forever.
+func TestWorkspaceFileReaderBudget(t *testing.T) {
+	const budget = 1 << 20
+	files := map[string][]byte{}
+	for i := range 6 {
+		files[string(rune('a'+i))] = bytes.Repeat([]byte{byte(i)}, 100<<10) // cost 528 KiB: one fits at a time
+	}
+	files["huge"] = bytes.Repeat([]byte("h"), 300<<10) // cost 1.3 MiB > budget
+	src := newFakeSource(files)
+	store := testStore(budget)
+	reader := newVerifiedWorkspaceReader(src.source(), store)
+	ctx := WithForcedWorkingDir(context.Background(), "/ws")
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 6)
+	for i := range 6 {
+		name := string(rune('a' + i))
+		wg.Go(func() {
+			_, err := reader(ctx, name, hexSum(files[name]), 0, 10, 1<<20)
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if store.peak > budget {
+		t.Fatalf("peak reserved+cached %d exceeds budget %d", store.peak, budget)
+	}
+	if store.reserved != 0 || store.cached > budget {
+		t.Fatalf("after settling: reserved %d, cached %d", store.reserved, store.cached)
+	}
+
+	// Oversize: fails fast, without reading.
+	start := time.Now()
+	if _, err := reader(ctx, "huge", hexSum(files["huge"]), 0, 10, 1<<20); !errors.Is(err, ErrWorkspaceFileBudget) {
+		t.Fatalf("oversize read: %v", err)
+	}
+	if src.readCount("huge") != 0 || time.Since(start) > time.Second {
+		t.Fatal("oversize read was attempted or waited")
+	}
+
+	// Cancellation while waiting: hold one read in flight, then cancel a
+	// second miss that cannot be admitted beside it.
+	src.mu.Lock()
+	src.gate = make(chan struct{})
+	src.started = make(chan string, 64) // drop the batch's start signals
+	src.mu.Unlock()
+	holder := newVerifiedWorkspaceReader(src.source(), store) // fresh reader: a miss
+	held := make(chan error, 1)
+	go func() {
+		_, err := holder(ctx, "a", hexSum(files["a"]), 0, 10, 1<<20)
+		held <- err
+	}()
+	<-src.started // the holder's read is in flight
+	waitCtx, cancel := context.WithCancel(ctx)
+	waited := make(chan error, 1)
+	go func() {
+		_, err := holder(waitCtx, "b", hexSum(files["b"]), 0, 10, 1<<20)
+		waited <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if src.readCount("b") != 1 { // b's only read so far is from the batch above
+		t.Fatal("second miss was admitted beside the first")
+	}
+	cancel()
+	if err := <-waited; !errors.Is(err, context.Canceled) {
+		t.Fatalf("waiting miss ignored cancellation: %v", err)
+	}
+	src.mu.Lock()
+	close(src.gate)
+	src.mu.Unlock()
+	if err := <-held; err != nil {
+		t.Fatal(err)
+	}
+	if store.peak > budget || store.reserved != 0 {
+		t.Fatalf("budget broken: peak %d, reserved %d", store.peak, store.reserved)
 	}
 }

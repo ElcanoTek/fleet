@@ -273,8 +273,16 @@ func TestFileOpSinkBoundsHelperOutput(t *testing.T) {
 			t.Fatalf("sink must keep the pipe draining: %d %v", n, err)
 		}
 	}
-	if int64(flood.buf.Cap()) > bound+(1<<20) {
-		t.Fatalf("sink kept buffering past the bound: cap %d", flood.buf.Cap())
+	if flood.data != nil {
+		t.Fatalf("sink kept buffering past the bound: cap %d", cap(flood.data))
+	}
+	// Growth never allocates past the bound, even just under it.
+	near := newFileOpSink(read)
+	for written := int64(0); written+(1<<20) <= bound; written += 1 << 20 {
+		_, _ = near.Write(chunk)
+	}
+	if int64(cap(near.data)) > bound {
+		t.Fatalf("sink capacity %d exceeds its bound %d", cap(near.data), bound)
 	}
 	if _, err := flood.output(FileOpRead); !errors.Is(err, ErrFileOpOutputTooLarge) {
 		t.Fatalf("oversized helper response accepted: %v", err)

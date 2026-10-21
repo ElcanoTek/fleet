@@ -13,8 +13,8 @@ import (
 // (ADR-0085, raising ADR-0066's 2 MiB). 64 MiB matches the largest staged
 // upload a Pages-class MCP server accepts, so Fleet is not the bottleneck for a
 // chunked upload. The file is read out of the sandbox and hashed in Fleet once
-// per reference; its verified bytes sit in a cache bounded to 128 MiB process
-// wide, and each window is sliced from them (tools.WorkspaceFileReader).
+// per reference, under a process-wide memory budget for cached and in-flight
+// reads; each window is sliced from the verified bytes (tools.WorkspaceFileReader).
 const maxMCPWorkspaceFileBytes = 64 * 1024 * 1024
 
 // workspaceFileReferenceDescription is the advertised schema text, derived
