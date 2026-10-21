@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http/httptest"
@@ -652,5 +653,74 @@ func TestRunStagedTool_ClosesTheStopWindowBeforeTheScope(t *testing.T) {
 	}
 	if s.finalizeApprovalStop(a.ID) {
 		t.Fatal("the outcome must not report a stop that arrived after the call returned")
+	}
+}
+
+// openHookEngine runs onOpen while a per-approval scope opens, then fails the
+// open with openErr, or opens a scope whose catalog lacks the staged tool.
+type openHookEngine struct {
+	*fakeEngine
+	onOpen  func()
+	openErr error
+}
+
+func (e *openHookEngine) MCPBroker() agentcore.MCPBroker { return nil }
+func (e *openHookEngine) MCPCatalog() []mcp.ServerTool   { return nil }
+func (e *openHookEngine) OpenApprovalRemoteMCPScope(context.Context, string, string, string) (*agent.RemoteMCPOverlay, error) {
+	return nil, nil
+}
+
+func (e *openHookEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string, agentcore.MCPUserIdentity) (*agent.MCPScope, error) {
+	e.onOpen()
+	if e.openErr != nil {
+		return nil, e.openErr
+	}
+	return &agent.MCPScope{
+		Broker:  &fakeMCPBroker{text: `{"success":true}`},
+		Catalog: []mcp.ServerTool{{ServerName: "ix", Tool: mcp.Tool{Name: "other_tool"}}},
+		Close:   func(context.Context) error { return nil },
+	}, nil
+}
+
+// A Stop accepted while the call's scope was still opening, followed by a
+// failure before anything was dispatched (the scope would not open, or its
+// catalog no longer has the tool), sent nothing and no cancellation: the
+// outcome is "stopped before it was sent", so fleet's line says nothing ran,
+// never that the server was asked to stop. Without a Stop the setup failure
+// reads as before.
+func TestExecuteClaimedApproval_SetupFailureAfterStopSaysNothingRan(t *testing.T) {
+	stopPolicy(t)
+	for name, openErr := range map[string]error{
+		"the scope does not open":      errors.New("seat revoked"),
+		"the tool is no longer listed": nil,
+	} {
+		for _, pressStop := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s, stop=%t", name, pressStop), func(t *testing.T) {
+				a := stopRow()
+				a.MCPServer = "ix"
+				running := a
+				running.Status, running.ResultText = "approved", approvalExecutingSentinel
+				st := &stopStore{approval: running}
+				engine := &openHookEngine{fakeEngine: &fakeEngine{}, openErr: openErr}
+				s := &Server{store: st, agent: engine}
+				engine.onOpen = func() {
+					if pressStop {
+						if rec := postStop(s, "c1"); !strings.Contains(rec.Body.String(), `"stopping":true`) {
+							t.Fatalf("stop while opening = %d %s", rec.Code, rec.Body.String())
+						}
+					}
+				}
+				s.armApprovalStop(a.ID)
+				s.executeClaimedApproval(context.Background(), "u@example.com", "c1", a.ID, &a, approvalRequest{Approved: true, Scope: "once"})
+				switch {
+				case pressStop && (!strings.Contains(st.result, approvalStoppedBeforeSendNote) || strings.Contains(st.result, approvalStopNote)):
+					t.Fatalf("result = %q, want the before-send line only", st.result)
+				case pressStop && !strings.Contains(st.result, "nothing ran"):
+					t.Fatalf("result = %q, want it to say nothing ran", st.result)
+				case !pressStop && (strings.Contains(st.result, "[fleet]") || strings.Contains(st.result, "nothing ran")):
+					t.Fatalf("result = %q, want the plain setup failure without a stop line", st.result)
+				}
+			})
+		}
 	}
 }

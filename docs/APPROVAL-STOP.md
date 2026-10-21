@@ -105,7 +105,12 @@ Elcano bundle's deal-plan execute does this).
   `mcp.ErrStoppedBeforeSend`, kept as that sentinel across the broker). The
   outcome is "stopped before the call was sent to its server; nothing ran",
   recorded as a failure, and fleet's line says the person pressed Stop before
-  the call was sent and nothing ran (not the running-call line). A Stop in the
+  the call was sent and nothing ran (not the running-call line). So is a call
+  that failed before it was dispatched after a Stop was accepted (its scope
+  would not open, or the reopened catalog no longer lists the tool): nothing
+  and no cancellation was sent, and the setup failure is kept in the outcome's
+  text. The stop window closes as soon as `runStagedTool` returns, before the
+  scope is torn down, so a Stop during that teardown is refused. A Stop in the
   instant between that last check and the write sends the call and then its
   cancellation, so at most the item the server starts with runs, as for any
   Stop.

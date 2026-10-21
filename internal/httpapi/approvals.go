@@ -2444,7 +2444,7 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 // runStagedTool executes the staged tool one-shot outside the agent
 // loop. Supports MCP tools (send_email) and the native bash tool (risky
 // shell commands gated by orchestration.checkBashSafety).
-func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (string, error) {
+func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (text string, err error) {
 	mgr := s.agent
 	if mgr == nil {
 		return "", errors.New("agent manager unavailable")
@@ -2467,6 +2467,22 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	// export send_email).
 	if !strings.HasPrefix(approval.ToolName, "mcp_") {
 		return "", fmt.Errorf("unsupported tool for approval: %s", approval.ToolName)
+	}
+	// A tool in critical_tool_stop: a Stop accepted before the call was
+	// dispatched (while its scope opened, say) means nothing was sent and no
+	// cancellation either, whatever else failed first. Such a failure is
+	// reported as stopped before send, so fleet's line says nothing ran
+	// rather than that the server was asked to stop. This runs last, after
+	// the stop window has closed (finalize is idempotent), so no Stop can land
+	// between this check and the outcome.
+	sent := false
+	if approvalStoppable(approval.ToolName) {
+		defer func() {
+			if !s.finalizeApprovalStop(approval.ID) || sent || err == nil || errors.Is(err, errStoppedBeforeSend) {
+				return
+			}
+			err = fmt.Errorf("%w (preparing it had failed too: %w)", errStoppedBeforeSend, err)
+		}()
 	}
 	// The staged arguments, with the narrowed argument replaced when the
 	// person approved only some of its values (approval_narrowing.go). A
@@ -2545,6 +2561,7 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 		callCtx, stopProgress = s.startApprovalProgress(callCtx, approval)
 		defer stopProgress()
 	}
+	sent = true
 	text, isError, err := broker.CallMCP(callCtx, server, tool, args)
 	if err != nil {
 		return "", err
