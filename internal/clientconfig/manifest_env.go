@@ -216,7 +216,7 @@ func defaultOnlyRefNames(sites []manifestRefSite) []string {
 func walkManifestNode(node any, segs []string, out *[]manifestRefSite) {
 	switch v := node.(type) {
 	case string:
-		recordManifestRefs(v, segs, out)
+		recordManifestRefs(v, segs, false, out)
 	case map[string]any:
 		keys := make([]string, 0, len(v))
 		for k := range v {
@@ -225,7 +225,7 @@ func walkManifestNode(node any, segs []string, out *[]manifestRefSite) {
 		sort.Strings(keys)
 		for _, k := range keys {
 			kidSegs := append(append([]string(nil), segs...), k)
-			recordManifestRefs(k, kidSegs, out)
+			recordManifestRefs(k, kidSegs, true, out)
 			walkManifestNode(v[k], kidSegs, out)
 		}
 	case []any:
@@ -238,7 +238,12 @@ func walkManifestNode(node any, segs []string, out *[]manifestRefSite) {
 	}
 }
 
-func recordManifestRefs(value string, segs []string, out *[]manifestRefSite) {
+// recordManifestRefs records the ${...} references in one scalar. isKey marks
+// a map KEY (segs then ends with the key itself): the spawn paths substitute
+// reserved tokens in env map VALUES only, so a reserved token in a key — e.g.
+// env: {"${FLEET_USER_EMAIL}": "x"} — would name a literal variable and is
+// never reservedOK, even under mcp_servers[].env.
+func recordManifestRefs(value string, segs []string, isKey bool, out *[]manifestRefSite) {
 	if !strings.Contains(value, "${") {
 		return
 	}
@@ -247,8 +252,11 @@ func recordManifestRefs(value string, segs []string, out *[]manifestRefSite) {
 		return
 	}
 	path := renderManifestPath(segs)
+	if isKey {
+		path += " (map key)"
+	}
 	lazy := lazyResolvedManifestPath(segs)
-	reservedOK := reservedSubstitutablePath(segs)
+	reservedOK := !isKey && reservedSubstitutablePath(segs)
 	for _, ref := range refs {
 		*out = append(*out, manifestRefSite{path: path, ref: ref, lazy: lazy, reservedOK: reservedOK})
 	}
@@ -347,6 +355,19 @@ func unresolvedManifestRefs(sites []manifestRefSite) []string {
 			continue
 		}
 		if reservedRuntimeVar(site.ref.name) {
+			if exact := "${" + site.ref.name + "}"; site.ref.token != exact {
+				// ${ FLEET_WORKSPACE } names a reserved token but is not its
+				// exact spelling, and the spawn paths substitute (or drop)
+				// only the exact "${NAME}" — so it would reach every
+				// connector, scheduled and user-less spawns included, as a
+				// literal placeholder. Checked here, on the parsed scalars,
+				// so a comment that merely mentions a spelling is not a load
+				// failure.
+				problems = append(problems, fmt.Sprintf(
+					"%s: %s: %s is a RESERVED runtime token that fleet substitutes at MCP launch; write exactly %s, without spaces inside the braces (see docs/MCP-BUNDLE-ENV.md)",
+					site.path, site.ref.token, site.ref.name, exact))
+				continue
+			}
 			if site.reservedOK {
 				continue
 			}

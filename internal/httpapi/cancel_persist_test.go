@@ -90,7 +90,7 @@ func (f *fakeTurnEngine) OpenApprovalRemoteMCPScope(context.Context, string, str
 	return nil, nil
 }
 
-func (f *fakeTurnEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string) (*agent.MCPScope, error) {
+func (f *fakeTurnEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string, agentcore.MCPUserIdentity) (*agent.MCPScope, error) {
 	return nil, nil
 }
 func (f *fakeTurnEngine) SandboxPool() *sandbox.Pool                   { return nil }

@@ -48,7 +48,7 @@ export function UpdateNotice({ appName }: { appName: string }) {
       <button
         type="button"
         onClick={() => window.location.reload()}
-        className="shrink-0 rounded-[var(--radius-md)] bg-[var(--color-primary)] px-2.5 py-1 font-medium text-[var(--color-on-primary)] transition hover:bg-[var(--color-primary-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+        className="shrink-0 rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-2.5 py-1 font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
       >
         Reload
       </button>

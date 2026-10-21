@@ -1159,7 +1159,7 @@ function CardBody({
                 <button
                   ref={confirmYesRef}
                   type="button"
-                  className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] hover:opacity-90"
+                  className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)]"
                   onClick={() => onConfirm(confirmingVisible)}
                 >
                   Yes, {confirmingVisible.label.toLowerCase()}
@@ -1186,7 +1186,7 @@ function CardBody({
                       onClick={() => onAction(a)}
                       className={
                         style === "primary"
-                          ? "rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+                          ? "rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
                           : style === "danger"
                             ? "rounded-[var(--radius-md)] border border-[var(--color-danger-border)] px-3 py-1.5 text-[0.75rem] text-[var(--color-danger)] transition hover:opacity-90 disabled:opacity-50"
                             : actionButton + " py-1.5"
@@ -2423,10 +2423,10 @@ function Toggle({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         onClick={() => onChange?.(!on)}
         className={[
           "relative h-5 w-9 shrink-0 rounded-full transition disabled:opacity-60",
-          on ? "bg-[var(--color-primary)]" : "bg-[var(--color-overlay-strong)]",
+          on ? "bg-[var(--color-primary-fill)]" : "bg-[var(--color-overlay-strong)]",
         ].join(" ")}
       >
-        <span className={["absolute top-0.5 size-4 rounded-full bg-[var(--color-white)] transition-all", on ? "left-[1.125rem]" : "left-0.5"].join(" ")} />
+        <span className={["absolute top-0.5 size-4 rounded-full transition-all", on ? "left-[1.125rem] bg-[var(--color-on-primary-fill)]" : "left-0.5 bg-[var(--color-white)]"].join(" ")} />
       </button>
       <span className="text-[0.8125rem]">
         {str(c.label).trim()}

@@ -881,12 +881,12 @@ function ConvRow({
                 className={[
                   "inline-flex size-4 shrink-0 items-center justify-center rounded-[0.3rem] border-[1.5px] transition",
                   checked
-                    ? "border-[var(--color-primary)] bg-[var(--color-primary)]"
+                    ? "border-[var(--color-primary-fill)] bg-[var(--color-primary-fill)]"
                     : "border-[var(--color-border-strong)]",
                 ].join(" ")}
               >
                 {checked ? (
-                  <Icon name="check" className="size-[0.7rem] text-[var(--color-on-primary)]" />
+                  <Icon name="check" className="size-[0.7rem] text-[var(--color-on-primary-fill)]" />
                 ) : null}
               </span>
             ) : null}

@@ -46,7 +46,7 @@ export function btnClass({
   let color: string;
   if (variant === "primary") {
     color =
-      "bg-[var(--color-primary)] text-[var(--color-on-primary)] hover:bg-[var(--color-primary-hover)]";
+      "bg-[var(--color-primary-fill)] text-[var(--color-on-primary-fill)] enabled:hover:bg-[var(--color-primary-fill-hover)]";
   } else if (armed) {
     color =
       "bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] text-[var(--color-danger)]";
@@ -188,7 +188,7 @@ export function SetSwitch({
       className={[
         "relative h-[1.3rem] w-[2.3rem] shrink-0 cursor-pointer rounded-full border-none p-0 transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50",
         on
-          ? "bg-[var(--color-primary)]"
+          ? "bg-[var(--color-primary-fill)]"
           : "bg-[color-mix(in_srgb,var(--color-primary)_32%,transparent)]",
         small ? "origin-left scale-[0.88]" : "",
       ].join(" ")}
@@ -196,7 +196,7 @@ export function SetSwitch({
       <span
         className={[
           "absolute left-[3px] top-[3px] size-[calc(1.3rem-6px)] rounded-full transition",
-          on ? "translate-x-4 bg-white" : "bg-[var(--color-text-muted)]",
+          on ? "translate-x-4 bg-[var(--color-on-primary-fill)]" : "bg-[var(--color-text-muted)]",
         ].join(" ")}
       />
     </button>

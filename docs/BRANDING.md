@@ -190,17 +190,21 @@ Both are fixed:
 ### `on_primary`
 
 The readable foreground **on** a primary fill — buttons, active segments, the
-switch knob, the user avatar, and the `--gradient-action-primary` surface.
+switch knob, the user avatar, and the action gradient (`--gradient-action-fill`).
 
 It has to be declared rather than derived, and a bundle with a **light** primary
 must set it. Every one of those rules previously hardcoded white, so a
 yellow-primary bundle rendered white-on-yellow at **1.33:1**. Declaring
 near-black instead takes the same surface to 14.87:1.
 
-**Filled buttons are held to WCAG AA whatever the pair.** The approval cards'
-filled buttons (Approve, Check result, Retry failed, Approve 2 of 3) paint
-`--color-on-primary-fill` on `--color-primary-fill`, not `on_primary` on
-`primary`. When a bundle sets
+**Filled buttons are held to WCAG AA whatever the pair.** Every filled
+button, chip and selected segmented option with a label (the approval cards'
+Approve, Create project, Move and share, `.btn-primary`, the
+sign-in button, the account avatar) paints `--color-on-primary-fill` on
+`--color-primary-fill`, not `on_primary` on `primary`, and hovers to
+`--color-primary-fill-hover`. `designTokens.test.ts` holds all of `web/src`
+to it, and so do the ON switch tracks with their knobs. The raw `primary` is left for what has nothing
+painted on it (a nav row's active bar, tints, borders and accent colors). When a bundle sets
 `primary` or `on_primary`, `/theme.css` measures the pair (the other one is
 fleet's default) and emits a fill that is the primary mixed toward black or
 white by the smallest step that reaches 4.5:1, plus a hover a further 10 points
@@ -212,11 +216,29 @@ measured. Fleet's own white on `#7272ab` measures 4.46:1, so its
 fill is the primary with 1% black (`#7171a9`, 4.53:1). The fill is derived,
 never pinned: there is no manifest key for it.
 
-Light mode additionally starts the action gradient from `--color-primary-hover`
-(its deep end is `--color-secondary` mixed 85% toward black), on the reasoning
-that "the deeper primary" is what that token already means there — so a
-light-primary bundle supplies a deeper *shade of its own hue* as the gradient's
-leading stop instead of fleet's default.
+**The action gradient keeps its label at AA too.** The composer's Send circle
+and the empty-state prompt's Run button paint `--gradient-action-fill`: primary
+→ secondary like the brand's `--gradient-action-primary`, but from
+`--color-primary-fill` to `--color-secondary-fill`, under
+`--color-on-primary-fill`. The label sits on every point of the gradient, and
+with dark text a straight sRGB blend can dip darker mid-way than either end
+(`#ee0000` and `#008844` are 4.6:1 each under black, and their blend falls to
+2.6:1), so `/theme.css` measures the whole blend, not just its ends: the
+secondary is mixed toward the fill's extreme by the smallest step at which every
+point clears 4.5:1, and its hover (`--color-secondary-fill-hover`, paired with
+`--color-primary-fill-hover` in `--gradient-action-fill-hover`) at least 10
+points further. It is re-derived when a bundle sets `primary`, `on_primary` or
+`secondary`. Fleet's own secondary (`#586f7c`) already clears AA along the
+blend, so the stock gradient runs `#7171a9` → `#586f7c`. The raw
+`--gradient-action-primary` is left for what carries no label (a selected
+option's ring); `designTokens.test.ts` bans it under a label, and allows a
+gradient under `--color-on-primary-fill` only between measured stops.
+
+Light mode keeps a deeper action surface: the raw `--gradient-action-primary`
+starts from `--color-primary-hover` (its deep end is `--color-secondary` mixed
+85% toward black), and `--gradient-action-fill` starts from the measured hover
+pair (fleet's own runs `#656598` → `#4f6470`, beside the raw `#5f5f97` →
+`#4b5e69`).
 
 ### `colors`
 
