@@ -201,7 +201,7 @@ func (h *hostImpl) executeFileOp(ctx context.Context, req FileOpRequest) (FileOp
 	if err != nil {
 		return FileOpResult{}, err
 	}
-	return decodeFileOpResponse(out)
+	return decodeFileOpOutput(req, out)
 }
 
 func (h *hostImpl) runPython(ctx context.Context, req PythonRequest) (PythonResult, error) {

@@ -1167,7 +1167,7 @@ func (k *k8sImpl) executeFileOp(ctx context.Context, req FileOpRequest, anchor s
 	if err != nil {
 		return FileOpResult{}, err
 	}
-	return decodeFileOpResponse(out)
+	return decodeFileOpOutput(req, out)
 }
 
 func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResult, error) {

@@ -923,3 +923,22 @@ func TestDecodeFileOpResponse_BoundsStreamedTrailer(t *testing.T) {
 		t.Fatalf("an oversized trailer was parsed: %v", err)
 	}
 }
+
+// TestDecodeFileOpOutput_BoundedReadMustStream: a bounded read whose helper
+// answers with a large legacy JSON response (the whole file as a data_b64
+// string) is refused before it is parsed; small pre-stream errors still decode.
+func TestDecodeFileOpOutput_BoundedReadMustStream(t *testing.T) {
+	req := FileOpRequest{Op: FileOpRead, MaxSize: 1 << 20}
+	if _, err := decodeFileOpOutput(req, []byte(`{"ok":false,"err_kind":"not_found","err":"no such file","data_b64":""}`)); !errors.Is(err, ErrFileOpNotFound) {
+		t.Fatalf("a small pre-stream error: %v", err)
+	}
+	legacy := append([]byte(`{"ok":true,"data_b64":"`), bytes.Repeat([]byte("A"), 512<<10)...)
+	legacy = append(legacy, `","size":393216}`...)
+	if _, err := decodeFileOpOutput(req, legacy); !errors.Is(err, ErrFileOpOutputTooLarge) {
+		t.Fatalf("a large non-streamed read response was parsed: %v", err)
+	}
+	// An unbounded op is unaffected.
+	if _, err := decodeFileOpOutput(FileOpRequest{Op: FileOpWrite}, []byte(`{"ok":true,"data_b64":""}`)); err != nil {
+		t.Fatalf("a write response: %v", err)
+	}
+}

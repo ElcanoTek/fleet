@@ -1008,7 +1008,7 @@ func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, an
 	if err != nil {
 		return FileOpResult{}, err
 	}
-	return decodeFileOpResponse(out)
+	return decodeFileOpOutput(req, out)
 }
 
 // stderrSuffix renders captured helper stderr the way stderrOf renders an

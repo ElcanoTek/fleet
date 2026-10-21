@@ -513,6 +513,18 @@ func splitStreamedRead(out []byte) (payload, rest []byte, ok bool) {
 	return body[:end], rest, true
 }
 
+// decodeFileOpOutput decodes the helper's output for req. A bounded read
+// answers in the streamed format, or with a small error raised before it
+// started streaming; a larger non-streamed response is not the helper's (a
+// replaced one could carry a whole file as a JSON string, copied again by
+// the decode), so it is refused before it is parsed.
+func decodeFileOpOutput(req FileOpRequest, out []byte) (FileOpResult, error) {
+	if fileOpOutputBound(req) > 0 && !bytes.HasPrefix(out, streamedReadPrefix) && len(out) > fileOpResponseOverhead {
+		return FileOpResult{}, fmt.Errorf("fileop %s: %w (a non-streamed read response of %d bytes)", req.Op, ErrFileOpOutputTooLarge, len(out))
+	}
+	return decodeFileOpResponse(out)
+}
+
 // decodeFileOpResponse maps the executor's JSON envelope into a FileOpResult or
 // a typed sentinel error, so every backend surfaces identical semantics.
 func decodeFileOpResponse(out []byte) (FileOpResult, error) {
