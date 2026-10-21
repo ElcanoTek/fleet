@@ -1,12 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CostForecast, McpServer, MCPChoice, Task, TaskCreate, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
+import type {
+  CostForecast,
+  McpServer,
+  MCPChoice,
+  RecipientUse,
+  Task,
+  TaskCreate,
+  TaskTemplate,
+} from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { applyTemplateVars, humanizeVarName, promptableVars } from "@/app/shared/lib/taskTemplates";
 import { validateTaskForm, validateCronExpression, describeEmailError } from "@/app/shared/lib/validation";
 import { isValidEmail } from "@/app/shared/lib/format";
 import { buildPromptWithRecipients, splitPromptRecipients } from "./taskEmailBlock";
+import { rankRecipientSuggestions } from "./recipientSuggestions";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { Icon } from "@/app/shared/ui/Icon";
 import { dateInZone, endOfDayInZone, nextCronOccurrence, formatNextRun } from "@/app/shared/lib/cronNext";
@@ -399,6 +408,12 @@ export function TaskCreateModal({
   const [emails, setEmails] = useState<string[]>(init.emails);
   const [emailInput, setEmailInput] = useState("");
   const [emailError, setEmailError] = useState("");
+  // Remembered recipients: every address a visible task already mails
+  // (GET /tasks/recipients), offered as the field's suggestions. Optional —
+  // a failed fetch leaves plain typing exactly as it was.
+  const [recipientHistory, setRecipientHistory] = useState<RecipientUse[]>([]);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [suggestIndex, setSuggestIndex] = useState(-1);
 
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(init.scheduleMode);
   const [scheduledDate, setScheduledDate] = useState(init.scheduledDate);
@@ -951,6 +966,35 @@ export function TaskCreateModal({
     [cronDescription, recurrence, timezone, previewTick],
   );
 
+  // Load the remembered recipients each time the form opens, so an address a
+  // task started using since the last open is offered too. The call goes
+  // through a resolved promise so a missing or throwing client is caught.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => orchestratorApi.recipientHistory())
+      .then((rows) => {
+        if (!cancelled && Array.isArray(rows)) setRecipientHistory(rows);
+      })
+      .catch(() => {
+        // Suggestions are a convenience; typing addresses still works.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const recipientSuggestions = useMemo(
+    () => rankRecipientSuggestions(recipientHistory, emailInput, emails),
+    [recipientHistory, emailInput, emails],
+  );
+  const suggestionsShown = suggestOpen && recipientSuggestions.length > 0;
+  const activeSuggestion =
+    suggestionsShown && suggestIndex >= 0 && suggestIndex < recipientSuggestions.length
+      ? suggestIndex
+      : -1;
+
   if (!open) return null;
 
   // ── Derived display state ─────────────────────────────────────────────────
@@ -1057,6 +1101,14 @@ export function TaskCreateModal({
   const blurValidateScheduled = () => {
     if (scheduleMode !== "once") return;
     setFieldError("scheduled_for", scheduledDate ? "" : "Pick a date and time.");
+  };
+
+  const pickSuggestion = (email: string) => {
+    if (!emails.includes(email)) setEmails((prev) => [...prev, email]);
+    setEmailInput("");
+    setEmailError("");
+    setSuggestIndex(-1);
+    emailInputRef.current?.focus();
   };
 
   const commitEmail = (): boolean => {
@@ -2119,60 +2171,129 @@ export function TaskCreateModal({
                     handler only forwards a click on the box's padding to that
                     input, which a keyboard user reaches by Tab anyway, so there
                     is no keyboard behavior missing here to add. */}
-                <div
-                  className={`task-chipfield${emailError ? " has-error" : ""}`}
-                  onClick={() => emailInputRef.current?.focus()}
-                  role="presentation"
-                >
-                  {emails.map((e) => (
-                    <span key={e} className="task-chip" data-email={e}>
-                      {e}
-                      <button
-                        type="button"
-                        className="task-chip-delete"
-                        aria-label={`Remove ${e}`}
-                        onClick={() => setEmails(emails.filter((x) => x !== e))}
-                      >
-                        <svg
-                          width="10"
-                          height="10"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.4"
-                          strokeLinecap="round"
-                          aria-hidden="true"
+                {/* The anchor positions the suggestion list under the chip box
+                    without pushing the rest of the form down. */}
+                <div className="task-suggest-anchor">
+                  <div
+                    className={`task-chipfield${emailError ? " has-error" : ""}`}
+                    onClick={() => emailInputRef.current?.focus()}
+                    role="presentation"
+                  >
+                    {emails.map((e) => (
+                      <span key={e} className="task-chip" data-email={e}>
+                        {e}
+                        <button
+                          type="button"
+                          className="task-chip-delete"
+                          aria-label={`Remove ${e}`}
+                          onClick={() => setEmails(emails.filter((x) => x !== e))}
                         >
-                          <path d="M18 6L6 18M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </span>
-                  ))}
-                  <input
-                    id="emailChipInput"
-                    ref={emailInputRef}
-                    type="email"
-                    className="task-chipfield-input"
-                    placeholder={emails.length === 0 ? "Add email — press Enter" : "Add email…"}
-                    maxLength={254}
-                    aria-describedby={emailError ? "email-error email-help" : "email-help"}
-                    value={emailInput}
-                    onChange={(e) => {
-                      setEmailInput(e.target.value);
-                      if (emailError) setEmailError("");
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === ",") {
-                        e.preventDefault();
-                        commitEmail();
-                      } else if (e.key === "Backspace" && emailInput === "" && emails.length > 0) {
-                        setEmails(emails.slice(0, -1));
+                          <svg
+                            width="10"
+                            height="10"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.4"
+                            strokeLinecap="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M18 6L6 18M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </span>
+                    ))}
+                    {/* A combobox over the remembered recipients. autoComplete is
+                        off because the browser's own autofill offered unrelated
+                        personal addresses over the list. */}
+                    <input
+                      id="emailChipInput"
+                      ref={emailInputRef}
+                      type="email"
+                      className="task-chipfield-input"
+                      placeholder={emails.length === 0 ? "Add email — press Enter" : "Add email…"}
+                      maxLength={254}
+                      autoComplete="off"
+                      role="combobox"
+                      aria-autocomplete="list"
+                      aria-expanded={suggestionsShown}
+                      aria-controls="email-suggestions"
+                      aria-activedescendant={
+                        activeSuggestion >= 0 ? `email-suggestion-${activeSuggestion}` : undefined
                       }
-                    }}
-                    onBlur={() => {
-                      if (emailInput.trim()) commitEmail();
-                    }}
-                  />
+                      aria-describedby={emailError ? "email-error email-help" : "email-help"}
+                      value={emailInput}
+                      onFocus={() => setSuggestOpen(true)}
+                      onChange={(e) => {
+                        setEmailInput(e.target.value);
+                        setSuggestOpen(true);
+                        setSuggestIndex(-1);
+                        if (emailError) setEmailError("");
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                          if (recipientSuggestions.length === 0) return;
+                          e.preventDefault();
+                          const n = recipientSuggestions.length;
+                          setSuggestOpen(true);
+                          setSuggestIndex((i) =>
+                            e.key === "ArrowDown" ? (i + 1) % n : i <= 0 ? n - 1 : i - 1,
+                          );
+                        } else if (e.key === "Escape" && suggestionsShown) {
+                          // The dialog leaves Escape to an expanded combobox
+                          // (useDialogA11y), so this closes only the list.
+                          e.preventDefault();
+                          setSuggestOpen(false);
+                          setSuggestIndex(-1);
+                        } else if (e.key === "Enter" && activeSuggestion >= 0) {
+                          e.preventDefault();
+                          pickSuggestion(recipientSuggestions[activeSuggestion].email);
+                        } else if (e.key === "Enter" || e.key === ",") {
+                          e.preventDefault();
+                          commitEmail();
+                        } else if (e.key === "Backspace" && emailInput === "" && emails.length > 0) {
+                          setEmails(emails.slice(0, -1));
+                        }
+                      }}
+                      onBlur={() => {
+                        setSuggestOpen(false);
+                        setSuggestIndex(-1);
+                        if (emailInput.trim()) commitEmail();
+                      }}
+                    />
+                  </div>
+                  {suggestionsShown ? (
+                    <div
+                      id="email-suggestions"
+                      className="task-suggest"
+                      role="listbox"
+                      aria-label="Recipients used before"
+                      data-testid="email-suggestions"
+                    >
+                      {recipientSuggestions.map((r, i) => (
+                        <button
+                          key={r.email}
+                          id={`email-suggestion-${i}`}
+                          type="button"
+                          role="option"
+                          tabIndex={-1}
+                          aria-selected={i === activeSuggestion}
+                          className={`task-suggest-option${i === activeSuggestion ? " is-active" : ""}`}
+                          // Same as ModelPicker: mousedown is swallowed so the
+                          // input keeps focus (a blur would commit the typed
+                          // fragment first), and the click picks.
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => pickSuggestion(r.email)}
+                          onMouseEnter={() => setSuggestIndex(i)}
+                        >
+                          <span className="task-suggest-email">{r.email}</span>
+                          <span className="task-suggest-meta">
+                            {r.task_count} task{r.task_count === 1 ? "" : "s"}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
                 {emailError ? (
                   <div className="task-inline-error" id="email-error" data-testid="error-email">

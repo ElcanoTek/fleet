@@ -82,6 +82,7 @@ import {
   type TranscriptRow,
 } from "./transcriptRows";
 import { useStickToBottom } from "./stickToBottom";
+import { assistantDisplayContent } from "./turnNarration";
 import { ReplyBubble, SubmissionBubble } from "./genui/SubmissionBubble";
 import { answerOf, cardSpecOf, deriveGenUiState, GenUiContext, isRenderableCardCall } from "./genui/transcript";
 // Generative-UI cards (show_ui) carry their own renderer and the markdown
@@ -693,6 +694,14 @@ export function ChatTranscript({
                     if (!activeToolName && toolCalls.length > 0) {
                       activeToolName = toolCalls[toolCalls.length - 1].name;
                     }
+                    // What renders as the answer. In the default view a live
+                    // turn's narration (text written between tool calls) is
+                    // not the answer: the status line below stands in for it,
+                    // and "Show details" shows it (turnNarration.ts).
+                    const displayContent = assistantDisplayContent(message, showStats);
+                    const working =
+                      message.state === "thinking" ||
+                      (message.state === "streaming" && !displayContent);
                     return (
                       <article
                         className={[
@@ -786,11 +795,16 @@ export function ChatTranscript({
                                 <ReasoningBlock text={message.reasoning} />
                               ) : null}
 
-                              {(message.state === "thinking" || crossfadingMessageIds.includes(message.id)) && !message.content ? (
+                              {showStats && message.narration ? (
+                                <ReasoningBlock label="Working notes" text={message.narration} />
+                              ) : null}
+
+                              {(working || crossfadingMessageIds.includes(message.id)) && !displayContent ? (
                                 <div
+                                  data-testid="assistant-working-status"
                                   className={[
                                     "flex min-w-0 items-center gap-2 text-[0.875rem] text-[var(--color-text-muted)] transition-opacity duration-base",
-                                    message.state === "thinking"
+                                    working
                                       ? "opacity-100"
                                       : "pointer-events-none opacity-0",
                                   ].join(" ")}
@@ -830,7 +844,7 @@ export function ChatTranscript({
                               ) : null}
 
                               <MessageMarkdown
-                                content={message.content}
+                                content={displayContent}
                                 isStreaming={
                                   message.state === "streaming" || message.state === "thinking"
                                 }
@@ -838,7 +852,7 @@ export function ChatTranscript({
                               />
                               {(message.state === "streaming" ||
                                 (message.state === "thinking" && message.reasoning)) &&
-                              message.content ? (
+                              displayContent ? (
                                 <LoadingLogo size={18} className="mt-1 opacity-60" />
                               ) : null}
 
@@ -1514,12 +1528,13 @@ function UserBubble({
 
 // ── Reasoning block ──────────────────────────────────────────────────────
 //
-// Renders the model's streamed reasoning. Only mounted when the global
+// Renders the model's streamed reasoning — and, labelled "Working notes", a
+// live turn's narration between tool calls. Only mounted when the global
 // "Show details" toggle (showStats) is on — so the user opted into seeing
 // the thinking, and we default to expanded. Users can still click the
 // header to collapse a noisy block manually.
 
-function ReasoningBlock({ text }: { text: string }) {
+function ReasoningBlock({ text, label = "Thinking" }: { text: string; label?: string }) {
   const [expanded, setExpanded] = useState(true);
 
   return (
@@ -1531,7 +1546,7 @@ function ReasoningBlock({ text }: { text: string }) {
         aria-expanded={expanded}
       >
         <span className="text-[0.68rem] font-medium uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-          Thinking
+          {label}
         </span>
         <span className="text-[0.68rem] text-[var(--color-text-muted)]">
           {expanded ? "Hide" : "Show"}

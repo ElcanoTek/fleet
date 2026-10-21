@@ -532,6 +532,87 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 	return tasks, total, err
 }
 
+// RecipientUse is one address the task form's **Email results** field can
+// suggest: an address some visible task already mails its report to, how many
+// distinct tasks do (a recurring task counts once, however many runs it has),
+// and when one was last created. Drives GET /tasks/recipients.
+type RecipientUse struct {
+	Email     string    `json:"email"`
+	TaskCount int       `json:"task_count"`
+	LastUsed  time.Time `json:"last_used"`
+}
+
+// RecipientHistoryScope scopes the recipient history exactly like the tag
+// catalogue (#1082): a principal without the fleet-wide grant only learns the
+// addresses on tasks it created. Zero value = fleet-wide.
+type RecipientHistoryScope struct {
+	VisibleToUserID *uuid.UUID
+	VisibleToKeyID  *string
+}
+
+// recipientBlockMarker is how the web form's delivery instruction starts
+// (web/src/app/orchestrator/taskEmailBlock.ts): recipients are not a column,
+// they are a CRITICAL ACTION block appended to the prompt, one "    - addr"
+// line each. Matching only from that marker on keeps addresses the author
+// wrote in the prompt body out of the suggestions. Both strings go in as bind
+// parameters, so no SQL-literal escaping touches the regex.
+const (
+	recipientBlockMarker = "\n---\nCRITICAL ACTION\nemail:"
+	recipientLinePattern = `\n {4}- ([^\s]+@[^\s]+)`
+)
+
+// GetRecipientHistory returns the distinct recipient addresses in the delivery
+// blocks of visible tasks created since `since`, most recently used first, at
+// most `limit`. Addresses are lower-cased; callers validate them.
+func (db *Database) GetRecipientHistory(ctx context.Context, scope RecipientHistoryScope, since time.Time, limit int) ([]RecipientUse, error) {
+	// The scope binds as nullable parameters ($5 user, $6 key; NULL = no
+	// filter), so the statement is one constant string.
+	var userID, keyID interface{}
+	if scope.VisibleToUserID != nil {
+		userID = *scope.VisibleToUserID
+	}
+	if scope.VisibleToKeyID != nil {
+		keyID = *scope.VisibleToKeyID
+	}
+	args := []interface{}{since, limit, recipientBlockMarker, recipientLinePattern, userID, keyID}
+	// A recurring task stores one row per run, all with the same prompt, so
+	// task_count counts lineages, not rows.
+	const query = `
+		WITH blocks AS (
+			SELECT COALESCE(NULLIF(lineage_id, ''), id::text) AS lineage, created_at,
+			       position($3 IN prompt) AS pos, prompt
+			FROM tasks
+			WHERE created_at >= $1
+			  AND prompt LIKE '%CRITICAL ACTION%'
+			  AND ($5::uuid IS NULL OR created_by = $5::uuid)
+			  AND ($6::text IS NULL OR created_by_key_id = $6::text)
+		), addrs AS (
+			SELECT lineage, created_at, lower(m[1]) AS email
+			FROM blocks, regexp_matches(substring(prompt FROM pos), $4, 'g') AS m
+			WHERE pos > 0
+		)
+		SELECT email, COUNT(DISTINCT lineage) AS task_count, MAX(created_at) AS last_used
+		FROM addrs
+		GROUP BY email
+		ORDER BY last_used DESC, task_count DESC, email ASC
+		LIMIT $2`
+
+	rows, err := db.conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RecipientUse{}
+	for rows.Next() {
+		var ru RecipientUse
+		if err := rows.Scan(&ru.Email, &ru.TaskCount, &ru.LastUsed); err != nil {
+			return nil, err
+		}
+		out = append(out, ru)
+	}
+	return out, rows.Err()
+}
+
 // TagCount is one row of the tag catalogue: a distinct tag and how many tasks
 // carry it (#212).
 type TagCount struct {

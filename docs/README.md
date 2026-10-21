@@ -89,6 +89,10 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
 - **Chat stream recovery** (why a lost SSE socket reconciles against Postgres
   instead of stamping a terminal state — the walk-away-and-come-back case):
   [`docs/CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md)
+- **The chat view while the agent works** (the status line that replaces the
+  model's between-tool-call narration in the default view, the Working notes
+  under Show details, and the paragraph break between model steps):
+  [`docs/CHAT-WORKING-STATUS.md`](CHAT-WORKING-STATUS.md)
 - **What became of one turn** (the per-turn outcome endpoint the client reads
   instead of inferring from a liveness probe plus a transcript, and why a
   pre-answer failure now offers Retry): [`docs/TURN-OUTCOME.md`](TURN-OUTCOME.md)
@@ -226,6 +230,7 @@ above fails otherwise.
 - [`BUNDLE-STAGING.md`](BUNDLE-STAGING.md) — Staging the default bundle for a bare install on an SELinux host (#1655)
 - [`CHAT-EXPORT.md`](CHAT-EXPORT.md) — Downloading a chat
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn
+- [`CHAT-WORKING-STATUS.md`](CHAT-WORKING-STATUS.md) — The chat view while the agent works
 - [`CODEQL.md`](CODEQL.md) — CodeQL: advanced setup, and the Go analysis that had stopped working
 - [`COMPLETED-STEP-RECOVERY.md`](COMPLETED-STEP-RECOVERY.md) — Provider recovery after completed tool steps and preservation of verifier evidence.
 - [`CONDITIONAL-TASK-COMPLETION.md`](CONDITIONAL-TASK-COMPLETION.md) — Conditional scheduled tasks
@@ -250,7 +255,7 @@ above fails otherwise.
 - [`FEATURE-NOTES.md`](FEATURE-NOTES.md) — Feature design notes
 - [`FILE-EDIT-SAFETY.md`](FILE-EDIT-SAFETY.md) — File-edit safety (#787, #1745)
 - [`generating-demo-gif.md`](generating-demo-gif.md) — Generating the demo GIFs (TUI + web)
-- [`GENERATIVE-UI.md`](GENERATIVE-UI.md) — Generative UI: interactive cards the agent builds in chat (`show_ui`)
+- [`GENERATIVE-UI.md`](GENERATIVE-UI.md) — Generative UI: interactive cards the agent builds in chat (`show_ui`), inline or by reference to a tool's result (ADR-0080, ADR-0086)
 - [`GROUPED-APPROVALS.md`](GROUPED-APPROVALS.md) — Grouped approvals: the cards one turn stages for opted-in tools render as one card with a checkbox per call
 - [`GUARDRAILS.md`](GUARDRAILS.md) — Prompt-injection guardrails (#702)
 - [`HOOKS.md`](HOOKS.md) — Governed lifecycle hooks (#788)
@@ -259,6 +264,7 @@ above fails otherwise.
 - [`IN-HOUSED-DEPENDENCIES.md`](IN-HOUSED-DEPENDENCIES.md) — In-housed dependencies
 - [`INPUT-QUEUE.md`](INPUT-QUEUE.md) — Input queue & mid-turn steering (#785)
 - [`INSTALLER.md`](INSTALLER.md) — The public one-line installer (`install.sh`)
+- [`INTERACTIVE-HIDDEN-TOOLS.md`](INTERACTIVE-HIDDEN-TOOLS.md) — Tools hidden from interactive chat (`agent_policy.interactive_hidden_tools`, ADR-0085)
 - [`keyboard-shortcuts.md`](keyboard-shortcuts.md) — Keyboard shortcuts
 - [`KUBERNETES-LIVE-TEST.md`](KUBERNETES-LIVE-TEST.md) — Real-cluster sandbox integration test
 - [`LEGACY-IMPORT.md`](LEGACY-IMPORT.md) — Legacy import — migrating chat + moc data into fleet
@@ -268,7 +274,7 @@ above fails otherwise.
 - [`LOAD-TESTING.md`](LOAD-TESTING.md) — Load testing & benchmarks (#296)
 - [`MAINTENANCE.md`](MAINTENANCE.md) — Reclamation, disk backpressure, and stuck-task backstops
 - [`MCP-BROKER-SCOPES.md`](MCP-BROKER-SCOPES.md) — MCP broker scoped sessions
-- [`MCP-BUNDLE-ENV.md`](MCP-BUNDLE-ENV.md) — MCP bundle env contract: `${FLEET_WORKSPACE}`, `MCP_VARIANT_CLIENT`, `identity_env`, interactive critical-tool staging
+- [`MCP-BUNDLE-ENV.md`](MCP-BUNDLE-ENV.md) — MCP bundle env contract: `${FLEET_WORKSPACE}`, the signed-in user's `${FLEET_USER_EMAIL}` (ADR-0087), `MCP_VARIANT_CLIENT`, `identity_env`, interactive critical-tool staging
 - [`MCP-CATALOG-SMOKE.md`](MCP-CATALOG-SMOKE.md) — Nightly MCP catalog smoke — dead links and live handshakes for the built-in directory
 - [`MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md) — Hosted MCP connector status — the #1006 OAuth pack and the catalog audit
 - [`MCP-CATALOG.md`](MCP-CATALOG.md) — The MCP connector directory — trust classes, built-in catalog, provenance
@@ -322,6 +328,7 @@ above fails otherwise.
 - [`STRUCTURED-OUTPUT.md`](STRUCTURED-OUTPUT.md) — Structured output contracts
 - [`SUBAGENTS.md`](SUBAGENTS.md) — Sub-agents: default-on, parent decides, typed children (#1043)
 - [`TASK-PROMPT-CAP.md`](TASK-PROMPT-CAP.md) — Task prompt size cap (250,000 bytes)
+- [`TASK-RECIPIENT-SUGGESTIONS.md`](TASK-RECIPIENT-SUGGESTIONS.md) — Remembered email recipients in the task form
 - [`TASK-SCHEDULE-UX.md`](TASK-SCHEDULE-UX.md) — Create Task schedule controls
 - [`TASK-SEARCH.md`](TASK-SEARCH.md) — Recent Tasks search (any-order words, tags, description, creator) and the one scheduled filter
 - [`TASK-SERIALIZATION.md`](TASK-SERIALIZATION.md) — Task serialization — opaque `serialization_key` mutual exclusion (#709)

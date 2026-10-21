@@ -151,6 +151,30 @@ func writeThemeBlock(b *strings.Builder, selector string, colors map[string]stri
 		}
 		fmt.Fprintf(&decls, "%s:%s;", t.cssVar, strings.TrimSpace(colors[t.key]))
 	}
+	// Filled buttons paint --color-primary-fill under --color-on-primary text.
+	// A bundle that sets either color gets a fill measured against the pair
+	// (theme_contrast.go), so no palette can push a button label below WCAG
+	// AA. It is derived, never pinned: a pinned fill could break the guarantee.
+	// The action gradient's end (--color-secondary-fill) is measured with that
+	// pair too, so it is re-derived when the secondary changes as well.
+	if valid("primary") || valid("on_primary") || valid("secondary") {
+		primary, onPrimary, secondary := fleetPrimaryDefaults.primary, fleetPrimaryDefaults.onPrimary, fleetSecondaryDefault
+		if valid("primary") {
+			primary = strings.TrimSpace(colors["primary"])
+		}
+		if valid("on_primary") {
+			onPrimary = strings.TrimSpace(colors["on_primary"])
+		}
+		if valid("secondary") {
+			secondary = strings.TrimSpace(colors["secondary"])
+		}
+		f := derivePrimaryFill(primary, onPrimary)
+		if valid("primary") || valid("on_primary") {
+			fmt.Fprintf(&decls, "--color-primary-fill:%s;--color-primary-fill-hover:%s;--color-on-primary-fill:%s;", f.fill, f.hover, f.text)
+		}
+		g := deriveSecondaryFill(f, secondary)
+		fmt.Fprintf(&decls, "--color-secondary-fill:%s;--color-secondary-fill-hover:%s;", g.fill, g.hover)
+	}
 	if decls.Len() == 0 {
 		return
 	}

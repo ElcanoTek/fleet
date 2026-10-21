@@ -418,6 +418,7 @@ func run() error {
 		CriticalToolGroupApproval:     bundlePolicy.CriticalToolGroupApproval,
 		CriticalToolProgress:          bundlePolicy.CriticalToolProgress,
 		CriticalToolResultCards:       bundlePolicy.CriticalToolResultCards,
+		InteractiveHiddenTools:        bundlePolicy.InteractiveHiddenTools,
 	})
 
 	// Connector credentials cross exactly one process boundary at boot: the child
@@ -1695,6 +1696,8 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// /tasks/import are likewise static segments that must precede the
 		// {task_id} wildcard (#238).
 		r.Get("/tasks/tags", h.GetTagCatalogue)
+		// Same static-before-wildcard rule: the task form's recipient suggestions.
+		r.Get("/tasks/recipients", h.GetRecipientHistory)
 		r.Get("/tasks/export", h.HandleTaskExport)
 		// Import is a bulk create (the batch path's sibling), so it carries the
 		// same task-create rate limiter as /tasks, /tasks/batch and /upload.

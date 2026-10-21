@@ -16,6 +16,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -2136,6 +2137,53 @@ func (h *Handlers) GetTagCatalogue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, catalogue)
+}
+
+// recipientHistoryWindow and recipientHistoryLimit bound GET /tasks/recipients:
+// addresses used in the last six months, at most 200 of them — the task form's
+// suggestions are a memory of who the team mails, not an address book.
+const (
+	recipientHistoryWindow = 180 * 24 * time.Hour
+	recipientHistoryLimit  = 200
+)
+
+// GetRecipientHistory handles GET /tasks/recipients: the addresses that visible
+// tasks already email their reports to, most recently used first, so the task
+// form's **Email results** field can suggest them instead of making people
+// retype a client list. Scoped like the tag catalogue (#1082): a principal
+// without the fleet-wide grant only sees addresses on tasks it created.
+func (h *Handlers) GetRecipientHistory(w http.ResponseWriter, r *http.Request) {
+	p := h.principalFromRequest(r)
+	if !p.hasPermission(models.PermissionViewTasks) {
+		writeError(w, http.StatusForbidden, "Insufficient permissions")
+		return
+	}
+
+	var scope db.RecipientHistoryScope
+	if !p.fleetWideTaskVisibility() {
+		switch {
+		case p.user != nil:
+			scope.VisibleToUserID = &p.user.ID
+		case p.apiKey != nil:
+			scope.VisibleToKeyID = &p.apiKey.KeyID
+		}
+	}
+
+	since := time.Now().Add(-recipientHistoryWindow)
+	history, err := h.storage.ListRecipientHistory(r.Context(), scope, since, recipientHistoryLimit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to load recipient history")
+		return
+	}
+	// The SQL match is deliberately loose; only a bare, parseable address is
+	// worth suggesting, so a hand-edited block's stray line never becomes one.
+	out := make([]db.RecipientUse, 0, len(history))
+	for _, ru := range history {
+		if addr, perr := mail.ParseAddress(ru.Email); perr == nil && addr.Name == "" && addr.Address == ru.Email {
+			out = append(out, ru)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // GetSLAReport handles GET /sla-report (#274): the per-prompt SLA actuals

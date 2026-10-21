@@ -1,4 +1,4 @@
-# MCP bundle env contract: `${FLEET_WORKSPACE}`, `MCP_VARIANT_CLIENT`, `identity_env`, interactive critical-tool staging
+# MCP bundle env contract: `${FLEET_WORKSPACE}`, `${FLEET_USER_EMAIL}`, `MCP_VARIANT_CLIENT`, `identity_env`, interactive critical-tool staging
 
 Design note for the fleet-side support that bundle-provided Python MCP servers
 (carried by out-of-repo client bundles) need from the platform. Canonical
@@ -118,6 +118,112 @@ substituted directory is the **per-conversation workspace**, the same one
 `bash`/`run_python` work in, not the per-deployment dir. The per-deployment
 directory is what the shared paths above get.
 
+### 1b. Reserved `${FLEET_USER_EMAIL}` — the signed-in user of a chat turn
+
+A connector that writes something addressed to a person — the deal-sheet email
+a bundle's `finish_plan_booking` sends, which should default its recipient to
+the trader who asked for it — needs to know who is at the keyboard. The model
+must not be the source (an argument is model-authored, so an injected document
+could redirect the email), and the operator's env is one value for every user.
+So a bundle may write, on a **stdio** server entry:
+
+```yaml
+env:
+  DEAL_SHEET_DEFAULT_TO: "${FLEET_USER_EMAIL}"
+```
+
+| Token | Value |
+|---|---|
+| `${FLEET_USER_EMAIL}` | The turn sender's normalized (lowercased) email, exactly as fleet authenticated it. |
+
+**There is no name token.** Fleet's sign-in (password, OIDC from the Elcano
+Auth service, the `elcano_auth` cookie) carries an email and no name claim, and
+fleet never guesses a name from an email (`jsmith@…` is not "Jsmith"). So
+`FLEET_USER_NAME` is **reserved and refused**: any spelling of
+`${FLEET_USER_NAME}`, anywhere in a manifest or an Agent Plugin's `mcp.json`,
+fails the load (the plugin entry is skipped) with an error that says no name
+token exists — it is reserved only so an operator-exported `FLEET_USER_NAME`
+can never be read into every user's turn. A connector that greets someone uses
+its own no-name wording ("Hi team,").
+
+| Spawn path | What the server sees |
+|---|---|
+| An **interactive chat turn's** scope (production broker mode), when a signed-in person sent the turn — typed it or had it drained from their input queue — and the turn fleet resumes in their conversation after one of their approval cards settles (ADR-0083; it continues their own turn, even when the card settled by timing out) | The sender's (conversation owner's) email |
+| The scope an **approved card's** call runs on | The approving user — the only user who can claim that card, and the one whose turn staged it |
+| A **webhook-started** turn (runs as the trigger owner, but nobody signed in sent it), evals, dataset runs | Keys **dropped** (unset) |
+| **Every scheduled run** — dedicated `mcp_selection` client or shared, broker or in-process | Keys **dropped** (unset). A task scope that carried a user is refused by the broker before it opens. |
+| Shared spawns — boot catalog, hot reload, load-on-demand onto a shared client, `fleet mcp test`, the transitional local-client mode | Keys **dropped** (unset): a process-lifetime subprocess serves every user |
+
+**Whose identity in a shared chat.** Turns are attributed to the authenticated
+user who sent them. Fleet conversations have exactly one owner and every turn
+path loads the conversation owner-scoped, so the sender and the owner are the
+same person; a teammate who can read a team-shared chat cannot send a turn in it
+— they branch it into a chat of their own, where they are the sender
+(`TEAM-SHARING.md`). Nothing reads the identity from the conversation row, the
+transcript, the model or the bundle.
+
+**Dropped, never blank.** A key whose value needs the token with no value is
+removed from the subprocess env, the same posture as `${FLEET_TASK_ID}` on a
+shared spawn: the server sees the variable as unset — never a literal token,
+never an empty string. Bundles must keep their own "no user" behaviour (for the
+deal sheet: no default recipient), because every scheduled run of the same
+connector takes it.
+
+**Data, not instructions — and not authorization.** The value is validated on
+both sides of the broker boundary against a conservative character set: one
+`@`, a local part of ASCII letters, digits and `. _ % + - '`, and a dotted
+domain. A value that fails is treated as absent. The set admits no `$`, `{` or
+`}`, so a substituted value can never spell another reserved token. The user
+selects no server, account seat or tool and is not part of the scope's
+authorization policy (ADR-0042 is unchanged). A server must never use the
+variable as a credential, a seat selector, or an access decision — it says who
+is at the keyboard, nothing more. It is PII: fleet adds no log line that prints
+it, and a bundle server should not log its env. For the same reason a key
+listed in `identity_env` may not reference it: the load fails, since a key that
+routes a seat or money must never be filled from whoever is at the keyboard.
+
+**Named account seats.** The user is written into the env last, at spawn —
+after the `<VAR>_<ACCOUNT>` overlay and its inherited-identity guard — so a
+named seat (`deals_client_a`) gets the signed-in user exactly like the default
+seat. An operator who sets an explicit `<VAR>_<ACCOUNT>` value for a
+token-bearing key (`DEAL_SHEET_DEFAULT_TO_CLIENT_A`) overrides the token for
+that seat, like any other account overlay.
+
+The spelling rules are the other reserved tokens': bare only (a
+`${FLEET_USER_EMAIL:-team@example.com}` default fails the load — it would bake
+one person in), exact (a padded `${ FLEET_USER_EMAIL }` fails the load for
+every reserved token, since the spawn paths match only the exact spelling and
+it would otherwise reach every connector as a literal; for the user token any
+padding counts — Unicode whitespace, a zero-width space or a BOM included, and
+a YAML escape that only becomes padding once parsed), not escapable (an
+escaped `$${FLEET_USER_EMAIL}` fails the load anywhere in the manifest,
+including inside a `${OUTER:-...}` default body: the escape collapses to — or
+survives as a `$` in front of — the token before spawn, so it would deliver
+the user's email rather than the literal text; there is no way to write that
+literal), never resolved from the process env (an operator-exported
+`FLEET_USER_EMAIL` cannot hijack it; and because the token is honoured only
+where the bundle itself writes it, an ordinary `${VAR}` whose process value
+names it counts as unset, a token assembled from several env values (or an
+env value completing manifest text) fails the load or drops the key, and an
+account's `<VAR>_<ACCOUNT>` overlay that names it refuses that seat), and only in a **stdio** `mcp_servers` env
+value (an env **key**, a header name or value, the url, command or args, or an
+http server's env fails the load, since nothing would ever substitute it
+there). An Agent Plugin's `mcp.json` entry gets the same rules — escaped or
+padded spellings in an env value, a token in an env key, args, the cwd, or a
+`streamable-http` url or header, and any `${FLEET_USER_NAME}` are refused and
+that entry is skipped. As a spawn-time backstop, a key whose value still
+carries an escaped or non-exact spelling, or `FLEET_USER_NAME`, is dropped,
+never substituted or passed through. The user token is expanded first at
+spawn, before the workspace and task tokens, so a workspace path that happens
+to contain the token text stays literal. The rules apply to the YAML's keys
+and values, not its comments: a comment that documents a refused spelling
+does not fail the load. `fleet validate-config` and bundle
+preflight accept the token exactly where it works. A bundle that never writes
+it is unaffected. Adopt it only after the fleet release that ships it: an
+older fleet treats it as an ordinary unset variable and hands the server an
+**empty** value. The decision record is
+[ADR-0087](adr/0087-interactive-mcp-scopes-carry-the-signed-in-user.md).
+
 ## The subprocess working directory
 
 A stdio server's cwd is **not** the bundle root. Bundle-relative script args
@@ -235,7 +341,7 @@ circularity. Three deliberate edges:
   a `url:`/`command:`/`sandbox.image`, so the literal token could never work.
   `${VAR:-default}` with the var unset still resolves to the default quietly;
   `$${...}` still writes an intentional literal. A bare reserved token
-  (`${FLEET_WORKSPACE}`/`${FLEET_WORKSPACE_ROOT}`/`${FLEET_TASK_ID}`) outside an `mcp_servers` env value
+  (`${FLEET_WORKSPACE}`/`${FLEET_WORKSPACE_ROOT}`/`${FLEET_TASK_ID}`/`${FLEET_USER_EMAIL}`) outside an `mcp_servers` env value
   fails the same way — the spawn paths substitute it only there, so even in
   the lazily-RESOLVED header maps (where `interpolate()` merely preserves it
   verbatim) it would ship on the wire as the literal token. Likewise a
@@ -295,6 +401,18 @@ for a `url:`-referenced var survives the `.env` allowlist.
   Making that the default for *every* scheduled run would mean a per-run spawn
   of the whole catalog and would have to reproduce the shared client's
   optional-server gating; it stays deferred.
+- **A name for the signed-in user.** Fleet's sessions carry an email only
+  (password, OIDC and the central auth cookie alike), and the Elcano Auth
+  service stores no name, so there is no `${FLEET_USER_NAME}` token; it is
+  reserved and refused. A name is never derived from the email. If a real name
+  source appears (an Auth `given_name` claim), a name token can be added on
+  top of the reservation without changing `${FLEET_USER_EMAIL}`.
+- **A user identity for webhook-started turns or scheduled runs.** Nobody
+  signed in sent them. A task created from chat does not inherit its creator's
+  identity into its runs either: a run may fire long after, on a schedule the
+  creator no longer watches, and the scheduled path takes no user at all.
+- **`${FLEET_USER_EMAIL}` on HTTP servers or in headers.** Only stdio `env`
+  values are substituted, like the workspace tokens.
 - ~~**Full re-ordering of bundle-load vs `.env` load**~~ — no longer a
   residual: fleet#1123 shipped the re-ordering plus a fail-loud check for
   unresolvable references. See "Bundle-load vs `.env` ordering" above.
@@ -307,7 +425,17 @@ for a `url:`-referenced var survives the `.env` allowlist.
   `internal/clientconfig/manifest_env.go` (`applyBootEnvFile`,
   `scanManifestEnvRefs`, `unresolvedManifestRefs`) +
   `internal/config/config.go` (`BootstrapEnvFile`).
-- Spawn-time substitution: `internal/agentcore/mcp_workspace.go`.
+- Spawn-time substitution: `internal/agentcore/mcp_workspace.go`; the user
+  token and its validation:
+  `internal/agentcore/mcp_user.go` (`ExpandUserEnv`, `NewMCPUserIdentity`);
+  the one spelling matcher shared with the loader: `internal/usertoken`;
+  the load-time spelling and placement rules:
+  `internal/clientconfig/user_tokens.go`.
+- Where the signed-in user comes from and how it crosses the broker:
+  `internal/httpapi/chat.go` (`runTurnAsync`'s `mcpUser`),
+  `internal/httpapi/approvals.go` (`approvalMCPScope`),
+  `internal/mcpbroker/protocol.go` (`ScopeSpec.User`) +
+  `server.go` (`validateScopeSpec`), `cmd/fleet/mcp_broker.go` (`OpenScope`).
 - Variant guard + marker: `internal/agentcore/mcp_selection.go`.
 - Interactive critical gate: `internal/agentcore/interactive_gates.go`
   (`checkCriticalToolApproval`) + `docs/AGENT-RUNTIME.md` (approval timeouts).

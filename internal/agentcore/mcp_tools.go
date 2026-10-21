@@ -278,6 +278,10 @@ type toolBuildConfig struct {
 	personaName   string
 	personaPolicy *PersonaToolPermissions
 	observer      Observer
+	// hiddenSuffixes is RunConfig.HiddenToolSuffixes (interactive_hidden.go):
+	// MCP tools it selects are dropped here, before the disclosure decision,
+	// and every built mcpTool carries it as its call gate. nil = none.
+	hiddenSuffixes []string
 	// panicAttribution is copied into the universal dispatch wrapper for every
 	// advertised route and into deferred logical MCP tools before registration.
 	panicAttribution panicAttribution
@@ -343,9 +347,10 @@ type toolRoster struct {
 	mcp []string
 
 	// removed names the gate that kept each catalog tool out of this run
-	// (#1744): gateOptIn, gateAllowlist, gateNarrowed, gatePersona or
-	// gateSchema. A model that calls one of these names is told which gate
-	// removed it, instead of only "tool not found" (out_of_roster.go).
+	// (#1744): gateOptIn, gateAllowlist, gateNarrowed, gatePersona,
+	// gateSchema or gateInteractiveHidden. A model that calls one of these
+	// names is told which gate removed it, instead of only "tool not found"
+	// (out_of_roster.go).
 	removed map[string]string
 	// servers is every registration name in the catalog, before the gates:
 	// the server names an out-of-roster mcp_* call is matched against.
@@ -408,6 +413,15 @@ func buildFantasyToolsWithRoster(
 	mcpSkippedAllowlist := 0
 	mcpSkippedPersona := 0
 	mcpSkippedSchema := 0
+	mcpSkippedHidden := 0
+	// hiddenNames are the tools interactive_hidden_tools removed, so the
+	// tool_call bridge can say why such a name is not callable.
+	var hiddenNames map[string]bool
+	// personaDenied are the tools Gate-4 removed, so tool_describe and
+	// tool_call can say why (the same words as the out-of-roster answer)
+	// instead of "no tool named": a tool both the persona and the hidden list
+	// remove is reported under the persona gate everywhere.
+	var personaDenied map[string]bool
 	for _, st := range mcpServerTools {
 		if roster.servers == nil {
 			roster.servers = map[string]bool{}
@@ -453,6 +467,7 @@ func buildFantasyToolsWithRoster(
 			hooks:             cfg.hooks,
 			journal:           cfg.journal,
 			readWorkspaceFile: cfg.readWorkspaceFile,
+			hiddenSuffixes:    cfg.hiddenSuffixes,
 		}
 		// Gate 4 (persona tool allowlist, #294): applied HERE — to the logical
 		// mcp_<server>_<tool> identity, before the disclosure decision below —
@@ -469,6 +484,10 @@ func buildFantasyToolsWithRoster(
 				emitPersonaToolBlocked(cfg.observer, cfg.personaName, mt.Name(), reason)
 				mcpSkippedPersona++
 				roster.noteRemoved(mt.Name(), gatePersona)
+				if personaDenied == nil {
+					personaDenied = map[string]bool{}
+				}
+				personaDenied[mt.Name()] = true
 				continue
 			}
 		}
@@ -486,6 +505,29 @@ func buildFantasyToolsWithRoster(
 			emitToolSchemaInvalid(cfg.observer, mt.Name(), issue.Detail)
 			mcpSkippedSchema++
 			roster.noteRemoved(mt.Name(), gateSchema)
+			continue
+		}
+		// Interactive-hidden tools (agent_policy.interactive_hidden_tools,
+		// interactive_hidden.go): a chat turn, and a sub-agent spawned from
+		// one, drops these HERE, before the disclosure decision, for the same
+		// reason Gate-4 is applied here (#570): a tool that deferred behind
+		// the bridges would otherwise stay discoverable via tool_search and
+		// callable via tool_call. Scheduled runs pass no list.
+		//
+		// It is the LAST gate, after the persona policy and the schema check.
+		// Those remove a tool in every mode; this one only in chat. A tool two
+		// gates remove is reported under the first one (roster.removed,
+		// out_of_roster.go), so the broader gate wins: "reserved for scheduled
+		// runs" would be false for a tool the persona denies everywhere. Only a
+		// tool every mode-wide gate kept lands in hiddenNames, which is what
+		// tool_describe and tool_call explain with interactiveHiddenRefusal.
+		if hiddenByList(mt.Name(), cfg.hiddenSuffixes) {
+			mcpSkippedHidden++
+			roster.noteRemoved(mt.Name(), gateInteractiveHidden)
+			if hiddenNames == nil {
+				hiddenNames = map[string]bool{}
+			}
+			hiddenNames[mt.Name()] = true
 			continue
 		}
 		// Install the final model-visible boundary before the tool enters the
@@ -516,6 +558,9 @@ func buildFantasyToolsWithRoster(
 		// so an MCP panic is attributed and accounted to mcp_<server>_<tool>, not
 		// only to the disclosure plumbing. containToolRoster is idempotent.
 		reg := newDeferredToolRegistry(containToolRoster(mcpTools, cfg.panicAttribution, policy))
+		reg.hidden = hiddenNames
+		reg.personaDenied = personaDenied
+		reg.personaName = cfg.personaName
 		bridges := reg.bridgeTools()
 		for _, b := range bridges {
 			guarded := &policyGuardedTool{inner: b, policy: policy}
@@ -532,8 +577,8 @@ func buildFantasyToolsWithRoster(
 			allTools = append(allTools, guarded)
 		}
 		allTools = append(allTools, confirmAudit...)
-		log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d bridges; %d MCP tools DEFERRED behind tool_search/describe/call [#506], %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona, %d MCP skipped schema)",
-			len(allTools), len(nativeTools), len(cfg.loaderTools), len(bridges), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona, mcpSkippedSchema)
+		log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d bridges; %d MCP tools DEFERRED behind tool_search/describe/call [#506], %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona, %d MCP skipped schema, %d MCP hidden from chat)",
+			len(allTools), len(nativeTools), len(cfg.loaderTools), len(bridges), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona, mcpSkippedSchema, mcpSkippedHidden)
 		if len(allTools) > maxToolsPerRequest {
 			return nil, toolRoster{}, fmt.Errorf("registered %d core+bridge tools, exceeds the %d-tool ceiling even after deferral", len(allTools), maxToolsPerRequest)
 		}
@@ -550,8 +595,8 @@ func buildFantasyToolsWithRoster(
 	allTools = append(allTools, mcpTools...)
 	allTools = append(allTools, confirmAudit...)
 
-	log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d MCP, %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona, %d MCP skipped schema)",
-		len(allTools), len(nativeTools), len(cfg.loaderTools), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona, mcpSkippedSchema)
+	log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d MCP, %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona, %d MCP skipped schema, %d MCP hidden from chat)",
+		len(allTools), len(nativeTools), len(cfg.loaderTools), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona, mcpSkippedSchema, mcpSkippedHidden)
 
 	if len(allTools) > maxToolsPerRequest {
 		return nil, toolRoster{}, fmt.Errorf("registered %d tools, exceeds the %d-tool ceiling", len(allTools), maxToolsPerRequest)
@@ -684,6 +729,9 @@ type mcpTool struct {
 	providerOptions   fantasy.ProviderOptions
 	hooks             *hookEngine // #788; fires under the real mcp_<server>_<tool> name (also on the deferred route)
 	journal           TurnJournal // #798; nil = no durable journal (scheduled/evals)
+	// hiddenSuffixes is the run's RunConfig.HiddenToolSuffixes, the call
+	// gate Run checks first (interactive_hidden.go). nil = none.
+	hiddenSuffixes []string
 }
 
 func (m *mcpTool) Name() string {
@@ -732,6 +780,14 @@ func (m *mcpTool) Info() fantasy.ToolInfo {
 // steps: the argument parse (validate) and the brokered call (execute).
 func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	toolName := m.Name()
+	// The interactive-hidden call gate (interactive_hidden.go): refused before
+	// the policy gate, so a hidden critical tool never stages an approval
+	// card, nothing is journaled and the broker is never called. The build
+	// loop already keeps such a tool out of the run; this is what makes it
+	// uncallable rather than only unlisted, whatever path reaches it.
+	if hiddenByList(toolName, m.hiddenSuffixes) {
+		return fantasy.NewTextErrorResponse(interactiveHiddenRefusal(toolName)), nil
+	}
 	var args map[string]any
 	return runGovernedToolCall(ctx, toolCallFraming{
 		name:    toolName,
