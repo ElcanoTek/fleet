@@ -47,6 +47,20 @@
      literal #fff — with a literal, a yellow-primary bundle rendered white on
      yellow at 1.33:1. */
   --color-on-primary: #ffffff;
+  /* The background of a filled button (Approve, Check result, Retry failed)
+     under --color-on-primary text. The brand pair is not held to contrast:
+     white on fleet's #7272ab is 4.46:1, just under WCAG AA. So the fill is
+     the primary mixed toward black (or white) by the smallest step that
+     reaches 4.5:1, and its hover a further 10 points the same way, so a hover
+     only ever raises the contrast. These are fleet's own values; when a
+     bundle sets primary or on_primary, /theme.css emits the fill measured for
+     that pair (internal/httpapi/theme_contrast.go), so no palette can push a
+     button label below AA. Not themable on purpose. */
+  --color-primary-fill: color-mix(in srgb, var(--color-primary) 99%, #000);
+  --color-primary-fill-hover: color-mix(in srgb, var(--color-primary) 89%, #000);
+  /* The label on that fill: on_primary, painted solid. /theme.css emits it
+     with the fill (a translucent on_primary could not reach AA on any fill). */
+  --color-on-primary-fill: var(--color-on-primary);
   --color-secondary: #586f7c;
   --color-accent: #9da7ef;
   --color-white: #ffffff;
@@ -108,6 +122,58 @@
      values are pinned to >= 4.5:1 on a 15-20% -strong tint over every
      surface fleet and its bundles ship (designTokens.test.ts). */
   --color-danger-soft: #e79b9b;
+  /* Status words as TEXT on a card (approval cards: "Not applied:", "1
+     failed", "Timed out", a failed card's title). The base status color with
+     25-30% of the theme's strongest text mixed in, so it reads darker in light
+     and lighter in dark without leaving its hue. The base tokens measured as
+     low as 3.6:1 (light warning) and 4.4:1 (dark danger) on the tinted
+     approval cards. Derived, so they follow a bundle's text_primary;
+     approvalCardContrast.test.ts pins >= 4.5:1. */
+  --color-success-text: color-mix(in srgb, var(--color-success) 75%, var(--color-text-primary));
+  --color-warning-text: color-mix(in srgb, var(--color-warning) 70%, var(--color-text-primary));
+  --color-danger-text: color-mix(in srgb, var(--color-danger) 75%, var(--color-text-primary));
+  /* The faint wash behind a status icon on a card (a row's check, cross,
+     warning or clock). The icon itself stays the base status color and needs
+     3:1 on this wash (WCAG 1.4.11). */
+  --color-success-tint: color-mix(in srgb, var(--color-success) 15%, transparent);
+  --color-warning-tint: color-mix(in srgb, var(--color-warning) 15%, transparent);
+  --color-danger-tint: color-mix(in srgb, var(--color-danger) 15%, transparent);
+  /* The warning icon on that wash (an outcome card's "check didn't match" or
+     "outcome unclear" glyph). The base amber measured 2.77:1 on its wash over a
+     mid-gray light surface-2 (#e9e9e9), under the 3:1 icons need, so the icon
+     mixes 15% of the strongest text in: deeper in light, lighter in dark, on
+     every bundle palette. Success and danger icons clear 3:1 as they are. */
+  --color-warning-icon: color-mix(in srgb, var(--color-warning) 85%, var(--color-text-primary));
+  /* Approval-card shells (chat/ui/Approval*.tsx), one fill per state, so the
+     cards and approvalCardContrast.test.ts read the same values:
+       card-bg          a neutral card: pending without a plain-words layout,
+                        a plan, running, declined, expired
+       card-pending-bg  a pending card that asks for a decision (and a mixed
+                        plan's result)
+       card-*-bg        an outcome: done, check didn't match / unclear,
+                        failed; record-bg is a notify record
+     The danger fill is 4% in dark, from the designer's contrast check: a red
+     wash reads heavier on a dark page and pulls the card's secondary text
+     toward its hue. Light restates it at 7%. */
+  --color-card-bg: color-mix(in srgb, var(--color-overlay-soft) 55%, transparent);
+  --color-card-pending-bg: color-mix(in srgb, var(--color-accent) 7%, var(--color-overlay-soft));
+  --color-card-success-bg: color-mix(in srgb, var(--color-success) 7%, var(--color-overlay-soft));
+  --color-card-warning-bg: color-mix(in srgb, var(--color-warning) 7%, var(--color-overlay-soft));
+  --color-card-danger-bg: color-mix(in srgb, var(--color-danger) 4%, var(--color-overlay-soft));
+  --color-card-record-bg: color-mix(in srgb, var(--color-text-muted) 7%, var(--color-overlay-soft));
+  /* Muted text and links ON those fills. --color-text-muted and
+     --color-accent are tuned for plain surfaces (fleet's light muted is
+     ~5:1 on the page) and dropped to 3.7-4.4:1 on a tinted card, so the card
+     mixes 20% of the strongest text into each. Themable inputs, derived
+     outputs: a bundle's palette gets the same lift. */
+  --color-card-text-muted: color-mix(in srgb, var(--color-text-muted) 80%, var(--color-text-primary));
+  --color-card-link: color-mix(in srgb, var(--color-accent) 80%, var(--color-text-primary));
+  /* The running approval card's progress bar. It was --color-primary, which
+     a bundle may set to a light brand color (a yellow primary with dark text
+     on its buttons) that cannot reach 3:1 on the near-white track. The card
+     link color is already held to 4.5:1 on every card fill, so the bar
+     inherits a contrast-safe color from the palette in both themes. */
+  --color-progress: var(--color-card-link);
   /* Syntax-highlighting palette for code blocks. Prism themes are
      rebuilt on top of these via CSS vars so code colors track
      light/dark automatically without a JS theme swap. */
@@ -479,12 +545,17 @@
   --color-success-strong: #2f8f5e;
   /* -soft deepened from #137b47 / #9a6a00 / #b02a2a, which measured
      3.4-4.5:1 on their own 15% tints over light surfaces; pinned to
-     >= 4.5:1 by designTokens.test.ts. */
-  --color-success-soft: #10673c;
+     >= 4.5:1 by designTokens.test.ts. Deepened once more (from #10673c /
+     #795300 / #a42727) for chips ON an approval card, where the card's own
+     wash sits under the chip's tint: 4.38-4.48:1 there before, >= 4.9:1 now
+     (approvalCardContrast.test.ts). */
+  --color-success-soft: #0d5d35;
   --color-warning-strong: #b07a24;
-  --color-warning-soft: #795300;
+  --color-warning-soft: #704c00;
   --color-danger-strong: #c14f4f;
-  --color-danger-soft: #a42727;
+  --color-danger-soft: #992323;
+  /* The failed approval card's red wash keeps its 7% in light (see :root). */
+  --color-card-danger-bg: color-mix(in srgb, var(--color-danger) 7%, var(--color-overlay-soft));
   --color-syntax-keyword: #7c3aed;
   --color-syntax-string: #0f7f3e;
   --color-syntax-number: #a85a00;
@@ -6304,7 +6375,10 @@ select.mcp-server-picker__account-select {
 }
 
 .guide-prose a {
-  color: var(--color-primary);
+  /* The link token, not the primary: a bundle's primary can be a light brand
+     color (yellow) meant for button fills, unreadable as text on the page.
+     --color-link follows the bundle's accent unless it pins one. */
+  color: var(--color-link);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
