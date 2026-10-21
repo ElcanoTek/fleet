@@ -168,7 +168,9 @@ cooperative stop.
   whatever key matches it: those transports neither observe the stop signal
   nor send a cancellation, so the card would claim a stop that never reached
   anything. Its card carries no `stoppable` key and the stop route answers
-  400.
+  400. A `critical_tool_stop` member that names a synthetic server
+  (`mcp__http_publish`, `_a2a_helpdesk_send`) is refused by the policy check
+  (`fleet validate-config` reports it), as is the native `bash` tool.
 - **"Halted on a shared failure" (6d) is the bundle's,** not fleet's: it is
   the server's own stop reason in its result card.
 - **No Stop in the terminal client.** It shows the running state and

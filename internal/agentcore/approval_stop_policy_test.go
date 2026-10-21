@@ -67,12 +67,13 @@ func TestApprovalStopProblems_ResolvesOverlappingModes(t *testing.T) {
 func TestApprovalStopPolicy_RefusesNativeBash(t *testing.T) {
 	t.Cleanup(func() { ConfigureAgentPolicy(AgentPolicy{}) })
 	p := AgentPolicy{
-		CriticalToolSuffixes: []string{"bash", "shell_bash"},
-		CriticalToolStop:     []string{"bash", "shell_bash"},
+		CriticalToolSuffixes: []string{"bash", "shell_bash", "mcp__http_publish", "_a2a_helpdesk_send"},
+		CriticalToolStop:     []string{"bash", "shell_bash", "mcp__http_publish", "_a2a_helpdesk_send"},
 	}
 	problems := ApprovalStopProblems(p)
-	if len(problems) != 1 || !strings.Contains(problems[0], `"bash"`) || !strings.Contains(problems[0], "native bash") {
-		t.Fatalf("problems = %q, want native bash reported", problems)
+	joined := strings.Join(problems, "\n")
+	if len(problems) != 3 || !strings.Contains(joined, "native bash") || !strings.Contains(joined, `"mcp__http_publish"`) || !strings.Contains(joined, `"_a2a_helpdesk_send"`) {
+		t.Fatalf("problems = %q, want native bash and both synthetic-server members reported", problems)
 	}
 	ConfigureAgentPolicy(p)
 	if ApprovalStop("bash") {

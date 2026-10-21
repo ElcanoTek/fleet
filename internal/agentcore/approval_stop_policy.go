@@ -26,16 +26,21 @@ func ApprovalStopProblems(p AgentPolicy) []string {
 }
 
 // buildStopSet resolves critical_tool_stop: buildStagedCardSuffixSet's rules,
-// plus a member naming a native executable tool (bash) is dropped and
-// reported: it runs inline, never as an MCP request, so there is nothing to
-// cancel and its running card could never offer Stop.
+// plus a member naming a native executable tool (bash), or naming a synthetic
+// server (SelectsOnlySyntheticTransport), is dropped and reported: neither
+// runs as a cancellable MCP request, so its running card could never offer
+// Stop.
 func buildStopSet(members []string, modes map[string]string, critical map[string]bool) (map[string]bool, []string) {
 	set, problems := buildStagedCardSuffixSet("critical_tool_stop", members, modes, critical)
 	for _, s := range members {
 		s = strings.TrimSpace(s)
-		if set[s] && nativeExecutableTools[s] {
+		switch {
+		case set[s] && nativeExecutableTools[s]:
 			delete(set, s)
 			problems = append(problems, fmt.Sprintf("ignoring critical_tool_stop member %q: it selects fleet's native %s tool, which runs no MCP call and cannot be stopped (name an MCP tool by its server, e.g. <server>_%s)", s, s, s))
+		case set[s] && SelectsOnlySyntheticTransport(s):
+			delete(set, s)
+			problems = append(problems, fmt.Sprintf("ignoring critical_tool_stop member %q: it selects only inline http_tools or a2a peer tools, whose transports cannot cancel a call, so their card never offers Stop", s))
 		}
 	}
 	return set, problems
