@@ -16,6 +16,18 @@ import (
 	"time"
 )
 
+// readNow adapts a reader for tests that do not hold the window: it
+// releases the lease at once.
+func readNow(r WorkspaceFileReadFunc) func(context.Context, string, string, int64, int64, int64) ([]byte, error) {
+	return func(ctx context.Context, path, sum string, offset, length, maxFileBytes int64) ([]byte, error) {
+		window, release, err := r(ctx, path, sum, offset, length, maxFileBytes)
+		if err == nil {
+			release()
+		}
+		return window, err
+	}
+}
+
 func hexSum(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
@@ -32,7 +44,7 @@ func TestWorkspaceFileReaderConfinement(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := hexSum([]byte("exact bytes"))
-	reader := WorkspaceFileReader(sb)
+	reader := readNow(WorkspaceFileReader(sb))
 	window, err := reader(ctx, "payload", sum, 0, 11, 100)
 	if err != nil || string(window) != "exact bytes" {
 		t.Fatalf("read failed: %q %v", window, err)
@@ -58,7 +70,7 @@ func TestWorkspaceFileReaderConfinement(t *testing.T) {
 		}
 	}
 	// The cap is on the whole file, so even a 1-byte window of it is refused.
-	if _, err := WorkspaceFileReader(sb)(ctx, "payload", sum, 0, 1, 10); err == nil || !strings.Contains(err.Error(), "exceeding the 10-byte cap") {
+	if _, err := readNow(WorkspaceFileReader(sb))(ctx, "payload", sum, 0, 1, 10); err == nil || !strings.Contains(err.Error(), "exceeding the 10-byte cap") {
 		t.Fatalf("oversized file accepted: %v", err)
 	}
 	for _, r := range [][3]int64{{-1, 1, 100}, {0, 0, 100}, {0, 101, 100}, {100, 1, 100}, {0, 1, 0}} {
@@ -69,7 +81,7 @@ func TestWorkspaceFileReaderConfinement(t *testing.T) {
 	if _, err := reader(context.Background(), "payload", sum, 0, 1, 100); err == nil {
 		t.Fatal("missing workspace accepted")
 	}
-	if _, err := WorkspaceFileReader(nil)(ctx, "payload", sum, 0, 1, 100); err == nil {
+	if _, err := readNow(WorkspaceFileReader(nil))(ctx, "payload", sum, 0, 1, 100); err == nil {
 		t.Fatal("nil sandbox accepted")
 	}
 }
@@ -93,7 +105,7 @@ func TestWorkspaceFileReaderChunkedLargeFile(t *testing.T) {
 	if err := os.WriteFile(path, body, 0600); err != nil {
 		t.Fatal(err)
 	}
-	reader := WorkspaceFileReader(sb)
+	reader := readNow(WorkspaceFileReader(sb))
 	var got []byte
 	for offset := int64(0); offset < int64(len(body)); offset += 1 << 20 {
 		window, err := reader(ctx, "site.zip", hexSum(body), offset, 1<<20, 64<<20)
@@ -181,7 +193,7 @@ func TestWorkspaceFileReaderRejectsForgedHelperDigest(t *testing.T) {
 	src := newFakeSource(map[string][]byte{"f": approved})
 	src.override = func(string) []byte { return []byte("altered contents!") } // helper would claim hexSum(approved)
 	store := testStore(1 << 20)
-	reader := newVerifiedWorkspaceReader(src.source(), store)
+	reader := readNow(newVerifiedWorkspaceReader(src.source(), store))
 	ctx := WithForcedWorkingDir(context.Background(), "/ws")
 	for offset := int64(0); offset < 3; offset++ {
 		if _, err := reader(ctx, "f", hexSum(approved), offset, 4, 1<<20); !errors.Is(err, ErrWorkspaceFileHashMismatch) {
@@ -199,9 +211,9 @@ func TestVerifiedWorkspaceFileCache(t *testing.T) {
 	src := newFakeSource(files)
 	now := time.Unix(0, 0)
 	store := newWorkspaceFileStore(1<<20, 1000, 2, time.Minute, func() time.Time { return now })
-	reader := newVerifiedWorkspaceReader(src.source(), store)
+	reader := readNow(newVerifiedWorkspaceReader(src.source(), store))
 	ctx := WithForcedWorkingDir(context.Background(), "/ws")
-	read := func(r WorkspaceFileReadFunc, path string, offset int64) []byte {
+	read := func(r func(context.Context, string, string, int64, int64, int64) ([]byte, error), path string, offset int64) []byte {
 		t.Helper()
 		window, err := r(ctx, path, hexSum(files[path]), offset, 100, 1<<20)
 		if err != nil {
@@ -220,7 +232,7 @@ func TestVerifiedWorkspaceFileCache(t *testing.T) {
 		t.Fatalf("hit re-read the file: %d reads", src.readCount("a"))
 	}
 	// Miss: another reader (another run) never sees this run's entry.
-	read(newVerifiedWorkspaceReader(src.source(), store), "a", 0)
+	read(readNow(newVerifiedWorkspaceReader(src.source(), store)), "a", 0)
 	if src.readCount("a") != 2 {
 		t.Fatalf("cache shared across readers: %d reads", src.readCount("a"))
 	}
@@ -265,7 +277,7 @@ func TestWorkspaceFileReaderConcurrentIdenticalMisses(t *testing.T) {
 	body := bytes.Repeat([]byte("p"), 64<<10)
 	src := newFakeSource(map[string][]byte{"f": body})
 	src.gate = make(chan struct{})
-	reader := newVerifiedWorkspaceReader(src.source(), testStore(4<<20))
+	reader := readNow(newVerifiedWorkspaceReader(src.source(), testStore(8<<20)))
 	ctx := WithForcedWorkingDir(context.Background(), "/ws")
 	var wg sync.WaitGroup
 	errs := make(chan error, 16)
@@ -306,7 +318,7 @@ func TestWorkspaceFileReaderBudget(t *testing.T) {
 	files["huge"] = bytes.Repeat([]byte("h"), 300<<10) // cost 1.3 MiB > budget
 	src := newFakeSource(files)
 	store := testStore(budget)
-	reader := newVerifiedWorkspaceReader(src.source(), store)
+	reader := readNow(newVerifiedWorkspaceReader(src.source(), store))
 	ctx := WithForcedWorkingDir(context.Background(), "/ws")
 
 	var wg sync.WaitGroup
@@ -347,7 +359,7 @@ func TestWorkspaceFileReaderBudget(t *testing.T) {
 	src.gate = make(chan struct{})
 	src.started = make(chan string, 64) // drop the batch's start signals
 	src.mu.Unlock()
-	holder := newVerifiedWorkspaceReader(src.source(), store) // fresh reader: a miss
+	holder := readNow(newVerifiedWorkspaceReader(src.source(), store)) // fresh reader: a miss
 	held := make(chan error, 1)
 	go func() {
 		_, err := holder(ctx, "a", hexSum(files["a"]), 0, 10, 1<<20)
@@ -376,5 +388,84 @@ func TestWorkspaceFileReaderBudget(t *testing.T) {
 	}
 	if store.peak > budget || store.reserved != 0 {
 		t.Fatalf("budget broken: peak %d, reserved %d", store.peak, store.reserved)
+	}
+}
+
+// TestWorkspaceFileLeases: a window stays charged — the file it is cut from
+// plus its dispatch charge — from acquisition until release, on cache hits as
+// well as misses; a pinned file is never evicted from under a lease; a lease
+// that does not fit waits for a release; release is idempotent.
+func TestWorkspaceFileLeases(t *testing.T) {
+	files := map[string][]byte{"a": bytes.Repeat([]byte("a"), 100<<10), "b": bytes.Repeat([]byte("b"), 10<<10)}
+	src := newFakeSource(files)
+	wc := WorkspaceWindowCharge(10)
+	// Room for "a" and two leases, not three; and for a's file and one lease
+	// beside b's miss reservation (max(4*10K+128K, 10K+wc)).
+	budget := 100<<10 + 2*wc + wc/2
+	store := newWorkspaceFileStore(budget, budget, 1, time.Minute, time.Now)
+	reader := newVerifiedWorkspaceReader(src.source(), store)
+	ctx := WithForcedWorkingDir(context.Background(), "/ws")
+	charged := func() int64 {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.cached + store.reserved
+	}
+	acquire := func(c context.Context, path string) (func(), error) {
+		_, release, err := reader(c, path, hexSum(files[path]), 0, 10, 1<<20)
+		return release, err
+	}
+
+	releaseMiss, err := acquire(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := charged(), int64(100<<10)+wc; got != want {
+		t.Fatalf("miss lease charged %d, want %d", got, want)
+	}
+	releaseHit, err := acquire(ctx, "a") // cache hit
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := charged(), int64(100<<10)+2*wc; got != want || src.readCount("a") != 1 {
+		t.Fatalf("hit lease charged %d, want %d (reads %d)", got, want, src.readCount("a"))
+	}
+	// A third lease does not fit: it waits, and honors cancellation.
+	waitCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	if _, err := acquire(waitCtx, "a"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("over-budget lease: %v", err)
+	}
+	cancel()
+	third := make(chan error, 1)
+	go func() {
+		release, err := acquire(ctx, "a")
+		if err == nil {
+			release()
+		}
+		third <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	releaseHit()
+	releaseHit() // idempotent
+	if err := <-third; err != nil {
+		t.Fatalf("waiting lease not admitted after a release: %v", err)
+	}
+	// maxEntries is 1, but "a" is pinned: reading "b" must not evict it.
+	releaseB, err := acquire(ctx, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	entries := store.order.Len()
+	store.mu.Unlock()
+	if entries != 2 {
+		t.Fatalf("pinned file evicted: %d entries", entries)
+	}
+	releaseMiss()
+	releaseB()
+	if got := charged(); got > int64(100<<10) || store.reserved != 0 {
+		t.Fatalf("after releasing every lease %d bytes stay charged; want at most one cached file", got)
+	}
+	if store.peak > budget {
+		t.Fatalf("peak %d exceeds budget %d", store.peak, budget)
 	}
 }

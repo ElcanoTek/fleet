@@ -1,4 +1,4 @@
-# ADR-0087: MCP workspace-file references cap the whole file at 64 MiB, are hash-verified in Fleet once per reference, and serve each window from those verified bytes
+# ADR-0087: MCP workspace-file references: a 64 MiB whole-file cap, an 8 MiB per-call window, host-side hash verification, and one memory budget for every byte held
 
 - **Status:** Accepted
 - **Date:** 2026-10-21
@@ -11,143 +11,153 @@
 
 ADR-0066 lets a model pass `{workspace_file, sha256, offset, length}` for an
 MCP string property annotated `contentEncoding: base64`. It capped the whole
-file at 2 MiB, and Fleet read the whole file out of the sandbox for every chunk
-so it could hash it host-side.
+file at 2 MiB, and Fleet read and hashed the whole file for every chunk.
 
-MCP servers now take much bigger uploads. Pages accepts staged uploads of
-32 MiB by default and 64 MiB at most, in chunks of up to 8 MiB. With a 2 MiB
-cap, Fleet was the limit. Raising the cap while keeping whole-file reads would
-make a chunked upload quadratic: a 64 MiB file sent in 1 MiB chunks would move
-64 whole copies (4 GiB) out of the sandbox, through JSON and base64, and into
-Fleet's memory.
+MCP servers now take much larger uploads. Pages stages up to 64 MiB, in chunks
+of up to 8 MiB, with MCP request bodies of up to 32 MB. Raising the cap exposes
+three problems.
 
-Reading only the window out of the sandbox and trusting a whole-file digest the
-sandbox helper computed is not an option. The sandbox is model-writable: a
-planted module or a compromised interpreter could report the approved hash for
-altered bytes. The approved hash has to be checked by Fleet over the bytes it
-actually sends.
+- **Integrity.** The sandbox is model-writable. A digest computed inside it,
+  for example by a planted `hashlib.py`, cannot bind the approved hash to the
+  bytes Fleet sends.
+- **Cost.** Re-reading the whole file for every chunk makes a chunked upload
+  quadratic.
+- **Memory.** A large file, the base64 of each window, and every whole-request
+  copy the dispatch path makes of that base64 all live in Fleet. Concurrent
+  runs can multiply them past anything advertised.
 
 ## Decision
 
-1. **The whole-file cap is 64 MiB.** `maxMCPWorkspaceFileBytes` in
-   `internal/agentcore/mcp_file_arguments.go` is the only copy of the number.
-   The advertised description text and the schema maxima are derived from it.
-2. **Fleet hashes the whole file itself, once per reference.** On the first
-   reference to a file, `tools.WorkspaceFileReader` reads the whole file out of
-   the sandbox through FileOp with `MaxSize = cap`. The helper refuses a file
-   over the cap from its size, before reading any of it. It also counts the
-   bytes it actually reads, and never reads more than `MaxSize + 1`, so a file
-   grown mid-read (and restored before the after-read stat check) is refused
-   rather than buffered. On Fleet's side, every backend (podman, kubernetes,
-   host) buffers at most the base64 of `MaxSize` (or `Limit`) plus 64 KiB of
-   helper output for such a read. A longer response is discarded and refused,
-   so even a helper that is not the script Fleet sent cannot exhaust Fleet's
-   memory. Fleet then hashes the
-   bytes and refuses a mismatch before any MCP call. Nothing the helper reports
-   about the bytes, size or digest, is used.
-3. **Later windows are sliced from the verified bytes.** The verified bytes go
-   into an LRU that holds at most 2 files and 128 MiB process-wide, with a
-   5-minute TTL. The key is the reader instance (one per run or turn binding to
-   a sandbox), the workspace root, the path and the sha256. Each window of the
-   same reference is a slice of those bytes. On a miss (eviction, expiry, a
-   new turn), Fleet re-reads and re-verifies. A file that fails verification
-   is never cached.
-4. **Every miss is admitted against one process-wide memory budget of
-   320 MiB.** The budget covers cached files plus the reservations of reads in
-   flight, and that total never exceeds it.
-   - **Identical misses share one read.** Concurrent misses for the same key
-     wait for a single read rather than each reading the file.
-   - **Size probe.** Before a read starts, a cheap probe gets the file's size.
-     It is a FileOp read with `MaxSize` 1, which the helper answers from fstat
-     without hashing.
-   - **Reservation.** The read then reserves `4 × size + 128 KiB`. That covers
-     its peak: the FileOp output buffer, which holds at most base64(size) +
-     64 KiB and grows no further; the JSON-decoded copy of that buffer; and
-     the decoded bytes.
-   - **Untrusted probe, still bounded.** The read's `MaxSize` is the probed
-     size. The helper refuses a larger file, and the output sink refuses
-     longer output. So a lying probe cannot push a read past its reservation.
-   - **Making room.** A reservation first evicts cached files, least recently
-     used first. If that is not enough, it waits for reads in flight to
-     finish, and honours cancellation while it waits.
-   - **Settling.** When the read ends, its reservation is released. If the
-     file verified, its bytes are charged to the cache instead.
-   - **Oversize requests.** A request whose cost exceeds the whole budget
-     fails at once rather than waiting.
-   - **What fits.** One 64 MiB file costs 256 MiB + 128 KiB, which fits
-     alongside up to 64 MiB of cached files.
-5. **The helper runs in Python isolated mode from `/`** on every backend
-   (podman `exec --workdir / python3 -I -c`, kubernetes `cd / && python3 -I`,
-   the host test executor `python3 -I -c`). This is defence in depth: a
-   workspace file cannot shadow a stdlib module the helper imports.
-6. Every other part of ADR-0066 still holds: the path must stay inside the
-   active workspace, symlinks are rejected, an exact range and the server's
-   `maxLength` are enforced before reading, governance runs before the read,
-   the broker authorizes the call, and the journal and approval card record the
-   reference.
+1. **Caps.** A reference may name a file of up to 64 MiB
+   (`maxMCPWorkspaceFileBytes`). One call may carry at most 8 MiB of it
+   (`maxMCPWorkspaceWindowBytes`). 8 MiB is Pages' largest chunk, and its
+   base64 fits Pages' 32 MB request body. Both numbers have a single definition
+   in `internal/agentcore/mcp_file_arguments.go`, and the advertised
+   description and schema maxima are derived from them. The server's own
+   `maxLength` still applies, and every cap is checked before anything is
+   read.
+2. **Fleet verifies the hash itself.** On the first reference to a file,
+   `tools.WorkspaceFileReader` reads the whole file out of the sandbox and
+   hashes it in Fleet. It refuses a mismatch before any MCP call. It uses
+   nothing the helper says about the bytes.
+   - The FileOp helper refuses a file over its `MaxSize` from fstat.
+   - The helper also counts the bytes it actually reads and never reads past
+     `MaxSize + 1`, so a file grown during the read is refused.
+   - Every backend (podman, kubernetes, host) stores at most base64(`MaxSize`
+     or `Limit`) + 64 KiB of helper stdout in a buffer that grows no further
+     than that, and refuses longer output.
+   - The helper runs as `python3 -I` from `/` on every backend.
+3. **Later windows are slices of the verified bytes.** Verified files are
+   cached for up to 5 minutes, at most 2 unpinned files and 128 MiB. The cache
+   key is the reader instance (one per run or turn binding), the workspace
+   root, the path and the sha256. A window is a sub-slice of the cached file,
+   so there is no copy. Concurrent misses on the same key share one read. A
+   file that fails verification is never cached.
+4. **One budget charges every byte Fleet holds for a reference.** The budget
+   is 384 MiB process-wide. A byte is charged before it is allocated and stays
+   charged until it is released. The tally is
+   `cached files + in-flight reads + window leases ≤ 384 MiB`.
+
+   | Item | Charge | Held from → until |
+   | --- | --- | --- |
+   | Size probe output (FileOp read, `MaxSize` 1) | inside the 64 KiB response overhead | probe call |
+   | Miss read: FileOp output buffer (≤ base64(S) + 64 KiB) + its JSON-decoded string (same) + decoded bytes (S) | `4·S + 128 KiB` | before the read → read settles |
+   | Verified file (cached, or pinned by a lease) | `S` | read settles → evicted (only when unpinned) |
+   | Window W leased to one call (cache hit **or** miss), with E = base64(W): | `WorkspaceWindowCharge(W) = 12·E + 256 KiB` | before the window is returned → after the outbound call returns |
+   | · the window itself | 0 (a slice of the pinned file) | |
+   | · parent: base64 argument string (`resolveFileReferences`) | E | |
+   | · parent: broker frame encode (pooled `json` encodeState, growth) | ≤ 3E | |
+   | · child: broker frame decode buffer (growth; the decoder is replaced after a large frame, so the buffer is not retained) | ≤ 3E | |
+   | · child: decoded argument string | E | |
+   | · child: JSON-RPC line encode (`mcp.EncodeJSONLine`, growth) + the encoded line | ≤ 4E | |
+
+   - **Measured, not guessed.** The window charge is calibrated by
+     `TestWorkspaceWindowDispatchAllocsWithinCharge` (`internal/mcpbroker`).
+     It counts every byte allocated while dispatching a 1 MiB and an 8 MiB
+     window through the real out-of-process broker (client encode, server
+     decode) and the real stdio line encoding, growth intermediates included.
+     The measured total, about 9·E, is an upper bound on what is live at once,
+     and the test fails if the charge falls below it. The in-process broker and
+     the HTTP transport make fewer copies.
+   - **No hold-and-wait.** A miss reserves `max(4·S + 128 KiB, S + windowCharge)`
+     up front. When the read settles, that reservation converts into the pinned
+     file plus the lease without waiting again. A hit reserves its window
+     charge and pins the file in one step. Waiting therefore never happens
+     while part of a request's charge is held.
+   - **Room is made in a fixed order.** First, unpinned files are evicted,
+     least recently used first. Then the request waits for releases,
+     honouring cancellation. A request whose charge exceeds the whole budget
+     fails at once.
+   - **Releasing a lease.** Releasing is idempotent. `mcpTool.call` defers it
+     right after resolving, so the lease is released after `CallMCP` returns on
+     every path: success, error, cancellation and panic. Releasing also puts
+     the reference back in `args`, which drops the base64 string. A resolve
+     that fails partway releases what it already acquired.
+   - **What fits.** A 64 MiB file being read reserves 256 MiB + 128 KiB. Steady
+     state for an 8 MiB window of a 64 MiB file is 64 MiB + 128.3 MiB. So two
+     such windows run at once on one file, and further calls queue. Pages'
+     default 1 MiB chunk costs about 16.3 MiB per call.
+5. Every other part of ADR-0066 still holds: path confinement, symlink
+   refusal, governance before the read, broker authorization, and the journal
+   and approval card recording the reference rather than the bytes.
 
 ## Enforcement
 
-- `TestMCPWorkspaceFileCap` (`internal/agentcore`): pins the cap at 64 MiB and
-  checks that the description and schema carry it. A 3 MiB file is accepted
-  and its window is delivered exactly. A file of 64 MiB + 1 byte is refused
-  with no MCP call. A range past the cap never reaches the reader.
-- `TestWorkspaceFileReaderRejectsForgedHelperDigest` (`internal/tools`): a
-  helper that returns altered bytes while claiming the approved hash is
-  refused every time, and nothing is cached.
-- `TestWorkspaceFileReaderConcurrentIdenticalMisses`: 16 concurrent references
-  to one file read it once.
-- `TestWorkspaceFileReaderBudget`: concurrent misses on different large files
-  never exceed the budget, measured by the peak of cached plus reserved bytes.
-  A waiting miss honours cancellation. A file whose read cannot fit the budget
-  fails at once, without a read.
-- `TestVerifiedWorkspaceFileCache`: covers a hit (several windows, one read),
-  a miss across reader instances, LRU eviction by entry and byte bounds, TTL
-  expiry, and an over-budget file that is never cached.
-- `TestWorkspaceFileReaderChunkedLargeFile`: a 3 MiB file sent in 1 MiB
-  windows through the real sandbox is byte-exact, even when the file is
-  rewritten mid-upload.
-- `TestWorkspaceFileReaderConfinement`: the existing path and root confinement
-  cases, plus hash refusal and cap refusal.
-- `TestFileOp_ReadMaxSizeAndLargeWindow` (`internal/sandbox`): `MaxSize`
-  refusal, and a multi-MiB read that comes back byte-exact from the real
-  `fileops.py`.
-- `TestFileOp_ReadMaxSizeCountsBytesRead`: a file that never reaches EOF is
-  refused after `MaxSize + 1` bytes, for whole and windowed reads.
-- `TestFileOpSinkBoundsHelperOutput`: the Go-side output bound, and the
-  refusal of a flooding helper with buffering stopped at the bound.
+- `internal/agentcore`:
+  - `TestMCPWorkspaceFileCap` covers both caps, the derived text and schema, a
+    3 MiB file being accepted, 64 MiB + 1 being refused, and an over-wide
+    window being refused before any read.
+  - `TestMCPWorkspaceFileWindowsStayCharged` (real sandbox, slow broker):
+    4 concurrent 8 MiB calls never exceed the budget, at most the number the
+    budget admits are in the broker at once, and every in-broker sample has at
+    least `file + n·windowCharge` charged.
+  - `TestMCPWorkspaceFileLeaseReleasedOnEveryPath` covers broker error,
+    cancellation while blocked, broker panic, and a partial resolve failure.
+- `internal/tools`:
+  - `TestWorkspaceFileLeases`: hits are charged, a lease that does not fit
+    waits and honours cancellation, release is idempotent, and a pinned file
+    is never evicted.
+  - `TestWorkspaceFileReaderBudget`: the peak stays within the budget, an
+    oversize request fails fast, and waiting honours cancellation.
+  - `TestWorkspaceFileReaderConcurrentIdenticalMisses`: concurrent identical
+    misses share one read.
+  - `TestWorkspaceFileReaderRejectsForgedHelperDigest`: a forged helper digest
+    is refused.
+  - `TestVerifiedWorkspaceFileCache`: cache hits, misses, LRU eviction and TTL
+    expiry.
+  - `TestWorkspaceFileReaderChunkedLargeFile`: a chunked upload is byte-exact.
+  - `TestWorkspaceFileReaderConfinement`: confinement.
+- `internal/mcpbroker`: `TestWorkspaceWindowDispatchAllocsWithinCharge`, the
+  charge calibration.
+- `internal/sandbox`:
+  - `TestFileOp_ReadMaxSizeCountsBytesRead`: a file that never reaches EOF is
+    refused after `MaxSize + 1` bytes.
+  - `TestFileOpSinkBoundsHelperOutput`: the output bound, buffer capacity
+    within the bound, and refusal of a flood.
+  - `TestFileOp_ReadMaxSizeAndLargeWindow`.
 
 ## Consequences
 
-- A chunked upload reads and hashes the file once, not once per chunk, as long
-  as its chunks arrive within the TTL and the cache is not churned by other
-  large references. A miss costs one more whole-file read. The worst case is
-  the pre-cache behaviour, bounded by the cap.
-- The dispatched bytes are always the version the approved hash names. A file
-  rewritten mid-upload keeps sending the verified version until the entry
-  leaves the cache, and after that the reference fails its hash check.
-- Host memory: cached files plus in-flight reads stay within 320 MiB,
-  with at most 128 MiB of that cached. What the budget does not count:
-  - the copy of a window being base64-encoded and sent at that moment, which
-    the server's `maxLength` bounds per call;
-  - verified bytes a caller is still using after the cache has evicted them.
-
-  Concurrent large misses queue rather than multiply. The helper writes the
-  base64 payload straight to stdout instead of copying it again into a dumped
-  JSON string.
-- No other limit on the path was in the way. The broker's JSON framing, the
-  stdio and HTTP MCP request bodies, and the FileOp exec output have no
-  request-size cap. The existing caps apply only to MCP *responses*.
+- A chunked upload reads and hashes the file once per reference rather than
+  once per chunk. The dispatched bytes are always the version the approved
+  hash names, even if the file is rewritten mid-upload.
+- **The bound holds for reachable data during a call.** Three things sit
+  outside it:
+  - Go's collector may let freed garbage linger up to the `GOGC` target.
+  - `encoding/json`'s pooled encoder buffers may keep up to about 2·E after a
+    call, until the next GC cycles reclaim them.
+  - An MCP server's own process is not counted.
+- Calls past what the budget admits queue rather than fail. A single call can
+  only fail for budget reasons when its own charge can never fit, which the
+  caps rule out for any valid reference.
 
 ## Alternatives considered
 
-- **Keep reading the whole file per chunk at the larger cap.** Rejected
-  because a chunked upload becomes quadratic in transfer and host memory.
-- **Read only the window and trust the helper's whole-file digest.** This was
-  the first draft of this ADR. Rejected because the digest is computed in
-  model-writable territory, so it cannot bind the approved hash to the bytes
-  Fleet sends.
-- **A cross-turn cache keyed only on path.** Rejected for the reason ADR-0066
-  gave: a cache keyed on a path has to be invalidated correctly against a
-  sandbox that can rewrite the file at any time. Keying on the verified hash
-  and the reader instance removes the need to invalidate anything.
+- **Trust the helper's digest and read only the window.** Rejected because the
+  sandbox is model-writable.
+- **Keep the whole-file read per chunk.** Rejected because it is quadratic.
+- **Admit reads but not windows.** This was an earlier revision. Rejected
+  because the window's base64 and its dispatch copies are the larger, longer
+  lived part.
+- **Stream the base64 from the sandbox into the MCP request.** This would
+  avoid the parent and child copies, but needs a broker wire change. Deferred.

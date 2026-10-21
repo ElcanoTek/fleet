@@ -1164,7 +1164,7 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 		"params":            params,
 	}
 
-	requestBytes, err := json.Marshal(request)
+	requestLine, err := EncodeJSONLine(request)
 	if err != nil {
 		return nil, err
 	}
@@ -1173,7 +1173,7 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 	// the request never reached the server, so Server.callTool may safely
 	// retry it after a restart — unlike a read-side failure, where the
 	// server may have executed the call before dying.
-	if err := t.writeLocked(ctx, append(requestBytes, '\n')); err != nil {
+	if err := t.writeLocked(ctx, requestLine); err != nil {
 		return nil, err
 	}
 
@@ -1282,11 +1282,25 @@ func (t *StdioTransport) Notify(ctx context.Context, method string, params inter
 		"method":            method,
 		"params":            params,
 	}
-	b, err := json.Marshal(msg)
+	line, err := EncodeJSONLine(msg)
 	if err != nil {
 		return err
 	}
-	return t.writeLocked(ctx, append(b, '\n'))
+	return t.writeLocked(ctx, line)
+}
+
+// EncodeJSONLine encodes v as one newline-terminated JSON value, the stdio
+// framing. It produces the same bytes as json.Marshal plus '\n', but without
+// the extra whole-request copy that appending the newline to Marshal's
+// exactly-sized result made. A tools/call can carry a multi-MiB base64
+// argument (MCP workspace-file references, ADR-0087), and that copy was
+// charged to the workspace-file budget.
+func EncodeJSONLine(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(v); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // writeLocked writes b to the subprocess's stdin, honoring ctx. The write

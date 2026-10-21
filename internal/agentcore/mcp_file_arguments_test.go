@@ -85,20 +85,20 @@ func TestMCPWorkspaceFileChunks(t *testing.T) {
 func fakeWorkspaceReader(t *testing.T, name string, data []byte, reads *int) tools.WorkspaceFileReadFunc {
 	t.Helper()
 	sum := sha256.Sum256(data)
-	return func(_ context.Context, path, sha256Hex string, offset, length, maxFileBytes int64) ([]byte, error) {
+	return func(_ context.Context, path, sha256Hex string, offset, length, maxFileBytes int64) ([]byte, func(), error) {
 		*reads++
 		if path != name || maxFileBytes != maxMCPWorkspaceFileBytes {
 			t.Fatalf("wrong read contract: %q %d", path, maxFileBytes)
 		}
 		size := int64(len(data))
 		if size > maxFileBytes {
-			return nil, fmt.Errorf("file is %d bytes, exceeding the %d-byte cap", size, maxFileBytes)
+			return nil, nil, fmt.Errorf("file is %d bytes, exceeding the %d-byte cap", size, maxFileBytes)
 		}
 		if hex.EncodeToString(sum[:]) != sha256Hex {
-			return nil, tools.ErrWorkspaceFileHashMismatch
+			return nil, nil, tools.ErrWorkspaceFileHashMismatch
 		}
 		start, end := min(offset, size), min(offset+length, size)
-		return data[start:end], nil
+		return data[start:end], func() {}, nil
 	}
 }
 
@@ -122,8 +122,12 @@ func TestMCPWorkspaceFileCap(t *testing.T) {
 	reads := 0
 	tool, _ := newTool(nil, &reads)
 	params := mustFileJSON(t, tool.Info().Parameters)
-	if !strings.Contains(params, fmt.Sprintf("Maximum whole file: %d bytes.", maxMCPWorkspaceFileBytes)) ||
-		!strings.Contains(params, fmt.Sprintf(`"maximum":%d`, maxMCPWorkspaceFileBytes)) {
+	if maxMCPWorkspaceWindowBytes != 8<<20 {
+		t.Fatalf("per-call window = %d, want 8 MiB", maxMCPWorkspaceWindowBytes)
+	}
+	if !strings.Contains(params, fmt.Sprintf("Maximum whole file: %d bytes; maximum length per call: %d bytes.", maxMCPWorkspaceFileBytes, maxMCPWorkspaceWindowBytes)) ||
+		!strings.Contains(params, fmt.Sprintf(`"maximum":%d`, maxMCPWorkspaceFileBytes-1)) ||
+		!strings.Contains(params, fmt.Sprintf(`"maximum":%d`, maxMCPWorkspaceWindowBytes)) {
 		t.Fatalf("advertised schema does not carry the cap: %s", params)
 	}
 
@@ -159,8 +163,14 @@ func TestMCPWorkspaceFileCap(t *testing.T) {
 	if err != nil || !result.IsError || broker.calls != 0 {
 		t.Fatalf("64 MiB + 1 file dispatched: %+v %v", result, err)
 	}
-	// A range reaching past the cap is refused before the reader runs.
+	// A window over the per-call maximum is refused before the reader runs.
 	before := reads
+	input = mustFileJSON(t, map[string]any{"chunk": workspaceFileArgument{"site.zip", hex.EncodeToString(overSum[:]), 0, maxMCPWorkspaceWindowBytes + 1}})
+	if result, _ := tool.Run(context.Background(), fantasy.ToolCall{ID: "wide", Input: input}); !result.IsError || reads != before || broker.calls != 0 ||
+		!strings.Contains(result.Content, "per-call maximum") {
+		t.Fatalf("over-wide window reached the reader: %+v", result)
+	}
+	// A range reaching past the cap is refused before the reader runs.
 	input = mustFileJSON(t, map[string]any{"chunk": workspaceFileArgument{"site.zip", hex.EncodeToString(overSum[:]), maxMCPWorkspaceFileBytes, 1}})
 	if result, _ := tool.Run(context.Background(), fantasy.ToolCall{ID: "past", Input: input}); !result.IsError || reads != before || broker.calls != 0 {
 		t.Fatal("range past the cap reached the reader")

@@ -813,10 +813,15 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 	// The broker owns the call itself — the fast.io inline-upload guard, the
 	// transport against the credentialed client, the content flatten, and the
 	// fast.io response trim. mcpTool keeps only the per-call framing.
-	if err := m.resolveFileReferences(ctx, args); err != nil {
+	resolved, err := m.resolveFileReferences(ctx, args)
+	if err != nil {
 		message, _ := governToolOutput(ctx, toolName, err.Error())
 		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(message), failed: true}
 	}
+	// Held until CallMCP has returned — on every path, panics included — so
+	// a window's bytes and their dispatch copies stay charged to the
+	// workspace-file budget for exactly as long as they are live (ADR-0087).
+	defer resolved()
 	// The budget starts once the call holds the server's mutex
 	// (mcp.WithCallTimeout), so time spent queued behind another call on the
 	// same server does not eat a long batch's budget. The outer deadline is

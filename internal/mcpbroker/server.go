@@ -87,8 +87,26 @@ func NewServer(backend Backend) *Server {
 // connection, and the latest update still arrives (mcp.ThrottleProgress).
 const progressForwardInterval = 250 * time.Millisecond
 
+// decoderResetBytes is how much a connection's decoder may read before Serve
+// replaces it (see the loop in Serve).
+const decoderResetBytes = 1 << 20
+
+// countingReader counts the bytes read through it. Only Serve's read loop
+// touches it, so it needs no lock.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
 func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
-	dec := json.NewDecoder(conn)
+	counted := &countingReader{r: conn}
+	dec := json.NewDecoder(counted)
 	// Arguments are consent-bound JSON: never round record IDs through float64.
 	dec.UseNumber()
 	enc := json.NewEncoder(conn)
@@ -118,6 +136,16 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 	}()
 
 	for {
+		// A json.Decoder never shrinks its buffer, so one large call (a
+		// multi-MiB workspace-file argument, ADR-0087) would otherwise pin
+		// a buffer that size for the life of the connection. After a large
+		// frame, carry the decoder's unread bytes into a fresh decoder and
+		// let the big buffer go.
+		if counted.n > decoderResetBytes {
+			dec = json.NewDecoder(io.MultiReader(dec.Buffered(), counted))
+			dec.UseNumber()
+			counted.n = 0
+		}
 		var req request
 		if err := dec.Decode(&req); err != nil {
 			// Drain: cancel everything still running, then wait so we never leak a
