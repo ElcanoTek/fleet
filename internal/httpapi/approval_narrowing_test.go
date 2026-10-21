@@ -860,3 +860,52 @@ func TestQuoteClientValue(t *testing.T) {
 		t.Fatalf("over the bound = %s, want the first %d characters and an ellipsis", got, maxQuotedClientRunes)
 	}
 }
+
+// The restart breadcrumb of the longest narrowing fleet accepts (the outcome
+// line plus the exact narrowing line) stays within the minimum output limit,
+// so a restart can never write a recovered result past any limit the
+// deployment can be set to; the line is whole in it.
+func TestApprovalRecoveryText_FitsTheMinimumOutputLimit(t *testing.T) {
+	narrowPolicy(t)
+	agentcore.SetMaxToolOutputBytes(64 << 10)
+	t.Cleanup(func() { agentcore.SetMaxToolOutputBytes(-1) })
+	staged := make([]string, 0, 500)
+	for i := range 500 {
+		staged = append(staged, fmt.Sprintf("d%03d", i))
+	}
+	stagedJSON, _ := json.Marshal(map[string]any{"deal_ids": staged})
+	row := narrowApprovalRow()
+	row.ArgsJSON = string(stagedJSON)
+	var n *approvalNarrowing
+	for k := 1; ; k++ {
+		leftOut := map[int]bool{}
+		for j := range k {
+			leftOut[300+2*j] = true
+		}
+		var approved []string
+		for i, v := range staged {
+			if !leftOut[i] {
+				approved = append(approved, v)
+			}
+		}
+		next, err := narrowApproval(&row, approved, "deal_ids")
+		if err != nil {
+			break
+		}
+		n = next
+	}
+	if n == nil {
+		t.Fatal("test setup: no narrowing was accepted")
+	}
+	record, err := json.Marshal(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := store.ApprovalRecoveryText(string(record))
+	if !strings.HasSuffix(text, narrowingNote(n)) || !strings.HasPrefix(text, store.ApprovalRecoveryOutcome) {
+		t.Fatalf("breadcrumb = %q, want the outcome then the whole narrowing line", text)
+	}
+	if len(text) > agentcore.MinMaxToolOutputBytes {
+		t.Fatalf("breadcrumb is %d bytes, over the %d-byte minimum limit", len(text), agentcore.MinMaxToolOutputBytes)
+	}
+}

@@ -61,6 +61,29 @@ func PositionRanges(pos []int) string {
 	return strings.Join(parts, ", ")
 }
 
+// ApprovalRecoveryOutcome is the outcome RecoverStrandedApprovals records
+// for an approved call a restart cut off: it may have committed remotely, so
+// it is uncertainty, never a failure or a retry.
+const ApprovalRecoveryOutcome = "Execution outcome unknown after server restart. Do not repeat this action automatically; verify the external result before taking further action."
+
+// ApprovalRecoveryText is the model-visible breadcrumb RecoverStrandedApprovals
+// appends for a stranded approval: the outcome line, then, for a narrowed
+// approval, its narrowing line (the recorded tool call holds the whole staged
+// list, so the breadcrumb says which values were approved and which were left
+// out). It is not cut here, because the narrowing line is never shortened:
+// the chat server accepts a narrowing only when its line fits
+// agentcore.ApprovalTrailerRoom, the room at the minimum output limit, and
+// the outcome line is shorter than the tool-text floor that room leaves, so
+// this text stays within every limit the deployment can be set to (pinned by
+// httpapi's TestApprovalRecoveryText_FitsTheMinimumOutputLimit).
+func ApprovalRecoveryText(narrowedJSON string) string {
+	text := ApprovalRecoveryOutcome
+	if note := narrowingNoteFor(narrowedJSON); note != "" {
+		text += "\n\n" + note
+	}
+	return text
+}
+
 // narrowingNoteFor is NarrowingNote for a stored narrowed_json record, or ""
 // when there is none or it does not read.
 func narrowingNoteFor(narrowedJSON string) string {

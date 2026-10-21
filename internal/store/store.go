@@ -2220,7 +2220,7 @@ const ApprovalExecutingSentinel = "Approved — executing…"
 // may have committed remotely before the process died, so record uncertainty,
 // never failure or a retry: repeating it could duplicate a side effect.
 func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
-	const outcome = "Execution outcome unknown after server restart. Do not repeat this action automatically; verify the external result before taking further action."
+	const outcome = ApprovalRecoveryOutcome
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -2254,13 +2254,7 @@ func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
 		if callID == "" {
 			callID = a.ID
 		}
-		text := outcome
-		// A narrowed approval keeps its context across the restart: the
-		// recorded tool call holds the whole staged list, so the breadcrumb
-		// says which values were approved and which were left out.
-		if note := narrowingNoteFor(a.NarrowedJSON); note != "" {
-			text += "\n\n" + note
-		}
+		text := ApprovalRecoveryText(a.NarrowedJSON)
 		payload, err := json.Marshal(map[string]any{"id": callID, "name": a.ToolName, "text": text, "is_err": true})
 		if err != nil {
 			return 0, err
