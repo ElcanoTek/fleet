@@ -615,6 +615,11 @@ func TestHistoryTokenRate(t *testing.T) {
 	if got, want := e.historyTokenRate(history, 10_000+2*seen, true), 2.0; got != want {
 		t.Errorf("history billed at twice the estimate: rate %v, want %v", got, want)
 	}
+	// gpt-6-luna-pro counts dense numbers at about 7.3 times the estimate: a
+	// real rate, under the cap.
+	if got := e.historyTokenRate(history, 10_000+73*seen/10, true); got < 7.29 || got > 7.31 {
+		t.Errorf("history billed at 7.3 times the estimate: rate %v, want 7.3 unclamped", got)
+	}
 	if got := e.historyTokenRate(history, 10_000+20*seen, true); got != maxHistoryTokenRate {
 		t.Errorf("rate %v, want the clamp %v", got, maxHistoryTokenRate)
 	}

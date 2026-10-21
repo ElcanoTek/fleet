@@ -303,19 +303,21 @@ fewer summarizer calls; making the elided content recallable added nothing.
   are sent, extended to at least the last two assistant turns and moved back so
   it never starts on a tool message.
 - **In the provider's tokens.** The in-round guard's estimator counts about 4
-  characters a token, which is close for prose but not for dense output:
-  digits, punctuation and base64 cost a provider far more tokens per character.
-  A live run of numeric `run_python` output measured about 2.3 of the
-  provider's tokens per estimated token, so an uncalibrated "30% of the budget"
-  window held some 60% of it, the stubs' savings looked half their size, and
-  elision never freed enough. So each elision measures the run's own rate
-  first: the provider's count for the call that fired, less the prefix measured
-  before any history existed (#1600), over the estimate of the history that
-  call carried, counted as it was sent (a media result, and a result or input
-  over the hard cap, at the stub the in-round guard sends in its place). It
-  sizes the window, the savings and the estimate below at that rate, clamped to
-  0.5–4, and is 1 when there is nothing to measure against (no floor yet, or a
-  size that is itself an estimate).
+  characters a token. Providers count very differently, by model as much as by
+  data, and dense output (digits, punctuation, base64) costs far more per
+  character: measured on comma-separated 4-digit numbers, claude-haiku-5.5
+  counts 2.4 tokens per estimated token, gemini-3.8-flash 4.0 and
+  gpt-6-luna-pro 7.3 (on prose, 1.5, 1.1 and 3.0). On a live Haiku run at 2.3,
+  an uncalibrated "30% of the budget" window held some 60% of it, the stubs'
+  savings looked half their size, and elision never freed enough. So each
+  elision measures the run's own rate first: the provider's count for the call
+  that fired, less the prefix measured before any history existed (#1600), over
+  the estimate of the history that call carried, counted as it was sent (a
+  media result, and a result or input over the hard cap, at the stub the
+  in-round guard sends in its place). It sizes the window, the savings and the
+  estimate below at that rate, clamped to 0.5–12, and is 1 when there is
+  nothing to measure against (no floor yet, or a size that is itself an
+  estimate).
 - **Left alone.** Results of 2 KiB or less; media; results over the 128 KiB
   hard cap, because the in-round guard already sends a stub of the same size in
   their place on every call; and the results of `spawn_subagent` (a child run's
@@ -407,6 +409,48 @@ audit). The 16K pair also ran before the calibration. There, each result is
 about a third of the budget, so even calibrated elision would rarely clear the
 target. Even so, the floor settled near 41K instead of climbing to 62K, and
 prompt tokens fell by a fifth.
+
+The same task on other models, 2026-10-21, at the default 80K budget, each
+model once with elision off and once on (the build before the rate cap below
+was raised; only Luna Pro's rate reached it, and Luna Pro ran a third time
+with the new cap):
+
+| Model | Elision | Result | Pauses | Summaries | Completion | Cost | Rate |
+|---|---|---|---|---|---|---|---|
+| claude-sonnet-5.5 | off | success | 8 | 9 | 22,272 | $3.19 | |
+| claude-sonnet-5.5 | on | success | 6 | 2 | 9,147 | $2.08 | 2.31–2.39 |
+| claude-opus-5.5 | off | success | 8 | 9 | 22,474 | $6.41 | |
+| claude-opus-5.5 | on | success | 6 | 2 | 9,499 | $4.21 | 2.32–2.39 |
+| deepseek-v4.1-flash | off | success | 9 | 9 | 33,984 | $0.156 | |
+| deepseek-v4.1-flash | on | success | 5 | 1 | 16,218 | $0.079 | 2.18–2.34 |
+| gemini-3.8-flash | off | self-audit failed | 4 | 5 | 12,823 | $0.84 | |
+| gemini-3.8-flash | on | self-audit failed | 2 | 0 | 11,288 | $0.78 | 3.65–3.94 |
+| gpt-6-luna-pro | off | self-audit failed | 40 (cap) | 41 | 122,424 | $0.50 | |
+| gpt-6-luna-pro | on | self-audit failed | 24 | 24 | 135,814 | $0.31 | 4.00 (cap) |
+| gpt-6-luna-pro | on, cap 12 | self-audit failed | 15 | 14 | 73,129 | $0.18 | 4.52–6.81 |
+
+On the Anthropic models and DeepSeek, elision cut summaries from nine to one or
+two and cost by a third to a half (DeepSeek's half partly because its run with
+elision made 48 tool calls to the other's 60). Both Gemini runs failed on the
+model's own account: it stopped after 11–12 of the 30 seeds and then failed the
+audit, and with elision on it had also filled in the missing values itself;
+each of its three elisions freed enough. Luna Pro failed both ways, and not for
+a reason compaction can fix. On a sample like this output (17,999 characters of
+the same comma-separated numbers), its tokenizer counted about 1.8 tokens a
+character, which puts each result near 31K tokens, close to 40% of the budget,
+and the two newest results the window must keep fill most of it. Its runs
+paused every one or two steps either way, and what the summaries (and, with
+elision, the stubs) kept was not enough for the audit to vouch for every seed.
+A direct measurement of the rate per model (listed with the bounds on
+`historyTokenRate`) found Luna Pro at 7.3 on that sample and 8.2 on base64,
+above the rate's old cap of 4, so the cap is now 12. Rerun with the new cap,
+Luna Pro's own runs measured 4.5–4.6, once 6.8: lower than the sample's 7.3,
+presumably because its history also carries the model's text, tool-call inputs
+and summaries, which it counts at a lower rate (not measured separately). So
+the old cap had understated its history by about a tenth, once by 40%. It still
+could not free enough by eliding two results each time, summarized at all but
+one pause, and failed the audit the same way, with 13 seeds' values no longer
+in what it was sent.
 
 ### Deviations from the issue
 

@@ -190,11 +190,15 @@ func unseenTokens(messages []fantasy.Message) int {
 
 // Bounds on historyTokenRate: past them the measurement is degenerate (a
 // history of a few tokens, a size taken across a compaction) rather than a
-// property of the data. Real text runs from about 1 (prose) to about 3
-// (base64).
+// property of the data. Measured through OpenRouter on 2026-10-21, the rate
+// depends on the model's tokenizer as much as on the data: prose 1.1
+// (gemini-3.8-flash) to 3.0 (gpt-6-luna-pro); comma-separated 4-digit
+// numbers 2.4 (claude-haiku-5.5), 4.0 (gemini) and 7.3 (gpt-6-luna-pro);
+// base64 2.8 (gemini) to 8.2 (gpt-6-luna-pro). An earlier cap of 4 was below
+// Luna's rate on such output; its live runs measured 4.5-6.8.
 const (
 	minHistoryTokenRate = 0.5
-	maxHistoryTokenRate = 4.0
+	maxHistoryTokenRate = 12.0
 )
 
 // historyTokenRate is how many tokens the provider counts per token the
@@ -206,10 +210,11 @@ const (
 // wireTokens). It is 1 when there is nothing to calibrate against: used is
 // itself an estimate, or no floor has been measured.
 //
-// The estimator is close for prose, but digits, punctuation and base64 cost
-// the provider far more tokens per character: a live run of numeric
-// run_python output measured about 2.3, and with an uncalibrated estimate a
-// 30%-of-budget recent window held some 60% of the budget, and the stubs'
+// Providers count very differently from the estimator, by model as much as by
+// data, and dense output (digits, punctuation, base64) costs far more per
+// character (see minHistoryTokenRate for measured rates). A live Haiku run of
+// numeric run_python output measured about 2.3: with an uncalibrated estimate
+// a 30%-of-budget recent window held some 60% of the budget, and the stubs'
 // savings looked half their size.
 //
 // Three shapes it does not see, each bounded:
