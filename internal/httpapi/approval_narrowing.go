@@ -201,6 +201,14 @@ func narrowApproval(a *store.Approval, approved []string, shownArg string) (*app
 			n.Approved = append(n.Approved, v)
 		}
 	}
+	// The line that tells the model exactly which values were approved is
+	// never shortened (the model must never read a left-out value as
+	// approved), and the result must stay within the operator's output
+	// limit. With a limit near the minimum, a long scattered selection cannot
+	// have both, so it is refused here, before anything is claimed.
+	if len(narrowingNote(n)) > agentcore.ApprovalTrailerRoom() {
+		return nil, fmt.Errorf("this selection is too scattered to record exactly within this deployment's tool output limit: select fewer separate ranges of %s, or approve or decline the action whole", arg)
+	}
 	return n, nil
 }
 
@@ -389,26 +397,16 @@ func narrowingNote(n *approvalNarrowing) string {
 }
 
 // approvalTrailer joins fleet's labelled lines under an approved call's
-// result: the narrowing line (when narrowed is set) and then others. When the
-// whole would not fit agentcore.ApprovalTrailerRoom (an operator output limit
-// near the minimum), the narrowing line drops its position list
-// (store.NarrowingNoteCompact), so the tool text and the lines together stay
-// within the configured limit.
+// result: the narrowing line (when narrowed is set) and then others. Never
+// shortened: narrowApproval refuses, at decision, a narrowing whose exact line
+// would not fit agentcore.ApprovalTrailerRoom, so the tool text and the lines
+// together stay within the configured output limit.
 func approvalTrailer(narrowed *approvalNarrowing, others ...string) string {
-	join := func(note string) string {
-		parts := make([]string, 0, 1+len(others))
-		if note != "" {
-			parts = append(parts, note)
-		}
-		return strings.Join(append(parts, others...), "\n\n")
+	parts := make([]string, 0, 1+len(others))
+	if narrowed != nil {
+		parts = append(parts, narrowingNote(narrowed))
 	}
-	if narrowed == nil {
-		return join("")
-	}
-	if full := join(narrowingNote(narrowed)); len(full) <= agentcore.ApprovalTrailerRoom() {
-		return full
-	}
-	return join(store.NarrowingNoteCompact(narrowed.Arg, narrowed.Staged, narrowed.Approved))
+	return strings.Join(append(parts, others...), "\n\n")
 }
 
 // withApprovalNarrowable adds a pending card's `narrowable` field: the

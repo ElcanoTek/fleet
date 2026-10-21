@@ -447,31 +447,40 @@ func TestGovernWithTrailer_KeepsTheWholeNoteWithinTheBound(t *testing.T) {
 	}
 }
 
-// Near the minimum output limit a 500-value narrowing's full line (about
-// 1.6 KiB with alternating positions) does not fit beside the tool's text:
-// the line drops its position list and the whole result stays within the
-// configured limit, the line still whole at its end.
-func TestApprovalTrailer_StaysWithinAMinimumOutputLimit(t *testing.T) {
+// Near the minimum output limit the exact narrowing line of a long,
+// scattered selection (about 1.6 KiB) cannot fit beside the tool's text. The
+// line is never shortened, so that selection is refused at decision with
+// nothing claimed; a selection whose exact line fits is accepted and the
+// whole result stays within the configured limit, the line whole at its end.
+func TestNarrowing_StaysExactAndWithinAMinimumOutputLimit(t *testing.T) {
 	narrowPolicy(t)
 	agentcore.SetMaxToolOutputBytes(agentcore.MinMaxToolOutputBytes)
 	t.Cleanup(func() { agentcore.SetMaxToolOutputBytes(-1) })
-	row := narrowApprovalRow()
 	staged := make([]string, 0, 500)
-	approved := make([]string, 0, 250)
 	for i := range 500 {
-		v := fmt.Sprintf("deal-%03d", i)
-		staged = append(staged, v)
+		staged = append(staged, fmt.Sprintf("d%03d", i))
+	}
+	stagedJSON, _ := json.Marshal(map[string]any{"deal_ids": staged})
+	row := narrowApprovalRow()
+	row.ArgsJSON = string(stagedJSON)
+
+	var scattered []string
+	for i, v := range staged {
 		if i%2 == 0 {
-			approved = append(approved, v)
+			scattered = append(scattered, v)
 		}
 	}
-	n := &approvalNarrowing{Arg: "deal_ids", Staged: staged, Approved: approved}
-	if len(narrowingNote(n)) <= agentcore.ApprovalTrailerRoom() {
-		t.Fatalf("the full line (%d bytes) must not fit the room (%d) for this test", len(narrowingNote(n)), agentcore.ApprovalTrailerRoom())
+	if _, err := narrowApproval(&row, scattered, "deal_ids"); err == nil || !strings.Contains(err.Error(), "too scattered") {
+		t.Fatalf("a scattered 250-of-500 selection: err = %v, want refused", err)
+	}
+
+	n, err := narrowApproval(&row, staged[:250], "deal_ids") // positions 1-250: a short exact line
+	if err != nil || n == nil {
+		t.Fatalf("a contiguous selection: %v", err)
 	}
 	trailer := approvalTrailer(n)
-	if !strings.Contains(trailer, "250 were approved and 250 were left out") || len(trailer) > agentcore.ApprovalTrailerRoom() {
-		t.Fatalf("trailer = %q (%d bytes), want the compact line within %d", trailer, len(trailer), agentcore.ApprovalTrailerRoom())
+	if trailer != narrowingNote(n) || !strings.Contains(trailer, "positions 1-250") {
+		t.Fatalf("trailer = %q, want the exact line", trailer)
 	}
 	for _, text := range []string{strings.Repeat("x", 64<<10), `{"success":true}`} {
 		got, _, _ := governApprovalResultWithTrailer(context.Background(), &row, text, false, trailer)
@@ -482,10 +491,10 @@ func TestApprovalTrailer_StaysWithinAMinimumOutputLimit(t *testing.T) {
 			t.Fatalf("result is %d bytes, over the configured %d", len(got), agentcore.MinMaxToolOutputBytes)
 		}
 	}
-	// With room to spare the full line, positions included, is kept.
+	// With a roomier limit the scattered selection is fine.
 	agentcore.SetMaxToolOutputBytes(8192)
-	if approvalTrailer(n) != narrowingNote(n) {
-		t.Fatal("the full line must be kept when it fits")
+	if _, err := narrowApproval(&row, scattered, "deal_ids"); err != nil {
+		t.Fatalf("at 8 KiB the scattered selection must be accepted: %v", err)
 	}
 	if approvalTrailer(nil, "a", "b") != "a\n\nb" || approvalTrailer(nil) != "" {
 		t.Fatal("other lines join as given")
