@@ -2,6 +2,7 @@ package mcpbroker
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -81,5 +82,22 @@ func TestServer_IgnoresAStopForAnUnknownCall(t *testing.T) {
 	}
 	if text, _, err := client.CallMCP(context.Background(), "deals", "execute_plan", nil); err != nil || text != "no stop asked" {
 		t.Fatalf("call after a stray stop = %q, %v", text, err)
+	}
+}
+
+// A stoppable call stopped before its frame is written never reaches the
+// child.
+func TestClient_DoesNotSendACallStoppedBeforeSend(t *testing.T) {
+	backend := &stopBackend{fakeBroker: &fakeBroker{}, entered: make(chan struct{})}
+	client := loopback(t, backend)
+	stop := make(chan struct{})
+	close(stop)
+	if _, _, err := client.CallMCP(mcp.WithStop(context.Background(), stop), "deals", "execute_plan", nil); !errors.Is(err, mcp.ErrStoppedBeforeSend) {
+		t.Fatalf("err = %v, want ErrStoppedBeforeSend", err)
+	}
+	select {
+	case <-backend.entered:
+		t.Fatal("the stopped call reached the child")
+	default:
 	}
 }

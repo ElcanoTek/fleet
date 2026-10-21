@@ -23,13 +23,13 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -59,8 +59,10 @@ func (h *approvalStopHandle) stopped() bool {
 }
 
 // errStoppedBeforeSend is the outcome of a call stopped before it was sent:
-// nothing ran.
-var errStoppedBeforeSend = errors.New("stopped before the call was sent to its server; nothing ran")
+// nothing ran. The MCP transports refuse to send a call whose stop already
+// fired (mcp.ErrStoppedBeforeSend); this is the same refusal one step
+// earlier, before its scope's budget even starts.
+var errStoppedBeforeSend = mcp.ErrStoppedBeforeSend
 
 // approvalStoppable reports whether a running approved call of toolName offers
 // Stop: an MCP tool in critical_tool_stop (handler-only cards never).

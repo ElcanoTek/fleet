@@ -461,6 +461,12 @@ func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
 	}
 	c.mu.Unlock()
 
+	// A stoppable call stopped before its frame is written is never sent
+	// (docs/APPROVAL-STOP.md).
+	if req.Stoppable && mcp.StoppedBeforeSend(ctx) {
+		c.discard(req.ID)
+		return response{}, mcp.ErrStoppedBeforeSend
+	}
 	if err := c.send(req); err != nil {
 		c.discard(req.ID)
 		return response{}, fmt.Errorf("mcpbroker: send: %w", err)

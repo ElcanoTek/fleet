@@ -95,10 +95,15 @@ Elcano bundle's deal-plan execute does this).
     names the user, the card and the tool. The answer is the card's state:
     `executing: true, stopping: true`. A second Stop answers the same and
     records nothing new.
-- **A Stop before the call is sent runs nothing.** If the signal closed while
-  the call's scope was still opening, `runStagedTool` does not send the call;
-  the outcome is "stopped before the call was sent to its server; nothing
-  ran", recorded as a failure.
+- **A Stop before the call is sent runs nothing.** If the signal has fired
+  when the call is about to go out, it is not sent: `runStagedTool` checks
+  before the call starts, and each transport checks again at its own send
+  boundary (the stdio pipe write, the HTTP request, the broker's call frame;
+  `mcp.ErrStoppedBeforeSend`). The outcome is "stopped before the call was
+  sent to its server; nothing ran", recorded as a failure. A Stop in the
+  instant between that last check and the write sends the call and then its
+  cancellation, so at most the item the server starts with runs, as for any
+  Stop.
 - **The outcome is the call's.** Whatever the server answers is recorded by
   the same code as any approved call (governance, result card, history,
   resume, finish push). After the tool's text fleet adds, governed with it

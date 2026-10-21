@@ -1188,6 +1188,12 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 		return nil, err
 	}
 
+	// A stoppable call stopped before it reaches the pipe is never sent
+	// (docs/APPROVAL-STOP.md): checked here, at the send boundary.
+	if stoppedBeforeSend(ctx) {
+		return nil, ErrStoppedBeforeSend
+	}
+
 	// Write request. Failures carry a distinct marker: a write error means
 	// the request never reached the server, so Server.callTool may safely
 	// retry it after a restart — unlike a read-side failure, where the
@@ -1502,6 +1508,11 @@ func (t *HTTPTransport) Call(ctx context.Context, method string, params interfac
 		go t.notifyStopHTTP(ctx, stop, wrote, done, id)
 	}
 
+	// A stoppable call stopped before it is sent is never sent
+	// (docs/APPROVAL-STOP.md): checked here, at the send boundary.
+	if stoppedBeforeSend(ctx) {
+		return nil, ErrStoppedBeforeSend
+	}
 	resp, err := t.client.Do(httpReq)
 	if err != nil {
 		return nil, err

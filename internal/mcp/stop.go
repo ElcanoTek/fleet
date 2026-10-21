@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"time"
 )
@@ -31,6 +32,29 @@ const StopReasonByUser = "stopped_by_user"
 
 // CooperativeCancelMetaKey is the `_meta` key a stoppable call carries.
 const CooperativeCancelMetaKey = RequestMetaPrefix + "cooperative_cancel"
+
+// ErrStoppedBeforeSend is a stoppable call whose stop signal had already
+// fired when its transport was about to send the request: nothing was sent,
+// so nothing ran. Every transport checks it at its own send boundary.
+var ErrStoppedBeforeSend = errors.New("stopped before the call was sent to its server; nothing ran")
+
+// stoppedBeforeSend reports whether ctx's stop signal has already fired.
+func stoppedBeforeSend(ctx context.Context) bool {
+	stop := StopSignal(ctx)
+	if stop == nil {
+		return false
+	}
+	select {
+	case <-stop:
+		return true
+	default:
+		return false
+	}
+}
+
+// StoppedBeforeSend is stoppedBeforeSend for the out-of-process broker,
+// which sends the call on its own wire.
+func StoppedBeforeSend(ctx context.Context) bool { return stoppedBeforeSend(ctx) }
 
 // stopNotifyTimeout bounds sending the cancellation over HTTP, which is a
 // request of its own.

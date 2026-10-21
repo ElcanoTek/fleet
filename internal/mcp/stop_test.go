@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -171,10 +172,14 @@ func TestHTTPTransport_StopPostsCancelledDuringTheCall(t *testing.T) {
 	defer srv.Close()
 	tr := NewHTTPTransport(srv.URL)
 	tr.sessionID = "sess-1"
-	// The stop is already pressed when the call starts: the cancellation
-	// must still follow the call, never precede it.
+	// Stop is pressed as soon as the server has the call (a stop pressed
+	// before the call is sent sends nothing; see
+	// TestTransports_DoNotSendACallStoppedBeforeSend).
 	stop := make(chan struct{})
-	close(stop)
+	go func() {
+		<-callArrived
+		close(stop)
+	}()
 	ctx, cancel := context.WithTimeout(WithStop(context.Background(), stop), 10*time.Second)
 	defer cancel()
 	raw, err := tr.Call(ctx, "tools/call", map[string]any{"name": "run_items", "arguments": map[string]any{}, "_meta": map[string]any{CooperativeCancelMetaKey: true}})
@@ -246,4 +251,29 @@ func shortStopResend(t *testing.T) {
 	first, maxInterval := stopResendFirst, stopResendMaxInterval
 	stopResendFirst, stopResendMaxInterval = 20*time.Millisecond, 50*time.Millisecond
 	t.Cleanup(func() { stopResendFirst, stopResendMaxInterval = first, maxInterval })
+}
+
+// A stoppable call whose stop already fired is never written to the server,
+// over stdio or HTTP: the transport checks at its send boundary.
+func TestTransports_DoNotSendACallStoppedBeforeSend(t *testing.T) {
+	c := stopServer(t)
+	stop := make(chan struct{})
+	close(stop)
+	if _, err := c.CallToolOn(WithStop(context.Background(), stop), "s", "run_items", map[string]any{}); !errors.Is(err, ErrStoppedBeforeSend) {
+		t.Fatalf("stdio: err = %v, want ErrStoppedBeforeSend", err)
+	}
+	// The transport is untouched: a plain call still works.
+	if _, err := c.CallToolOn(context.Background(), "s", "run_items", map[string]any{}); err != nil {
+		t.Fatalf("plain call after a refused stopped call: %v", err)
+	}
+
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+	if _, err := NewHTTPTransport(srv.URL).Call(WithStop(context.Background(), stop), "tools/call", map[string]any{}); !errors.Is(err, ErrStoppedBeforeSend) || hits != 0 {
+		t.Fatalf("http: err = %v, requests = %d; want ErrStoppedBeforeSend and none sent", err, hits)
+	}
 }
