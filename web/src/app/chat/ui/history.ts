@@ -1,3 +1,5 @@
+import { joinTextSegments } from "./textSegments";
+
 // Pure functions shared with chat-experience.tsx — extracted so they can be
 // unit-tested under vitest without pulling in React/Next.js.
 //
@@ -11,6 +13,15 @@ export type ToolCall = {
   name: string;
   input: string;
   resultText?: string;
+  /**
+   * A show_ui card drawn by reference to a tool's result (`from_result`,
+   * docs/GENERATIVE-UI.md): the spec fleet loaded from that result and
+   * validated, as JSON text. It rides the show_ui result (the `card` field of
+   * the tool.result event and of the persisted tool_result row), so a reload
+   * and a second tab draw the same card. Absent for an inline card, whose
+   * spec is `input`.
+   */
+  card?: string;
   state: ToolCallState;
   /**
    * Live sub-agent activity for a `spawn_subagent` call (#1043 follow-up).
@@ -1071,6 +1082,18 @@ export type Message = {
   notSent?: boolean;
   state: MessageState;
   reasoning?: string;
+  /**
+   * Client-only: the text a live turn streamed in its earlier steps — the
+   * model's narration ahead of each tool call — moved out of `content` when
+   * the call arrived (turnNarration.ts). Rendered only under "Show details".
+   * Never set on a history row: the server persists the final answer alone.
+   */
+  narration?: string;
+  /**
+   * Client-only: text.replace delivered the turn's authoritative answer, so
+   * `content` is that answer rather than an in-progress step (turnNarration.ts).
+   */
+  finalAnswer?: boolean;
   toolCalls?: ToolCall[];
   pythonStreams?: PythonStream[];
   approvals?: Approval[];
@@ -1381,7 +1404,7 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
   // would stay stuck on "APPROVAL_REQUIRED" even though the send succeeded
   // ("looks like nothing happened"). We re-apply these against tool_calls in
   // ANY message in a post-pass below.
-  const orphanResults: Array<{ id: string; name: string; text: string; is_err: boolean }> = [];
+  const orphanResults: Array<{ id: string; name: string; text: string; is_err: boolean; card?: unknown }> = [];
 
   const flush = () => {
     if (current) {
@@ -1432,7 +1455,12 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       // Track the highest persisted messages.id in this assistant group as its
       // branch point (#454); undefined until a persisted entry contributes one.
       current.dbId = Math.max(current.dbId ?? 0, e.id ?? 0) || undefined;
-      current.content += String((e.content as { text?: string }).text ?? "");
+      // Separate rows are separately written text (journal recovery flushes
+      // one per step), so they join as paragraphs, never "deal.Found it."
+      current.content = joinTextSegments(
+        current.content,
+        String((e.content as { text?: string }).text ?? ""),
+      );
       continue;
     }
     if (e.type === "reasoning") {
@@ -1443,7 +1471,7 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       // branch point (#454); undefined until a persisted entry contributes one.
       current.dbId = Math.max(current.dbId ?? 0, e.id ?? 0) || undefined;
       const txt = String((e.content as { text?: string }).text ?? "");
-      current.reasoning = (current.reasoning ?? "") + (current.reasoning ? "\n" : "") + txt;
+      current.reasoning = joinTextSegments(current.reasoning ?? "", txt);
       continue;
     }
     if (e.type === "tool_call") {
@@ -1548,11 +1576,9 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       // Track the highest persisted messages.id in this assistant group as its
       // branch point (#454); undefined until a persisted entry contributes one.
       current.dbId = Math.max(current.dbId ?? 0, e.id ?? 0) || undefined;
-      const c = e.content as { id: string; name: string; text: string; is_err: boolean };
+      const c = e.content as { id: string; name: string; text: string; is_err: boolean; card?: unknown };
       if ((current.toolCalls ?? []).some((t) => t.id === c.id)) {
-        current.toolCalls = (current.toolCalls ?? []).map((t) =>
-          t.id === c.id ? { ...t, resultText: c.text, state: c.is_err ? "error" : "done" } : t,
-        );
+        current.toolCalls = applyToolResult(current.toolCalls ?? [], c.id, (t) => withResult(t, c));
       } else {
         // No matching call in the open message — defer to the post-pass,
         // which resolves it against tool_calls in any message (or drops it
@@ -1578,18 +1604,36 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
   // "no retroactive creation" invariant.
   for (const c of orphanResults) {
     for (const m of messages) {
-      if (!m.toolCalls) continue;
-      let matched = false;
-      m.toolCalls = m.toolCalls.map((t) => {
-        if (t.id !== c.id) return t;
-        matched = true;
-        return { ...t, resultText: c.text, state: c.is_err ? "error" : "done" };
-      });
-      if (matched) break;
+      if (!m.toolCalls?.some((t) => t.id === c.id)) continue;
+      m.toolCalls = applyToolResult(m.toolCalls, c.id, (t) => withResult(t, c));
+      break;
     }
   }
 
   return messages;
+}
+
+/**
+ * Applies one result to the call it answers. A provider may reuse a call id
+ * within a turn, so a result goes to the FIRST call with that id that has no
+ * result yet: each occurrence keeps its own result (and, for a by-reference
+ * show_ui card, its own spec). When every call with the id already has one,
+ * the result replaces them all, as before: an appended approval resolution is
+ * the authoritative outcome over the placeholder the call landed with.
+ */
+export function applyToolResult(calls: ToolCall[], id: string, apply: (t: ToolCall) => ToolCall): ToolCall[] {
+  const open = calls.findIndex((t) => t.id === id && t.resultText === undefined);
+  return calls.map((t, i) => ((open >= 0 ? i === open : t.id === id) ? apply(t) : t));
+}
+
+/**
+ * A tool call with its persisted result applied: the text, the state, and a
+ * by-reference show_ui card's validated spec when the row carries one.
+ */
+function withResult(t: ToolCall, c: { text: string; is_err: boolean; card?: unknown }): ToolCall {
+  const next: ToolCall = { ...t, resultText: c.text, state: c.is_err ? "error" : "done" };
+  if (typeof c.card === "string" && c.card) next.card = c.card;
+  return next;
 }
 
 /** Map an MCP tool name like `mcp_email_search_emails` to a display string. */

@@ -89,6 +89,10 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
 - **Chat stream recovery** (why a lost SSE socket reconciles against Postgres
   instead of stamping a terminal state — the walk-away-and-come-back case):
   [`docs/CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md)
+- **The chat view while the agent works** (the status line that replaces the
+  model's between-tool-call narration in the default view, the Working notes
+  under Show details, and the paragraph break between model steps):
+  [`docs/CHAT-WORKING-STATUS.md`](CHAT-WORKING-STATUS.md)
 - **What became of one turn** (the per-turn outcome endpoint the client reads
   instead of inferring from a liveness probe plus a transcript, and why a
   pre-answer failure now offers Retry): [`docs/TURN-OUTCOME.md`](TURN-OUTCOME.md)
@@ -227,6 +231,7 @@ above fails otherwise.
 - [`BUNDLE-STAGING.md`](BUNDLE-STAGING.md) — Staging the default bundle for a bare install on an SELinux host (#1655)
 - [`CHAT-EXPORT.md`](CHAT-EXPORT.md) — Downloading a chat
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn
+- [`CHAT-WORKING-STATUS.md`](CHAT-WORKING-STATUS.md) — The chat view while the agent works
 - [`CODEQL.md`](CODEQL.md) — CodeQL: advanced setup, and the Go analysis that had stopped working
 - [`COMPLETED-STEP-RECOVERY.md`](COMPLETED-STEP-RECOVERY.md) — Provider recovery after completed tool steps and preservation of verifier evidence.
 - [`CONDITIONAL-TASK-COMPLETION.md`](CONDITIONAL-TASK-COMPLETION.md) — Conditional scheduled tasks
@@ -251,7 +256,7 @@ above fails otherwise.
 - [`FEATURE-NOTES.md`](FEATURE-NOTES.md) — Feature design notes
 - [`FILE-EDIT-SAFETY.md`](FILE-EDIT-SAFETY.md) — File-edit safety (#787, #1745)
 - [`generating-demo-gif.md`](generating-demo-gif.md) — Generating the demo GIFs (TUI + web)
-- [`GENERATIVE-UI.md`](GENERATIVE-UI.md) — Generative UI: interactive cards the agent builds in chat (`show_ui`)
+- [`GENERATIVE-UI.md`](GENERATIVE-UI.md) — Generative UI: interactive cards the agent builds in chat (`show_ui`), inline or by reference to a tool's result (ADR-0080, ADR-0086)
 - [`GROUPED-APPROVALS.md`](GROUPED-APPROVALS.md) — Grouped approvals: the cards one turn stages for opted-in tools render as one card with a checkbox per call
 - [`GUARDRAILS.md`](GUARDRAILS.md) — Prompt-injection guardrails (#702)
 - [`HOOKS.md`](HOOKS.md) — Governed lifecycle hooks (#788)

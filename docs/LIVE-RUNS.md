@@ -7,7 +7,8 @@ for both interactive chat and scheduled tasks (#508).
 
 - **Live activity**: tool-call pills stream into the transcript as each call
   starts/finishes ("Show details" toggle); the thinking indicator names the
-  in-flight tool.
+  in-flight tool, and stands in for the model's narration between tool calls
+  in the default view ([CHAT-WORKING-STATUS.md](CHAT-WORKING-STATUS.md)).
 - **Stop**: the composer's Stop button cancels the turn at the governed loop's
   next checkpoint; the partial transcript persists and the turn records
   `Cancelled`.
