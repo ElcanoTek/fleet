@@ -108,6 +108,12 @@ type MCPServerBase struct {
 	// the owner id would otherwise transact in the DEFAULT client's seat under
 	// the named account's label (the cutlass inherited-routing-identity guard).
 	IdentityEnv []string
+	// User is the signed-in user of the interactive scope this base is bound
+	// into (ADR-0087), substituted for ${FLEET_USER_*} at spawn — AFTER the
+	// account overlay and its guard, so the user is the last thing written
+	// into the env. Only the broker child's interactive OpenScope sets it;
+	// every other path leaves it zero, which drops the token-bearing keys.
+	User MCPUserIdentity
 }
 
 // resolveMCPVariant computes the per-run registration name + credentialed env
@@ -464,11 +470,13 @@ func bindMCPServer(ctx context.Context, client *mcp.Client, plan mcpBindPlan, wo
 	// ${FLEET_WORKSPACE_ROOT}: the deployment root, offered on every path
 	// (per-run, load-on-demand and broker scopes all bind through here).
 	env = ExpandWorkspaceRootEnv(env)
-	// ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME}: an interactive broker scope
-	// already substituted the signed-in user into BaseEnv (cmd/fleet
-	// OpenScope), so this is a no-op there. Every other caller — scheduled
-	// runs, load-on-demand onto a shared client — has no user: drop the keys.
-	env = ExpandUserEnv(env, MCPUserIdentity{})
+	// ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME}: the signed-in user an
+	// interactive broker scope stamped on the base (cmd/fleet OpenScope).
+	// Substituted here, after resolveMCPVariant's account overlay and
+	// identity guard, so a named seat gets the user exactly like the default
+	// seat does. Every other caller — scheduled runs, load-on-demand onto a
+	// shared client — leaves base.User zero, which drops the keys.
+	env = ExpandUserEnv(env, base.User)
 	cwd := StdioCwd(base.Dir, base.DirPinned, workdir)
 	if err := client.AddStdioServer(ctx, name, base.Command, base.Args, env, cwd); err != nil {
 		return fmt.Errorf("register server %q: %w", name, err)

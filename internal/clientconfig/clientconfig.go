@@ -1943,8 +1943,16 @@ func validateIdentityEnv(s *ServerDef) error {
 		if s.Type != "stdio" {
 			return fmt.Errorf("mcp_servers[%q]: identity_env is only valid on a stdio server (accounts are env-suffixed; http servers reject account variants)", s.Name)
 		}
-		if _, ok := s.Env[trimmed]; !ok {
+		val, ok := s.Env[trimmed]
+		if !ok {
 			return fmt.Errorf("mcp_servers[%q]: identity_env var %q is not a key of the server's env map", s.Name, trimmed)
+		}
+		// The signed-in user is data, never routing identity (ADR-0087): a
+		// key that routes a seat or money must not be filled from whoever is
+		// at the keyboard, and the variant guard would read the token as an
+		// inherited default-seat value and refuse every named seat anyway.
+		if strings.Contains(val, "${"+reservedUserEmailVar+"}") || strings.Contains(val, "${"+reservedUserNameVar+"}") {
+			return fmt.Errorf("mcp_servers[%q]: identity_env var %q is filled from ${FLEET_USER_EMAIL}/${FLEET_USER_NAME}; the signed-in user must never route a seat or money — drop it from identity_env (see docs/MCP-BUNDLE-ENV.md)", s.Name, trimmed)
 		}
 	}
 	return nil

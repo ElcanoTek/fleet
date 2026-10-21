@@ -26,8 +26,9 @@ import (
 // the same person, since an approval is claimable only by its own user). They
 // are resolved in the parent from the request's authenticated identity, never
 // from the conversation, the model, or the bundle, cross to the credential
-// owner as ScopeSpec.User, and are substituted only when that child opens the
-// turn's scope. Every other spawn path — the boot catalog, hot reload,
+// owner as ScopeSpec.User, which that child stamps on the turn scope's bases
+// (MCPServerBase.User) and the binder substitutes last, at spawn — after the
+// account overlay and its identity guard. Every other spawn path — the boot catalog, hot reload,
 // load-on-demand onto a shared client, `fleet mcp test`, and every scheduled
 // run, dedicated client or not — has no signed-in user and DROPS each
 // token-bearing key, so the server sees the variable as unset. A key is never

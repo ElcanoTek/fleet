@@ -107,6 +107,18 @@ mcp_servers:
     url: "https://example.test/$${FLEET_USER_NAME}"
     always: true
 `, "an escaped FLEET_USER_NAME cannot be written"},
+		// The signed-in user is data, never routing identity: a key that
+		// routes a seat or money must not be filled from the keyboard.
+		{"user token in identity_env", `
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py"]
+    always: true
+    env:
+      OWNER_ID: "${FLEET_USER_EMAIL}"
+    identity_env: ["OWNER_ID"]
+`, "must never route a seat or money"},
 		{"email in a header", `
 mcp_servers:
   - name: remote

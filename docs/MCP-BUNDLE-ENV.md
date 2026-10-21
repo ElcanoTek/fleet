@@ -173,7 +173,16 @@ server, account seat or tool and is not part of the scope's authorization
 policy (ADR-0042 is unchanged). A server must never use these variables as a
 credential, a seat selector, or an access decision — they say who is at the
 keyboard, nothing more. They are PII: fleet adds no log line that prints them,
-and a bundle server should not log its env.
+and a bundle server should not log its env. For the same reason a key listed in
+`identity_env` may not reference them: the load fails, since a key that routes
+a seat or money must never be filled from whoever is at the keyboard.
+
+**Named account seats.** The user is written into the env last, at spawn —
+after the `<VAR>_<ACCOUNT>` overlay and its inherited-identity guard — so a
+named seat (`deals_client_a`) gets the signed-in user exactly like the default
+seat. An operator who sets an explicit `<VAR>_<ACCOUNT>` value for a
+token-bearing key (`DEAL_SHEET_DEFAULT_TO_CLIENT_A`) overrides the token for
+that seat, like any other account overlay.
 
 The spelling rules are the other reserved tokens': bare only (a
 `${FLEET_USER_EMAIL:-team@example.com}` default fails the load — it would bake

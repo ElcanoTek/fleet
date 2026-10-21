@@ -74,13 +74,18 @@ ADR-0042 governs, so it is recorded here.
    re-validates both fields against a conservative character set
    (`agentcore.MCPUserIdentity.Sanitized`) and treats a field that fails as
    absent. Neither set admits `$`, `{` or `}`, so a substituted value can
-   never spell another reserved token for a later pass to expand.
+   never spell another reserved token for a later pass to expand. The child
+   writes the user into each server's env last, at spawn, after the
+   `<VAR>_<ACCOUNT>` overlay and its inherited-identity guard, so a named seat
+   gets the user exactly like the default seat.
 5. **ADR-0042 is unchanged: the user authorizes nothing.** The value selects
    no server, seat or tool and is not part of `ScopePolicy`. The child's
    Gate-2 floor, enabled-server set and Gate-3 relay apply exactly as before,
    and a scope with a user reaches precisely what it would have reached
    without one. A bundle server must not treat these variables as a
-   credential or a seat selector; the docs say so.
+   credential or a seat selector; the docs say so, and the load refuses a
+   key listed in `identity_env` (seat/money routing) whose value references
+   either token.
 6. **PII handling follows existing norms.** Fleet adds no log line, metric
    label or audit field that prints either value, and the env map is not
    model-visible and never enters the sandbox. Operational logs that already

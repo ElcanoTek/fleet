@@ -56,7 +56,9 @@ func newBrokerBackendForUserTest(t *testing.T) *brokerBackend {
 				BaseEnv: map[string]string{
 					"DEAL_SHEET_DEFAULT_TO": "${FLEET_USER_EMAIL}",
 					"DEAL_SHEET_GREETING":   "Hi ${FLEET_USER_NAME},",
+					"DEALS_API_KEY":         "default-seat-key",
 				},
+				IdentityEnv: []string{"DEALS_API_KEY"},
 			},
 		},
 		enabled: map[string]bool{"deals": true},
@@ -68,6 +70,11 @@ func newBrokerBackendForUserTest(t *testing.T) *brokerBackend {
 
 func callWhoami(t *testing.T, b *brokerBackend, spec mcpbroker.ScopeSpec) string {
 	t.Helper()
+	return callWhoamiOn(t, b, spec, "deals")
+}
+
+func callWhoamiOn(t *testing.T, b *brokerBackend, spec mcpbroker.ScopeSpec, server string) string {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	id, _, _, err := b.OpenScope(ctx, spec)
@@ -75,7 +82,7 @@ func callWhoami(t *testing.T, b *brokerBackend, spec mcpbroker.ScopeSpec) string
 		t.Fatalf("OpenScope: %v", err)
 	}
 	defer func() { _ = b.CloseScope(ctx, id) }()
-	text, isErr, err := b.CallMCPInScope(ctx, id, "deals", "whoami", nil)
+	text, isErr, err := b.CallMCPInScope(ctx, id, server, "whoami", nil)
 	if err != nil || isErr {
 		t.Fatalf("CallMCPInScope = (%q, %v, %v)", text, isErr, err)
 	}
@@ -109,6 +116,22 @@ func TestBrokerBackend_ScopeSubstitutesSignedInUser(t *testing.T) {
 	})
 	if got != "elyse@example.com|<unset>" {
 		t.Fatalf("scope env with an invalid name = %q, want the greeting key dropped", got)
+	}
+}
+
+// TestBrokerBackend_NamedSeatScopeSubstitutesSignedInUser: on a named account
+// the user is written into the env at spawn, AFTER the account overlay and its
+// inherited-identity guard (which still runs on DEALS_API_KEY), so a named seat
+// gets the user exactly like the default seat.
+func TestBrokerBackend_NamedSeatScopeSubstitutesSignedInUser(t *testing.T) {
+	b := newBrokerBackendForUserTest(t)
+	t.Setenv("DEALS_API_KEY_CLIENT_A", "client-a-key")
+	got := callWhoamiOn(t, b, mcpbroker.ScopeSpec{
+		Selection: []mcpbroker.ScopeChoice{{Server: "deals", Account: "client_a"}},
+		User:      &mcpbroker.ScopeUser{Email: "elyse@example.com", Name: "Elyse"},
+	}, "deals_client_a")
+	if got != "elyse@example.com|Hi Elyse," {
+		t.Fatalf("named-seat scope env = %q, want the signed-in user substituted", got)
 	}
 }
 

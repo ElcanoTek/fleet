@@ -299,7 +299,9 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	}
 	for name, base := range bases {
 		base.BaseEnv = agentcore.ExpandTaskIDEnv(base.BaseEnv, spec.TaskID)
-		base.BaseEnv = agentcore.ExpandUserEnv(base.BaseEnv, user)
+		// Stamped, not substituted: the binder writes the user into the env
+		// at spawn, after the account overlay and its identity guard.
+		base.User = user
 		bases[name] = base
 	}
 
