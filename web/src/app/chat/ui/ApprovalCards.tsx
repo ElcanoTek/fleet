@@ -1164,12 +1164,14 @@ function GenericActionCard({
         <span aria-hidden>{recorded ? "📓" : "🛠️"}</span>
         <span data-testid="generic-action-title" className="min-w-0 break-words font-medium">{title}</span>
       </div>
+      {/* A narrowed approval says so on every settled or running card, with
+          or without a readable card (docs/APPROVAL-NARROWING.md). */}
+      {narrowedLine}
 
       {readable ? (
         <>
           {/* Pending: the records in plain words. Resolved: the one-line
               outcome above is the card; the records move into Details. */}
-          {narrowedLine}
           {approval.status === "pending" ? <ApprovalReadableBody card={readable} leftOut={leftOut} /> : null}
           <ApprovalCardDetails>
             {approval.status !== "pending" ? <ApprovalCardItems items={readable.items} leftOut={leftOut} /> : null}

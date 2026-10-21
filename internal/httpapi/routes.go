@@ -204,13 +204,29 @@ func bodyLimitMiddleware(next http.Handler) http.Handler {
 			// shape, same in-handler cap) — but ONLY the POST: the collection
 			// route's other methods and every /shared-files/{id} mutation are
 			// small JSON and keep the 1 MB cap.
+			// A grouped approval decision (POST
+			// /conversations/{id}/approval-groups/{groupId}) has its own,
+			// larger cap sized for what it accepts (maxApprovalGroupBody,
+			// docs/APPROVAL-NARROWING.md), applied by its handler.
 			if !strings.HasPrefix(r.URL.Path, "/attachments") &&
-				(r.Method != http.MethodPost || r.URL.Path != "/shared-files") {
+				(r.Method != http.MethodPost || r.URL.Path != "/shared-files") &&
+				(r.Method != http.MethodPost || !isApprovalGroupPath(r.URL.Path)) {
 				r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isApprovalGroupPath reports whether path is a grouped approval decision:
+// /conversations/{id}/approval-groups/{groupId}, exactly.
+func isApprovalGroupPath(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/conversations/")
+	if !ok {
+		return false
+	}
+	parts := strings.Split(rest, "/")
+	return len(parts) == 3 && parts[0] != "" && parts[1] == "approval-groups" && parts[2] != ""
 }
 
 // recoverMiddleware converts a panic in a SYNCHRONOUS chat handler into a 500

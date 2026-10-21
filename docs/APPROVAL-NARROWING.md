@@ -181,7 +181,7 @@ Every id in `narrow` must be in `approve`, the values across all cards are at
 most 5000 (the card row budget), and each narrowing is checked with the same
 code as the single-card POST before any card is claimed; a bad one refuses the
 whole decision. Each card is then decided with its own values. The body limit
-is now 8 MiB (it was 64 KiB), which holds 5000 values of 200 characters even
+is now 8 MiB (it was 64 KiB; the route is exempt from the server's global 1 MiB JSON cap, and its handler applies this one), which holds 5000 values of 200 characters even
 fully JSON-escaped; a larger narrowing is refused and the person can decide the
 cards one at a time.
 

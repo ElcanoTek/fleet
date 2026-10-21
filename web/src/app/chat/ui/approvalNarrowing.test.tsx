@@ -234,3 +234,22 @@ describe("a narrowed call that settles by the poll", () => {
     expect(settled?.narrowed).toEqual({ arg: "deal_ids", staged: ["k1", "k2", "k3"], approved: ["k1"] });
   });
 });
+
+describe("a narrowed approval without a readable card", () => {
+  it("still says what was approved on the settled generic card", () => {
+    render(
+      <ApprovalCard
+        approval={pending({
+          card: undefined,
+          narrowable: undefined,
+          status: "approved",
+          resultText: "ok",
+          narrowed: { arg: "deal_ids", staged: ["k1", "k2", "k3"], approved: ["k1"] },
+        })}
+        conversationId="conv_1"
+        onResolved={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("approval-narrowed-summary")).toHaveTextContent("Approved 1 of 3 · 2 left out");
+  });
+});

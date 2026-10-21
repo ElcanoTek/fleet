@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -539,5 +541,27 @@ func TestStagedNarrowable_NeverAnEmailSend(t *testing.T) {
 	}
 	if agentcore.IsOutboundEmailTool("mcp_ix_execute_plan") {
 		t.Error("execute_plan is not an email send")
+	}
+}
+
+// A grouped decision gets its own body cap, not the global 1 MiB JSON cap;
+// every other POST keeps the global one.
+func TestBodyLimitMiddleware_ApprovalGroupHasItsOwnCap(t *testing.T) {
+	big := strings.Repeat("x", maxJSONBodyBytes+10)
+	read := func(path string) error {
+		var err error
+		h := bodyLimitMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			_, err = io.ReadAll(r.Body)
+		}))
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, path, strings.NewReader(big)))
+		return err
+	}
+	if err := read("/conversations/c1/approval-groups/g1"); err != nil {
+		t.Fatalf("the group decision was cut by the global cap: %v", err)
+	}
+	for _, path := range []string{"/conversations/c1/approvals/a1", "/conversations/c1/approval-groups/g1/x", "/conversations/c1/messages"} {
+		if err := read(path); err == nil {
+			t.Errorf("%s: the global cap must still apply", path)
+		}
 	}
 }
