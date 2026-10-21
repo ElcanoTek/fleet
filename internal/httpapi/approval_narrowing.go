@@ -81,7 +81,12 @@ func stagedNarrowable(toolName, argsJSON string) (arg string, values []string, o
 	// An outbound email send (send_email, send_template_email) is never
 	// narrowable, whatever the policy says: one approval covers the message
 	// as written.
-	if !strings.HasPrefix(toolName, "mcp_") || handlerOnlyApproval(toolName) || tools.IsEmailToolName(toolName) || agentcore.IsOutboundEmailTool(toolName) {
+	// A tool of a synthetic server (inline http_tools, a2a peers) is never
+	// narrowable either: its transport sends the arguments only, so the
+	// endpoint would never see `_meta["fleet/narrowed"]` and could not check
+	// its other arguments against the staged list.
+	if !strings.HasPrefix(toolName, "mcp_") || handlerOnlyApproval(toolName) || tools.IsEmailToolName(toolName) ||
+		agentcore.IsOutboundEmailTool(toolName) || onSyntheticTransport(toolName) {
 		return "", nil, false
 	}
 	arg = agentcore.NarrowableArgFor(toolName)
@@ -97,6 +102,21 @@ func stagedNarrowable(toolName, argsJSON string) (arg string, values []string, o
 		return "", nil, false
 	}
 	return arg, values, true
+}
+
+// onSyntheticTransport reports whether toolName is a tool of one of fleet's
+// synthetic servers: inline http_tools (mcp.HTTPToolServerName) or a2a peers
+// (mcp.A2AToolServerName). Their transports forward a call's arguments only:
+// no request `_meta` reaches the endpoint and Notify is a no-op, so nothing
+// that relies on either (a narrowing's staged list, a Stop's cancellation)
+// can be honoured there.
+func onSyntheticTransport(toolName string) bool {
+	for _, server := range []string{mcp.HTTPToolServerName, mcp.A2AToolServerName} {
+		if strings.HasPrefix(toolName, "mcp_"+server+"_") {
+			return true
+		}
+	}
+	return false
 }
 
 // narrowableValues reads a staged list argument: distinct non-empty strings

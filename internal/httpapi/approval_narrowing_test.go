@@ -544,6 +544,34 @@ func TestStagedNarrowable_NeverAnEmailSend(t *testing.T) {
 	}
 }
 
+// A tool of a synthetic server (inline http_tools, a2a peers) is never
+// narrowable, whatever key matches it: its transport forwards the arguments
+// only, so the endpoint would never receive the staged list in
+// `_meta["fleet/narrowed"]`.
+func TestStagedNarrowable_NeverASyntheticTransportTool(t *testing.T) {
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
+		CriticalToolSuffixes:       []string{"execute_plan"},
+		CriticalToolNarrowableArgs: map[string]string{"execute_plan": "deal_ids"},
+	})
+	args := `{"deal_ids":["d1","d2","d3"]}`
+	for _, tool := range []string{
+		"mcp_" + mcp.HTTPToolServerName + "_execute_plan",
+		"mcp_" + mcp.A2AToolServerName + "_execute_plan",
+	} {
+		if _, _, ok := stagedNarrowable(tool, args); ok {
+			t.Errorf("%s: a synthetic-transport tool must never be narrowable", tool)
+		}
+		if _, err := narrowApproval(&store.Approval{ToolName: tool, ArgsJSON: args}, []string{"d1"}); err == nil {
+			t.Errorf("%s: a narrowing must be refused", tool)
+		}
+	}
+	// The same key still narrows a real MCP server's tool.
+	if arg, values, ok := stagedNarrowable("mcp_dealplan_execute_plan", args); !ok || arg != "deal_ids" || len(values) != 3 {
+		t.Fatalf("an MCP tool must stay narrowable: arg=%q values=%v ok=%v", arg, values, ok)
+	}
+}
+
 // A grouped decision gets its own body cap, not the global 1 MiB JSON cap;
 // every other POST keeps the global one.
 func TestBodyLimitMiddleware_ApprovalGroupHasItsOwnCap(t *testing.T) {
