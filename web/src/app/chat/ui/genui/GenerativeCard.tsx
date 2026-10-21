@@ -2423,10 +2423,10 @@ function Toggle({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
         onClick={() => onChange?.(!on)}
         className={[
           "relative h-5 w-9 shrink-0 rounded-full transition disabled:opacity-60",
-          on ? "bg-[var(--color-primary)]" : "bg-[var(--color-overlay-strong)]",
+          on ? "bg-[var(--color-primary-fill)]" : "bg-[var(--color-overlay-strong)]",
         ].join(" ")}
       >
-        <span className={["absolute top-0.5 size-4 rounded-full bg-[var(--color-white)] transition-all", on ? "left-[1.125rem]" : "left-0.5"].join(" ")} />
+        <span className={["absolute top-0.5 size-4 rounded-full transition-all", on ? "left-[1.125rem] bg-[var(--color-on-primary-fill)]" : "left-0.5 bg-[var(--color-white)]"].join(" ")} />
       </button>
       <span className="text-[0.8125rem]">
         {str(c.label).trim()}

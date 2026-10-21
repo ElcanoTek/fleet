@@ -203,8 +203,9 @@ Approve, Create project, Move and share, `.btn-primary`, the
 sign-in button, the account avatar) paints `--color-on-primary-fill` on
 `--color-primary-fill`, not `on_primary` on `primary`, and hovers to
 `--color-primary-fill-hover`. `designTokens.test.ts` holds all of `web/src`
-to it; the raw `primary` is left for graphics with no text (switch tracks, a
-nav row's active bar, tints and borders). When a bundle sets
+to it, and so do the ON switch tracks with their knobs and the composer's
+Send circle with its arrow. The raw `primary` is left for what has nothing
+painted on it (a nav row's active bar, tints, borders and accent colors). When a bundle sets
 `primary` or `on_primary`, `/theme.css` measures the pair (the other one is
 fleet's default) and emits a fill that is the primary mixed toward black or
 white by the smallest step that reaches 4.5:1, plus a hover a further 10 points

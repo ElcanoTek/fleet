@@ -3681,12 +3681,15 @@ tr.sla-row-fail {
     left var(--motion-fast) ease,
     background var(--motion-fast) ease;
 }
+/* The ON track and knob are the measured fill pair, so the knob holds 4.5:1
+   on its track for any bundle palette (a white knob on a yellow primary was
+   1.07:1). */
 .ui-switch:checked {
-  background: var(--color-primary);
+  background: var(--color-primary-fill);
 }
 .ui-switch:checked::before {
   left: calc(100% - 1.03rem);
-  background: var(--color-on-primary);
+  background: var(--color-on-primary-fill);
 }
 .ui-switch.ui-switch--always-on:checked {
   /* Keep locked availability only slightly stronger than off, and neutral

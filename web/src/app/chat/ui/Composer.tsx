@@ -1360,9 +1360,10 @@ export function Composer({
               </span>
             </button>
             {/* The design's .send-btn: a 2.1rem circle that lights up
-                      with the action gradient once there is content to send
-                      (the image: hint keeps the gradient token in
-                      background-image). */}
+                      with the measured primary fill once there is content
+                      to send. Not the action gradient: its secondary stop
+                      is not measured, so a bundle's arrow could fall under
+                      3:1 on it (a yellow primary with white on_primary). */}
             <button
               aria-label="Send message"
               className={`inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed ${
@@ -1370,7 +1371,7 @@ export function Composer({
                 !isStreaming &&
                 !isUploadingAttachments &&
                 !modelError
-                  ? "bg-[image:var(--gradient-action-primary)] text-[var(--color-on-primary-fill)] hover:-translate-y-px"
+                  ? "bg-[var(--color-primary-fill)] text-[var(--color-on-primary-fill)] hover:-translate-y-px enabled:hover:bg-[var(--color-primary-fill-hover)]"
                   : "bg-[var(--color-surface-2)] text-[var(--color-text-disabled)]"
               }`}
               type="submit"
