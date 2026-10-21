@@ -118,7 +118,13 @@ func TestExpandUserEnv(t *testing.T) {
 			"PADDED":  "${ FLEET_USER_EMAIL }",
 			"DEFAULT": "${FLEET_USER_NAME:-team}",
 			"MIXED":   "${FLEET_USER_EMAIL} / $${FLEET_USER_NAME}",
-			"OK":      "${FLEET_USER_EMAIL}",
+			// Unicode padding: RE2's \s is ASCII-only, so these used to be
+			// passed through as literal placeholders.
+			"NBSP":       "${\u00a0FLEET_USER_EMAIL\u00a0}",
+			"EM_SPACE":   "${\u2003FLEET_USER_NAME}",
+			"ZERO_WIDTH": "${\u200bFLEET_USER_EMAIL}",
+			"ESC_NBSP":   "$${\u00a0FLEET_USER_EMAIL}",
+			"OK":         "${FLEET_USER_EMAIL}",
 		}, MCPUserIdentity{Email: "elyse@example.com", Name: "Elyse"})
 		if want := map[string]string{"OK": "elyse@example.com"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("ExpandUserEnv = %v, want %v", got, want)

@@ -188,16 +188,20 @@ The spelling rules are the other reserved tokens': bare only (a
 `${FLEET_USER_EMAIL:-team@example.com}` default fails the load — it would bake
 one person in), exact (a padded `${ FLEET_USER_EMAIL }` fails the load for
 every reserved token, since the spawn paths match only the exact spelling and
-it would otherwise reach every connector as a literal), not escapable (an
+it would otherwise reach every connector as a literal; for the user tokens any
+padding counts — Unicode whitespace, a zero-width space or a BOM included, and
+a YAML escape that only becomes padding once parsed), not escapable (an
 escaped `$${FLEET_USER_EMAIL}` fails the load anywhere in the manifest,
 including inside a `${OUTER:-...}` default body: the escape collapses to — or
 survives as a `$` in front of — the token before spawn, so it would deliver
 the user's email rather than the literal text; there is no way to write that
 literal), never resolved from the process env (an operator-exported
 `FLEET_USER_EMAIL` cannot hijack it), and only in a **stdio** `mcp_servers` env
-value (a header, url, command or an http server's env fails the load, since
-nothing would ever substitute it there). An Agent Plugin's `mcp.json` env gets
-the same escaped/padded refusal (that entry is skipped). As a spawn-time
+value (an env **key**, a header name or value, the url, command or args, or an
+http server's env fails the load, since nothing would ever substitute it
+there). An Agent Plugin's `mcp.json` entry gets the same rules — escaped or
+padded spellings in an env value, and a token in an env key, args, or a
+`streamable-http` url or header, are refused and that entry is skipped. As a spawn-time
 backstop, a key whose value still carries an escaped or non-exact spelling is
 dropped, never substituted or passed through. `fleet validate-config` and
 bundle preflight accept the tokens exactly where they work. A bundle that never writes them is unaffected. Adopt them only

@@ -157,6 +157,51 @@ mcp_servers:
     url: "https://example.test/${FLEET_USER_NAME}"
     always: true
 `, "reserved runtime token"},
+		// The spawn paths substitute env VALUES only: a token in an env key
+		// would name a literal "${FLEET_USER_EMAIL}" variable.
+		{"user token as an env key", `
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py"]
+    always: true
+    env:
+      "${FLEET_USER_EMAIL}": "x"
+`, "env.${FLEET_USER_EMAIL} (map key): ${FLEET_USER_EMAIL} is a reserved runtime token"},
+		{"workspace token as an env key", `
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py"]
+    always: true
+    env:
+      "${FLEET_WORKSPACE}": "x"
+`, "(map key): ${FLEET_WORKSPACE} is a reserved runtime token"},
+		// Go's \s is ASCII-only: Unicode padding must be refused too, both
+		// written literally (caught on the raw text) and as a YAML escape
+		// that only becomes padding once parsed (caught per server).
+		{"NBSP-padded email", "\nmcp_servers:\n  - name: deals\n    command: python3\n    args: [\"deals.py\"]\n    always: true\n    env:\n      TO: \"${\u00a0FLEET_USER_EMAIL\u00a0}\"\n",
+			"RESERVED runtime token"},
+		{"zero-width-padded name", "\nmcp_servers:\n  - name: deals\n    command: python3\n    args: [\"deals.py\"]\n    always: true\n    env:\n      NAME: \"${\u200bFLEET_USER_NAME}\"\n",
+			"RESERVED runtime token"},
+		{"escaped ideographic-space-padded email", "\nmcp_servers:\n  - name: deals\n    command: python3\n    args: [\"deals.py\"]\n    always: true\n    env:\n      TO: \"$${\u3000FLEET_USER_EMAIL}\"\n",
+			"an escaped FLEET_USER_EMAIL cannot be written"},
+		{"YAML-escaped NBSP padding", `
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py"]
+    always: true
+    env:
+      TO: "${\u00a0FLEET_USER_EMAIL}"
+`, "RESERVED runtime token"},
+		{"YAML-escaped token in an arg", `
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py", "--to=${\u0020FLEET_USER_EMAIL}"]
+    always: true
+`, "mcp_servers[0].args[1]: ${ FLEET_USER_EMAIL} is a reserved runtime token"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1056,16 +1056,31 @@ func parsePluginServer(name string, raw json.RawMessage, ctx pluginServerContext
 		literalEnv:  true,
 		plugin:      ctx.plugin,
 	}
+	var sd ServerDef
 	switch typ {
 	case "stdio":
-		return parseStdioPluginServer(fields, ctx, base)
+		sd, err = parseStdioPluginServer(fields, ctx, base)
 	case "streamable-http":
-		return parseHTTPPluginServer(fields, base)
+		sd, err = parseHTTPPluginServer(fields, base)
 	case "sse":
 		return ServerDef{}, errors.New("legacy HTTP+SSE transport is not supported (fleet speaks stdio and Streamable HTTP; spec support for sse is optional)")
 	default:
 		return ServerDef{}, fmt.Errorf("unknown type %q (want stdio, streamable-http, or sse)", typ)
 	}
+	if err != nil {
+		return ServerDef{}, err
+	}
+	// Plugin entries skip the manifest's interpolation and validate passes,
+	// so the signed-in-user token rules (user_tokens.go, ADR-0087) are applied
+	// to the translated entry here: an escaped or padded token in an env
+	// value would reach the binder as PII or a literal placeholder, and a
+	// token anywhere else — an env key, the command or args, an http url or
+	// header — is never substituted and would ship verbatim. The entry is
+	// skipped, like any other entry defect.
+	if err := serverUserTokenProblem(&sd); err != nil {
+		return ServerDef{}, err
+	}
+	return sd, nil
 }
 
 // parseStdioPluginServer handles the `stdio` variant: command resolution,
@@ -1094,16 +1109,9 @@ func parseStdioPluginServer(fields map[string]json.RawMessage, ctx pluginServerC
 	if err != nil {
 		return ServerDef{}, err
 	}
-	for k, v := range env {
+	for k := range env {
 		if k == pluginRootVar || k == pluginDataVar {
 			return ServerDef{}, fmt.Errorf("env must not set the reserved variable %s (the client supplies it)", k)
-		}
-		// Plugin env skips the manifest's interpolation pass, so the
-		// signed-in-user spelling rules (user_tokens.go) are applied here:
-		// an escaped or padded user token would otherwise reach the binder
-		// as PII or as a literal placeholder.
-		if p := userTokenSpellingProblem(v); p != "" {
-			return ServerDef{}, fmt.Errorf("env %q: %s", k, p)
 		}
 	}
 	cwd, _, err := jsonString(fields, "cwd")

@@ -62,6 +62,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
+	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
 
 // HTTPToolServerName is the synthetic MCP-server name inline http_tools are
@@ -1951,7 +1952,7 @@ func validateIdentityEnv(s *ServerDef) error {
 		// key that routes a seat or money must not be filled from whoever is
 		// at the keyboard, and the variant guard would read the token as an
 		// inherited default-seat value and refuse every named seat anyway.
-		if strings.Contains(val, "${"+reservedUserEmailVar+"}") || strings.Contains(val, "${"+reservedUserNameVar+"}") {
+		if usertoken.Mentions(val) {
 			return fmt.Errorf("mcp_servers[%q]: identity_env var %q is filled from ${FLEET_USER_EMAIL}/${FLEET_USER_NAME}; the signed-in user must never route a seat or money — drop it from identity_env (see docs/MCP-BUNDLE-ENV.md)", s.Name, trimmed)
 		}
 	}
@@ -3631,8 +3632,8 @@ const (
 	reservedWorkspaceVar     = "FLEET_WORKSPACE"
 	reservedWorkspaceRootVar = "FLEET_WORKSPACE_ROOT"
 	reservedTaskIDVar        = "FLEET_TASK_ID"
-	reservedUserEmailVar     = "FLEET_USER_EMAIL"
-	reservedUserNameVar      = "FLEET_USER_NAME"
+	reservedUserEmailVar     = usertoken.EmailVar
+	reservedUserNameVar      = usertoken.NameVar
 )
 
 func reservedRuntimeVar(name string) bool {

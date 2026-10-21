@@ -1,10 +1,11 @@
 package agentcore
 
 import (
-	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
 
 // Reserved ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME} manifest-env tokens
@@ -48,14 +49,13 @@ import (
 const (
 	// UserEmailEnvToken resolves to the turn sender's normalized (lowercased)
 	// email address.
-	//nolint:gosec // G101 false positive: an interpolation placeholder name, not a credential.
-	UserEmailEnvToken = "${FLEET_USER_EMAIL}"
+	UserEmailEnvToken = usertoken.EmailToken
 	// UserNameEnvToken resolves to the turn sender's first name as THEY saved
 	// it (Settings → General → "Your first name", users.given_name). It is
 	// never guessed from the email: a user who has not saved one has no name,
 	// and the token is treated as absent, so a connector falls back to its own
 	// no-name wording ("Hi team,").
-	UserNameEnvToken = "${FLEET_USER_NAME}" //nolint:gosec // interpolation placeholder, not a credential.
+	UserNameEnvToken = usertoken.NameToken
 
 	// maxMCPUserEmailLen is RFC 5321's path limit; maxMCPUserNameLen bounds a
 	// display name in runes.
@@ -179,34 +179,15 @@ func isASCIIAlnum(c byte) bool {
 }
 
 // EnvReferencesUser reports whether any value in env carries a reserved user
-// token, in any spelling (see userTokenNamed).
+// token, in any spelling (usertoken.Find: exact, escaped, padded with any
+// whitespace or invisible character, or a colon form).
 func EnvReferencesUser(env map[string]string) bool {
 	for _, v := range env {
-		if strings.Contains(v, "FLEET_USER_") && userTokenNamed.MatchString(v) {
+		if usertoken.Mentions(v) {
 			return true
 		}
 	}
 	return false
-}
-
-// userTokenNamed matches every spelling that NAMES a user token — the exact
-// one, an escaped "$${...}", a padded "${ FLEET_USER_EMAIL }", or a colon
-// form. The bundle loader refuses all but the exact spelling
-// (internal/clientconfig/user_tokens.go); this is the spawn-time backstop for
-// a value that reached the binder some other way (e.g. an escape nested in a
-// default body the loader missed): such a key is DROPPED, never substituted
-// and never passed through as a literal.
-var userTokenNamed = regexp.MustCompile(`\$?\$\{\s*FLEET_USER_(?:EMAIL|NAME)\s*(?::[^}]*)?\}`)
-
-// userTokenSpellingsExact reports whether every user-token spelling in v is
-// exactly UserEmailEnvToken or UserNameEnvToken, not preceded by an escape.
-func userTokenSpellingsExact(v string) bool {
-	for _, m := range userTokenNamed.FindAllString(v, -1) {
-		if m != UserEmailEnvToken && m != UserNameEnvToken {
-			return false
-		}
-	}
-	return true
 }
 
 // ExpandUserEnv resolves the reserved user tokens in env against user, which
@@ -225,14 +206,17 @@ func ExpandUserEnv(env map[string]string, user MCPUserIdentity) map[string]strin
 	replacer := strings.NewReplacer(UserEmailEnvToken, user.Email, UserNameEnvToken, user.Name)
 	out := make(map[string]string, len(env))
 	for k, v := range env {
-		if !strings.Contains(v, "FLEET_USER_") || !userTokenNamed.MatchString(v) {
+		if !usertoken.Mentions(v) {
 			out[k] = v
 			continue
 		}
-		if !userTokenSpellingsExact(v) {
-			// An escaped or non-canonical spelling: substituting would hand
-			// the connector PII it asked to keep literal, and passing it
-			// through would ship a placeholder. Drop the key.
+		if _, bad := usertoken.FirstInexact(v); bad {
+			// An escaped or non-canonical spelling — the spawn-time
+			// backstop for a value that reached the binder some other way
+			// than the loader, which refuses them all
+			// (internal/clientconfig/user_tokens.go): substituting would
+			// hand the connector PII it asked to keep literal, and passing
+			// it through would ship a placeholder. Drop the key.
 			continue
 		}
 		usesEmail := strings.Contains(v, UserEmailEnvToken)

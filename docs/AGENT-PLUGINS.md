@@ -234,6 +234,10 @@ plugin's MCP servers run in the control-plane pod like every manifest server.
   client "MUST NOT perform any other placeholder or environment-variable
   expansion"; this is a documented, narrow deviation rather than a second
   substitution path, and a portable plugin has no reason to write those tokens.
+  The user tokens follow the manifest's placement and spelling rules: an entry
+  that writes one anywhere but a stdio env value (an env key, args, or a
+  `streamable-http` url or header), or in an escaped or padded spelling, is
+  skipped.
 - **No marketplace, installer, signing or update checker.** Distribution and
   installation are out of the portable contract by design; a plugin arrives by
   being committed to the bundle checkout and reviewed like any other bundle

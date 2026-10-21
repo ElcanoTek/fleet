@@ -447,6 +447,52 @@ func TestPluginMCPEntryFailuresSkipOnlyThatEntry(t *testing.T) {
 	}
 }
 
+// TestPluginUserTokenPlacementSkipsEntry (ADR-0087): a plugin entry never sees
+// the manifest's raw-text or validate passes, so the user-token rules run on
+// the parsed entry. A token is substituted only in a stdio env VALUE in its
+// exact spelling; anywhere else (an http url or header, an env key, args) it
+// would ship verbatim, and a Unicode-padded spelling would reach the connector
+// as a literal. Each such entry is skipped with a reason naming the rule.
+func TestPluginUserTokenPlacementSkipsEntry(t *testing.T) {
+	cases := map[string]struct{ entry, want string }{
+		"http header value": {`{"type": "streamable-http", "url": "https://x.example.com/mcp", "headers": {"X-User": "${FLEET_USER_EMAIL}"}}`,
+			`header "X-User" names ${FLEET_USER_EMAIL}/${FLEET_USER_NAME}`},
+		"http url": {`{"type": "streamable-http", "url": "https://x.example.com/mcp?u=${FLEET_USER_NAME}"}`,
+			`url names ${FLEET_USER_EMAIL}/${FLEET_USER_NAME}`},
+		"stdio env key": {`{"type": "stdio", "command": "python3", "env": {"${FLEET_USER_EMAIL}": "x"}}`,
+			`env key "${FLEET_USER_EMAIL}" names`},
+		"stdio arg": {`{"type": "stdio", "command": "python3", "args": ["--to", "${FLEET_USER_EMAIL}"]}`,
+			`args[1] names`},
+		"NBSP-padded env value": {`{"type": "stdio", "command": "python3", "env": {"TO": "${XU00A0FLEET_USER_EMAIL}"}}`,
+			"RESERVED runtime token"},
+		"zero-width-escaped env value": {`{"type": "stdio", "command": "python3", "env": {"TO": "$${XU200BFLEET_USER_NAME}"}}`,
+			"an escaped FLEET_USER_NAME cannot be written"},
+	}
+	for label, tc := range cases {
+		t.Run(label, func(t *testing.T) {
+			// JSON \u escapes, so the padding reaches the parser as the
+			// real rune while this source stays ASCII.
+			entry := strings.NewReplacer("XU00A0", `\u00a0`, "XU200B", `\u200b`).Replace(tc.entry)
+			mcp := `{` + testMCPSchema + `, "mcpServers": {"bad_entry": ` + entry + `, "good_one": {"type": "stdio", "command": "python3", "env": {"TO": "${FLEET_USER_EMAIL}"}}}}`
+			dir := writePluginBundle(t, "", pluginFixture{dir: "p", manifest: minimalManifest("p"), mcp: mcp})
+			b, err := Load(dir)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			cfgs := b.MCPServerConfigs()
+			if _, ok := cfgs["bad_entry"]; ok {
+				t.Errorf("entry must be skipped: %v", b.PluginProblems())
+			}
+			if got := cfgs["good_one"].Env["TO"]; got != "${FLEET_USER_EMAIL}" {
+				t.Errorf("the exact token in a stdio env value is the contract; sibling env TO = %q (%v)", got, b.PluginProblems())
+			}
+			if !containsProblem(b.PluginProblems(), `server "bad_entry"`) || !containsProblem(b.PluginProblems(), tc.want) {
+				t.Errorf("skip reason must name the rule (%q): %v", tc.want, b.PluginProblems())
+			}
+		})
+	}
+}
+
 func TestPluginMCPCwdForms(t *testing.T) {
 	dir := writePluginBundle(t, "", pluginFixture{dir: "p", manifest: minimalManifest("cwd-plugin"),
 		files: map[string]string{"work/.keep": ""},
