@@ -81,8 +81,26 @@ function hex(h: string): RGBA {
  * Out-of-range values clamp, as CSS does.
  */
 function rgbComponents(value: string, args: string): RGBA {
-  const parts = args.split(/[\s,/]+/).filter(Boolean);
-  if (parts.length !== 3 && parts.length !== 4) throw new Error(`unsupported color value: ${value}`);
+  const bad = () => new Error(`unsupported color value: ${value}`);
+  // The two grammars the browser accepts, never mixed: legacy commas
+  // `r, g, b[, a]`, or modern spaces with an optional slash `r g b[ / a]`.
+  let parts: string[];
+  if (args.includes(",")) {
+    if (args.includes("/")) throw bad();
+    parts = args.split(",").map((p) => p.trim());
+    if (parts.some((p) => p === "" || /\s/.test(p))) throw bad();
+  } else {
+    const [rgb, alpha, ...rest] = args.split("/");
+    if (rest.length) throw bad();
+    parts = rgb.trim().split(/\s+/).filter(Boolean);
+    if (parts.length !== 3) throw bad();
+    if (alpha !== undefined) {
+      const a = alpha.trim();
+      if (!a || /\s/.test(a)) throw bad();
+      parts.push(a);
+    }
+  }
+  if (parts.length !== 3 && parts.length !== 4) throw bad();
   const num = (s: string, scale: number): number => {
     const pct = s.endsWith("%");
     const n = Number(pct ? s.slice(0, -1) : s);
@@ -113,7 +131,9 @@ export function resolveColor(value: string, theme: Theme, seen: string[] = []): 
   }
   if (c.name === "rgb" || c.name === "rgba") return rgbComponents(v, c.args);
   if (c.name === "color-mix") {
-    const [space, a, b] = splitTopLevel(c.args);
+    const args = splitTopLevel(c.args);
+    if (args.length !== 3) throw new Error(`unsupported color value: ${v}`);
+    const [space, a, b] = args;
     if (space.replace(/\s+/g, " ") !== "in srgb") throw new Error(`color-mix space ${space} unsupported`);
     const stop = (s: string): { color: string; pct: number | null } => {
       const m = /^([\s\S]*?)\s+(\d+(?:\.\d+)?)%$/.exec(s.trim());
@@ -121,9 +141,12 @@ export function resolveColor(value: string, theme: Theme, seen: string[] = []): 
     };
     const s1 = stop(a);
     const s2 = stop(b);
+    // CSS rejects a percentage over 100% and a pair that sums to 0%.
+    if ((s1.pct ?? 0) > 1 || (s2.pct ?? 0) > 1) throw new Error(`unsupported color value: ${v}`);
     let p1 = s1.pct ?? (s2.pct === null ? 0.5 : 1 - s2.pct);
     let p2 = s2.pct ?? 1 - p1;
     const sum = p1 + p2;
+    if (!(sum > 0)) throw new Error(`unsupported color value: ${v}`);
     const alphaScale = sum < 1 ? sum : 1;
     p1 /= sum;
     p2 /= sum;
