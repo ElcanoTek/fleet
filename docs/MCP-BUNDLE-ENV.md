@@ -189,13 +189,18 @@ The spelling rules are the other reserved tokens': bare only (a
 one person in), exact (a padded `${ FLEET_USER_EMAIL }` fails the load for
 every reserved token, since the spawn paths match only the exact spelling and
 it would otherwise reach every connector as a literal), not escapable (an
-escaped `$${FLEET_USER_EMAIL}` fails the load: the escape collapses to the
-token one pass before spawn, so it would deliver the user's email rather than
-the literal text — there is no way to write that literal), never resolved from the process env (an operator-exported
-`FLEET_USER_EMAIL` cannot hijack it), and only in an `mcp_servers` env value (a
-header, url or command fails the load, since nothing would ever substitute it
-there). `fleet validate-config` and bundle preflight accept the tokens exactly
-where they work. A bundle that never writes them is unaffected. Adopt them only
+escaped `$${FLEET_USER_EMAIL}` fails the load anywhere in the manifest,
+including inside a `${OUTER:-...}` default body: the escape collapses to — or
+survives as a `$` in front of — the token before spawn, so it would deliver
+the user's email rather than the literal text; there is no way to write that
+literal), never resolved from the process env (an operator-exported
+`FLEET_USER_EMAIL` cannot hijack it), and only in a **stdio** `mcp_servers` env
+value (a header, url, command or an http server's env fails the load, since
+nothing would ever substitute it there). An Agent Plugin's `mcp.json` env gets
+the same escaped/padded refusal (that entry is skipped). As a spawn-time
+backstop, a key whose value still carries an escaped or non-exact spelling is
+dropped, never substituted or passed through. `fleet validate-config` and
+bundle preflight accept the tokens exactly where they work. A bundle that never writes them is unaffected. Adopt them only
 after the fleet release that ships them: an older fleet treats them as ordinary
 unset variables and hands the server an **empty** value. The decision record is
 [ADR-0087](adr/0087-interactive-mcp-scopes-carry-the-signed-in-user.md).

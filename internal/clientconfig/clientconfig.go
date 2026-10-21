@@ -1853,7 +1853,7 @@ func (b *Bundle) validate() error {
 		if err := validateServerTLS(s.Name, s.Type, s.URL, s.TLS); err != nil {
 			return err
 		}
-		if err := validateIdentityEnv(s); err != nil {
+		if err := validateServerEnvContract(s); err != nil {
 			return err
 		}
 		if err := validateCategory(s); err != nil {
@@ -3553,15 +3553,18 @@ func copyStringMap(in map[string]string) map[string]string {
 // (#1123), so every other field — and ${VAR:?...} validation — sees the same
 // environment the runtime uses.
 func interpolateManifest(raw []byte, manifestPath string) ([]byte, error) {
+	// Escaped or padded user-token spellings (user_tokens.go) are refused on
+	// the raw text, before this pass collapses an escape — including one
+	// nested in a default body, which the loop below never descends into.
+	if err := rawUserTokenSpellingProblem(raw, manifestPath); err != nil {
+		return nil, err
+	}
 	s := string(raw)
 	var sb strings.Builder
 	sb.Grow(len(s))
 	for i := 0; i < len(s); {
 		// Escape: "$${" -> literal "${" (consume one leading '$').
 		if strings.HasPrefix(s[i:], "$${") {
-			if err := escapedUserToken(s, i+1, manifestPath); err != nil {
-				return nil, err
-			}
 			sb.WriteString("${")
 			i += 3
 			continue
@@ -3638,32 +3641,6 @@ func reservedRuntimeVar(name string) bool {
 		return true
 	}
 	return false
-}
-
-// escapedUserToken fails the load for an escaped user token — $${FLEET_USER_EMAIL}
-// or $${FLEET_USER_NAME} — at s[dollar:] (which starts "${"). The escape
-// collapses to the literal "${FLEET_USER_EMAIL}" one pass before the spawn
-// paths run, and those paths cannot tell that literal from the token, so a
-// bundle that asked for the literal TEXT would be handed the signed-in user's
-// email instead. There is no way to express that literal in an env value, so
-// the spelling is refused rather than silently turned into PII. (Scoped to the
-// two user tokens, which no bundle predating them can contain; the older
-// reserved tokens keep their behaviour.)
-func escapedUserToken(s string, dollar int, manifestPath string) error {
-	end, ok := matchBrace(s, dollar+1)
-	if !ok {
-		return nil
-	}
-	name := strings.TrimSpace(s[dollar+2 : end])
-	if idx := strings.IndexByte(name, ':'); idx >= 0 {
-		name = strings.TrimSpace(name[:idx])
-	}
-	if name != reservedUserEmailVar && name != reservedUserNameVar {
-		return nil
-	}
-	return fmt.Errorf(
-		"client config manifest %s: $%s: an escaped %s cannot be written — fleet substitutes the signed-in user for that spelling at MCP launch, so the escape would hand a connector the user's identity instead of the literal text (see docs/MCP-BUNDLE-ENV.md)",
-		manifestPath, s[dollar:end+1], name)
 }
 
 // expandExpr resolves the body of a single ${...} expression (the text between

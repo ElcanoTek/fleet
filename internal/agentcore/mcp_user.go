@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -186,14 +187,34 @@ func isASCIIAlnum(c byte) bool {
 }
 
 // EnvReferencesUser reports whether any value in env carries a reserved user
-// token.
+// token, in any spelling (see userTokenNamed).
 func EnvReferencesUser(env map[string]string) bool {
 	for _, v := range env {
-		if strings.Contains(v, UserEmailEnvToken) || strings.Contains(v, UserNameEnvToken) {
+		if strings.Contains(v, "FLEET_USER_") && userTokenNamed.MatchString(v) {
 			return true
 		}
 	}
 	return false
+}
+
+// userTokenNamed matches every spelling that NAMES a user token — the exact
+// one, an escaped "$${...}", a padded "${ FLEET_USER_EMAIL }", or a colon
+// form. The bundle loader refuses all but the exact spelling
+// (internal/clientconfig/user_tokens.go); this is the spawn-time backstop for
+// a value that reached the binder some other way (e.g. an escape nested in a
+// default body the loader missed): such a key is DROPPED, never substituted
+// and never passed through as a literal.
+var userTokenNamed = regexp.MustCompile(`\$?\$\{\s*FLEET_USER_(?:EMAIL|NAME)\s*(?::[^}]*)?\}`)
+
+// userTokenSpellingsExact reports whether every user-token spelling in v is
+// exactly UserEmailEnvToken or UserNameEnvToken, not preceded by an escape.
+func userTokenSpellingsExact(v string) bool {
+	for _, m := range userTokenNamed.FindAllString(v, -1) {
+		if m != UserEmailEnvToken && m != UserNameEnvToken {
+			return false
+		}
+	}
+	return true
 }
 
 // ExpandUserEnv resolves the reserved user tokens in env against user, which
@@ -212,12 +233,18 @@ func ExpandUserEnv(env map[string]string, user MCPUserIdentity) map[string]strin
 	replacer := strings.NewReplacer(UserEmailEnvToken, user.Email, UserNameEnvToken, user.Name)
 	out := make(map[string]string, len(env))
 	for k, v := range env {
-		usesEmail := strings.Contains(v, UserEmailEnvToken)
-		usesName := strings.Contains(v, UserNameEnvToken)
-		if !usesEmail && !usesName {
+		if !strings.Contains(v, "FLEET_USER_") || !userTokenNamed.MatchString(v) {
 			out[k] = v
 			continue
 		}
+		if !userTokenSpellingsExact(v) {
+			// An escaped or non-canonical spelling: substituting would hand
+			// the connector PII it asked to keep literal, and passing it
+			// through would ship a placeholder. Drop the key.
+			continue
+		}
+		usesEmail := strings.Contains(v, UserEmailEnvToken)
+		usesName := strings.Contains(v, UserNameEnvToken)
 		if (usesEmail && user.Email == "") || (usesName && user.Name == "") {
 			continue
 		}

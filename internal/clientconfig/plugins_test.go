@@ -390,16 +390,21 @@ func TestPluginMCPTopLevelFailureDisablesMCPOnly(t *testing.T) {
 
 func TestPluginMCPEntryFailuresSkipOnlyThatEntry(t *testing.T) {
 	bad := map[string]string{
-		"unknown field":         `{"type": "stdio", "command": "python3", "shell": true}`,
-		"missing type":          `{"command": "python3"}`,
-		"unknown type":          `{"type": "websocket", "url": "wss://x"}`,
-		"missing command":       `{"type": "stdio"}`,
-		"parent-escaping cmd":   `{"type": "stdio", "command": "../bin/server"}`,
-		"absolute cmd":          `{"type": "stdio", "command": "/usr/bin/python3"}`,
-		"placeholder cmd":       `{"type": "stdio", "command": "${PLUGIN_ROOT}/bin/x"}`,
-		"missing relative cmd":  `{"type": "stdio", "command": "./bin/nope"}`,
-		"reserved env key":      `{"type": "stdio", "command": "python3", "env": {"PLUGIN_ROOT": "/x"}}`,
-		"env not strings":       `{"type": "stdio", "command": "python3", "env": {"A": 1}}`,
+		"unknown field":        `{"type": "stdio", "command": "python3", "shell": true}`,
+		"missing type":         `{"command": "python3"}`,
+		"unknown type":         `{"type": "websocket", "url": "wss://x"}`,
+		"missing command":      `{"type": "stdio"}`,
+		"parent-escaping cmd":  `{"type": "stdio", "command": "../bin/server"}`,
+		"absolute cmd":         `{"type": "stdio", "command": "/usr/bin/python3"}`,
+		"placeholder cmd":      `{"type": "stdio", "command": "${PLUGIN_ROOT}/bin/x"}`,
+		"missing relative cmd": `{"type": "stdio", "command": "./bin/nope"}`,
+		"reserved env key":     `{"type": "stdio", "command": "python3", "env": {"PLUGIN_ROOT": "/x"}}`,
+		"env not strings":      `{"type": "stdio", "command": "python3", "env": {"A": 1}}`,
+		// ADR-0087: plugin env skips the manifest interpolation pass, so an
+		// escaped user token would reach the binder as PII and a padded one
+		// as a literal placeholder; both are refused at parse.
+		"escaped user token":    `{"type": "stdio", "command": "python3", "env": {"TO": "$${FLEET_USER_EMAIL}"}}`,
+		"padded user token":     `{"type": "stdio", "command": "python3", "env": {"TO": "${ FLEET_USER_NAME }"}}`,
 		"args not strings":      `{"type": "stdio", "command": "python3", "args": [1]}`,
 		"bare cwd":              `{"type": "stdio", "command": "python3", "cwd": "data"}`,
 		"escaping cwd":          `{"type": "stdio", "command": "python3", "cwd": "./../.."}`,

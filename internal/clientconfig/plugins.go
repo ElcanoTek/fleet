@@ -1094,9 +1094,16 @@ func parseStdioPluginServer(fields map[string]json.RawMessage, ctx pluginServerC
 	if err != nil {
 		return ServerDef{}, err
 	}
-	for k := range env {
+	for k, v := range env {
 		if k == pluginRootVar || k == pluginDataVar {
 			return ServerDef{}, fmt.Errorf("env must not set the reserved variable %s (the client supplies it)", k)
+		}
+		// Plugin env skips the manifest's interpolation pass, so the
+		// signed-in-user spelling rules (user_tokens.go) are applied here:
+		// an escaped or padded user token would otherwise reach the binder
+		// as PII or as a literal placeholder.
+		if p := userTokenSpellingProblem(v); p != "" {
+			return ServerDef{}, fmt.Errorf("env %q: %s", k, p)
 		}
 	}
 	cwd, _, err := jsonString(fields, "cwd")

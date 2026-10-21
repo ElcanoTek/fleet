@@ -78,7 +78,7 @@ mcp_servers:
     always: true
     env:
       TO: "${ FLEET_USER_EMAIL }"
-`, "without spaces inside the braces"},
+`, "spaces inside the braces"},
 		{"padded workspace spelling", `
 mcp_servers:
   - name: deals
@@ -87,7 +87,7 @@ mcp_servers:
     always: true
     env:
       RUN_WORKDIR: "${FLEET_WORKSPACE }"
-`, "without spaces inside the braces"},
+`, "spaces inside the braces"},
 		// An escape collapses to the exact token one pass before spawn, which
 		// would hand the connector the user's email instead of the literal
 		// text the bundle asked for — so it is refused.
@@ -100,6 +100,28 @@ mcp_servers:
     env:
       TEMPLATE: "Reply to $${FLEET_USER_EMAIL}"
 `, "an escaped FLEET_USER_EMAIL cannot be written"},
+		// The interpolator never expands a default body, so an escape nested
+		// in one would survive verbatim to spawn — caught on the raw text.
+		{"escaped email nested in a default", `
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py"]
+    always: true
+    env:
+      TEMPLATE: "${DEALS_TEMPLATE:-$${FLEET_USER_EMAIL}}"
+`, "an escaped FLEET_USER_EMAIL cannot be written"},
+		// Fleet never spawns an http server, so its env could never carry
+		// the user; accepting it would claim a contract that does not exist.
+		{"user token in an http server env", `
+mcp_servers:
+  - name: remote
+    type: http
+    url: "https://example.test/mcp"
+    always: true
+    env:
+      TO: "${FLEET_USER_EMAIL}"
+`, "only for stdio servers"},
 		{"escaped name in a url", `
 mcp_servers:
   - name: remote

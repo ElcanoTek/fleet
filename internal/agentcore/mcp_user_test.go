@@ -94,6 +94,21 @@ func TestExpandUserEnv(t *testing.T) {
 			t.Fatalf("ExpandUserEnv(hostile) = %v, want %v", got, want)
 		}
 	})
+	// Spawn-time backstop for spellings the loader refuses: an escape left
+	// verbatim (e.g. nested in a default body) or a padded/colon form must be
+	// dropped — never substituted into "$elyse@…", never shipped literally.
+	t.Run("escaped or non-canonical spellings are dropped", func(t *testing.T) {
+		got := ExpandUserEnv(map[string]string{
+			"ESCAPED": "$${FLEET_USER_EMAIL}",
+			"PADDED":  "${ FLEET_USER_EMAIL }",
+			"DEFAULT": "${FLEET_USER_NAME:-team}",
+			"MIXED":   "${FLEET_USER_EMAIL} / $${FLEET_USER_NAME}",
+			"OK":      "${FLEET_USER_EMAIL}",
+		}, MCPUserIdentity{Email: "elyse@example.com", Name: "Elyse"})
+		if want := map[string]string{"OK": "elyse@example.com"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("ExpandUserEnv = %v, want %v", got, want)
+		}
+	})
 	t.Run("a token-free map is returned as-is", func(t *testing.T) {
 		plain := map[string]string{"A": "1"}
 		got := ExpandUserEnv(plain, MCPUserIdentity{Email: "elyse@example.com"})
