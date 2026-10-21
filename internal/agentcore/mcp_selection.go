@@ -12,6 +12,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
 
 // MCPVariantClientEnvVar is injected into every ACCOUNT-VARIANT stdio
@@ -148,11 +149,24 @@ func resolveMCPVariant(server string, base MCPServerBase, account string) (name 
 
 	name = server
 	if account != "" {
+		// The signed-in-user token is honoured only where the bundle writes it
+		// (ADR-0087). A <VAR>_<ACCOUNT> overlay comes from the process env —
+		// the credential store, an operator export — so one that names the
+		// token would otherwise be filled with whoever is at the keyboard at
+		// spawn, an identity_env key included, routing a seat or money by the
+		// user. Refuse the seat rather than spawn it.
+		suffix := "_" + upperAccount(account)
+		for v := range base.BaseEnv {
+			if usertoken.Mentions(os.Getenv(v + suffix)) {
+				return "", nil, fmt.Errorf(
+					"refusing to spawn server %q under account %q: %s%s names the reserved signed-in-user token, which fleet substitutes only where the bundle manifest writes it",
+					server, account, v, suffix)
+			}
+		}
 		// Inherited-routing-identity guard: a partially-suffixed account (API
 		// key overridden, owner/member id not) must be refused, not spawned —
 		// it would transact in the DEFAULT seat's identity under the named
 		// account's label. Mirrors the cutlass mcp_loader guard.
-		suffix := "_" + upperAccount(account)
 		for _, v := range base.IdentityEnv {
 			if strings.TrimSpace(base.BaseEnv[v]) == "" {
 				continue // identity var unset on the default seat: nothing to inherit

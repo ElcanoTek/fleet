@@ -55,6 +55,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/goccy/go-yaml"
 	"github.com/itchyny/gojq"
@@ -3728,12 +3729,39 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 // lookupNonEmpty reports the trimmed process-env value for name and whether it is
 // set AND non-empty (empty env counts as unset, matching POSIX ${VAR:-default}
 // and the legacy getEnvOrDefault, which treated an empty value as "use default").
+//
+// It is the one read behind every ${VAR} the manifest resolves — at load
+// (expandExpr) and at catalog-build time (resolveSpawnExpr) — so it is also
+// where the signed-in-user token's provenance is enforced (ADR-0087): a
+// process value that names ${FLEET_USER_EMAIL} (or FLEET_USER_NAME) in any
+// spelling counts as UNSET. Otherwise `OWNER_ID: "${OWNER_ID}"` with
+// OWNER_ID=${FLEET_USER_EMAIL} exported would pass every load check (the
+// manifest shows only ${OWNER_ID}) and then be filled with whoever is at the
+// keyboard — in an identity_env key, a seat or money would follow the user.
+// The token is honoured only where the bundle itself writes it.
 func lookupNonEmpty(name string) (string, bool) {
-	v := strings.TrimSpace(os.Getenv(strings.TrimSpace(name)))
+	name = strings.TrimSpace(name)
+	v := strings.TrimSpace(os.Getenv(name))
 	if v == "" {
 		return "", false
 	}
+	if usertoken.Mentions(v) {
+		warnUserTokenFromEnv(name)
+		return "", false
+	}
 	return v, true
+}
+
+// userTokenEnvWarned dedupes warnUserTokenFromEnv per variable name.
+var userTokenEnvWarned sync.Map
+
+// warnUserTokenFromEnv logs, once per variable, that a process value naming a
+// user token was ignored. The value itself is never logged.
+func warnUserTokenFromEnv(name string) {
+	if _, seen := userTokenEnvWarned.LoadOrStore(name, true); seen {
+		return
+	}
+	log.Printf("clientconfig: warning: the process env value of %s names the reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME token; fleet substitutes the signed-in user only where the bundle manifest itself writes the token, so %s is treated as unset (see docs/MCP-BUNDLE-ENV.md)", name, name)
 }
 
 // matchBrace returns the index of the '}' that closes the '{' at position open

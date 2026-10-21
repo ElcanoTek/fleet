@@ -235,6 +235,70 @@ mcp_servers:
 	}
 }
 
+// TestUserTokenFromProcessEnvCountsAsUnset: the user token is honoured only
+// where the bundle writes it. A process value that names it — reached through
+// an ordinary ${VAR}, at load or at catalog-build time — counts as unset, so
+// `OWNER_ID: "${OWNER_ID}"` with OWNER_ID=${FLEET_USER_EMAIL} exported can
+// never become the signed-in user's email at spawn (in an identity_env key a
+// seat would follow the user). ADR-0087.
+func TestUserTokenFromProcessEnvCountsAsUnset(t *testing.T) {
+	manifest := `
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py"]
+    always: true
+    env:
+      OWNER_ID: "${DEALS_OWNER_ID}"
+      REPLY_TO: "${DEALS_REPLY_TO:-ops@example.com}"
+      GREETING: "${DEALS_GREETING}"
+      TO: "${FLEET_USER_EMAIL}"
+    identity_env: ["OWNER_ID"]
+    optional_env: ["GREETING"]
+`
+	check := func(t *testing.T, b *Bundle) {
+		t.Helper()
+		env := b.MCPServerConfigs()["deals"].Env
+		for k, v := range env {
+			if k != "TO" && strings.Contains(v, "FLEET_USER_") {
+				t.Errorf("env %s = %q: a process value carried the user token into the spawn env", k, v)
+			}
+		}
+		if env["OWNER_ID"] != "" {
+			t.Errorf("OWNER_ID = %q, want unset (empty)", env["OWNER_ID"])
+		}
+		if env["REPLY_TO"] != "ops@example.com" {
+			t.Errorf("REPLY_TO = %q, want the manifest default", env["REPLY_TO"])
+		}
+		if _, ok := env["GREETING"]; ok {
+			t.Errorf("GREETING present (%q), want the optional key dropped", env["GREETING"])
+		}
+		if env["TO"] != "${FLEET_USER_EMAIL}" {
+			t.Errorf("TO = %q, want the bundle-written token kept", env["TO"])
+		}
+	}
+	t.Run("exported before load", func(t *testing.T) {
+		t.Setenv("DEALS_OWNER_ID", "${FLEET_USER_EMAIL}")
+		t.Setenv("DEALS_REPLY_TO", "<${FLEET_USER_EMAIL}>")
+		t.Setenv("DEALS_GREETING", "Hi ${FLEET_USER_NAME},")
+		b, err := Load(writeManifest(t, manifest))
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		check(t, b)
+	})
+	t.Run("exported after load", func(t *testing.T) {
+		b, err := Load(writeManifest(t, manifest))
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		t.Setenv("DEALS_OWNER_ID", "$${FLEET_USER_EMAIL}")
+		t.Setenv("DEALS_REPLY_TO", "${ FLEET_USER_EMAIL }")
+		t.Setenv("DEALS_GREETING", "${FLEET_USER_EMAIL}")
+		check(t, b)
+	})
+}
+
 // TestUserNameTokenIsRefused: fleet has no name for the signed-in user (sign-in
 // carries an email and no name claim, and a name is never guessed from the
 // email), so FLEET_USER_NAME is reserved with no token behind it. Every

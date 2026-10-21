@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -38,6 +39,29 @@ func TestMCPUserIdentitySanitized(t *testing.T) {
 	}
 	if got := (MCPUserIdentity{Email: "not an email"}).Sanitized(); !got.IsZero() {
 		t.Errorf("Sanitized(bad email) = %+v, want the zero identity", got)
+	}
+}
+
+// TestResolveMCPVariant_RefusesUserTokenFromOverlay: a <VAR>_<ACCOUNT> overlay
+// comes from the process env, not the bundle, so one that names the user
+// token must never be filled with the signed-in user at spawn — in an
+// identity_env key that would route a seat by whoever is at the keyboard. The
+// seat is refused instead (ADR-0087).
+func TestResolveMCPVariant_RefusesUserTokenFromOverlay(t *testing.T) {
+	base := MCPServerBase{
+		BaseEnv:     map[string]string{"DEALS_API_KEY": "default-key", "OWNER_ID": "default-owner"},
+		IdentityEnv: []string{"OWNER_ID"},
+		Command:     "python",
+	}
+	t.Setenv("DEALS_API_KEY_CLIENT_A", "client-a-key")
+	t.Setenv("OWNER_ID_CLIENT_A", "${FLEET_USER_EMAIL}")
+	if name, env, err := resolveMCPVariant("deals", base, "client_a"); err == nil || !strings.Contains(err.Error(), "OWNER_ID_CLIENT_A names the reserved signed-in-user token") {
+		t.Fatalf("resolveMCPVariant = (%q, %v, %v), want the seat refused", name, env, err)
+	}
+	// An ordinary overlay still binds.
+	t.Setenv("OWNER_ID_CLIENT_A", "client-a-owner")
+	if _, env, err := resolveMCPVariant("deals", base, "client_a"); err != nil || env["OWNER_ID"] != "client-a-owner" {
+		t.Fatalf("resolveMCPVariant(ordinary overlay) = (%v, %v), want the client_a owner", env, err)
 	}
 }
 

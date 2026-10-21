@@ -45,6 +45,11 @@ ADR-0042 governs, so it is recorded here.
    the workspace tokens: exact bare spelling only, never read from the process
    env (an operator export would give every user one person's identity),
    refused anywhere else in the manifest or an Agent Plugin's `mcp.json`.
+   It is honoured only where the bundle writes it: a process value reached
+   through an ordinary `${VAR}` that names the token counts as unset, and a
+   `<VAR>_<ACCOUNT>` overlay that names it refuses the seat, so an exported
+   value can never smuggle the user into a key the load checks did not see
+   (an `identity_env` key above all).
    `fleet validate-config` and bundle preflight therefore accept it where it
    works and fail it where it cannot.
 2. **No name token; `FLEET_USER_NAME` is reserved and refused.** No sign-in

@@ -201,7 +201,10 @@ including inside a `${OUTER:-...}` default body: the escape collapses to — or
 survives as a `$` in front of — the token before spawn, so it would deliver
 the user's email rather than the literal text; there is no way to write that
 literal), never resolved from the process env (an operator-exported
-`FLEET_USER_EMAIL` cannot hijack it), and only in a **stdio** `mcp_servers` env
+`FLEET_USER_EMAIL` cannot hijack it; and because the token is honoured only
+where the bundle itself writes it, an ordinary `${VAR}` whose process value
+names it counts as unset, and an account's `<VAR>_<ACCOUNT>` overlay that
+names it refuses that seat), and only in a **stdio** `mcp_servers` env
 value (an env **key**, a header name or value, the url, command or args, or an
 http server's env fails the load, since nothing would ever substitute it
 there). An Agent Plugin's `mcp.json` entry gets the same rules — escaped or
