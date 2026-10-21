@@ -159,16 +159,23 @@ const approvalStopNote = store.ApprovalStopNote
 // stopped, `stopped` on a settled one. Absent for every other card, so its
 // payload is unchanged.
 func withApprovalStop(payload map[string]any, a *store.Approval) map[string]any {
-	if a == nil || !approvalStoppable(a.ToolName) {
+	if a == nil {
+		return payload
+	}
+	executing := payload["executing"] == true
+	// A settled stop is history: it follows the stored mark, whatever the
+	// policy says now (an operator may have removed the tool from
+	// critical_tool_stop since).
+	if a.StopRequestedAt > 0 && !executing {
+		payload["stopped"] = true
+	}
+	// Offering Stop, and a stop still in progress, follow the current policy.
+	if !approvalStoppable(a.ToolName) {
 		return payload
 	}
 	payload["stoppable"] = true
-	if a.StopRequestedAt > 0 {
-		if payload["executing"] == true {
-			payload["stopping"] = true
-		} else {
-			payload["stopped"] = true
-		}
+	if a.StopRequestedAt > 0 && executing {
+		payload["stopping"] = true
 	}
 	return payload
 }

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ApprovalCard } from "./ApprovalCards";
+import { ApprovalGroupCard } from "./ApprovalGroupCard";
 import { remainingAfterStop, retryFailedPrompt } from "./ApprovalResultCard";
 import { hydrateResolvedApproval, type Approval } from "./history";
 import { approvalFromPoll } from "./useApprovalProgressPoll";
@@ -121,5 +122,32 @@ describe("a stopped call", () => {
     // A local "stopping" is never turned into a stop the server did not record.
     const unrecorded = approvalFromPoll(next as Approval, { resolved_approvals: [{ approval_id: "ap_1", status: "approved", is_err: false }] });
     expect(unrecorded?.stopped).toBeUndefined();
+  });
+});
+
+describe("a grouped decision", () => {
+  it("carries a stop recorded while the group request waited", async () => {
+    const groupId = "11111111-2222-3333-4444-555555555555";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            results: [
+              { approval_id: "ap_1", decision: "approve", status_code: 200, result: { status: "approved", is_err: false, stoppable: true, stopped: true, result_text: "{}" } },
+            ],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const onResolved = vi.fn();
+    const pendingCard = (id: string): Approval => ({ ...running({ id, status: "pending", executing: undefined, groupId }), expiresAt: Math.floor(Date.now() / 1000) + 600 });
+    render(
+      <ApprovalGroupCard groupId={groupId} approvals={[pendingCard("ap_1"), pendingCard("ap_2")]} conversationId="conv_1" onResolved={onResolved} onOneAtATime={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByTestId("approval-group-approve"));
+    await waitFor(() => expect(onResolved).toHaveBeenCalled());
+    expect(onResolved.mock.calls[0][0]).toMatchObject({ id: "ap_1", status: "approved", stopped: true });
   });
 });

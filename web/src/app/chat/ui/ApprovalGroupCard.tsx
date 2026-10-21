@@ -199,7 +199,15 @@ export function ApprovalGroupCard({
         const next = approvalStatusFromOutcome(r.result);
         if (next === null) {
           anyExecuting = true;
-          onResolved({ ...approval, status: "pending", executing: true, resultText: r.result.result_text, narrowed: parseApprovalNarrowed(r.result.narrowed) });
+          onResolved({
+            ...approval,
+            status: "pending",
+            executing: true,
+            resultText: r.result.result_text,
+            narrowed: parseApprovalNarrowed(r.result.narrowed),
+            stoppable: r.result.stoppable === true || approval.stoppable,
+            stopping: r.result.stopping === true || undefined,
+          });
         } else {
           onResolved({
             ...approval,
@@ -208,6 +216,8 @@ export function ApprovalGroupCard({
             resultCard: resultCardFromOutcome(r.result),
             executing: false,
             narrowed: parseApprovalNarrowed(r.result.narrowed),
+            // A stop recorded while the group request waited (docs/APPROVAL-STOP.md).
+            stopped: r.result.stopped === true || undefined,
           });
         }
       }

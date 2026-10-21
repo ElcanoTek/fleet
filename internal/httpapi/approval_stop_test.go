@@ -416,3 +416,20 @@ func TestApprovalStop_OrderedAgainstTheOutcome(t *testing.T) {
 		t.Fatalf("no armed signal: %d %s, marks %d; want no mark", rec.Code, rec.Body.String(), st.marks)
 	}
 }
+
+// A settled stop stays visible after the tool leaves critical_tool_stop: it
+// is history on the row. Offering Stop follows the current policy.
+func TestWithApprovalStop_SettledStopOutlivesThePolicy(t *testing.T) {
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{CriticalToolSuffixes: []string{"execute_plan"}})
+	a := stopRow()
+	a.Status, a.StopRequestedAt = "approved", 1
+	settled := withApprovalStop(map[string]any{}, &a)
+	if settled["stopped"] != true || settled["stoppable"] != nil {
+		t.Fatalf("settled = %v, want stopped without stoppable", settled)
+	}
+	running := withApprovalStop(map[string]any{"executing": true}, &a)
+	if running["stopping"] != nil || running["stoppable"] != nil {
+		t.Fatalf("running = %v, want nothing offered without the policy", running)
+	}
+}
