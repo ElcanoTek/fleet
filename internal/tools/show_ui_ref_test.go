@@ -103,8 +103,11 @@ func TestShowUIRef_PathAndStringEncodedCard(t *testing.T) {
 		{CallID: "nested", Tool: "mcp_s_t", Text: `{"data":{"card":` + refCard + `}}`},
 		{CallID: "script", Tool: "bash", Text: `{"exit_code":0,"stdout":` + string(printed) + `}`},
 		{CallID: "wrapped", Tool: "bash", Text: `{"exit_code":0,"stdout":` + string(wrapped) + `}`},
+		// A post_tool_use hook appended its context after the JSON.
+		{CallID: "hooked", Tool: "mcp_s_h", Text: `{"show_ui":` + refCard + "}\n\nhook: remember the plan id"},
 	}
 	for args, id := range map[string]string{
+		`{"from_result":{"call_id":"hooked"}}`:                          "hooked",
 		`{"from_result":{"call_id":"nested","path":"data.card"}}`:       "nested",
 		`{"from_result":{"call_id":"script","path":"stdout"}}`:          "script",
 		`{"from_result":{"call_id":"wrapped","path":"stdout.show_ui"}}`: "wrapped",
@@ -124,6 +127,7 @@ func TestShowUIRef_Refusals(t *testing.T) {
 		{CallID: "err", Tool: "mcp_p_intake_card", Text: "vendor said no", IsErr: true},
 		{CallID: "ok", Tool: "mcp_p_other", Text: `{"show_ui":` + refCard + `}`},
 		{CallID: "prose", Tool: "mcp_p_notes", Text: "not json"},
+		{CallID: "trailer", Tool: "mcp_p_trailer", Text: `{"show_ui":{"title":"T","components":[]}} trailing`},
 		{CallID: "bad", Tool: "mcp_p_bad", Text: `{"show_ui":{"title":"T","components":[{"type":"nope"}]}}`},
 		{CallID: "secret", Tool: "mcp_p_secret", Text: `{"show_ui":{"title":"[REDACTED]","components":[]}}`},
 		{CallID: "escaped", Tool: "mcp_p_escaped", Text: `{"show_ui":{"title":"T","components":[{"type":"select","id":"s","options":["a","\u005bREDACTED\u005d"]}]}}`},
@@ -135,6 +139,7 @@ func TestShowUIRef_Refusals(t *testing.T) {
 		"unknown call":                  {`{"from_result":{"call_id":"zzz"}}`, "no result of call"},
 		"call id of another tool":       {`{"from_result":{"call_id":"ok","tool":"intake_card"}}`, "no result of call"},
 		"not JSON":                      {`{"from_result":{"call_id":"prose"}}`, "not a JSON object"},
+		"JSON then a non-hook trailer":  {`{"from_result":{"call_id":"trailer"}}`, "not a JSON object"},
 		"no such key":                   {`{"from_result":{"call_id":"ok","path":"card"}}`, `no key "card"`},
 		"referenced card invalid":       {`{"from_result":{"call_id":"bad"}}`, "the card in the referenced result has"},
 		"redacted value":                {`{"from_result":{"call_id":"secret"}}`, "redacted value"},

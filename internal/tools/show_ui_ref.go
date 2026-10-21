@@ -189,6 +189,7 @@ func cardAtPath(text, path string) (map[string]json.RawMessage, error) {
 	if len(cur) == 0 || cur[0] != '{' {
 		return nil, fmt.Errorf("the result is not a JSON object")
 	}
+	cur = withoutHookContext(cur)
 	for _, key := range strings.Split(path, ".") {
 		cur = unwrapJSONString(cur)
 		var obj map[string]json.RawMessage
@@ -236,4 +237,21 @@ func hasRedactionMarker(card []byte) bool {
 		}
 		return s
 	})
+}
+
+// withoutHookContext returns the JSON object a result opens with when a
+// post_tool_use hook appended its context after it (the loop writes
+// result + "\n\n" + fragment, appendHookContext; Codex P2 on #1819), and
+// the text unchanged otherwise: any other trailer still fails to parse.
+func withoutHookContext(text json.RawMessage) json.RawMessage {
+	dec := json.NewDecoder(bytes.NewReader(text))
+	var first json.RawMessage
+	if err := dec.Decode(&first); err != nil {
+		return text
+	}
+	rest := text[dec.InputOffset():]
+	if len(bytes.TrimSpace(rest)) == 0 || bytes.HasPrefix(rest, []byte("\n\n")) {
+		return first
+	}
+	return text
 }
