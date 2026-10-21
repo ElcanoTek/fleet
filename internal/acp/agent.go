@@ -774,16 +774,25 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	// stopped is the prompt's stop signal, read so that a hang-up always
+	// counts. cancelCtx ends with the lifetime, but not at the same instant:
+	// cancelling lifetime closes its Done before it cancels the contexts
+	// under it, cancelCtx among them. So something that wakes on lifetime
+	// (readRest ending the last turn's stream; a file read failing as the
+	// connection closes) can unblock this prompt while cancelCtx.Err() is
+	// still nil, and the prompt would be submitted after the hang-up.
+	// lifetime.Err() is set before its Done closes, so it is checked too.
+	stopped := func() bool { return cancelCtx.Err() != nil || a.lifetime.Err() != nil }
 	// A prompt cancelled while it waited for this session (an earlier prompt
 	// still running) must never be submitted: once POSTed, fleet may start
 	// the turn or dispatch a tool before any Stop could land.
-	if cancelCtx.Err() != nil {
+	if stopped() {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
 	}
 	// Nor submitted while the last prompt's turn is still finishing on the
 	// server (session.rest): fleet would queue it, and its answer would never
 	// reach the client. A session/cancel during that wait ends it unsent.
-	if !sess.awaitRest(cancelCtx) {
+	if !sess.awaitRest(cancelCtx) || stopped() {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
 	}
 	// The files the prompt links to are read now, once it holds the session
@@ -794,7 +803,7 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	// the reads ends them and the prompt, unsubmitted, as the checks above
 	// would.
 	submitted := a.withLinkedFiles(cancelCtx, p.SessionId, p.Prompt, message)
-	if cancelCtx.Err() != nil {
+	if stopped() {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
 	}
 	key := idempotencyKey(p.MessageId, sess, message, earlier)

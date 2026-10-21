@@ -827,10 +827,22 @@ type validationResult struct {
 	Warnings []string `json:"warnings"`
 }
 
-// frozenArgsMaxBytes bounds ArgsJSON before frozen_args is decoded. Oversized
-// raw input is complete:false so clients refuse informed consent; execution
-// still uses the stored row.
+// frozenArgsMaxBytes bounds frozen_args as fleet sends it: the decoded
+// arguments re-encoded (which is what rides the SSE event and the GET). A
+// larger snapshot is complete:false so clients refuse informed consent;
+// execution still uses the stored row. Bounding the re-encoded form, not the
+// raw ArgsJSON, keeps what clients receive within 1 MiB however the model
+// escaped its JSON, and keeps every list a card may narrow reviewable: the
+// largest (500 values of 200 characters outside the BMP) is about 1.2 MiB
+// when written with surrogate-pair escapes but about 400 KiB re-encoded.
 const frozenArgsMaxBytes = 1 << 20
+
+// approvalArgsMaxDecodeBytes bounds the raw ArgsJSON fleet decodes for a
+// card's review (frozenApprovalArgs) and its narrowing (stagedNarrowable):
+// room for the largest narrowable list in its worst supported encoding
+// (about 1.2 MiB) and the call's other arguments. Larger arguments are
+// neither reviewable in full nor narrowable; the card approves whole.
+const approvalArgsMaxDecodeBytes = 4 << 20
 
 var errTrailingJSON = errors.New("trailing JSON")
 
@@ -858,10 +870,11 @@ func decodeJSONNumbers(raw []byte, dest any) error {
 // staged tool. ArgsJSON is the source of truth (model-authored arguments the
 // handler will replay). Broker-resolved credentials are never copied in.
 // complete is false when the snapshot is missing, unparseable, trailing,
-// typed JSON null, not an object, or over frozenArgsMaxBytes — clients fail closed.
+// typed JSON null, not an object, over approvalArgsMaxDecodeBytes raw, or
+// over frozenArgsMaxBytes re-encoded — clients fail closed.
 func frozenApprovalArgs(rawInput string) map[string]any {
 	incomplete := map[string]any{"complete": false}
-	if len(rawInput) > frozenArgsMaxBytes {
+	if len(rawInput) > approvalArgsMaxDecodeBytes {
 		return incomplete
 	}
 	var args any
@@ -870,6 +883,9 @@ func frozenApprovalArgs(rawInput string) map[string]any {
 	}
 	obj, ok := args.(map[string]any)
 	if !ok || obj == nil {
+		return incomplete
+	}
+	if encoded, err := json.Marshal(obj); err != nil || len(encoded) > frozenArgsMaxBytes {
 		return incomplete
 	}
 	return map[string]any{"complete": true, "args": obj}

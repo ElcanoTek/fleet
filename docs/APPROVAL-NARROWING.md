@@ -97,7 +97,9 @@ refuses with 400, leaving the card pending, when:
 - the tool declares no narrowable argument, or its staged value is not a list
   of 2 to 500 distinct non-empty strings of at most 200 characters, or the
   call's staged arguments are over 4 MiB (the largest such list, written
-  with surrogate-pair escapes, is about 1.2 MiB, so every valid list fits);
+  with surrogate-pair escapes, is about 1.2 MiB, so every valid list fits;
+  its terminal review snapshot is bounded re-encoded, about 400 KiB, so it
+  stays complete and the terminal can approve it too);
 - the list is empty (decline instead) or an explicit `null` (refused, never read as "approve everything"), names a value that was not staged, or
   names one twice;
 - it comes with `approved: false`, or with a scope other than `once`;
