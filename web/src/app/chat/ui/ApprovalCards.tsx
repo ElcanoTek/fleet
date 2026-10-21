@@ -27,7 +27,7 @@ import {
   approvalStatusFromOutcome,
   resultCardFromOutcome,
 } from "./history";
-import { applyAllText, approvalToolLabel, ConnectorNamesContext } from "./approvalToolLabel";
+import { applyAllText, approvalToolLabel, ConnectorNamesContext, knownConnectorLabel } from "./approvalToolLabel";
 import { useApprovalProgressPoll } from "./useApprovalProgressPoll";
 import { EmailSendResult, parseEmailSendPayload } from "./ToolChips";
 import {
@@ -114,9 +114,10 @@ export function ApprovalSeatBadge({ server, account, verb = "Sending as" }: {
 }) {
   const names = useContext(ConnectorNamesContext);
   if (!server || !account) return null;
-  // The connector by its human name when the chat knows it ("on Index
-  // Exchange"); the id, as code, otherwise.
-  const named = names.get(server);
+  // The connector by its human name when one is known ("on Index
+  // Exchange"), as the apply-all checkbox names it; the id, as code,
+  // otherwise.
+  const named = knownConnectorLabel(server, names);
   return (
     <div
       data-testid="approval-seat"
@@ -157,12 +158,13 @@ function isTimedOutApproval(approval: Approval): boolean {
 // actionLabel splits an mcp_<server>_<tool> name into a humanized action
 // ("Deploy page") and its server ("pages") for the generic card's header.
 // Native tools have no server half and humanize whole.
-export function actionLabel(tool: string): { action: string; server?: string } {
-  const m = /^mcp_([^_]+)_(.+)$/.exec(tool);
-  const raw = m ? m[2] : tool;
-  const spaced = raw.replace(/_/g, " ").trim();
-  const action = spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : tool;
-  return m ? { action, server: m[1] } : { action };
+export function actionLabel(tool: string, mcpServer?: string): { action: string; server?: string } {
+  // The action in words comes from the same label the apply-all checkbox
+  // uses (approvalToolLabel), so a card names its tool one way. `server` is
+  // the raw connector id, for the code-styled call line.
+  const server = mcpServer && tool.startsWith(`mcp_${mcpServer}_`) ? mcpServer : /^mcp_([^_]+)_(.+)$/.exec(tool)?.[1];
+  const { action } = approvalToolLabel(tool, server);
+  return server ? { action, server } : { action };
 }
 
 // askAgainPrompt is the canned user turn the Ask-again affordance submits: a
@@ -170,7 +172,7 @@ export function actionLabel(tool: string): { action: string; server?: string } {
 // again" by hand — the agent must re-stage (the old card's claim is spent and
 // its args may be stale), so one click asks it to.
 export function askAgainPrompt(approval: Approval): string {
-  const { action, server } = actionLabel(approval.tool);
+  const { action, server } = actionLabel(approval.tool, approval.mcpServer);
   const what = server ? `${action.toLowerCase()} (${approval.tool})` : action.toLowerCase();
   return `The approval card for ${what} timed out before I could act on it. Please stage it again — I'm ready to review it now.`;
 }
@@ -923,7 +925,7 @@ function GenericActionCard({
   const detailsId = useId();
   const executing = approvalIsExecuting(approval);
   const countdown = useApprovalCountdown(approval.expiresAt, approval.status, executing);
-  const { action, server } = actionLabel(approval.tool);
+  const { action, server } = actionLabel(approval.tool, approval.mcpServer);
   const args = Array.isArray(approval.summary.args) ? approval.summary.args : [];
   const rawArgs = approval.summary.raw ?? "";
   const recorded = approval.recorded === true;

@@ -47,7 +47,7 @@ type GroupResult = {
 };
 
 function RawArgs({ approval }: { approval: Approval }) {
-  const { server } = actionLabel(approval.tool);
+  const { server } = actionLabel(approval.tool, approval.mcpServer);
   const args = Array.isArray(approval.summary.args) ? approval.summary.args : [];
   const raw = approval.summary.raw ?? "";
   return (
@@ -84,7 +84,7 @@ function RawArgs({ approval }: { approval: Approval }) {
 
 function rowTitle(approval: Approval): string {
   if (approval.card) return approval.card.title;
-  return `Run "${actionLabel(approval.tool).action}"`;
+  return `Run "${actionLabel(approval.tool, approval.mcpServer).action}"`;
 }
 
 export function ApprovalGroupCard({

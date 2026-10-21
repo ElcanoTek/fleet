@@ -29,6 +29,11 @@ describe("approvalToolLabel", () => {
     // fleet's SSP names, and the short prefix their tools repeat.
     ["mcp_indexexchange_ix_create_deal", "indexexchange", "Index Exchange", "Create deal"],
     ["mcp_magnite_magnite_update_deal", "magnite", "Magnite", "Update deal"],
+    // A connector's short prefix is dropped even outside fleet's SSP list.
+    ["mcp_openx_ox_create_deal", "openx", "Openx", "Create deal"],
+    ["mcp_triplelift_tl_update_deal", "triplelift", "Triplelift", "Update deal"],
+    // An older row with no mcpServer: the longest connector the chat knows.
+    ["mcp_deal_sheet_next_campaign_id", undefined, "Deal Sheet", "Next campaign id"],
     // Unknown connector, blank display name: the humanised id.
     ["mcp_blank_publish_page", "blank", "Blank", "Publish page"],
     ["mcp_pages_deploy_page", undefined, "Pages", "Deploy page"],
@@ -91,6 +96,22 @@ describe("the approval card's words for the tool", () => {
     });
     const label = screen.getByTestId("approval-apply-all").closest("label");
     expect(label?.textContent).toBe("Apply my choice to every “Send email” request in this chat");
+  });
+
+  it("the generic card's title names the action the way its checkbox does", () => {
+    renderCard({
+      tool: "mcp_indexexchange_ix_create_deal",
+      mcpServer: "indexexchange",
+      summary: { tool: "mcp_indexexchange_ix_create_deal", args: [{ key: "deal_name", value: "Q4" }] },
+    });
+    expect(screen.getByText('ACTION REQUIRED · Run "Create deal"?')).toBeTruthy();
+    const label = screen.getByTestId("approval-apply-all").closest("label");
+    expect(label?.textContent).toBe("Apply my choice to every Index Exchange “Create deal” request in this chat");
+  });
+
+  it("the seat line uses fleet's SSP name when the chat has none", () => {
+    renderCard({ tool: "mcp_indexexchange_ix_create_deal", mcpServer: "indexexchange", mcpAccount: "elcano", summary: { args: [] } });
+    expect(screen.getByTestId("approval-seat").textContent).toBe("Runs as elcano on Index Exchange");
   });
 
   it("without a known name the seat line keeps the connector id", () => {

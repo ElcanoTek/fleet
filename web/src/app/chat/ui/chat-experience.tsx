@@ -770,7 +770,13 @@ export function ChatExperience({
   const [mcpServers, setMcpServers] = useState<MCPServerInfo[]>([]);
   // The connectors' human names, so an approval card says "Index Exchange"
   // rather than a raw tool id (approvalToolLabel.ts).
-  const connectorNameMap = useMemo(() => connectorNames(mcpServers), [mcpServers]);
+  // Keyed on the names themselves: a toggle gives mcpServers a new identity
+  // without changing a name, and must not re-render every card.
+  const connectorNameKey = JSON.stringify(mcpServers.map((s) => [s.name, s.display_name ?? ""]));
+  const connectorNameMap = useMemo(
+    () => connectorNames((JSON.parse(connectorNameKey) as [string, string][]).map(([name, display_name]) => ({ name, display_name }))),
+    [connectorNameKey],
+  );
   // The Tools picker's category headings, in order, from the same catalog
   // responses (empty until the first one answers; the picker falls back).
   const [mcpCategories, setMcpCategories] = useState<PickerCategory[]>([]);

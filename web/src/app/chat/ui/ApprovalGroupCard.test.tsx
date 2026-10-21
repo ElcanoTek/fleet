@@ -63,7 +63,7 @@ describe("ApprovalGroupCard", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain("Create 12 deals on PubMatic");
     expect(rows[0].textContent).toContain("Q4 Video");
-    expect(rows[0].textContent).toContain("Runs as client_a on pubmatic");
+    expect(rows[0].textContent).toContain("Runs as client_a on PubMatic");
     expect(rows[1].textContent).toContain('Run "Execute plan"');
     expect(rows[1].textContent).toContain("plan_id");
     // One countdown, on the earliest deadline (10 minutes, not 15).

@@ -32,9 +32,24 @@ function humanize(token: string): string {
   return spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : "";
 }
 
+/** A connector's human name when one is known: the bundle's, else fleet's SSP name. */
+export function knownConnectorLabel(server: string, names?: ReadonlyMap<string, string>): string | undefined {
+  return names?.get(server) ?? sspConnector(server)?.display;
+}
+
 /** A connector's human name: the bundle's, fleet's known SSP name, or the humanised id. */
 export function connectorLabel(server: string, names?: ReadonlyMap<string, string>): string {
-  return names?.get(server) ?? sspConnector(server)?.display ?? humanize(server);
+  return knownConnectorLabel(server, names) ?? humanize(server);
+}
+
+// isShortPrefixOf reports whether token is the short form SSP tools repeat
+// for their connector: 2-3 letters, the connector's first letter, the rest in
+// order (ix ⊂ indexexchange, pm ⊂ pubmatic, ox ⊂ openx, tl ⊂ triplelift).
+function isShortPrefixOf(token: string, server: string): boolean {
+  if (token.length < 2 || token.length > 3 || token[0] !== server[0]) return false;
+  let i = 0;
+  for (const ch of server) if (ch === token[i]) i++;
+  return i === token.length;
 }
 
 export type ApprovalToolLabel = {
@@ -55,6 +70,13 @@ export function approvalToolLabel(
   names?: ReadonlyMap<string, string>,
 ): ApprovalToolLabel {
   let srv = server && tool.startsWith(`mcp_${server}_`) ? server : undefined;
+  if (!srv && names) {
+    // No connector on the row (an older record): the longest connector the
+    // chat knows that prefixes the id, so `mcp_deal_sheet_…` is deal_sheet.
+    for (const k of names.keys()) {
+      if (tool.startsWith(`mcp_${k}_`) && k.length > (srv?.length ?? 0)) srv = k;
+    }
+  }
   let rest = srv ? tool.slice(`mcp_${srv}_`.length) : tool;
   if (!srv) {
     const m = /^mcp_([^_]+)_(.+)$/.exec(tool);
@@ -68,7 +90,10 @@ export function approvalToolLabel(
   if (srv) {
     // SSP tools repeat their connector as a short prefix
     // (mcp_indexexchange_ix_create_deal, mcp_magnite_magnite_get_deal).
-    for (const p of [...(sspConnector(srv)?.toolPrefixes ?? []), `${srv}_`]) {
+    const first = rest.split("_")[0];
+    const prefixes = [...(sspConnector(srv)?.toolPrefixes ?? []), `${srv}_`];
+    if (first !== rest && isShortPrefixOf(first, srv)) prefixes.push(`${first}_`);
+    for (const p of prefixes) {
       if (rest.startsWith(p) && rest.length > p.length) {
         rest = rest.slice(p.length);
         break;
