@@ -860,3 +860,67 @@ func TestQuoteClientValue(t *testing.T) {
 		t.Fatalf("over the bound = %s, want the first %d characters and an ellipsis", got, maxQuotedClientRunes)
 	}
 }
+
+// The restart breadcrumb of the longest narrowing fleet accepts (the outcome
+// line plus the exact narrowing line) stays within the minimum output limit,
+// so a restart can never write a recovered result past any limit the
+// deployment can be set to; the line is whole in it.
+func TestApprovalRecoveryText_FitsTheMinimumOutputLimit(t *testing.T) {
+	agentcore.SetMaxToolOutputBytes(64 << 10)
+	t.Cleanup(func() { agentcore.SetMaxToolOutputBytes(-1) })
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	staged := make([]string, 0, 500)
+	for i := range 500 {
+		staged = append(staged, fmt.Sprintf("d%03d", i))
+	}
+	stagedJSON, _ := json.Marshal(map[string]any{"deal_ids": staged})
+	// A stoppable tool's breadcrumb also carries the restart's stop line.
+	for _, stoppable := range []bool{false, true} {
+		policy := agentcore.AgentPolicy{
+			CriticalToolSuffixes:       []string{"execute_plan"},
+			CriticalToolNarrowableArgs: map[string]string{"execute_plan": "deal_ids"},
+		}
+		if stoppable {
+			policy.CriticalToolStop = []string{"execute_plan"}
+		}
+		agentcore.ConfigureAgentPolicy(policy)
+		row := narrowApprovalRow()
+		row.ArgsJSON = string(stagedJSON)
+		var n *approvalNarrowing
+		for k := 1; ; k++ {
+			leftOut := map[int]bool{}
+			for j := range k {
+				leftOut[300+2*j] = true
+			}
+			var approved []string
+			for i, v := range staged {
+				if !leftOut[i] {
+					approved = append(approved, v)
+				}
+			}
+			next, err := narrowApproval(&row, approved, "deal_ids")
+			if err != nil {
+				break
+			}
+			n = next
+		}
+		if n == nil {
+			t.Fatalf("stoppable=%t: test setup: no narrowing was accepted", stoppable)
+		}
+		record, err := json.Marshal(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := store.ApprovalRecoveryText(string(record), stoppable)
+		want := store.ApprovalRecoveryOutcome + "\n\n" + narrowingNote(n)
+		if stoppable {
+			want += "\n\n" + store.ApprovalStopRecoveredNote
+		}
+		if text != want {
+			t.Fatalf("stoppable=%t: breadcrumb = %q, want the outcome, the whole narrowing line and any stop line", stoppable, text)
+		}
+		if len(text) > agentcore.MinMaxToolOutputBytes {
+			t.Fatalf("stoppable=%t: breadcrumb is %d bytes, over the %d-byte minimum limit", stoppable, len(text), agentcore.MinMaxToolOutputBytes)
+		}
+	}
+}
