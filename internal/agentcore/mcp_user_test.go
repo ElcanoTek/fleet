@@ -65,6 +65,36 @@ func TestResolveMCPVariant_RefusesUserTokenFromOverlay(t *testing.T) {
 	}
 }
 
+// TestSpawnEnv_UserTokenExpandsFirst: the user token is expanded on the
+// bundle-written values BEFORE the workspace and task substitutions, so a
+// workspace path that happens to contain the token text can never turn a key
+// the bundle did not write it into (an identity_env key included) into a
+// user-dependent one: that text stays literal, and nothing is dropped on a
+// user-less path either (ADR-0087).
+func TestSpawnEnv_UserTokenExpandsFirst(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", "/srv/${FLEET_USER_EMAIL}")
+	env := map[string]string{
+		"OWNER_ID": "${FLEET_WORKSPACE_ROOT}/owner",
+		"WORKDIR":  "${FLEET_WORKSPACE}",
+		"TO":       "${FLEET_USER_EMAIL}",
+	}
+	user := MCPUserIdentity{Email: "elyse@example.com"}
+	got := SpawnEnv(env, "/work/${FLEET_USER_EMAIL}", user)
+	want := map[string]string{
+		"OWNER_ID": "/srv/${FLEET_USER_EMAIL}/owner",
+		"WORKDIR":  "/work/${FLEET_USER_EMAIL}",
+		"TO":       "elyse@example.com",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SpawnEnv = %v, want %v", got, want)
+	}
+	got = SpawnEnv(env, "/work/${FLEET_USER_EMAIL}", MCPUserIdentity{})
+	delete(want, "TO")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SpawnEnv(no user) = %v, want %v (only the bundle-written key dropped)", got, want)
+	}
+}
+
 func TestExpandUserEnv(t *testing.T) {
 	env := map[string]string{
 		"TO":      "${FLEET_USER_EMAIL}",

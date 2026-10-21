@@ -1,9 +1,12 @@
 package clientconfig
 
 import (
+	"bytes"
 	"fmt"
 	"maps"
 	"slices"
+
+	"github.com/goccy/go-yaml"
 
 	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
@@ -37,6 +40,21 @@ import (
 // internal/usertoken's one matcher, shared with the spawn-time backstop
 // (agentcore.ExpandUserEnv) so the two sides can never disagree.
 
+// userTokenFieldProblem refuses any user-token spelling in a server field the
+// spawn paths never substitute (anything but a stdio env value): the token
+// would ship verbatim. nil when v names no user token.
+func userTokenFieldProblem(server, field, v string) error {
+	if !usertoken.Mentions(v) {
+		return nil
+	}
+	for _, sp := range usertoken.Find(v) {
+		if sp.Var == usertoken.ReservedNameVar {
+			return fmt.Errorf("mcp_servers[%q]: %s: %s", server, field, noNameTokenProblem(sp.Text))
+		}
+	}
+	return fmt.Errorf("mcp_servers[%q]: %s names ${FLEET_USER_EMAIL}; fleet substitutes the signed-in user only in an env value of a stdio server it spawns, so it can never resolve here (see docs/MCP-BUNDLE-ENV.md)", server, field)
+}
+
 // noNameTokenProblem is the refusal for any spelling of FLEET_USER_NAME.
 func noNameTokenProblem(text string) string {
 	return fmt.Sprintf("%q: fleet has no ${%s} token — sign-in carries the user's email and no name, so it would never be substituted. %s is reserved only so it can never be read from the process env; remove it and give the connector its own no-name wording (e.g. \"Hi team,\"). Only ${%s} is available (see docs/MCP-BUNDLE-ENV.md)",
@@ -62,14 +80,52 @@ func userTokenSpellingProblem(s string) string {
 	}
 }
 
-// rawUserTokenSpellingProblem checks the RAW manifest text — before the
+// rawUserTokenSpellingProblem checks the RAW manifest — before the
 // interpolation pass collapses any escape — so an escape inside a nested
-// ${OUTER:-...} default body is caught too.
+// ${OUTER:-...} default body is caught too. It checks the YAML's scalars (map
+// keys and values), not the byte stream, so a comment that merely documents
+// a spelling ("# never write $${FLEET_USER_EMAIL}") is not a load failure,
+// while a YAML escape that only becomes padding once parsed (" ") is
+// seen as the padding it is. A manifest whose raw YAML does not parse is
+// skipped here: scanManifestEnvRefs has already failed that load.
 func rawUserTokenSpellingProblem(raw []byte, manifestPath string) error {
-	if p := userTokenSpellingProblem(string(raw)); p != "" {
+	if !bytes.Contains(raw, []byte("FLEET_USER_")) {
+		return nil
+	}
+	// A raw parse error is not this check's to report: scanManifestEnvRefs
+	// has already failed the load on it. Only a parsed tree is checked.
+	var tree any
+	parseErr := yaml.Unmarshal(raw, &tree)
+	if p := firstScalarProblem(tree, userTokenSpellingProblem); parseErr == nil && p != "" {
 		return fmt.Errorf("client config manifest %s: %s", manifestPath, p)
 	}
 	return nil
+}
+
+// firstScalarProblem returns the first non-empty check result over every
+// string scalar in a generic YAML tree — map keys (in sorted order, for a
+// deterministic error) and values alike.
+func firstScalarProblem(node any, check func(string) string) string {
+	switch v := node.(type) {
+	case string:
+		return check(v)
+	case map[string]any:
+		for _, k := range slices.Sorted(maps.Keys(v)) {
+			if p := check(k); p != "" {
+				return p
+			}
+			if p := firstScalarProblem(v[k], check); p != "" {
+				return p
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if p := firstScalarProblem(item, check); p != "" {
+				return p
+			}
+		}
+	}
+	return ""
 }
 
 // validateServerEnvContract runs the per-server env checks: identity_env
@@ -96,17 +152,7 @@ func validateServerEnvContract(s *ServerDef) error {
 // cannot see — a YAML escape that only becomes padding once the YAML is
 // parsed — is caught here too.
 func serverUserTokenProblem(s *ServerDef) error {
-	check := func(field, v string) error {
-		if !usertoken.Mentions(v) {
-			return nil
-		}
-		for _, sp := range usertoken.Find(v) {
-			if sp.Var == usertoken.ReservedNameVar {
-				return fmt.Errorf("mcp_servers[%q]: %s: %s", s.Name, field, noNameTokenProblem(sp.Text))
-			}
-		}
-		return fmt.Errorf("mcp_servers[%q]: %s names ${FLEET_USER_EMAIL}; fleet substitutes the signed-in user only in an env value of a stdio server it spawns, so it can never resolve here (see docs/MCP-BUNDLE-ENV.md)", s.Name, field)
-	}
+	check := func(field, v string) error { return userTokenFieldProblem(s.Name, field, v) }
 	if err := check("command", s.Command); err != nil {
 		return err
 	}

@@ -200,7 +200,7 @@ mcp_servers:
     command: python3
     args: ["deals.py", "--to=${\u0020FLEET_USER_EMAIL}"]
     always: true
-`, "mcp_servers[0].args[1]: ${ FLEET_USER_EMAIL} is a reserved runtime token"},
+`, "RESERVED runtime token"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -232,6 +232,29 @@ mcp_servers:
 	}
 	if got := b.MCPServerConfigs()["deals"].Env["TEMPLATE"]; got != "${NOT_A_FLEET_TOKEN}" {
 		t.Errorf("TEMPLATE = %q, want the literal text", got)
+	}
+}
+
+// TestTokenSpellingsInCommentsLoad: the spelling rules apply to the YAML's
+// scalars, not its comments — a comment that documents a refused spelling is
+// not a load failure.
+func TestTokenSpellingsInCommentsLoad(t *testing.T) {
+	b, err := Load(writeManifest(t, `
+# Never write $${FLEET_USER_EMAIL}, ${ FLEET_USER_EMAIL } or ${ FLEET_WORKSPACE }:
+# only the exact spelling is substituted, and there is no ${FLEET_USER_NAME}.
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py"]
+    always: true
+    env:
+      TO: "${FLEET_USER_EMAIL}" # not $${FLEET_USER_EMAIL}, not ${ FLEET_USER_EMAIL }
+`))
+	if err != nil {
+		t.Fatalf("a comment that mentions a token spelling must not fail the load: %v", err)
+	}
+	if got := b.MCPServerConfigs()["deals"].Env["TO"]; got != "${FLEET_USER_EMAIL}" {
+		t.Errorf("TO = %q, want the token kept", got)
 	}
 }
 

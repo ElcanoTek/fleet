@@ -208,11 +208,15 @@ names it refuses that seat), and only in a **stdio** `mcp_servers` env
 value (an env **key**, a header name or value, the url, command or args, or an
 http server's env fails the load, since nothing would ever substitute it
 there). An Agent Plugin's `mcp.json` entry gets the same rules — escaped or
-padded spellings in an env value, a token in an env key, args, or a
+padded spellings in an env value, a token in an env key, args, the cwd, or a
 `streamable-http` url or header, and any `${FLEET_USER_NAME}` are refused and
 that entry is skipped. As a spawn-time backstop, a key whose value still
 carries an escaped or non-exact spelling, or `FLEET_USER_NAME`, is dropped,
-never substituted or passed through. `fleet validate-config` and bundle
+never substituted or passed through. The user token is expanded first at
+spawn, before the workspace and task tokens, so a workspace path that happens
+to contain the token text stays literal. The rules apply to the YAML's keys
+and values, not its comments: a comment that documents a refused spelling
+does not fail the load. `fleet validate-config` and bundle
 preflight accept the token exactly where it works. A bundle that never writes
 it is unaffected. Adopt it only after the fleet release that ships it: an
 older fleet treats it as an ordinary unset variable and hands the server an

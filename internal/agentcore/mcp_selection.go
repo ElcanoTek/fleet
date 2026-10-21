@@ -475,27 +475,38 @@ func bindMCPServer(ctx context.Context, client *mcp.Client, plan mcpBindPlan, wo
 	// (transport error, bad command, init timeout) is logged and SKIPPED by the
 	// caller so the rest of the selection still registers and the run proceeds
 	// with the tools that did come up. A Required server still aborts the run.
-	env := ExpandWorkspaceEnv(plan.env, workdir)
-	// ${FLEET_TASK_ID}: the scheduled per-run path already substituted the
-	// real task ID into BaseEnv (scheduledrun), so this is a no-op there.
-	// Every other caller has no task identity — drop token-bearing keys
-	// instead of leaking the literal placeholder to the connector.
-	env = ExpandTaskIDEnv(env, "")
-	// ${FLEET_WORKSPACE_ROOT}: the deployment root, offered on every path
-	// (per-run, load-on-demand and broker scopes all bind through here).
-	env = ExpandWorkspaceRootEnv(env)
-	// ${FLEET_USER_EMAIL}: the signed-in user an
-	// interactive broker scope stamped on the base (cmd/fleet OpenScope).
-	// Substituted here, after resolveMCPVariant's account overlay and
-	// identity guard, so a named seat gets the user exactly like the default
-	// seat does. Every other caller — scheduled runs, load-on-demand onto a
-	// shared client — leaves base.User zero, which drops the keys.
-	env = ExpandUserEnv(env, base.User)
+	env := SpawnEnv(plan.env, workdir, base.User)
 	cwd := StdioCwd(base.Dir, base.DirPinned, workdir)
 	if err := client.AddStdioServer(ctx, name, base.Command, base.Args, env, cwd); err != nil {
 		return fmt.Errorf("register server %q: %w", name, err)
 	}
 	return nil
+}
+
+// SpawnEnv applies fleet's reserved spawn-time tokens to a server's resolved
+// env (after resolveMCPVariant's account overlay and identity guard) in the
+// one safe order:
+//
+//  1. ${FLEET_USER_EMAIL} FIRST (ADR-0087), on the values the bundle wrote:
+//     the signed-in user an interactive broker scope stamped on the base
+//     (cmd/fleet OpenScope), so a named seat gets the user exactly like the
+//     default seat. Every other caller — scheduled runs, load-on-demand onto
+//     a shared client — passes the zero user, which drops the keys. Running
+//     it before the path substitutions below means a workspace path that
+//     happens to contain the token text can never turn a key the bundle did
+//     not write the token into (an identity_env key included) into a
+//     user-dependent one; such text stays literal. The email itself can
+//     never contain '$', '{' or '}', so it cannot form a later token.
+//  2. ${FLEET_WORKSPACE}: workdir (empty drops the keys).
+//  3. ${FLEET_TASK_ID}: the scheduled per-run path already substituted the
+//     real task ID into BaseEnv (scheduledrun), so this is a no-op there;
+//     every other caller has no task identity, so the keys are dropped.
+//  4. ${FLEET_WORKSPACE_ROOT}: the deployment root, offered on every path.
+func SpawnEnv(env map[string]string, workdir string, user MCPUserIdentity) map[string]string {
+	env = ExpandUserEnv(env, user)
+	env = ExpandWorkspaceEnv(env, workdir)
+	env = ExpandTaskIDEnv(env, "")
+	return ExpandWorkspaceRootEnv(env)
 }
 
 func upperAccount(account string) string {

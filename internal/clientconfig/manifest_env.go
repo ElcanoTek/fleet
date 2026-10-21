@@ -355,6 +355,19 @@ func unresolvedManifestRefs(sites []manifestRefSite) []string {
 			continue
 		}
 		if reservedRuntimeVar(site.ref.name) {
+			if exact := "${" + site.ref.name + "}"; site.ref.token != exact {
+				// ${ FLEET_WORKSPACE } names a reserved token but is not its
+				// exact spelling, and the spawn paths substitute (or drop)
+				// only the exact "${NAME}" — so it would reach every
+				// connector, scheduled and user-less spawns included, as a
+				// literal placeholder. Checked here, on the parsed scalars,
+				// so a comment that merely mentions a spelling is not a load
+				// failure.
+				problems = append(problems, fmt.Sprintf(
+					"%s: %s: %s is a RESERVED runtime token that fleet substitutes at MCP launch; write exactly %s, without spaces inside the braces (see docs/MCP-BUNDLE-ENV.md)",
+					site.path, site.ref.token, site.ref.name, exact))
+				continue
+			}
 			if site.reservedOK {
 				continue
 			}

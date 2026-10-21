@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"golang.org/x/net/http/httpguts"
+
+	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
 
 // Agent Plugins (https://agent-plugins.org, specification v1.0.0) support for
@@ -1056,6 +1058,13 @@ func parsePluginServer(name string, raw json.RawMessage, ctx pluginServerContext
 		literalEnv:  true,
 		plugin:      ctx.plugin,
 	}
+	// PLUGIN_ROOT / PLUGIN_DATA are expanded into args, env and cwd at load,
+	// so a plugin path that itself contains user-token text would introduce
+	// the token into values the plugin never wrote it in — and the spawn
+	// paths would then fill it with the signed-in user. Refuse such a path.
+	if usertoken.Mentions(ctx.root) || usertoken.Mentions(ctx.dataDir) {
+		return ServerDef{}, errors.New("the plugin's root or data directory path names the reserved signed-in-user token; fleet cannot expand it into the entry without introducing that token")
+	}
 	var sd ServerDef
 	switch typ {
 	case "stdio":
@@ -1116,6 +1125,13 @@ func parseStdioPluginServer(fields map[string]json.RawMessage, ctx pluginServerC
 	}
 	cwd, _, err := jsonString(fields, "cwd")
 	if err != nil {
+		return ServerDef{}, err
+	}
+	// The cwd becomes a real directory (created under PLUGIN_DATA) before
+	// serverUserTokenProblem sees the entry, and nothing ever substitutes a
+	// user token in it: every user's subprocess would share a directory
+	// literally named after the placeholder. Refuse it before it is created.
+	if err := userTokenFieldProblem(base.Name, "cwd", cwd); err != nil {
 		return ServerDef{}, err
 	}
 	if command, err = resolveStdioCommand(command, ctx.root); err != nil {

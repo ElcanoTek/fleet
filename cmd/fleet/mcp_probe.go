@@ -272,7 +272,10 @@ func probeBundleServer(name string, spec config.MCPServerConfig, timeout time.Du
 		// substitution and the cwd — `fleet mcp test` exists to reproduce a
 		// real boot, so it must not launch the server anywhere else.
 		shared := agentcore.SharedMCPWorkspaceDir()
-		env := spec.Env
+		// No signed-in user either: ${FLEET_USER_EMAIL}-bearing keys are
+		// dropped, exactly as on the boot-time shared spawn — first, on the
+		// bundle-written values (see agentcore.SpawnEnv).
+		env := agentcore.ExpandUserEnv(spec.Env, agentcore.MCPUserIdentity{})
 		if agentcore.EnvReferencesWorkspace(env) {
 			env = agentcore.ExpandWorkspaceEnv(env, shared)
 		}
@@ -280,9 +283,6 @@ func probeBundleServer(name string, spec config.MCPServerConfig, timeout time.Du
 		// the boot-time shared spawn does, so the probe env matches production.
 		env = agentcore.ExpandTaskIDEnv(env, "")
 		env = agentcore.ExpandWorkspaceRootEnv(env)
-		// No signed-in user either: ${FLEET_USER_EMAIL}-bearing keys are dropped,
-		// exactly as on the boot-time shared spawn.
-		env = agentcore.ExpandUserEnv(env, agentcore.MCPUserIdentity{})
 		addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env,
 			agentcore.StdioCwd(spec.Dir, spec.DirPinned, shared))
 	default:

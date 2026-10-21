@@ -235,7 +235,7 @@ plugin's MCP servers run in the control-plane pod like every manifest server.
   expansion"; this is a documented, narrow deviation rather than a second
   substitution path, and a portable plugin has no reason to write those tokens.
   The user token follows the manifest's placement and spelling rules: an entry
-  that writes it anywhere but a stdio env value (an env key, args, or a
+  that writes it anywhere but a stdio env value (an env key, args, the cwd, or a
   `streamable-http` url or header), in an escaped or padded spelling, or that
   writes the reserved `${FLEET_USER_NAME}` (fleet has no name token) is
   skipped.
