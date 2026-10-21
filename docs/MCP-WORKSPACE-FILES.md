@@ -28,21 +28,28 @@ an alternative object schema only when a sandbox reader is bound:
 
 Every byte Fleet holds for a reference is charged to one 384 MiB process-wide
 budget, from before it is allocated until it is released
-([ADR-0087](adr/0087-mcp-workspace-file-cap-and-windowed-reads.md)). S is the
+([ADR-0088](adr/0088-mcp-workspace-file-cap-and-windowed-reads.md)). S is the
 file size, W the window, and E = base64(W):
 
 | Held | Charge | Until |
 | --- | --- | --- |
-| A file being read (FileOp output buffer, its decoded string, the bytes) | 4·S + 128 KiB | the read settles |
+| A file being read (the FileOp output buffer, allocated once, and the decoded bytes) | 2.5·S + 192 KiB | the read settles |
 | A verified file, cached or pinned by a call using it | S | evicted, which can only happen while unpinned |
-| One call's window, on a cache hit or a miss: its base64 and every whole-request copy the broker and JSON-RPC encoding make | 12·E + 256 KiB, about 9·E measured | the MCP call returns, on every path |
+| One call's window, on a cache hit or a miss: its base64 and every whole-request copy the broker and JSON-RPC encoding make | 10·E + 256 KiB, about 9·E measured | the dispatch lets go of the arguments: CallMCP returned and, for a cancelled out-of-process call, the broker child answered |
 
+- **One admission per call.** All references of a call are admitted
+  together, so a call never holds some windows while it waits for others; a
+  call that could never fit fails at once. Two 64 MiB files with 8 MiB
+  windows in one call need about 342 MiB.
 - **Identical references** in flight share one read.
 - **Admission order.** A request first evicts unpinned files, then queues,
   honouring cancellation. One that could never fit fails at once.
-- **Pages examples.** A 1 MiB Pages chunk costs about 16 MiB while its call is
-  in flight. An 8 MiB chunk of a 64 MiB file costs 64 MiB + 128 MiB, so two
-  such calls run at once and further calls wait.
+- **Pages examples.** A 1 MiB Pages chunk costs about 14 MiB while its call is
+  in flight. An 8 MiB chunk of a 64 MiB file costs 64 MiB + 107 MiB, so two
+  such calls run at once and a third waits.
+- **In the sandbox.** The FileOp helper streams a read (hash, base64 and
+  write in fixed-size chunks), so a 64 MiB read uses about 20 MiB and fits the
+  smallest supported sandbox.
 - **Outside the bound.** Garbage the Go collector has not yet reclaimed and
   `encoding/json`'s pooled buffers after a call are not counted.
 

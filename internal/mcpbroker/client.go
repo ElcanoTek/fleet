@@ -468,13 +468,32 @@ func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
 		// Best-effort: ask the server to stop the in-flight call so it doesn't keep
 		// running an MCP request whose result nobody will read.
 		_ = c.send(request{ID: req.ID, Method: methodCancel})
-		if req.Method == methodOpenScope {
+		switch req.Method {
+		case methodOpenScope:
 			// Keep this pending slot alive: cancellation can race the backend creating
 			// the scope. If a late response owns an ID, release it instead of losing
 			// the only handle and leaking its subprocesses until broker shutdown.
 			//nolint:gosec // cleanup must outlive the request context that triggered it.
 			go c.closeAbandonedScope(ch)
-		} else {
+		case methodCall:
+			// The child still holds req.Args until it answers: the call may
+			// be queued behind another on its MCP server, or unwinding. Keep
+			// the pending slot and tell the caller's argument hold (if any)
+			// that the arguments are still live, so a workspace-file window
+			// stays charged until the child's final response — or the
+			// connection's death — proves it let go (ADR-0088). The cancel
+			// frame above makes that prompt: a queued call gives up its wait,
+			// an in-flight one unwinds on its context.
+			letGo := mcp.RetainArguments(ctx)
+			go func() {
+				select {
+				case <-ch:
+				case <-c.done:
+				}
+				c.discard(req.ID)
+				letGo()
+			}()
+		default:
 			c.discard(req.ID)
 		}
 		return response{}, ctx.Err()

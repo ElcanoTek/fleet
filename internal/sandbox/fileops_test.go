@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -176,7 +177,7 @@ func TestFileOp_ReadReportsFullSHA256(t *testing.T) {
 }
 
 // TestFileOp_ReadMaxSizeAndLargeWindow pins the read contract the MCP
-// workspace-file reader relies on (ADR-0087): MaxSize refuses a file by its
+// workspace-file reader relies on (ADR-0088): MaxSize refuses a file by its
 // size before reading it, and a multi-MiB window comes back byte-exact through
 // the helper's spliced (not re-dumped) base64 output, with the whole-file hash.
 func TestFileOp_ReadMaxSizeAndLargeWindow(t *testing.T) {
@@ -286,6 +287,60 @@ func TestFileOpSinkBoundsHelperOutput(t *testing.T) {
 	}
 	if _, err := flood.output(FileOpRead); !errors.Is(err, ErrFileOpOutputTooLarge) {
 		t.Fatalf("oversized helper response accepted: %v", err)
+	}
+}
+
+// TestFileOp_ReadStreamsWithinSandboxMemory: the helper streams a 64 MiB
+// read (hash, base64 and write in fixed-size chunks) instead of holding the
+// file and its encoding, so it fits the smallest supported sandbox (128 MiB).
+// It runs under a 96 MiB address-space limit (ulimit -v), which the previous
+// helper — 64 MiB of file plus ~85 MiB of base64 — could not survive. The
+// response still decodes to the exact bytes and whole-file hash, and windows
+// at unaligned offsets keep the base64 carry right. (rusage is no use here: a
+// child's ru_maxrss inherits the Go parent's high-water mark at exec.)
+func TestFileOp_ReadStreamsWithinSandboxMemory(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 required for the fileop seam")
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "site.zip")
+	body := make([]byte, 64<<20)
+	for i := range body {
+		body[i] = byte(i*131 + i>>12)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(req map[string]any) []byte {
+		t.Helper()
+		req["op"], req["path"], req["root"], req["anchor"] = "read", path, root, root
+		raw, err := json.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("/bin/sh", "-c", `ulimit -v 98304 && exec python3 -I -c "$1"`, "sh", string(fileOpsScript))
+		cmd.Stdin = bytes.NewReader(raw)
+		var out, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("helper under a 96 MiB address-space limit: %v\n%s", err, stderr.String())
+		}
+		return out.Bytes()
+	}
+
+	out := run(map[string]any{"max_size": 64 << 20})
+	res, err := decodeFileOpResponse(out)
+	sum := sha256.Sum256(body)
+	if err != nil || !bytes.Equal(res.Data, body) || res.SHA256 != hex.EncodeToString(sum[:]) || res.Size != int64(len(body)) {
+		t.Fatalf("streamed read: err=%v, %d bytes, size %d", err, len(res.Data), res.Size)
+	}
+	// Windows: unaligned offsets and lengths keep the base64 carry right.
+	for _, w := range [][2]int64{{1, 1}, {1, 2}, {5, 3 << 18}, {(3 << 18) - 1, 7}, {64<<20 - 2, 2}} {
+		out := run(map[string]any{"offset": w[0], "limit": w[1]})
+		res, err := decodeFileOpResponse(out)
+		if err != nil || !bytes.Equal(res.Data, body[w[0]:w[0]+w[1]]) || res.SHA256 != hex.EncodeToString(sum[:]) {
+			t.Fatalf("window %v: err=%v, %d bytes", w, err, len(res.Data))
+		}
 	}
 }
 

@@ -137,7 +137,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 
 	for {
 		// A json.Decoder never shrinks its buffer, so one large call (a
-		// multi-MiB workspace-file argument, ADR-0087) would otherwise pin
+		// multi-MiB workspace-file argument, ADR-0088) would otherwise pin
 		// a buffer that size for the life of the connection. After a large
 		// frame, carry the decoder's unread bytes into a fresh decoder and
 		// let the big buffer go.

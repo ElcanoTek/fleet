@@ -983,7 +983,7 @@ func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, an
 	// import a module the model planted in the workspace (a shadow hashlib.py
 	// or json.py beside the cwd), nor honor PYTHON* variables from the
 	// container environment. Fleet re-verifies what matters host-side anyway
-	// (ADR-0087); this keeps the helper's own guards honest.
+	// (ADR-0088); this keeps the helper's own guards honest.
 	args := c.podmanArgs([]string{"exec", "-i", "--workdir", "/", containerID, "python3", "-I", "-c", string(fileOpsScript)})
 	cmd := exec.CommandContext(cmdCtx, c.cfg.PodmanBinary, args...) //nolint:gosec // fixed embedded script; container is our isolated sandbox
 	cmd.Stdin = bytes.NewReader(reqJSON)

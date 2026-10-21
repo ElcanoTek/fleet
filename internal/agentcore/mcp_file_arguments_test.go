@@ -85,24 +85,28 @@ func TestMCPWorkspaceFileChunks(t *testing.T) {
 func fakeWorkspaceReader(t *testing.T, name string, data []byte, reads *int) tools.WorkspaceFileReadFunc {
 	t.Helper()
 	sum := sha256.Sum256(data)
-	return func(_ context.Context, path, sha256Hex string, offset, length, maxFileBytes int64) ([]byte, func(), error) {
+	return func(_ context.Context, refs []tools.WorkspaceFileRef, maxFileBytes int64) ([][]byte, func(), error) {
 		*reads++
-		if path != name || maxFileBytes != maxMCPWorkspaceFileBytes {
-			t.Fatalf("wrong read contract: %q %d", path, maxFileBytes)
+		windows := make([][]byte, len(refs))
+		for i, ref := range refs {
+			if ref.Path != name || maxFileBytes != maxMCPWorkspaceFileBytes {
+				t.Fatalf("wrong read contract: %q %d", ref.Path, maxFileBytes)
+			}
+			size := int64(len(data))
+			if size > maxFileBytes {
+				return nil, nil, fmt.Errorf("file is %d bytes, exceeding the %d-byte cap", size, maxFileBytes)
+			}
+			if hex.EncodeToString(sum[:]) != ref.SHA256 {
+				return nil, nil, tools.ErrWorkspaceFileHashMismatch
+			}
+			start, end := min(ref.Offset, size), min(ref.Offset+ref.Length, size)
+			windows[i] = data[start:end]
 		}
-		size := int64(len(data))
-		if size > maxFileBytes {
-			return nil, nil, fmt.Errorf("file is %d bytes, exceeding the %d-byte cap", size, maxFileBytes)
-		}
-		if hex.EncodeToString(sum[:]) != sha256Hex {
-			return nil, nil, tools.ErrWorkspaceFileHashMismatch
-		}
-		start, end := min(offset, size), min(offset+length, size)
-		return data[start:end], func() {}, nil
+		return windows, func() {}, nil
 	}
 }
 
-// TestMCPWorkspaceFileCap pins the whole-file cap at 64 MiB (ADR-0087): a file
+// TestMCPWorkspaceFileCap pins the whole-file cap at 64 MiB (ADR-0088): a file
 // well past the old 2 MiB cap is accepted and its window delivered exactly, a
 // file one byte over the cap is refused before any MCP call, and the
 // advertised description and schema maxima carry the same number.

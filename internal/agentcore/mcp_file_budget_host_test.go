@@ -193,3 +193,53 @@ func TestMCPWorkspaceFileLeaseReleasedOnEveryPath(t *testing.T) {
 	}
 	settle("resolve failure")
 }
+
+// retainingBroker returns at once but, like an out-of-process call cancelled
+// mid-flight, reports that it still holds the arguments until letGo.
+type retainingBroker struct{ letGo chan func() }
+
+func (b retainingBroker) CallMCP(ctx context.Context, _, _ string, _ map[string]any) (string, bool, error) {
+	b.letGo <- mcp.RetainArguments(ctx)
+	return "", false, context.Canceled
+}
+
+// TestMCPWorkspaceFileLeaseOutlivesRetainedDispatch: when the dispatch still
+// holds args after CallMCP returned (a cancelled broker call the child has not
+// answered), the windows stay charged until it lets go.
+func TestMCPWorkspaceFileLeaseOutlivesRetainedDispatch(t *testing.T) {
+	ctx, reader, sum := budgetHostFixture(t, 1<<20)
+	baseline, _ := fleettools.WorkspaceFileBudgetUsage()
+	broker := retainingBroker{letGo: make(chan func(), 1)}
+	input := mustFileJSON(t, map[string]any{"chunk": workspaceFileArgument{"site.zip", sum, 0, 4096}})
+	_, _ = budgetTool(broker, reader).Run(ctx, fantasy.ToolCall{ID: "r", Input: input})
+	letGo := <-broker.letGo
+	window := fleettools.WorkspaceWindowCharge(4096)
+	if charged, _ := fleettools.WorkspaceFileBudgetUsage(); charged < baseline+window {
+		t.Fatalf("lease released while the dispatch still holds args: %d charged", charged)
+	}
+	letGo()
+	if charged, _ := fleettools.WorkspaceFileBudgetUsage(); charged > baseline+1<<20 {
+		t.Fatalf("lease not released after the dispatch let go: %d charged", charged)
+	}
+}
+
+// TestMCPWorkspaceFileTwoReferencesOneCall: a call with two references is
+// admitted as one unit and both windows reach the broker.
+func TestMCPWorkspaceFileTwoReferencesOneCall(t *testing.T) {
+	ctx, reader, sum := budgetHostFixture(t, 1<<20)
+	broker := &recordingBroker{text: `{}`}
+	input := mustFileJSON(t, map[string]any{
+		"chunk": workspaceFileArgument{"site.zip", sum, 0, 3},
+		"other": workspaceFileArgument{"site.zip", sum, 3, 3},
+	})
+	result, err := budgetTool(broker, reader).Run(ctx, fantasy.ToolCall{ID: "two", Input: input})
+	if err != nil || result.IsError || broker.calls != 1 {
+		t.Fatalf("two-reference call: %+v %v", result, err)
+	}
+	if _, ok := broker.gotArgs["chunk"].(string); !ok {
+		t.Fatal("chunk not expanded")
+	}
+	if _, ok := broker.gotArgs["other"].(string); !ok {
+		t.Fatal("other not expanded")
+	}
+}

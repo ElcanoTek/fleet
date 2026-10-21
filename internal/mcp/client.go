@@ -790,10 +790,39 @@ func CallTimeout(ctx context.Context) (time.Duration, bool) {
 	return d, ok && d > 0
 }
 
+// lockWithContext acquires mu, or gives up when ctx ends first. A lock that
+// arrives after giving up is released at once by the waiting goroutine, which
+// holds nothing of the caller's.
+func lockWithContext(ctx context.Context, mu *sync.Mutex) error {
+	if mu.TryLock() {
+		return nil
+	}
+	locked := make(chan struct{})
+	go func() {
+		mu.Lock()
+		close(locked)
+	}()
+	select {
+	case <-locked:
+		return nil
+	case <-ctx.Done():
+		go func() {
+			<-locked
+			mu.Unlock()
+		}()
+		return ctx.Err()
+	}
+}
+
 func (s *Server) callTool(ctx context.Context, name string, arguments map[string]interface{}) (*ToolResult, error) {
 	// Hold the server mutex for the entire call+restart sequence to prevent
-	// concurrent callers from using a half-restarted transport.
-	s.mu.Lock()
+	// concurrent callers from using a half-restarted transport. Wait for it
+	// with ctx: a call queued behind a slow one must be able to give up — and
+	// let go of its arguments, which can be a multi-MiB base64 workspace-file
+	// window charged until this returns (ADR-0088) — when it is cancelled.
+	if err := lockWithContext(ctx, &s.mu); err != nil {
+		return nil, fmt.Errorf("MCP server %s: %s was not sent; the call was cancelled while it waited for the server's previous call: %w", s.name, name, err)
+	}
 	defer s.mu.Unlock()
 
 	// The caller's deadline may have run out while this call waited for the
@@ -1293,7 +1322,7 @@ func (t *StdioTransport) Notify(ctx context.Context, method string, params inter
 // framing. It produces the same bytes as json.Marshal plus '\n', but without
 // the extra whole-request copy that appending the newline to Marshal's
 // exactly-sized result made. A tools/call can carry a multi-MiB base64
-// argument (MCP workspace-file references, ADR-0087), and that copy was
+// argument (MCP workspace-file references, ADR-0088), and that copy was
 // charged to the workspace-file budget.
 func EncodeJSONLine(v any) ([]byte, error) {
 	var buf bytes.Buffer
@@ -1345,6 +1374,12 @@ func (t *StdioTransport) writeLocked(ctx context.Context, b []byte) error {
 		default:
 		}
 		t.broken = true
+		// The write goroutine still holds b — the whole request line, which
+		// can carry a multi-MiB argument — while it is blocked on a wedged
+		// server. The transport is unusable now anyway (broken forces a
+		// restart), so close stdin: the write fails, the goroutine exits and
+		// b is freed instead of living as long as the wedged server.
+		_ = t.stdin.Close()
 		return fmt.Errorf("%s: %w", errStdioWriteFailed, ctx.Err())
 	case err := <-writeDone:
 		if err != nil {

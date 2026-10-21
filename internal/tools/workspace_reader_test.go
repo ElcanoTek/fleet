@@ -16,16 +16,23 @@ import (
 	"time"
 )
 
-// readNow adapts a reader for tests that do not hold the window: it
-// releases the lease at once.
+// readNow adapts a reader for tests that read one window and do not hold
+// it: it releases the lease at once.
 func readNow(r WorkspaceFileReadFunc) func(context.Context, string, string, int64, int64, int64) ([]byte, error) {
 	return func(ctx context.Context, path, sum string, offset, length, maxFileBytes int64) ([]byte, error) {
-		window, release, err := r(ctx, path, sum, offset, length, maxFileBytes)
-		if err == nil {
-			release()
+		windows, release, err := r(ctx, []WorkspaceFileRef{{Path: path, SHA256: sum, Offset: offset, Length: length}}, maxFileBytes)
+		if err != nil {
+			return nil, err
 		}
-		return window, err
+		release()
+		return windows[0], nil
 	}
+}
+
+// readHeld reads one window and returns its release.
+func readHeld(ctx context.Context, r WorkspaceFileReadFunc, path, sum string, offset, length, maxFileBytes int64) (func(), error) {
+	_, release, err := r(ctx, []WorkspaceFileRef{{Path: path, SHA256: sum, Offset: offset, Length: length}}, maxFileBytes)
+	return release, err
 }
 
 func hexSum(data []byte) string {
@@ -313,9 +320,9 @@ func TestWorkspaceFileReaderBudget(t *testing.T) {
 	const budget = 1 << 20
 	files := map[string][]byte{}
 	for i := range 6 {
-		files[string(rune('a'+i))] = bytes.Repeat([]byte{byte(i)}, 100<<10) // cost 528 KiB: one fits at a time
+		files[string(rune('a'+i))] = bytes.Repeat([]byte{byte(i)}, 150<<10) // a read reserves 2.5*150K + 192K: one fits at a time
 	}
-	files["huge"] = bytes.Repeat([]byte("h"), 300<<10) // cost 1.3 MiB > budget
+	files["huge"] = bytes.Repeat([]byte("h"), 400<<10) // read costs 2.5*400K + 192K > budget
 	src := newFakeSource(files)
 	store := testStore(budget)
 	reader := readNow(newVerifiedWorkspaceReader(src.source(), store))
@@ -411,8 +418,7 @@ func TestWorkspaceFileLeases(t *testing.T) {
 		return store.cached + store.reserved
 	}
 	acquire := func(c context.Context, path string) (func(), error) {
-		_, release, err := reader(c, path, hexSum(files[path]), 0, 10, 1<<20)
-		return release, err
+		return readHeld(c, reader, path, hexSum(files[path]), 0, 10, 1<<20)
 	}
 
 	releaseMiss, err := acquire(ctx, "a")
@@ -467,5 +473,114 @@ func TestWorkspaceFileLeases(t *testing.T) {
 	}
 	if store.peak > budget {
 		t.Fatalf("peak %d exceeds budget %d", store.peak, budget)
+	}
+}
+
+// TestWorkspaceFileMultiReferenceAdmission: all references of one call are
+// admitted in one step. Two 64 MiB files with 8 MiB windows — the shape that
+// deadlocked when each reference was admitted while holding the previous
+// one — fit together under the real budget. Calls that each need most of the
+// budget run one after another instead of deadlocking on each other, a call
+// that could never fit fails at once, and a file named twice is read once.
+func TestWorkspaceFileMultiReferenceAdmission(t *testing.T) {
+	ctx := WithForcedWorkingDir(context.Background(), "/ws")
+	two := func(a, b string, files map[string][]byte, n int64) []WorkspaceFileRef {
+		return []WorkspaceFileRef{{Path: a, SHA256: hexSum(files[a]), Length: n}, {Path: b, SHA256: hexSum(files[b]), Offset: 1, Length: n}}
+	}
+
+	big := map[string][]byte{"x": bytes.Repeat([]byte("x"), 64<<20), "y": bytes.Repeat([]byte("y"), 64<<20)}
+	store := newWorkspaceFileStore(workspaceFileBudgetBytes, workspaceFileCacheMaxBytes, workspaceFileCacheMaxEntries, time.Minute, time.Now)
+	reader := newVerifiedWorkspaceReader(newFakeSource(big).source(), store)
+	windows, release, err := reader(ctx, two("x", "y", big, 8<<20), 64<<20)
+	if err != nil {
+		t.Fatalf("two 64 MiB files with 8 MiB windows: %v", err)
+	}
+	if !bytes.Equal(windows[0], big["x"][:8<<20]) || !bytes.Equal(windows[1], big["y"][1:1+8<<20]) {
+		t.Fatal("wrong windows")
+	}
+	if store.peak > store.budget {
+		t.Fatalf("peak %d exceeds budget %d", store.peak, store.budget)
+	}
+	release()
+
+	files := map[string][]byte{"a": bytes.Repeat([]byte("a"), 100<<10), "b": bytes.Repeat([]byte("b"), 100<<10)}
+	src := newFakeSource(files)
+	// One call needs both files plus two leases (and one read's excess);
+	// two such calls do not fit at once.
+	one := 2*(100<<10+WorkspaceWindowCharge(10)) + (workspaceFileMissCost(100<<10) - (100<<10 + WorkspaceWindowCharge(10)))
+	small := newWorkspaceFileStore(one+one/2, one+one/2, 2, time.Minute, time.Now)
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, order := range [][2]string{{"a", "b"}, {"b", "a"}} {
+		r := newVerifiedWorkspaceReader(src.source(), small) // separate runs: separate keys
+		wg.Go(func() {
+			cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			_, release, err := r(cctx, two(order[0], order[1], files, 10), 1<<20)
+			if err == nil {
+				time.Sleep(20 * time.Millisecond)
+				release()
+			}
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent multi-reference calls: %v", err)
+		}
+	}
+	if small.peak > small.budget || small.reserved != 0 {
+		t.Fatalf("peak %d (budget %d), reserved %d after release", small.peak, small.budget, small.reserved)
+	}
+
+	// Never fits: fails fast, reads nothing.
+	tiny := newWorkspaceFileStore(one-1, one, 2, time.Minute, time.Now)
+	before := src.readCount("a") + src.readCount("b")
+	start := time.Now()
+	if _, _, err := newVerifiedWorkspaceReader(src.source(), tiny)(ctx, two("a", "b", files, 10), 1<<20); !errors.Is(err, ErrWorkspaceFileBudget) {
+		t.Fatalf("call over the whole budget: %v", err)
+	}
+	if src.readCount("a")+src.readCount("b") != before || time.Since(start) > time.Second {
+		t.Fatal("an impossible call read or waited")
+	}
+
+	// The same file twice in one call: one read, both windows, two pins.
+	r := newVerifiedWorkspaceReader(src.source(), small)
+	before = src.readCount("a")
+	windows, release, err = r(ctx, two("a", "a", files, 10), 1<<20)
+	if err != nil || src.readCount("a") != before+1 || !bytes.Equal(windows[1], files["a"][1:11]) {
+		t.Fatalf("same file twice: %v (reads %d)", err, src.readCount("a")-before)
+	}
+	release()
+	release() // idempotent
+	if small.reserved != 0 {
+		t.Fatalf("reserved %d after release", small.reserved)
+	}
+}
+
+// TestWorkspaceFileReadPanicReleases: a panic while reading leaves nothing
+// reserved, pinned, or in flight, and a later call reads normally.
+func TestWorkspaceFileReadPanicReleases(t *testing.T) {
+	files := map[string][]byte{"a": bytes.Repeat([]byte("a"), 1000)}
+	src := newFakeSource(files)
+	panicking := src.source()
+	panicking.read = func(context.Context, string, string, int64) ([]byte, error) { panic("read blew up") }
+	store := testStore(4 << 20)
+	ctx := WithForcedWorkingDir(context.Background(), "/ws")
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("panic swallowed")
+			}
+		}()
+		_, _, _ = newVerifiedWorkspaceReader(panicking, store)(ctx, []WorkspaceFileRef{{Path: "a", SHA256: hexSum(files["a"]), Length: 10}}, 1<<20)
+	}()
+	if store.reserved != 0 || len(store.flights) != 0 {
+		t.Fatalf("panic leaked: reserved %d, flights %d", store.reserved, len(store.flights))
+	}
+	if _, err := readNow(newVerifiedWorkspaceReader(src.source(), store))(ctx, "a", hexSum(files["a"]), 0, 10, 1<<20); err != nil {
+		t.Fatal(err)
 	}
 }

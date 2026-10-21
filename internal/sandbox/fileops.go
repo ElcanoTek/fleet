@@ -1,12 +1,14 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -174,7 +176,12 @@ func fileOpOutputBound(req FileOpRequest) int64 {
 	if n <= 0 {
 		return 0
 	}
-	return int64(base64.StdEncoding.EncodedLen(int(n))) + fileOpResponseOverhead
+	// int64 arithmetic: a caller's Limit can be any int64, and EncodedLen
+	// takes an int. Past ~6 EiB the bound saturates instead of wrapping.
+	if n > (math.MaxInt64-fileOpResponseOverhead)/4*3 {
+		return math.MaxInt64
+	}
+	return (n+2)/3*4 + fileOpResponseOverhead
 }
 
 // fileOpSink collects a helper's stdout up to a bound. Past the bound it
@@ -183,18 +190,27 @@ func fileOpOutputBound(req FileOpRequest) int64 {
 // abandoned-copier reason as cappedBuffer.
 //
 // A plain slice rather than a bytes.Buffer: Buffer's doubling can allocate
-// nearly twice the bound, and the MCP workspace-file budget (ADR-0087) counts
+// nearly twice the bound, and the MCP workspace-file budget (ADR-0088) counts
 // on the buffer never exceeding it. Growth here is capped at the bound.
 type fileOpSink struct {
-	mu    sync.Mutex
-	data  []byte
-	limit int64
-	over  bool
-	done  bool
+	mu       sync.Mutex
+	data     []byte
+	limit    int64
+	prealloc bool
+	over     bool
+	done     bool
 }
 
+// fileOpSinkPreallocMax caps the up-front allocation of a MaxSize read's
+// buffer (the MCP workspace-file budget reserved for it already); a larger
+// bound grows on demand instead.
+const fileOpSinkPreallocMax = 128 << 20
+
 func newFileOpSink(req FileOpRequest) *fileOpSink {
-	return &fileOpSink{limit: fileOpOutputBound(req)}
+	// Preallocate only for MaxSize reads, whose caller sized MaxSize to the
+	// file; a Limit-only read (view_file) of a small file should not reserve
+	// its whole window.
+	return &fileOpSink{limit: fileOpOutputBound(req), prealloc: req.Op == FileOpRead && req.MaxSize > 0}
 }
 
 func (s *fileOpSink) Write(p []byte) (int, error) {
@@ -208,6 +224,12 @@ func (s *fileOpSink) Write(p []byte) (int, error) {
 		s.over = true
 		s.data = nil
 		return len(p), nil
+	}
+	if s.prealloc && s.data == nil && s.limit > 0 && s.limit <= fileOpSinkPreallocMax {
+		// The bound is exact for a read with MaxSize (the caller knows the
+		// size), so allocate it once: no growth, and no moment where an old
+		// and a new buffer are both live.
+		s.data = make([]byte, 0, s.limit)
 	}
 	if s.limit > 0 && need > int64(cap(s.data)) {
 		grown := make([]byte, len(s.data), min(max(2*int64(cap(s.data)), need), s.limit))
@@ -458,14 +480,60 @@ type fileOpResponse struct {
 	DiffNote   string `json:"diff_note"`
 	Dev        uint64 `json:"dev"`
 	Ino        uint64 `json:"ino"`
+
+	decoded []byte // a streamed read's payload, decoded in place of DataB64
+}
+
+// streamedReadPrefix opens a streamed read response (see fileops.py
+// _ReadStream).
+var streamedReadPrefix = []byte(`{"data_b64":"`)
+
+// splitStreamedRead splits a streamed read response into its base64 payload
+// (a sub-slice of out, not a copy) and the remaining members as a small JSON
+// object of their own.
+func splitStreamedRead(out []byte) (payload, rest []byte, ok bool) {
+	if !bytes.HasPrefix(out, streamedReadPrefix) {
+		return nil, nil, false
+	}
+	body := out[len(streamedReadPrefix):]
+	end := bytes.IndexByte(body, '"')
+	if end < 0 || end+1 >= len(body) || body[end+1] != ',' {
+		return nil, nil, false
+	}
+	rest = append([]byte{'{'}, body[end+2:]...)
+	return body[:end], rest, true
 }
 
 // decodeFileOpResponse maps the executor's JSON envelope into a FileOpResult or
 // a typed sentinel error, so every backend surfaces identical semantics.
 func decodeFileOpResponse(out []byte) (FileOpResult, error) {
 	var resp fileOpResponse
+	// A streamed read puts its payload first: {"data_b64":"<base64>",<rest>}.
+	// Decode the payload straight from the output buffer, so a large read is
+	// never copied into a JSON string as well (ADR-0088 charges a read for the
+	// output buffer plus the decoded bytes, nothing more). Base64 contains no
+	// quote or backslash, so the first quote ends it; anything else in there
+	// fails the base64 decode.
+	var streamed []byte
+	if payload, rest, ok := splitStreamedRead(out); ok {
+		streamed = payload
+		out = rest
+	}
 	if err := json.Unmarshal(out, &resp); err != nil {
 		return FileOpResult{}, fmt.Errorf("decode fileop response: %w (raw: %.200s)", err, string(out))
+	}
+	if streamed != nil {
+		if resp.DataB64 != "" {
+			return FileOpResult{}, errors.New("decode fileop response: duplicate data_b64")
+		}
+		if resp.OK {
+			data := make([]byte, base64.StdEncoding.DecodedLen(len(streamed)))
+			n, err := base64.StdEncoding.Decode(data, streamed)
+			if err != nil {
+				return FileOpResult{}, fmt.Errorf("decode fileop data: %w", err)
+			}
+			resp.decoded = data[:n:n]
+		}
 	}
 	if !resp.OK {
 		switch resp.ErrKind {
@@ -492,8 +560,8 @@ func decodeFileOpResponse(out []byte) (FileOpResult, error) {
 			return FileOpResult{}, errors.New(resp.Err)
 		}
 	}
-	var data []byte
-	if resp.DataB64 != "" {
+	data := resp.decoded
+	if data == nil && resp.DataB64 != "" {
 		var derr error
 		data, derr = base64.StdEncoding.DecodeString(resp.DataB64)
 		if derr != nil {

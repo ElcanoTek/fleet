@@ -29,7 +29,7 @@ type recordingBroker struct {
 func (b *recordingBroker) CallMCP(_ context.Context, server, tool string, args map[string]any) (string, bool, error) {
 	b.calls++
 	// A copy: the caller restores workspace-file references in args once the
-	// call returns (ADR-0087), and the test wants what was dispatched.
+	// call returns (ADR-0088), and the test wants what was dispatched.
 	b.gotServer, b.gotTool, b.gotArgs = server, tool, maps.Clone(args)
 	return b.text, b.isErr, b.err
 }

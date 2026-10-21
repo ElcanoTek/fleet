@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -24,17 +23,28 @@ var ErrWorkspaceFileHashMismatch = errors.New("workspace file SHA-256 mismatch; 
 // than the whole process-wide workspace-file budget, so it can never run.
 var ErrWorkspaceFileBudget = errors.New("workspace file is too large for the workspace-file transfer budget")
 
-// WorkspaceFileReadFunc returns [offset, offset+length) of the workspace file
-// at path, provided the WHOLE file hashes (in Fleet, not in the sandbox) to
-// sha256Hex and is at most maxFileBytes. The window may be shorter than length
-// when the range runs past the end of the file.
+// WorkspaceFileRef names one window of a workspace file: the whole file must
+// hash to SHA256 (lowercase hex), and [Offset, Offset+Length) is returned.
+type WorkspaceFileRef struct {
+	Path   string
+	SHA256 string
+	Offset int64
+	Length int64
+}
+
+// WorkspaceFileReadFunc returns the windows for every ref of ONE call, each
+// cut from a whole file that Fleet (not the sandbox) hashed to its SHA256 and
+// that is at most maxFileBytes. A window may be shorter than its Length when
+// the range runs past the end of the file.
 //
-// On success it also returns release, which the caller MUST call (it is safe
-// to call more than once) once nothing derived from the window is live any
-// more: for an MCP argument, after the outbound call has returned. Until then
-// the window — the verified file it is cut from, and WorkspaceWindowCharge of
-// transient copies — stays charged to the process-wide budget (ADR-0087).
-type WorkspaceFileReadFunc func(ctx context.Context, path, sha256Hex string, offset, length, maxFileBytes int64) (window []byte, release func(), err error)
+// All refs are admitted against the process-wide budget together, in one
+// step, so a call never holds some of its windows while it waits for the
+// rest (ADR-0088). On success the caller MUST call release (idempotent) once
+// nothing derived from the windows is live any more: for an MCP call, after
+// the outbound dispatch has let go of its arguments. Until then the files the
+// windows are cut from stay pinned and WorkspaceWindowCharge of each window
+// stays charged.
+type WorkspaceFileReadFunc func(ctx context.Context, refs []WorkspaceFileRef, maxFileBytes int64) (windows [][]byte, release func(), err error)
 
 // workspaceFileSource is the sandbox side of the reader. size is a cheap probe
 // (no hashing) and its answer is untrusted: it only sizes the reservation and
@@ -46,43 +56,42 @@ type workspaceFileSource struct {
 	read func(ctx context.Context, root, path string, maxBytes int64) ([]byte, error)
 }
 
-// Budget (ADR-0087). Every byte Fleet holds on behalf of a workspace-file
-// reference is charged to one process-wide budget from before it is
-// allocated until it is released. Charged items:
+// Budget (ADR-0088). Every byte Fleet holds on behalf of workspace-file
+// references is charged to one process-wide budget from before it is
+// allocated until it is released:
 //
-//   - a verified file, while cached or while any window lease pins it: S;
-//   - a read in flight: workspaceFileMissCost(S) = 4S + 128 KiB, covering the
-//     FileOp output buffer (at most base64(S) + 64 KiB, grown no further), the
-//     JSON-decoded copy of it, and the decoded S bytes;
-//   - a window lease, from before the window is handed out until the caller
-//     releases it: WorkspaceWindowCharge(W), covering the base64 argument and
-//     every whole-request copy the dispatch path makes of it (see that
-//     function).
+//   - a file being read: workspaceFileMissCost(S) = 2.5·S + 192 KiB. The
+//     FileOp output buffer is allocated once at its exact bound, base64(S) +
+//     64 KiB, and the payload is decoded straight out of it into S bytes; the
+//     rest of the response is a few hundred bytes.
+//   - a verified file, cached or pinned by a lease: S.
+//   - a leased window: WorkspaceWindowCharge(W), from before the window is
+//     handed out until the caller releases it.
 //
-// A miss reserves max(missCost(S), S + windowCharge(W)) up front and, when the
-// read settles, converts that into S (the file, pinned) plus windowCharge(W)
-// (the lease) without waiting again, so a caller never holds part of what it
-// needs while it waits for the rest. A hit reserves windowCharge(W) and pins
-// the file atomically. Only unpinned files are evicted; pinned files are what
-// leases point into. A request that could never fit fails at once.
+// A call's refs are admitted together: hits reserve their window charges and
+// pin their files; misses reserve their final cost (S + window charges) plus,
+// once for the whole call, the largest transient excess of a read over its
+// final cost, because the call reads its misses one at a time. Only unpinned
+// files are evicted. A call that could never fit fails at once.
 const (
 	workspaceFileBudgetBytes     = 384 << 20
 	workspaceFileCacheMaxBytes   = 128 << 20
 	workspaceFileCacheMaxEntries = 2
 	workspaceFileCacheTTL        = 5 * time.Minute
-	workspaceFileMissOverhead    = 128 << 10
+	workspaceFileMissOverhead    = 192 << 10
 
 	// workspaceWindowChargeFactor multiplies a window's base64 length.
 	// TestWorkspaceWindowDispatchAllocsWithinCharge (internal/mcpbroker)
 	// measures every byte the out-of-process broker + stdio dispatch path
 	// allocates for a window, growth intermediates included (an upper bound
-	// on what is live at once), and fails if this charge is lower.
-	workspaceWindowChargeFactor   = 12
+	// on what is live at once: about 9×), and fails if this charge is lower.
+	workspaceWindowChargeFactor   = 10
 	workspaceWindowChargeOverhead = 256 << 10
 )
 
 func workspaceFileMissCost(size int64) int64 {
-	return 4*max(size, 1) + workspaceFileMissOverhead
+	size = max(size, 1)
+	return size*5/2 + 1 + workspaceFileMissOverhead
 }
 
 // WorkspaceWindowCharge is what one leased window of n raw bytes is charged
@@ -96,10 +105,13 @@ func workspaceFileMissCost(size int64) int64 {
 //	child   JSON-RPC request line encode (EncodeJSONLine, growth)   up to 3E
 //	child   the encoded line handed to the transport                E
 //
-// The in-process broker skips the frame encode/decode, so the charge covers
-// both. The window itself is a sub-slice of the pinned file: no copy.
+// Not every copy is live at once (measured: about 9E allocated in total). The
+// in-process broker skips the frame encode/decode. The window itself is a
+// sub-slice of the pinned file: no copy. n is clamped to [1, 1 GiB] so the
+// arithmetic cannot overflow; callers cap windows far below that.
 func WorkspaceWindowCharge(n int64) int64 {
-	return workspaceWindowChargeFactor*int64(base64.StdEncoding.EncodedLen(int(max(n, 1)))) + workspaceWindowChargeOverhead
+	n = min(max(n, 1), 1<<30)
+	return workspaceWindowChargeFactor*((n+2)/3*4) + workspaceWindowChargeOverhead
 }
 
 // workspaceFileStore is the verified-bytes LRU plus the admission control for
@@ -139,8 +151,8 @@ type verifiedFile struct {
 	pins    int
 }
 
-// fileFlight is one in-progress miss. Identical concurrent misses wait on it
-// instead of each reading (and reserving for) the same file.
+// fileFlight is a key some call is reading. Others wanting the same key wait
+// for it (holding nothing) instead of reading it again.
 type fileFlight struct {
 	done chan struct{}
 	err  error
@@ -152,10 +164,23 @@ func newWorkspaceFileStore(budget, maxBytes int64, maxEntries int, ttl time.Dura
 		changed: make(chan struct{}), flights: map[verifiedFileKey]*fileFlight{}}
 }
 
-// lease is one charged window. release is idempotent.
+// fileRequest is one key a call needs, with every window it wants from it.
+type fileRequest struct {
+	key          verifiedFileKey
+	windowCharge int64 // all of this call's windows of this key
+	windows      int
+	probe        func(context.Context) (int64, error)
+	fill         func(context.Context, int64) ([]byte, error)
+
+	// planning state
+	size  int64 // probed size; -1 until probed
+	entry *verifiedFile
+}
+
+// lease is one call's admitted windows. release is idempotent.
 type lease struct {
 	store  *workspaceFileStore
-	entry  *verifiedFile
+	pinned []*verifiedFile // with multiplicity
 	charge int64
 	once   sync.Once
 }
@@ -165,125 +190,186 @@ func (l *lease) release() {
 		s := l.store
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		l.entry.pins--
+		for _, entry := range l.pinned {
+			entry.pins--
+		}
 		s.reserved -= l.charge
 		s.trimLocked()
 		s.broadcastLocked()
 	})
 }
 
-// acquire returns the verified file for key, pinned and with windowCharge
-// reserved, reading it (once across concurrent callers) on a miss. probe and
-// fill are the miss path's size probe and verified read.
-func (s *workspaceFileStore) acquire(ctx context.Context, key verifiedFileKey, windowCharge int64,
-	probe func(context.Context) (int64, error), fill func(context.Context, int64) ([]byte, error)) (*lease, error) {
-	if windowCharge > s.budget {
-		return nil, fmt.Errorf("%w: the window needs %d bytes, the process-wide budget is %d", ErrWorkspaceFileBudget, windowCharge, s.budget)
+// acquire admits every request of one call in a single step and returns its
+// lease, with each request's entry set. It never holds a charge or a pin
+// while it waits: on any wait it holds nothing, then plans again.
+func (s *workspaceFileStore) acquire(ctx context.Context, reqs []*fileRequest) (*lease, error) {
+	for _, r := range reqs {
+		r.size = -1
 	}
 	for {
 		s.mu.Lock()
-		if el, ok := s.byKey[key]; ok {
-			entry := el.Value.(*verifiedFile)
-			if entry.pins == 0 && !s.now().Before(entry.expires) {
+		var hits, misses []*fileRequest
+		var wait *fileFlight
+		var probe []*fileRequest
+		for _, r := range reqs {
+			r.entry = nil
+			if el, ok := s.byKey[r.key]; ok {
+				entry := el.Value.(*verifiedFile)
+				if entry.pins > 0 || s.now().Before(entry.expires) {
+					r.entry = entry
+					hits = append(hits, r)
+					continue
+				}
 				s.removeLocked(el)
 				s.broadcastLocked()
-			} else {
-				s.evictForLocked(windowCharge)
-				if s.cached+s.reserved+windowCharge <= s.budget {
-					entry.pins++
-					s.reserved += windowCharge
-					s.peak = max(s.peak, s.cached+s.reserved)
-					s.order.MoveToFront(el)
-					s.mu.Unlock()
-					return &lease{store: s, entry: entry, charge: windowCharge}, nil
-				}
-				if err := s.waitLocked(ctx); err != nil {
-					return nil, err
-				}
-				continue
 			}
+			if flight, ok := s.flights[r.key]; ok {
+				wait = flight
+				break
+			}
+			if r.size < 0 {
+				probe = append(probe, r)
+			}
+			misses = append(misses, r)
 		}
-		if flight, ok := s.flights[key]; ok {
+		if wait != nil {
 			s.mu.Unlock()
 			select {
-			case <-flight.done:
+			case <-wait.done:
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
-			// The leader's own cancellation is not this caller's failure:
-			// retry (as leader, or as a hit on what the leader cached).
-			leaderCancelled := errors.Is(flight.err, context.Canceled) || errors.Is(flight.err, context.DeadlineExceeded)
-			if flight.err != nil && (!leaderCancelled || ctx.Err() != nil) {
-				return nil, flight.err
+			continue // the key is cached now, or failed: plan again
+		}
+		if len(probe) > 0 {
+			s.mu.Unlock()
+			for _, r := range probe {
+				size, err := r.probe(ctx)
+				if err != nil {
+					return nil, err
+				}
+				r.size = max(size, 1)
 			}
 			continue
 		}
-		flight := &fileFlight{done: make(chan struct{})}
-		s.flights[key] = flight
+		var need, extra int64
+		for _, r := range hits {
+			need += r.windowCharge
+		}
+		for _, r := range misses {
+			final := r.size + r.windowCharge
+			need += final
+			extra = max(extra, workspaceFileMissCost(r.size)-final)
+		}
+		need += extra
+		if need > s.budget {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("%w: this call's files and windows need %d bytes, the process-wide budget is %d", ErrWorkspaceFileBudget, need, s.budget)
+		}
+		// Pin the hits before making room, so eviction cannot take them.
+		for _, r := range hits {
+			r.entry.pins++
+		}
+		s.evictForLocked(need)
+		if s.cached+s.reserved+need > s.budget {
+			for _, r := range hits {
+				r.entry.pins--
+			}
+			if err := s.waitLocked(ctx); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		s.reserved += need
+		s.peak = max(s.peak, s.cached+s.reserved)
+		flights := make([]*fileFlight, len(misses))
+		for i, r := range misses {
+			flights[i] = &fileFlight{done: make(chan struct{})}
+			s.flights[r.key] = flights[i]
+		}
+		l := &lease{store: s}
+		for _, r := range hits {
+			l.pinned = append(l.pinned, r.entry)
+			for range r.windows - 1 {
+				r.entry.pins++
+				l.pinned = append(l.pinned, r.entry)
+			}
+			l.charge += r.windowCharge
+		}
 		s.mu.Unlock()
-
-		l, err := s.miss(ctx, key, windowCharge, probe, fill)
-		s.mu.Lock()
-		delete(s.flights, key)
-		s.mu.Unlock()
-		flight.err = err
-		close(flight.done)
-		return l, err
+		if err := s.readMisses(ctx, misses, flights, l, need); err != nil {
+			return nil, err
+		}
+		return l, nil
 	}
 }
 
-func (s *workspaceFileStore) miss(ctx context.Context, key verifiedFileKey, windowCharge int64,
-	probe func(context.Context) (int64, error), fill func(context.Context, int64) ([]byte, error)) (*lease, error) {
-	size, err := probe(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// The read's cap is the probed size, so the reservation bounds the read
-	// however the (untrusted) probe answered.
-	readCap := max(size, 1)
-	cost := max(workspaceFileMissCost(readCap), readCap+windowCharge)
-	if cost > s.budget {
-		return nil, fmt.Errorf("%w: reading it needs %d bytes, the process-wide budget is %d", ErrWorkspaceFileBudget, cost, s.budget)
-	}
-	s.mu.Lock()
-	for {
-		s.evictForLocked(cost)
-		if s.cached+s.reserved+cost <= s.budget {
-			break
-		}
-		if err := s.waitLocked(ctx); err != nil {
-			return nil, err
+// readMisses reads the call's misses one at a time inside the reservation
+// acquire made (need), converting it as each settles: the file's bytes move
+// from reserved to cached, pinned by l. On success what stays reserved is
+// exactly l.charge. On any failure — or a panic — everything is undone.
+func (s *workspaceFileStore) readMisses(ctx context.Context, misses []*fileRequest, flights []*fileFlight, l *lease, need int64) (err error) {
+	held := need // what this call has reserved and not yet converted
+	settled := 0
+	defer func() {
+		failed := err != nil
+		if r := recover(); r != nil {
+			failed = true
+			defer panic(r)
 		}
 		s.mu.Lock()
+		for i := settled; i < len(misses); i++ {
+			delete(s.flights, misses[i].key)
+			if failed && flights[i].err == nil {
+				flights[i].err = errors.Join(errors.New("workspace file read failed"), err)
+			}
+			close(flights[i].done)
+		}
+		if failed {
+			for _, entry := range l.pinned {
+				entry.pins--
+			}
+			s.reserved -= held
+			s.trimLocked()
+		} else {
+			// Release the transient excess; keep exactly the windows.
+			s.reserved -= held - l.charge
+		}
+		s.broadcastLocked()
+		s.mu.Unlock()
+	}()
+	for i, r := range misses {
+		data, ferr := r.fill(ctx, r.size)
+		if ferr == nil && int64(len(data)) > r.size {
+			ferr = fmt.Errorf("workspace file exceeds %d bytes", r.size)
+		}
+		if ferr != nil {
+			flights[i].err = ferr
+			return ferr
+		}
+		s.mu.Lock()
+		if el, ok := s.byKey[r.key]; ok {
+			s.removeLocked(el) // an expired, unpinned twin
+		}
+		entry := &verifiedFile{key: r.key, data: data, expires: s.now().Add(s.ttl), pins: r.windows}
+		r.entry = entry
+		s.byKey[r.key] = s.order.PushFront(entry)
+		size := int64(len(data))
+		s.cached += size
+		s.reserved -= size
+		held -= size
+		for range r.windows {
+			l.pinned = append(l.pinned, entry)
+		}
+		l.charge += r.windowCharge
+		s.peak = max(s.peak, s.cached+s.reserved)
+		delete(s.flights, r.key)
+		close(flights[i].done)
+		settled = i + 1
+		s.broadcastLocked()
+		s.mu.Unlock()
 	}
-	s.reserved += cost
-	s.peak = max(s.peak, s.cached+s.reserved)
-	s.mu.Unlock()
-
-	data, err := fill(ctx, readCap)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.reserved -= cost
-	defer s.broadcastLocked()
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > readCap {
-		return nil, fmt.Errorf("workspace file exceeds %d bytes", readCap)
-	}
-	// Convert the reservation: the file (pinned by this lease) plus the
-	// lease's charge. cost >= readCap + windowCharge >= len(data) +
-	// windowCharge, so this never exceeds what was just released.
-	if el, ok := s.byKey[key]; ok {
-		s.removeLocked(el) // an expired, unpinned twin
-	}
-	entry := &verifiedFile{key: key, data: data, expires: s.now().Add(s.ttl), pins: 1}
-	s.byKey[key] = s.order.PushFront(entry)
-	s.cached += int64(len(data))
-	s.reserved += windowCharge
-	s.peak = max(s.peak, s.cached+s.reserved)
-	s.trimLocked()
-	return &lease{store: s, entry: entry, charge: windowCharge}, nil
+	return nil
 }
 
 // waitLocked releases mu, waits for room to be freed (or ctx), and returns
@@ -359,7 +445,7 @@ var (
 // over the cap) and Fleet hashes the bytes itself. The verified bytes are kept
 // in a small LRU so the next window of the same reference is sliced from them
 // instead of re-reading the file, and every read is admitted against one
-// process-wide memory budget before it starts (ADR-0087).
+// process-wide memory budget before it starts (ADR-0088).
 func WorkspaceFileReader(sb *sandbox.Sandbox) WorkspaceFileReadFunc {
 	var src *workspaceFileSource
 	if sb != nil {
@@ -399,18 +485,12 @@ func WorkspaceFileReader(sb *sandbox.Sandbox) WorkspaceFileReadFunc {
 
 func newVerifiedWorkspaceReader(src *workspaceFileSource, store *workspaceFileStore) WorkspaceFileReadFunc {
 	id := workspaceReaderIDs.Add(1)
-	return func(ctx context.Context, path, sha256Hex string, offset, length, maxFileBytes int64) ([]byte, func(), error) {
+	return func(ctx context.Context, refs []WorkspaceFileRef, maxFileBytes int64) ([][]byte, func(), error) {
 		if maxFileBytes <= 0 {
 			return nil, nil, fmt.Errorf("workspace file reader requires a positive byte limit")
 		}
-		if offset < 0 || length <= 0 || offset > maxFileBytes || length > maxFileBytes-offset {
-			return nil, nil, fmt.Errorf("workspace file reader requires a byte range within %d bytes", maxFileBytes)
-		}
 		if src == nil {
 			return nil, nil, fmt.Errorf("workspace file reference requires a sandbox")
-		}
-		if !filepath.IsLocal(path) || containsDotDotComponent(path) {
-			return nil, nil, fmt.Errorf("workspace_file must be a relative path without '..'")
 		}
 		root := ForcedWorkingDirFromContext(ctx)
 		if root == "" && ConversationIDFromContext(ctx) != "" {
@@ -419,33 +499,62 @@ func newVerifiedWorkspaceReader(src *workspaceFileSource, store *workspaceFileSt
 		if root == "" {
 			return nil, nil, fmt.Errorf("workspace file reference requires an active workspace")
 		}
-		key := verifiedFileKey{reader: id, root: root, path: filepath.Clean(path), sha256: sha256Hex}
-		l, err := store.acquire(ctx, key, WorkspaceWindowCharge(length),
-			func(ctx context.Context) (int64, error) {
-				size, err := src.size(ctx, root, path)
-				if err == nil && size > maxFileBytes {
-					err = fmt.Errorf("workspace file is %d bytes, exceeding the %d-byte cap", size, maxFileBytes)
-				}
-				return size, err
-			},
-			func(ctx context.Context, readCap int64) ([]byte, error) {
-				read, err := src.read(ctx, root, path, readCap)
-				if err != nil {
-					return nil, err
-				}
-				if sum := sha256.Sum256(read); hex.EncodeToString(sum[:]) != sha256Hex {
-					return nil, ErrWorkspaceFileHashMismatch
-				}
-				return read, nil
-			})
+		byKey := map[verifiedFileKey]*fileRequest{}
+		var reqs []*fileRequest
+		forRef := make([]*fileRequest, len(refs))
+		for i, ref := range refs {
+			if ref.Offset < 0 || ref.Length <= 0 || ref.Offset > maxFileBytes || ref.Length > maxFileBytes-ref.Offset {
+				return nil, nil, fmt.Errorf("workspace file reader requires a byte range within %d bytes", maxFileBytes)
+			}
+			if !filepath.IsLocal(ref.Path) || containsDotDotComponent(ref.Path) {
+				return nil, nil, fmt.Errorf("workspace_file must be a relative path without '..'")
+			}
+			key := verifiedFileKey{reader: id, root: root, path: filepath.Clean(ref.Path), sha256: ref.SHA256}
+			r, ok := byKey[key]
+			if !ok {
+				path, sum := ref.Path, ref.SHA256
+				r = &fileRequest{key: key,
+					probe: func(ctx context.Context) (int64, error) {
+						size, err := src.size(ctx, root, path)
+						switch {
+						case err != nil:
+						case size < 0:
+							err = fmt.Errorf("workspace file reported a negative size (%d)", size)
+						case size > maxFileBytes:
+							err = fmt.Errorf("workspace file is %d bytes, exceeding the %d-byte cap", size, maxFileBytes)
+						}
+						return size, err
+					},
+					fill: func(ctx context.Context, readCap int64) ([]byte, error) {
+						read, err := src.read(ctx, root, path, readCap)
+						if err != nil {
+							return nil, err
+						}
+						if digest := sha256.Sum256(read); hex.EncodeToString(digest[:]) != sum {
+							return nil, ErrWorkspaceFileHashMismatch
+						}
+						return read, nil
+					}}
+				byKey[key] = r
+				reqs = append(reqs, r)
+			}
+			r.windows++
+			r.windowCharge += WorkspaceWindowCharge(ref.Length)
+			forRef[i] = r
+		}
+		l, err := store.acquire(ctx, reqs)
 		if err != nil {
 			return nil, nil, err
 		}
-		data := l.entry.data
-		size := int64(len(data))
-		start, end := min(offset, size), min(offset+length, size)
-		// Full slice expression: the caller must not be able to append into
-		// the cached, shared backing array.
-		return data[start:end:end], l.release, nil
+		windows := make([][]byte, len(refs))
+		for i, ref := range refs {
+			data := forRef[i].entry.data
+			size := int64(len(data))
+			start, end := min(ref.Offset, size), min(ref.Offset+ref.Length, size)
+			// Full slice expression: the caller must not be able to append
+			// into the cached, shared backing array.
+			windows[i] = data[start:end:end]
+		}
+		return windows, l.release, nil
 	}
 }

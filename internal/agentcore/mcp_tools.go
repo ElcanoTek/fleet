@@ -813,23 +813,27 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 	// The broker owns the call itself — the fast.io inline-upload guard, the
 	// transport against the credentialed client, the content flatten, and the
 	// fast.io response trim. mcpTool keeps only the per-call framing.
-	resolved, err := m.resolveFileReferences(ctx, args)
-	if err != nil {
-		message, _ := governToolOutput(ctx, toolName, err.Error())
-		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(message), failed: true}
-	}
-	// Held until CallMCP has returned — on every path, panics included — so
-	// a window's bytes and their dispatch copies stay charged to the
-	// workspace-file budget for exactly as long as they are live (ADR-0087).
-	defer resolved()
 	// The budget starts once the call holds the server's mutex
 	// (mcp.WithCallTimeout), so time spent queued behind another call on the
 	// same server does not eat a long batch's budget. The outer deadline is
 	// the backstop for brokers that never reach an mcp.Server (and for the
-	// queue itself): the budget plus one default call's worth of waiting.
+	// queue itself): the budget plus one default call's worth of waiting. It
+	// also bounds resolving workspace-file references, which may queue for
+	// the workspace-file budget (ADR-0088).
 	timeout := toolCallTimeoutFor(m.serverName, params.Input)
 	callCtx, cancel := context.WithTimeout(mcp.WithCallTimeout(ctx, timeout), timeout+toolCallTimeout)
 	defer cancel()
+	resolved, err := m.resolveFileReferences(callCtx, args)
+	if err != nil {
+		message, _ := governToolOutput(ctx, toolName, err.Error())
+		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(message), failed: true}
+	}
+	// The references' windows stay charged until the dispatch has let go of
+	// args: when CallMCP returns (on every path, panics included) AND, for an
+	// out-of-process call cancelled mid-flight, when the broker child has
+	// answered (mcp.RetainArguments). The hold runs resolved then.
+	callCtx, hold := mcp.WithArgumentHold(callCtx, resolved)
+	defer hold.Done()
 	// Sentry breadcrumb (#193): a trail of every MCP call so a captured
 	// exception's Sentry event shows the agent's tool history. Tool ARGS are
 	// deliberately NOT attached (they may carry connector params); the
