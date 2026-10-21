@@ -3671,6 +3671,15 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 		// hence deferred) rather than silently mangling it.
 	}
 	name := strings.TrimSpace(expr)
+	if reservedRuntimeVar(name) && name != expr {
+		// ${ FLEET_USER_EMAIL } names a reserved token but is not its exact
+		// spelling, and the spawn paths substitute (or drop) only the exact
+		// "${NAME}" — so it would reach every connector, scheduled and
+		// user-less spawns included, as a literal placeholder. Fail the load.
+		return expandResult{}, fmt.Errorf(
+			"client config manifest %s: ${%s}: %s is a RESERVED runtime token that fleet substitutes at MCP launch; write exactly ${%s}, without spaces inside the braces (see docs/MCP-BUNDLE-ENV.md)",
+			manifestPath, expr, name, name)
+	}
 	if reservedRuntimeVar(name) {
 		// Reserved spawn-time token: always deferred, never read from the
 		// process env (an operator-exported FLEET_WORKSPACE must not hijack it).

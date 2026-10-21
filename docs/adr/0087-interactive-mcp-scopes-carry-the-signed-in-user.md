@@ -51,8 +51,10 @@ ADR-0042 governs, so it is recorded here.
 2. **One source: the authenticated sender of an interactive turn.** The HTTP
    layer fills `TurnInput.MCPUser` from the request's authenticated identity
    (`X-User-Email` over the shared-secret channel) for a turn a person sent —
-   directly, from their own input queue, or by settling an approval card that
-   resumes the turn. Conversations have exactly one owner and every turn path
+   directly or from their own input queue — and for the turn fleet resumes in
+   their conversation after one of their approval cards settles (ADR-0083),
+   which continues that person's own turn (a card that settles by timing out
+   included). Conversations have exactly one owner and every turn path
    loads the conversation owner-scoped, so the sender is also the owner; a
    teammate reading a team-shared chat cannot send a turn in it (they branch).
    An approved card's call carries the approving user, who is the only user

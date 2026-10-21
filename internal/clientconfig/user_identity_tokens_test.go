@@ -67,6 +67,27 @@ mcp_servers:
     env:
       NAME: "${FLEET_USER_NAME:?who}"
 `, "RESERVED runtime token"},
+		// The spawn paths match only the exact "${NAME}" spelling, so a padded
+		// one would ship as a literal placeholder to every connector — even a
+		// scheduled run's, which must never see anything for these keys.
+		{"padded email spelling", `
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py"]
+    always: true
+    env:
+      TO: "${ FLEET_USER_EMAIL }"
+`, "without spaces inside the braces"},
+		{"padded workspace spelling", `
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py"]
+    always: true
+    env:
+      RUN_WORKDIR: "${FLEET_WORKSPACE }"
+`, "without spaces inside the braces"},
 		{"email in a header", `
 mcp_servers:
   - name: remote

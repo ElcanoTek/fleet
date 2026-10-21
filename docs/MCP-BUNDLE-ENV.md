@@ -140,7 +140,7 @@ env:
 
 | Spawn path | What the server sees |
 |---|---|
-| An **interactive chat turn's** scope (production broker mode), when a signed-in person sent the turn — typed it, had it drained from their input queue, or settled an approval card that resumed it | The sender's email and derived name |
+| An **interactive chat turn's** scope (production broker mode), when a signed-in person sent the turn — typed it or had it drained from their input queue — and the turn fleet resumes in their conversation after one of their approval cards settles (ADR-0083; it continues their own turn, even when the card settled by timing out) | The sender's (conversation owner's) email and derived name |
 | The scope an **approved card's** call runs on | The approving user — the only user who can claim that card, and the one whose turn staged it |
 | A **webhook-started** turn (runs as the trigger owner, but nobody signed in sent it), evals, dataset runs | Keys **dropped** (unset) |
 | **Every scheduled run** — dedicated `mcp_selection` client or shared, broker or in-process | Keys **dropped** (unset). A task scope that carried a user is refused by the broker before it opens. |
@@ -177,7 +177,9 @@ and a bundle server should not log its env.
 
 The spelling rules are the other reserved tokens': bare only (a
 `${FLEET_USER_EMAIL:-team@example.com}` default fails the load — it would bake
-one person in), never resolved from the process env (an operator-exported
+one person in), exact (a padded `${ FLEET_USER_EMAIL }` fails the load for
+every reserved token, since the spawn paths match only the exact spelling and
+it would otherwise reach every connector as a literal), never resolved from the process env (an operator-exported
 `FLEET_USER_EMAIL` cannot hijack it), and only in an `mcp_servers` env value (a
 header, url or command fails the load, since nothing would ever substitute it
 there). `fleet validate-config` and bundle preflight accept the tokens exactly

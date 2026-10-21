@@ -160,11 +160,13 @@ type TurnInput struct {
 	// MCPUser is the signed-in user who SENT this turn, for the bundle's
 	// ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME} env tokens (ADR-0087). The HTTP
 	// layer fills it from the authenticated request only for a turn a person
-	// sent (directly, from their queue, or by settling an approval card that
-	// resumes it); a webhook-started turn, an eval and a dataset run leave it
-	// zero, and so do scheduled runs, which never come through here. Distinct
-	// from UserEmail on purpose: UserEmail is set for webhook turns too (the
-	// trigger owner's hosted connections), but nobody signed in sent those.
+	// sent (directly or from their queue) and for the turn fleet resumes in
+	// their conversation after one of their approval cards settles (it
+	// continues their own turn); a webhook-started turn, an eval and a
+	// dataset run leave it zero, and so do scheduled runs, which never come
+	// through here. Distinct from UserEmail on purpose: UserEmail is set for
+	// webhook turns too (the trigger owner's hosted connections), but nobody
+	// signed in sent those.
 	MCPUser agentcore.MCPUserIdentity
 }
 
