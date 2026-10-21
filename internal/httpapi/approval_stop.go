@@ -163,6 +163,18 @@ const approvalStopNote = store.ApprovalStopNote
 
 // approvalStoppedBeforeSendNote is fleet's line for a call the person stopped
 // before it was sent: nothing reached the server, so nothing ran.
+// approvalStopTrailerReserve is the room a stop line may take beside the
+// narrowing line under the same result: the longest of the three stop lines
+// (running, before send, after a restart) plus its separator for a stoppable
+// tool, else 0. narrowApproval reserves it, so a narrowed call that is later
+// stopped still fits the output limit with every line whole.
+func approvalStopTrailerReserve(toolName string) int {
+	if !approvalStoppable(toolName) {
+		return 0
+	}
+	return max(len(approvalStopNote), len(approvalStoppedBeforeSendNote), len(store.ApprovalStopRecoveredNote)) + 2
+}
+
 const approvalStoppedBeforeSendNote = "[fleet] The person pressed Stop before this call was sent, so nothing was sent to its server and nothing ran. Do not run it unless the person asks. (Written by fleet, not the tool.)"
 
 // withApprovalStop adds the stop fields to a card payload: `stoppable` for a

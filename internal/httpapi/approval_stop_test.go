@@ -486,29 +486,52 @@ func TestExecuteClaimedApproval_StoppedBeforeSendSaysNothingRan(t *testing.T) {
 	}
 }
 
-// A stopped, narrowed call at the minimum output limit: the stop line and the
-// (compact) narrowing line fit the trailer room together, so the whole result
-// stays within the configured limit with both lines whole.
-func TestApprovalTrailer_StopAndNarrowingWithinAMinimumLimit(t *testing.T) {
+// A stopped, narrowed call at the minimum output limit: the decision reserves
+// room for the stop line, so a narrowing accepted for a stoppable tool keeps
+// its exact line and the stop line whole and the whole result within the
+// configured limit; one whose lines could not both fit is refused.
+func TestNarrowing_ReservesRoomForTheStopLine(t *testing.T) {
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
+		CriticalToolSuffixes:       []string{"execute_plan"},
+		CriticalToolStop:           []string{"execute_plan"},
+		CriticalToolNarrowableArgs: map[string]string{"execute_plan": "deal_ids"},
+	})
 	agentcore.SetMaxToolOutputBytes(agentcore.MinMaxToolOutputBytes)
 	t.Cleanup(func() { agentcore.SetMaxToolOutputBytes(-1) })
-	staged := make([]string, 0, 500)
-	approved := make([]string, 0, 250)
-	for i := range 500 {
-		v := fmt.Sprintf("deal-%03d", i)
-		staged = append(staged, v)
+	staged := make([]string, 0, 120)
+	for i := range 120 {
+		staged = append(staged, fmt.Sprintf("d%03d", i))
+	}
+	args, _ := json.Marshal(map[string]any{"deal_ids": staged})
+	row := stopRow()
+	row.ArgsJSON, row.NarrowableArg = string(args), "deal_ids"
+
+	// 60 scattered positions: the line alone fits the room, but not beside a
+	// stop line, so a stoppable tool refuses it.
+	var scattered []string
+	for i, v := range staged {
 		if i%2 == 0 {
-			approved = append(approved, v)
+			scattered = append(scattered, v)
 		}
 	}
-	n := &approvalNarrowing{Arg: "deal_ids", Staged: staged, Approved: approved}
-	trailer := approvalTrailer(n, approvalStopNote)
-	if len(trailer) > agentcore.ApprovalTrailerRoom() || !strings.HasSuffix(trailer, approvalStopNote) || !strings.Contains(trailer, "250 were approved") {
-		t.Fatalf("trailer = %q (%d bytes), want the compact narrowing line and the stop line within %d", trailer, len(trailer), agentcore.ApprovalTrailerRoom())
+	n := &approvalNarrowing{Arg: "deal_ids", Staged: staged, Approved: scattered}
+	if len(narrowingNote(n)) > agentcore.ApprovalTrailerRoom() {
+		t.Fatalf("test setup: the line (%d) must fit the room (%d) alone", len(narrowingNote(n)), agentcore.ApprovalTrailerRoom())
 	}
-	row := stopRow()
-	got, _, _ := governApprovalResultWithTrailer(context.Background(), &row, strings.Repeat("x", 64<<10), false, trailer)
-	if !strings.HasSuffix(got, trailer) || len(got) > agentcore.MinMaxToolOutputBytes {
-		t.Fatalf("result is %d bytes (want <= %d) or lost its lines", len(got), agentcore.MinMaxToolOutputBytes)
+	if _, err := narrowApproval(&row, scattered, "deal_ids"); err == nil {
+		t.Fatal("a narrowing whose line cannot fit beside the stop line must be refused for a stoppable tool")
+	}
+
+	got, err := narrowApproval(&row, staged[:60], "deal_ids")
+	if err != nil {
+		t.Fatalf("a contiguous selection: %v", err)
+	}
+	for _, stopLine := range []string{approvalStopNote, approvalStoppedBeforeSendNote} {
+		trailer := approvalTrailer(got, stopLine)
+		res, _, _ := governApprovalResultWithTrailer(context.Background(), &row, strings.Repeat("x", 64<<10), false, trailer)
+		if !strings.HasSuffix(res, trailer) || len(res) > agentcore.MinMaxToolOutputBytes {
+			t.Fatalf("result is %d bytes (want <= %d) or lost its lines", len(res), agentcore.MinMaxToolOutputBytes)
+		}
 	}
 }

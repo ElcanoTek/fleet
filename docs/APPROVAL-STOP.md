@@ -159,6 +159,10 @@ cooperative stop.
 
 ## Deviations
 
+- **A narrowed call keeps room for its stop line.** For a stoppable tool,
+  the narrowing check at decision reserves the longest stop line, so a
+  narrowed call that is later stopped still keeps every fleet line whole and
+  the result within the output limit (docs/APPROVAL-NARROWING.md).
 - **Never a synthetic-transport tool.** An inline `http_tools` entry
   (`mcp__http_*`) or an a2a peer tool (`mcp__a2a_*`) never offers Stop,
   whatever key matches it: those transports neither observe the stop signal

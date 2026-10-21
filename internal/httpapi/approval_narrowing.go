@@ -206,7 +206,7 @@ func narrowApproval(a *store.Approval, approved []string, shownArg string) (*app
 	// approved), and the result must stay within the operator's output
 	// limit. With a limit near the minimum, a long scattered selection cannot
 	// have both, so it is refused here, before anything is claimed.
-	if len(narrowingNote(n)) > agentcore.ApprovalTrailerRoom() {
+	if len(narrowingNote(n))+approvalStopTrailerReserve(a.ToolName) > agentcore.ApprovalTrailerRoom() {
 		return nil, fmt.Errorf("this selection is too scattered to record exactly within this deployment's tool output limit: select fewer separate ranges of %s, or approve or decline the action whole", arg)
 	}
 	return n, nil
