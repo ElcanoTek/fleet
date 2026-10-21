@@ -4,8 +4,8 @@
 # routine updates land as one PR instead of a flood; majors stay separate so
 # breaking changes get their own review.
 #
-# Supply-chain cooldown: the gomod and npm surfaces carry a `cooldown` block so
-# Dependabot waits a few days before opening a PR for a freshly published
+# Supply-chain cooldown: the gomod, npm and docker surfaces carry a `cooldown`
+# block so Dependabot waits a few days before opening a PR for a freshly published
 # release. This is a deliberate defense against fast typosquat / account-takeover
 # attacks, where a compromised version is published and then yanked once the
 # ecosystem flags it — by the time Dependabot proposes the bump, that window has
@@ -34,12 +34,26 @@ version: 2
 #    options (grouping, prefixes, `ignore`), so a CVE bump can still propose a
 #    major that the version-update rules below would have held back.
 #
-# Cadence: `interval: daily` with the cooldown below. Cooldown, not the polling
-# interval, is what protects against a compromised fresh release; polling weekly
-# on top of a 7-day cooldown just added up to another week before anyone LEARNED
-# an update existed. Daily plus grouping means the routine minor/patch traffic
-# stays one PR per ecosystem that Dependabot updates in place, while a major
-# shows up the day it becomes eligible instead of whenever the weekly run lands.
+# Cadence: `interval: monthly` for version updates, matching the dependency
+# policy in AGENTS.md ("Dependencies and in-housed code"): a version bump is
+# merged when it earns it (a commit we need, a CVE whose code path we reach),
+# and once a month as a routine grouped refresh so drift never piles up into a
+# big-bang upgrade. It used to be `daily`, which opened a PR for every release
+# of anything we import, including releases that touch none of our code (chi
+# v5.5.0 changed only `chi/middleware`, which fleet in-housed in #1778, so #1829
+# was noise). Every merge to `main` is a release (ADR-0059), so daily bumps
+# meant daily no-op releases or a queue of PRs left open on purpose. Monthly
+# gives one PR per ecosystem per month, reviewed and merged in one sitting.
+#
+# What monthly does NOT delay:
+#   * Dependabot SECURITY updates. They are raised when an advisory is
+#     published, not on this schedule, and cooldown does not apply to them.
+#   * Our own gates. govulncheck (call-graph aware) and `npm audit` run on every
+#     PR and every push to `main`, so a reachable CVE turns CI red the day it is
+#     published, whatever Dependabot's calendar says. That red check is the
+#     out-of-cycle trigger: bump the one dependency, in its own PR (#1821,
+#     #1822 are the pattern).
+#   * A bump someone needs now. Bump it by hand in the PR that needs it.
 
 # ── What Dependabot does NOT cover here (learned the hard way) ───────────────
 # The node RUNTIME major is not a dependency any of the three surfaces below can
@@ -95,14 +109,13 @@ updates:
   - package-ecosystem: gomod
     directory: "/"
     schedule:
-      interval: daily
+      interval: monthly
     open-pull-requests-limit: 10
     # Wait before proposing freshly published releases (see header).
     cooldown:
       default-days: 7
       # 7, not 14 for a major: a long delay protects nothing here — a major is
-      # reviewed by a human either way — and costs up to 14 days of visibility
-      # (cooldown + the weekly interval) before anyone even learns it exists.
+      # reviewed by a human either way.
       semver-major-days: 7
       semver-minor-days: 7
       semver-patch-days: 3
@@ -127,14 +140,13 @@ updates:
   - package-ecosystem: npm
     directory: "/web"
     schedule:
-      interval: daily
+      interval: monthly
     open-pull-requests-limit: 10
     # Same supply-chain cooldown as gomod (see header).
     cooldown:
       default-days: 7
       # 7, not 14 for a major: a long delay protects nothing here — a major is
-      # reviewed by a human either way — and costs up to 14 days of visibility
-      # (cooldown + the weekly interval) before anyone even learns it exists.
+      # reviewed by a human either way.
       semver-major-days: 7
       semver-minor-days: 7
       semver-patch-days: 3
@@ -169,7 +181,7 @@ updates:
     directories:
       - "/config/default/sandbox"
     schedule:
-      interval: daily
+      interval: monthly
     open-pull-requests-limit: 5
     cooldown:
       default-days: 7
@@ -180,7 +192,7 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: daily
+      interval: monthly
     open-pull-requests-limit: 10
     commit-message:
       prefix: "deps(actions)"

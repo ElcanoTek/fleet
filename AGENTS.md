@@ -259,10 +259,13 @@ same PR.
 
 Prefer the standard library or a small piece of owned code; add a dependency
 only when it earns its keep (a protocol, a large or security-critical body of
-code we should not own). Dependabot proposes updates (daily, 7-day cooldown,
-grouped); a human merges only when the bump earns it — a specific commit we
-need, or a CVE whose code path we actually reach — otherwise it waits. In-housed
-code is not tracked by Dependabot. On a CVE, check reachability first
+code we should not own). Dependabot opens one grouped version-update PR per
+ecosystem a month (7-day cooldown; majors separate); a human merges that
+routine refresh once it is green, so drift stays small. Out of cycle, a bump is
+merged only when it earns it — a specific commit we need, or a CVE whose code
+path we actually reach (govulncheck or `npm audit` turns CI red) — and goes in
+its own PR. Dependabot security updates arrive whenever an advisory does.
+In-housed code is not tracked by Dependabot. On a CVE, check reachability first
 (`make govulncheck` is call-graph aware); delete the affected code if it is
 unused, adapt the upstream patch if it is used.
 
