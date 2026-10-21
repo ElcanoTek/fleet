@@ -1,0 +1,74 @@
+[
+  {
+    "name": "fleet's own palette",
+    "primary": "#7272ab",
+    "on_primary": "#ffffff",
+    "fill": "#7171a9",
+    "hover": "#656598",
+    "text": "#ffffff"
+  },
+  {
+    "name": "a light (yellow) primary with dark text",
+    "primary": "#ffdf03",
+    "on_primary": "#0c0a09",
+    "fill": "#ffdf03",
+    "hover": "#ffe21c",
+    "text": "#0c0a09"
+  },
+  {
+    "name": "a light (yellow) primary left with fleet's white text",
+    "primary": "#ffdf03",
+    "on_primary": "#ffffff",
+    "fill": "#877602",
+    "hover": "#6e6001",
+    "text": "#ffffff"
+  },
+  {
+    "name": "a mid-gray primary under white",
+    "primary": "#8a8a8a",
+    "on_primary": "#ffffff",
+    "fill": "#757575",
+    "hover": "#686868",
+    "text": "#ffffff"
+  },
+  {
+    "name": "a dark primary with dark text",
+    "primary": "#1d2a5a",
+    "on_primary": "#000000",
+    "fill": "#6c7594",
+    "hover": "#838aa4",
+    "text": "#000000"
+  },
+  {
+    "name": "a translucent primary",
+    "primary": "rgba(114, 114, 171, 0.5)",
+    "on_primary": "#ffffff",
+    "fill": "#7171a9",
+    "hover": "#656598",
+    "text": "#ffffff"
+  },
+  {
+    "name": "translucent text",
+    "primary": "#7272ab",
+    "on_primary": "rgba(255, 255, 255, 0.85)",
+    "fill": "#7171a9",
+    "hover": "#656598",
+    "text": "#ffffff"
+  },
+  {
+    "name": "faint text no fill can carry",
+    "primary": "#7272ab",
+    "on_primary": "rgba(255, 255, 255, 0.3)",
+    "fill": "#7171a9",
+    "hover": "#656598",
+    "text": "#ffffff"
+  },
+  {
+    "name": "a saturated magenta primary under white",
+    "primary": "#e5007a",
+    "on_primary": "#ffffff",
+    "fill": "#e5007a",
+    "hover": "#ce006e",
+    "text": "#ffffff"
+  }
+]
