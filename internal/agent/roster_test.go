@@ -16,7 +16,7 @@ func TestActiveMCPToolNamesReturnsSnapshot(t *testing.T) {
 		mcpClient:     nil,
 		mcpToolRoster: []string{"mcp_sendgrid_send_email", "mcp_tavily_search"},
 	}
-	got := m.activeMCPToolNames(nil)
+	got := m.activeMCPToolNames(nil, nil)
 	if len(got) != 2 || got[0] != "mcp_sendgrid_send_email" || got[1] != "mcp_tavily_search" {
 		t.Fatalf("activeMCPToolNames() = %v, want the frozen snapshot", got)
 	}
@@ -36,7 +36,7 @@ func TestActiveMCPToolNamesFiltersDisabledOptionalServers(t *testing.T) {
 		},
 	}
 
-	got := m.activeMCPToolNames([]string{"xandr"})
+	got := m.activeMCPToolNames([]string{"xandr"}, nil)
 	want := []string{"mcp_email_search_emails", "mcp_fast_io_storage", "mcp_xandr_xandr_auth_status"}
 	if len(got) != len(want) {
 		t.Fatalf("activeMCPToolNames() = %v, want %v", got, want)
@@ -75,14 +75,14 @@ func TestActiveMCPToolNamesOverlappingOptionalServersLongestPrefix(t *testing.T)
 	// filtered on every evaluation; mcp_jira_search matches only "jira" and
 	// stays.
 	for i := 0; i < 200; i++ {
-		got := m.activeMCPToolNames([]string{"jira"})
+		got := m.activeMCPToolNames([]string{"jira"}, nil)
 		if len(got) != 1 || got[0] != "mcp_jira_search" {
 			t.Fatalf("iteration %d: activeMCPToolNames = %v, want [mcp_jira_search] (longest-prefix, map-order-independent)", i, got)
 		}
 	}
 	// The inverse opt-in keeps only the variant's tool.
 	for i := 0; i < 200; i++ {
-		got := m.activeMCPToolNames([]string{"jira_prod"})
+		got := m.activeMCPToolNames([]string{"jira_prod"}, nil)
 		if len(got) != 1 || got[0] != "mcp_jira_prod_search" {
 			t.Fatalf("iteration %d: activeMCPToolNames = %v, want [mcp_jira_prod_search]", i, got)
 		}
