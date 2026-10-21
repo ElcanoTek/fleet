@@ -148,6 +148,13 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 		return
 	}
 
+	// The count is checked before anything is sized by it: the body may hold
+	// millions of short repeated ids, and a request over the bound is refused
+	// whatever else it holds.
+	if len(req.Approve)+len(req.Decline) > maxApprovalGroupDecisions {
+		http.Error(w, fmt.Sprintf("too many approvals in one group decision (max %d)", maxApprovalGroupDecisions), http.StatusBadRequest)
+		return
+	}
 	type decision struct {
 		id      string
 		approve bool
@@ -164,7 +171,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 				return
 			}
 			if seen[id] {
-				http.Error(w, fmt.Sprintf("approval %q is named more than once", id), http.StatusBadRequest)
+				http.Error(w, fmt.Sprintf("approval %s is named more than once", quoteClientValue(id)), http.StatusBadRequest)
 				return
 			}
 			seen[id] = true
@@ -173,10 +180,6 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 	}
 	if len(decisions) == 0 {
 		http.Error(w, "name at least one approval to approve or decline", http.StatusBadRequest)
-		return
-	}
-	if len(decisions) > maxApprovalGroupDecisions {
-		http.Error(w, fmt.Sprintf("too many approvals in one group decision (max %d)", maxApprovalGroupDecisions), http.StatusBadRequest)
 		return
 	}
 	if err := checkGroupNarrowing(req); err != nil {
@@ -194,11 +197,11 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 			return
 		}
 		if a == nil || a.ConversationID != convID {
-			http.Error(w, fmt.Sprintf("approval %q not found in this conversation", d.id), http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("approval %s not found in this conversation", quoteClientValue(d.id)), http.StatusNotFound)
 			return
 		}
 		if a.GroupID != groupID {
-			http.Error(w, fmt.Sprintf("approval %q is not in this approval group", d.id), http.StatusConflict)
+			http.Error(w, fmt.Sprintf("approval %s is not in this approval group", quoteClientValue(d.id)), http.StatusConflict)
 			return
 		}
 		// A narrowing must be one the card can take, checked here as the
@@ -207,7 +210,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 		// A settled card answers its recorded state below, as before.
 		if values, ok := req.Narrow[d.id]; ok && a.Status == "pending" {
 			if _, err := narrowApproval(a, values, req.NarrowArgs[d.id]); err != nil {
-				http.Error(w, fmt.Sprintf("approval %q: %v", d.id, err), http.StatusBadRequest)
+				http.Error(w, fmt.Sprintf("approval %s: %v", quoteClientValue(d.id), err), http.StatusBadRequest)
 				return
 			}
 		}
@@ -280,19 +283,19 @@ func checkGroupNarrowing(req approvalGroupRequest) error {
 	total := 0
 	for id, values := range req.Narrow {
 		if !approving[id] {
-			return fmt.Errorf("approval %q is narrowed but not approved", id)
+			return fmt.Errorf("approval %s is narrowed but not approved", quoteClientValue(id))
 		}
 		if values == nil {
-			return fmt.Errorf("approval %q is narrowed to nothing; decline it instead", id)
+			return fmt.Errorf("approval %s is narrowed to nothing; decline it instead", quoteClientValue(id))
 		}
 		if req.NarrowArgs[id] == "" {
-			return fmt.Errorf("approval %q is narrowed without narrow_args naming the argument its card showed", id)
+			return fmt.Errorf("approval %s is narrowed without narrow_args naming the argument its card showed", quoteClientValue(id))
 		}
 		total += len(values)
 	}
 	for id := range req.NarrowArgs {
 		if _, ok := req.Narrow[id]; !ok {
-			return fmt.Errorf("narrow_args names approval %q, which is not narrowed", id)
+			return fmt.Errorf("narrow_args names approval %s, which is not narrowed", quoteClientValue(id))
 		}
 	}
 	if total > maxApprovalGroupNarrowedValues {

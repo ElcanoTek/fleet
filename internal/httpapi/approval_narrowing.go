@@ -173,7 +173,7 @@ func narrowApproval(a *store.Approval, approved []string, shownArg string) (*app
 		return nil, errors.New("narrowed_arg is missing: send the argument the card narrows with the approved values")
 	}
 	if shownArg != arg {
-		return nil, fmt.Errorf("this card now narrows %q, not %q (fleet's policy changed after it was shown): reload it and decide again", arg, shownArg)
+		return nil, fmt.Errorf("this card now narrows %q, not %s (fleet's policy changed after it was shown): reload it and decide again", arg, quoteClientValue(shownArg))
 	}
 	if len(approved) == 0 {
 		return nil, fmt.Errorf("approved_values is empty: to leave every %s out, decline the action", arg)
@@ -189,12 +189,18 @@ func narrowApproval(a *store.Approval, approved []string, shownArg string) (*app
 		inStaged[v] = true
 	}
 	picked := make(map[string]bool, len(approved))
-	for _, v := range approved {
+	for i, v := range approved {
+		// No staged value is longer than maxNarrowableValueRunes, so a longer
+		// one is refused by its position before it could be quoted back: the
+		// body may carry a single multi-megabyte value.
+		if len(v) > maxNarrowableValueRunes*utf8.UTFMax || utf8.RuneCountInString(v) > maxNarrowableValueRunes {
+			return nil, fmt.Errorf("approved_values item %d is longer than %d characters, so it is not one of the staged %s", i+1, maxNarrowableValueRunes, arg)
+		}
 		if !inStaged[v] {
-			return nil, fmt.Errorf("approved_values names %q, which is not one of the staged %s", v, arg)
+			return nil, fmt.Errorf("approved_values names %s, which is not one of the staged %s", quoteClientValue(v), arg)
 		}
 		if picked[v] {
-			return nil, fmt.Errorf("approved_values names %q more than once", v)
+			return nil, fmt.Errorf("approved_values names %s more than once", quoteClientValue(v))
 		}
 		picked[v] = true
 	}
@@ -216,6 +222,29 @@ func narrowApproval(a *store.Approval, approved []string, shownArg string) (*app
 		return nil, fmt.Errorf("this selection is too scattered to record exactly within this deployment's tool output limit: select fewer separate ranges of %s, or approve or decline the action whole", arg)
 	}
 	return n, nil
+}
+
+// maxQuotedClientRunes bounds how much of one client-sent string an error
+// reply quotes back.
+const maxQuotedClientRunes = 80
+
+// quoteClientValue quotes a client-sent string (an approval id, an approved
+// value, an argument name) for an error reply, cut to maxQuotedClientRunes
+// characters: a request may carry one value of megabytes, and an error must
+// never echo it whole. A cut value is marked with an ellipsis after the
+// closing quote, so it cannot be read as the value itself.
+func quoteClientValue(s string) string {
+	if len(s) <= maxQuotedClientRunes {
+		return fmt.Sprintf("%q", s)
+	}
+	n := 0
+	for i := range s {
+		if n == maxQuotedClientRunes {
+			return fmt.Sprintf("%q…", s[:i])
+		}
+		n++
+	}
+	return fmt.Sprintf("%q", s)
 }
 
 // requestedNarrowing checks a request's approved_values (nil when it names

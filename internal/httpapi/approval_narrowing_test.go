@@ -770,3 +770,40 @@ func TestMaxApprovalBody_HoldsTheWorstCaseEscaping(t *testing.T) {
 		t.Fatalf("worst case %d bytes > cap %d", need, maxApprovalBody)
 	}
 }
+
+// An approved value longer than any staged value can be is refused by its
+// position, never quoted back: one multi-megabyte value gets a short error.
+// A value that is merely unknown is quoted, cut to a bounded length; so is a
+// huge echoed argument name.
+func TestNarrowApproval_ErrorsNeverEchoAHugeValue(t *testing.T) {
+	narrowPolicy(t)
+	row := narrowApprovalRow()
+	huge := strings.Repeat("é", 2<<20)
+	_, err := narrowApproval(&row, []string{"a", huge}, "deal_ids")
+	if err == nil || !strings.Contains(err.Error(), "item 2 is longer than") || len(err.Error()) > 300 {
+		t.Fatalf("err = %.300v (%d bytes), want the bounded length refusal", err, len(fmt.Sprint(err)))
+	}
+	long := strings.Repeat("z", maxNarrowableValueRunes)
+	_, err = narrowApproval(&row, []string{"a", long}, "deal_ids")
+	if err == nil || !strings.Contains(err.Error(), "not one of the staged") || strings.Contains(err.Error(), long) || len(err.Error()) > 300 {
+		t.Fatalf("err = %v, want an unknown-value refusal quoting a cut value", err)
+	}
+	_, err = narrowApproval(&row, []string{"a"}, huge)
+	if err == nil || !strings.Contains(err.Error(), "now narrows") || len(err.Error()) > 400 {
+		t.Fatalf("err = %.300v (%d bytes), want a bounded changed-argument refusal", err, len(fmt.Sprint(err)))
+	}
+}
+
+func TestQuoteClientValue(t *testing.T) {
+	if got := quoteClientValue("ap-1"); got != `"ap-1"` {
+		t.Fatalf("short = %s", got)
+	}
+	exact := strings.Repeat("é", maxQuotedClientRunes)
+	if got := quoteClientValue(exact); got != fmt.Sprintf("%q", exact) {
+		t.Fatalf("exactly at the bound = %s, want it whole", got)
+	}
+	got := quoteClientValue(exact + "\nmore")
+	if got != fmt.Sprintf("%q…", exact) {
+		t.Fatalf("over the bound = %s, want the first %d characters and an ellipsis", got, maxQuotedClientRunes)
+	}
+}
