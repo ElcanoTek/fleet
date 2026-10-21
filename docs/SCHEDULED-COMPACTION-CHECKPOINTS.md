@@ -1,7 +1,8 @@
 # Scheduled runs: compaction checkpoints inside the tool loop
 
 **Status:** shipped 2026-09-21; the prompt-floor rule (#1600) shipped
-2026-09-22. Design note for the change that makes the cost-aware compaction
+2026-09-22; eliding stale tool results before the summary (#1742) shipped
+2026-10. Design note for the change that makes the cost-aware compaction
 (#1534) recur inside a scheduled run's tool loop and gives scheduled runs a real
 compaction summary.
 
@@ -260,6 +261,255 @@ scheduled opt-in `TestWindowCheckpointActive` and
   budget, then pauses once, and does not pause again after the post-compaction
   re-measurement
   (`TestRun_ResendCheckpoint_FloorAboveBudgetWaitsForABudgetOfHistory`).
+
+## Stale tool results before the summary (#1742)
+
+### Why
+
+Every scheduled compaction above bought an LLM summary: about 7K completion
+tokens and a cold cache per pause, measured on the prod Pages refreshes in
+[The prompt floor](#the-prompt-floor-1600). In a data-heavy run most of what is
+resent is old tool output (7–50 KB `get_page_data` payloads), and those stayed
+verbatim while they were in the kept recent half, which is what pushes the
+post-compaction floor toward prefix + 2 × budget. Fleet already had a
+deterministic stub for a tool result, the in-round guard's
+`aggregateResultEnvelope`, but it ran only as a near-overflow backstop on a
+per-request copy, so it never cut cost. The harness-design study the issue
+cites (arXiv 2609.20804, §2.3, §3.2, Fig. 5) found that eliding stale bulky
+observations first and summarizing only past a hard threshold had the lowest
+cost per task at every window budget it tried, with comparable success and
+fewer summarizer calls; making the elided content recallable added nothing.
+
+### What shipped
+
+`internal/agentcore/checkpoint_elision.go`, called from `checkContextPressure`:
+
+- **When.** Only when a scheduled run's compaction fires: the resend-budget one
+  (checkpoint or between rounds), or the window one on the
+  `FLEET_SCHEDULED_AUTO_COMPACT` opt-in. That is the moment the history is
+  rewritten anyway, so the stubs cost no extra prompt-cache miss. Nothing
+  happens per step: between pauses every call's history is an exact prefix of
+  the next call's, and a stub never changes once written, so a later elision
+  rewrites only the results that left the window since
+  (`TestRun_Elision_KeepsThePromptCachePrefix`, which fails if elision is moved
+  into the per-step chain). A subagent runs the scheduled loop, including one a
+  chat spawns, so it elides too; an interactive chat turn never does.
+- **What.** Every tool result after the pinned head and before the recent
+  window is replaced with its stub, when the stub is shorter: the start and end
+  of the output (about 1 KiB, the whole stub at most 2 KiB), its original size,
+  and a recovery action. A result whose full output the tool output boundary
+  saved keeps its `artifact_path`, and its recovery is `view_file` on it. Any
+  other says the call is done and should not be repeated just to see it again,
+  and that only a tool that reads data should be re-run, with narrower output:
+  the in-round guard's plain "Re-run <tool>" is wrong advice for a call with
+  side effects, and elision stubs results routinely, not only near overflow.
+  The recent window is the newest messages that fit 30% of the budget as they
+  are sent, extended to at least the last two assistant turns and moved back so
+  it never starts on a tool message.
+- **In the provider's tokens.** The in-round guard's estimator counts about 4
+  characters a token. Providers count very differently, by model as much as by
+  data, and dense output (digits, punctuation, base64) costs far more per
+  character: measured on comma-separated 4-digit numbers, claude-haiku-5.5
+  counts 2.4 tokens per estimated token, gemini-3.8-flash 4.0 and
+  gpt-6-luna-pro 7.3 (on prose, 1.5, 1.1 and 3.0). On a live Haiku run at 2.3,
+  an uncalibrated "30% of the budget" window held some 60% of it, the stubs'
+  savings looked half their size, and elision never freed enough. So each
+  elision measures the run's own rate first: the provider's count for the call
+  that fired, less the prefix measured before any history existed (#1600), over
+  the estimate of the history that call carried, counted as it was sent (a
+  media result, and a result or input over the hard cap, at the stub the
+  in-round guard sends in its place). It sizes the window, the savings and the
+  estimate below at that rate, clamped to 0.5–12, and is 1 when there is
+  nothing to measure against (no floor yet, or a size that is itself an
+  estimate).
+- **Left alone.** Results of 2 KiB or less; media; results over the 128 KiB
+  hard cap, because the in-round guard already sends a stub of the same size in
+  their place on every call; and the results of `spawn_subagent` (a child run's
+  answer, which only a whole new child run could reproduce) and `task_tracker`
+  (the plan the finish gate holds the run to, which a summary re-announces and
+  an elision does not). A2A peer tools are named per peer, so they are not kept
+  by name; their stubs say to re-run only a tool that reads data. Assistant
+  text, tool-call inputs, the pinned head and any summary are byte-identical,
+  every result keeps its call ID (#1106), and the history is copied, never
+  written in place. An elision that would save less than 2% of the budget is
+  not made at all: it could not skip the summary.
+- **Then.** The resent size is estimated again: the measured prefix plus the
+  elided history, as sent, at the run's rate. That includes what the provider's
+  count for the paused call did not yet include (the step's own assistant
+  message and results, and anything appended after them). With no floor
+  measured, it falls back to that count, less the stubs' savings, plus the
+  paused step's output, and never below the estimator's own count of the elided
+  request. On the #1600 fixture the estimate came within 0.2% of what the next
+  step resent, and on a fixture counting tool output at twice the estimator's
+  rate, within 3%. The summary is bought only if the estimate is not at least
+  30% of the budget below the threshold: a run that elides gets room for
+  several more steps before its next pause, rather than pausing again on the
+  next one. When the summary does run, it is written from the history as it
+  stood before this pass's stubs, so the identifiers it is asked to keep are
+  not lost to a preview just made; only the kept half carries this pass's
+  stubs. A result stubbed at an earlier pause is a preview by then, in the
+  summary's input as everywhere else.
+- **Budget.** For the resend budget it is the budget; under the floor rule the
+  threshold is floor + budget, so the target is floor + 70% of the budget. For
+  the window path it is the compaction point: window × the compaction
+  threshold, clamped to the in-round allowance when the window checkpoint is
+  the run's checkpoint (the resend budget turned off).
+- **Bookkeeping.** An elision is a clean reduction like the proactive
+  compaction: it resets the consecutive-compaction count, on the window path
+  clears the stalled window flag, and marks the floor for re-measurement at the
+  next step.
+- **Visible as.** `fleet.context_compacted` with `trigger: "elision"`,
+  `elision_trigger` (`resend_budget` or `window`), `elided_results`,
+  `elided_bytes`, `used_tokens`, `estimated_tokens_after` and
+  `history_token_rate`, plus the firing trigger's fields
+  (`resend_budget_tokens` and, under the floor rule, `resend_floor_tokens` and
+  `effective_budget_tokens`; or `window_size`). The session log gets
+  `[context_elided] trigger=… used=… elided_results=… elided_bytes=…
+  estimated_after=… token_rate=… — …`, ending with whether the summary was
+  still needed; the Operations Center timeline shows it as **Older tool results
+  trimmed**, and as a gap in the overview strip. A summary that follows is
+  recorded exactly as before.
+- **Knob.** `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY`, on by default; `0` or `false`
+  turns it off and restores the summary-only behaviour. It takes
+  `strconv.ParseBool` tokens and is registered with `fleet validate-config`.
+
+On the #1600 fixture (a 140K prefix, an 80K budget, ~10K-token results), the
+first pause elides seven results and needs no summary, and the next step
+resends 162K tokens where the summary-only run resends 190K: 22K of carried
+history over the prefix instead of 50K. Run on to 26 steps, the fixture pauses
+twice, each time after a full budget over the latest floor, and never buys a
+summary (`TestRun_Elision_ClearsTheBudgetWithoutASummary`,
+`TestRun_Elision_LowersThePostCompactionFloor`). With an 80K budget, a 16K
+prefix and ~17 KB results counted at 2 characters a token, the summary-only
+run pauses six times; with elision it pauses four times and never summarizes
+(`TestRun_Elision_SizedInTheProvidersTokens`). Those are fixtures, not
+measurements; see [Measured](#measured) for real runs.
+
+### Measured
+
+On a local fleet instance, 2026-10-20, with `anthropic/claude-haiku-5.5` and a
+synthetic scheduled task: one `run_python` call per seed, each printing about
+17 KB of seeded random numbers, then a table of one number per seed. Each row
+is one run, so model variance is in it (the step counts differ by one or two).
+It is not the issue's "real recurring scheduled task": that measurement needs a
+production run after release.
+
+| Budget, seeds | Elision | Pauses | Summaries | Prompt tokens (cached) | Completion | Cost |
+|---|---|---|---|---|---|---|
+| 80K (default), 30 | off | 8 | 9 | 2,599,736 (1,336,452) | 31,357 | $0.170 |
+| 80K (default), 30 | on | 6 | 2 | 2,076,830 (1,248,154) | 14,987 | $0.113 |
+| 16K, 14 | off | 4 | 5 | 1,096,959 (506,073) | 14,319 | $0.078 |
+| 16K, 14 | on, before calibration | 4 | 4 | 875,558 (437,600) | 15,694 | $0.061 |
+
+At the default budget, elision cut the summaries from nine to two, completion
+tokens by half and cost by a third. That run used the build before the last
+change, which only counts media and oversized results as sent; the task had
+neither. The run measured 2.31–2.38 provider
+tokens per estimated token, and elided four or five results at each pause; the
+two summaries came when the stubs had piled up enough that elision alone no
+longer cleared the target. A first 80K run with elision on, built before the
+calibration above, elided only one or two results per pause, never freed
+enough, and bought nine summaries like the run without it; that run then
+failed its own self-audit, because the model would not vouch for values it had
+only from compaction summaries (the run without elision passed the same
+audit). The 16K pair also ran before the calibration. There, each result is
+about a third of the budget, so even calibrated elision would rarely clear the
+target. Even so, the floor settled near 41K instead of climbing to 62K, and
+prompt tokens fell by a fifth.
+
+The same task on other models, 2026-10-21, at the default 80K budget, each
+model once with elision off and once on (the build before the rate cap below
+was raised; only Luna Pro's rate reached it, and Luna Pro ran a third time
+with the new cap):
+
+| Model | Elision | Result | Pauses | Summaries | Completion | Cost | Rate |
+|---|---|---|---|---|---|---|---|
+| claude-sonnet-5.5 | off | success | 8 | 9 | 22,272 | $3.19 | |
+| claude-sonnet-5.5 | on | success | 6 | 2 | 9,147 | $2.08 | 2.31–2.39 |
+| claude-opus-5.5 | off | success | 8 | 9 | 22,474 | $6.41 | |
+| claude-opus-5.5 | on | success | 6 | 2 | 9,499 | $4.21 | 2.32–2.39 |
+| deepseek-v4.1-flash | off | success | 9 | 9 | 33,984 | $0.156 | |
+| deepseek-v4.1-flash | on | success | 5 | 1 | 16,218 | $0.079 | 2.18–2.34 |
+| gemini-3.8-flash | off | self-audit failed | 4 | 5 | 12,823 | $0.84 | |
+| gemini-3.8-flash | on | self-audit failed | 2 | 0 | 11,288 | $0.78 | 3.65–3.94 |
+| gpt-6-luna-pro | off | self-audit failed | 40 (cap) | 41 | 122,424 | $0.50 | |
+| gpt-6-luna-pro | on | self-audit failed | 24 | 24 | 135,814 | $0.31 | 4.00 (cap) |
+| gpt-6-luna-pro | on, cap 12 | self-audit failed | 15 | 14 | 73,129 | $0.18 | 4.52–6.81 |
+
+On the Anthropic models and DeepSeek, elision cut summaries from nine to one or
+two and cost by a third to a half (DeepSeek's half partly because its run with
+elision made 48 tool calls to the other's 60). On every model, the share of
+prompt tokens read from the provider's cache went up with elision, and no run
+paused more often: Haiku 51% to 60%, Sonnet 51% to 61%, Opus 51% to 63%,
+DeepSeek 72% to 84%, Gemini 13% to 16%, Luna Pro 59% to 64%. Both Gemini runs
+failed on the model's own account: it stopped after 11–12 of the 30 seeds and
+then failed the audit, and with elision on it had also filled in the missing
+values itself; each of its three elisions freed enough. Luna Pro failed both
+ways, and not for a reason compaction can fix. On a sample like this output
+(17,999 characters of the same comma-separated numbers), its tokenizer counted
+about 1.8 tokens a character, which puts each result near 31K tokens, close to
+40% of the budget, and the two newest results the window must keep fill most of
+it. Its runs paused every one or two steps either way, and what the summaries
+(and, with elision, the stubs) kept was not enough for the audit to vouch for
+every seed. A direct measurement of the rate per model (listed with the bounds
+on `historyTokenRate`) found Luna Pro at 7.3 on that sample and 8.2 on base64,
+above the rate's old cap of 4, so the cap is now 12. Rerun with the new cap,
+Luna Pro's own runs measured 4.5–4.6, once 6.8: lower than the sample's 7.3,
+presumably because its history also carries the model's text, tool-call inputs
+and summaries, which it counts at a lower rate (not measured separately). So
+the old cap had understated its history by about a tenth, once by 40%. It still
+could not free enough by eliding two results each time, summarized at all but
+one pause, and failed the audit the same way, with 13 seeds' values no longer
+in what it was sent.
+
+### Deviations from the issue
+
+- The before/after numbers come from a synthetic task on a local instance
+  ([Measured](#measured)), not a production recurring task; those need a
+  production run after release.
+- The breadcrumb is `[context_elided]`, as asked, but the event is the existing
+  `fleet.context_compacted` with `trigger: "elision"`, so the scheduler stream
+  forwards it with no change.
+- "Elide down to a target" became the headroom rule above: elision alone must
+  get 30% of the budget under the threshold, else the summary runs too.
+- The fake-LLM acceptance run is `TestElision_LargeToolResultsNeedNoSummary_FakeLLM`
+  (`internal/taskrun`): a scheduled task through the OpenRouter adapter against
+  `internal/fakellm`, elision on and no summary. `fakellm` gained an opt-in
+  `SizedPromptTokens` scenario field for it, since every response reported a
+  fixed 10 prompt tokens before and so could never reach a resend budget. The
+  other run-level tests use the agentcore scripted model, like #1600's.
+- `TestRun_ResendCheckpoint_FloorAboveBudgetWaitsForABudgetOfHistory` now runs
+  with elision off: it pins the floor rule with the summary compaction, and its
+  fixture, run with elision on, is the acceptance test above.
+- A re-fetch the model makes after reading a stub is an ordinary tool step: it
+  counts against the step cap like any other.
+
+### Not done
+
+- A rate per result, a re-measured prefix, and a mirror of the in-round guard's
+  trimming. The rate is one average over the history: when the old results that
+  get elided cost the provider fewer tokens per character than the rest (prose
+  first, dense data later), their savings are over-counted. The prefix is the
+  one measured at the first step: a mid-run tool-roster rebuild or a fallback
+  model's tokenizer that grows it is taken for history. And the rate is
+  measured against the history as the guard always sends it, but not as it
+  trims it to fit the model's input allowance, which happens near the window
+  (the window path, not the resend budget). In each of these the estimate after
+  elision can come out low; the run then pauses again a step or two later, that
+  pause cannot free enough, and the summary runs: one extra pause, no more. The
+  opposite also happens: when the call that fired sent more than the measured
+  span holds (reasoning resent within a round, which the carried history drops,
+  or a step cut off by length, whose assistant message the replay drops), the
+  rate comes out high, more results are stubbed, and a summary may run that
+  elision alone would have spared; never a call past the budget.
+- Getting an elided result back into the history. Once a result is a stub,
+  the full output is in the session log (and, when the tool output boundary
+  saved it, in the workspace file the stub names), not in what the model is
+  sent; an identifier deep inside it is gone unless the model wrote it down.
+  The study found recall of elided output almost never used.
+- Eliding tool-call inputs. Only results change; the in-round guard still
+  evicts oversized inputs near the window as before.
+- Eliding per step, and eliding in interactive chat (out of scope in the issue).
 
 ## Deferred
 

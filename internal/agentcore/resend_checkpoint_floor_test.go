@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -18,9 +19,12 @@ import (
 // sizedPromptTokens sizes a call the way a provider bills it, for fixtures that
 // need a compaction to actually shrink the resent prompt: a fixed prefix (the
 // system prompt and tool schemas, which no compaction can shed) plus ~4 chars
-// per token of every message's text, tool-call input and tool-result output.
-func sizedPromptTokens(prefix int, call fantasy.Call) int {
-	chars := 0
+// per token of every message's text and tool-call input, and
+// resultCharsPerToken chars per token of tool-result output (4 for prose;
+// dense data such as digits or base64 costs a provider more tokens than the
+// in-round guard's 4-character estimate).
+func sizedPromptTokens(prefix int, call fantasy.Call, resultCharsPerToken int) int {
+	chars, resultChars := 0, 0
 	for _, m := range call.Prompt {
 		if m.Role == fantasy.MessageRoleSystem {
 			continue
@@ -34,22 +38,53 @@ func sizedPromptTokens(prefix int, call fantasy.Call) int {
 			}
 			if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
 				if out, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentText](tr.Output); ok {
-					chars += len(out.Text)
+					resultChars += len(out.Text)
 				}
 			}
 		}
 	}
-	return prefix + chars/4
+	return prefix + chars/4 + resultChars/resultCharsPerToken
 }
 
-// sizedRun is a scheduled run whose model reports sizedPromptTokens(prefix)
-// for every call and asks for toolSteps tick calls (each returning resultChars
+// sizedRun is a scheduled run whose model reports sizedPromptTokens for every
+// call and asks for toolSteps tick calls (each returning resultChars
 // of output) before it answers.
 type sizedRun struct {
 	prefix, toolSteps, resultChars int
+	// resultCharsPerToken is how densely the model counts tool output
+	// (sizedPromptTokens); 0 is the estimator's 4.
+	resultCharsPerToken int
+	// summarizer, when set, is the run's compaction summarizer; nil keeps the
+	// engine's placeholder.
+	summarizer func(ctx context.Context, in CompactionSummarizeInput) fantasy.Message
 
 	mu    sync.Mutex
 	sizes []int // the resent size of each call, in call order
+	// sent is each call's history as the model received it, one rendered
+	// line per message (renderSentMessage), in call order.
+	sent [][]string
+}
+
+// renderSentMessage is one message as a provider receives it, for comparing
+// what successive calls sent: its role and every part's model-visible
+// content. Provider options (the prompt-cache markers, which move to the
+// newest message on every call) are left out.
+func renderSentMessage(m fantasy.Message) string {
+	var b strings.Builder
+	b.WriteString(string(m.Role))
+	for _, part := range m.Content {
+		if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok {
+			b.WriteString("|text:" + tp.Text)
+		}
+		if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok {
+			b.WriteString("|call:" + tc.ToolCallID + ":" + tc.ToolName + ":" + tc.Input)
+		}
+		if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
+			text, _ := toolResultOutputText(tr.Output)
+			b.WriteString("|result:" + tr.ToolCallID + ":" + text)
+		}
+	}
+	return b.String()
 }
 
 func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSession) {
@@ -67,9 +102,14 @@ func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSessio
 	var calls atomic.Int32
 	model.streamFunc = func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
 		n := calls.Add(1)
-		size := sizedPromptTokens(sr.prefix, call)
+		size := sizedPromptTokens(sr.prefix, call, cmp.Or(sr.resultCharsPerToken, 4))
+		sent := make([]string, 0, len(call.Prompt))
+		for _, m := range call.Prompt {
+			sent = append(sent, renderSentMessage(m))
+		}
 		sr.mu.Lock()
 		sr.sizes = append(sr.sizes, size)
+		sr.sent = append(sr.sent, sent)
 		sr.mu.Unlock()
 		if int(n) <= sr.toolSteps {
 			return toolStep(fantasy.Usage{InputTokens: int64(size), OutputTokens: 10}, fmt.Sprintf("page-%d", n), n), nil
@@ -81,11 +121,12 @@ func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSessio
 	res, err := Run(context.Background(), ModeScheduled,
 		RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
 		Deps{
-			Input:      historyInput{system: "s", msgs: fillerMessages(1, 400), label: "refresh"},
-			Observer:   obs,
-			Policy:     finishableScheduledPolicy(session),
-			Model:      model,
-			LogSession: session,
+			Input:                historyInput{system: "s", msgs: fillerMessages(1, 400), label: "refresh"},
+			Observer:             obs,
+			Policy:               finishableScheduledPolicy(session),
+			Model:                model,
+			LogSession:           session,
+			CompactionSummarizer: sr.summarizer,
 		})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -143,10 +184,13 @@ func sessionLines(session *LogSession, marker string) []string {
 // the run takes no pause until the history alone has grown by a full budget,
 // then exactly one pause and one compaction — and the floor is re-measured
 // after it, so the post-compaction steps, which resend well past the ORIGINAL
-// floor + budget, run on without pausing again.
+// floor + budget, run on without pausing again. Elision (#1742) is off: this
+// pins the floor rule with the summary compaction; the same fixture with
+// elision is TestRun_Elision_ClearsTheBudgetWithoutASummary.
 func TestRun_ResendCheckpoint_FloorAboveBudgetWaitsForABudgetOfHistory(t *testing.T) {
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "0")
 	const budget = 80_000
 	sr := &sizedRun{prefix: 140_000, toolSteps: 16, resultChars: 40_000} // ~10K tokens per result
 	obs, session := sr.run(t, "cp-floor-high")
@@ -212,7 +256,9 @@ func TestRun_ResendCheckpoint_FloorAboveBudgetWaitsForABudgetOfHistory(t *testin
 // every tool step whose resent prompt reached the plain budget and after no
 // other, and its payload and breadcrumb are the pre-#1600 ones. The fixture's
 // compactions are real (the sized model reports what it was sent), so this is
-// the plain rule cycling through several pause/compact/resume rounds.
+// the plain rule cycling through several pause/compact/resume rounds. With
+// elision on (#1742), its ~3K-token results are trimmed at each pause before
+// any summary; the plain rule holds either way.
 func TestRun_ResendCheckpoint_SmallPrefixKeepsThePlainBudget(t *testing.T) {
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "20000")

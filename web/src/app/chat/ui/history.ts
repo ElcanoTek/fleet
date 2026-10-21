@@ -409,7 +409,7 @@ export function parseApprovalCardData(value: unknown): ApprovalCardData | undefi
 }
 
 /** How a record ended, on a result card (docs/APPROVAL-RESULT-CARDS.md). */
-export type ApprovalResultItemStatus = "done" | "failed" | "mismatch" | "unclear" | "skipped" | "not_run";
+export type ApprovalResultItemStatus = "done" | "failed" | "mismatch" | "needs_check" | "unclear" | "skipped" | "not_run";
 /** The card's overall outcome; it sets the tone. */
 export type ApprovalResultOutcome = "done" | "partial" | "failed" | "mismatch" | "unclear";
 
@@ -444,7 +444,7 @@ export type ApprovalResultCardData = {
 };
 
 const RESULT_OUTCOMES = new Set<string>(["done", "partial", "failed", "mismatch", "unclear"]);
-const RESULT_ITEM_STATUSES = new Set<string>(["done", "failed", "mismatch", "unclear", "skipped", "not_run"]);
+const RESULT_ITEM_STATUSES = new Set<string>(["done", "failed", "mismatch", "needs_check", "unclear", "skipped", "not_run"]);
 
 // parseApprovalResultCardData accepts exactly the server's result-card schema
 // (approval_result_card.go) and returns undefined for anything else, so the
@@ -468,6 +468,8 @@ export function parseApprovalResultCardData(value: unknown): ApprovalResultCardD
     const strs = [optString(it.key), optString(it.id), optString(it.internal_id), optString(it.note)];
     if (strs.some((x) => x === null)) return undefined;
     const [key, id, internalId, note] = strs as Array<string | undefined>;
+    // A needs_check row says what needs checking (the server requires it too).
+    if (it.status === "needs_check" && !note?.trim()) return undefined;
     const link = parseCardLink(it);
     const rows = parseCardRows(it);
     if (!link || !rows) return undefined;
@@ -484,8 +486,10 @@ export function parseApprovalResultCardData(value: unknown): ApprovalResultCardD
     items.push(item);
   }
   const count = (s: string) => items.filter((it) => it.status === s).length;
-  if (v.outcome === "done" && count("failed") + count("mismatch") + count("unclear") > 0) return undefined;
-  if (v.outcome === "failed" && count("done") + count("mismatch") > 0) return undefined;
+  if (v.outcome === "done" && count("failed") + count("mismatch") + count("needs_check") + count("unclear") > 0) return undefined;
+  if (v.outcome === "failed" && count("done") + count("mismatch") + count("needs_check") > 0) return undefined;
+  // A needs_check row is known to be applied: an unclear card carries one only beside an unclear row.
+  if (v.outcome === "unclear" && count("needs_check") > 0 && count("unclear") === 0) return undefined;
   const card: ApprovalResultCardData = { outcome: v.outcome as ApprovalResultOutcome, title: v.title, items };
   if (subtitle) card.subtitle = subtitle;
   if (footer) card.footer = footer;
@@ -1676,13 +1680,36 @@ function humanize(token: string): string {
 // and prepending a clean display name keeps the indicator readable —
 // without this we get "Pubmatic pm run standard report" which is
 // triple-redundant.
+//
+// These are the ONLY tool-name prefixes fleet strips: a prefix is removed
+// only for a known SSP, never inferred, because a bundle's own connector can
+// have an action that merely starts with a short word (spacelift's
+// `set_variable` is not "Variable"). Each list is the prefixes the SSP's
+// tools actually use, checked against elcano-config main (296f705c,
+// mcp/*_mcp.py): xandr's few unprefixed tools (create_…, get_…) keep their
+// names whole.
 const sspPrefixes: Array<{ match: string; tools: string[]; display: string }> = [
   { match: "mcp_pubmatic_", tools: ["pm_"], display: "PubMatic" },
   { match: "mcp_indexexchange_", tools: ["ix_"], display: "Index Exchange" },
   { match: "mcp_magnite_", tools: ["magnite_"], display: "Magnite" },
   { match: "mcp_xandr_", tools: ["xandr_"], display: "Xandr" },
-  { match: "mcp_medianet_", tools: ["mn_"], display: "Media.net" },
+  { match: "mcp_medianet_", tools: ["mn_", "medianet_"], display: "Media.net" },
+  { match: "mcp_openx_", tools: ["ox_"], display: "OpenX" },
+  { match: "mcp_triplelift_", tools: ["tl_"], display: "TripleLift" },
+  { match: "mcp_equativ_", tools: ["eq_"], display: "Equativ" },
+  { match: "mcp_nexxen_", tools: ["nx_"], display: "Nexxen" },
 ];
+
+/**
+ * Fleet's known SSP connector: its display name and the short prefix its
+ * tools repeat. A bundle's server id may carry the conventional `_mcp`
+ * suffix (`magnite_mcp`): it names the same SSP.
+ */
+export function sspConnector(server: string): { display: string; toolPrefixes: string[] } | undefined {
+  const base = server.endsWith("_mcp") ? server.slice(0, -"_mcp".length) : server;
+  const hit = sspPrefixes.find((p) => p.match === `mcp_${base}_`);
+  return hit ? { display: hit.display, toolPrefixes: [...hit.tools] } : undefined;
+}
 
 /**
  * Human-readable, present-progressive label for the thinking indicator.
@@ -1716,7 +1743,9 @@ export function humanToolLabel(name: string): string {
   }
   for (const { match, tools, display } of sspPrefixes) {
     if (!name.startsWith(match)) continue;
-    let rest = name.slice(match.length);
+    // A bundle's server id may carry the `_mcp` suffix
+    // (mcp_magnite_mcp_magnite_get_deal): it is part of the id, not the action.
+    let rest = name.slice(match.length).replace(/^mcp_/, "");
     for (const tp of tools) {
       if (rest.startsWith(tp)) {
         rest = rest.slice(tp.length);

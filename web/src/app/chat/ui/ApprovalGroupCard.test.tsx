@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ApprovalGroupCard } from "./ApprovalGroupCard";
+import { ConnectorNamesContext } from "./approvalToolLabel";
 import type { Approval } from "./history";
 
 // The grouped approval card (docs/GROUPED-APPROVALS.md): one card for the
@@ -63,7 +64,7 @@ describe("ApprovalGroupCard", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain("Create 12 deals on PubMatic");
     expect(rows[0].textContent).toContain("Q4 Video");
-    expect(rows[0].textContent).toContain("Runs as client_a on pubmatic");
+    expect(rows[0].textContent).toContain("Runs as client_a on PubMatic");
     expect(rows[1].textContent).toContain('Run "Execute plan"');
     expect(rows[1].textContent).toContain("plan_id");
     // One countdown, on the earliest deadline (10 minutes, not 15).
@@ -71,6 +72,33 @@ describe("ApprovalGroupCard", () => {
     expect(countdowns).toHaveLength(1);
     expect(countdowns[0].textContent).toMatch(/(9|10):\d\d/);
     expect(screen.getByTestId("approval-group-approve").textContent).toBe("Approve all (2)");
+  });
+
+  // An older row with no mcpServer: its title splits the id with the chat's
+  // connector names, as its single card and checkbox do (Codex review, #1828).
+  it("titles an older row by the chat's connector names", () => {
+    const legacy: Approval = {
+      id: "ap-ds",
+      tool: "mcp_deal_sheet_next_campaign_id",
+      summary: { tool: "mcp_deal_sheet_next_campaign_id", args: [{ key: "client", value: "Elcano" }] },
+      status: "pending",
+      groupId: "11111111-2222-3333-4444-555555555555",
+      expiresAt: Math.floor(Date.now() / 1000) + 600,
+    };
+    render(
+      <ConnectorNamesContext.Provider value={new Map([["deal_sheet", "Deal Sheet"]])}>
+        <ApprovalGroupCard
+          groupId="11111111-2222-3333-4444-555555555555"
+          approvals={[members()[1], legacy]}
+          conversationId="conv_1"
+          onResolved={vi.fn()}
+          onOneAtATime={vi.fn()}
+        />
+      </ConnectorNamesContext.Provider>,
+    );
+    const rows = screen.getAllByTestId("approval-group-row");
+    expect(rows[1].textContent).toContain('Run "Next campaign id"');
+    expect(rows[1].textContent).toContain("via deal_sheet");
   });
 
   it("approves the checked calls and declines the unchecked one in one POST", async () => {

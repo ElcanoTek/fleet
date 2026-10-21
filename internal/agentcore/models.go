@@ -321,6 +321,14 @@ func contextResendBudgetTokens(p EnvPrefix) int {
 	return int(v)
 }
 
+// contextElideBeforeSummary resolves FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY
+// (#1742): on unless set to a false value. When on, a scheduled run's
+// compaction first replaces stale bulky tool results with stubs and buys the
+// LLM summary only if that did not free enough (see elideBeforeSummary).
+func contextElideBeforeSummary(p EnvPrefix) bool {
+	return p.lookupBoolDefault("CONTEXT_ELIDE_BEFORE_SUMMARY", true)
+}
+
 // clampFraction returns v when it lies in (0,1]; otherwise def. A misconfigured
 // threshold must not silently compact every round (≤0) or never fire (>1).
 func clampFraction(v, def float64) float64 {

@@ -294,7 +294,7 @@ func runPatchedOp(t *testing.T, op string, req map[string]any, patch string) (Fi
 		t.Fatal(err)
 	}
 	driver := "import json, os, sys\nsys.path.insert(0, sys.argv[1])\nimport fileops\n" + patch +
-		"\nprint(json.dumps(fileops.do_" + op + "(json.loads(sys.argv[2]))))\n"
+		"\nfileops._emit(fileops.do_" + op + "(json.loads(sys.argv[2])))\n"
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "python3", "-I", "-c", driver, mod, string(raw)).Output()

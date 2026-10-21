@@ -104,11 +104,22 @@ The tool's result is a JSON object. Its top-level `result_card` key holds:
 - **`title`** (required) is the one-line outcome, at most 200 characters.
   `subtitle` and `footer` are optional, at most 2000 each.
 - **`items`** (required, may be empty, at most 500) has one row per record:
-  - `label` and `status` are required.
+  - `label` and `status` are required, and so is a non-blank `note` on a
+    `needs_check` row: it is what the person should check.
   - `status` is one of `done`, `failed` (confirmed not applied), `mismatch`
-    (applied, but the read-back differs), `unclear` (it may or may not have
-    happened), `skipped` (nothing to do, already done earlier) or `not_run`
-    (never attempted: left out, or stopped before it).
+    (applied, but the read-back differs), `needs_check` (applied, but
+    something after it needs a person's check, such as a follow-up step of the
+    same record that failed), `unclear` (it may or may not have happened),
+    `skipped` (nothing to do, already done earlier) or `not_run` (never
+    attempted: left out, or stopped before it).
+  - Fleet words each status the same way on every bundle. The chip reads
+    "Done", "Not applied", "Check didn't match", "Needs a check", "Outcome
+    unclear", "Already done" or "Not run". The note's lead reads "Not
+    applied:", "Applied, but the read-back didn't match:" or "Applied, but
+    needs a check:". Use `needs_check`, not `mismatch`, for a record that was
+    created when a later step of it failed (for example, the deal exists but
+    its exclusion list did not apply). `mismatch` claims a read-back
+    disagreed.
   - `key` is the record's key in the call: what a retry names. It is optional
     and unique within the card.
   - `id` is the buyer-facing id. `internal_id` is the system's own.
@@ -119,8 +130,14 @@ The tool's result is a JSON object. Its top-level `result_card` key holds:
 - **`retry`** is optional: `{keys: [...]}`, with at least one key and at most
   500. Every key must name an item of the card, once, and that item's status
   must be `failed` or `not_run`.
-- **Consistency:** a `done` card may not carry a `failed`, `mismatch` or
-  `unclear` row, and a `failed` card may not carry a `done` or `mismatch` row.
+- **Consistency:** a `done` card may not carry a `failed`, `mismatch`,
+  `needs_check` or `unclear` row, and a `failed` card may not carry a `done`,
+  `mismatch` or `needs_check` row. A card whose rows are applied but need a
+  check takes `mismatch` (the warning tone) or `partial`; an `unclear` card
+  may carry a `needs_check` row only beside an `unclear` one.
+- **Older fleets** reject a card with a `needs_check` row (an unknown status),
+  and the settled card then shows without it. A bundle should emit
+  `needs_check` only against a fleet that has it.
 - **Text rules and limits are the describer card's:** no nulls, no unknown
   keys, no control, bidirectional-formatting or line-separator characters,
   labels at most 200 characters and other text at most 2000, at most 100

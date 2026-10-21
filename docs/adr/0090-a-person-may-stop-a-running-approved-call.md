@@ -1,4 +1,4 @@
-# ADR-0088: A person may stop a running approved call; fleet cancels it cooperatively and waits for the answer
+# ADR-0090: A person may stop a running approved call; fleet cancels it cooperatively and waits for the answer
 
 - **Status:** Accepted
 - **Date:** 2026-10-20

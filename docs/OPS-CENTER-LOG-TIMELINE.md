@@ -42,8 +42,10 @@ The view is now a timeline.
   "Audit Failed". A failed step stays visible while collapsed and shows its
   error line. For a traceback that is the last line.
 - **Runtime events.** Bracket-tagged engine lines such as `[context_compacted] …`,
+  `[context_elided] …` (#1742, shown as "Older tool results trimmed"),
   `[context_checkpoint] …` and `[fatal] …` render as slim event rows that show
-  their key facts. `[fatal]` renders as a red banner instead. Session-log
+  their key facts. Compactions and trims also show as gaps in the overview
+  strip. `[fatal]` renders as a red banner instead. Session-log
   messages with `message_type: "compaction_summary"` render as a collapsed
   "Compaction summary" card. The engine writes those from #1704 on. Older
   transcripts have no summary to show.

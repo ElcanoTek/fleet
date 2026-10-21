@@ -264,7 +264,7 @@ func OptionalServerForToolName(toolName string, optional MCPOptionalSet) string 
 type toolBuildConfig struct {
 	// includeConfirmAudit appends the scheduled-mode confirm_audit tool.
 	includeConfirmAudit bool
-	readWorkspaceFile   func(context.Context, string, int64) ([]byte, error)
+	readWorkspaceFile   tools.WorkspaceFileReadFunc
 	// loaderTools are extra always-registered tools (scheduled mcp_list/load).
 	loaderTools []fantasy.AgentTool
 	// remediationHints configures the fast.io inline-upload guard hint.
@@ -721,7 +721,7 @@ func governToolOutput(ctx context.Context, toolName, text string) (string, bool)
 // mapping, while the broker owns the call itself (guard, transport, flatten,
 // fast.io trim).
 type mcpTool struct {
-	readWorkspaceFile func(context.Context, string, int64) ([]byte, error)
+	readWorkspaceFile tools.WorkspaceFileReadFunc
 	serverName        string
 	tool              mcp.Tool
 	broker            MCPBroker
@@ -813,18 +813,35 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 	// The broker owns the call itself — the fast.io inline-upload guard, the
 	// transport against the credentialed client, the content flatten, and the
 	// fast.io response trim. mcpTool keeps only the per-call framing.
-	if err := m.resolveFileReferences(ctx, args); err != nil {
-		message, _ := governToolOutput(ctx, toolName, err.Error())
-		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(message), failed: true}
-	}
 	// The budget starts once the call holds the server's mutex
 	// (mcp.WithCallTimeout), so time spent queued behind another call on the
 	// same server does not eat a long batch's budget. The outer deadline is
 	// the backstop for brokers that never reach an mcp.Server (and for the
-	// queue itself): the budget plus one default call's worth of waiting.
+	// queue itself): the budget plus one default call's worth of waiting. It
+	// also bounds resolving workspace-file references, which may queue for
+	// the workspace-file budget (ADR-0088).
 	timeout := toolCallTimeoutFor(m.serverName, params.Input)
 	callCtx, cancel := context.WithTimeout(mcp.WithCallTimeout(ctx, timeout), timeout+toolCallTimeout)
 	defer cancel()
+	resolved, err := m.resolveFileReferences(callCtx, args)
+	if err != nil {
+		message, _ := governToolOutput(ctx, toolName, err.Error())
+		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(message), failed: true}
+	}
+	// The references' windows stay charged until the dispatch has let go of
+	// args: when CallMCP returns (on every path, panics included) AND, for an
+	// out-of-process call cancelled mid-flight, when the broker child has
+	// answered (mcp.RetainArguments). The hold runs resolved then.
+	callCtx, hold := mcp.WithArgumentHold(callCtx, resolved)
+	defer hold.Done()
+	// Resolution may have queued for the workspace-file budget past the
+	// call's deadline (or its cancellation). Never dispatch then: an
+	// out-of-process call sends the request before it notices ctx, and the
+	// tool may have side effects.
+	if err := callCtx.Err(); err != nil {
+		message, _ := governToolOutput(ctx, toolName, fmt.Sprintf("MCP call not sent: %v", err))
+		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(message), failed: true}
+	}
 	// Sentry breadcrumb (#193): a trail of every MCP call so a captured
 	// exception's Sentry event shows the agent's tool history. Tool ARGS are
 	// deliberately NOT attached (they may carry connector params); the

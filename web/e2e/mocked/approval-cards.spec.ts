@@ -331,7 +331,7 @@ test("a turn's grouped cards render as one card and Approve all sends one decisi
   await expect(group.getByTestId("approval-group-title")).toHaveText("2 actions to approve");
   await expect(group.getByTestId("approval-group-row")).toHaveCount(2);
   await expect(group).toContainText("Create 12 deals on PubMatic");
-  await expect(group).toContainText("Runs as client_a on pubmatic");
+  await expect(group).toContainText("Runs as client_a on PubMatic");
   // The individual cards are not rendered beside the group.
   await expect(page.getByTestId("generic-action-card")).toHaveCount(0);
 

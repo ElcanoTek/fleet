@@ -979,12 +979,20 @@ func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, an
 		return FileOpResult{}, err
 	}
 
-	args := c.podmanArgs([]string{"exec", "-i", containerID, "python3", "-c", string(fileOpsScript)})
+	// -I (isolated mode) and a root working directory: the helper must not
+	// import a module the model planted in the workspace (a shadow hashlib.py
+	// or json.py beside the cwd), nor honor PYTHON* variables from the
+	// container environment. Fleet re-verifies what matters host-side anyway
+	// (ADR-0088); this keeps the helper's own guards honest.
+	args := c.podmanArgs([]string{"exec", "-i", "--workdir", "/", containerID, "python3", "-I", "-c", string(fileOpsScript)})
 	cmd := exec.CommandContext(cmdCtx, c.cfg.PodmanBinary, args...) //nolint:gosec // fixed embedded script; container is our isolated sandbox
 	cmd.Stdin = bytes.NewReader(reqJSON)
 	cmd.WaitDelay = BashWaitDelay
-	out, err := cmd.Output()
-	if err != nil {
+	stdout := newFileOpSink(req)
+	defer stdout.discard()
+	stderr := &cappedBuffer{cap: 4096}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	if err := cmd.Run(); err != nil {
 		if cmdCtx.Err() != nil {
 			// CommandContext only kills the host-side podman client. Exactly like
 			// bash (#796), the helper may still be alive inside the persistent
@@ -995,9 +1003,29 @@ func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, an
 			_ = c.killContainerNow(containerID)
 			return FileOpResult{}, fmt.Errorf("fileop %s interrupted (%w); sandbox retired: %w", req.Op, cmdCtx.Err(), ErrPoisoned)
 		}
-		return FileOpResult{}, fmt.Errorf("fileop %s exec: %w%s", req.Op, err, stderrOf(err))
+		return FileOpResult{}, fmt.Errorf("fileop %s exec: %w%s", req.Op, err, stderrSuffix(stderr))
 	}
-	return decodeFileOpResponse(out)
+	out, err := stdout.output(req.Op)
+	if err != nil {
+		return FileOpResult{}, err
+	}
+	return decodeFileOpOutput(req, out)
+}
+
+// stderrSuffix renders captured helper stderr the way stderrOf renders an
+// ExitError's, for callers that collect stderr themselves.
+func stderrSuffix(buf *cappedBuffer) string {
+	captured := stderrText(buf)
+	if captured == "" {
+		return ""
+	}
+	return " (" + summarizeBytes([]byte(captured), 200) + ")"
+}
+
+// stderrText is the captured stderr as a string.
+func stderrText(buf *cappedBuffer) string {
+	captured, _ := buf.snapshot()
+	return string(captured)
 }
 
 // fileOpAnchor returns the most specific trusted bind mount containing root.

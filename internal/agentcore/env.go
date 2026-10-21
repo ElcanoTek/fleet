@@ -79,6 +79,19 @@ func (p EnvPrefix) lookupBool(suffix string) bool {
 	return v
 }
 
+// lookupBoolDefault is lookupBool for a knob that is on unless turned off:
+// def when the var is unset or unparseable, else its strconv.ParseBool value.
+// So a typo such as "off" means the default, which for a default-on knob is
+// on; config.Load refuses such a value at boot (kindStrconvBool), which is
+// where an operator sees it.
+func (p EnvPrefix) lookupBoolDefault(suffix string, def bool) bool {
+	v, err := strconv.ParseBool(p.lookup(suffix))
+	if err != nil {
+		return def
+	}
+	return v
+}
+
 // lookupFloatDefault parses the resolved value as a float64, returning def when
 // the var is unset or unparseable. Used for fractional thresholds (e.g. the
 // context-pressure ratios) where a bad value must fall back to a safe default

@@ -14,7 +14,7 @@
 // SummarizeProgressCard — were module-level functions in chat-experience whose
 // only callers are this transcript JSX, so they move here verbatim (the
 // originals are removed from chat-experience to keep one definition each).
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { LoadingLogo } from "./LoadingLogo";
@@ -31,6 +31,7 @@ import {
   type MemoryDestination,
   type MemoryProject,
 } from "./ApprovalCards";
+import { ConnectorNamesContext } from "./approvalToolLabel";
 import { ApprovalGroupCard } from "./ApprovalGroupCard";
 import { retryFailedPrompt } from "./ApprovalResultCard";
 import { approvalRenderItems } from "./approvalGroups";
@@ -344,6 +345,9 @@ export function ChatTranscript({
   // the total size include the spacing. Lazy-initialized from the current
   // breakpoint and only updated on media-query changes, so it never sets state
   // during the effect body.
+  // The chat's connector names: Ask again splits an older row's tool id with
+  // them, the way its card does.
+  const connectorNameMap = useContext(ConnectorNamesContext);
   // Approval groups the person split with "One at a time"
   // (docs/GROUPED-APPROVALS.md): their cards render individually from then on.
   // Held for the page's lifetime; a reload regroups any cards still pending.
@@ -1119,7 +1123,7 @@ export function ChatTranscript({
                                         onModelSwitched={(model) => setSelectedModel(model)}
                                         onResumeExpected={onResumeExpected}
                                         onSwitchAndRetry={switchAndRetry}
-                                        onAskAgain={(timedOut) => void submitPrompt(askAgainPrompt(timedOut))}
+                                        onAskAgain={(timedOut) => void submitPrompt(askAgainPrompt(timedOut, connectorNameMap))}
                                         onRetryFailed={(settled, keys) =>
                                           // A card's own request: it neither takes nor clears
                                           // the composer's draft and attachments.

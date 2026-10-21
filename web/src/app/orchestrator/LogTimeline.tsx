@@ -590,6 +590,7 @@ function AssistantCard({ msg, final, taskId }: { msg: LogMessage; final: boolean
 
 const EVENT_FIELD_LABEL: Record<string, (v: string) => string> = {
   removed_turns: (v) => `${v} turns summarized`,
+  elided_results: (v) => `${v} results trimmed`,
   used: (v) => `${Number(v).toLocaleString()} tokens resent`,
   trigger: (v) => v.replace(/_/g, " "),
   effective_budget: (v) => `budget ${Number(v).toLocaleString()}`,
@@ -657,18 +658,22 @@ function UserCard({ msg, taskId }: { msg: LogMessage; taskId: string }) {
 
 // ── overview strip ───────────────────────────────────────────────────────────
 
+// STRIP_GAP_TAGS are the runtime events the overview strip shows as gaps: the
+// points where the run rewrote its history.
+const STRIP_GAP_TAGS = new Set(["context_compacted", "context_elided"]);
+
 /**
  * StepStrip is the whole run at a glance: one tick per tool call, colored by
- * tool family, failures ringed, compactions as gaps. Clicking a tick opens and
- * scrolls to that step — the quick way through a 130-step transcript.
+ * tool family, failures ringed, compactions and trims as gaps. Clicking a tick
+ * opens and scrolls to that step — the quick way through a 130-step transcript.
  */
 function StepStrip({ items, onJump }: { items: TimelineItem[]; onJump: (key: string) => void }) {
-  const ticks = items.filter((it) => it.kind === "tool" || (it.kind === "event" && it.event.tag === "context_compacted"));
+  const ticks = items.filter((it) => it.kind === "tool" || (it.kind === "event" && STRIP_GAP_TAGS.has(it.event.tag)));
   if (ticks.filter((t) => t.kind === "tool").length < 2) return null;
   return (
     <div className="lt-strip" data-testid="log-step-strip" aria-label="Run overview">
       {ticks.map((it) => {
-        if (it.kind !== "tool") return <span key={it.key} className="lt-strip-gap" title="History compacted" />;
+        if (it.kind !== "tool") return <span key={it.key} className="lt-strip-gap" title={it.kind === "event" ? it.event.title : undefined} />;
         const meta = toolMeta(it.tool.name);
         const failed = stepFailed(it.tool);
         return (

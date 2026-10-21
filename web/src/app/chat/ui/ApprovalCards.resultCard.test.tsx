@@ -153,6 +153,23 @@ describe("the completed card from a result card", () => {
     expect(screen.getByTestId("approval-card-change")).toHaveTextContent("Floor$55.00→$0.10");
   });
 
+  it("says a record was applied but needs a check when a later step of it failed", () => {
+    renderCard({
+      resultCard: parseApprovalResultCardData({
+        outcome: "mismatch",
+        title: "Created 1 OpenX deal · needs a check",
+        items: [{ label: "Deal A", id: "OX-1", status: "needs_check", note: "The deal exists, but the IAB exclusion step failed." }],
+      }),
+    });
+    expect(screen.getByTestId("approval-result-status")).toHaveTextContent("Needs a check");
+    expect(screen.getByTestId("approval-result-status")).toHaveAttribute("data-status", "needs_check");
+    expect(screen.getByTestId("approval-result-note")).toHaveTextContent(
+      "Applied, but needs a check: The deal exists, but the IAB exclusion step failed.",
+    );
+    expect(screen.queryByText(/read-back/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Retry failed/ })).toBeNull();
+  });
+
   // The row glyphs paint the tokens approvalCardContrast.test.ts measures:
   // a warning row is --color-warning-icon, never the base amber (Codex
   // review, #1815).
@@ -165,6 +182,7 @@ describe("the completed card from a result card", () => {
           { key: "A", label: "A", status: "done" },
           { key: "M", label: "M", status: "mismatch" },
           { key: "U", label: "U", status: "unclear" },
+          { key: "N", label: "N", status: "needs_check", note: "A later step failed." },
         ],
       }),
     });
@@ -174,6 +192,7 @@ describe("the completed card from a result card", () => {
     expect(glyph("done")).toBe("var(--color-success)");
     expect(glyph("mismatch")).toBe("var(--color-warning-icon)");
     expect(glyph("unclear")).toBe("var(--color-warning-icon)");
+    expect(glyph("needs_check")).toBe("var(--color-warning-icon)");
   });
 
   it("shows each record's flags on a several-record card too", () => {
@@ -267,9 +286,28 @@ describe("parseApprovalResultCardData", () => {
       { outcome: "partial", title: "t", items: [{ key: "B", label: "B", status: "failed" }], retry: { keys: ["Z"] } },
       { outcome: "unclear", title: "t", items: [{ key: "U", label: "U", status: "unclear" }], retry: { keys: ["U"] } },
       { outcome: "mismatch", title: "t", items: [{ key: "M", label: "M", status: "mismatch" }], retry: { keys: ["M"] } },
+      { outcome: "done", title: "t", items: [{ label: "A", status: "needs_check", note: "n" }] },
+      { outcome: "failed", title: "t", items: [{ label: "A", status: "needs_check", note: "n" }] },
+      { outcome: "mismatch", title: "t", items: [{ key: "N", label: "N", status: "needs_check", note: "n" }], retry: { keys: ["N"] } },
+      // A needs_check row says what needs checking.
+      { outcome: "mismatch", title: "t", items: [{ label: "A", status: "needs_check" }] },
+      // It is known to be applied: not on an unclear card without an unclear row.
+      { outcome: "unclear", title: "t", items: [{ label: "A", status: "needs_check", note: "n" }] },
+      { outcome: "mismatch", title: "t", items: [{ label: "A", status: "needs_check", note: "  " }] },
     ]) {
       expect(parseApprovalResultCardData(bad), JSON.stringify(bad)).toBeUndefined();
     }
+    // Beside a record the caller can't tell about, the card may be unclear.
+    expect(
+      parseApprovalResultCardData({
+        outcome: "unclear",
+        title: "t",
+        items: [
+          { label: "A", status: "needs_check", note: "n" },
+          { label: "B", status: "unclear" },
+        ],
+      }),
+    ).toBeDefined();
   });
 
   it("reads a result card only from a recorded success", () => {
