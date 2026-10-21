@@ -213,3 +213,26 @@ func TestShowUISource_NewestMeansTheLaterCall(t *testing.T) {
 		t.Fatalf("replayed results oldest call first = %+v", seed)
 	}
 }
+
+// A reused call id keeps each occurrence's position and tool: results answer
+// the oldest open call with their id, as the web binds them, so neither
+// result takes the later call's name or position (Codex P2 on #1819).
+func TestShowUISource_ReusedIDKeepsEachCallsPlace(t *testing.T) {
+	s := newStreamSink(nil)
+	s.onToolCall("dup", "mcp_p_intake_card", `{}`)
+	s.onToolCall("other", "bash", `{}`)
+	s.onToolCall("dup", "mcp_p_notes", `{}`)
+	s.onToolResult("dup", "mcp_p_intake_card", `{"n":1}`, false)
+	s.onToolResult("other", "bash", `{}`, false)
+	s.onToolResult("dup", "mcp_p_notes", `{"n":2}`, false)
+	got := s.priorToolResults()
+	want := []string{"dup mcp_p_intake_card", "other bash", "dup mcp_p_notes"}
+	if len(got) != len(want) {
+		t.Fatalf("results = %+v", got)
+	}
+	for i, r := range got {
+		if r.CallID+" "+r.Tool != want[i] {
+			t.Fatalf("result %d = %s %s, want %s (all: %+v)", i, r.CallID, r.Tool, want[i], got)
+		}
+	}
+}

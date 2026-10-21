@@ -70,10 +70,19 @@ func bridgedToolName(name, input string) string {
 // (call order) (Codex P2 on #1819). A result whose call is not seen sorts at
 // its own position.
 type callOrdered struct {
-	seq     int
-	callSeq map[string]int
-	names   map[string]string
-	out     []orderedResult
+	seq int
+	// open holds, per call id, the calls with that id still waiting for a
+	// result, oldest first. A provider may reuse an id, even for parallel
+	// calls, so each occurrence keeps its own position and name, and a result
+	// answers the oldest one still open: the rule the web applies when it
+	// binds results to calls (applyToolResult) (Codex P2 on #1819).
+	open map[string][]callOccurrence
+	out  []orderedResult
+}
+
+type callOccurrence struct {
+	pos  int
+	name string
 }
 
 type orderedResult struct {
@@ -82,23 +91,23 @@ type orderedResult struct {
 }
 
 func newCallOrdered() *callOrdered {
-	return &callOrdered{callSeq: map[string]int{}, names: map[string]string{}}
+	return &callOrdered{open: map[string][]callOccurrence{}}
 }
 
 func (c *callOrdered) call(id, name, input string) {
 	c.seq++
-	c.callSeq[id] = c.seq
-	c.names[id] = bridgedToolName(name, input)
+	c.open[id] = append(c.open[id], callOccurrence{pos: c.seq, name: bridgedToolName(name, input)})
 }
 
 func (c *callOrdered) result(r tools.PriorToolResult) {
 	c.seq++
-	pos, ok := c.callSeq[r.CallID]
-	if !ok {
-		pos = c.seq
-	}
-	if name := c.names[r.CallID]; name != "" {
-		r.Tool = name
+	pos := c.seq
+	if q := c.open[r.CallID]; len(q) > 0 {
+		pos = q[0].pos
+		if q[0].name != "" {
+			r.Tool = q[0].name
+		}
+		c.open[r.CallID] = q[1:]
 	}
 	c.out = append(c.out, orderedResult{pos: pos, r: r})
 }
