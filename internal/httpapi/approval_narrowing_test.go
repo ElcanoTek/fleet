@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
@@ -907,5 +908,37 @@ func TestApprovalRecoveryText_FitsTheMinimumOutputLimit(t *testing.T) {
 	}
 	if len(text) > agentcore.MinMaxToolOutputBytes {
 		t.Fatalf("breadcrumb is %d bytes, over the %d-byte minimum limit", len(text), agentcore.MinMaxToolOutputBytes)
+	}
+}
+
+// The largest list a card may narrow, in its worst supported encoding (500
+// values of 200 characters, outside the BMP and written as surrogate-pair
+// escapes), is over 1 MiB of arguments: it is still narrowable. Only
+// arguments past maxNarrowableArgsBytes approve whole.
+func TestStagedNarrowable_HoldsTheWorstCaseEscapedList(t *testing.T) {
+	narrowPolicy(t)
+	var b strings.Builder
+	b.WriteString(`{"deal_ids":[`)
+	// One character outside the BMP as a JSON surrogate-pair escape (12 bytes).
+	escaped := `\` + "ud83d" + `\` + "ude00"
+	emoji := strings.Repeat(escaped, maxNarrowableValueRunes-4)
+	for i := range maxNarrowableValues {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `"%s%04d"`, emoji, i)
+	}
+	b.WriteString(`]}`)
+	raw := b.String()
+	if len(raw) <= frozenArgsMaxBytes {
+		t.Fatalf("test setup: %d bytes, want past the 1 MiB frozen-args bound", len(raw))
+	}
+	arg, values, ok := stagedNarrowable("mcp_ix_execute_plan", raw, "deal_ids")
+	if !ok || arg != "deal_ids" || len(values) != maxNarrowableValues || utf8.RuneCountInString(values[0]) != maxNarrowableValueRunes {
+		t.Fatalf("worst-case list (%d bytes): ok=%t arg=%q values=%d", len(raw), ok, arg, len(values))
+	}
+	padded := `{"pad":"` + strings.Repeat("x", maxNarrowableArgsBytes) + `","deal_ids":["a","b"]}`
+	if _, _, ok := stagedNarrowable("mcp_ix_execute_plan", padded, "deal_ids"); ok {
+		t.Fatal("arguments past maxNarrowableArgsBytes must approve whole")
 	}
 }
