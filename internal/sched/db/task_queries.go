@@ -565,24 +565,27 @@ const (
 // blocks of visible tasks created since `since`, most recently used first, at
 // most `limit`. Addresses are lower-cased; callers validate them.
 func (db *Database) GetRecipientHistory(ctx context.Context, scope RecipientHistoryScope, since time.Time, limit int) ([]RecipientUse, error) {
-	args := []interface{}{since, limit, recipientBlockMarker, recipientLinePattern}
-	where := []string{"created_at >= $1", "prompt LIKE '%CRITICAL ACTION%'"}
+	// The scope binds as nullable parameters ($5 user, $6 key; NULL = no
+	// filter), so the statement is one constant string.
+	var userID, keyID interface{}
 	if scope.VisibleToUserID != nil {
-		args = append(args, *scope.VisibleToUserID)
-		where = append(where, fmt.Sprintf("created_by = $%d", len(args)))
+		userID = *scope.VisibleToUserID
 	}
 	if scope.VisibleToKeyID != nil {
-		args = append(args, *scope.VisibleToKeyID)
-		where = append(where, fmt.Sprintf("created_by_key_id = $%d", len(args)))
+		keyID = *scope.VisibleToKeyID
 	}
+	args := []interface{}{since, limit, recipientBlockMarker, recipientLinePattern, userID, keyID}
 	// A recurring task stores one row per run, all with the same prompt, so
 	// task_count counts lineages, not rows.
-	query := fmt.Sprintf(`
+	const query = `
 		WITH blocks AS (
 			SELECT COALESCE(NULLIF(lineage_id, ''), id::text) AS lineage, created_at,
 			       position($3 IN prompt) AS pos, prompt
 			FROM tasks
-			WHERE %s
+			WHERE created_at >= $1
+			  AND prompt LIKE '%CRITICAL ACTION%'
+			  AND ($5::uuid IS NULL OR created_by = $5::uuid)
+			  AND ($6::text IS NULL OR created_by_key_id = $6::text)
 		), addrs AS (
 			SELECT lineage, created_at, lower(m[1]) AS email
 			FROM blocks, regexp_matches(substring(prompt FROM pos), $4, 'g') AS m
@@ -592,7 +595,7 @@ func (db *Database) GetRecipientHistory(ctx context.Context, scope RecipientHist
 		FROM addrs
 		GROUP BY email
 		ORDER BY last_used DESC, task_count DESC, email ASC
-		LIMIT $2`, strings.Join(where, " AND "))
+		LIMIT $2`
 
 	rows, err := db.conn.QueryContext(ctx, query, args...)
 	if err != nil {

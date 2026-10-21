@@ -66,7 +66,7 @@ func TestRecipientHistory(t *testing.T) {
 		t.Fatalf("history: %v", err)
 	}
 	got := map[string]int{}
-	var order []string
+	order := make([]string, 0, len(all))
 	for _, ru := range all {
 		got[ru.Email] = ru.TaskCount
 		order = append(order, ru.Email)
