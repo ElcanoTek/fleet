@@ -2124,7 +2124,7 @@ func mapRunEntries(entries []agentcore.RunEntry) []HistoryEntry {
 			}))
 		case "tool_result":
 			out = append(out, mustEntry("tool", "tool_result", ToolResultContent{
-				ID: e.ToolCallID, Name: e.ToolName, Text: e.Text, IsErr: e.IsErr,
+				ID: e.ToolCallID, Name: e.ToolName, Text: e.Text, IsErr: e.IsErr, Card: e.Card,
 			}))
 		}
 	}

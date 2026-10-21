@@ -607,6 +607,11 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// into the ceiling/billing totals but must not overwrite the LastStep*
 	// per-call input-size signals, which belong to the MAIN loop's steps.
 	eng.bindRunUsage(usageOrch)
+	// show_ui by reference (show_ui_source.go): the tool results the model
+	// can see — this turn's seed history plus the run's own — and where a
+	// resolved card goes, for the sink to attach to its result as display
+	// data. Read-only over what the run already holds.
+	ctx = withShowUISeam(ctx, sink, messages)
 	ctx = tools.WithUsageRecorder(ctx, func(modelSlug string, u fantasy.Usage, md fantasy.ProviderMetadata) {
 		usageOrch.updateAuxUsage(modelSlug, u, md)
 	})
