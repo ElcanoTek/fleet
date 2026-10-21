@@ -6,7 +6,7 @@
 - **Relates to:** [ADR-0042](0042-child-side-mcp-scope-authorization.md)
   (child-side MCP scope authorization), [ADR-0083](0083-a-settled-approval-card-may-start-a-turn.md)
   (resume after approval), [ADR-0084](0084-a-settled-card-reads-its-outcome-from-the-calls-own-result.md)
-  (result cards), [ADR-0085](0085-an-approval-may-narrow-a-declared-list-argument.md)
+  (result cards), [ADR-0089](0089-an-approval-may-narrow-a-declared-list-argument.md)
   (narrowing).
 - **Design note:** [`APPROVAL-STOP.md`](../APPROVAL-STOP.md)
 
