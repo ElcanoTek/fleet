@@ -108,6 +108,9 @@ func TestParseApprovalResultCard_Refusals(t *testing.T) {
 		"failed with needs_check": `{"outcome":"failed","title":"t","items":[{"label":"A","status":"needs_check","note":"n"}]}`,
 		"retry a needs_check row": `{"outcome":"mismatch","title":"t","items":[{"key":"N","label":"N","status":"needs_check","note":"n"}],"retry":{"keys":["N"]}}`,
 		// A needs_check row says what needs checking (Codex review, #1828).
+		// A needs_check row is known to be applied: an unclear card carries
+		// one only beside an unclear row (Codex review, #1828).
+		"unclear with only needs_check": `{"outcome":"unclear","title":"t","items":[{"label":"A","status":"needs_check","note":"n"}]}`,
 		"needs_check without a note":    `{"outcome":"mismatch","title":"t","items":[{"label":"A","status":"needs_check"}]}`,
 		"needs_check with a blank note": `{"outcome":"mismatch","title":"t","items":[{"label":"A","status":"needs_check","note":"  "}]}`,
 		"bad flag code":                 `{"outcome":"done","title":"t","items":[{"label":"A","status":"done","flags":[{"code":"Bad Code","label":"x"}]}]}`,
@@ -125,6 +128,11 @@ func TestParseApprovalResultCard_Refusals(t *testing.T) {
 		if _, _, err := parseApprovalResultCard([]byte(nc)); err != nil {
 			t.Fatalf("needs_check on a %s card refused: %v", outcome, err)
 		}
+	}
+	// Beside a record the caller can't tell about, the card may be unclear.
+	mixed := `{"outcome":"unclear","title":"t","items":[{"label":"Deal A","status":"needs_check","note":"n"},{"label":"Deal B","status":"unclear"}]}`
+	if _, _, err := parseApprovalResultCard([]byte(mixed)); err != nil {
+		t.Fatalf("needs_check beside an unclear row refused: %v", err)
 	}
 	// A not_run row may be retried, like a failed one.
 	ok := `{"outcome":"partial","title":"t","items":[{"key":"A","label":"A","status":"done"},{"key":"N","label":"N","status":"not_run"}],"retry":{"keys":["N"]}}`

@@ -232,7 +232,9 @@ func validateResultCard(c *ApprovalResultCard) error {
 	// The outcome sets the card's tone, so it may not contradict the rows: a
 	// green "done" card never carries a failed, mismatched, needs-check or
 	// unclear record, and a red "failed" card never claims a record was
-	// applied.
+	// applied. A needs-check record is known to be applied, so an "unclear"
+	// card (the caller can't tell) carries one only beside a record that is
+	// itself unclear; otherwise the card is "mismatch" or "partial".
 	notDone := counts[resultItemFailed] + counts[resultItemMismatch] + counts[resultItemNeedsCheck] + counts[resultItemUnclear]
 	applied := counts[resultItemDone] + counts[resultItemMismatch] + counts[resultItemNeedsCheck]
 	switch {
@@ -240,6 +242,8 @@ func validateResultCard(c *ApprovalResultCard) error {
 		return errors.New(`outcome "done" with a failed, mismatched, needs_check or unclear item`)
 	case c.Outcome == resultOutcomeFailed && applied > 0:
 		return errors.New(`outcome "failed" with an applied item`)
+	case c.Outcome == resultOutcomeUnclear && counts[resultItemNeedsCheck] > 0 && counts[resultItemUnclear] == 0:
+		return errors.New(`outcome "unclear" with a needs_check item and no unclear one: use "mismatch" or "partial"`)
 	}
 	if c.Retry != nil {
 		if err := validateResultRetry(c.Retry, keys); err != nil {

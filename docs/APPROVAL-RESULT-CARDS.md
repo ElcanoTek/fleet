@@ -133,7 +133,8 @@ The tool's result is a JSON object. Its top-level `result_card` key holds:
 - **Consistency:** a `done` card may not carry a `failed`, `mismatch`,
   `needs_check` or `unclear` row, and a `failed` card may not carry a `done`,
   `mismatch` or `needs_check` row. A card whose rows are applied but need a
-  check takes `mismatch` (the warning tone) or `partial`.
+  check takes `mismatch` (the warning tone) or `partial`; an `unclear` card
+  may carry a `needs_check` row only beside an `unclear` one.
 - **Older fleets** reject a card with a `needs_check` row (an unknown status),
   and the settled card then shows without it. A bundle should emit
   `needs_check` only against a fleet that has it.

@@ -291,10 +291,23 @@ describe("parseApprovalResultCardData", () => {
       { outcome: "mismatch", title: "t", items: [{ key: "N", label: "N", status: "needs_check", note: "n" }], retry: { keys: ["N"] } },
       // A needs_check row says what needs checking.
       { outcome: "mismatch", title: "t", items: [{ label: "A", status: "needs_check" }] },
+      // It is known to be applied: not on an unclear card without an unclear row.
+      { outcome: "unclear", title: "t", items: [{ label: "A", status: "needs_check", note: "n" }] },
       { outcome: "mismatch", title: "t", items: [{ label: "A", status: "needs_check", note: "  " }] },
     ]) {
       expect(parseApprovalResultCardData(bad), JSON.stringify(bad)).toBeUndefined();
     }
+    // Beside a record the caller can't tell about, the card may be unclear.
+    expect(
+      parseApprovalResultCardData({
+        outcome: "unclear",
+        title: "t",
+        items: [
+          { label: "A", status: "needs_check", note: "n" },
+          { label: "B", status: "unclear" },
+        ],
+      }),
+    ).toBeDefined();
   });
 
   it("reads a result card only from a recorded success", () => {

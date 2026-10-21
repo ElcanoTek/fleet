@@ -475,6 +475,8 @@ export function parseApprovalResultCardData(value: unknown): ApprovalResultCardD
   const count = (s: string) => items.filter((it) => it.status === s).length;
   if (v.outcome === "done" && count("failed") + count("mismatch") + count("needs_check") + count("unclear") > 0) return undefined;
   if (v.outcome === "failed" && count("done") + count("mismatch") + count("needs_check") > 0) return undefined;
+  // A needs_check row is known to be applied: an unclear card carries one only beside an unclear row.
+  if (v.outcome === "unclear" && count("needs_check") > 0 && count("unclear") === 0) return undefined;
   const card: ApprovalResultCardData = { outcome: v.outcome as ApprovalResultOutcome, title: v.title, items };
   if (subtitle) card.subtitle = subtitle;
   if (footer) card.footer = footer;
