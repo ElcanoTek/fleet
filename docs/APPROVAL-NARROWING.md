@@ -135,9 +135,11 @@ The approved-call budget is computed for the narrowed arguments (a smaller
 - The result breadcrumb in the conversation (what the model reads) is the
   tool's governed, bounded text followed by fleet's line: `[fleet] The person
   narrowed this call: of the 3 staged deal_ids in its arguments, only
-  positions 2 ("k2") were left out; the other 2 were approved and sent. Do not
-  run the left-out ones unless the person asks. (Written by fleet, not the
-  tool.)` It names the smaller side exactly by its positions in the staged
+  positions 2 ("k2") were left out; the other 2 were approved. Only the
+  approved ones could be sent to the tool; the result says whether they ran.
+  Do not run the left-out ones unless the person asks. (Written by fleet, not
+  the tool.)` It records the decision only, never that anything ran (the call
+  may have failed before it was sent). It names the smaller side exactly by its positions in the staged
   list (which the recorded tool call holds), and by value too when that side
   has at most 20 values, so it is exact and small (at most 250 positions). It
   follows the tool's text, so a result card, which is read from the start of
@@ -147,8 +149,8 @@ The approved-call budget is computed for the narrowed arguments (a smaller
   `RecoverStrandedApprovals` reads `narrowed_json` and adds it after the
   "outcome unknown" breadcrumb, because the recorded tool call holds the whole
   staged list.
-- `narrowed: {arg, staged, approved}` rides the approve POST answer, its
-  idempotent replays, each `resolved_approvals` row and the one-card GET.
+- `narrowed: {arg, staged, approved}` rides the approve POST answer (the
+  early `executing` answer too), its idempotent replays, each `resolved_approvals` row and the one-card GET.
 - The settled card says **Approved 2 of 3 · 1 left out** (under the result
   card's "Approved: <title>" when there is one), and the records under
   **Details** mark the left-out rows **Left out · unchecked before approval**.

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
@@ -179,7 +180,7 @@ func TestHandleApproval_NarrowedRunsOnlyTheApprovedValues(t *testing.T) {
 	if narrowed == nil || !reflect.DeepEqual(narrowed["approved"], []any{"a", "c"}) {
 		t.Fatalf("reply narrowed = %v", body["narrowed"])
 	}
-	if !strings.HasPrefix(st.result, `{"success":true}`) || !strings.Contains(st.result, `of the 3 staged deal_ids in its arguments, only positions 2 ("b") were left out; the other 2 were approved and sent`) {
+	if !strings.HasPrefix(st.result, `{"success":true}`) || !strings.Contains(st.result, `of the 3 staged deal_ids in its arguments, only positions 2 ("b") were left out; the other 2 were approved. Only the approved ones could be sent to the tool`) {
 		t.Fatalf("recorded result = %q, want the tool's text then fleet's note", st.result)
 	}
 }
@@ -417,5 +418,57 @@ func TestAppendFleetNote_SurvivesResultTruncation(t *testing.T) {
 	got := appendFleetNote(context.Background(), &row, bounded, note)
 	if !strings.HasPrefix(got, bounded) || !strings.HasSuffix(got, note) {
 		t.Fatalf("result = %q, want the bounded result then the whole note", got)
+	}
+}
+
+// blockingNarrowChild holds the approved call until released.
+type blockingNarrowChild struct {
+	mcpbroker.Backend
+	release chan struct{}
+}
+
+func (c *blockingNarrowChild) CallMCP(ctx context.Context, _, _ string, _ map[string]any) (string, bool, error) {
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+	}
+	return `{"success":true}`, false, nil
+}
+
+// A narrowed call that answers "executing" early says what was approved in
+// that answer too, so the running card keeps its narrowing.
+func TestHandleApproval_EarlyExecutingAnswerCarriesTheNarrowing(t *testing.T) {
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
+		CriticalToolSuffixes:       []string{"execute_plan"},
+		CriticalToolProgress:       []string{"execute_plan"},
+		CriticalToolNarrowableArgs: map[string]string{"execute_plan": "deal_ids"},
+	})
+	prev := approvalProgressEarlyReplyAfter
+	approvalProgressEarlyReplyAfter = 20 * time.Millisecond
+	t.Cleanup(func() { approvalProgressEarlyReplyAfter = prev })
+
+	st := &narrowStore{approval: narrowApprovalRow()}
+	child := &blockingNarrowChild{release: make(chan struct{})}
+	clientConn, serverConn := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = mcpbroker.NewServer(child).Serve(ctx, serverConn)
+	}()
+	client := mcpbroker.NewClient(clientConn)
+	t.Cleanup(func() { close(child.release); _ = client.Close(); cancel(); <-done })
+	s := &Server{store: st, agent: &approvalEngine{
+		fakeEngine: &fakeEngine{},
+		broker:     client,
+		catalog:    []mcp.ServerTool{{ServerName: "ix", Tool: mcp.Tool{Name: "execute_plan"}}},
+	}}
+	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["a","c"]}`)
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	narrowed, _ := body["narrowed"].(map[string]any)
+	if rec.Code != 200 || body["executing"] != true || narrowed == nil || !reflect.DeepEqual(narrowed["approved"], []any{"a", "c"}) {
+		t.Fatalf("early answer = %d %s, want executing with the narrowing", rec.Code, rec.Body.String())
 	}
 }

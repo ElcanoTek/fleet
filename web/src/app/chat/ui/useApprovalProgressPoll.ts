@@ -16,6 +16,7 @@ import {
   type ApprovalOutcomePayload,
   approvalStatusFromOutcome,
   resultCardFromOutcome,
+  parseApprovalNarrowed,
   parseApprovalProgress,
 } from "./history";
 import { conversationApprovalApiUrl } from "@/app/lib/conversationApiUrl";
@@ -53,7 +54,16 @@ export function approvalFromPoll(
   }
   const status = approvalStatusFromOutcome(row);
   if (status === null) return null;
-  return { ...current, status, resultText: row.result_text, resultCard: resultCardFromOutcome(row), executing: false, progress: undefined };
+  return {
+    ...current,
+    status,
+    resultText: row.result_text,
+    resultCard: resultCardFromOutcome(row),
+    executing: false,
+    progress: undefined,
+    // A narrowed approval's record rides the row (docs/APPROVAL-NARROWING.md).
+    narrowed: parseApprovalNarrowed(row.narrowed) ?? current.narrowed,
+  };
 }
 
 export function useApprovalProgressPoll(

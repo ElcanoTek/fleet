@@ -33,15 +33,18 @@ func NarrowingNote(arg string, staged, approved []string) string {
 			leftVals = append(leftVals, fmt.Sprintf("%q", v))
 		}
 	}
-	side, pos, vals, other := "were approved and sent", approvedPos, approvedVals, fmt.Sprintf("the other %d were left out", len(leftPos))
+	side, pos, vals, other := "were approved", approvedPos, approvedVals, fmt.Sprintf("the other %d were left out", len(leftPos))
 	if len(leftPos) < len(approvedPos) {
-		side, pos, vals, other = "were left out", leftPos, leftVals, fmt.Sprintf("the other %d were approved and sent", len(approvedPos))
+		side, pos, vals, other = "were left out", leftPos, leftVals, fmt.Sprintf("the other %d were approved", len(approvedPos))
 	}
 	named := ""
 	if len(vals) <= narrowingNoteMaxNamed {
 		named = " (" + strings.Join(vals, ", ") + ")"
 	}
-	return fmt.Sprintf("[fleet] The person narrowed this call: of the %d staged %s in its arguments, only positions %s%s %s; %s. Do not run the left-out ones unless the person asks. (Written by fleet, not the tool.)",
+	// The note records the person's decision only. Whether the approved ones
+	// ran is the call's own outcome (it may have failed before it was sent,
+	// or a restart may have left it unknown), so the note never claims it.
+	return fmt.Sprintf("[fleet] The person narrowed this call: of the %d staged %s in its arguments, only positions %s%s %s; %s. Only the approved ones could be sent to the tool; the result says whether they ran. Do not run the left-out ones unless the person asks. (Written by fleet, not the tool.)",
 		len(staged), arg, strings.Join(pos, ", "), named, side, other)
 }
 

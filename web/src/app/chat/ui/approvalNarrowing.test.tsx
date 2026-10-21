@@ -11,6 +11,7 @@ import {
   type ApprovalCardData,
 } from "./history";
 import { approvedValuesFor, narrowedApproveLabel, narrowedSummary, selectableKeys } from "./approvalNarrowing";
+import { approvalFromPoll } from "./useApprovalProgressPoll";
 
 // Approval narrowing (docs/APPROVAL-NARROWING.md): a readable card whose tool
 // declares a narrowable list argument shows a checkbox on every row that names
@@ -219,5 +220,17 @@ describe("narrowing inside a grouped card", () => {
     fireEvent.click(screen.getByTestId("approval-group-approve"));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ approve: ["ap-mg"], decline: ["ap-ix"] });
+  });
+});
+
+describe("a narrowed call that settles by the poll", () => {
+  it("keeps what was approved when the polled row carries it", () => {
+    const current = pending({ status: "pending", executing: true, narrowable: undefined });
+    const settled = approvalFromPoll(current, {
+      resolved_approvals: [
+        { approval_id: "ap_1", status: "approved", is_err: false, narrowed: { arg: "deal_ids", staged: ["k1", "k2", "k3"], approved: ["k1"] } },
+      ],
+    });
+    expect(settled?.narrowed).toEqual({ arg: "deal_ids", staged: ["k1", "k2", "k3"], approved: ["k1"] });
   });
 });

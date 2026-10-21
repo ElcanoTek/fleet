@@ -1850,11 +1850,14 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	case out := <-reply:
 		return approvalBody(out)
 	case <-early.C:
-		return approvalBody(s.resumeReplyFlag(execCtx, map[string]any{
+		running := map[string]any{
 			"status":      "approved",
 			"executing":   true,
 			"result_text": approvalExecutingSentinel,
-		}, approval))
+		}
+		// A narrowed approval says what was approved while it still runs, so
+		// the running card keeps its "Approved k of n" and left-out rows.
+		return approvalBody(s.resumeReplyFlag(execCtx, withApprovalNarrowed(running, approval), approval))
 	case <-done:
 		// The client is gone; nobody reads a reply. The execution carries on
 		// detached and records its outcome for the next "Check result".
