@@ -535,3 +535,60 @@ func TestNarrowing_ReservesRoomForTheStopLine(t *testing.T) {
 		}
 	}
 }
+
+// The live output limit may be lowered while a narrowed, stoppable call
+// runs. The narrowing is checked at decision against the room at the minimum
+// limit, so the longest selection accepted under a roomy limit still settles
+// within the limit live when it ends, with the narrowing and stop lines whole.
+func TestNarrowing_StoppedResultFitsALimitLoweredWhileItRan(t *testing.T) {
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
+		CriticalToolSuffixes:       []string{"execute_plan"},
+		CriticalToolStop:           []string{"execute_plan"},
+		CriticalToolNarrowableArgs: map[string]string{"execute_plan": "deal_ids"},
+	})
+	agentcore.SetMaxToolOutputBytes(64 << 10)
+	t.Cleanup(func() { agentcore.SetMaxToolOutputBytes(-1) })
+	staged := make([]string, 0, 500)
+	for i := range 500 {
+		staged = append(staged, fmt.Sprintf("d%03d", i))
+	}
+	args, _ := json.Marshal(map[string]any{"deal_ids": staged})
+	row := stopRow()
+	row.ArgsJSON, row.NarrowableArg = string(args), "deal_ids"
+
+	// The longest line accepted at 64 KiB: leave out one more scattered
+	// position at a time until the selection is refused.
+	var n *approvalNarrowing
+	for k := 1; ; k++ {
+		leftOut := map[int]bool{}
+		for j := range k {
+			leftOut[300+2*j] = true
+		}
+		var approved []string
+		for i, v := range staged {
+			if !leftOut[i] {
+				approved = append(approved, v)
+			}
+		}
+		next, err := narrowApproval(&row, approved, "deal_ids")
+		if err != nil {
+			break
+		}
+		n = next
+	}
+	if n == nil {
+		t.Fatal("test setup: no narrowing was accepted")
+	}
+	agentcore.SetMaxToolOutputBytes(agentcore.MinMaxToolOutputBytes) // lowered while the call ran
+	for _, stopLine := range []string{approvalStopNote, approvalStoppedBeforeSendNote} {
+		trailer := approvalTrailer(n, stopLine)
+		res, _, _ := governApprovalResultWithTrailer(context.Background(), &row, strings.Repeat("x", 64<<10), false, trailer)
+		if !strings.HasSuffix(res, trailer) {
+			t.Fatalf("the lines were cut or changed: ...%q", res[max(0, len(res)-200):])
+		}
+		if len(res) > agentcore.MinMaxToolOutputBytes {
+			t.Fatalf("result is %d bytes, over the %d-byte limit live at settlement", len(res), agentcore.MinMaxToolOutputBytes)
+		}
+	}
+}
