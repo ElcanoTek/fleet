@@ -403,7 +403,8 @@ Four ways data reaches a conversation. Most days you will use the first two.
 For connectors that advertise binary file inputs, Fleet can send a hash-checked
 workspace file chunk directly through the connector. This avoids copying large
 base64 strings into the conversation and works without sandbox HTTP access.
-The connector's existing permissions and publication checks still apply; a
+The whole file can be up to 64 MiB, sent in chunks of at most 8 MiB each; the
+connector may set lower limits of its own. The connector's existing permissions and publication checks still apply; a
 staged upload alone does not mean a page or document was published.
 
 ## 5. Connectors in a conversation
@@ -529,9 +530,12 @@ with the action's own result underneath and the records under **Details**.
 A deployment can also have chosen actions report their own outcome. The
 finished card then says what happened in one line ("Created 1 Index Exchange
 deal · verified"), with a row per record: its name, its ids, a status
-(**Done**, **Not applied**, **Check didn't match**, **Outcome unclear**,
-**Already done**, **Not run**), and a link. The raw result moves under
-**Details**. When some records failed, **Retry failed (N)** asks the assistant
+(**Done**, **Not applied**, **Check didn't match**, **Needs a check**,
+**Outcome unclear**, **Already done**, **Not run**), and a link. The raw
+result moves under **Details**. **Needs a check** means the record was
+applied, but a later step for it failed (for example the deal exists, but its
+exclusion list was not added); its note says what, and it is not offered for
+retry, because the record already exists. When some records failed, **Retry failed (N)** asks the assistant
 to try only those again, and the retry comes back to you as a new card to
 approve: nothing runs from the click. A record that may already exist is never
 offered for retry. An action that ran without asking can say what it did the

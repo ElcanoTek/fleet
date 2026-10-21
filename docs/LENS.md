@@ -30,8 +30,11 @@ Both already existed and are generic. Nothing was added for Lens.
   `create_job.content_base64` as `type: string, contentEncoding: base64`, so
   fleet offers the model a `{workspace_file, sha256, offset, length}`
   reference. Fleet reads the file through the sandbox FileOp seam and
-  base64-encodes it in the broker. A list of up to 2 MiB (roughly 100,000
-  domains) reaches Lens without its bytes entering the model's context. Short
+  base64-encodes it in the broker, so the list reaches Lens without its bytes
+  entering the model's context. Fleet sends at most 8 MiB per call (from a
+  file of up to 64 MiB). `create_job` takes the list in one call, so a list
+  can be up to 8 MiB. The tool's `maxLength` and Lens's own request limits
+  still apply. Short
   lists go inline as `items`. Bigger files go through the Lens dashboard and
   are then named with `input_file`.
 - **Files out:** `download_url`. `get_download_link` returns a 15-minute,
@@ -81,7 +84,8 @@ back to another organisation's Lens.
 
 - No push notification when a Lens job finishes. The agent polls `get_job`,
   sleeping in bash between checks in scheduled runs.
-- No uploads larger than the 2 MiB workspace-file cap through the agent.
+- No list uploads larger than 8 MiB through the agent, Fleet's per-call
+  workspace-file maximum (or less, if Lens's own limit is lower).
 - No file download from a Lens that only resolves to a private address (see
   "Files out").
 - No broker-side vaulting of the signed download link (a generic opaque

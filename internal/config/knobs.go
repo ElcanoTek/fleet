@@ -364,6 +364,11 @@ var envKnobs = []envKnob{
 	// prompt budget in tokens; 0 disables. Read lazily per check in agentcore.
 	{key: "FLEET_CONTEXT_RESEND_BUDGET_TOKENS", fleet: true, kind: kindInt, min: bound(0),
 		scope: scopeExternal, readBy: "internal/agentcore (cost-aware context compaction)"},
+	// Scheduled compaction elides stale tool results before buying a summary
+	// (#1742); on unless set false. Read with strconv.ParseBool, so it takes
+	// that narrower token set, like the kill-switches further down.
+	{key: "FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", fleet: true, kind: kindStrconvBool,
+		scope: scopeExternal, readBy: "internal/agentcore (scheduled compaction elision)"},
 	{key: "FLEET_CONTEXT_COMPACTION_THRESHOLD", fleet: true, kind: kindFloat,
 		scope: scopeExternal, readBy: "internal/agentcore (context compaction)"},
 	// Clamped by the consumer to (0,1] like the two context thresholds above;
@@ -380,8 +385,8 @@ var envKnobs = []envKnob{
 		scope: scopeExternal, readBy: "internal/agentcore (provider first-chunk watchdog)"},
 	{key: "FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS", fleet: true, kind: kindFloat, min: bound(0),
 		scope: scopeExternal, readBy: "internal/agentcore (provider first-chunk watchdog)"},
-	// The three agentcore kill-switches are read with strconv.ParseBool, so
-	// they take its narrower token set (see kindStrconvBool).
+	// These agentcore kill-switches are read with strconv.ParseBool, so they
+	// take its narrower token set (see kindStrconvBool).
 	{key: "FLEET_DISABLE_PROMPT_CACHE", fleet: true, kind: kindStrconvBool,
 		scope: scopeExternal, readBy: "internal/agentcore (prompt-cache breakpoints)"},
 	{key: "FLEET_DISABLE_OPENROUTER_MODELS", fleet: true, kind: kindStrconvBool,

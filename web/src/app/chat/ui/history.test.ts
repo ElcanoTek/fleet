@@ -541,6 +541,14 @@ describe("humanToolLabel", () => {
     ["mcp_magnite_magnite_download_report", "Magnite download report"],
     ["mcp_xandr_xandr_run_curator_report", "Xandr run curator report"],
     ["mcp_medianet_mn_queue_report_data", "Media.net queue report data"],
+    // Production bundles' server ids carry the `_mcp` suffix.
+    ["mcp_magnite_mcp_magnite_update_deal", "Magnite update deal"],
+    ["mcp_pubmatic_mcp_pm_run_standard_report", "PubMatic run standard report"],
+    ["mcp_openx_mcp_ox_create_deal", "OpenX create deal"],
+    ["mcp_triplelift_mcp_tl_update_deal", "TripleLift update deal"],
+    ["mcp_equativ_mcp_eq_create_deal", "Equativ create deal"],
+    ["mcp_nexxen_mcp_nx_create_deal", "Nexxen create deal"],
+    ["mcp_medianet_mcp_medianet_list_deals", "Media.net list deals"],
     ["mcp_fastio_download", "Fastio download"],
     ["unknown_tool", "Unknown tool"],
   ])("%s → %s", (input, expected) => {

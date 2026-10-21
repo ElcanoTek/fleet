@@ -136,7 +136,10 @@ Those live tests also exposed concatenated pre-audit/final answer drafts. The
 runtime now prefers the final completed response when available, preserving prior
 work in the transcript carried into enforcement rounds. When the run finishes, the live stream emits `text.replace` with that
 authoritative text so web, TUI, and one-shot clients drop superseded
-pre-audit drafts; a reload and a live view then agree. One-shot stdout is
+pre-audit drafts; a reload and a live view then agree. (Since #1826 a
+scheduled run keeps the answer it gave before its self-audit as part of that
+final text, so that answer is no longer dropped; see
+[SCHEDULED-REFRESH-RELIABILITY.md](SCHEDULED-REFRESH-RELIABILITY.md#the-answer-given-before-the-self-audit-1826).) One-shot stdout is
 the reconstructed final text, not every intermediate delta. Abort and
 round-cap paths keep the partial transcript. The production email summarizer includes frozen
 `attachments` and `inline_attachments` metadata (paths and CIDs, not file

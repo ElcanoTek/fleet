@@ -31,6 +31,7 @@ const abandonedScopeCloseTimeout = 3 * time.Second
 // A Client is safe for concurrent use.
 type Client struct {
 	enc  *json.Encoder
+	out  io.Writer // the connection, for sendLive's per-frame encoders
 	conn io.Closer
 	done chan struct{} // closed when the connection dies or Close is called
 
@@ -54,6 +55,7 @@ var _ agentcore.MCPBroker = (*Client)(nil)
 func NewClient(conn io.ReadWriteCloser) *Client {
 	c := &Client{
 		enc:      json.NewEncoder(conn),
+		out:      conn,
 		conn:     conn,
 		done:     make(chan struct{}),
 		pending:  make(map[uint64]chan response),
@@ -458,8 +460,13 @@ func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
 	}
 	c.mu.Unlock()
 
-	if err := c.send(req); err != nil {
+	if sent, err := c.sendLive(ctx, req); !sent {
 		c.discard(req.ID)
+		if err == nil {
+			// Cancelled while queued for the write lock: nothing went out,
+			// so there is nothing for the child to cancel or retain.
+			return response{}, ctx.Err()
+		}
 		return response{}, fmt.Errorf("mcpbroker: send: %w", err)
 	}
 
@@ -470,13 +477,32 @@ func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
 		// Best-effort: ask the server to stop the in-flight call so it doesn't keep
 		// running an MCP request whose result nobody will read.
 		_ = c.send(request{ID: req.ID, Method: methodCancel})
-		if req.Method == methodOpenScope {
+		switch req.Method {
+		case methodOpenScope:
 			// Keep this pending slot alive: cancellation can race the backend creating
 			// the scope. If a late response owns an ID, release it instead of losing
 			// the only handle and leaking its subprocesses until broker shutdown.
 			//nolint:gosec // cleanup must outlive the request context that triggered it.
 			go c.closeAbandonedScope(ch)
-		} else {
+		case methodCall:
+			// The child still holds req.Args until it answers: the call may
+			// be queued behind another on its MCP server, or unwinding. Keep
+			// the pending slot and tell the caller's argument hold (if any)
+			// that the arguments are still live, so a workspace-file window
+			// stays charged until the child's final response — or the
+			// connection's death — proves it let go (ADR-0088). The cancel
+			// frame above makes that prompt: a queued call gives up its wait,
+			// an in-flight one unwinds on its context.
+			letGo := mcp.RetainArguments(ctx)
+			go func() {
+				select {
+				case <-ch:
+				case <-c.done:
+				}
+				c.discard(req.ID)
+				letGo()
+			}()
+		default:
 			c.discard(req.ID)
 		}
 		return response{}, ctx.Err()
@@ -500,6 +526,52 @@ func (c *Client) closeAbandonedScope(ch <-chan response) {
 		})
 	case <-c.done:
 	}
+}
+
+// sendLive writes req unless ctx has ended before its first byte goes out:
+// another frame may hold the write lock a while, and marshalling a request
+// that carries a multi-MiB workspace-file window takes time too. A request
+// whose caller already gave up must never reach the child (a
+// side-effecting tool would run for nobody), so the check sits in the
+// writer, after the encoder has marshalled and just before it writes. sent
+// reports whether any of req was written; a write error is returned with
+// sent false.
+func (c *Client) sendLive(ctx context.Context, req request) (sent bool, err error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	// A fresh encoder per frame: json.Encoder keeps its first write error
+	// and returns it from every later Encode, so a refusal must not reach
+	// the shared one.
+	if err := json.NewEncoder(&liveWriter{w: c.out, ctx: ctx}).Encode(req); err != nil {
+		if errors.Is(err, errCallerGone) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// errCallerGone is liveWriter's refusal to start a frame for a caller whose
+// context has ended.
+var errCallerGone = errors.New("mcpbroker: caller gone before the request was written")
+
+// liveWriter refuses a frame's first write once ctx has ended; json.Encoder
+// marshals the whole frame first and then writes it once, so nothing of a
+// refused frame reaches the connection. Used under Client.writeMu.
+type liveWriter struct {
+	w     io.Writer
+	ctx   context.Context
+	wrote bool
+}
+
+func (g *liveWriter) Write(p []byte) (int, error) {
+	if !g.wrote {
+		if g.ctx.Err() != nil {
+			return 0, errCallerGone
+		}
+		g.wrote = true
+	}
+	return g.w.Write(p)
 }
 
 func (c *Client) send(req request) error {

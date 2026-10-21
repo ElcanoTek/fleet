@@ -207,3 +207,33 @@ func TestKeyEndpointAuthContract(t *testing.T) {
 		t.Errorf("with bearer: status %d, want 200", resp2.StatusCode)
 	}
 }
+
+// A scenario with SizedPromptTokens reports prompt_tokens that grow with the
+// request, through the real fantasy wire path; any other reports the fixed 10.
+func TestFakeLLM_SizedPromptTokens(t *testing.T) {
+	srv := fakellm.New().
+		Scenario("sized", fakellm.Scenario{SizedPromptTokens: true, Steps: []fakellm.Step{fakellm.TextStep("ok")}}).
+		Scenario("fixed", fakellm.Scenario{Steps: []fakellm.Step{fakellm.TextStep("ok")}})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	model, err := newProvider(t, ts.URL).LanguageModel(context.Background(), "anthropic/claude-opus-4.8")
+	if err != nil {
+		t.Fatalf("language model: %v", err)
+	}
+	inputTokens := func(prompt string) int64 {
+		t.Helper()
+		res, err := fantasy.NewAgent(model).Generate(context.Background(), fantasy.AgentCall{Prompt: prompt})
+		if err != nil {
+			t.Fatalf("generate: %v", err)
+		}
+		return res.TotalUsage.InputTokens + res.TotalUsage.CacheReadTokens
+	}
+	short := inputTokens("[[scenario:sized]] hi")
+	long := inputTokens("[[scenario:sized]] " + strings.Repeat("d", 40_000))
+	if long-short < 9_900 || long-short > 10_100 {
+		t.Fatalf("40,000 more characters reported %d more prompt tokens, want about 10,000", long-short)
+	}
+	if fixed := inputTokens("[[scenario:fixed]] " + strings.Repeat("d", 40_000)); fixed != 10 {
+		t.Fatalf("a scenario without SizedPromptTokens reported %d prompt tokens, want the fixed 10", fixed)
+	}
+}

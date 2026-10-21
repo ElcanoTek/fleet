@@ -12,7 +12,7 @@
 // byte-identical to the in-module originals.
 
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useId, useRef, useState } from "react";
 import {
   currentAdvancedModel,
   labelForModel,
@@ -35,6 +35,7 @@ import {
   selectedCountText,
   useNarrowing,
 } from "./approvalNarrowing";
+import { applyAllText, approvalToolLabel, ConnectorNamesContext, knownConnectorLabel, mcpToolServer } from "./approvalToolLabel";
 import { useApprovalProgressPoll } from "./useApprovalProgressPoll";
 import { EmailSendResult, parseEmailSendPayload } from "./ToolChips";
 import {
@@ -119,7 +120,12 @@ export function ApprovalSeatBadge({ server, account, verb = "Sending as" }: {
   account?: string;
   verb?: string;
 }) {
+  const names = useContext(ConnectorNamesContext);
   if (!server || !account) return null;
+  // The connector by its human name when one is known ("on Index
+  // Exchange"), as the apply-all checkbox names it; the id, as code,
+  // otherwise.
+  const named = knownConnectorLabel(server, names);
   return (
     <div
       data-testid="approval-seat"
@@ -128,10 +134,17 @@ export function ApprovalSeatBadge({ server, account, verb = "Sending as" }: {
     >
       <span>
         {verb} <span className="font-mono">{account}</span> on{" "}
-        <span className="font-mono">{server}</span>
+        {named ? named : <span className="font-mono">{server}</span>}
       </span>
     </div>
   );
+}
+
+// ApplyAllText is the batch-approval checkbox's label: the tool in words
+// ("every Index Exchange “Execute plan” request"), never its raw id.
+function ApplyAllText({ approval }: { approval: Approval }) {
+  const names = useContext(ConnectorNamesContext);
+  return <>{applyAllText(approvalToolLabel(approval.tool, approval.mcpServer, names, approval.mcpAccount))}</>;
 }
 
 // isEmailApprovalTool gates the email-shaped card. It used to be the implicit
@@ -153,20 +166,28 @@ function isTimedOutApproval(approval: Approval): boolean {
 // actionLabel splits an mcp_<server>_<tool> name into a humanized action
 // ("Deploy page") and its server ("pages") for the generic card's header.
 // Native tools have no server half and humanize whole.
-export function actionLabel(tool: string): { action: string; server?: string } {
-  const m = /^mcp_([^_]+)_(.+)$/.exec(tool);
-  const raw = m ? m[2] : tool;
-  const spaced = raw.replace(/_/g, " ").trim();
-  const action = spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : tool;
-  return m ? { action, server: m[1] } : { action };
+export function actionLabel(
+  tool: string,
+  mcpServer?: string,
+  mcpAccount?: string,
+  names?: ReadonlyMap<string, string>,
+): { action: string; server?: string } {
+  // The action in words comes from the same label the apply-all checkbox
+  // uses (approvalToolLabel), so a card names its tool one way. `server` is
+  // the raw connector id, for the code-styled call line; mcpAccount keeps a
+  // named seat's id out of the action. `names` (the chat's connectors)
+  // splits an older row with no mcpServer the way the checkbox does.
+  const server = mcpToolServer(tool, mcpServer, names);
+  const { action } = approvalToolLabel(tool, server, names, mcpAccount);
+  return server ? { action, server } : { action };
 }
 
 // askAgainPrompt is the canned user turn the Ask-again affordance submits: a
 // timed-out approval's only recovery used to be composing "please try that
 // again" by hand — the agent must re-stage (the old card's claim is spent and
 // its args may be stale), so one click asks it to.
-export function askAgainPrompt(approval: Approval): string {
-  const { action, server } = actionLabel(approval.tool);
+export function askAgainPrompt(approval: Approval, names?: ReadonlyMap<string, string>): string {
+  const { action, server } = actionLabel(approval.tool, approval.mcpServer, approval.mcpAccount, names);
   const what = server ? `${action.toLowerCase()} (${approval.tool})` : action.toLowerCase();
   return `The approval card for ${what} timed out before I could act on it. Please stage it again — I'm ready to review it now.`;
 }
@@ -852,7 +873,7 @@ export function ApprovalCard({
                   onChange={(e) => setApplyAll(e.target.checked)}
                   className="size-3.5 accent-[var(--color-primary)]"
                 />
-                Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
+                <ApplyAllText approval={approval} />
               </label>
             )}
           </div>
@@ -944,7 +965,8 @@ function GenericActionCard({
       {narrowedSummary(approval.narrowed)}
     </p>
   ) : null;
-  const { action, server } = actionLabel(approval.tool);
+  const names = useContext(ConnectorNamesContext);
+  const { action, server } = actionLabel(approval.tool, approval.mcpServer, approval.mcpAccount, names);
   const args = Array.isArray(approval.summary.args) ? approval.summary.args : [];
   const rawArgs = approval.summary.raw ?? "";
   const recorded = approval.recorded === true;
@@ -1148,7 +1170,7 @@ function GenericActionCard({
                 onChange={(e) => onApplyAllChange(e.target.checked)}
                 className="size-3.5 accent-[var(--color-primary)]"
               />
-              Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
+              <ApplyAllText approval={approval} />
             </label>
           )}
         </div>
@@ -1234,7 +1256,7 @@ function GenericActionCard({
                 onChange={(e) => onApplyAllChange(e.target.checked)}
                 className="size-3.5 accent-[var(--color-primary)]"
               />
-              Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
+              <ApplyAllText approval={approval} />
             </label>
           )}
         </div>

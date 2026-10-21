@@ -8,9 +8,11 @@ package sandbox
 // caps, lockdown network) is covered by the podman-gated test below.
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -171,6 +173,174 @@ func TestFileOp_ReadReportsFullSHA256(t *testing.T) {
 	win, _ := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpRead, Path: path, Root: root, Offset: 4, Limit: 5})
 	if full.SHA256 != want || win.SHA256 != want {
 		t.Errorf("sha256 full=%q window=%q, want %q", full.SHA256, win.SHA256, want)
+	}
+}
+
+// TestFileOp_ReadMaxSizeAndLargeWindow pins the read contract the MCP
+// workspace-file reader relies on (ADR-0088): MaxSize refuses a file by its
+// size before reading it, and a multi-MiB window comes back byte-exact through
+// the helper's spliced (not re-dumped) base64 output, with the whole-file hash.
+func TestFileOp_ReadMaxSizeAndLargeWindow(t *testing.T) {
+	sb := fileopTestSandbox(t)
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "big.bin")
+	root := filepath.Dir(path)
+	body := make([]byte, 5<<20+123)
+	for i := range body {
+		body[i] = byte(i*7 + i>>11)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	want := hex.EncodeToString(sum[:])
+
+	win, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpRead, Path: path, Root: root,
+		Offset: 1 << 20, Limit: 3 << 20, MaxSize: int64(len(body))})
+	if err != nil {
+		t.Fatalf("window read: %v", err)
+	}
+	if !bytes.Equal(win.Data, body[1<<20:4<<20]) || win.Size != int64(len(body)) || win.SHA256 != want {
+		t.Fatalf("window: %d bytes, size=%d sha=%s", len(win.Data), win.Size, win.SHA256)
+	}
+	_, err = sb.RunFileOp(ctx, FileOpRequest{Op: FileOpRead, Path: path, Root: root,
+		Limit: 1, MaxSize: int64(len(body)) - 1})
+	if err == nil || !strings.Contains(err.Error(), "exceeding the") {
+		t.Fatalf("MaxSize did not refuse an oversized file: %v", err)
+	}
+}
+
+// TestFileOp_ReadMaxSizeCountsBytesRead: the fstat size check alone is not
+// enough, because a process in the sandbox can grow a file while it is read
+// and restore its size and mtime before the after-read check. The patched
+// os.read below never reaches EOF. The helper must stop by itself once it has
+// read max_size + 1 bytes and refuse the file, never buffering more than that.
+func TestFileOp_ReadMaxSizeCountsBytesRead(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "growing.bin")
+	if err := os.WriteFile(path, []byte("small"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	patch := `
+_reads = [0]
+def _endless(fd, n):
+    _reads[0] += 1
+    if _reads[0] > 16:
+        raise SystemExit("helper kept reading past max_size")
+    if n > (1 << 20) or n <= 0:
+        raise SystemExit("read asked for %d bytes" % n)
+    return b"x" * n
+fileops.os.read = _endless
+`
+	for _, req := range []map[string]any{
+		{"path": path, "root": root, "max_size": 3 << 20},
+		{"path": path, "root": root, "max_size": 3 << 20, "offset": 1, "limit": 2},
+	} {
+		_, err := runPatchedOp(t, "read", req, patch)
+		if !errors.Is(err, ErrFileOpTooLarge) {
+			t.Fatalf("growing file not refused: %v", err)
+		}
+	}
+}
+
+// TestFileOpSinkBoundsHelperOutput: Fleet's side of the same bound. A helper
+// that writes more than a read response can be (it is not the script Fleet
+// sent) is refused, and Fleet stops buffering at the bound.
+func TestFileOpSinkBoundsHelperOutput(t *testing.T) {
+	read := FileOpRequest{Op: FileOpRead, MaxSize: 3 << 20}
+	bound := fileOpOutputBound(read)
+	if want := int64(4<<20) + fileOpResponseOverhead; bound != want { // 3 MiB raw is exactly 4 MiB of base64
+		t.Fatalf("bound = %d, want %d", bound, want)
+	}
+	if got := fileOpOutputBound(FileOpRequest{Op: FileOpRead, MaxSize: 3 << 20, Limit: 10}); got != 16+fileOpResponseOverhead {
+		t.Fatalf("window bound = %d", got)
+	}
+	if fileOpOutputBound(FileOpRequest{Op: FileOpWrite, MaxSize: 1}) != 0 || fileOpOutputBound(FileOpRequest{Op: FileOpRead}) != 0 {
+		t.Fatal("unbounded requests got a bound")
+	}
+
+	ok := newFileOpSink(read)
+	if _, err := ok.Write([]byte(`{"ok":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := ok.output(FileOpRead); err != nil || string(out) != `{"ok":true}` {
+		t.Fatalf("in-bound output refused: %q %v", out, err)
+	}
+
+	flood := newFileOpSink(read)
+	chunk := bytes.Repeat([]byte("A"), 1<<20)
+	for range 8 { // 8 MiB, well past the ~4.06 MiB bound
+		if n, err := flood.Write(chunk); n != len(chunk) || err != nil {
+			t.Fatalf("sink must keep the pipe draining: %d %v", n, err)
+		}
+	}
+	if flood.data != nil {
+		t.Fatalf("sink kept buffering past the bound: cap %d", cap(flood.data))
+	}
+	// Growth never allocates past the bound, even just under it.
+	near := newFileOpSink(read)
+	for written := int64(0); written+(1<<20) <= bound; written += 1 << 20 {
+		_, _ = near.Write(chunk)
+	}
+	if int64(cap(near.data)) > bound {
+		t.Fatalf("sink capacity %d exceeds its bound %d", cap(near.data), bound)
+	}
+	if _, err := flood.output(FileOpRead); !errors.Is(err, ErrFileOpOutputTooLarge) {
+		t.Fatalf("oversized helper response accepted: %v", err)
+	}
+}
+
+// TestFileOp_ReadStreamsWithinSandboxMemory: the helper streams a 64 MiB
+// read (hash, base64 and write in fixed-size chunks) instead of holding the
+// file and its encoding, so it fits the smallest supported sandbox (128 MiB).
+// It runs under a 96 MiB address-space limit (ulimit -v), which the previous
+// helper — 64 MiB of file plus ~85 MiB of base64 — could not survive. The
+// response still decodes to the exact bytes and whole-file hash, and windows
+// at unaligned offsets keep the base64 carry right. (rusage is no use here: a
+// child's ru_maxrss inherits the Go parent's high-water mark at exec.)
+func TestFileOp_ReadStreamsWithinSandboxMemory(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 required for the fileop seam")
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "site.zip")
+	body := make([]byte, 64<<20)
+	for i := range body {
+		body[i] = byte(i*131 + i>>12)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(req map[string]any) []byte {
+		t.Helper()
+		req["op"], req["path"], req["root"], req["anchor"] = "read", path, root, root
+		raw, err := json.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("/bin/sh", "-c", `ulimit -v 98304 && exec python3 -I -c "$1"`, "sh", string(fileOpsScript))
+		cmd.Stdin = bytes.NewReader(raw)
+		var out, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("helper under a 96 MiB address-space limit: %v\n%s", err, stderr.String())
+		}
+		return out.Bytes()
+	}
+
+	out := run(map[string]any{"max_size": 64 << 20})
+	res, err := decodeFileOpResponse(out)
+	sum := sha256.Sum256(body)
+	if err != nil || !bytes.Equal(res.Data, body) || res.SHA256 != hex.EncodeToString(sum[:]) || res.Size != int64(len(body)) {
+		t.Fatalf("streamed read: err=%v, %d bytes, size %d", err, len(res.Data), res.Size)
+	}
+	// Windows: unaligned offsets and lengths keep the base64 carry right.
+	for _, w := range [][2]int64{{1, 1}, {1, 2}, {5, 3 << 18}, {(3 << 18) - 1, 7}, {64<<20 - 2, 2}} {
+		out := run(map[string]any{"offset": w[0], "limit": w[1]})
+		res, err := decodeFileOpResponse(out)
+		if err != nil || !bytes.Equal(res.Data, body[w[0]:w[0]+w[1]]) || res.SHA256 != hex.EncodeToString(sum[:]) {
+			t.Fatalf("window %v: err=%v, %d bytes", w, err, len(res.Data))
+		}
 	}
 }
 
@@ -736,5 +906,70 @@ func TestContainerFileOpReadOnlySupportingMount(t *testing.T) {
 		Op: FileOpWrite, Path: policy, Root: docs, Data: []byte("mutated"),
 	}); !errors.Is(err, ErrFileOpUnsafePath) {
 		t.Fatalf("supporting mount write = %v, want ErrFileOpUnsafePath", err)
+	}
+}
+
+// TestDecodeFileOpResponse_BoundsStreamedTrailer: a replaced helper that
+// follows a streamed payload with a large second member (another data_b64,
+// say) is refused before the trailer is copied or parsed.
+func TestDecodeFileOpResponse_BoundsStreamedTrailer(t *testing.T) {
+	ok := []byte(`{"data_b64":"aGk=","ok":true,"size":2}`)
+	if res, err := decodeFileOpResponse(ok); err != nil || string(res.Data) != "hi" {
+		t.Fatalf("a normal streamed read: %v %q", err, res.Data)
+	}
+	big := append([]byte(`{"data_b64":"aGk=","ok":true,"data_b64x":"`), bytes.Repeat([]byte("A"), maxStreamedTrailerBytes)...)
+	big = append(big, `"}`...)
+	if _, err := decodeFileOpResponse(big); err == nil || !strings.Contains(err.Error(), "trailer exceeds") {
+		t.Fatalf("an oversized trailer was parsed: %v", err)
+	}
+}
+
+// TestDecodeFileOpOutput_BoundedReadMustStream: a bounded read whose helper
+// answers with a large legacy JSON response (the whole file as a data_b64
+// string) is refused before it is parsed; small pre-stream errors still decode.
+func TestDecodeFileOpOutput_BoundedReadMustStream(t *testing.T) {
+	req := FileOpRequest{Op: FileOpRead, MaxSize: 1 << 20}
+	if _, err := decodeFileOpOutput(req, []byte(`{"ok":false,"err_kind":"not_found","err":"no such file","data_b64":""}`)); !errors.Is(err, ErrFileOpNotFound) {
+		t.Fatalf("a small pre-stream error: %v", err)
+	}
+	legacy := append([]byte(`{"ok":true,"data_b64":"`), bytes.Repeat([]byte("A"), 512<<10)...)
+	legacy = append(legacy, `","size":393216}`...)
+	if _, err := decodeFileOpOutput(req, legacy); !errors.Is(err, ErrFileOpOutputTooLarge) {
+		t.Fatalf("a large non-streamed read response was parsed: %v", err)
+	}
+	// An unbounded op is unaffected.
+	if _, err := decodeFileOpOutput(FileOpRequest{Op: FileOpWrite}, []byte(`{"ok":true,"data_b64":""}`)); err != nil {
+		t.Fatalf("a write response: %v", err)
+	}
+}
+
+// TestDecodeFileOpOutput_PrefixAloneIsNotAStream: a large response that opens
+// like a streamed frame but does not split as one (whitespace after the
+// payload, here) is refused, not parsed as legacy JSON.
+func TestDecodeFileOpOutput_PrefixAloneIsNotAStream(t *testing.T) {
+	req := FileOpRequest{Op: FileOpRead, MaxSize: 1 << 20}
+	out := append([]byte(`{"data_b64":"`), bytes.Repeat([]byte("A"), 512<<10)...)
+	out = append(out, `" ,"ok":true,"size":393216}`...)
+	if _, err := decodeFileOpOutput(req, out); !errors.Is(err, ErrFileOpOutputTooLarge) {
+		t.Fatalf("a malformed streamed frame was parsed: %v", err)
+	}
+}
+
+// TestFileOpSinkDiscardReleasesBuffer: once a backend returns, the sink drops
+// its buffer, and a copier that outlived the call (a cancelled Kubernetes
+// stream) can neither keep it alive nor grow a new one.
+func TestFileOpSinkDiscardReleasesBuffer(t *testing.T) {
+	s := newFileOpSink(FileOpRequest{Op: FileOpRead, MaxSize: 1 << 20})
+	if _, err := s.Write([]byte(`{"data_b64":"AAAA`)); err != nil || s.data == nil {
+		t.Fatalf("write before discard: %v", err)
+	}
+	s.discard()
+	if n, err := s.Write(bytes.Repeat([]byte("A"), 4096)); err != nil || n != 4096 {
+		t.Fatalf("a late write must still report success: %d %v", n, err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data != nil {
+		t.Fatalf("the sink kept %d bytes (cap %d) after discard", len(s.data), cap(s.data))
 	}
 }

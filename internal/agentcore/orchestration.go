@@ -52,7 +52,12 @@ type orchestrationState struct {
 	// auditTerminalFailure. It is the agent's own account of why it aborted —
 	// the single most useful sentence about the run — and before #1151 nothing
 	// downstream read it, so the task row said "Task completed successfully".
-	auditSummary             string
+	auditSummary string
+	// finishRefusedForAudit records whether the last checkFinishEnforcement
+	// refused the round for want of a passed self-audit: the "Before
+	// finishing: audit …" request, or "Audit not confirmed". Read through
+	// ScheduledPolicy.FinishRefusedForAudit (#1826).
+	finishRefusedForAudit    bool
 	pendingCriticalActions   []pendingCriticalAction
 	completedCriticalActions []string
 	// criticalExecutedCount counts every critical call that ran and reported
