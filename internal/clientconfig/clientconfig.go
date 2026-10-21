@@ -3551,6 +3551,9 @@ func interpolateManifest(raw []byte, manifestPath string) ([]byte, error) {
 	for i := 0; i < len(s); {
 		// Escape: "$${" -> literal "${" (consume one leading '$').
 		if strings.HasPrefix(s[i:], "$${") {
+			if err := escapedUserToken(s, i+1, manifestPath); err != nil {
+				return nil, err
+			}
 			sb.WriteString("${")
 			i += 3
 			continue
@@ -3627,6 +3630,32 @@ func reservedRuntimeVar(name string) bool {
 		return true
 	}
 	return false
+}
+
+// escapedUserToken fails the load for an escaped user token — $${FLEET_USER_EMAIL}
+// or $${FLEET_USER_NAME} — at s[dollar:] (which starts "${"). The escape
+// collapses to the literal "${FLEET_USER_EMAIL}" one pass before the spawn
+// paths run, and those paths cannot tell that literal from the token, so a
+// bundle that asked for the literal TEXT would be handed the signed-in user's
+// email instead. There is no way to express that literal in an env value, so
+// the spelling is refused rather than silently turned into PII. (Scoped to the
+// two user tokens, which no bundle predating them can contain; the older
+// reserved tokens keep their behaviour.)
+func escapedUserToken(s string, dollar int, manifestPath string) error {
+	end, ok := matchBrace(s, dollar+1)
+	if !ok {
+		return nil
+	}
+	name := strings.TrimSpace(s[dollar+2 : end])
+	if idx := strings.IndexByte(name, ':'); idx >= 0 {
+		name = strings.TrimSpace(name[:idx])
+	}
+	if name != reservedUserEmailVar && name != reservedUserNameVar {
+		return nil
+	}
+	return fmt.Errorf(
+		"client config manifest %s: $%s: an escaped %s cannot be written — fleet substitutes the signed-in user for that spelling at MCP launch, so the escape would hand a connector the user's identity instead of the literal text (see docs/MCP-BUNDLE-ENV.md)",
+		manifestPath, s[dollar:end+1], name)
 }
 
 // expandExpr resolves the body of a single ${...} expression (the text between

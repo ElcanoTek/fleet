@@ -179,7 +179,10 @@ The spelling rules are the other reserved tokens': bare only (a
 `${FLEET_USER_EMAIL:-team@example.com}` default fails the load — it would bake
 one person in), exact (a padded `${ FLEET_USER_EMAIL }` fails the load for
 every reserved token, since the spawn paths match only the exact spelling and
-it would otherwise reach every connector as a literal), never resolved from the process env (an operator-exported
+it would otherwise reach every connector as a literal), not escapable (an
+escaped `$${FLEET_USER_EMAIL}` fails the load: the escape collapses to the
+token one pass before spawn, so it would deliver the user's email rather than
+the literal text — there is no way to write that literal), never resolved from the process env (an operator-exported
 `FLEET_USER_EMAIL` cannot hijack it), and only in an `mcp_servers` env value (a
 header, url or command fails the load, since nothing would ever substitute it
 there). `fleet validate-config` and bundle preflight accept the tokens exactly

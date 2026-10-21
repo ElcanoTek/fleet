@@ -88,6 +88,25 @@ mcp_servers:
     env:
       RUN_WORKDIR: "${FLEET_WORKSPACE }"
 `, "without spaces inside the braces"},
+		// An escape collapses to the exact token one pass before spawn, which
+		// would hand the connector the user's email instead of the literal
+		// text the bundle asked for — so it is refused.
+		{"escaped email", `
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py"]
+    always: true
+    env:
+      TEMPLATE: "Reply to $${FLEET_USER_EMAIL}"
+`, "an escaped FLEET_USER_EMAIL cannot be written"},
+		{"escaped name in a url", `
+mcp_servers:
+  - name: remote
+    type: http
+    url: "https://example.test/$${FLEET_USER_NAME}"
+    always: true
+`, "an escaped FLEET_USER_NAME cannot be written"},
 		{"email in a header", `
 mcp_servers:
   - name: remote
@@ -115,5 +134,25 @@ mcp_servers:
 				t.Errorf("error = %v, want it to contain %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestEscapedOrdinaryVarStillLoads: the escaped-user-token refusal is scoped
+// to the two user tokens; any other $${...} keeps its literal meaning.
+func TestEscapedOrdinaryVarStillLoads(t *testing.T) {
+	b, err := Load(writeManifest(t, `
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py"]
+    always: true
+    env:
+      TEMPLATE: "$${NOT_A_FLEET_TOKEN}"
+`))
+	if err != nil {
+		t.Fatalf("an ordinary escape must still load: %v", err)
+	}
+	if got := b.MCPServerConfigs()["deals"].Env["TEMPLATE"]; got != "${NOT_A_FLEET_TOKEN}" {
+		t.Errorf("TEMPLATE = %q, want the literal text", got)
 	}
 }
