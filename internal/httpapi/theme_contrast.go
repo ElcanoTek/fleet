@@ -310,3 +310,81 @@ func hslToRGB(h, s, l float64) rgba {
 	}
 	return rgba{f(0), f(8), f(4), 1}
 }
+
+// The action gradient (the composer's Send circle, the empty-state prompt's
+// Run button) runs from the primary to the secondary. Its label sits on every
+// point of it, so both stops are measured, and so is the blend between them:
+// with dark text a straight sRGB blend can dip darker mid-way than either end
+// (luminance is convex along the blend), so an AA pair of ends is not enough.
+// The gradient starts at the measured primary fill and ends at
+// --color-secondary-fill: the secondary mixed toward the fill's extreme by the
+// smallest step at which every point of the blend clears AA under the label.
+// Its hover runs from the primary hover to a secondary hover at least
+// primaryFillHoverStep further, measured the same way.
+
+// fleetSecondaryDefault mirrors globals.css's --color-secondary (both themes).
+// TestSecondaryFill_DefaultsMatchGlobalsCSS keeps the two in step.
+const fleetSecondaryDefault = "#586f7c"
+
+// gradientSamples is how many steps of a blend are measured. The 2.1rem Send
+// circle is ~34px across, so 64 steps is finer than the pixels it paints.
+const gradientSamples = 64
+
+// secondaryFill is the measured end of the action gradient and its hover.
+type secondaryFill struct {
+	fill, hover        string // #rrggbb
+	percent, hoverPct  int    // how much of the extreme is mixed in
+	minRatio, hoverMin float64
+}
+
+// deriveSecondaryFill returns the action gradient's end stops for a derived
+// primary pair and a secondary. Its blends with the primary fill (and the
+// hover's with the primary hover) clear AA at every point: at 100% the end is
+// the extreme the fill was mixed toward, and a blend from an AA fill toward
+// that extreme only moves away from the label. Should that ever not hold, the
+// end is the start stop itself (a flat fill, AA by construction).
+func deriveSecondaryFill(pf primaryFill, secondary string) secondaryFill {
+	s, ok := parseCSSColor(secondary)
+	if !ok {
+		s, _ = parseCSSColor(fleetSecondaryDefault)
+	}
+	s.a = 1
+	text, _ := parseCSSColor(pf.text)
+	fill, _ := parseCSSColor(pf.fill)
+	hover, _ := parseCSSColor(pf.hover)
+	toward, _ := parseCSSColor(pf.toward)
+	other := rgba{1 - toward.r, 1 - toward.g, 1 - toward.b, 1}
+
+	// end is the smallest mix of s (from `from`% up) whose blend from start
+	// clears AA everywhere.
+	end := func(start rgba, from int) (rgba, int, float64) {
+		for _, dir := range []rgba{toward, other} {
+			for pct := from; pct <= 100; pct++ {
+				cand := quantize(mixSRGB(s, dir, pct))
+				if r := blendMinContrast(text, start, cand); r >= primaryFillMinContrast {
+					return cand, pct, r
+				}
+			}
+		}
+		return start, 0, blendMinContrast(text, start, start)
+	}
+	var out secondaryFill
+	c, pct, r := end(fill, 0)
+	out.fill, out.percent, out.minRatio = hexOf(c), pct, r
+	c, pct, r = end(hover, min(out.percent+primaryFillHoverStep, 100))
+	out.hover, out.hoverPct, out.hoverMin = hexOf(c), pct, r
+	return out
+}
+
+// blendMinContrast is the lowest contrast of text on any point of a CSS
+// linear-gradient from a to b (opaque stops blend in sRGB), each point
+// rounded to the 8-bit color the browser paints.
+func blendMinContrast(text, a, b rgba) float64 {
+	lowest := math.Inf(1)
+	for i := 0; i <= gradientSamples; i++ {
+		t := float64(i) / gradientSamples
+		p := quantize(rgba{a.r + (b.r-a.r)*t, a.g + (b.g-a.g)*t, a.b + (b.b-a.b)*t, 1})
+		lowest = math.Min(lowest, contrast(text, p))
+	}
+	return lowest
+}

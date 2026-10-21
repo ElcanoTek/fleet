@@ -215,20 +215,33 @@ const RULES: Rule[] = [
   },
   {
     why: "a hover that fades or lightens a filled button lowers its contrast: hover to --color-primary-fill-hover",
-    line: [/--color-primary-fill\b/],
+    line: [/--color-primary-fill\b/, /--gradient-action-fill\b/],
     window: [/(^|[\s"'`:])hover:(opacity|brightness)-/],
     extent: "class",
   },
   {
     why: "a disableable button must not deepen on hover while disabled: use enabled:hover:",
-    line: [/(^|[\s"'`])hover:bg-\[var\(--color-primary-fill-hover\)\]/],
+    line: [/(^|[\s"'`])hover:bg-\[var\(--color-primary-fill-hover\)\]/, /(^|[\s"'`])hover:bg-\[image:var\(--gradient-action-fill-hover\)\]/],
     window: [/(^|[\s"'`:])disabled:|\bdisabled=\{/],
     extent: "element",
   },
   {
-    why: "a foreground on --gradient-action-primary: its secondary stop is not measured, use the -fill tokens",
+    why: "a foreground on --gradient-action-primary: its secondary stop is not measured, use --gradient-action-fill",
     line: [/--gradient-action-primary/],
     window: [/--color-on-primary/],
+    extent: "class",
+  },
+  {
+    // A gradient under the measured label is allowed only between measured
+    // stops: --gradient-action-fill(-hover), or an inline linear-gradient()
+    // whose every var() is a -fill stop /theme.css measures. Any other
+    // gradient token or stop is unmeasured under the label.
+    why: "a gradient under --color-on-primary-fill runs between measured stops only: --gradient-action-fill(-hover) or -fill tokens",
+    line: [
+      /var\(--gradient-(?!action-fill(-hover)?\))[\w-]+\)/,
+      /linear-gradient\([^\]]*var\(--(?!color-(primary|secondary)-fill(-hover)?\))[\w-]+\)/,
+    ],
+    window: [/--color-on-primary-fill/],
     extent: "class",
   },
 ];
@@ -283,7 +296,9 @@ describe("filled primary buttons use the measured fill pair (WCAG AA)", () => {
       const rawBg = /(^|[\s;])background(-color)?\s*:\s*var\(--color-primary(-hover)?\)\s*(!important\s*)?(;|$)/.test(body);
       const onPrimary = /(^|[\s;])(color|background(-color)?|fill|stroke)\s*:\s*var\(--color-on-primary\)/.test(body);
       const fillLabel = /(^|[\s;])color\s*:\s*var\(--color-on-primary-fill\)/.test(body);
-      const fillBg = /(^|[\s;])background(-color)?\s*:\s*var\(--color-primary-fill(-hover)?\)/.test(body);
+      const fillBg =
+        /(^|[\s;])background(-color)?\s*:\s*var\(--color-primary-fill(-hover)?\)/.test(body) ||
+        /(^|[\s;])background(-image)?\s*:\s*var\(--gradient-action-fill(-hover)?\)/.test(body);
       const anyBg = /(^|[\s;])background(-color|-image)?\s*:/.test(body);
       if (onPrimary) offenders.push(`${selector} — a foreground on the brand fill is --color-on-primary-fill`);
       if (fillLabel && anyBg && !fillBg) offenders.push(`${selector} — --color-on-primary-fill is measured on --color-primary-fill only`);
@@ -306,6 +321,12 @@ describe("filled primary buttons use the measured fill pair (WCAG AA)", () => {
       ["className={[", '  "bg-[var(--color-primary-fill)] text-[var(--color-on-primary-fill)]",', '  "hover:opacity-90",', '].join(" ")}'],
       ["<button", "  disabled={busy}", '  className="bg-[var(--color-primary-fill)] hover:bg-[var(--color-primary-fill-hover)]"', ">"],
       ['className="bg-[image:var(--gradient-action-primary)]', '  text-[var(--color-on-primary-fill)]"'],
+      // A gradient under the measured label with an unmeasured stop or token.
+      ['className="bg-[linear-gradient(140deg,var(--color-primary-fill),var(--color-secondary))] text-[var(--color-on-primary-fill)]"'],
+      ['className="bg-[image:var(--gradient-surface-elevated)] text-[var(--color-on-primary-fill)]"'],
+      // The measured gradient still must not fade, nor deepen while disabled.
+      ['className="bg-[image:var(--gradient-action-fill)] text-[var(--color-on-primary-fill)] hover:opacity-90"'],
+      ["<button", "  disabled={busy}", '  className="bg-[image:var(--gradient-action-fill)] hover:bg-[image:var(--gradient-action-fill-hover)]"', ">"],
       // A nav bar allowance outside the nav files, or one carrying text.
       [`className="${NAV_BAR} before:content-['New'] before:text-[var(--color-on-primary-fill)]"`],
     ];
@@ -317,6 +338,10 @@ describe("filled primary buttons use the measured fill pair (WCAG AA)", () => {
       ['className="border-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_14%,transparent)] text-[var(--color-text-primary)]"'],
       ['className="accent-[var(--color-primary)]"'],
       ['className="bg-[linear-gradient(var(--color-surface-1),var(--color-surface-1))_padding-box,var(--gradient-action-primary)_border-box]"'],
+      // Gradients between measured stops under the measured label.
+      ['className="bg-[image:var(--gradient-action-fill)] text-[var(--color-on-primary-fill)] enabled:hover:bg-[image:var(--gradient-action-fill-hover)] disabled:bg-none"'],
+      ['className="bg-[linear-gradient(140deg,var(--color-primary-fill),var(--color-primary-fill-hover))] text-[var(--color-on-primary-fill)]"'],
+      ['className="bg-[linear-gradient(140deg,var(--color-primary-fill),var(--color-secondary-fill))] text-[var(--color-on-primary-fill)]"'],
     ];
     for (const lines of good) expect(offendersIn("app/x.tsx", lines), lines.join("\n")).toEqual([]);
     expect(offendersIn(NAV_BAR_FILES[0], [`className="before:h-[0.85rem] ${NAV_BAR} max-[900px]:before:hidden"`])).toEqual([]);

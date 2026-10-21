@@ -62,6 +62,15 @@
      with the fill (a translucent on_primary could not reach AA on any fill). */
   --color-on-primary-fill: var(--color-on-primary);
   --color-secondary: #586f7c;
+  /* The far end of the action gradient (--gradient-action-fill) under
+     --color-on-primary-fill. Every point of a blend carries the label, and
+     with dark text an sRGB blend can dip darker mid-way than either end, so
+     /theme.css measures the whole blend from the primary fill (and the hover
+     blend from the primary hover) and mixes the secondary toward the fill's
+     extreme by the smallest step that keeps all of it at 4.5:1. Fleet's own
+     secondary needs no mix. Not themable on purpose. */
+  --color-secondary-fill: var(--color-secondary);
+  --color-secondary-fill-hover: color-mix(in srgb, var(--color-secondary) 90%, #000);
   --color-accent: #9da7ef;
   --color-white: #ffffff;
   --color-bg: #1a0b1e;
@@ -345,6 +354,21 @@
     140deg,
     var(--color-primary),
     var(--color-secondary)
+  );
+  /* The action gradient a label sits on (the composer's Send circle, the
+     empty-state prompt's Run button): primary → secondary like the one above,
+     but between the measured stops, so the label holds 4.5:1 on every point
+     for any bundle palette. The raw gradient above is for what carries no
+     label (a selected option's ring). */
+  --gradient-action-fill: linear-gradient(
+    140deg,
+    var(--color-primary-fill),
+    var(--color-secondary-fill)
+  );
+  --gradient-action-fill-hover: linear-gradient(
+    140deg,
+    var(--color-primary-fill-hover),
+    var(--color-secondary-fill-hover)
   );
   --gradient-featured-top-accent: linear-gradient(
     90deg,
@@ -681,6 +705,14 @@
     140deg,
     var(--color-primary-hover),
     color-mix(in srgb, var(--color-secondary) 85%, #000)
+  );
+  /* Light keeps the deeper action surface with the measured stops: the hover
+     pair, which moves away from the label (fleet's own runs #656598 →
+     #4f6470, beside the raw #5f5f97 → #4b5e69 above). */
+  --gradient-action-fill: linear-gradient(
+    140deg,
+    var(--color-primary-fill-hover),
+    var(--color-secondary-fill-hover)
   );
   --gradient-featured-top-accent: linear-gradient(
     90deg,
