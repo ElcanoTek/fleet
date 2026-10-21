@@ -741,3 +741,70 @@ func TestElideBeforeSummary_EstimatesTheSentHistory(t *testing.T) {
 		t.Fatalf("estimated after %d, want %d: the image's bytes are not sent and must not be counted", el.usedAfter, want)
 	}
 }
+
+// The issue's prompt-cache constraint: elision never rewrites history per
+// step, only when the run already rewrites it (a compaction pause), and what
+// it writes then is carried on unchanged. Between pauses every call's history
+// is an exact prefix of the next call's, so the provider's cache holds; and a
+// stub, once written, is byte-identical in every later call, so an elision at
+// a later pause rewrites only the results that left the window since.
+func TestRun_Elision_KeepsThePromptCachePrefix(t *testing.T) {
+	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	sr := &sizedRun{prefix: 140_000, toolSteps: 26, resultChars: 40_000}
+	obs, _ := sr.run(t, "elide-cache-prefix")
+	paused := map[int]bool{}
+	for _, step := range checkpointedSteps(obs) {
+		paused[step] = true // the call after step s is the first after a rewrite
+	}
+	stubs := map[string]string{} // call ID -> the stub first sent for it
+	rewrites := 0
+	for i := 0; i+1 < len(sr.sent); i++ {
+		prev, next := sr.sent[i], sr.sent[i+1]
+		if !paused[i+1] {
+			if len(next) < len(prev) || !reflect.DeepEqual(next[:len(prev)], prev) {
+				t.Fatalf("call %d rewrote the history call %d sent, with no pause between them", i+2, i+1)
+			}
+			continue
+		}
+		rewrites++
+		// Across a pause the next call carries the paused step's own call and
+		// result (two messages), and of what the paused call sent, only tool
+		// results may differ, each keeping its call ID.
+		if len(next) != len(prev)+2 {
+			t.Fatalf("the call after the pause at call %d sent %d messages, want %d", i+1, len(next), len(prev)+2)
+		}
+		for k := range prev {
+			if next[k] == prev[k] {
+				continue
+			}
+			id, _, _ := strings.Cut(strings.TrimPrefix(prev[k], "tool|result:"), ":")
+			if !strings.HasPrefix(prev[k], "tool|result:") || !strings.HasPrefix(next[k], "tool|result:"+id+":") {
+				t.Fatalf("the elision at call %d rewrote message %d, which is not a tool result:\n was %.80q\n now %.80q", i+2, k, prev[k], next[k])
+			}
+		}
+	}
+	for _, sent := range sr.sent {
+		for _, line := range sent {
+			_, rest, ok := strings.Cut(line, "|result:")
+			if !ok {
+				continue
+			}
+			id, text, _ := strings.Cut(rest, ":")
+			if !strings.HasPrefix(text, "[tool output truncated]") {
+				continue
+			}
+			if first, seen := stubs[id]; seen && first != text {
+				t.Fatalf("the stub for %s changed after it was written", id)
+			}
+			stubs[id] = text
+		}
+	}
+	// Checked last, so a per-step rewrite fails above on what it changed.
+	if len(paused) < 2 || len(payloadsOf(obs, evtContextCompacted)) != len(paused) {
+		t.Fatalf("fixture: want two or more elision pauses and no summary, got pauses %v, compactions %v", paused, payloadsOf(obs, evtContextCompacted))
+	}
+	if rewrites != len(paused) || len(stubs) == 0 {
+		t.Fatalf("rewrites %d (pauses %d), stubs %d", rewrites, len(paused), len(stubs))
+	}
+}

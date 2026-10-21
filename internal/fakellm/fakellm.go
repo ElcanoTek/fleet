@@ -108,6 +108,26 @@ type Scenario struct {
 	// the streaming worker conversation. Reviewers receive a fresh transcript
 	// carrying the same scenario marker, but must not restart its tool loop.
 	NonStreaming *Step
+	// SizedPromptTokens reports each request's prompt_tokens as its messages'
+	// characters / 4, the way a real provider's count grows with the history,
+	// instead of the fixed defaultPromptTokens. A scheduled run's resend-budget
+	// checkpoint fires on that count, so a scenario that must reach the budget
+	// sets it.
+	SizedPromptTokens bool
+}
+
+// defaultPromptTokens is the prompt_tokens every response reports unless its
+// scenario sets SizedPromptTokens.
+const defaultPromptTokens = 10
+
+// sizedPromptTokens is a request's prompt size at about 4 characters a token:
+// every message's raw content (text, or the content-part array), as sent.
+func sizedPromptTokens(msgs []chatMessage) int {
+	chars := 0
+	for _, m := range msgs {
+		chars += len(m.Content)
+	}
+	return max(1, chars/4)
 }
 
 // scenarioMarker matches "[[scenario:NAME]]" in a prompt. NAME is any run of
@@ -268,10 +288,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.hits["__echo__"]++
 		s.mu.Unlock()
 		if !req.Stream {
-			s.jsonText(w, req.Model, text)
+			s.jsonText(w, req.Model, text, defaultPromptTokens)
 			return
 		}
-		s.streamText(w, r, req.Model, text, 0)
+		s.streamText(w, r, req.Model, text, 0, defaultPromptTokens)
 		return
 	}
 
@@ -297,6 +317,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !req.Stream && sc.NonStreaming != nil {
 		step = *sc.NonStreaming
 	}
+	promptTokens := defaultPromptTokens
+	if sc.SizedPromptTokens {
+		promptTokens = sizedPromptTokens(req.Messages)
+	}
 
 	switch step.Kind {
 	case StepStatus:
@@ -317,17 +341,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	case StepToolCalls:
 		if !req.Stream {
-			s.jsonToolCalls(w, req.Model, step.ToolCalls)
+			s.jsonToolCalls(w, req.Model, step.ToolCalls, promptTokens)
 			return
 		}
-		s.streamToolCalls(w, r, req.Model, step.ToolCalls, step.Delay)
+		s.streamToolCalls(w, r, req.Model, step.ToolCalls, step.Delay, promptTokens)
 		return
 	default: // StepText (and any unrecognized kind falls back to text)
 		if !req.Stream {
-			s.jsonText(w, req.Model, step.Text)
+			s.jsonText(w, req.Model, step.Text, promptTokens)
 			return
 		}
-		s.streamText(w, r, req.Model, step.Text, step.Delay)
+		s.streamText(w, r, req.Model, step.Text, step.Delay, promptTokens)
 		return
 	}
 }

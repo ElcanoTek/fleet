@@ -288,8 +288,12 @@ fewer summarizer calls; making the elided content recallable added nothing.
   (checkpoint or between rounds), or the window one on the
   `FLEET_SCHEDULED_AUTO_COMPACT` opt-in. That is the moment the history is
   rewritten anyway, so the stubs cost no extra prompt-cache miss. Nothing
-  happens per step. A subagent runs the scheduled loop, including one a chat
-  spawns, so it elides too; an interactive chat turn never does.
+  happens per step: between pauses every call's history is an exact prefix of
+  the next call's, and a stub never changes once written, so a later elision
+  rewrites only the results that left the window since
+  (`TestRun_Elision_KeepsThePromptCachePrefix`, which fails if elision is moved
+  into the per-step chain). A subagent runs the scheduled loop, including one a
+  chat spawns, so it elides too; an interactive chat turn never does.
 - **What.** Every tool result after the pinned head and before the recent
   window is replaced with its stub, when the stub is shorter: the start and end
   of the output (about 1 KiB, the whole stub at most 2 KiB), its original size,
@@ -431,18 +435,21 @@ with the new cap):
 
 On the Anthropic models and DeepSeek, elision cut summaries from nine to one or
 two and cost by a third to a half (DeepSeek's half partly because its run with
-elision made 48 tool calls to the other's 60). Both Gemini runs failed on the
-model's own account: it stopped after 11–12 of the 30 seeds and then failed the
-audit, and with elision on it had also filled in the missing values itself;
-each of its three elisions freed enough. Luna Pro failed both ways, and not for
-a reason compaction can fix. On a sample like this output (17,999 characters of
-the same comma-separated numbers), its tokenizer counted about 1.8 tokens a
-character, which puts each result near 31K tokens, close to 40% of the budget,
-and the two newest results the window must keep fill most of it. Its runs
-paused every one or two steps either way, and what the summaries (and, with
-elision, the stubs) kept was not enough for the audit to vouch for every seed.
-A direct measurement of the rate per model (listed with the bounds on
-`historyTokenRate`) found Luna Pro at 7.3 on that sample and 8.2 on base64,
+elision made 48 tool calls to the other's 60). On every model, the share of
+prompt tokens read from the provider's cache went up with elision, and no run
+paused more often: Haiku 51% to 60%, Sonnet 51% to 61%, Opus 51% to 63%,
+DeepSeek 72% to 84%, Gemini 13% to 16%, Luna Pro 59% to 64%. Both Gemini runs
+failed on the model's own account: it stopped after 11–12 of the 30 seeds and
+then failed the audit, and with elision on it had also filled in the missing
+values itself; each of its three elisions freed enough. Luna Pro failed both
+ways, and not for a reason compaction can fix. On a sample like this output
+(17,999 characters of the same comma-separated numbers), its tokenizer counted
+about 1.8 tokens a character, which puts each result near 31K tokens, close to
+40% of the budget, and the two newest results the window must keep fill most of
+it. Its runs paused every one or two steps either way, and what the summaries
+(and, with elision, the stubs) kept was not enough for the audit to vouch for
+every seed. A direct measurement of the rate per model (listed with the bounds
+on `historyTokenRate`) found Luna Pro at 7.3 on that sample and 8.2 on base64,
 above the rate's old cap of 4, so the cap is now 12. Rerun with the new cap,
 Luna Pro's own runs measured 4.5–4.6, once 6.8: lower than the sample's 7.3,
 presumably because its history also carries the model's text, tool-call inputs
@@ -462,8 +469,12 @@ in what it was sent.
   forwards it with no change.
 - "Elide down to a target" became the headroom rule above: elision alone must
   get 30% of the budget under the threshold, else the summary runs too.
-- The acceptance tests use the package's scripted mock model, like the #1600
-  checkpoint tests, not the `internal/fakellm` HTTP server.
+- The fake-LLM acceptance run is `TestElision_LargeToolResultsNeedNoSummary_FakeLLM`
+  (`internal/taskrun`): a scheduled task through the OpenRouter adapter against
+  `internal/fakellm`, elision on and no summary. `fakellm` gained an opt-in
+  `SizedPromptTokens` scenario field for it, since every response reported a
+  fixed 10 prompt tokens before and so could never reach a resend budget. The
+  other run-level tests use the agentcore scripted model, like #1600's.
 - `TestRun_ResendCheckpoint_FloorAboveBudgetWaitsForABudgetOfHistory` now runs
   with elision off: it pins the floor rule with the summary compaction, and its
   fixture, run with elision on, is the acceptance test above.

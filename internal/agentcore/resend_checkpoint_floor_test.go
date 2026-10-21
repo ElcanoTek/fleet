@@ -60,6 +60,31 @@ type sizedRun struct {
 
 	mu    sync.Mutex
 	sizes []int // the resent size of each call, in call order
+	// sent is each call's history as the model received it, one rendered
+	// line per message (renderSentMessage), in call order.
+	sent [][]string
+}
+
+// renderSentMessage is one message as a provider receives it, for comparing
+// what successive calls sent: its role and every part's model-visible
+// content. Provider options (the prompt-cache markers, which move to the
+// newest message on every call) are left out.
+func renderSentMessage(m fantasy.Message) string {
+	var b strings.Builder
+	b.WriteString(string(m.Role))
+	for _, part := range m.Content {
+		if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok {
+			b.WriteString("|text:" + tp.Text)
+		}
+		if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok {
+			b.WriteString("|call:" + tc.ToolCallID + ":" + tc.ToolName + ":" + tc.Input)
+		}
+		if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
+			text, _ := toolResultOutputText(tr.Output)
+			b.WriteString("|result:" + tr.ToolCallID + ":" + text)
+		}
+	}
+	return b.String()
 }
 
 func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSession) {
@@ -78,8 +103,13 @@ func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSessio
 	model.streamFunc = func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
 		n := calls.Add(1)
 		size := sizedPromptTokens(sr.prefix, call, cmp.Or(sr.resultCharsPerToken, 4))
+		sent := make([]string, 0, len(call.Prompt))
+		for _, m := range call.Prompt {
+			sent = append(sent, renderSentMessage(m))
+		}
 		sr.mu.Lock()
 		sr.sizes = append(sr.sizes, size)
+		sr.sent = append(sr.sent, sent)
 		sr.mu.Unlock()
 		if int(n) <= sr.toolSteps {
 			return toolStep(fantasy.Usage{InputTokens: int64(size), OutputTokens: 10}, fmt.Sprintf("page-%d", n), n), nil

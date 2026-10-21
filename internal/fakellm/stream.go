@@ -70,7 +70,7 @@ func writeSSE(w http.ResponseWriter, c chunk) {
 // streamText emits an assistant text turn: a role-priming chunk, the content
 // split into a few deltas (so the stream resembles token-by-token delivery),
 // a terminal chunk with finish_reason:"stop", a usage-only chunk, then [DONE].
-func (s *Server) streamText(w http.ResponseWriter, r *http.Request, model, text string, delay time.Duration) {
+func (s *Server) streamText(w http.ResponseWriter, r *http.Request, model, text string, delay time.Duration, promptTokens int) {
 	id := "fake-" + nonce()
 	startSSE(w)
 
@@ -94,7 +94,7 @@ func (s *Server) streamText(w http.ResponseWriter, r *http.Request, model, text 
 	writeSSE(w, chunk{ID: id, Object: chunkObject, Created: now(), Model: model,
 		Choices: []chunkChoice{{Index: 0, Delta: chunkDelta{}, FinishReason: ptr("stop")}}})
 
-	writeUsage(w, id, model)
+	writeUsage(w, id, model, promptTokens)
 	writeDone(w)
 }
 
@@ -102,7 +102,7 @@ func (s *Server) streamText(w http.ResponseWriter, r *http.Request, model, text 
 // finishes with finish_reason:"tool_calls". Each call is sent in a single chunk
 // carrying the id, name and complete JSON arguments — the SDK's accumulator
 // handles whole-in-one-chunk calls.
-func (s *Server) streamToolCalls(w http.ResponseWriter, r *http.Request, model string, calls []ToolCall, delay time.Duration) {
+func (s *Server) streamToolCalls(w http.ResponseWriter, r *http.Request, model string, calls []ToolCall, delay time.Duration, promptTokens int) {
 	id := "fake-" + nonce()
 	startSSE(w)
 
@@ -138,15 +138,15 @@ func (s *Server) streamToolCalls(w http.ResponseWriter, r *http.Request, model s
 	writeSSE(w, chunk{ID: id, Object: chunkObject, Created: now(), Model: model,
 		Choices: []chunkChoice{{Index: 0, Delta: chunkDelta{}, FinishReason: ptr("tool_calls")}}})
 
-	writeUsage(w, id, model)
+	writeUsage(w, id, model, promptTokens)
 	writeDone(w)
 }
 
-func writeUsage(w http.ResponseWriter, id, model string) {
+func writeUsage(w http.ResponseWriter, id, model string, promptTokens int) {
 	// A usage-only chunk (empty choices) after include_usage; harmless if the
 	// client ignores it, and keeps cost accounting clean.
 	writeSSE(w, chunk{ID: id, Object: chunkObject, Created: now(), Model: model,
-		Choices: []chunkChoice{}, Usage: &usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}})
+		Choices: []chunkChoice{}, Usage: &usage{PromptTokens: promptTokens, CompletionTokens: 5, TotalTokens: promptTokens + 5}})
 }
 
 func writeDone(w http.ResponseWriter) {
@@ -239,7 +239,7 @@ func writeJSON(w http.ResponseWriter, c completion) {
 	_ = json.NewEncoder(w).Encode(c)
 }
 
-func (s *Server) jsonText(w http.ResponseWriter, model, text string) {
+func (s *Server) jsonText(w http.ResponseWriter, model, text string, promptTokens int) {
 	writeJSON(w, completion{
 		ID: "fake-" + nonce(), Object: "chat.completion", Created: now(), Model: model,
 		Choices: []completionChoice{{
@@ -247,11 +247,11 @@ func (s *Server) jsonText(w http.ResponseWriter, model, text string) {
 			Message:      completionMessage{Role: "assistant", Content: text},
 			FinishReason: "stop",
 		}},
-		Usage: usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+		Usage: usage{PromptTokens: promptTokens, CompletionTokens: 5, TotalTokens: promptTokens + 5},
 	})
 }
 
-func (s *Server) jsonToolCalls(w http.ResponseWriter, model string, calls []ToolCall) {
+func (s *Server) jsonToolCalls(w http.ResponseWriter, model string, calls []ToolCall, promptTokens int) {
 	tcs := make([]msgToolCall, 0, len(calls))
 	for i, c := range calls {
 		callID := c.ID
@@ -274,7 +274,7 @@ func (s *Server) jsonToolCalls(w http.ResponseWriter, model string, calls []Tool
 			Message:      completionMessage{Role: "assistant", ToolCalls: tcs},
 			FinishReason: "tool_calls",
 		}},
-		Usage: usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+		Usage: usage{PromptTokens: promptTokens, CompletionTokens: 5, TotalTokens: promptTokens + 5},
 	})
 }
 
