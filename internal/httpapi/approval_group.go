@@ -57,6 +57,10 @@ type approvalGroupRequest struct {
 	// approved_values, docs/APPROVAL-NARROWING.md). Every id must be in
 	// Approve; a card absent from it is approved whole.
 	Narrow map[string][]string `json:"narrow,omitempty"`
+	// NarrowArgs maps each narrowed card's id to the argument its card showed
+	// as narrowable (the single-card POST's narrowed_arg). Required for every
+	// id in Narrow, and only for those.
+	NarrowArgs map[string]string `json:"narrow_args,omitempty"`
 }
 
 // maxApprovalGroupNarrowedValues bounds the approved values one group
@@ -202,7 +206,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 		// decision instead of failing one card after others were claimed.
 		// A settled card answers its recorded state below, as before.
 		if values, ok := req.Narrow[d.id]; ok && a.Status == "pending" {
-			if _, err := narrowApproval(a, values); err != nil {
+			if _, err := narrowApproval(a, values, req.NarrowArgs[d.id]); err != nil {
 				http.Error(w, fmt.Sprintf("approval %q: %v", d.id, err), http.StatusBadRequest)
 				return
 			}
@@ -224,7 +228,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 				if d.approve {
 					res.Decision = "approve"
 				}
-				out := s.decideApproval(ctx, r.Context().Done(), user, convID, d.id, approvalRequest{Approved: d.approve, Scope: "once", ApprovedValues: groupApprovedValues(req.Narrow, d.id)})
+				out := s.decideApproval(ctx, r.Context().Done(), user, convID, d.id, approvalRequest{Approved: d.approve, Scope: "once", ApprovedValues: groupApprovedValues(req.Narrow, d.id), NarrowedArg: req.NarrowArgs[d.id]})
 				switch {
 				case out.suggest != nil:
 					// Unreachable: a suggestion card is handler-only and never
@@ -281,7 +285,15 @@ func checkGroupNarrowing(req approvalGroupRequest) error {
 		if values == nil {
 			return fmt.Errorf("approval %q is narrowed to nothing; decline it instead", id)
 		}
+		if req.NarrowArgs[id] == "" {
+			return fmt.Errorf("approval %q is narrowed without narrow_args naming the argument its card showed", id)
+		}
 		total += len(values)
+	}
+	for id := range req.NarrowArgs {
+		if _, ok := req.Narrow[id]; !ok {
+			return fmt.Errorf("narrow_args names approval %q, which is not narrowed", id)
+		}
 	}
 	if total > maxApprovalGroupNarrowedValues {
 		return fmt.Errorf("too many narrowed values in one group decision (max %d); decide the cards one at a time", maxApprovalGroupNarrowedValues)

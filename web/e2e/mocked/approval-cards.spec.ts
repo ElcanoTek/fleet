@@ -660,5 +660,5 @@ test("a narrowable card leaves an unticked deal out and approves the rest in one
   await pending.getByRole("button", { name: "Approve 2 of 3" }).click();
 
   await expect(pending.getByTestId("approval-narrowed-summary")).toHaveText("Approved 2 of 3 · 1 left out");
-  expect(posted).toEqual({ approved: true, scope: "once", approved_values: ["k1", "k3"] });
+  expect(posted).toEqual({ approved: true, scope: "once", approved_values: ["k1", "k3"], narrowed_arg: "deal_ids" });
 });

@@ -466,7 +466,11 @@ export function ApprovalCard({
     if (executing && !approved) return;
     setSubmitting(approved ? "send" : "cancel");
     setSubmitError(null);
-    const narrowing = approved && !executing && approvedValues !== undefined && approvedValues.length > 0;
+    // The argument the card showed goes with the values: the server refuses a
+    // narrowing of any other argument (a policy that changed after a restart).
+    const narrowedArg = approval.narrowable?.arg;
+    const narrowing =
+      approved && !executing && approvedValues !== undefined && approvedValues.length > 0 && narrowedArg !== undefined;
     try {
       const approvalUrl = conversationApprovalApiUrl(conversationId, approval.id);
       if (!approvalUrl) {
@@ -486,7 +490,7 @@ export function ApprovalCard({
           // wider scope with approved_values).
           scope: executing || approval.noSessionApproval || narrowing ? "once" : applyAll ? "session" : "once",
           ...(!executing && edits && Object.keys(edits).length > 0 ? { edits } : {}),
-          ...(narrowing ? { approved_values: approvedValues } : {}),
+          ...(narrowing ? { approved_values: approvedValues, narrowed_arg: narrowedArg } : {}),
         }),
       });
       if (!response.ok) {

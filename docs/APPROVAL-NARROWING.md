@@ -84,10 +84,11 @@ checkbox is there.
 
 ### The decision
 
-The approve POST takes `approved_values`, the ticked values:
+The approve POST takes `approved_values`, the ticked values, and
+`narrowed_arg`, the argument the card showed (its `narrowable.arg`):
 
 ```json
-{"approved": true, "scope": "once", "approved_values": ["k1", "k3"]}
+{"approved": true, "scope": "once", "approved_values": ["k1", "k3"], "narrowed_arg": "deal_ids"}
 ```
 
 `decideApproval` checks it before anything is claimed (`narrowApproval`), and
@@ -97,7 +98,12 @@ refuses with 400, leaving the card pending, when:
   of 2 to 500 distinct non-empty strings of at most 200 characters;
 - the list is empty (decline instead) or an explicit `null` (refused, never read as "approve everything"), names a value that was not staged, or
   names one twice;
-- it comes with `approved: false`, or with a scope other than `once`.
+- it comes with `approved: false`, or with a scope other than `once`;
+- `narrowed_arg` is missing, or is not the argument the tool narrows now. The
+  decision is bound to what the card showed: if fleet restarted with another
+  `critical_tool_narrowable_args` entry while the card was open, the values
+  are never applied to an argument the person did not review (reload the card
+  and decide again).
 
 Naming every staged value is a whole approval: the plain claim, the staged
 call. Otherwise the card is claimed with `store.ClaimApprovalNarrowed`, which
@@ -179,13 +185,14 @@ The approved-call budget is computed for the narrowed arguments (a smaller
 ### Grouped cards
 
 `POST /conversations/{id}/approval-groups/{groupId}` takes `narrow`, a map from
-an approved card's id to its ticked values:
+an approved card's id to its ticked values, and `narrow_args`, the argument
+each of those cards showed:
 
 ```json
-{"approve": ["ap-ix", "ap-mg"], "decline": [], "narrow": {"ap-ix": ["k2", "k3"]}}
+{"approve": ["ap-ix", "ap-mg"], "decline": [], "narrow": {"ap-ix": ["k2", "k3"]}, "narrow_args": {"ap-ix": "deal_ids"}}
 ```
 
-Every id in `narrow` must be in `approve`, the values across all cards are at
+Every id in `narrow` must be in `approve` and in `narrow_args` (and only those), the values across all cards are at
 most 5000 (the card row budget), and each narrowing is checked with the same
 code as the single-card POST before any card is claimed; a bad one refuses the
 whole decision. Each card is then decided with its own values. The body limit
@@ -206,6 +213,9 @@ an unchecked call, and **Approve all (k)** counts the calls that will run.
   `email`, `template_email`, `mail_send_email`) is refused by the policy
   check, and an outbound email tool is never narrowable at run time whatever
   key matches it (`agentcore.IsOutboundEmailTool`, the same base suffixes).
+- **Never the native `bash` tool.** Its approved card runs inline, not as an
+  MCP call, so a key `bash` is refused by the policy check (name an MCP tool
+  by its server instead, e.g. `shell_bash`).
 - **Never a synthetic-transport tool.** An inline `http_tools` entry
   (`mcp__http_*`) or an a2a peer tool (`mcp__a2a_*`) is approved whole
   whatever key matches it: those transports forward the call's arguments

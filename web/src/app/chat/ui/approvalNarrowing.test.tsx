@@ -124,7 +124,12 @@ describe("a narrowable pending card", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/conversations/conv_1/approvals/ap_1");
-    expect(JSON.parse(String(init?.body))).toEqual({ approved: true, scope: "once", approved_values: ["k1", "k3"] });
+    expect(JSON.parse(String(init?.body))).toEqual({
+      approved: true,
+      scope: "once",
+      approved_values: ["k1", "k3"],
+      narrowed_arg: "deal_ids",
+    });
     await waitFor(() => expect(onResolved).toHaveBeenCalled());
     expect(onResolved.mock.calls[0][0].narrowed).toEqual({ arg: "deal_ids", staged: ["k1", "k2", "k3"], approved: ["k1", "k3"] });
   });
@@ -210,6 +215,7 @@ describe("narrowing inside a grouped card", () => {
       approve: ["ap-ix", "ap-mg"],
       decline: [],
       narrow: { "ap-ix": ["k2", "k3"] },
+      narrow_args: { "ap-ix": "deal_ids" },
     });
 
     cleanup();
