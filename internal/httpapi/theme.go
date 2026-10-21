@@ -163,9 +163,8 @@ func writeThemeBlock(b *strings.Builder, selector string, colors map[string]stri
 		if valid("on_primary") {
 			onPrimary = strings.TrimSpace(colors["on_primary"])
 		}
-		if f, ok := derivePrimaryFill(primary, onPrimary); ok {
-			fmt.Fprintf(&decls, "--color-primary-fill:%s;--color-primary-fill-hover:%s;", f.fill, f.hover)
-		}
+		f := derivePrimaryFill(primary, onPrimary)
+		fmt.Fprintf(&decls, "--color-primary-fill:%s;--color-primary-fill-hover:%s;--color-on-primary-fill:%s;", f.fill, f.hover, f.text)
 	}
 	if decls.Len() == 0 {
 		return

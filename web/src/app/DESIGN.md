@@ -21,7 +21,7 @@ An element filled with a brand or status color needs a foreground chosen for
 
 | Fill | Foreground | Why |
 |---|---|---|
-| `bg-[var(--color-primary)]` | `text-[var(--color-on-primary)]` | The purpose-built token. It cannot be derived — a dark primary needs light text, a light one (yellow, lime, cyan) needs dark text — so a bundle declares it. |
+| `bg-[var(--color-primary)]` | `text-[var(--color-on-primary)]` | The purpose-built token. It cannot be derived — a dark primary needs light text, a light one (yellow, lime, cyan) needs dark text — so a bundle declares it. The pair itself is not held to 4.5:1 (fleet's own is 4.46:1): for a filled button's label prefer `bg-[var(--color-primary-fill)]` + `text-[var(--color-on-primary-fill)]`, which `/theme.css` measures for every palette (required on the approval cards). |
 | `bg-[var(--color-accent)]`, `bg-[var(--color-danger)]` | `text-[var(--color-surface-1)]` | Inverts with the theme (near-black in dark, white in light), which is the polarity a saturated fill needs. Themable, so a bundle keeps control. |
 
 Reaching for `--color-text-primary` on a saturated fill is the common mistake:
@@ -155,8 +155,8 @@ Known, deliberate exceptions:
   with dark button text) that cannot reach 3:1 on the track. For the same
   reason the help guides paint links in `--color-link`. Filled buttons
   (Approve, Check result, Retry failed, Approve 2 of 3) paint
-  `--color-on-primary` on `--color-primary-fill` and hover to
-  `--color-primary-fill-hover`, never `--color-primary` or a faded
+  `--color-on-primary-fill` on `--color-primary-fill` and hover (when
+  enabled) to `--color-primary-fill-hover`, never `--color-primary` or a faded
   `hover:opacity-*`: the brand pair can miss 4.5:1 (fleet's own is 4.46:1),
   so the fill is the primary nudged until it passes, measured per bundle by
   `/theme.css` (see `docs/BRANDING.md`). Don't mix a card

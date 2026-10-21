@@ -89,8 +89,8 @@ const PROGRESS: Pair = {
 // opaque, so the card under it does not change the pair.
 function filledButton(label: string): Pair[] {
   return [
-    { what: `${label} button label`, fg: v("color-on-primary"), layers: [v("color-primary-fill")], min: TEXT },
-    { what: `${label} button label, hovered`, fg: v("color-on-primary"), layers: [v("color-primary-fill-hover")], min: TEXT },
+    { what: `${label} button label`, fg: v("color-on-primary-fill"), layers: [v("color-primary-fill")], min: TEXT },
+    { what: `${label} button label, hovered`, fg: v("color-on-primary-fill"), layers: [v("color-primary-fill-hover")], min: TEXT },
   ];
 }
 
@@ -240,6 +240,7 @@ describe("approval cards use the measured tokens", () => {
     [/fg:\s*"var\(--color-warning\)"/, "a warning icon is --color-warning-icon"],
     [/\bbg-\[var\(--color-primary\)\]/, "a filled button is --color-primary-fill (the brand pair can miss 4.5:1)"],
     [/text-\[var\(--color-on-primary\)\][^"]*hover:opacity-/, "a hover that fades a filled button lowers its contrast: use --color-primary-fill-hover"],
+    [/bg-\[var\(--color-primary-fill\)\][^"]*text-\[var\(--color-on-primary\)\]/, "a filled button's label is --color-on-primary-fill (painted solid)"],
   ];
 
   it.each(FILES)("%s", (file) => {
@@ -298,7 +299,7 @@ describe("bundle palette traits fleet must survive", () => {
   // What /theme.css emits as a bundle's button fill, recorded from the Go
   // derivation (internal/httpapi TestPrimaryFillContract). Each palette trait
   // is re-measured here with this file's own evaluator, on every card fill.
-  const FILLS: { name: string; primary: string; on_primary: string; fill: string; hover: string }[] = JSON.parse(
+  const FILLS: { name: string; primary: string; on_primary: string; fill: string; hover: string; text: string }[] = JSON.parse(
     readFileSync(join(APP_DIR, "..", "..", "..", "testdata", "contracts", "theme-primary-fill.json"), "utf8"),
   );
   const BUTTON_FILLS = [CARD, PENDING, SUCCESS, WARNING, DANGER, RECORD];
@@ -311,10 +312,12 @@ describe("bundle palette traits fleet must survive", () => {
         "--color-on-primary": f.on_primary,
         "--color-primary-fill": f.fill,
         "--color-primary-fill-hover": f.hover,
+        "--color-on-primary-fill": f.text,
       };
       // A fill is opaque: a button never takes its color from what it sits on.
       expect(resolveColor(f.fill, theme)[3]).toBe(1);
       expect(resolveColor(f.hover, theme)[3]).toBe(1);
+      expect(resolveColor(f.text, theme)[3]).toBe(1);
       const pairs = BUTTON_FILLS.flatMap((fill) =>
         filledButton("button").map((p) => ({ ...p, layers: [fill, ...p.layers] })),
       );

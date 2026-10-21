@@ -44,7 +44,7 @@ func TestRenderThemeCSS_DropsInvalidAndUnknown(t *testing.T) {
 			"accent":      "rgb(157, 167, 239)",       // valid functional
 			"secondary":   "red; } body{display:none", // INVALID — injection attempt
 			"text_muted":  "javascript:alert(1)",      // INVALID
-			"not_a_token": "#ffffff",                  // unknown key — ignored
+			"not_a_token": "#a1b2c3",                  // unknown key — ignored
 		},
 	})
 	if !strings.Contains(css, "--color-primary:#7272ab;") {
@@ -59,7 +59,7 @@ func TestRenderThemeCSS_DropsInvalidAndUnknown(t *testing.T) {
 	if strings.Contains(css, "javascript") {
 		t.Errorf("invalid value emitted: %q", css)
 	}
-	if strings.Contains(css, "#ffffff") {
+	if strings.Contains(css, "#a1b2c3") {
 		t.Errorf("unknown token emitted: %q", css)
 	}
 }

@@ -14,19 +14,19 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 )
 
-// measuredRatio re-measures a derived fill from its emitted hex, independent
-// of the values derivePrimaryFill reports about itself.
-func measuredRatio(t *testing.T, onPrimary, fillHex string) float64 {
+// measuredRatio re-measures a derived pair from the hex it emits,
+// independent of the values derivePrimaryFill reports about itself.
+func measuredRatio(t *testing.T, textHex, fillHex string) float64 {
 	t.Helper()
-	text, ok := parseCSSColor(onPrimary)
-	if !ok {
-		t.Fatalf("on_primary %q does not parse", onPrimary)
+	text, ok := parseCSSColor(textHex)
+	if !ok || text.a != 1 {
+		t.Fatalf("label %q is not an opaque color", textHex)
 	}
 	fill, ok := parseCSSColor(fillHex)
 	if !ok || fill.a != 1 {
 		t.Fatalf("fill %q is not an opaque color", fillHex)
 	}
-	return contrast(over(text, fill), fill)
+	return contrast(text, fill)
 }
 
 func TestDerivePrimaryFill_Cases(t *testing.T) {
@@ -49,15 +49,12 @@ func TestDerivePrimaryFill_Cases(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			f, ok := derivePrimaryFill(c.primary, c.onPrimary)
-			if !ok {
-				t.Fatalf("derivePrimaryFill(%q, %q) not ok", c.primary, c.onPrimary)
-			}
+			f := derivePrimaryFill(c.primary, c.onPrimary)
 			if f.fill != c.fill || f.hover != c.hover || f.percent != c.percent {
 				t.Errorf("got fill %s hover %s at %d%% toward %s, want fill %s hover %s at %d%%",
 					f.fill, f.hover, f.percent, f.toward, c.fill, c.hover, c.percent)
 			}
-			if r := measuredRatio(t, c.onPrimary, f.fill); r < primaryFillMinContrast {
+			if r := measuredRatio(t, f.text, f.fill); r < primaryFillMinContrast {
 				t.Errorf("fill %s: %.3f:1 < 4.5:1", f.fill, r)
 			}
 		})
@@ -86,30 +83,35 @@ func TestDerivePrimaryFill_AnyPaletteReachesAA(t *testing.T) {
 		pairs = append(pairs, [2]string{randomHex(), randomHex()})
 	}
 	for _, p := range pairs {
-		f, ok := derivePrimaryFill(p[0], p[1])
-		if !ok {
-			t.Fatalf("derivePrimaryFill(%q, %q) not ok", p[0], p[1])
+		f := derivePrimaryFill(p[0], p[1])
+		if r := measuredRatio(t, f.text, f.fill); r < primaryFillMinContrast {
+			t.Fatalf("%s on %s → %s on fill %s: %.3f:1 < 4.5:1", p[1], p[0], f.text, f.fill, r)
 		}
-		if r := measuredRatio(t, p[1], f.fill); r < primaryFillMinContrast {
-			t.Fatalf("%s on %s → fill %s: %.3f:1 < 4.5:1", p[1], p[0], f.fill, r)
-		}
-		if h := measuredRatio(t, p[1], f.hover); h < measuredRatio(t, p[1], f.fill)-1e-9 {
+		if h := measuredRatio(t, f.text, f.hover); h < measuredRatio(t, f.text, f.fill)-1e-9 {
 			t.Fatalf("%s on %s → hover %s (%.3f:1) lowers the fill's contrast", p[1], p[0], f.hover, h)
 		}
 	}
 }
 
-func TestDerivePrimaryFill_RejectsUnparseable(t *testing.T) {
-	for _, p := range [][2]string{
-		{"rgb(foo, bar, baz)", "#ffffff"},
-		{"#7272ab", "rgb(1, 2)"},
-		{"hsl(1, 2%, 3%, 4, 5)", "#ffffff"},
-		{"rgb(1, 2, 3 / 0.5)", "#ffffff"},
-		{"red", "#ffffff"},
-		{"", "#ffffff"},
+// A value fleet cannot read falls back to fleet's own for that color, and
+// a translucent label is painted solid, so the pair is always measured.
+func TestDerivePrimaryFill_FallsBackAndPaintsTheLabelSolid(t *testing.T) {
+	for _, c := range []struct{ primary, onPrimary, fill, text string }{
+		{"rgb(foo, bar, baz)", "#ffffff", "#7171a9", "#ffffff"},
+		{"rgb(1 2 3 4)", "#ffffff", "#7171a9", "#ffffff"},
+		{"#7272ab", "rgb(1, 2)", "#7171a9", "#ffffff"},
+		{"hsl(240, 25, 56)", "#ffffff", "#7171a9", "#ffffff"},
+		{"rgb(100%, 0, 0)", "#ffffff", "#7171a9", "#ffffff"},
+		{"", "", "#7171a9", "#ffffff"},
+		// White at 30% is 2.46:1 even on black; painted solid it passes.
+		{"#7272ab", "rgba(255, 255, 255, 0.3)", "#7171a9", "#ffffff"},
 	} {
-		if f, ok := derivePrimaryFill(p[0], p[1]); ok {
-			t.Errorf("derivePrimaryFill(%q, %q) = %+v, want not ok", p[0], p[1], f)
+		f := derivePrimaryFill(c.primary, c.onPrimary)
+		if f.fill != c.fill || f.text != c.text {
+			t.Errorf("derivePrimaryFill(%q, %q) = %s on %s, want %s on %s", c.primary, c.onPrimary, f.text, f.fill, c.text, c.fill)
+		}
+		if r := measuredRatio(t, f.text, f.fill); r < primaryFillMinContrast {
+			t.Errorf("%q / %q: %.3f:1", c.primary, c.onPrimary, r)
 		}
 	}
 }
@@ -164,9 +166,9 @@ func TestPrimaryFill_DefaultsMatchGlobalsCSS(t *testing.T) {
 			}
 		}
 	}
-	f, ok := derivePrimaryFill(fleetPrimaryDefaults.primary, fleetPrimaryDefaults.onPrimary)
-	if !ok || f.toward != "#000000" {
-		t.Fatalf("fleet default fill: %+v, %v", f, ok)
+	f := derivePrimaryFill(fleetPrimaryDefaults.primary, fleetPrimaryDefaults.onPrimary)
+	if f.toward != "#000000" {
+		t.Fatalf("fleet default fill: %+v", f)
 	}
 	mix := regexp.MustCompile(`^color-mix\(in srgb, var\(--color-primary\) (\d+)%, #000\)$`)
 	for name, pct := range map[string]int{
@@ -190,7 +192,7 @@ func TestPrimaryFill_DefaultsMatchGlobalsCSS(t *testing.T) {
 func TestRenderThemeCSS_EmitsPrimaryFill(t *testing.T) {
 	t.Run("primary only: measured against fleet's on_primary", func(t *testing.T) {
 		css := renderThemeCSS(clientconfig.BrandColors{Light: map[string]string{"primary": "#ffdf03"}})
-		if !strings.Contains(css, "--color-primary-fill:#877602;--color-primary-fill-hover:#6e6001;") {
+		if !strings.Contains(css, "--color-primary-fill:#877602;--color-primary-fill-hover:#6e6001;--color-on-primary-fill:#ffffff;") {
 			t.Errorf("no measured fill: %q", css)
 		}
 	})
@@ -233,6 +235,7 @@ func TestPrimaryFillContract(t *testing.T) {
 		OnPrimary string `json:"on_primary"`
 		Fill      string `json:"fill"`
 		Hover     string `json:"hover"`
+		Text      string `json:"text"`
 	}
 	traits := []struct{ name, primary, onPrimary string }{
 		{"fleet's own palette", "#7272ab", "#ffffff"},
@@ -242,15 +245,13 @@ func TestPrimaryFillContract(t *testing.T) {
 		{"a dark primary with dark text", "#1d2a5a", "#000000"},
 		{"a translucent primary", "rgba(114, 114, 171, 0.5)", "#ffffff"},
 		{"translucent text", "#7272ab", "rgba(255, 255, 255, 0.85)"},
+		{"faint text no fill can carry", "#7272ab", "rgba(255, 255, 255, 0.3)"},
 		{"a saturated magenta primary under white", "#e5007a", "#ffffff"},
 	}
 	got := make([]entry, 0, len(traits))
 	for _, tr := range traits {
-		f, ok := derivePrimaryFill(tr.primary, tr.onPrimary)
-		if !ok {
-			t.Fatalf("%s: not ok", tr.name)
-		}
-		got = append(got, entry{tr.name, tr.primary, tr.onPrimary, f.fill, f.hover})
+		f := derivePrimaryFill(tr.primary, tr.onPrimary)
+		got = append(got, entry{tr.name, tr.primary, tr.onPrimary, f.fill, f.hover, f.text})
 	}
 	body, err := json.MarshalIndent(got, "", "  ")
 	if err != nil {

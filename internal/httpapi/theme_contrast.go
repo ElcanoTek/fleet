@@ -42,39 +42,47 @@ var fleetPrimaryDefaults = struct{ primary, onPrimary string }{"#7272ab", "#ffff
 // rgba is a color with channels and alpha in [0,1].
 type rgba struct{ r, g, b, a float64 }
 
-// primaryFill is a derived fill: the primary's opaque color with percent of
-// black (toward == "#000000") or white mixed in, plus its hover.
+// primaryFill is a derived button pair: the fill (the primary's opaque color
+// with percent of black, toward == "#000000", or white mixed in), its hover,
+// and the label color painted on both.
 type primaryFill struct {
 	fill, hover string  // #rrggbb
+	text        string  // #rrggbb: on_primary, opaque
 	toward      string  // "#000000" or "#ffffff"
 	percent     int     // how much of the extreme is mixed in (0 = the primary itself)
-	ratio       float64 // contrast of on_primary on fill, as the browser paints it
+	ratio       float64 // contrast of text on fill
 	hoverRatio  float64
 }
 
-// derivePrimaryFill returns the accessible fill for on-primary text over a
-// primary, or ok=false when either color cannot be parsed (the stylesheet
-// then keeps globals.css's default fill, which is derived from whatever
-// --color-primary resolves to).
+// derivePrimaryFill returns the button pair for a primary and on_primary.
+// It always returns an AA pair:
 //
-// A translucent primary is used opaque: a button fill must not depend on what
-// it happens to sit on. A translucent on_primary is measured composited over
-// each candidate fill, which is how the browser paints it.
-func derivePrimaryFill(primary, onPrimary string) (primaryFill, bool) {
+//   - The label is on_primary made opaque. A translucent label can sit
+//     under 4.5:1 on every fill (white at 30% reaches 2.5:1 even on black),
+//     so the button paints it solid. An opaque on_primary is unchanged.
+//   - A translucent primary is used opaque: a button fill must not depend on
+//     what it happens to sit on.
+//   - A value fleet cannot read falls back to fleet's own for that color, so
+//     the pair is still measured rather than left to an unmeasured mix.
+//
+// Every color reaches at least 4.58:1 against black or against white, so one
+// of the two directions always passes for an opaque label.
+func derivePrimaryFill(primary, onPrimary string) primaryFill {
 	p, ok := parseCSSColor(primary)
 	if !ok {
-		return primaryFill{}, false
+		p, _ = parseCSSColor(fleetPrimaryDefaults.primary)
 	}
 	text, ok := parseCSSColor(onPrimary)
 	if !ok {
-		return primaryFill{}, false
+		text, _ = parseCSSColor(fleetPrimaryDefaults.onPrimary)
 	}
-	p.a = 1
+	p.a, text.a = 1, 1
+	text = quantize(text)
 	best := primaryFill{percent: -1}
 	for _, toward := range []rgba{{0, 0, 0, 1}, {1, 1, 1, 1}} {
 		for pct := 0; pct <= 100; pct++ {
 			fill := quantize(mixSRGB(p, toward, pct))
-			ratio := contrast(over(text, fill), fill)
+			ratio := contrast(text, fill)
 			if ratio < primaryFillMinContrast {
 				continue
 			}
@@ -82,10 +90,11 @@ func derivePrimaryFill(primary, onPrimary string) (primaryFill, bool) {
 			cand := primaryFill{
 				fill:       hexOf(fill),
 				hover:      hexOf(hover),
+				text:       hexOf(text),
 				toward:     hexOf(toward),
 				percent:    pct,
 				ratio:      ratio,
-				hoverRatio: contrast(over(text, hover), hover),
+				hoverRatio: contrast(text, hover),
 			}
 			// The smallest change wins. A primary that already passes (0% in
 			// both directions) takes the direction that moves AWAY from the
@@ -97,12 +106,7 @@ func derivePrimaryFill(primary, onPrimary string) (primaryFill, bool) {
 			break
 		}
 	}
-	// Unreachable for a parsed on_primary (see the file comment); kept so a
-	// future change to the threshold cannot emit an unmeasured fill.
-	if best.percent < 0 {
-		return primaryFill{}, false
-	}
-	return best, true
+	return best
 }
 
 // mixSRGB is CSS color-mix(in srgb, a (100-pct)%, b pct%) for opaque colors.
@@ -125,17 +129,6 @@ func quantize(c rgba) rgba {
 func hexOf(c rgba) string {
 	b := func(v float64) int { return int(math.Round(clamp01(v) * 255)) }
 	return fmt.Sprintf("#%02x%02x%02x", b(c.r), b(c.g), b(c.b))
-}
-
-// over composites top onto an opaque color.
-func over(top, under rgba) rgba {
-	a := top.a
-	return rgba{
-		top.r*a + under.r*(1-a),
-		top.g*a + under.g*(1-a),
-		top.b*a + under.b*(1-a),
-		1,
-	}
 }
 
 func luminance(c rgba) float64 {
@@ -177,6 +170,7 @@ func parseCSSColor(s string) (rgba, bool) {
 	if !ok {
 		return rgba{}, false
 	}
+	legacy := strings.Contains(args, ",")
 	alpha := 1.0
 	if len(parts) == 4 {
 		if alpha, ok = cssNumber(parts[3], 1); !ok {
@@ -185,6 +179,11 @@ func parseCSSColor(s string) (rgba, bool) {
 	}
 	switch name {
 	case "rgb", "rgba":
+		// Legacy syntax: the channels are all numbers or all percentages.
+		if legacy && (strings.HasSuffix(parts[0], "%") != strings.HasSuffix(parts[1], "%") ||
+			strings.HasSuffix(parts[1], "%") != strings.HasSuffix(parts[2], "%")) {
+			return rgba{}, false
+		}
 		var ch [3]float64
 		for i := range ch {
 			if ch[i], ok = cssNumber(parts[i], 255); !ok {
@@ -196,6 +195,10 @@ func parseCSSColor(s string) (rgba, bool) {
 	case "hsl", "hsla":
 		h, ok := cssHue(parts[0])
 		if !ok {
+			return rgba{}, false
+		}
+		// Legacy hsl() needs percentages for saturation and lightness.
+		if legacy && (!strings.HasSuffix(parts[1], "%") || !strings.HasSuffix(parts[2], "%")) {
 			return rgba{}, false
 		}
 		sat, ok1 := cssNumber(parts[1], 100)
@@ -244,8 +247,13 @@ func colorArgs(args string) ([]string, bool) {
 			parts = append(parts, strings.TrimSpace(p))
 		}
 	} else {
+		// Modern syntax: exactly three space-separated components, the alpha
+		// only after a slash ("rgb(1 2 3 4)" is not a color).
 		main, alpha, hasAlpha := strings.Cut(args, "/")
 		parts = strings.Fields(main)
+		if len(parts) != 3 {
+			return nil, false
+		}
 		if hasAlpha {
 			parts = append(parts, strings.TrimSpace(alpha))
 		}

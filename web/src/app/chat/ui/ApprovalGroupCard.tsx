@@ -248,7 +248,7 @@ export function ApprovalGroupCard({
           <button
             type="button"
             data-testid="approval-group-approve"
-            className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
+            className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
             disabled={disabled || checkedIds.length === 0}
             onClick={() => void decide(checkedIds, uncheckedIds)}
           >

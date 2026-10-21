@@ -58,6 +58,9 @@
      button label below AA. Not themable on purpose. */
   --color-primary-fill: color-mix(in srgb, var(--color-primary) 99%, #000);
   --color-primary-fill-hover: color-mix(in srgb, var(--color-primary) 89%, #000);
+  /* The label on that fill: on_primary, painted solid. /theme.css emits it
+     with the fill (a translucent on_primary could not reach AA on any fill). */
+  --color-on-primary-fill: var(--color-on-primary);
   --color-secondary: #586f7c;
   --color-accent: #9da7ef;
   --color-white: #ffffff;
