@@ -48,11 +48,16 @@ version: 2
 # What monthly does NOT delay:
 #   * Dependabot SECURITY updates. They are raised when an advisory is
 #     published, not on this schedule, and cooldown does not apply to them.
-#   * Our own gates. govulncheck (call-graph aware) and `npm audit` run on every
-#     PR and every push to `main`, so a reachable CVE turns CI red the day it is
-#     published, whatever Dependabot's calendar says. That red check is the
+#   * Our own gates. govulncheck (call-graph aware) and `npm audit` gate every
+#     PR and every push to `main`, so the first PR or push after an advisory
+#     goes red, whatever Dependabot's calendar says. That red check is the
 #     out-of-cycle trigger: bump the one dependency, in its own PR (#1821,
-#     #1822 are the pattern).
+#     #1822 are the pattern). Between pushes, Go is also scanned daily
+#     (govulncheck-scheduled.yml, non-blocking, Security tab); npm has no
+#     scheduled lane, so a fresh npm advisory on a quiet week surfaces only
+#     through Dependabot security updates. Those are a repository setting
+#     (Settings → Code security), not something this file controls: keep them
+#     on.
 #   * A bump someone needs now. Bump it by hand in the PR that needs it.
 
 # ── What Dependabot does NOT cover here (learned the hard way) ───────────────
