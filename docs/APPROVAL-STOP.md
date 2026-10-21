@@ -81,9 +81,9 @@ Elcano bundle's deal-plan execute does this).
   - 404 for an unknown card or another conversation, 400 for a tool that did
     not opt in, 409 for a card still pending (decline it instead);
   - a card already settled answers its outcome, and nothing is recorded;
-  - a running card whose outcome is already being recorded (its stop window
-    is finalized, or its signal is gone) answers its state and records
-    nothing: accepting a stop and finalizing the outcome take the same lock,
+  - a running card whose call has already returned (its stop window closes
+    the moment the call returns, before its result is processed, or its
+    signal is gone) answers its state and records nothing: accepting a stop and finalizing the outcome take the same lock,
     so the row's stop mark and the outcome's stop line always agree;
   - a running card: `store.MarkApprovalStopRequested` writes
     `approvals.stop_requested_at` (migration 080) once, only on the owner's
@@ -97,8 +97,9 @@ Elcano bundle's deal-plan execute does this).
   ran", recorded as a failure.
 - **The outcome is the call's.** Whatever the server answers is recorded by
   the same code as any approved call (governance, result card, history,
-  resume, finish push). After the tool's governed, bounded text fleet adds,
-  governed and bounded on its own: `[fleet] The person
+  resume, finish push). After the tool's text fleet adds, governed with it
+  and never truncated (the tool's text is bounded to what the output limit
+  leaves after it): `[fleet] The person
   pressed Stop while this call ran. Its server was asked to stop after the
   item it was working on; the result above says what ran and what did not. Do
   not run the remaining items unless the person asks. (Written by fleet, not
