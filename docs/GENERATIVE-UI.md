@@ -118,8 +118,12 @@ Honest scope:
 - **No cross-conversation references.** Only the current conversation's
   results are searched, as the turn replays them. A result from before the
   conversation's summary is not replayed, so it is not found, which is a clear
-  error. The run's own results are searched as they were recorded, in full,
-  even after a mid-turn context reduction has shortened what the model sees.
+  error. The candidates are fixed when the turn starts (its replayed history)
+  plus the run's own results as they were recorded, in full. A mid-turn
+  context reduction or compaction does not remove a candidate, even though it
+  shortens what the model sees. The conversation and the user are the same,
+  the card is still validated, and the newest result of a tool is the one a
+  reduction keeps longest.
 
 ## The component catalog
 
