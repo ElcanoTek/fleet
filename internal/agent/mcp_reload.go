@@ -109,6 +109,8 @@ func MCPServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
 			// no task identity) so the diff compares like with like.
 			env = agentcore.ExpandTaskIDEnv(env, "")
 			env = agentcore.ExpandWorkspaceRootEnv(env)
+			// ...and its user-token handling (dropped — no signed-in user).
+			env = agentcore.ExpandUserEnv(env, agentcore.MCPUserIdentity{})
 			// Dir must be the SAME value BuildMCPClient's spawn used, or
 			// serverDefEqual sees a changed def and restarts every server on
 			// every reload.

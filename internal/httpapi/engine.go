@@ -62,8 +62,9 @@ type turnEngine interface {
 	// OpenApprovalMCPScope reopens the credential seat a staged approval
 	// recorded so the approved call runs on the account its turn used, not the
 	// default bundle seat (#167 residual 2). (nil, nil) means the engine has no
-	// scope opener and the caller falls back to MCPBroker().
-	OpenApprovalMCPScope(ctx context.Context, selection agentcore.MCPSelection, workspace string) (*agent.MCPScope, error)
+	// scope opener and the caller falls back to MCPBroker(). user is the
+	// approving user, for the bundle's ${FLEET_USER_*} env tokens (ADR-0087).
+	OpenApprovalMCPScope(ctx context.Context, selection agentcore.MCPSelection, workspace string, user agentcore.MCPUserIdentity) (*agent.MCPScope, error)
 	// OpenApprovalRemoteMCPScope is the hosted-connection counterpart (#988):
 	// it reopens exactly the {connection, account} seat a card recorded. nil,
 	// nil when remote MCP is not wired.

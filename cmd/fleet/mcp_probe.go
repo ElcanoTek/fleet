@@ -280,6 +280,9 @@ func probeBundleServer(name string, spec config.MCPServerConfig, timeout time.Du
 		// the boot-time shared spawn does, so the probe env matches production.
 		env = agentcore.ExpandTaskIDEnv(env, "")
 		env = agentcore.ExpandWorkspaceRootEnv(env)
+		// No signed-in user either: ${FLEET_USER_*}-bearing keys are dropped,
+		// exactly as on the boot-time shared spawn.
+		env = agentcore.ExpandUserEnv(env, agentcore.MCPUserIdentity{})
 		addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env,
 			agentcore.StdioCwd(spec.Dir, spec.DirPinned, shared))
 	default:

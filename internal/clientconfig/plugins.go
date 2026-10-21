@@ -77,7 +77,8 @@ import (
 // Every other client ignores that namespace, so a plugin carrying it stays
 // portable.
 //
-// Honest scope: fleet's own `${FLEET_WORKSPACE}` / `${FLEET_TASK_ID}`
+// Honest scope: fleet's own `${FLEET_WORKSPACE}` / `${FLEET_TASK_ID}` /
+// `${FLEET_USER_EMAIL}` / `${FLEET_USER_NAME}` (and `${FLEET_WORKSPACE_ROOT}`)
 // spawn-time tokens are still substituted in a plugin server's env values (a
 // documented deviation from the spec's "no other expansion" rule — see
 // docs/AGENT-PLUGINS.md); a portable plugin has no reason to write them.

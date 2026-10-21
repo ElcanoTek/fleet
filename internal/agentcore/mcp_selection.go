@@ -464,6 +464,11 @@ func bindMCPServer(ctx context.Context, client *mcp.Client, plan mcpBindPlan, wo
 	// ${FLEET_WORKSPACE_ROOT}: the deployment root, offered on every path
 	// (per-run, load-on-demand and broker scopes all bind through here).
 	env = ExpandWorkspaceRootEnv(env)
+	// ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME}: an interactive broker scope
+	// already substituted the signed-in user into BaseEnv (cmd/fleet
+	// OpenScope), so this is a no-op there. Every other caller — scheduled
+	// runs, load-on-demand onto a shared client — has no user: drop the keys.
+	env = ExpandUserEnv(env, MCPUserIdentity{})
 	cwd := StdioCwd(base.Dir, base.DirPinned, workdir)
 	if err := client.AddStdioServer(ctx, name, base.Command, base.Args, env, cwd); err != nil {
 		return fmt.Errorf("register server %q: %w", name, err)

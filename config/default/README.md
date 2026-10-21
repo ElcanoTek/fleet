@@ -55,6 +55,34 @@ authoritative description of each field, including the MCP catalog's declarative
 enable gate (`enabled_env` / `enabled_groups` / `always`), the `${VAR}` env
 interpolation, the tool allowlist, and the account-suffix vars.
 
+## Values fleet fills in when it starts an MCP server
+
+A stdio server's `env:` values may use fleet's reserved tokens. They are never
+read from the process env; fleet substitutes them each time it starts the
+server, and drops the key (the server sees it unset) on a path that has no
+value. Full contract: [`docs/MCP-BUNDLE-ENV.md`](../../docs/MCP-BUNDLE-ENV.md).
+
+| Token | Value |
+|---|---|
+| `${FLEET_WORKSPACE}` | A fleet-managed writable directory (per-run for a scheduled run with an `mcp_selection`, the conversation workspace for a chat turn, else one per deployment) |
+| `${FLEET_WORKSPACE_ROOT}` | The deployment's workspace root, on every path |
+| `${FLEET_TASK_ID}` | The scheduled task's id — dedicated per-run clients only |
+| `${FLEET_USER_EMAIL}` | The signed-in user who sent the **chat turn** (or approved the card) — interactive turns only, never a scheduled or webhook run |
+| `${FLEET_USER_NAME}` | A first name derived from that email (`elyse.messer@…` → `Elyse`), or unset when none can be derived |
+
+```yaml
+mcp_servers:
+  - name: deal_sheets
+    command: python3
+    args: ["mcp/deal_sheets.py"]
+    env:
+      DEAL_SHEET_DEFAULT_TO: "${FLEET_USER_EMAIL}"   # unset on scheduled runs
+      DEAL_SHEET_GREETING_NAME: "${FLEET_USER_NAME}" # unset when unknown
+```
+
+The user tokens are data about who is at the keyboard, never a credential or an
+access decision, and a server must handle them being unset ("Hi team,").
+
 ## Inline HTTP tools (`http_tools`)
 
 For simple "call this REST endpoint" needs that don't justify a full MCP server,

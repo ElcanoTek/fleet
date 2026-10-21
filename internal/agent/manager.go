@@ -156,6 +156,16 @@ type TurnInput struct {
 	// turn.started (input_kind) so every client can render the row as a
 	// notice; the model sees the labelled text either way.
 	InputKind string
+
+	// MCPUser is the signed-in user who SENT this turn, for the bundle's
+	// ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME} env tokens (ADR-0087). The HTTP
+	// layer fills it from the authenticated request only for a turn a person
+	// sent (directly, from their queue, or by settling an approval card that
+	// resumes it); a webhook-started turn, an eval and a dataset run leave it
+	// zero, and so do scheduled runs, which never come through here. Distinct
+	// from UserEmail on purpose: UserEmail is set for webhook turns too (the
+	// trigger owner's hosted connections), but nobody signed in sent those.
+	MCPUser agentcore.MCPUserIdentity
 }
 
 // TurnResult is returned after a turn completes.
@@ -312,8 +322,10 @@ type MCPScopePolicy struct {
 
 // MCPScopeOpener binds the selected public server/account names to a per-turn
 // broker scope rooted at workspace, under the run's effective policy.
-// Credential resolution remains behind the opener's process boundary.
-type MCPScopeOpener func(ctx context.Context, selection agentcore.MCPSelection, policy MCPScopePolicy, workspace string) (*MCPScope, error)
+// Credential resolution remains behind the opener's process boundary. user is
+// the signed-in user the scope is opened for (zero = none); the credential
+// owner substitutes it for ${FLEET_USER_*} and nothing else (ADR-0087).
+type MCPScopeOpener func(ctx context.Context, selection agentcore.MCPSelection, policy MCPScopePolicy, workspace string, user agentcore.MCPUserIdentity) (*MCPScope, error)
 
 // MCPReloadResult is the public post-reload state returned by an injected
 // credential owner. It contains configuration identifiers and tool schemas,
@@ -380,6 +392,11 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 			env = agentcore.ExpandTaskIDEnv(env, "")
 			// ${FLEET_WORKSPACE_ROOT}: always resolvable, never dropped.
 			env = agentcore.ExpandWorkspaceRootEnv(env)
+			// Shared spawn ⇒ no signed-in user: drop ${FLEET_USER_EMAIL} /
+			// ${FLEET_USER_NAME}-bearing keys. Only an interactive broker scope
+			// resolves them (ADR-0087); a process-lifetime subprocess serves
+			// every user, so it must never carry one user's identity.
+			env = agentcore.ExpandUserEnv(env, agentcore.MCPUserIdentity{})
 			addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env,
 				agentcore.StdioCwd(spec.Dir, spec.DirPinned, shared))
 		default:
@@ -1294,7 +1311,11 @@ func (m *Manager) MCPCatalog() []mcp.ServerTool {
 // local-client mode), which tells the caller to fall back to MCPBroker(). A
 // seat the credential owner no longer provisions fails the open, and the
 // approval fails closed rather than silently running as a different account.
-func (m *Manager) OpenApprovalMCPScope(ctx context.Context, selection agentcore.MCPSelection, workspace string) (*MCPScope, error) {
+//
+// user is the person who approved the card — the only user who can claim it —
+// so an approved call sees the same ${FLEET_USER_*} values the staging turn
+// did (ADR-0087).
+func (m *Manager) OpenApprovalMCPScope(ctx context.Context, selection agentcore.MCPSelection, workspace string, user agentcore.MCPUserIdentity) (*MCPScope, error) {
 	if m.openMCPScope == nil {
 		return nil, nil
 	}
@@ -1302,7 +1323,7 @@ func (m *Manager) OpenApprovalMCPScope(ctx context.Context, selection agentcore.
 	// a tool the operator has since removed from a server's allowlist must not
 	// execute just because it was staged while it was still permitted.
 	allow, _ := m.mcpGates()
-	scope, err := m.openMCPScope(ctx, selection, MCPScopePolicy{ToolAllowlist: agentcore.MCPAllowlist(allow)}, workspace)
+	scope, err := m.openMCPScope(ctx, selection, MCPScopePolicy{ToolAllowlist: agentcore.MCPAllowlist(allow)}, workspace, user)
 	if err != nil {
 		return nil, err
 	}
@@ -1513,11 +1534,14 @@ func (m *Manager) configureTurnWorkspace(ctx context.Context, sb *sandbox.Sandbo
 	return artifactCtx, fileOpRoot, releaseArtifacts, nil
 }
 
-func (m *Manager) openTurnMCPScope(ctx context.Context, selection agentcore.MCPSelection, policy MCPScopePolicy, workspace string) (agentcore.MCPBroker, []mcp.ServerTool, func(), error) {
+func (m *Manager) openTurnMCPScope(ctx context.Context, selection agentcore.MCPSelection, policy MCPScopePolicy, workspace string, user agentcore.MCPUserIdentity) (agentcore.MCPBroker, []mcp.ServerTool, func(), error) {
 	if m.openMCPScope == nil {
+		// Transitional local-client mode: the shared, process-lifetime client
+		// serves every user, so its ${FLEET_USER_*} keys were dropped at spawn
+		// and the turn's user has nowhere to go.
 		return m.mcpBroker, m.mcpCatalogSnapshot(), func() {}, nil
 	}
-	scope, err := m.openMCPScope(ctx, selection, policy, workspace)
+	scope, err := m.openMCPScope(ctx, selection, policy, workspace, user)
 	if err != nil {
 		return nil, nil, func() {}, fmt.Errorf("open MCP turn scope: %w", err)
 	}
@@ -1775,7 +1799,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	turnAllowlist, turnOptional := m.mcpGates()
 	turnSelection := m.scopeSelection(in.OptionalMCPServersEnabled, in.MCPAccountDefaults)
 	turnBroker, turnCatalog, releaseMCPScope, err := m.openTurnMCPScope(ctx, turnSelection,
-		MCPScopePolicy{ToolAllowlist: agentcore.MCPAllowlist(turnAllowlist)}, workspace)
+		MCPScopePolicy{ToolAllowlist: agentcore.MCPAllowlist(turnAllowlist)}, workspace, in.MCPUser)
 	if err != nil {
 		return nil, err
 	}

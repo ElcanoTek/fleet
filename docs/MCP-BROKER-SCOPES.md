@@ -41,9 +41,18 @@ replaced by another account. `exact` makes the labels literal (`""` = the
 unlabeled seat), which approval re-execution uses to reopen the very seat a card
 recorded. Labels cross the boundary; the rows and credentials they select do not.
 
+A bundle scope opened for an interactive chat turn (or an approved card's
+call) may also carry `user` — the signed-in sender's `{email, name}`, which the
+child substitutes for `${FLEET_USER_EMAIL}` / `${FLEET_USER_NAME}` (ADR-0087,
+`MCP-BUNDLE-ENV.md` §1b). It is data, not authorization: it selects no server,
+seat or tool, and the child re-validates both fields and treats a field that
+fails as absent. A spec that pairs `user` with a `taskId` or with a remote
+overlay is refused before backend dispatch, so a scheduled scope can never be
+handed a person's identity; a scope without `user` drops the keys that need it.
+
 The `fleet mcp-broker` backend implements that interface. It resolves account
-suffixes, identity-routing refusal, `${FLEET_TASK_ID}`, and
-`${FLEET_WORKSPACE}` inside the child; owns one MCP client per opaque scope; and
+suffixes, identity-routing refusal, `${FLEET_TASK_ID}`, the signed-in user's
+`${FLEET_USER_*}`, and `${FLEET_WORKSPACE}` inside the child; owns one MCP client per opaque scope; and
 serializes scope close against calls already admitted to that client. Closing
 the broker after its protocol loop exits also reaps every scope a disconnected
 parent left open. Disabled servers are absent from the shared spawn-definition

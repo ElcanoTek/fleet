@@ -102,7 +102,7 @@ func (e *budgetEngine) OpenApprovalRemoteMCPScope(context.Context, string, strin
 	return nil, nil
 }
 
-func (e *budgetEngine) OpenApprovalMCPScope(ctx context.Context, _ agentcore.MCPSelection, _ string) (*agent.MCPScope, error) {
+func (e *budgetEngine) OpenApprovalMCPScope(ctx context.Context, _ agentcore.MCPSelection, _ string, _ agentcore.MCPUserIdentity) (*agent.MCPScope, error) {
 	e.openMu.Lock()
 	if dl, ok := ctx.Deadline(); ok {
 		e.openDL = time.Until(dl)

@@ -849,7 +849,12 @@ type ServerDef struct {
 
 	// Env is the per-subprocess env. Each value may reference process-env vars
 	// via ${VAR} (and a literal default tail). Keys whose resolved value is
-	// empty AND listed in OptionalEnv are dropped from the spawned env.
+	// empty AND listed in OptionalEnv are dropped from the spawned env. A value
+	// may also carry fleet's reserved spawn-time tokens — ${FLEET_WORKSPACE},
+	// ${FLEET_WORKSPACE_ROOT}, ${FLEET_TASK_ID}, and the interactive turn's
+	// signed-in user ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME} — which are never
+	// read from the process env and are substituted (or the key dropped) per
+	// spawn path; see docs/MCP-BUNDLE-ENV.md.
 	Env         map[string]string `yaml:"env"`
 	OptionalEnv []string          `yaml:"optional_env"`
 
@@ -3601,14 +3606,27 @@ type expandResult struct {
 // here: the spawn paths resolve it through the same root lookup the knob
 // feeds, so an operator setting and the token always agree, and an unset knob
 // yields the ./workspace default instead of a blank.
+//
+// ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME} (agentcore.UserEmailEnvToken /
+// UserNameEnvToken, ADR-0087) are the signed-in user of an interactive chat
+// turn, substituted only when the credential owner opens that turn's scope and
+// dropped on every other spawn path. They are reserved for the same reason as
+// the others, and more so: an operator-exported FLEET_USER_EMAIL resolved at
+// load would hand ONE fixed person's identity to every user's turn.
 const (
 	reservedWorkspaceVar     = "FLEET_WORKSPACE"
 	reservedWorkspaceRootVar = "FLEET_WORKSPACE_ROOT"
 	reservedTaskIDVar        = "FLEET_TASK_ID"
+	reservedUserEmailVar     = "FLEET_USER_EMAIL"
+	reservedUserNameVar      = "FLEET_USER_NAME"
 )
 
 func reservedRuntimeVar(name string) bool {
-	return name == reservedWorkspaceVar || name == reservedWorkspaceRootVar || name == reservedTaskIDVar
+	switch name {
+	case reservedWorkspaceVar, reservedWorkspaceRootVar, reservedTaskIDVar, reservedUserEmailVar, reservedUserNameVar:
+		return true
+	}
+	return false
 }
 
 // expandExpr resolves the body of a single ${...} expression (the text between
