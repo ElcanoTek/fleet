@@ -2466,7 +2466,7 @@ func (s *Server) approvalMCPScope(ctx context.Context, approval *store.Approval)
 	scope, err := s.agent.OpenApprovalMCPScope(ctx, agentcore.MCPSelection{{
 		Server:  approval.MCPServer,
 		Account: approval.MCPAccount,
-	}}, workspace, agentcore.NewMCPUserIdentity(approval.UserEmail))
+	}}, workspace, s.mcpUserFor(ctx, approval.UserEmail))
 	if err != nil {
 		// Fail closed: a seat that no longer resolves (account revoked, server
 		// removed from the bundle) must surface, not silently downgrade to the

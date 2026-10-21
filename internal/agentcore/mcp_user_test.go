@@ -7,31 +7,39 @@ import (
 
 func TestNewMCPUserIdentity(t *testing.T) {
 	tests := []struct {
-		email string
-		want  MCPUserIdentity
+		email, firstName string
+		want             MCPUserIdentity
 	}{
-		{"elyse@elcanotek.com", MCPUserIdentity{Email: "elyse@elcanotek.com", Name: "Elyse"}},
-		{"  Elyse.Messer@Example.COM ", MCPUserIdentity{Email: "elyse.messer@example.com", Name: "Elyse"}},
-		{"elyse_m@example.com", MCPUserIdentity{Email: "elyse_m@example.com", Name: "Elyse"}},
-		{"elyse+deals@example.com", MCPUserIdentity{Email: "elyse+deals@example.com", Name: "Elyse"}},
-		{"o'neil@example.com", MCPUserIdentity{Email: "o'neil@example.com"}},
-		// No plausible first name: the email still resolves, the name does not.
-		{"j.smith@example.com", MCPUserIdentity{Email: "j.smith@example.com"}},
-		{"ops2@example.com", MCPUserIdentity{Email: "ops2@example.com"}},
-		// Not an address fleet will hand a connector: nothing resolves.
-		{"", MCPUserIdentity{}},
-		{"no-at-sign", MCPUserIdentity{}},
-		{"a@b@example.com", MCPUserIdentity{}},
-		{"user@localhost", MCPUserIdentity{}},
-		{"user@example..com", MCPUserIdentity{}},
-		{"${FLEET_WORKSPACE}@example.com", MCPUserIdentity{}},
-		{"us{er}@example.com", MCPUserIdentity{}},
-		{"user name@example.com", MCPUserIdentity{}},
-		{"user@exa\nmple.com", MCPUserIdentity{}},
+		// The saved first name is used as-is (trimmed).
+		{"elyse@elcanotek.com", "Elyse", MCPUserIdentity{Email: "elyse@elcanotek.com", Name: "Elyse"}},
+		{"  Elyse.Messer@Example.COM ", "  Elyse ", MCPUserIdentity{Email: "elyse.messer@example.com", Name: "Elyse"}},
+		{"jsmith@example.com", "Jo-Anne", MCPUserIdentity{Email: "jsmith@example.com", Name: "Jo-Anne"}},
+		{"ops@example.com", "Mary Ann", MCPUserIdentity{Email: "ops@example.com", Name: "Mary Ann"}},
+		// No saved name: the email resolves, the name does NOT — it is never
+		// guessed from the local part, however name-like that looks.
+		{"elyse@elcanotek.com", "", MCPUserIdentity{Email: "elyse@elcanotek.com"}},
+		{"elyse.messer@example.com", "", MCPUserIdentity{Email: "elyse.messer@example.com"}},
+		{"jsmith@example.com", "   ", MCPUserIdentity{Email: "jsmith@example.com"}},
+		// A saved value that is not a name (an email, a handle with digits, a
+		// token) is treated as no name, not passed through.
+		{"elyse@elcanotek.com", "elyse@elcanotek.com", MCPUserIdentity{Email: "elyse@elcanotek.com"}},
+		{"elyse@elcanotek.com", "ops2", MCPUserIdentity{Email: "elyse@elcanotek.com"}},
+		{"elyse@elcanotek.com", "${FLEET_USER_EMAIL}", MCPUserIdentity{Email: "elyse@elcanotek.com"}},
+		// Not an address fleet will hand a connector: nothing resolves, not
+		// even a valid saved name.
+		{"", "Elyse", MCPUserIdentity{}},
+		{"no-at-sign", "Elyse", MCPUserIdentity{}},
+		{"a@b@example.com", "", MCPUserIdentity{}},
+		{"user@localhost", "", MCPUserIdentity{}},
+		{"user@example..com", "", MCPUserIdentity{}},
+		{"${FLEET_WORKSPACE}@example.com", "", MCPUserIdentity{}},
+		{"us{er}@example.com", "", MCPUserIdentity{}},
+		{"user name@example.com", "", MCPUserIdentity{}},
+		{"user@exa\nmple.com", "", MCPUserIdentity{}},
 	}
 	for _, tt := range tests {
-		if got := NewMCPUserIdentity(tt.email); got != tt.want {
-			t.Errorf("NewMCPUserIdentity(%q) = %+v, want %+v", tt.email, got, tt.want)
+		if got := NewMCPUserIdentity(tt.email, tt.firstName); got != tt.want {
+			t.Errorf("NewMCPUserIdentity(%q, %q) = %+v, want %+v", tt.email, tt.firstName, got, tt.want)
 		}
 	}
 }
@@ -42,7 +50,7 @@ func TestMCPUserIdentitySanitized(t *testing.T) {
 		t.Fatalf("Sanitized = %+v, want %+v", got, want)
 	}
 	// Each field is judged on its own: a bad name never takes the email with it.
-	for _, bad := range []string{"", "${FLEET_USER_EMAIL}", "Robert'); DROP", "a\nb", "<b>x</b>", "Two  Spaces", "123"} {
+	for _, bad := range []string{"", "${FLEET_USER_EMAIL}", "Robert'); DROP", "a\nb", "<b>x</b>", "Two  Spaces", "123", "elyse@example.com"} {
 		got := MCPUserIdentity{Email: "trader@example.com", Name: bad}.Sanitized()
 		if got.Name != "" || got.Email != "trader@example.com" {
 			t.Errorf("Sanitized(name=%q) = %+v, want the name cleared and the email kept", bad, got)

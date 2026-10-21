@@ -52,6 +52,18 @@ func (e *scopedApprovalEngine) OpenApprovalMCPScope(_ context.Context, selection
 	return &scope, nil
 }
 
+// givenNameStore answers only the saved-first-name read approvalMCPScope makes
+// for ${FLEET_USER_NAME} (ADR-0087); any other store call panics on the nil
+// embedded interface, which keeps these tests honest about what they touch.
+type givenNameStore struct {
+	chatStore
+	names map[string]string
+}
+
+func (g givenNameStore) UserGivenName(_ context.Context, email string) (string, error) {
+	return g.names[email], nil
+}
+
 func TestRunStagedTool_ReopensTheStagedSeat(t *testing.T) {
 	scoped := &fakeMCPBroker{text: "sent from client-a"}
 	engine := &scopedApprovalEngine{
@@ -64,7 +76,7 @@ func TestRunStagedTool_ReopensTheStagedSeat(t *testing.T) {
 			Catalog: []mcp.ServerTool{{ServerName: "send_grid_client_a", Tool: mcp.Tool{Name: "send_email"}}},
 		},
 	}
-	s := &Server{agent: engine}
+	s := &Server{agent: engine, store: givenNameStore{names: map[string]string{"elyse.trader@example.com": "Elyse"}}}
 
 	text, err := s.runStagedTool(context.Background(), &store.Approval{
 		ToolName:   "mcp_send_grid_client_a_send_email",
@@ -80,10 +92,10 @@ func TestRunStagedTool_ReopensTheStagedSeat(t *testing.T) {
 		t.Fatalf("result = %q, want the scoped broker's result", text)
 	}
 	// ADR-0087: the approved call's scope carries the approving user (the
-	// only user who can claim the card), so ${FLEET_USER_*} resolves the same
-	// as it did for the turn that staged it.
+	// only user who can claim the card) and the first name they saved, so
+	// ${FLEET_USER_*} resolves the same as it did for the turn that staged it.
 	if engine.user != (agentcore.MCPUserIdentity{Email: "elyse.trader@example.com", Name: "Elyse"}) {
-		t.Fatalf("approval scope user = %+v, want the approving user", engine.user)
+		t.Fatalf("approval scope user = %+v, want the approving user with their saved name", engine.user)
 	}
 	if len(engine.requested) != 1 || engine.requested[0].Server != "send_grid" || engine.requested[0].Account != "client_a" {
 		t.Fatalf("reopened selection = %+v, want the staged {send_grid, client_a} seat", engine.requested)
@@ -103,7 +115,7 @@ func TestRunStagedTool_FailsClosedWhenTheStagedSeatIsGone(t *testing.T) {
 		catalog:    sendgridApprovalCatalog,
 		openErr:    errors.New("no <VAR>_CLIENT_A credentials are set"),
 	}
-	s := &Server{agent: engine}
+	s := &Server{agent: engine, store: givenNameStore{}}
 
 	_, err := s.runStagedTool(context.Background(), &store.Approval{
 		ToolName:   "mcp_send_grid_client_a_send_email",
@@ -116,6 +128,35 @@ func TestRunStagedTool_FailsClosedWhenTheStagedSeatIsGone(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "send_grid (account client_a)") {
 		t.Fatalf("error = %v, want the staged seat named", err)
+	}
+}
+
+// An approver who saved no first name gets none on the approved call — even
+// with a name-like address, nothing is guessed from it (ADR-0087), so the
+// connector's ${FLEET_USER_NAME} key is dropped and it says "Hi team,".
+func TestRunStagedTool_NoSavedNameMeansNoName(t *testing.T) {
+	engine := &scopedApprovalEngine{
+		fakeEngine: &fakeEngine{},
+		shared:     &fakeMCPBroker{text: "sent from the default seat"},
+		catalog:    sendgridApprovalCatalog,
+		scope: &agent.MCPScope{
+			Broker:  &fakeMCPBroker{text: "sent from client-a"},
+			Catalog: []mcp.ServerTool{{ServerName: "send_grid_client_a", Tool: mcp.Tool{Name: "send_email"}}},
+		},
+	}
+	s := &Server{agent: engine, store: givenNameStore{}}
+
+	if _, err := s.runStagedTool(context.Background(), &store.Approval{
+		ToolName:   "mcp_send_grid_client_a_send_email",
+		ArgsJSON:   `{}`,
+		MCPServer:  "send_grid",
+		MCPAccount: "client_a",
+		UserEmail:  "elyse.trader@example.com",
+	}); err != nil {
+		t.Fatalf("runStagedTool: %v", err)
+	}
+	if engine.user != (agentcore.MCPUserIdentity{Email: "elyse.trader@example.com"}) {
+		t.Fatalf("approval scope user = %+v, want the email and no name", engine.user)
 	}
 }
 

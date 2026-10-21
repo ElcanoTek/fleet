@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-20
-- **Deciders:** fleet maintainers (owner-approved 2026-10-20)
+- **Deciders:** fleet maintainers (owner-approved 2026-10-20; the name source revised by the owner 2026-10-21: a saved first name, never one derived from the email)
 - **Relates to:** [ADR-0042](0042-child-side-mcp-scope-authorization.md)
   (child-side MCP scope authorization),
   [ADR-0040](0040-child-owned-remote-mcp-runtime.md) (the remote
@@ -92,16 +92,37 @@ ADR-0042 governs, so it is recorded here.
    name the authenticated user (turn errors, audit rows) are unchanged. What a
    bundle server does with its own env is the bundle's responsibility.
 
-`${FLEET_USER_NAME}` is honest about its source. Fleet's sign-in carries an
-email and no name claim, so the name is **derived** from the email's local
-part: the text before any `+tag`, cut at the first `.`, `_` or `-`, accepted
-only when it is 2–64 ASCII letters, and capitalized (`elyse.messer@…` →
-`Elyse`; `j.smith@…` and `ops2@…` → no name, so the key is dropped). A
-name-derivation heuristic can be wrong (`jsmith@…` → `Jsmith`). When a real
-name source exists (an OIDC `given_name` claim, a profile field), it replaces
-the derivation without any bundle change — the token's contract is "the best
-display name fleet knows", and a bundle must keep its own fallback for
-"unset".
+`${FLEET_USER_NAME}` comes from a real name source, never from the email.
+**No sign-in path carries a name today.** Fleet signs people in three ways —
+its own password form, OIDC against the Elcano Auth service, and the Auth
+service's `elcano_auth` magic-link cookie — and all three hand fleet an email
+and nothing else. The Auth service has no external identity provider behind
+it (no Google or Microsoft account to read a profile from), its accounts table
+holds no name, its discovery document advertises only the `openid` and
+`email` scopes, and its ID token carries no `name` or `given_name` claim.
+Fleet's own `users` table had no name either.
+
+A first name guessed from the email was rejected by the owner (2026-10-21):
+`jsmith@…` is not "Jsmith", and a greeting that gets someone's name wrong is
+worse than "Hi team,". So the name is the one the person **saves for
+themselves**: Settings → General → "Your first name" (`PUT /me/name`), stored
+server-side per account in `users.given_name` (migration 081) so it follows
+them across browsers. The turn reads it when it starts (and an approved
+card's scope when it opens), so a saved name applies from the next turn.
+Unset — a user who never saved one, or a failed lookup — means the key is
+dropped and the connector uses its no-name wording ("Hi team,"). The write
+holds the value to the same character rule the scope applies (letters, single
+spaces, `. ' -`, at most 64), so an email address or a handle cannot be saved
+as a name, and a saved name is never silently dropped later.
+
+The setting was chosen over plumbing a name through the Auth service because
+it is the only option that covers every sign-in path. An Auth-side name (an
+`accounts.given_name` column, a `profile` scope, a `given_name` claim in the
+ID token) would need a new field and admin UI in Auth, a new claim, and fleet
+persisting the claim at login — and it would still reach only OIDC sessions,
+not password or `elcano_auth` sessions, whose tokens carry no claim fleet can
+read per request. If Auth gains a name later, the OIDC callback can seed
+`users.given_name` when the user has not saved one; no bundle changes.
 
 ## Consequences
 
@@ -131,5 +152,11 @@ display name fleet knows", and a bundle must keep its own fallback for
   input that can only narrow, and identity is not authorization. Keeping it a
   separate field keeps ADR-0042's reasoning intact.
 - **Ship only `${FLEET_USER_EMAIL}` and let bundles derive the name.**
-  Workable, but it puts the same heuristic in every bundle and makes the
-  future real-name source a change to every bundle instead of one in fleet.
+  Rejected for the same reason fleet does not derive it: a name guessed from
+  an email is not a name.
+- **Derive `${FLEET_USER_NAME}` from the email's local part** (the first
+  version of this ADR: `elyse.messer@…` → `Elyse`). Rejected by the owner: it
+  greets `jsmith@…` as "Jsmith". Replaced by the saved first name.
+- **Read a name claim from the identity provider.** None exists on any
+  sign-in path today (see Decision); an Auth-side name would cover OIDC
+  sessions only. It can seed the saved name later.

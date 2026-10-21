@@ -136,11 +136,11 @@ env:
 | Token | Value |
 |---|---|
 | `${FLEET_USER_EMAIL}` | The turn sender's normalized (lowercased) email, exactly as fleet authenticated it. |
-| `${FLEET_USER_NAME}` | A first name **derived from that email** — fleet's sign-in carries no name claim. The local part before any `+tag`, cut at the first `.`, `_` or `-`, capitalized, and only when it is 2–64 ASCII letters: `elyse@…` and `elyse.messer@…` give `Elyse`; `j.smith@…`, `ops2@…` and `x@…` give no name. It is a heuristic (`jsmith@…` gives `Jsmith`); if fleet gains a real name source it will fill this token instead, with no bundle change. |
+| `${FLEET_USER_NAME}` | The first name that user **saved for themselves** in Settings → General → "Your first name" (`PUT /me/name`, stored in `users.given_name`). Unset when they have not saved one. It is **never derived from the email**: fleet's sign-in (password, OIDC from the Elcano Auth service, the `elcano_auth` cookie) carries an email and no name claim, and `jsmith@…` is not "Jsmith". Read when the turn starts, so a newly saved name applies from the next turn. |
 
 | Spawn path | What the server sees |
 |---|---|
-| An **interactive chat turn's** scope (production broker mode), when a signed-in person sent the turn — typed it or had it drained from their input queue — and the turn fleet resumes in their conversation after one of their approval cards settles (ADR-0083; it continues their own turn, even when the card settled by timing out) | The sender's (conversation owner's) email and derived name |
+| An **interactive chat turn's** scope (production broker mode), when a signed-in person sent the turn — typed it or had it drained from their input queue — and the turn fleet resumes in their conversation after one of their approval cards settles (ADR-0083; it continues their own turn, even when the card settled by timing out) | The sender's (conversation owner's) email and saved first name |
 | The scope an **approved card's** call runs on | The approving user — the only user who can claim that card, and the one whose turn staged it |
 | A **webhook-started** turn (runs as the trigger owner, but nobody signed in sent it), evals, dataset runs | Keys **dropped** (unset) |
 | **Every scheduled run** — dedicated `mcp_selection` client or shared, broker or in-process | Keys **dropped** (unset). A task scope that carried a user is refused by the broker before it opens. |
@@ -158,8 +158,8 @@ transcript, the model or the bundle.
 removed from the subprocess env, the same posture as `${FLEET_TASK_ID}` on a
 shared spawn: the server sees the variable as unset — never a literal token,
 never an empty string, never a half-substituted `"Hi ${FLEET_USER_NAME},"`.
-Each token is judged alone, so `${FLEET_USER_EMAIL}` still resolves when no
-name could be derived. Bundles must keep their own "no user" behaviour (for the
+Each token is judged alone, so `${FLEET_USER_EMAIL}` still resolves for a user
+who has not saved a first name. Bundles must keep their own "no user" behaviour (for the
 deal sheet: "Hi team," and no default recipient), because every scheduled run
 of the same connector takes it.
 
@@ -382,11 +382,12 @@ for a `url:`-referenced var survives the `.env` allowlist.
   Making that the default for *every* scheduled run would mean a per-run spawn
   of the whole catalog and would have to reproduce the shared client's
   optional-server gating; it stays deferred.
-- **A real name for `${FLEET_USER_NAME}`.** Fleet's sessions carry an email
-  only (password, OIDC and the central auth cookie alike), so the name is
-  derived from the email. Carrying an OIDC `given_name` claim or a profile
-  field through the web tier is a separate change; the token's contract
-  already allows it to replace the derivation.
+- **A name from the identity provider.** Fleet's sessions carry an email only
+  (password, OIDC and the central auth cookie alike), and the Elcano Auth
+  service stores no name, so `${FLEET_USER_NAME}` is the first name the user
+  saves in Settings. If Auth gains a `given_name` claim, the OIDC callback can
+  seed `users.given_name` for users who have not saved one; nothing changes
+  for bundles.
 - **A user identity for webhook-started turns or scheduled runs.** Nobody
   signed in sent them. A task created from chat does not inherit its creator's
   identity into its runs either: a run may fire long after, on a schedule the
@@ -406,8 +407,12 @@ for a `url:`-referenced var survives the `.env` allowlist.
   `scanManifestEnvRefs`, `unresolvedManifestRefs`) +
   `internal/config/config.go` (`BootstrapEnvFile`).
 - Spawn-time substitution: `internal/agentcore/mcp_workspace.go`; the user
-  tokens, their validation and the name derivation:
+  tokens and their validation:
   `internal/agentcore/mcp_user.go` (`ExpandUserEnv`, `NewMCPUserIdentity`).
+- The saved first name: `internal/store/users.go` (`SetOwnGivenName`,
+  `UserGivenName`, migration `081_users_given_name.sql`),
+  `internal/httpapi/me.go` (`handleMyName`, `mcpUserFor`) and
+  `web/src/app/settings/FirstNameRow.tsx`.
 - Where the signed-in user comes from and how it crosses the broker:
   `internal/httpapi/chat.go` (`runTurnAsync`'s `mcpUser`),
   `internal/httpapi/approvals.go` (`approvalMCPScope`),

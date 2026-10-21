@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
@@ -36,8 +37,12 @@ type User struct {
 	// comparison in httpapi.membershipMiddleware is a plain mismatch, which
 	// fails closed.
 	SessionEpoch string
-	CreatedAt    int64
-	UpdatedAt    int64
+	// GivenName is the first name the user saved for themselves (Settings →
+	// General, migration 081); "" = not set. It feeds ${FLEET_USER_NAME}
+	// (ADR-0087) and nothing else, and it is never derived from Email.
+	GivenName string
+	CreatedAt int64
+	UpdatedAt int64
 }
 
 // sessionEpochBytes is how much of the digest below makes up the epoch. The
@@ -85,7 +90,7 @@ var sessionEpochExpr = fmt.Sprintf(
 
 // userColumns is the read projection behind every *User: the row's own columns
 // plus the derived epoch, never password_hash.
-var userColumns = "email, role, team_id, " + sessionEpochExpr + ", created_at, updated_at"
+var userColumns = "email, role, team_id, " + sessionEpochExpr + ", given_name, created_at, updated_at"
 
 // Role constants (#237). Kept in sync with the CHECK constraint in
 // migrations/024_rbac.sql.
@@ -174,7 +179,7 @@ func (s *Store) GetUser(ctx context.Context, email string) (*User, error) {
 	var teamID sql.NullString
 	err := s.db.QueryRowContext(ctx,
 		`SELECT `+userColumns+` FROM users WHERE email = $1 AND enabled = TRUE`, email).
-		Scan(&u.Email, &u.Role, &teamID, &u.SessionEpoch, &u.CreatedAt, &u.UpdatedAt)
+		Scan(&u.Email, &u.Role, &teamID, &u.SessionEpoch, &u.GivenName, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrUserNotFound
 	}
@@ -449,6 +454,57 @@ func (s *Store) SetOwnTeam(ctx context.Context, email, teamID string, allowExist
 		return nil, err
 	}
 	return s.GetUser(ctx, email)
+}
+
+// MaxGivenNameRunes bounds users.given_name (migration 081's CHECK).
+const MaxGivenNameRunes = 64
+
+// SetOwnGivenName stores the first name the caller saved for themselves
+// (PUT /me/name); "" clears it. The HTTP layer applies the full character rule
+// (agentcore.ValidMCPUserName) before calling; this is the length and
+// control-character backstop for any other writer. Returns the updated user,
+// or ErrUserNotFound when the email is absent or disabled.
+func (s *Store) SetOwnGivenName(ctx context.Context, email, givenName string) (*User, error) {
+	email = normalizeEmail(email)
+	name := strings.TrimSpace(givenName)
+	if utf8.RuneCountInString(name) > MaxGivenNameRunes {
+		return nil, errInput(fmt.Sprintf("name is too long (max %d characters)", MaxGivenNameRunes))
+	}
+	if strings.IndexFunc(name, unicode.IsControl) >= 0 {
+		return nil, errInput("name must not contain control characters")
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE users SET given_name = $2, updated_at = $3 WHERE email = $1 AND enabled = TRUE`,
+		email, name, time.Now().Unix())
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrUserNotFound
+	}
+	return s.GetUser(ctx, email)
+}
+
+// UserGivenName returns the first name email saved for themselves, or "" when
+// they saved none. It is the one read behind ${FLEET_USER_NAME} (ADR-0087): a
+// turn's sender is looked up here when the turn starts, so a name saved in
+// Settings applies from the next turn. An unknown or disabled account returns
+// ErrUserNotFound.
+func (s *Store) UserGivenName(ctx context.Context, email string) (string, error) {
+	email = normalizeEmail(email)
+	if email == "" {
+		return "", ErrUserNotFound
+	}
+	var name string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT given_name FROM users WHERE email = $1 AND enabled = TRUE`, email).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrUserNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 // unshareOnTeamChange revokes what email loses when their team is about to
@@ -812,7 +868,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	for rows.Next() {
 		var u User
 		var teamID sql.NullString
-		if err := rows.Scan(&u.Email, &u.Role, &teamID, &u.SessionEpoch, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.Email, &u.Role, &teamID, &u.SessionEpoch, &u.GivenName, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, err
 		}
 		u.TeamID = teamID.String

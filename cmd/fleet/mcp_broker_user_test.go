@@ -108,6 +108,17 @@ func TestBrokerBackend_ScopeSubstitutesSignedInUser(t *testing.T) {
 		t.Fatalf("user-less scope env = %q, want both keys dropped", got)
 	}
 
+	// A signed-in user who saved no first name: the email resolves and the
+	// greeting key is dropped, so the connector says "Hi team," — nothing is
+	// derived from the address.
+	got = callWhoami(t, b, mcpbroker.ScopeSpec{
+		Selection: selection,
+		User:      &mcpbroker.ScopeUser{Email: "elyse.messer@example.com"},
+	})
+	if got != "elyse.messer@example.com|<unset>" {
+		t.Fatalf("scope env for a user with no saved name = %q, want the greeting key dropped", got)
+	}
+
 	// The child re-validates: a value the parent should never have sent is
 	// treated as absent, not passed through.
 	got = callWhoami(t, b, mcpbroker.ScopeSpec{
@@ -151,7 +162,7 @@ func TestBrokerBackend_TaskScopeNeverSeesAUser(t *testing.T) {
 // TestBrokerScopeUser: the parent never puts a user on a task scope's wire
 // form, and sends nothing when it has nothing valid to send.
 func TestBrokerScopeUser(t *testing.T) {
-	user := agentcore.NewMCPUserIdentity("elyse@example.com")
+	user := agentcore.NewMCPUserIdentity("elyse@example.com", "Elyse")
 	if got := brokerScopeUser("task-1", user); got != nil {
 		t.Fatalf("task scope user = %+v, want nil", got)
 	}

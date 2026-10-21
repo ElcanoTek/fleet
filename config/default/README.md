@@ -68,7 +68,7 @@ value. Full contract: [`docs/MCP-BUNDLE-ENV.md`](../../docs/MCP-BUNDLE-ENV.md).
 | `${FLEET_WORKSPACE_ROOT}` | The deployment's workspace root, on every path |
 | `${FLEET_TASK_ID}` | The scheduled task's id — dedicated per-run clients only |
 | `${FLEET_USER_EMAIL}` | The signed-in user who sent the **chat turn** (or approved the card) — interactive turns only, never a scheduled or webhook run |
-| `${FLEET_USER_NAME}` | A first name derived from that email (`elyse.messer@…` → `Elyse`), or unset when none can be derived |
+| `${FLEET_USER_NAME}` | That user's first name as they saved it in Settings → General ("Your first name"), or unset when they have not saved one — never guessed from the email |
 
 ```yaml
 mcp_servers:

@@ -24,9 +24,12 @@ import (
 //
 // The values come from ONE place: the authenticated user who sent an
 // interactive chat turn (or, for an approved card, the user who approved it —
-// the same person, since an approval is claimable only by its own user). They
-// are resolved in the parent from the request's authenticated identity, never
-// from the conversation, the model, or the bundle, cross to the credential
+// the same person, since an approval is claimable only by its own user). The
+// email is the authenticated identity; the name is the first name that user
+// saved on their own account (users.given_name), never one guessed from the
+// email. They are resolved in the parent from the request's authenticated
+// identity and that user's row, never from the conversation, the model, or
+// the bundle, cross to the credential
 // owner as ScopeSpec.User, which that child stamps on the turn scope's bases
 // (MCPServerBase.User) and the binder substitutes last, at spawn — after the
 // account overlay and its identity guard. Every other spawn path — the boot catalog, hot reload,
@@ -47,10 +50,11 @@ const (
 	// email address.
 	//nolint:gosec // G101 false positive: an interpolation placeholder name, not a credential.
 	UserEmailEnvToken = "${FLEET_USER_EMAIL}"
-	// UserNameEnvToken resolves to the best display name fleet knows for the
-	// turn sender. Fleet's auth carries no name claim today, so this is the
-	// first name DERIVED from the email's local part (DeriveMCPUserName); when
-	// no plausible name can be derived the token is treated as absent.
+	// UserNameEnvToken resolves to the turn sender's first name as THEY saved
+	// it (Settings → General → "Your first name", users.given_name). It is
+	// never guessed from the email: a user who has not saved one has no name,
+	// and the token is treated as absent, so a connector falls back to its own
+	// no-name wording ("Hi team,").
 	UserNameEnvToken = "${FLEET_USER_NAME}" //nolint:gosec // interpolation placeholder, not a credential.
 
 	// maxMCPUserEmailLen is RFC 5321's path limit; maxMCPUserNameLen bounds a
@@ -70,16 +74,24 @@ type MCPUserIdentity struct {
 // IsZero reports whether the identity carries nothing usable.
 func (u MCPUserIdentity) IsZero() bool { return u.Email == "" && u.Name == "" }
 
-// NewMCPUserIdentity builds the identity for an authenticated user's email:
-// the normalized email (when it passes ValidMCPUserEmail) plus the derived
-// display name. An email that fails validation yields the zero identity, so a
-// malformed value can never reach a connector.
-func NewMCPUserIdentity(email string) MCPUserIdentity {
+// NewMCPUserIdentity builds the identity for an authenticated user: the
+// normalized email (when it passes ValidMCPUserEmail) plus the first name the
+// user saved for themselves (when it passes ValidMCPUserName). The name comes
+// ONLY from that saved value — fleet's sign-in carries no name claim, and an
+// email's local part is not a name (jsmith@ is not "Jsmith"), so an empty or
+// invalid firstName leaves Name empty rather than falling back to a guess. An
+// email that fails validation yields the zero identity: a name with no
+// authenticated address behind it is never handed to a connector.
+func NewMCPUserIdentity(email, firstName string) MCPUserIdentity {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if !ValidMCPUserEmail(email) {
 		return MCPUserIdentity{}
 	}
-	return MCPUserIdentity{Email: email, Name: DeriveMCPUserName(email)}
+	out := MCPUserIdentity{Email: email}
+	if name := strings.TrimSpace(firstName); ValidMCPUserName(name) {
+		out.Name = name
+	}
+	return out
 }
 
 // Sanitized returns u with every field that fails validation cleared. The
@@ -127,9 +139,11 @@ func ValidMCPUserEmail(s string) bool {
 	return true
 }
 
-// ValidMCPUserName reports whether s is a display name fleet will hand to a
-// connector: 1–64 runes of letters, single spaces, and . ' - — no digits,
-// punctuation that could carry markup or a token, or control characters.
+// ValidMCPUserName reports whether s is a name fleet will store and hand to a
+// connector: 1–64 runes of letters, single spaces, and . ' - — no digits, no
+// '@' (so an email address can never pass as a name), no punctuation that
+// could carry markup or a token, and no control characters. The Settings write
+// (PUT /me/name) enforces the same rule, so a saved name always passes.
 func ValidMCPUserName(s string) bool {
 	if s == "" || !utf8.ValidString(s) || utf8.RuneCountInString(s) > maxMCPUserNameLen {
 		return false
@@ -148,38 +162,6 @@ func ValidMCPUserName(s string) bool {
 		}
 	}
 	return hasLetter
-}
-
-// DeriveMCPUserName guesses a first name from an email's local part: the text
-// before any '+' tag, cut at the first '.', '_' or '-', and capitalized —
-// "elyse@x" and "elyse.messer@x" both give "Elyse". It returns "" (the token is
-// then treated as absent) unless that segment is 2–64 ASCII letters, so
-// "j.smith", "ops2" and "x" give nothing rather than a wrong greeting. It is a
-// heuristic: "jsmith@x" gives "Jsmith". Fleet's sign-in carries an email and
-// no name claim; a real name source, when one exists, replaces this function
-// without any bundle change.
-func DeriveMCPUserName(email string) string {
-	at := strings.IndexByte(email, '@')
-	if at <= 0 {
-		return ""
-	}
-	local := email[:at]
-	if i := strings.IndexByte(local, '+'); i >= 0 {
-		local = local[:i]
-	}
-	if i := strings.IndexAny(local, "._-"); i >= 0 {
-		local = local[:i]
-	}
-	if len(local) < 2 || len(local) > maxMCPUserNameLen {
-		return ""
-	}
-	for i := 0; i < len(local); i++ {
-		c := local[i]
-		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
-			return ""
-		}
-	}
-	return strings.ToUpper(local[:1]) + strings.ToLower(local[1:])
 }
 
 func isASCIIAlnum(c byte) bool {

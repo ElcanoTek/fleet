@@ -265,7 +265,7 @@ func TestManagerRunTurn_OpensAndClosesScopedMCP(t *testing.T) {
 		ConversationID:            "scope-test",
 		OptionalMCPServersEnabled: []string{"optional_on"},
 		MCPAccountDefaults:        map[string]string{"mandatory": "primary", "optional_on": "backup"},
-		MCPUser:                   agentcore.NewMCPUserIdentity("elyse@example.com"),
+		MCPUser:                   agentcore.NewMCPUserIdentity("elyse@example.com", "Elyse"),
 	}, &recordingSink{})
 	if err != nil {
 		t.Fatalf("RunTurn: %v", err)

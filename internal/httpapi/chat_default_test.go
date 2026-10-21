@@ -181,6 +181,9 @@ type fakeChatStore struct {
 	claimAfterEnqueue bool
 	// memoriesErr makes ListMemories (turn preparation) fail.
 	memoriesErr error
+	// givenNames is each user's saved first name (PUT /me/name) — what a
+	// turn's ${FLEET_USER_NAME} resolves to (ADR-0087). Absent = none saved.
+	givenNames map[string]string
 }
 
 func newFakeChatStore() *fakeChatStore {
@@ -188,6 +191,14 @@ func newFakeChatStore() *fakeChatStore {
 		convs:   map[string]*store.Conversation{},
 		history: map[string][]agent.HistoryEntry{},
 	}
+}
+
+// UserGivenName is read as each turn starts, for ${FLEET_USER_NAME}
+// (ADR-0087): the saved first name, "" when the user saved none.
+func (s *fakeChatStore) UserGivenName(_ context.Context, email string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.givenNames[email], nil
 }
 
 // Connector prefs (unified connector UX): the fake has no prefs, meaning

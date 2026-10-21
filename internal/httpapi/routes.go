@@ -130,6 +130,9 @@ func (s *Server) Routes() http.Handler {
 	// mutate keeps a read-only viewer read-only here too.
 	mux.Handle("/me", auth(member(http.HandlerFunc(s.handleMe))))
 	mux.Handle("/me/team", auth(member(mutate(http.HandlerFunc(s.handleMyTeam)))))
+	// PUT /me/name saves the caller's own first name — what ${FLEET_USER_NAME}
+	// resolves to on their chat turns (ADR-0087). Same gates as /me/team.
+	mux.Handle("/me/name", auth(member(mutate(http.HandlerFunc(s.handleMyName)))))
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
 	// /auth/session-epoch is on auth alone for the same reason as /auth/verify:
 	// the Next.js mint paths call it before a session exists, and it must answer

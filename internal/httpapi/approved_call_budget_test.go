@@ -156,7 +156,7 @@ func TestRunStagedTool_ApprovedCallBudget(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			broker := &budgetBroker{text: "ok"}
 			engine := &budgetEngine{fakeEngine: &fakeEngine{}, broker: broker, catalog: dealsApprovalCatalog}
-			s := &Server{agent: engine}
+			s := &Server{agent: engine, store: givenNameStore{}}
 			if _, err := s.runStagedTool(context.Background(), tc.approval); err != nil {
 				t.Fatalf("runStagedTool: %v", err)
 			}
@@ -231,6 +231,9 @@ type claimStore struct {
 	results   int
 	resultErr error
 }
+
+// UserGivenName: the approver saved no first name (ADR-0087).
+func (c *claimStore) UserGivenName(context.Context, string) (string, error) { return "", nil }
 
 func (c *claimStore) GetApproval(context.Context, string, string) (*store.Approval, error) {
 	c.mu.Lock()

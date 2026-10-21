@@ -283,6 +283,12 @@ type chatStore interface {
 	// team that already has members is refused with store.ErrTeamExists unless
 	// allowExisting (admins). See internal/httpapi/me.go.
 	SetOwnTeam(ctx context.Context, email, teamID string, allowExisting bool) (*store.User, error)
+	// SetOwnGivenName / UserGivenName are the caller's saved first name (PUT
+	// /me/name), the only source of the bundle's ${FLEET_USER_NAME} token
+	// (ADR-0087). UserGivenName is read when a turn starts or an approved
+	// card's scope opens.
+	SetOwnGivenName(ctx context.Context, email, givenName string) (*store.User, error)
+	UserGivenName(ctx context.Context, email string) (string, error)
 	RenameTeam(ctx context.Context, from, to string) (usersUpdated, projectsUpdated int64, err error)
 	// CreateUser/DeleteUser/UpdatePassword complete the admin Users tab CRUD so
 	// user management no longer requires CLI access to the box (`fleet admin
