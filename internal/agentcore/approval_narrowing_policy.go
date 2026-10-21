@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Approval narrowing (docs/APPROVAL-NARROWING.md, ADR-0085).
+// Approval narrowing (docs/APPROVAL-NARROWING.md, ADR-0089).
 //
 // One critical call can cover many records: a deal plan's execute call names
 // every item it runs in one list argument. The approval card used to be all or

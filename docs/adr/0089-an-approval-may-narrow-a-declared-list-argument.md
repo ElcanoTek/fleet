@@ -1,4 +1,4 @@
-# ADR-0085: An approval may narrow one declared list argument to a subset of what was staged
+# ADR-0089: An approval may narrow one declared list argument to a subset of what was staged
 
 - **Status:** Accepted
 - **Date:** 2026-10-20

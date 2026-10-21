@@ -341,12 +341,14 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	// offer the describer (Gate-4) means the model could not call it either,
 	// and a pre_tool_use hook that matches it would run before the loop
 	// dispatched it — this host-side call cannot run that hook, so it skips
-	// the call rather than bypass it.
+	// the call rather than bypass it. A describer the bundle hides from
+	// interactive chat (agent_policy.interactive_hidden_tools) is skipped
+	// for the same reason: cards are staged by chat turns, which never see it.
 	a.mcpMu.RLock()
 	persona := a.personaPolicy
 	a.mcpMu.RUnlock()
-	if !agentcore.PersonaPermitsTool(persona, full) || agentcore.PreToolUseHookMatches(full) {
-		log.Printf("approval card: describer %q is gated by the persona or a pre_tool_use hook; not called", full)
+	if !agentcore.PersonaPermitsTool(persona, full) || agentcore.PreToolUseHookMatches(full) || agentcore.InteractiveHiddenTool(full) {
+		log.Printf("approval card: describer %q is gated by the persona, a pre_tool_use hook or interactive_hidden_tools; not called", full)
 		return "", cardFallbackGated
 	}
 	var args map[string]any

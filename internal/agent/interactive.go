@@ -95,6 +95,10 @@ type TurnConfig struct {
 	// it from the bundle manifest's personas: block for the turn's persona.
 	Persona       string
 	PersonaPolicy *agentcore.PersonaToolPermissions
+	// HiddenToolSuffixes is agent_policy.interactive_hidden_tools: MCP tools
+	// this turn (and any sub-agent it spawns) neither offers nor calls. The
+	// Manager sets it from agentcore.InteractiveHiddenTools(); nil = none.
+	HiddenToolSuffixes []string
 
 	MaxCostUSD     float64
 	MaxTotalTokens int
@@ -237,6 +241,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		Selection:           tc.Selection,
 		PersonaName:         tc.Persona,
 		PersonaPolicy:       tc.PersonaPolicy,
+		HiddenToolSuffixes:  tc.HiddenToolSuffixes,
 		ProviderHeaders:     agentcore.DefaultProviderHeaders,
 		ThinkingConfig:      tc.ThinkingConfig,
 		RuntimeDateInInput:  tc.RuntimeDateInMessages,
@@ -273,8 +278,10 @@ func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy,
 		Sandbox:          tc.Sandbox,
 		NoteProposer:     tc.NoteProposer,
 		PersonaPolicy:    tc.PersonaPolicy,
-		Overlay:          tc.Overlay,
-		Subagent:         tc.Subagent,
+		// Children inherit the turn's hidden tools (buildChild copies them).
+		HiddenToolSuffixes: tc.HiddenToolSuffixes,
+		Overlay:            tc.Overlay,
+		Subagent:           tc.Subagent,
 	})
 	host.runtimePolicy = policy
 	host.spawnObserver = obs

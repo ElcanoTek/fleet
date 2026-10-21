@@ -420,6 +420,7 @@ func run() error {
 		CriticalToolResultCards:       bundlePolicy.CriticalToolResultCards,
 		CriticalToolNarrowableArgs:    bundlePolicy.NarrowableArgNames(),
 		CriticalToolStop:              bundlePolicy.CriticalToolStop,
+		InteractiveHiddenTools:        bundlePolicy.InteractiveHiddenTools,
 	})
 
 	// Connector credentials cross exactly one process boundary at boot: the child

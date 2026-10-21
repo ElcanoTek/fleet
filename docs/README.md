@@ -215,7 +215,7 @@ above fails otherwise.
 - [`APPROVAL-RESULT-CARDS.md`](APPROVAL-RESULT-CARDS.md) — Approval result cards: a settled card reads the outcome card the call's own result carries (ids, status, link, Retry failed), and the readable pending card's layout (ADR-0084)
 - [`APPROVAL-PROGRESS.md`](APPROVAL-PROGRESS.md) — Approval progress: a running approved call shows its MCP progress, and a push says when it ends or the chat waits
 - [`APPROVAL-STOP.md`](APPROVAL-STOP.md) — Stopping a running approved call: Stop sends the MCP cancellation and waits for the server's answer after its current item (ADR-0088)
-- [`APPROVAL-NARROWING.md`](APPROVAL-NARROWING.md) — Approval narrowing: untick records on a readable card and approve the rest of one call in one click (ADR-0085)
+- [`APPROVAL-NARROWING.md`](APPROVAL-NARROWING.md) — Approval narrowing: untick records on a readable card and approve the rest of one call in one click (ADR-0089)
 - [`APPROVED-CALL-BUDGET.md`](APPROVED-CALL-BUDGET.md) — Approved-call budget: how long an approved card's MCP call may run, and the early "executing" reply
 - [`ASK-NOTIFY.md`](ASK-NOTIFY.md) — ask / notify + paused-awaiting-human run state
 - [`ATTACHMENT-SCOPING.md`](ATTACHMENT-SCOPING.md) — Attachment scoping, and where a turn's injected context lives
@@ -266,6 +266,7 @@ above fails otherwise.
 - [`IN-HOUSED-DEPENDENCIES.md`](IN-HOUSED-DEPENDENCIES.md) — In-housed dependencies
 - [`INPUT-QUEUE.md`](INPUT-QUEUE.md) — Input queue & mid-turn steering (#785)
 - [`INSTALLER.md`](INSTALLER.md) — The public one-line installer (`install.sh`)
+- [`INTERACTIVE-HIDDEN-TOOLS.md`](INTERACTIVE-HIDDEN-TOOLS.md) — Tools hidden from interactive chat (`agent_policy.interactive_hidden_tools`, ADR-0085)
 - [`keyboard-shortcuts.md`](keyboard-shortcuts.md) — Keyboard shortcuts
 - [`KUBERNETES-LIVE-TEST.md`](KUBERNETES-LIVE-TEST.md) — Real-cluster sandbox integration test
 - [`LEGACY-IMPORT.md`](LEGACY-IMPORT.md) — Legacy import — migrating chat + moc data into fleet

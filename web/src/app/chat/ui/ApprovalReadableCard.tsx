@@ -58,14 +58,14 @@ function CardItem({ item, leftOut = false }: { item: ApprovalCardItem; leftOut?:
         <span className={`break-words font-medium ${leftOut ? "text-[var(--color-text-secondary)]" : "text-[var(--color-text-primary)]"}`}>{item.label}</span>
         {leftOut ? <LeftOutTag settled /> : null}
         {item.id ? (
-          <span className="break-all font-mono text-[0.72rem] text-[var(--color-text-muted)]">{item.id}</span>
+          <span className="break-all font-mono text-[0.72rem] text-[var(--color-card-text-muted)]">{item.id}</span>
         ) : null}
         {item.link ? (
           <a
             href={item.link}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[0.72rem] text-[var(--color-accent)] underline-offset-2 hover:underline"
+            className="text-[0.72rem] text-[var(--color-card-link)] underline-offset-2 hover:underline"
           >
             {item.linkLabel ? `${item.linkLabel} ↗` : "Open ↗"}
           </a>
@@ -82,11 +82,11 @@ function CardItem({ item, leftOut = false }: { item: ApprovalCardItem; leftOut?:
         <div className="mt-1 grid gap-0.5 text-[0.78rem] text-[var(--color-text-secondary)]">
           {item.changes.map((c, i) => (
             <div key={i} data-testid="approval-card-change" className="min-w-0 break-words">
-              <span className="text-[var(--color-text-muted)]">{c.label}: </span>
+              <span className="text-[var(--color-card-text-muted)]">{c.label}: </span>
               {c.before !== undefined ? (
                 <>
-                  <span className="line-through decoration-[var(--color-text-muted)]">{c.before || "(empty)"}</span>
-                  <span aria-label="changes to" className="mx-1 text-[var(--color-text-muted)]">
+                  <span className="line-through decoration-[var(--color-card-text-muted)]">{c.before || "(empty)"}</span>
+                  <span aria-label="changes to" className="mx-1 text-[var(--color-card-text-muted)]">
                     →
                   </span>
                 </>
@@ -100,7 +100,7 @@ function CardItem({ item, leftOut = false }: { item: ApprovalCardItem; leftOut?:
         <div className="mt-1 grid gap-0.5 text-[0.78rem] text-[var(--color-text-secondary)]">
           {item.settings.map((s, i) => (
             <div key={i} data-testid="approval-card-setting" className="min-w-0 break-words">
-              <span className="text-[var(--color-text-muted)]">{s.label}: </span>
+              <span className="text-[var(--color-card-text-muted)]">{s.label}: </span>
               <span>{s.value}</span>
             </div>
           ))}
@@ -152,13 +152,13 @@ export function ApprovalCardItems({ items, leftOut }: { items: ApprovalCardItem[
         ))}
       </ul>
       {searchable && query.trim() && filtered.length === 0 ? (
-        <p className="text-[0.72rem] text-[var(--color-text-muted)]">No record matches “{query.trim()}”.</p>
+        <p className="text-[0.72rem] text-[var(--color-card-text-muted)]">No record matches “{query.trim()}”.</p>
       ) : null}
       {hidden > 0 ? (
         <button
           type="button"
           data-testid="approval-card-show-more"
-          className="mt-1 text-[0.72rem] text-[var(--color-accent)] hover:underline"
+          className="mt-1 text-[0.72rem] text-[var(--color-card-link)] hover:underline"
           onClick={() => setExpanded(true)}
         >
           Show {hidden} more
@@ -192,7 +192,7 @@ export function ApprovalReadableBody({
         <ApprovalCardItems items={card.items} leftOut={leftOut} />
       )}
       {card.footer ? (
-        <p className="mt-1.5 break-words text-[0.72rem] text-[var(--color-text-muted)]">{card.footer}</p>
+        <p className="mt-1.5 break-words text-[0.72rem] text-[var(--color-card-text-muted)]">{card.footer}</p>
       ) : null}
     </div>
   );
@@ -203,7 +203,7 @@ export function ApprovalReadableBody({
 export function ApprovalCardDetails({ children }: { children: ReactNode }) {
   return (
     <details data-testid="approval-card-details" className="mt-2 min-w-0">
-      <summary className="cursor-pointer text-[0.72rem] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]">
+      <summary className="cursor-pointer text-[0.72rem] text-[var(--color-card-text-muted)] hover:text-[var(--color-text-secondary)]">
         Details
       </summary>
       <div className="mt-1 min-w-0">{children}</div>
@@ -231,7 +231,7 @@ export function RecordLink({ link, linkLabel }: { link: string; linkLabel?: stri
       target="_blank"
       rel="noopener noreferrer"
       data-testid="approval-card-link"
-      className="inline-flex items-center gap-1 text-[0.75rem] font-medium text-[var(--color-accent)] underline-offset-2 hover:underline"
+      className="inline-flex items-center gap-1 text-[0.75rem] font-medium text-[var(--color-card-link)] underline-offset-2 hover:underline"
     >
       {linkLabel || "Open"}
       <Icon name="external-link" className="size-3" />
@@ -245,8 +245,8 @@ export function ChangeValue({ before, after }: { before?: string; after: string 
     <span className="min-w-0 break-words text-right">
       {before !== undefined ? (
         <>
-          <span className="text-[var(--color-text-muted)]">{before || "(empty)"}</span>
-          <span aria-label="changes to" className="mx-1.5 text-[var(--color-text-muted)]">
+          <span className="text-[var(--color-card-text-muted)]">{before || "(empty)"}</span>
+          <span aria-label="changes to" className="mx-1.5 text-[var(--color-card-text-muted)]">
             →
           </span>
         </>
@@ -289,7 +289,7 @@ export function CardRows({ changes, settings }: Pick<ApprovalCardItem, "changes"
         <button
           type="button"
           data-testid="approval-card-rows-more"
-          className="mt-0.5 text-[0.75rem] font-medium text-[var(--color-accent)] hover:underline"
+          className="mt-0.5 text-[0.75rem] font-medium text-[var(--color-card-link)] hover:underline"
           onClick={() => setExpanded(true)}
         >
           Show all {rows.length}
@@ -327,7 +327,7 @@ export function RecordBox({
       <div className="min-w-0 break-words [overflow-wrap:anywhere] text-[0.85rem] font-medium leading-[1.45] text-[var(--color-text-primary)]">{label}</div>
       {id || link ? (
         <div className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
-          {id ? <span className="break-all font-mono text-[0.75rem] text-[var(--color-text-muted)]">{id}</span> : null}
+          {id ? <span className="break-all font-mono text-[0.75rem] text-[var(--color-card-text-muted)]">{id}</span> : null}
           {link ? <RecordLink link={link} linkLabel={linkLabel} /> : null}
         </div>
       ) : null}
@@ -377,7 +377,7 @@ function PlanRow({ item, selection }: { item: ApprovalCardItem; selection?: RowS
           </div>
           {item.id || item.link ? (
             <div className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-3">
-              {item.id ? <span className="break-all font-mono text-[0.72rem] text-[var(--color-text-muted)]">{item.id}</span> : null}
+              {item.id ? <span className="break-all font-mono text-[0.72rem] text-[var(--color-card-text-muted)]">{item.id}</span> : null}
               {item.link ? <RecordLink link={item.link} linkLabel={item.linkLabel} /> : null}
             </div>
           ) : null}
@@ -447,13 +447,13 @@ export function ReadablePendingRecords({ items, selection }: { items: ApprovalCa
         ))}
       </ul>
       {searchable && query.trim() && filtered.length === 0 ? (
-        <p className="mt-1 text-[0.72rem] text-[var(--color-text-muted)]">No record matches “{query.trim()}”.</p>
+        <p className="mt-1 text-[0.72rem] text-[var(--color-card-text-muted)]">No record matches “{query.trim()}”.</p>
       ) : null}
       {hidden > 0 ? (
         <button
           type="button"
           data-testid="approval-card-show-more"
-          className="mt-1 text-[0.75rem] font-medium text-[var(--color-accent)] hover:underline"
+          className="mt-1 text-[0.75rem] font-medium text-[var(--color-card-link)] hover:underline"
           onClick={() => setExpanded(true)}
         >
           Show {hidden} more
@@ -473,7 +473,7 @@ export function DetailsToggle({ open, onToggle, controls }: { open: boolean; onT
       aria-expanded={open}
       aria-controls={controls}
       onClick={onToggle}
-      className="ml-auto inline-flex items-center gap-1 text-[0.75rem] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+      className="ml-auto inline-flex items-center gap-1 text-[0.75rem] text-[var(--color-card-text-muted)] hover:text-[var(--color-text-secondary)]"
     >
       Details
       <Icon name="chevron-down" className={`size-3 transition-transform ${open ? "rotate-180" : ""}`} />
@@ -502,7 +502,7 @@ export function EyebrowCountdown({ remaining, expired }: { remaining: number | n
     <span
       data-testid="approval-countdown"
       className="inline-flex items-center gap-1 text-[0.72rem]"
-      style={{ color: expired ? "var(--color-danger)" : "var(--color-text-muted)" }}
+      style={{ color: expired ? "var(--color-danger-text)" : "var(--color-card-text-muted)" }}
     >
       <Icon name="clock" className="size-3" />
       <span className={remaining < 120 && !expired ? "font-mono" : undefined}>{text}</span>

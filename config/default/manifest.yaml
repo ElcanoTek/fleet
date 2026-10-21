@@ -471,7 +471,19 @@ remote_mcp_catalog: []
 #                               honours the mark. See docs/APPROVAL-STOP.md.
 #                               Example:
 #                                 critical_tool_stop: [execute_plan]
-#   critical_tool_timeouts:    OPTIONAL per-tool approval default-deny window
+#   interactive_hidden_tools:   OPTIONAL tool-name suffixes (same suffix
+#                               matching as critical_tools) whose MCP tools
+#                               interactive chat never sees or calls: not in
+#                               the tool list, not found by tool_search,
+#                               refused by tool_call and by a direct call,
+#                               and out of reach of a sub-agent a chat turn
+#                               spawns. Scheduled and Operations Center runs
+#                               keep them. For raw writes chat must reach
+#                               through a reviewed flow instead. Absent =
+#                               chat and scheduled runs see the same tools.
+#                               See docs/INTERACTIVE-HIDDEN-TOOLS.md. Example:
+#                                 interactive_hidden_tools: [ox_create_deal]
+#   critical_tool_timeouts:     OPTIONAL per-tool approval default-deny window
 #                               (#225), keyed by the same bare tool-name suffix
 #                               as critical_tools, in seconds. Highest-priority
 #                               layer of the approval-timeout resolution chain

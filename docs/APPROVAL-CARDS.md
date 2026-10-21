@@ -237,7 +237,7 @@ staged order, and nothing else changed. Nothing ticked declines. The grouped
 card does the same per call. The approval records both lists, the server is
 told the staged list in `_meta["fleet/narrowed"]`, and the settled card says
 **Approved 2 of 3 · 1 left out**. See
-[APPROVAL-NARROWING.md](APPROVAL-NARROWING.md) and ADR-0085.
+[APPROVAL-NARROWING.md](APPROVAL-NARROWING.md) and ADR-0089.
 
 ## A running call shows its progress
 

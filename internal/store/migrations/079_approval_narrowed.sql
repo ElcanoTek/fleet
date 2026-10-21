@@ -1,6 +1,6 @@
 -- 079_approval_narrowed.sql — what a person approved when they narrowed a
 -- card (agent_policy.critical_tool_narrowable_args, docs/APPROVAL-NARROWING.md,
--- ADR-0085).
+-- ADR-0089).
 --
 -- Canonical JSON {"arg", "staged", "approved"}: the declared list argument,
 -- every value the call was staged with (args_json keeps the whole staged call

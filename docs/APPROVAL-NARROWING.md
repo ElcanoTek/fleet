@@ -5,7 +5,7 @@ declare, for a critical tool, the one list argument a person may narrow on its
 approval card. The readable card's rows that name a staged value get a
 checkbox; the person unticks the ones to leave out and approves the rest in one
 click. Recorded as
-[ADR-0085](adr/0085-an-approval-may-narrow-a-declared-list-argument.md),
+[ADR-0089](adr/0089-an-approval-may-narrow-a-declared-list-argument.md),
 because it changes what an approval runs. It builds on
 [APPROVAL-CARD-DESCRIBERS.md](APPROVAL-CARD-DESCRIBERS.md) (the rows),
 [GROUPED-APPROVALS.md](GROUPED-APPROVALS.md) (one card for several calls) and

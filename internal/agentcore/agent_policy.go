@@ -145,7 +145,7 @@ type AgentPolicy struct {
 	CriticalToolResultCards []string
 	// CriticalToolNarrowableArgs maps a critical suffix to the ONE top-level
 	// list argument a person may narrow on its approval card
-	// (docs/APPROVAL-NARROWING.md, ADR-0085): on approve, the chat server may
+	// (docs/APPROVAL-NARROWING.md, ADR-0089): on approve, the chat server may
 	// replace that argument with a non-empty subset of the staged values, in
 	// staged order, and nothing else. Keys match like CriticalToolSuffixes
 	// (longest suffix wins); a key must stage a card for an MCP call (see
@@ -159,6 +159,12 @@ type AgentPolicy struct {
 	// members must stage a card for an MCP call (see ApprovalStopProblems).
 	// Empty = no running card offers Stop, as before.
 	CriticalToolStop []string
+	// InteractiveHiddenTools lists tool-name suffixes (matched like
+	// CriticalToolSuffixes) whose MCP tools interactive chat never sees or
+	// calls, while scheduled runs keep them (interactive_hidden.go,
+	// docs/INTERACTIVE-HIDDEN-TOOLS.md). Empty = every run sees the same
+	// tools, as before.
+	InteractiveHiddenTools []string
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -254,6 +260,9 @@ var (
 	// activeStop is the set of critical suffixes whose running approved calls
 	// offer Stop. Empty by default.
 	activeStop = map[string]bool{}
+	// activeInteractiveHidden is the normalized interactive_hidden_tools
+	// list. Empty by default: chat sees what scheduled runs see.
+	activeInteractiveHidden []string
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -404,6 +413,7 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 
 	activeNarrowableArgs = installNarrowableArgs(p.CriticalToolNarrowableArgs, p.CriticalToolModes, seen)
 	activeStop = installStagedCardSuffixSet("critical_tool_stop", p.CriticalToolStop, p.CriticalToolModes, seen)
+	activeInteractiveHidden = installInteractiveHiddenList(p.InteractiveHiddenTools)
 }
 
 // suffixMatches reports whether a tool (or a suffix standing for one) is

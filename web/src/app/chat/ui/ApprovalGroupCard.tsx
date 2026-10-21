@@ -60,7 +60,7 @@ function RawArgs({ approval }: { approval: Approval }) {
   const raw = approval.summary.raw ?? "";
   return (
     <>
-      <div className="mb-1 text-[0.72rem] text-[var(--color-text-muted)]">
+      <div className="mb-1 text-[0.72rem] text-[var(--color-card-text-muted)]">
         {server ? (
           <>
             via <span className="font-mono">{server}</span>
@@ -73,7 +73,7 @@ function RawArgs({ approval }: { approval: Approval }) {
         <div className="grid gap-0.5 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
           {args.map((row) => (
             <div key={row.key} className="min-w-0">
-              <span className="text-[var(--color-text-muted)]">{row.key}: </span>
+              <span className="text-[var(--color-card-text-muted)]">{row.key}: </span>
               <span className="break-all">{row.value}</span>
             </div>
           ))}
@@ -242,7 +242,7 @@ export function ApprovalGroupCard({
     <div
       data-testid="approval-group-card"
       data-approval-group={groupId}
-      className="rounded-[var(--radius-lg)] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
+      className="rounded-[var(--radius-lg)] border bg-[var(--color-card-bg)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
       style={{ borderColor: "var(--color-accent)", color: "var(--color-text-primary)" }}
     >
       <div className="mb-2 flex min-w-0 items-center gap-2">
@@ -318,7 +318,7 @@ export function ApprovalGroupCard({
           <button
             type="button"
             data-testid="approval-group-approve"
-            className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+            className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
             disabled={disabled || checkedIds.length === 0}
             onClick={() => void decide(checkedIds, uncheckedIds, narrow)}
           >
@@ -344,14 +344,14 @@ export function ApprovalGroupCard({
           </button>
         </div>
         {uncheckedIds.length > 0 && checkedIds.length > 0 ? (
-          <p className="text-[0.72rem] text-[var(--color-text-muted)]" data-testid="approval-group-unchecked-note">
+          <p className="text-[0.72rem] text-[var(--color-card-text-muted)]" data-testid="approval-group-unchecked-note">
             {uncheckedIds.length === 1 ? "The unchecked action is" : `The ${uncheckedIds.length} unchecked actions are`}{" "}
             declined.
           </p>
         ) : null}
         <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
         {countdown.expired ? (
-          <p className="text-[0.72rem] text-[var(--color-text-muted)]">
+          <p className="text-[0.72rem] text-[var(--color-card-text-muted)]">
             The earliest of these actions timed out. Use One at a time to see each one.
           </p>
         ) : null}
