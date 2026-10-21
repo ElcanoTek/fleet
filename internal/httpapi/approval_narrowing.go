@@ -23,7 +23,7 @@
 //
 // The server is told which values were staged (`_meta["fleet/narrowed"]`), so
 // it can check its other arguments (a summary written for the staged list,
-// say) against what the person saw. See docs/APPROVAL-NARROWING.md, ADR-0085.
+// say) against what the person saw. See docs/APPROVAL-NARROWING.md, ADR-0089.
 
 package httpapi
 

@@ -463,7 +463,7 @@ type AgentPolicy struct {
 	// person unticks rows, and fleet approves the call with that argument
 	// replaced by the ticked values (a non-empty subset of the staged ones,
 	// staged order, nothing else changed). The key must stage a card for an
-	// MCP call (docs/APPROVAL-NARROWING.md, ADR-0085).
+	// MCP call (docs/APPROVAL-NARROWING.md, ADR-0089).
 	//
 	//	agent_policy:
 	//	  critical_tool_narrowable_args:

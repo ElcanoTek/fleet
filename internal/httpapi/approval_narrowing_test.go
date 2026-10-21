@@ -24,7 +24,7 @@ import (
 )
 
 // These tests cover approval narrowing (docs/APPROVAL-NARROWING.md,
-// ADR-0085): a person approves only some of the staged values of a tool's
+// ADR-0089): a person approves only some of the staged values of a tool's
 // declared list argument, and fleet runs the staged call with only that
 // argument replaced.
 

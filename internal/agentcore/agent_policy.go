@@ -145,7 +145,7 @@ type AgentPolicy struct {
 	CriticalToolResultCards []string
 	// CriticalToolNarrowableArgs maps a critical suffix to the ONE top-level
 	// list argument a person may narrow on its approval card
-	// (docs/APPROVAL-NARROWING.md, ADR-0085): on approve, the chat server may
+	// (docs/APPROVAL-NARROWING.md, ADR-0089): on approve, the chat server may
 	// replace that argument with a non-empty subset of the staged values, in
 	// staged order, and nothing else. Keys match like CriticalToolSuffixes
 	// (longest suffix wins); a key must stage a card for an MCP call (see
