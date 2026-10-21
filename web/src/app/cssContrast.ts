@@ -73,6 +73,27 @@ function hex(h: string): RGBA {
   return [n(0), n(2), n(4), x.length === 8 ? n(6) : 1];
 }
 
+/**
+ * rgb()/rgba() in comma or space syntax, each channel a number (0-255) or a
+ * percentage, alpha a number (0-1) or a percentage. Wrong arity or a
+ * component that is not a finite number throws: a NaN channel would make
+ * every ratio NaN, and `NaN < min` is false, so a broken token would pass.
+ * Out-of-range values clamp, as CSS does.
+ */
+function rgbComponents(value: string, args: string): RGBA {
+  const parts = args.split(/[\s,/]+/).filter(Boolean);
+  if (parts.length !== 3 && parts.length !== 4) throw new Error(`unsupported color value: ${value}`);
+  const num = (s: string, scale: number): number => {
+    const pct = s.endsWith("%");
+    const n = Number(pct ? s.slice(0, -1) : s);
+    if (!/^[+-]?(\d+\.?\d*|\.\d+)%?$/.test(s) || !Number.isFinite(n)) {
+      throw new Error(`unsupported color value: ${value}`);
+    }
+    return Math.min(Math.max(pct ? (n / 100) * scale : n, 0), scale);
+  };
+  return [num(parts[0], 255) / 255, num(parts[1], 255) / 255, num(parts[2], 255) / 255, parts[3] ? num(parts[3], 1) : 1];
+}
+
 /** Resolve a CSS color value against a theme's custom properties. */
 export function resolveColor(value: string, theme: Theme, seen: string[] = []): RGBA {
   const v = value.trim();
@@ -90,10 +111,7 @@ export function resolveColor(value: string, theme: Theme, seen: string[] = []): 
     if (fallback.length) return resolveColor(fallback.join(","), theme, seen);
     throw new Error(`undefined custom property ${name}`);
   }
-  if (c.name === "rgb" || c.name === "rgba") {
-    const nums = c.args.split(/[\s,/]+/).filter(Boolean).map(Number);
-    return [nums[0] / 255, nums[1] / 255, nums[2] / 255, nums.length > 3 ? nums[3] : 1];
-  }
+  if (c.name === "rgb" || c.name === "rgba") return rgbComponents(v, c.args);
   if (c.name === "color-mix") {
     const [space, a, b] = splitTopLevel(c.args);
     if (space.replace(/\s+/g, " ") !== "in srgb") throw new Error(`color-mix space ${space} unsupported`);
@@ -137,6 +155,7 @@ function luminance([r, g, b]: RGB): number {
 
 /** WCAG 2.x contrast ratio between two opaque colors. */
 export function contrastRatio(a: RGB, b: RGB): number {
+  if (![...a, ...b].every(Number.isFinite)) throw new Error(`contrast of a non-finite color: ${a} / ${b}`);
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (hi + 0.05) / (lo + 0.05);
 }
