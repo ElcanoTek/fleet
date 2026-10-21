@@ -250,8 +250,8 @@ yourself: what they shared with their old team stops being shared.
 Above the transcript sit three small controls, left to right: **Keyboard
 shortcuts** shows the same list as the [last section](#13-keyboard-shortcuts) of
 this guide; **Memories** opens the memory manager; and **Show details** toggles
-the assistant's reasoning, tool calls, and per-turn cost figures on or off across
-the whole conversation. Every conversation also shows who can see it — **Only
+the assistant's reasoning, working notes, tool calls, and per-turn cost figures on
+or off across the whole conversation. Every conversation also shows who can see it — **Only
 you**, **Shared with** your team, or **Public link** — and a **Share** button.
 Both open the share dialog.
 
@@ -269,6 +269,7 @@ your eye lands on the answer and then on anything that needs you:
 | --- | --- |
 | Execution trail | A row of chips, one per tool the assistant used: a file it read, a connector it called, code it ran. Click a chip to see exactly what went in and what came back. This is how you check the work. A chip in the danger colour is a call that failed; the chip of an action that went to an approval card is not: it is marked **sent for approval**, and the card says whether it ran. Shown only when **Show details** is on. |
 | Reasoning | The assistant's narrated thinking. Also shown only when **Show details** is on. |
+| Working notes | While a reply is in progress, the short notes the assistant writes between steps ("Let me look up the deal first."). Shown only when **Show details** is on, and only until you reload the page: the saved conversation keeps the answer, not the notes. With details off, a status line takes their place: **Thinking**, or the step under way, such as **Running shell** or the plan item it is working on. |
 | The answer | Text, tables, charts, and images. Code and data come in copyable blocks. When the assistant produces an HTML report, it renders as an **HTML preview** with a **Show source** toggle. |
 | Interactive cards | A form, picker, checklist, comparison, chart or small calculator the assistant built for this answer. Fill it in and press its button; your answers go back as your next message. See [Interactive cards](#interactive-cards). |
 | Status | Banners for anything unusual about the turn: retrying, cancelled, failed. See [When a turn goes wrong](#11-when-a-turn-goes-wrong). |

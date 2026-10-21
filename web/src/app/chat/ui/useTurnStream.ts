@@ -80,6 +80,8 @@ export type QueuedInput = {
   submission_id?: string;
 };
 import { formatBytes } from "./formatters";
+import { joinTextSegments } from "./textSegments";
+import { foldNarration, settleDone, settleDoneMessages, settleNarration } from "./turnNarration";
 import type { ConversationSummary, MCPServerInfo } from "./chat-experience";
 import type { PerConvComposerState } from "./usePerConvComposerState";
 import type { TurnStreamState } from "./useTurnStreamState";
@@ -684,10 +686,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // Destructure into the SAME local names the moved bodies already use, so
   // the bodies below are verbatim. Fresh each render; no memoization.
   const {
-    setConvMessages,
+    setConvMessages: setConvMessagesRaw,
     getConvMessages,
     renameConvKey,
-    patchAssistantMessage,
+    patchAssistantMessage: patchAssistantMessageRaw,
     startThinkingCrossfade,
     refreshConversations,
     loadConversation,
@@ -737,6 +739,21 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     streamingConvsRef,
     isStreaming,
   } = deps;
+
+  // Every write to the transcript passes through settleDone (turnNarration.ts):
+  // a slot that turns `done` on ANY path — a terminal frame, Stop before the
+  // turn.cancelled frame lands, a recovered outcome — gets its folded narration
+  // back unless text.replace delivered the final answer. One choke point
+  // instead of a settle call at each of the many places that end a turn.
+  const setConvMessages: TurnStreamDeps["setConvMessages"] = (convId, updater) =>
+    setConvMessagesRaw(convId, (prev) =>
+      settleDoneMessages(typeof updater === "function" ? updater(prev) : updater),
+    );
+  const patchAssistantMessage: TurnStreamDeps["patchAssistantMessage"] = (
+    convId,
+    assistantId,
+    updater,
+  ) => patchAssistantMessageRaw(convId, assistantId, (m) => settleDone(updater(m)));
 
   // #785: per-conversation pending-input queue, fed by queue.updated events
   // on the live stream and by GET /queue on submit/reconnect.
@@ -2391,10 +2408,23 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       event.event === "reasoning.delta"
     ) {
       const p = payload as { text?: string };
+      // A reasoning.start opens a new block: it begins a new paragraph even
+      // when it carries no text of its own (deltas follow), so two blocks
+      // never run together as "…deal.**Checking**".
+      if (event.event === "reasoning.start" && !p.text) {
+        patchAssistantMessage(ctx.target, ctx.assistantId, (m) =>
+          m.reasoning?.trim() ? { ...m, reasoning: `${m.reasoning.trimEnd()}\n\n` } : m,
+        );
+        return;
+      }
       if (!p.text) return;
+      const text = p.text;
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
         ...clearRetryNotice(m),
-        reasoning: (m.reasoning ?? "") + p.text,
+        reasoning:
+          event.event === "reasoning.start"
+            ? joinTextSegments(m.reasoning ?? "", text)
+            : (m.reasoning ?? "") + text,
       }));
       return;
     }
@@ -2429,6 +2459,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
         ...clearRetryNotice(m),
         content: p.text ?? "",
+        // The answer is final; the narration stays for "Show details".
+        finalAnswer: true,
         state: "streaming",
       }));
       return;
@@ -2464,7 +2496,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (event.event === "tool.call") {
       const p = payload as { id: string; name: string; input: string };
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
-        ...clearRetryNotice(m),
+        // The text this step streamed was narration ahead of the call, not
+        // the answer: move it aside so the default view shows the status line.
+        ...foldNarration(clearRetryNotice(m)),
         toolCalls: [
           ...(m.toolCalls ?? []),
           { id: p.id, name: p.name, input: p.input, state: "pending" },
@@ -2718,12 +2752,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (event.event === "turn.error") {
       ctx.sawTerminal = true;
       const p = payload as { message?: string };
-      patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
-        ...clearRetryNotice(m),
-        content: m.content || p.message || "Something went wrong.",
-        state: "done",
-        failed: true,
-      }));
+      patchAssistantMessage(ctx.target, ctx.assistantId, (m) => {
+        const settled = settleNarration(clearRetryNotice(m));
+        return {
+          ...settled,
+          content: settled.content || p.message || "Something went wrong.",
+          state: "done",
+          failed: true,
+        };
+      });
       return;
     }
 
@@ -2740,7 +2777,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         model?: string;
       };
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
-        ...clearRetryNotice(m),
+        ...settleNarration(clearRetryNotice(m)),
         state: "done",
         cancelled: true,
         summary: {
@@ -2820,6 +2857,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         duration_ms?: number;
         model?: string;
       };
+      // Settle first: a turn that ended without text.replace keeps its
+      // narration as part of the answer (turnNarration.ts).
+      patchAssistantMessage(ctx.target, ctx.assistantId, settleNarration);
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
         ...clearRetryNotice(m),
         // ctx.gap: the replay skipped events we never received, so an empty
@@ -3867,6 +3907,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       throw new Error("__stream_closed_before_turn_end__");
     }
 
+    patchAssistantMessage(target, assistantId, settleNarration);
     patchAssistantMessage(target, assistantId, (m) => ({
       ...m,
       // A stopped turn (turn.cancelled — an API cancel, a time or cost limit)

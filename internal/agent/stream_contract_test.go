@@ -76,6 +76,16 @@ func contractScenarios() []contractScenario {
 			},
 		},
 		{
+			name: "narrated-tool-loop",
+			about: "the model narrates before each tool call, then answers: steps arrive as separate paragraphs " +
+				"(agentcore.StepTextSeparator) and text.replace swaps the narration for the final answer",
+			steps: []fakellm.Step{
+				narrated("Let me check the workspace.", fakellm.BashStep("call_contract_narrated_1", "echo CONTRACT_NARRATED_ONE")),
+				narrated("Found it. Now the second check.", fakellm.BashStep("call_contract_narrated_2", "echo CONTRACT_NARRATED_TWO")),
+				fakellm.TextStep("Both checks passed."),
+			},
+		},
+		{
 			name:  "model-required",
 			about: "the provider rejects the request (non-retryable 400)",
 			steps: []fakellm.Step{{
@@ -98,6 +108,13 @@ func contractScenarios() []contractScenario {
 			cancel: true,
 		},
 	}
+}
+
+// narrated gives a tool-call step the narration a real model writes ahead of
+// its calls.
+func narrated(text string, step fakellm.Step) fakellm.Step {
+	step.Text = text
+	return step
 }
 
 func TestChatStreamContract(t *testing.T) {
