@@ -39,6 +39,8 @@ type fakeEngine struct {
 	mu             sync.Mutex
 	lastHistory    []agent.HistoryEntry
 	lastModel      string
+	lastUserEmail  string
+	lastMCPUser    agentcore.MCPUserIdentity
 	turns          int
 	providerHealth []agentcore.ModelHealth
 }
@@ -47,6 +49,8 @@ func (f *fakeEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.Event
 	f.mu.Lock()
 	f.lastHistory = in.History
 	f.lastModel = in.Model
+	f.lastUserEmail = in.UserEmail
+	f.lastMCPUser = in.MCPUser
 	f.turns++
 	f.mu.Unlock()
 
@@ -111,7 +115,7 @@ func (f *fakeEngine) OpenApprovalRemoteMCPScope(context.Context, string, string,
 	return nil, nil
 }
 
-func (f *fakeEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string) (*agent.MCPScope, error) {
+func (f *fakeEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string, agentcore.MCPUserIdentity) (*agent.MCPScope, error) {
 	return nil, nil
 }
 func (f *fakeEngine) SandboxPool() *sandbox.Pool                   { return nil }
