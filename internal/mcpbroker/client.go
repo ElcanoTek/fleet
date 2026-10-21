@@ -456,8 +456,13 @@ func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
 	}
 	c.mu.Unlock()
 
-	if err := c.send(req); err != nil {
+	if sent, err := c.sendLive(ctx, req); !sent {
 		c.discard(req.ID)
+		if err == nil {
+			// Cancelled while queued for the write lock: nothing went out,
+			// so there is nothing for the child to cancel or retain.
+			return response{}, ctx.Err()
+		}
 		return response{}, fmt.Errorf("mcpbroker: send: %w", err)
 	}
 
@@ -517,6 +522,23 @@ func (c *Client) closeAbandonedScope(ch <-chan response) {
 		})
 	case <-c.done:
 	}
+}
+
+// sendLive writes req unless ctx has ended by the time this caller holds
+// the write lock: another frame may hold it a while, and a request whose
+// caller already gave up must never reach the child (a side-effecting tool
+// would run for nobody). sent reports whether any of req was written; a
+// write error is returned with sent false.
+func (c *Client) sendLive(ctx context.Context, req request) (sent bool, err error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if ctx.Err() != nil {
+		return false, nil
+	}
+	if err := c.enc.Encode(req); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (c *Client) send(req request) error {

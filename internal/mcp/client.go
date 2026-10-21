@@ -65,7 +65,7 @@ type Client struct {
 
 // Server represents a connection to an MCP server
 type Server struct {
-	mu        sync.Mutex // protects transport during restart
+	mu        ctxMutex // protects transport during restart; callers may give up waiting
 	name      string
 	transport Transport
 	// toolsMu guards tools separately from mu: initialize reassigns the slice
@@ -788,30 +788,6 @@ func WithCallTimeout(ctx context.Context, d time.Duration) context.Context {
 func CallTimeout(ctx context.Context) (time.Duration, bool) {
 	d, ok := ctx.Value(callTimeoutKey{}).(time.Duration)
 	return d, ok && d > 0
-}
-
-// lockWithContext acquires mu, or gives up when ctx ends first. A lock that
-// arrives after giving up is released at once by the waiting goroutine, which
-// holds nothing of the caller's.
-func lockWithContext(ctx context.Context, mu *sync.Mutex) error {
-	if mu.TryLock() {
-		return nil
-	}
-	locked := make(chan struct{})
-	go func() {
-		mu.Lock()
-		close(locked)
-	}()
-	select {
-	case <-locked:
-		return nil
-	case <-ctx.Done():
-		go func() {
-			<-locked
-			mu.Unlock()
-		}()
-		return ctx.Err()
-	}
 }
 
 func (s *Server) callTool(ctx context.Context, name string, arguments map[string]interface{}) (*ToolResult, error) {
