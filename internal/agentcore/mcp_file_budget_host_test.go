@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -241,5 +242,35 @@ func TestMCPWorkspaceFileTwoReferencesOneCall(t *testing.T) {
 	}
 	if _, ok := broker.gotArgs["other"].(string); !ok {
 		t.Fatal("other not expanded")
+	}
+}
+
+// TestMCPCallNotSentAfterResolutionOutlivesItsContext: when resolving the
+// references returns only after the call's context has ended (it queued for
+// the budget past the deadline, say), the call is never dispatched and the
+// windows are released.
+func TestMCPCallNotSentAfterResolutionOutlivesItsContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	released := 0
+	reader := func(_ context.Context, refs []fleettools.WorkspaceFileRef, _ int64) ([][]byte, func(), error) {
+		cancel() // the call's context ends while resolution is finishing
+		windows := make([][]byte, len(refs))
+		for i := range windows {
+			windows[i] = []byte("payload")
+		}
+		return windows, func() { released++ }, nil
+	}
+	broker := &blockingBroker{mode: "ok", entered: make(chan struct{}, 1)}
+	input := mustFileJSON(t, map[string]any{"chunk": workspaceFileArgument{"site.zip", strings.Repeat("a", 64), 0, 7}})
+	resp, _ := budgetTool(broker, reader).Run(ctx, fantasy.ToolCall{ID: "late", Input: input})
+	if n := broker.inside.Load() + int64(len(broker.samples)); n != 0 {
+		t.Fatalf("the broker was called %d times after the call's context ended", n)
+	}
+	if !resp.IsError {
+		t.Fatalf("a call whose context ended during resolution did not fail: %+v", resp)
+	}
+	if released != 1 {
+		t.Fatalf("windows released %d times, want 1", released)
 	}
 }

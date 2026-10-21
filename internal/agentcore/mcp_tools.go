@@ -834,6 +834,14 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 	// answered (mcp.RetainArguments). The hold runs resolved then.
 	callCtx, hold := mcp.WithArgumentHold(callCtx, resolved)
 	defer hold.Done()
+	// Resolution may have queued for the workspace-file budget past the
+	// call's deadline (or its cancellation). Never dispatch then: an
+	// out-of-process call sends the request before it notices ctx, and the
+	// tool may have side effects.
+	if err := callCtx.Err(); err != nil {
+		message, _ := governToolOutput(ctx, toolName, fmt.Sprintf("MCP call not sent: %v", err))
+		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(message), failed: true}
+	}
 	// Sentry breadcrumb (#193): a trail of every MCP call so a captured
 	// exception's Sentry event shows the agent's tool history. Tool ARGS are
 	// deliberately NOT attached (they may carry connector params); the

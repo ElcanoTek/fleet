@@ -415,7 +415,9 @@ func (s *workspaceFileStore) waitLocked(ctx context.Context) error {
 	s.mu.Unlock()
 	select {
 	case <-wait:
-		return nil
+		// Both may be ready at once, and select picks at random: a caller
+		// whose context has ended must not go on to take a lease.
+		return ctx.Err()
 	case <-ctx.Done():
 		return ctx.Err()
 	}

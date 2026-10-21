@@ -738,3 +738,19 @@ func TestWorkspaceFileReaderAbandonedFlightIsRetried(t *testing.T) {
 		t.Fatalf("a waiter on an unread file inherited another file's failure: %v", err)
 	}
 }
+
+// TestWorkspaceFileWaitPrefersCancellation: when room frees at the same
+// moment the caller's context ends, the wait reports the cancellation, so
+// the caller never goes on to take a lease.
+func TestWorkspaceFileWaitPrefersCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 200 { // select picks at random between ready cases
+		s := testStore(1 << 20)
+		s.mu.Lock()
+		close(s.changed)
+		if err := s.waitLocked(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("a wait with both room and cancellation ready returned %v", err)
+		}
+	}
+}
