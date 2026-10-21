@@ -100,15 +100,11 @@ func MCPServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
 			// compares like with like — a raw token here against the live
 			// server's expanded env would force a spurious restart on every
 			// reload. Resolved lazily: token-free catalogs touch no disk.
+			// The same helper, arguments and order as BuildMCPClient's shared
+			// spawn: no task identity and no signed-in user (their keys are
+			// dropped), the shared dir for ${FLEET_WORKSPACE}.
 			shared := agentcore.SharedMCPWorkspaceDir()
-			env := spec.Env
-			if agentcore.EnvReferencesWorkspace(env) {
-				env = agentcore.ExpandWorkspaceEnv(env, shared)
-			}
-			// Mirror the shared spawn's ${FLEET_TASK_ID} handling (dropped —
-			// no task identity) so the diff compares like with like.
-			env = agentcore.ExpandTaskIDEnv(env, "")
-			env = agentcore.ExpandWorkspaceRootEnv(env)
+			env := agentcore.SpawnEnv(spec.Env, shared, "", agentcore.MCPUserIdentity{})
 			// Dir must be the SAME value BuildMCPClient's spawn used, or
 			// serverDefEqual sees a changed def and restarts every server on
 			// every reload.

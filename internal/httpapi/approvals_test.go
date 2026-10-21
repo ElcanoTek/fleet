@@ -256,7 +256,7 @@ func (e *approvalEngine) OpenApprovalRemoteMCPScope(context.Context, string, str
 	return nil, nil
 }
 
-func (e *approvalEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string) (*agent.MCPScope, error) {
+func (e *approvalEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSelection, string, agentcore.MCPUserIdentity) (*agent.MCPScope, error) {
 	return nil, nil
 }
 

@@ -348,7 +348,7 @@ export function NewProjectDialog({
         <button
           type="button"
           disabled={!canCreate}
-          className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-on-primary)] transition hover:opacity-90 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
+          className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
           onClick={() => void create()}
         >
           {busy ? "Creating…" : "Create project"}
