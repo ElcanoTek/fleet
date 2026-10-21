@@ -12,3 +12,12 @@
 -- opt in, and every row written before this column existed), which executes
 -- exactly as before, so a nullable ADD with no backfill is the old behaviour.
 ALTER TABLE approvals ADD COLUMN narrowed_json TEXT;
+
+-- narrowable_arg freezes, at staging, the argument a person may narrow on a
+-- pending card (the policy's critical_tool_narrowable_args entry then, when
+-- the staged value is a narrowable list). The card shown, a reload of it and
+-- the decision all use this value, never the boot policy at decision time, so
+-- a restart with another entry can never narrow an argument the person did
+-- not review. NULL = the card approves its call whole (every row written
+-- before this column, and every card of a tool that did not opt in).
+ALTER TABLE approvals ADD COLUMN narrowable_arg TEXT;

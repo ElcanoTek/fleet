@@ -73,11 +73,27 @@ type approvalNarrowing struct {
 	Approved []string `json:"approved"`
 }
 
-// stagedNarrowable reports the argument a person may narrow on toolName's
-// card and its staged values. ok is false when the tool declares none, or the
-// staged value is not a list of 2..maxNarrowableValues distinct non-empty
-// strings: such a card approves its call whole, as before.
-func stagedNarrowable(toolName, argsJSON string) (arg string, values []string, ok bool) {
+// narrowableArgAtStaging is the argument a person may narrow on a card being
+// staged now: the policy's critical_tool_narrowable_args entry for toolName,
+// when the staged call passes stagedNarrowable with it, else "". It is frozen
+// on the row (store.Approval.NarrowableArg) and read back from there by the
+// card, every reload and the decision, never from the boot policy again: a
+// restart with another entry cannot narrow an argument the person did not
+// review.
+func narrowableArgAtStaging(toolName, argsJSON string) string {
+	arg, _, ok := stagedNarrowable(toolName, argsJSON, agentcore.NarrowableArgFor(toolName))
+	if !ok {
+		return ""
+	}
+	return arg
+}
+
+// stagedNarrowable reports whether arg (the argument frozen on the card at
+// staging) can be narrowed on toolName's card, and its staged values. ok is
+// false when arg is empty, or the staged value is not a list of
+// 2..maxNarrowableValues distinct non-empty strings: such a card approves its
+// call whole, as before.
+func stagedNarrowable(toolName, argsJSON, arg string) (_ string, values []string, ok bool) {
 	// An outbound email send (send_email, send_template_email) is never
 	// narrowable, whatever the policy says: one approval covers the message
 	// as written.
@@ -89,7 +105,6 @@ func stagedNarrowable(toolName, argsJSON string) (arg string, values []string, o
 		agentcore.IsOutboundEmailTool(toolName) || onSyntheticTransport(toolName) {
 		return "", nil, false
 	}
-	arg = agentcore.NarrowableArgFor(toolName)
 	if arg == "" || len(argsJSON) > frozenArgsMaxBytes {
 		return "", nil, false
 	}
@@ -150,7 +165,7 @@ func narrowableValues(v any) ([]string, bool) {
 // never narrow an argument the person did not review. Any error is the
 // client's: the request is refused and nothing is claimed.
 func narrowApproval(a *store.Approval, approved []string, shownArg string) (*approvalNarrowing, error) {
-	arg, staged, ok := stagedNarrowable(a.ToolName, a.ArgsJSON)
+	arg, staged, ok := stagedNarrowable(a.ToolName, a.ArgsJSON, a.NarrowableArg)
 	if !ok {
 		return nil, errors.New("this action cannot be narrowed: approve or decline it whole")
 	}
@@ -373,15 +388,44 @@ func narrowingNote(n *approvalNarrowing) string {
 	return store.NarrowingNote(n.Arg, n.Staged, n.Approved)
 }
 
-// narrowablePayload is the pending card's `narrowable` field: the argument a
-// person may narrow and its staged values, or nil when the card approves its
-// call whole.
-func narrowablePayload(toolName, argsJSON string) map[string]any {
-	arg, values, ok := stagedNarrowable(toolName, argsJSON)
-	if !ok {
-		return nil
+// approvalTrailer joins fleet's labelled lines under an approved call's
+// result: the narrowing line (when narrowed is set) and then others. When the
+// whole would not fit agentcore.ApprovalTrailerRoom (an operator output limit
+// near the minimum), the narrowing line drops its position list
+// (store.NarrowingNoteCompact), so the tool text and the lines together stay
+// within the configured limit.
+func approvalTrailer(narrowed *approvalNarrowing, others ...string) string {
+	join := func(note string) string {
+		parts := make([]string, 0, 1+len(others))
+		if note != "" {
+			parts = append(parts, note)
+		}
+		return strings.Join(append(parts, others...), "\n\n")
 	}
-	return map[string]any{"arg": arg, "values": values}
+	if narrowed == nil {
+		return join("")
+	}
+	if full := join(narrowingNote(narrowed)); len(full) <= agentcore.ApprovalTrailerRoom() {
+		return full
+	}
+	return join(store.NarrowingNoteCompact(narrowed.Arg, narrowed.Staged, narrowed.Approved))
+}
+
+// withApprovalNarrowable adds a pending card's `narrowable` field: the
+// argument frozen on the row at staging and its staged values. Absent when the
+// card approves its call whole, so every other payload is unchanged.
+func withApprovalNarrowable(payload map[string]any, a *store.Approval) map[string]any {
+	if a == nil || a.Status != "pending" {
+		return payload
+	}
+	arg, values, ok := stagedNarrowable(a.ToolName, a.ArgsJSON, a.NarrowableArg)
+	if !ok {
+		return payload
+	}
+	// critical_tool_narrowable_args: the describer card's rows that name a
+	// staged value get a checkbox (docs/APPROVAL-NARROWING.md).
+	payload["narrowable"] = map[string]any{"arg": arg, "values": values}
+	return payload
 }
 
 // withApprovalNarrowed adds a settled card's `narrowed` record (what the

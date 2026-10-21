@@ -2106,6 +2106,11 @@ type Approval struct {
 	// asked for. Read by GetApproval, ListResolvedApprovals and
 	// ListExecutingApprovals.
 	StopRequestedAt int64
+	// NarrowableArg is the argument a person may narrow on this card, frozen
+	// at staging by SetApprovalNarrowableArg (migration 079,
+	// docs/APPROVAL-NARROWING.md). Empty = the card approves its call whole.
+	// Read by GetApproval and ListPendingApprovals.
+	NarrowableArg string
 }
 
 // ListPendingApprovals returns every pending approval for a conversation,
@@ -2117,7 +2122,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, ''), COALESCE(group_id, '')
+		        is_err, COALESCE(card_json, ''), COALESCE(group_id, ''), COALESCE(narrowable_arg, '')
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status = 'pending'
 		 ORDER BY created_at ASC`,
@@ -2132,7 +2137,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID, &a.NarrowableArg); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2337,6 +2342,20 @@ func (s *Store) SetApprovalCard(ctx context.Context, userEmail, approvalID, card
 	return n == 1, err
 }
 
+// SetApprovalNarrowableArg freezes, at staging, the argument a person may
+// narrow on a still-pending approval the user owns (migration 079). It
+// reports whether a row was updated.
+func (s *Store) SetApprovalNarrowableArg(ctx context.Context, userEmail, approvalID, arg string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE approvals SET narrowable_arg = $1 WHERE id = $2 AND user_email = $3 AND status = 'pending'`,
+		arg, approvalID, userEmail)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // SetApprovalGroup records the approval group a still-pending approval the
 // user owns joined at staging (docs/GROUPED-APPROVALS.md). It reports whether
 // a row was updated: a row resolved or superseded in between keeps no group,
@@ -2412,7 +2431,7 @@ func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
 		        is_err, COALESCE(card_json, ''), resume_state, COALESCE(group_id, ''), COALESCE(progress_json, ''),
-		        COALESCE(result_card_json, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0)
+		        COALESCE(result_card_json, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0), COALESCE(narrowable_arg, '')
 		 FROM approvals WHERE id = $1 AND user_email = $2`,
 		approvalID, userEmail,
 	)
@@ -2420,7 +2439,7 @@ func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
 		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState, &a.GroupID, &a.ProgressJSON, &a.ResultCardJSON,
-		&a.NarrowedJSON, &a.StopRequestedAt); err != nil {
+		&a.NarrowedJSON, &a.StopRequestedAt, &a.NarrowableArg); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}

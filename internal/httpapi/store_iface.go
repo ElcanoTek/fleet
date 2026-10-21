@@ -201,6 +201,9 @@ type chatStore interface {
 	// SetApprovalCard attaches a describer's readable card to a still-pending
 	// approval (docs/APPROVAL-CARD-DESCRIBERS.md); false = no pending row.
 	SetApprovalCard(ctx context.Context, userEmail, approvalID, cardJSON string) (bool, error)
+	// SetApprovalNarrowableArg freezes, at staging, the argument a person may
+	// narrow on a still-pending card (docs/APPROVAL-NARROWING.md).
+	SetApprovalNarrowableArg(ctx context.Context, userEmail, approvalID, arg string) (bool, error)
 	// SetApprovalGroup records the approval group a still-pending card joined
 	// at staging (docs/GROUPED-APPROVALS.md); false when the row is no longer
 	// pending.

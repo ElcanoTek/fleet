@@ -453,6 +453,16 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// A tool in critical_tool_group_approval: the card joins this turn's
 	// approval group, so the web can render the turn's cards as one.
 	a.joinApprovalGroup(approval)
+	// critical_tool_narrowable_args: freeze the argument this card narrows
+	// now, so the card, its reloads and the decision never read a policy
+	// that changed after it was shown (docs/APPROVAL-NARROWING.md).
+	if arg := narrowableArgAtStaging(toolName, rawInput); arg != "" {
+		if ok, err := a.store.SetApprovalNarrowableArg(a.ctx, a.userEmail, approval.ID, arg); err != nil || !ok {
+			log.Printf("approval narrowing: freeze the argument for %s: ok=%t err=%v", approval.ID, ok, err)
+		} else {
+			approval.NarrowableArg = arg
+		}
+	}
 	if cardJSON != "" {
 		if ok, err := a.store.SetApprovalCard(a.ctx, a.userEmail, approval.ID, cardJSON); err != nil || !ok {
 			log.Printf("approval card: store card for %s: ok=%t err=%v", approval.ID, ok, err)
@@ -889,13 +899,6 @@ func approvalClientFields(toolName, rawInput, convID string) map[string]any {
 		// Only present when true, so every other card's payload is unchanged.
 		out["progress_updates"] = true
 	}
-	if n := narrowablePayload(toolName, rawInput); n != nil {
-		// critical_tool_narrowable_args: the list argument a person may
-		// narrow on this card and its staged values; the describer card's
-		// rows that name one get a checkbox (docs/APPROVAL-NARROWING.md).
-		// Only present for such a card, so every other payload is unchanged.
-		out["narrowable"] = n
-	}
 	if approvalStoppable(toolName) {
 		// critical_tool_stop: once approved and running, the card offers
 		// Stop (docs/APPROVAL-STOP.md). Only present when true.
@@ -924,7 +927,7 @@ func approvalRequiredEvent(approval *store.Approval, rawInput, convID string) ma
 	ev["expires_at"] = approval.ExpiresAt
 	ev["mcp_server"] = approval.MCPServer
 	ev["mcp_account"] = approval.MCPAccount
-	return withApprovalGroup(withApprovalCard(ev, approval), approval)
+	return withApprovalNarrowable(withApprovalGroup(withApprovalCard(ev, approval), approval), approval)
 }
 
 // summarizeApprovalInput dispatches on tool name to build a display
@@ -2017,12 +2020,13 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	// staged values were approved and which were left out. They are governed
 	// with the result but never truncated: the tool's text is bounded to what
 	// the output limit leaves after them.
-	var trailers []string
-	if narrowed, nerr := parseApprovalNarrowing(approval.NarrowedJSON); approval.NarrowedJSON != "" && nerr == nil {
-		trailers = append(trailers, narrowingNote(narrowed))
+	var narrowed *approvalNarrowing
+	if n, nerr := parseApprovalNarrowing(approval.NarrowedJSON); approval.NarrowedJSON != "" && nerr == nil {
+		narrowed = n
 	}
 	// The person pressed Stop: fleet's line says so, in the words that fit.
 	// A stop that landed before the call was sent ran nothing at all.
+	var trailers []string
 	if stopped {
 		if errors.Is(toolErr, mcp.ErrStoppedBeforeSend) {
 			trailers = append(trailers, approvalStoppedBeforeSendNote)
@@ -2031,7 +2035,7 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 		}
 	}
 	var governed string
-	resultText, isErr, governed = governApprovalResultWithTrailer(execCtx, approval, resultText, isErr, strings.Join(trailers, "\n\n"))
+	resultText, isErr, governed = governApprovalResultWithTrailer(execCtx, approval, resultText, isErr, approvalTrailer(narrowed, trailers...))
 	// A tool in critical_tool_result_cards: the outcome card its own result
 	// carries, stored on the still-executing row just before the outcome, so
 	// the settled card and its reply carry both. Only for a call that ran and

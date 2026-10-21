@@ -129,3 +129,38 @@ func TestNarrowingNote_IsExactAndBounded(t *testing.T) {
 		}
 	}
 }
+
+// The narrowable argument is frozen on a pending row at staging and read back
+// by GetApproval and ListPendingApprovals; a settled row cannot take one.
+func TestSetApprovalNarrowableArg(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	a, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "mcp_ix_execute_plan", "call_1", `{"deal_ids":["a","b"]}`, 0, ApprovalSeat{Server: "ix"})
+	if err != nil {
+		t.Fatalf("CreateApproval: %v", err)
+	}
+	if ok, err := s.SetApprovalNarrowableArg(ctx, "bob@example.com", a.ID, "deal_ids"); err != nil || ok {
+		t.Fatalf("another user's row: ok=%v err=%v", ok, err)
+	}
+	if ok, err := s.SetApprovalNarrowableArg(ctx, "alice@example.com", a.ID, "deal_ids"); err != nil || !ok {
+		t.Fatalf("SetApprovalNarrowableArg: ok=%v err=%v", ok, err)
+	}
+	got, err := s.GetApproval(ctx, "alice@example.com", a.ID)
+	if err != nil || got == nil || got.NarrowableArg != "deal_ids" {
+		t.Fatalf("GetApproval = %+v, %v", got, err)
+	}
+	pending, err := s.ListPendingApprovals(ctx, "alice@example.com", conv.ID)
+	if err != nil || len(pending) != 1 || pending[0].NarrowableArg != "deal_ids" {
+		t.Fatalf("ListPendingApprovals = %+v, %v", pending, err)
+	}
+	if ok, err := s.ClaimApproval(ctx, "alice@example.com", a.ID, "approved", "done"); err != nil || !ok {
+		t.Fatalf("ClaimApproval: %v %v", ok, err)
+	}
+	if ok, err := s.SetApprovalNarrowableArg(ctx, "alice@example.com", a.ID, "item_ids"); err != nil || ok {
+		t.Fatalf("a settled row must not take a new argument: ok=%v err=%v", ok, err)
+	}
+}

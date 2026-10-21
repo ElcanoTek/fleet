@@ -43,6 +43,7 @@ func narrowApprovalRow() store.Approval {
 	return store.Approval{
 		ID: "ap1", ConversationID: "c1", UserEmail: "u@example.com",
 		ToolName: "mcp_ix_execute_plan", ArgsJSON: narrowStagedArgs, Status: "pending",
+		NarrowableArg: "deal_ids", // frozen at staging
 	}
 }
 
@@ -226,7 +227,7 @@ func TestHandleApproval_RefusesABadNarrowingBeforeTheClaim(t *testing.T) {
 		{name: "staged list repeats a value", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"deal_ids"}`, args: `{"deal_ids":["a","a","b"]}`, policy: true},
 		{name: "staged list holds a number", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"deal_ids"}`, args: `{"deal_ids":["a",7]}`, policy: true},
 		{name: "no narrowed_arg", body: `{"approved":true,"approved_values":["a"]}`, policy: true},
-		{name: "a narrowed_arg the policy no longer narrows", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"item_ids"}`, policy: true},
+		{name: "a narrowed_arg other than the one frozen at staging", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"item_ids"}`, policy: true},
 		{name: "staged value too long for a row key", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"deal_ids"}`, args: `{"deal_ids":["a","` + strings.Repeat("x", 201) + `"]}`, policy: true},
 	}
 	for _, tc := range cases {
@@ -240,6 +241,9 @@ func TestHandleApproval_RefusesABadNarrowingBeforeTheClaim(t *testing.T) {
 			row := narrowApprovalRow()
 			if tc.args != "" {
 				row.ArgsJSON = tc.args
+			}
+			if !tc.policy {
+				row.NarrowableArg = "" // nothing was frozen at staging
 			}
 			st := &narrowStore{approval: row}
 			child := &narrowChild{}
@@ -289,19 +293,22 @@ func TestApprovalExecutionArgs_RefusesAMismatchedRecord(t *testing.T) {
 // what was approved.
 func TestNarrowingPayloads(t *testing.T) {
 	narrowPolicy(t)
-	fields := approvalClientFields("mcp_ix_execute_plan", narrowStagedArgs, "c1")
+	pending := narrowApprovalRow()
+	fields := withApprovalNarrowable(map[string]any{}, &pending)
 	want := map[string]any{"arg": "deal_ids", "values": []string{"a", "b", "c"}}
 	if !reflect.DeepEqual(fields["narrowable"], want) {
 		t.Fatalf("narrowable = %#v, want %#v", fields["narrowable"], want)
 	}
-	for _, tc := range []struct{ tool, args string }{
-		{"mcp_pages_deploy_page", `{"deal_ids":["a","b"]}`},
-		{"mcp_ix_execute_plan", `{"deal_ids":["a"]}`},
-		{"mcp_ix_execute_plan", `{"deal_ids":"a,b"}`},
-		{"mcp_ix_execute_plan", `{}`},
+	for _, tc := range []struct{ tool, args, frozen string }{
+		{"mcp_pages_deploy_page", `{"deal_ids":["a","b"]}`, ""},
+		{"mcp_ix_execute_plan", `{"deal_ids":["a"]}`, "deal_ids"},
+		{"mcp_ix_execute_plan", `{"deal_ids":"a,b"}`, "deal_ids"},
+		{"mcp_ix_execute_plan", `{}`, "deal_ids"},
+		{"mcp_ix_execute_plan", narrowStagedArgs, ""}, // nothing frozen at staging
 	} {
-		if _, ok := approvalClientFields(tc.tool, tc.args, "c1")["narrowable"]; ok {
-			t.Errorf("%s %s: narrowable present, want absent", tc.tool, tc.args)
+		row := store.Approval{ToolName: tc.tool, ArgsJSON: tc.args, Status: "pending", NarrowableArg: tc.frozen}
+		if _, ok := withApprovalNarrowable(map[string]any{}, &row)["narrowable"]; ok {
+			t.Errorf("%s %s (frozen %q): narrowable present, want absent", tc.tool, tc.args, tc.frozen)
 		}
 	}
 
@@ -349,6 +356,7 @@ func TestApprovalGroup_Narrowing(t *testing.T) {
 		r := groupRows()
 		for i := range r {
 			r[i].ArgsJSON = `{"deal_ids":["x","y","z"]}`
+			r[i].NarrowableArg = "deal_ids" // frozen at staging
 		}
 		return r
 	}
@@ -436,6 +444,51 @@ func TestGovernWithTrailer_KeepsTheWholeNoteWithinTheBound(t *testing.T) {
 	}
 	if len(got) > 4096 {
 		t.Fatalf("result is %d bytes, over the 4096-byte bound", len(got))
+	}
+}
+
+// Near the minimum output limit a 500-value narrowing's full line (about
+// 1.6 KiB with alternating positions) does not fit beside the tool's text:
+// the line drops its position list and the whole result stays within the
+// configured limit, the line still whole at its end.
+func TestApprovalTrailer_StaysWithinAMinimumOutputLimit(t *testing.T) {
+	narrowPolicy(t)
+	agentcore.SetMaxToolOutputBytes(agentcore.MinMaxToolOutputBytes)
+	t.Cleanup(func() { agentcore.SetMaxToolOutputBytes(-1) })
+	row := narrowApprovalRow()
+	staged := make([]string, 0, 500)
+	approved := make([]string, 0, 250)
+	for i := range 500 {
+		v := fmt.Sprintf("deal-%03d", i)
+		staged = append(staged, v)
+		if i%2 == 0 {
+			approved = append(approved, v)
+		}
+	}
+	n := &approvalNarrowing{Arg: "deal_ids", Staged: staged, Approved: approved}
+	if len(narrowingNote(n)) <= agentcore.ApprovalTrailerRoom() {
+		t.Fatalf("the full line (%d bytes) must not fit the room (%d) for this test", len(narrowingNote(n)), agentcore.ApprovalTrailerRoom())
+	}
+	trailer := approvalTrailer(n)
+	if !strings.Contains(trailer, "250 were approved and 250 were left out") || len(trailer) > agentcore.ApprovalTrailerRoom() {
+		t.Fatalf("trailer = %q (%d bytes), want the compact line within %d", trailer, len(trailer), agentcore.ApprovalTrailerRoom())
+	}
+	for _, text := range []string{strings.Repeat("x", 64<<10), `{"success":true}`} {
+		got, _, _ := governApprovalResultWithTrailer(context.Background(), &row, text, false, trailer)
+		if !strings.HasSuffix(got, trailer) {
+			t.Fatalf("the line was cut or changed: ...%q", got[max(0, len(got)-200):])
+		}
+		if len(got) > agentcore.MinMaxToolOutputBytes {
+			t.Fatalf("result is %d bytes, over the configured %d", len(got), agentcore.MinMaxToolOutputBytes)
+		}
+	}
+	// With room to spare the full line, positions included, is kept.
+	agentcore.SetMaxToolOutputBytes(8192)
+	if approvalTrailer(n) != narrowingNote(n) {
+		t.Fatal("the full line must be kept when it fits")
+	}
+	if approvalTrailer(nil, "a", "b") != "a\n\nb" || approvalTrailer(nil) != "" {
+		t.Fatal("other lines join as given")
 	}
 }
 
@@ -529,14 +582,14 @@ func TestStagedNarrowable_NeverAnEmailSend(t *testing.T) {
 		CriticalToolSuffixes:       []string{"mail_send_email"},
 		CriticalToolNarrowableArgs: map[string]string{"mail_send_email": "to"},
 	})
-	if _, _, ok := stagedNarrowable("mcp_x_mail_send_email", `{"to":["a@x.com","b@x.com"]}`); ok {
+	if _, _, ok := stagedNarrowable("mcp_x_mail_send_email", `{"to":["a@x.com","b@x.com"]}`, "to"); ok || narrowableArgAtStaging("mcp_x_mail_send_email", `{"to":["a@x.com","b@x.com"]}`) != "" {
 		t.Fatal("an email send must never be narrowable")
 	}
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
 		CriticalToolSuffixes:       []string{"x_send_template_email"},
 		CriticalToolNarrowableArgs: map[string]string{"x_send_template_email": "to"},
 	})
-	if _, _, ok := stagedNarrowable("mcp_x_send_template_email", `{"to":["a@x.com","b@x.com"]}`); ok {
+	if _, _, ok := stagedNarrowable("mcp_x_send_template_email", `{"to":["a@x.com","b@x.com"]}`, "to"); ok || narrowableArgAtStaging("mcp_x_send_template_email", `{"to":["a@x.com","b@x.com"]}`) != "" {
 		t.Fatal("a template email send must never be narrowable")
 	}
 	for _, tool := range []string{"mcp_x_send_email", "mcp_x_send_template_email", "send_email"} {
@@ -564,16 +617,89 @@ func TestStagedNarrowable_NeverASyntheticTransportTool(t *testing.T) {
 		"mcp_" + mcp.HTTPToolServerName + "_execute_plan",
 		"mcp_" + mcp.A2AToolServerName + "_execute_plan",
 	} {
-		if _, _, ok := stagedNarrowable(tool, args); ok {
+		if _, _, ok := stagedNarrowable(tool, args, "deal_ids"); ok || narrowableArgAtStaging(tool, args) != "" {
 			t.Errorf("%s: a synthetic-transport tool must never be narrowable", tool)
 		}
-		if _, err := narrowApproval(&store.Approval{ToolName: tool, ArgsJSON: args}, []string{"d1"}, "deal_ids"); err == nil {
+		if _, err := narrowApproval(&store.Approval{ToolName: tool, ArgsJSON: args, NarrowableArg: "deal_ids"}, []string{"d1"}, "deal_ids"); err == nil {
 			t.Errorf("%s: a narrowing must be refused", tool)
 		}
 	}
 	// The same key still narrows a real MCP server's tool.
-	if arg, values, ok := stagedNarrowable("mcp_dealplan_execute_plan", args); !ok || arg != "deal_ids" || len(values) != 3 {
+	if arg := narrowableArgAtStaging("mcp_dealplan_execute_plan", args); arg != "deal_ids" {
+		t.Fatalf("an MCP tool must stay narrowable at staging: arg=%q", arg)
+	}
+	if arg, values, ok := stagedNarrowable("mcp_dealplan_execute_plan", args, "deal_ids"); !ok || arg != "deal_ids" || len(values) != 3 {
 		t.Fatalf("an MCP tool must stay narrowable: arg=%q values=%v ok=%v", arg, values, ok)
+	}
+}
+
+// The argument is frozen on the card at staging: a restart with another
+// critical_tool_narrowable_args entry changes neither what a reload of the
+// pending card offers nor what its decision narrows, and a card staged with
+// nothing frozen is never narrowed whatever the policy says now.
+func TestNarrowing_UsesTheArgumentFrozenAtStaging(t *testing.T) {
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
+		CriticalToolSuffixes:       []string{"execute_plan"},
+		CriticalToolNarrowableArgs: map[string]string{"execute_plan": "item_ids"},
+	})
+	row := narrowApprovalRow()
+	row.ArgsJSON = `{"deal_ids":["a","b","c"],"item_ids":["a","b","c"]}`
+	want := map[string]any{"arg": "deal_ids", "values": []string{"a", "b", "c"}}
+	if got := withApprovalNarrowable(map[string]any{}, &row)["narrowable"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("reloaded narrowable = %#v, want the frozen %#v", got, want)
+	}
+	n, err := narrowApproval(&row, []string{"a"}, "deal_ids")
+	if err != nil || n == nil || n.Arg != "deal_ids" {
+		t.Fatalf("narrowApproval = %+v, %v; want the frozen deal_ids", n, err)
+	}
+	if _, err := narrowApproval(&row, []string{"a"}, "item_ids"); err == nil {
+		t.Fatal("a decision naming the policy's new argument must be refused")
+	}
+	row.NarrowableArg = ""
+	if _, ok := withApprovalNarrowable(map[string]any{}, &row)["narrowable"]; ok {
+		t.Fatal("a card staged with nothing frozen must not become narrowable")
+	}
+	if _, err := narrowApproval(&row, []string{"a"}, "item_ids"); err == nil {
+		t.Fatal("a card staged with nothing frozen must refuse a narrowing")
+	}
+}
+
+// narrowStageStore records the argument the stager freezes.
+type narrowStageStore struct {
+	stageStore
+	frozen string
+}
+
+func (s *narrowStageStore) SetApprovalNarrowableArg(_ context.Context, _, _, arg string) (bool, error) {
+	s.frozen = arg
+	return true, nil
+}
+
+// Staging freezes the policy's argument on the row and the live card carries
+// it; a call whose staged value is not a narrowable list freezes nothing.
+func TestStage_FreezesTheNarrowableArgument(t *testing.T) {
+	narrowPolicy(t)
+	st := &narrowStageStore{}
+	sink := &eventSink{}
+	a := &approvalStager{ctx: context.Background(), store: st, conversationID: "c1", userEmail: "u@e.com", sink: sink}
+	if _, err := a.Stage("mcp_ix_execute_plan", "call-1", narrowStagedArgs); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	if st.frozen != "deal_ids" || st.created.NarrowableArg != "deal_ids" {
+		t.Fatalf("frozen = %q / row %q, want deal_ids", st.frozen, st.created.NarrowableArg)
+	}
+	ev := eventNamed(sink, "tool.approval_required")
+	if want := (map[string]any{"arg": "deal_ids", "values": []string{"a", "b", "c"}}); !reflect.DeepEqual(ev["narrowable"], want) {
+		t.Fatalf("event narrowable = %#v, want %#v", ev["narrowable"], want)
+	}
+	st2 := &narrowStageStore{}
+	a2 := &approvalStager{ctx: context.Background(), store: st2, conversationID: "c1", userEmail: "u@e.com", sink: &eventSink{}}
+	if _, err := a2.Stage("mcp_ix_execute_plan", "call-2", `{"deal_ids":["a"]}`); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	if st2.frozen != "" {
+		t.Fatalf("frozen = %q, want nothing for a one-value list", st2.frozen)
 	}
 }
 

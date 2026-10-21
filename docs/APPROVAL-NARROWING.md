@@ -99,11 +99,14 @@ refuses with 400, leaving the card pending, when:
 - the list is empty (decline instead) or an explicit `null` (refused, never read as "approve everything"), names a value that was not staged, or
   names one twice;
 - it comes with `approved: false`, or with a scope other than `once`;
-- `narrowed_arg` is missing, or is not the argument the tool narrows now. The
-  decision is bound to what the card showed: if fleet restarted with another
-  `critical_tool_narrowable_args` entry while the card was open, the values
-  are never applied to an argument the person did not review (reload the card
-  and decide again).
+- `narrowed_arg` is missing, or is not the argument frozen on the card.
+
+The argument is frozen on the row when the card is staged
+(`approvals.narrowable_arg`, migration 079): the live card, every reload of
+it and the decision read that value, never the boot policy again. A restart
+with another `critical_tool_narrowable_args` entry therefore changes nothing
+for a card already staged, and a card staged with nothing frozen is never
+narrowed.
 
 Naming every staged value is a whole approval: the plain claim, the staged
 call. Otherwise the card is claimed with `store.ClaimApprovalNarrowed`, which
@@ -166,12 +169,14 @@ The approved-call budget is computed for the narrowed arguments (a smaller
   under it): it passes only the secret redactor. The tool's text is bounded to
   what the output limit leaves after it
   (`agentcore.GovernAndBoundModelVisibleToolTextWithTrailer`), so the whole
-  stays within the limit. The one exception: with an operator limit near the
-  1 KiB minimum and a long, scattered narrowing (up to 250 separate
-  positions, about 1.2 KiB), the line is kept whole and the result exceeds
-  that limit by it, never the 128 KiB hard maximum. Exactness wins there,
-  because a truncated line could let the agent run a value the person left
-  out.
+  stays within the limit. The tool's text keeps at least 256 bytes (enough
+  for the truncation envelope that says where the full output went); when
+  the line would not fit beside that (an operator limit near the 1 KiB
+  minimum and a long, scattered narrowing, up to 250 separate positions),
+  fleet writes the compact line instead (`store.NarrowingNoteCompact`): the
+  counts and the rule, with the positions left to the approval card. It is
+  never cut, because a truncated line could let the agent run a value the
+  person left out, and the whole result stays within the configured limit.
 - A narrowed call cut off by a restart keeps the line too:
   `RecoverStrandedApprovals` reads `narrowed_json` and adds it after the
   "outcome unknown" breadcrumb, because the recorded tool call holds the whole
