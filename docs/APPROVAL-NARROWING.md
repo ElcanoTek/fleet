@@ -191,10 +191,11 @@ an unchecked call, and **Approve all (k)** counts the calls that will run.
 
 ## Deviations
 
-- **Never an email send.** The email card previews the message and has no
-  rows to untick, so a key that selects email sends (`send_email`, `email`)
-  is refused by the policy check, and an email tool is never narrowable at
-  run time whatever key matches it.
+- **Never an outbound email.** A send (`send_email`, `send_template_email`)
+  is approved as the message was written, so a key that selects one (e.g.
+  `email`, `template_email`, `mail_send_email`) is refused by the policy
+  check, and an outbound email tool is never narrowable at run time whatever
+  key matches it (`agentcore.IsOutboundEmailTool`, the same base suffixes).
 - **Selection is per row of the describer card, not per change.** The
   designer's 2b and 2c untick single changes within a deal. Fleet narrows the
   values of one list argument, so a change can be left out only when the

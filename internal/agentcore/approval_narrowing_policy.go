@@ -53,8 +53,8 @@ func buildNarrowableArgs(entries map[string]string, modes map[string]string, cri
 			problems = append(problems, fmt.Sprintf("ignoring critical_tool_narrowable_args entry %q: arg %q is not a top-level argument name (letters, digits and _, starting with a letter or _)", suffix, arg))
 			continue
 		}
-		if suffixMatches(sendEmailToolSuffix, suffix) {
-			problems = append(problems, fmt.Sprintf("ignoring critical_tool_narrowable_args entry %q: it selects email sends, whose card previews the message and has no rows to untick", suffix))
+		if selectsOutboundEmail(suffix) {
+			problems = append(problems, fmt.Sprintf("ignoring critical_tool_narrowable_args entry %q: it selects outbound email sends, which are never narrowed (one approval per message as written)", suffix))
 			continue
 		}
 		set, staged := buildStagedCardSuffixSet("critical_tool_narrowable_args", []string{suffix}, modes, critical)
@@ -77,6 +77,31 @@ func installNarrowableArgs(entries map[string]string, modes map[string]string, c
 		log.Printf("agent_policy: %s", problem)
 	}
 	return out
+}
+
+// selectsOutboundEmail reports whether a policy suffix would select an
+// outbound-email tool: it matches one of the base email suffixes
+// (send_email, send_template_email; e.g. "email", "template_email"), or it is
+// a narrower name of one (e.g. "mail_send_email").
+func selectsOutboundEmail(suffix string) bool {
+	for _, base := range baseCriticalToolSuffixes {
+		if suffixMatches(base, suffix) || suffixMatches(suffix, base) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsOutboundEmailTool reports whether toolName is an outbound-email send under
+// the base email suffixes (send_email, send_template_email), the same
+// predicate the policy check uses. Such a call is never narrowed.
+func IsOutboundEmailTool(toolName string) bool {
+	for _, base := range baseCriticalToolSuffixes {
+		if suffixMatches(toolName, base) {
+			return true
+		}
+	}
+	return false
 }
 
 // NarrowableArgProblems is the preflight face of the narrowable-argument map,

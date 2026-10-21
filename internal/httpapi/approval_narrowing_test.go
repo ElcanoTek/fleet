@@ -513,8 +513,9 @@ func TestHandleApproval_UnknownOutcomeKeepsTheNarrowing(t *testing.T) {
 	}
 }
 
-// An email send is never narrowable, even when a key the policy accepts
-// matches it: its card previews the message and has no rows to untick.
+// An outbound email send is never narrowable: a key that selects one is
+// dropped at boot, and the run-time predicate refuses one too (defence in
+// depth, should a later policy path let such a key through).
 func TestStagedNarrowable_NeverAnEmailSend(t *testing.T) {
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
@@ -523,5 +524,20 @@ func TestStagedNarrowable_NeverAnEmailSend(t *testing.T) {
 	})
 	if _, _, ok := stagedNarrowable("mcp_x_mail_send_email", `{"to":["a@x.com","b@x.com"]}`); ok {
 		t.Fatal("an email send must never be narrowable")
+	}
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
+		CriticalToolSuffixes:       []string{"x_send_template_email"},
+		CriticalToolNarrowableArgs: map[string]string{"x_send_template_email": "to"},
+	})
+	if _, _, ok := stagedNarrowable("mcp_x_send_template_email", `{"to":["a@x.com","b@x.com"]}`); ok {
+		t.Fatal("a template email send must never be narrowable")
+	}
+	for _, tool := range []string{"mcp_x_send_email", "mcp_x_send_template_email", "send_email"} {
+		if !agentcore.IsOutboundEmailTool(tool) {
+			t.Errorf("%s: not recognized as an outbound email send", tool)
+		}
+	}
+	if agentcore.IsOutboundEmailTool("mcp_ix_execute_plan") {
+		t.Error("execute_plan is not an email send")
 	}
 }

@@ -71,9 +71,10 @@ type approvalNarrowing struct {
 // staged value is not a list of 2..maxNarrowableValues distinct non-empty
 // strings: such a card approves its call whole, as before.
 func stagedNarrowable(toolName, argsJSON string) (arg string, values []string, ok bool) {
-	// The email card has no rows to tick (it previews the message), so an
-	// email send is never narrowable, whatever the policy says.
-	if !strings.HasPrefix(toolName, "mcp_") || handlerOnlyApproval(toolName) || tools.IsEmailToolName(toolName) {
+	// An outbound email send (send_email, send_template_email) is never
+	// narrowable, whatever the policy says: one approval covers the message
+	// as written.
+	if !strings.HasPrefix(toolName, "mcp_") || handlerOnlyApproval(toolName) || tools.IsEmailToolName(toolName) || agentcore.IsOutboundEmailTool(toolName) {
 		return "", nil, false
 	}
 	arg = agentcore.NarrowableArgFor(toolName)

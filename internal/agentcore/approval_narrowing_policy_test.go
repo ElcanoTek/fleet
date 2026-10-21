@@ -41,28 +41,30 @@ func TestNarrowableArgFor(t *testing.T) {
 func TestNarrowableArgProblems(t *testing.T) {
 	t.Cleanup(func() { ConfigureAgentPolicy(AgentPolicy{}) })
 	p := AgentPolicy{
-		CriticalToolSuffixes: []string{"execute_plan", "deploy_page", "schedule_task", "update_deal", "email"},
+		CriticalToolSuffixes: []string{"execute_plan", "deploy_page", "schedule_task", "update_deal", "email", "template_email", "mail_send_email"},
 		CriticalToolModes:    map[string]string{"deploy_page": "notify"},
 		CriticalToolNarrowableArgs: map[string]string{
-			"execute_plan":  "deal_ids",
-			"execute_plans": "deal_ids",
-			"deploy_page":   "slugs",
-			"schedule_task": "ids",
-			"update_deal":   "deal_ids.0",
-			"send_email":    "to",
-			"email":         "to",
-			"":              "deal_ids",
+			"execute_plan":    "deal_ids",
+			"execute_plans":   "deal_ids",
+			"deploy_page":     "slugs",
+			"schedule_task":   "ids",
+			"update_deal":     "deal_ids.0",
+			"send_email":      "to",
+			"email":           "to",
+			"template_email":  "to",
+			"mail_send_email": "to",
+			"":                "deal_ids",
 		},
 	}
 	problems := NarrowableArgProblems(p)
 	joined := strings.Join(problems, "\n")
-	for _, want := range []string{`"execute_plans"`, `"deploy_page"`, `"schedule_task"`, `"deal_ids.0"`, "empty tool suffix", `"send_email"`, `"email"`} {
+	for _, want := range []string{`"execute_plans"`, `"deploy_page"`, `"schedule_task"`, `"deal_ids.0"`, "empty tool suffix", `"send_email"`, `"email"`, `"template_email"`, `"mail_send_email"`} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("problems %q do not name %s", joined, want)
 		}
 	}
-	if len(problems) != 7 {
-		t.Fatalf("problems = %d (%q), want exactly the seven bad entries", len(problems), joined)
+	if len(problems) != 9 {
+		t.Fatalf("problems = %d (%q), want exactly the nine bad entries", len(problems), joined)
 	}
 
 	ConfigureAgentPolicy(p)
