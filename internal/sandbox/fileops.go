@@ -1,14 +1,17 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -51,9 +54,14 @@ type FileOpRequest struct {
 	// checked pathname by replacing an ancestor with a symlink.
 	Root string
 
-	// Read.
-	Offset int64
-	Limit  int64
+	// Read. Limit is the window length (0 = to EOF), not a size cap; the
+	// helper still streams the whole file through SHA-256. MaxSize > 0 refuses
+	// a file whose size exceeds it before reading a byte, so a cap the caller
+	// will enforce anyway does not first cost a full hash of a huge file (and,
+	// for a big enough one, a file-op timeout that retires the sandbox).
+	Offset  int64
+	Limit   int64
+	MaxSize int64
 
 	// Write.
 	Data []byte
@@ -139,7 +147,122 @@ var (
 	// ErrFileOpNoOp: old_text and new_text produce identical content (#787).
 	ErrFileOpNoOp       = errors.New("edit is a no-op")
 	ErrFileOpUnsafePath = errors.New("file operation path changed or contains a symlink")
+	// ErrFileOpTooLarge: a read's file holds more than its MaxSize (checked
+	// against the bytes actually read, not only the size fstat reported).
+	ErrFileOpTooLarge = errors.New("file exceeds the read size cap")
+	// ErrFileOpOutputTooLarge: the helper wrote more than a response to this
+	// request can legitimately be. Fleet stopped buffering it.
+	ErrFileOpOutputTooLarge = errors.New("fileop helper response exceeded its bound")
 )
+
+// fileOpResponseOverhead is the room left for a read response's JSON envelope
+// (size, hash, error text) around its base64 payload.
+const fileOpResponseOverhead = 64 << 10
+
+// fileOpOutputBound is the most helper output Fleet buffers for req, or 0 for
+// no bound. A read with MaxSize or Limit can return at most that many raw
+// bytes, so its response is at most their base64 plus the envelope. Anything
+// longer means the helper is not the script Fleet sent (the sandbox is
+// model-writable), and buffering it would let the sandbox exhaust Fleet's
+// memory.
+func fileOpOutputBound(req FileOpRequest) int64 {
+	if req.Op != FileOpRead {
+		return 0
+	}
+	n := req.MaxSize
+	if req.Limit > 0 && (n <= 0 || req.Limit < n) {
+		n = req.Limit
+	}
+	if n <= 0 {
+		return 0
+	}
+	// int64 arithmetic: a caller's Limit can be any int64, and EncodedLen
+	// takes an int. Past ~6 EiB the bound saturates instead of wrapping.
+	if n > (math.MaxInt64-fileOpResponseOverhead)/4*3 {
+		return math.MaxInt64
+	}
+	return (n+2)/3*4 + fileOpResponseOverhead
+}
+
+// fileOpSink collects a helper's stdout up to a bound. Past the bound it
+// discards (and still reports a full write, so the pipe copier never stalls
+// the helper) and remembers that it overflowed. Mutex-guarded for the same
+// abandoned-copier reason as cappedBuffer.
+//
+// A plain slice rather than a bytes.Buffer: Buffer's doubling can allocate
+// nearly twice the bound, and the MCP workspace-file budget (ADR-0088) counts
+// on the buffer never exceeding it. Growth here is capped at the bound.
+type fileOpSink struct {
+	mu       sync.Mutex
+	data     []byte
+	limit    int64
+	prealloc bool
+	over     bool
+	done     bool
+}
+
+// fileOpSinkPreallocMax caps the up-front allocation of a MaxSize read's
+// buffer (the MCP workspace-file budget reserved for it already); a larger
+// bound grows on demand instead.
+const fileOpSinkPreallocMax = 128 << 20
+
+func newFileOpSink(req FileOpRequest) *fileOpSink {
+	// Preallocate only for MaxSize reads, whose caller sized MaxSize to the
+	// file; a Limit-only read (view_file) of a small file should not reserve
+	// its whole window.
+	return &fileOpSink{limit: fileOpOutputBound(req), prealloc: req.Op == FileOpRead && req.MaxSize > 0}
+}
+
+func (s *fileOpSink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.done || s.over {
+		return len(p), nil
+	}
+	need := int64(len(s.data)) + int64(len(p))
+	if s.limit > 0 && need > s.limit {
+		s.over = true
+		s.data = nil
+		return len(p), nil
+	}
+	if s.prealloc && s.data == nil && s.limit > 0 && s.limit <= fileOpSinkPreallocMax {
+		// The bound is exact for a read with MaxSize (the caller knows the
+		// size), so allocate it once: no growth, and no moment where an old
+		// and a new buffer are both live.
+		s.data = make([]byte, 0, s.limit)
+	}
+	if s.limit > 0 && need > int64(cap(s.data)) {
+		grown := make([]byte, len(s.data), min(max(2*int64(cap(s.data)), need), s.limit))
+		copy(grown, s.data)
+		s.data = grown
+	}
+	s.data = append(s.data, p...)
+	return len(p), nil
+}
+
+// discard drops the collected bytes and any later writes. Every backend
+// defers it: an exec copier may outlive the call (a cancelled Kubernetes
+// stream), and it must not keep a read's buffer alive after the read's
+// budget is released. Decoding copies out of the buffer, so the result never
+// aliases it.
+func (s *fileOpSink) discard() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.done = true
+	s.data = nil
+}
+
+// output returns the collected bytes, or ErrFileOpOutputTooLarge. Later
+// writes are dropped, so the returned slice is never mutated.
+func (s *fileOpSink) output(op FileOpKind) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.done = true
+	if s.over {
+		return nil, fmt.Errorf("fileop %s: %w (more than %d bytes)", op, ErrFileOpOutputTooLarge, s.limit)
+	}
+	return s.data, nil
+}
 
 // FileOpStaleError carries the executor's explanation of a stale-content
 // refusal (#787, #1745): what was expected, what is there, and how to recover.
@@ -155,6 +278,22 @@ func (e *FileOpStaleError) Error() string {
 }
 func (e *FileOpStaleError) Is(target error) bool {
 	return target == ErrFileOpStale
+}
+
+// FileOpTooLargeError is a read refused by MaxSize. Size is the file size the
+// helper's fstat reported when the refusal came from that check, and 0 when
+// the file ran over the cap while it was being read. It comes from the
+// sandbox, so a caller may use it only to size a later, still-bounded read.
+type FileOpTooLargeError struct {
+	Size int64
+	Msg  string
+}
+
+func (e *FileOpTooLargeError) Error() string {
+	return fmt.Sprintf("%s (%s)", ErrFileOpTooLarge.Error(), e.Msg)
+}
+func (e *FileOpTooLargeError) Is(target error) bool {
+	return target == ErrFileOpTooLarge
 }
 
 // FileOpAmbiguousError carries the match count + the executor's guidance for an
@@ -297,6 +436,9 @@ func encodeFileOpWire(req FileOpRequest, anchor string) ([]byte, error) {
 	case FileOpRead:
 		wire["offset"] = req.Offset
 		wire["limit"] = req.Limit
+		if req.MaxSize > 0 {
+			wire["max_size"] = req.MaxSize
+		}
 	case FileOpWrite:
 		wire["data_b64"] = base64.StdEncoding.EncodeToString(req.Data)
 		if req.ExpectedSHA256 != "" {
@@ -350,14 +492,87 @@ type fileOpResponse struct {
 	DiffNote   string `json:"diff_note"`
 	Dev        uint64 `json:"dev"`
 	Ino        uint64 `json:"ino"`
+
+	decoded []byte // a streamed read's payload, decoded in place of DataB64
+}
+
+// streamedReadPrefix opens a streamed read response (see fileops.py
+// _ReadStream).
+var streamedReadPrefix = []byte(`{"data_b64":"`)
+
+// maxStreamedTrailerBytes bounds what may follow a streamed payload: the
+// helper's trailer is a status, size, hash and at most a short error, so
+// anything longer is not the helper's and is refused before it is copied or
+// parsed (a replaced helper must not grow a read past its reservation).
+const maxStreamedTrailerBytes = 16 << 10
+
+// splitStreamedRead splits a streamed read response into its base64 payload
+// (a sub-slice of out, not a copy) and the remaining members as a small JSON
+// object of their own.
+func splitStreamedRead(out []byte) (payload, rest []byte, ok bool) {
+	if !bytes.HasPrefix(out, streamedReadPrefix) {
+		return nil, nil, false
+	}
+	body := out[len(streamedReadPrefix):]
+	end := bytes.IndexByte(body, '"')
+	if end < 0 || end+1 >= len(body) || body[end+1] != ',' {
+		return nil, nil, false
+	}
+	if len(body)-(end+2) > maxStreamedTrailerBytes {
+		return body[:end], nil, true
+	}
+	rest = append([]byte{'{'}, body[end+2:]...)
+	return body[:end], rest, true
+}
+
+// decodeFileOpOutput decodes the helper's output for req. A bounded read
+// answers in the streamed format, or with a small error raised before it
+// started streaming; a larger response that does not split as a streamed
+// frame (a prefix alone is not enough) is not the helper's (a
+// replaced one could carry a whole file as a JSON string, copied again by
+// the decode), so it is refused before it is parsed.
+func decodeFileOpOutput(req FileOpRequest, out []byte) (FileOpResult, error) {
+	if fileOpOutputBound(req) > 0 && len(out) > fileOpResponseOverhead {
+		if _, _, ok := splitStreamedRead(out); !ok {
+			return FileOpResult{}, fmt.Errorf("fileop %s: %w (a non-streamed read response of %d bytes)", req.Op, ErrFileOpOutputTooLarge, len(out))
+		}
+	}
+	return decodeFileOpResponse(out)
 }
 
 // decodeFileOpResponse maps the executor's JSON envelope into a FileOpResult or
 // a typed sentinel error, so every backend surfaces identical semantics.
 func decodeFileOpResponse(out []byte) (FileOpResult, error) {
 	var resp fileOpResponse
+	// A streamed read puts its payload first: {"data_b64":"<base64>",<rest>}.
+	// Decode the payload straight from the output buffer, so a large read is
+	// never copied into a JSON string as well (ADR-0088 charges a read for the
+	// output buffer plus the decoded bytes, nothing more). Base64 contains no
+	// quote or backslash, so the first quote ends it; anything else in there
+	// fails the base64 decode.
+	var streamed []byte
+	if payload, rest, ok := splitStreamedRead(out); ok {
+		if rest == nil {
+			return FileOpResult{}, fmt.Errorf("decode fileop response: trailer exceeds %d bytes", maxStreamedTrailerBytes)
+		}
+		streamed = payload
+		out = rest
+	}
 	if err := json.Unmarshal(out, &resp); err != nil {
 		return FileOpResult{}, fmt.Errorf("decode fileop response: %w (raw: %.200s)", err, string(out))
+	}
+	if streamed != nil {
+		if resp.DataB64 != "" {
+			return FileOpResult{}, errors.New("decode fileop response: duplicate data_b64")
+		}
+		if resp.OK {
+			data := make([]byte, base64.StdEncoding.DecodedLen(len(streamed)))
+			n, err := base64.StdEncoding.Decode(data, streamed)
+			if err != nil {
+				return FileOpResult{}, fmt.Errorf("decode fileop data: %w", err)
+			}
+			resp.decoded = data[:n:n]
+		}
 	}
 	if !resp.OK {
 		switch resp.ErrKind {
@@ -378,12 +593,14 @@ func decodeFileOpResponse(out []byte) (FileOpResult, error) {
 			return FileOpResult{}, ErrFileOpNoOp
 		case "unsafe_path":
 			return FileOpResult{}, ErrFileOpUnsafePath
+		case "too_large":
+			return FileOpResult{}, &FileOpTooLargeError{Size: resp.Size, Msg: resp.Err}
 		default:
 			return FileOpResult{}, errors.New(resp.Err)
 		}
 	}
-	var data []byte
-	if resp.DataB64 != "" {
+	data := resp.decoded
+	if data == nil && resp.DataB64 != "" {
 		var derr error
 		data, derr = base64.StdEncoding.DecodeString(resp.DataB64)
 		if derr != nil {

@@ -153,7 +153,7 @@ type Deps struct {
 	// held here so the loop can surface it to the finalize hook).
 	Executor Executor
 	// ReadWorkspaceFile binds MCP binary argument references to the active sandbox.
-	ReadWorkspaceFile func(context.Context, string, int64) ([]byte, error)
+	ReadWorkspaceFile tools.WorkspaceFileReadFunc
 
 	// Model + FallbackModel are the resolved fantasy language models.
 	Model         fantasy.LanguageModel

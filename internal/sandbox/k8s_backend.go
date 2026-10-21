@@ -1144,10 +1144,13 @@ func (k *k8sImpl) executeFileOp(ctx context.Context, req FileOpRequest, anchor s
 
 	// fileops.py reads stdin to EOF; v4 exec cannot half-close stdin, so the
 	// read is bounded with `head -c <len>` — EOF arrives when head exits.
-	script := fmt.Sprintf("head -c %d | python3 %s", len(reqJSON), k8sFileOpsPath)
-	var stdout, stderr bytes.Buffer
+	// Isolated mode from "/": see containerImpl.executeFileOp.
+	script := fmt.Sprintf("cd / && head -c %d | python3 -I %s", len(reqJSON), k8sFileOpsPath)
+	stdout := newFileOpSink(req)
+	defer stdout.discard()
+	stderr := &cappedBuffer{cap: 4096}
 	code, execErr := k.backend.client.runOneShotExec(cmdCtx, k.backend.cfg.Namespace, podName, sandboxContainerName,
-		[]string{"/bin/sh", "-c", script}, reqJSON, &stdout, &stderr)
+		[]string{"/bin/sh", "-c", script}, reqJSON, stdout, stderr)
 	if execErr != nil || cmdCtx.Err() != nil {
 		if cmdCtx.Err() != nil {
 			// Same containment as bash: the helper may still be alive inside a
@@ -1156,12 +1159,16 @@ func (k *k8sImpl) executeFileOp(ctx context.Context, req FileOpRequest, anchor s
 			_ = k.deletePodNow(podName)
 			return FileOpResult{}, fmt.Errorf("fileop %s interrupted (%w); sandbox retired: %w", req.Op, cmdCtx.Err(), ErrPoisoned)
 		}
-		return FileOpResult{}, fmt.Errorf("fileop %s exec: %w (%.200s)", req.Op, execErr, sanitizeClusterText(stderr.String()))
+		return FileOpResult{}, fmt.Errorf("fileop %s exec: %w (%.200s)", req.Op, execErr, sanitizeClusterText(stderrText(stderr)))
 	}
 	if code != 0 {
-		return FileOpResult{}, fmt.Errorf("fileop %s: helper exit %d (%.200s)", req.Op, code, sanitizeClusterText(stderr.String()))
+		return FileOpResult{}, fmt.Errorf("fileop %s: helper exit %d (%.200s)", req.Op, code, sanitizeClusterText(stderrText(stderr)))
 	}
-	return decodeFileOpResponse(stdout.Bytes())
+	out, err := stdout.output(req.Op)
+	if err != nil {
+		return FileOpResult{}, err
+	}
+	return decodeFileOpOutput(req, out)
 }
 
 func (k *k8sImpl) runPython(ctx context.Context, req PythonRequest) (PythonResult, error) {

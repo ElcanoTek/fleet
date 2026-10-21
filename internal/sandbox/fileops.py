@@ -379,38 +379,105 @@ def _atomic_write(
         raise
 
 
-def _hash_and_window(fd, offset, limit):
-    if offset < 0 or limit < 0:
-        raise OSError("offset and limit must be non-negative")
-    digest = hashlib.sha256()
-    chunks = []
-    position = 0
-    end = offset + limit if limit > 0 else None
-    while True:
-        chunk = os.read(fd, 1 << 20)
-        if not chunk:
-            break
-        digest.update(chunk)
-        chunk_end = position + len(chunk)
-        wanted_start = max(position, offset)
-        wanted_end = chunk_end if end is None else min(chunk_end, end)
-        if wanted_start < wanted_end:
-            chunks.append(chunk[wanted_start - position : wanted_end - position])
-        position = chunk_end
-    return digest.hexdigest(), b"".join(chunks)
+class FileTooLarge(OSError):
+    """The file holds more than the request's max_size bytes."""
+
+    def __init__(self, size, max_size):
+        super().__init__(
+            errno.EFBIG,
+            "file is %s bytes, exceeding the %d-byte cap" % (size, max_size),
+        )
+        self.size = size
 
 
-def do_read(req):
-    parent_fd = -1
-    fd = -1
-    try:
-        parent_fd, name = _open_parent(req, create=False)
-        _test_pause(req, parent_fd)
-        fd, before = _open_file(parent_fd, name)
-        offset = int(req.get("offset", 0) or 0)
-        limit = int(req.get("limit", 0) or 0)
-        digest, data = _hash_and_window(fd, offset, limit)
-        after = os.fstat(fd)
+_READ_CHUNK = 3 << 18  # 768 KiB: a multiple of 3, so each chunk's base64 has no padding
+
+
+class _ReadStream:
+    """A read that has passed its open-time checks and streams its response.
+
+    The helper never holds the file or its encoding: it reads fixed-size
+    chunks, hashes each, base64-encodes the part inside the window (carrying at
+    most 2 bytes between chunks so only the final piece is padded), and writes
+    it straight to stdout. The response puts data_b64 FIRST and the status,
+    size and hash after it, because they are only known at the end; a failure
+    found mid-read (the file outgrew max_size, or changed) becomes an ok=false
+    trailer, and Fleet ignores the partial data. Peak memory is O(chunk), so a
+    64 MiB read fits a 128 MiB sandbox (ADR-0088).
+    """
+
+    def __init__(self, parent_fd, fd, before, offset, limit, max_size):
+        self.parent_fd = parent_fd
+        self.fd = fd
+        self.before = before
+        self.offset = offset
+        self.limit = limit
+        self.max_size = max_size
+
+    def close(self):
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+        if self.parent_fd >= 0:
+            os.close(self.parent_fd)
+            self.parent_fd = -1
+
+    def emit(self, out):
+        try:
+            out.write(b'{"data_b64":"')
+            trailer = self._stream(out)
+        except FileTooLarge as exc:
+            trailer = fail("too_large", exc.strerror)
+        except StaleContent as exc:
+            trailer = fail("stale", str(exc))
+        except OSError as exc:
+            trailer = fail("", "read failed: %s" % exc)
+        except Exception as exc:  # noqa: BLE001 - the trailer must still be valid JSON
+            trailer = fail("", "fileop failed: %s" % exc)
+        finally:
+            self.close()
+        trailer.pop("data_b64", None)
+        # json.dumps of the trailer is '{...}'; splice its members after the
+        # data string.
+        body = json.dumps(trailer)
+        out.write(b'",' + body[1:].encode("ascii") + b"\n")
+        out.flush()
+
+    def _stream(self, out):
+        offset, limit, max_size = self.offset, self.limit, self.max_size
+        if offset < 0 or limit < 0 or max_size < 0:
+            raise OSError("offset, limit and max_size must be non-negative")
+        digest = hashlib.sha256()
+        carry = b""
+        position = 0
+        end = offset + limit if limit > 0 else None
+        while True:
+            want = _READ_CHUNK
+            if max_size > 0:
+                # The fstat size check before the read is not enough: a
+                # process in the sandbox can grow the file while it is read
+                # and restore its size and mtime before the after-read check.
+                # Count what is actually read; never read past max_size + 1.
+                want = min(want, max_size + 1 - position)
+            chunk = os.read(self.fd, want)
+            if not chunk:
+                break
+            digest.update(chunk)
+            chunk_end = position + len(chunk)
+            if max_size > 0 and chunk_end > max_size:
+                raise FileTooLarge("more than %d" % max_size, max_size)
+            wanted_start = max(position, offset)
+            wanted_end = chunk_end if end is None else min(chunk_end, end)
+            if wanted_start < wanted_end:
+                piece = carry + chunk[wanted_start - position : wanted_end - position]
+                whole = len(piece) - len(piece) % 3
+                out.write(base64.b64encode(piece[:whole]))
+                carry = piece[whole:]
+            position = chunk_end
+        if carry:
+            out.write(base64.b64encode(carry))
+        after = os.fstat(self.fd)
+        before = self.before
         if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
             after.st_dev,
             after.st_ino,
@@ -422,11 +489,32 @@ def do_read(req):
             "ok": True,
             "err_kind": "",
             "err": "",
-            "data_b64": base64.b64encode(data).decode("ascii"),
             "size": before.st_size,
             "count": 0,
-            "sha256": digest,
+            "sha256": digest.hexdigest(),
         }
+
+
+def do_read(req):
+    parent_fd = -1
+    fd = -1
+    try:
+        parent_fd, name = _open_parent(req, create=False)
+        _test_pause(req, parent_fd)
+        fd, before = _open_file(parent_fd, name)
+        offset = int(req.get("offset", 0) or 0)
+        limit = int(req.get("limit", 0) or 0)
+        max_size = int(req.get("max_size", 0) or 0)
+        if max_size > 0 and before.st_size > max_size:
+            return fail(
+                "too_large",
+                "file is %d bytes, exceeding the %d-byte cap"
+                % (before.st_size, max_size),
+                size=before.st_size,
+            )
+        stream = _ReadStream(parent_fd, fd, before, offset, limit, max_size)
+        parent_fd = fd = -1  # owned by the stream now
+        return stream
     except FileNotFoundError:
         return fail("not_found", "file not found")
     except IsADirectoryError:
@@ -987,6 +1075,14 @@ def main():
         response = fail("unsafe_path", str(exc))
     except Exception as exc:
         response = fail("", "fileop failed: %s" % exc)
+    _emit(response)
+
+
+def _emit(response):
+    """Write the response: a streamed read, or one JSON document."""
+    if isinstance(response, _ReadStream):
+        response.emit(sys.stdout.buffer)
+        return
     print(json.dumps(response))
 
 
