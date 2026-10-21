@@ -52,7 +52,7 @@ export function ErrorScreen({ error }: { error: Error & { digest?: string } }) {
         <button
           type="button"
           onClick={() => window.location.reload()}
-          className="mt-6 block w-full rounded-[var(--radius-md)] bg-[var(--color-primary)] px-4 py-2.5 text-center text-sm font-medium text-[var(--color-on-primary)] transition hover:bg-[var(--color-primary-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="mt-6 block w-full rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-4 py-2.5 text-center text-sm font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
           Reload
         </button>

@@ -21,7 +21,7 @@ An element filled with a brand or status color needs a foreground chosen for
 
 | Fill | Foreground | Why |
 |---|---|---|
-| `bg-[var(--color-primary)]` | `text-[var(--color-on-primary)]` | The purpose-built token. It cannot be derived — a dark primary needs light text, a light one (yellow, lime, cyan) needs dark text — so a bundle declares it. The pair itself is not held to 4.5:1 (fleet's own is 4.46:1): for a filled button's label prefer `bg-[var(--color-primary-fill)]` + `text-[var(--color-on-primary-fill)]`, which `/theme.css` measures for every palette (required on the approval cards). |
+| `bg-[var(--color-primary-fill)]`, hover (when enabled) `bg-[var(--color-primary-fill-hover)]` | `text-[var(--color-on-primary-fill)]` | The measured pair. A bundle declares `on_primary` (a dark primary needs light text, a light one — yellow, lime, cyan — needs dark text), but the brand pair itself is not held to 4.5:1 (fleet's own is 4.46:1), so `/theme.css` nudges the primary into a fill that reaches 4.5:1 under the label for every palette. Every filled button, chip or selected option with a label uses it, app-wide. The raw `--color-primary` is for graphics only (switch tracks, a nav row's active bar, a checkbox accent, tints), and `--color-primary-hover` is never a button hover: it is LIGHTER than the primary in dark. |
 | `bg-[var(--color-accent)]`, `bg-[var(--color-danger)]` | `text-[var(--color-surface-1)]` | Inverts with the theme (near-black in dark, white in light), which is the polarity a saturated fill needs. Themable, so a bundle keeps control. |
 
 Reaching for `--color-text-primary` on a saturated fill is the common mistake:
@@ -154,7 +154,8 @@ Known, deliberate exceptions:
   `--color-primary`: a bundle's primary can be a light brand fill (a yellow
   with dark button text) that cannot reach 3:1 on the track. For the same
   reason the help guides paint links in `--color-link`. Filled buttons
-  (Approve, Check result, Retry failed, Approve 2 of 3) paint
+  (Approve, Check result, Retry failed, Approve 2 of 3, and every other
+  filled button in the app) paint
   `--color-on-primary-fill` on `--color-primary-fill` and hover (when
   enabled) to `--color-primary-fill-hover`, never `--color-primary` or a faded
   `hover:opacity-*`: the brand pair can miss 4.5:1 (fleet's own is 4.46:1),
@@ -219,7 +220,7 @@ shared.
 A choice between 2–4 mutually exclusive options (theme, schedule mode,
 list/week, simple/cron, memory views, the email preview's inbox and size) is
 ONE look: `.seg` / `.seg-option` in `globals.css`, a pill track with the active
-option on `--color-primary` / `--color-on-primary`. React button groups use
+option on `--color-primary-fill` / `--color-on-primary-fill`. React button groups use
 `shared/ui/Segmented` (aria-pressed); a radiogroup or tablist with its own
 keyboard handling keeps its markup and semantics and takes the classes
 (`.seg--md` is the form-field size). Underlined page tabs, filter chips with

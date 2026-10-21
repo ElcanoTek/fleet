@@ -197,10 +197,14 @@ must set it. Every one of those rules previously hardcoded white, so a
 yellow-primary bundle rendered white-on-yellow at **1.33:1**. Declaring
 near-black instead takes the same surface to 14.87:1.
 
-**Filled buttons are held to WCAG AA whatever the pair.** The approval cards'
-filled buttons (Approve, Check result, Retry failed, Approve 2 of 3) paint
-`--color-on-primary-fill` on `--color-primary-fill`, not `on_primary` on
-`primary`. When a bundle sets
+**Filled buttons are held to WCAG AA whatever the pair.** Every filled
+button, chip and selected segmented option with a label (the approval cards'
+Approve, Create project, Move and share, `.btn-primary`, the
+sign-in button, the account avatar) paints `--color-on-primary-fill` on
+`--color-primary-fill`, not `on_primary` on `primary`, and hovers to
+`--color-primary-fill-hover`. `designTokens.test.ts` holds all of `web/src`
+to it; the raw `primary` is left for graphics with no text (switch tracks, a
+nav row's active bar, tints and borders). When a bundle sets
 `primary` or `on_primary`, `/theme.css` measures the pair (the other one is
 fleet's default) and emits a fill that is the primary mixed toward black or
 white by the smallest step that reaches 4.5:1, plus a hover a further 10 points

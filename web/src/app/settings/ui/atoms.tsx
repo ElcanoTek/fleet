@@ -46,7 +46,7 @@ export function btnClass({
   let color: string;
   if (variant === "primary") {
     color =
-      "bg-[var(--color-primary)] text-[var(--color-on-primary)] hover:bg-[var(--color-primary-hover)]";
+      "bg-[var(--color-primary-fill)] text-[var(--color-on-primary-fill)] enabled:hover:bg-[var(--color-primary-fill-hover)]";
   } else if (armed) {
     color =
       "bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] text-[var(--color-danger)]";

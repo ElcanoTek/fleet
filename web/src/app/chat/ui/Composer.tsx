@@ -1370,7 +1370,7 @@ export function Composer({
                 !isStreaming &&
                 !isUploadingAttachments &&
                 !modelError
-                  ? "bg-[image:var(--gradient-action-primary)] text-[var(--color-on-primary)] hover:-translate-y-px"
+                  ? "bg-[image:var(--gradient-action-primary)] text-[var(--color-on-primary-fill)] hover:-translate-y-px"
                   : "bg-[var(--color-surface-2)] text-[var(--color-text-disabled)]"
               }`}
               type="submit"

@@ -82,35 +82,206 @@ describe("design tokens", () => {
     expect(offenders, `${banned} must be a token: ${offenders.join(", ")}`).toEqual([]);
   });
 
-  it("every primary-filled element declares the on-primary foreground", () => {
-    // Narrower, positive check: a `bg-[var(--color-primary)]` in the same class
-    // string as a text color must use --color-on-primary. This catches the
-    // regression where someone reaches for --color-text-primary (a foreground
-    // for ordinary surfaces, which on a primary fill is near-invisible) instead.
+  it("every primary-filled element declares the on-primary-fill foreground", () => {
+    // Narrower, positive check: a `bg-[var(--color-primary-fill)]` in the same
+    // class string as a text color must use --color-on-primary-fill. This
+    // catches the regression where someone reaches for --color-text-primary (a
+    // foreground for ordinary surfaces, which on a primary fill is
+    // near-invisible) instead.
     //
     // Only a BARE fill counts. A variant-prefixed one paints something other
     // than this element's own background, so the element's text color says
-    // nothing about its readability — `before:bg-[var(--color-primary)]` is
-    // NavRail's 2px active-indicator bar, sitting on an element whose real fill
-    // is an 18%-alpha tint that --color-text-primary reads correctly against.
-    // Matching it would be a false positive.
-    const bareFill = /(^|[\s"'`])bg-\[var\(--color-primary\)\]/;
+    // nothing about its readability.
+    const bareFill = /(^|[\s"'`])bg-\[var\(--color-primary-fill\)\]/;
     const offenders: string[] = [];
 
     for (const file of files) {
       const lines = readFileSync(file, "utf8").split("\n");
       lines.forEach((line, i) => {
         if (!bareFill.test(line)) return;
-        const textToken = /text-\[var\(--color-([a-z0-9-]+)\)\]/.exec(line);
-        if (textToken && textToken[1] !== "on-primary") {
-          offenders.push(`${file.replace(APP_DIR, "")}:${i + 1} → --color-${textToken[1]}`);
+        const textToken = /(^|[\s"'`])text-\[var\(--color-([a-z0-9-]+)\)\]/.exec(line);
+        if (textToken && textToken[2] !== "on-primary-fill") {
+          offenders.push(`${file.replace(APP_DIR, "")}:${i + 1} → --color-${textToken[2]}`);
         }
       });
     }
 
-    expect(offenders, `use --color-on-primary on a primary fill: ${offenders.join(", ")}`).toEqual(
+    expect(
+      offenders,
+      `use --color-on-primary-fill on a primary fill: ${offenders.join(", ")}`,
+    ).toEqual([]);
+  });
+});
+
+/**
+ * Filled buttons are held to WCAG AA for any palette (#1815 follow-up).
+ *
+ * White on fleet's own `--color-primary` (#7272ab, which the elcano bundle
+ * repeats) is 4.46:1, just under AA's 4.5:1 for text, and a bundle's brand pair
+ * is not measured at all. `--color-primary-hover` is worse as a hover: it is
+ * the DEEPER primary in light but the LIGHTER one in dark (white on fleet's
+ * dark #8686c4 is 3.38:1), and a `hover:opacity-90` fades the fill toward the
+ * page. #1815 added the measured pair — `--color-primary-fill` /
+ * `-fill-hover` under `--color-on-primary-fill`, which `/theme.css` derives
+ * for every bundle palette (internal/httpapi/theme_contrast.go) — and moved
+ * the approval cards to it. These rules hold the whole of web/src to it, so
+ * no label anywhere sits on the raw brand pair.
+ *
+ * The raw `--color-primary` stays legal where it paints no text: tints
+ * (`color-mix(…, transparent)`), borders, focus/accent colors, and the few
+ * solid graphics listed in NON_TEXT_FILLS, each with its reason. A graphic is
+ * held to 3:1 (1.4.11), which the brand primary clears.
+ */
+const SRC_DIR = join(APP_DIR, "..");
+
+function sourceFiles(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    if (entry === "node_modules" || entry === ".next") continue;
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) sourceFiles(full, out);
+    else if (/\.tsx?$/.test(entry) && !/\.(test|spec)\.tsx?$/.test(entry)) out.push(full);
+  }
+  return out;
+}
+
+/** A solid --color-primary fill that carries no text, by file and exact line. */
+const NON_TEXT_FILLS: { file: string; line: string; why: string }[] = [
+  {
+    file: "app/chat/ui/genui/GenerativeCard.tsx",
+    line: 'on ? "bg-[var(--color-primary)]" : "bg-[var(--color-overlay-strong)]",',
+    why: "a genui switch's ON track: the knob is a white dot, no label sits on it (3:1 graphic)",
+  },
+  {
+    file: "app/settings/ui/atoms.tsx",
+    line: '? "bg-[var(--color-primary)]"',
+    why: "the settings Toggle's ON track: the knob is a white dot, no label sits on it (3:1 graphic)",
+  },
+];
+
+/** A gradient action fill that carries an icon, not text. */
+const ICON_ONLY_GRADIENTS: { file: string; line: string; why: string }[] = [
+  {
+    file: "app/chat/ui/Composer.tsx",
+    line: '? "bg-[image:var(--gradient-action-primary)] text-[var(--color-on-primary-fill)] hover:-translate-y-px"',
+    why: "the composer's Send circle: an arrow icon (3:1 graphic), aria-label only, no text label",
+  },
+];
+
+/** CSS rules whose --color-primary background carries no text. */
+const CSS_NON_TEXT_FILLS: { selector: string; why: string }[] = [
+  { selector: ".ui-switch:checked", why: "a switch's ON track; its knob (::before) is a dot, not text" },
+];
+
+const rel = (file: string) => file.slice(SRC_DIR.length + 1);
+
+describe("filled primary buttons use the measured fill pair (WCAG AA)", () => {
+  const files = sourceFiles(SRC_DIR);
+
+  it("walks all of web/src (guards against a broken walk)", () => {
+    expect(files.length).toBeGreaterThan(100);
+    expect(files.some((f) => rel(f) === "proxy.ts")).toBe(true);
+  });
+
+  const RULES: [RegExp, string][] = [
+    [
+      /(^|[\s"'`:])text-\[var\(--color-on-primary\)\]/,
+      "a label on the brand fill is --color-on-primary-fill (on_primary painted solid, measured with the fill)",
+    ],
+    [
+      /(^|[\s"'`:])bg-\[var\(--color-primary(-hover)?\)\]/,
+      "a filled button/chip is --color-primary-fill, hovering to --color-primary-fill-hover (the brand pair can miss 4.5:1, and -hover is lighter in dark)",
+    ],
+    [
+      /var\(--color-primary(-hover)?\)(?=.*--color-on-primary)|--color-on-primary.*var\(--color-primary(-hover)?\)/,
+      "a label on a fill painted from the raw primary (a gradient too): use the -fill tokens",
+    ],
+    [
+      /(?=.*primary-fill).*hover:(opacity|brightness)-/,
+      "a hover that fades or lightens a filled button lowers its contrast: hover to --color-primary-fill-hover",
+    ],
+    [
+      /(?=.*disabled:)(?=.*bg-\[var\(--color-primary-fill\)\]).*(^|[\s"'`])hover:bg-\[var\(--color-primary-fill-hover\)\]/,
+      "a disabled button must not deepen on hover: use enabled:hover:",
+    ],
+  ];
+
+  it("no label sits on the raw brand fill, and no filled button fades on hover", () => {
+    const offenders: string[] = [];
+    const used = new Set<string>();
+    for (const file of files) {
+      readFileSync(file, "utf8")
+        .split("\n")
+        .forEach((raw, i) => {
+          const trimmed = raw.trim();
+          const allowed = NON_TEXT_FILLS.find((x) => rel(file) === x.file && trimmed === x.line);
+          if (allowed) used.add(allowed.line);
+          // A nav row's active bar: a 2px pseudo-element with no content text,
+          // on a row whose real fill is a translucent tint.
+          const line = (allowed ? trimmed.replaceAll("bg-[var(--color-primary)]", "") : raw).replaceAll(
+            "before:bg-[var(--color-primary)]",
+            "",
+          );
+          for (const [re, why] of RULES) if (re.test(line)) offenders.push(`${rel(file)}:${i + 1} — ${why}`);
+
+          if (line.includes("--gradient-action-primary") && line.includes("--color-on-primary")) {
+            const icon = ICON_ONLY_GRADIENTS.find((x) => rel(file) === x.file && trimmed === x.line);
+            if (icon) used.add(icon.line);
+            else
+              offenders.push(
+                `${rel(file)}:${i + 1} — a label on --gradient-action-primary: its secondary stop is not measured, use the -fill tokens`,
+              );
+          }
+        });
+    }
+    expect(offenders).toEqual([]);
+    // A stale exception would silently widen the allowance.
+    expect([...NON_TEXT_FILLS, ...ICON_ONLY_GRADIENTS].filter((x) => !used.has(x.line)).map((x) => x.file)).toEqual(
       [],
     );
+  });
+
+  it("no globals.css rule paints a label on the raw brand fill", () => {
+    const css = readFileSync(join(APP_DIR, "globals.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const offenders: string[] = [];
+    const used = new Set<string>();
+    // Innermost blocks only: comments are stripped, so a `{…}` with no brace
+    // inside is one rule (nested @layer/@media wrappers fall away).
+    for (const m of css.matchAll(/([^{};]+)\{([^{}]*)\}/g)) {
+      const selector = m[1].trim();
+      const body = m[2];
+      const rawBg = /(^|[\s;])background(-color)?\s*:\s*var\(--color-primary(-hover)?\)\s*(;|$)/.test(body);
+      const onPrimary = /(^|[\s;])color\s*:\s*var\(--color-on-primary\)/.test(body);
+      const fillLabel = /(^|[\s;])color\s*:\s*var\(--color-on-primary-fill\)/.test(body);
+      const fillBg = /(^|[\s;])background(-color)?\s*:\s*var\(--color-primary-fill(-hover)?\)/.test(body);
+      const anyBg = /(^|[\s;])background(-color|-image)?\s*:/.test(body);
+      if (onPrimary) offenders.push(`${selector} — a label on the brand fill is --color-on-primary-fill`);
+      if (fillLabel && anyBg && !fillBg) offenders.push(`${selector} — --color-on-primary-fill is measured on --color-primary-fill only`);
+      if (rawBg) {
+        const ok = CSS_NON_TEXT_FILLS.find((x) => x.selector === selector);
+        if (ok) used.add(ok.selector);
+        else offenders.push(`${selector} — a filled button/option is --color-primary-fill (hover: -fill-hover)`);
+      }
+    }
+    expect(offenders).toEqual([]);
+    expect(CSS_NON_TEXT_FILLS.filter((x) => !used.has(x.selector)).map((x) => x.selector)).toEqual([]);
+  });
+
+  it("the rules catch the shapes they ban (mutation check)", () => {
+    const bad = [
+      'className="bg-[var(--color-primary)] text-[var(--color-on-primary)]"',
+      'className="bg-[var(--color-primary-fill)] text-[var(--color-on-primary-fill)] hover:opacity-90"',
+      'className="bg-[var(--color-primary-fill)] text-[var(--color-on-primary-fill)] hover:bg-[var(--color-primary-hover)]"',
+      'className="bg-[linear-gradient(140deg,var(--color-primary),var(--color-primary-hover))] text-[var(--color-on-primary-fill)]"',
+      'className="bg-[var(--color-primary-fill)] text-[var(--color-on-primary-fill)] hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"',
+      'className="bg-[var(--color-primary-fill)] text-[var(--color-on-primary-fill)] hover:brightness-[1.08]"',
+    ];
+    for (const line of bad) expect(RULES.some(([re]) => re.test(line)), line).toBe(true);
+    const good = [
+      'className="bg-[var(--color-primary-fill)] text-[var(--color-on-primary-fill)] enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"',
+      'className="border-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_14%,transparent)] text-[var(--color-text-primary)]"',
+      'className="accent-[var(--color-primary)]"',
+    ];
+    for (const line of good) expect(RULES.some(([re]) => re.test(line)), line).toBe(false);
   });
 });
 

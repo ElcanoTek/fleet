@@ -1159,7 +1159,7 @@ function CardBody({
                 <button
                   ref={confirmYesRef}
                   type="button"
-                  className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] hover:opacity-90"
+                  className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)]"
                   onClick={() => onConfirm(confirmingVisible)}
                 >
                   Yes, {confirmingVisible.label.toLowerCase()}
@@ -1186,7 +1186,7 @@ function CardBody({
                       onClick={() => onAction(a)}
                       className={
                         style === "primary"
-                          ? "rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+                          ? "rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
                           : style === "danger"
                             ? "rounded-[var(--radius-md)] border border-[var(--color-danger-border)] px-3 py-1.5 text-[0.75rem] text-[var(--color-danger)] transition hover:opacity-90 disabled:opacity-50"
                             : actionButton + " py-1.5"
