@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -115,6 +116,10 @@ func (s *Server) applyConnectorRecommendations(userMessage, rawMessage string, p
 		return userMessage
 	}
 	enabled := enabledConnectorSet(persistedEnabled, requestEnabled)
-	recs := recommendConnectors(rawMessage, s.agent.MCPServerCatalog(), enabled, maxConnectorRecommendations)
+	// A connector whose every tool interactive_hidden_tools keeps out of chat
+	// is not recommended: connecting it would give this chat no tool, and the
+	// picker does not list it (mcp_servers_hidden.go).
+	catalog := chatVisibleConnectors(s.agent.MCPServerCatalog(), agentcore.InteractiveHiddenTools())
+	recs := recommendConnectors(rawMessage, catalog, enabled, maxConnectorRecommendations)
 	return appendConnectorRecommendationBlock(userMessage, recs)
 }

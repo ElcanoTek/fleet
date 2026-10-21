@@ -1640,7 +1640,10 @@ func (m *Manager) admitInteractiveTurn(ctx context.Context) (func(), error) {
 // NOT be mounted: RunTurn opens that overlay first and composes the prompt
 // second, so the prompt can name them (#1006). The tools that DID mount are
 // described by agentcore.Run's roster-derived live-registry section, not here.
-func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, persona string, hosted hostedMCPRoster) (string, error) {
+//
+// hidden is the turn's interactive_hidden_tools snapshot, the same slice the
+// turn's RunConfig carries, so the prompt describes what the run offers.
+func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, persona string, hosted hostedMCPRoster, hidden []string) (string, error) {
 	var notes []agentcore.Note
 	if m.notesProvider != nil {
 		if got, err := m.notesProvider.PublishedNotes(ctx); err != nil {
@@ -1649,7 +1652,7 @@ func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, per
 			notes = got
 		}
 	}
-	systemPrompt, err := m.buildSystemPrompt(persona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled, in.UserSkills, hosted)
+	systemPrompt, err := m.buildSystemPrompt(persona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled, in.UserSkills, hosted, hidden)
 	if err != nil {
 		return "", fmt.Errorf("compose system prompt: %w", err)
 	}
@@ -1830,7 +1833,11 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		}
 	}
 
-	systemPrompt, err := m.composeTurnSystemPrompt(ctx, in, persona, hostedRosterFromOverlay(overlay))
+	// One interactive_hidden_tools snapshot per turn: the prompt's tool-gated
+	// sections and the run gate read the same list (a policy reload between
+	// the two cannot split them).
+	hiddenTools := agentcore.InteractiveHiddenTools()
+	systemPrompt, err := m.composeTurnSystemPrompt(ctx, in, persona, hostedRosterFromOverlay(overlay), hiddenTools)
 	if err != nil {
 		return nil, err
 	}
@@ -1889,11 +1896,14 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		Selection:             selection,
 		Persona:               persona,
 		PersonaPolicy:         m.personaPolicy(persona),
-		MaxCostUSD:            m.config.LiveMaxCostUSD(),
-		MaxTotalTokens:        m.config.LiveMaxTotalTokens(),
-		ApprovalStager:        in.ApprovalStager,
-		MemoryProposer:        in.MemoryProposer,
-		NoteProposer:          m.noteProposer,
+		// agent_policy.interactive_hidden_tools: tools a chat turn neither
+		// offers nor calls (scheduled runs keep them).
+		HiddenToolSuffixes: hiddenTools,
+		MaxCostUSD:         m.config.LiveMaxCostUSD(),
+		MaxTotalTokens:     m.config.LiveMaxTotalTokens(),
+		ApprovalStager:     in.ApprovalStager,
+		MemoryProposer:     in.MemoryProposer,
+		NoteProposer:       m.noteProposer,
 		// The finish nudge / BLOCKED texts name protocols/self-audit.md only when
 		// this bundle actually ships it.
 		AuditProtocolRef: AuditProtocolRef(m.protocolsDir),
