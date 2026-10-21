@@ -143,12 +143,22 @@ func narrowableValues(v any) ([]string, bool) {
 
 // narrowApproval checks the values a person approved against a's staged call
 // and returns the narrowing to record, or nil when they approved every staged
-// value (the call runs whole, exactly as an un-narrowed approval). Any error
-// is the client's: the request is refused and nothing is claimed.
-func narrowApproval(a *store.Approval, approved []string) (*approvalNarrowing, error) {
+// value (the call runs whole, exactly as an un-narrowed approval). shownArg is
+// the argument the card showed (its `narrowable.arg`), echoed by the client:
+// the decision is bound to it, so a policy that changed since the card was
+// shown (a restart with another critical_tool_narrowable_args entry) can
+// never narrow an argument the person did not review. Any error is the
+// client's: the request is refused and nothing is claimed.
+func narrowApproval(a *store.Approval, approved []string, shownArg string) (*approvalNarrowing, error) {
 	arg, staged, ok := stagedNarrowable(a.ToolName, a.ArgsJSON)
 	if !ok {
 		return nil, errors.New("this action cannot be narrowed: approve or decline it whole")
+	}
+	if shownArg == "" {
+		return nil, errors.New("narrowed_arg is missing: send the argument the card narrows with the approved values")
+	}
+	if shownArg != arg {
+		return nil, fmt.Errorf("this card now narrows %q, not %q (fleet's policy changed after it was shown): reload it and decide again", arg, shownArg)
 	}
 	if len(approved) == 0 {
 		return nil, fmt.Errorf("approved_values is empty: to leave every %s out, decline the action", arg)
@@ -197,7 +207,7 @@ func requestedNarrowing(a *store.Approval, req approvalRequest) (*approvalNarrow
 	if scope := strings.TrimSpace(req.Scope); scope != "" && scope != "once" {
 		return nil, errors.New("a narrowed approval covers this call only; use scope once")
 	}
-	return narrowApproval(a, req.ApprovedValues.values)
+	return narrowApproval(a, req.ApprovedValues.values, req.NarrowedArg)
 }
 
 // claimApproved claims a pending card as approved and executing: the plain

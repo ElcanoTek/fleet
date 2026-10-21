@@ -131,9 +131,15 @@ export function ApprovalGroupCard({
   const checkedIds = approvals.filter(goes).map((a) => a.id);
   const uncheckedIds = approvals.filter((a) => !goes(a)).map((a) => a.id);
   const narrow: Record<string, string[]> = {};
+  // The argument each narrowed card showed: the server refuses a narrowing of
+  // any other argument (a policy that changed after a restart).
+  const narrowArgs: Record<string, string> = {};
   for (const a of approvals) {
     const approved = approvedOf(a);
-    if (goes(a) && approved && a.narrowable && approved.length < a.narrowable.values.length) narrow[a.id] = approved;
+    if (goes(a) && approved && a.narrowable && approved.length < a.narrowable.values.length) {
+      narrow[a.id] = approved;
+      narrowArgs[a.id] = a.narrowable.arg;
+    }
   }
   const selectionFor = (a: Approval): RowSelection | undefined => {
     if (!a.narrowable) return undefined;
@@ -156,7 +162,12 @@ export function ApprovalGroupCard({
     };
   };
 
-  const decide = async (approve: string[], decline: string[], narrowed: Record<string, string[]> = {}) => {
+  const decide = async (
+    approve: string[],
+    decline: string[],
+    narrowed: Record<string, string[]> = {},
+    narrowedArgs: Record<string, string> = {},
+  ) => {
     if (submitting || !conversationId) return;
     setSubmitting(approve.length > 0 ? "approve" : "cancel");
     setSubmitError(null);
@@ -170,7 +181,11 @@ export function ApprovalGroupCard({
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(Object.keys(narrowed).length > 0 ? { approve, decline, narrow: narrowed } : { approve, decline }),
+        body: JSON.stringify(
+          Object.keys(narrowed).length > 0
+            ? { approve, decline, narrow: narrowed, narrow_args: narrowedArgs }
+            : { approve, decline },
+        ),
       });
       if (!response.ok) {
         // Nothing was decided: the server refuses the whole decision before
@@ -320,7 +335,7 @@ export function ApprovalGroupCard({
             data-testid="approval-group-approve"
             className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
             disabled={disabled || checkedIds.length === 0}
-            onClick={() => void decide(checkedIds, uncheckedIds, narrow)}
+            onClick={() => void decide(checkedIds, uncheckedIds, narrow, narrowArgs)}
           >
             {submitting === "approve" ? "Running…" : `Approve all (${checkedIds.length})`}
           </button>

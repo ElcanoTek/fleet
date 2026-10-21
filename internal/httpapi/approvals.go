@@ -1535,6 +1535,10 @@ type approvalRequest struct {
 	// the call whole. Only with approved=true and scope once; anything else is
 	// refused before a claim.
 	ApprovedValues approvedValuesField `json:"approved_values"`
+	// NarrowedArg is the argument the card showed as narrowable
+	// (`narrowable.arg`), required with ApprovedValues: the narrowing is
+	// refused unless it is still the argument the tool narrows.
+	NarrowedArg string `json:"narrowed_arg,omitempty"`
 }
 
 // prevalidateStagedTaskPrompt checks the prompt of a schedule_task or

@@ -151,7 +151,7 @@ func TestHandleApproval_NarrowedRunsOnlyTheApprovedValues(t *testing.T) {
 	child := &narrowChild{}
 	s := narrowServer(t, st, child)
 
-	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["c","a"]}`)
+	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["c","a"],"narrowed_arg":"deal_ids"}`)
 	if rec.Code != 200 {
 		t.Fatalf("POST = %d %s", rec.Code, rec.Body.String())
 	}
@@ -196,7 +196,7 @@ func TestHandleApproval_ApprovingEveryValueIsAWholeApproval(t *testing.T) {
 	st := &narrowStore{approval: narrowApprovalRow()}
 	child := &narrowChild{}
 	s := narrowServer(t, st, child)
-	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["b","c","a"]}`)
+	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["b","c","a"],"narrowed_arg":"deal_ids"}`)
 	if rec.Code != 200 {
 		t.Fatalf("POST = %d %s", rec.Code, rec.Body.String())
 	}
@@ -215,17 +215,19 @@ func TestHandleApproval_RefusesABadNarrowingBeforeTheClaim(t *testing.T) {
 		name, body, args string
 		policy           bool
 	}{
-		{name: "empty", body: `{"approved":true,"approved_values":[]}`, policy: true},
-		{name: "explicit null", body: `{"approved":true,"approved_values":null}`, policy: true},
-		{name: "unknown value", body: `{"approved":true,"approved_values":["a","z"]}`, policy: true},
-		{name: "repeated value", body: `{"approved":true,"approved_values":["a","a"]}`, policy: true},
-		{name: "with a decline", body: `{"approved":false,"approved_values":["a"]}`, policy: true},
-		{name: "with a session scope", body: `{"approved":true,"scope":"session","approved_values":["a"]}`, policy: true},
-		{name: "tool declares nothing", body: `{"approved":true,"approved_values":["a"]}`},
-		{name: "one staged value", body: `{"approved":true,"approved_values":["a"]}`, args: `{"deal_ids":["a"]}`, policy: true},
-		{name: "staged list repeats a value", body: `{"approved":true,"approved_values":["a"]}`, args: `{"deal_ids":["a","a","b"]}`, policy: true},
-		{name: "staged list holds a number", body: `{"approved":true,"approved_values":["a"]}`, args: `{"deal_ids":["a",7]}`, policy: true},
-		{name: "staged value too long for a row key", body: `{"approved":true,"approved_values":["a"]}`, args: `{"deal_ids":["a","` + strings.Repeat("x", 201) + `"]}`, policy: true},
+		{name: "empty", body: `{"approved":true,"approved_values":[],"narrowed_arg":"deal_ids"}`, policy: true},
+		{name: "explicit null", body: `{"approved":true,"approved_values":null,"narrowed_arg":"deal_ids"}`, policy: true},
+		{name: "unknown value", body: `{"approved":true,"approved_values":["a","z"],"narrowed_arg":"deal_ids"}`, policy: true},
+		{name: "repeated value", body: `{"approved":true,"approved_values":["a","a"],"narrowed_arg":"deal_ids"}`, policy: true},
+		{name: "with a decline", body: `{"approved":false,"approved_values":["a"],"narrowed_arg":"deal_ids"}`, policy: true},
+		{name: "with a session scope", body: `{"approved":true,"scope":"session","approved_values":["a"],"narrowed_arg":"deal_ids"}`, policy: true},
+		{name: "tool declares nothing", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"deal_ids"}`},
+		{name: "one staged value", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"deal_ids"}`, args: `{"deal_ids":["a"]}`, policy: true},
+		{name: "staged list repeats a value", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"deal_ids"}`, args: `{"deal_ids":["a","a","b"]}`, policy: true},
+		{name: "staged list holds a number", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"deal_ids"}`, args: `{"deal_ids":["a",7]}`, policy: true},
+		{name: "no narrowed_arg", body: `{"approved":true,"approved_values":["a"]}`, policy: true},
+		{name: "a narrowed_arg the policy no longer narrows", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"item_ids"}`, policy: true},
+		{name: "staged value too long for a row key", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"deal_ids"}`, args: `{"deal_ids":["a","` + strings.Repeat("x", 201) + `"]}`, policy: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -360,7 +362,7 @@ func TestApprovalGroup_Narrowing(t *testing.T) {
 	}
 
 	st := &narrowGroupStore{groupStore: newGroupStore(rows()...), narrowed: map[string]string{}}
-	rec := post(st, `{"approve":["ap-pm","ap-mg"],"decline":["ap-ix"],"narrow":{"ap-pm":["z","x"]}}`)
+	rec := post(st, `{"approve":["ap-pm","ap-mg"],"decline":["ap-ix"],"narrow":{"ap-pm":["z","x"]},"narrow_args":{"ap-pm":"deal_ids"}}`)
 	if rec.Code != 200 {
 		t.Fatalf("POST = %d %s", rec.Code, rec.Body.String())
 	}
@@ -372,9 +374,12 @@ func TestApprovalGroup_Narrowing(t *testing.T) {
 	}
 
 	for _, body := range []string{
-		`{"approve":["ap-pm"],"decline":["ap-mg"],"narrow":{"ap-mg":["x"]}}`,                                                                   // narrowing a declined card
-		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":["q"]}}`,                                                                               // not a staged value
-		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":[]}}`,                                                                                  // empty
+		`{"approve":["ap-pm"],"decline":["ap-mg"],"narrow":{"ap-mg":["x"]}}`,
+		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":["x"]}}`,                                                                               // no narrow_args
+		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":["x"]},"narrow_args":{"ap-pm":"item_ids"}}`,                                            // an argument the policy no longer narrows
+		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":["x"]},"narrow_args":{"ap-pm":"deal_ids","ap-mg":"deal_ids"}}`,                         // narrow_args for a card not narrowed                                                                   // narrowing a declined card
+		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":["q"]},"narrow_args":{"ap-pm":"deal_ids"}}`,                                            // not a staged value
+		`{"approve":["ap-pm","ap-mg"],"narrow":{"ap-pm":[]},"narrow_args":{"ap-pm":"deal_ids"}}`,                                               // empty
 		`{"approve":["ap-pm"],"narrow":{"ap-pm":null}}`,                                                                                        // null
 		`{"approve":["ap-pm"],"narrow":{"ap-pm":[` + strings.TrimSuffix(strings.Repeat(`"x",`, maxApprovalGroupNarrowedValues+1), ",") + `]}}`, // over the group's value budget
 	} {
@@ -477,7 +482,7 @@ func TestHandleApproval_EarlyExecutingAnswerCarriesTheNarrowing(t *testing.T) {
 		broker:     client,
 		catalog:    []mcp.ServerTool{{ServerName: "ix", Tool: mcp.Tool{Name: "execute_plan"}}},
 	}}
-	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["a","c"]}`)
+	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["a","c"],"narrowed_arg":"deal_ids"}`)
 	var body map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	narrowed, _ := body["narrowed"].(map[string]any)
@@ -507,7 +512,7 @@ func TestHandleApproval_UnknownOutcomeKeepsTheNarrowing(t *testing.T) {
 	narrowPolicy(t)
 	st := &failingResultNarrowStore{narrowStore: &narrowStore{approval: narrowApprovalRow()}}
 	s := narrowServer(t, st, &narrowChild{})
-	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["a"]}`)
+	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["a"],"narrowed_arg":"deal_ids"}`)
 	var body map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	if rec.Code != 200 || body["execution_unknown"] != true || body["narrowed"] == nil {
@@ -562,7 +567,7 @@ func TestStagedNarrowable_NeverASyntheticTransportTool(t *testing.T) {
 		if _, _, ok := stagedNarrowable(tool, args); ok {
 			t.Errorf("%s: a synthetic-transport tool must never be narrowable", tool)
 		}
-		if _, err := narrowApproval(&store.Approval{ToolName: tool, ArgsJSON: args}, []string{"d1"}); err == nil {
+		if _, err := narrowApproval(&store.Approval{ToolName: tool, ArgsJSON: args}, []string{"d1"}, "deal_ids"); err == nil {
 			t.Errorf("%s: a narrowing must be refused", tool)
 		}
 	}
@@ -599,8 +604,8 @@ func TestBodyLimitMiddleware_ApprovalGroupHasItsOwnCap(t *testing.T) {
 // The group cap holds the largest decision the endpoint accepts, written in
 // the most expensive JSON escaping (a surrogate pair per character).
 func TestMaxApprovalGroupBody_HoldsTheWorstCaseEscaping(t *testing.T) {
-	perValue := maxNarrowableValueRunes*12 + 3 // two six-byte escapes per rune, quotes, comma
-	ids := maxApprovalGroupDecisions * 200     // ids, keys and brackets, generously
+	perValue := maxNarrowableValueRunes*12 + 3        // two six-byte escapes per rune, quotes, comma
+	ids := maxApprovalGroupDecisions * (200 + 64 + 8) // ids, keys and brackets, generously; a narrow_args name (64) each
 	if need := maxApprovalGroupNarrowedValues*perValue + ids; need > maxApprovalGroupBody {
 		t.Fatalf("worst case %d bytes > cap %d", need, maxApprovalGroupBody)
 	}

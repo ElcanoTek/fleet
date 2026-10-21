@@ -41,7 +41,7 @@ func TestNarrowableArgFor(t *testing.T) {
 func TestNarrowableArgProblems(t *testing.T) {
 	t.Cleanup(func() { ConfigureAgentPolicy(AgentPolicy{}) })
 	p := AgentPolicy{
-		CriticalToolSuffixes: []string{"execute_plan", "deploy_page", "schedule_task", "update_deal", "email", "template_email", "mail_send_email"},
+		CriticalToolSuffixes: []string{"execute_plan", "deploy_page", "schedule_task", "update_deal", "email", "template_email", "mail_send_email", "bash", "shell_bash"},
 		CriticalToolModes:    map[string]string{"deploy_page": "notify"},
 		CriticalToolNarrowableArgs: map[string]string{
 			"execute_plan":    "deal_ids",
@@ -53,23 +53,30 @@ func TestNarrowableArgProblems(t *testing.T) {
 			"email":           "to",
 			"template_email":  "to",
 			"mail_send_email": "to",
+			"bash":            "commands",
+			"shell_bash":      "commands",
 			"":                "deal_ids",
 		},
 	}
 	problems := NarrowableArgProblems(p)
 	joined := strings.Join(problems, "\n")
-	for _, want := range []string{`"execute_plans"`, `"deploy_page"`, `"schedule_task"`, `"deal_ids.0"`, "empty tool suffix", `"send_email"`, `"email"`, `"template_email"`, `"mail_send_email"`} {
+	for _, want := range []string{`"execute_plans"`, `"deploy_page"`, `"schedule_task"`, `"deal_ids.0"`, "empty tool suffix", `"send_email"`, `"email"`, `"template_email"`, `"mail_send_email"`, `native bash`} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("problems %q do not name %s", joined, want)
 		}
 	}
-	if len(problems) != 9 {
-		t.Fatalf("problems = %d (%q), want exactly the nine bad entries", len(problems), joined)
+	if len(problems) != 10 {
+		t.Fatalf("problems = %d (%q), want exactly the ten bad entries", len(problems), joined)
 	}
 
 	ConfigureAgentPolicy(p)
 	if NarrowableArgFor("mcp_ix_execute_plan") != "deal_ids" {
 		t.Fatal("a valid entry must be installed")
+	}
+	// The native bash tool is never narrowable; an MCP tool named by its
+	// server (shell_bash) still is.
+	if NarrowableArgFor("bash") != "" || NarrowableArgFor("mcp_shell_bash") != "commands" {
+		t.Fatalf("bash = %q, mcp_shell_bash = %q", NarrowableArgFor("bash"), NarrowableArgFor("mcp_shell_bash"))
 	}
 	for _, tool := range []string{"mcp_pages_deploy_page", "schedule_task", "mcp_ix_update_deal"} {
 		if got := NarrowableArgFor(tool); got != "" {

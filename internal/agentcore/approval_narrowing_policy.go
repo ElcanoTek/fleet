@@ -57,6 +57,10 @@ func buildNarrowableArgs(entries map[string]string, modes map[string]string, cri
 			problems = append(problems, fmt.Sprintf("ignoring critical_tool_narrowable_args entry %q: it selects outbound email sends, which are never narrowed (one approval per message as written)", suffix))
 			continue
 		}
+		if nativeExecutableTools[suffix] {
+			problems = append(problems, fmt.Sprintf("ignoring critical_tool_narrowable_args entry %q: it selects fleet's native %s tool, which runs no MCP call and is never narrowed (name an MCP tool by its server, e.g. <server>_%s)", suffix, suffix, suffix))
+			continue
+		}
 		set, staged := buildStagedCardSuffixSet("critical_tool_narrowable_args", []string{suffix}, modes, critical)
 		if len(staged) > 0 {
 			problems = append(problems, staged...)
@@ -78,6 +82,13 @@ func installNarrowableArgs(entries map[string]string, modes map[string]string, c
 	}
 	return out
 }
+
+// nativeExecutableTools are the native tools whose approved card fleet runs
+// itself (httpapi runStagedTool: bash runs inline, not as an MCP call). A
+// behaviour that needs an MCP request (a narrowed argument told to the server
+// in _meta, a cooperative cancellation) can never apply to one, so a policy
+// key that names one exactly is reported instead of silently doing nothing.
+var nativeExecutableTools = map[string]bool{toolNameBash: true}
 
 // selectsOutboundEmail reports whether a policy suffix would select an
 // outbound-email tool: it matches one of the base email suffixes
