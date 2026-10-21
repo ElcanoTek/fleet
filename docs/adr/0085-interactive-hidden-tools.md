@@ -52,7 +52,11 @@ suffix rule, applied to MCP tool names only.
 5. **Host-side reads for a chat turn honor it.** The approval-card describer
    is not called when it is hidden, alongside the persona and hook checks
    ADR-0082 already requires.
-6. **Absent key, no change.** Without the key the list is nil and every run
+6. **The chat Tools picker matches the turn.** The picker's listing routes
+   drop a hidden tool from each connector's tools and count, and do not list a
+   connector whose every tool is hidden, so the UI never offers what the run
+   gate refuses.
+7. **Absent key, no change.** Without the key the list is nil and every run
    is built exactly as before.
 
 ## Consequences

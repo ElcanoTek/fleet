@@ -57,6 +57,31 @@ The explanation is the same text everywhere:
 The system prompt's live-registry section is built from the roster, so it
 never lists a hidden tool.
 
+## What the chat Tools picker shows
+
+The picker (`GET /mcp-servers` before a conversation exists,
+`GET /conversations/{id}/mcp-servers` after) lists what a chat turn can call,
+so a trader is never shown a tool chat will refuse:
+
+- A hidden tool is dropped from its connector's `tools` and `tool_count`, so
+  it is not in the row's count, the library's tool list or the picker's search
+  (no "↳ ox_create_deal" hit). An always-on row sends only a count; its hidden
+  tools are subtracted on the server, by name, and the names are never sent.
+- A connector whose every tool is hidden is not listed at all. It has nothing
+  to offer in chat, and a switch that turns on nothing would mislead. A
+  conversation that opted into it earlier keeps the opt-in, which reaches no
+  tool.
+- Turning a connector on can never expose a hidden tool by another path: the
+  run gate above drops it from every chat turn, whatever the conversation
+  opted into (`TestInteractiveHidden_ManagerRunTurnHidesTheTool` runs the turn
+  with the connector opted in).
+
+Both routes are chat-only; the task form reads the scheduler's own catalog,
+which is unchanged. The Connections directory (`/mcp-catalog`) describes a
+connector for every run, scheduled ones included, so it still counts a
+chat-hidden tool. The web renders only what these routes return (search hits
+come from the row's `tools`), so the filtering is all server-side.
+
 ## What it does not change
 
 - **Scheduled runs, Operations Center tasks and the A2A server.** They pass no
@@ -96,6 +121,7 @@ the rest of `agent_policy`.
 - `internal/agent/manager.go`, `interactive.go`, `subagent.go`,
   `scheduled.go`: the turn's list and its inheritance by sub-agents.
 - `internal/httpapi/approval_card.go`: the describer skip.
+- `internal/httpapi/mcp_servers_hidden.go`: the chat Tools picker's rows.
 - `cmd/fleet/validate_config.go`: the preflight.
 
 Tests: `internal/agentcore/interactive_hidden_test.go`,

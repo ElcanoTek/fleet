@@ -121,6 +121,11 @@ func TestBuildAlwaysOnServerMetadata_ReflectsLiveDiscoveryStatus(t *testing.T) {
 		email.DisplayName != "Email" || len(email.Accounts) != 1 || email.Accounts[0] != "backup" {
 		t.Fatalf("live email status = %+v", email)
 	}
+	// The names behind the count, for the chat picker's hidden-tool filter:
+	// the allowlisted tool only, never the one the allowlist hides.
+	if email := byName["email"]; len(email.Tools) != 1 || email.Tools[0] != "search" {
+		t.Fatalf("email tools = %v, want [search]", email.Tools)
+	}
 	if broken := byName["broken"]; broken.Available || broken.ToolCount != 0 {
 		t.Fatalf("failed always-on connector was painted available: %+v", broken)
 	}

@@ -91,6 +91,9 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
 		}
 	}
+	// What a chat turn can call: interactive_hidden_tools are not offered
+	// (mcp_servers_hidden.go).
+	servers = s.hideInteractiveHiddenTools(servers)
 	writeJSON(w, map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()})
 }
 
@@ -480,6 +483,9 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
 		}
 	}
+	// What a chat turn can call: interactive_hidden_tools are not offered
+	// (mcp_servers_hidden.go).
+	servers = s.hideInteractiveHiddenTools(servers)
 	writeJSON(w, map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()})
 }
 

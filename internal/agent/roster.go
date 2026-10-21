@@ -61,6 +61,11 @@ type AlwaysOnServerInfo struct {
 	ToolCount   int
 	Available   bool
 	Accounts    []string
+	// Tools are the allowlisted tool names ToolCount counts. Server-side
+	// only: the chat Tools picker subtracts the ones
+	// agent_policy.interactive_hidden_tools keeps out of chat, and never
+	// sends the names (the status row exposes only the count).
+	Tools []string
 }
 
 // buildOptionalServerMetadata snapshots the Optional-server subset of the
@@ -162,8 +167,10 @@ func buildAlwaysOnServerMetadataFromCatalog(
 			info.Available = true
 			if len(spec.ToolAllowlist) == 0 || slices.Contains(spec.ToolAllowlist, st.Tool.Name) {
 				info.ToolCount++
+				info.Tools = append(info.Tools, st.Tool.Name)
 			}
 		}
+		sort.Strings(info.Tools)
 		out = append(out, info)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
