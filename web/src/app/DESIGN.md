@@ -138,7 +138,10 @@ Known, deliberate exceptions:
     color with 25–30% of `--color-text-primary` mixed in, so it is darker in
     light and lighter in dark; the base tokens fail 4.5:1 on tinted cards.
     `--color-{success,warning,danger}-tint` is the 15% wash behind a status
-    icon; the icon keeps the base color and needs 3:1 on it.
+    icon; success and danger icons keep the base color and need 3:1 on it.
+    The warning icon is `--color-warning-icon` (15% of the strongest text
+    mixed in): the base amber fell to 2.77:1 on its wash over a mid-gray
+    light `surface_2`.
 - **Approval cards** (`chat/ui/Approval*.tsx`) — one fill token per state:
   `--color-card-bg` (neutral: pending without a plain-words layout, plan,
   running, declined, expired), `--color-card-pending-bg` (a card asking for a
@@ -146,7 +149,11 @@ Known, deliberate exceptions:
   wash is 4% in dark, 7% in light) and `--color-card-record-bg` (a notify
   record). Muted text and links on those fills use `--color-card-text-muted`
   and `--color-card-link`: the themable muted/accent with 20% of the strongest
-  text mixed in, because a tinted card costs them ~0.5:1. Don't mix a card
+  text mixed in, because a tinted card costs them ~0.5:1. The running card's
+  progress bar is `--color-progress` (the card link color), never
+  `--color-primary`: a bundle's primary can be a light brand fill (a yellow
+  with dark button text) that cannot reach 3:1 on the track. For the same
+  reason the help guides paint links in `--color-link`. Don't mix a card
   fill or paint a base status color as text inline in those files:
   `approvalCardContrast.test.ts` measures every state's pairs (4.5:1 text,
   3:1 icons, both themes, over `--color-bg`..`--color-surface-2`) from these

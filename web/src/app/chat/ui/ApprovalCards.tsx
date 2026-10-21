@@ -319,7 +319,7 @@ export function ApprovalProgressBar({ progress }: { progress: ApprovalProgress }
           aria-valuenow={pct}
           className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-overlay-soft)]"
         >
-          <div className="h-full rounded-full bg-[var(--color-primary)] transition-[width]" style={{ width: `${pct}%` }} />
+          <div className="h-full rounded-full bg-[var(--color-progress)] transition-[width]" style={{ width: `${pct}%` }} />
         </div>
       ) : null}
       <span data-testid="approval-progress-text" className="min-w-0 break-words text-[0.72rem] text-[var(--color-text-secondary)]">

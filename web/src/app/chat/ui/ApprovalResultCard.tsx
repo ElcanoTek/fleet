@@ -45,8 +45,8 @@ const OUTCOME_TONE: Record<ApprovalResultOutcome, Tone> = {
   done: { border: "var(--color-success-border)", bg: "var(--color-card-success-bg)", tint: "var(--color-success-tint)", fg: "var(--color-success)", icon: "check" },
   partial: { border: "var(--color-border-strong)", bg: "var(--color-card-pending-bg)", tint: "transparent", fg: "var(--color-text-secondary)", icon: null },
   failed: { border: "var(--color-danger-border)", bg: "var(--color-card-danger-bg)", tint: "var(--color-danger-tint)", fg: "var(--color-danger)", icon: "close" },
-  mismatch: { border: "var(--color-warning-border)", bg: "var(--color-card-warning-bg)", tint: "var(--color-warning-tint)", fg: "var(--color-warning)", icon: "warning" },
-  unclear: { border: "var(--color-warning-border)", bg: "var(--color-card-warning-bg)", tint: "var(--color-warning-tint)", fg: "var(--color-warning)", icon: "clock" },
+  mismatch: { border: "var(--color-warning-border)", bg: "var(--color-card-warning-bg)", tint: "var(--color-warning-tint)", fg: "var(--color-warning-icon)", icon: "warning" },
+  unclear: { border: "var(--color-warning-border)", bg: "var(--color-card-warning-bg)", tint: "var(--color-warning-tint)", fg: "var(--color-warning-icon)", icon: "clock" },
 };
 
 // The words fleet puts on a record's status chip, and the lead-in of its note.
