@@ -21,35 +21,42 @@ const (
 	answerTable  = "| seed | value |\n|---|---|\n| 1 | 42 |\n| 2 | 17 |"
 	auditPointer = "The audit is confirmed. The table is in my previous message."
 	passedAudit  = `{"success":true,"critical_actions":[],"reasoning":"checked every value","artifacts_checked":["values"],"workflow_sections_checked":["completion"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`
+	abortedAudit = `{"success":false,"reasoning":"two values could not be verified","artifacts_checked":["values"],"workflow_sections_checked":["completion"],"send_contract_checked":false,"attachments_checked":[],"remaining_risks":["unverified values"],"user_visible_summary":"Two values could not be verified."}`
+	seedTask     = "Compute the value of every seed and answer with a table."
 )
 
-// answerThenAuditModel scripts the #1826 shape: call 0 closes the first round
-// with answer (no tool call, so the finish enforcement asks for the audit),
-// call 1 calls confirm_audit with audit, and call 2 closes the run with
-// closing. It records the prompt of every call.
-func answerThenAuditModel(answer, audit, closing string, prompts *[]string) *itMockModel {
+// scriptedStep is one model call: a confirm_audit call with audit as its
+// input, or else a closing message with text (none when empty).
+type scriptedStep struct{ audit, text string }
+
+// scriptedModel answers call i with steps[i] (the last step repeats) and
+// records the prompt of every call.
+func scriptedModel(prompts *[]string, steps ...scriptedStep) *itMockModel {
 	calls := 0
 	return &itMockModel{streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
-		step := calls
+		step := steps[min(calls, len(steps)-1)]
 		calls++
 		raw, _ := json.Marshal(call.Prompt)
 		*prompts = append(*prompts, string(raw))
 		return func(yield func(fantasy.StreamPart) bool) {
-			switch step {
-			case 0:
-				if answer != "" {
-					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "answer", Delta: answer})
-				}
-				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
-			case 1:
-				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "audit", ToolCallName: "confirm_audit", ToolCallInput: audit})
+			if step.audit != "" {
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "audit", ToolCallName: "confirm_audit", ToolCallInput: step.audit})
 				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
-			default:
-				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "closing", Delta: closing})
-				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				return
 			}
+			if step.text != "" {
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: step.text})
+			}
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
 		}, nil
 	}}
+}
+
+// answerThenAudit is the #1826 shape: the first round closes with answer (no
+// tool call, so the finish enforcement asks for the audit), the next calls
+// confirm_audit with audit, and the run closes with closing.
+func answerThenAudit(prompts *[]string, answer, audit, closing string) *itMockModel {
+	return scriptedModel(prompts, scriptedStep{text: answer}, scriptedStep{audit: audit}, scriptedStep{text: closing})
 }
 
 // The issue's reproduction: the answer, then an audit round that only points
@@ -57,8 +64,8 @@ func answerThenAuditModel(answer, audit, closing string, prompts *[]string) *itM
 // closing text, and the audit request told the model that is how it composes.
 func TestScheduledAnswerBeforeAuditIsKept(t *testing.T) {
 	var prompts []string
-	a := newTestScheduledAgent(t, answerThenAuditModel(answerTable, passedAudit, auditPointer, &prompts))
-	if err := a.Execute(context.Background(), "Compute the value of every seed and answer with a table."); err != nil {
+	a := newTestScheduledAgent(t, answerThenAudit(&prompts, answerTable, passedAudit, auditPointer))
+	if err := a.Execute(context.Background(), seedTask); err != nil {
 		t.Fatalf("run rejected: %v", err)
 	}
 	if want := answerTable + "\n\n" + auditPointer; lastAssistantContent(a.logSession) != want {
@@ -81,9 +88,9 @@ func TestScheduledAnswerBeforeAuditIsKept(t *testing.T) {
 func TestScheduledVerifierJudgesTheAnswerBeforeAudit(t *testing.T) {
 	var prompts []string
 	verifier := &recordingVerifier{replies: []string{`{"missing_actions":[],"reasoning":"the table is reported"}`}}
-	a := newTestScheduledAgent(t, answerThenAuditModel(answerTable, passedAudit, auditPointer, &prompts))
+	a := newTestScheduledAgent(t, answerThenAudit(&prompts, answerTable, passedAudit, auditPointer))
 	a.verifierModel = verifier
-	if err := a.Execute(context.Background(), "Compute the value of every seed and answer with a table."); err != nil {
+	if err := a.Execute(context.Background(), seedTask); err != nil {
 		t.Fatalf("run rejected: %v", err)
 	}
 	if len(verifier.prompts) != 1 {
@@ -94,38 +101,56 @@ func TestScheduledVerifierJudgesTheAnswerBeforeAudit(t *testing.T) {
 	}
 }
 
+// A verifier repair after the audit composes with the kept answer like any
+// judged answer: the repair round's supplement follows the table and the
+// audit's closing text.
+func TestScheduledVerifierRepairComposesWithTheAnswerBeforeAudit(t *testing.T) {
+	var prompts []string
+	const supplement = "| 3 | 4898 |"
+	verifier := &recordingVerifier{replies: []string{
+		`{"missing_actions":["report seed 3"],"reasoning":"seed 3 is missing"}`,
+		`{"missing_actions":[],"reasoning":"every seed is reported"}`,
+	}}
+	a := newTestScheduledAgent(t, scriptedModel(&prompts,
+		scriptedStep{text: answerTable}, scriptedStep{audit: passedAudit}, scriptedStep{text: auditPointer}, scriptedStep{text: supplement}))
+	a.verifierModel = verifier
+	if err := a.Execute(context.Background(), seedTask); err != nil {
+		t.Fatalf("run rejected: %v", err)
+	}
+	if want := answerTable + "\n\n" + auditPointer + "\n\n" + supplement; lastAssistantContent(a.logSession) != want {
+		t.Fatalf("persisted answer = %q, want %q", lastAssistantContent(a.logSession), want)
+	}
+}
+
+// Once a gate has judged the composition, the kept answer is part of what the
+// gate judged: an abort after a verifier repair keeps that judged answer, as
+// it would any judged answer. Only an answer no gate has judged yet is dropped
+// by an abort.
+func TestScheduledAbortAfterAGateKeepsTheJudgedAnswer(t *testing.T) {
+	var prompts []string
+	const closing = "Aborted: seed 3 could not be computed."
+	verifier := &recordingVerifier{replies: []string{`{"missing_actions":["report seed 3"],"reasoning":"seed 3 is missing"}`}}
+	a := newTestScheduledAgent(t, scriptedModel(&prompts,
+		scriptedStep{text: answerTable}, scriptedStep{audit: passedAudit}, scriptedStep{text: auditPointer},
+		scriptedStep{audit: abortedAudit}, scriptedStep{text: closing}))
+	a.verifierModel = verifier
+	if err := a.Execute(context.Background(), seedTask); !errors.Is(err, agentcore.ErrAuditAborted) {
+		t.Fatalf("run returned %v, want ErrAuditAborted", err)
+	}
+	if want := answerTable + "\n\n" + auditPointer + "\n\n" + closing; lastAssistantContent(a.logSession) != want {
+		t.Fatalf("persisted answer = %q, want the judged answer and the abort's text %q", lastAssistantContent(a.logSession), want)
+	}
+}
+
 // A model that audits on its own first, has that confirm_audit refused, and
 // then answers without retrying is refused with "Audit not confirmed", not
 // with the audit request. Its answer is kept the same way.
 func TestScheduledAnswerAfterARefusedOwnAuditIsKept(t *testing.T) {
 	const misnamed = `{"success":true,"critical_actions":[{"tool":"send_email"}],"reasoning":"checked every value","artifacts_checked":["values"],"workflow_sections_checked":["completion"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`
 	var prompts []string
-	calls := 0
-	model := &itMockModel{streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
-		step := calls
-		calls++
-		raw, _ := json.Marshal(call.Prompt)
-		prompts = append(prompts, string(raw))
-		return func(yield func(fantasy.StreamPart) bool) {
-			switch step {
-			case 0, 2:
-				input := misnamed
-				if step == 2 {
-					input = passedAudit
-				}
-				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "audit", ToolCallName: "confirm_audit", ToolCallInput: input})
-				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
-			case 1:
-				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "answer", Delta: answerTable})
-				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
-			default:
-				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "closing", Delta: auditPointer})
-				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
-			}
-		}, nil
-	}}
-	a := newTestScheduledAgent(t, model)
-	if err := a.Execute(context.Background(), "Compute the value of every seed and answer with a table."); err != nil {
+	a := newTestScheduledAgent(t, scriptedModel(&prompts,
+		scriptedStep{audit: misnamed}, scriptedStep{text: answerTable}, scriptedStep{audit: passedAudit}, scriptedStep{text: auditPointer}))
+	if err := a.Execute(context.Background(), seedTask); err != nil {
 		t.Fatalf("run rejected: %v", err)
 	}
 	if len(prompts) != 4 {
@@ -139,13 +164,37 @@ func TestScheduledAnswerAfterARefusedOwnAuditIsKept(t *testing.T) {
 	}
 }
 
+// A correction written in a later refused round (the model audited, fixed a
+// value, and ended the round without calling confirm_audit) follows the
+// answer it corrects. Dropping it stored the uncorrected table under a closing
+// text that called it corrected.
+func TestScheduledCorrectionBeforeTheAuditPassesIsKept(t *testing.T) {
+	var prompts []string
+	const correction = "Correction: seed 2 is 18, not 17."
+	const closing = "Audit confirmed; the corrected table above is final."
+	a := newTestScheduledAgent(t, scriptedModel(&prompts,
+		scriptedStep{text: answerTable}, scriptedStep{text: correction}, scriptedStep{audit: passedAudit}, scriptedStep{text: closing}))
+	if err := a.Execute(context.Background(), seedTask); err != nil {
+		t.Fatalf("run rejected: %v", err)
+	}
+	if len(prompts) != 4 {
+		t.Fatalf("model calls = %d, want 4 (answer, correction, audit, closing)", len(prompts))
+	}
+	if !strings.Contains(prompts[2], "Audit not confirmed.") || !strings.Contains(prompts[2], auditAnswerNote) {
+		t.Errorf("the refusal after the correction must say it is kept too: %s", prompts[2])
+	}
+	if want := answerTable + "\n\n" + correction + "\n\n" + closing; lastAssistantContent(a.logSession) != want {
+		t.Fatalf("persisted answer = %q, want the answer, its correction and the closing text %q", lastAssistantContent(a.logSession), want)
+	}
+}
+
 // A model that restates its whole answer after the audit, as the note asks it
 // not to, still gets it stored once.
 func TestScheduledAnswerBeforeAuditRestatedIsStoredOnce(t *testing.T) {
 	var prompts []string
 	restated := "Audit passed; the values are final.\n\n" + answerTable
-	a := newTestScheduledAgent(t, answerThenAuditModel(answerTable, passedAudit, restated, &prompts))
-	if err := a.Execute(context.Background(), "Compute the value of every seed and answer with a table."); err != nil {
+	a := newTestScheduledAgent(t, answerThenAudit(&prompts, answerTable, passedAudit, restated))
+	if err := a.Execute(context.Background(), seedTask); err != nil {
 		t.Fatalf("run rejected: %v", err)
 	}
 	if got := lastAssistantContent(a.logSession); got != restated {
@@ -157,8 +206,8 @@ func TestScheduledAnswerBeforeAuditRestatedIsStoredOnce(t *testing.T) {
 // request carries no note, exactly as before.
 func TestScheduledTextlessRoundBeforeAuditKeepsNothing(t *testing.T) {
 	var prompts []string
-	a := newTestScheduledAgent(t, answerThenAuditModel("", passedAudit, answerTable, &prompts))
-	if err := a.Execute(context.Background(), "Compute the value of every seed and answer with a table."); err != nil {
+	a := newTestScheduledAgent(t, answerThenAudit(&prompts, "", passedAudit, answerTable))
+	if err := a.Execute(context.Background(), seedTask); err != nil {
 		t.Fatalf("run rejected: %v", err)
 	}
 	if got := lastAssistantContent(a.logSession); got != answerTable {
@@ -174,10 +223,9 @@ func TestScheduledTextlessRoundBeforeAuditKeepsNothing(t *testing.T) {
 // closing text, as before.
 func TestScheduledAbortedAuditDropsTheAnswerBeforeIt(t *testing.T) {
 	var prompts []string
-	const aborted = `{"success":false,"reasoning":"two values could not be verified","artifacts_checked":["values"],"workflow_sections_checked":["completion"],"send_contract_checked":false,"attachments_checked":[],"remaining_risks":["unverified values"],"user_visible_summary":"Two values could not be verified."}`
 	const closing = "Aborted: two of the values could not be verified."
-	a := newTestScheduledAgent(t, answerThenAuditModel("All done.\n\n"+answerTable, aborted, closing, &prompts))
-	err := a.Execute(context.Background(), "Compute the value of every seed and answer with a table.")
+	a := newTestScheduledAgent(t, answerThenAudit(&prompts, "All done.\n\n"+answerTable, abortedAudit, closing))
+	err := a.Execute(context.Background(), seedTask)
 	if !errors.Is(err, agentcore.ErrAuditAborted) {
 		t.Fatalf("aborted run returned %v, want ErrAuditAborted", err)
 	}
@@ -186,41 +234,42 @@ func TestScheduledAbortedAuditDropsTheAnswerBeforeIt(t *testing.T) {
 	}
 }
 
-// Only the first round refused for want of an audit is kept. A later one (the
-// model wrote text but did not call confirm_audit) is superseded as before,
-// and the answer survives a textless closing round.
-func TestScheduledOnlyTheFirstAuditRefusedRoundIsKept(t *testing.T) {
+// Every round refused for want of the audit composes in, each refusal after
+// a reply carries the note, a textless refused round adds nothing, and the
+// kept text survives a textless closing round.
+func TestScheduledEveryAuditRefusedRoundComposes(t *testing.T) {
 	a := newTestScheduledAgent(t, &itMockModel{})
 	p := &scheduledPolicy{
 		inner:  agentcore.NewScheduledPolicy(a.logSession, 50, 0, 0),
 		agent:  a,
-		task:   "Compute the value of every seed and answer with a table.",
+		task:   seedTask,
 		runCtx: context.Background(),
 	}
-
-	p.SetRoundFinalText(answerTable)
-	ok, msgs := p.CanFinish(0)
-	if ok || !strings.Contains(strings.Join(msgs, " "), auditAnswerNote) {
-		t.Fatalf("the audit request must refuse and carry the note: ok=%v msgs=%q", ok, msgs)
+	const correction = "Correction: seed 2 is 18, not 17."
+	for i, round := range []struct {
+		text string
+		note bool
+	}{{answerTable, true}, {"", false}, {correction, true}} {
+		p.SetRoundFinalText(round.text)
+		ok, msgs := p.CanFinish(i)
+		if ok || strings.Contains(strings.Join(msgs, " "), auditAnswerNote) != round.note {
+			t.Fatalf("round %d: ok=%v, want a refusal with note=%v: %q", i, ok, round.note, msgs)
+		}
 	}
 
-	p.SetRoundFinalText("I checked everything.")
-	ok, msgs = p.CanFinish(1)
-	if ok || strings.Contains(strings.Join(msgs, " "), auditAnswerNote) {
-		t.Fatalf("an unconfirmed audit must refuse without the note: ok=%v msgs=%q", ok, msgs)
+	kept := answerTable + "\n\n" + correction
+	if got, want := p.RunAnswer(auditPointer), kept+"\n\n"+auditPointer; got != want {
+		t.Errorf("run answer = %q, want the kept text and the closing text %q", got, want)
 	}
-
-	if got, want := p.RunAnswer(auditPointer), answerTable+"\n\n"+auditPointer; got != want {
-		t.Errorf("run answer = %q, want the pre-audit answer and the closing text %q", got, want)
-	}
-	if got := p.RunAnswer(""); got != answerTable {
-		t.Errorf("a textless closing round = %q, want the pre-audit answer %q", got, answerTable)
+	if got := p.RunAnswer(""); got != kept {
+		t.Errorf("a textless closing round = %q, want the kept text %q", got, kept)
 	}
 }
 
 // On a task with an output schema whose pre-audit answer is one JSON value, a
 // supplement appended after it would be a second value. There the post-audit
-// text replaces the answer, and the audit request asks for the whole answer.
+// text replaces the answer, and the audit request asks for the whole answer
+// without calling the first one wrong.
 func TestScheduledStructuredAnswerBeforeAuditIsReplaced(t *testing.T) {
 	a := newTestScheduledAgent(t, &itMockModel{})
 	a.outputSchema = json.RawMessage(`{"type":"object"}`)
@@ -234,7 +283,7 @@ func TestScheduledStructuredAnswerBeforeAuditIsReplaced(t *testing.T) {
 	p.SetRoundFinalText(`{"values":[42,17]}`)
 	ok, msgs := p.CanFinish(0)
 	nudge := strings.Join(msgs, " ")
-	if ok || !strings.Contains(nudge, reviewerRepairAnswerNote) || strings.Contains(nudge, auditAnswerNote) {
+	if ok || !strings.Contains(nudge, auditReplaceNote) || strings.Contains(nudge, auditAnswerNote) {
 		t.Fatalf("a structured answer's audit request must ask for the whole answer: ok=%v msgs=%q", ok, msgs)
 	}
 	if got := p.RunAnswer(`{"values":[42,18]}`); got != `{"values":[42,18]}` {

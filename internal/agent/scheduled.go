@@ -552,14 +552,14 @@ type scheduledPolicy struct {
 	// until the run dead-lettered while the text it left behind held every
 	// requested item. RunAnswer hands the same composition back to the core as
 	// the run's final text, so the gates judge the answer the user receives.
-	// One round the audit/finish enforcement refused enters it too: the first
-	// round it sent back for want of a passed self-audit, whose closing text
-	// is the answer the model gave before its audit (keepAnswerBeforeAudit,
-	// #1826). Every other refused round is superseded by the next round's
-	// text, as before.
+	// Rounds the audit/finish enforcement refused for want of a passed
+	// self-audit enter it too: their closing texts are the answer the model
+	// gave before its audit, and any correction it wrote while auditing
+	// (keepAnswerBeforeAudit, #1826). Every other refused round is superseded
+	// by the next round's text, as before.
 	judgedAnswer string
-	// answerBeforeAudit is set while judgedAnswer holds only that pre-audit
-	// answer, no model gate having judged it yet. An aborted audit drops it
+	// answerBeforeAudit is set while judgedAnswer holds only text kept before
+	// the audit, no model gate having judged it yet. An aborted audit drops it
 	// (the abort is the run's last word on whether that answer stands); a
 	// gate that judges the composition clears the flag, the answer now being
 	// part of what the gate judged.
@@ -605,9 +605,9 @@ func (p *scheduledPolicy) SetRoundFinalText(text string) {
 // message of the round that just ended — the same text RunAnswer makes the
 // run's result. A run that has produced no text at all yields "", which the
 // verifier surfaces as the explicit "(no final response text)" marker; prose
-// from a round the audit/finish enforcement refused is included only for the
-// answer given before the audit (keepAnswerBeforeAudit), because the result
-// includes only that one too.
+// from a round the audit/finish enforcement refused is included only when it
+// refused the round for want of a passed self-audit (keepAnswerBeforeAudit),
+// because the result includes only those rounds too.
 func (p *scheduledPolicy) latestRunText() string {
 	return composeRunAnswer(p.judgedAnswer, p.roundFinalText, p.replaceJudged)
 }
@@ -636,28 +636,30 @@ func (p *scheduledPolicy) keepJudgedAnswer() {
 
 // keepAnswerBeforeAudit runs when the audit/finish enforcement has just
 // refused the round for want of a passed self-audit (#1826): the "Before
-// finishing: audit …" request, or "Audit not confirmed" when the model's own
-// confirm_audit did not go through. The round's closing text is an answer the
+// finishing: audit …" request, or "Audit not confirmed" while the model has
+// not had a confirm_audit accepted. The round's closing text is an answer the
 // model gave before its audit, and the round that ends the audit often closes
 // with only a pointer back to it ("the table is in my previous message").
 // Superseding the answer with that pointer stored a success with no
-// deliverable. So the first such answer is kept as the judged answer, which
-// the post-audit closing text composes with (composeRunAnswer: appended, kept
-// once if restated, replaced on a schema task whose answer is one JSON
+// deliverable. So the text composes into the judged answer, which the
+// post-audit closing text composes with in turn (composeRunAnswer: appended,
+// kept once if restated, replaced on a schema task whose answer is one JSON
 // value), and the refusal tells the model so, as a verifier repair's does.
-// Later refused rounds before the audit passes (text written while auditing)
-// are superseded, as before. A textless round keeps nothing and adds no note.
+// Every such round composes, not only the first: a correction the model
+// writes in a later refused round (it audited, fixed a value, and has not
+// called confirm_audit yet) must follow the answer it corrects rather than
+// be dropped under a closing text that calls the kept answer corrected. No
+// model gate runs before the audit passes, so the judged answer here holds
+// only text this method kept. A textless round adds nothing and no note.
 func (p *scheduledPolicy) keepAnswerBeforeAudit(msgs []string) []string {
-	// No model gate runs before the audit passes, so a judged answer here can
-	// only be an answer this method already kept.
-	if strings.TrimSpace(p.roundFinalText) == "" || p.judgedAnswer != "" || len(msgs) == 0 {
+	if strings.TrimSpace(p.roundFinalText) == "" || len(msgs) == 0 {
 		return msgs
 	}
 	p.keepJudgedAnswer()
 	p.answerBeforeAudit = true
 	note := auditAnswerNote
 	if p.replaceJudged {
-		note = reviewerRepairAnswerNote
+		note = auditReplaceNote
 	}
 	msgs = append([]string(nil), msgs...)
 	msgs[len(msgs)-1] += " " + note
@@ -740,8 +742,15 @@ const reviewerRepairAnswerNote = "Your next closing text replaces your previous 
 
 // auditAnswerNote is the audit refusal's counterpart of repairAnswerNote: the
 // answer the model gave before the audit stays, and what it writes after the
-// audit is appended (keepAnswerBeforeAudit).
-const auditAnswerNote = "Your reply above stays part of this run's final answer and your closing text after the audit is appended to it, so write only what the audit changed or adds — do not restate the answer."
+// audit is appended (keepAnswerBeforeAudit). auditReplaceNote is the
+// counterpart of reviewerRepairAnswerNote for a schema task whose answer is
+// one JSON value: the next closing text replaces it, whether it comes after
+// the audit or in another refused round before it, and nothing has been
+// judged wrong, so it asks for the complete answer, not a corrected one.
+const (
+	auditAnswerNote  = "Your reply above stays part of this run's final answer and your closing text after the audit is appended to it, so write only what the audit changed or adds — do not restate the answer."
+	auditReplaceNote = "Your next closing text replaces your reply above, so write the complete answer."
+)
 
 // The core hands the policy each round's closing text before consulting
 // CanFinish, and takes the composed answer back once the run may finish; these
@@ -760,11 +769,11 @@ func (p *scheduledPolicy) RecordToolResult(toolName, rawInput, resultText string
 	p.inner.RecordToolResult(toolName, rawInput, resultText, succeeded)
 }
 
-// CanFinish first defers to the audit/finish enforcement; when that refuses a
-// round for want of a passed self-audit, the first such round's answer is
-// kept (keepAnswerBeforeAudit). When that clears, a
-// task-declared completion predicate that is satisfied finishes the run with no
-// model gate (#1602). Otherwise it runs the end-of-run verifier until a clean
+// CanFinish first defers to the audit/finish enforcement, keeping the answer
+// of a round it refused for want of a passed self-audit
+// (keepAnswerBeforeAudit). When that clears, a task-declared completion
+// predicate that is satisfied finishes the run with no model gate (#1602).
+// Otherwise it runs the end-of-run verifier until a clean
 // verdict or the bounded review cap (missing actions become repair rounds) and
 // then the phone-a-friend review once (material issues become a final
 // enforcement round). A verifier that cannot answer is retried once and, after

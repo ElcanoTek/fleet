@@ -32,8 +32,8 @@ which concatenates every round, contained every requested item.
 - A round the **audit/finish enforcement** refused (a pre-audit draft) never
   enters the answer. That keeps #1563's rule that a pre-audit draft is
   superseded by the post-audit text, so the gates never judge text the result
-  does not include. **Amended 2026-10-21 (#1826):** one refused round now
-  does enter it, as described in
+  does not include. **Amended 2026-10-21 (#1826):** rounds refused for want
+  of a passed self-audit now enter it, as described in
   [The answer given before the self-audit](#the-answer-given-before-the-self-audit-1826) below.
 - When a repair round's text already contains the judged text, or is
   contained in it, or equals it once whitespace is collapsed, only the longer
@@ -81,96 +81,119 @@ text, cannot happen.
 ("Before finishing: audit …"), calls `confirm_audit`, and closes that round.
 Under #1563's rule the stored answer was that closing text alone, and models
 often close the audit with only a pointer back: "The table is in my previous
-message." The pointed-to answer was stored nowhere: not in the task result,
+message." The answer it pointed to was stored nowhere: not in the task result,
 and not in the session log the Operations Center transcript is built from.
-Live runs on 2026-10-20/21 (a synthetic task, 30 `run_python` calls then a
+Live runs on 2026-10-20/21 (a synthetic task, 30 `run_python` calls, then a
 30-row table) stored no table in 4 of 8 runs on Anthropic models that passed
 their audit.
 
 **What shipped.**
 
-- The audit/finish enforcement now records whether it refused a round *for
-  want of a passed self-audit*: the "Before finishing: audit …" request, or
-  "Audit not confirmed" (the model's own `confirm_audit` was refused and it
-  answered without retrying). `agentcore.ScheduledPolicy.FinishRefusedForAudit`
-  reports it. Both refusals happen only before the run's first accepted
-  `confirm_audit`.
-- `scheduledPolicy.CanFinish` keeps the closing text of the first such round,
-  the answer given before the audit, as the judged answer
-  (`keepAnswerBeforeAudit`). The post-audit closing text composes with it
-  exactly as a verifier repair's does (`composeRunAnswer`): it is appended, and
-  stored only once if it restates the answer.
-- The refusal tells the model so: `auditAnswerNote` ("Your reply above stays
-  part of this run's final answer and your closing text after the audit is
-  appended to it, so write only what the audit changed or adds — do not
-  restate the answer"). On a task with an output schema whose pre-audit answer
-  is one JSON value, the post-audit text replaces it instead, and the refusal
-  carries the reviewer's whole-answer note (the 2026-10-19 rule above).
-- The end-of-run verifier and the phone-a-friend reviewer judge that composed
-  answer, and the run persists it. The verifier's prompt now says the FINAL
-  RESPONSE can be the earlier closing text followed by what the self-audit
-  added.
-- Every other refused round is still superseded:
+- **The refusal kind is recorded.** The audit/finish enforcement now records
+  whether it refused a round *for want of a passed self-audit*: the "Before
+  finishing: audit …" request, or "Audit not confirmed" (the model ended a
+  round without having a `confirm_audit` accepted).
+  `agentcore.ScheduledPolicy.FinishRefusedForAudit` reports it. Both refusals
+  happen only before the run's first accepted `confirm_audit`.
+- **Those rounds' text is kept.** `scheduledPolicy.CanFinish` composes the
+  closing text of every such round into the judged answer
+  (`keepAnswerBeforeAudit`): the answer given before the audit, then any
+  correction written while auditing. The post-audit closing text composes
+  after it, exactly as a verifier repair's does (`composeRunAnswer`). Each
+  text is appended, and a verbatim restatement is stored once.
+- **Every such round counts, not only the first.** Take a model that
+  corrected a value in a refused round, and then closed with "the corrected
+  table above is final". Keeping only the first round would store the
+  uncorrected table under that sentence. Before this fix it stored only the
+  sentence.
+- **The model is told.** Each such refusal that follows a reply says so:
+  `auditAnswerNote` ("Your reply above stays part of this run's final answer
+  and your closing text after the audit is appended to it, so write only what
+  the audit changed or adds — do not restate the answer").
+- **A JSON answer is replaced, not appended.** This applies to a task with an
+  output schema whose kept answer is one JSON value (the 2026-10-19 rule
+  above). The refusal then carries `auditReplaceNote` instead ("Your next
+  closing text replaces your reply above, so write the complete answer").
+- **The gates judge what is persisted.** The end-of-run verifier and the
+  phone-a-friend reviewer judge the composed answer, and the run persists it.
+  The verifier's prompt now says the FINAL RESPONSE can be the earlier
+  closing text followed by what the self-audit added. A verifier repair
+  composes after it like after any judged answer.
+- **Other refused rounds are still superseded:**
   - a round cut off by the output limit (its text is truncated);
   - a round refused for open task-tracker items;
-  - one that still owes a declared action;
-  - a later round refused for want of the audit, once an answer is kept (text
-    written while auditing).
-- A textless round keeps nothing, and its audit request carries no note.
-- **An aborted audit drops the pre-audit answer.** `confirm_audit(success=false)`
-  is the run's last word on whether that answer stands, so the run persists
-  the abort's own closing text, as before. This holds only while no model gate
-  has judged the answer yet.
+  - one that still owes a declared action.
+- **A textless round adds nothing**, and its refusal carries no note.
+- **An aborted audit drops the kept text.** `confirm_audit(success=false)` is
+  the run's last word on whether that answer stands. So, while no model gate
+  has judged the answer, the run persists the abort's own closing text, as
+  before. Once a gate has judged it, the kept text is part of the judged
+  answer, and an abort composes after it like after any judged answer.
 
 **Deviations from the issue.**
 
-- The issue's first option was to persist each round's reply in the session
-  log as its own message. That was not done. The final assistant message now
-  carries the pre-audit answer, so a separate copy would show it twice in the
-  transcript.
-- Its other option, asking the model to restate its answer after the audit,
-  was not taken either. A model that does not comply would still lose the
-  answer.
-- The fix instead uses the append contract the verifier repair already has,
-  which keeps the answer whatever the model writes next. The cost is a model
-  that restates its answer with edits despite the note: it is stored twice,
-  once as given and once restated, and only a verbatim restatement is kept
-  once.
-- The task `result` column is the runner's one-line summary of that message
-  (`successMessage`: whitespace collapsed, 600 runes). A long answer is still
-  cut there, as every long answer is. The full answer is in the final
-  assistant message of the log.
+- **Each round's reply as its own log message.** The issue's first option was
+  to persist each round's reply in the session log. That was not done: the
+  final assistant message now carries the answer, so a separate copy would
+  show it twice in the transcript.
+- **Asking the model to restate its answer.** The issue's other option was
+  not taken either. A model that does not comply would still lose the answer.
+- **The append contract instead.** The fix uses the contract the verifier
+  repair already has, which keeps the answer whatever the model writes next.
+  That has two costs.
+  - A model that restates its answer *with edits* despite the note gets one
+    more copy per restatement: once as given and once per edited
+    restatement. Only a verbatim restatement is kept once.
+  - The core hands the policy a round's closing text. When the round's last
+    step has no text, that is the text the round streamed earlier
+    (`run.go`'s fallback). A round that ends with "Let me compute the values
+    first." and then an empty step therefore has that sentence kept ahead of
+    the real answer. That adds noise but loses nothing.
+- **The task `result` column.** It is the runner's one-line summary of the
+  final message (`successMessage`: whitespace collapsed, 600 runes). It now
+  starts with the kept answer, so two things follow.
+  - A post-audit caveat or correction after a long answer can fall past the
+    cut.
+  - A kept answer that starts with `{` or `[` makes the summary fall back to
+    "Task completed successfully".
+
+  The full answer is the final assistant message of the log.
 
 **Tests.**
 
 - `internal/agent/answer_before_audit_test.go` covers:
   - the issue's reproduction (`TestScheduledAnswerBeforeAuditIsKept`);
-  - the verifier judging the composed answer;
   - an answer after the model's own refused `confirm_audit`;
+  - a correction in a later refused round;
+  - every refused round composing, with a textless one adding nothing;
+  - the verifier judging the composed answer, and a verifier repair composing
+    after it;
   - a restatement stored once;
   - a textless round;
-  - the aborted audit;
-  - only the first refused round being kept;
+  - the aborted audit, and an abort after a gate judged the answer;
   - the structured-answer replace.
+- Every guard was mutation-checked against these tests.
 - `agentcore`'s `TestFinishRefusedForAudit` pins which refusals count.
-- `internal/taskrun/answer_before_audit_e2e_test.go` runs the same shape end to
-  end through the fake LLM and the OpenRouter adapter. Without the fix, the
+- `internal/taskrun/answer_before_audit_e2e_test.go` runs the issue's shape end
+  to end through the fake LLM and the OpenRouter adapter. Without the fix, the
   final assistant message is the pointer alone.
 
 **Live check (2026-10-21).** These runs used a local instance and a 6-seed
-`run_python` task that ends in a table. There were five runs in all: Haiku 5.5
-three times, Sonnet 5.5 once and Opus 5.5 once.
+`run_python` task that ends in a table. There were seven runs in all: Haiku
+5.5 four times, Sonnet 5.5 twice and Opus 5.5 once.
 
 - Every model answered before the audit, and every audit request carried the
   note.
 - Every stored answer was the table followed by the post-audit text. That text
   referred back to it ("the table above stays as it is") instead of restating
   it, so no value appeared twice.
-- All 30 values were correct.
-- The runs cost $0.26 in total.
-- Four of the runs used the first cut of the fix, which kept only the
-  audit-request round. Its path is unchanged by the "Audit not confirmed"
-  widening, and the fifth run used the final build.
+- All 42 values were correct.
+- The runs cost $0.35 in total.
+- The audit request was the only refusal in every run, so the three builds
+  tested took the same path. The first four runs used the first cut of the
+  fix, which kept only the audit-request round. One run used the build that
+  added "Audit not confirmed". The last two (Haiku and Sonnet) used the final
+  build, where every audit-refused round composes.
 
 ## B. Transient MCP connect failures, and a requirements miss they explain
 

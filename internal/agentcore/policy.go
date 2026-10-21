@@ -179,12 +179,13 @@ func (p *ScheduledPolicy) AuditAborted() bool {
 
 // FinishRefusedForAudit reports whether the last CanFinish refused the round
 // for want of a passed self-audit: the "Before finishing: audit …" request,
-// or "Audit not confirmed". Both happen only before the run's first accepted
-// confirm_audit (a pass or an abort; neither flag is ever reset), so the
-// closing text of such a round is an answer the model gave before its audit;
-// the scheduled driver keeps the first one as part of the run's answer
-// (#1826). A refusal for anything else (output cut off,
-// open task-tracker items, an owed critical action) reports false.
+// or "Audit not confirmed". Both happen only while selfAuditConfirmedOnce is
+// false, i.e. before the run's first accepted confirm_audit (a pass, an
+// abort, or a refused abort; the flag is never reset), so the closing text of
+// such a round is an answer the model gave before its audit, which the
+// scheduled driver keeps as part of the run's answer (#1826). A refusal for
+// anything else (output cut off, open task-tracker items, an owed critical
+// action, an abort's owed summary email) reports false.
 func (p *ScheduledPolicy) FinishRefusedForAudit() bool {
 	p.orch.mu.Lock()
 	defer p.orch.mu.Unlock()
