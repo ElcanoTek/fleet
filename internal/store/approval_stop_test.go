@@ -98,7 +98,7 @@ func TestRecoverStrandedApprovals_KeepsTheStop(t *testing.T) {
 	}
 	// Never the running-call line: a stop accepted before the transport was
 	// reached sent no request and no cancellation.
-	if strings.Contains(last, "Its server was asked to stop") {
+	if strings.Contains(last, "server was asked to stop") {
 		t.Fatalf("recovery breadcrumb = %s claims a cancellation was sent", last)
 	}
 }

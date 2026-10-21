@@ -119,10 +119,13 @@ Elcano bundle's deal-plan execute does this).
   resume, finish push). After the tool's text fleet adds, governed with it
   and never truncated (the tool's text is bounded to what the output limit
   leaves after it): `[fleet] The person
-  pressed Stop while this call ran. Its server was asked to stop after the
-  item it was working on; the result above says what ran and what did not. Do
-  not run the remaining items unless the person asks. (Written by fleet, not
-  the tool.)`
+  pressed Stop while this call ran. Unless the call had already finished, its
+  server was asked to stop after the item it was working on; the result above
+  says what ran and what did not. Do not run the remaining items unless the
+  person asks. (Written by fleet, not the tool.)` A recorded stop proves the
+  stop signal closed while the call was out, not that the cancellation was
+  sent: a transport whose answer was already in hand returns it without
+  sending one, so the line does not claim delivery.
 - **Payloads.** `stoppable: true` rides the pending card (live event and
   GET), the early `executing` answer and the executing rows; `stopping: true`
   an executing row that was stopped; `stopped: true` a settled one. Every

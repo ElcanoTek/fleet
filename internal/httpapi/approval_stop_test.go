@@ -724,3 +724,17 @@ func TestExecuteClaimedApproval_SetupFailureAfterStopSaysNothingRan(t *testing.T
 		}
 	}
 }
+
+// A recorded stop proves the signal closed while the call was out, not that a
+// cancellation was sent (a transport whose answer was already in hand returns
+// it without sending one), so the running-call line never claims delivery
+// outright. The trailer reserve still covers it.
+func TestApprovalStopNote_DoesNotClaimDelivery(t *testing.T) {
+	if strings.Contains(approvalStopNote, "Its server was asked") || !strings.Contains(approvalStopNote, "Unless the call had already finished, its server was asked to stop") {
+		t.Fatalf("stop line = %q, want the cancellation claimed only for a call that had not finished", approvalStopNote)
+	}
+	stopPolicy(t)
+	if reserve := approvalStopTrailerReserve("mcp_ix_execute_plan"); reserve < len(approvalStopNote)+2 {
+		t.Fatalf("reserve %d does not hold the stop line (%d)", reserve, len(approvalStopNote))
+	}
+}
