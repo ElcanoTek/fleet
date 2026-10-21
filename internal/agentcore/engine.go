@@ -492,8 +492,21 @@ type proactiveCompactResult struct {
 // consecutiveCompactions: it is not a reactive resilience compaction and must not
 // count toward the ErrContextBudgetExhausted cap.
 func (e *engine) proactiveCompact(ctx context.Context, messages []fantasy.Message) proactiveCompactResult {
-	head := compactionHeadLen(messages)
-	active := messages[head:]
+	return e.proactiveCompactKeeping(ctx, messages, messages)
+}
+
+// proactiveCompactKeeping is proactiveCompact that summarizes source but keeps
+// kept's copy of the head and the recent half. The two are the same history
+// message for message, kept with its stale tool results elided (#1742): the
+// summary is written from the full results, whose identifiers a stub's
+// preview may have cut, while the stubs carry on in what is kept.
+func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fantasy.Message) proactiveCompactResult {
+	if len(kept) != len(source) {
+		source = kept
+	}
+	messages := kept
+	head := compactionHeadLen(source)
+	active := source[head:]
 	// The raw midpoint follows the same #1106 boundary rule as
 	// forceCompactMessageHistory: never split a tool exchange, or the kept half
 	// starts with tool results whose call was summarized away and the provider
@@ -512,7 +525,7 @@ func (e *engine) proactiveCompact(ctx context.Context, messages []fantasy.Messag
 		return proactiveCompactResult{messages: messages}
 	}
 	droppable := active[:midpoint]
-	keep := active[midpoint:]
+	keep := messages[head+midpoint:]
 
 	var summary fantasy.Message
 	if e.compactionSummarizer != nil {
@@ -637,12 +650,19 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 		// checkpoint paused the tool loop mid-turn).
 		used = e.runOrch.lastStepInputTokens()
 	}
+	// A provider-measured size is the last call's input, in the provider's
+	// tokens; an estimate counts the whole history in the estimator's. An
+	// elision sizes itself differently for each (elideBeforeSummary).
+	measured := used > 0
 	if used <= 0 {
 		used = e.estimateRequestTokens(messages)
 	}
 	if used <= 0 {
 		return out
 	}
+	// summarize is the history a summary after an elision is written from:
+	// the one before the stubs (proactiveCompactKeeping).
+	summarize := messages
 
 	// Cost-aware trigger (#1534), SCHEDULED runs only (the driver-supplied
 	// requireCompactionOptIn is what marks a scheduled engine): the prompt a
@@ -659,7 +679,20 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 	if e.requireCompactionOptIn {
 		if budget := contextResendBudgetTokens(e.envPrefix); budget > 0 && used >= e.effectiveResendBudget(budget) {
 			pressure := e.withResendFloorFields(map[string]any{evtFieldUsedTokens: used, evtFieldResendBudget: budget, evtFieldTrigger: "resend_budget"}, budget)
-			if res := e.proactiveCompact(ctx, messages); res.compacted {
+			// Stale bulky tool results are replaced with stubs first (#1742);
+			// the summary is bought only if that did not free enough.
+			if el, ok := e.elideBeforeSummary(messages, used, measured, e.effectiveResendBudget(budget), budget); ok {
+				messages = el.messages
+				out.messages = messages
+				out.warned = false
+				e.noteElision(sink, el, used, "resend_budget",
+					fmt.Sprintf("budget=%d%s", budget, e.resendFloorCrumb(budget)),
+					e.withResendFloorFields(map[string]any{evtFieldResendBudget: budget}, budget))
+				if el.enough {
+					return out
+				}
+			}
+			if res := e.proactiveCompactKeeping(ctx, summarize, messages); res.compacted {
 				out.messages = res.messages
 				out.warned = false
 				e.logSession.AddMessage(roleUser, fmt.Sprintf(
@@ -711,7 +744,21 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 			}
 			return out
 		}
-		if res := e.proactiveCompact(ctx, messages); res.compacted {
+		// A scheduled run that opted into window compaction elides first too
+		// (#1742), with the compaction point as its budget; an interactive
+		// engine never does (elideBeforeSummary).
+		if el, ok := e.elideBeforeSummary(messages, used, measured, compactAt, compactAt); ok {
+			messages = el.messages
+			out.messages = messages
+			out.warned = false
+			e.windowCompactionStalled = false
+			e.noteElision(sink, el, used, "window", fmt.Sprintf("window=%d", window),
+				map[string]any{evtFieldWindowSize: window})
+			if el.enough {
+				return out
+			}
+		}
+		if res := e.proactiveCompactKeeping(ctx, summarize, messages); res.compacted {
 			out.messages = res.messages
 			out.warned = false
 			e.windowCompactionStalled = false
