@@ -38,8 +38,8 @@ func NarrowingNote(arg string, staged, approved []string) string {
 	// The decision only: whether the approved ones ran is the call's own
 	// outcome (it may have failed before it was sent, or a restart may have
 	// left it unknown), so the line never claims it.
-	return fmt.Sprintf("[fleet] The person narrowed this call: of the %d staged %s in its arguments, only positions %s %s; %s. Only the approved ones could be sent to the tool; the result says whether they ran. Do not run the left-out ones unless the person asks. (Written by fleet, not the tool.)",
-		len(staged), arg, PositionRanges(pos), side, other)
+	return fmt.Sprintf("[fleet] The person narrowed this call: of the %d staged %s in its arguments, only positions %s %s; %s. The call's %s held only the approved ones; the result says whether they ran. Do not run the left-out ones unless the person asks. (Written by fleet, not the tool.)",
+		len(staged), arg, PositionRanges(pos), side, other, arg)
 }
 
 // PositionRanges writes ascending 1-based positions compactly: "1-3, 5, 8-10".

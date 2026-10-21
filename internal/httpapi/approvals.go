@@ -1631,7 +1631,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	user := userFromCtx(r.Context())
 
 	var req approvalRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxApprovalBody)).Decode(&req); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}

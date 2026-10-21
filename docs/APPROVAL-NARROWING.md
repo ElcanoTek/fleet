@@ -74,7 +74,7 @@ On the readable card (`GenericActionCard` with `ReadablePendingRecords`):
 - an unticked row greys out and reads **Left out** in place of its change;
 - the button reads **Approve** while every row is ticked, **Approve 2 of 3**
   once one is not, and **Decline** when none is; a line under it says "Covers
-  only the 2 selected. 1 left out is not sent." or "Nothing is selected, so
+  only the 2 selected; 1 left out of the call." or "Nothing is selected, so
   this declines the action.";
 - apply-all is not offered on a narrowable card (a narrowed approval is a
   decision about this call only).
@@ -129,6 +129,12 @@ entries to a call's context, `Server.callTool` merges them into the request's
 `_meta` beside a progress token, and the broker carries them on its own wire
 (`request.Meta`); the credential-owning child keeps only `fleet/` keys.
 
+So the server does receive the left-out values, in this metadata (it needs
+the staged list to check the call's other arguments against what the person
+reviewed); they are only absent from the argument the tool acts on. The card
+therefore says a left-out value is "left out of the call", not that it is
+never sent.
+
 The approved-call budget is computed for the narrowed arguments (a smaller
 `deal_ids` batch gets a smaller scaled budget).
 
@@ -137,8 +143,8 @@ The approved-call budget is computed for the narrowed arguments (a smaller
 - The result breadcrumb in the conversation (what the model reads) is the
   tool's governed, bounded text followed by fleet's line: `[fleet] The person
   narrowed this call: of the 3 staged deal_ids in its arguments, only
-  positions 2 were left out; the other 2 were approved. Only the
-  approved ones could be sent to the tool; the result says whether they ran.
+  positions 2 were left out; the other 2 were approved. The
+  call's deal_ids held only the approved ones; the result says whether they ran.
   Do not run the left-out ones unless the person asks. (Written by fleet, not
   the tool.)` It records the decision only, never that anything ran (the call
   may have failed before it was sent). It names the smaller side exactly by its positions in the staged

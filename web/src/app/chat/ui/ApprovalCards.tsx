@@ -1128,7 +1128,7 @@ function GenericActionCard({
             <p data-testid="approval-narrow-scope" className="text-[0.72rem] text-[var(--color-text-muted)]">
               {narrowing.approved.length === 0
                 ? "Nothing is selected, so this declines the action."
-                : `Covers only the ${narrowing.approved.length} selected. ${narrowing.total - narrowing.approved.length} left out ${narrowing.total - narrowing.approved.length === 1 ? "is" : "are"} not sent.`}
+                : `Covers only the ${narrowing.approved.length} selected; ${narrowing.total - narrowing.approved.length} left out of the call.`}
             </p>
           ) : null}
           <ApprovalSeatBadge server={approval.mcpServer} account={approval.mcpAccount} verb="Runs as" />

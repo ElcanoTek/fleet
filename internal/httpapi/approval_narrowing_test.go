@@ -184,7 +184,7 @@ func TestHandleApproval_NarrowedRunsOnlyTheApprovedValues(t *testing.T) {
 	if narrowed == nil || !reflect.DeepEqual(narrowed["approved"], []any{"a", "c"}) {
 		t.Fatalf("reply narrowed = %v", body["narrowed"])
 	}
-	if !strings.HasPrefix(st.result, `{"success":true}`) || !strings.Contains(st.result, `of the 3 staged deal_ids in its arguments, only positions 2 were left out; the other 2 were approved. Only the approved ones could be sent to the tool`) {
+	if !strings.HasPrefix(st.result, `{"success":true}`) || !strings.Contains(st.result, `of the 3 staged deal_ids in its arguments, only positions 2 were left out; the other 2 were approved. The call's deal_ids held only the approved ones`) {
 		t.Fatalf("recorded result = %q, want the tool's text then fleet's note", st.result)
 	}
 }
@@ -556,10 +556,12 @@ func TestBodyLimitMiddleware_ApprovalGroupHasItsOwnCap(t *testing.T) {
 		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, path, strings.NewReader(big)))
 		return err
 	}
-	if err := read("/conversations/c1/approval-groups/g1"); err != nil {
-		t.Fatalf("the group decision was cut by the global cap: %v", err)
+	for _, path := range []string{"/conversations/c1/approval-groups/g1", "/conversations/c1/approvals/a1"} {
+		if err := read(path); err != nil {
+			t.Fatalf("%s: an approval decision was cut by the global cap: %v", path, err)
+		}
 	}
-	for _, path := range []string{"/conversations/c1/approvals/a1", "/conversations/c1/approval-groups/g1/x", "/conversations/c1/messages"} {
+	for _, path := range []string{"/conversations/c1/approvals/a1/stop", "/conversations/c1/approval-groups/g1/x", "/conversations/c1/messages"} {
 		if err := read(path); err == nil {
 			t.Errorf("%s: the global cap must still apply", path)
 		}
@@ -573,5 +575,13 @@ func TestMaxApprovalGroupBody_HoldsTheWorstCaseEscaping(t *testing.T) {
 	ids := maxApprovalGroupDecisions * 200     // ids, keys and brackets, generously
 	if need := maxApprovalGroupNarrowedValues*perValue + ids; need > maxApprovalGroupBody {
 		t.Fatalf("worst case %d bytes > cap %d", need, maxApprovalGroupBody)
+	}
+}
+
+// The single-card cap holds the largest narrowing it accepts, in the most
+// expensive JSON escaping.
+func TestMaxApprovalBody_HoldsTheWorstCaseEscaping(t *testing.T) {
+	if need := maxNarrowableValues*(maxNarrowableValueRunes*12+3) + 1024; need > maxApprovalBody {
+		t.Fatalf("worst case %d bytes > cap %d", need, maxApprovalBody)
 	}
 }

@@ -49,6 +49,13 @@ import (
 // row anyway.
 const maxNarrowableValues = approvalCardMaxItems
 
+// maxApprovalBody bounds the single-card approve POST: up to
+// maxNarrowableValues approved values of maxNarrowableValueRunes characters,
+// each character at most 12 bytes once JSON-escaped (a surrogate pair of
+// six-byte escapes): about 1.2 MiB, plus the small fixed fields. The route
+// is exempt from the global 1 MiB JSON cap; handleApproval applies this one.
+const maxApprovalBody = 4 << 20
+
 // maxNarrowableValueRunes bounds one narrowable value: the card row that
 // names it carries it as its `key`, whose limit is the same.
 const maxNarrowableValueRunes = approvalCardMaxTitle

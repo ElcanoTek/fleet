@@ -118,7 +118,7 @@ describe("a narrowable pending card", () => {
     expect(within(rows[1]).getByTestId("approval-card-left-out")).toHaveTextContent("Left out");
     expect(screen.getByTestId("approval-narrow-count")).toHaveTextContent("2 of 3 selected");
     expect(screen.getByTestId("approval-approve")).toHaveTextContent("Approve 2 of 3");
-    expect(screen.getByTestId("approval-narrow-scope")).toHaveTextContent("Covers only the 2 selected. 1 left out is not sent.");
+    expect(screen.getByTestId("approval-narrow-scope")).toHaveTextContent("Covers only the 2 selected; 1 left out of the call.");
 
     fireEvent.click(screen.getByTestId("approval-approve"));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
