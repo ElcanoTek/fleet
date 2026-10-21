@@ -99,8 +99,10 @@ Elcano bundle's deal-plan execute does this).
   when the call is about to go out, it is not sent: `runStagedTool` checks
   before the call starts, and each transport checks again at its own send
   boundary (the stdio pipe write, the HTTP request, the broker's call frame;
-  `mcp.ErrStoppedBeforeSend`). The outcome is "stopped before the call was
-  sent to its server; nothing ran", recorded as a failure. A Stop in the
+  `mcp.ErrStoppedBeforeSend`, kept as that sentinel across the broker). The
+  outcome is "stopped before the call was sent to its server; nothing ran",
+  recorded as a failure, and fleet's line says the person pressed Stop before
+  the call was sent and nothing ran (not the running-call line). A Stop in the
   instant between that last check and the write sends the call and then its
   cancellation, so at most the item the server starts with runs, as for any
   Stop.

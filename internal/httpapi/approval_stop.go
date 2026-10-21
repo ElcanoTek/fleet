@@ -156,6 +156,10 @@ func (s *Server) finalizeApprovalStop(approvalID string) bool {
 // history the model reads (shared with the restart recovery).
 const approvalStopNote = store.ApprovalStopNote
 
+// approvalStoppedBeforeSendNote is fleet's line for a call the person stopped
+// before it was sent: nothing reached the server, so nothing ran.
+const approvalStoppedBeforeSendNote = "[fleet] The person pressed Stop before this call was sent, so nothing was sent to its server and nothing ran. Do not run it unless the person asks. (Written by fleet, not the tool.)"
+
 // withApprovalStop adds the stop fields to a card payload: `stoppable` for a
 // tool in critical_tool_stop, `stopping` on a running call the person
 // stopped, `stopped` on a settled one. Absent for every other card, so its

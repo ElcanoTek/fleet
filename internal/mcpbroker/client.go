@@ -98,6 +98,11 @@ func (c *Client) callMCP(ctx context.Context, scope, server, tool string, args m
 		return "", false, err
 	}
 	if resp.Err != "" {
+		// The child's transport refused a call already stopped: keep the
+		// sentinel, so the caller knows nothing was sent.
+		if resp.Err == mcp.ErrStoppedBeforeSend.Error() {
+			return resp.Text, resp.IsError, mcp.ErrStoppedBeforeSend
+		}
 		return resp.Text, resp.IsError, errors.New(resp.Err)
 	}
 	return resp.Text, resp.IsError, nil

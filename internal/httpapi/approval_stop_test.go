@@ -433,3 +433,22 @@ func TestWithApprovalStop_SettledStopOutlivesThePolicy(t *testing.T) {
 		t.Fatalf("running = %v, want nothing offered without the policy", running)
 	}
 }
+
+// A call stopped before it was sent is recorded with the before-send line,
+// never the line that says the call ran and its server was asked to stop.
+func TestExecuteClaimedApproval_StoppedBeforeSendSaysNothingRan(t *testing.T) {
+	stopPolicy(t)
+	a := stopRow()
+	a.Status, a.ResultText = "approved", approvalExecutingSentinel
+	st := &stopStore{approval: a, resulted: make(chan struct{})}
+	child := &stopChild{}
+	s := stopServerFor(t, st, child)
+	s.armApprovalStop("ap1")
+	s.approvalStopFor("ap1").stop()
+	s.executeClaimedApproval(context.Background(), "u@example.com", "c1", "ap1", &a, approvalRequest{Approved: true})
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if !strings.Contains(st.result, "before this call was sent") || strings.Contains(st.result, "while this call ran") || child.calls != 0 {
+		t.Fatalf("result = %q, calls = %d; want the before-send line and no call", st.result, child.calls)
+	}
+}

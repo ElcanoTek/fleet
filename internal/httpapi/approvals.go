@@ -2007,9 +2007,14 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	if narrowed, nerr := parseApprovalNarrowing(approval.NarrowedJSON); approval.NarrowedJSON != "" && nerr == nil {
 		trailers = append(trailers, narrowingNote(narrowed))
 	}
-	// The person pressed Stop while it ran: fleet's line says so.
+	// The person pressed Stop: fleet's line says so, in the words that fit.
+	// A stop that landed before the call was sent ran nothing at all.
 	if stopped {
-		trailers = append(trailers, approvalStopNote)
+		if errors.Is(toolErr, mcp.ErrStoppedBeforeSend) {
+			trailers = append(trailers, approvalStoppedBeforeSendNote)
+		} else {
+			trailers = append(trailers, approvalStopNote)
+		}
 	}
 	var governed string
 	resultText, isErr, governed = governApprovalResultWithTrailer(execCtx, approval, resultText, isErr, strings.Join(trailers, "\n\n"))
