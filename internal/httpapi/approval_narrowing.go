@@ -215,11 +215,14 @@ func narrowApproval(a *store.Approval, approved []string, shownArg string) (*app
 	}
 	// The line that tells the model exactly which values were approved is
 	// never shortened (the model must never read a left-out value as
-	// approved), and the result must stay within the operator's output
-	// limit. With a limit near the minimum, a long scattered selection cannot
-	// have both, so it is refused here, before anything is claimed.
+	// approved), and the result must stay within the output limit live when
+	// the call settles, which an operator may lower to the minimum while it
+	// runs. A long scattered selection cannot have both, so it is refused
+	// here, before anything is claimed, whatever the limit is now
+	// (agentcore.ApprovalTrailerRoom is the room at the minimum). The room
+	// holds the longest stop line too, for a tool the person may stop.
 	if len(narrowingNote(n))+approvalStopTrailerReserve(a.ToolName) > agentcore.ApprovalTrailerRoom() {
-		return nil, fmt.Errorf("this selection is too scattered to record exactly within this deployment's tool output limit: select fewer separate ranges of %s, or approve or decline the action whole", arg)
+		return nil, fmt.Errorf("this selection is too scattered for fleet to record exactly in the call's result: select fewer separate ranges of %s, or approve or decline the action whole", arg)
 	}
 	return n, nil
 }
