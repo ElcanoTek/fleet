@@ -1125,7 +1125,7 @@ function GenericActionCard({
         </DetailsPanel>
         <div className="mt-2 flex flex-col gap-2 empty:hidden">
           {narrowing.approved && narrowing.approved.length < narrowing.total ? (
-            <p data-testid="approval-narrow-scope" className="text-[0.72rem] text-[var(--color-text-muted)]">
+            <p data-testid="approval-narrow-scope" className="text-[0.72rem] text-[var(--color-card-text-muted)]">
               {narrowing.approved.length === 0
                 ? "Nothing is selected, so this declines the action."
                 : `Covers only the ${narrowing.approved.length} selected; ${narrowing.total - narrowing.approved.length} left out of the call.`}
