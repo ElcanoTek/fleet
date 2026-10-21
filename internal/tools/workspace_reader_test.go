@@ -691,3 +691,50 @@ func TestWorkspaceFileHitFootprintFailsFast(t *testing.T) {
 		t.Fatalf("cached file re-read: %d reads", got)
 	}
 }
+
+// TestWorkspaceFileReaderAbandonedFlightIsRetried: a call that reserves two
+// misses and fails on the first leaves the second unread; a waiter on that
+// second file must read it itself rather than inherit the first file's error.
+func TestWorkspaceFileReaderAbandonedFlightIsRetried(t *testing.T) {
+	files := map[string][]byte{"a": bytes.Repeat([]byte("a"), 32<<10), "b": bytes.Repeat([]byte("b"), 32<<10)}
+	src := newFakeSource(files)
+	src.override = func(path string) []byte {
+		if path == "a" {
+			return bytes.Repeat([]byte("x"), 32<<10)
+		}
+		return files[path]
+	}
+	src.gate = make(chan struct{})
+	reader := newVerifiedWorkspaceReader(src.source(), testStore(8<<20))
+	ctx := WithForcedWorkingDir(context.Background(), "/ws")
+	first := make(chan error, 1)
+	go func() {
+		_, release, err := reader(ctx, []WorkspaceFileRef{
+			{Path: "a", SHA256: hexSum(files["a"]), Length: 1024},
+			{Path: "b", SHA256: hexSum(files["b"]), Length: 1024},
+		}, 1<<20)
+		if err == nil {
+			release()
+		}
+		first <- err
+	}()
+	if got := <-src.started; got != "a" {
+		t.Fatalf("first read was %q, want a", got)
+	}
+	second := make(chan error, 1)
+	go func() {
+		_, release, err := reader(ctx, []WorkspaceFileRef{{Path: "b", SHA256: hexSum(files["b"]), Length: 1024}}, 1<<20)
+		if err == nil {
+			release()
+		}
+		second <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // let the second call queue on b's flight
+	close(src.gate)
+	if err := <-first; !errors.Is(err, ErrWorkspaceFileHashMismatch) {
+		t.Fatalf("first call: %v", err)
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("a waiter on an unread file inherited another file's failure: %v", err)
+	}
+}

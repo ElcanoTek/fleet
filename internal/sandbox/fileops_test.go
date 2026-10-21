@@ -908,3 +908,18 @@ func TestContainerFileOpReadOnlySupportingMount(t *testing.T) {
 		t.Fatalf("supporting mount write = %v, want ErrFileOpUnsafePath", err)
 	}
 }
+
+// TestDecodeFileOpResponse_BoundsStreamedTrailer: a replaced helper that
+// follows a streamed payload with a large second member (another data_b64,
+// say) is refused before the trailer is copied or parsed.
+func TestDecodeFileOpResponse_BoundsStreamedTrailer(t *testing.T) {
+	ok := []byte(`{"data_b64":"aGk=","ok":true,"size":2}`)
+	if res, err := decodeFileOpResponse(ok); err != nil || string(res.Data) != "hi" {
+		t.Fatalf("a normal streamed read: %v %q", err, res.Data)
+	}
+	big := append([]byte(`{"data_b64":"aGk=","ok":true,"data_b64x":"`), bytes.Repeat([]byte("A"), maxStreamedTrailerBytes)...)
+	big = append(big, `"}`...)
+	if _, err := decodeFileOpResponse(big); err == nil || !strings.Contains(err.Error(), "trailer exceeds") {
+		t.Fatalf("an oversized trailer was parsed: %v", err)
+	}
+}

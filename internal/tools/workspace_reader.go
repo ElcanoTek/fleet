@@ -162,8 +162,13 @@ type fileFlight struct {
 // its leader rather than to the file: the leader's context ended, so a
 // waiter with a live context should read the file itself.
 func retryableFlightError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	return errors.Is(err, errFlightAbandoned) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
+
+// errFlightAbandoned ends a flight its leader never read, because another
+// file in the same call failed first. Nothing is known about this file, so
+// its waiters read it themselves.
+var errFlightAbandoned = errors.New("workspace file read abandoned")
 
 func newWorkspaceFileStore(budget, maxBytes int64, maxEntries int, ttl time.Duration, now func() time.Time) *workspaceFileStore {
 	return &workspaceFileStore{budget: budget, maxBytes: maxBytes, maxEntries: maxEntries, ttl: ttl, now: now,
@@ -352,7 +357,7 @@ func (s *workspaceFileStore) readMisses(ctx context.Context, misses []*fileReque
 		for i := settled; i < len(misses); i++ {
 			delete(s.flights, misses[i].key)
 			if failed && flights[i].err == nil {
-				flights[i].err = errors.Join(errors.New("workspace file read failed"), err)
+				flights[i].err = errFlightAbandoned
 			}
 			close(flights[i].done)
 		}

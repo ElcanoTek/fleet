@@ -488,6 +488,12 @@ type fileOpResponse struct {
 // _ReadStream).
 var streamedReadPrefix = []byte(`{"data_b64":"`)
 
+// maxStreamedTrailerBytes bounds what may follow a streamed payload: the
+// helper's trailer is a status, size, hash and at most a short error, so
+// anything longer is not the helper's and is refused before it is copied or
+// parsed (a replaced helper must not grow a read past its reservation).
+const maxStreamedTrailerBytes = 16 << 10
+
 // splitStreamedRead splits a streamed read response into its base64 payload
 // (a sub-slice of out, not a copy) and the remaining members as a small JSON
 // object of their own.
@@ -499,6 +505,9 @@ func splitStreamedRead(out []byte) (payload, rest []byte, ok bool) {
 	end := bytes.IndexByte(body, '"')
 	if end < 0 || end+1 >= len(body) || body[end+1] != ',' {
 		return nil, nil, false
+	}
+	if len(body)-(end+2) > maxStreamedTrailerBytes {
+		return body[:end], nil, true
 	}
 	rest = append([]byte{'{'}, body[end+2:]...)
 	return body[:end], rest, true
@@ -516,6 +525,9 @@ func decodeFileOpResponse(out []byte) (FileOpResult, error) {
 	// fails the base64 decode.
 	var streamed []byte
 	if payload, rest, ok := splitStreamedRead(out); ok {
+		if rest == nil {
+			return FileOpResult{}, fmt.Errorf("decode fileop response: trailer exceeds %d bytes", maxStreamedTrailerBytes)
+		}
 		streamed = payload
 		out = rest
 	}
