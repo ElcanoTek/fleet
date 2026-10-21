@@ -565,3 +565,13 @@ func TestBodyLimitMiddleware_ApprovalGroupHasItsOwnCap(t *testing.T) {
 		}
 	}
 }
+
+// The group cap holds the largest decision the endpoint accepts, written in
+// the most expensive JSON escaping (a surrogate pair per character).
+func TestMaxApprovalGroupBody_HoldsTheWorstCaseEscaping(t *testing.T) {
+	perValue := maxNarrowableValueRunes*12 + 3 // two six-byte escapes per rune, quotes, comma
+	ids := maxApprovalGroupDecisions * 200     // ids, keys and brackets, generously
+	if need := maxApprovalGroupNarrowedValues*perValue + ids; need > maxApprovalGroupBody {
+		t.Fatalf("worst case %d bytes > cap %d", need, maxApprovalGroupBody)
+	}
+}

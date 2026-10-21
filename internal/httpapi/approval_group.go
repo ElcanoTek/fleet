@@ -66,10 +66,11 @@ const maxApprovalGroupNarrowedValues = approvalCardMaxRows
 
 // maxApprovalGroupBody bounds the group decision's body so that every
 // decision the endpoint accepts fits: at most maxApprovalGroupNarrowedValues
-// values of at most maxNarrowableValueRunes characters each (at most 6 bytes
-// per character once JSON-escaped, plus quotes and comma: about 6 MB), plus
-// at most maxApprovalGroupDecisions ids, the keys and the brackets.
-const maxApprovalGroupBody = 8 << 20
+// values of at most maxNarrowableValueRunes characters each (at most 12 bytes
+// per character once JSON-escaped: a character outside the BMP written as a
+// surrogate pair of two six-byte escapes; plus quotes and comma: about
+// 11.5 MiB), plus at most maxApprovalGroupDecisions ids, keys and brackets.
+const maxApprovalGroupBody = 16 << 20
 
 // approvalGroupResult is one card's answer inside the group reply: the body
 // the single-card POST would have answered, or its error.
