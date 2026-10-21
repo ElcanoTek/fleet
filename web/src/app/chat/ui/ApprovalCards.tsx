@@ -966,20 +966,23 @@ export function ApprovalCard({
 
 // readableTitle is a readable card's header line: the describer's plain-words
 // title while the card waits, and a one-line outcome once it has resolved —
-// "Applied", "Not applied", "Declined", "Timed out — not applied", "Outcome
-// not recorded". The tool's own result still renders below, as on every card.
+// "Applied", "Stop requested", "Not applied", "Declined", "Timed out — not
+// applied", "Outcome not recorded". The tool's own result still renders below,
+// as on every card.
 function readableTitle(
   approval: Approval,
   cardTitle: string,
   executing: boolean,
   recorded: boolean,
   timedOut: boolean,
+  stopped: boolean,
 ): string {
   if (executing) return `Running · ${cardTitle}`;
   switch (approval.status) {
     case "pending":
       return cardTitle;
     case "approved":
+      if (stopped) return `Stop requested · ${cardTitle}`;
       return recorded ? `${cardTitle} · ran without asking` : `Applied · ${cardTitle}`;
     case "rejected":
       return timedOut ? `Timed out — not applied · ${cardTitle}` : `Declined · ${cardTitle}`;
@@ -1038,19 +1041,27 @@ function GenericActionCard({
   const rawArgs = approval.summary.raw ?? "";
   const recorded = approval.recorded === true;
   const timedOut = isTimedOutApproval(approval);
+  // A call the person stopped while it ran (critical_tool_stop,
+  // docs/APPROVAL-STOP.md) that settled without an error: only part of it may
+  // have run, so it never reads as applied or completed. Whether the server
+  // honoured the stop is the result's to say, so the card says a stop was
+  // requested, not that the call stopped.
+  const stopped = approval.stopped === true && approval.status === "approved" && !executing;
   // A bundle-declared describer's readable card (docs/APPROVAL-CARD-DESCRIBERS.md):
   // plain-words title, the records, before → after, flags. Absent = the
   // generic layout below, unchanged.
   const readable = approval.card;
 
   const title = readable
-    ? readableTitle(approval, readable.title, executing, recorded, timedOut)
+    ? readableTitle(approval, readable.title, executing, recorded, timedOut, stopped)
     : executing
       ? `${action} · running`
       : approval.status === "pending"
       ? `ACTION REQUIRED · Run "${action}"?`
       : approval.status === "approved"
-        ? recorded
+        ? stopped
+          ? `${action} · stop requested`
+          : recorded
           ? `${action} · ran without asking`
           : `${action} · completed ✓`
         : approval.status === "rejected"
@@ -1066,6 +1077,8 @@ function GenericActionCard({
   const statusStyle: React.CSSProperties =
     executing
       ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
+      : stopped
+      ? { borderColor: "var(--color-warning-border)", color: "var(--color-text-primary)" }
       : approval.status === "approved"
       ? recorded
         ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
@@ -1260,6 +1273,11 @@ function GenericActionCard({
       {/* A narrowed approval says so on every settled or running card, with
           or without a readable card (docs/APPROVAL-NARROWING.md). */}
       {narrowedLine}
+      {stopped ? (
+        <p data-testid="approval-stopped" className="mt-0.5 min-w-0 text-[0.75rem] text-[var(--color-warning-text)]">
+          You pressed Stop while this ran, so it may have run only in part. The result says what ran.
+        </p>
+      ) : null}
 
       {readable ? (
         <>

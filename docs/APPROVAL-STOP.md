@@ -144,6 +144,12 @@ Elcano bundle's deal-plan execute does this).
   items of the approved <tool> call (approval_id=…) that were not run because
   I stopped it: …. Run only these, and stage the run for my approval." As
   with **Retry failed**, nothing runs from the click.
+- A settled stopped call with no result card (the tool is in
+  `critical_tool_stop` but not `critical_tool_result_cards`) never reads as
+  applied: its title is **Stop requested · <card title>** (a generic card:
+  **<action> · stop requested**, not "completed ✓"), its border takes the
+  warning colour, and it says "You pressed Stop while this ran, so it may
+  have run only in part. The result says what ran."
 
 ## What a server that does not cooperate gets
 

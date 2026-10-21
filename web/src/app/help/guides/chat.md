@@ -589,7 +589,9 @@ working through many deals, for example). Their running card then has a
 **Stop** button: it asks the connector to stop after the record it is on,
 and the card reads **Stop requested** until the action ends. Whether it
 stopped there is up to the connector, so the finished card's result says what
-ran. The finished card says how far it
+ran; a finished card with no outcome summary of its own is titled **Stop
+requested**, never **Applied**. Where the connector does summarise its
+outcome, the finished card says how far it
 got (for example "Stopped after 12 of 24") and offers **Run the remaining N**,
 which asks the assistant to run the records it never reached; that comes back
 to you as a new card to approve. If the connector does not support stopping,

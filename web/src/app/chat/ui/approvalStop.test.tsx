@@ -113,6 +113,32 @@ describe("a stopped call", () => {
     expect(screen.getByTestId("approval-retry-failed")).toHaveTextContent("Run the remaining 2");
   });
 
+  // critical_tool_stop without critical_tool_result_cards: the settled card
+  // has no outcome card to say "Stopped after …", so its own title and
+  // styling must, never "Applied" or a green "completed ✓".
+  it("reads as stopped without a result card, readable or generic", () => {
+    const readable = running({ status: "approved", executing: false, stopped: true, resultText: '{"updated":1}' });
+    render(<ApprovalCard approval={readable} conversationId="conv_1" onResolved={vi.fn()} />);
+    expect(screen.getByTestId("generic-action-title")).toHaveTextContent("Stop requested · Update floor on 3 Index Exchange deals");
+    expect(screen.queryByText(/^Applied/)).toBeNull();
+    expect(screen.getByTestId("approval-stopped")).toHaveTextContent("You pressed Stop while this ran, so it may have run only in part. The result says what ran.");
+    expect(screen.getByTestId("generic-action-card").style.borderColor).toBe("var(--color-warning-border)");
+    cleanup();
+
+    const generic = running({ status: "approved", executing: false, stopped: true, card: undefined, resultText: '{"updated":1}' });
+    render(<ApprovalCard approval={generic} conversationId="conv_1" onResolved={vi.fn()} />);
+    expect(screen.getByTestId("generic-action-title")).toHaveTextContent("Execute plan · stop requested");
+    expect(screen.queryByText(/completed ✓/)).toBeNull();
+    expect(screen.getByTestId("approval-stopped")).toBeTruthy();
+    expect(screen.getByTestId("generic-action-card").style.borderColor).toBe("var(--color-warning-border)");
+    cleanup();
+
+    // A call that was not stopped reads as before.
+    render(<ApprovalCard approval={{ ...generic, stopped: undefined }} conversationId="conv_1" onResolved={vi.fn()} />);
+    expect(screen.getByTestId("generic-action-title")).toHaveTextContent("Execute plan · completed ✓");
+    expect(screen.queryByTestId("approval-stopped")).toBeNull();
+  });
+
   it("the poll carries a stop pressed elsewhere, then the stopped outcome", () => {
     const current = running();
     const next = approvalFromPoll(current, { resolved_approvals: [{ approval_id: "ap_1", status: "approved", executing: true, stopping: true }] });
