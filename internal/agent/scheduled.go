@@ -552,9 +552,18 @@ type scheduledPolicy struct {
 	// until the run dead-lettered while the text it left behind held every
 	// requested item. RunAnswer hands the same composition back to the core as
 	// the run's final text, so the gates judge the answer the user receives.
-	// A round the audit/finish enforcement refused never enters it: that is a
-	// pre-audit draft, superseded by the next round's text as before.
+	// One round the audit/finish enforcement refused enters it too: the first
+	// round it sent back for want of a passed self-audit, whose closing text
+	// is the answer the model gave before its audit (keepAnswerBeforeAudit,
+	// #1826). Every other refused round is superseded by the next round's
+	// text, as before.
 	judgedAnswer string
+	// answerBeforeAudit is set while judgedAnswer holds only that pre-audit
+	// answer, no model gate having judged it yet. An aborted audit drops it
+	// (the abort is the run's last word on whether that answer stands); a
+	// gate that judges the composition clears the flag, the answer now being
+	// part of what the gate judged.
+	answerBeforeAudit bool
 	// replaceJudged is set when the phone-a-friend reviewer sent the answer
 	// back: the repair round's text is the CORRECTED answer, so it replaces
 	// the reviewed text instead of being appended after the wrong one (a
@@ -596,8 +605,9 @@ func (p *scheduledPolicy) SetRoundFinalText(text string) {
 // message of the round that just ended — the same text RunAnswer makes the
 // run's result. A run that has produced no text at all yields "", which the
 // verifier surfaces as the explicit "(no final response text)" marker; prose
-// from a round the audit/finish enforcement refused is never included,
-// because the result does not include it either.
+// from a round the audit/finish enforcement refused is included only for the
+// answer given before the audit (keepAnswerBeforeAudit), because the result
+// includes only that one too.
 func (p *scheduledPolicy) latestRunText() string {
 	return composeRunAnswer(p.judgedAnswer, p.roundFinalText, p.replaceJudged)
 }
@@ -621,6 +631,37 @@ func (p *scheduledPolicy) RunAnswer(roundText string) string {
 func (p *scheduledPolicy) keepJudgedAnswer() {
 	p.judgedAnswer = p.latestRunText()
 	p.replaceJudged = p.agent != nil && len(p.agent.outputSchema) > 0 && isSingleJSONValue(p.judgedAnswer)
+	p.answerBeforeAudit = false
+}
+
+// keepAnswerBeforeAudit runs when the audit/finish enforcement has just
+// refused the round for want of a passed self-audit (#1826): the "Before
+// finishing: audit …" request, or "Audit not confirmed" when the model's own
+// confirm_audit did not go through. The round's closing text is an answer the
+// model gave before its audit, and the round that ends the audit often closes
+// with only a pointer back to it ("the table is in my previous message").
+// Superseding the answer with that pointer stored a success with no
+// deliverable. So the first such answer is kept as the judged answer, which
+// the post-audit closing text composes with (composeRunAnswer: appended, kept
+// once if restated, replaced on a schema task whose answer is one JSON
+// value), and the refusal tells the model so, as a verifier repair's does.
+// Later refused rounds before the audit passes (text written while auditing)
+// are superseded, as before. A textless round keeps nothing and adds no note.
+func (p *scheduledPolicy) keepAnswerBeforeAudit(msgs []string) []string {
+	// No model gate runs before the audit passes, so a judged answer here can
+	// only be an answer this method already kept.
+	if strings.TrimSpace(p.roundFinalText) == "" || p.judgedAnswer != "" || len(msgs) == 0 {
+		return msgs
+	}
+	p.keepJudgedAnswer()
+	p.answerBeforeAudit = true
+	note := auditAnswerNote
+	if p.replaceJudged {
+		note = reviewerRepairAnswerNote
+	}
+	msgs = append([]string(nil), msgs...)
+	msgs[len(msgs)-1] += " " + note
+	return msgs
 }
 
 // isSingleJSONValue reports whether text is exactly one JSON value (object,
@@ -697,6 +738,11 @@ const repairAnswerNote = "Your closing text so far stays part of this run's fina
 // A verifier repair on a structured-output task uses it too.
 const reviewerRepairAnswerNote = "Your next closing text replaces your previous answer, so write the complete corrected answer."
 
+// auditAnswerNote is the audit refusal's counterpart of repairAnswerNote: the
+// answer the model gave before the audit stays, and what it writes after the
+// audit is appended (keepAnswerBeforeAudit).
+const auditAnswerNote = "Your reply above stays part of this run's final answer and your closing text after the audit is appended to it, so write only what the audit changed or adds — do not restate the answer."
+
 // The core hands the policy each round's closing text before consulting
 // CanFinish, and takes the composed answer back once the run may finish; these
 // are the seams the finish gates read, and the result carries, the run's
@@ -714,7 +760,9 @@ func (p *scheduledPolicy) RecordToolResult(toolName, rawInput, resultText string
 	p.inner.RecordToolResult(toolName, rawInput, resultText, succeeded)
 }
 
-// CanFinish first defers to the audit/finish enforcement. When that clears, a
+// CanFinish first defers to the audit/finish enforcement; when that refuses a
+// round for want of a passed self-audit, the first such round's answer is
+// kept (keepAnswerBeforeAudit). When that clears, a
 // task-declared completion predicate that is satisfied finishes the run with no
 // model gate (#1602). Otherwise it runs the end-of-run verifier until a clean
 // verdict or the bounded review cap (missing actions become repair rounds) and
@@ -729,9 +777,15 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		return false, nil
 	}
 	if ok, msgs := p.inner.CanFinish(round); !ok {
+		if p.inner.FinishRefusedForAudit() {
+			msgs = p.keepAnswerBeforeAudit(msgs)
+		}
 		return false, msgs
 	}
 	if p.inner.AuditAborted() {
+		if p.answerBeforeAudit {
+			p.judgedAnswer, p.replaceJudged, p.answerBeforeAudit = "", false, false
+		}
 		return true, nil
 	}
 	ctx := p.runCtx

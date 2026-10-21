@@ -716,6 +716,34 @@ func TestOrchestrationFinishEnforcementLengthTruncation(t *testing.T) {
 	}
 }
 
+// FinishRefusedForAudit is true exactly for the refusals that want a passed
+// self-audit (the request, then "Audit not confirmed") and false for every
+// other refusal and for a granted finish: the scheduled driver keeps the
+// closing text of the first such round as the answer given before the audit
+// (#1826), and a length cutoff's truncated text must never be that answer.
+func TestFinishRefusedForAudit(t *testing.T) {
+	p := NewScheduledPolicy(NewLogSession(), 100, 0, 0)
+	orch := p.orchestration()
+	step := func(want bool, label string) {
+		t.Helper()
+		if _, msgs := p.CanFinish(0); p.FinishRefusedForAudit() != want {
+			t.Fatalf("%s: FinishRefusedForAudit = %v, want %v (msgs %v)", label, !want, want, msgs)
+		}
+	}
+
+	orch.noteRoundFinishReason(fantasy.FinishReasonLength)
+	step(false, "output cut off")
+	orch.latestTaskTracker = taskTrackerSnapshot{Seen: true, Total: 2, Todo: 1, Done: 1}
+	step(false, "open task-tracker items")
+	orch.latestTaskTracker = taskTrackerSnapshot{Seen: true, Total: 2, Done: 2}
+	step(true, "the audit request")
+	step(true, "audit not confirmed")
+	orch.mu.Lock()
+	orch.selfAuditConfirmedOnce = true
+	orch.mu.Unlock()
+	step(false, "a granted finish")
+}
+
 // ── session log sub-tests lifted from cutlass execute_test.go + session_log_test.go ──
 
 func TestSessionLogAddMessage(t *testing.T) {

@@ -18,6 +18,8 @@ DLQ. fleet.elcanotek.com hit exactly this on 2026-09-19 and 2026-09-21.
 > combined answer had every item. A textless repair round is therefore judged
 > on the answer it would persist, not on the no-response marker. See
 > [SCHEDULED-REFRESH-RELIABILITY.md](SCHEDULED-REFRESH-RELIABILITY.md#a-the-verifier-judges-the-answer-the-run-persists).
+> Since 2026-10-21 (#1826), the answer the model gave before the self-audit
+> was asked for stays part of that answer too.
 > The rest of this note is the record of #1570 as it shipped.
 
 ## What shipped

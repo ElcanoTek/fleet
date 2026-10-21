@@ -157,10 +157,14 @@ type RoundFinalTextReceiver interface {
 // persists — never a different one.
 //
 // The composition is the policy's to own, and it must include an earlier
-// round's text only when the policy's own gates judged that round: a round the
-// audit/finish enforcement refused (a pre-audit draft) is superseded by the
-// next round's text, exactly as before. Called inside the same contained
-// policy boundary as CanFinish. Structured-output tasks still replace the
+// round's text only when the policy's own gates judged that round, or when the
+// nudge that sent the round back told the model that text stays part of the
+// answer. The scheduled policy does the latter for exactly one refused round:
+// the first one the audit/finish enforcement sent back for want of a passed
+// self-audit (FinishRefusedForAudit), whose text is the answer given before
+// the audit (#1826). Any other round the enforcement refused is superseded by
+// the next round's text. Called inside
+// the same contained policy boundary as CanFinish. Structured-output tasks still replace the
 // persisted FinalText with the schema-valid JSON afterwards (completeRun).
 type RunAnswerProvider interface {
 	RunAnswer(roundText string) string
