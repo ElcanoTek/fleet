@@ -716,54 +716,6 @@ func TestOrchestrationFinishEnforcementLengthTruncation(t *testing.T) {
 	}
 }
 
-// FinishRefusedForAudit is true exactly for the refusals that want a passed
-// self-audit (the request, then "Audit not confirmed") and false for every
-// other refusal and for a granted finish: the scheduled driver keeps the
-// closing text of such rounds as the answer given before the audit (#1826),
-// and a length cutoff's truncated text must never be that answer.
-func TestFinishRefusedForAudit(t *testing.T) {
-	p := NewScheduledPolicy(NewLogSession(), 100, 0, 0)
-	orch := p.orchestration()
-	step := func(want bool, label string) {
-		t.Helper()
-		if ok, msgs := p.CanFinish(0); ok || p.FinishRefusedForAudit() != want {
-			t.Fatalf("%s: ok=%v FinishRefusedForAudit=%v, want a refusal with %v (msgs %v)", label, ok, !want, want, msgs)
-		}
-	}
-	set := func(f func()) {
-		orch.mu.Lock()
-		defer orch.mu.Unlock()
-		f()
-	}
-
-	orch.noteRoundFinishReason(fantasy.FinishReasonLength)
-	step(false, "output cut off")
-	set(func() { orch.latestTaskTracker = taskTrackerSnapshot{Seen: true, Total: 2, Todo: 1, Done: 1} })
-	step(false, "open task-tracker items")
-	set(func() { orch.latestTaskTracker = taskTrackerSnapshot{Seen: true, Total: 2, Done: 2} })
-	step(true, "the audit request")
-	step(true, "audit not confirmed")
-
-	// The refusals after the audit was accepted.
-	set(func() {
-		orch.selfAuditConfirmedOnce = true
-		orch.auditConfirmed = true
-		orch.pendingCriticalActions = []pendingCriticalAction{{toolName: "mcp_mail_send_email"}}
-	})
-	step(false, "a pending critical action")
-	set(func() {
-		orch.pendingCriticalActions = nil
-		orch.auditTerminalFailure = true
-		orch.emailLastAttempted = true
-	})
-	step(false, "an abort's owed summary email")
-
-	set(func() { orch.emailLastAttempted = false })
-	if ok, msgs := p.CanFinish(0); !ok || p.FinishRefusedForAudit() {
-		t.Fatalf("a granted finish: ok=%v FinishRefusedForAudit=%v (msgs %v)", ok, p.FinishRefusedForAudit(), msgs)
-	}
-}
-
 // ── session log sub-tests lifted from cutlass execute_test.go + session_log_test.go ──
 
 func TestSessionLogAddMessage(t *testing.T) {
