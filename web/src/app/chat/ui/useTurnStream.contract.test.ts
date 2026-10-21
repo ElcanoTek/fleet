@@ -89,6 +89,13 @@ const CONSUMED: Record<string, Record<string, JsonType>> = {
   },
 };
 
+// Fields the hook reads when present: their type is checked on every frame
+// that carries them, and the oracle below expects them on screen.
+const OPTIONAL: Record<string, Record<string, JsonType>> = {
+  // A show_ui card drawn by reference carries its validated spec here.
+  "tool.result": { card: "string" },
+};
+
 const recordings = readdirSync(CONTRACT_DIR)
   .filter((f) => f.endsWith(".sse"))
   .sort();
@@ -111,6 +118,7 @@ function expectedFrom(frames: Frame[]) {
         input: String(f.data.input),
         state: result ? (result.is_err ? "error" : "done") : "running",
         resultText: result ? String(result.text) : undefined,
+        card: typeof result?.card === "string" ? result.card : undefined,
       };
     });
   const terminal = frames.findLast((f) => f.event.startsWith("turn.") && f.event !== "turn.started");
@@ -118,7 +126,21 @@ function expectedFrom(frames: Frame[]) {
   // A turn that ends before any text (a provider refusal, an error) shows its
   // terminal event's message as the reply instead of an empty bubble.
   const fallback = typeof terminal?.data.message === "string" ? terminal.data.message : "";
-  return { text: streamed || fallback, tools, terminal };
+  // Text streamed ahead of the last tool call is the model's narration. With
+  // the answer delivered by text.replace it is kept apart from the answer for
+  // "Show details"; a turn without one keeps it in the reply (turnNarration.ts).
+  const lastCall = frames.findLastIndex((f) => f.event === "tool.call");
+  const narration = frames
+    .slice(0, Math.max(0, lastCall))
+    .filter((f) => f.event === "text.delta")
+    .map((f) => String(f.data.text))
+    .join("");
+  return {
+    text: streamed || fallback,
+    narration: replace && narration.trim() ? narration : undefined,
+    tools,
+    terminal,
+  };
 }
 
 async function replay(raw: string): Promise<Message[]> {
@@ -174,7 +196,18 @@ describe("chat stream contract (recorded from the Go producer)", () => {
           `${name}: ${frame.event}.${field} (the hook reads it as a ${type})`,
         ).toBe(type);
       }
+      for (const [field, type] of Object.entries(OPTIONAL[frame.event] ?? {})) {
+        if (field in frame.data) {
+          expect(typeof frame.data[field], `${name}: ${frame.event}.${field} (read as a ${type} when present)`).toBe(type);
+        }
+      }
     }
+  });
+
+  it("records a card shown by reference", () => {
+    // Without this recording the card assertions above would be vacuous.
+    const frames = readRecording("show-ui-by-reference.sse").frames;
+    expect(frames.some((f) => f.event === "tool.result" && typeof f.data.card === "string")).toBe(true);
   });
 
   it.each(recordings)("%s renders what the producer streamed", async (name) => {
@@ -187,13 +220,15 @@ describe("chat stream contract (recorded from the Go producer)", () => {
     if (!assistant) return;
     expect(assistant.state).toBe("done");
     expect(assistant.content).toBe(want.text);
+    expect(assistant.narration).toBe(want.narration);
     expect(
-      (assistant.toolCalls ?? []).map(({ id, name: tool, input, state, resultText }) => ({
+      (assistant.toolCalls ?? []).map(({ id, name: tool, input, state, resultText, card }) => ({
         id,
         name: tool,
         input,
         state,
         resultText,
+        card,
       })),
     ).toEqual(want.tools);
 

@@ -746,6 +746,16 @@ func (a *approvalStager) prevalidateEmail(sourceToolName, rawInput string) error
 		log.Printf("prevalidateEmail: resolve source tool: %v", err)
 		return nil
 	}
+	// The email is staged by a chat turn, so a validate_email_content the
+	// bundle hides from interactive chat (agent_policy.interactive_hidden_tools)
+	// is not called, exactly as a hidden approval-card describer is not
+	// (approval_card.go): this host-side call must not reach what the model
+	// could not. Prevalidation is best-effort, so it is skipped like an
+	// unreachable validator and the card is staged unvalidated.
+	if full := agentcore.MCPToolName(server, "validate_email_content"); agentcore.InteractiveHiddenTool(full) {
+		log.Printf("prevalidateEmail: %q is hidden from interactive chat (interactive_hidden_tools); not called", full)
+		return nil
+	}
 	text, isError, err := broker.CallMCP(ctx, server, "validate_email_content", map[string]interface{}{
 		"content": content,
 		"subject": subject,
@@ -2460,10 +2470,13 @@ func (s *Server) approvalMCPScope(ctx context.Context, approval *store.Approval)
 		return overlay.CallBroker(), overlay.Catalog, overlay.Close, nil
 	}
 	workspace := tools.WorkspaceDirForConversation(approval.ConversationID)
+	// The approving user: ClaimApproval matches the row's user_email against
+	// the authenticated caller, so approval.UserEmail IS the person who just
+	// clicked approve — and the one whose turn staged the card (ADR-0087).
 	scope, err := s.agent.OpenApprovalMCPScope(ctx, agentcore.MCPSelection{{
 		Server:  approval.MCPServer,
 		Account: approval.MCPAccount,
-	}}, workspace)
+	}}, workspace, agentcore.NewMCPUserIdentity(approval.UserEmail))
 	if err != nil {
 		// Fail closed: a seat that no longer resolves (account revoked, server
 		// removed from the bundle) must surface, not silently downgrade to the

@@ -96,10 +96,13 @@ export default function LoginCard({
   const label =
     "mb-2 block text-[0.8125rem] font-bold text-[var(--color-text-secondary)]";
 
-  // The primary action uses Auth's button gradient (primary → primary_hover)
-  // rather than Fleet's app-wide --gradient-action-primary (primary →
-  // secondary), so the two sign-in buttons are identical; the app's own
-  // buttons are untouched.
+  // The primary action keeps the shape of Auth's button gradient (primary →
+  // a deeper primary) rather than Fleet's app-wide --gradient-action-primary
+  // (primary → secondary), but both stops are the measured fill pair
+  // (--color-primary-fill → -fill-hover), so its label holds 4.5:1 for any
+  // bundle palette. Auth's raw primary_hover is LIGHTER than the primary in
+  // dark (white on fleet's #8686c4 is 3.38:1), and its brightness hover
+  // faded the label further. Hover deepens to the hover fill instead.
   // The card is Auth's sign-in card, term for term (auth/internal/httpapi/
   // templates.go: loginHTML + componentCSS): the bundle mark, the wordmark,
   // the title and tagline, labelled fields on surface_1, one full-width
@@ -169,7 +172,7 @@ export default function LoginCard({
           />
           <button
             type="submit"
-            className="mt-5 inline-flex min-h-11 w-full items-center justify-center rounded-[var(--radius-md)] bg-[linear-gradient(140deg,var(--color-primary),var(--color-primary-hover))] px-4 py-3 font-bold text-[var(--color-on-primary)] transition hover:brightness-[1.08] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] active:translate-y-px"
+            className="mt-5 inline-flex min-h-11 w-full items-center justify-center rounded-[var(--radius-md)] bg-[linear-gradient(140deg,var(--color-primary-fill),var(--color-primary-fill-hover))] px-4 py-3 font-bold text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[linear-gradient(140deg,var(--color-primary-fill-hover),var(--color-primary-fill-hover))] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] active:translate-y-px"
           >
             Sign in
           </button>

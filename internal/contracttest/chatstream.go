@@ -137,10 +137,24 @@ type Expected struct {
 	// Text is the answer as finally shown: the last text.replace, else the
 	// concatenated text.delta frames.
 	Text string
+	// Streamed is every text.delta frame concatenated: narration ahead of
+	// tool calls included, which text.replace later drops from Text.
+	Streamed string
 	// Tools are the tool calls in order, with how each one ended.
 	Tools []ExpectedTool
 	// Terminal is the turn's final turn.* frame (not turn.started).
 	Terminal Frame
+}
+
+// AppendOnlyText is what a client that cannot retract streamed text (ACP)
+// ends up showing: when the final answer is the tail of what streamed — the
+// model narrated before its tool calls and then answered — everything that
+// streamed, narration included; otherwise the final answer.
+func (e Expected) AppendOnlyText() string {
+	if e.Text != "" && strings.HasSuffix(strings.TrimRight(e.Streamed, " \t\r\n"), e.Text) {
+		return e.Streamed
+	}
+	return e.Text
 }
 
 // ExpectedTool is one tool call and its outcome.
@@ -173,7 +187,8 @@ func Expect(frames []Frame) Expected {
 			e.Terminal = f
 		}
 	}
-	e.Text = deltas.String()
+	e.Streamed = deltas.String()
+	e.Text = e.Streamed
 	if haveReplace {
 		e.Text = replaced
 	}

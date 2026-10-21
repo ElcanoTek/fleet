@@ -1360,9 +1360,13 @@ export function Composer({
               </span>
             </button>
             {/* The design's .send-btn: a 2.1rem circle that lights up
-                      with the action gradient once there is content to send
-                      (the image: hint keeps the gradient token in
-                      background-image). */}
+                      with the action gradient once there is content to send.
+                      It is the measured gradient (--gradient-action-fill),
+                      not the raw primary → secondary one: every point of it
+                      holds the arrow at 4.5:1 for any bundle palette (on the
+                      raw one a yellow primary with white on_primary put it
+                      under 3:1). The image: hint keeps the gradient token in
+                      background-image. */}
             <button
               aria-label="Send message"
               className={`inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed ${
@@ -1370,7 +1374,7 @@ export function Composer({
                 !isStreaming &&
                 !isUploadingAttachments &&
                 !modelError
-                  ? "bg-[image:var(--gradient-action-primary)] text-[var(--color-on-primary)] hover:-translate-y-px"
+                  ? "bg-[image:var(--gradient-action-fill)] text-[var(--color-on-primary-fill)] hover:-translate-y-px enabled:hover:bg-[image:var(--gradient-action-fill-hover)]"
                   : "bg-[var(--color-surface-2)] text-[var(--color-text-disabled)]"
               }`}
               type="submit"

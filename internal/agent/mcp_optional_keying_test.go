@@ -62,12 +62,12 @@ func TestActiveMCPToolNamesVariantSeatUnderBaseOptionalKey(t *testing.T) {
 		optionalServers: mcpOptionalSet{"jira": true},
 	}
 
-	got := m.activeMCPToolNames(nil)
+	got := m.activeMCPToolNames(nil, nil)
 	if len(got) != 1 || got[0] != "mcp_public_ping" {
 		t.Fatalf("activeMCPToolNames(nil) = %v, want only [mcp_public_ping]", got)
 	}
 
-	got = m.activeMCPToolNames([]string{"jira"})
+	got = m.activeMCPToolNames([]string{"jira"}, nil)
 	want := []string{"mcp_jira_prod_search", "mcp_jira_search", "mcp_public_ping"}
 	if len(got) != len(want) {
 		t.Fatalf("activeMCPToolNames([jira]) = %v, want %v", got, want)

@@ -195,7 +195,7 @@ func TestNew_RejectsIncompleteMCPBrokerInjection(t *testing.T) {
 	}{
 		{
 			name: "scope opener without base broker",
-			opts: ManagerOptions{OpenMCPScope: func(context.Context, agentcore.MCPSelection, MCPScopePolicy, string) (*MCPScope, error) {
+			opts: ManagerOptions{OpenMCPScope: func(context.Context, agentcore.MCPSelection, MCPScopePolicy, string, agentcore.MCPUserIdentity) (*MCPScope, error) {
 				return nil, nil
 			}},
 			want: "open MCP scope requires MCP broker",
@@ -230,6 +230,7 @@ func TestManagerRunTurn_OpensAndClosesScopedMCP(t *testing.T) {
 	var (
 		gotSelection agentcore.MCPSelection
 		gotWorkspace string
+		gotUser      agentcore.MCPUserIdentity
 		closed       bool
 	)
 	mgr := newFakeLLMManagerWithOptions(t, fake, func(opts *ManagerOptions) {
@@ -240,7 +241,8 @@ func TestManagerRunTurn_OpensAndClosesScopedMCP(t *testing.T) {
 		}
 		opts.MCPBroker = inertMCPBroker{}
 		opts.MCPCatalog = []mcp.ServerTool{}
-		opts.OpenMCPScope = func(_ context.Context, selection agentcore.MCPSelection, _ MCPScopePolicy, workspace string) (*MCPScope, error) {
+		opts.OpenMCPScope = func(_ context.Context, selection agentcore.MCPSelection, _ MCPScopePolicy, workspace string, user agentcore.MCPUserIdentity) (*MCPScope, error) {
+			gotUser = user
 			gotSelection = append(agentcore.MCPSelection(nil), selection...)
 			gotWorkspace = workspace
 			return &MCPScope{
@@ -263,9 +265,15 @@ func TestManagerRunTurn_OpensAndClosesScopedMCP(t *testing.T) {
 		ConversationID:            "scope-test",
 		OptionalMCPServersEnabled: []string{"optional_on"},
 		MCPAccountDefaults:        map[string]string{"mandatory": "primary", "optional_on": "backup"},
+		MCPUser:                   agentcore.NewMCPUserIdentity("elyse@example.com"),
 	}, &recordingSink{})
 	if err != nil {
 		t.Fatalf("RunTurn: %v", err)
+	}
+	// ADR-0087: the turn's signed-in sender reaches the scope opener, which is
+	// what carries it to the credential owner for ${FLEET_USER_EMAIL}.
+	if gotUser != (agentcore.MCPUserIdentity{Email: "elyse@example.com"}) {
+		t.Errorf("scope user = %+v, want the turn's signed-in sender", gotUser)
 	}
 	want := agentcore.MCPSelection{
 		{Server: "mandatory", Account: "primary"},
@@ -285,7 +293,7 @@ func TestManagerRunTurn_OpensAndClosesScopedMCP(t *testing.T) {
 func TestManagerScopeCleanupIgnoresCancelledTurnContext(t *testing.T) {
 	closeCtxErr := errors.New("scope was not closed")
 	mgr := &Manager{
-		openMCPScope: func(context.Context, agentcore.MCPSelection, MCPScopePolicy, string) (*MCPScope, error) {
+		openMCPScope: func(context.Context, agentcore.MCPSelection, MCPScopePolicy, string, agentcore.MCPUserIdentity) (*MCPScope, error) {
 			return &MCPScope{
 				Broker: inertMCPBroker{},
 				Close: func(ctx context.Context) error {
@@ -296,7 +304,7 @@ func TestManagerScopeCleanupIgnoresCancelledTurnContext(t *testing.T) {
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	_, _, cleanup, err := mgr.openTurnMCPScope(ctx, nil, MCPScopePolicy{}, "/workspace")
+	_, _, cleanup, err := mgr.openTurnMCPScope(ctx, nil, MCPScopePolicy{}, "/workspace", agentcore.MCPUserIdentity{})
 	if err != nil {
 		t.Fatalf("openTurnMCPScope: %v", err)
 	}
@@ -311,7 +319,7 @@ func TestManagerRunTurn_ScopeOpenFailureFailsClosed(t *testing.T) {
 	fake := fakellm.New()
 	mgr := newFakeLLMManager(t, fake)
 	wantErr := errors.New("broker unavailable")
-	mgr.openMCPScope = func(context.Context, agentcore.MCPSelection, MCPScopePolicy, string) (*MCPScope, error) {
+	mgr.openMCPScope = func(context.Context, agentcore.MCPSelection, MCPScopePolicy, string, agentcore.MCPUserIdentity) (*MCPScope, error) {
 		return nil, wantErr
 	}
 	committed := false

@@ -55,6 +55,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/goccy/go-yaml"
 	"github.com/itchyny/gojq"
@@ -62,6 +63,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
+	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
 
 // HTTPToolServerName is the synthetic MCP-server name inline http_tools are
@@ -436,6 +438,19 @@ type AgentPolicy struct {
 	//	agent_policy:
 	//	  critical_tool_result_cards: [execute_plan]
 	CriticalToolResultCards []string `yaml:"critical_tool_result_cards"`
+	// InteractiveHiddenTools is an OPTIONAL list of tool-name suffixes (same
+	// suffix matching as critical_tools) whose MCP tools interactive chat
+	// never sees or calls: not in the tool list, not findable through
+	// tool_search, refused by tool_call and by a direct call, and not
+	// reachable from a sub-agent a chat turn spawns. Scheduled and Operations
+	// Center runs keep them. Use it for raw writes a scheduled protocol needs
+	// but chat must reach through a reviewed flow (a plan with one approval
+	// card) instead. Absent = chat and scheduled runs see the same tools. See
+	// docs/INTERACTIVE-HIDDEN-TOOLS.md.
+	//
+	//	agent_policy:
+	//	  interactive_hidden_tools: [ox_create_deal, ix_merge_deal_domains]
+	InteractiveHiddenTools []string `yaml:"interactive_hidden_tools"`
 	// BatchSecondsPerDeal is DERIVED, never read from agent_policy: Bundle.AgentPolicy
 	// collects each mcp_servers[].batch_seconds_per_deal into it, keyed by
 	// server name, so the per-record batch budget reaches agentcore on the same
@@ -849,7 +864,12 @@ type ServerDef struct {
 
 	// Env is the per-subprocess env. Each value may reference process-env vars
 	// via ${VAR} (and a literal default tail). Keys whose resolved value is
-	// empty AND listed in OptionalEnv are dropped from the spawned env.
+	// empty AND listed in OptionalEnv are dropped from the spawned env. A value
+	// may also carry fleet's reserved spawn-time tokens — ${FLEET_WORKSPACE},
+	// ${FLEET_WORKSPACE_ROOT}, ${FLEET_TASK_ID}, and the interactive turn's
+	// signed-in user's email ${FLEET_USER_EMAIL} — which are never
+	// read from the process env and are substituted (or the key dropped) per
+	// spawn path; see docs/MCP-BUNDLE-ENV.md.
 	Env         map[string]string `yaml:"env"`
 	OptionalEnv []string          `yaml:"optional_env"`
 
@@ -1848,7 +1868,7 @@ func (b *Bundle) validate() error {
 		if err := validateServerTLS(s.Name, s.Type, s.URL, s.TLS); err != nil {
 			return err
 		}
-		if err := validateIdentityEnv(s); err != nil {
+		if err := validateServerEnvContract(s); err != nil {
 			return err
 		}
 		if err := validateCategory(s); err != nil {
@@ -1938,8 +1958,16 @@ func validateIdentityEnv(s *ServerDef) error {
 		if s.Type != "stdio" {
 			return fmt.Errorf("mcp_servers[%q]: identity_env is only valid on a stdio server (accounts are env-suffixed; http servers reject account variants)", s.Name)
 		}
-		if _, ok := s.Env[trimmed]; !ok {
+		val, ok := s.Env[trimmed]
+		if !ok {
 			return fmt.Errorf("mcp_servers[%q]: identity_env var %q is not a key of the server's env map", s.Name, trimmed)
+		}
+		// The signed-in user is data, never routing identity (ADR-0087): a
+		// key that routes a seat or money must not be filled from whoever is
+		// at the keyboard, and the variant guard would read the token as an
+		// inherited default-seat value and refuse every named seat anyway.
+		if usertoken.Mentions(val) {
+			return fmt.Errorf("mcp_servers[%q]: identity_env var %q is filled from ${FLEET_USER_EMAIL}; the signed-in user must never route a seat or money — drop it from identity_env (see docs/MCP-BUNDLE-ENV.md)", s.Name, trimmed)
 		}
 	}
 	return nil
@@ -2919,6 +2947,7 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		CriticalToolGroupApproval:     append([]string(nil), b.AgentPolicyConfig.CriticalToolGroupApproval...),
 		CriticalToolProgress:          append([]string(nil), b.AgentPolicyConfig.CriticalToolProgress...),
 		CriticalToolResultCards:       append([]string(nil), b.AgentPolicyConfig.CriticalToolResultCards...),
+		InteractiveHiddenTools:        append([]string(nil), b.AgentPolicyConfig.InteractiveHiddenTools...),
 	}
 	// An http_tool flagged `critical: true` opts into the SAME critical-tool audit
 	// gate as the manifest's critical_tools suffixes. The tool is registered as
@@ -3469,7 +3498,16 @@ func resolveEnvMap(in map[string]string, optional []string) map[string]string {
 	}
 	out := make(map[string]string, len(in))
 	for k, v := range in {
-		resolved := interpolate(v)
+		resolved, assembled := interpolate(v)
+		if assembled {
+			// The value names a user token that the manifest did not write:
+			// it was assembled from resolved fragments ("${A}${B}" with
+			// A="${FLEET_USER_" and B="EMAIL}"). Substituting it at spawn
+			// would fill a key the load checks never saw — an identity_env
+			// key included — with whoever is at the keyboard. Drop the key.
+			warnUserTokenAssembled(k)
+			continue
+		}
 		if resolved == "" && opt[k] {
 			continue
 		}
@@ -3540,7 +3578,14 @@ func copyStringMap(in map[string]string) map[string]string {
 // (#1123), so every other field — and ${VAR:?...} validation — sees the same
 // environment the runtime uses.
 func interpolateManifest(raw []byte, manifestPath string) ([]byte, error) {
+	// Escaped or padded user-token spellings (user_tokens.go) are refused on
+	// the raw text, before this pass collapses an escape — including one
+	// nested in a default body, which the loop below never descends into.
+	if err := rawUserTokenSpellingProblem(raw, manifestPath); err != nil {
+		return nil, err
+	}
 	s := string(raw)
+	var fromEnv [][2]int // output ranges substituted from the process env
 	var sb strings.Builder
 	sb.Grow(len(s))
 	for i := 0; i < len(s); {
@@ -3571,17 +3616,30 @@ func interpolateManifest(raw []byte, manifestPath string) ([]byte, error) {
 			// resolution.
 			sb.WriteString(s[i : end+1])
 		} else {
+			if val.fromEnv && val.text != "" {
+				fromEnv = append(fromEnv, [2]int{sb.Len(), sb.Len() + len(val.text)})
+			}
 			sb.WriteString(val.text)
 		}
 		i = end + 1
 	}
-	return []byte(sb.String()), nil
+	out := sb.String()
+	// User-token provenance (ADR-0087): a spelling the substituted env values
+	// helped form ("${A}${B}" with A="${FLEET_USER_" and B="EMAIL}") was not
+	// written by the bundle, yet every later check would read it as if it
+	// were. Fail the load rather than let it reach a connector — or an
+	// identity_env key — as the signed-in user.
+	if usertoken.AssembledFrom(out, fromEnv) {
+		return nil, fmt.Errorf("client config manifest %s: environment values substituted into the manifest assemble a reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME spelling; fleet substitutes the signed-in user only where the manifest itself writes the token (see docs/MCP-BUNDLE-ENV.md)", manifestPath)
+	}
+	return []byte(out), nil
 }
 
 // expandResult is the outcome of expanding one ${...} expression.
 type expandResult struct {
 	text     string // resolved replacement text (when deferred is false)
 	deferred bool   // true => leave the literal ${VAR} token in place (unset bare ref)
+	fromEnv  bool   // text came from the process env, not the manifest (user-token provenance, ADR-0087)
 }
 
 // reservedWorkspaceVar is the RESERVED spawn-time token name a bundle may use
@@ -3601,14 +3659,31 @@ type expandResult struct {
 // here: the spawn paths resolve it through the same root lookup the knob
 // feeds, so an operator setting and the token always agree, and an unset knob
 // yields the ./workspace default instead of a blank.
+//
+// ${FLEET_USER_EMAIL} (agentcore.UserEmailEnvToken, ADR-0087) is the signed-in
+// user's email on an interactive chat turn, substituted only when the
+// credential owner opens that turn's scope and dropped on every other spawn
+// path. It is reserved for the same reason as the others, and more so: an
+// operator-exported FLEET_USER_EMAIL resolved at load would hand ONE fixed
+// person's identity to every user's turn.
+//
+// FLEET_USER_NAME (usertoken.ReservedNameVar) is reserved with NO token behind
+// it — fleet has no name for the signed-in user — so it is never read from the
+// process env and every spelling of it fails the load (user_tokens.go).
 const (
 	reservedWorkspaceVar     = "FLEET_WORKSPACE"
 	reservedWorkspaceRootVar = "FLEET_WORKSPACE_ROOT"
 	reservedTaskIDVar        = "FLEET_TASK_ID"
+	reservedUserEmailVar     = usertoken.EmailVar
+	reservedUserNameVar      = usertoken.ReservedNameVar
 )
 
 func reservedRuntimeVar(name string) bool {
-	return name == reservedWorkspaceVar || name == reservedWorkspaceRootVar || name == reservedTaskIDVar
+	switch name {
+	case reservedWorkspaceVar, reservedWorkspaceRootVar, reservedTaskIDVar, reservedUserEmailVar, reservedUserNameVar:
+		return true
+	}
+	return false
 }
 
 // expandExpr resolves the body of a single ${...} expression (the text between
@@ -3635,12 +3710,12 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 		switch op {
 		case '-': // ${VAR:-default}
 			if v, ok := lookupNonEmpty(name); ok {
-				return expandResult{text: v}, nil
+				return expandResult{text: v, fromEnv: true}, nil
 			}
 			return expandResult{text: body}, nil
 		case '?': // ${VAR:?message}
 			if v, ok := lookupNonEmpty(name); ok {
-				return expandResult{text: v}, nil
+				return expandResult{text: v, fromEnv: true}, nil
 			}
 			msg := strings.TrimSpace(body)
 			if msg == "" {
@@ -3659,7 +3734,7 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 		return expandResult{deferred: true}, nil
 	}
 	if v, ok := lookupNonEmpty(name); ok {
-		return expandResult{text: v}, nil
+		return expandResult{text: v, fromEnv: true}, nil
 	}
 	// Unset bare ${VAR}: defer to spawn-time resolution.
 	return expandResult{deferred: true}, nil
@@ -3668,12 +3743,39 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 // lookupNonEmpty reports the trimmed process-env value for name and whether it is
 // set AND non-empty (empty env counts as unset, matching POSIX ${VAR:-default}
 // and the legacy getEnvOrDefault, which treated an empty value as "use default").
+//
+// It is the one read behind every ${VAR} the manifest resolves — at load
+// (expandExpr) and at catalog-build time (resolveSpawnExpr) — so it is also
+// where the signed-in-user token's provenance is enforced (ADR-0087): a
+// process value that names ${FLEET_USER_EMAIL} (or FLEET_USER_NAME) in any
+// spelling counts as UNSET. Otherwise `OWNER_ID: "${OWNER_ID}"` with
+// OWNER_ID=${FLEET_USER_EMAIL} exported would pass every load check (the
+// manifest shows only ${OWNER_ID}) and then be filled with whoever is at the
+// keyboard — in an identity_env key, a seat or money would follow the user.
+// The token is honoured only where the bundle itself writes it.
 func lookupNonEmpty(name string) (string, bool) {
-	v := strings.TrimSpace(os.Getenv(strings.TrimSpace(name)))
+	name = strings.TrimSpace(name)
+	v := strings.TrimSpace(os.Getenv(name))
 	if v == "" {
 		return "", false
 	}
+	if usertoken.Mentions(v) {
+		warnUserTokenFromEnv(name)
+		return "", false
+	}
 	return v, true
+}
+
+// userTokenEnvWarned dedupes warnUserTokenFromEnv per variable name.
+var userTokenEnvWarned sync.Map
+
+// warnUserTokenFromEnv logs, once per variable, that a process value naming a
+// user token was ignored. The value itself is never logged.
+func warnUserTokenFromEnv(name string) {
+	if _, seen := userTokenEnvWarned.LoadOrStore(name, true); seen {
+		return
+	}
+	log.Printf("clientconfig: warning: the process env value of %s names the reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME token; fleet substitutes the signed-in user only where the bundle manifest itself writes the token, so %s is treated as unset (see docs/MCP-BUNDLE-ENV.md)", name, name)
 }
 
 // matchBrace returns the index of the '}' that closes the '{' at position open
@@ -3707,10 +3809,19 @@ func matchBrace(s string, open int) (int, bool) {
 // already failed the load). The reserved runtime tokens (reservedRuntimeVar)
 // are preserved verbatim — never env-resolved, never blanked — for the MCP
 // spawn paths to substitute. An unterminated "${" is copied through verbatim.
-func interpolate(v string) string {
+//
+// It also checks the user token's provenance (ADR-0087): it records the byte
+// ranges of the output that came from the process env, and if any user-token
+// spelling in the assembled value overlaps one of them — "${A}${B}" with
+// A="${FLEET_USER_" and B="EMAIL}", or an env fragment completing manifest
+// text — the token was not written by the bundle, and assembled is true (the
+// result is then ""). Tokens the manifest wrote, verbatim or in a default
+// body, are untouched.
+func interpolate(v string) (out string, assembled bool) {
 	if !strings.Contains(v, "${") {
-		return v
+		return v, false
 	}
+	var fromEnv [][2]int
 	var sb strings.Builder
 	sb.Grow(len(v))
 	for i := 0; i < len(v); {
@@ -3730,26 +3841,45 @@ func interpolate(v string) string {
 			sb.WriteString(v[i:])
 			break
 		}
-		sb.WriteString(resolveSpawnExpr(v[i+2:end], v[i:end+1]))
+		text, env := resolveSpawnExpr(v[i+2:end], v[i:end+1])
+		if env && text != "" {
+			fromEnv = append(fromEnv, [2]int{sb.Len(), sb.Len() + len(text)})
+		}
+		sb.WriteString(text)
 		i = end + 1
 	}
-	return sb.String()
+	out = sb.String()
+	if usertoken.AssembledFrom(out, fromEnv) {
+		return "", true
+	}
+	return out, false
+}
+
+// warnUserTokenAssembled logs, once per env key, that a value assembling a
+// user token from resolved fragments was dropped. No value is logged.
+func warnUserTokenAssembled(key string) {
+	if _, seen := userTokenEnvWarned.LoadOrStore("assembled:"+key, true); seen {
+		return
+	}
+	log.Printf("clientconfig: warning: MCP env/header %s resolves to a reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME spelling the manifest did not write (assembled from environment values); the key is dropped (see docs/MCP-BUNDLE-ENV.md)", key)
 }
 
 // resolveSpawnExpr resolves one ${...} expression at catalog-build time (expr
-// is the text between the braces, token the original "${...}" spelling). It
+// is the text between the braces, token the original "${...}" spelling);
+// fromEnv reports that the text came from the process env (not the manifest),
+// for interpolate's provenance check. It
 // mirrors expandExpr with the two load/spawn differences: an unset bare ${VAR}
 // resolves to "" (there is no later pass to defer to), and a reserved runtime
 // token is preserved verbatim in ANY spelling rather than erroring — the load
 // pass already rejected non-bare reserved forms, so this is belt-and-braces
 // against a value that never went through it.
-func resolveSpawnExpr(expr, token string) string {
+func resolveSpawnExpr(expr, token string) (text string, fromEnv bool) {
 	head := expr
 	if idx := strings.IndexByte(expr, ':'); idx >= 0 {
 		head = expr[:idx]
 	}
 	if reservedRuntimeVar(strings.TrimSpace(head)) {
-		return token
+		return token, false
 	}
 	if idx := strings.IndexByte(expr, ':'); idx >= 0 && idx+1 < len(expr) {
 		name := expr[:idx]
@@ -3758,16 +3888,16 @@ func resolveSpawnExpr(expr, token string) string {
 		switch op {
 		case '-': // ${VAR:-default}
 			if v, ok := lookupNonEmpty(name); ok {
-				return v
+				return v, true
 			}
-			return body
+			return body, false
 		case '?': // ${VAR:?message}
 			v, _ := lookupNonEmpty(name)
-			return v
+			return v, true
 		}
 		// Any other ':X' is not a form we support; treat the whole expression
 		// as a bare name, matching expandExpr.
 	}
 	v, _ := lookupNonEmpty(expr)
-	return v
+	return v, true
 }
