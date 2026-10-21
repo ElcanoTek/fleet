@@ -81,6 +81,33 @@ func Find(s string) []Spelling {
 	return out
 }
 
+// Locate returns the [start, end) byte range of every spelling in s, in order
+// — for a caller that must know which part of an assembled string a spelling
+// came from.
+func Locate(s string) [][]int {
+	if !strings.Contains(s, "FLEET_USER_") {
+		return nil
+	}
+	return spelling.FindAllStringIndex(s, -1)
+}
+
+// AssembledFrom reports whether any spelling in s overlaps one of the given
+// [start, end) byte ranges of s — i.e. whether text that came from those
+// ranges (resolved environment values) helped form a user token.
+func AssembledFrom(s string, ranges [][2]int) bool {
+	if len(ranges) == 0 {
+		return false
+	}
+	for _, m := range Locate(s) {
+		for _, r := range ranges {
+			if m[0] < r[1] && r[0] < m[1] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Mentions reports whether s names a reserved user variable in any spelling.
 func Mentions(s string) bool {
 	return strings.Contains(s, "FLEET_USER_") && spelling.MatchString(s)

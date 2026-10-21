@@ -3498,7 +3498,16 @@ func resolveEnvMap(in map[string]string, optional []string) map[string]string {
 	}
 	out := make(map[string]string, len(in))
 	for k, v := range in {
-		resolved := interpolate(v)
+		resolved, assembled := interpolate(v)
+		if assembled {
+			// The value names a user token that the manifest did not write:
+			// it was assembled from resolved fragments ("${A}${B}" with
+			// A="${FLEET_USER_" and B="EMAIL}"). Substituting it at spawn
+			// would fill a key the load checks never saw — an identity_env
+			// key included — with whoever is at the keyboard. Drop the key.
+			warnUserTokenAssembled(k)
+			continue
+		}
 		if resolved == "" && opt[k] {
 			continue
 		}
@@ -3576,6 +3585,7 @@ func interpolateManifest(raw []byte, manifestPath string) ([]byte, error) {
 		return nil, err
 	}
 	s := string(raw)
+	var fromEnv [][2]int // output ranges substituted from the process env
 	var sb strings.Builder
 	sb.Grow(len(s))
 	for i := 0; i < len(s); {
@@ -3606,17 +3616,30 @@ func interpolateManifest(raw []byte, manifestPath string) ([]byte, error) {
 			// resolution.
 			sb.WriteString(s[i : end+1])
 		} else {
+			if val.fromEnv && val.text != "" {
+				fromEnv = append(fromEnv, [2]int{sb.Len(), sb.Len() + len(val.text)})
+			}
 			sb.WriteString(val.text)
 		}
 		i = end + 1
 	}
-	return []byte(sb.String()), nil
+	out := sb.String()
+	// User-token provenance (ADR-0087): a spelling the substituted env values
+	// helped form ("${A}${B}" with A="${FLEET_USER_" and B="EMAIL}") was not
+	// written by the bundle, yet every later check would read it as if it
+	// were. Fail the load rather than let it reach a connector — or an
+	// identity_env key — as the signed-in user.
+	if usertoken.AssembledFrom(out, fromEnv) {
+		return nil, fmt.Errorf("client config manifest %s: environment values substituted into the manifest assemble a reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME spelling; fleet substitutes the signed-in user only where the manifest itself writes the token (see docs/MCP-BUNDLE-ENV.md)", manifestPath)
+	}
+	return []byte(out), nil
 }
 
 // expandResult is the outcome of expanding one ${...} expression.
 type expandResult struct {
 	text     string // resolved replacement text (when deferred is false)
 	deferred bool   // true => leave the literal ${VAR} token in place (unset bare ref)
+	fromEnv  bool   // text came from the process env, not the manifest (user-token provenance, ADR-0087)
 }
 
 // reservedWorkspaceVar is the RESERVED spawn-time token name a bundle may use
@@ -3687,12 +3710,12 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 		switch op {
 		case '-': // ${VAR:-default}
 			if v, ok := lookupNonEmpty(name); ok {
-				return expandResult{text: v}, nil
+				return expandResult{text: v, fromEnv: true}, nil
 			}
 			return expandResult{text: body}, nil
 		case '?': // ${VAR:?message}
 			if v, ok := lookupNonEmpty(name); ok {
-				return expandResult{text: v}, nil
+				return expandResult{text: v, fromEnv: true}, nil
 			}
 			msg := strings.TrimSpace(body)
 			if msg == "" {
@@ -3711,7 +3734,7 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 		return expandResult{deferred: true}, nil
 	}
 	if v, ok := lookupNonEmpty(name); ok {
-		return expandResult{text: v}, nil
+		return expandResult{text: v, fromEnv: true}, nil
 	}
 	// Unset bare ${VAR}: defer to spawn-time resolution.
 	return expandResult{deferred: true}, nil
@@ -3786,10 +3809,19 @@ func matchBrace(s string, open int) (int, bool) {
 // already failed the load). The reserved runtime tokens (reservedRuntimeVar)
 // are preserved verbatim — never env-resolved, never blanked — for the MCP
 // spawn paths to substitute. An unterminated "${" is copied through verbatim.
-func interpolate(v string) string {
+//
+// It also checks the user token's provenance (ADR-0087): it records the byte
+// ranges of the output that came from the process env, and if any user-token
+// spelling in the assembled value overlaps one of them — "${A}${B}" with
+// A="${FLEET_USER_" and B="EMAIL}", or an env fragment completing manifest
+// text — the token was not written by the bundle, and assembled is true (the
+// result is then ""). Tokens the manifest wrote, verbatim or in a default
+// body, are untouched.
+func interpolate(v string) (out string, assembled bool) {
 	if !strings.Contains(v, "${") {
-		return v
+		return v, false
 	}
+	var fromEnv [][2]int
 	var sb strings.Builder
 	sb.Grow(len(v))
 	for i := 0; i < len(v); {
@@ -3809,26 +3841,45 @@ func interpolate(v string) string {
 			sb.WriteString(v[i:])
 			break
 		}
-		sb.WriteString(resolveSpawnExpr(v[i+2:end], v[i:end+1]))
+		text, env := resolveSpawnExpr(v[i+2:end], v[i:end+1])
+		if env && text != "" {
+			fromEnv = append(fromEnv, [2]int{sb.Len(), sb.Len() + len(text)})
+		}
+		sb.WriteString(text)
 		i = end + 1
 	}
-	return sb.String()
+	out = sb.String()
+	if usertoken.AssembledFrom(out, fromEnv) {
+		return "", true
+	}
+	return out, false
+}
+
+// warnUserTokenAssembled logs, once per env key, that a value assembling a
+// user token from resolved fragments was dropped. No value is logged.
+func warnUserTokenAssembled(key string) {
+	if _, seen := userTokenEnvWarned.LoadOrStore("assembled:"+key, true); seen {
+		return
+	}
+	log.Printf("clientconfig: warning: MCP env/header %s resolves to a reserved ${FLEET_USER_EMAIL}/FLEET_USER_NAME spelling the manifest did not write (assembled from environment values); the key is dropped (see docs/MCP-BUNDLE-ENV.md)", key)
 }
 
 // resolveSpawnExpr resolves one ${...} expression at catalog-build time (expr
-// is the text between the braces, token the original "${...}" spelling). It
+// is the text between the braces, token the original "${...}" spelling);
+// fromEnv reports that the text came from the process env (not the manifest),
+// for interpolate's provenance check. It
 // mirrors expandExpr with the two load/spawn differences: an unset bare ${VAR}
 // resolves to "" (there is no later pass to defer to), and a reserved runtime
 // token is preserved verbatim in ANY spelling rather than erroring — the load
 // pass already rejected non-bare reserved forms, so this is belt-and-braces
 // against a value that never went through it.
-func resolveSpawnExpr(expr, token string) string {
+func resolveSpawnExpr(expr, token string) (text string, fromEnv bool) {
 	head := expr
 	if idx := strings.IndexByte(expr, ':'); idx >= 0 {
 		head = expr[:idx]
 	}
 	if reservedRuntimeVar(strings.TrimSpace(head)) {
-		return token
+		return token, false
 	}
 	if idx := strings.IndexByte(expr, ':'); idx >= 0 && idx+1 < len(expr) {
 		name := expr[:idx]
@@ -3837,16 +3888,16 @@ func resolveSpawnExpr(expr, token string) string {
 		switch op {
 		case '-': // ${VAR:-default}
 			if v, ok := lookupNonEmpty(name); ok {
-				return v
+				return v, true
 			}
-			return body
+			return body, false
 		case '?': // ${VAR:?message}
 			v, _ := lookupNonEmpty(name)
-			return v
+			return v, true
 		}
 		// Any other ':X' is not a form we support; treat the whole expression
 		// as a bare name, matching expandExpr.
 	}
 	v, _ := lookupNonEmpty(expr)
-	return v
+	return v, true
 }

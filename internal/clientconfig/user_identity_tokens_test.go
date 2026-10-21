@@ -322,6 +322,59 @@ mcp_servers:
 	})
 }
 
+// TestUserTokenAssembledFromEnvFragments: no single env value names the token,
+// but "${A}${B}" with A="${FLEET_USER_" and B="EMAIL}" (or an env fragment
+// completing manifest text) assembles it. That spelling was not written by
+// the bundle: exported before the load it fails the load; exported after, the
+// key is dropped at catalog-build time — never filled with the signed-in user
+// (in an identity_env key a seat would follow the user). Tokens the manifest
+// wrote are untouched. ADR-0087.
+func TestUserTokenAssembledFromEnvFragments(t *testing.T) {
+	manifest := `
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py"]
+    always: true
+    env:
+      OWNER_ID: "${DEALS_FRAG_A}${DEALS_FRAG_B}"
+      REPLY_TO: "${DEALS_FRAG_C}FLEET_USER_EMAIL}"
+      MIXED: "${DEALS_PLAIN}/${FLEET_USER_EMAIL}"
+      DEFAULTED: "${DEALS_UNSET_X:-${FLEET_USER_EMAIL}}"
+    identity_env: ["OWNER_ID"]
+`
+	t.Run("exported before load fails the load", func(t *testing.T) {
+		t.Setenv("DEALS_FRAG_A", "${FLEET_USER_")
+		t.Setenv("DEALS_FRAG_B", "EMAIL}")
+		_, err := Load(writeManifest(t, manifest))
+		if err == nil || !strings.Contains(err.Error(), "assemble a reserved") {
+			t.Fatalf("error = %v, want the assembled-token refusal", err)
+		}
+	})
+	t.Run("exported after load drops the key", func(t *testing.T) {
+		b, err := Load(writeManifest(t, manifest))
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		t.Setenv("DEALS_FRAG_A", "${FLEET_USER_")
+		t.Setenv("DEALS_FRAG_B", "EMAIL}")
+		t.Setenv("DEALS_PLAIN", "out")
+		t.Setenv("DEALS_FRAG_C", "${")
+		env := b.MCPServerConfigs()["deals"].Env
+		for _, k := range []string{"OWNER_ID", "REPLY_TO"} {
+			if v, ok := env[k]; ok {
+				t.Errorf("%s = %q, want the key dropped (token assembled from env values)", k, v)
+			}
+		}
+		if got := env["MIXED"]; got != "out/${FLEET_USER_EMAIL}" {
+			t.Errorf("MIXED = %q, want the manifest's own token kept beside the env value", got)
+		}
+		if got := env["DEFAULTED"]; got != "${FLEET_USER_EMAIL}" {
+			t.Errorf("DEFAULTED = %q, want the manifest-written default kept", got)
+		}
+	})
+}
+
 // TestUserNameTokenIsRefused: fleet has no name for the signed-in user (sign-in
 // carries an email and no name claim, and a name is never guessed from the
 // email), so FLEET_USER_NAME is reserved with no token behind it. Every
