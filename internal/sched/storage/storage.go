@@ -1371,6 +1371,12 @@ func (s *Storage) ListTagCatalogue(ctx context.Context, scope db.TagCatalogueSco
 	return s.db.GetTagCatalogue(ctx, scope)
 }
 
+// ListRecipientHistory returns the email recipients visible tasks already
+// deliver to, for the task form's suggestions (GET /tasks/recipients).
+func (s *Storage) ListRecipientHistory(ctx context.Context, scope db.RecipientHistoryScope, since time.Time, limit int) ([]db.RecipientUse, error) {
+	return s.db.GetRecipientHistory(ctx, scope, since, limit)
+}
+
 // UpdateTaskStatusAtomic updates a task's status atomically, verifying lease
 // ownership/assignment and handling completion + recurrence. Preserved verbatim
 // from moc; the in-process worker reports status through this same path.

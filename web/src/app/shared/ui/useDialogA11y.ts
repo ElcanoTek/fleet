@@ -86,6 +86,18 @@ export function useDialogA11y(
       // key; this one stays quiet so Escape closes one layer, not two.
       if (!isTopDialog(token)) return;
       if (event.key === "Escape") {
+        // An expanded combobox inside the dialog owns this Escape: it closes
+        // its own list (ModelPicker, the task form's recipient suggestions),
+        // and the next Escape reaches the dialog. Listening in the capture
+        // phase means the combobox cannot stop this itself.
+        const target = event.target;
+        if (
+          target instanceof HTMLElement &&
+          target.getAttribute("role") === "combobox" &&
+          target.getAttribute("aria-expanded") === "true"
+        ) {
+          return;
+        }
         event.preventDefault();
         onCloseRef.current();
         return;

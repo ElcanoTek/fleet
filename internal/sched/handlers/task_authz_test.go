@@ -62,6 +62,7 @@ func setupTaskAuthz(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux)
 		r.Use(h.AdminOrUserAuthMiddleware)
 		r.Get("/tasks", h.ListTasks)
 		r.Get("/tasks/tags", h.GetTagCatalogue)
+		r.Get("/tasks/recipients", h.GetRecipientHistory)
 		r.Get("/tasks/export", h.HandleTaskExport)
 		r.Get("/tasks/upcoming", h.GetUpcomingRuns)
 		r.Get("/tasks/{task_id}", h.GetTask)
@@ -370,5 +371,70 @@ func TestTagCatalogueAuthz(t *testing.T) {
 	adminKeyTags := toMap(getTagCatalogue(t, r, "X-API-Key", "admin-key"))
 	if len(adminKeyTags) != 4 || adminKeyTags["shared"] != 3 {
 		t.Errorf("admin key tags mismatch: got %v", adminKeyTags)
+	}
+}
+
+// TestRecipientHistoryAuthz pins GET /tasks/recipients: a non-admin learns only
+// the addresses its own tasks deliver to, an admin sees every visible task's,
+// and a line in a delivery block that is not a bare address is never offered.
+func TestRecipientHistoryAuthz(t *testing.T) {
+	store, _, r := setupTaskAuthz(t)
+
+	alice := addLogUser(t, store, "alice", "client", "alice-token")
+	bob := addLogUser(t, store, "bob", "client", "bob-token")
+	addLogUser(t, store, "root", "admin", "root-token")
+
+	block := func(addrs ...string) string {
+		out := "Report\n\n---\nCRITICAL ACTION\nemail:\n  action: send_report\n  recipients:\n"
+		for _, a := range addrs {
+			out += "    - " + a + "\n"
+		}
+		return out + "---"
+	}
+	for _, tc := range []struct {
+		owner  *uuid.UUID
+		prompt string
+	}{
+		{&alice.ID, block("alice-client@example.com", "shared@example.com")},
+		{&bob.ID, block("bob-secret@example.com", "shared@example.com", "<weird>@example.com")},
+	} {
+		task := &models.Task{ID: uuid.New(), Prompt: tc.prompt, Status: models.TaskStatusSuccess, CreatedBy: tc.owner, CreatedAt: time.Now().UTC()}
+		if _, err := store.AddTask(task); err != nil {
+			t.Fatalf("add task: %v", err)
+		}
+	}
+
+	get := func(token string) map[string]int {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/tasks/recipients", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /tasks/recipients: code=%d body=%s", w.Code, w.Body.String())
+		}
+		var out []db.RecipientUse
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		m := map[string]int{}
+		for _, ru := range out {
+			m[ru.Email] = ru.TaskCount
+		}
+		return m
+	}
+
+	if got := get("alice-token"); len(got) != 2 || got["alice-client@example.com"] != 1 || got["shared@example.com"] != 1 {
+		t.Errorf("alice sees %v, want only her own two addresses", got)
+	}
+	bobSees := get("bob-token")
+	if _, leaked := bobSees["alice-client@example.com"]; leaked {
+		t.Errorf("bob must not learn alice's recipients: %v", bobSees)
+	}
+	if _, bad := bobSees["<weird>@example.com"]; bad {
+		t.Errorf("a non-address line must not be suggested: %v", bobSees)
+	}
+	if got := get("root-token"); len(got) != 3 || got["shared@example.com"] != 2 {
+		t.Errorf("admin sees %v, want all three addresses with shared counted twice", got)
 	}
 }

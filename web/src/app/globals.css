@@ -4519,6 +4519,58 @@ tr.sla-row-fail {
 .task-chipfield.has-error {
   border-color: var(--color-danger);
 }
+/* Remembered-recipient suggestions under the Email results chip box
+   (TaskCreateModal): a listbox floating over the form, not pushing it down. */
+.task-suggest-anchor {
+  position: relative;
+}
+.task-suggest {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  max-height: 16rem;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0.625rem;
+  background: var(--color-surface-1);
+  box-shadow: var(--shadow-md);
+}
+.task-suggest-option {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  border-radius: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+.task-suggest-option.is-active {
+  background: var(--color-overlay-soft);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+.task-suggest-email {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-suggest-meta {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
 .task-chip {
   display: inline-flex;
   align-items: center;
