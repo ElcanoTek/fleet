@@ -49,7 +49,8 @@ const (
 // spawn_subagent (internal/agent) returns a child run's answer, which only a
 // whole new child run could reproduce; task_tracker returns the plan the
 // finish gate holds the run to (a summary re-announces it after a compaction,
-// an elision does not).
+// an elision does not). A2A peer tools are named per peer (<peer>_<op>), so
+// they are not listed: their stubs say to re-run only a tool that reads data.
 var elisionKeptTools = map[string]bool{"spawn_subagent": true, toolNameTaskTracker: true}
 
 // elisionResult is what elideStaleToolResults did.
@@ -217,7 +218,7 @@ const (
 // a 30%-of-budget recent window held some 60% of the budget, and the stubs'
 // savings looked half their size.
 //
-// Three shapes it does not see, each bounded:
+// Four shapes it does not see, each bounded:
 //   - The rate is one average over the history. When the old results that
 //     get elided cost the provider fewer tokens per character than the rest
 //     (prose first, dense data later), their savings are over-counted.
@@ -228,10 +229,18 @@ const (
 //     When the call that fired was also trimmed to fit the model's input
 //     allowance (compactOldToolResults, near the window: the window path, not
 //     the resend budget), used holds the trimmed history and the rate is low.
+//   - The measured span can hold less than the call that fired sent:
+//     reasoning resent within a round, which the carried history drops, or a
+//     step cut off by length, whose assistant message the replay drops
+//     (messagesForReplay), so the span ends a step early. Then the rate is
+//     high, not low.
 //
-// In each, the estimate after elision can come out low, and the run pauses
-// again a step or two later; that pause cannot free enough by elision, so the
-// summary runs. One extra pause, no more: the next one re-measures the rate.
+// In the first three, the estimate after elision can come out low, and the
+// run pauses again a step or two later; that pause cannot free enough by
+// elision, so the summary runs. One extra pause, no more: the next one
+// re-measures the rate. In the fourth, the estimate comes out high and the
+// window small: more results are stubbed, and a summary may run that elision
+// alone would have spared. It never lets a call past the budget.
 func (e *engine) historyTokenRate(messages []fantasy.Message, used int, measured bool) float64 {
 	if !measured || e.resendPrefix <= 0 || used <= e.resendPrefix {
 		return 1

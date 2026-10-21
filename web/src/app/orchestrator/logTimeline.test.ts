@@ -114,7 +114,7 @@ describe("parseRuntimeEvent", () => {
 
   it("reads the elision breadcrumb as its own event", () => {
     const ev = parseRuntimeEvent(
-      "[context_elided] trigger=resend_budget used=220205 budget=80000 elided_results=7 elided_bytes=270529 estimated_after=162595 — tool results older than the recent window were replaced with short previews; that freed enough, so no summary was needed",
+      "[context_elided] trigger=resend_budget used=220205 budget=80000 elided_results=7 elided_bytes=270529 estimated_after=162595 token_rate=1.00 — tool results older than the recent window were replaced with short previews; that freed enough, so no summary was needed",
     );
     expect(ev).toMatchObject({ tag: "context_elided", title: "Older tool results trimmed", tone: "info" });
     expect(ev?.fields).toContainEqual(["elided_results", "7"]);

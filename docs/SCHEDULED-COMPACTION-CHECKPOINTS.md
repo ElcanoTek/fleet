@@ -327,23 +327,25 @@ fewer summarizer calls; making the elided content recallable added nothing.
   their place on every call; and the results of `spawn_subagent` (a child run's
   answer, which only a whole new child run could reproduce) and `task_tracker`
   (the plan the finish gate holds the run to, which a summary re-announces and
-  an elision does not). Assistant text, tool-call inputs, the pinned head and
-  any summary are byte-identical, every result keeps its call ID (#1106), and
-  the history is copied, never written in place. An elision that would save
-  less than 2% of the budget is not made at all: it could not skip the summary.
+  an elision does not). A2A peer tools are named per peer, so they are not kept
+  by name; their stubs say to re-run only a tool that reads data. Assistant
+  text, tool-call inputs, the pinned head and any summary are byte-identical,
+  every result keeps its call ID (#1106), and the history is copied, never
+  written in place. An elision that would save less than 2% of the budget is
+  not made at all: it could not skip the summary.
 - **Then.** The resent size is estimated again: the measured prefix plus the
   elided history, as sent, at the run's rate. That includes what the provider's
   count for the paused call did not yet include (the step's own assistant
   message and results, and anything appended after them). With no floor
   measured, it falls back to that count, less the stubs' savings, plus the
   paused step's output, and never below the estimator's own count of the elided
-  request. On the #1600 fixture the estimate came within 20 tokens of what the
-  next step resent, and on a fixture counting tool output at twice the
-  estimator's rate, within 3%. The summary is bought only if the estimate is
-  not at least 30% of the budget below the threshold: a run that elides gets
-  room for several more steps before its next pause, rather than pausing again
-  on the next one. When the summary does run, it is written from the history as
-  it stood before this pass's stubs, so the identifiers it is asked to keep are
+  request. On the #1600 fixture the estimate came within 0.2% of what the next
+  step resent, and on a fixture counting tool output at twice the estimator's
+  rate, within 3%. The summary is bought only if the estimate is not at least
+  30% of the budget below the threshold: a run that elides gets room for
+  several more steps before its next pause, rather than pausing again on the
+  next one. When the summary does run, it is written from the history as it
+  stood before this pass's stubs, so the identifiers it is asked to keep are
   not lost to a preview just made; only the kept half carries this pass's
   stubs. A result stubbed at an earlier pause is a preview by then, in the
   summary's input as everywhere else.
@@ -353,8 +355,9 @@ fewer summarizer calls; making the elided content recallable added nothing.
   threshold, clamped to the in-round allowance when the window checkpoint is
   the run's checkpoint (the resend budget turned off).
 - **Bookkeeping.** An elision is a clean reduction like the proactive
-  compaction: it resets the consecutive-compaction count, clears the stalled
-  window flag, and marks the floor for re-measurement at the next step.
+  compaction: it resets the consecutive-compaction count, on the window path
+  clears the stalled window flag, and marks the floor for re-measurement at the
+  next step.
 - **Visible as.** `fleet.context_compacted` with `trigger: "elision"`,
   `elision_trigger` (`resend_budget` or `window`), `elided_results`,
   `elided_bytes`, `used_tokens`, `estimated_tokens_after` and
@@ -491,9 +494,14 @@ in what it was sent.
   model's tokenizer that grows it is taken for history. And the rate is
   measured against the history as the guard always sends it, but not as it
   trims it to fit the model's input allowance, which happens near the window
-  (the window path, not the resend budget). In each case the estimate after
+  (the window path, not the resend budget). In each of these the estimate after
   elision can come out low; the run then pauses again a step or two later, that
-  pause cannot free enough, and the summary runs: one extra pause, no more.
+  pause cannot free enough, and the summary runs: one extra pause, no more. The
+  opposite also happens: when the call that fired sent more than the measured
+  span holds (reasoning resent within a round, which the carried history drops,
+  or a step cut off by length, whose assistant message the replay drops), the
+  rate comes out high, more results are stubbed, and a summary may run that
+  elision alone would have spared; never a call past the budget.
 - Getting an elided result back into the history. Once a result is a stub,
   the full output is in the session log (and, when the tool output boundary
   saved it, in the workspace file the stub names), not in what the model is

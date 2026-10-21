@@ -619,22 +619,21 @@ never fewer than the last two assistant turns. Both it and the savings are
 measured in the provider's tokens: each elision first takes the run's own rate
 of provider tokens per estimated token from the call that fired, against the
 history as it was sent, since dense output such as digits costs far more than
-the estimator's 4 characters a token. Results of 2 KiB or less, media,
-results the in-round guard already stubs on every call, and the results of
+the estimator's 4 characters a token. Results of 2 KiB or less, media, results
+the in-round guard already stubs on every call, and the results of
 `spawn_subagent` and `task_tracker` are left alone. The run then estimates the
 resent size again (the measured prefix plus the elided history at that rate,
 which includes the paused step's own output), and buys the summary only if
-elision did not bring
-it at least 30% of the budget below the threshold. A summary that still runs is
-written from the history as it stood before this pass's stubs (a result stubbed
-at an earlier pause is a preview by then). The stubs are
-carried in the history from then on, written at the moment the compaction
-already rewrites it, so they cost no extra prompt-cache miss. Assistant text,
-tool-call inputs, the pinned head and any summary are never changed, and every
-result keeps its call ID. Each elision emits `fleet.context_compacted` with
-`trigger: "elision"`, `elision_trigger`, `elided_results`, `elided_bytes`,
-`estimated_tokens_after` and `history_token_rate`, plus the firing trigger's
-own fields, and writes a
+elision did not bring it at least 30% of the budget below the threshold. A
+summary that still runs is written from the history as it stood before this
+pass's stubs (a result stubbed at an earlier pause is a preview by then). The
+stubs are carried in the history from then on, written at the moment the
+compaction already rewrites it, so they cost no extra prompt-cache miss.
+Assistant text, tool-call inputs, the pinned head and any summary are never
+changed, and every result keeps its call ID. Each elision emits
+`fleet.context_compacted` with `trigger: "elision"`, `elision_trigger`,
+`elided_results`, `elided_bytes`, `estimated_tokens_after` and
+`history_token_rate`, plus the firing trigger's own fields, and writes a
 `[context_elided]` session-log breadcrumb. Like a proactive compaction, it
 marks the floor for re-measurement and does not count toward the
 consecutive-compaction cap. `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY=0` turns it
