@@ -18,34 +18,28 @@ func NarrowingNote(arg string, staged, approved []string) string {
 	for _, v := range approved {
 		picked[v] = true
 	}
-	// Name the smaller side exactly, by its 1-based position in the staged
-	// list (the call's recorded arguments hold that list), and by value too
-	// when it is short. Positions keep the note small and exact whatever the
-	// values are: at most 250 positions.
+	// Name the smaller side exactly by its 1-based positions in the staged
+	// list, which the call's recorded arguments hold. Positions only, never
+	// the values: the values are model-authored, so a line built from them
+	// could carry what output governance must scrub or block, and this line
+	// must reach the model whole (it is also replayed at restart recovery).
 	var approvedPos, leftPos []int
-	var approvedVals, leftVals []string
 	for i, v := range staged {
 		if picked[v] {
 			approvedPos = append(approvedPos, i+1)
-			approvedVals = append(approvedVals, fmt.Sprintf("%q", v))
 		} else {
 			leftPos = append(leftPos, i+1)
-			leftVals = append(leftVals, fmt.Sprintf("%q", v))
 		}
 	}
-	side, pos, vals, other := "were approved", approvedPos, approvedVals, fmt.Sprintf("the other %d were left out", len(leftPos))
+	side, pos, other := "were approved", approvedPos, fmt.Sprintf("the other %d were left out", len(leftPos))
 	if len(leftPos) < len(approvedPos) {
-		side, pos, vals, other = "were left out", leftPos, leftVals, fmt.Sprintf("the other %d were approved", len(approvedPos))
+		side, pos, other = "were left out", leftPos, fmt.Sprintf("the other %d were approved", len(approvedPos))
 	}
-	named := ""
-	if len(vals) <= narrowingNoteMaxNamed {
-		named = " (" + strings.Join(vals, ", ") + ")"
-	}
-	// The note records the person's decision only. Whether the approved ones
-	// ran is the call's own outcome (it may have failed before it was sent,
-	// or a restart may have left it unknown), so the note never claims it.
-	return fmt.Sprintf("[fleet] The person narrowed this call: of the %d staged %s in its arguments, only positions %s%s %s; %s. Only the approved ones could be sent to the tool; the result says whether they ran. Do not run the left-out ones unless the person asks. (Written by fleet, not the tool.)",
-		len(staged), arg, PositionRanges(pos), named, side, other)
+	// The decision only: whether the approved ones ran is the call's own
+	// outcome (it may have failed before it was sent, or a restart may have
+	// left it unknown), so the line never claims it.
+	return fmt.Sprintf("[fleet] The person narrowed this call: of the %d staged %s in its arguments, only positions %s %s; %s. Only the approved ones could be sent to the tool; the result says whether they ran. Do not run the left-out ones unless the person asks. (Written by fleet, not the tool.)",
+		len(staged), arg, PositionRanges(pos), side, other)
 }
 
 // PositionRanges writes ascending 1-based positions compactly: "1-3, 5, 8-10".
@@ -66,11 +60,6 @@ func PositionRanges(pos []int) string {
 	}
 	return strings.Join(parts, ", ")
 }
-
-// narrowingNoteMaxNamed bounds how many values the note also names by value;
-// above it the positions alone identify them. The values are model-authored,
-// so the note stays small whatever the staged list held.
-const narrowingNoteMaxNamed = 20
 
 // narrowingNoteFor is NarrowingNote for a stored narrowed_json record, or ""
 // when there is none or it does not read.

@@ -53,6 +53,10 @@ func buildNarrowableArgs(entries map[string]string, modes map[string]string, cri
 			problems = append(problems, fmt.Sprintf("ignoring critical_tool_narrowable_args entry %q: arg %q is not a top-level argument name (letters, digits and _, starting with a letter or _)", suffix, arg))
 			continue
 		}
+		if suffixMatches(sendEmailToolSuffix, suffix) {
+			problems = append(problems, fmt.Sprintf("ignoring critical_tool_narrowable_args entry %q: it selects email sends, whose card previews the message and has no rows to untick", suffix))
+			continue
+		}
 		set, staged := buildStagedCardSuffixSet("critical_tool_narrowable_args", []string{suffix}, modes, critical)
 		if len(staged) > 0 {
 			problems = append(problems, staged...)

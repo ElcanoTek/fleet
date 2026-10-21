@@ -182,7 +182,7 @@ func TestHandleApproval_NarrowedRunsOnlyTheApprovedValues(t *testing.T) {
 	if narrowed == nil || !reflect.DeepEqual(narrowed["approved"], []any{"a", "c"}) {
 		t.Fatalf("reply narrowed = %v", body["narrowed"])
 	}
-	if !strings.HasPrefix(st.result, `{"success":true}`) || !strings.Contains(st.result, `of the 3 staged deal_ids in its arguments, only positions 2 ("b") were left out; the other 2 were approved. Only the approved ones could be sent to the tool`) {
+	if !strings.HasPrefix(st.result, `{"success":true}`) || !strings.Contains(st.result, `of the 3 staged deal_ids in its arguments, only positions 2 were left out; the other 2 were approved. Only the approved ones could be sent to the tool`) {
 		t.Fatalf("recorded result = %q, want the tool's text then fleet's note", st.result)
 	}
 }
@@ -510,5 +510,18 @@ func TestHandleApproval_UnknownOutcomeKeepsTheNarrowing(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	if rec.Code != 200 || body["execution_unknown"] != true || body["narrowed"] == nil {
 		t.Fatalf("answer = %d %s, want execution_unknown with the narrowing", rec.Code, rec.Body.String())
+	}
+}
+
+// An email send is never narrowable, even when a key the policy accepts
+// matches it: its card previews the message and has no rows to untick.
+func TestStagedNarrowable_NeverAnEmailSend(t *testing.T) {
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
+		CriticalToolSuffixes:       []string{"mail_send_email"},
+		CriticalToolNarrowableArgs: map[string]string{"mail_send_email": "to"},
+	})
+	if _, _, ok := stagedNarrowable("mcp_x_mail_send_email", `{"to":["a@x.com","b@x.com"]}`); ok {
+		t.Fatal("an email send must never be narrowable")
 	}
 }

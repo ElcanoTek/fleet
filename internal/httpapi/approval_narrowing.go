@@ -41,6 +41,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // maxNarrowableValues bounds a narrowable list: a card shows at most
@@ -70,7 +71,9 @@ type approvalNarrowing struct {
 // staged value is not a list of 2..maxNarrowableValues distinct non-empty
 // strings: such a card approves its call whole, as before.
 func stagedNarrowable(toolName, argsJSON string) (arg string, values []string, ok bool) {
-	if !strings.HasPrefix(toolName, "mcp_") || handlerOnlyApproval(toolName) {
+	// The email card has no rows to tick (it previews the message), so an
+	// email send is never narrowable, whatever the policy says.
+	if !strings.HasPrefix(toolName, "mcp_") || handlerOnlyApproval(toolName) || tools.IsEmailToolName(toolName) {
 		return "", nil, false
 	}
 	arg = agentcore.NarrowableArgFor(toolName)

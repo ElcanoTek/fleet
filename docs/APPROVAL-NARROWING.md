@@ -137,13 +137,16 @@ The approved-call budget is computed for the narrowed arguments (a smaller
 - The result breadcrumb in the conversation (what the model reads) is the
   tool's governed, bounded text followed by fleet's line: `[fleet] The person
   narrowed this call: of the 3 staged deal_ids in its arguments, only
-  positions 2 ("k2") were left out; the other 2 were approved. Only the
+  positions 2 were left out; the other 2 were approved. Only the
   approved ones could be sent to the tool; the result says whether they ran.
   Do not run the left-out ones unless the person asks. (Written by fleet, not
   the tool.)` It records the decision only, never that anything ran (the call
   may have failed before it was sent). It names the smaller side exactly by its positions in the staged
-  list (which the recorded tool call holds), and by value too when that side
-  has at most 20 values, so it is exact and small (at most 250 positions). Positions
+  list (which the recorded tool call holds), and never by value: the values
+  are model-authored, so a line built from them could carry what output
+  governance must scrub or block, while this line must reach the model whole
+  (the restart recovery replays it too). It is exact and small (at most 250
+  positions). Positions
   are written as ranges ("1-3, 5"). It follows the tool's text, so a result
   card, which is read from the start of the result, is untouched. It is
   governed with the result and never truncated: the tool's text is bounded to
@@ -151,7 +154,7 @@ The approved-call budget is computed for the narrowed arguments (a smaller
   (`agentcore.GovernAndBoundModelVisibleToolTextWithTrailer`), so the whole
   stays within the limit. The one exception: with an operator limit near the
   1 KiB minimum and a long, scattered narrowing (up to 250 separate
-  positions, about 1.3 KiB), the line is kept whole and the result exceeds
+  positions, about 1.2 KiB), the line is kept whole and the result exceeds
   that limit by it, never the 128 KiB hard maximum. Exactness wins there,
   because a truncated line could let the agent run a value the person left
   out.
@@ -188,6 +191,10 @@ an unchecked call, and **Approve all (k)** counts the calls that will run.
 
 ## Deviations
 
+- **Never an email send.** The email card previews the message and has no
+  rows to untick, so a key that selects email sends (`send_email`, `email`)
+  is refused by the policy check, and an email tool is never narrowable at
+  run time whatever key matches it.
 - **Selection is per row of the describer card, not per change.** The
   designer's 2b and 2c untick single changes within a deal. Fleet narrows the
   values of one list argument, so a change can be left out only when the
