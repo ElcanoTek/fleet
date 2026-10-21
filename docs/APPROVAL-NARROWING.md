@@ -226,7 +226,10 @@ an unchecked call, and **Approve all (k)** counts the calls that will run.
   (`mcp__http_*`) or an a2a peer tool (`mcp__a2a_*`) is approved whole
   whatever key matches it: those transports forward the call's arguments
   only, so the endpoint would never receive `_meta["fleet/narrowed"]` and
-  could not check its other arguments against the staged list.
+  could not check its other arguments against the staged list. A key that
+  names a synthetic server (`mcp__http_publish`, `_a2a_helpdesk_send`) is
+  refused by the policy check too (`fleet validate-config` reports it); a
+  bare tool suffix may also match an MCP tool, so it is kept.
 - **Selection is per row of the describer card, not per change.** The
   designer's 2b and 2c untick single changes within a deal. Fleet narrows the
   values of one list argument, so a change can be left out only when the
