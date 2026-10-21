@@ -559,10 +559,12 @@ type scheduledPolicy struct {
 	// by the next round's text, as before.
 	judgedAnswer string
 	// answerBeforeAudit is set while judgedAnswer holds only text kept before
-	// the audit, no model gate having judged it yet. An aborted audit drops it
-	// (the abort is the run's last word on whether that answer stands); a
-	// gate that judges the composition clears the flag, the answer now being
-	// part of what the gate judged.
+	// the audit, no model gate having sent the run back yet. An aborted audit
+	// drops it (the abort is the run's last word on whether that answer
+	// stands). A gate that sends the run back for repair clears the flag
+	// (keepJudgedAnswer): the repair round composes with the answer as it then
+	// stood, kept text included, and that holds for a verifier that returned
+	// no valid verdict too, since its repair composes the same way (#1675).
 	answerBeforeAudit bool
 	// replaceJudged is set when the phone-a-friend reviewer sent the answer
 	// back: the repair round's text is the CORRECTED answer, so it replaces

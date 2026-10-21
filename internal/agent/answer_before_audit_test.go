@@ -142,6 +142,29 @@ func TestScheduledAbortAfterAGateKeepsTheJudgedAnswer(t *testing.T) {
 	}
 }
 
+// A verifier that returns no valid verdict also sends the run back, and its
+// repair composes with the answer as it stood, like any judged answer (#1675).
+// So the kept text is part of that answer, and an abort after it keeps it.
+func TestScheduledAbortAfterAVerifierErrorKeepsTheJudgedAnswer(t *testing.T) {
+	withFastVerifierRetry(t)
+	var prompts []string
+	const closing = "Aborted: the values could not be verified."
+	verifier := &recordingVerifier{replies: []string{"not a verdict"}}
+	a := newTestScheduledAgent(t, scriptedModel(&prompts,
+		scriptedStep{text: answerTable}, scriptedStep{audit: passedAudit}, scriptedStep{text: auditPointer},
+		scriptedStep{audit: abortedAudit}, scriptedStep{text: closing}))
+	a.verifierModel = verifier
+	if err := a.Execute(context.Background(), seedTask); !errors.Is(err, agentcore.ErrAuditAborted) {
+		t.Fatalf("run returned %v, want ErrAuditAborted", err)
+	}
+	if len(verifier.prompts) != 2 {
+		t.Fatalf("verifier calls = %d, want 2 (the call and its one retry)", len(verifier.prompts))
+	}
+	if want := answerTable + "\n\n" + auditPointer + "\n\n" + closing; lastAssistantContent(a.logSession) != want {
+		t.Fatalf("persisted answer = %q, want the judged answer and the abort's text %q", lastAssistantContent(a.logSession), want)
+	}
+}
+
 // A model that audits on its own first, has that confirm_audit refused, and
 // then answers without retrying is refused with "Audit not confirmed", not
 // with the audit request. Its answer is kept the same way.

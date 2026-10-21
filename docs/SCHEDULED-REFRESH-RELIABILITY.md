@@ -126,9 +126,11 @@ their audit.
 - **A textless round adds nothing**, and its refusal carries no note.
 - **An aborted audit drops the kept text.** `confirm_audit(success=false)` is
   the run's last word on whether that answer stands. So, while no model gate
-  has judged the answer, the run persists the abort's own closing text, as
-  before. Once a gate has judged it, the kept text is part of the judged
-  answer, and an abort composes after it like after any judged answer.
+  has sent the run back, the run persists the abort's own closing text, as
+  before. Once a gate has sent the run back for repair, the kept text is part
+  of the judged answer, and an abort composes after it like after any judged
+  answer. "Sent back" covers a verifier that returned no valid verdict too:
+  its repair already composes with the answer as it stood (above).
 
 **Deviations from the issue.**
 
@@ -170,7 +172,8 @@ their audit.
     after it;
   - a restatement stored once;
   - a textless round;
-  - the aborted audit, and an abort after a gate judged the answer;
+  - the aborted audit, and an abort after a gate sent the run back (a
+    missing-actions verdict, or a verifier with no valid verdict);
   - the structured-answer replace.
 - Every guard was mutation-checked against these tests.
 - `agentcore`'s `TestFinishRefusedForAudit` pins which refusals count.
