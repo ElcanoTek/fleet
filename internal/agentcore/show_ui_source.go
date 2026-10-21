@@ -193,9 +193,10 @@ func (s *streamSink) noteShownCard(callID, ack, spec string) {
 
 // takeShownCard returns and forgets the card held for a show_ui result. It is
 // attached only to the success it was resolved for: the held occurrence whose
-// acknowledgement is this result's text (the first, when occurrences of a
-// reused id returned the same text). A result that is an error, or whose text
-// no held acknowledgement matches (a governance rewrite, a contained panic),
+// acknowledgement is this result's text, or opens it before a post_tool_use
+// hook's fragment (the first, when occurrences of a reused id returned the
+// same text). A result that is an error, or whose text no held
+// acknowledgement matches (a governance rewrite, a contained panic),
 // gets none. A spec the secret redaction would change is dropped rather than
 // shown altered. Caller holds s.mu.
 func (s *streamSink) takeShownCard(id, name, text string, isErr bool) string {
@@ -203,20 +204,38 @@ func (s *streamSink) takeShownCard(id, name, text string, isErr bool) string {
 	if len(held) == 0 || isErr || name != tools.ShowUIToolName || !strings.HasPrefix(text, "UI_DISPLAYED") {
 		return ""
 	}
-	for i, c := range held {
-		if c.ack != text {
-			continue
-		}
-		held = slices.Delete(held, i, i+1)
-		if len(held) > 0 {
-			s.shownCards[id] = held
-		} else {
-			delete(s.shownCards, id)
-		}
-		if toolRedactor().Redact(c.spec) != c.spec {
-			return ""
-		}
-		return c.spec
+	i := heldFor(held, text)
+	if i < 0 {
+		return ""
 	}
-	return ""
+	c := held[i]
+	held = slices.Delete(held, i, i+1)
+	if len(held) > 0 {
+		s.shownCards[id] = held
+	} else {
+		delete(s.shownCards, id)
+	}
+	if toolRedactor().Redact(c.spec) != c.spec {
+		return ""
+	}
+	return c.spec
+}
+
+// heldFor picks the held occurrence a show_ui result answers: one whose
+// acknowledgement is the result's text, else one whose acknowledgement the
+// text continues with a post_tool_use hook fragment (appendHookContext adds
+// "\n\n<fragment>" after the tool's own text; Codex P2 on #1819). -1 when
+// none matches.
+func heldFor(held []shownCard, text string) int {
+	for i, c := range held {
+		if c.ack == text {
+			return i
+		}
+	}
+	for i, c := range held {
+		if strings.HasPrefix(text, c.ack+"\n\n") {
+			return i
+		}
+	}
+	return -1
 }

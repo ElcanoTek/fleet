@@ -236,3 +236,18 @@ func TestShowUISource_ReusedIDKeepsEachCallsPlace(t *testing.T) {
 		}
 	}
 }
+
+// A post_tool_use hook may append its context to show_ui's acknowledgement;
+// the card still rides that result (Codex P2 on #1819). A text that merely
+// starts the same way without the hook separator does not match.
+func TestShowUISource_HookFragmentKeepsTheCard(t *testing.T) {
+	s := newStreamSink(nil)
+	ack := `UI_DISPLAYED card_id=u1: the user can now see the card "One".`
+	s.noteShownCard("u1", ack, `{"title":"One"}`)
+	s.onToolResult("u1", tools.ShowUIToolName, appendHookContext(ack, "hook says hi"), false)
+	s.noteShownCard("u2", ack, `{"title":"Two"}`)
+	s.onToolResult("u2", tools.ShowUIToolName, ack+" and more", false)
+	if len(s.entries) != 2 || s.entries[0].Card != `{"title":"One"}` || s.entries[1].Card != "" {
+		t.Fatalf("entries = %+v", s.entries)
+	}
+}
