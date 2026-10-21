@@ -4,8 +4,11 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -20,9 +23,15 @@ func TestWorkspaceFileReaderConfinement(t *testing.T) {
 		t.Fatal(err)
 	}
 	reader := WorkspaceFileReader(sb)
-	data, err := reader(ctx, "payload", 100)
-	if err != nil || string(data) != "exact bytes" {
-		t.Fatalf("read failed: %q %v", data, err)
+	window, err := reader(ctx, "payload", 0, 11, 100)
+	sum := sha256.Sum256([]byte("exact bytes"))
+	if err != nil || string(window.Data) != "exact bytes" || window.Size != 11 || window.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("read failed: %+v %v", window, err)
+	}
+	// Only the requested window crosses out; the hash still names the whole file.
+	window, err = reader(ctx, "payload", 6, 5, 100)
+	if err != nil || string(window.Data) != "bytes" || window.Size != 11 || window.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("window read failed: %+v %v", window, err)
 	}
 	outside := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("outside"), 0600); err != nil {
@@ -32,17 +41,23 @@ func TestWorkspaceFileReaderConfinement(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{"../secret", filepath.Join(outside, "secret"), "escape", "missing", ""} {
-		if _, err := reader(ctx, path, 100); err == nil {
+		if _, err := reader(ctx, path, 0, 1, 100); err == nil {
 			t.Fatalf("read permitted for %q", path)
 		}
 	}
-	if _, err := reader(ctx, "payload", 3); err == nil {
-		t.Fatal("oversized file accepted")
+	// The cap is on the whole file, so even a 1-byte window of it is refused.
+	if _, err := reader(ctx, "payload", 0, 1, 10); err == nil || !strings.Contains(err.Error(), "exceeding the 10-byte cap") {
+		t.Fatalf("oversized file accepted: %v", err)
 	}
-	if _, err := reader(context.Background(), "payload", 100); err == nil {
+	for _, r := range [][3]int64{{-1, 1, 100}, {0, 0, 100}, {0, 101, 100}, {100, 1, 100}, {0, 1, 0}} {
+		if _, err := reader(ctx, "payload", r[0], r[1], r[2]); err == nil {
+			t.Fatalf("invalid range %v accepted", r)
+		}
+	}
+	if _, err := reader(context.Background(), "payload", 0, 1, 100); err == nil {
 		t.Fatal("missing workspace accepted")
 	}
-	if _, err := WorkspaceFileReader(nil)(ctx, "payload", 100); err == nil {
+	if _, err := WorkspaceFileReader(nil)(ctx, "payload", 0, 1, 100); err == nil {
 		t.Fatal("nil sandbox accepted")
 	}
 }

@@ -383,7 +383,9 @@ def _hash_and_window(fd, offset, limit):
     if offset < 0 or limit < 0:
         raise OSError("offset and limit must be non-negative")
     digest = hashlib.sha256()
-    chunks = []
+    # One growing buffer, not a list of slices joined at the end: the join
+    # held the window twice, and a window can be tens of MiB.
+    window = bytearray()
     position = 0
     end = offset + limit if limit > 0 else None
     while True:
@@ -395,9 +397,9 @@ def _hash_and_window(fd, offset, limit):
         wanted_start = max(position, offset)
         wanted_end = chunk_end if end is None else min(chunk_end, end)
         if wanted_start < wanted_end:
-            chunks.append(chunk[wanted_start - position : wanted_end - position])
+            window += chunk[wanted_start - position : wanted_end - position]
         position = chunk_end
-    return digest.hexdigest(), b"".join(chunks)
+    return digest.hexdigest(), window
 
 
 def do_read(req):
@@ -409,6 +411,14 @@ def do_read(req):
         fd, before = _open_file(parent_fd, name)
         offset = int(req.get("offset", 0) or 0)
         limit = int(req.get("limit", 0) or 0)
+        max_size = int(req.get("max_size", 0) or 0)
+        if max_size > 0 and before.st_size > max_size:
+            return fail(
+                "too_large",
+                "file is %d bytes, exceeding the %d-byte cap"
+                % (before.st_size, max_size),
+                size=before.st_size,
+            )
         digest, data = _hash_and_window(fd, offset, limit)
         after = os.fstat(fd)
         if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
@@ -422,7 +432,9 @@ def do_read(req):
             "ok": True,
             "err_kind": "",
             "err": "",
-            "data_b64": base64.b64encode(data).decode("ascii"),
+            # Left as bytes: main() writes it straight to stdout rather than
+            # copying it into a str and again into the dumped JSON document.
+            "data_b64": base64.b64encode(data),
             "size": before.st_size,
             "count": 0,
             "sha256": digest,
@@ -987,7 +999,28 @@ def main():
         response = fail("unsafe_path", str(exc))
     except Exception as exc:
         response = fail("", "fileop failed: %s" % exc)
-    print(json.dumps(response))
+    _emit(response)
+
+
+def _emit(response):
+    """Write the JSON response. A read's base64 payload arrives as bytes and is
+    spliced into the document as-is (base64 needs no JSON escaping), so a large
+    window is not copied into a str and then into a second, dumped string."""
+    payload = response.get("data_b64")
+    if not isinstance(payload, (bytes, bytearray)):
+        print(json.dumps(response))
+        return
+    rest = dict(response)
+    rest["data_b64"] = ""
+    head = json.dumps(rest)
+    marker = '"data_b64": ""'
+    cut = head.index(marker) + len(marker) - 1
+    out = sys.stdout.buffer
+    out.write(head[:cut].encode("ascii"))
+    out.write(payload)
+    out.write(head[cut:].encode("ascii"))
+    out.write(b"\n")
+    out.flush()
 
 
 if __name__ == "__main__":

@@ -51,9 +51,14 @@ type FileOpRequest struct {
 	// checked pathname by replacing an ancestor with a symlink.
 	Root string
 
-	// Read.
-	Offset int64
-	Limit  int64
+	// Read. Limit is the window length (0 = to EOF), not a size cap; the
+	// helper still streams the whole file through SHA-256. MaxSize > 0 refuses
+	// a file whose size exceeds it before reading a byte, so a cap the caller
+	// will enforce anyway does not first cost a full hash of a huge file (and,
+	// for a big enough one, a file-op timeout that retires the sandbox).
+	Offset  int64
+	Limit   int64
+	MaxSize int64
 
 	// Write.
 	Data []byte
@@ -297,6 +302,9 @@ func encodeFileOpWire(req FileOpRequest, anchor string) ([]byte, error) {
 	case FileOpRead:
 		wire["offset"] = req.Offset
 		wire["limit"] = req.Limit
+		if req.MaxSize > 0 {
+			wire["max_size"] = req.MaxSize
+		}
 	case FileOpWrite:
 		wire["data_b64"] = base64.StdEncoding.EncodeToString(req.Data)
 		if req.ExpectedSHA256 != "" {

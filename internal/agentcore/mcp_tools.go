@@ -264,7 +264,7 @@ func OptionalServerForToolName(toolName string, optional MCPOptionalSet) string 
 type toolBuildConfig struct {
 	// includeConfirmAudit appends the scheduled-mode confirm_audit tool.
 	includeConfirmAudit bool
-	readWorkspaceFile   func(context.Context, string, int64) ([]byte, error)
+	readWorkspaceFile   tools.WorkspaceFileReadFunc
 	// loaderTools are extra always-registered tools (scheduled mcp_list/load).
 	loaderTools []fantasy.AgentTool
 	// remediationHints configures the fast.io inline-upload guard hint.
@@ -676,7 +676,7 @@ func governToolOutput(ctx context.Context, toolName, text string) (string, bool)
 // mapping, while the broker owns the call itself (guard, transport, flatten,
 // fast.io trim).
 type mcpTool struct {
-	readWorkspaceFile func(context.Context, string, int64) ([]byte, error)
+	readWorkspaceFile tools.WorkspaceFileReadFunc
 	serverName        string
 	tool              mcp.Tool
 	broker            MCPBroker

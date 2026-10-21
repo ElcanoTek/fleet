@@ -8,6 +8,7 @@ package sandbox
 // caps, lockdown network) is covered by the podman-gated test below.
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -171,6 +172,40 @@ func TestFileOp_ReadReportsFullSHA256(t *testing.T) {
 	win, _ := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpRead, Path: path, Root: root, Offset: 4, Limit: 5})
 	if full.SHA256 != want || win.SHA256 != want {
 		t.Errorf("sha256 full=%q window=%q, want %q", full.SHA256, win.SHA256, want)
+	}
+}
+
+// TestFileOp_ReadMaxSizeAndLargeWindow pins the read contract the MCP
+// workspace-file reader relies on (ADR-0085): MaxSize refuses a file by its
+// size before reading it, and a multi-MiB window comes back byte-exact through
+// the helper's spliced (not re-dumped) base64 output, with the whole-file hash.
+func TestFileOp_ReadMaxSizeAndLargeWindow(t *testing.T) {
+	sb := fileopTestSandbox(t)
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "big.bin")
+	root := filepath.Dir(path)
+	body := make([]byte, 5<<20+123)
+	for i := range body {
+		body[i] = byte(i*7 + i>>11)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	want := hex.EncodeToString(sum[:])
+
+	win, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpRead, Path: path, Root: root,
+		Offset: 1 << 20, Limit: 3 << 20, MaxSize: int64(len(body))})
+	if err != nil {
+		t.Fatalf("window read: %v", err)
+	}
+	if !bytes.Equal(win.Data, body[1<<20:4<<20]) || win.Size != int64(len(body)) || win.SHA256 != want {
+		t.Fatalf("window: %d bytes, size=%d sha=%s", len(win.Data), win.Size, win.SHA256)
+	}
+	_, err = sb.RunFileOp(ctx, FileOpRequest{Op: FileOpRead, Path: path, Root: root,
+		Limit: 1, MaxSize: int64(len(body)) - 1})
+	if err == nil || !strings.Contains(err.Error(), "exceeding the") {
+		t.Fatalf("MaxSize did not refuse an oversized file: %v", err)
 	}
 }
 

@@ -1,6 +1,6 @@
 # ADR-0066: Hash-bound workspace references for MCP binary arguments
 
-Status: accepted
+Status: accepted; amended by [ADR-0085](0085-mcp-workspace-file-cap-and-windowed-reads.md)
 
 ## Context
 

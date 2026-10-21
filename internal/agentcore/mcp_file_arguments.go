@@ -9,7 +9,23 @@ import (
 	"fmt"
 )
 
-const maxMCPWorkspaceFileBytes = 2 * 1024 * 1024
+// maxMCPWorkspaceFileBytes caps the WHOLE workspace file a reference may name
+// (ADR-0085, raising ADR-0066's 2 MiB). 64 MiB matches the largest staged
+// upload a Pages-class MCP server accepts, so Fleet is not the bottleneck for a
+// chunked upload. Memory stays bounded by the requested window, not this cap:
+// the sandbox helper streams the whole file through SHA-256 and returns only
+// [offset, offset+length), and the server's maxLength bounds that window
+// before anything is read. A single unbounded-maxLength call can still ask for
+// the whole 64 MiB in one window; that one read is the worst case.
+const maxMCPWorkspaceFileBytes = 64 * 1024 * 1024
+
+// workspaceFileReferenceDescription is the advertised schema text, derived
+// from the cap so the number the model reads cannot drift from the one
+// enforced below.
+var workspaceFileReferenceDescription = fmt.Sprintf("Send the original base64 string OR a workspace file reference. "+
+	"Prefer the reference for files: Fleet reads and base64-encodes the exact byte range without exposing bytes to the model. "+
+	"sha256 must match the WHOLE file; offset and length are raw bytes. Maximum whole file: %d bytes. "+
+	"The tool's existing side effects, approval requirements and verification workflow still apply.", maxMCPWorkspaceFileBytes)
 
 // MCP servers opt in per binary string property with the standard JSON Schema
 // contentEncoding annotation. No connector identity or upload protocol lives in
@@ -33,14 +49,14 @@ func (m *mcpTool) advertiseFileReferences(props map[string]any) {
 	}
 	for name := range m.binaryFileProperties() {
 		props[name] = map[string]any{
-			"description": "Send the original base64 string OR a workspace file reference. Prefer the reference for files: Fleet reads and base64-encodes the exact byte range without exposing bytes to the model. sha256 must match the WHOLE file; offset and length are raw bytes. Maximum whole file: 2097152 bytes. The tool's existing side effects, approval requirements and verification workflow still apply.",
+			"description": workspaceFileReferenceDescription,
 			"anyOf": []any{props[name], map[string]any{
 				"type": "object", "additionalProperties": false,
 				"required": []string{"workspace_file", "sha256", "offset", "length"},
 				"properties": map[string]any{
 					"workspace_file": map[string]any{"type": "string", "minLength": 1},
 					"sha256":         map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"},
-					"offset":         map[string]any{"type": "integer", "minimum": 0, "maximum": maxMCPWorkspaceFileBytes},
+					"offset":         map[string]any{"type": "integer", "minimum": 0, "maximum": maxMCPWorkspaceFileBytes - 1},
 					"length":         map[string]any{"type": "integer", "minimum": 1, "maximum": maxMCPWorkspaceFileBytes},
 				},
 			}},
@@ -95,18 +111,30 @@ func (m *mcpTool) resolveFileReferences(ctx context.Context, args map[string]any
 				return fmt.Errorf("%s: byte range exceeds the tool's maxLength", name)
 			}
 		}
-		data, err := m.readWorkspaceFile(ctx, file.Path, maxMCPWorkspaceFileBytes)
+		// The reader returns only the requested window plus the SHA-256 of the
+		// WHOLE file, computed by the sandbox helper in the same pass that read
+		// the window (it streams the file, and refuses one that changed while
+		// it was read). Asking for the window instead of the whole file is what
+		// keeps a chunked upload linear: n chunks of a large file no longer
+		// move n whole copies of it out of the sandbox and through Fleet.
+		window, err := m.readWorkspaceFile(ctx, file.Path, int64(file.Offset), int64(file.Length), maxMCPWorkspaceFileBytes)
 		if err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
-		sum := sha256.Sum256(data)
-		if hex.EncodeToString(sum[:]) != file.SHA256 {
+		if window.SHA256 != file.SHA256 {
 			return fmt.Errorf("%s: workspace file SHA-256 mismatch; no MCP call was made", name)
 		}
-		if len(data) > maxMCPWorkspaceFileBytes || file.Offset+file.Length > len(data) {
+		if window.Size > maxMCPWorkspaceFileBytes || int64(len(window.Data)) != int64(file.Length) || int64(file.Offset)+int64(file.Length) > window.Size {
 			return fmt.Errorf("%s: byte range exceeds workspace file", name)
 		}
-		args[name] = base64.StdEncoding.EncodeToString(data[file.Offset : file.Offset+file.Length])
+		// When the window is the whole file the host re-derives the hash for
+		// free, so a whole-file transfer does not rest on the helper's report.
+		if file.Offset == 0 && int64(file.Length) == window.Size {
+			if sum := sha256.Sum256(window.Data); hex.EncodeToString(sum[:]) != file.SHA256 {
+				return fmt.Errorf("%s: workspace file SHA-256 mismatch; no MCP call was made", name)
+			}
+		}
+		args[name] = base64.StdEncoding.EncodeToString(window.Data)
 	}
 	return nil
 }
