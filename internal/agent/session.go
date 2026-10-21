@@ -156,6 +156,12 @@ type ToolResultContent struct {
 	Name  string `json:"name"`
 	Text  string `json:"text"`
 	IsErr bool   `json:"is_err"`
+	// Card is the validated spec (JSON text) of a show_ui card drawn by
+	// reference to a tool result (from_result, docs/GENERATIVE-UI.md): the
+	// web draws the card from it on reload. Display data only — replay never
+	// sends it to the model. Omitted for every other result, so their rows
+	// are unchanged.
+	Card string `json:"card,omitempty"`
 }
 
 // SummaryContent for Type=summary. Inserted by the user-initiated

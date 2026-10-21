@@ -87,29 +87,69 @@ const CARD = {
   ],
 };
 
-async function openConversationWithCard(page: Page) {
+// The default history: the model wrote the card out as show_ui's input.
+const INLINE_CARD_HISTORY = [
+  { id: 1, role: "user", type: "text", content: { text: "set up deals for the new Acme campaign" } },
+  { id: 2, role: "assistant", type: "text", content: { text: "Here's a builder with the exchanges you have connected." } },
+  {
+    id: 3,
+    role: "assistant",
+    type: "tool_call",
+    content: { id: "call-ui-1", name: "show_ui", input: JSON.stringify(CARD) },
+  },
+  {
+    id: 4,
+    role: "tool",
+    type: "tool_result",
+    content: { id: "call-ui-1", name: "show_ui", text: 'UI_DISPLAYED card_id=call-ui-1: the user can now see the card "New campaign".', is_err: false },
+  },
+];
+
+// The same card shown by reference: a tool built it, show_ui named that
+// tool's result, and the server attached the validated spec to show_ui's
+// result row as `card`.
+const REFERENCE_CARD_HISTORY = [
+  INLINE_CARD_HISTORY[0],
+  {
+    id: 2,
+    role: "assistant",
+    type: "tool_call",
+    content: { id: "call-intake-1", name: "mcp_deal_plan_intake_card", input: "{}" },
+  },
+  {
+    id: 3,
+    role: "tool",
+    type: "tool_result",
+    content: { id: "call-intake-1", name: "mcp_deal_plan_intake_card", text: JSON.stringify({ show_ui: CARD }), is_err: false },
+  },
+  {
+    id: 4,
+    role: "assistant",
+    type: "tool_call",
+    content: { id: "call-ui-1", name: "show_ui", input: JSON.stringify({ from_result: { tool: "mcp_deal_plan_intake_card" } }) },
+  },
+  {
+    id: 5,
+    role: "tool",
+    type: "tool_result",
+    content: {
+      id: "call-ui-1",
+      name: "show_ui",
+      text: 'UI_DISPLAYED card_id=call-ui-1: the user can now see the card "New campaign".',
+      is_err: false,
+      card: JSON.stringify(CARD),
+    },
+  },
+];
+
+async function openConversationWithCard(page: Page, history: unknown[] = INLINE_CARD_HISTORY) {
   await mockChatBoot(page, { conversations: [{ id: "conv-genui", title: "Campaign setup" }] });
   await page.route("**/api/conversations/conv-genui", (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     return r.fulfill({
       json: {
         conversation: { id: "conv-genui", title: "Campaign setup", persona: "default", model: "test-model", pinned: false },
-        history: [
-          { id: 1, role: "user", type: "text", content: { text: "set up deals for the new Acme campaign" } },
-          { id: 2, role: "assistant", type: "text", content: { text: "Here's a builder with the exchanges you have connected." } },
-          {
-            id: 3,
-            role: "assistant",
-            type: "tool_call",
-            content: { id: "call-ui-1", name: "show_ui", input: JSON.stringify(CARD) },
-          },
-          {
-            id: 4,
-            role: "tool",
-            type: "tool_result",
-            content: { id: "call-ui-1", name: "show_ui", text: 'UI_DISPLAYED card_id=call-ui-1: the user can now see the card "New campaign".', is_err: false },
-          },
-        ],
+        history,
         pending_approvals: [],
         resolved_approvals: [],
         pending_memory_proposals: [],
@@ -153,4 +193,19 @@ test("a show_ui card renders from history, recomputes live, and submits as a use
   expect(values.lines).toHaveLength(2);
   expect(values.lines[1]).toMatchObject({ channel: "CTV", cpm: 22, geo: { include: ["US"], exclude: [] } });
   expect(values.lines[1]).not.toHaveProperty("domains");
+});
+
+test("a card shown by reference to a tool's result renders from history and submits", async ({ page }) => {
+  await openConversationWithCard(page, REFERENCE_CARD_HISTORY);
+  const card = page.getByTestId("genui-card");
+  await expect(card).toHaveCount(1);
+  await expect(card).toContainText("New campaign");
+  await expect(card).toContainText("2 deal(s) will be created");
+  await card.getByLabel(/Advertiser/).fill("Acme");
+
+  const chat = page.waitForRequest((req) => req.url().includes("/api/chat") && req.method() === "POST");
+  await card.getByRole("button", { name: "Create deals" }).click();
+  await card.getByRole("button", { name: "Yes, create deals" }).click();
+  const body = JSON.parse((await chat).postData() ?? "{}") as { message?: string };
+  expect(body.message ?? "").toMatch(/^\[UI submission\] card=call-ui-1 action=create\n```json\n/);
 });

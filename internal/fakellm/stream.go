@@ -101,13 +101,21 @@ func (s *Server) streamText(w http.ResponseWriter, r *http.Request, model, text 
 // streamToolCalls emits an assistant turn that calls one or more tools and
 // finishes with finish_reason:"tool_calls". Each call is sent in a single chunk
 // carrying the id, name and complete JSON arguments — the SDK's accumulator
-// handles whole-in-one-chunk calls.
-func (s *Server) streamToolCalls(w http.ResponseWriter, r *http.Request, model string, calls []ToolCall, delay time.Duration) {
+// handles whole-in-one-chunk calls. Non-empty narration streams first, as text
+// content, the way a real model introduces its calls.
+func (s *Server) streamToolCalls(w http.ResponseWriter, r *http.Request, model, narration string, calls []ToolCall, delay time.Duration) {
 	id := "fake-" + nonce()
 	startSSE(w)
 
 	writeSSE(w, chunk{ID: id, Object: chunkObject, Created: now(), Model: model,
 		Choices: []chunkChoice{{Index: 0, Delta: chunkDelta{Role: "assistant"}}}})
+
+	if narration != "" {
+		for _, piece := range splitForStream(narration) {
+			writeSSE(w, chunk{ID: id, Object: chunkObject, Created: now(), Model: model,
+				Choices: []chunkChoice{{Index: 0, Delta: chunkDelta{Content: piece}}}})
+		}
+	}
 
 	for i, c := range calls {
 		if r.Context().Err() != nil {
@@ -251,7 +259,7 @@ func (s *Server) jsonText(w http.ResponseWriter, model, text string) {
 	})
 }
 
-func (s *Server) jsonToolCalls(w http.ResponseWriter, model string, calls []ToolCall) {
+func (s *Server) jsonToolCalls(w http.ResponseWriter, model, narration string, calls []ToolCall) {
 	tcs := make([]msgToolCall, 0, len(calls))
 	for i, c := range calls {
 		callID := c.ID
@@ -271,7 +279,7 @@ func (s *Server) jsonToolCalls(w http.ResponseWriter, model string, calls []Tool
 		ID: "fake-" + nonce(), Object: "chat.completion", Created: now(), Model: model,
 		Choices: []completionChoice{{
 			Index:        0,
-			Message:      completionMessage{Role: "assistant", ToolCalls: tcs},
+			Message:      completionMessage{Role: "assistant", Content: narration, ToolCalls: tcs},
 			FinishReason: "tool_calls",
 		}},
 		Usage: usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
