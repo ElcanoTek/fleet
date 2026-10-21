@@ -112,17 +112,18 @@ func TestPIIRedaction_CleanOutputUnaffected(t *testing.T) {
 	}
 }
 
-// A trailer fleet appends to an approved call's result (an approval's
-// narrowing line) is governed too: when governance blocks it, the whole
-// result is an error, even though the tool's own text passed.
-func TestGovernWithTrailer_ABlockedTrailerBlocksTheResult(t *testing.T) {
+// A trailer fleet appends to an approved call's result (the narrowing
+// line, fleet's own text) survives governance whole, even when governance
+// blocks the tool's text, which still makes the result an error.
+func TestGovernWithTrailer_TheTrailerSurvivesABlockedResult(t *testing.T) {
 	SetPIIRedactor(piiredact.New(piiredact.ModeBlock))
 	t.Cleanup(func() { SetPIIRedactor(nil) })
-	got, isErr, _ := GovernAndBoundModelVisibleToolTextWithTrailer(context.Background(), "mcp_ix_execute_plan", "c1", `{"success":true}`, false, `[fleet] left out "SSN 123-45-6789"`)
-	if !isErr || strings.Contains(got, "123-45-6789") {
-		t.Fatalf("result = %q, isErr = %v; want the blocked trailer to block the result", got, isErr)
+	const trailer = "[fleet] The person narrowed this call: of the 3 staged deal_ids in its arguments, only positions 2 were left out"
+	got, isErr, _ := GovernAndBoundModelVisibleToolTextWithTrailer(context.Background(), "mcp_ix_execute_plan", "c1", "SSN 123-45-6789 for the account", false, trailer)
+	if !isErr || strings.Contains(got, "123-45-6789") || !strings.HasSuffix(got, trailer) {
+		t.Fatalf("result = %q, isErr = %v; want the blocked text, an error, and the trailer whole", got, isErr)
 	}
-	if _, isErr, _ := GovernAndBoundModelVisibleToolTextWithTrailer(context.Background(), "mcp_ix_execute_plan", "c1", `{"success":true}`, false, "[fleet] left out positions 2"); isErr {
-		t.Fatal("a clean trailer must not mark the result an error")
+	if got, isErr, _ := GovernAndBoundModelVisibleToolTextWithTrailer(context.Background(), "mcp_ix_execute_plan", "c1", `{"success":true}`, false, trailer); isErr || !strings.HasSuffix(got, trailer) {
+		t.Fatalf("clean result = %q, isErr = %v", got, isErr)
 	}
 }

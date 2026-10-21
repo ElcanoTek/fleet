@@ -266,30 +266,31 @@ func GovernAndBoundModelVisibleToolTextFull(ctx context.Context, toolName, toolC
 // GovernAndBoundModelVisibleToolTextWithTrailer is
 // GovernAndBoundModelVisibleToolTextFull for a result that carries one of
 // fleet's own labelled trailers (an approval's narrowing or stop line). The
-// trailer is governed on its own and never truncated: the tool's text is
-// bounded to what the output limit leaves after the trailer (at least
-// MinMaxToolOutputBytes), then the trailer follows it. So a long result's
-// truncation can never cut the trailer, and the whole stays within the limit
-// unless the trailer itself is larger than the limit's spare room (only
-// possible with an operator limit near the minimum; never past the hard
-// maximum, since a trailer is a few KiB at most). governed is the governed
-// tool text without the trailer. An empty trailer is
-// GovernAndBoundModelVisibleToolTextFull.
+// tool's text is governed and bounded to what the output limit leaves after
+// the trailer (at least MinMaxToolOutputBytes); the trailer follows it whole.
+//
+// The trailer must be fleet's own text with nothing model- or tool-authored
+// in it (the narrowing line names staged positions only). It is the consent
+// record the model needs to read even when governance blocks the tool's
+// text, so it is never blocked or truncated: it only passes the secret
+// redactor, which cannot block. A blocked tool text still makes the whole
+// result an error. The total stays within the limit unless the trailer itself
+// is larger than the limit's spare room (only with an operator limit near
+// the minimum; never past the hard maximum, a trailer being a few KiB at
+// most). governed is the governed tool text without the trailer. An empty
+// trailer is GovernAndBoundModelVisibleToolTextFull.
 func GovernAndBoundModelVisibleToolTextWithTrailer(ctx context.Context, toolName, toolCallID, content string, isError bool, trailer string) (bounded string, isErr bool, governed string) {
 	if trailer == "" {
 		return GovernAndBoundModelVisibleToolTextFull(ctx, toolName, toolCallID, content, isError)
 	}
-	gtResp := governFinalToolResponse(ctx, toolName, fantasy.NewTextResponse(trailer))
-	gt := gtResp.Content
+	gt := toolRedactor().Redact(trailer)
 	resp := fantasy.NewTextResponse(content)
 	resp.IsError = isError
 	resp = governFinalToolResponse(ctx, toolName, resp)
 	governed = resp.Content
 	budget := max(maxToolOutputBytes()-len(gt)-2, MinMaxToolOutputBytes)
 	resp = boundModelVisibleToolResponseWithin(ctx, toolName, toolCallID, resp, budget)
-	// A trailer governance blocked blocks the whole result, as a blocked
-	// result does: the caller must not record it as a success.
-	return strings.TrimRight(resp.Content, "\n") + "\n\n" + gt, resp.IsError || gtResp.IsError, governed
+	return strings.TrimRight(resp.Content, "\n") + "\n\n" + gt, resp.IsError, governed
 }
 
 type toolOutputEnvelope struct {

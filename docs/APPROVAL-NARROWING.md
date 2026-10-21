@@ -148,8 +148,10 @@ The approved-call budget is computed for the narrowed arguments (a smaller
   (the restart recovery replays it too). It is exact and small (at most 250
   positions). Positions
   are written as ranges ("1-3, 5"). It follows the tool's text, so a result
-  card, which is read from the start of the result, is untouched. It is
-  governed with the result and never truncated: the tool's text is bounded to
+  card, which is read from the start of the result, is untouched. Being
+  fleet's own text, it is never blocked or truncated, even when governance
+  blocks the tool's text (the result is then an error, with the line still
+  under it): it passes only the secret redactor. The tool's text is bounded to
   what the output limit leaves after it
   (`agentcore.GovernAndBoundModelVisibleToolTextWithTrailer`), so the whole
   stays within the limit. The one exception: with an operator limit near the

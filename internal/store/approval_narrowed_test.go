@@ -43,6 +43,11 @@ func TestClaimApprovalNarrowed(t *testing.T) {
 	if got.Status != "approved" || got.ResultText != ApprovalExecutingSentinel || got.NarrowedJSON != record || got.ArgsJSON != staged {
 		t.Fatalf("row = status %q result %q narrowed %q args %q", got.Status, got.ResultText, got.NarrowedJSON, got.ArgsJSON)
 	}
+	// The executing-row fallback a reload uses past the resolved cap carries
+	// the narrowing too.
+	if executing, err := s.ListExecutingApprovals(ctx, "alice@example.com", conv.ID, ApprovalExecutingSentinel); err != nil || len(executing) != 1 || executing[0].NarrowedJSON != record {
+		t.Fatalf("ListExecutingApprovals = %+v err=%v", executing, err)
+	}
 	if err := s.SetApprovalResult(ctx, "alice@example.com", a.ID, "done", false); err != nil {
 		t.Fatalf("SetApprovalResult: %v", err)
 	}
