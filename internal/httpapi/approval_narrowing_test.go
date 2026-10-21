@@ -213,6 +213,7 @@ func TestHandleApproval_RefusesABadNarrowingBeforeTheClaim(t *testing.T) {
 		policy           bool
 	}{
 		{name: "empty", body: `{"approved":true,"approved_values":[]}`, policy: true},
+		{name: "explicit null", body: `{"approved":true,"approved_values":null}`, policy: true},
 		{name: "unknown value", body: `{"approved":true,"approved_values":["a","z"]}`, policy: true},
 		{name: "repeated value", body: `{"approved":true,"approved_values":["a","a"]}`, policy: true},
 		{name: "with a decline", body: `{"approved":false,"approved_values":["a"]}`, policy: true},

@@ -223,7 +223,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 				if d.approve {
 					res.Decision = "approve"
 				}
-				out := s.decideApproval(ctx, r.Context().Done(), user, convID, d.id, approvalRequest{Approved: d.approve, Scope: "once", ApprovedValues: req.Narrow[d.id]})
+				out := s.decideApproval(ctx, r.Context().Done(), user, convID, d.id, approvalRequest{Approved: d.approve, Scope: "once", ApprovedValues: groupApprovedValues(req.Narrow, d.id)})
 				switch {
 				case out.suggest != nil:
 					// Unreachable: a suggestion card is handler-only and never

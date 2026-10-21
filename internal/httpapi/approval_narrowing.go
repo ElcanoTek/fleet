@@ -152,8 +152,13 @@ func narrowApproval(a *store.Approval, approved []string) (*approvalNarrowing, e
 // none, or names every staged value): only with an approval decided once, and
 // only a narrowing narrowApproval accepts. An error is the client's.
 func requestedNarrowing(a *store.Approval, req approvalRequest) (*approvalNarrowing, error) {
-	if req.ApprovedValues == nil {
+	if !req.ApprovedValues.present {
 		return nil, nil
+	}
+	if req.ApprovedValues.values == nil {
+		// An explicit null is refused, never read as "approve everything": a
+		// client that meant to send a subset must not run the whole list.
+		return nil, errors.New("approved_values is null: send the approved values, or leave the field out to approve the whole action")
 	}
 	if !req.Approved {
 		return nil, errors.New("approved_values goes with an approval; to decline, send approved false without it")
@@ -161,7 +166,7 @@ func requestedNarrowing(a *store.Approval, req approvalRequest) (*approvalNarrow
 	if scope := strings.TrimSpace(req.Scope); scope != "" && scope != "once" {
 		return nil, errors.New("a narrowed approval covers this call only; use scope once")
 	}
-	return narrowApproval(a, req.ApprovedValues)
+	return narrowApproval(a, req.ApprovedValues.values)
 }
 
 // claimApproved claims a pending card as approved and executing: the plain
@@ -185,6 +190,47 @@ func (s *Server) claimApproved(ctx context.Context, user, convID string, a *stor
 			user, len(n.Approved), len(n.Staged), n.Arg, a.ID, a.ToolName, convID, n.leftOut())
 	}
 	return claimed, err
+}
+
+// approvedValuesField is the approve request's `approved_values`, with its
+// presence kept apart from its value: absent approves the call whole, while
+// an explicit null is refused (Go would otherwise decode null and absent to
+// the same nil slice).
+type approvedValuesField struct {
+	present bool
+	values  []string // nil for an explicit null
+}
+
+// UnmarshalJSON records that the field was sent, and its values.
+func (f *approvedValuesField) UnmarshalJSON(b []byte) error {
+	f.present = true
+	if bytes.Equal(bytes.TrimSpace(b), []byte("null")) {
+		f.values = nil
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal(b, &values); err != nil {
+		return err
+	}
+	if values == nil {
+		values = []string{}
+	}
+	f.values = values
+	return nil
+}
+
+// groupApprovedValues is a group decision's narrowing for one card as the
+// single-card field: absent when the card is not in `narrow`.
+// checkGroupNarrowing has already refused a null entry.
+func groupApprovedValues(narrow map[string][]string, id string) approvedValuesField {
+	values, ok := narrow[id]
+	if !ok {
+		return approvedValuesField{}
+	}
+	if values == nil {
+		values = []string{}
+	}
+	return approvedValuesField{present: true, values: values}
 }
 
 // parseApprovalNarrowing decodes a stored narrowing record strictly.

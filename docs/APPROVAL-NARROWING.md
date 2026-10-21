@@ -95,7 +95,7 @@ refuses with 400, leaving the card pending, when:
 
 - the tool declares no narrowable argument, or its staged value is not a list
   of 2 to 500 distinct non-empty strings of at most 200 characters;
-- the list is empty (decline instead), names a value that was not staged, or
+- the list is empty (decline instead) or an explicit `null` (refused, never read as "approve everything"), names a value that was not staged, or
   names one twice;
 - it comes with `approved: false`, or with a scope other than `once`.
 

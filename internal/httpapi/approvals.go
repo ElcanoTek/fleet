@@ -1519,7 +1519,7 @@ type approvalRequest struct {
 	// approved, a non-empty subset of the staged ones. Absent (nil) approves
 	// the call whole. Only with approved=true and scope once; anything else is
 	// refused before a claim.
-	ApprovedValues []string `json:"approved_values,omitempty"`
+	ApprovedValues approvedValuesField `json:"approved_values"`
 }
 
 // prevalidateStagedTaskPrompt checks the prompt of a schedule_task or
