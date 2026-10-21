@@ -263,6 +263,32 @@ func GovernAndBoundModelVisibleToolTextFull(ctx context.Context, toolName, toolC
 	return resp.Content, resp.IsError, governed
 }
 
+// GovernAndBoundModelVisibleToolTextWithTrailer is
+// GovernAndBoundModelVisibleToolTextFull for a result that carries one of
+// fleet's own labelled trailers (an approval's narrowing or stop line). The
+// trailer is governed on its own and never truncated: the tool's text is
+// bounded to what the output limit leaves after the trailer (at least
+// MinMaxToolOutputBytes), then the trailer follows it. So a long result's
+// truncation can never cut the trailer, and the whole stays within the limit
+// unless the trailer itself is larger than the limit's spare room (only
+// possible with an operator limit near the minimum; never past the hard
+// maximum, since a trailer is a few KiB at most). governed is the governed
+// tool text without the trailer. An empty trailer is
+// GovernAndBoundModelVisibleToolTextFull.
+func GovernAndBoundModelVisibleToolTextWithTrailer(ctx context.Context, toolName, toolCallID, content string, isError bool, trailer string) (bounded string, isErr bool, governed string) {
+	if trailer == "" {
+		return GovernAndBoundModelVisibleToolTextFull(ctx, toolName, toolCallID, content, isError)
+	}
+	gt := governFinalToolResponse(ctx, toolName, fantasy.NewTextResponse(trailer)).Content
+	resp := fantasy.NewTextResponse(content)
+	resp.IsError = isError
+	resp = governFinalToolResponse(ctx, toolName, resp)
+	governed = resp.Content
+	budget := max(maxToolOutputBytes()-len(gt)-2, MinMaxToolOutputBytes)
+	resp = boundModelVisibleToolResponseWithin(ctx, toolName, toolCallID, resp, budget)
+	return strings.TrimRight(resp.Content, "\n") + "\n\n" + gt, resp.IsError, governed
+}
+
 type toolOutputEnvelope struct {
 	FleetEnvelope    string `json:"_fleet_envelope,omitempty"`
 	Tool             string `json:"tool"`
@@ -284,7 +310,13 @@ const fleetToolOutputEnvelopeV1 = "tool-output/v1"
 // artifacts are staged only here, after the inner wrapper's redaction, PII, and
 // guardrail decisions. Media bytes are never base64-encoded into model context.
 func boundModelVisibleToolResponse(ctx context.Context, toolName, toolCallID string, resp fantasy.ToolResponse) fantasy.ToolResponse {
-	limit := maxToolOutputBytes()
+	return boundModelVisibleToolResponseWithin(ctx, toolName, toolCallID, resp, maxToolOutputBytes())
+}
+
+// boundModelVisibleToolResponseWithin is boundModelVisibleToolResponse for an
+// explicit limit (normalized to the documented range).
+func boundModelVisibleToolResponseWithin(ctx context.Context, toolName, toolCallID string, resp fantasy.ToolResponse, limit int) fantasy.ToolResponse {
+	limit = normalizeToolOutputLimit(limit)
 	if len(resp.Data) > 0 || resp.Type == "image" || resp.Type == "media" {
 		// Both fields are discarded at this boundary. Count both so a custom
 		// media tool carrying a caption alongside binary data cannot underreport

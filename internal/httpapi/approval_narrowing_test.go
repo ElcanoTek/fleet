@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http/httptest"
 	"reflect"
@@ -402,22 +403,30 @@ func (g *narrowGroupStore) ClaimApprovalNarrowed(ctx context.Context, user, id, 
 	return ok, err
 }
 
-// A long tool result is truncated to the output bound, but fleet's narrowing
-// line is governed and bounded on its own after it, so the truncation cannot
-// cut it.
-func TestAppendFleetNote_SurvivesResultTruncation(t *testing.T) {
+// A long tool result is truncated to what the output bound leaves after
+// fleet's narrowing line, which is never cut: the whole stays within the
+// bound and ends with the complete line.
+func TestGovernWithTrailer_KeepsTheWholeNoteWithinTheBound(t *testing.T) {
 	narrowPolicy(t)
-	agentcore.SetMaxToolOutputBytes(1024)
+	agentcore.SetMaxToolOutputBytes(4096)
 	t.Cleanup(func() { agentcore.SetMaxToolOutputBytes(-1) })
 	row := narrowApprovalRow()
-	bounded, _, _ := governApprovalResult(context.Background(), &row, strings.Repeat("x", 64<<10), false)
-	if len(bounded) > 2048 {
-		t.Fatalf("the result was not bounded (%d bytes)", len(bounded))
+	staged := make([]string, 0, 500)
+	approved := make([]string, 0, 250)
+	for i := range 500 {
+		v := fmt.Sprintf("deal-%03d", i)
+		staged = append(staged, v)
+		if i%2 == 0 {
+			approved = append(approved, v)
+		}
 	}
-	note := narrowingNote(&approvalNarrowing{Arg: "deal_ids", Staged: []string{"a", "b", "c"}, Approved: []string{"a", "c"}})
-	got := appendFleetNote(context.Background(), &row, bounded, note)
-	if !strings.HasPrefix(got, bounded) || !strings.HasSuffix(got, note) {
-		t.Fatalf("result = %q, want the bounded result then the whole note", got)
+	note := narrowingNote(&approvalNarrowing{Arg: "deal_ids", Staged: staged, Approved: approved})
+	got, _, _ := governApprovalResultWithTrailer(context.Background(), &row, strings.Repeat("x", 64<<10), false, note)
+	if !strings.HasSuffix(got, note) {
+		t.Fatalf("the note was cut or changed: ...%q", got[max(0, len(got)-200):])
+	}
+	if len(got) > 4096 {
+		t.Fatalf("result is %d bytes, over the 4096-byte bound", len(got))
 	}
 }
 

@@ -22,14 +22,14 @@ func NarrowingNote(arg string, staged, approved []string) string {
 	// list (the call's recorded arguments hold that list), and by value too
 	// when it is short. Positions keep the note small and exact whatever the
 	// values are: at most 250 positions.
-	var approvedPos, leftPos []string
+	var approvedPos, leftPos []int
 	var approvedVals, leftVals []string
 	for i, v := range staged {
 		if picked[v] {
-			approvedPos = append(approvedPos, strconv.Itoa(i+1))
+			approvedPos = append(approvedPos, i+1)
 			approvedVals = append(approvedVals, fmt.Sprintf("%q", v))
 		} else {
-			leftPos = append(leftPos, strconv.Itoa(i+1))
+			leftPos = append(leftPos, i+1)
 			leftVals = append(leftVals, fmt.Sprintf("%q", v))
 		}
 	}
@@ -45,7 +45,25 @@ func NarrowingNote(arg string, staged, approved []string) string {
 	// ran is the call's own outcome (it may have failed before it was sent,
 	// or a restart may have left it unknown), so the note never claims it.
 	return fmt.Sprintf("[fleet] The person narrowed this call: of the %d staged %s in its arguments, only positions %s%s %s; %s. Only the approved ones could be sent to the tool; the result says whether they ran. Do not run the left-out ones unless the person asks. (Written by fleet, not the tool.)",
-		len(staged), arg, strings.Join(pos, ", "), named, side, other)
+		len(staged), arg, positionRanges(pos), named, side, other)
+}
+
+// positionRanges writes ascending 1-based positions compactly: "1-3, 5, 8-10".
+func positionRanges(pos []int) string {
+	var parts []string
+	for i := 0; i < len(pos); {
+		j := i
+		for j+1 < len(pos) && pos[j+1] == pos[j]+1 {
+			j++
+		}
+		if j > i {
+			parts = append(parts, fmt.Sprintf("%d-%d", pos[i], pos[j]))
+		} else {
+			parts = append(parts, strconv.Itoa(pos[i]))
+		}
+		i = j + 1
+	}
+	return strings.Join(parts, ", ")
 }
 
 // narrowingNoteMaxNamed bounds how many values the note also names by value;

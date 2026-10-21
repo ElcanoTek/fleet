@@ -141,10 +141,18 @@ The approved-call budget is computed for the narrowed arguments (a smaller
   the tool.)` It records the decision only, never that anything ran (the call
   may have failed before it was sent). It names the smaller side exactly by its positions in the staged
   list (which the recorded tool call holds), and by value too when that side
-  has at most 20 values, so it is exact and small (at most 250 positions). It
-  follows the tool's text, so a result card, which is read from the start of
-  the result, is untouched, and it passes the governance and output bound on
-  its own, so truncating a long result never cuts it.
+  has at most 20 values, so it is exact and small (at most 250 positions). Positions
+  are written as ranges ("1-3, 5"). It follows the tool's text, so a result
+  card, which is read from the start of the result, is untouched. It is
+  governed with the result and never truncated: the tool's text is bounded to
+  what the output limit leaves after it
+  (`agentcore.GovernAndBoundModelVisibleToolTextWithTrailer`), so the whole
+  stays within the limit. The one exception: with an operator limit near the
+  1 KiB minimum and a long, scattered narrowing (up to 250 separate
+  positions, about 1.3 KiB), the line is kept whole and the result exceeds
+  that limit by it, never the 128 KiB hard maximum. Exactness wins there,
+  because a truncated line could let the agent run a value the person left
+  out.
 - A narrowed call cut off by a restart keeps the line too:
   `RecoverStrandedApprovals` reads `narrowed_json` and adds it after the
   "outcome unknown" breadcrumb, because the recorded tool call holds the whole

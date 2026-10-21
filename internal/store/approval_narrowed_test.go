@@ -118,7 +118,7 @@ func TestNarrowingNote_IsExactAndBounded(t *testing.T) {
 	if strings.Contains(half, `"vvv`) {
 		t.Fatalf("a 30-value side must be named by position only: %q", half)
 	}
-	if !strings.Contains(half, "only positions 11, 12,") || !strings.Contains(half, ", 40 were approved; the other 30 were left out") {
+	if !strings.Contains(half, "only positions 11-40 were approved; the other 30 were left out") {
 		t.Fatalf("note = %q", half)
 	}
 	if len(half) > 4<<10 {

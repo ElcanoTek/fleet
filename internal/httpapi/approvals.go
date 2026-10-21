@@ -1970,15 +1970,17 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 		resultText = fmt.Sprintf("%s failed: %v", actionVerb(approval.ToolName), toolErr)
 	}
 	isErr := toolErr != nil
-	var governed string
-	resultText, isErr, governed = governApprovalResult(execCtx, approval, resultText, isErr)
-	// A narrowed approval: fleet's line saying exactly which staged values
-	// were approved and which were left out. It goes after the tool's own text
-	// (a result card is read from the start of the result) and is governed and
-	// bounded ON ITS OWN, so truncating a long tool result can never cut it.
+	// Fleet's own labelled lines after the tool's text (a result card is read
+	// from the start of the result): for a narrowed approval, exactly which
+	// staged values were approved and which were left out. They are governed
+	// with the result but never truncated: the tool's text is bounded to what
+	// the output limit leaves after them.
+	var trailers []string
 	if narrowed, nerr := parseApprovalNarrowing(approval.NarrowedJSON); approval.NarrowedJSON != "" && nerr == nil {
-		resultText = appendFleetNote(execCtx, approval, resultText, narrowingNote(narrowed))
+		trailers = append(trailers, narrowingNote(narrowed))
 	}
+	var governed string
+	resultText, isErr, governed = governApprovalResultWithTrailer(execCtx, approval, resultText, isErr, strings.Join(trailers, "\n\n"))
 	// A tool in critical_tool_result_cards: the outcome card its own result
 	// carries, stored on the still-executing row just before the outcome, so
 	// the settled card and its reply carry both. Only for a call that ran and
@@ -2080,13 +2082,15 @@ func (g *approvalRunGate) drain(ctx context.Context) bool {
 	}
 }
 
-// appendFleetNote adds one of fleet's labelled lines after an approved call's
-// governed, bounded result. The note passes the same governance and bound by
-// itself, so it is never cut by the result's truncation and never carries
-// what the redaction would scrub.
-func appendFleetNote(ctx context.Context, approval *store.Approval, resultText, note string) string {
-	bounded, _, _ := governApprovalResult(ctx, approval, note, false)
-	return strings.TrimRight(resultText, "\n") + "\n\n" + bounded
+// governApprovalResultWithTrailer is governApprovalResult for a result that
+// carries fleet's own labelled lines (trailer): they are governed too, and
+// never cut by the result's size bound (agentcore
+// GovernAndBoundModelVisibleToolTextWithTrailer).
+func governApprovalResultWithTrailer(ctx context.Context, approval *store.Approval, text string, isErr bool, trailer string) (bounded string, err bool, governed string) {
+	if trailer == "" {
+		return governApprovalResult(ctx, approval, text, isErr)
+	}
+	return agentcore.GovernAndBoundModelVisibleToolTextWithTrailer(ctx, approval.ToolName, resolutionCallID(approval), text, isErr, trailer)
 }
 
 // governApprovalResult applies the loop's post-execution boundary to an
