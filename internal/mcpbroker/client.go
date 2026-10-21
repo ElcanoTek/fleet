@@ -31,6 +31,7 @@ const abandonedScopeCloseTimeout = 3 * time.Second
 // A Client is safe for concurrent use.
 type Client struct {
 	enc  *json.Encoder
+	out  io.Writer // the connection, for sendLive's per-frame encoders
 	conn io.Closer
 	done chan struct{} // closed when the connection dies or Close is called
 
@@ -54,6 +55,7 @@ var _ agentcore.MCPBroker = (*Client)(nil)
 func NewClient(conn io.ReadWriteCloser) *Client {
 	c := &Client{
 		enc:      json.NewEncoder(conn),
+		out:      conn,
 		conn:     conn,
 		done:     make(chan struct{}),
 		pending:  make(map[uint64]chan response),
@@ -524,21 +526,50 @@ func (c *Client) closeAbandonedScope(ch <-chan response) {
 	}
 }
 
-// sendLive writes req unless ctx has ended by the time this caller holds
-// the write lock: another frame may hold it a while, and a request whose
-// caller already gave up must never reach the child (a side-effecting tool
-// would run for nobody). sent reports whether any of req was written; a
-// write error is returned with sent false.
+// sendLive writes req unless ctx has ended before its first byte goes out:
+// another frame may hold the write lock a while, and marshalling a request
+// that carries a multi-MiB workspace-file window takes time too. A request
+// whose caller already gave up must never reach the child (a
+// side-effecting tool would run for nobody), so the check sits in the
+// writer, after the encoder has marshalled and just before it writes. sent
+// reports whether any of req was written; a write error is returned with
+// sent false.
 func (c *Client) sendLive(ctx context.Context, req request) (sent bool, err error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if ctx.Err() != nil {
-		return false, nil
-	}
-	if err := c.enc.Encode(req); err != nil {
+	// A fresh encoder per frame: json.Encoder keeps its first write error
+	// and returns it from every later Encode, so a refusal must not reach
+	// the shared one.
+	if err := json.NewEncoder(&liveWriter{w: c.out, ctx: ctx}).Encode(req); err != nil {
+		if errors.Is(err, errCallerGone) {
+			return false, nil
+		}
 		return false, err
 	}
 	return true, nil
+}
+
+// errCallerGone is liveWriter's refusal to start a frame for a caller whose
+// context has ended.
+var errCallerGone = errors.New("mcpbroker: caller gone before the request was written")
+
+// liveWriter refuses a frame's first write once ctx has ended; json.Encoder
+// marshals the whole frame first and then writes it once, so nothing of a
+// refused frame reaches the connection. Used under Client.writeMu.
+type liveWriter struct {
+	w     io.Writer
+	ctx   context.Context
+	wrote bool
+}
+
+func (g *liveWriter) Write(p []byte) (int, error) {
+	if !g.wrote {
+		if g.ctx.Err() != nil {
+			return 0, errCallerGone
+		}
+		g.wrote = true
+	}
+	return g.w.Write(p)
 }
 
 func (c *Client) send(req request) error {

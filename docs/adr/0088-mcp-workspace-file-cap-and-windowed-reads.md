@@ -67,7 +67,9 @@ controls every argument of every call. Four things follow:
    root, the path and the sha256. A window is a sub-slice of its file, with no
    copy. A key being read by one call is waited on by the others (holding
    nothing) rather than read twice. A file that fails verification is never
-   cached.
+   cached. A pin never extends the 5 minutes: once an entry ages out, a new
+   call waits (holding nothing) for its last lease to end, then reads and
+   verifies the file afresh, so an edited file fails its old hash.
 4. **One budget charges every byte held for a reference.** The budget is
    384 MiB process-wide. A byte is charged before it is allocated and stays
    charged until it is released. The tally is

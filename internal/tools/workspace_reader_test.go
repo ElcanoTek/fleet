@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -752,5 +753,56 @@ func TestWorkspaceFileWaitPrefersCancellation(t *testing.T) {
 		if err := s.waitLocked(ctx); !errors.Is(err, context.Canceled) {
 			t.Fatalf("a wait with both room and cancellation ready returned %v", err)
 		}
+	}
+}
+
+// TestWorkspaceFilePinnedEntryExpires: a pin held past the TTL (a slow or
+// cancelled-but-retained broker call) does not extend it. A new call waits
+// for the old pins to drop, then re-reads and re-verifies the file, so an
+// edited file fails its old hash instead of being served from the cache.
+func TestWorkspaceFilePinnedEntryExpires(t *testing.T) {
+	approved := bytes.Repeat([]byte("v"), 4096)
+	src := newFakeSource(map[string][]byte{"f": approved})
+	var clock atomic.Int64
+	clock.Store(time.Now().UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()) }
+	store := newWorkspaceFileStore(8<<20, 8<<20, 4, time.Minute, now)
+	reader := newVerifiedWorkspaceReader(src.source(), store)
+	ctx := WithForcedWorkingDir(context.Background(), "/ws")
+	ref := []WorkspaceFileRef{{Path: "f", SHA256: hexSum(approved), Length: 1024}}
+
+	_, release, err := reader(ctx, ref, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The slow call still holds its lease when the entry ages out, and the
+	// file is edited meanwhile.
+	clock.Add(int64(2 * time.Minute))
+	src.override = func(string) []byte { return bytes.Repeat([]byte("e"), 4096) }
+
+	done := make(chan error, 1)
+	go func() {
+		_, rel, err := reader(ctx, ref, 1<<20)
+		if err == nil {
+			rel()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("served an expired entry while it was pinned: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrWorkspaceFileHashMismatch) {
+			t.Fatalf("after the pin dropped: %v, want the edited file's hash mismatch", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the waiting call never re-read the file")
+	}
+	if got := src.readCount("f"); got != 2 {
+		t.Fatalf("%d reads, want 2 (the expired entry re-read once)", got)
 	}
 }

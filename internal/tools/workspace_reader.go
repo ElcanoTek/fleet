@@ -223,11 +223,21 @@ func (s *workspaceFileStore) acquire(ctx context.Context, reqs []*fileRequest) (
 		var hits, misses []*fileRequest
 		var wait *fileFlight
 		var probe []*fileRequest
+		retiring := false
 		for _, r := range reqs {
 			r.entry = nil
 			if el, ok := s.byKey[r.key]; ok {
 				entry := el.Value.(*verifiedFile)
-				if entry.pins > 0 || s.now().Before(entry.expires) {
+				if !s.now().Before(entry.expires) && entry.pins > 0 {
+					// Expired but still pinned by a slow call: never hand
+					// the old bytes to a new lease (a pin must not extend
+					// the TTL, or an edited file would be served forever).
+					// Wait for the pins to drop, then retire it and read
+					// the file afresh.
+					retiring = true
+					break
+				}
+				if s.now().Before(entry.expires) {
 					// A hit is a use: keep the LRU order honest so an
 					// interleaved upload does not evict the file it is
 					// still sending.
@@ -247,6 +257,12 @@ func (s *workspaceFileStore) acquire(ctx context.Context, reqs []*fileRequest) (
 				probe = append(probe, r)
 			}
 			misses = append(misses, r)
+		}
+		if retiring {
+			if err := s.waitLocked(ctx); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		if wait != nil {
 			s.mu.Unlock()
