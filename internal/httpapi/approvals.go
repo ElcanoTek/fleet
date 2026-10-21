@@ -453,6 +453,16 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// A tool in critical_tool_group_approval: the card joins this turn's
 	// approval group, so the web can render the turn's cards as one.
 	a.joinApprovalGroup(approval)
+	// critical_tool_narrowable_args: freeze the argument this card narrows
+	// now, so the card, its reloads and the decision never read a policy
+	// that changed after it was shown (docs/APPROVAL-NARROWING.md).
+	if arg := narrowableArgAtStaging(toolName, rawInput); arg != "" {
+		if ok, err := a.store.SetApprovalNarrowableArg(a.ctx, a.userEmail, approval.ID, arg); err != nil || !ok {
+			log.Printf("approval narrowing: freeze the argument for %s: ok=%t err=%v", approval.ID, ok, err)
+		} else {
+			approval.NarrowableArg = arg
+		}
+	}
 	if cardJSON != "" {
 		if ok, err := a.store.SetApprovalCard(a.ctx, a.userEmail, approval.ID, cardJSON); err != nil || !ok {
 			log.Printf("approval card: store card for %s: ok=%t err=%v", approval.ID, ok, err)
@@ -889,13 +899,6 @@ func approvalClientFields(toolName, rawInput, convID string) map[string]any {
 		// Only present when true, so every other card's payload is unchanged.
 		out["progress_updates"] = true
 	}
-	if n := narrowablePayload(toolName, rawInput); n != nil {
-		// critical_tool_narrowable_args: the list argument a person may
-		// narrow on this card and its staged values; the describer card's
-		// rows that name one get a checkbox (docs/APPROVAL-NARROWING.md).
-		// Only present for such a card, so every other payload is unchanged.
-		out["narrowable"] = n
-	}
 	if resumesAfterApproval(toolName) {
 		// critical_tool_resume: once this card is settled fleet starts a turn
 		// on its own (docs/RESUME-AFTER-APPROVAL.md), so the client follows the
@@ -919,7 +922,7 @@ func approvalRequiredEvent(approval *store.Approval, rawInput, convID string) ma
 	ev["expires_at"] = approval.ExpiresAt
 	ev["mcp_server"] = approval.MCPServer
 	ev["mcp_account"] = approval.MCPAccount
-	return withApprovalGroup(withApprovalCard(ev, approval), approval)
+	return withApprovalNarrowable(withApprovalGroup(withApprovalCard(ev, approval), approval), approval)
 }
 
 // summarizeApprovalInput dispatches on tool name to build a display

@@ -99,11 +99,14 @@ refuses with 400, leaving the card pending, when:
 - the list is empty (decline instead) or an explicit `null` (refused, never read as "approve everything"), names a value that was not staged, or
   names one twice;
 - it comes with `approved: false`, or with a scope other than `once`;
-- `narrowed_arg` is missing, or is not the argument the tool narrows now. The
-  decision is bound to what the card showed: if fleet restarted with another
-  `critical_tool_narrowable_args` entry while the card was open, the values
-  are never applied to an argument the person did not review (reload the card
-  and decide again).
+- `narrowed_arg` is missing, or is not the argument frozen on the card.
+
+The argument is frozen on the row when the card is staged
+(`approvals.narrowable_arg`, migration 079): the live card, every reload of
+it and the decision read that value, never the boot policy again. A restart
+with another `critical_tool_narrowable_args` entry therefore changes nothing
+for a card already staged, and a card staged with nothing frozen is never
+narrowed.
 
 Naming every staged value is a whole approval: the plain claim, the staged
 call. Otherwise the card is claimed with `store.ClaimApprovalNarrowed`, which
