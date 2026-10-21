@@ -89,6 +89,8 @@ function rgbComponents(value: string, args: string): RGBA {
     if (args.includes("/")) throw bad();
     parts = args.split(",").map((p) => p.trim());
     if (parts.some((p) => p === "" || /\s/.test(p))) throw bad();
+    // Legacy syntax: the three channels are all numbers or all percentages.
+    if (new Set(parts.slice(0, 3).map((p) => p.endsWith("%"))).size > 1) throw bad();
   } else {
     const [rgb, alpha, ...rest] = args.split("/");
     if (rest.length) throw bad();

@@ -20,6 +20,9 @@ describe("resolveColor", () => {
     ["rgb(100% 0% 0%)", [1, 0, 0, 1]],
     ["rgb(0 0 0 / 50%)", [0, 0, 0, 0.5]],
     ["rgb(.5e2% 0 0)", [0.5, 0, 0, 1]],
+    // Modern syntax may mix units; legacy alpha may be a percentage.
+    ["rgb(100% 0 0)", [1, 0, 0, 1]],
+    ["rgba(100%, 0%, 0%, 50%)", [1, 0, 0, 0.5]],
   ] as const)("reads %s", (value, want) => {
     const got = resolveColor(value, {});
     want.forEach((w, i) => expect(got[i]).toBeCloseTo(w));
@@ -38,6 +41,9 @@ describe("resolveColor", () => {
     "rgb(0 0 0 / 50% / 1)",
     "rgb(0 0 0 /)",
     "rgb(0, 0 0)",
+    // Legacy commas with mixed channel units.
+    "rgb(100%, 0, 0)",
+    "rgba(255, 0%, 0, 0.5)",
     // Not CSS numbers.
     "rgb(255., 0, 0)",
     "rgb(0 0 0 / 1.)",
