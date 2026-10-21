@@ -38,7 +38,9 @@ model reads the values ──▶ calls MCP tools as usual (approval cards apply)
 
 - **No staging row and no new SSE event.** The card's spec is the `show_ui`
   tool call's own input. Every client already receives it as `tool.call`, and
-  the transcript persists it, so a reload redraws the card from history. The
+  the transcript persists it, so a reload redraws the card from history. (A
+  card shown by reference to a tool's result rides the `show_ui` result
+  instead; see [A card a tool built](#a-card-a-tool-built-from_result).) The
   submission is a user message. "Replaced" is a later card's `replaces`. The
   web derives all three from the messages (`web/src/app/chat/ui/genui/transcript.ts`),
   so a reload and a second tab agree on every card's state.
@@ -50,6 +52,78 @@ model reads the values ──▶ calls MCP tools as usual (approval cards apply)
   and then calls tools, every action a card leads to passes the one governed
   loop (`agentcore.Run`) and its approval cards. The card has no path that
   skips them.
+
+## A card a tool built (`from_result`)
+
+A bundle can build a card in code. For example, a deal-plan server's
+`intake_card` tool returns `{"show_ui": {...}, ...}`, a spec of 3–13 KB.
+Copying that spec into `show_ui` costs output tokens every time, and it is
+fragile. In one real log the model copied the spec correctly, then decided it
+had "hand-built" the card, redrew an identical one with `replaces`, and told
+the trader about its internals. So `show_ui` can take the card by reference
+instead:
+
+```json
+{"from_result": {"tool": "mcp_deal_plan_intake_card"}}
+{"from_result": {"call_id": "toolu_01…", "path": "show_ui"}}
+{"from_result": {"tool": "intake_card"}, "replaces": "<card_id>", "field_errors": [{"field": "advertiser", "message": "Unknown advertiser"}]}
+```
+
+- **Which result.** `call_id` selects the newest result with that tool-call id.
+  `tool` selects that tool's newest result, by exact name or by the
+  `critical_tools` suffix rule (`intake_card` matches
+  `mcp_deal_plan_intake_card`). A call made through the deferred `tool_call`
+  bridge counts under the tool it ran. Given both, they must agree. Only
+  results the model can see are searched: this turn's replayed history plus
+  the run's own results so far. A call in the same step as `show_ui` has not
+  returned yet, so it cannot be referenced. "Newest" means the latest call,
+  not the latest to finish, so parallel calls resolve the same way live and
+  after a reload. The newest match is final: an older success never stands in
+  for a newer error.
+- **Where in it.** `path` is dot-separated keys into the result's JSON, and
+  defaults to `show_ui`. A JSON string met on the way is decoded and walked
+  into, so a card a script printed works too (bash's result:
+  `"path": "stdout.show_ui"`). The value there must be a JSON object.
+- **What else may be given.** Only `replaces` and `field_errors`. They are laid
+  over the tool's card, so a refinement re-shows the same card with errors.
+  Any other key beside `from_result` (`title`, `components`, …) is refused.
+- **Checks.** The resolved card goes through `genui.Validate` and the
+  secret-redaction check exactly as an inline card does, with the same limits.
+  It is also refused when it holds a redaction marker (`[REDACTED…]`, also when JSON-escaped), that
+  is, a value the result's governance already scrubbed. An error result, a
+  result that is not JSON, a missing key and an unknown call are all
+  `UI_INVALID` tool errors that name the problem. When the tool's card itself
+  is invalid, the error says so and tells the model not to copy and repair it.
+- **What the model gets back.** The same short `UI_DISPLAYED card_id=…`
+  acknowledgement as for an inline card. The spec is never echoed to the
+  model. The tool description tells models to prefer the reference whenever a
+  tool returned a card, and not to rebuild it or describe how it was made.
+- **How the browser gets it.** On success the validated spec rides the
+  `show_ui` result as display data: a `card` field (JSON text) on the
+  `tool.result` stream event and on the persisted `tool_result` row. Replay
+  sends the model only the result's text. The web draws a call whose input is
+  a reference from that `card`, so a reload and a second tab agree as they do
+  for inline cards. A result without a `card` (any other tool, an inline card)
+  is unchanged. This adds no table, no migration and no new event, and the
+  card stays declarative data ([ADR-0086](adr/0086-show-ui-card-by-reference.md)).
+
+Honest scope:
+
+- **A turn recovered after a crash loses a referenced card.** The durable
+  turn journal (#798) records each result's text, not the `card` field. A
+  `show_ui` reference in a turn rebuilt from the journal draws no card. The
+  web treats it as not a card, and the model can show it again.
+- **The terminal client and ACP** see the tool call and result as before
+  (the TUI's pointer to the web chat included). They do not read `card`.
+- **No cross-conversation references.** Only the current conversation's
+  results are searched, as the turn replays them. A result from before the
+  conversation's summary is not replayed, so it is not found, which is a clear
+  error. The candidates are fixed when the turn starts (its replayed history)
+  plus the run's own results as they were recorded, in full. A mid-turn
+  context reduction or compaction does not remove a candidate, even though it
+  shortens what the model sees. The conversation and the user are the same,
+  the card is still validated, and the newest result of a tool is the one a
+  reduction keeps longest.
 
 ## The component catalog
 

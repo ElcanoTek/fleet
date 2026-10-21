@@ -6,7 +6,10 @@ import { cardSpecOf, deriveGenUiState, fieldLabels, isRenderableCardCall, summar
 const card = (title: string, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ title, components: [{ type: "text", text: "x" }], ...extra });
 
-function assistant(id: number, calls: { id: string; input: string; resultText?: string; state?: "done" | "error" | "pending" }[]): Message {
+function assistant(
+  id: number,
+  calls: { id: string; input: string; resultText?: string; card?: string; state?: "done" | "error" | "pending" }[],
+): Message {
   return {
     id,
     role: "assistant",
@@ -19,6 +22,35 @@ function assistant(id: number, calls: { id: string; input: string; resultText?: 
 function user(id: number, content: string): Message {
   return { id, role: "user", content, state: "done" } as unknown as Message;
 }
+
+describe("cards shown by reference (from_result)", () => {
+  const ref = JSON.stringify({ from_result: { tool: "intake_card" }, replaces: "c0" });
+
+  it("draws the validated spec the result carries, never the reference input", () => {
+    const msgs = [
+      assistant(1, [{ id: "c1", input: ref, card: card("Intake", { replaces: "c0" }), resultText: "UI_DISPLAYED card_id=c1" }]),
+    ];
+    const tc = msgs[0].toolCalls![0];
+    expect(isRenderableCardCall(tc)).toBe(true);
+    expect(cardSpecOf(tc)?.title).toBe("Intake");
+    const s = deriveGenUiState(msgs);
+    expect(s.cards.get("c1")?.title).toBe("Intake");
+    expect(s.superseded.has("c0")).toBe(true);
+  });
+
+  it("draws nothing for a reference whose result carries no card", () => {
+    const tc = assistant(1, [{ id: "c1", input: ref, resultText: "UI_DISPLAYED card_id=c1" }]).toolCalls![0];
+    expect(isRenderableCardCall(tc)).toBe(false);
+    expect(deriveGenUiState([assistant(1, [{ id: "c1", input: ref, resultText: "UI_DISPLAYED card_id=c1" }])]).cards.size).toBe(0);
+  });
+
+  it("leaves an inline card that merely mentions from_result alone", () => {
+    const inline = JSON.stringify({ title: "T", components: [{ type: "text", text: '"from_result"' }] });
+    const tc = assistant(1, [{ id: "c1", input: inline, resultText: "UI_DISPLAYED card_id=c1" }]).toolCalls![0];
+    expect(isRenderableCardCall(tc)).toBe(true);
+    expect(cardSpecOf(tc)?.title).toBe("T");
+  });
+});
 
 describe("deriveGenUiState", () => {
   it("collects cards, the latest submission per card, and replaced cards", () => {

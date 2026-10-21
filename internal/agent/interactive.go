@@ -367,6 +367,9 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 		repair = in.RepairToolCall(tc.Model.Model())
 	}
 	var sb strings.Builder
+	// The retry is a multi-step loop like the main stream, so its steps get
+	// the same paragraph break between them (agentcore.StepTextSeparator).
+	stepEnded := false
 	_, err := agent.Stream(ctx, fantasy.AgentStreamCall{
 		Messages:        convo,
 		MaxOutputTokens: &maxTokens,
@@ -377,6 +380,10 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 		// it streams with tools, so it is a real loop, not a single call.
 		StopWhen: in.StopWhen,
 		OnTextDelta: func(_, text string) error {
+			if stepEnded && text != "" {
+				text = agentcore.StepTextSeparator(sb.String(), text) + text
+				stepEnded = false
+			}
 			sb.WriteString(text)
 			if in.Observer != nil {
 				in.Observer.Observe("text.delta", map[string]any{"text": text})
@@ -388,6 +395,7 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 		// Meter this recovery call into the run's accounting so its tokens/cost
 		// are not invisible to the cost chip (#83). Nil-safe.
 		OnStepFinish: func(step fantasy.StepResult) error {
+			stepEnded = sb.Len() > 0
 			if in.RecordUsage != nil {
 				in.RecordUsage(step.Usage, step.ProviderMetadata)
 			}

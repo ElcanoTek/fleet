@@ -76,6 +76,16 @@ func contractScenarios() []contractScenario {
 			},
 		},
 		{
+			name: "narrated-tool-loop",
+			about: "the model narrates before each tool call, then answers: steps arrive as separate paragraphs " +
+				"(agentcore.StepTextSeparator) and text.replace swaps the narration for the final answer",
+			steps: []fakellm.Step{
+				narrated("Let me check the workspace.", fakellm.BashStep("call_contract_narrated_1", "echo CONTRACT_NARRATED_ONE")),
+				narrated("Found it. Now the second check.", fakellm.BashStep("call_contract_narrated_2", "echo CONTRACT_NARRATED_TWO")),
+				fakellm.TextStep("Both checks passed."),
+			},
+		},
+		{
 			name:  "model-required",
 			about: "the provider rejects the request (non-retryable 400)",
 			steps: []fakellm.Step{{
@@ -92,12 +102,29 @@ func contractScenarios() []contractScenario {
 			},
 		},
 		{
+			name:  "show-ui-by-reference",
+			about: "a tool returns a card and show_ui shows it by reference; the validated spec rides the show_ui result as `card` (docs/GENERATIVE-UI.md)",
+			steps: []fakellm.Step{
+				fakellm.BashStep("call_contract_card", `printf '%s' '{"show_ui":{"title":"Contract card","components":[{"type":"text_input","id":"name","label":"Name"}],"actions":[{"id":"send","label":"Send"}]}}'`),
+				fakellm.ToolStep(fakellm.ToolCall{ID: "call_contract_ui", Name: "show_ui",
+					Arguments: `{"from_result":{"call_id":"call_contract_card","path":"stdout.show_ui"}}`}),
+				fakellm.TextStep("The card is on screen."),
+			},
+		},
+		{
 			name:   "cancelled",
 			about:  "the user stops the turn while the model is stalled",
 			steps:  []fakellm.Step{{Kind: fakellm.StepText, Text: "never sent", Delay: time.Minute}},
 			cancel: true,
 		},
 	}
+}
+
+// narrated gives a tool-call step the narration a real model writes ahead of
+// its calls.
+func narrated(text string, step fakellm.Step) fakellm.Step {
+	step.Text = text
+	return step
 }
 
 func TestChatStreamContract(t *testing.T) {
