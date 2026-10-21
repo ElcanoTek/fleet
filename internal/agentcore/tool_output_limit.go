@@ -279,14 +279,17 @@ func GovernAndBoundModelVisibleToolTextWithTrailer(ctx context.Context, toolName
 	if trailer == "" {
 		return GovernAndBoundModelVisibleToolTextFull(ctx, toolName, toolCallID, content, isError)
 	}
-	gt := governFinalToolResponse(ctx, toolName, fantasy.NewTextResponse(trailer)).Content
+	gtResp := governFinalToolResponse(ctx, toolName, fantasy.NewTextResponse(trailer))
+	gt := gtResp.Content
 	resp := fantasy.NewTextResponse(content)
 	resp.IsError = isError
 	resp = governFinalToolResponse(ctx, toolName, resp)
 	governed = resp.Content
 	budget := max(maxToolOutputBytes()-len(gt)-2, MinMaxToolOutputBytes)
 	resp = boundModelVisibleToolResponseWithin(ctx, toolName, toolCallID, resp, budget)
-	return strings.TrimRight(resp.Content, "\n") + "\n\n" + gt, resp.IsError, governed
+	// A trailer governance blocked blocks the whole result, as a blocked
+	// result does: the caller must not record it as a success.
+	return strings.TrimRight(resp.Content, "\n") + "\n\n" + gt, resp.IsError || gtResp.IsError, governed
 }
 
 type toolOutputEnvelope struct {

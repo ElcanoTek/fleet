@@ -111,3 +111,18 @@ func TestPIIRedaction_CleanOutputUnaffected(t *testing.T) {
 		t.Errorf("clean output should be untouched, got %q (isErr=%v)", resp.Content, resp.IsError)
 	}
 }
+
+// A trailer fleet appends to an approved call's result (an approval's
+// narrowing line) is governed too: when governance blocks it, the whole
+// result is an error, even though the tool's own text passed.
+func TestGovernWithTrailer_ABlockedTrailerBlocksTheResult(t *testing.T) {
+	SetPIIRedactor(piiredact.New(piiredact.ModeBlock))
+	t.Cleanup(func() { SetPIIRedactor(nil) })
+	got, isErr, _ := GovernAndBoundModelVisibleToolTextWithTrailer(context.Background(), "mcp_ix_execute_plan", "c1", `{"success":true}`, false, `[fleet] left out "SSN 123-45-6789"`)
+	if !isErr || strings.Contains(got, "123-45-6789") {
+		t.Fatalf("result = %q, isErr = %v; want the blocked trailer to block the result", got, isErr)
+	}
+	if _, isErr, _ := GovernAndBoundModelVisibleToolTextWithTrailer(context.Background(), "mcp_ix_execute_plan", "c1", `{"success":true}`, false, "[fleet] left out positions 2"); isErr {
+		t.Fatal("a clean trailer must not mark the result an error")
+	}
+}
