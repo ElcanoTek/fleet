@@ -21,7 +21,7 @@ An element filled with a brand or status color needs a foreground chosen for
 
 | Fill | Foreground | Why |
 |---|---|---|
-| `bg-[var(--color-primary)]` | `text-[var(--color-on-primary)]` | The purpose-built token. It cannot be derived — a dark primary needs light text, a light one (yellow, lime, cyan) needs dark text — so a bundle declares it. |
+| `bg-[var(--color-primary)]` | `text-[var(--color-on-primary)]` | The purpose-built token. It cannot be derived — a dark primary needs light text, a light one (yellow, lime, cyan) needs dark text — so a bundle declares it. The pair itself is not held to 4.5:1 (fleet's own is 4.46:1): for a filled button's label prefer `bg-[var(--color-primary-fill)]` + `text-[var(--color-on-primary-fill)]`, which `/theme.css` measures for every palette (required on the approval cards). |
 | `bg-[var(--color-accent)]`, `bg-[var(--color-danger)]` | `text-[var(--color-surface-1)]` | Inverts with the theme (near-black in dark, white in light), which is the polarity a saturated fill needs. Themable, so a bundle keeps control. |
 
 Reaching for `--color-text-primary` on a saturated fill is the common mistake:
@@ -133,6 +133,37 @@ Known, deliberate exceptions:
     Every `-soft` value clears WCAG AA (4.5:1) on its own 15–20% tint over
     every surface fleet and its bundles ship, in both themes; status colors
     are not bundle-themable, so `designTokens.test.ts` pins this.
+  - `--color-{success,warning,danger}-text`: status **words** on a card
+    ("Not applied:", "Timed out", a failed card's title). The base status
+    color with 25–30% of `--color-text-primary` mixed in, so it is darker in
+    light and lighter in dark; the base tokens fail 4.5:1 on tinted cards.
+    `--color-{success,warning,danger}-tint` is the 15% wash behind a status
+    icon; success and danger icons keep the base color and need 3:1 on it.
+    The warning icon is `--color-warning-icon` (15% of the strongest text
+    mixed in): the base amber fell to 2.77:1 on its wash over a mid-gray
+    light `surface_2`.
+- **Approval cards** (`chat/ui/Approval*.tsx`) — one fill token per state:
+  `--color-card-bg` (neutral: pending without a plain-words layout, plan,
+  running, declined, expired), `--color-card-pending-bg` (a card asking for a
+  decision), `--color-card-{success,warning,danger}-bg` (outcomes; the danger
+  wash is 4% in dark, 7% in light) and `--color-card-record-bg` (a notify
+  record). Muted text and links on those fills use `--color-card-text-muted`
+  and `--color-card-link`: the themable muted/accent with 20% of the strongest
+  text mixed in, because a tinted card costs them ~0.5:1. The running card's
+  progress bar is `--color-progress` (the card link color), never
+  `--color-primary`: a bundle's primary can be a light brand fill (a yellow
+  with dark button text) that cannot reach 3:1 on the track. For the same
+  reason the help guides paint links in `--color-link`. Filled buttons
+  (Approve, Check result, Retry failed, Approve 2 of 3) paint
+  `--color-on-primary-fill` on `--color-primary-fill` and hover (when
+  enabled) to `--color-primary-fill-hover`, never `--color-primary` or a faded
+  `hover:opacity-*`: the brand pair can miss 4.5:1 (fleet's own is 4.46:1),
+  so the fill is the primary nudged until it passes, measured per bundle by
+  `/theme.css` (see `docs/BRANDING.md`). Don't mix a card
+  fill or paint a base status color as text inline in those files:
+  `approvalCardContrast.test.ts` measures every state's pairs (4.5:1 text,
+  3:1 icons, both themes, over `--color-bg`..`--color-surface-2`) from these
+  tokens and bans the inline forms.
 - **Syntax** — `--color-syntax-*` for code highlighting.
 - **Geometry & motion** — `--radius-md` (0.625rem), `--radius-lg` (0.875rem),
   `--radius-xl` (1.125rem), `--radius-pill`; `--space-*`; `--shadow-sm/md/lg`;

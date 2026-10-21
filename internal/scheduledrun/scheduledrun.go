@@ -1587,7 +1587,9 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 	// never uses the token creates nothing on disk.
 	bases := r.mcpBases()
 	for name, base := range bases {
-		base.BaseEnv = agentcore.ExpandTaskIDEnv(base.BaseEnv, task.ID.String())
+		// ${FLEET_TASK_ID}: stamped, substituted at spawn by agentcore.SpawnEnv
+		// (after the user token, in the one shared order).
+		base.TaskID = task.ID.String()
 		bases[name] = base
 	}
 	workdir, err := r.prepareTaskMCPWorkspace(task, selection)

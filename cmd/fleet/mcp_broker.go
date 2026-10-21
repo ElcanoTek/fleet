@@ -288,8 +288,21 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	if err := validateScopeSelection(selection, enabled); err != nil {
 		return "", nil, nil, err
 	}
+	// The interactive turn's signed-in user (ADR-0087). Re-validated here —
+	// the credential owner does not trust the parent's formatting — and a
+	// value that fails is treated as absent, which drops the keys that need
+	// it. No user (every scheduled scope; validateScopeSpec refuses a task
+	// scope that carries one) drops every ${FLEET_USER_EMAIL}-bearing key.
+	var user agentcore.MCPUserIdentity
+	if spec.User != nil {
+		user = agentcore.NewMCPUserIdentity(spec.User.Email)
+	}
 	for name, base := range bases {
-		base.BaseEnv = agentcore.ExpandTaskIDEnv(base.BaseEnv, spec.TaskID)
+		// Stamped, not substituted: the binder writes the task id and the user
+		// into the env at spawn (agentcore.SpawnEnv), after the account
+		// overlay and its identity guard, in the one shared token order.
+		base.TaskID = spec.TaskID
+		base.User = user
 		bases[name] = base
 	}
 

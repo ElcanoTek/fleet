@@ -250,8 +250,8 @@ yourself: what they shared with their old team stops being shared.
 Above the transcript sit three small controls, left to right: **Keyboard
 shortcuts** shows the same list as the [last section](#13-keyboard-shortcuts) of
 this guide; **Memories** opens the memory manager; and **Show details** toggles
-the assistant's reasoning, tool calls, and per-turn cost figures on or off across
-the whole conversation. Every conversation also shows who can see it — **Only
+the assistant's reasoning, working notes, tool calls, and per-turn cost figures on
+or off across the whole conversation. Every conversation also shows who can see it — **Only
 you**, **Shared with** your team, or **Public link** — and a **Share** button.
 Both open the share dialog.
 
@@ -269,6 +269,7 @@ your eye lands on the answer and then on anything that needs you:
 | --- | --- |
 | Execution trail | A row of chips, one per tool the assistant used: a file it read, a connector it called, code it ran. Click a chip to see exactly what went in and what came back. This is how you check the work. A chip in the danger colour is a call that failed; the chip of an action that went to an approval card is not: it is marked **sent for approval**, and the card says whether it ran. Shown only when **Show details** is on. |
 | Reasoning | The assistant's narrated thinking. Also shown only when **Show details** is on. |
+| Working notes | While a reply is in progress, the short notes the assistant writes between steps ("Let me look up the deal first."). Shown only when **Show details** is on, and only until you reload the page: the saved conversation keeps the answer, not the notes. With details off, a status line takes their place: **Thinking**, or the step under way, such as **Running shell** or the plan item it is working on. |
 | The answer | Text, tables, charts, and images. Code and data come in copyable blocks. When the assistant produces an HTML report, it renders as an **HTML preview** with a **Show source** toggle. |
 | Interactive cards | A form, picker, checklist, comparison, chart or small calculator the assistant built for this answer. Fill it in and press its button; your answers go back as your next message. See [Interactive cards](#interactive-cards). |
 | Status | Banners for anything unusual about the turn: retrying, cancelled, failed. See [When a turn goes wrong](#11-when-a-turn-goes-wrong). |
@@ -432,12 +433,20 @@ with no switch, and selecting it opens it in the library. **All on** and
 they cover only the matches ("All 3 on"); the count beside them says how
 many are on. The expand icon beside the search, or **Open library** at the
 foot of the menu, opens the **Tools & connections** library: every
-connector with a category and status filter on the left, the list in the
+connector you can use in Chat with a category and status filter on the left, the list in the
 middle, and the selected connector on the right with its switch, its status,
 **Show N tools** for the names of its tools, and **Manage in Settings** for
 whether it starts on in new chats. On a phone or a narrow window the filters
 scroll sideways as chips, and tapping a connector opens its details on their
-own screen; the back button at the top (or `Esc`) returns to the list. When a connector has more than one
+own screen; the back button at the top (or `Esc`) returns to the list.
+A deployment can reserve some connector tools for scheduled tasks, typically a
+raw write that Chat reaches through a reviewed flow instead. Chat leaves those
+tools out of the Tools menu, its search, the library's **Show N tools** list
+and every tool count, and does not list a **Bundled** connector whose every
+tool is reserved. A third-party connector you signed into yourself is listed
+either way, because its tools are only known once a conversation opens it. The
+assistant cannot call a reserved tool in a conversation, whatever you turn on; a scheduled task still can, so the Operations Center task form may show
+tools and connectors that Chat does not. When a connector has more than one
 account, an **Account** menu on its row and in the library picks the one this
 conversation uses; the default reads as your deployment's name, or as the
 account you chose in **Settings → Connections**. A connector that **Needs
