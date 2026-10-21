@@ -913,8 +913,10 @@ func TestApprovalRecoveryText_FitsTheMinimumOutputLimit(t *testing.T) {
 
 // The largest list a card may narrow, in its worst supported encoding (500
 // values of 200 characters, outside the BMP and written as surrogate-pair
-// escapes), is over 1 MiB of arguments: it is still narrowable. Only
-// arguments past maxNarrowableArgsBytes approve whole.
+// escapes), is over 1 MiB of arguments: it is still narrowable, and its
+// review snapshot is complete (frozen_args is bounded re-encoded, about
+// 400 KiB here), so the terminal can approve it too. Only arguments past
+// approvalArgsMaxDecodeBytes approve whole.
 func TestStagedNarrowable_HoldsTheWorstCaseEscapedList(t *testing.T) {
 	narrowPolicy(t)
 	var b strings.Builder
@@ -937,8 +939,14 @@ func TestStagedNarrowable_HoldsTheWorstCaseEscapedList(t *testing.T) {
 	if !ok || arg != "deal_ids" || len(values) != maxNarrowableValues || utf8.RuneCountInString(values[0]) != maxNarrowableValueRunes {
 		t.Fatalf("worst-case list (%d bytes): ok=%t arg=%q values=%d", len(raw), ok, arg, len(values))
 	}
-	padded := `{"pad":"` + strings.Repeat("x", maxNarrowableArgsBytes) + `","deal_ids":["a","b"]}`
+	if frozen := frozenApprovalArgs(raw); frozen["complete"] != true {
+		t.Fatalf("the worst-case list's review snapshot is incomplete, so the terminal could not approve it: %v", frozen["complete"])
+	}
+	padded := `{"pad":"` + strings.Repeat("x", approvalArgsMaxDecodeBytes) + `","deal_ids":["a","b"]}`
 	if _, _, ok := stagedNarrowable("mcp_ix_execute_plan", padded, "deal_ids"); ok {
-		t.Fatal("arguments past maxNarrowableArgsBytes must approve whole")
+		t.Fatal("arguments past approvalArgsMaxDecodeBytes must approve whole")
+	}
+	if frozenApprovalArgs(padded)["complete"] != false {
+		t.Fatal("arguments past approvalArgsMaxDecodeBytes are not reviewable in full")
 	}
 }
