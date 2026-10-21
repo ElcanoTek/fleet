@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"os/exec"
 	"sort"
@@ -1480,21 +1481,32 @@ func (t *HTTPTransport) Call(ctx context.Context, method string, params interfac
 		httpReq.Header.Set(key, value)
 	}
 
+	// A caller that may stop the call (WithStop): the cancellation is its own
+	// POST on the session, sent while this call is still waiting for its
+	// response, however the server answers (an SSE stream, or one JSON body
+	// that arrives only when the work is done). It is sent only once the
+	// whole tools/call request has been written, so it cannot overtake the
+	// call it cancels.
+	if stop := StopSignal(ctx); stop != nil {
+		wrote := make(chan struct{})
+		var wroteOnce sync.Once
+		httpReq = httpReq.WithContext(httptrace.WithClientTrace(httpReq.Context(), &httptrace.ClientTrace{
+			WroteRequest: func(info httptrace.WroteRequestInfo) {
+				if info.Err == nil {
+					wroteOnce.Do(func() { close(wrote) })
+				}
+			},
+		}))
+		done := make(chan struct{})
+		defer close(done)
+		go t.notifyStopHTTP(ctx, stop, wrote, done, id)
+	}
+
 	resp, err := t.client.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
-	// A caller that may stop the call (WithStop): the cancellation is its own
-	// POST on the session, sent while this response is still being read. It
-	// starts only once the server has answered the request's headers, so the
-	// cancellation can never reach the server before the call it cancels.
-	if stop := StopSignal(ctx); stop != nil {
-		done := make(chan struct{})
-		defer close(done)
-		go t.notifyStopHTTP(ctx, stop, done, id)
-	}
 
 	// Capture MCP session ID from response (try multiple header name variants)
 	t.captureSessionID(resp.Header)

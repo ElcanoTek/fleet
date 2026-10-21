@@ -45,9 +45,13 @@ agent_policy:
    "params":{"requestId":<id>,"reason":"stopped_by_user"}}` on the call's pipe,
    once, and goes on reading for the call's response. The HTTP transport
    sends the same notification as its own POST on the session while the
-   call's response is still open, and only once the server has answered the
-   call's headers, so the cancellation never reaches the server before the
-   call it cancels.
+   call still waits for its answer (an SSE stream or one JSON body), once the
+   whole `tools/call` request has been written. Because that POST travels on
+   another connection, the server may read it before it has registered the
+   call, and the spec has it ignore a cancellation for a request it does not
+   know; so the HTTP transport sends it again on a backoff (0.5 s doubling to
+   5 s, at most 30 sends) until the call returns. A repeated cancellation of a
+   request already stopping changes nothing.
 3. **The broker carries it.** The parent marks the call `stoppable` and,
    once the call frame is sent, turns the signal into one `stop` frame with
    the call's id. The child closes the call's stop signal; unlike the
@@ -111,6 +115,10 @@ Elcano bundle's deal-plan execute does this).
 
 - A running card of an opted-in tool shows **Stop** beside **Check result**,
   with "Stopping finishes the current item, then halts." as its description.
+- If the server refuses the stop because the call finished first, the card
+  says so ("The action finished before it could be stopped; its outcome is
+  being recorded.") and does not claim a stop; a settled card reads "stopped"
+  only when the server recorded one.
 - After Stop it reads "Stopping: the current item finishes, then it halts."
   (a status region) and offers no second Stop; the poll settles it.
 - A settled stopped call shows its result card (the bundle writes "Stopped

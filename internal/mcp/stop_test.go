@@ -122,9 +122,11 @@ func TestCallTool_StopSendsCancelledAndWaitsForTheAnswer(t *testing.T) {
 // Over streamable HTTP the stop is its own POST on the session while the
 // call's SSE response is still open; the call then gets its normal answer.
 func TestHTTPTransport_StopPostsCancelledDuringTheCall(t *testing.T) {
+	shortStopResend(t)
 	var mu sync.Mutex
 	var cancelled map[string]any
 	gotCancel := make(chan struct{})
+	var cancelOnce sync.Once
 	callArrived := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -132,10 +134,13 @@ func TestHTTPTransport_StopPostsCancelledDuringTheCall(t *testing.T) {
 		_ = json.Unmarshal(body, &msg)
 		switch msg["method"] {
 		case "notifications/cancelled":
+			// A cancellation for a call the server has not registered yet is
+			// ignored, as the spec says; the client sends it again.
 			select {
 			case <-callArrived:
 			default:
-				t.Errorf("the stop reached the server before the call it cancels")
+				w.WriteHeader(http.StatusAccepted)
+				return
 			}
 			if r.Header.Get("Mcp-Session-Id") != "sess-1" {
 				t.Errorf("stop sent without the session id")
@@ -143,7 +148,7 @@ func TestHTTPTransport_StopPostsCancelledDuringTheCall(t *testing.T) {
 			mu.Lock()
 			cancelled, _ = msg["params"].(map[string]any)
 			mu.Unlock()
-			close(gotCancel)
+			cancelOnce.Do(func() { close(gotCancel) })
 			w.WriteHeader(http.StatusAccepted)
 		case "tools/call":
 			close(callArrived)
@@ -181,4 +186,64 @@ func TestHTTPTransport_StopPostsCancelledDuringTheCall(t *testing.T) {
 	if cancelled["reason"] != StopReasonByUser || cancelled["requestId"] == nil {
 		t.Fatalf("cancelled params = %v", cancelled)
 	}
+}
+
+// A server that answers tools/call with one JSON body only when the work is
+// done (no early headers) still gets the stop while it works: the
+// cancellation is sent once the call's request is written, not once its
+// response starts.
+func TestHTTPTransport_StopReachesAPlainJSONServerMidCall(t *testing.T) {
+	shortStopResend(t)
+	gotCancel := make(chan struct{})
+	var cancelOnce sync.Once
+	callArrived := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var msg map[string]any
+		_ = json.Unmarshal(body, &msg)
+		switch msg["method"] {
+		case "notifications/cancelled":
+			// A cancellation for a call the server has not registered yet is
+			// ignored, as the spec says; the client sends it again.
+			select {
+			case <-callArrived:
+			default:
+				w.WriteHeader(http.StatusAccepted)
+				return
+			}
+			cancelOnce.Do(func() { close(gotCancel) })
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			close(callArrived)
+			text := "ran every item"
+			select {
+			case <-gotCancel:
+				text = "stopped after item 1"
+			case <-time.After(5 * time.Second):
+			}
+			w.Header().Set("Content-Type", "application/json")
+			resp, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}}})
+			_, _ = w.Write(resp)
+		}
+	}))
+	defer srv.Close()
+	tr := NewHTTPTransport(srv.URL)
+	stop := make(chan struct{})
+	ctx, cancel := context.WithTimeout(WithStop(context.Background(), stop), 10*time.Second)
+	defer cancel()
+	go func() {
+		<-callArrived
+		close(stop)
+	}()
+	raw, err := tr.Call(ctx, "tools/call", map[string]any{"name": "run_items", "arguments": map[string]any{}})
+	if err != nil || !strings.Contains(string(raw), "stopped after item 1") {
+		t.Fatalf("Call = %s, %v; want the server to have seen the stop mid-call", raw, err)
+	}
+}
+
+func shortStopResend(t *testing.T) {
+	t.Helper()
+	first, maxInterval := stopResendFirst, stopResendMaxInterval
+	stopResendFirst, stopResendMaxInterval = 20*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { stopResendFirst, stopResendMaxInterval = first, maxInterval })
 }

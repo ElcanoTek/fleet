@@ -61,6 +61,18 @@ describe("the running card's Stop", () => {
     expect(screen.queryByTestId("approval-stop")).toBeNull();
   });
 
+  it("does not claim a stop the server refused because the call finished first", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "approved", executing: true, stoppable: true }), { status: 200 })),
+    );
+    const onResolved = vi.fn();
+    render(<ApprovalCard approval={running()} conversationId="conv_1" onResolved={onResolved} />);
+    fireEvent.click(screen.getByTestId("approval-stop"));
+    await waitFor(() => expect(screen.getByText(/finished before it could be stopped/)).toBeTruthy());
+    expect(onResolved).not.toHaveBeenCalled();
+  });
+
   it("keeps the card pending with the server's reason when the stop is refused", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("this action is not running", { status: 409 })));
     const onResolved = vi.fn();
@@ -106,5 +118,8 @@ describe("a stopped call", () => {
     expect(next).toMatchObject({ executing: true, stopping: true });
     const settled = approvalFromPoll(next as Approval, { resolved_approvals: [{ approval_id: "ap_1", status: "approved", is_err: false, stopped: true }] });
     expect(settled).toMatchObject({ status: "approved", executing: false, stopped: true });
+    // A local "stopping" is never turned into a stop the server did not record.
+    const unrecorded = approvalFromPoll(next as Approval, { resolved_approvals: [{ approval_id: "ap_1", status: "approved", is_err: false }] });
+    expect(unrecorded?.stopped).toBeUndefined();
   });
 });

@@ -600,7 +600,14 @@ export function ApprovalCard({
       const data = (await response.json()) as ApprovalOutcomePayload;
       const nextStatus = approvalStatusFromOutcome(data);
       if (nextStatus === null) {
-        onResolved({ ...approval, status: "pending", executing: true, stopping: true });
+        if (data.stopping === true) {
+          onResolved({ ...approval, status: "pending", executing: true, stopping: true });
+        } else {
+          // The server refused the stop: the call finished first and its
+          // outcome is being recorded without one. The card keeps running
+          // until the poll (or Check result) shows that outcome.
+          setSubmitError("The action finished before it could be stopped; its outcome is being recorded.");
+        }
         return;
       }
       setHeldExecuting(false);

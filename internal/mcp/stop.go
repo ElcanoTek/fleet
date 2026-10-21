@@ -65,20 +65,51 @@ func cancelledNotification(id int) []byte {
 	return b
 }
 
-// notifyStopHTTP sends notifications/cancelled for request id when stop
-// fires, until done closes. Over HTTP the cancellation is a request of its
-// own on the same session, so the call's response stream keeps being read.
-func (t *HTTPTransport) notifyStopHTTP(ctx context.Context, stop <-chan struct{}, done <-chan struct{}, id int) {
-	select {
-	case <-stop:
-	case <-done:
-		return
-	case <-ctx.Done():
-		return
+// notifyStopHTTP sends notifications/cancelled for request id once stop
+// fires and the call's request has been written (wrote), and sends it again
+// on a backoff until the call returns (done). Over HTTP the cancellation is a
+// request of its own, on another connection, so the server can read it
+// before it has registered the call it names, and a server ignores a
+// cancellation for a request it does not know (the spec says so). Repeating
+// it is harmless (a cancellation of a request already being cancelled
+// changes nothing) and makes sure one lands once the call is in flight.
+func (t *HTTPTransport) notifyStopHTTP(ctx context.Context, stop, wrote, done <-chan struct{}, id int) {
+	for _, gate := range []<-chan struct{}{stop, wrote} {
+		select {
+		case <-gate:
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		}
 	}
-	nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopNotifyTimeout)
-	defer cancel()
-	if err := t.Notify(nctx, "notifications/cancelled", map[string]any{"requestId": id, "reason": StopReasonByUser}); err != nil {
-		log.Printf("MCP http: could not send the stop for request %d: %v", id, err)
+	wait := stopResendFirst
+	for sent := 0; sent < stopResendMax; sent++ {
+		nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopNotifyTimeout)
+		err := t.Notify(nctx, "notifications/cancelled", map[string]any{"requestId": id, "reason": StopReasonByUser})
+		cancel()
+		if err != nil {
+			log.Printf("MCP http: could not send the stop for request %d: %v", id, err)
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-timer.C:
+		case <-done:
+			timer.Stop()
+			return
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		}
+		wait = min(wait*2, stopResendMaxInterval)
 	}
 }
+
+// The HTTP stop's resend schedule: the first repeat after stopResendFirst,
+// doubling up to stopResendMaxInterval, at most stopResendMax sends. Vars,
+// not consts: tests shorten them.
+var (
+	stopResendFirst       = 500 * time.Millisecond
+	stopResendMaxInterval = 5 * time.Second
+	stopResendMax         = 30
+)
