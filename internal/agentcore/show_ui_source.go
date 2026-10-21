@@ -73,17 +73,20 @@ func bridgedToolName(name, input string) string {
 type callOrdered struct {
 	seq int
 	// open holds, per call id, the calls with that id still waiting for a
-	// result, oldest first. A provider may reuse an id, even for parallel
-	// calls, so each occurrence keeps its own position and name, and a result
-	// answers the oldest one still open: the rule the web applies when it
-	// binds results to calls (applyToolResult) (Codex P2 on #1819).
+	// result, oldest first. A provider may reuse an id across steps, so each
+	// occurrence keeps its own position and name, and a result answers the
+	// oldest open call with its id and its tool (the result's own tool name,
+	// when it carries one), else the oldest open call with its id: the rule
+	// the web applies when it binds results to calls (applyToolResult)
+	// (Codex P2 on #1819).
 	open map[string][]callOccurrence
 	out  []orderedResult
 }
 
 type callOccurrence struct {
 	pos  int
-	name string
+	raw  string // the tool name as called ("tool_call" for the bridge)
+	name string // the tool it ran
 }
 
 type orderedResult struct {
@@ -97,18 +100,28 @@ func newCallOrdered() *callOrdered {
 
 func (c *callOrdered) call(id, name, input string) {
 	c.seq++
-	c.open[id] = append(c.open[id], callOccurrence{pos: c.seq, name: bridgedToolName(name, input)})
+	c.open[id] = append(c.open[id], callOccurrence{pos: c.seq, raw: name, name: bridgedToolName(name, input)})
 }
 
+// result records one result. r.Tool, when set, is the tool name the result
+// was recorded under (the call's raw name), which picks among open calls
+// sharing its id; it is replaced by the tool the matched call ran.
 func (c *callOrdered) result(r tools.PriorToolResult) {
 	c.seq++
 	pos := c.seq
 	if q := c.open[r.CallID]; len(q) > 0 {
-		pos = q[0].pos
-		if q[0].name != "" {
-			r.Tool = q[0].name
+		k := 0
+		for i, o := range q {
+			if r.Tool != "" && o.raw == r.Tool {
+				k = i
+				break
+			}
 		}
-		c.open[r.CallID] = q[1:]
+		pos = q[k].pos
+		if q[k].name != "" {
+			r.Tool = q[k].name
+		}
+		c.open[r.CallID] = slices.Delete(q, k, k+1)
 	}
 	c.out = append(c.out, orderedResult{pos: pos, r: r})
 }

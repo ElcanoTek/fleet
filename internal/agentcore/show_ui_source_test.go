@@ -271,3 +271,18 @@ func TestShowUISource_SameStepSiblingIsNotSeen(t *testing.T) {
 		t.Fatalf("all results = %+v", all)
 	}
 }
+
+// With a reused id, a result is matched to the open call of its own tool, so
+// a later call that finishes first keeps its own name and place (Codex P2 on
+// #1819).
+func TestShowUISource_ReusedIDMatchedByTool(t *testing.T) {
+	s := newStreamSink(nil)
+	s.onToolCall("dup", "mcp_p_intake_card", `{}`)
+	s.onToolCall("dup", "mcp_p_notes", `{}`)
+	s.onToolResult("dup", "mcp_p_notes", `{"notes":true}`, false) // the later call finishes first
+	s.onToolResult("dup", "mcp_p_intake_card", `{"card":true}`, false)
+	got := s.priorToolResults("")
+	if len(got) != 2 || got[0].Tool != "mcp_p_intake_card" || got[0].Text != `{"card":true}` || got[1].Tool != "mcp_p_notes" {
+		t.Fatalf("results = %+v", got)
+	}
+}
