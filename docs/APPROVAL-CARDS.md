@@ -60,7 +60,13 @@ its body. It never masquerades as a past human approval.
 ### Why
 
 The email and generic cards carry a small checkbox below the buttons, "Apply
-my choice to all <tool> calls in this chat" (#300). Ticked, the click
+my choice to every <tool> request in this chat" (#300). The tool is named in
+words, never by its id: the connector's `display_name` and the humanised
+action ("every Index Exchange “Execute plan” request"), from
+`web/src/app/chat/ui/approvalToolLabel.ts`. The seat badge names the
+connector the same way ("Runs as elcano on Index Exchange") when the chat
+knows its display name. The raw id stays where it is read as code: the
+generic card's call line and a readable card's Details. Ticked, the click
 registers an in-memory session policy, and every later call of that tool in
 the conversation skips its card until the process restarts. That is right
 for a run of similar, reversible actions, and wrong for an action where each
