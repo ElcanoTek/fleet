@@ -286,3 +286,21 @@ func TestShowUISource_ReusedIDMatchedByTool(t *testing.T) {
 		t.Fatalf("results = %+v", got)
 	}
 }
+
+// A show_ui result that failed after its card was held consumes that card, so
+// a later reuse of the id with the same acknowledgement gets its own card,
+// not the stale one (Codex P2 on #1819).
+func TestShowUISource_FailedResultDropsItsHeldCard(t *testing.T) {
+	s := newStreamSink(nil)
+	ack := `UI_DISPLAYED card_id=dup: the user can now see the card "Intake".`
+	s.noteShownCard("dup", ack, `{"title":"Intake","v":1}`)
+	s.onToolResult("dup", tools.ShowUIToolName, "tool panicked; incident 123", true)
+	s.noteShownCard("dup", ack, `{"title":"Intake","v":2}`)
+	s.onToolResult("dup", tools.ShowUIToolName, ack, false)
+	if len(s.entries) != 2 || s.entries[0].Card != "" || s.entries[1].Card != `{"title":"Intake","v":2}` {
+		t.Fatalf("entries = %+v", s.entries)
+	}
+	if len(s.shownCards) != 0 {
+		t.Fatalf("held cards left: %v", s.shownCards)
+	}
+}

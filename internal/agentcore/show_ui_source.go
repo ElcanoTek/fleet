@@ -221,27 +221,34 @@ func (s *streamSink) noteShownCard(callID, ack, spec string) {
 // attached only to the success it was resolved for: the held occurrence whose
 // acknowledgement is this result's text, or opens it before a post_tool_use
 // hook's fragment (the first, when occurrences of a reused id returned the
-// same text). A result that is an error, or whose text no held
-// acknowledgement matches (a governance rewrite, a contained panic),
-// gets none. A spec the secret redaction would change is dropped rather than
-// shown altered. Caller holds s.mu.
+// same text). A show_ui result that is an error, or whose text no held
+// acknowledgement matches (a governance rewrite, a contained panic), gets
+// none, and still consumes its id's oldest held card: that card belonged to
+// this failed call, and left queued it could be attached to a later reuse of
+// the id with the same acknowledgement (Codex P2 on #1819). A spec the secret
+// redaction would change is dropped rather than shown altered. Caller holds
+// s.mu.
 func (s *streamSink) takeShownCard(id, name, text string, isErr bool) string {
 	held := s.shownCards[id]
-	if len(held) == 0 || isErr || name != tools.ShowUIToolName || !strings.HasPrefix(text, "UI_DISPLAYED") {
+	if len(held) == 0 || name != tools.ShowUIToolName {
 		return ""
 	}
-	i := heldFor(held, text)
-	if i < 0 {
-		return ""
+	i := -1
+	if !isErr && strings.HasPrefix(text, "UI_DISPLAYED") {
+		i = heldFor(held, text)
 	}
-	c := held[i]
-	held = slices.Delete(held, i, i+1)
+	take := i
+	if take < 0 {
+		take = 0
+	}
+	c := held[take]
+	held = slices.Delete(held, take, take+1)
 	if len(held) > 0 {
 		s.shownCards[id] = held
 	} else {
 		delete(s.shownCards, id)
 	}
-	if toolRedactor().Redact(c.spec) != c.spec {
+	if i < 0 || toolRedactor().Redact(c.spec) != c.spec {
 		return ""
 	}
 	return c.spec
