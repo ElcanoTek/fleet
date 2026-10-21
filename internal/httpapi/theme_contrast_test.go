@@ -252,23 +252,21 @@ func TestPrimaryFillContract(t *testing.T) {
 		{"translucent text", "#7272ab", "rgba(255, 255, 255, 0.85)"},
 		{"faint text no fill can carry", "#7272ab", "rgba(255, 255, 255, 0.3)"},
 		{"a saturated magenta primary under white", "#e5007a", "#ffffff"},
+		// These run to their own secondary (below); the rest to fleet's.
+		{"a pale secondary under white", "#7272ab", "#ffffff"},
+		{"a deep secondary under dark text", "#ffdf03", "#0c0a09"},
+		{"a blend that dips between AA ends", "#ee0000", "#000000"},
+		{"a translucent secondary", "#7272ab", "#ffffff"},
 	}
-	// Each trait runs to fleet's own secondary, and these to their own: a pale
-	// secondary under white, a deep one under dark text, and a pair whose ends
-	// clear AA under dark text while the blend between them dips under it.
+	// A pale secondary under white, a deep one under dark text, and a pair
+	// whose ends clear AA under dark text while the blend between them dips
+	// under it.
 	secondaries := map[string]string{
 		"a pale secondary under white":      "#c8e6f5",
 		"a deep secondary under dark text":  "#123d2a",
 		"a blend that dips between AA ends": "#008844",
 		"a translucent secondary":           "rgba(88, 111, 124, 0.4)",
 	}
-	extra := []struct{ name, primary, onPrimary string }{
-		{"a pale secondary under white", "#7272ab", "#ffffff"},
-		{"a deep secondary under dark text", "#ffdf03", "#0c0a09"},
-		{"a blend that dips between AA ends", "#ee0000", "#000000"},
-		{"a translucent secondary", "#7272ab", "#ffffff"},
-	}
-	traits = append(traits, extra...)
 	got := make([]entry, 0, len(traits))
 	for _, tr := range traits {
 		f := derivePrimaryFill(tr.primary, tr.onPrimary)
