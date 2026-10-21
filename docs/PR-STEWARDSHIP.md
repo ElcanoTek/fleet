@@ -102,7 +102,7 @@ Re-request the reviewer after pushing for a changes-requested review.
   module targets:
 
   ```sh
-  GOTOOLCHAIN=go1.27.2 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+  GOTOOLCHAIN=go1.27.3 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
   ```
 
 - **gitleaks**: CI pins **8.30.1**. Its rule set differs from older builds, so
