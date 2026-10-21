@@ -95,7 +95,9 @@ The approve POST takes `approved_values`, the ticked values, and
 refuses with 400, leaving the card pending, when:
 
 - the tool declares no narrowable argument, or its staged value is not a list
-  of 2 to 500 distinct non-empty strings of at most 200 characters;
+  of 2 to 500 distinct non-empty strings of at most 200 characters, or the
+  call's staged arguments are over 4 MiB (the largest such list, written
+  with surrogate-pair escapes, is about 1.2 MiB, so every valid list fits);
 - the list is empty (decline instead) or an explicit `null` (refused, never read as "approve everything"), names a value that was not staged, or
   names one twice;
 - it comes with `approved: false`, or with a scope other than `once`;

@@ -60,6 +60,17 @@ const maxApprovalBody = 4 << 20
 // names it carries it as its `key`, whose limit is the same.
 const maxNarrowableValueRunes = approvalCardMaxTitle
 
+// maxNarrowableArgsBytes bounds the staged arguments stagedNarrowable decodes
+// (at staging, on every card payload and at the decision). It holds the
+// largest list a card may narrow in its worst supported encoding with room
+// to spare for the call's other arguments: maxNarrowableValues values of
+// maxNarrowableValueRunes characters, each at most 12 bytes once JSON-escaped
+// (a character outside the BMP written as a surrogate pair of six-byte
+// escapes), plus quotes and commas, is about 1.2 MiB. It is its own bound,
+// not frozenArgsMaxBytes (1 MiB), which a valid list can exceed. A call whose
+// arguments are larger still approves whole.
+const maxNarrowableArgsBytes = 4 << 20
+
 // narrowedRequestMetaKey is the `_meta` entry fleet adds to a narrowed
 // approved call: {"arg": <name>, "staged": [<every staged value, in order>]}.
 const narrowedRequestMetaKey = mcp.RequestMetaPrefix + "narrowed"
@@ -105,7 +116,7 @@ func stagedNarrowable(toolName, argsJSON, arg string) (_ string, values []string
 		agentcore.IsOutboundEmailTool(toolName) || onSyntheticTransport(toolName) {
 		return "", nil, false
 	}
-	if arg == "" || len(argsJSON) > frozenArgsMaxBytes {
+	if arg == "" || len(argsJSON) > maxNarrowableArgsBytes {
 		return "", nil, false
 	}
 	var args map[string]any
