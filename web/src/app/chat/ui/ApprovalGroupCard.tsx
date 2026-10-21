@@ -19,7 +19,7 @@
 // outcome card (running, applied, declined …), so the executing and resolved
 // states are the individual cards' states.
 
-import { useState } from "react";
+import { useContext, useState } from "react";
 import {
   type Approval,
   type ApprovalOutcomePayload,
@@ -37,6 +37,7 @@ import {
 import { ApprovalCardDetails, ApprovalReadableBody } from "./ApprovalReadableCard";
 import { conversationApiPath } from "@/app/lib/conversationApiUrl";
 import { earliestExpiry } from "./approvalGroups";
+import { ConnectorNamesContext } from "./approvalToolLabel";
 
 type GroupResult = {
   approval_id: string;
@@ -47,7 +48,8 @@ type GroupResult = {
 };
 
 function RawArgs({ approval }: { approval: Approval }) {
-  const { server } = actionLabel(approval.tool, approval.mcpServer, approval.mcpAccount);
+  const names = useContext(ConnectorNamesContext);
+  const { server } = actionLabel(approval.tool, approval.mcpServer, approval.mcpAccount, names);
   const args = Array.isArray(approval.summary.args) ? approval.summary.args : [];
   const raw = approval.summary.raw ?? "";
   return (
@@ -82,9 +84,9 @@ function RawArgs({ approval }: { approval: Approval }) {
   );
 }
 
-function rowTitle(approval: Approval): string {
+function rowTitle(approval: Approval, names: ReadonlyMap<string, string>): string {
   if (approval.card) return approval.card.title;
-  return `Run "${actionLabel(approval.tool, approval.mcpServer, approval.mcpAccount).action}"`;
+  return `Run "${actionLabel(approval.tool, approval.mcpServer, approval.mcpAccount, names).action}"`;
 }
 
 export function ApprovalGroupCard({
@@ -105,6 +107,7 @@ export function ApprovalGroupCard({
 }) {
   // Unchecked ids. Every call starts checked, and a call that joins the group
   // while the card is open arrives checked too.
+  const names = useContext(ConnectorNamesContext);
   const [unchecked, setUnchecked] = useState<ReadonlySet<string>>(() => new Set());
   const [submitting, setSubmitting] = useState<"approve" | "cancel" | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -149,7 +152,7 @@ export function ApprovalGroupCard({
           // reason rides the card too, because once the others settle the
           // group may no longer hold it and this card unmounts.
           if (r.error) {
-            failures.push(`${rowTitle(approval)}: ${r.error}`);
+            failures.push(`${rowTitle(approval, names)}: ${r.error}`);
             onResolved({ ...approval, decisionError: `Couldn't submit your decision: ${r.error}` });
           }
           continue;
@@ -221,7 +224,7 @@ export function ApprovalGroupCard({
                   }}
                   className="mt-1 size-3.5 shrink-0 accent-[var(--color-primary)]"
                 />
-                <span className="min-w-0 break-words font-medium">{rowTitle(a)}</span>
+                <span className="min-w-0 break-words font-medium">{rowTitle(a, names)}</span>
               </label>
               <div className="mt-1 min-w-0 pl-5">
                 {a.card ? (

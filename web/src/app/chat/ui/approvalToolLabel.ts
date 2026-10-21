@@ -85,6 +85,22 @@ export function guessMcpTool(tool: string): { server: string; rest: string } | u
 }
 
 /**
+ * The connector of an `mcp_<server>_<tool>` id: the row's mcpServer when the
+ * id carries it; for an older row with none, the longest connector the chat
+ * knows that prefixes the id (so `mcp_deal_sheet_…` is deal_sheet); else the
+ * first segment (guessMcpTool). Every label on a card reads the connector
+ * from here, so the title, the checkbox and Ask again split an id one way.
+ */
+export function mcpToolServer(tool: string, server?: string, names?: ReadonlyMap<string, string>): string | undefined {
+  if (server && tool.startsWith(`mcp_${server}_`)) return server;
+  let best: string | undefined;
+  for (const k of names?.keys() ?? []) {
+    if (tool.startsWith(`mcp_${k}_`) && k.length > (best?.length ?? 0)) best = k;
+  }
+  return best ?? guessMcpTool(tool)?.server;
+}
+
+/**
  * The human label for an approval's tool. `server` is the approval's
  * mcpServer when it has one: it splits `mcp_<server>_<tool>` exactly even
  * when the connector id holds an underscore (`mcp_deal_sheet_next_id`).
@@ -97,29 +113,13 @@ export function approvalToolLabel(
   names?: ReadonlyMap<string, string>,
   account?: string,
 ): ApprovalToolLabel {
-  let srv = server && tool.startsWith(`mcp_${server}_`) ? server : undefined;
+  const srv = mcpToolServer(tool, server, names);
   const seatPrefix = srv && account?.trim() ? `mcp_${srv}_${canonicalAccount(account)}_` : "";
   if (srv && seatPrefix && tool.startsWith(seatPrefix) && tool.length > seatPrefix.length) {
     const action = humanize(stripConnectorPrefix(tool.slice(seatPrefix.length), srv)) || "This action";
     return { action, connector: connectorLabel(srv, names) };
   }
-  if (!srv && names) {
-    // No connector on the row (an older record): the longest connector the
-    // chat knows that prefixes the id, so `mcp_deal_sheet_…` is deal_sheet.
-    for (const k of names.keys()) {
-      if (tool.startsWith(`mcp_${k}_`) && k.length > (srv?.length ?? 0)) srv = k;
-    }
-  }
-  let rest = srv ? tool.slice(`mcp_${srv}_`.length) : tool;
-  if (!srv) {
-    const guess = guessMcpTool(tool);
-    if (guess) {
-      srv = guess.server;
-      rest = guess.rest;
-    } else {
-      rest = tool.replace(/^mcp_/, "");
-    }
-  }
+  let rest = srv ? tool.slice(`mcp_${srv}_`.length) : tool.replace(/^mcp_/, "");
   if (srv) rest = stripConnectorPrefix(rest, srv);
   const action = humanize(rest) || "This action";
   return srv ? { action, connector: connectorLabel(srv, names) } : { action };

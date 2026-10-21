@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
-import { ApprovalCard } from "./ApprovalCards";
+import { ApprovalCard, actionLabel, askAgainPrompt } from "./ApprovalCards";
 import { applyAllText, approvalToolLabel, connectorNames, ConnectorNamesContext } from "./approvalToolLabel";
 import type { Approval } from "./history";
 
@@ -142,6 +142,31 @@ describe("the approval card's words for the tool", () => {
     expect(screen.getByText('ACTION REQUIRED · Run "Create deal"?')).toBeTruthy();
     const label = screen.getByTestId("approval-apply-all").closest("label");
     expect(label?.textContent).toBe("Apply my choice to every Index Exchange “Create deal” request in this chat");
+  });
+
+  // An older row with no mcpServer splits its id with the chat's connector
+  // names everywhere, not only in the checkbox (Codex review, #1828).
+  it("an older row's title, checkbox and Ask again split the id with the chat's connectors", () => {
+    const sheet = new Map([["deal_sheet", "Deal Sheet"]]);
+    renderCard(
+      {
+        tool: "mcp_deal_sheet_next_campaign_id",
+        summary: { tool: "mcp_deal_sheet_next_campaign_id", args: [{ key: "client", value: "Elcano" }] },
+      },
+      sheet,
+    );
+    expect(screen.getByText('ACTION REQUIRED · Run "Next campaign id"?')).toBeTruthy();
+    const label = screen.getByTestId("approval-apply-all").closest("label");
+    expect(label?.textContent).toBe("Apply my choice to every Deal Sheet “Next campaign id” request in this chat");
+    expect(actionLabel("mcp_deal_sheet_next_campaign_id", undefined, undefined, sheet)).toEqual({
+      action: "Next campaign id",
+      server: "deal_sheet",
+    });
+    const prompt = askAgainPrompt(
+      { id: "ap_1", status: "rejected", summary: {}, tool: "mcp_deal_sheet_next_campaign_id" } as Approval,
+      sheet,
+    );
+    expect(prompt).toContain("next campaign id (mcp_deal_sheet_next_campaign_id)");
   });
 
   it("a named seat's card names the action without the seat, in its title and checkbox", () => {
