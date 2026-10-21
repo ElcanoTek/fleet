@@ -281,9 +281,21 @@ func (s *workspaceFileStore) acquire(ctx context.Context, reqs []*fileRequest) (
 			extra = max(extra, workspaceFileMissCost(r.size)-final)
 		}
 		need += extra
-		if need > s.budget {
+		// The call can never fit if what it needs plus the hit files it must
+		// keep pinned (already counted in s.cached, but unevictable while it
+		// runs) exceeds the budget: fail now rather than wait for capacity
+		// that cannot appear.
+		footprint := need
+		pinnedFiles := map[*verifiedFile]bool{}
+		for _, r := range hits {
+			if !pinnedFiles[r.entry] {
+				pinnedFiles[r.entry] = true
+				footprint += int64(len(r.entry.data))
+			}
+		}
+		if footprint > s.budget {
 			s.mu.Unlock()
-			return nil, fmt.Errorf("%w: this call's files and windows need %d bytes, the process-wide budget is %d", ErrWorkspaceFileBudget, need, s.budget)
+			return nil, fmt.Errorf("%w: this call's files and windows need %d bytes, the process-wide budget is %d", ErrWorkspaceFileBudget, footprint, s.budget)
 		}
 		// Pin the hits before making room, so eviction cannot take them.
 		for _, r := range hits {

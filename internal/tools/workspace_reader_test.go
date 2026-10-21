@@ -646,3 +646,48 @@ func TestWorkspaceFileReaderFailedFlightIsShared(t *testing.T) {
 		t.Fatalf("a failed read was repeated by waiters: %d reads, want 1", got)
 	}
 }
+
+// TestWorkspaceFileHitFootprintFailsFast: when every reference is a cache
+// hit, the impossibility check counts the hit file the call must keep pinned,
+// so a call that can never fit fails at once instead of waiting for capacity
+// that cannot appear.
+func TestWorkspaceFileHitFootprintFailsFast(t *testing.T) {
+	ctx := WithForcedWorkingDir(context.Background(), "/ws")
+	files := map[string][]byte{"x": bytes.Repeat([]byte("x"), 64<<20)}
+	src := newFakeSource(files)
+	store := newWorkspaceFileStore(workspaceFileBudgetBytes, workspaceFileCacheMaxBytes, workspaceFileCacheMaxEntries, time.Minute, time.Now)
+	reader := newVerifiedWorkspaceReader(src.source(), store)
+	refs := func(n int) []WorkspaceFileRef {
+		out := make([]WorkspaceFileRef, n)
+		for i := range out {
+			out[i] = WorkspaceFileRef{Path: "x", SHA256: hexSum(files["x"]), Offset: int64(i) << 23, Length: 8 << 20}
+		}
+		return out
+	}
+	// Cache the file, then a call that fits alongside it is still admitted.
+	_, release, err := reader(ctx, refs(1), 64<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if _, release, err = reader(ctx, refs(2), 64<<20); err != nil {
+		t.Fatalf("two windows of a cached 64 MiB file should fit: %v", err)
+	}
+	release()
+	// Three 8 MiB windows plus the pinned 64 MiB file exceed the budget.
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	if _, _, err := reader(cctx, refs(3), 64<<20); !errors.Is(err, ErrWorkspaceFileBudget) {
+		t.Fatalf("an impossible all-hit call: %v", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("an impossible all-hit call waited instead of failing fast")
+	}
+	if store.reserved != 0 {
+		t.Fatalf("reserved %d after the refused call", store.reserved)
+	}
+	if got := src.readCount("x"); got != 1 {
+		t.Fatalf("cached file re-read: %d reads", got)
+	}
+}
