@@ -978,8 +978,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Playwright browser (chromium)
-        run: npx playwright install --with-deps chromium
+      - name: Install Playwright browser (chromium, retried)
+        # Retried for the same reason as the Go module prefetch: this step only
+        # downloads (apt for the browser's system libraries, then the browser
+        # itself from Playwright's CDN), and a single network hiccup there fails
+        # the job before any test runs. main went red twice on 2026-10-21 exactly
+        # that way: a 403 from packages.microsoft.com during apt-get update, then
+        # a failed Chrome Headless Shell download. Retries are bounded; a third
+        # failure still fails the job, with an annotation saying why.
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "playwright install failed (attempt ${attempt}/3); retrying in $(( attempt * 15 ))s"
+            sleep "$(( attempt * 15 ))"
+          done
+          echo "::error::playwright install failed three times — apt or the Playwright CDN is unreachable from this runner"
+          exit 1
 
       - name: Build
         # Production build; playwright.config.ts boots `next start` against it in
@@ -1082,9 +1099,20 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Install Playwright browser (chromium)
+      - name: Install Playwright browser (chromium, retried)
         working-directory: web
-        run: npx playwright install --with-deps chromium
+        # Retried: download-only step; see ci.yml's mocked e2e job for why.
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "playwright install failed (attempt ${attempt}/3); retrying in $(( attempt * 15 ))s"
+            sleep "$(( attempt * 15 ))"
+          done
+          echo "::error::playwright install failed three times — apt or the Playwright CDN is unreachable from this runner"
+          exit 1
 
       - name: Ensure podman + pasta + postgres client
         # ubuntu-latest already ships podman and the postgres client, but install
