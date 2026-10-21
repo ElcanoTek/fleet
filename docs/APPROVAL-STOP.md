@@ -77,9 +77,12 @@ Elcano bundle's deal-plan execute does this).
   the stop route always finds it for a running call. It is reference-counted:
   a concurrent request that loses the claim drops only its own reference, and
   the winner's goes when the outcome is recorded.
-- **A restart keeps the stop.** A stopped call cut off by a restart gets the
-  same fleet line after `RecoverStrandedApprovals`' "outcome unknown"
-  breadcrumb.
+- **A restart keeps the stop.** A stopped call cut off by a restart gets a
+  fleet line after `RecoverStrandedApprovals`' "outcome unknown" breadcrumb.
+  It is neutral (`store.ApprovalStopRecoveredNote`): a Stop accepted while
+  the call was still opening its MCP scope leaves the mark although nothing
+  was sent, so after a restart fleet says it cannot tell whether the call or
+  the stop reached the server, never that the server was asked to stop.
 - **`POST /conversations/{id}/approvals/{approvalId}/stop`** (web proxy
   `/api/conversations/{id}/approvals/{approvalId}/stop`):
   - 404 for an unknown card or another conversation, 400 for a tool that did

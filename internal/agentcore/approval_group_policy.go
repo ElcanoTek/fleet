@@ -2,7 +2,6 @@ package agentcore
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -48,16 +47,6 @@ func buildStagedCardSuffixSet(key string, members []string, modes map[string]str
 		set[s] = true
 	}
 	return set, problems
-}
-
-// installStagedCardSuffixSet is buildStagedCardSuffixSet for the boot
-// install: each dropped member is one log line.
-func installStagedCardSuffixSet(key string, members []string, modes map[string]string, critical map[string]bool) map[string]bool {
-	set, problems := buildStagedCardSuffixSet(key, members, modes, critical)
-	for _, problem := range problems {
-		log.Printf("agent_policy: %s", problem)
-	}
-	return set
 }
 
 // resolvesToNotify returns the critical_tool_modes entry that makes a tool

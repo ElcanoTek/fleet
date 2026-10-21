@@ -412,7 +412,7 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	activeResultCards = installResultCardSet(p.CriticalToolResultCards, seen)
 
 	activeNarrowableArgs = installNarrowableArgs(p.CriticalToolNarrowableArgs, p.CriticalToolModes, seen)
-	activeStop = installStagedCardSuffixSet("critical_tool_stop", p.CriticalToolStop, p.CriticalToolModes, seen)
+	activeStop = installStopSet(p.CriticalToolStop, p.CriticalToolModes, seen)
 	activeInteractiveHidden = installInteractiveHiddenList(p.InteractiveHiddenTools)
 }
 

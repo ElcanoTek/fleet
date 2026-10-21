@@ -67,6 +67,14 @@ func PositionRanges(pos []int) string {
 // breadcrumb.
 const ApprovalStopNote = "[fleet] The person pressed Stop while this call ran. Its server was asked to stop after the item it was working on; the result above says what ran and what did not. Do not run the remaining items unless the person asks. (Written by fleet, not the tool.)"
 
+// ApprovalStopRecoveredNote is the stop line RecoverStrandedApprovals adds to
+// an interrupted call the person had pressed Stop on. Unlike ApprovalStopNote
+// it claims nothing about the call: a Stop accepted while the call was still
+// opening its MCP scope leaves the mark although no request (and no
+// cancellation) was ever sent, and after a restart fleet cannot tell which
+// happened.
+const ApprovalStopRecoveredNote = "[fleet] The person pressed Stop on this call before fleet restarted. Fleet cannot tell whether the call reached its server or whether the stop was sent: check what ran on the external system before doing anything else, and do not run the remaining items unless the person asks. (Written by fleet, not the tool.)"
+
 // narrowingNoteFor is NarrowingNote for a stored narrowed_json record, or ""
 // when there is none or it does not read.
 func narrowingNoteFor(narrowedJSON string) string {

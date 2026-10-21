@@ -2262,9 +2262,10 @@ func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
 		if note := narrowingNoteFor(a.NarrowedJSON); note != "" {
 			text += "\n\n" + note
 		}
-		// So does a stop the person pressed before the restart cut it off.
+		// So does a stop the person pressed before the restart cut it off,
+		// in neutral words: the call may never have been sent.
 		if a.StopRequestedAt > 0 {
-			text += "\n\n" + ApprovalStopNote
+			text += "\n\n" + ApprovalStopRecoveredNote
 		}
 		payload, err := json.Marshal(map[string]any{"id": callID, "name": a.ToolName, "text": text, "is_err": true})
 		if err != nil {

@@ -60,3 +60,25 @@ func TestApprovalStopProblems_ResolvesOverlappingModes(t *testing.T) {
 		t.Fatalf("problems = %q, want none once execute_plan resolves to approve", problems)
 	}
 }
+
+// A member naming the native bash tool is reported and dropped: bash runs
+// inline, never as an MCP request, so its running card could never offer
+// Stop. An MCP tool named by its server (shell_bash) still offers it.
+func TestApprovalStopPolicy_RefusesNativeBash(t *testing.T) {
+	t.Cleanup(func() { ConfigureAgentPolicy(AgentPolicy{}) })
+	p := AgentPolicy{
+		CriticalToolSuffixes: []string{"bash", "shell_bash"},
+		CriticalToolStop:     []string{"bash", "shell_bash"},
+	}
+	problems := ApprovalStopProblems(p)
+	if len(problems) != 1 || !strings.Contains(problems[0], `"bash"`) || !strings.Contains(problems[0], "native bash") {
+		t.Fatalf("problems = %q, want native bash reported", problems)
+	}
+	ConfigureAgentPolicy(p)
+	if ApprovalStop("bash") {
+		t.Fatal("native bash must never offer Stop")
+	}
+	if !ApprovalStop("mcp_shell_bash") {
+		t.Fatal("an MCP tool named by its server must still offer Stop")
+	}
+}

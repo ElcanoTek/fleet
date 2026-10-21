@@ -92,7 +92,13 @@ func TestRecoverStrandedApprovals_KeepsTheStop(t *testing.T) {
 	if err != nil || len(history) == 0 {
 		t.Fatalf("LoadHistory = %d, %v", len(history), err)
 	}
-	if last := string(history[len(history)-1].Content); !strings.Contains(last, "pressed Stop") {
-		t.Fatalf("recovery breadcrumb = %s, want the stop", last)
+	last := string(history[len(history)-1].Content)
+	if !strings.Contains(last, "pressed Stop") || !strings.Contains(last, "cannot tell whether the call reached its server") {
+		t.Fatalf("recovery breadcrumb = %s, want the neutral stop line", last)
+	}
+	// Never the running-call line: a stop accepted before the transport was
+	// reached sent no request and no cancellation.
+	if strings.Contains(last, "Its server was asked to stop") {
+		t.Fatalf("recovery breadcrumb = %s claims a cancellation was sent", last)
 	}
 }
