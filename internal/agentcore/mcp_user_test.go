@@ -79,7 +79,7 @@ func TestSpawnEnv_UserTokenExpandsFirst(t *testing.T) {
 		"TO":       "${FLEET_USER_EMAIL}",
 	}
 	user := MCPUserIdentity{Email: "elyse@example.com"}
-	got := SpawnEnv(env, "/work/${FLEET_USER_EMAIL}", user)
+	got := SpawnEnv(env, "/work/${FLEET_USER_EMAIL}", "", user)
 	want := map[string]string{
 		"OWNER_ID": "/srv/${FLEET_USER_EMAIL}/owner",
 		"WORKDIR":  "/work/${FLEET_USER_EMAIL}",
@@ -88,10 +88,19 @@ func TestSpawnEnv_UserTokenExpandsFirst(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("SpawnEnv = %v, want %v", got, want)
 	}
-	got = SpawnEnv(env, "/work/${FLEET_USER_EMAIL}", MCPUserIdentity{})
+	got = SpawnEnv(env, "/work/${FLEET_USER_EMAIL}", "", MCPUserIdentity{})
 	delete(want, "TO")
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("SpawnEnv(no user) = %v, want %v (only the bundle-written key dropped)", got, want)
+	}
+	// The task id is applied by the same helper (stamped on the base, never
+	// pre-substituted), after the user token: text in it stays literal too.
+	got = SpawnEnv(map[string]string{"RUN": "${FLEET_TASK_ID}", "TO": "${FLEET_USER_EMAIL}"}, "", "task-${FLEET_USER_EMAIL}", MCPUserIdentity{})
+	if want := map[string]string{"RUN": "task-${FLEET_USER_EMAIL}"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("SpawnEnv(task) = %v, want %v", got, want)
+	}
+	if got := SpawnEnv(map[string]string{"RUN": "${FLEET_TASK_ID}"}, "", "", MCPUserIdentity{}); len(got) != 0 {
+		t.Fatalf("SpawnEnv(no task) = %v, want the task key dropped", got)
 	}
 }
 

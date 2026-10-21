@@ -384,22 +384,13 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 			// relative output paths somewhere — and "somewhere" must not be
 			// the operator's bundle checkout.
 			shared := agentcore.SharedMCPWorkspaceDir()
-			// Shared spawn ⇒ no signed-in user: drop ${FLEET_USER_EMAIL}-bearing
-			// keys. Only an interactive broker scope resolves them (ADR-0087);
-			// a process-lifetime subprocess serves every user, so it must never
-			// carry one user's identity. FIRST, on the bundle-written values,
-			// so a workspace path substituted below can never introduce (and
-			// so drop) a key the bundle did not write the token into.
-			env := agentcore.ExpandUserEnv(spec.Env, agentcore.MCPUserIdentity{})
-			if agentcore.EnvReferencesWorkspace(env) {
-				env = agentcore.ExpandWorkspaceEnv(env, shared)
-			}
-			// Shared spawn ⇒ no task identity: drop ${FLEET_TASK_ID}-bearing keys
-			// rather than hand the connector a literal placeholder. Only the
-			// scheduled per-run path resolves the token to a real ID.
-			env = agentcore.ExpandTaskIDEnv(env, "")
-			// ${FLEET_WORKSPACE_ROOT}: always resolvable, never dropped.
-			env = agentcore.ExpandWorkspaceRootEnv(env)
+			// The one token helper, in its one order (MCPServerDefs, the
+			// reload diff, calls it identically). Shared spawn ⇒ no task
+			// identity and no signed-in user: ${FLEET_TASK_ID}- and
+			// ${FLEET_USER_EMAIL}-bearing keys are dropped rather than handed
+			// to the connector as literal placeholders — a process-lifetime
+			// subprocess serves every user and every run (ADR-0087).
+			env := agentcore.SpawnEnv(spec.Env, shared, "", agentcore.MCPUserIdentity{})
 			addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env,
 				agentcore.StdioCwd(spec.Dir, spec.DirPinned, shared))
 		default:

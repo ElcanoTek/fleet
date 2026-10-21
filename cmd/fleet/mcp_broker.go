@@ -298,9 +298,10 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 		user = agentcore.NewMCPUserIdentity(spec.User.Email)
 	}
 	for name, base := range bases {
-		base.BaseEnv = agentcore.ExpandTaskIDEnv(base.BaseEnv, spec.TaskID)
-		// Stamped, not substituted: the binder writes the user into the env
-		// at spawn, after the account overlay and its identity guard.
+		// Stamped, not substituted: the binder writes the task id and the user
+		// into the env at spawn (agentcore.SpawnEnv), after the account
+		// overlay and its identity guard, in the one shared token order.
+		base.TaskID = spec.TaskID
 		base.User = user
 		bases[name] = base
 	}
