@@ -492,13 +492,63 @@ func TestNarrowing_StaysExactAndWithinAMinimumOutputLimit(t *testing.T) {
 			t.Fatalf("result is %d bytes, over the configured %d", len(got), agentcore.MinMaxToolOutputBytes)
 		}
 	}
-	// With a roomier limit the scattered selection is fine.
-	agentcore.SetMaxToolOutputBytes(8192)
-	if _, err := narrowApproval(&row, scattered, "deal_ids"); err != nil {
-		t.Fatalf("at 8 KiB the scattered selection must be accepted: %v", err)
+	// A roomier limit live now does not change that: the limit may be
+	// lowered to the minimum before the call settles, so the line must fit
+	// the room there.
+	agentcore.SetMaxToolOutputBytes(64 << 10)
+	if _, err := narrowApproval(&row, scattered, "deal_ids"); err == nil || !strings.Contains(err.Error(), "too scattered") {
+		t.Fatalf("at 64 KiB the scattered selection: err = %v, want refused all the same", err)
 	}
 	if approvalTrailer(nil, "a", "b") != "a\n\nb" || approvalTrailer(nil) != "" {
 		t.Fatal("other lines join as given")
+	}
+}
+
+// A narrowing accepted under a roomy limit still settles within the limit
+// live when the call ends: an operator who lowers max_tool_output_bytes to
+// the minimum while the call runs gets a result within it, the line whole.
+func TestNarrowing_SettlesWithinALimitLoweredWhileItRan(t *testing.T) {
+	narrowPolicy(t)
+	agentcore.SetMaxToolOutputBytes(64 << 10)
+	t.Cleanup(func() { agentcore.SetMaxToolOutputBytes(-1) })
+	staged := make([]string, 0, 500)
+	for i := range 500 {
+		staged = append(staged, fmt.Sprintf("d%03d", i))
+	}
+	stagedJSON, _ := json.Marshal(map[string]any{"deal_ids": staged})
+	row := narrowApprovalRow()
+	row.ArgsJSON = string(stagedJSON)
+	// The longest line accepted: leave out one more scattered position at a
+	// time (every other one from 300 on) until the selection is refused.
+	var n *approvalNarrowing
+	for k := 1; ; k++ {
+		leftOut := map[int]bool{}
+		for j := range k {
+			leftOut[300+2*j] = true
+		}
+		var approved []string
+		for i, v := range staged {
+			if !leftOut[i] {
+				approved = append(approved, v)
+			}
+		}
+		next, err := narrowApproval(&row, approved, "deal_ids")
+		if err != nil {
+			break
+		}
+		n = next
+	}
+	trailer := approvalTrailer(n)
+	if len(trailer) < agentcore.ApprovalTrailerRoom()-8 {
+		t.Fatalf("test setup: the line is %d bytes, want close to the room %d", len(trailer), agentcore.ApprovalTrailerRoom())
+	}
+	agentcore.SetMaxToolOutputBytes(agentcore.MinMaxToolOutputBytes) // lowered while the call ran
+	got, _, _ := governApprovalResultWithTrailer(context.Background(), &row, strings.Repeat("x", 64<<10), false, trailer)
+	if !strings.HasSuffix(got, trailer) {
+		t.Fatalf("the line was cut or changed: ...%q", got[max(0, len(got)-200):])
+	}
+	if len(got) > agentcore.MinMaxToolOutputBytes {
+		t.Fatalf("result is %d bytes, over the %d-byte limit live at settlement", len(got), agentcore.MinMaxToolOutputBytes)
 	}
 }
 

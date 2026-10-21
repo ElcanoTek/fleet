@@ -173,9 +173,13 @@ The approved-call budget is computed for the narrowed arguments (a smaller
   for the truncation envelope that says where the full output went). The
   line is never shortened or cut, because the model must never read a
   left-out value as approved, so a narrowing whose exact line would not fit
-  beside those 256 bytes (an operator limit near the 1 KiB minimum and a
-  long, scattered selection) is refused at decision (400, nothing claimed):
-  select fewer separate ranges, or approve or decline the action whole. The
+  beside those 256 bytes under the 1 KiB minimum limit (a long, scattered
+  selection) is refused at decision (400, nothing claimed): select fewer
+  separate ranges, or approve or decline the action whole. The check uses
+  the minimum, not the limit live at decision, because an operator can lower
+  `max_tool_output_bytes` (admin settings) while the call runs and the result
+  is bounded by the limit live when it settles; a line that fits at the
+  minimum fits under every limit. The
   restart breadcrumb (the short "outcome unknown" text plus the same line)
   fits the same room.
 - A narrowed call cut off by a restart keeps the line too:
