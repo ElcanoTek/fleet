@@ -1144,7 +1144,8 @@ func (k *k8sImpl) executeFileOp(ctx context.Context, req FileOpRequest, anchor s
 
 	// fileops.py reads stdin to EOF; v4 exec cannot half-close stdin, so the
 	// read is bounded with `head -c <len>` — EOF arrives when head exits.
-	script := fmt.Sprintf("head -c %d | python3 %s", len(reqJSON), k8sFileOpsPath)
+	// Isolated mode from "/": see containerImpl.executeFileOp.
+	script := fmt.Sprintf("cd / && head -c %d | python3 -I %s", len(reqJSON), k8sFileOpsPath)
 	var stdout, stderr bytes.Buffer
 	code, execErr := k.backend.client.runOneShotExec(cmdCtx, k.backend.cfg.Namespace, podName, sandboxContainerName,
 		[]string{"/bin/sh", "-c", script}, reqJSON, &stdout, &stderr)

@@ -313,7 +313,7 @@ func (f *fakeKube) handleListPods(w http.ResponseWriter, r *http.Request) {
 
 var (
 	uploadRe  = regexp.MustCompile(`^head -c (\d+) > (\S+) && wc -c < (\S+)$`)
-	fileOpsRe = regexp.MustCompile(`^head -c (\d+) \| python3 (\S+)$`)
+	fileOpsRe = regexp.MustCompile(`^cd / && head -c (\d+) \| python3 -I (\S+)$`)
 )
 
 // The channel-protocol constants moved out of production code when exec went
@@ -434,7 +434,7 @@ func (f *fakeKube) runFakeProcess(podName string, command []string, e *execConn)
 			}
 			// Run the REAL uploaded fileops.py on the test host so the k8s
 			// transport is exercised against the genuine executor.
-			cmd := exec.Command("python3", "-c", string(script))
+			cmd := exec.Command("python3", "-I", "-c", string(script))
 			cmd.Stdin = bytes.NewReader(req)
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &stdout, &stderr

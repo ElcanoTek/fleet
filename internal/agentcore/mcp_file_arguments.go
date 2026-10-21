@@ -12,11 +12,9 @@ import (
 // maxMCPWorkspaceFileBytes caps the WHOLE workspace file a reference may name
 // (ADR-0085, raising ADR-0066's 2 MiB). 64 MiB matches the largest staged
 // upload a Pages-class MCP server accepts, so Fleet is not the bottleneck for a
-// chunked upload. Memory stays bounded by the requested window, not this cap:
-// the sandbox helper streams the whole file through SHA-256 and returns only
-// [offset, offset+length), and the server's maxLength bounds that window
-// before anything is read. A single unbounded-maxLength call can still ask for
-// the whole 64 MiB in one window; that one read is the worst case.
+// chunked upload. The file is read out of the sandbox and hashed in Fleet once
+// per reference; its verified bytes sit in a cache bounded to 128 MiB process
+// wide, and each window is sliced from them (tools.WorkspaceFileReader).
 const maxMCPWorkspaceFileBytes = 64 * 1024 * 1024
 
 // workspaceFileReferenceDescription is the advertised schema text, derived
@@ -111,30 +109,19 @@ func (m *mcpTool) resolveFileReferences(ctx context.Context, args map[string]any
 				return fmt.Errorf("%s: byte range exceeds the tool's maxLength", name)
 			}
 		}
-		// The reader returns only the requested window plus the SHA-256 of the
-		// WHOLE file, computed by the sandbox helper in the same pass that read
-		// the window (it streams the file, and refuses one that changed while
-		// it was read). Asking for the window instead of the whole file is what
-		// keeps a chunked upload linear: n chunks of a large file no longer
-		// move n whole copies of it out of the sandbox and through Fleet.
-		window, err := m.readWorkspaceFile(ctx, file.Path, int64(file.Offset), int64(file.Length), maxMCPWorkspaceFileBytes)
+		// The reader hashes the WHOLE file in Fleet — never trusting a digest
+		// computed inside the model-writable sandbox — and returns the window
+		// from those verified bytes. It keeps them in a small bounded cache so
+		// the next chunk of the same reference is a slice, not another read:
+		// that is what keeps a chunked upload linear (ADR-0085).
+		window, err := m.readWorkspaceFile(ctx, file.Path, file.SHA256, int64(file.Offset), int64(file.Length), maxMCPWorkspaceFileBytes)
 		if err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
-		if window.SHA256 != file.SHA256 {
-			return fmt.Errorf("%s: workspace file SHA-256 mismatch; no MCP call was made", name)
-		}
-		if window.Size > maxMCPWorkspaceFileBytes || int64(len(window.Data)) != int64(file.Length) || int64(file.Offset)+int64(file.Length) > window.Size {
+		if len(window) != file.Length {
 			return fmt.Errorf("%s: byte range exceeds workspace file", name)
 		}
-		// When the window is the whole file the host re-derives the hash for
-		// free, so a whole-file transfer does not rest on the helper's report.
-		if file.Offset == 0 && int64(file.Length) == window.Size {
-			if sum := sha256.Sum256(window.Data); hex.EncodeToString(sum[:]) != file.SHA256 {
-				return fmt.Errorf("%s: workspace file SHA-256 mismatch; no MCP call was made", name)
-			}
-		}
-		args[name] = base64.StdEncoding.EncodeToString(window.Data)
+		args[name] = base64.StdEncoding.EncodeToString(window)
 	}
 	return nil
 }

@@ -79,23 +79,26 @@ func TestMCPWorkspaceFileChunks(t *testing.T) {
 	}
 }
 
-// fakeWorkspaceReader mirrors the sandbox helper's contract: it refuses a file
-// over the cap from its size alone, and returns only the requested window plus
-// the whole file's size and SHA-256.
+// fakeWorkspaceReader mirrors tools.WorkspaceFileReader's contract: it
+// refuses a file over the cap, hashes the whole file itself and refuses a
+// mismatch, and returns only the requested window.
 func fakeWorkspaceReader(t *testing.T, name string, data []byte, reads *int) tools.WorkspaceFileReadFunc {
 	t.Helper()
 	sum := sha256.Sum256(data)
-	return func(_ context.Context, path string, offset, length, maxFileBytes int64) (tools.WorkspaceFileWindow, error) {
+	return func(_ context.Context, path, sha256Hex string, offset, length, maxFileBytes int64) ([]byte, error) {
 		*reads++
 		if path != name || maxFileBytes != maxMCPWorkspaceFileBytes {
 			t.Fatalf("wrong read contract: %q %d", path, maxFileBytes)
 		}
 		size := int64(len(data))
 		if size > maxFileBytes {
-			return tools.WorkspaceFileWindow{}, fmt.Errorf("file is %d bytes, exceeding the %d-byte cap", size, maxFileBytes)
+			return nil, fmt.Errorf("file is %d bytes, exceeding the %d-byte cap", size, maxFileBytes)
+		}
+		if hex.EncodeToString(sum[:]) != sha256Hex {
+			return nil, tools.ErrWorkspaceFileHashMismatch
 		}
 		start, end := min(offset, size), min(offset+length, size)
-		return tools.WorkspaceFileWindow{Data: data[start:end], Size: size, SHA256: hex.EncodeToString(sum[:])}, nil
+		return data[start:end], nil
 	}
 }
 
@@ -161,23 +164,6 @@ func TestMCPWorkspaceFileCap(t *testing.T) {
 	input = mustFileJSON(t, map[string]any{"chunk": workspaceFileArgument{"site.zip", hex.EncodeToString(overSum[:]), maxMCPWorkspaceFileBytes, 1}})
 	if result, _ := tool.Run(context.Background(), fantasy.ToolCall{ID: "past", Input: input}); !result.IsError || reads != before || broker.calls != 0 {
 		t.Fatal("range past the cap reached the reader")
-	}
-}
-
-// TestMCPWorkspaceFileHelperHashMismatch: a whole-file window whose bytes do
-// not hash to the reported SHA-256 is refused even when the helper's report
-// matches the reference.
-func TestMCPWorkspaceFileHelperHashMismatch(t *testing.T) {
-	claimed := sha256.Sum256([]byte("claimed"))
-	broker := &recordingBroker{text: `{}`}
-	tool := &mcpTool{serverName: "pages", tool: mcp.Tool{Name: "upload_chunk", InputSchema: map[string]any{"properties": map[string]any{
-		"chunk": map[string]any{"type": "string", "contentEncoding": "base64"},
-	}}}, broker: broker, policy: &gatePolicy{}, readWorkspaceFile: func(context.Context, string, int64, int64, int64) (tools.WorkspaceFileWindow, error) {
-		return tools.WorkspaceFileWindow{Data: []byte("other"), Size: 5, SHA256: hex.EncodeToString(claimed[:])}, nil
-	}}
-	input := mustFileJSON(t, map[string]any{"chunk": workspaceFileArgument{"f", hex.EncodeToString(claimed[:]), 0, 5}})
-	if result, _ := tool.Run(context.Background(), fantasy.ToolCall{ID: "x", Input: input}); !result.IsError || broker.calls != 0 {
-		t.Fatal("mismatched whole-file window dispatched")
 	}
 }
 

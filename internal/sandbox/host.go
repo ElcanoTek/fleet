@@ -187,7 +187,7 @@ func (h *hostImpl) executeFileOp(ctx context.Context, req FileOpRequest) (FileOp
 	}
 
 	//nolint:gosec // fixed embedded script; the host backend is the test/dev executor
-	cmd := exec.CommandContext(cmdCtx, "python3", "-c", string(fileOpsScript))
+	cmd := exec.CommandContext(cmdCtx, "python3", "-I", "-c", string(fileOpsScript))
 	cmd.Stdin = bytes.NewReader(reqJSON)
 	out, err := cmd.Output()
 	if err != nil {

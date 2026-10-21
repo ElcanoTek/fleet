@@ -1,4 +1,4 @@
-# ADR-0085: MCP workspace-file references cap the whole file at 64 MiB and read only the requested window
+# ADR-0085: MCP workspace-file references cap the whole file at 64 MiB, are hash-verified in Fleet once per reference, and serve each window from those verified bytes
 
 - **Status:** Accepted
 - **Date:** 2026-10-21
@@ -21,24 +21,35 @@ make a chunked upload quadratic: a 64 MiB file sent in 1 MiB chunks would move
 64 whole copies (4 GiB) out of the sandbox, through JSON and base64, and into
 Fleet's memory.
 
+Reading only the window out of the sandbox and trusting a whole-file digest the
+sandbox helper computed is not an option. The sandbox is model-writable: a
+planted module or a compromised interpreter could report the approved hash for
+altered bytes. The approved hash has to be checked by Fleet over the bytes it
+actually sends.
+
 ## Decision
 
 1. **The whole-file cap is 64 MiB.** `maxMCPWorkspaceFileBytes` in
    `internal/agentcore/mcp_file_arguments.go` is the only copy of the number.
    The advertised description text and the schema maxima are derived from it.
-2. **Only the requested window leaves the sandbox.** The reader
-   (`tools.WorkspaceFileReader`) asks the sandbox FileOp helper for
-   `[offset, offset+length)` and for `MaxSize = cap`. The helper refuses a file
-   over the cap based on its size, before reading any of it. Otherwise it streams
-   the whole file through SHA-256 in 1 MiB reads, keeps only the window, and
-   refuses a file that changed while it was being read. It then returns the
-   window together with the whole file's size and hash.
-3. **The sha256 binding still covers the whole file.** Fleet refuses the call,
-   with no MCP request made, in any of these cases: the reported whole-file
-   hash differs from the reference, the window is shorter than `length`, or the
-   range runs past the file or the cap. When the window is the whole file,
-   Fleet also hashes the bytes itself.
-4. Every other part of ADR-0066 still holds: the path must stay inside the
+2. **Fleet hashes the whole file itself, once per reference.** On the first
+   reference to a file, `tools.WorkspaceFileReader` reads the whole file out of
+   the sandbox through FileOp with `MaxSize = cap`. The helper refuses a file
+   over the cap from its size, before reading any of it. Fleet then hashes the
+   bytes and refuses a mismatch before any MCP call. Nothing the helper reports
+   about the bytes, size or digest, is used.
+3. **Later windows are sliced from the verified bytes.** The verified bytes go
+   into an LRU that holds at most 2 files and 128 MiB process-wide, with a
+   5-minute TTL. The key is the reader instance (one per run or turn binding to
+   a sandbox), the workspace root, the path and the sha256. Each window of the
+   same reference is a slice of those bytes. On a miss (eviction, expiry, a
+   new turn), Fleet re-reads and re-verifies. A file that fails verification
+   is never cached.
+4. **The helper runs in Python isolated mode from `/`** on every backend
+   (podman `exec --workdir / python3 -I -c`, kubernetes `cd / && python3 -I`,
+   the host test executor `python3 -I -c`). This is defence in depth: a
+   workspace file cannot shadow a stdlib module the helper imports.
+5. Every other part of ADR-0066 still holds: the path must stay inside the
    active workspace, symlinks are rejected, an exact range and the server's
    `maxLength` are enforced before reading, governance runs before the read,
    the broker authorizes the call, and the journal and approval card record the
@@ -50,32 +61,34 @@ Fleet's memory.
   checks that the description and schema carry it. A 3 MiB file is accepted
   and its window is delivered exactly. A file of 64 MiB + 1 byte is refused
   with no MCP call. A range past the cap never reaches the reader.
-- `TestMCPWorkspaceFileHelperHashMismatch`: when a whole-file window does not
-  hash to the reported hash, the call is refused.
-- `TestWorkspaceFileReaderConfinement` (`internal/tools`): covers windowed
-  reads, the whole-file hash on a window, cap refusal on a 1-byte window, and
-  range validation, alongside the existing confinement cases.
+- `TestWorkspaceFileReaderRejectsForgedHelperDigest` (`internal/tools`): a
+  helper that returns altered bytes while claiming the approved hash is
+  refused every time, and nothing is cached.
+- `TestVerifiedWorkspaceFileCache`: covers a hit (several windows, one read),
+  a miss across reader instances, LRU eviction by entry and byte bounds, TTL
+  expiry, and an over-budget file that is never cached.
+- `TestWorkspaceFileReaderChunkedLargeFile`: a 3 MiB file sent in 1 MiB
+  windows through the real sandbox is byte-exact, even when the file is
+  rewritten mid-upload.
+- `TestWorkspaceFileReaderConfinement`: the existing path and root confinement
+  cases, plus hash refusal and cap refusal.
 - `TestFileOp_ReadMaxSizeAndLargeWindow` (`internal/sandbox`): `MaxSize`
-  refusal, and a multi-MiB window that comes back byte-exact from the real
+  refusal, and a multi-MiB read that comes back byte-exact from the real
   `fileops.py`.
 
 ## Consequences
 
-- Each chunk call moves only its own bytes. The sandbox helper still hashes
-  the whole file on every chunk, which costs up to 64 MiB of sequential I/O
-  inside the sandbox per call. ADR-0066 chose this trade for exact identity
-  without a mutable cross-turn cache, and it is kept.
-- For a sub-range, the whole-file hash is computed by the helper inside the
-  sandbox. Fleet does not re-derive it. This does not change the trust model:
-  the window's bytes also come from the sandbox, so a compromised helper could
-  already return any bytes. The hash binds the model's reference to one version
-  of the file. It was never a defence against the sandbox itself.
-- Memory scales with the window, not the cap. The worst case is a server with
-  no `maxLength` asked for all 64 MiB in one window. That costs one 64 MiB
-  read, plus its base64 form in the helper (written straight to stdout, not
-  copied again into a dumped JSON string), plus the usual decode and
-  re-encode copies in Fleet. Pages-class servers bound each chunk, for example
-  to 8 MiB.
+- A chunked upload reads and hashes the file once, not once per chunk, as long
+  as its chunks arrive within the TTL and the cache is not churned by other
+  large references. A miss costs one more whole-file read. The worst case is
+  the pre-cache behaviour, bounded by the cap.
+- The dispatched bytes are always the version the approved hash names. A file
+  rewritten mid-upload keeps sending the verified version until the entry
+  leaves the cache, and after that the reference fails its hash check.
+- Host memory: the cache holds at most 128 MiB. A miss briefly holds one file
+  of up to 64 MiB plus its base64 and decode copies. The helper writes the
+  base64 payload straight to stdout instead of copying it again into a dumped
+  JSON string.
 - No other limit on the path was in the way. The broker's JSON framing, the
   stdio and HTTP MCP request bodies, and the FileOp exec output have no
   request-size cap. The existing caps apply only to MCP *responses*.
@@ -84,9 +97,11 @@ Fleet's memory.
 
 - **Keep reading the whole file per chunk at the larger cap.** Rejected
   because a chunked upload becomes quadratic in transfer and host memory.
-- **Cache the hash across calls.** Rejected for the reason in ADR-0066: a
-  mutable cache keyed on a path has to be invalidated correctly against a
-  sandbox that can rewrite the file at any time.
-- **Stream the base64 straight from the helper into the MCP request.** This
-  would save the decode and re-encode copies. Rejected as needless complexity
-  at a 64 MiB worst case.
+- **Read only the window and trust the helper's whole-file digest.** This was
+  the first draft of this ADR. Rejected because the digest is computed in
+  model-writable territory, so it cannot bind the approved hash to the bytes
+  Fleet sends.
+- **A cross-turn cache keyed only on path.** Rejected for the reason ADR-0066
+  gave: a cache keyed on a path has to be invalidated correctly against a
+  sandbox that can rewrite the file at any time. Keying on the verified hash
+  and the reader instance removes the need to invalidate anything.
