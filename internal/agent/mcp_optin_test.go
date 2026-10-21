@@ -131,6 +131,21 @@ func TestBuildAlwaysOnServerMetadata_ReflectsLiveDiscoveryStatus(t *testing.T) {
 	}
 }
 
+// The always-on catalog is a copy: a caller editing a row's Accounts or
+// Tools (the chat picker reads Tools) cannot reach the Manager's snapshot.
+func TestAlwaysOnMCPServerCatalog_ReturnsCopies(t *testing.T) {
+	m := &Manager{alwaysOnServerMetadata: []AlwaysOnServerInfo{
+		{Name: "email", ToolCount: 2, Tools: []string{"search", "send"}, Accounts: []string{"backup"}},
+	}}
+	got := m.AlwaysOnMCPServerCatalog()
+	got[0].Tools[0] = "changed"
+	got[0].Accounts[0] = "changed"
+	again := m.AlwaysOnMCPServerCatalog()
+	if again[0].Tools[0] != "search" || again[0].Accounts[0] != "backup" {
+		t.Fatalf("a caller's edit reached the snapshot: %+v", again[0])
+	}
+}
+
 func TestMCPServerCatalog_ReturnsSnapshot(t *testing.T) {
 	// Catalog exposes the exact snapshot built at Manager.New(). Test
 	// that mutating the returned slice doesn't leak back into the

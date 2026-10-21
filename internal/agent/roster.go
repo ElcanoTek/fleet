@@ -219,6 +219,7 @@ func (m *Manager) AlwaysOnMCPServerCatalog() []AlwaysOnServerInfo {
 	out := append([]AlwaysOnServerInfo(nil), m.alwaysOnServerMetadata...)
 	for i := range out {
 		out[i].Accounts = append([]string(nil), out[i].Accounts...)
+		out[i].Tools = append([]string(nil), out[i].Tools...)
 	}
 	return out
 }

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // Interactive-hidden tools (docs/INTERACTIVE-HIDDEN-TOOLS.md, ADR-0085).
@@ -120,6 +122,21 @@ func InteractiveHiddenTool(toolName string) bool {
 	policyMu.RLock()
 	defer policyMu.RUnlock()
 	return hiddenByList(toolName, activeInteractiveHidden)
+}
+
+// InteractiveHiddenIn reports whether list (a snapshot from
+// InteractiveHiddenTools) hides toolName, under the same rule the run gate
+// applies. For a host-side caller that checks many names against one
+// snapshot (the chat Tools picker).
+func InteractiveHiddenIn(list []string, toolName string) bool {
+	return hiddenByList(toolName, list)
+}
+
+// MCPToolName is the model-facing name a connector's tool registers under
+// in a run (mcp_<server>_<tool>), the name interactive_hidden_tools and
+// critical_tools suffixes are matched against.
+func MCPToolName(server, tool string) string {
+	return mcpToolName(mcp.ServerTool{ServerName: server, Tool: mcp.Tool{Name: tool}})
 }
 
 // hiddenByList reports whether any suffix in list selects name, under the

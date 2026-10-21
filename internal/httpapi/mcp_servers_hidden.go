@@ -28,56 +28,50 @@ import (
 // whatever the conversation opted into. This filter only makes the picker
 // say so.
 
-// chatToolName is the model-facing name a connector's tool registers under,
-// the name interactive_hidden_tools suffixes are matched against.
-func chatToolName(server, tool string) string {
-	return "mcp_" + server + "_" + tool
+// chatHiddenCount is how many of a connector's tools the hidden list keeps
+// out of chat, matched by the name the run gate matches
+// (agentcore.MCPToolName).
+func chatHiddenCount(hidden []string, server string, tools []string) int {
+	n := 0
+	for _, t := range tools {
+		if agentcore.InteractiveHiddenIn(hidden, agentcore.MCPToolName(server, t)) {
+			n++
+		}
+	}
+	return n
 }
 
-// hideInteractiveHiddenTools applies the installed
-// interactive_hidden_tools list to the chat picker's rows. It returns rows
-// unchanged when the bundle hides nothing.
-func (s *Server) hideInteractiveHiddenTools(rows []map[string]any) []map[string]any {
-	if len(agentcore.InteractiveHiddenTools()) == 0 {
+// hideInteractiveHiddenTools applies the installed interactive_hidden_tools
+// list to the rows that carry tool names (optional and needs-setup rows). An
+// always-on row carries only a count; alwaysOnMCPServerCatalogEntries
+// subtracts its hidden tools from the same snapshot it counts. Rows are
+// returned unchanged when the bundle hides nothing.
+func hideInteractiveHiddenTools(rows []map[string]any) []map[string]any {
+	hidden := agentcore.InteractiveHiddenTools()
+	if len(hidden) == 0 {
 		return rows
-	}
-	// Always-on rows send a count but no names; their names come from the
-	// same snapshot the count was taken from.
-	alwaysOn := map[string][]string{}
-	if p, ok := s.agent.(alwaysOnMCPServerCatalogProvider); ok {
-		for _, info := range p.AlwaysOnMCPServerCatalog() {
-			alwaysOn[info.Name] = info.Tools
-		}
 	}
 	out := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		name, _ := row["name"].(string)
+		tools, _ := row["tools"].([]string)
 		// A hosted connection lists no tools (they are only known once it is
 		// opened for a turn); the run gate still applies to them.
-		if remote, _ := row["remote"].(bool); remote || name == "" {
+		if remote, _ := row["remote"].(bool); remote || name == "" || len(tools) == 0 {
 			out = append(out, row)
 			continue
 		}
-		count, _ := row["tool_count"].(int)
-		tools, _ := row["tools"].([]string)
-		names := tools
-		if alwaysOnRow, _ := row["always_on"].(bool); alwaysOnRow && len(tools) == 0 {
-			names = alwaysOn[name]
-		}
 		visible := make([]string, 0, len(tools))
-		hidden := 0
-		for _, t := range names {
-			if agentcore.InteractiveHiddenTool(chatToolName(name, t)) {
-				hidden++
-			} else if len(tools) > 0 {
+		for _, t := range tools {
+			if !agentcore.InteractiveHiddenIn(hidden, agentcore.MCPToolName(name, t)) {
 				visible = append(visible, t)
 			}
 		}
-		if hidden == 0 {
+		if len(visible) == len(tools) {
 			out = append(out, row)
 			continue
 		}
-		if count-hidden <= 0 {
+		if len(visible) == 0 {
 			continue
 		}
 		cp := make(map[string]any, len(row))
@@ -85,7 +79,7 @@ func (s *Server) hideInteractiveHiddenTools(rows []map[string]any) []map[string]
 			cp[k] = v
 		}
 		cp["tools"] = visible
-		cp["tool_count"] = count - hidden
+		cp["tool_count"] = len(visible)
 		out = append(out, cp)
 	}
 	return out
