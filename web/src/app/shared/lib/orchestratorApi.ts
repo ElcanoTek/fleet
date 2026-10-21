@@ -678,6 +678,16 @@ export type TagCount = {
   task_count: number;
 };
 
+/**
+ * One row of GET /tasks/recipients: an address visible tasks already email
+ * their reports to, how many distinct tasks do, and when one was last created.
+ */
+export type RecipientUse = {
+  email: string;
+  task_count: number;
+  last_used: string;
+};
+
 export const orchestratorApi = {
   stats: () => request<DashboardStats>("/stats"),
   tasks: (qs: string) => request<Paginated<Task>>(`/tasks${qs ? `?${qs}` : ""}`),
@@ -734,6 +744,10 @@ export const orchestratorApi = {
   // Deployment-wide, like the dashboard counters: a non-admin sees only their
   // own tasks, so a tag here can narrow the board to nothing.
   tagCatalogue: () => request<TagCount[]>("/tasks/tags"),
+  // Addresses the task form's Email results field can suggest: every recipient
+  // a visible task already delivers to (last 180 days, own tasks only for a
+  // non-admin), most recently used first.
+  recipientHistory: () => request<RecipientUse[]>("/tasks/recipients"),
   upcomingRuns: (limit = 50, until?: string) =>
     request<{ upcoming: UpcomingRun[] }>(
       `/tasks/upcoming?limit=${limit}${until ? `&until=${encodeURIComponent(until)}` : ""}`,

@@ -385,3 +385,54 @@ func TestWithApprovalGroup(t *testing.T) {
 		t.Fatalf("ungrouped card payload = %v, want unchanged", got)
 	}
 }
+
+// The decision count is checked before anything is sized by it: a body of a
+// million repeated ids is refused as too many, not walked id by id (the
+// duplicate check would otherwise answer first, after sizing a map and a
+// slice for every id).
+func TestApprovalGroup_RefusesTooManyDecisionsBeforeSizingAnything(t *testing.T) {
+	groupPolicy(t)
+	ids := make([]string, 1_000_000)
+	for i := range ids {
+		ids[i] = "ap-pm"
+	}
+	raw, err := json.Marshal(map[string]any{"approve": ids})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := newGroupStore(groupRows()...)
+	code, body := postGroup(t, groupMockServer(st), http.MethodPost, "turn-1", string(raw))
+	if code != http.StatusBadRequest || !strings.Contains(body, "too many approvals") {
+		t.Fatalf("status = %d (%.200s), want 400 too many approvals", code, body)
+	}
+	for id := range st.approvals {
+		if n := st.claimCount(id); n != 0 {
+			t.Fatalf("%s claimed %d times by a refused decision", id, n)
+		}
+	}
+}
+
+// An error reply never quotes a client-sent id whole: a group decision naming
+// one multi-megabyte unknown id, or one huge narrowed-but-not-approved key,
+// is answered with a short message.
+func TestApprovalGroup_ErrorsNeverEchoAHugeID(t *testing.T) {
+	groupPolicy(t)
+	huge := strings.Repeat("x", 4<<20)
+	for name, req := range map[string]map[string]any{
+		"unknown card":            {"approve": []string{"ap-pm", huge}},
+		"duplicate":               {"approve": []string{huge}, "decline": []string{huge}},
+		"narrowed, not approved":  {"approve": []string{"ap-pm"}, "narrow": map[string][]string{huge: {"a"}}, "narrow_args": map[string]string{huge: "deal_ids"}},
+		"narrow_args, not narrow": {"approve": []string{"ap-pm"}, "narrow_args": map[string]string{huge: "deal_ids"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := json.Marshal(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			code, body := postGroup(t, groupMockServer(newGroupStore(groupRows()...)), http.MethodPost, "turn-1", string(raw))
+			if code < 400 || len(body) > 512 {
+				t.Fatalf("status = %d, body %d bytes (%.200s), want a short refusal", code, len(body), body)
+			}
+		})
+	}
+}

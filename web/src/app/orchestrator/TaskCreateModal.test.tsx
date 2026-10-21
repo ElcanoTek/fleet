@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
 import { TaskCreateModal, normalizeRunIfTimeout } from "./TaskCreateModal";
 import type { McpServer, Task, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 import { buildPromptWithRecipients } from "./taskEmailBlock";
@@ -24,6 +24,7 @@ const uploadFile = vi.fn();
 const updateTask = vi.fn();
 const rerunTask = vi.fn();
 const prompts = vi.fn();
+const recipientHistory = vi.fn();
 
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
   orchestratorApi: {
@@ -34,6 +35,7 @@ vi.mock("@/app/shared/lib/orchestratorApi", () => ({
     updateTask: (...args: unknown[]) => updateTask(...args),
     rerunTask: (...args: unknown[]) => rerunTask(...args),
     prompts: (...args: unknown[]) => prompts(...args),
+    recipientHistory: (...args: unknown[]) => recipientHistory(...args),
   },
 }));
 
@@ -367,6 +369,78 @@ describe("TaskCreateModal — schedule modes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
     expect(await screen.findByText("Pick a date and time.")).toBeInTheDocument();
     expect(createTask).not.toHaveBeenCalled();
+  });
+});
+
+describe("TaskCreateModal — remembered recipients", () => {
+  const HISTORY = [
+    { email: "jeanne@elcanotek.com", task_count: 32, last_used: "2026-10-21T09:00:00Z" },
+    { email: "connor@elcanotek.com", task_count: 18, last_used: "2026-10-21T09:00:00Z" },
+    { email: "jane.blumin@weather.com", task_count: 3, last_used: "2026-10-21T06:00:00Z" },
+  ];
+
+  const suggestionOptions = () => within(screen.getByTestId("email-suggestions")).getAllByRole("option");
+
+  async function openSuggestions() {
+    recipientHistory.mockReset();
+    recipientHistory.mockResolvedValue(HISTORY);
+    const utils = renderModal();
+    await waitFor(() => expect(recipientHistory).toHaveBeenCalled());
+    const input = screen.getByLabelText(/Email results/);
+    fireEvent.focus(input);
+    await screen.findByTestId("email-suggestions");
+    return { ...utils, input };
+  }
+
+  it("offers recipients other tasks use, most used first, and adds one on click", async () => {
+    const { input } = await openSuggestions();
+    const options = suggestionOptions();
+    expect(options.map((o) => o.textContent)).toEqual([
+      "jeanne@elcanotek.com32 tasks",
+      "connor@elcanotek.com18 tasks",
+      "jane.blumin@weather.com3 tasks",
+    ]);
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(input).toHaveAttribute("autocomplete", "off");
+
+    fireEvent.mouseDown(options[2]);
+    fireEvent.click(options[2]);
+    expect(screen.getByText("jane.blumin@weather.com", { selector: ".task-chip" })).toBeInTheDocument();
+    // An added address leaves the list.
+    expect(suggestionOptions()).toHaveLength(2);
+  });
+
+  it("filters as you type and picks with the arrow keys and Enter", async () => {
+    const { input } = await openSuggestions();
+    fireEvent.change(input, { target: { value: "con" } });
+    expect(suggestionOptions().map((o) => o.textContent)).toEqual(["connor@elcanotek.com18 tasks"]);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(input).toHaveAttribute("aria-activedescendant", "email-suggestion-0");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByText("connor@elcanotek.com", { selector: ".task-chip" })).toBeInTheDocument();
+    expect(input).toHaveValue("");
+  });
+
+  it("closes the list on Escape without closing the form, and the next Escape closes it", async () => {
+    const { input, onClose } = await openSuggestions();
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByTestId("email-suggestions")).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("still takes a typed address when the history cannot load", async () => {
+    recipientHistory.mockReset();
+    recipientHistory.mockRejectedValue(new Error("offline"));
+    renderModal();
+    await waitFor(() => expect(recipientHistory).toHaveBeenCalled());
+    const input = screen.getByLabelText(/Email results/);
+    fireEvent.focus(input);
+    expect(screen.queryByTestId("email-suggestions")).not.toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "new@client.com" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByText("new@client.com")).toBeInTheDocument();
   });
 });
 
