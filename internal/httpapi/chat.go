@@ -1176,9 +1176,9 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// The sender is the authenticated user (postChat), or the user whose
 		// queued row this drain launched — either way a person who signed in
 		// and sent this turn, so their identity reaches the turn's MCP scope
-		// for ${FLEET_USER_*} (ADR-0087). Conversations have exactly one
+		// for ${FLEET_USER_EMAIL} (ADR-0087). Conversations have exactly one
 		// owner and store.Get is owner-scoped, so this is also the owner.
-		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, injected, req.inputKind, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments), steer, s.mcpUserFor(turnCtx, user))
+		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, injected, req.inputKind, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments), steer, agentcore.NewMCPUserIdentity(user))
 		// The turn (and its deferred finishTurn) is done: settle this turn's
 		// queue rows against the durable #798 record — the drained row
 		// completes only if its user entry committed (a pre-commit failure
@@ -1309,7 +1309,7 @@ func (s *Server) runTurnAsync(
 	imageAttachments []agent.ImageAttachment,
 	steer *steerMailbox,
 	// mcpUser is the signed-in user who sent this turn, for the bundle's
-	// ${FLEET_USER_*} env tokens (ADR-0087); zero for a turn nobody signed
+	// ${FLEET_USER_EMAIL} env token (ADR-0087); zero for a turn nobody signed
 	// in sent (a webhook trigger), which drops those keys.
 	mcpUser agentcore.MCPUserIdentity,
 ) {

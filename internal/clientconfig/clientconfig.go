@@ -853,7 +853,7 @@ type ServerDef struct {
 	// empty AND listed in OptionalEnv are dropped from the spawned env. A value
 	// may also carry fleet's reserved spawn-time tokens — ${FLEET_WORKSPACE},
 	// ${FLEET_WORKSPACE_ROOT}, ${FLEET_TASK_ID}, and the interactive turn's
-	// signed-in user ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME} — which are never
+	// signed-in user's email ${FLEET_USER_EMAIL} — which are never
 	// read from the process env and are substituted (or the key dropped) per
 	// spawn path; see docs/MCP-BUNDLE-ENV.md.
 	Env         map[string]string `yaml:"env"`
@@ -1953,7 +1953,7 @@ func validateIdentityEnv(s *ServerDef) error {
 		// at the keyboard, and the variant guard would read the token as an
 		// inherited default-seat value and refuse every named seat anyway.
 		if usertoken.Mentions(val) {
-			return fmt.Errorf("mcp_servers[%q]: identity_env var %q is filled from ${FLEET_USER_EMAIL}/${FLEET_USER_NAME}; the signed-in user must never route a seat or money — drop it from identity_env (see docs/MCP-BUNDLE-ENV.md)", s.Name, trimmed)
+			return fmt.Errorf("mcp_servers[%q]: identity_env var %q is filled from ${FLEET_USER_EMAIL}; the signed-in user must never route a seat or money — drop it from identity_env (see docs/MCP-BUNDLE-ENV.md)", s.Name, trimmed)
 		}
 	}
 	return nil
@@ -3622,18 +3622,22 @@ type expandResult struct {
 // feeds, so an operator setting and the token always agree, and an unset knob
 // yields the ./workspace default instead of a blank.
 //
-// ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME} (agentcore.UserEmailEnvToken /
-// UserNameEnvToken, ADR-0087) are the signed-in user of an interactive chat
-// turn, substituted only when the credential owner opens that turn's scope and
-// dropped on every other spawn path. They are reserved for the same reason as
-// the others, and more so: an operator-exported FLEET_USER_EMAIL resolved at
-// load would hand ONE fixed person's identity to every user's turn.
+// ${FLEET_USER_EMAIL} (agentcore.UserEmailEnvToken, ADR-0087) is the signed-in
+// user's email on an interactive chat turn, substituted only when the
+// credential owner opens that turn's scope and dropped on every other spawn
+// path. It is reserved for the same reason as the others, and more so: an
+// operator-exported FLEET_USER_EMAIL resolved at load would hand ONE fixed
+// person's identity to every user's turn.
+//
+// FLEET_USER_NAME (usertoken.ReservedNameVar) is reserved with NO token behind
+// it — fleet has no name for the signed-in user — so it is never read from the
+// process env and every spelling of it fails the load (user_tokens.go).
 const (
 	reservedWorkspaceVar     = "FLEET_WORKSPACE"
 	reservedWorkspaceRootVar = "FLEET_WORKSPACE_ROOT"
 	reservedTaskIDVar        = "FLEET_TASK_ID"
 	reservedUserEmailVar     = usertoken.EmailVar
-	reservedUserNameVar      = usertoken.NameVar
+	reservedUserNameVar      = usertoken.ReservedNameVar
 )
 
 func reservedRuntimeVar(name string) bool {

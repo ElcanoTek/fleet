@@ -229,14 +229,15 @@ plugin's MCP servers run in the control-plane pod like every manifest server.
   entry, not a plugin entry.
 - **Fleet's own spawn-time tokens are still substituted.** A plugin env value
   containing `${FLEET_WORKSPACE}`, `${FLEET_WORKSPACE_ROOT}`, `${FLEET_TASK_ID}`,
-  `${FLEET_USER_EMAIL}` or `${FLEET_USER_NAME}` is rewritten at spawn
+  or `${FLEET_USER_EMAIL}` is rewritten at spawn
   exactly like a manifest server's (docs/MCP-BUNDLE-ENV.md). The spec says a
   client "MUST NOT perform any other placeholder or environment-variable
   expansion"; this is a documented, narrow deviation rather than a second
   substitution path, and a portable plugin has no reason to write those tokens.
-  The user tokens follow the manifest's placement and spelling rules: an entry
-  that writes one anywhere but a stdio env value (an env key, args, or a
-  `streamable-http` url or header), or in an escaped or padded spelling, is
+  The user token follows the manifest's placement and spelling rules: an entry
+  that writes it anywhere but a stdio env value (an env key, args, or a
+  `streamable-http` url or header), in an escaped or padded spelling, or that
+  writes the reserved `${FLEET_USER_NAME}` (fleet has no name token) is
   skipped.
 - **No marketplace, installer, signing or update checker.** Distribution and
   installation are out of the portable contract by design; a plugin arrives by

@@ -109,7 +109,7 @@ type MCPServerBase struct {
 	// the named account's label (the cutlass inherited-routing-identity guard).
 	IdentityEnv []string
 	// User is the signed-in user of the interactive scope this base is bound
-	// into (ADR-0087), substituted for ${FLEET_USER_*} at spawn — AFTER the
+	// into (ADR-0087), substituted for ${FLEET_USER_EMAIL} at spawn — AFTER the
 	// account overlay and its guard, so the user is the last thing written
 	// into the env. Only the broker child's interactive OpenScope sets it;
 	// every other path leaves it zero, which drops the token-bearing keys.
@@ -470,7 +470,7 @@ func bindMCPServer(ctx context.Context, client *mcp.Client, plan mcpBindPlan, wo
 	// ${FLEET_WORKSPACE_ROOT}: the deployment root, offered on every path
 	// (per-run, load-on-demand and broker scopes all bind through here).
 	env = ExpandWorkspaceRootEnv(env)
-	// ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME}: the signed-in user an
+	// ${FLEET_USER_EMAIL}: the signed-in user an
 	// interactive broker scope stamped on the base (cmd/fleet OpenScope).
 	// Substituted here, after resolveMCPVariant's account overlay and
 	// identity guard, so a named seat gets the user exactly like the default

@@ -147,13 +147,13 @@ func (r *productionMCPRuntime) Close() error { return r.stop() }
 // openInteractiveScope opens a chat turn's (or an approved card's) scope. user
 // is the signed-in user the turn belongs to — the zero value when there is none
 // (a webhook-started turn) — and becomes ScopeSpec.User for the child to
-// substitute into ${FLEET_USER_*} (ADR-0087).
+// substitute into ${FLEET_USER_EMAIL} (ADR-0087).
 func (r *productionMCPRuntime) openInteractiveScope(ctx context.Context, selection agentcore.MCPSelection, policy agent.MCPScopePolicy, workspace string, user agentcore.MCPUserIdentity) (*agent.MCPScope, error) {
 	return r.openScope(ctx, selection, policy, "", workspace, user)
 }
 
 // openTaskScope opens a scheduled run's scope. It takes no user: a task run has
-// no one at the keyboard, so its ${FLEET_USER_*} keys are always dropped.
+// no one at the keyboard, so its ${FLEET_USER_EMAIL} keys are always dropped.
 func (r *productionMCPRuntime) openTaskScope(ctx context.Context, selection agentcore.MCPSelection, policy agent.MCPScopePolicy, taskID, workspace string) (*agent.MCPScope, error) {
 	return r.openScope(ctx, selection, policy, taskID, workspace, agentcore.MCPUserIdentity{})
 }
@@ -237,7 +237,7 @@ func (r *productionMCPRuntime) openScope(ctx context.Context, selection agentcor
 // nil when there is none, and ALWAYS nil for a task scope, so a scheduled run
 // cannot carry a person's identity even if a caller passed one (the child
 // refuses a task scope with a user too — this keeps the parent from sending
-// one). Only fields that pass validation cross.
+// one). Only an email that passes validation crosses.
 func brokerScopeUser(taskID string, user agentcore.MCPUserIdentity) *mcpbroker.ScopeUser {
 	if taskID != "" {
 		return nil
@@ -246,7 +246,7 @@ func brokerScopeUser(taskID string, user agentcore.MCPUserIdentity) *mcpbroker.S
 	if user.IsZero() {
 		return nil
 	}
-	return &mcpbroker.ScopeUser{Email: user.Email, Name: user.Name}
+	return &mcpbroker.ScopeUser{Email: user.Email}
 }
 
 // brokerScopePolicy serializes the parent's effective gates for the credential

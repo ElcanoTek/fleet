@@ -7,14 +7,13 @@ import (
 )
 
 // TestReservedUserTokensSurviveLoad pins the load half of ADR-0087: the
-// ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME} tokens pass through both
-// interpolation passes verbatim, for the credential owner to substitute when it
+// ${FLEET_USER_EMAIL} token passes through both interpolation passes verbatim,
+// for the credential owner to substitute when it
 // opens an interactive scope. An operator-exported variable of the same name is
 // the realistic hijack — resolved here it would give every user's turn one
 // fixed person's identity — so it is set and must not appear.
 func TestReservedUserTokensSurviveLoad(t *testing.T) {
 	t.Setenv("FLEET_USER_EMAIL", "operator@example.com")
-	t.Setenv("FLEET_USER_NAME", "Operator")
 	b, err := Load(writeManifest(t, `
 mcp_servers:
   - name: deals
@@ -24,7 +23,7 @@ mcp_servers:
     always: true
     env:
       DEAL_SHEET_DEFAULT_TO: "${FLEET_USER_EMAIL}"
-      DEAL_SHEET_GREETING: "Hi ${FLEET_USER_NAME},"
+      DEAL_SHEET_REPLY_TO: "Reply-To: <${FLEET_USER_EMAIL}>"
     optional_env: ["DEAL_SHEET_DEFAULT_TO"]
 `))
 	if err != nil {
@@ -34,12 +33,12 @@ mcp_servers:
 	if got := env["DEAL_SHEET_DEFAULT_TO"]; got != "${FLEET_USER_EMAIL}" {
 		t.Errorf("DEAL_SHEET_DEFAULT_TO = %q, want the reserved token preserved verbatim", got)
 	}
-	if got := env["DEAL_SHEET_GREETING"]; got != "Hi ${FLEET_USER_NAME}," {
-		t.Errorf("DEAL_SHEET_GREETING = %q, want token + text preserved", got)
+	if got := env["DEAL_SHEET_REPLY_TO"]; got != "Reply-To: <${FLEET_USER_EMAIL}>" {
+		t.Errorf("DEAL_SHEET_REPLY_TO = %q, want token + text preserved", got)
 	}
 	names := b.EnvVarNames()
-	if slices.Contains(names, "FLEET_USER_EMAIL") || slices.Contains(names, "FLEET_USER_NAME") {
-		t.Errorf("EnvVarNames must exclude the reserved user tokens, got %v", names)
+	if slices.Contains(names, "FLEET_USER_EMAIL") {
+		t.Errorf("EnvVarNames must exclude the reserved user token, got %v", names)
 	}
 }
 
@@ -66,7 +65,7 @@ mcp_servers:
     always: true
     env:
       NAME: "${FLEET_USER_NAME:?who}"
-`, "RESERVED runtime token"},
+`, "fleet has no ${FLEET_USER_NAME} token"},
 		// The spawn paths match only the exact "${NAME}" spelling, so a padded
 		// one would ship as a literal placeholder to every connector — even a
 		// scheduled run's, which must never see anything for these keys.
@@ -128,7 +127,7 @@ mcp_servers:
     type: http
     url: "https://example.test/$${FLEET_USER_NAME}"
     always: true
-`, "an escaped FLEET_USER_NAME cannot be written"},
+`, "fleet has no ${FLEET_USER_NAME} token"},
 		// The signed-in user is data, never routing identity: a key that
 		// routes a seat or money must not be filled from the keyboard.
 		{"user token in identity_env", `
@@ -156,7 +155,7 @@ mcp_servers:
     type: http
     url: "https://example.test/${FLEET_USER_NAME}"
     always: true
-`, "reserved runtime token"},
+`, "fleet has no ${FLEET_USER_NAME} token"},
 		// The spawn paths substitute env VALUES only: a token in an env key
 		// would name a literal "${FLEET_USER_EMAIL}" variable.
 		{"user token as an env key", `
@@ -182,7 +181,7 @@ mcp_servers:
 		// that only becomes padding once parsed (caught per server).
 		{"NBSP-padded email", "\nmcp_servers:\n  - name: deals\n    command: python3\n    args: [\"deals.py\"]\n    always: true\n    env:\n      TO: \"${\u00a0FLEET_USER_EMAIL\u00a0}\"\n",
 			"RESERVED runtime token"},
-		{"zero-width-padded name", "\nmcp_servers:\n  - name: deals\n    command: python3\n    args: [\"deals.py\"]\n    always: true\n    env:\n      NAME: \"${\u200bFLEET_USER_NAME}\"\n",
+		{"zero-width-padded email", "\nmcp_servers:\n  - name: deals\n    command: python3\n    args: [\"deals.py\"]\n    always: true\n    env:\n      TO: \"${\u200bFLEET_USER_EMAIL}\"\n",
 			"RESERVED runtime token"},
 		{"escaped ideographic-space-padded email", "\nmcp_servers:\n  - name: deals\n    command: python3\n    args: [\"deals.py\"]\n    always: true\n    env:\n      TO: \"$${\u3000FLEET_USER_EMAIL}\"\n",
 			"an escaped FLEET_USER_EMAIL cannot be written"},
@@ -233,5 +232,37 @@ mcp_servers:
 	}
 	if got := b.MCPServerConfigs()["deals"].Env["TEMPLATE"]; got != "${NOT_A_FLEET_TOKEN}" {
 		t.Errorf("TEMPLATE = %q, want the literal text", got)
+	}
+}
+
+// TestUserNameTokenIsRefused: fleet has no name for the signed-in user (sign-in
+// carries an email and no name claim, and a name is never guessed from the
+// email), so FLEET_USER_NAME is reserved with no token behind it. Every
+// spelling fails the load with an error that says so — the exact one too, and
+// with an operator-exported FLEET_USER_NAME that must never be read.
+func TestUserNameTokenIsRefused(t *testing.T) {
+	t.Setenv("FLEET_USER_NAME", "Operator")
+	for name, value := range map[string]string{
+		"exact":            "${FLEET_USER_NAME}",
+		"in a greeting":    "Hi ${FLEET_USER_NAME},",
+		"beside the email": "${FLEET_USER_NAME} <${FLEET_USER_EMAIL}>",
+		"escaped":          "$${FLEET_USER_NAME}",
+		"padded":           "${ FLEET_USER_NAME }",
+		"default form":     "${FLEET_USER_NAME:-team}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(writeManifest(t, `
+mcp_servers:
+  - name: deals
+    command: python3
+    args: ["deals.py"]
+    always: true
+    env:
+      GREETING: "`+value+`"
+`))
+			if err == nil || !strings.Contains(err.Error(), "fleet has no ${FLEET_USER_NAME} token") {
+				t.Fatalf("error = %v, want the no-name-token refusal", err)
+			}
+		})
 	}
 }

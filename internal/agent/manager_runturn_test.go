@@ -265,14 +265,14 @@ func TestManagerRunTurn_OpensAndClosesScopedMCP(t *testing.T) {
 		ConversationID:            "scope-test",
 		OptionalMCPServersEnabled: []string{"optional_on"},
 		MCPAccountDefaults:        map[string]string{"mandatory": "primary", "optional_on": "backup"},
-		MCPUser:                   agentcore.NewMCPUserIdentity("elyse@example.com", "Elyse"),
+		MCPUser:                   agentcore.NewMCPUserIdentity("elyse@example.com"),
 	}, &recordingSink{})
 	if err != nil {
 		t.Fatalf("RunTurn: %v", err)
 	}
 	// ADR-0087: the turn's signed-in sender reaches the scope opener, which is
-	// what carries it to the credential owner for ${FLEET_USER_*}.
-	if gotUser != (agentcore.MCPUserIdentity{Email: "elyse@example.com", Name: "Elyse"}) {
+	// what carries it to the credential owner for ${FLEET_USER_EMAIL}.
+	if gotUser != (agentcore.MCPUserIdentity{Email: "elyse@example.com"}) {
 		t.Errorf("scope user = %+v, want the turn's signed-in sender", gotUser)
 	}
 	want := agentcore.MCPSelection{

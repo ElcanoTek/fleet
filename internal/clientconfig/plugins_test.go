@@ -404,7 +404,8 @@ func TestPluginMCPEntryFailuresSkipOnlyThatEntry(t *testing.T) {
 		// escaped user token would reach the binder as PII and a padded one
 		// as a literal placeholder; both are refused at parse.
 		"escaped user token":    `{"type": "stdio", "command": "python3", "env": {"TO": "$${FLEET_USER_EMAIL}"}}`,
-		"padded user token":     `{"type": "stdio", "command": "python3", "env": {"TO": "${ FLEET_USER_NAME }"}}`,
+		"padded user token":     `{"type": "stdio", "command": "python3", "env": {"TO": "${ FLEET_USER_EMAIL }"}}`,
+		"user name token":       `{"type": "stdio", "command": "python3", "env": {"GREETING": "Hi ${FLEET_USER_NAME},"}}`,
 		"args not strings":      `{"type": "stdio", "command": "python3", "args": [1]}`,
 		"bare cwd":              `{"type": "stdio", "command": "python3", "cwd": "data"}`,
 		"escaping cwd":          `{"type": "stdio", "command": "python3", "cwd": "./../.."}`,
@@ -456,17 +457,21 @@ func TestPluginMCPEntryFailuresSkipOnlyThatEntry(t *testing.T) {
 func TestPluginUserTokenPlacementSkipsEntry(t *testing.T) {
 	cases := map[string]struct{ entry, want string }{
 		"http header value": {`{"type": "streamable-http", "url": "https://x.example.com/mcp", "headers": {"X-User": "${FLEET_USER_EMAIL}"}}`,
-			`header "X-User" names ${FLEET_USER_EMAIL}/${FLEET_USER_NAME}`},
-		"http url": {`{"type": "streamable-http", "url": "https://x.example.com/mcp?u=${FLEET_USER_NAME}"}`,
-			`url names ${FLEET_USER_EMAIL}/${FLEET_USER_NAME}`},
+			`header "X-User" names ${FLEET_USER_EMAIL}`},
+		"http url": {`{"type": "streamable-http", "url": "https://x.example.com/mcp?u=${FLEET_USER_EMAIL}"}`,
+			`url names ${FLEET_USER_EMAIL}`},
+		"name token in an env value": {`{"type": "stdio", "command": "python3", "env": {"GREETING": "Hi ${FLEET_USER_NAME},"}}`,
+			`fleet has no ${FLEET_USER_NAME} token`},
+		"name token in a header": {`{"type": "streamable-http", "url": "https://x.example.com/mcp", "headers": {"X-Name": "${FLEET_USER_NAME}"}}`,
+			`header "X-Name": "${FLEET_USER_NAME}": fleet has no ${FLEET_USER_NAME} token`},
 		"stdio env key": {`{"type": "stdio", "command": "python3", "env": {"${FLEET_USER_EMAIL}": "x"}}`,
 			`env key "${FLEET_USER_EMAIL}" names`},
 		"stdio arg": {`{"type": "stdio", "command": "python3", "args": ["--to", "${FLEET_USER_EMAIL}"]}`,
 			`args[1] names`},
 		"NBSP-padded env value": {`{"type": "stdio", "command": "python3", "env": {"TO": "${XU00A0FLEET_USER_EMAIL}"}}`,
 			"RESERVED runtime token"},
-		"zero-width-escaped env value": {`{"type": "stdio", "command": "python3", "env": {"TO": "$${XU200BFLEET_USER_NAME}"}}`,
-			"an escaped FLEET_USER_NAME cannot be written"},
+		"zero-width-escaped env value": {`{"type": "stdio", "command": "python3", "env": {"TO": "$${XU200BFLEET_USER_EMAIL}"}}`,
+			"an escaped FLEET_USER_EMAIL cannot be written"},
 	}
 	for label, tc := range cases {
 		t.Run(label, func(t *testing.T) {

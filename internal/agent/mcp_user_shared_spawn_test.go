@@ -9,8 +9,8 @@ import (
 )
 
 // sharedSpawnWhoamiScript is a minimal stdio MCP server whose one tool echoes
-// the two env vars a bundle would fill from ${FLEET_USER_EMAIL} /
-// ${FLEET_USER_NAME}, or "<unset>" when the variable is absent.
+// two env vars a bundle would fill from ${FLEET_USER_EMAIL}, or "<unset>"
+// when the variable is absent.
 const sharedSpawnWhoamiScript = `
 import json, os, sys
 def send(obj):
@@ -29,7 +29,7 @@ for line in sys.stdin:
     elif method == "tools/call":
         text = "|".join([
             os.environ.get("DEAL_SHEET_DEFAULT_TO", "<unset>"),
-            os.environ.get("DEAL_SHEET_GREETING", "<unset>"),
+            os.environ.get("DEAL_SHEET_REPLY_TO", "<unset>"),
         ])
         send({"jsonrpc":"2.0","id":rid,"result":{"content":[{"type":"text","text":text}]}})
     elif rid is not None:
@@ -38,7 +38,7 @@ for line in sys.stdin:
 
 // TestBuildMCPClient_SharedSpawnDropsUserKeys: the process-lifetime client
 // (boot catalog, local-client mode, and the shared client every scheduled run
-// without an mcp_selection uses) serves every user, so its ${FLEET_USER_*}
+// without an mcp_selection uses) serves every user, so its ${FLEET_USER_EMAIL}
 // keys are dropped — the server sees them unset, never a literal token, never
 // an empty string, never anyone's identity (ADR-0087).
 func TestBuildMCPClient_SharedSpawnDropsUserKeys(t *testing.T) {
@@ -52,7 +52,7 @@ func TestBuildMCPClient_SharedSpawnDropsUserKeys(t *testing.T) {
 			Args:    []string{"-u", "-c", sharedSpawnWhoamiScript},
 			Env: map[string]string{
 				"DEAL_SHEET_DEFAULT_TO": "${FLEET_USER_EMAIL}",
-				"DEAL_SHEET_GREETING":   "Hi ${FLEET_USER_NAME},",
+				"DEAL_SHEET_REPLY_TO":   "Reply-To: <${FLEET_USER_EMAIL}>",
 			},
 		},
 	}, nil, nil)

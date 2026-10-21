@@ -1,7 +1,6 @@
 "use client";
 
 // Settings → General (fleet-unified settings pass): personal preference rows —
-// Your first name (the server-stored name connectors greet you by, ADR-0087),
 // Theme (mirrors the account-menu segmented control via the shared useTheme
 // hook), Send on Enter (the composer's localStorage preference), and the
 // browser-notifications opt-in (moved here from the Connections page; the
@@ -12,7 +11,6 @@
 
 import { useState } from "react";
 import { BrowserNotificationsRow } from "./BrowserNotificationsRow";
-import { FirstNameRow } from "./FirstNameRow";
 import { SetRow, SetSwitch, Segmented } from "./ui/atoms";
 import { SetSection } from "./ui/panels";
 import { useTheme, type ThemePreference } from "@/app/shared/hooks/useTheme";
@@ -70,7 +68,6 @@ export default function GeneralSettingsPage() {
       intro="Personal preferences — they affect only you, not your workspace."
     >
       <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[1.15rem] py-[0.3rem]">
-        <FirstNameRow />
         <SetRow
           label="Theme"
           desc="System follows your OS appearance. Also switchable from the account menu."

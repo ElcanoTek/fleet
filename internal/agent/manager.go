@@ -158,7 +158,7 @@ type TurnInput struct {
 	InputKind string
 
 	// MCPUser is the signed-in user who SENT this turn, for the bundle's
-	// ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME} env tokens (ADR-0087). The HTTP
+	// ${FLEET_USER_EMAIL} env token (ADR-0087). The HTTP
 	// layer fills it from the authenticated request only for a turn a person
 	// sent (directly or from their queue) and for the turn fleet resumes in
 	// their conversation after one of their approval cards settles (it
@@ -326,7 +326,7 @@ type MCPScopePolicy struct {
 // broker scope rooted at workspace, under the run's effective policy.
 // Credential resolution remains behind the opener's process boundary. user is
 // the signed-in user the scope is opened for (zero = none); the credential
-// owner substitutes it for ${FLEET_USER_*} and nothing else (ADR-0087).
+// owner substitutes it for ${FLEET_USER_EMAIL} and nothing else (ADR-0087).
 type MCPScopeOpener func(ctx context.Context, selection agentcore.MCPSelection, policy MCPScopePolicy, workspace string, user agentcore.MCPUserIdentity) (*MCPScope, error)
 
 // MCPReloadResult is the public post-reload state returned by an injected
@@ -394,8 +394,8 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 			env = agentcore.ExpandTaskIDEnv(env, "")
 			// ${FLEET_WORKSPACE_ROOT}: always resolvable, never dropped.
 			env = agentcore.ExpandWorkspaceRootEnv(env)
-			// Shared spawn ⇒ no signed-in user: drop ${FLEET_USER_EMAIL} /
-			// ${FLEET_USER_NAME}-bearing keys. Only an interactive broker scope
+			// Shared spawn ⇒ no signed-in user: drop ${FLEET_USER_EMAIL}-bearing
+			// keys. Only an interactive broker scope
 			// resolves them (ADR-0087); a process-lifetime subprocess serves
 			// every user, so it must never carry one user's identity.
 			env = agentcore.ExpandUserEnv(env, agentcore.MCPUserIdentity{})
@@ -1315,7 +1315,7 @@ func (m *Manager) MCPCatalog() []mcp.ServerTool {
 // approval fails closed rather than silently running as a different account.
 //
 // user is the person who approved the card — the only user who can claim it —
-// so an approved call sees the same ${FLEET_USER_*} values the staging turn
+// so an approved call sees the same ${FLEET_USER_EMAIL} values the staging turn
 // did (ADR-0087).
 func (m *Manager) OpenApprovalMCPScope(ctx context.Context, selection agentcore.MCPSelection, workspace string, user agentcore.MCPUserIdentity) (*MCPScope, error) {
 	if m.openMCPScope == nil {
@@ -1539,7 +1539,7 @@ func (m *Manager) configureTurnWorkspace(ctx context.Context, sb *sandbox.Sandbo
 func (m *Manager) openTurnMCPScope(ctx context.Context, selection agentcore.MCPSelection, policy MCPScopePolicy, workspace string, user agentcore.MCPUserIdentity) (agentcore.MCPBroker, []mcp.ServerTool, func(), error) {
 	if m.openMCPScope == nil {
 		// Transitional local-client mode: the shared, process-lifetime client
-		// serves every user, so its ${FLEET_USER_*} keys were dropped at spawn
+		// serves every user, so its ${FLEET_USER_EMAIL} keys were dropped at spawn
 		// and the turn's user has nowhere to go.
 		return m.mcpBroker, m.mcpCatalogSnapshot(), func() {}, nil
 	}

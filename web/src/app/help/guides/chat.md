@@ -206,13 +206,6 @@ for the owner, **Share…** and **Project settings…**. See [Keeping, shaping, 
 Your account menu at the foot of the rail switches between **Light**, **Dark**,
 and **System** appearance and opens **Settings**.
 
-**Settings → General → Your first name** is the name connectors use when they
-address you, for example an email the assistant sends for you that opens
-"Hi Sam,". Type it and click **Save**; it applies from your next message. Fleet
-never guesses it from your email address, so until you save one, connectors use
-their own wording instead (often "Hi team,"). Clear the box and save to go back
-to that.
-
 **Settings → General → Browser notifications** turns on alerts in the browser
 you are using, even while the tab is in the background. By default you get one
 when a task you created finishes, is waiting for your answer, or sends a

@@ -239,7 +239,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		defer releaseSlot()
 		// No signed-in sender: the trigger owner is the conversation's user
 		// for scoping, but nobody at a keyboard sent this turn, so the
-		// bundle's ${FLEET_USER_*} keys are dropped (ADR-0087).
+		// bundle's ${FLEET_USER_EMAIL} keys are dropped (ADR-0087).
 		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, prompt, injected, "", history, memoryContents(memories), "", nil, nil, agentcore.MCPUserIdentity{})
 		// Webhook turns participate in the #785 drain loop too: anything
 		// queued behind this turn must not stall until the next submission.

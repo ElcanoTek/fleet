@@ -6,9 +6,8 @@ package httpapi
 // that operator — into a team, and every "Share with my team" project write failed
 // with "you are not in a team". This is the member-facing half:
 //
-//	GET /me         → who am I: email, role, team, admin flag, saved first name
+//	GET /me         → who am I: email, role, team, admin flag
 //	PUT /me/team    → set MY OWN team ({"team_id": "platform"}; "" leaves)
-//	PUT /me/name    → set MY OWN first name ({"given_name": "Elyse"}; "" clears)
 //
 // The privacy gate is in store.SetOwnTeam, not here: a member may CREATE a team
 // or LEAVE one, but joining a team that already has members (or that owns a
@@ -21,14 +20,12 @@ package httpapi
 // so a read-only viewer can see its team but not change it.
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"strings"
 
-	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -42,19 +39,14 @@ type meResponse struct {
 	// users.role = 'admin'), the same OR adminMiddleware applies. Clients use
 	// it to phrase the "ask an admin" path — authorization stays server-side.
 	Admin bool `json:"admin"`
-	// GivenName is the first name the user saved for themselves (PUT
-	// /me/name), "" when unset. It is what ${FLEET_USER_NAME} resolves to
-	// (ADR-0087); fleet never fills it from the email.
-	GivenName string `json:"given_name"`
 }
 
 func (s *Server) meResponseFor(u *store.User) meResponse {
 	return meResponse{
-		Email:     u.Email,
-		Role:      u.Role,
-		TeamID:    u.TeamID,
-		Admin:     s.isAdmin(u.Email) || u.Role == store.RoleAdmin,
-		GivenName: u.GivenName,
+		Email:  u.Email,
+		Role:   u.Role,
+		TeamID: u.TeamID,
+		Admin:  s.isAdmin(u.Email) || u.Role == store.RoleAdmin,
 	}
 }
 
@@ -145,66 +137,6 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 	// %q escapes CR/LF, so the request-supplied team cannot forge a log line.
 	log.Printf("teams: %q set own team to %q", u.Email, u.TeamID)
 	writeJSON(w, s.meResponseFor(u))
-}
-
-// handleMyName serves PUT /me/name — set the caller's own first name, the
-// value the bundle's ${FLEET_USER_NAME} token resolves to on their chat turns
-// (ADR-0087), e.g. the "Hi Elyse," of a deal-sheet email. Body:
-// {"given_name": "Elyse"}; "" clears it, and a connector then uses its no-name
-// wording ("Hi team,"). GET returns the same /me record.
-//
-// This is the only way a name reaches fleet: every sign-in path (password,
-// OIDC from the Elcano Auth service, the elcano_auth cookie) carries an email
-// and no name claim, and fleet does not guess one from the email. The store
-// holds the value to agentcore.ValidMCPUserName — the same rule the turn
-// applies before handing it to a connector — so a saved name is never silently
-// dropped later, and an address or handle cannot be saved as a name.
-func (s *Server) handleMyName(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		s.handleMe(w, r)
-		return
-	}
-	if r.Method != http.MethodPut && r.Method != http.MethodPatch {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		GivenName *string `json:"given_name"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
-		return
-	}
-	if body.GivenName == nil {
-		http.Error(w, `given_name required (use "" to clear your name)`, http.StatusBadRequest)
-		return
-	}
-	// store.SetOwnGivenName applies agentcore.ValidMCPUserName and reports a
-	// refusal as an input error, which writeUserLookupError turns into a 400.
-	u, err := s.store.SetOwnGivenName(r.Context(), userFromCtx(r.Context()), *body.GivenName)
-	if err != nil {
-		s.writeUserLookupError(w, err)
-		return
-	}
-	writeJSON(w, s.meResponseFor(u))
-}
-
-// mcpUserFor builds the ${FLEET_USER_*} identity (ADR-0087) for a signed-in
-// user who sent a turn or approved a card: their authenticated email plus the
-// first name THEY saved (PUT /me/name). A user who saved none — or a lookup
-// that fails — gets no name, so the token is unset and a connector uses its
-// no-name wording. The name is never derived from the email.
-func (s *Server) mcpUserFor(ctx context.Context, email string) agentcore.MCPUserIdentity {
-	name, err := s.store.UserGivenName(ctx, email)
-	if err != nil {
-		if !errors.Is(err, store.ErrUserNotFound) {
-			// No address or name in the line: the cause is enough to debug a
-			// missing greeting, and the turn goes ahead without the name.
-			log.Printf("mcp user: first-name lookup failed, the turn proceeds without one: %v", err)
-		}
-		name = ""
-	}
-	return agentcore.NewMCPUserIdentity(email, name)
 }
 
 // writeUserLookupError maps the store's user errors onto the two statuses this

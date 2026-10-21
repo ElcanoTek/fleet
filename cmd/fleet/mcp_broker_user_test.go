@@ -12,9 +12,10 @@ import (
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 )
 
-// brokerUserServerScript echoes the two env vars a bundle maps the
-// ${FLEET_USER_*} tokens to, "<unset>" when the variable is absent — the
-// distinction the drop contract is about (unset, never a literal or a blank).
+// brokerUserServerScript echoes two env vars — one a bundle maps to
+// ${FLEET_USER_EMAIL}, one that (wrongly) names the refused FLEET_USER_NAME —
+// "<unset>" when the variable is absent: the distinction the drop contract is
+// about (unset, never a literal or a blank).
 const brokerUserServerScript = `
 import json, os, sys
 def send(obj):
@@ -96,37 +97,29 @@ func TestBrokerBackend_ScopeSubstitutesSignedInUser(t *testing.T) {
 	b := newBrokerBackendForUserTest(t)
 	selection := []mcpbroker.ScopeChoice{{Server: "deals"}}
 
+	// The email is substituted; the FLEET_USER_NAME key is dropped even for
+	// a signed-in user — there is no name token, so nothing is derived from
+	// the address and the connector falls back to "Hi team,".
 	got := callWhoami(t, b, mcpbroker.ScopeSpec{
 		Selection: selection,
-		User:      &mcpbroker.ScopeUser{Email: "elyse@example.com", Name: "Elyse"},
+		User:      &mcpbroker.ScopeUser{Email: "elyse@example.com"},
 	})
-	if got != "elyse@example.com|Hi Elyse," {
-		t.Fatalf("interactive scope env = %q, want the signed-in user substituted", got)
+	if got != "elyse@example.com|<unset>" {
+		t.Fatalf("interactive scope env = %q, want the email substituted and the name key dropped", got)
 	}
 
 	if got := callWhoami(t, b, mcpbroker.ScopeSpec{Selection: selection}); got != "<unset>|<unset>" {
 		t.Fatalf("user-less scope env = %q, want both keys dropped", got)
 	}
 
-	// A signed-in user who saved no first name: the email resolves and the
-	// greeting key is dropped, so the connector says "Hi team," — nothing is
-	// derived from the address.
-	got = callWhoami(t, b, mcpbroker.ScopeSpec{
-		Selection: selection,
-		User:      &mcpbroker.ScopeUser{Email: "elyse.messer@example.com"},
-	})
-	if got != "elyse.messer@example.com|<unset>" {
-		t.Fatalf("scope env for a user with no saved name = %q, want the greeting key dropped", got)
-	}
-
 	// The child re-validates: a value the parent should never have sent is
 	// treated as absent, not passed through.
 	got = callWhoami(t, b, mcpbroker.ScopeSpec{
 		Selection: selection,
-		User:      &mcpbroker.ScopeUser{Email: "elyse@example.com", Name: "${FLEET_TASK_ID}"},
+		User:      &mcpbroker.ScopeUser{Email: "x${FLEET_TASK_ID}@example.com"},
 	})
-	if got != "elyse@example.com|<unset>" {
-		t.Fatalf("scope env with an invalid name = %q, want the greeting key dropped", got)
+	if got != "<unset>|<unset>" {
+		t.Fatalf("scope env with an invalid email = %q, want both keys dropped", got)
 	}
 }
 
@@ -139,9 +132,9 @@ func TestBrokerBackend_NamedSeatScopeSubstitutesSignedInUser(t *testing.T) {
 	t.Setenv("DEALS_API_KEY_CLIENT_A", "client-a-key")
 	got := callWhoamiOn(t, b, mcpbroker.ScopeSpec{
 		Selection: []mcpbroker.ScopeChoice{{Server: "deals", Account: "client_a"}},
-		User:      &mcpbroker.ScopeUser{Email: "elyse@example.com", Name: "Elyse"},
+		User:      &mcpbroker.ScopeUser{Email: "elyse@example.com"},
 	}, "deals_client_a")
-	if got != "elyse@example.com|Hi Elyse," {
+	if got != "elyse@example.com|<unset>" {
 		t.Fatalf("named-seat scope env = %q, want the signed-in user substituted", got)
 	}
 }
@@ -162,7 +155,7 @@ func TestBrokerBackend_TaskScopeNeverSeesAUser(t *testing.T) {
 // TestBrokerScopeUser: the parent never puts a user on a task scope's wire
 // form, and sends nothing when it has nothing valid to send.
 func TestBrokerScopeUser(t *testing.T) {
-	user := agentcore.NewMCPUserIdentity("elyse@example.com", "Elyse")
+	user := agentcore.NewMCPUserIdentity("elyse@example.com")
 	if got := brokerScopeUser("task-1", user); got != nil {
 		t.Fatalf("task scope user = %+v, want nil", got)
 	}
@@ -173,7 +166,7 @@ func TestBrokerScopeUser(t *testing.T) {
 		t.Fatalf("invalid user = %+v, want nil", got)
 	}
 	got := brokerScopeUser("", user)
-	if got == nil || got.Email != "elyse@example.com" || got.Name != "Elyse" {
+	if got == nil || got.Email != "elyse@example.com" {
 		t.Fatalf("interactive scope user = %+v, want the validated identity", got)
 	}
 }

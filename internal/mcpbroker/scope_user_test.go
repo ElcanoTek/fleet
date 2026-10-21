@@ -15,7 +15,7 @@ func TestClientServer_ScopeUserCrossesToBackend(t *testing.T) {
 	spec := ScopeSpec{
 		Selection: []ScopeChoice{{Server: "deal_sheet"}},
 		Workspace: "/srv/fleet/workspace/conv-1",
-		User:      &ScopeUser{Email: "trader@example.com", Name: "Trader"},
+		User:      &ScopeUser{Email: "trader@example.com"},
 	}
 	scope, err := client.OpenScope(context.Background(), spec)
 	if err != nil {
@@ -35,7 +35,7 @@ func TestClientServer_ScopeUserCrossesToBackend(t *testing.T) {
 // refused before the backend sees it, so a task run is never handed a
 // person's identity.
 func TestClientServer_ScopeUserRefusedOnTaskAndRemoteScopes(t *testing.T) {
-	user := &ScopeUser{Email: "trader@example.com", Name: "Trader"}
+	user := &ScopeUser{Email: "trader@example.com"}
 	tests := []struct {
 		name string
 		spec ScopeSpec

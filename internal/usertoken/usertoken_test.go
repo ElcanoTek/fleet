@@ -12,8 +12,12 @@ func TestFind(t *testing.T) {
 		{"", 0, false, false},
 		{"plain text", 0, false, false},
 		{"${FLEET_USER_EMAIL}", 1, false, false},
-		{"Hi ${FLEET_USER_NAME}, <${FLEET_USER_EMAIL}>", 2, false, false},
+		{"To: ${FLEET_USER_EMAIL}, cc ${FLEET_USER_EMAIL}", 2, false, false},
 		{"${OUTER:-${FLEET_USER_EMAIL}}", 1, false, false},
+		// FLEET_USER_NAME is reserved with no token behind it: even its
+		// canonical spelling is never exact.
+		{"${FLEET_USER_NAME}", 1, true, false},
+		{"Hi ${FLEET_USER_NAME}, <${FLEET_USER_EMAIL}>", 2, true, false},
 		// Not a user token: identifier boundaries.
 		{"${FLEET_USER_NAMES}", 0, false, false},
 		{"${MY_FLEET_USER_EMAIL}", 0, false, false},

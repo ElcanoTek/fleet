@@ -290,12 +290,12 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	}
 	// The interactive turn's signed-in user (ADR-0087). Re-validated here —
 	// the credential owner does not trust the parent's formatting — and a
-	// field that fails is treated as absent, which drops the keys that need
+	// value that fails is treated as absent, which drops the keys that need
 	// it. No user (every scheduled scope; validateScopeSpec refuses a task
-	// scope that carries one) drops every ${FLEET_USER_*}-bearing key.
+	// scope that carries one) drops every ${FLEET_USER_EMAIL}-bearing key.
 	var user agentcore.MCPUserIdentity
 	if spec.User != nil {
-		user = agentcore.MCPUserIdentity{Email: spec.User.Email, Name: spec.User.Name}.Sanitized()
+		user = agentcore.NewMCPUserIdentity(spec.User.Email)
 	}
 	for name, base := range bases {
 		base.BaseEnv = agentcore.ExpandTaskIDEnv(base.BaseEnv, spec.TaskID)

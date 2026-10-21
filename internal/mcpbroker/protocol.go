@@ -91,7 +91,7 @@ type ScopeSpec struct {
 	// endpoint URLs, and credential values remain broker-side.
 	Remote *RemoteScopeSpec `json:"remote,omitempty"`
 	// User is the signed-in user of an INTERACTIVE chat turn (ADR-0087): the
-	// value the child substitutes for ${FLEET_USER_EMAIL} / ${FLEET_USER_NAME}
+	// value the child substitutes for ${FLEET_USER_EMAIL}
 	// in this scope's bundle server env. It is data, not authorization — it
 	// selects no server, seat or tool — and it is PII, so neither side logs
 	// it. nil for every other scope; a scheduled scope (TaskID set) or a
@@ -146,12 +146,12 @@ type ScopePolicy struct {
 }
 
 // ScopeUser is the interactive turn's signed-in user as it crosses to the
-// credential owner. The parent fills it from the authenticated request; the
-// child re-validates both fields (agentcore.MCPUserIdentity.Sanitized) and
-// treats a field that fails as absent.
+// credential owner: the authenticated email only (there is no name — see
+// ADR-0087). The parent fills it from the authenticated request; the child
+// re-validates it (agentcore.MCPUserIdentity.Sanitized) and treats a value
+// that fails as absent.
 type ScopeUser struct {
 	Email string `json:"email,omitempty"`
-	Name  string `json:"name,omitempty"`
 }
 
 // RemoteScopeSpec selects one user's hosted MCP connections. FilterEnabled is
