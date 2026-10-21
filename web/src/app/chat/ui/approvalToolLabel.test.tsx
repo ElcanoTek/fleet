@@ -41,6 +41,41 @@ describe("approvalToolLabel", () => {
     expect(approvalToolLabel(tool, server, names)).toEqual({ connector, action });
   });
 
+  // Production bundles name SSP servers with the `_mcp` suffix
+  // (elcano-config's magnite_mcp, indexexchange_mcp, …), and their tools
+  // repeat the connector after it (Codex review, #1828).
+  it.each([
+    // [tool, mcpServer, connector, action]
+    ["mcp_magnite_mcp_magnite_update_deal", "magnite_mcp", "Magnite", "Update deal"],
+    ["mcp_indexexchange_mcp_ix_create_deal", "indexexchange_mcp", "Index Exchange", "Create deal"],
+    ["mcp_pubmatic_mcp_pm_update_deal", "pubmatic_mcp", "PubMatic", "Update deal"],
+    ["mcp_openx_mcp_ox_create_deal", "openx_mcp", "Openx", "Create deal"],
+    ["mcp_equativ_mcp_eq_create_deal", "equativ_mcp", "Equativ", "Create deal"],
+    ["mcp_xandr_mcp_create_deal", "xandr_mcp", "Xandr", "Create deal"],
+    // No mcpServer on the row and no catalog: the suffix stays with the connector.
+    ["mcp_magnite_mcp_magnite_update_deal", undefined, "Magnite", "Update deal"],
+    ["mcp_triplelift_mcp_tl_update_deal", undefined, "Triplelift", "Update deal"],
+  ])("a _mcp server: %s (server %s) → %s “%s”", (tool, server, connector, action) => {
+    expect(approvalToolLabel(tool, server)).toEqual({ connector, action });
+  });
+
+  // A named seat registers its tools as mcp_<server>_<account>_<tool>
+  // (internal/agentcore.RegisteredMCPName); the seat is not the action
+  // (Codex review, #1828).
+  it.each([
+    // [tool, mcpServer, mcpAccount, connector, action]
+    ["mcp_send_grid_client_a_send_email", "send_grid", "client_a", "Send grid", "Send email"],
+    // The account folds the way fleet registers it: client-a is client_a.
+    ["mcp_send_grid_client_a_send_email", "send_grid", "client-a", "Send grid", "Send email"],
+    ["mcp_magnite_mcp_omnicom_magnite_update_deal", "magnite_mcp", "omnicom", "Magnite", "Update deal"],
+    ["mcp_indexexchange_mcp_rain_barrel_ix_create_deal", "indexexchange_mcp", "rain barrel", "Index Exchange", "Create deal"],
+    // The default seat's tools carry no account.
+    ["mcp_send_grid_send_email", "send_grid", undefined, "Send grid", "Send email"],
+    ["mcp_send_grid_send_email", "send_grid", "", "Send grid", "Send email"],
+  ])("a named seat: %s (%s as %s) → %s “%s”", (tool, server, account, connector, action) => {
+    expect(approvalToolLabel(tool, server, undefined, account)).toEqual({ connector, action });
+  });
+
   it("names a native tool by its action alone", () => {
     expect(approvalToolLabel("send_email", undefined, names)).toEqual({ action: "Send email" });
     expect(approvalToolLabel("mcp_", undefined, names).action).not.toMatch(/mcp/i);
@@ -107,6 +142,31 @@ describe("the approval card's words for the tool", () => {
     expect(screen.getByText('ACTION REQUIRED · Run "Create deal"?')).toBeTruthy();
     const label = screen.getByTestId("approval-apply-all").closest("label");
     expect(label?.textContent).toBe("Apply my choice to every Index Exchange “Create deal” request in this chat");
+  });
+
+  it("a named seat's card names the action without the seat, in its title and checkbox", () => {
+    renderCard({
+      tool: "mcp_send_grid_client_a_send_email",
+      mcpServer: "send_grid",
+      mcpAccount: "client_a",
+      summary: { tool: "mcp_send_grid_client_a_send_email", args: [{ key: "to", value: "a@example.com" }] },
+    });
+    const label = screen.getByTestId("approval-apply-all").closest("label");
+    expect(label?.textContent).toBe("Apply my choice to every Send grid “Send email” request in this chat");
+    expect(label?.textContent).not.toMatch(/client/i);
+  });
+
+  it("a production _mcp server's card names the SSP and the action", () => {
+    renderCard({
+      tool: "mcp_magnite_mcp_magnite_update_deal",
+      mcpServer: "magnite_mcp",
+      mcpAccount: "elcano",
+      summary: { tool: "mcp_magnite_mcp_magnite_update_deal", args: [{ key: "deal_id", value: "1" }] },
+    });
+    expect(screen.getByText('ACTION REQUIRED · Run "Update deal"?')).toBeTruthy();
+    const label = screen.getByTestId("approval-apply-all").closest("label");
+    expect(label?.textContent).toBe("Apply my choice to every Magnite “Update deal” request in this chat");
+    expect(screen.getByTestId("approval-seat").textContent).toBe("Runs as elcano on Magnite");
   });
 
   it("the seat line uses fleet's SSP name when the chat has none", () => {

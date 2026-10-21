@@ -1600,9 +1600,14 @@ const sspPrefixes: Array<{ match: string; tools: string[]; display: string }> = 
   { match: "mcp_medianet_", tools: ["mn_"], display: "Media.net" },
 ];
 
-/** Fleet's known SSP connector: its display name and the short prefix its tools repeat. */
+/**
+ * Fleet's known SSP connector: its display name and the short prefix its
+ * tools repeat. A bundle's server id may carry the conventional `_mcp`
+ * suffix (`magnite_mcp`): it names the same SSP.
+ */
 export function sspConnector(server: string): { display: string; toolPrefixes: string[] } | undefined {
-  const hit = sspPrefixes.find((p) => p.match === `mcp_${server}_`);
+  const base = server.endsWith("_mcp") ? server.slice(0, -"_mcp".length) : server;
+  const hit = sspPrefixes.find((p) => p.match === `mcp_${base}_`);
   return hit ? { display: hit.display, toolPrefixes: [...hit.tools] } : undefined;
 }
 
@@ -1638,7 +1643,9 @@ export function humanToolLabel(name: string): string {
   }
   for (const { match, tools, display } of sspPrefixes) {
     if (!name.startsWith(match)) continue;
-    let rest = name.slice(match.length);
+    // A bundle's server id may carry the `_mcp` suffix
+    // (mcp_magnite_mcp_magnite_get_deal): it is part of the id, not the action.
+    let rest = name.slice(match.length).replace(/^mcp_/, "");
     for (const tp of tools) {
       if (rest.startsWith(tp)) {
         rest = rest.slice(tp.length);

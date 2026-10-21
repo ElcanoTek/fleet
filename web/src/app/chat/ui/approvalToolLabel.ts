@@ -39,7 +39,21 @@ export function knownConnectorLabel(server: string, names?: ReadonlyMap<string, 
 
 /** A connector's human name: the bundle's, fleet's known SSP name, or the humanised id. */
 export function connectorLabel(server: string, names?: ReadonlyMap<string, string>): string {
-  return knownConnectorLabel(server, names) ?? humanize(server);
+  return knownConnectorLabel(server, names) ?? humanize(connectorBase(server));
+}
+
+// connectorBase drops the conventional `_mcp` suffix a bundle's server id
+// carries (`magnite_mcp`, `openx_mcp`): the word a connector's tools repeat
+// and its name read from is the part before it.
+function connectorBase(server: string): string {
+  return server.endsWith("_mcp") && server.length > "_mcp".length ? server.slice(0, -"_mcp".length) : server;
+}
+
+// canonicalAccount folds an account name the way fleet registers its seat
+// (internal/creds.CanonicalAccount: hyphen and space become underscore), so
+// `client-a` finds the `mcp_<server>_client_a_<tool>` registration.
+function canonicalAccount(account: string): string {
+  return account.trim().replace(/[- ]/g, "_");
 }
 
 // isShortPrefixOf reports whether token is the short form SSP tools repeat
@@ -60,16 +74,35 @@ export type ApprovalToolLabel = {
 };
 
 /**
+ * The connector and tool of an `mcp_<server>_<tool>` id whose row names no
+ * connector: the first segment, with the conventional `_mcp` suffix kept on
+ * the connector (`mcp_magnite_mcp_magnite_get_deal` is magnite_mcp's
+ * `magnite_get_deal`).
+ */
+export function guessMcpTool(tool: string): { server: string; rest: string } | undefined {
+  const m = /^mcp_([^_]+(?:_mcp(?=_.))?)_(.+)$/.exec(tool);
+  return m ? { server: m[1], rest: m[2] } : undefined;
+}
+
+/**
  * The human label for an approval's tool. `server` is the approval's
  * mcpServer when it has one: it splits `mcp_<server>_<tool>` exactly even
  * when the connector id holds an underscore (`mcp_deal_sheet_next_id`).
+ * `account` is the approval's mcpAccount: a named seat registers its tools
+ * as `mcp_<server>_<account>_<tool>`, and the seat is not part of the action.
  */
 export function approvalToolLabel(
   tool: string,
   server?: string,
   names?: ReadonlyMap<string, string>,
+  account?: string,
 ): ApprovalToolLabel {
   let srv = server && tool.startsWith(`mcp_${server}_`) ? server : undefined;
+  const seatPrefix = srv && account?.trim() ? `mcp_${srv}_${canonicalAccount(account)}_` : "";
+  if (srv && seatPrefix && tool.startsWith(seatPrefix) && tool.length > seatPrefix.length) {
+    const action = humanize(stripConnectorPrefix(tool.slice(seatPrefix.length), srv)) || "This action";
+    return { action, connector: connectorLabel(srv, names) };
+  }
   if (!srv && names) {
     // No connector on the row (an older record): the longest connector the
     // chat knows that prefixes the id, so `mcp_deal_sheet_…` is deal_sheet.
@@ -79,29 +112,31 @@ export function approvalToolLabel(
   }
   let rest = srv ? tool.slice(`mcp_${srv}_`.length) : tool;
   if (!srv) {
-    const m = /^mcp_([^_]+)_(.+)$/.exec(tool);
-    if (m) {
-      srv = m[1];
-      rest = m[2];
+    const guess = guessMcpTool(tool);
+    if (guess) {
+      srv = guess.server;
+      rest = guess.rest;
     } else {
       rest = tool.replace(/^mcp_/, "");
     }
   }
-  if (srv) {
-    // SSP tools repeat their connector as a short prefix
-    // (mcp_indexexchange_ix_create_deal, mcp_magnite_magnite_get_deal).
-    const first = rest.split("_")[0];
-    const prefixes = [...(sspConnector(srv)?.toolPrefixes ?? []), `${srv}_`];
-    if (first !== rest && isShortPrefixOf(first, srv)) prefixes.push(`${first}_`);
-    for (const p of prefixes) {
-      if (rest.startsWith(p) && rest.length > p.length) {
-        rest = rest.slice(p.length);
-        break;
-      }
-    }
-  }
+  if (srv) rest = stripConnectorPrefix(rest, srv);
   const action = humanize(rest) || "This action";
   return srv ? { action, connector: connectorLabel(srv, names) } : { action };
+}
+
+// stripConnectorPrefix drops the connector name SSP tools repeat as a prefix
+// (mcp_indexexchange_ix_create_deal, mcp_magnite_mcp_magnite_get_deal),
+// matched against the server id without its `_mcp` suffix.
+function stripConnectorPrefix(rest: string, server: string): string {
+  const base = connectorBase(server);
+  const first = rest.split("_")[0];
+  const prefixes = [...(sspConnector(server)?.toolPrefixes ?? []), `${server}_`, `${base}_`];
+  if (first !== rest && isShortPrefixOf(first, base)) prefixes.push(`${first}_`);
+  for (const p of prefixes) {
+    if (rest.startsWith(p) && rest.length > p.length) return rest.slice(p.length);
+  }
+  return rest;
 }
 
 /**
