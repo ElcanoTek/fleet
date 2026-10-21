@@ -20,7 +20,9 @@ minutes), so a chunked upload does not re-read the file per chunk
 ([ADR-0085](adr/0085-mcp-workspace-file-cap-and-windowed-reads.md)). A cache
 miss re-reads and re-verifies. A file rewritten mid-upload keeps sending the
 verified version until the entry ages out, after which the reference fails its
-hash check. References must
+hash check. The size cap is enforced on the bytes actually read, so a file
+that grows mid-read is refused, and Fleet buffers no more helper output than
+such a read can produce. References must
 stay in the current conversation or scheduled workspace. Fleet reads through
 sandbox FileOp, base64-encodes bytes in fixed broker adapter code, and calls
 the original tool through its usual scoped broker. Model input, approvals and

@@ -379,9 +379,20 @@ def _atomic_write(
         raise
 
 
-def _hash_and_window(fd, offset, limit):
-    if offset < 0 or limit < 0:
-        raise OSError("offset and limit must be non-negative")
+class FileTooLarge(OSError):
+    """The file holds more than the request's max_size bytes."""
+
+    def __init__(self, size, max_size):
+        super().__init__(
+            errno.EFBIG,
+            "file is %s bytes, exceeding the %d-byte cap" % (size, max_size),
+        )
+        self.size = size
+
+
+def _hash_and_window(fd, offset, limit, max_size=0):
+    if offset < 0 or limit < 0 or max_size < 0:
+        raise OSError("offset, limit and max_size must be non-negative")
     digest = hashlib.sha256()
     # One growing buffer, not a list of slices joined at the end: the join
     # held the window twice, and a window can be tens of MiB.
@@ -389,11 +400,20 @@ def _hash_and_window(fd, offset, limit):
     position = 0
     end = offset + limit if limit > 0 else None
     while True:
-        chunk = os.read(fd, 1 << 20)
+        want = 1 << 20
+        if max_size > 0:
+            # The fstat size check before the read is not enough: a process in
+            # the sandbox can grow the file while it is read and restore its
+            # size and mtime before the after-read check. Count what is
+            # actually read, and never read past max_size + 1 bytes.
+            want = min(want, max_size + 1 - position)
+        chunk = os.read(fd, want)
         if not chunk:
             break
         digest.update(chunk)
         chunk_end = position + len(chunk)
+        if max_size > 0 and chunk_end > max_size:
+            raise FileTooLarge("more than %d" % max_size, max_size)
         wanted_start = max(position, offset)
         wanted_end = chunk_end if end is None else min(chunk_end, end)
         if wanted_start < wanted_end:
@@ -419,7 +439,7 @@ def do_read(req):
                 % (before.st_size, max_size),
                 size=before.st_size,
             )
-        digest, data = _hash_and_window(fd, offset, limit)
+        digest, data = _hash_and_window(fd, offset, limit, max_size)
         after = os.fstat(fd)
         if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
             after.st_dev,
@@ -449,6 +469,8 @@ def do_read(req):
         return fail("stale", str(exc))
     except NotRegularFile as exc:
         return fail("", exc.strerror)
+    except FileTooLarge as exc:
+        return fail("too_large", exc.strerror)
     except OSError as exc:
         return fail("", "read failed: %s" % exc)
     finally:

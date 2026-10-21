@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/base64"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -144,7 +146,79 @@ var (
 	// ErrFileOpNoOp: old_text and new_text produce identical content (#787).
 	ErrFileOpNoOp       = errors.New("edit is a no-op")
 	ErrFileOpUnsafePath = errors.New("file operation path changed or contains a symlink")
+	// ErrFileOpTooLarge: a read's file holds more than its MaxSize (checked
+	// against the bytes actually read, not only the size fstat reported).
+	ErrFileOpTooLarge = errors.New("file exceeds the read size cap")
+	// ErrFileOpOutputTooLarge: the helper wrote more than a response to this
+	// request can legitimately be. Fleet stopped buffering it.
+	ErrFileOpOutputTooLarge = errors.New("fileop helper response exceeded its bound")
 )
+
+// fileOpResponseOverhead is the room left for a read response's JSON envelope
+// (size, hash, error text) around its base64 payload.
+const fileOpResponseOverhead = 64 << 10
+
+// fileOpOutputBound is the most helper output Fleet buffers for req, or 0 for
+// no bound. A read with MaxSize or Limit can return at most that many raw
+// bytes, so its response is at most their base64 plus the envelope. Anything
+// longer means the helper is not the script Fleet sent (the sandbox is
+// model-writable), and buffering it would let the sandbox exhaust Fleet's
+// memory.
+func fileOpOutputBound(req FileOpRequest) int64 {
+	if req.Op != FileOpRead {
+		return 0
+	}
+	n := req.MaxSize
+	if req.Limit > 0 && (n <= 0 || req.Limit < n) {
+		n = req.Limit
+	}
+	if n <= 0 {
+		return 0
+	}
+	return int64(base64.StdEncoding.EncodedLen(int(n))) + fileOpResponseOverhead
+}
+
+// fileOpSink collects a helper's stdout up to a bound. Past the bound it
+// discards (and still reports a full write, so the pipe copier never stalls
+// the helper) and remembers that it overflowed. Mutex-guarded for the same
+// abandoned-copier reason as cappedBuffer.
+type fileOpSink struct {
+	mu    sync.Mutex
+	buf   bytes.Buffer
+	limit int64
+	over  bool
+	done  bool
+}
+
+func newFileOpSink(req FileOpRequest) *fileOpSink {
+	return &fileOpSink{limit: fileOpOutputBound(req)}
+}
+
+func (s *fileOpSink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.done || s.over {
+		return len(p), nil
+	}
+	if s.limit > 0 && int64(s.buf.Len())+int64(len(p)) > s.limit {
+		s.over = true
+		s.buf = bytes.Buffer{}
+		return len(p), nil
+	}
+	return s.buf.Write(p)
+}
+
+// output returns the collected bytes, or ErrFileOpOutputTooLarge. Later
+// writes are dropped, so the returned slice is never mutated.
+func (s *fileOpSink) output(op FileOpKind) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.done = true
+	if s.over {
+		return nil, fmt.Errorf("fileop %s: %w (more than %d bytes)", op, ErrFileOpOutputTooLarge, s.limit)
+	}
+	return s.buf.Bytes(), nil
+}
 
 // FileOpStaleError carries the executor's explanation of a stale-content
 // refusal (#787, #1745): what was expected, what is there, and how to recover.
@@ -386,6 +460,8 @@ func decodeFileOpResponse(out []byte) (FileOpResult, error) {
 			return FileOpResult{}, ErrFileOpNoOp
 		case "unsafe_path":
 			return FileOpResult{}, ErrFileOpUnsafePath
+		case "too_large":
+			return FileOpResult{}, fmt.Errorf("%w (%s)", ErrFileOpTooLarge, resp.Err)
 		default:
 			return FileOpResult{}, errors.New(resp.Err)
 		}

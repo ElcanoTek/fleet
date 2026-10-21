@@ -988,8 +988,10 @@ func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, an
 	cmd := exec.CommandContext(cmdCtx, c.cfg.PodmanBinary, args...) //nolint:gosec // fixed embedded script; container is our isolated sandbox
 	cmd.Stdin = bytes.NewReader(reqJSON)
 	cmd.WaitDelay = BashWaitDelay
-	out, err := cmd.Output()
-	if err != nil {
+	stdout := newFileOpSink(req)
+	stderr := &cappedBuffer{cap: 4096}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	if err := cmd.Run(); err != nil {
 		if cmdCtx.Err() != nil {
 			// CommandContext only kills the host-side podman client. Exactly like
 			// bash (#796), the helper may still be alive inside the persistent
@@ -1000,9 +1002,29 @@ func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, an
 			_ = c.killContainerNow(containerID)
 			return FileOpResult{}, fmt.Errorf("fileop %s interrupted (%w); sandbox retired: %w", req.Op, cmdCtx.Err(), ErrPoisoned)
 		}
-		return FileOpResult{}, fmt.Errorf("fileop %s exec: %w%s", req.Op, err, stderrOf(err))
+		return FileOpResult{}, fmt.Errorf("fileop %s exec: %w%s", req.Op, err, stderrSuffix(stderr))
+	}
+	out, err := stdout.output(req.Op)
+	if err != nil {
+		return FileOpResult{}, err
 	}
 	return decodeFileOpResponse(out)
+}
+
+// stderrSuffix renders captured helper stderr the way stderrOf renders an
+// ExitError's, for callers that collect stderr themselves.
+func stderrSuffix(buf *cappedBuffer) string {
+	captured := stderrText(buf)
+	if captured == "" {
+		return ""
+	}
+	return " (" + summarizeBytes([]byte(captured), 200) + ")"
+}
+
+// stderrText is the captured stderr as a string.
+func stderrText(buf *cappedBuffer) string {
+	captured, _ := buf.snapshot()
+	return string(captured)
 }
 
 // fileOpAnchor returns the most specific trusted bind mount containing root.

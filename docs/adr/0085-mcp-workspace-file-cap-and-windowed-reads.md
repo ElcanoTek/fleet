@@ -35,7 +35,14 @@ actually sends.
 2. **Fleet hashes the whole file itself, once per reference.** On the first
    reference to a file, `tools.WorkspaceFileReader` reads the whole file out of
    the sandbox through FileOp with `MaxSize = cap`. The helper refuses a file
-   over the cap from its size, before reading any of it. Fleet then hashes the
+   over the cap from its size, before reading any of it. It also counts the
+   bytes it actually reads, and never reads more than `MaxSize + 1`, so a file
+   grown mid-read (and restored before the after-read stat check) is refused
+   rather than buffered. On Fleet's side, every backend (podman, kubernetes,
+   host) buffers at most the base64 of `MaxSize` (or `Limit`) plus 64 KiB of
+   helper output for such a read. A longer response is discarded and refused,
+   so even a helper that is not the script Fleet sent cannot exhaust Fleet's
+   memory. Fleet then hashes the
    bytes and refuses a mismatch before any MCP call. Nothing the helper reports
    about the bytes, size or digest, is used.
 3. **Later windows are sliced from the verified bytes.** The verified bytes go
@@ -75,6 +82,10 @@ actually sends.
 - `TestFileOp_ReadMaxSizeAndLargeWindow` (`internal/sandbox`): `MaxSize`
   refusal, and a multi-MiB read that comes back byte-exact from the real
   `fileops.py`.
+- `TestFileOp_ReadMaxSizeCountsBytesRead`: a file that never reaches EOF is
+  refused after `MaxSize + 1` bytes, for whole and windowed reads.
+- `TestFileOpSinkBoundsHelperOutput`: the Go-side output bound, and the
+  refusal of a flooding helper with buffering stopped at the bound.
 
 ## Consequences
 

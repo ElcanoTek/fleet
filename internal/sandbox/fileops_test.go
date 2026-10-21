@@ -209,6 +209,78 @@ func TestFileOp_ReadMaxSizeAndLargeWindow(t *testing.T) {
 	}
 }
 
+// TestFileOp_ReadMaxSizeCountsBytesRead: the fstat size check alone is not
+// enough, because a process in the sandbox can grow a file while it is read
+// and restore its size and mtime before the after-read check. The patched
+// os.read below never reaches EOF. The helper must stop by itself once it has
+// read max_size + 1 bytes and refuse the file, never buffering more than that.
+func TestFileOp_ReadMaxSizeCountsBytesRead(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "growing.bin")
+	if err := os.WriteFile(path, []byte("small"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	patch := `
+_reads = [0]
+def _endless(fd, n):
+    _reads[0] += 1
+    if _reads[0] > 16:
+        raise SystemExit("helper kept reading past max_size")
+    if n > (1 << 20) or n <= 0:
+        raise SystemExit("read asked for %d bytes" % n)
+    return b"x" * n
+fileops.os.read = _endless
+`
+	for _, req := range []map[string]any{
+		{"path": path, "root": root, "max_size": 3 << 20},
+		{"path": path, "root": root, "max_size": 3 << 20, "offset": 1, "limit": 2},
+	} {
+		_, err := runPatchedOp(t, "read", req, patch)
+		if !errors.Is(err, ErrFileOpTooLarge) {
+			t.Fatalf("growing file not refused: %v", err)
+		}
+	}
+}
+
+// TestFileOpSinkBoundsHelperOutput: Fleet's side of the same bound. A helper
+// that writes more than a read response can be (it is not the script Fleet
+// sent) is refused, and Fleet stops buffering at the bound.
+func TestFileOpSinkBoundsHelperOutput(t *testing.T) {
+	read := FileOpRequest{Op: FileOpRead, MaxSize: 3 << 20}
+	bound := fileOpOutputBound(read)
+	if want := int64(4<<20) + fileOpResponseOverhead; bound != want { // 3 MiB raw is exactly 4 MiB of base64
+		t.Fatalf("bound = %d, want %d", bound, want)
+	}
+	if got := fileOpOutputBound(FileOpRequest{Op: FileOpRead, MaxSize: 3 << 20, Limit: 10}); got != 16+fileOpResponseOverhead {
+		t.Fatalf("window bound = %d", got)
+	}
+	if fileOpOutputBound(FileOpRequest{Op: FileOpWrite, MaxSize: 1}) != 0 || fileOpOutputBound(FileOpRequest{Op: FileOpRead}) != 0 {
+		t.Fatal("unbounded requests got a bound")
+	}
+
+	ok := newFileOpSink(read)
+	if _, err := ok.Write([]byte(`{"ok":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := ok.output(FileOpRead); err != nil || string(out) != `{"ok":true}` {
+		t.Fatalf("in-bound output refused: %q %v", out, err)
+	}
+
+	flood := newFileOpSink(read)
+	chunk := bytes.Repeat([]byte("A"), 1<<20)
+	for range 8 { // 8 MiB, well past the ~4.06 MiB bound
+		if n, err := flood.Write(chunk); n != len(chunk) || err != nil {
+			t.Fatalf("sink must keep the pipe draining: %d %v", n, err)
+		}
+	}
+	if int64(flood.buf.Cap()) > bound+(1<<20) {
+		t.Fatalf("sink kept buffering past the bound: cap %d", flood.buf.Cap())
+	}
+	if _, err := flood.output(FileOpRead); !errors.Is(err, ErrFileOpOutputTooLarge) {
+		t.Fatalf("oversized helper response accepted: %v", err)
+	}
+}
+
 func TestFileOp_PreservesModeOnOverwriteAndEdit(t *testing.T) {
 	sb := fileopTestSandbox(t)
 	ctx := context.Background()
