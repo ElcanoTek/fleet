@@ -584,3 +584,65 @@ func TestWorkspaceFileReadPanicReleases(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestVerifiedWorkspaceFileCacheHitIsAUse: a cache hit moves the file to the
+// front of the LRU, so after A, B, A the next insert evicts B, not the file an
+// interleaved upload is still sending.
+func TestVerifiedWorkspaceFileCacheHitIsAUse(t *testing.T) {
+	files := map[string][]byte{"a": bytes.Repeat([]byte("a"), 100), "b": bytes.Repeat([]byte("b"), 100), "c": bytes.Repeat([]byte("c"), 100)}
+	src := newFakeSource(files)
+	store := newWorkspaceFileStore(1<<20, 1<<20, 2, time.Minute, time.Now)
+	reader := readNow(newVerifiedWorkspaceReader(src.source(), store))
+	ctx := WithForcedWorkingDir(context.Background(), "/ws")
+	read := func(path string) {
+		t.Helper()
+		if _, err := reader(ctx, path, hexSum(files[path]), 0, 10, 1<<20); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read("a")
+	read("b")
+	read("a") // a hit: a is now the most recently used
+	read("c") // evicts b
+	read("a")
+	if got := src.readCount("a"); got != 1 {
+		t.Fatalf("recently used file was evicted and re-read: %d reads", got)
+	}
+	read("b")
+	if got := src.readCount("b"); got != 2 {
+		t.Fatalf("least recently used file was not the one evicted: %d reads of b", got)
+	}
+}
+
+// TestWorkspaceFileReaderFailedFlightIsShared: when the shared read of a key
+// fails on its own terms (here a hash mismatch), every waiter gets that
+// failure instead of repeating the whole-file read in turn.
+func TestWorkspaceFileReaderFailedFlightIsShared(t *testing.T) {
+	approved := bytes.Repeat([]byte("q"), 32<<10)
+	src := newFakeSource(map[string][]byte{"f": approved})
+	src.override = func(string) []byte { return bytes.Repeat([]byte("x"), 32<<10) }
+	src.gate = make(chan struct{})
+	reader := readNow(newVerifiedWorkspaceReader(src.source(), testStore(8<<20)))
+	ctx := WithForcedWorkingDir(context.Background(), "/ws")
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			_, err := reader(ctx, "f", hexSum(approved), 0, 1024, 1<<20)
+			errs <- err
+		})
+	}
+	<-src.started
+	time.Sleep(50 * time.Millisecond) // let the others queue on the flight
+	close(src.gate)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if !errors.Is(err, ErrWorkspaceFileHashMismatch) {
+			t.Fatalf("waiter did not get the shared failure: %v", err)
+		}
+	}
+	if got := src.readCount("f"); got != 1 {
+		t.Fatalf("a failed read was repeated by waiters: %d reads, want 1", got)
+	}
+}

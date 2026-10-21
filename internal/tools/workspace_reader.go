@@ -158,6 +158,13 @@ type fileFlight struct {
 	err  error
 }
 
+// retryableFlightError reports whether a failed flight's error belongs to
+// its leader rather than to the file: the leader's context ended, so a
+// waiter with a live context should read the file itself.
+func retryableFlightError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
 func newWorkspaceFileStore(budget, maxBytes int64, maxEntries int, ttl time.Duration, now func() time.Time) *workspaceFileStore {
 	return &workspaceFileStore{budget: budget, maxBytes: maxBytes, maxEntries: maxEntries, ttl: ttl, now: now,
 		order: list.New(), byKey: map[verifiedFileKey]*list.Element{},
@@ -216,6 +223,10 @@ func (s *workspaceFileStore) acquire(ctx context.Context, reqs []*fileRequest) (
 			if el, ok := s.byKey[r.key]; ok {
 				entry := el.Value.(*verifiedFile)
 				if entry.pins > 0 || s.now().Before(entry.expires) {
+					// A hit is a use: keep the LRU order honest so an
+					// interleaved upload does not evict the file it is
+					// still sending.
+					s.order.MoveToFront(el)
 					r.entry = entry
 					hits = append(hits, r)
 					continue
@@ -239,7 +250,15 @@ func (s *workspaceFileStore) acquire(ctx context.Context, reqs []*fileRequest) (
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
-			continue // the key is cached now, or failed: plan again
+			// A read that failed on its own terms (a hash mismatch, a
+			// sandbox read error, an over-cap file) would fail the same
+			// way for this caller: share the result instead of letting
+			// every waiter repeat a whole-file read in turn. Only the
+			// leader's own cancellation is worth retrying.
+			if wait.err != nil && !retryableFlightError(wait.err) {
+				return nil, wait.err
+			}
+			continue // the key is cached now, or its leader gave up: plan again
 		}
 		if len(probe) > 0 {
 			s.mu.Unlock()
