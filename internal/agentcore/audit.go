@@ -502,6 +502,7 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 
 	finishReason := o.lastRoundFinishReason
 	o.lastRoundFinishReason = ""
+	o.finishRefusedForAudit = false
 
 	if o.auditTerminalFailure {
 		// An aborted email-last run still owes its reader the single
@@ -541,6 +542,7 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 	if !o.delegatedFinish {
 		if !o.selfAuditRequested {
 			o.selfAuditRequested = true
+			o.finishRefusedForAudit = true
 			log.Println("Enforcement: Self Audit not requested. Rejecting finish.")
 			// The audit wording (#990, borrowed from Prime Agent's goal
 			// completion audit) names the two rationalizations unattended runs
@@ -550,6 +552,7 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 		}
 
 		if !o.selfAuditConfirmedOnce {
+			o.finishRefusedForAudit = true
 			log.Println("Enforcement: Self Audit not confirmed. Rejecting finish.")
 			return false, []string{"Audit not confirmed. Call confirm_audit(...) with evidence to proceed."}
 		}
