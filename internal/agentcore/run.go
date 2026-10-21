@@ -89,6 +89,16 @@ type RunConfig struct {
 	// SUBTRACT from what the server/credential gates already permitted, never
 	// add. The drivers resolve it from the bundle manifest's personas: block.
 	PersonaPolicy *PersonaToolPermissions
+	// HiddenToolSuffixes are tool-name suffixes (the critical_tools suffix
+	// rule) whose MCP tools this run neither offers nor calls: the bundle's
+	// agent_policy.interactive_hidden_tools, which the interactive driver
+	// sets on a chat turn and a sub-agent spawned from it inherits
+	// (interactive_hidden.go). A hidden tool is dropped before the
+	// disclosure decision, so it is in neither the tool list nor the
+	// tool_search/tool_call registry, and a call to one is refused before
+	// the policy gate. Like PersonaPolicy it only SUBTRACTS. Driver-supplied
+	// data, not a Mode branch (see TestSeamPurity). nil = no narrowing.
+	HiddenToolSuffixes []string
 	// RemediationHints configures the fast.io guard (defaults to
 	// DefaultRemediationHints, which exposes both remediation paths).
 	RemediationHints RemediationHints
@@ -474,6 +484,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// a tool that deferred behind the tool_search/tool_call bridges.
 		personaName:       cfg.PersonaName,
 		personaPolicy:     cfg.PersonaPolicy,
+		hiddenSuffixes:    cfg.HiddenToolSuffixes,
 		observer:          deps.Observer,
 		panicAttribution:  panicAttribution,
 		hooks:             hooks,

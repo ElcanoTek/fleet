@@ -183,7 +183,7 @@ func fileOpOutputBound(req FileOpRequest) int64 {
 // abandoned-copier reason as cappedBuffer.
 //
 // A plain slice rather than a bytes.Buffer: Buffer's doubling can allocate
-// nearly twice the bound, and the MCP workspace-file budget (ADR-0085) counts
+// nearly twice the bound, and the MCP workspace-file budget (ADR-0087) counts
 // on the buffer never exceeding it. Growth here is capped at the bound.
 type fileOpSink struct {
 	mu    sync.Mutex

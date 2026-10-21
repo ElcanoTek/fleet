@@ -121,8 +121,28 @@ func TestBuildAlwaysOnServerMetadata_ReflectsLiveDiscoveryStatus(t *testing.T) {
 		email.DisplayName != "Email" || len(email.Accounts) != 1 || email.Accounts[0] != "backup" {
 		t.Fatalf("live email status = %+v", email)
 	}
+	// The names behind the count, for the chat picker's hidden-tool filter:
+	// the allowlisted tool only, never the one the allowlist hides.
+	if email := byName["email"]; len(email.Tools) != 1 || email.Tools[0] != "search" {
+		t.Fatalf("email tools = %v, want [search]", email.Tools)
+	}
 	if broken := byName["broken"]; broken.Available || broken.ToolCount != 0 {
 		t.Fatalf("failed always-on connector was painted available: %+v", broken)
+	}
+}
+
+// The always-on catalog is a copy: a caller editing a row's Accounts or
+// Tools (the chat picker reads Tools) cannot reach the Manager's snapshot.
+func TestAlwaysOnMCPServerCatalog_ReturnsCopies(t *testing.T) {
+	m := &Manager{alwaysOnServerMetadata: []AlwaysOnServerInfo{
+		{Name: "email", ToolCount: 2, Tools: []string{"search", "send"}, Accounts: []string{"backup"}},
+	}}
+	got := m.AlwaysOnMCPServerCatalog()
+	got[0].Tools[0] = "changed"
+	got[0].Accounts[0] = "changed"
+	again := m.AlwaysOnMCPServerCatalog()
+	if again[0].Tools[0] != "search" || again[0].Accounts[0] != "backup" {
+		t.Fatalf("a caller's edit reached the snapshot: %+v", again[0])
 	}
 }
 

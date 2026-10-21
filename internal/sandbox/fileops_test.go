@@ -176,7 +176,7 @@ func TestFileOp_ReadReportsFullSHA256(t *testing.T) {
 }
 
 // TestFileOp_ReadMaxSizeAndLargeWindow pins the read contract the MCP
-// workspace-file reader relies on (ADR-0085): MaxSize refuses a file by its
+// workspace-file reader relies on (ADR-0087): MaxSize refuses a file by its
 // size before reading it, and a multi-MiB window comes back byte-exact through
 // the helper's spliced (not re-dumped) base64 output, with the whole-file hash.
 func TestFileOp_ReadMaxSizeAndLargeWindow(t *testing.T) {

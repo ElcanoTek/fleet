@@ -10,7 +10,7 @@ import (
 )
 
 // maxMCPWorkspaceFileBytes caps the WHOLE workspace file a reference may name
-// (ADR-0085, raising ADR-0066's 2 MiB). 64 MiB matches the largest staged
+// (ADR-0087, raising ADR-0066's 2 MiB). 64 MiB matches the largest staged
 // upload a Pages-class MCP server accepts, so Fleet is not the bottleneck for a
 // chunked upload. The file is read out of the sandbox and hashed in Fleet once
 // per reference, under a process-wide memory budget for cached and in-flight
@@ -113,7 +113,7 @@ func (m *mcpTool) resolveFileReferences(ctx context.Context, args map[string]any
 		// computed inside the model-writable sandbox — and returns the window
 		// from those verified bytes. It keeps them in a small bounded cache so
 		// the next chunk of the same reference is a slice, not another read:
-		// that is what keeps a chunked upload linear (ADR-0085).
+		// that is what keeps a chunked upload linear (ADR-0087).
 		window, err := m.readWorkspaceFile(ctx, file.Path, file.SHA256, int64(file.Offset), int64(file.Length), maxMCPWorkspaceFileBytes)
 		if err != nil {
 			return fmt.Errorf("%s: %w", name, err)

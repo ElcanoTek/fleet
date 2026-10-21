@@ -1,4 +1,4 @@
-# ADR-0085: MCP workspace-file references cap the whole file at 64 MiB, are hash-verified in Fleet once per reference, and serve each window from those verified bytes
+# ADR-0087: MCP workspace-file references cap the whole file at 64 MiB, are hash-verified in Fleet once per reference, and serve each window from those verified bytes
 
 - **Status:** Accepted
 - **Date:** 2026-10-21

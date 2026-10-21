@@ -143,6 +143,12 @@ type AgentPolicy struct {
 	// card (see ResultCardProblems). Empty = every settled card renders as
 	// before.
 	CriticalToolResultCards []string
+	// InteractiveHiddenTools lists tool-name suffixes (matched like
+	// CriticalToolSuffixes) whose MCP tools interactive chat never sees or
+	// calls, while scheduled runs keep them (interactive_hidden.go,
+	// docs/INTERACTIVE-HIDDEN-TOOLS.md). Empty = every run sees the same
+	// tools, as before.
+	InteractiveHiddenTools []string
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -232,6 +238,9 @@ var (
 	// activeResultCards is the set of critical suffixes whose results may
 	// carry an outcome card. Empty by default: no result is read for one.
 	activeResultCards = map[string]bool{}
+	// activeInteractiveHidden is the normalized interactive_hidden_tools
+	// list. Empty by default: chat sees what scheduled runs see.
+	activeInteractiveHidden []string
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -379,6 +388,8 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	activeProgress = progress
 
 	activeResultCards = installResultCardSet(p.CriticalToolResultCards, seen)
+
+	activeInteractiveHidden = installInteractiveHiddenList(p.InteractiveHiddenTools)
 }
 
 // suffixMatches reports whether a tool (or a suffix standing for one) is

@@ -39,7 +39,7 @@ type workspaceFileSource struct {
 	read func(ctx context.Context, root, path string, maxBytes int64) ([]byte, error)
 }
 
-// Budget (ADR-0085). Everything Fleet holds for workspace-file references —
+// Budget (ADR-0087). Everything Fleet holds for workspace-file references —
 // verified files in the cache plus the reservations of reads in flight — stays
 // within workspaceFileBudgetBytes, process wide.
 //
@@ -249,7 +249,7 @@ var (
 // over the cap) and Fleet hashes the bytes itself. The verified bytes are kept
 // in a small LRU so the next window of the same reference is sliced from them
 // instead of re-reading the file, and every read is admitted against one
-// process-wide memory budget before it starts (ADR-0085).
+// process-wide memory budget before it starts (ADR-0087).
 func WorkspaceFileReader(sb *sandbox.Sandbox) WorkspaceFileReadFunc {
 	var src *workspaceFileSource
 	if sb != nil {

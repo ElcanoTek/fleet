@@ -302,8 +302,8 @@ type MCPServerSpec struct {
 // We probe by tool-name prefix rather than by config flag so the
 // check stays accurate if a future allowlist change drops every
 // fast.io tool but leaves the server registered.
-func (m *Manager) fastIOEnabledForTurn(enabledOptIns []string) bool {
-	for _, name := range m.activeMCPToolNames(enabledOptIns) {
+func (m *Manager) fastIOEnabledForTurn(enabledOptIns, hidden []string) bool {
+	for _, name := range m.activeMCPToolNames(enabledOptIns, hidden) {
 		if strings.HasPrefix(name, "mcp_fast_io_") {
 			return true
 		}
@@ -314,10 +314,16 @@ func (m *Manager) fastIOEnabledForTurn(enabledOptIns []string) bool {
 // activeMCPToolNames returns the prefixed (`mcp_<server>_<tool>`) tool names
 // the system prompt advertises to the model for this turn. It starts from the
 // frozen startup roster, then filters Optional servers unless the conversation
-// opted in. This keeps prompt guidance aligned with buildFantasyTools.
-func (m *Manager) activeMCPToolNames(enabledOptIns []string) []string {
+// opted in, and drops the tools hidden selects: the turn's
+// agent_policy.interactive_hidden_tools snapshot, the SAME slice RunTurn puts
+// on the turn's RunConfig for the run gate (agentcore/interactive_hidden.go),
+// so the prompt and the tools cannot disagree within a turn. This keeps
+// prompt guidance aligned with buildFantasyTools: a section gated on a
+// connector's tools (the fast.io protocol entry) is not written for tools the
+// model cannot call. nil hidden = nothing hidden.
+func (m *Manager) activeMCPToolNames(enabledOptIns, hidden []string) []string {
 	optionalServers, roster := m.mcpRosterSnapshot()
-	if len(optionalServers) == 0 {
+	if len(optionalServers) == 0 && len(hidden) == 0 {
 		return roster
 	}
 	enabled := make(map[string]bool, len(enabledOptIns))
@@ -327,6 +333,9 @@ func (m *Manager) activeMCPToolNames(enabledOptIns []string) []string {
 	out := make([]string, 0, len(roster))
 	for _, name := range roster {
 		if optionalServer := longestOptionalServerFor(name, optionalServers); optionalServer != "" && !enabled[optionalServer] {
+			continue
+		}
+		if agentcore.InteractiveHiddenIn(hidden, name) {
 			continue
 		}
 		out = append(out, name)
@@ -398,10 +407,13 @@ type UserSkillPromptEntry struct {
 	Path        string // workspace-relative, e.g. "user-skills/<name>/SKILL.md"
 }
 
-func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []string, projectInstructions string, notes []agentcore.Note, enabledOptionalMCPServers []string, userSkills []UserSkillPromptEntry, hosted hostedMCPRoster) (string, error) {
+// buildSystemPrompt's hidden is the turn's interactive_hidden_tools snapshot
+// (see activeMCPToolNames); nil hides nothing. The composition order is
+// documented above, under "system-prompt composition".
+func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []string, projectInstructions string, notes []agentcore.Note, enabledOptionalMCPServers []string, userSkills []UserSkillPromptEntry, hosted hostedMCPRoster, hidden []string) (string, error) {
 	var sb strings.Builder
 
-	fastIOOn := m.fastIOEnabledForTurn(enabledOptionalMCPServers)
+	fastIOOn := m.fastIOEnabledForTurn(enabledOptionalMCPServers, hidden)
 
 	// 1. system prompt — the interactive base (bundle's chat.md by default).
 	promptFile := m.chatSystemPromptFile

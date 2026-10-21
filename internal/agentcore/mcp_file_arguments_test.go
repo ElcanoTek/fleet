@@ -102,7 +102,7 @@ func fakeWorkspaceReader(t *testing.T, name string, data []byte, reads *int) too
 	}
 }
 
-// TestMCPWorkspaceFileCap pins the whole-file cap at 64 MiB (ADR-0085): a file
+// TestMCPWorkspaceFileCap pins the whole-file cap at 64 MiB (ADR-0087): a file
 // well past the old 2 MiB cap is accepted and its window delivered exactly, a
 // file one byte over the cap is refused before any MCP call, and the
 // advertised description and schema maxima carry the same number.
