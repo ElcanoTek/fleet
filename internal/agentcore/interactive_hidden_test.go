@@ -192,11 +192,11 @@ func TestInteractiveHidden_DescribeExplains(t *testing.T) {
 }
 
 // Precedence: interactive_hidden_tools is the LAST gate. A tool the persona
-// also denies is reported as persona-removed in every enforcement point that
-// reads the gate (roster.removed for a direct call, tool_describe and
-// tool_call in deferred mode), because the persona removes it in every mode
-// and "reserved for scheduled runs" would be false for it. A tool only the
-// hidden list removes is still reported as hidden.
+// also denies is explained by the persona gate at every enforcement point
+// (roster.removed for a direct call, tool_describe and tool_call in deferred
+// mode, all with personaRefusal), because the persona removes it in every
+// mode and "reserved for scheduled runs" would be false for it. A tool only
+// the hidden list removes is still explained as hidden.
 func TestInteractiveHidden_PersonaGateWinsOverHidden(t *testing.T) {
 	const both = "mcp_srv_stripe_refund_charge_2"
 	const onlyHidden = "mcp_srv_stripe_refund_charge_5"
@@ -220,7 +220,7 @@ func TestInteractiveHidden_PersonaGateWinsOverHidden(t *testing.T) {
 			}
 			for _, bridge := range []string{"tool_describe", "tool_call"} {
 				resp, _ := findTool(got, bridge).Run(context.Background(), fantasy.ToolCall{ID: "c", Input: `{"name":"` + both + `","arguments":{}}`})
-				if resp.Content == interactiveHiddenRefusal(both) || !strings.Contains(resp.Content, "no tool named") {
+				if resp.Content != personaRefusal(both, "trader") {
 					t.Fatalf("%s on a persona-denied tool: %q", bridge, resp.Content)
 				}
 				resp, _ = findTool(got, bridge).Run(context.Background(), fantasy.ToolCall{ID: "c", Input: `{"name":"` + onlyHidden + `","arguments":{}}`})

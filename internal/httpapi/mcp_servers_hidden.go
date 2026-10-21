@@ -33,13 +33,24 @@ import (
 // out of chat, matched by the name the run gate matches
 // (agentcore.MCPToolName).
 func chatHiddenCount(hidden []string, server string, tools []string) int {
-	n := 0
+	return len(tools) - len(chatVisibleTools(hidden, server, tools))
+}
+
+// chatVisibleTools is the one visibility rule every chat-facing listing uses
+// (the picker rows, the always-on counts, the connector recommendation): the
+// tools of server the hidden list does not select, matched by the name the
+// run gate matches. tools itself is returned when nothing is hidden.
+func chatVisibleTools(hidden []string, server string, tools []string) []string {
+	if len(hidden) == 0 {
+		return tools
+	}
+	visible := make([]string, 0, len(tools))
 	for _, t := range tools {
-		if agentcore.InteractiveHiddenIn(hidden, agentcore.MCPToolName(server, t)) {
-			n++
+		if !agentcore.InteractiveHiddenIn(hidden, agentcore.MCPToolName(server, t)) {
+			visible = append(visible, t)
 		}
 	}
-	return n
+	return visible
 }
 
 // hideInteractiveHiddenTools applies the installed interactive_hidden_tools
@@ -62,12 +73,7 @@ func hideInteractiveHiddenTools(rows []map[string]any) []map[string]any {
 			out = append(out, row)
 			continue
 		}
-		visible := make([]string, 0, len(tools))
-		for _, t := range tools {
-			if !agentcore.InteractiveHiddenIn(hidden, agentcore.MCPToolName(name, t)) {
-				visible = append(visible, t)
-			}
-		}
+		visible := chatVisibleTools(hidden, name, tools)
 		if len(visible) == len(tools) {
 			out = append(out, row)
 			continue
@@ -98,7 +104,7 @@ func chatVisibleConnectors(catalog []agent.OptionalServerInfo, hidden []string) 
 	}
 	out := make([]agent.OptionalServerInfo, 0, len(catalog))
 	for _, srv := range catalog {
-		if len(srv.Tools) > 0 && chatHiddenCount(hidden, srv.Name, srv.Tools) == len(srv.Tools) {
+		if len(srv.Tools) > 0 && len(chatVisibleTools(hidden, srv.Name, srv.Tools)) == 0 {
 			continue
 		}
 		out = append(out, srv)

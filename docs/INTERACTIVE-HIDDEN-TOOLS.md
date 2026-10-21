@@ -58,9 +58,20 @@ The explanation is the same text everywhere:
 not as hidden. The hidden list is the last gate because it is the narrowest:
 the persona policy and the schema check remove a tool in every mode, so for a
 tool the persona denies, "reserved for scheduled runs" would be false. Every
-enforcement point agrees, because each reads the first gate recorded
-(`roster.removed`, and the registry's hidden set holds only tools no earlier
-gate removed): the out-of-roster answer, `tool_describe` and `tool_call`.
+enforcement point gives the same answer:
+
+- **The out-of-roster answer** reads the first gate recorded (`roster.removed`).
+- **`tool_describe` and `tool_call`** keep the persona-denied and hidden names
+  of the run apart. A persona-denied name gets the persona explanation the
+  out-of-roster answer gives, and the hidden set holds only tools no earlier
+  gate removed.
+
+So a tool both gates remove is explained as the persona's, everywhere.
+
+Because the hidden list is last, a chat turn now runs the schema check on a
+hidden tool, and emits `persona_tool_blocked` for one the persona also denies.
+That is the same work and the same events a scheduled run already produces
+for that tool.
 
 **What the per-turn prompt says.** The model is not told about a hidden tool
 anywhere in a chat turn:
@@ -71,10 +82,15 @@ anywhere in a chat turn:
 - The chat prompt's tool-gated sections read `activeMCPToolNames`, which
   subtracts the hidden list. Today that is the `protocols/fastio-mcp.md`
   entry: it is listed while at least one fast.io tool is visible to chat, and
-  left out when every one is hidden.
+  left out when every one is hidden. `RunTurn` takes ONE snapshot of the list
+  per turn and hands the same slice to the prompt and to the run gate, so a
+  policy reload mid-turn cannot split them.
 - The per-turn "Possibly-relevant connectors" note (#512) does not recommend a
   connector whose every tool is hidden, because connecting it would give the
-  chat nothing. The picker does not list such a connector either.
+  chat nothing. The picker does not list such a connector either. Both use
+  one visibility rule (`chatVisibleTools`). A partly hidden connector is
+  still recommended: what remains is usually the chat flow itself (a plan
+  connector's `preview_plan` / `execute_plan` beside its hidden raw writes).
 - Text a bundle writes in its persona or protocols is the bundle's to keep
   consistent with its own list.
 
@@ -131,6 +147,16 @@ can tell: every `mcp_servers` entry lists its `tools:` and there are no
 typo, but it may be meant for a per-user hosted connector's tool, which users
 add at runtime and the bundle cannot list. The check is non-blocking, like
 the rest of `agent_policy`.
+
+**Name the tool, not the connector.** A member is a suffix of
+`mcp_<server>_<tool>`. A named-account seat registers as
+`mcp_<server>_<account>_<tool>`, so a member that pins the connector
+(`openx_ox_create_deal` or `mcp_openx_ox_create_deal`) hides only the base
+seat, and the raw tool stays callable from chat on every named seat. The bare
+tool name (`ox_create_deal`) hides it on all of them. `fleet validate-config`
+warns on a member that pins one of the bundle's connectors this way, and
+names the tool to list instead. A tool whose own name starts with its
+connector's name (`ix_merge_deal_domains` on `ix`) is not mistaken for one.
 
 ## Code
 

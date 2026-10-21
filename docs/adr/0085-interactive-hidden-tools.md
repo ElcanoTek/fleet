@@ -47,8 +47,9 @@ suffix rule, applied to MCP tool names only.
    card is staged and nothing is journaled or dispatched. `tool_describe`,
    `tool_call` and the out-of-roster recovery all answer with a fixed
    explanation instead of "not found". It is the last gate: a tool the
-   persona policy or the schema check also removes is reported under that
-   gate, which holds in every mode.
+   persona policy or the schema check also removes is explained by that
+   gate, which holds in every mode. The bridges give a persona-denied name
+   the persona explanation too, so the answer is the same at every point.
 4. **Delegation inherits it.** A sub-agent spawned from a chat turn carries the
    list at every depth (monotonic privilege, ADR-0007).
 5. **Host-side reads for a chat turn honor it.** The approval-card describer

@@ -417,6 +417,11 @@ func buildFantasyToolsWithRoster(
 	// hiddenNames are the tools interactive_hidden_tools removed, so the
 	// tool_call bridge can say why such a name is not callable.
 	var hiddenNames map[string]bool
+	// personaDenied are the tools Gate-4 removed, so tool_describe and
+	// tool_call can say why (the same words as the out-of-roster answer)
+	// instead of "no tool named": a tool both the persona and the hidden list
+	// remove is reported under the persona gate everywhere.
+	var personaDenied map[string]bool
 	for _, st := range mcpServerTools {
 		if roster.servers == nil {
 			roster.servers = map[string]bool{}
@@ -479,6 +484,10 @@ func buildFantasyToolsWithRoster(
 				emitPersonaToolBlocked(cfg.observer, cfg.personaName, mt.Name(), reason)
 				mcpSkippedPersona++
 				roster.noteRemoved(mt.Name(), gatePersona)
+				if personaDenied == nil {
+					personaDenied = map[string]bool{}
+				}
+				personaDenied[mt.Name()] = true
 				continue
 			}
 		}
@@ -550,6 +559,8 @@ func buildFantasyToolsWithRoster(
 		// only to the disclosure plumbing. containToolRoster is idempotent.
 		reg := newDeferredToolRegistry(containToolRoster(mcpTools, cfg.panicAttribution, policy))
 		reg.hidden = hiddenNames
+		reg.personaDenied = personaDenied
+		reg.personaName = cfg.personaName
 		bridges := reg.bridgeTools()
 		for _, b := range bridges {
 			guarded := &policyGuardedTool{inner: b, policy: policy}

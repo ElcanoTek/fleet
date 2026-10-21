@@ -315,11 +315,7 @@ func (o *outOfRoster) gateNote(tool, gate string) string {
 			why += "; the registered stand-in is " + standIn + ", call it instead"
 		}
 	case gatePersona:
-		persona := "this persona"
-		if o.persona != "" {
-			persona = fmt.Sprintf("the %q persona", o.persona)
-		}
-		why = persona + "'s tool policy does not allow it"
+		return personaRefusal(tool, o.persona)
 	case gateOptIn:
 		why = "it belongs to an optional connector this run did not turn on"
 	case gateAllowlist:
@@ -331,7 +327,22 @@ func (o *outOfRoster) gateNote(tool, gate string) string {
 	default:
 		return ""
 	}
+	return gateRefusal(tool, why)
+}
+
+// gateRefusal is the answer to a call of a tool a gate removed from the run.
+func gateRefusal(tool, why string) string {
 	return fmt.Sprintf("%s is not available in this run and was not called: %s.", tool, why)
+}
+
+// personaRefusal is gateRefusal for the persona policy (Gate-4), shared by the
+// out-of-roster answer and the tool_describe / tool_call bridges.
+func personaRefusal(tool, personaName string) string {
+	persona := "this persona"
+	if personaName != "" {
+		persona = fmt.Sprintf("the %q persona", personaName)
+	}
+	return gateRefusal(tool, persona+"'s tool policy does not allow it")
 }
 
 // hasTool reports whether name is in the step's tool list.

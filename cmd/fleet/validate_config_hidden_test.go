@@ -47,8 +47,12 @@ agent_policy:
 	if res.Status != statusWarn || !strings.Contains(res.Detail, `"ox_creat_deal" matches no tool`) || !strings.Contains(res.Detail, `"mcp_github_create_issue"`) || strings.Contains(res.Detail, `"ox_create_deal"`) {
 		t.Fatalf("want a warning naming the unmatched members only, got %q: %s", res.Status, res.Detail)
 	}
-	if res := checkAgentPolicy(load(fmt.Sprintf(listed, "create_deal, mcp_openx_ox_get_deal")), nil); res.Status != statusOK {
+	if res := checkAgentPolicy(load(fmt.Sprintf(listed, "create_deal, ox_get_deal")), nil); res.Status != statusOK {
 		t.Fatalf("matching members must pass, got %q: %s", res.Status, res.Detail)
+	}
+	// A member that pins the connector hides only its base seat: it warns.
+	if res := checkAgentPolicy(load(fmt.Sprintf(listed, "mcp_openx_ox_get_deal")), nil); res.Status != statusWarn || !strings.Contains(res.Detail, "mcp_openx_<account>_ox_get_deal") {
+		t.Fatalf("a server-pinned member must warn, got %q: %s", res.Status, res.Detail)
 	}
 	unlisted := `
 mcp_servers:
