@@ -152,6 +152,12 @@ type AgentPolicy struct {
 	// NarrowableArgProblems). Empty = every card approves its call whole, as
 	// before.
 	CriticalToolNarrowableArgs map[string]string
+	// InteractiveHiddenTools lists tool-name suffixes (matched like
+	// CriticalToolSuffixes) whose MCP tools interactive chat never sees or
+	// calls, while scheduled runs keep them (interactive_hidden.go,
+	// docs/INTERACTIVE-HIDDEN-TOOLS.md). Empty = every run sees the same
+	// tools, as before.
+	InteractiveHiddenTools []string
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -244,6 +250,9 @@ var (
 	// activeNarrowableArgs maps a critical suffix to the list argument a
 	// person may narrow on its card. Empty by default: nothing is narrowed.
 	activeNarrowableArgs = map[string]string{}
+	// activeInteractiveHidden is the normalized interactive_hidden_tools
+	// list. Empty by default: chat sees what scheduled runs see.
+	activeInteractiveHidden []string
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -393,6 +402,7 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	activeResultCards = installResultCardSet(p.CriticalToolResultCards, seen)
 
 	activeNarrowableArgs = installNarrowableArgs(p.CriticalToolNarrowableArgs, p.CriticalToolModes, seen)
+	activeInteractiveHidden = installInteractiveHiddenList(p.InteractiveHiddenTools)
 }
 
 // suffixMatches reports whether a tool (or a suffix standing for one) is

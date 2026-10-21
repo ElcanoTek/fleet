@@ -34,17 +34,19 @@ import {
   RecordLink,
 } from "./ApprovalReadableCard";
 
-type Tone = { border: string; bg: string; fg: string; icon: string | null };
+type Tone = { border: string; bg: string; tint: string; fg: string; icon: string | null };
 
 // One tone per outcome: success, warning or danger, and the accent for a
 // mixed plan. The text stays the theme's primary text; the tone colours the
-// border, a light wash, and the icon.
+// border, the card's fill, and the icon on its own wash. Every fill and wash
+// is a globals.css token (--color-card-*-bg, --color-*-tint), so
+// approvalCardContrast.test.ts measures exactly what renders.
 const OUTCOME_TONE: Record<ApprovalResultOutcome, Tone> = {
-  done: { border: "var(--color-success-border)", bg: "var(--color-success)", fg: "var(--color-success)", icon: "check" },
-  partial: { border: "var(--color-border-strong)", bg: "var(--color-accent)", fg: "var(--color-text-secondary)", icon: null },
-  failed: { border: "var(--color-danger-border)", bg: "var(--color-danger)", fg: "var(--color-danger)", icon: "close" },
-  mismatch: { border: "var(--color-warning-border)", bg: "var(--color-warning)", fg: "var(--color-warning)", icon: "warning" },
-  unclear: { border: "var(--color-warning-border)", bg: "var(--color-warning)", fg: "var(--color-warning)", icon: "clock" },
+  done: { border: "var(--color-success-border)", bg: "var(--color-card-success-bg)", tint: "var(--color-success-tint)", fg: "var(--color-success)", icon: "check" },
+  partial: { border: "var(--color-border-strong)", bg: "var(--color-card-pending-bg)", tint: "transparent", fg: "var(--color-text-secondary)", icon: null },
+  failed: { border: "var(--color-danger-border)", bg: "var(--color-card-danger-bg)", tint: "var(--color-danger-tint)", fg: "var(--color-danger)", icon: "close" },
+  mismatch: { border: "var(--color-warning-border)", bg: "var(--color-card-warning-bg)", tint: "var(--color-warning-tint)", fg: "var(--color-warning-icon)", icon: "warning" },
+  unclear: { border: "var(--color-warning-border)", bg: "var(--color-card-warning-bg)", tint: "var(--color-warning-tint)", fg: "var(--color-warning-icon)", icon: "clock" },
 };
 
 // The words fleet puts on a record's status chip, and the lead-in of its note.
@@ -73,19 +75,41 @@ function StatusGlyph({ status, size = "size-3" }: { status: ApprovalResultItemSt
   return name ? <Icon name={name} className={`${size} shrink-0`} /> : null;
 }
 
-function statusColor(status: ApprovalResultItemStatus): string {
+type StatusFamily = "success" | "danger" | "warning" | null;
+
+function statusFamily(status: ApprovalResultItemStatus): StatusFamily {
   switch (status) {
     case "done":
     case "skipped":
-      return "var(--color-success)";
+      return "success";
     case "failed":
-      return "var(--color-danger)";
+      return "danger";
     case "mismatch":
     case "unclear":
-      return "var(--color-warning)";
+      return "warning";
     default:
-      return "var(--color-text-muted)";
+      return null;
   }
+}
+
+// statusColor is a record's status ICON color (3:1 on its wash); statusText
+// is the same status as words ("Not applied:"), which need 4.5:1 and so use
+// the -text token; statusTint is the icon's wash. The warning glyph has its
+// own deeper token: the base amber falls under 3:1 on a mid-gray surface.
+function statusColor(status: ApprovalResultItemStatus): string {
+  const f = statusFamily(status);
+  if (f === "warning") return "var(--color-warning-icon)";
+  return f ? `var(--color-${f})` : "var(--color-card-text-muted)";
+}
+
+function statusText(status: ApprovalResultItemStatus): string {
+  const f = statusFamily(status);
+  return f ? `var(--color-${f}-text)` : "var(--color-card-text-muted)";
+}
+
+function statusTint(status: ApprovalResultItemStatus): string | undefined {
+  const f = statusFamily(status);
+  return f ? `var(--color-${f}-tint)` : undefined;
 }
 
 // retryFailedPrompt is the user turn "Retry failed (N)" sends. It names the
@@ -135,7 +159,7 @@ function Note({ item }: { item: ApprovalResultCardItem }) {
   return (
     <p data-testid="approval-result-note" className="mt-1 min-w-0 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
       {lead ? (
-        <span className="font-semibold" style={{ color: statusColor(item.status) }}>
+        <span className="font-semibold" style={{ color: statusText(item.status) }}>
           {lead}{" "}
         </span>
       ) : null}
@@ -149,12 +173,12 @@ function Ids({ item }: { item: ApprovalResultCardItem }) {
   return (
     <div className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
       {item.id ? (
-        <span data-testid="approval-result-id" className="break-all font-mono text-[0.75rem] text-[var(--color-text-muted)]">
+        <span data-testid="approval-result-id" className="break-all font-mono text-[0.75rem] text-[var(--color-card-text-muted)]">
           {item.id}
         </span>
       ) : null}
       {item.internalId ? (
-        <span data-testid="approval-result-internal-id" className="break-all text-[0.72rem] text-[var(--color-text-muted)]">
+        <span data-testid="approval-result-internal-id" className="break-all text-[0.72rem] text-[var(--color-card-text-muted)]">
           internal <span className="font-mono">{item.internalId}</span>
         </span>
       ) : null}
@@ -170,14 +194,14 @@ function ResultRow({ item }: { item: ApprovalResultCardItem }) {
     <li data-testid="approval-result-item" data-status={item.status} className="flex min-w-0 gap-2.5 border-t border-[var(--color-border-subtle)] py-2 first:border-t-0">
       <span
         aria-hidden
-        className={`mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full ${item.status === "not_run" ? "border border-dashed border-[var(--color-text-muted)]" : ""}`}
-        style={{ color: statusColor(item.status), background: item.status === "not_run" ? undefined : `color-mix(in srgb, ${statusColor(item.status)} 14%, transparent)` }}
+        className={`mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full ${item.status === "not_run" ? "border border-dashed border-[var(--color-card-text-muted)]" : ""}`}
+        style={{ color: statusColor(item.status), background: statusTint(item.status) }}
       >
         <StatusGlyph status={item.status} />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
-          <span className={`min-w-0 break-words [overflow-wrap:anywhere] text-[0.82rem] font-medium ${item.status === "not_run" ? "text-[var(--color-text-muted)]" : "text-[var(--color-text-primary)]"}`}>
+          <span className={`min-w-0 break-words [overflow-wrap:anywhere] text-[0.82rem] font-medium ${item.status === "not_run" ? "text-[var(--color-card-text-muted)]" : "text-[var(--color-text-primary)]"}`}>
             {item.label}
           </span>
           <ResultStatusChip status={item.status} />
@@ -226,7 +250,7 @@ function ResultRecords({ items }: { items: ApprovalResultCardItem[] }) {
       {fold && !showDone && done.length > 0 ? (
         <div data-testid="approval-result-done-summary" className="flex min-w-0 items-center justify-between gap-3 py-2 text-[0.82rem]">
           <span className="min-w-0">
-            <span aria-hidden className="mr-2 inline-flex align-[-2px]" style={{ color: "var(--color-success)" }}>
+            <span aria-hidden className="mr-2 inline-flex align-[-2px]" style={{ color: "var(--color-success-text)" }}>
               <Icon name="check" className="size-3.5" />
             </span>
             <span className="font-semibold text-[var(--color-text-primary)]">
@@ -237,7 +261,7 @@ function ResultRecords({ items }: { items: ApprovalResultCardItem[] }) {
           <button
             type="button"
             data-testid="approval-result-view-all"
-            className="shrink-0 text-[0.75rem] font-medium text-[var(--color-accent)] hover:underline"
+            className="shrink-0 text-[0.75rem] font-medium text-[var(--color-card-link)] hover:underline"
             onClick={() => setShowDone(true)}
           >
             View all
@@ -287,7 +311,7 @@ export function ApprovalResultCardView({
   // A notify record is information, not a decision: muted chrome, like
   // every record card, whatever the outcome.
   const tone: Tone = recorded
-    ? { border: "var(--color-border-strong)", bg: "var(--color-text-muted)", fg: "var(--color-text-secondary)", icon: "book" }
+    ? { border: "var(--color-border-strong)", bg: "var(--color-card-record-bg)", tint: "var(--color-card-record-bg)", fg: "var(--color-text-secondary)", icon: "book" }
     : OUTCOME_TONE[result.outcome];
   // A notify record never offers a retry: its tool runs without an approval,
   // so "Retry failed" would ask for a call that runs straight away (the
@@ -301,7 +325,7 @@ export function ApprovalResultCardView({
       data-testid="generic-action-card"
       data-result-outcome={result.outcome}
       className="rounded-[var(--radius-lg)] border px-4 py-3 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]"
-      style={{ borderColor: tone.border, background: `color-mix(in srgb, ${tone.bg} 7%, var(--color-overlay-soft))` }}
+      style={{ borderColor: tone.border, background: tone.bg }}
     >
       <div data-testid="approval-result-card" className="min-w-0">
         <div className="flex min-w-0 items-start gap-2.5">
@@ -309,7 +333,7 @@ export function ApprovalResultCardView({
             <span
               aria-hidden
               className="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full"
-              style={{ color: tone.fg, background: `color-mix(in srgb, ${tone.bg} 16%, transparent)` }}
+              style={{ color: tone.fg, background: tone.tint }}
             >
               <Icon name={tone.icon} className="size-3.5" />
             </span>
@@ -319,7 +343,7 @@ export function ApprovalResultCardView({
               {title}
             </div>
             {approvedTitle ? (
-              <div data-testid="approval-result-approved" className="min-w-0 break-words text-[0.75rem] text-[var(--color-text-muted)]">
+              <div data-testid="approval-result-approved" className="min-w-0 break-words text-[0.75rem] text-[var(--color-card-text-muted)]">
                 {recorded ? approvedTitle : `Approved: ${approvedTitle}`}
               </div>
             ) : null}
@@ -335,10 +359,10 @@ export function ApprovalResultCardView({
         ) : null}
         <ResultRecords items={result.items} />
         {result.footer ? (
-          <p className="mt-1.5 min-w-0 break-words text-[0.72rem] text-[var(--color-text-muted)]">{result.footer}</p>
+          <p className="mt-1.5 min-w-0 break-words text-[0.72rem] text-[var(--color-card-text-muted)]">{result.footer}</p>
         ) : null}
         {recorded && approval.resultText ? (
-          <p data-testid="approval-record-note" className="mt-1.5 min-w-0 break-words text-[0.72rem] text-[var(--color-text-muted)]">
+          <p data-testid="approval-record-note" className="mt-1.5 min-w-0 break-words text-[0.72rem] text-[var(--color-card-text-muted)]">
             {approval.resultText}
           </p>
         ) : null}
@@ -348,7 +372,7 @@ export function ApprovalResultCardView({
               type="button"
               data-testid="approval-retry-failed"
               disabled={retry !== "idle"}
-              className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3.5 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+              className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3.5 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
               onClick={async () => {
                 setRetry("sending");
                 let accepted: void | boolean = undefined;
@@ -371,7 +395,7 @@ export function ApprovalResultCardView({
           {!recorded && approval.resultText ? (
             <pre
               data-testid="approval-result"
-              className="mt-2 max-h-60 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-inset)] p-2 text-[0.72rem] leading-[1.45] text-[var(--color-text-muted)]"
+              className="mt-2 max-h-60 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-inset)] p-2 text-[0.72rem] leading-[1.45] text-[var(--color-card-text-muted)]"
               style={{ fontFamily: "var(--font-code)" }}
             >
               {approval.resultText}
