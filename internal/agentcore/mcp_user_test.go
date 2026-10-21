@@ -15,6 +15,13 @@ func TestNewMCPUserIdentity(t *testing.T) {
 		{"  Elyse.Messer@Example.COM ", "  Elyse ", MCPUserIdentity{Email: "elyse.messer@example.com", Name: "Elyse"}},
 		{"jsmith@example.com", "Jo-Anne", MCPUserIdentity{Email: "jsmith@example.com", Name: "Jo-Anne"}},
 		{"ops@example.com", "Mary Ann", MCPUserIdentity{Email: "ops@example.com", Name: "Mary Ann"}},
+		// Combining marks belong to the letter before them: Devanagari vowel
+		// signs, and a decomposed "José" pasted from macOS (e + U+0301).
+		{"priya@example.com", "प्रिया", MCPUserIdentity{Email: "priya@example.com", Name: "प्रिया"}},
+		{"jose@example.com", "Jose\u0301", MCPUserIdentity{Email: "jose@example.com", Name: "Jose\u0301"}},
+		// ...and never stand alone.
+		{"jose@example.com", "\u0301Jose", MCPUserIdentity{Email: "jose@example.com"}},
+		{"jose@example.com", "Jo \u0301se", MCPUserIdentity{Email: "jose@example.com"}},
 		// No saved name: the email resolves, the name does NOT — it is never
 		// guessed from the local part, however name-like that looks.
 		{"elyse@elcanotek.com", "", MCPUserIdentity{Email: "elyse@elcanotek.com"}},

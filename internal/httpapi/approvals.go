@@ -2463,6 +2463,8 @@ func (s *Server) approvalMCPScope(ctx context.Context, approval *store.Approval)
 	// The approving user: ClaimApproval matches the row's user_email against
 	// the authenticated caller, so approval.UserEmail IS the person who just
 	// clicked approve — and the one whose turn staged the card (ADR-0087).
+	// Their saved first name is read now, so a name changed in Settings
+	// between staging and approval is the one the approved call sees.
 	scope, err := s.agent.OpenApprovalMCPScope(ctx, agentcore.MCPSelection{{
 		Server:  approval.MCPServer,
 		Account: approval.MCPAccount,

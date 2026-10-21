@@ -155,10 +155,10 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 //
 // This is the only way a name reaches fleet: every sign-in path (password,
 // OIDC from the Elcano Auth service, the elcano_auth cookie) carries an email
-// and no name claim, and fleet does not guess one from the email. The value is
-// held to agentcore.ValidMCPUserName here — the same rule the turn applies
-// before handing it to a connector — so a saved name is never silently dropped
-// later, and an address or handle cannot be saved as a name.
+// and no name claim, and fleet does not guess one from the email. The store
+// holds the value to agentcore.ValidMCPUserName — the same rule the turn
+// applies before handing it to a connector — so a saved name is never silently
+// dropped later, and an address or handle cannot be saved as a name.
 func (s *Server) handleMyName(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		s.handleMe(w, r)
@@ -179,12 +179,9 @@ func (s *Server) handleMyName(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `given_name required (use "" to clear your name)`, http.StatusBadRequest)
 		return
 	}
-	name := strings.TrimSpace(*body.GivenName)
-	if name != "" && !agentcore.ValidMCPUserName(name) {
-		http.Error(w, "use letters, single spaces, apostrophes, hyphens or periods (at most 64 characters) — the name you want to be greeted by, not an email address", http.StatusBadRequest)
-		return
-	}
-	u, err := s.store.SetOwnGivenName(r.Context(), userFromCtx(r.Context()), name)
+	// store.SetOwnGivenName applies agentcore.ValidMCPUserName and reports a
+	// refusal as an input error, which writeUserLookupError turns into a 400.
+	u, err := s.store.SetOwnGivenName(r.Context(), userFromCtx(r.Context()), *body.GivenName)
 	if err != nil {
 		s.writeUserLookupError(w, err)
 		return

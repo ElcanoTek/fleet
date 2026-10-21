@@ -76,7 +76,37 @@ describe("FirstNameRow", () => {
     fireEvent.change(input, { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(await screen.findByText(/Hi team,/)).toBeInTheDocument();
+    expect(await screen.findByText("Cleared.")).toBeInTheDocument();
+  });
+
+  it("offers a retry when the first read fails, and redirects a lapsed session", async () => {
+    let fail = true;
+    mockFetch(() => (fail ? new Response(JSON.stringify({ error: "chat server unavailable" }), { status: 502 }) : me("Elyse")));
+    render(<FirstNameRow />);
+    expect(await screen.findByText("chat server unavailable")).toBeInTheDocument();
+    expect(screen.getByLabelText("Your first name")).toBeDisabled();
+
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    const input = screen.getByLabelText("Your first name") as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("Elyse"));
+    expect(input).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+  });
+
+  it("explains a read-only refusal instead of showing the raw body", async () => {
+    mockFetch((_url, init) =>
+      init?.method === "PUT" ? new Response(JSON.stringify({ error: "read_only" }), { status: 403 }) : me(""),
+    );
+    render(<FirstNameRow />);
+    const input = await screen.findByLabelText("Your first name");
+    await waitFor(() => expect(input).not.toBeDisabled());
+
+    fireEvent.change(input, { target: { value: "Eve" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText(/read-only/)).toBeInTheDocument();
+    expect(screen.queryByText(/read_only/)).toBeNull();
   });
 
   it("shows the server's refusal and keeps the draft", async () => {

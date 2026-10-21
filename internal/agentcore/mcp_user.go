@@ -140,7 +140,8 @@ func ValidMCPUserEmail(s string) bool {
 }
 
 // ValidMCPUserName reports whether s is a name fleet will store and hand to a
-// connector: 1–64 runes of letters, single spaces, and . ' - — no digits, no
+// connector: 1–64 runes of letters (with any combining marks that follow a
+// letter), single spaces, and . ' - — no digits, no
 // '@' (so an email address can never pass as a name), no punctuation that
 // could carry markup or a token, and no control characters. The Settings write
 // (PUT /me/name) enforces the same rule, so a saved name always passes.
@@ -152,11 +153,20 @@ func ValidMCPUserName(s string) bool {
 		return false
 	}
 	hasLetter := false
+	prevLetter := false // the previous rune was a letter or a mark on one
 	for _, r := range s {
 		switch {
 		case unicode.IsLetter(r):
-			hasLetter = true
+			hasLetter, prevLetter = true, true
+		case unicode.IsMark(r):
+			// A combining mark (Mn/Mc/Me) is part of the letter before it:
+			// Devanagari and Thai vowel signs, or a decomposed "é" pasted
+			// from macOS. It never stands alone or after punctuation.
+			if !prevLetter {
+				return false
+			}
 		case r == ' ', r == '.', r == '\'', r == '-':
+			prevLetter = false
 		default:
 			return false
 		}

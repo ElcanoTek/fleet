@@ -12,9 +12,10 @@ import (
 	"testing"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -456,22 +457,24 @@ func (s *Store) SetOwnTeam(ctx context.Context, email, teamID string, allowExist
 	return s.GetUser(ctx, email)
 }
 
-// MaxGivenNameRunes bounds users.given_name (migration 081's CHECK).
+// MaxGivenNameRunes bounds users.given_name (migration 081's CHECK); it is
+// the same limit agentcore.ValidMCPUserName applies.
 const MaxGivenNameRunes = 64
 
+// errInvalidGivenNameMsg is the refusal for a value that is not a name.
+const errInvalidGivenNameMsg = "use letters, single spaces, apostrophes, hyphens or periods (at most 64 characters): the name you want to be greeted by, not an email address"
+
 // SetOwnGivenName stores the first name the caller saved for themselves
-// (PUT /me/name); "" clears it. The HTTP layer applies the full character rule
-// (agentcore.ValidMCPUserName) before calling; this is the length and
-// control-character backstop for any other writer. Returns the updated user,
-// or ErrUserNotFound when the email is absent or disabled.
+// (PUT /me/name); "" clears it. The value must pass agentcore.ValidMCPUserName
+// — the rule the turn applies before handing the name to a connector — so
+// every writer, not just the HTTP handler, stores only names that will be
+// used, never one that Settings shows as saved but every turn drops. Returns
+// the updated user, or ErrUserNotFound when the email is absent or disabled.
 func (s *Store) SetOwnGivenName(ctx context.Context, email, givenName string) (*User, error) {
 	email = normalizeEmail(email)
 	name := strings.TrimSpace(givenName)
-	if utf8.RuneCountInString(name) > MaxGivenNameRunes {
-		return nil, errInput(fmt.Sprintf("name is too long (max %d characters)", MaxGivenNameRunes))
-	}
-	if strings.IndexFunc(name, unicode.IsControl) >= 0 {
-		return nil, errInput("name must not contain control characters")
+	if name != "" && !agentcore.ValidMCPUserName(name) {
+		return nil, errInput(errInvalidGivenNameMsg)
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE users SET given_name = $2, updated_at = $3 WHERE email = $1 AND enabled = TRUE`,

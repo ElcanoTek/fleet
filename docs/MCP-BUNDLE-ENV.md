@@ -166,7 +166,7 @@ of the same connector takes it.
 **Data, not instructions — and not authorization.** The values are validated
 on both sides of the broker boundary against a conservative character set: an
 email is one `@`, a local part of ASCII letters, digits and `. _ % + - '`, and
-a dotted domain; a name is 1–64 runes of letters, single spaces and `. ' -`. A
+a dotted domain; a name is 1–64 runes of letters (with any combining marks that follow a letter), single spaces and `. ' -`. A
 value that fails is treated as absent. Neither set admits `$`, `{` or `}`, so a
 substituted value can never spell another reserved token. The user selects no
 server, account seat or tool and is not part of the scope's authorization

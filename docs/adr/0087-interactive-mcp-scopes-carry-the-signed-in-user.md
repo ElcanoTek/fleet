@@ -110,8 +110,8 @@ server-side per account in `users.given_name` (migration 081) so it follows
 them across browsers. The turn reads it when it starts (and an approved
 card's scope when it opens), so a saved name applies from the next turn.
 Unset — a user who never saved one, or a failed lookup — means the key is
-dropped and the connector uses its no-name wording ("Hi team,"). The write
-holds the value to the same character rule the scope applies (letters, single
+dropped and the connector uses its no-name wording ("Hi team,"). The store
+holds the value to the same character rule the scope applies (letters and their combining marks, single
 spaces, `. ' -`, at most 64), so an email address or a handle cannot be saved
 as a name, and a saved name is never silently dropped later.
 

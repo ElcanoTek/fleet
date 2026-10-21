@@ -40,12 +40,21 @@ func TestGivenName(t *testing.T) {
 		t.Fatalf("ListUsers = %+v, %v; want the saved name", users, err)
 	}
 
-	// The store's own backstop: length and control characters.
-	if _, err := s.SetOwnGivenName(ctx, "elyse.messer@x.com", strings.Repeat("é", MaxGivenNameRunes+1)); !IsInputError(err) {
-		t.Fatalf("too long: err = %v, want an input error", err)
+	// The store applies the same rule the turn does (agentcore.ValidMCPUserName)
+	// for every writer, so nothing it saves is later dropped on a turn.
+	for _, bad := range []string{
+		strings.Repeat("é", MaxGivenNameRunes+1), // too long
+		"a\x00b",              // control character
+		"elyse.messer@x.com",  // an address
+		"ops2",                // a handle
+		"${FLEET_USER_EMAIL}", // a token
+	} {
+		if _, err := s.SetOwnGivenName(ctx, "elyse.messer@x.com", bad); !IsInputError(err) {
+			t.Fatalf("SetOwnGivenName(%q): err = %v, want an input error", bad, err)
+		}
 	}
-	if _, err := s.SetOwnGivenName(ctx, "elyse.messer@x.com", "a\x00b"); !IsInputError(err) {
-		t.Fatalf("control char: err = %v, want an input error", err)
+	if name, _ := s.UserGivenName(ctx, "elyse.messer@x.com"); name != "Elyse" {
+		t.Fatalf("a refused write changed the saved name to %q", name)
 	}
 	// 64 multi-byte runes fit: the limit is characters, not bytes.
 	if _, err := s.SetOwnGivenName(ctx, "elyse.messer@x.com", strings.Repeat("é", MaxGivenNameRunes)); err != nil {
