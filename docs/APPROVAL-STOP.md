@@ -28,10 +28,14 @@ agent_policy:
   critical_tool_stop: [execute_plan]
 ```
 
-- Suffix matching like `critical_tools`. A member that is not critical, is
-  `notify` mode, or names a handler-only card is dropped at boot with a log
+- Suffix matching like `critical_tools`. A member that is not critical,
+  resolves to `notify` mode (as at run time: the longest matching
+  `critical_tool_modes` entry wins, so `plan: notify` catches
+  `execute_plan`), or names a handler-only card is dropped at boot with a log
   line and reported by `fleet validate-config`
-  (`agentcore.ApprovalStopProblems`).
+  (`agentcore.ApprovalStopProblems`). The same resolution now applies to
+  `critical_tool_group_approval`, `critical_tool_progress` and
+  `critical_tool_narrowable_args`, which share the check.
 - **Absent key = today's behaviour, exactly.** No request is marked, no card
   offers Stop, no payload gains a key, and the stop route answers 400.
 

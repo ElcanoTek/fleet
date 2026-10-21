@@ -29,12 +29,6 @@ import (
 func buildStagedCardSuffixSet(key string, members []string, modes map[string]string, critical map[string]bool) (map[string]bool, []string) {
 	set := make(map[string]bool, len(members))
 	var problems []string
-	notify := map[string]bool{}
-	for k, v := range modes {
-		if strings.EqualFold(strings.TrimSpace(v), ApprovalModeNotify) {
-			notify[strings.TrimSpace(k)] = true
-		}
-	}
 	for _, s := range members {
 		s = strings.TrimSpace(s)
 		if s == "" || set[s] {
@@ -44,8 +38,8 @@ func buildStagedCardSuffixSet(key string, members []string, modes map[string]str
 		case !critical[s]:
 			problems = append(problems, fmt.Sprintf("ignoring %s member %q: it is not in critical_tools, so no approval card is ever staged for it and the entry does nothing", key, s))
 			continue
-		case notify[s] && !nonReversibleSuffixes[s]:
-			problems = append(problems, fmt.Sprintf("ignoring %s member %q: its critical_tool_modes entry is notify, so it runs without an approval card", key, s))
+		case resolvesToNotify(s, modes) != "":
+			problems = append(problems, fmt.Sprintf("ignoring %s member %q: critical_tool_modes resolves it to notify (entry %q), so it runs without an approval card", key, s, resolvesToNotify(s, modes)))
 			continue
 		case handlerOnlyCardTools[s]:
 			problems = append(problems, fmt.Sprintf("ignoring %s member %q: its card is resolved by fleet's own handler (it runs no MCP call and never joins this behaviour), so the entry does nothing", key, s))
@@ -64,6 +58,33 @@ func installStagedCardSuffixSet(key string, members []string, modes map[string]s
 		log.Printf("agent_policy: %s", problem)
 	}
 	return set
+}
+
+// resolvesToNotify returns the critical_tool_modes entry that makes a tool
+// named by suffix s run in notify mode, or "" when it stages a card. It
+// resolves like ApprovalModeForTool: the longest matching entry wins, an
+// unknown mode is ignored, and notify on a non-reversible suffix is pinned to
+// approve, so an overlapping shorter entry (`plan: notify` over
+// `execute_plan`) is caught too.
+func resolvesToNotify(s string, modes map[string]string) string {
+	best, bestLen, bestMode := "", -1, ""
+	for k, v := range modes {
+		k = strings.TrimSpace(k)
+		v = strings.ToLower(strings.TrimSpace(v))
+		if k == "" || (v != ApprovalModeNotify && v != ApprovalModeApprove) {
+			continue
+		}
+		if v == ApprovalModeNotify && nonReversibleSuffixes[k] {
+			v = ApprovalModeApprove
+		}
+		if suffixMatches(s, k) && len(k) > bestLen {
+			best, bestLen, bestMode = k, len(k), v
+		}
+	}
+	if bestMode == ApprovalModeNotify {
+		return best
+	}
+	return ""
 }
 
 // handlerOnlyCardTools are the native cards fleet resolves with its own

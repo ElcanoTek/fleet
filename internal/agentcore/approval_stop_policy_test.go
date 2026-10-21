@@ -41,3 +41,22 @@ func TestApprovalStopPolicy(t *testing.T) {
 		}
 	}
 }
+
+// A member whose mode resolves to notify through a shorter overlapping entry
+// (plan: notify over execute_plan) stages no card either, so it is reported;
+// a longer approve entry wins back, as at run time.
+func TestApprovalStopProblems_ResolvesOverlappingModes(t *testing.T) {
+	t.Cleanup(func() { ConfigureAgentPolicy(AgentPolicy{}) })
+	p := AgentPolicy{
+		CriticalToolSuffixes: []string{"plan", "execute_plan"},
+		CriticalToolModes:    map[string]string{"plan": "notify"},
+		CriticalToolStop:     []string{"execute_plan"},
+	}
+	if problems := ApprovalStopProblems(p); len(problems) != 1 || !strings.Contains(problems[0], `entry "plan"`) {
+		t.Fatalf("problems = %q, want execute_plan reported through plan: notify", problems)
+	}
+	p.CriticalToolModes["execute_plan"] = "approve"
+	if problems := ApprovalStopProblems(p); len(problems) != 0 {
+		t.Fatalf("problems = %q, want none once execute_plan resolves to approve", problems)
+	}
+}
