@@ -254,6 +254,13 @@ func quoteClientValue(s string) string {
 // only a narrowing narrowApproval accepts. An error is the client's.
 func requestedNarrowing(a *store.Approval, req approvalRequest) (*approvalNarrowing, error) {
 	if !req.ApprovedValues.present {
+		// narrowed_arg names the argument a narrowing applies to, so a
+		// request carrying it meant to narrow: without approved_values it
+		// is refused, never read as approving every staged value (the group
+		// route refuses an orphaned narrow_args entry the same way).
+		if req.NarrowedArg != "" {
+			return nil, errors.New("narrowed_arg goes with approved_values: send the approved values, or leave both out to approve the whole action")
+		}
 		return nil, nil
 	}
 	if req.ApprovedValues.values == nil {

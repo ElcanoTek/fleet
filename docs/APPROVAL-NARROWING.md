@@ -99,7 +99,9 @@ refuses with 400, leaving the card pending, when:
 - the list is empty (decline instead) or an explicit `null` (refused, never read as "approve everything"), names a value that was not staged, or
   names one twice;
 - it comes with `approved: false`, or with a scope other than `once`;
-- `narrowed_arg` is missing, or is not the argument frozen on the card.
+- `narrowed_arg` is missing, or is not the argument frozen on the card;
+- `narrowed_arg` comes without `approved_values` (a request that names the
+  argument meant to narrow, so it is never read as a whole approval).
 
 The argument is frozen on the row when the card is staged
 (`approvals.narrowable_arg`, migration 079): the live card, every reload of
