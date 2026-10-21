@@ -276,7 +276,7 @@ above fails otherwise.
 - [`LOAD-TESTING.md`](LOAD-TESTING.md) — Load testing & benchmarks (#296)
 - [`MAINTENANCE.md`](MAINTENANCE.md) — Reclamation, disk backpressure, and stuck-task backstops
 - [`MCP-BROKER-SCOPES.md`](MCP-BROKER-SCOPES.md) — MCP broker scoped sessions
-- [`MCP-BUNDLE-ENV.md`](MCP-BUNDLE-ENV.md) — MCP bundle env contract: `${FLEET_WORKSPACE}`, `MCP_VARIANT_CLIENT`, `identity_env`, interactive critical-tool staging
+- [`MCP-BUNDLE-ENV.md`](MCP-BUNDLE-ENV.md) — MCP bundle env contract: `${FLEET_WORKSPACE}`, the signed-in user's `${FLEET_USER_EMAIL}` (ADR-0087), `MCP_VARIANT_CLIENT`, `identity_env`, interactive critical-tool staging
 - [`MCP-CATALOG-SMOKE.md`](MCP-CATALOG-SMOKE.md) — Nightly MCP catalog smoke — dead links and live handshakes for the built-in directory
 - [`MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md) — Hosted MCP connector status — the #1006 OAuth pack and the catalog audit
 - [`MCP-CATALOG.md`](MCP-CATALOG.md) — The MCP connector directory — trust classes, built-in catalog, provenance

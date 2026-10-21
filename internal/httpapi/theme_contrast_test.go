@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -236,6 +237,11 @@ func TestPrimaryFillContract(t *testing.T) {
 		Fill      string `json:"fill"`
 		Hover     string `json:"hover"`
 		Text      string `json:"text"`
+		// The action gradient's end: the secondary, and the measured stops
+		// deriveSecondaryFill pairs with fill and hover.
+		Secondary      string `json:"secondary"`
+		SecondaryFill  string `json:"secondary_fill"`
+		SecondaryHover string `json:"secondary_hover"`
 	}
 	traits := []struct{ name, primary, onPrimary string }{
 		{"fleet's own palette", "#7272ab", "#ffffff"},
@@ -247,11 +253,30 @@ func TestPrimaryFillContract(t *testing.T) {
 		{"translucent text", "#7272ab", "rgba(255, 255, 255, 0.85)"},
 		{"faint text no fill can carry", "#7272ab", "rgba(255, 255, 255, 0.3)"},
 		{"a saturated magenta primary under white", "#e5007a", "#ffffff"},
+		// These run to their own secondary (below); the rest to fleet's.
+		{"a pale secondary under white", "#7272ab", "#ffffff"},
+		{"a deep secondary under dark text", "#ffdf03", "#0c0a09"},
+		{"a blend that dips between AA ends", "#ee0000", "#000000"},
+		{"a translucent secondary", "#7272ab", "#ffffff"},
+	}
+	// A pale secondary under white, a deep one under dark text, and a pair
+	// whose ends clear AA under dark text while the blend between them dips
+	// under it.
+	secondaries := map[string]string{
+		"a pale secondary under white":      "#c8e6f5",
+		"a deep secondary under dark text":  "#123d2a",
+		"a blend that dips between AA ends": "#008844",
+		"a translucent secondary":           "rgba(88, 111, 124, 0.4)",
 	}
 	got := make([]entry, 0, len(traits))
 	for _, tr := range traits {
 		f := derivePrimaryFill(tr.primary, tr.onPrimary)
-		got = append(got, entry{tr.name, tr.primary, tr.onPrimary, f.fill, f.hover, f.text})
+		secondary := fleetSecondaryDefault
+		if v, ok := secondaries[tr.name]; ok {
+			secondary = v
+		}
+		g := deriveSecondaryFill(f, secondary)
+		got = append(got, entry{tr.name, tr.primary, tr.onPrimary, f.fill, f.hover, f.text, secondary, g.fill, g.hover})
 	}
 	body, err := json.MarshalIndent(got, "", "  ")
 	if err != nil {
@@ -270,5 +295,150 @@ func TestPrimaryFillContract(t *testing.T) {
 	}
 	if string(want) != string(body) {
 		t.Errorf("%s is stale; regenerate with -update.\nwant:\n%s\ngot:\n%s", path, want, body)
+	}
+}
+
+// The action gradient's guarantee: for ANY palette, every point of the blend
+// from the primary fill to the secondary fill (and from the primary hover to
+// the secondary hover) clears AA under the label, re-measured from the hex the
+// derivation emits.
+func TestDeriveSecondaryFill_AnyPaletteBlendReachesAA(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1830, 7))
+	randomHex := func() string { return fmt.Sprintf("#%06x", rng.IntN(1<<24)) }
+	for range 1000 {
+		primary, onPrimary, secondary := randomHex(), randomHex(), randomHex()
+		f := derivePrimaryFill(primary, onPrimary)
+		g := deriveSecondaryFill(f, secondary)
+		text, _ := parseCSSColor(f.text)
+		for _, seg := range [][2]string{{f.fill, g.fill}, {f.hover, g.hover}} {
+			a, _ := parseCSSColor(seg[0])
+			b, _ := parseCSSColor(seg[1])
+			if r := blendMinContrast(text, a, b); r < primaryFillMinContrast {
+				t.Fatalf("%s on %s → %s (secondary %s): %.3f:1 somewhere on the blend", f.text, seg[0], seg[1], secondary, r)
+			}
+		}
+	}
+}
+
+// A pair whose ends both clear AA under dark text can dip under it mid-way:
+// red #ee0000 and green #008844 under black are 4.6:1 each, and their sRGB
+// blend falls to about 2.6:1 mid-way. The end is pushed until the blend holds.
+func TestDeriveSecondaryFill_MeasuresTheBlendNotJustTheEnds(t *testing.T) {
+	f := derivePrimaryFill("#ee0000", "#000000")
+	text, _ := parseCSSColor(f.text)
+	fill, _ := parseCSSColor(f.fill)
+	green, _ := parseCSSColor("#008844")
+	if contrast(text, green) < primaryFillMinContrast || contrast(text, fill) < primaryFillMinContrast {
+		t.Fatalf("the ends should pass on their own: %s and #008844 under %s", f.fill, f.text)
+	}
+	if r := blendMinContrast(text, fill, green); r >= primaryFillMinContrast {
+		t.Fatalf("the raw blend should dip under AA, got %.3f:1", r)
+	}
+	g := deriveSecondaryFill(f, "#008844")
+	if g.fill == "#008844" || g.minRatio < primaryFillMinContrast {
+		t.Errorf("secondary fill %s (%.3f:1): the blend was not measured", g.fill, g.minRatio)
+	}
+}
+
+// fleet's own secondary already clears AA along the gradient, so globals.css
+// declares the fill as the secondary itself and the hover as a mix toward
+// black. Both must be what deriveSecondaryFill computes for fleet's palette.
+func TestSecondaryFill_DefaultsMatchGlobalsCSS(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "app", "globals.css"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllString(string(raw), "")
+	decl := func(name string) []string {
+		ms := regexp.MustCompile(`(?m)^\s*`+regexp.QuoteMeta(name)+`:\s*([^;]+);`).FindAllStringSubmatch(css, -1)
+		out := make([]string, 0, len(ms))
+		for _, m := range ms {
+			out = append(out, strings.TrimSpace(m[1]))
+		}
+		return out
+	}
+	for _, v := range decl("--color-secondary") {
+		if !strings.EqualFold(v, fleetSecondaryDefault) {
+			t.Errorf("globals.css --color-secondary: %s, fleetSecondaryDefault is %s", v, fleetSecondaryDefault)
+		}
+	}
+	g := deriveSecondaryFill(derivePrimaryFill(fleetPrimaryDefaults.primary, fleetPrimaryDefaults.onPrimary), fleetSecondaryDefault)
+	if g.percent != 0 {
+		t.Fatalf("fleet's secondary should need no mix, got %+v", g)
+	}
+	if vals := decl("--color-secondary-fill"); len(vals) != 1 || vals[0] != "var(--color-secondary)" {
+		t.Errorf("globals.css --color-secondary-fill: %q, want var(--color-secondary) once", vals)
+	}
+	want := fmt.Sprintf("color-mix(in srgb, var(--color-secondary) %d%%, #000)", 100-g.hoverPct)
+	if vals := decl("--color-secondary-fill-hover"); len(vals) != 1 || vals[0] != want {
+		t.Errorf("globals.css --color-secondary-fill-hover: %q, want %q once", vals, want)
+	}
+}
+
+func TestRenderThemeCSS_EmitsSecondaryFill(t *testing.T) {
+	t.Run("secondary only: measured on fleet's primary pair, which stays the default", func(t *testing.T) {
+		css := renderThemeCSS(clientconfig.BrandColors{Dark: map[string]string{"secondary": "#c8e6f5"}})
+		if strings.Contains(css, "primary-fill") || !strings.Contains(css, "--color-secondary-fill:#") {
+			t.Errorf("got %q", css)
+		}
+	})
+	t.Run("primary only: the gradient end is re-measured against the new fill", func(t *testing.T) {
+		css := renderThemeCSS(clientconfig.BrandColors{Light: map[string]string{"primary": "#ffdf03"}})
+		g := deriveSecondaryFill(derivePrimaryFill("#ffdf03", fleetPrimaryDefaults.onPrimary), fleetSecondaryDefault)
+		if !strings.Contains(css, fmt.Sprintf("--color-secondary-fill:%s;--color-secondary-fill-hover:%s;", g.fill, g.hover)) {
+			t.Errorf("got %q", css)
+		}
+	})
+	t.Run("none of the three: globals.css default stands", func(t *testing.T) {
+		css := renderThemeCSS(clientconfig.BrandColors{Dark: map[string]string{"accent": "#9da7ef"}})
+		if strings.Contains(css, "secondary-fill") {
+			t.Errorf("got %q", css)
+		}
+	})
+}
+
+// blendScan is a brute-force scan of a blend: the lowest contrast of text on
+// the 8-bit color painted at each of steps+1 evenly spaced points.
+func blendScan(text, a, b rgba, steps int) (float64, rgba) {
+	lowest, worst := math.Inf(1), a
+	for i := 0; i <= steps; i++ {
+		u := float64(i) / float64(steps)
+		p := quantize(rgba{a.r + (b.r-a.r)*u, a.g + (b.g-a.g)*u, a.b + (b.b-a.b)*u, 1})
+		if r := contrast(text, p); r < lowest {
+			lowest, worst = r, p
+		}
+	}
+	return lowest, worst
+}
+
+// blendMinContrast must find the worst color the blend paints wherever the
+// pixels fall, not the worst of a few samples: it is never above a
+// brute-force scan 10,000 steps fine over random blends.
+func TestBlendMinContrast_FindsEveryPaintedColor(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1830, 11))
+	randomColor := func() rgba {
+		return rgba{float64(rng.IntN(256)) / 255, float64(rng.IntN(256)) / 255, float64(rng.IntN(256)) / 255, 1}
+	}
+	for range 200 {
+		text, a, b := randomColor(), randomColor(), randomColor()
+		brute, _ := blendScan(text, a, b, 10000)
+		if got := blendMinContrast(text, a, b); got > brute+1e-12 {
+			t.Fatalf("%s → %s under %s: blendMinContrast %.6f, a painted color reaches %.6f", hexOf(a), hexOf(b), hexOf(text), got, brute)
+		}
+	}
+}
+
+// Codex review (#1830): with 65 fixed samples this palette's gradient
+// measured 4.5000:1 while a painted color between two samples was 4.477:1.
+func TestDeriveSecondaryFill_NoPaintedColorBetweenSamplesFallsUnderAA(t *testing.T) {
+	f := derivePrimaryFill("#920a39", "#360a91")
+	g := deriveSecondaryFill(f, "#08c1e4")
+	text, _ := parseCSSColor(f.text)
+	for _, seg := range [][2]string{{f.fill, g.fill}, {f.hover, g.hover}} {
+		a, _ := parseCSSColor(seg[0])
+		b, _ := parseCSSColor(seg[1])
+		if r, p := blendScan(text, a, b, 50000); r < primaryFillMinContrast {
+			t.Fatalf("%s → %s paints %s at %.4f:1 under %s", seg[0], seg[1], hexOf(p), r, f.text)
+		}
 	}
 }

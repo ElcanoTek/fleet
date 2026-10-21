@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -236,7 +237,10 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 			s.activeTurns.Done()
 		}()
 		defer releaseSlot()
-		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, prompt, injected, "", history, memoryContents(memories), "", nil, nil)
+		// No signed-in sender: the trigger owner is the conversation's user
+		// for scoping, but nobody at a keyboard sent this turn, so the
+		// bundle's ${FLEET_USER_EMAIL} keys are dropped (ADR-0087).
+		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, prompt, injected, "", history, memoryContents(memories), "", nil, nil, agentcore.MCPUserIdentity{})
 		// Webhook turns participate in the #785 drain loop too: anything
 		// queued behind this turn must not stall until the next submission.
 		s.maybeDrainQueue(conv.ID)

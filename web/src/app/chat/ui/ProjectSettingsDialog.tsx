@@ -163,7 +163,7 @@ function useMembers(projectId: string, enabled: boolean, nonce: number) {
 const pillGhost =
   "rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-4 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50";
 const pillPrimary =
-  "rounded-[var(--radius-md)] bg-[var(--color-primary)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-on-primary)] transition hover:opacity-90 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50";
+  "rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50";
 const pillDanger =
   "rounded-[var(--radius-md)] bg-[var(--color-danger)] px-4 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-surface-1)] transition hover:opacity-90 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50";
 

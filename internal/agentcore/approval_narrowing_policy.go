@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // Approval narrowing (docs/APPROVAL-NARROWING.md, ADR-0089).
@@ -61,6 +63,10 @@ func buildNarrowableArgs(entries map[string]string, modes map[string]string, cri
 			problems = append(problems, fmt.Sprintf("ignoring critical_tool_narrowable_args entry %q: it selects fleet's native %s tool, which runs no MCP call and is never narrowed (name an MCP tool by its server, e.g. <server>_%s)", suffix, suffix, suffix))
 			continue
 		}
+		if SelectsOnlySyntheticTransport(suffix) {
+			problems = append(problems, fmt.Sprintf("ignoring critical_tool_narrowable_args entry %q: it selects only inline http_tools or a2a peer tools, whose transports send no request _meta, so they are never narrowed", suffix))
+			continue
+		}
 		set, staged := buildStagedCardSuffixSet("critical_tool_narrowable_args", []string{suffix}, modes, critical)
 		if len(staged) > 0 {
 			problems = append(problems, staged...)
@@ -89,6 +95,23 @@ func installNarrowableArgs(entries map[string]string, modes map[string]string, c
 // in _meta, a cooperative cancellation) can never apply to one, so a policy
 // key that names one exactly is reported instead of silently doing nothing.
 var nativeExecutableTools = map[string]bool{toolNameBash: true}
+
+// SelectsOnlySyntheticTransport reports whether a policy suffix can match
+// only tools of fleet's synthetic servers (inline http_tools under
+// mcp.HTTPToolServerName, a2a peers under mcp.A2AToolServerName): it names
+// the server ("mcp__http_publish", "_a2a_helpdesk_send"). Their transports
+// forward a call's arguments only (no request _meta, no cancellation), so a
+// behaviour built on either is reported for such a key instead of being
+// silently ignored at run time. A bare tool suffix ("publish") may also match
+// an MCP tool, so it is not refused.
+func SelectsOnlySyntheticTransport(suffix string) bool {
+	for _, server := range []string{mcp.HTTPToolServerName, mcp.A2AToolServerName} {
+		if strings.HasPrefix(suffix, "mcp_"+server+"_") || strings.HasPrefix(suffix, server+"_") {
+			return true
+		}
+	}
+	return false
+}
 
 // selectsOutboundEmail reports whether a policy suffix would select an
 // outbound-email tool: it matches one of the base email suffixes

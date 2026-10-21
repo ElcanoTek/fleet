@@ -196,7 +196,7 @@ export function buildGettingStarted(i: GettingStartedInput): GettingStartedModel
 }
 
 export const primaryButtonClass =
-  "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-primary)] px-3 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:bg-[var(--color-primary-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60";
+  "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60";
 
 const secondaryButtonClass =
   "inline-flex h-7 shrink-0 items-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 text-[0.75rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60";

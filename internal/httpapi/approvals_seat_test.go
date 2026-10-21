@@ -26,6 +26,7 @@ type scopedApprovalEngine struct {
 	openErr   error
 	requested agentcore.MCPSelection
 	closed    bool
+	user      agentcore.MCPUserIdentity
 }
 
 func (e *scopedApprovalEngine) MCPBroker() agentcore.MCPBroker { return e.shared }
@@ -34,7 +35,8 @@ func (e *scopedApprovalEngine) OpenApprovalRemoteMCPScope(context.Context, strin
 	return nil, nil
 }
 
-func (e *scopedApprovalEngine) OpenApprovalMCPScope(_ context.Context, selection agentcore.MCPSelection, _ string) (*agent.MCPScope, error) {
+func (e *scopedApprovalEngine) OpenApprovalMCPScope(_ context.Context, selection agentcore.MCPSelection, _ string, user agentcore.MCPUserIdentity) (*agent.MCPScope, error) {
+	e.user = user
 	e.requested = selection
 	if e.openErr != nil {
 		return nil, e.openErr
@@ -69,12 +71,19 @@ func TestRunStagedTool_ReopensTheStagedSeat(t *testing.T) {
 		ArgsJSON:   `{"to":"test@example.com"}`,
 		MCPServer:  "send_grid",
 		MCPAccount: "client_a",
+		UserEmail:  "elyse.trader@example.com",
 	})
 	if err != nil {
 		t.Fatalf("runStagedTool: %v", err)
 	}
 	if text != "sent from client-a" {
 		t.Fatalf("result = %q, want the scoped broker's result", text)
+	}
+	// ADR-0087: the approved call's scope carries the approving user (the
+	// only user who can claim the card), so ${FLEET_USER_EMAIL} resolves the
+	// same as it did for the turn that staged it.
+	if engine.user != (agentcore.MCPUserIdentity{Email: "elyse.trader@example.com"}) {
+		t.Fatalf("approval scope user = %+v, want the approving user", engine.user)
 	}
 	if len(engine.requested) != 1 || engine.requested[0].Server != "send_grid" || engine.requested[0].Account != "client_a" {
 		t.Fatalf("reopened selection = %+v, want the staged {send_grid, client_a} seat", engine.requested)

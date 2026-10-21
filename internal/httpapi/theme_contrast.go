@@ -20,6 +20,7 @@ package httpapi
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -309,4 +310,100 @@ func hslToRGB(h, s, l float64) rgba {
 		return l - a*math.Max(-1, math.Min(math.Min(k-3, 9-k), 1))
 	}
 	return rgba{f(0), f(8), f(4), 1}
+}
+
+// The action gradient (the composer's Send circle, the empty-state prompt's
+// Run button) runs from the primary to the secondary. Its label sits on every
+// point of it, so both stops are measured, and so is the blend between them:
+// with dark text a straight sRGB blend can dip darker mid-way than either end
+// (luminance is convex along the blend), so an AA pair of ends is not enough:
+// blendMinContrast measures every color the blend paints.
+// The gradient starts at the measured primary fill and ends at
+// --color-secondary-fill: the secondary mixed toward the fill's extreme by the
+// smallest step at which every point of the blend clears AA under the label.
+// Its hover runs from the primary hover to a secondary hover at least
+// primaryFillHoverStep further, measured the same way.
+
+// fleetSecondaryDefault mirrors globals.css's --color-secondary (both themes).
+// TestSecondaryFill_DefaultsMatchGlobalsCSS keeps the two in step.
+const fleetSecondaryDefault = "#586f7c"
+
+// secondaryFill is the measured end of the action gradient and its hover.
+type secondaryFill struct {
+	fill, hover        string // #rrggbb
+	percent, hoverPct  int    // how much of the extreme is mixed in
+	minRatio, hoverMin float64
+}
+
+// deriveSecondaryFill returns the action gradient's end stops for a derived
+// primary pair and a secondary. Its blends with the primary fill (and the
+// hover's with the primary hover) clear AA at every point: at 100% the end is
+// the extreme the fill was mixed toward, and a blend from an AA fill toward
+// that extreme only moves away from the label. Should that ever not hold, the
+// end is the start stop itself (a flat fill, AA by construction).
+func deriveSecondaryFill(pf primaryFill, secondary string) secondaryFill {
+	s, ok := parseCSSColor(secondary)
+	if !ok {
+		s, _ = parseCSSColor(fleetSecondaryDefault)
+	}
+	s.a = 1
+	text, _ := parseCSSColor(pf.text)
+	fill, _ := parseCSSColor(pf.fill)
+	hover, _ := parseCSSColor(pf.hover)
+	toward, _ := parseCSSColor(pf.toward)
+	other := rgba{1 - toward.r, 1 - toward.g, 1 - toward.b, 1}
+
+	// end is the smallest mix of s (from `from`% up) whose blend from start
+	// clears AA everywhere.
+	end := func(start rgba, from int) (rgba, int, float64) {
+		for _, dir := range []rgba{toward, other} {
+			for pct := from; pct <= 100; pct++ {
+				cand := quantize(mixSRGB(s, dir, pct))
+				if r := blendMinContrast(text, start, cand); r >= primaryFillMinContrast {
+					return cand, pct, r
+				}
+			}
+		}
+		return start, 0, blendMinContrast(text, start, start)
+	}
+	var out secondaryFill
+	c, pct, r := end(fill, 0)
+	out.fill, out.percent, out.minRatio = hexOf(c), pct, r
+	c, pct, r = end(hover, min(out.percent+primaryFillHoverStep, 100))
+	out.hover, out.hoverPct, out.hoverMin = hexOf(c), pct, r
+	return out
+}
+
+// blendMinContrast is the lowest contrast of text on any color a CSS
+// linear-gradient from a to b paints (opaque stops blend in sRGB, and each
+// point is painted as its 8-bit color). Sampling fixed points is not enough:
+// where the pixels fall depends on the element's size, and the worst color
+// can sit between any two samples. So it measures every color the blend can
+// paint. A channel's 8-bit value changes only where the blend crosses a
+// half-step (k+0.5)/255, so between two consecutive crossings of any channel
+// the painted color is constant: one point inside each such interval, plus
+// the two ends, is the whole set (at most 766 colors).
+func blendMinContrast(text, a, b rgba) float64 {
+	from := [3]float64{a.r * 255, a.g * 255, a.b * 255}
+	to := [3]float64{b.r * 255, b.g * 255, b.b * 255}
+	cuts := []float64{0, 1}
+	for i := range 3 {
+		lo, hi := math.Min(from[i], to[i]), math.Max(from[i], to[i])
+		for k := math.Floor(lo) + 0.5; k < hi; k++ {
+			if k > lo {
+				cuts = append(cuts, (k-from[i])/(to[i]-from[i]))
+			}
+		}
+	}
+	sort.Float64s(cuts)
+	at := func(t float64) rgba {
+		return quantize(rgba{a.r + (b.r-a.r)*t, a.g + (b.g-a.g)*t, a.b + (b.b-a.b)*t, 1})
+	}
+	lowest := math.Min(contrast(text, at(0)), contrast(text, at(1)))
+	for j := 0; j+1 < len(cuts); j++ {
+		if cuts[j+1] > cuts[j] {
+			lowest = math.Min(lowest, contrast(text, at((cuts[j]+cuts[j+1])/2)))
+		}
+	}
+	return lowest
 }

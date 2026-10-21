@@ -227,6 +227,7 @@ func TestHandleApproval_RefusesABadNarrowingBeforeTheClaim(t *testing.T) {
 		{name: "staged list repeats a value", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"deal_ids"}`, args: `{"deal_ids":["a","a","b"]}`, policy: true},
 		{name: "staged list holds a number", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"deal_ids"}`, args: `{"deal_ids":["a",7]}`, policy: true},
 		{name: "no narrowed_arg", body: `{"approved":true,"approved_values":["a"]}`, policy: true},
+		{name: "more values than were staged", body: `{"approved":true,"approved_values":["a","b","c","a"],"narrowed_arg":"deal_ids"}`, policy: true},
 		{name: "a narrowed_arg other than the one frozen at staging", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"item_ids"}`, policy: true},
 		{name: "staged value too long for a row key", body: `{"approved":true,"approved_values":["a"],"narrowed_arg":"deal_ids"}`, args: `{"deal_ids":["a","` + strings.Repeat("x", 201) + `"]}`, policy: true},
 	}
@@ -709,6 +710,22 @@ func TestStage_FreezesTheNarrowableArgument(t *testing.T) {
 	}
 	if st2.frozen != "" {
 		t.Fatalf("frozen = %q, want nothing for a one-value list", st2.frozen)
+	}
+}
+
+// A request naming more values than were staged is refused by its length,
+// before anything is sized by it (a body can hold hundreds of thousands of
+// short repeats).
+func TestNarrowApproval_RefusesMoreValuesThanStagedByLength(t *testing.T) {
+	narrowPolicy(t)
+	row := narrowApprovalRow()
+	huge := make([]string, 200000)
+	for i := range huge {
+		huge[i] = "a"
+	}
+	_, err := narrowApproval(&row, huge, "deal_ids")
+	if err == nil || !strings.Contains(err.Error(), "more than the 3 staged") {
+		t.Fatalf("err = %v, want the length refusal", err)
 	}
 }
 

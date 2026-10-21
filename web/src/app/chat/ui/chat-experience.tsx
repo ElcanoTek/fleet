@@ -5445,7 +5445,7 @@ export function ChatExperience({
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="mt-5 rounded-xl bg-[var(--color-primary)] px-4 py-2.5 text-sm font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
+            className="mt-5 rounded-xl bg-[var(--color-primary-fill)] px-4 py-2.5 text-sm font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)]"
           >
             Retry
           </button>
@@ -6103,7 +6103,7 @@ export function ChatExperience({
               </button>
               <button
                 type="button"
-                className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
+                className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)]"
                 onClick={() => {
                   setConfirmSummarize(false);
                   void summarizeConversation();
@@ -6267,7 +6267,7 @@ export function ChatExperience({
                 Cancel
               </button>
               <button
-                className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+                className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
                 type="button"
                 disabled={isDeletingConversation}
                 onClick={() => void confirmDeleteConversation()}
