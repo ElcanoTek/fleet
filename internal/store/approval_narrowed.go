@@ -42,6 +42,15 @@ func NarrowingNote(arg string, staged, approved []string) string {
 		len(staged), arg, PositionRanges(pos), side, other, arg)
 }
 
+// NarrowingNoteCompact is NarrowingNote without the position list, for a
+// result whose output limit leaves no room for it: the counts and the rule,
+// and where the positions are (the approval card). Positions only ever, never
+// the values, as NarrowingNote.
+func NarrowingNoteCompact(arg string, staged, approved []string) string {
+	return fmt.Sprintf("[fleet] The person narrowed this call: of the %d staged %s in its arguments, %d were approved and %d were left out (the approval card lists which; too many to name within this result's size limit). The call's %s held only the approved ones; the result says whether they ran. Do not run the left-out ones unless the person asks. (Written by fleet, not the tool.)",
+		len(staged), arg, len(approved), len(staged)-len(approved), arg)
+}
+
 // PositionRanges writes ascending 1-based positions compactly: "1-3, 5, 8-10".
 // The narrowing note and the chat server's audit line share it.
 func PositionRanges(pos []int) string {

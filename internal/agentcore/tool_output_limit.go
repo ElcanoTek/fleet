@@ -277,8 +277,11 @@ func GovernAndBoundModelVisibleToolTextFull(ctx context.Context, toolName, toolC
 // result an error. The total stays within the limit unless the trailer itself
 // is larger than the limit's spare room (only with an operator limit near
 // the minimum; never past the hard maximum, a trailer being a few KiB at
-// most). governed is the governed tool text without the trailer. An empty
-// trailer is GovernAndBoundModelVisibleToolTextFull.
+// most). The tool's text keeps at least approvalTrailerTextFloor bytes, so
+// the whole stays within the limit whenever the trailer fits
+// ApprovalTrailerRoom (callers compact theirs to fit). governed is the
+// governed tool text without the trailer. An empty trailer is
+// GovernAndBoundModelVisibleToolTextFull.
 func GovernAndBoundModelVisibleToolTextWithTrailer(ctx context.Context, toolName, toolCallID, content string, isError bool, trailer string) (bounded string, isErr bool, governed string) {
 	if trailer == "" {
 		return GovernAndBoundModelVisibleToolTextFull(ctx, toolName, toolCallID, content, isError)
@@ -288,8 +291,8 @@ func GovernAndBoundModelVisibleToolTextWithTrailer(ctx context.Context, toolName
 	resp.IsError = isError
 	resp = governFinalToolResponse(ctx, toolName, resp)
 	governed = resp.Content
-	budget := max(maxToolOutputBytes()-len(gt)-2, MinMaxToolOutputBytes)
-	resp = boundModelVisibleToolResponseWithin(ctx, toolName, toolCallID, resp, budget)
+	budget := max(maxToolOutputBytes()-len(gt)-2, approvalTrailerTextFloor)
+	resp = boundModelVisibleToolResponseExact(ctx, toolName, toolCallID, resp, budget)
 	return strings.TrimRight(resp.Content, "\n") + "\n\n" + gt, resp.IsError, governed
 }
 
@@ -320,7 +323,31 @@ func boundModelVisibleToolResponse(ctx context.Context, toolName, toolCallID str
 // boundModelVisibleToolResponseWithin is boundModelVisibleToolResponse for an
 // explicit limit (normalized to the documented range).
 func boundModelVisibleToolResponseWithin(ctx context.Context, toolName, toolCallID string, resp fantasy.ToolResponse, limit int) fantasy.ToolResponse {
-	limit = normalizeToolOutputLimit(limit)
+	return boundModelVisibleToolResponseExact(ctx, toolName, toolCallID, resp, normalizeToolOutputLimit(limit))
+}
+
+// approvalTrailerTextFloor is the least room a tool's own text keeps beside
+// fleet's approval trailer: enough for the truncation envelope that says
+// where the full output went. Below MinMaxToolOutputBytes on purpose, so the
+// tool text plus the trailer can stay within an operator limit near the
+// minimum.
+const approvalTrailerTextFloor = 256
+
+// ApprovalTrailerRoom is the most bytes fleet's approval trailer may take so
+// that the bounded tool text (at least approvalTrailerTextFloor) and the
+// trailer together stay within the configured output limit. A caller whose
+// trailer is longer compacts it first (the narrowing line drops its position
+// list).
+func ApprovalTrailerRoom() int {
+	return maxToolOutputBytes() - approvalTrailerTextFloor - 2
+}
+
+// boundModelVisibleToolResponseExact is boundModelVisibleToolResponseWithin
+// for a limit taken as given (at least approvalTrailerTextFloor, at most the
+// hard maximum) rather than raised to MinMaxToolOutputBytes: the room a
+// trailer leaves.
+func boundModelVisibleToolResponseExact(ctx context.Context, toolName, toolCallID string, resp fantasy.ToolResponse, limit int) fantasy.ToolResponse {
+	limit = min(max(limit, approvalTrailerTextFloor), HardMaxToolOutputBytes)
 	if len(resp.Data) > 0 || resp.Type == "image" || resp.Type == "media" {
 		// Both fields are discarded at this boundary. Count both so a custom
 		// media tool carrying a caption alongside binary data cannot underreport

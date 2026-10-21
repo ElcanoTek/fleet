@@ -447,6 +447,51 @@ func TestGovernWithTrailer_KeepsTheWholeNoteWithinTheBound(t *testing.T) {
 	}
 }
 
+// Near the minimum output limit a 500-value narrowing's full line (about
+// 1.6 KiB with alternating positions) does not fit beside the tool's text:
+// the line drops its position list and the whole result stays within the
+// configured limit, the line still whole at its end.
+func TestApprovalTrailer_StaysWithinAMinimumOutputLimit(t *testing.T) {
+	narrowPolicy(t)
+	agentcore.SetMaxToolOutputBytes(agentcore.MinMaxToolOutputBytes)
+	t.Cleanup(func() { agentcore.SetMaxToolOutputBytes(-1) })
+	row := narrowApprovalRow()
+	staged := make([]string, 0, 500)
+	approved := make([]string, 0, 250)
+	for i := range 500 {
+		v := fmt.Sprintf("deal-%03d", i)
+		staged = append(staged, v)
+		if i%2 == 0 {
+			approved = append(approved, v)
+		}
+	}
+	n := &approvalNarrowing{Arg: "deal_ids", Staged: staged, Approved: approved}
+	if len(narrowingNote(n)) <= agentcore.ApprovalTrailerRoom() {
+		t.Fatalf("the full line (%d bytes) must not fit the room (%d) for this test", len(narrowingNote(n)), agentcore.ApprovalTrailerRoom())
+	}
+	trailer := approvalTrailer(n)
+	if !strings.Contains(trailer, "250 were approved and 250 were left out") || len(trailer) > agentcore.ApprovalTrailerRoom() {
+		t.Fatalf("trailer = %q (%d bytes), want the compact line within %d", trailer, len(trailer), agentcore.ApprovalTrailerRoom())
+	}
+	for _, text := range []string{strings.Repeat("x", 64<<10), `{"success":true}`} {
+		got, _, _ := governApprovalResultWithTrailer(context.Background(), &row, text, false, trailer)
+		if !strings.HasSuffix(got, trailer) {
+			t.Fatalf("the line was cut or changed: ...%q", got[max(0, len(got)-200):])
+		}
+		if len(got) > agentcore.MinMaxToolOutputBytes {
+			t.Fatalf("result is %d bytes, over the configured %d", len(got), agentcore.MinMaxToolOutputBytes)
+		}
+	}
+	// With room to spare the full line, positions included, is kept.
+	agentcore.SetMaxToolOutputBytes(8192)
+	if approvalTrailer(n) != narrowingNote(n) {
+		t.Fatal("the full line must be kept when it fits")
+	}
+	if approvalTrailer(nil, "a", "b") != "a\n\nb" || approvalTrailer(nil) != "" {
+		t.Fatal("other lines join as given")
+	}
+}
+
 // blockingNarrowChild holds the approved call until released.
 type blockingNarrowChild struct {
 	mcpbroker.Backend

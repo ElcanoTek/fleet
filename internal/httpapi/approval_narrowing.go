@@ -388,6 +388,29 @@ func narrowingNote(n *approvalNarrowing) string {
 	return store.NarrowingNote(n.Arg, n.Staged, n.Approved)
 }
 
+// approvalTrailer joins fleet's labelled lines under an approved call's
+// result: the narrowing line (when narrowed is set) and then others. When the
+// whole would not fit agentcore.ApprovalTrailerRoom (an operator output limit
+// near the minimum), the narrowing line drops its position list
+// (store.NarrowingNoteCompact), so the tool text and the lines together stay
+// within the configured limit.
+func approvalTrailer(narrowed *approvalNarrowing, others ...string) string {
+	join := func(note string) string {
+		parts := make([]string, 0, 1+len(others))
+		if note != "" {
+			parts = append(parts, note)
+		}
+		return strings.Join(append(parts, others...), "\n\n")
+	}
+	if narrowed == nil {
+		return join("")
+	}
+	if full := join(narrowingNote(narrowed)); len(full) <= agentcore.ApprovalTrailerRoom() {
+		return full
+	}
+	return join(store.NarrowingNoteCompact(narrowed.Arg, narrowed.Staged, narrowed.Approved))
+}
+
 // withApprovalNarrowable adds a pending card's `narrowable` field: the
 // argument frozen on the row at staging and its staged values. Absent when the
 // card approves its call whole, so every other payload is unchanged.

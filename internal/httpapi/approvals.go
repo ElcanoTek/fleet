@@ -1993,12 +1993,12 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	// staged values were approved and which were left out. They are governed
 	// with the result but never truncated: the tool's text is bounded to what
 	// the output limit leaves after them.
-	var trailers []string
-	if narrowed, nerr := parseApprovalNarrowing(approval.NarrowedJSON); approval.NarrowedJSON != "" && nerr == nil {
-		trailers = append(trailers, narrowingNote(narrowed))
+	var narrowed *approvalNarrowing
+	if n, nerr := parseApprovalNarrowing(approval.NarrowedJSON); approval.NarrowedJSON != "" && nerr == nil {
+		narrowed = n
 	}
 	var governed string
-	resultText, isErr, governed = governApprovalResultWithTrailer(execCtx, approval, resultText, isErr, strings.Join(trailers, "\n\n"))
+	resultText, isErr, governed = governApprovalResultWithTrailer(execCtx, approval, resultText, isErr, approvalTrailer(narrowed))
 	// A tool in critical_tool_result_cards: the outcome card its own result
 	// carries, stored on the still-executing row just before the outcome, so
 	// the settled card and its reply carry both. Only for a call that ran and

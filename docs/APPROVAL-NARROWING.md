@@ -169,12 +169,14 @@ The approved-call budget is computed for the narrowed arguments (a smaller
   under it): it passes only the secret redactor. The tool's text is bounded to
   what the output limit leaves after it
   (`agentcore.GovernAndBoundModelVisibleToolTextWithTrailer`), so the whole
-  stays within the limit. The one exception: with an operator limit near the
-  1 KiB minimum and a long, scattered narrowing (up to 250 separate
-  positions, about 1.2 KiB), the line is kept whole and the result exceeds
-  that limit by it, never the 128 KiB hard maximum. Exactness wins there,
-  because a truncated line could let the agent run a value the person left
-  out.
+  stays within the limit. The tool's text keeps at least 256 bytes (enough
+  for the truncation envelope that says where the full output went); when
+  the line would not fit beside that (an operator limit near the 1 KiB
+  minimum and a long, scattered narrowing, up to 250 separate positions),
+  fleet writes the compact line instead (`store.NarrowingNoteCompact`): the
+  counts and the rule, with the positions left to the approval card. It is
+  never cut, because a truncated line could let the agent run a value the
+  person left out, and the whole result stays within the configured limit.
 - A narrowed call cut off by a restart keeps the line too:
   `RecoverStrandedApprovals` reads `narrowed_json` and adds it after the
   "outcome unknown" breadcrumb, because the recorded tool call holds the whole
