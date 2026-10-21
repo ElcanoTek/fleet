@@ -76,7 +76,9 @@ function hex(h: string): RGBA {
 /** Resolve a CSS color value against a theme's custom properties. */
 export function resolveColor(value: string, theme: Theme, seen: string[] = []): RGBA {
   const v = value.trim();
-  if (/^#[0-9a-f]{3,8}$/i.test(v)) return hex(v);
+  // CSS hex is 3, 4, 6 or 8 digits; a 5- or 7-digit typo is invalid CSS and
+  // must fail here, not be read as some opaque color.
+  if (/^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v)) return hex(v);
   if (v === "transparent") return [0, 0, 0, 0];
   const c = call(v);
   if (!c) throw new Error(`unsupported color value: ${v}`);
