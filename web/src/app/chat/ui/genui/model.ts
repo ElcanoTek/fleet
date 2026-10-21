@@ -90,6 +90,23 @@ export function isInput(c: Component): boolean {
 const specCache = new Map<string, CardSpec | null>();
 const SPEC_CACHE_MAX = 200;
 
+/**
+ * Whether a show_ui call's input names a tool result instead of spelling the
+ * card out (`{"from_result": {...}}`, docs/GENERATIVE-UI.md). Its card is the
+ * spec the server attached to the call's result, never the input itself.
+ */
+export function isCardReference(input: string): boolean {
+  let v: unknown;
+  try {
+    v = JSON.parse(input);
+  } catch {
+    return false;
+  }
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const ref = (v as Record<string, unknown>).from_result;
+  return !!ref && typeof ref === "object";
+}
+
 export function parseCardSpec(input: string): CardSpec | null {
   const hit = specCache.get(input);
   if (hit !== undefined) return hit;

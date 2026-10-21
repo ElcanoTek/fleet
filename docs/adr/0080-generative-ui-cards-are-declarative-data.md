@@ -1,6 +1,6 @@
 # ADR-0080: Generative-UI cards are declarative data, and their actions route through the governed turn
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR-0086](0086-show-ui-card-by-reference.md) (a card a tool built may be shown by reference)
 - **Date:** 2026-10-08
 - **Deciders:** fleet maintainers
 

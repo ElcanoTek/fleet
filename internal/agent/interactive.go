@@ -95,6 +95,10 @@ type TurnConfig struct {
 	// it from the bundle manifest's personas: block for the turn's persona.
 	Persona       string
 	PersonaPolicy *agentcore.PersonaToolPermissions
+	// HiddenToolSuffixes is agent_policy.interactive_hidden_tools: MCP tools
+	// this turn (and any sub-agent it spawns) neither offers nor calls. The
+	// Manager sets it from agentcore.InteractiveHiddenTools(); nil = none.
+	HiddenToolSuffixes []string
 
 	MaxCostUSD     float64
 	MaxTotalTokens int
@@ -237,6 +241,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		Selection:           tc.Selection,
 		PersonaName:         tc.Persona,
 		PersonaPolicy:       tc.PersonaPolicy,
+		HiddenToolSuffixes:  tc.HiddenToolSuffixes,
 		ProviderHeaders:     agentcore.DefaultProviderHeaders,
 		ThinkingConfig:      tc.ThinkingConfig,
 		RuntimeDateInInput:  tc.RuntimeDateInMessages,
@@ -273,8 +278,10 @@ func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy,
 		Sandbox:          tc.Sandbox,
 		NoteProposer:     tc.NoteProposer,
 		PersonaPolicy:    tc.PersonaPolicy,
-		Overlay:          tc.Overlay,
-		Subagent:         tc.Subagent,
+		// Children inherit the turn's hidden tools (buildChild copies them).
+		HiddenToolSuffixes: tc.HiddenToolSuffixes,
+		Overlay:            tc.Overlay,
+		Subagent:           tc.Subagent,
 	})
 	host.runtimePolicy = policy
 	host.spawnObserver = obs
@@ -367,6 +374,9 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 		repair = in.RepairToolCall(tc.Model.Model())
 	}
 	var sb strings.Builder
+	// The retry is a multi-step loop like the main stream, so its steps get
+	// the same paragraph break between them (agentcore.StepTextSeparator).
+	stepEnded := false
 	_, err := agent.Stream(ctx, fantasy.AgentStreamCall{
 		Messages:        convo,
 		MaxOutputTokens: &maxTokens,
@@ -377,6 +387,10 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 		// it streams with tools, so it is a real loop, not a single call.
 		StopWhen: in.StopWhen,
 		OnTextDelta: func(_, text string) error {
+			if stepEnded && text != "" {
+				text = agentcore.StepTextSeparator(sb.String(), text) + text
+				stepEnded = false
+			}
 			sb.WriteString(text)
 			if in.Observer != nil {
 				in.Observer.Observe("text.delta", map[string]any{"text": text})
@@ -388,6 +402,7 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 		// Meter this recovery call into the run's accounting so its tokens/cost
 		// are not invisible to the cost chip (#83). Nil-safe.
 		OnStepFinish: func(step fantasy.StepResult) error {
+			stepEnded = sb.Len() > 0
 			if in.RecordUsage != nil {
 				in.RecordUsage(step.Usage, step.ProviderMetadata)
 			}
