@@ -385,7 +385,7 @@ export function parseApprovalCardData(value: unknown): ApprovalCardData | undefi
 }
 
 /** How a record ended, on a result card (docs/APPROVAL-RESULT-CARDS.md). */
-export type ApprovalResultItemStatus = "done" | "failed" | "mismatch" | "unclear" | "skipped" | "not_run";
+export type ApprovalResultItemStatus = "done" | "failed" | "mismatch" | "needs_check" | "unclear" | "skipped" | "not_run";
 /** The card's overall outcome; it sets the tone. */
 export type ApprovalResultOutcome = "done" | "partial" | "failed" | "mismatch" | "unclear";
 
@@ -420,7 +420,7 @@ export type ApprovalResultCardData = {
 };
 
 const RESULT_OUTCOMES = new Set<string>(["done", "partial", "failed", "mismatch", "unclear"]);
-const RESULT_ITEM_STATUSES = new Set<string>(["done", "failed", "mismatch", "unclear", "skipped", "not_run"]);
+const RESULT_ITEM_STATUSES = new Set<string>(["done", "failed", "mismatch", "needs_check", "unclear", "skipped", "not_run"]);
 
 // parseApprovalResultCardData accepts exactly the server's result-card schema
 // (approval_result_card.go) and returns undefined for anything else, so the
@@ -460,8 +460,8 @@ export function parseApprovalResultCardData(value: unknown): ApprovalResultCardD
     items.push(item);
   }
   const count = (s: string) => items.filter((it) => it.status === s).length;
-  if (v.outcome === "done" && count("failed") + count("mismatch") + count("unclear") > 0) return undefined;
-  if (v.outcome === "failed" && count("done") + count("mismatch") > 0) return undefined;
+  if (v.outcome === "done" && count("failed") + count("mismatch") + count("needs_check") + count("unclear") > 0) return undefined;
+  if (v.outcome === "failed" && count("done") + count("mismatch") + count("needs_check") > 0) return undefined;
   const card: ApprovalResultCardData = { outcome: v.outcome as ApprovalResultOutcome, title: v.title, items };
   if (subtitle) card.subtitle = subtitle;
   if (footer) card.footer = footer;

@@ -153,6 +153,23 @@ describe("the completed card from a result card", () => {
     expect(screen.getByTestId("approval-card-change")).toHaveTextContent("Floor$55.00→$0.10");
   });
 
+  it("says a record was applied but needs a check when a later step of it failed", () => {
+    renderCard({
+      resultCard: parseApprovalResultCardData({
+        outcome: "mismatch",
+        title: "Created 1 OpenX deal · needs a check",
+        items: [{ label: "Deal A", id: "OX-1", status: "needs_check", note: "The deal exists, but the IAB exclusion step failed." }],
+      }),
+    });
+    expect(screen.getByTestId("approval-result-status")).toHaveTextContent("Needs a check");
+    expect(screen.getByTestId("approval-result-status")).toHaveAttribute("data-status", "needs_check");
+    expect(screen.getByTestId("approval-result-note")).toHaveTextContent(
+      "Applied, but needs a check: The deal exists, but the IAB exclusion step failed.",
+    );
+    expect(screen.queryByText(/read-back/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Retry failed/ })).toBeNull();
+  });
+
   it("shows each record's flags on a several-record card too", () => {
     renderCard({
       resultCard: parseApprovalResultCardData({
@@ -244,6 +261,9 @@ describe("parseApprovalResultCardData", () => {
       { outcome: "partial", title: "t", items: [{ key: "B", label: "B", status: "failed" }], retry: { keys: ["Z"] } },
       { outcome: "unclear", title: "t", items: [{ key: "U", label: "U", status: "unclear" }], retry: { keys: ["U"] } },
       { outcome: "mismatch", title: "t", items: [{ key: "M", label: "M", status: "mismatch" }], retry: { keys: ["M"] } },
+      { outcome: "done", title: "t", items: [{ label: "A", status: "needs_check" }] },
+      { outcome: "failed", title: "t", items: [{ label: "A", status: "needs_check" }] },
+      { outcome: "mismatch", title: "t", items: [{ key: "N", label: "N", status: "needs_check" }], retry: { keys: ["N"] } },
     ]) {
       expect(parseApprovalResultCardData(bad), JSON.stringify(bad)).toBeUndefined();
     }

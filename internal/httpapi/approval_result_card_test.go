@@ -104,12 +104,23 @@ func TestParseApprovalResultCard_Refusals(t *testing.T) {
 		"retry repeats a key":     strings.TrimSuffix(item(""), "}") + `,"retry":{"keys":["B","B"]}}`,
 		"retry an unclear row":    `{"outcome":"unclear","title":"t","items":[{"key":"U","label":"U","status":"unclear"}],"retry":{"keys":["U"]}}`,
 		"retry a mismatched row":  `{"outcome":"mismatch","title":"t","items":[{"key":"M","label":"M","status":"mismatch"}],"retry":{"keys":["M"]}}`,
+		"done with needs_check":   `{"outcome":"done","title":"t","items":[{"label":"A","status":"needs_check"}]}`,
+		"failed with needs_check": `{"outcome":"failed","title":"t","items":[{"label":"A","status":"needs_check"}]}`,
+		"retry a needs_check row": `{"outcome":"mismatch","title":"t","items":[{"key":"N","label":"N","status":"needs_check"}],"retry":{"keys":["N"]}}`,
 		"bad flag code":           `{"outcome":"done","title":"t","items":[{"label":"A","status":"done","flags":[{"code":"Bad Code","label":"x"}]}]}`,
 		"change without after":    `{"outcome":"done","title":"t","items":[{"label":"A","status":"done","changes":[{"label":"Floor","before":"$1"}]}]}`,
 	}
 	for name, raw := range cases {
 		if _, _, err := parseApprovalResultCard([]byte(raw)); err == nil {
 			t.Errorf("%s: accepted %s", name, raw)
+		}
+	}
+	// A record that was applied but needs a check (a follow-up step failed)
+	// is its own status, on a warning or partial card.
+	for _, outcome := range []string{"mismatch", "partial"} {
+		nc := `{"outcome":"` + outcome + `","title":"t","items":[{"label":"Deal A","status":"needs_check","note":"The IAB exclusion step failed."}]}`
+		if _, _, err := parseApprovalResultCard([]byte(nc)); err != nil {
+			t.Fatalf("needs_check on a %s card refused: %v", outcome, err)
 		}
 	}
 	// A not_run row may be retried, like a failed one.

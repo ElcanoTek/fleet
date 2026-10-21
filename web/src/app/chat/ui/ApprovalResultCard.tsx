@@ -52,6 +52,7 @@ export const RESULT_STATUS_LABEL: Record<ApprovalResultItemStatus, string> = {
   done: "Done",
   failed: "Not applied",
   mismatch: "Check didn't match",
+  needs_check: "Needs a check",
   unclear: "Outcome unclear",
   skipped: "Already done",
   not_run: "Not run",
@@ -63,6 +64,7 @@ const STATUS_ICON: Record<ApprovalResultItemStatus, string | null> = {
   done: "check",
   failed: "close",
   mismatch: "warning",
+  needs_check: "warning",
   unclear: "clock",
   skipped: "check",
   not_run: null,
@@ -81,6 +83,7 @@ function statusColor(status: ApprovalResultItemStatus): string {
     case "failed":
       return "var(--color-danger)";
     case "mismatch":
+    case "needs_check":
     case "unclear":
       return "var(--color-warning)";
     default:
@@ -108,6 +111,7 @@ function resultTone(status: ApprovalResultItemStatus): StatusTone {
     case "failed":
       return "danger";
     case "mismatch":
+    case "needs_check":
     case "unclear":
       return "warning";
     default:
@@ -126,12 +130,20 @@ function ResultStatusChip({ status }: { status: ApprovalResultItemStatus }) {
   );
 }
 
+// The lead-in fleet puts before a record's note, so the state reads the same
+// on every bundle. needs_check is a record that WAS applied but needs a
+// person's look (a follow-up step of it failed); the note says what.
+const NOTE_LEAD: Partial<Record<ApprovalResultItemStatus, string>> = {
+  failed: "Not applied:",
+  mismatch: "Applied, but the read-back didn't match:",
+  needs_check: "Applied, but needs a check:",
+};
+
 // Note renders a record's note, led by fleet's words for a failure so the
 // state reads the same on every bundle: "Not applied: …".
 function Note({ item }: { item: ApprovalResultCardItem }) {
   if (!item.note) return null;
-  const lead =
-    item.status === "failed" ? "Not applied:" : item.status === "mismatch" ? "Applied, but the read-back didn't match:" : "";
+  const lead = NOTE_LEAD[item.status] ?? "";
   return (
     <p data-testid="approval-result-note" className="mt-1 min-w-0 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
       {lead ? (

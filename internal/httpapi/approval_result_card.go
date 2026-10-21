@@ -63,9 +63,14 @@ const (
 	resultItemDone     = "done"     // applied, and verified when the tool verifies
 	resultItemFailed   = "failed"   // confirmed not applied
 	resultItemMismatch = "mismatch" // applied, but the read-back differs
-	resultItemUnclear  = "unclear"  // may or may not have happened
-	resultItemSkipped  = "skipped"  // nothing to do (already done earlier)
-	resultItemNotRun   = "not_run"  // never attempted (left out, or stopped before it)
+	// applied, but something after it needs a person's check: a follow-up
+	// step of the same record failed (a targeting or exclusion step after the
+	// create). The note says what; it is never offered for retry, since the
+	// record itself exists.
+	resultItemNeedsCheck = "needs_check"
+	resultItemUnclear    = "unclear" // may or may not have happened
+	resultItemSkipped    = "skipped" // nothing to do (already done earlier)
+	resultItemNotRun     = "not_run" // never attempted (left out, or stopped before it)
 )
 
 var resultOutcomes = map[string]bool{
@@ -76,6 +81,7 @@ var resultOutcomes = map[string]bool{
 var resultItemStatuses = map[string]bool{
 	resultItemDone: true, resultItemFailed: true, resultItemMismatch: true,
 	resultItemUnclear: true, resultItemSkipped: true, resultItemNotRun: true,
+	resultItemNeedsCheck: true,
 }
 
 // ApprovalResultCard is the schema a result's `result_card` must match,
@@ -179,7 +185,7 @@ func validateResultCard(c *ApprovalResultCard) error {
 		it := &c.Items[i]
 		at := fmt.Sprintf("items[%d]", i)
 		if !resultItemStatuses[it.Status] {
-			return fmt.Errorf("%s.status %q is not one of done, failed, mismatch, unclear, skipped, not_run", at, it.Status)
+			return fmt.Errorf("%s.status %q is not one of done, failed, mismatch, needs_check, unclear, skipped, not_run", at, it.Status)
 		}
 		counts[it.Status]++
 		for _, f := range []struct {
@@ -222,13 +228,14 @@ func validateResultCard(c *ApprovalResultCard) error {
 		return fmt.Errorf("%d rows across the card, over the %d-row limit", rows, approvalCardMaxRows)
 	}
 	// The outcome sets the card's tone, so it may not contradict the rows: a
-	// green "done" card never carries a failed, mismatched or unclear record,
-	// and a red "failed" card never claims a record was applied.
-	notDone := counts[resultItemFailed] + counts[resultItemMismatch] + counts[resultItemUnclear]
-	applied := counts[resultItemDone] + counts[resultItemMismatch]
+	// green "done" card never carries a failed, mismatched, needs-check or
+	// unclear record, and a red "failed" card never claims a record was
+	// applied.
+	notDone := counts[resultItemFailed] + counts[resultItemMismatch] + counts[resultItemNeedsCheck] + counts[resultItemUnclear]
+	applied := counts[resultItemDone] + counts[resultItemMismatch] + counts[resultItemNeedsCheck]
 	switch {
 	case c.Outcome == resultOutcomeDone && notDone > 0:
-		return errors.New(`outcome "done" with a failed, mismatched or unclear item`)
+		return errors.New(`outcome "done" with a failed, mismatched, needs_check or unclear item`)
 	case c.Outcome == resultOutcomeFailed && applied > 0:
 		return errors.New(`outcome "failed" with an applied item`)
 	}
