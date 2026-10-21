@@ -185,9 +185,12 @@ func (s *Server) claimApproved(ctx context.Context, user, convID string, a *stor
 	claimed, err := s.store.ClaimApprovalNarrowed(ctx, user, a.ID, approvalExecutingSentinel, string(record))
 	if err == nil && claimed {
 		a.NarrowedJSON = string(record)
-		//nolint:gosec // G706: every interpolated value is rendered with %q, which escapes any CR/LF.
-		log.Printf("audit: %q approved %d of %d %q of approval %q (%q) in conversation %q; left out %q",
-			user, len(n.Approved), len(n.Staged), n.Arg, a.ID, a.ToolName, convID, n.leftOut())
+		// Counts and staged positions only: the values are model-authored and
+		// may carry anything, so they never reach the log. The exact record is
+		// on the row (narrowed_json).
+		//nolint:gosec // G706: every interpolated value is rendered with %q or %d, which escapes any CR/LF.
+		log.Printf("audit: %q approved %d of %d %q of approval %q (%q) in conversation %q; left out staged positions %q",
+			user, len(n.Approved), len(n.Staged), n.Arg, a.ID, a.ToolName, convID, n.leftOutPositions())
 	}
 	return claimed, err
 }
@@ -306,19 +309,20 @@ func narrowingRequestMeta(n *approvalNarrowing) map[string]any {
 	}}
 }
 
-// leftOut is the staged values the person did not approve, in staged order.
-func (n *approvalNarrowing) leftOut() []string {
+// leftOutPositions is the 1-based staged positions the person did not
+// approve, as ranges ("2, 5-7"): what the audit line names instead of values.
+func (n *approvalNarrowing) leftOutPositions() string {
 	picked := make(map[string]bool, len(n.Approved))
 	for _, v := range n.Approved {
 		picked[v] = true
 	}
-	out := make([]string, 0, len(n.Staged)-len(n.Approved))
-	for _, v := range n.Staged {
+	var pos []int
+	for i, v := range n.Staged {
 		if !picked[v] {
-			out = append(out, v)
+			pos = append(pos, i+1)
 		}
 	}
-	return out
+	return store.PositionRanges(pos)
 }
 
 // narrowingNote is fleet's line under a narrowed call's result, in the

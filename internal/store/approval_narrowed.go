@@ -45,11 +45,12 @@ func NarrowingNote(arg string, staged, approved []string) string {
 	// ran is the call's own outcome (it may have failed before it was sent,
 	// or a restart may have left it unknown), so the note never claims it.
 	return fmt.Sprintf("[fleet] The person narrowed this call: of the %d staged %s in its arguments, only positions %s%s %s; %s. Only the approved ones could be sent to the tool; the result says whether they ran. Do not run the left-out ones unless the person asks. (Written by fleet, not the tool.)",
-		len(staged), arg, positionRanges(pos), named, side, other)
+		len(staged), arg, PositionRanges(pos), named, side, other)
 }
 
-// positionRanges writes ascending 1-based positions compactly: "1-3, 5, 8-10".
-func positionRanges(pos []int) string {
+// PositionRanges writes ascending 1-based positions compactly: "1-3, 5, 8-10".
+// The narrowing note and the chat server's audit line share it.
+func PositionRanges(pos []int) string {
 	var parts []string
 	for i := 0; i < len(pos); {
 		j := i

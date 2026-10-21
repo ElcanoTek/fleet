@@ -104,7 +104,9 @@ call. Otherwise the card is claimed with `store.ClaimApprovalNarrowed`, which
 approves the row AND writes `approvals.narrowed_json` (migration 079)
 `{"arg", "staged", "approved"}` in the same UPDATE, under the same predicate as
 `ClaimApproval` (pending, not expired, the caller's row). An `audit:` line
-names the user, the card, the counts and the left-out values.
+names the user, the card, the counts and the left-out staged positions;
+never the values, which are model-authored and could carry anything (the
+exact record is on the row).
 
 ### The run
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http/httptest"
@@ -480,5 +481,34 @@ func TestHandleApproval_EarlyExecutingAnswerCarriesTheNarrowing(t *testing.T) {
 	narrowed, _ := body["narrowed"].(map[string]any)
 	if rec.Code != 200 || body["executing"] != true || narrowed == nil || !reflect.DeepEqual(narrowed["approved"], []any{"a", "c"}) {
 		t.Fatalf("early answer = %d %s, want executing with the narrowing", rec.Code, rec.Body.String())
+	}
+}
+
+// The audit line names staged positions, never the left-out values.
+func TestApprovalNarrowing_LeftOutPositions(t *testing.T) {
+	n := &approvalNarrowing{Arg: "deal_ids", Staged: []string{"a", "secret-b", "c", "d", "e"}, Approved: []string{"a", "e"}}
+	if got := n.leftOutPositions(); got != "2-4" {
+		t.Fatalf("leftOutPositions = %q, want 2-4", got)
+	}
+}
+
+// failingResultNarrowStore cannot record the outcome.
+type failingResultNarrowStore struct{ *narrowStore }
+
+func (f *failingResultNarrowStore) SetApprovalResult(context.Context, string, string, string, bool) error {
+	return errors.New("db down")
+}
+
+// An outcome that could not be recorded still answers what was approved, so
+// the card keeps its narrowing.
+func TestHandleApproval_UnknownOutcomeKeepsTheNarrowing(t *testing.T) {
+	narrowPolicy(t)
+	st := &failingResultNarrowStore{narrowStore: &narrowStore{approval: narrowApprovalRow()}}
+	s := narrowServer(t, st, &narrowChild{})
+	rec := postNarrowApproval(t, s, `{"approved":true,"scope":"once","approved_values":["a"]}`)
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if rec.Code != 200 || body["execution_unknown"] != true || body["narrowed"] == nil {
+		t.Fatalf("answer = %d %s, want execution_unknown with the narrowing", rec.Code, rec.Body.String())
 	}
 }

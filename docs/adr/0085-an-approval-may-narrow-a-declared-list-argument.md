@@ -50,7 +50,7 @@ may narrow on its card (`agent_policy.critical_tool_narrowable_args`, e.g.
    staged value, the approved ones). `args_json` stays the staged call. So the
    audit trail holds both what was staged and what was approved, and no row can
    be approved narrowed without the record. Each narrowed approval also logs an
-   `audit:` line naming what was left out.
+   `audit:` line naming the counts and the left-out staged positions (never the values).
 4. **Re-checked at execution.** Before the call runs, fleet re-checks the
    record against the staged call (the argument still holds exactly the
    recorded staged values; the approved values are a non-empty subset in

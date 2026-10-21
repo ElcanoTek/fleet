@@ -1833,10 +1833,11 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 			// the action may have run, so the honest answer is "unknown",
 			// never success or failure, and never a re-run.
 			s.approvalPersistenceFailures.Store(approvalID, true)
-			reply <- map[string]any{
+			// The narrowing was recorded with the claim, so the card keeps it.
+			reply <- withApprovalNarrowed(map[string]any{
 				"status": "approved", "execution_unknown": true,
 				"result_text": approvalOutcomeUnrecordedText,
-			}
+			}, approval)
 		})
 		reply <- s.executeClaimedApproval(execCtx, user, convID, approvalID, approval, req)
 	}()
@@ -1992,10 +1993,10 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText, isErr); err != nil {
 		log.Printf("SetApprovalResult: %v", err)
 		s.approvalPersistenceFailures.Store(approvalID, true)
-		return map[string]any{
+		return withApprovalNarrowed(map[string]any{
 			"status": "approved", "execution_unknown": true,
 			"result_text": approvalOutcomeUnrecordedText,
-		}
+		}, approval)
 	}
 	// SetApprovalResult commits the history breadcrumb in the same transaction.
 	s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
