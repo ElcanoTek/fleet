@@ -40,6 +40,9 @@ import (
 //  4. The approval-card describer (ADR-0082) is not called when it is hidden:
 //     it runs on the chat turn's scope and must not reach what the model
 //     could not.
+//  5. Email prevalidation (validate_email_content, called when a chat turn
+//     stages preview_email / send_email) is skipped when it is hidden, for
+//     the same reason; it is best-effort, so the email stages unvalidated.
 
 // gateInteractiveHidden is the toolRoster.removed gate for a tool this list
 // kept out of an interactive run.
@@ -117,7 +120,8 @@ func InteractiveHiddenTools() []string {
 
 // InteractiveHiddenTool reports whether the installed list hides toolName
 // from interactive chat. For a host-side caller that dispatches a tool for a
-// chat turn outside the loop (the approval-card describer).
+// chat turn outside the loop (the approval-card describer, email
+// prevalidation).
 func InteractiveHiddenTool(toolName string) bool {
 	policyMu.RLock()
 	defer policyMu.RUnlock()

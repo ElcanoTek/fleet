@@ -46,6 +46,7 @@ The interactive driver reads the installed list at the start of each turn
 | `spawn_subagent` from the chat turn | The child inherits the list at every depth (`buildChild`), so delegating cannot reach the tool. |
 | Any other dispatch of a built MCP tool | `mcpTool.Run` checks the list first, before the policy gate. A hidden critical tool therefore never stages an approval card, nothing is journaled, and the broker is not called. |
 | The approval-card describer (ADR-0082) | Not called when it is hidden. It runs on the chat turn's scope, so it must not reach what the model could not. The card falls back to the generic one (`gated`). |
+| Email prevalidation (`validate_email_content`, when a chat turn stages `preview_email` / `send_email`) | Not called when it is hidden, for the same reason. Prevalidation is best-effort, so it is skipped exactly as when the validator is unreachable: the email is staged unvalidated and the skip is logged. |
 
 The explanation is the same text everywhere:
 
@@ -172,11 +173,14 @@ connector's name (`ix_merge_deal_domains` on `ix`) is not mistaken for one.
 - `internal/agent/manager.go`, `interactive.go`, `subagent.go`,
   `scheduled.go`: the turn's list and its inheritance by sub-agents.
 - `internal/httpapi/approval_card.go`: the describer skip.
+- `internal/httpapi/approvals.go`: the email prevalidation skip
+  (`prevalidateEmail`).
 - `internal/httpapi/mcp_servers_hidden.go`: the chat Tools picker's rows.
 - `cmd/fleet/validate_config.go`: the preflight.
 
 Tests: `internal/agentcore/interactive_hidden_test.go`,
 `internal/agent/interactive_hidden_test.go`,
 `cmd/fleet/validate_config_hidden_test.go`,
-`internal/clientconfig/interactive_hidden_tools_test.go`, and
-`TestStage_DescriberHiddenFromChatIsNotCalled`.
+`internal/clientconfig/interactive_hidden_tools_test.go`,
+`TestStage_DescriberHiddenFromChatIsNotCalled`, and
+`TestPrevalidateEmailSkipsInteractiveHiddenValidator`.

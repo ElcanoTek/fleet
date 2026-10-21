@@ -54,7 +54,10 @@ suffix rule, applied to MCP tool names only.
    list at every depth (monotonic privilege, ADR-0007).
 5. **Host-side reads for a chat turn honor it.** The approval-card describer
    is not called when it is hidden, alongside the persona and hook checks
-   ADR-0082 already requires.
+   ADR-0082 already requires. Email prevalidation (`validate_email_content`
+   when a chat turn stages `preview_email` / `send_email`) is skipped when it
+   is hidden, as when the validator is unreachable: it is best-effort, so the
+   email stages unvalidated.
 6. **The chat Tools picker matches the turn.** The picker's listing routes
    drop a hidden tool from each connector's tools and count, and do not list a
    connector whose every tool is hidden, so the UI never offers what the run
