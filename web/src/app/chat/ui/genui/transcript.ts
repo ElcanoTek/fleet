@@ -1,5 +1,7 @@
 // Transcript-derived generative-UI state. A card has no server row of its
 // own: its spec IS the show_ui tool call's input (persisted with the turn),
+// or, for a card shown by reference to a tool's result, the validated spec
+// the show_ui result carries (`card`),
 // its submission IS a later user message (parseSubmissionMessage), and
 // "replaced" IS a later card's `replaces`. Deriving all three from the
 // messages means a reload and a second tab agree on every card's state with
@@ -8,6 +10,7 @@
 import { createContext } from "react";
 import type { Message, ToolCall } from "../history";
 import {
+  isCardReference,
   parseCardSpec,
   parseReplyMessage,
   parseSubmissionMessage,
@@ -67,7 +70,13 @@ export const EMPTY_GENUI_STATE: GenUiState = {
  */
 export function isRenderableCardCall(tc: ToolCall): boolean {
   if (tc.name !== SHOW_UI_TOOL || tc.state !== "done") return false;
-  return typeof tc.resultText === "string" && tc.resultText.startsWith("UI_DISPLAYED");
+  if (!(typeof tc.resultText === "string" && tc.resultText.startsWith("UI_DISPLAYED"))) return false;
+  // A card shown by reference (from_result) is drawn from the spec its
+  // result carries. Without one (a turn recovered from the journal after a
+  // crash) there is nothing to draw, so it is not a card.
+  // The substring test keeps an inline card (up to 128 KiB, re-checked on
+  // every streamed delta) from being parsed here.
+  return tc.card !== undefined || !tc.input.includes('"from_result"') || !isCardReference(tc.input);
 }
 
 // Parses are cached per message / tool-call object. Derivation runs on every
@@ -101,9 +110,12 @@ export function answerOf(m: Message): { sub: Submission | null; reply: Reply | n
   return cached(answerCache, m, m.content, parseAnswer);
 }
 
-/** A card tool call's own spec (parsed once per tool-call object). */
+/**
+ * A card tool call's spec (parsed once per tool-call object): the validated
+ * spec its result carries for a card shown by reference, else its own input.
+ */
 export function cardSpecOf(tc: ToolCall): CardSpec | null {
-  return cached(specCache, tc, tc.input, parseCardSpec);
+  return cached(specCache, tc, tc.card ?? tc.input, parseCardSpec);
 }
 
 export function deriveGenUiState(messages: Message[]): GenUiState {

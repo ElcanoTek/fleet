@@ -6,6 +6,7 @@ import {
   applyModelRequired,
   applyRetryNotice,
   applySubagentProgress,
+  applyToolResult,
   applyTurnOutcome,
   APPROVAL_RESUME_KIND,
   clearRetryNotice,
@@ -2566,17 +2567,18 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         name: string;
         text: string;
         is_err: boolean;
+        // A show_ui card drawn by reference: its validated spec (JSON text).
+        card?: string;
       };
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => {
-        const toolCalls = (m.toolCalls ?? []).map((tc) =>
-          tc.id === p.id
-            ? {
-                ...tc,
-                resultText: p.text,
-                state: (p.is_err ? "error" : "done") as ToolCallState,
-              }
-            : tc,
-        );
+        // A reused call id: the result answers the first call still
+        // waiting for one (applyToolResult), so each occurrence keeps its own.
+        const toolCalls = applyToolResult(m.toolCalls ?? [], p.id, (tc) => ({
+          ...tc,
+          resultText: p.text,
+          state: (p.is_err ? "error" : "done") as ToolCallState,
+          ...(typeof p.card === "string" && p.card ? { card: p.card } : {}),
+        }));
         let pythonStreams = m.pythonStreams;
         if (p.name === "run_python" && p.text) {
           pythonStreams = [
