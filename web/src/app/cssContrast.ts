@@ -104,7 +104,9 @@ function rgbComponents(value: string, args: string): RGBA {
   const num = (s: string, scale: number): number => {
     const pct = s.endsWith("%");
     const n = Number(pct ? s.slice(0, -1) : s);
-    if (!/^[+-]?(\d+\.?\d*|\.\d+)%?$/.test(s) || !Number.isFinite(n)) {
+    // A CSS <number>: digits with an optional fraction that has digits after
+    // the dot ("255." is not one), or ".5", with an optional exponent.
+    if (!/^[+-]?(\d+(\.\d+)?|\.\d+)(e[+-]?\d+)?%?$/i.test(s) || !Number.isFinite(n)) {
       throw new Error(`unsupported color value: ${value}`);
     }
     return Math.min(Math.max(pct ? (n / 100) * scale : n, 0), scale);
