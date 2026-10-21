@@ -90,6 +90,14 @@ type ScopeSpec struct {
 	// It carries identity and public server names only; connection records,
 	// endpoint URLs, and credential values remain broker-side.
 	Remote *RemoteScopeSpec `json:"remote,omitempty"`
+	// User is the signed-in user of an INTERACTIVE chat turn (ADR-0087): the
+	// value the child substitutes for ${FLEET_USER_EMAIL}
+	// in this scope's bundle server env. It is data, not authorization — it
+	// selects no server, seat or tool — and it is PII, so neither side logs
+	// it. nil for every other scope; a scheduled scope (TaskID set) or a
+	// remote scope carrying it is refused before backend dispatch, so a task
+	// run can never be handed a person's identity.
+	User *ScopeUser `json:"user,omitempty"`
 	// Policy is the parent's effective, already-decided authorization snapshot
 	// for this scope. It can only NARROW: the credential owner intersects it
 	// with the gates it re-derives from its own bundle, so a parent-side bug
@@ -135,6 +143,15 @@ type ScopePolicy struct {
 	// Credentials lists the permitted {server, account} pairs when
 	// RestrictCredentials is set.
 	Credentials []ScopeChoice `json:"credentials,omitempty"`
+}
+
+// ScopeUser is the interactive turn's signed-in user as it crosses to the
+// credential owner: the authenticated email only (there is no name — see
+// ADR-0087). The parent fills it from the authenticated request; the child
+// re-validates it (agentcore.MCPUserIdentity.Sanitized) and treats a value
+// that fails as absent.
+type ScopeUser struct {
+	Email string `json:"email,omitempty"`
 }
 
 // RemoteScopeSpec selects one user's hosted MCP connections. FilterEnabled is

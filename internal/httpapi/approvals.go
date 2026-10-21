@@ -2538,10 +2538,13 @@ func (s *Server) approvalMCPScope(ctx context.Context, approval *store.Approval)
 		return overlay.CallBroker(), overlay.Catalog, overlay.Close, nil
 	}
 	workspace := tools.WorkspaceDirForConversation(approval.ConversationID)
+	// The approving user: ClaimApproval matches the row's user_email against
+	// the authenticated caller, so approval.UserEmail IS the person who just
+	// clicked approve — and the one whose turn staged the card (ADR-0087).
 	scope, err := s.agent.OpenApprovalMCPScope(ctx, agentcore.MCPSelection{{
 		Server:  approval.MCPServer,
 		Account: approval.MCPAccount,
-	}}, workspace)
+	}}, workspace, agentcore.NewMCPUserIdentity(approval.UserEmail))
 	if err != nil {
 		// Fail closed: a seat that no longer resolves (account revoked, server
 		// removed from the bundle) must surface, not silently downgrade to the

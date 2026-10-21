@@ -390,16 +390,22 @@ func TestPluginMCPTopLevelFailureDisablesMCPOnly(t *testing.T) {
 
 func TestPluginMCPEntryFailuresSkipOnlyThatEntry(t *testing.T) {
 	bad := map[string]string{
-		"unknown field":         `{"type": "stdio", "command": "python3", "shell": true}`,
-		"missing type":          `{"command": "python3"}`,
-		"unknown type":          `{"type": "websocket", "url": "wss://x"}`,
-		"missing command":       `{"type": "stdio"}`,
-		"parent-escaping cmd":   `{"type": "stdio", "command": "../bin/server"}`,
-		"absolute cmd":          `{"type": "stdio", "command": "/usr/bin/python3"}`,
-		"placeholder cmd":       `{"type": "stdio", "command": "${PLUGIN_ROOT}/bin/x"}`,
-		"missing relative cmd":  `{"type": "stdio", "command": "./bin/nope"}`,
-		"reserved env key":      `{"type": "stdio", "command": "python3", "env": {"PLUGIN_ROOT": "/x"}}`,
-		"env not strings":       `{"type": "stdio", "command": "python3", "env": {"A": 1}}`,
+		"unknown field":        `{"type": "stdio", "command": "python3", "shell": true}`,
+		"missing type":         `{"command": "python3"}`,
+		"unknown type":         `{"type": "websocket", "url": "wss://x"}`,
+		"missing command":      `{"type": "stdio"}`,
+		"parent-escaping cmd":  `{"type": "stdio", "command": "../bin/server"}`,
+		"absolute cmd":         `{"type": "stdio", "command": "/usr/bin/python3"}`,
+		"placeholder cmd":      `{"type": "stdio", "command": "${PLUGIN_ROOT}/bin/x"}`,
+		"missing relative cmd": `{"type": "stdio", "command": "./bin/nope"}`,
+		"reserved env key":     `{"type": "stdio", "command": "python3", "env": {"PLUGIN_ROOT": "/x"}}`,
+		"env not strings":      `{"type": "stdio", "command": "python3", "env": {"A": 1}}`,
+		// ADR-0087: plugin env skips the manifest interpolation pass, so an
+		// escaped user token would reach the binder as PII and a padded one
+		// as a literal placeholder; both are refused at parse.
+		"escaped user token":    `{"type": "stdio", "command": "python3", "env": {"TO": "$${FLEET_USER_EMAIL}"}}`,
+		"padded user token":     `{"type": "stdio", "command": "python3", "env": {"TO": "${ FLEET_USER_EMAIL }"}}`,
+		"user name token":       `{"type": "stdio", "command": "python3", "env": {"GREETING": "Hi ${FLEET_USER_NAME},"}}`,
 		"args not strings":      `{"type": "stdio", "command": "python3", "args": [1]}`,
 		"bare cwd":              `{"type": "stdio", "command": "python3", "cwd": "data"}`,
 		"escaping cwd":          `{"type": "stdio", "command": "python3", "cwd": "./../.."}`,
@@ -437,6 +443,60 @@ func TestPluginMCPEntryFailuresSkipOnlyThatEntry(t *testing.T) {
 			}
 			if !containsProblem(b.PluginProblems(), `server "`+key+`"`) || !containsProblem(b.PluginProblems(), "skipped") {
 				t.Errorf("skip must be reported per entry: %v", b.PluginProblems())
+			}
+		})
+	}
+}
+
+// TestPluginUserTokenPlacementSkipsEntry (ADR-0087): a plugin entry never sees
+// the manifest's raw-text or validate passes, so the user-token rules run on
+// the parsed entry. A token is substituted only in a stdio env VALUE in its
+// exact spelling; anywhere else (an http url or header, an env key, args) it
+// would ship verbatim, and a Unicode-padded spelling would reach the connector
+// as a literal. Each such entry is skipped with a reason naming the rule.
+func TestPluginUserTokenPlacementSkipsEntry(t *testing.T) {
+	cases := map[string]struct{ entry, want string }{
+		"http header value": {`{"type": "streamable-http", "url": "https://x.example.com/mcp", "headers": {"X-User": "${FLEET_USER_EMAIL}"}}`,
+			`header "X-User" names ${FLEET_USER_EMAIL}`},
+		"http url": {`{"type": "streamable-http", "url": "https://x.example.com/mcp?u=${FLEET_USER_EMAIL}"}`,
+			`url names ${FLEET_USER_EMAIL}`},
+		"name token in an env value": {`{"type": "stdio", "command": "python3", "env": {"GREETING": "Hi ${FLEET_USER_NAME},"}}`,
+			`fleet has no ${FLEET_USER_NAME} token`},
+		"name token in a header": {`{"type": "streamable-http", "url": "https://x.example.com/mcp", "headers": {"X-Name": "${FLEET_USER_NAME}"}}`,
+			`header "X-Name": "${FLEET_USER_NAME}": fleet has no ${FLEET_USER_NAME} token`},
+		"stdio env key": {`{"type": "stdio", "command": "python3", "env": {"${FLEET_USER_EMAIL}": "x"}}`,
+			`env key "${FLEET_USER_EMAIL}" names`},
+		"stdio cwd": {`{"type": "stdio", "command": "python3", "cwd": "${PLUGIN_DATA}/${FLEET_USER_EMAIL}"}`,
+			`cwd names ${FLEET_USER_EMAIL}`},
+		"stdio cwd with the name token": {`{"type": "stdio", "command": "python3", "cwd": "${PLUGIN_DATA}/${FLEET_USER_NAME}"}`,
+			`cwd: "${FLEET_USER_NAME}": fleet has no ${FLEET_USER_NAME} token`},
+		"stdio arg": {`{"type": "stdio", "command": "python3", "args": ["--to", "${FLEET_USER_EMAIL}"]}`,
+			`args[1] names`},
+		"NBSP-padded env value": {`{"type": "stdio", "command": "python3", "env": {"TO": "${XU00A0FLEET_USER_EMAIL}"}}`,
+			"RESERVED runtime token"},
+		"zero-width-escaped env value": {`{"type": "stdio", "command": "python3", "env": {"TO": "$${XU200BFLEET_USER_EMAIL}"}}`,
+			"an escaped FLEET_USER_EMAIL cannot be written"},
+	}
+	for label, tc := range cases {
+		t.Run(label, func(t *testing.T) {
+			// JSON \u escapes, so the padding reaches the parser as the
+			// real rune while this source stays ASCII.
+			entry := strings.NewReplacer("XU00A0", `\u00a0`, "XU200B", `\u200b`).Replace(tc.entry)
+			mcp := `{` + testMCPSchema + `, "mcpServers": {"bad_entry": ` + entry + `, "good_one": {"type": "stdio", "command": "python3", "env": {"TO": "${FLEET_USER_EMAIL}"}}}}`
+			dir := writePluginBundle(t, "", pluginFixture{dir: "p", manifest: minimalManifest("p"), mcp: mcp})
+			b, err := Load(dir)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			cfgs := b.MCPServerConfigs()
+			if _, ok := cfgs["bad_entry"]; ok {
+				t.Errorf("entry must be skipped: %v", b.PluginProblems())
+			}
+			if got := cfgs["good_one"].Env["TO"]; got != "${FLEET_USER_EMAIL}" {
+				t.Errorf("the exact token in a stdio env value is the contract; sibling env TO = %q (%v)", got, b.PluginProblems())
+			}
+			if !containsProblem(b.PluginProblems(), `server "bad_entry"`) || !containsProblem(b.PluginProblems(), tc.want) {
+				t.Errorf("skip reason must name the rule (%q): %v", tc.want, b.PluginProblems())
 			}
 		})
 	}

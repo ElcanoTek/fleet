@@ -400,10 +400,17 @@ func openScope(ctx context.Context, backend ScopedBackend, spec ScopeSpec) (id s
 }
 
 func validateScopeSpec(spec ScopeSpec) error {
+	// A signed-in user belongs to an interactive turn only (ADR-0087). A
+	// scheduled scope is identified by its task, and no person is at the
+	// keyboard of a task run, so a spec carrying both is a parent bug that
+	// would hand a task someone's identity: refuse it rather than pick one.
+	if spec.User != nil && spec.TaskID != "" {
+		return errors.New("mcpbroker: a scheduled (task) scope cannot carry a signed-in user")
+	}
 	if spec.Remote == nil {
 		return nil
 	}
-	if len(spec.Selection) != 0 || spec.TaskID != "" || spec.Workspace != "" {
+	if len(spec.Selection) != 0 || spec.TaskID != "" || spec.Workspace != "" || spec.User != nil {
 		return errors.New("mcpbroker: remote scope cannot include bundle scope fields")
 	}
 	if strings.TrimSpace(spec.Remote.UserEmail) == "" {

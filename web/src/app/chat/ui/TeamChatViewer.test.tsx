@@ -137,9 +137,10 @@ describe("TeamChatViewer — the Branch CTA (#10, B19)", () => {
     const button = await screen.findByRole("button", {
       name: "Branch to continue in your own chat",
     });
-    // The primary action: the brand fill with its purpose-built foreground.
-    expect(button.className).toContain("bg-[var(--color-primary)]");
-    expect(button.className).toContain("text-[var(--color-on-primary)]");
+    // The primary action: the measured brand fill and its label (4.5:1 for
+    // any bundle palette).
+    expect(button.className).toContain("bg-[var(--color-primary-fill)]");
+    expect(button.className).toContain("text-[var(--color-on-primary-fill)]");
     // The bar is opaque so conversation content never shows through, and
     // positioned so it paints over the absolutely-positioned fade.
     const bar = button.parentElement!;

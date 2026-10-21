@@ -396,7 +396,7 @@ export function TeamChatViewer({
               <button
                 type="button"
                 disabled={branching}
-                className="inline-flex h-[2.375rem] items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-primary)] px-[1.125rem] text-[0.8125rem] font-semibold text-[var(--color-on-primary)] transition hover:bg-[var(--color-primary-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+                className="inline-flex h-[2.375rem] items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-[1.125rem] text-[0.8125rem] font-semibold text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
                 onClick={() => void branch()}
               >
                 {branching

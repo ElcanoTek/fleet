@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"golang.org/x/net/http/httpguts"
+
+	"github.com/ElcanoTek/fleet/internal/usertoken"
 )
 
 // Agent Plugins (https://agent-plugins.org, specification v1.0.0) support for
@@ -77,7 +79,8 @@ import (
 // Every other client ignores that namespace, so a plugin carrying it stays
 // portable.
 //
-// Honest scope: fleet's own `${FLEET_WORKSPACE}` / `${FLEET_TASK_ID}`
+// Honest scope: fleet's own `${FLEET_WORKSPACE}` / `${FLEET_TASK_ID}` /
+// `${FLEET_USER_EMAIL}` (and `${FLEET_WORKSPACE_ROOT}`)
 // spawn-time tokens are still substituted in a plugin server's env values (a
 // documented deviation from the spec's "no other expansion" rule — see
 // docs/AGENT-PLUGINS.md); a portable plugin has no reason to write them.
@@ -1055,16 +1058,38 @@ func parsePluginServer(name string, raw json.RawMessage, ctx pluginServerContext
 		literalEnv:  true,
 		plugin:      ctx.plugin,
 	}
+	// PLUGIN_ROOT / PLUGIN_DATA are expanded into args, env and cwd at load,
+	// so a plugin path that itself contains user-token text would introduce
+	// the token into values the plugin never wrote it in — and the spawn
+	// paths would then fill it with the signed-in user. Refuse such a path.
+	if usertoken.Mentions(ctx.root) || usertoken.Mentions(ctx.dataDir) {
+		return ServerDef{}, errors.New("the plugin's root or data directory path names the reserved signed-in-user token; fleet cannot expand it into the entry without introducing that token")
+	}
+	var sd ServerDef
 	switch typ {
 	case "stdio":
-		return parseStdioPluginServer(fields, ctx, base)
+		sd, err = parseStdioPluginServer(fields, ctx, base)
 	case "streamable-http":
-		return parseHTTPPluginServer(fields, base)
+		sd, err = parseHTTPPluginServer(fields, base)
 	case "sse":
 		return ServerDef{}, errors.New("legacy HTTP+SSE transport is not supported (fleet speaks stdio and Streamable HTTP; spec support for sse is optional)")
 	default:
 		return ServerDef{}, fmt.Errorf("unknown type %q (want stdio, streamable-http, or sse)", typ)
 	}
+	if err != nil {
+		return ServerDef{}, err
+	}
+	// Plugin entries skip the manifest's interpolation and validate passes,
+	// so the signed-in-user token rules (user_tokens.go, ADR-0087) are applied
+	// to the translated entry here: an escaped or padded token in an env
+	// value would reach the binder as PII or a literal placeholder, and a
+	// token anywhere else — an env key, the command or args, an http url or
+	// header — is never substituted and would ship verbatim. The entry is
+	// skipped, like any other entry defect.
+	if err := serverUserTokenProblem(&sd); err != nil {
+		return ServerDef{}, err
+	}
+	return sd, nil
 }
 
 // parseStdioPluginServer handles the `stdio` variant: command resolution,
@@ -1100,6 +1125,13 @@ func parseStdioPluginServer(fields map[string]json.RawMessage, ctx pluginServerC
 	}
 	cwd, _, err := jsonString(fields, "cwd")
 	if err != nil {
+		return ServerDef{}, err
+	}
+	// The cwd becomes a real directory (created under PLUGIN_DATA) before
+	// serverUserTokenProblem sees the entry, and nothing ever substitutes a
+	// user token in it: every user's subprocess would share a directory
+	// literally named after the placeholder. Refuse it before it is created.
+	if err := userTokenFieldProblem(base.Name, "cwd", cwd); err != nil {
 		return ServerDef{}, err
 	}
 	if command, err = resolveStdioCommand(command, ctx.root); err != nil {
