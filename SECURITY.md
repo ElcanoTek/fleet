@@ -200,7 +200,7 @@ compromised or fresh-and-unvetted release from reaching `main`:
   non-docs-only PR into `main`, on pushes to `main`, and weekly.
 - **Release cooldown — on the two ecosystems that support it.**
   `.github/dependabot.yml` applies a `cooldown` to the gomod and npm surfaces so
-  Dependabot waits a few days (3 for patch, 7 for minor, 14 for major) before
+  Dependabot waits a few days (3 for patch, 7 for minor and major) before
   proposing a freshly published release. This blunts fast typosquat /
   account-takeover attacks, where a malicious version is published and then yanked
   once the ecosystem flags it. Cooldown applies to version updates only — Dependabot
@@ -211,9 +211,9 @@ compromised or fresh-and-unvetted release from reaching `main`:
   cooldown would matter most.** Dependabot supports `cooldown` for gomod and npm
   only, so the one ecosystem whose "dependency" is *the CI definition itself* —
   a `github-actions` bump rewrites `.github/workflows/*` and therefore changes
-  what CI executes — cannot be made to wait, and it is configured daily against
-  `main`. What contains that is that such a bump meets the full `CI gate` like
-  any other PR (see "Static analysis" above), and that **every** Dependabot PR
+  what CI executes — cannot be made to wait. It is polled monthly against
+  `main`, like the other surfaces. What contains that is that such a bump meets
+  the full `CI gate` like any other PR (see "Static analysis" above), and that **every** Dependabot PR
   takes a human: automatic merging was removed from this repository, so no
   dependency bump of any ecosystem or bump level reaches `main` without someone
   looking at it.
