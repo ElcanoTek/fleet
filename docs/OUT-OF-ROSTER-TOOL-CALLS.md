@@ -39,8 +39,10 @@ All of it is in `internal/agentcore/out_of_roster.go`:
 - **A tool a gate removed.** The roster records which gate kept each catalog
   tool out: an optional connector the run did not turn on (`opt_in`), a
   connector's tool allowlist (`allowlist`), a narrowed roster (`narrowed`,
-  #1603), the persona's tool policy (`persona`, MCP and native tools), or an
-  invalid input schema (`schema`). A call to one of these names is never run,
+  #1603), the persona's tool policy (`persona`, MCP and native tools), an
+  invalid input schema (`schema`), or, in a chat turn, the bundle's
+  `agent_policy.interactive_hidden_tools` (`interactive_hidden`,
+  [`INTERACTIVE-HIDDEN-TOOLS.md`](INTERACTIVE-HIDDEN-TOOLS.md)). A call to one of these names is never run,
   and its result names the gate: "mcp_pages_deploy_page_upload is not available
   in this run and was not called: this run's tools are narrowed to the ones it
   requires, and mcp_pages_deploy_page_upload is not one of them." In a narrowed

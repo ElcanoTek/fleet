@@ -151,6 +151,21 @@ func writeThemeBlock(b *strings.Builder, selector string, colors map[string]stri
 		}
 		fmt.Fprintf(&decls, "%s:%s;", t.cssVar, strings.TrimSpace(colors[t.key]))
 	}
+	// Filled buttons paint --color-primary-fill under --color-on-primary text.
+	// A bundle that sets either color gets a fill measured against the pair
+	// (theme_contrast.go), so no palette can push a button label below WCAG
+	// AA. It is derived, never pinned: a pinned fill could break the guarantee.
+	if valid("primary") || valid("on_primary") {
+		primary, onPrimary := fleetPrimaryDefaults.primary, fleetPrimaryDefaults.onPrimary
+		if valid("primary") {
+			primary = strings.TrimSpace(colors["primary"])
+		}
+		if valid("on_primary") {
+			onPrimary = strings.TrimSpace(colors["on_primary"])
+		}
+		f := derivePrimaryFill(primary, onPrimary)
+		fmt.Fprintf(&decls, "--color-primary-fill:%s;--color-primary-fill-hover:%s;--color-on-primary-fill:%s;", f.fill, f.hover, f.text)
+	}
 	if decls.Len() == 0 {
 		return
 	}

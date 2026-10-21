@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -91,6 +92,9 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
 		}
 	}
+	// What a chat turn can call: interactive_hidden_tools are not offered
+	// (mcp_servers_hidden.go).
+	servers = hideInteractiveHiddenTools(servers)
 	writeJSON(w, map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()})
 }
 
@@ -238,18 +242,26 @@ func (s *Server) alwaysOnMCPServerCatalogEntries() []map[string]any {
 	}
 	catalog := provider.AlwaysOnMCPServerCatalog()
 	cats := s.connectorCategories()
+	hidden := agentcore.InteractiveHiddenTools()
 	servers := make([]map[string]any, 0, len(catalog))
 	for _, info := range catalog {
 		status := connectorStatusAvailable
 		if !info.Available {
 			status = connectorStatusUnavailable
 		}
+		// What a chat turn can call (mcp_servers_hidden.go): the tools
+		// interactive_hidden_tools keeps out of chat are not counted, and a
+		// connector with none left is not listed. Names never leave the server.
+		count := info.ToolCount - chatHiddenCount(hidden, info.Name, info.Tools)
+		if info.ToolCount > 0 && count <= 0 {
+			continue
+		}
 		servers = append(servers, map[string]any{
 			"name":         info.Name,
 			"display_name": info.DisplayName,
 			"description":  info.Description,
 			"tools":        []string{},
-			"tool_count":   info.ToolCount,
+			"tool_count":   count,
 			"enabled":      info.Available,
 			"always_on":    true,
 			"category":     categoryFor(cats, info.Name),
@@ -480,6 +492,9 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
 		}
 	}
+	// What a chat turn can call: interactive_hidden_tools are not offered
+	// (mcp_servers_hidden.go).
+	servers = hideInteractiveHiddenTools(servers)
 	writeJSON(w, map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()})
 }
 

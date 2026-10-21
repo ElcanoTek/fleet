@@ -29,7 +29,8 @@ import (
 //     tool_call the model wrote itself.
 //   - a tool a gate removed: a narrowed roster (#1603), the persona policy
 //     (#294), an optional connector the run did not turn on, a connector's
-//     allowlist, or an invalid schema. Such a call is never run; its result
+//     allowlist, an invalid schema, or agent_policy.interactive_hidden_tools
+//     in a chat turn. Such a call is never run; its result
 //     names the gate (and, in a narrowed run, the registered stand-in).
 //
 // Every out-of-roster call is counted per model and reason
@@ -314,21 +315,34 @@ func (o *outOfRoster) gateNote(tool, gate string) string {
 			why += "; the registered stand-in is " + standIn + ", call it instead"
 		}
 	case gatePersona:
-		persona := "this persona"
-		if o.persona != "" {
-			persona = fmt.Sprintf("the %q persona", o.persona)
-		}
-		why = persona + "'s tool policy does not allow it"
+		return personaRefusal(tool, o.persona)
 	case gateOptIn:
 		why = "it belongs to an optional connector this run did not turn on"
 	case gateAllowlist:
 		why = "its connector's tool allowlist does not include it"
 	case gateSchema:
 		why = "its input schema is not valid JSON Schema, so it is not offered to the model"
+	case gateInteractiveHidden:
+		return interactiveHiddenRefusal(tool)
 	default:
 		return ""
 	}
+	return gateRefusal(tool, why)
+}
+
+// gateRefusal is the answer to a call of a tool a gate removed from the run.
+func gateRefusal(tool, why string) string {
 	return fmt.Sprintf("%s is not available in this run and was not called: %s.", tool, why)
+}
+
+// personaRefusal is gateRefusal for the persona policy (Gate-4), shared by the
+// out-of-roster answer and the tool_describe / tool_call bridges.
+func personaRefusal(tool, personaName string) string {
+	persona := "this persona"
+	if personaName != "" {
+		persona = fmt.Sprintf("the %q persona", personaName)
+	}
+	return gateRefusal(tool, persona+"'s tool policy does not allow it")
 }
 
 // hasTool reports whether name is in the step's tool list.

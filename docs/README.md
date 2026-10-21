@@ -264,6 +264,7 @@ above fails otherwise.
 - [`IN-HOUSED-DEPENDENCIES.md`](IN-HOUSED-DEPENDENCIES.md) — In-housed dependencies
 - [`INPUT-QUEUE.md`](INPUT-QUEUE.md) — Input queue & mid-turn steering (#785)
 - [`INSTALLER.md`](INSTALLER.md) — The public one-line installer (`install.sh`)
+- [`INTERACTIVE-HIDDEN-TOOLS.md`](INTERACTIVE-HIDDEN-TOOLS.md) — Tools hidden from interactive chat (`agent_policy.interactive_hidden_tools`, ADR-0085)
 - [`keyboard-shortcuts.md`](keyboard-shortcuts.md) — Keyboard shortcuts
 - [`KUBERNETES-LIVE-TEST.md`](KUBERNETES-LIVE-TEST.md) — Real-cluster sandbox integration test
 - [`LEGACY-IMPORT.md`](LEGACY-IMPORT.md) — Legacy import — migrating chat + moc data into fleet

@@ -90,6 +90,30 @@ type deferredToolRegistry struct {
 	byName map[string]fantasy.AgentTool
 	descs  map[string]string // name → full description (for tool_describe)
 	index  *tools.BM25Index
+	// hidden names the MCP tools agent_policy.interactive_hidden_tools kept
+	// out of this run (interactive_hidden.go). They are not in byName, so they
+	// stay uncallable; tool_call only uses this to say why. nil = none.
+	hidden map[string]bool
+	// personaDenied names the MCP tools the persona policy (Gate-4) kept out
+	// of this run, and personaName the persona, for the same reason: the
+	// bridges explain a removed name instead of "no tool named". nil = none.
+	personaDenied map[string]bool
+	personaName   string
+}
+
+// removedNote is the explanation tool_describe and tool_call give for a name a
+// gate removed from this run (the same words the out-of-roster answer uses),
+// or "" for a name no gate this registry knows of removed. The persona gate
+// runs before the hidden one (mcp_tools.go), so a tool both remove is never
+// in hidden and is explained by the persona gate.
+func (r *deferredToolRegistry) removedNote(name string) string {
+	switch {
+	case r.personaDenied[name]:
+		return personaRefusal(name, r.personaName)
+	case r.hidden[name]:
+		return interactiveHiddenRefusal(name)
+	}
+	return ""
 }
 
 func newDeferredToolRegistry(deferred []fantasy.AgentTool) *deferredToolRegistry {
@@ -163,6 +187,13 @@ func (r *deferredToolRegistry) describeTool() fantasy.AgentTool {
 		func(_ context.Context, p toolDescribeParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			name := strings.TrimSpace(p.Name)
 			t, ok := r.byName[name]
+			// A tool interactive_hidden_tools kept out of this run gets the
+			// same fixed explanation tool_call and a direct call give, not
+			// "no tool named": told only that, a model goes looking for the
+			// tool under another name instead of switching to its chat flow.
+			if note := r.removedNote(name); !ok && note != "" {
+				return fantasy.NewTextErrorResponse(note), nil
+			}
 			if !ok {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("tool_describe: no tool named %q — use tool_search to find the right name.", name)), nil
 			}
@@ -250,6 +281,9 @@ func (t *deferredToolCall) Run(ctx context.Context, tc fantasy.ToolCall) (fantas
 
 	name := strings.TrimSpace(p.Name)
 	tool, ok := t.registry.byName[name]
+	if note := t.registry.removedNote(name); !ok && note != "" {
+		return fantasy.NewTextErrorResponse(note), nil
+	}
 	if !ok {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("tool_call: no tool named %q — use tool_search to find the right name.", name)), nil
 	}

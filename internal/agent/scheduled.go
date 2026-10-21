@@ -165,6 +165,12 @@ type Agent struct {
 	// into RunConfig so denied tools never enter the model's tool list.
 	personaPolicy *agentcore.PersonaToolPermissions
 
+	// hiddenToolSuffixes is agent_policy.interactive_hidden_tools when this
+	// agent carries a chat turn's wiring (the interactive spawn host, and
+	// every child it builds); nil for a scheduled task, which sees those
+	// tools. Threaded into RunConfig.HiddenToolSuffixes.
+	hiddenToolSuffixes []string
+
 	// auditProtocolRef names the bundle's self-audit protocol in the audit
 	// guidance ("protocols/self-audit.md"), or "" when the bundle ships none.
 	auditProtocolRef string
@@ -257,6 +263,11 @@ type Options struct {
 	// (scheduledrun) resolves it from the bundle manifest's personas: block for
 	// the task's effective persona and threads it into RunConfig.
 	PersonaPolicy *agentcore.PersonaToolPermissions
+	// HiddenToolSuffixes are the tool suffixes this agent's runs neither
+	// offer nor call (agent_policy.interactive_hidden_tools). Only the
+	// interactive spawn host sets it, so a sub-agent spawned from chat cannot
+	// reach what the chat turn could not; scheduled drivers leave it nil.
+	HiddenToolSuffixes []string
 	// AuditProtocolRef is the workspace-relative self-audit protocol path the
 	// audit guidance names, from AuditProtocolRef(protocolsDir); "" when the
 	// bundle ships none, so the model is never sent after a missing file.
@@ -402,6 +413,7 @@ func NewAgent(opts Options) *Agent {
 		credentialAllowlist:  opts.CredentialAllowlist,
 		thinkingBudget:       opts.ThinkingBudget,
 		personaPolicy:        opts.PersonaPolicy,
+		hiddenToolSuffixes:   append([]string(nil), opts.HiddenToolSuffixes...),
 		auditProtocolRef:     opts.AuditProtocolRef,
 		outputSchema:         append(json.RawMessage(nil), opts.OutputSchema...),
 		phoneAFriendEnabled:  opts.PhoneAFriendEnabled,
@@ -1356,12 +1368,15 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		CredentialAllowlist: a.credentialAllowlist,
 		// Per-persona tool allowlist (#294): NARROW the registered roster to the
 		// task persona's permitted tools. nil = no narrowing.
-		PersonaName:     personaLabel(a.persona),
-		PersonaPolicy:   a.personaPolicy,
-		LoaderTools:     loaderTools,
-		NativeTools:     nativeTools,
-		ProviderHeaders: agentcore.DefaultProviderHeaders,
-		OutputSchema:    a.outputSchema,
+		PersonaName:   personaLabel(a.persona),
+		PersonaPolicy: a.personaPolicy,
+		// A sub-agent of a chat turn keeps the turn's interactive-hidden
+		// list (nil for a scheduled task): its tools stay out of reach.
+		HiddenToolSuffixes: a.hiddenToolSuffixes,
+		LoaderTools:        loaderTools,
+		NativeTools:        nativeTools,
+		ProviderHeaders:    agentcore.DefaultProviderHeaders,
+		OutputSchema:       a.outputSchema,
 		// Extended thinking (#220): the per-task override (a.thinkingBudget) wins
 		// when set, else the GLOBAL default (FLEET_DEFAULT_THINKING_BUDGET_TOKENS).
 		// nil config (some test setups) with no override → thinking off.

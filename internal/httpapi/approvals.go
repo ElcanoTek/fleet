@@ -746,6 +746,16 @@ func (a *approvalStager) prevalidateEmail(sourceToolName, rawInput string) error
 		log.Printf("prevalidateEmail: resolve source tool: %v", err)
 		return nil
 	}
+	// The email is staged by a chat turn, so a validate_email_content the
+	// bundle hides from interactive chat (agent_policy.interactive_hidden_tools)
+	// is not called, exactly as a hidden approval-card describer is not
+	// (approval_card.go): this host-side call must not reach what the model
+	// could not. Prevalidation is best-effort, so it is skipped like an
+	// unreachable validator and the card is staged unvalidated.
+	if full := agentcore.MCPToolName(server, "validate_email_content"); agentcore.InteractiveHiddenTool(full) {
+		log.Printf("prevalidateEmail: %q is hidden from interactive chat (interactive_hidden_tools); not called", full)
+		return nil
+	}
 	text, isError, err := broker.CallMCP(ctx, server, "validate_email_content", map[string]interface{}{
 		"content": content,
 		"subject": subject,

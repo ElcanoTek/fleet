@@ -154,6 +154,48 @@ func TestPrevalidateEmailSkippedWhenMCPDown(t *testing.T) {
 	}
 }
 
+// A validate_email_content the bundle hides from interactive chat
+// (agent_policy.interactive_hidden_tools) is not called by prevalidation,
+// for an MCP send and a native preview alike: the email is staged by a chat
+// turn, which could not call the validator (Codex P2 on #1816). Prevalidation
+// is best-effort, so the email stages unvalidated rather than being refused.
+// A member naming another server's validator does not hide this one.
+func TestPrevalidateEmailSkipsInteractiveHiddenValidator(t *testing.T) {
+	broken := `{"valid":false,"errors":["Unclosed tag: <td>"],"warnings":[]}`
+	cases := []struct {
+		name       string
+		hidden     []string
+		source     string
+		catalog    []mcp.ServerTool
+		wantCalled bool
+	}{
+		{"mcp send, suffix hidden", []string{"validate_email_content"}, "mcp_send_grid_send_email", sendgridApprovalCatalog, false},
+		{"mcp send, server-qualified hidden", []string{"send_grid_validate_email_content"}, "mcp_send_grid_send_email", sendgridApprovalCatalog, false},
+		{"native preview, suffix hidden", []string{"validate_email_content"}, "preview_email", sendgridApprovalCatalog, false},
+		{"other server's validator hidden", []string{"other_validate_email_content"}, "mcp_send_grid_send_email", sendgridApprovalCatalog, true},
+		{"unrelated tool hidden", []string{"create_deal"}, "mcp_send_grid_send_email", sendgridApprovalCatalog, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+			agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{InteractiveHiddenTools: tc.hidden})
+			broker := &fakeMCPBroker{text: broken}
+			stager := &approvalStager{ctx: context.Background(), mcpBroker: broker, mcpCatalog: tc.catalog}
+			err := stager.prevalidateEmail(tc.source, `{"to_email":"a@b.com","subject":"s","content":"<html><body><td>broken"}`)
+			called := broker.tool != ""
+			if called != tc.wantCalled {
+				t.Fatalf("validator called = %t, want %t (route %q.%q)", called, tc.wantCalled, broker.server, broker.tool)
+			}
+			if tc.wantCalled && err == nil {
+				t.Fatal("a visible validator's failure must still refuse the stage")
+			}
+			if !tc.wantCalled && err != nil {
+				t.Fatalf("a hidden validator must be skipped, not refuse the stage: %v", err)
+			}
+		})
+	}
+}
+
 func TestPrevalidateEmailSkippedForNonJSON(t *testing.T) {
 	stager := &approvalStager{
 		ctx:       context.Background(),
