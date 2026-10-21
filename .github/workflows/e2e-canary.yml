@@ -98,9 +98,20 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Install Playwright browser (chromium)
+      - name: Install Playwright browser (chromium, retried)
         working-directory: web
-        run: npx playwright install --with-deps chromium
+        # Retried: download-only step; see ci.yml's mocked e2e job for why.
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "playwright install failed (attempt ${attempt}/3); retrying in $(( attempt * 15 ))s"
+            sleep "$(( attempt * 15 ))"
+          done
+          echo "::error::playwright install failed three times — apt or the Playwright CDN is unreachable from this runner"
+          exit 1
 
       - name: Ensure podman + pasta + postgres client
         # Kept IDENTICAL to ci.yml's e2e-live equivalent. Both lanes boot the
