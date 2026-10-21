@@ -50,17 +50,17 @@ const approvalGroupWorkers = 8
 // approve and the ones to decline. A card of the group named in neither list
 // is left as it is (it may have been staged after the person looked).
 type approvalGroupRequest struct {
-	Approve []string `json:"approve"`
-	Decline []string `json:"decline"`
+	Approve approvalIDList `json:"approve"`
+	Decline approvalIDList `json:"decline"`
 	// Narrow maps an approved card's id to the values of its declared
 	// narrowable list argument the person approved (the single-card POST's
 	// approved_values, docs/APPROVAL-NARROWING.md). Every id must be in
 	// Approve; a card absent from it is approved whole.
-	Narrow map[string][]string `json:"narrow,omitempty"`
+	Narrow approvalGroupNarrow `json:"narrow,omitempty"`
 	// NarrowArgs maps each narrowed card's id to the argument its card showed
 	// as narrowable (the single-card POST's narrowed_arg). Required for every
 	// id in Narrow, and only for those.
-	NarrowArgs map[string]string `json:"narrow_args,omitempty"`
+	NarrowArgs approvalGroupNarrowArgs `json:"narrow_args,omitempty"`
 }
 
 // maxApprovalGroupNarrowedValues bounds the approved values one group
