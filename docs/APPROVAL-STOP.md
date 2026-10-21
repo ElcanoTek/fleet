@@ -6,7 +6,7 @@ cancellation for that request and keeps waiting for the server's answer; a
 server that cooperates finishes the item it is on and answers normally,
 saying what it did not run, and the settled card offers **Run the remaining
 N**. Recorded as
-[ADR-0086](adr/0086-a-person-may-stop-a-running-approved-call.md). It builds
+[ADR-0088](adr/0088-a-person-may-stop-a-running-approved-call.md). It builds
 on [APPROVAL-PROGRESS.md](APPROVAL-PROGRESS.md) (the running card and its
 poll), [APPROVAL-RESULT-CARDS.md](APPROVAL-RESULT-CARDS.md) (the settled card
 and its retry) and [RESUME-AFTER-APPROVAL.md](RESUME-AFTER-APPROVAL.md).

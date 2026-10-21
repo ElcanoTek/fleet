@@ -285,7 +285,7 @@ halts"). Fleet records the stop on the row, sends the MCP
 `notifications/cancelled` for the request and keeps waiting for the server's
 answer; a cooperating server finishes its current item and answers with what
 it did not run, and the settled card offers **Run the remaining N**. See
-[APPROVAL-STOP.md](APPROVAL-STOP.md) and ADR-0086.
+[APPROVAL-STOP.md](APPROVAL-STOP.md) and ADR-0088.
 
 ## A settled card reads the call's own outcome
 
