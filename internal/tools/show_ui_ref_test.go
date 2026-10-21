@@ -17,7 +17,7 @@ type shownCards map[string]string
 
 func refSeam(results []PriorToolResult, shown shownCards) ShowUISeam {
 	return ShowUISeam{
-		Results:  func() []PriorToolResult { return results },
+		Results:  func(string) []PriorToolResult { return results },
 		ShowCard: func(id, _, spec string) { shown[id] = spec },
 	}
 }

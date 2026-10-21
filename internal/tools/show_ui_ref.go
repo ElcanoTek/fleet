@@ -40,9 +40,10 @@ type PriorToolResult struct {
 // loop installs it on the tool's context (WithShowUISeam); without it a
 // reference is refused, and an inline card works exactly as before.
 type ShowUISeam struct {
-	// Results returns the tool results the model can see in this
-	// conversation, newest first.
-	Results func() []PriorToolResult
+	// Results returns the tool results the model could see in this
+	// conversation when it made the show_ui call callID, newest first: a
+	// sibling call of the same step is not among them.
+	Results func(callID string) []PriorToolResult
 	// ShowCard records the validated spec for callID's show_ui result, with
 	// the acknowledgement show_ui returns alongside it (ack), which ties the
 	// spec to that occurrence when a provider reuses the call id. The loop
@@ -88,7 +89,7 @@ func uiInvalid(format string, args ...any) fantasy.ToolResponse {
 // resolveShowUIRef builds the card a reference names: the object at path in
 // the referenced result, with replaces / field_errors from the call laid
 // over it. It returns the spec bytes to validate, or a refusal.
-func resolveShowUIRef(ctx context.Context, input map[string]json.RawMessage) ([]byte, *fantasy.ToolResponse) {
+func resolveShowUIRef(ctx context.Context, callID string, input map[string]json.RawMessage) ([]byte, *fantasy.ToolResponse) {
 	fail := func(format string, args ...any) ([]byte, *fantasy.ToolResponse) {
 		r := uiInvalid(format, args...)
 		return nil, &r
@@ -115,7 +116,7 @@ func resolveShowUIRef(ctx context.Context, input map[string]json.RawMessage) ([]
 	if !ok {
 		return fail("this run cannot resolve from_result. Pass the card inline (title, components, actions).")
 	}
-	res, found := findPriorResult(seam.Results(), ref)
+	res, found := findPriorResult(seam.Results(callID), ref)
 	if !found {
 		what := fmt.Sprintf("call %q", ref.CallID)
 		if ref.CallID == "" {

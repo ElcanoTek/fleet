@@ -195,7 +195,7 @@ func TestShowUISource_NewestMeansTheLaterCall(t *testing.T) {
 	s.onToolCall("late", "mcp_p_intake_card", `{}`)
 	s.onToolResult("late", "mcp_p_intake_card", `{"n":2}`, false)  // finishes first
 	s.onToolResult("early", "mcp_p_intake_card", `{"n":1}`, false) // finishes last
-	run := s.priorToolResults()
+	run := s.priorToolResults("")
 	if len(run) != 2 || run[1].CallID != "late" {
 		t.Fatalf("this run's results oldest call first = %+v", run)
 	}
@@ -225,7 +225,7 @@ func TestShowUISource_ReusedIDKeepsEachCallsPlace(t *testing.T) {
 	s.onToolResult("dup", "mcp_p_intake_card", `{"n":1}`, false)
 	s.onToolResult("other", "bash", `{}`, false)
 	s.onToolResult("dup", "mcp_p_notes", `{"n":2}`, false)
-	got := s.priorToolResults()
+	got := s.priorToolResults("")
 	want := []string{"dup mcp_p_intake_card", "other bash", "dup mcp_p_notes"}
 	if len(got) != len(want) {
 		t.Fatalf("results = %+v", got)
@@ -249,5 +249,25 @@ func TestShowUISource_HookFragmentKeepsTheCard(t *testing.T) {
 	s.onToolResult("u2", tools.ShowUIToolName, ack+" and more", false)
 	if len(s.entries) != 2 || s.entries[0].Card != `{"title":"One"}` || s.entries[1].Card != "" {
 		t.Fatalf("entries = %+v", s.entries)
+	}
+}
+
+// A sibling call of the show_ui call's own step is never a candidate, even
+// when it finished first: the model has not seen its result (Codex P2 on
+// #1819). Results recorded before the show_ui call are.
+func TestShowUISource_SameStepSiblingIsNotSeen(t *testing.T) {
+	s := newStreamSink(nil)
+	s.onToolCall("old", "mcp_p_intake_card", `{}`)
+	s.onToolResult("old", "mcp_p_intake_card", `{"n":1}`, false)
+	// The next step: the card tool and show_ui together.
+	s.onToolCall("sib", "mcp_p_intake_card", `{}`)
+	s.onToolCall("ui", tools.ShowUIToolName, `{"from_result":{"tool":"intake_card"}}`)
+	s.onToolResult("sib", "mcp_p_intake_card", `{"n":2}`, false) // finished before show_ui ran
+	got := s.priorToolResults("ui")
+	if len(got) != 1 || got[0].CallID != "old" {
+		t.Fatalf("candidates for ui = %+v, want only the earlier result", got)
+	}
+	if all := s.priorToolResults(""); len(all) != 2 {
+		t.Fatalf("all results = %+v", all)
 	}
 }

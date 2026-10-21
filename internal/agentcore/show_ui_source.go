@@ -16,7 +16,8 @@ import (
 // built"). The run gives show_ui two things through its context:
 //
 //   - the tool results the model can see: the replayed history the turn was
-//     given (seed) plus this run's results so far (the sink), newest first;
+//     given (seed) plus this run's results recorded before the show_ui call
+//     (the sink), newest first;
 //   - a place to put the validated card it resolved, which the sink attaches
 //     to that show_ui result's RunEntry and tool.result event as display data
 //     only. The model is sent the same short UI_DISPLAYED acknowledgement as
@@ -32,8 +33,8 @@ func withShowUISeam(ctx context.Context, sink *streamSink, seed []fantasy.Messag
 	}
 	seedResults := priorToolResultsFromMessages(seed)
 	return tools.WithShowUISeam(ctx, tools.ShowUISeam{
-		Results: func() []tools.PriorToolResult {
-			run := sink.priorToolResults()
+		Results: func(callID string) []tools.PriorToolResult {
+			run := sink.priorToolResults(callID)
 			out := make([]tools.PriorToolResult, 0, len(run)+len(seedResults))
 			for i := len(run) - 1; i >= 0; i-- {
 				out = append(out, run[i])
@@ -153,13 +154,25 @@ func priorToolResultsFromMessages(msgs []fantasy.Message) []tools.PriorToolResul
 	return c.oldestFirst()
 }
 
-// priorToolResults lists this run's tool results so far, oldest call first,
-// each named by its call.
-func (s *streamSink) priorToolResults() []tools.PriorToolResult {
+// priorToolResults lists this run's tool results the model had seen when it
+// made the show_ui call `before`, oldest call first, each named by its call.
+// Only entries recorded before that call (its latest occurrence) count: a
+// sibling call made in the same step may already have finished when show_ui
+// runs, but the model has not seen its result, so referencing it would
+// depend on scheduling (Codex P2 on #1819). An unknown `before` (or "")
+// lists every result.
+func (s *streamSink) priorToolResults(before string) []tools.PriorToolResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	end := len(s.entries)
+	for i := len(s.entries) - 1; before != "" && i >= 0; i-- {
+		if e := s.entries[i]; e.Type == "tool_call" && e.ToolCallID == before {
+			end = i
+			break
+		}
+	}
 	c := newCallOrdered()
-	for _, e := range s.entries {
+	for _, e := range s.entries[:end] {
 		switch e.Type {
 		case "tool_call":
 			c.call(e.ToolCallID, e.ToolName, e.ToolInput)

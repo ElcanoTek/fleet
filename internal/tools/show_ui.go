@@ -88,7 +88,7 @@ func showUI(ctx context.Context, callID string, input []byte) fantasy.ToolRespon
 	if json.Unmarshal(input, &top) != nil || top["from_result"] == nil {
 		return ShowUIResult(callID, input)
 	}
-	spec, refusal := resolveShowUIRef(ctx, top)
+	spec, refusal := resolveShowUIRef(ctx, callID, top)
 	if refusal != nil {
 		return *refusal
 	}
