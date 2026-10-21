@@ -29,7 +29,7 @@ function Avatar({ email, className }: { email: string; className?: string }) {
     <span
       aria-hidden="true"
       className={[
-        "grid shrink-0 place-items-center rounded-full bg-[var(--color-primary)] text-[0.78rem] font-semibold text-[var(--color-on-primary)]",
+        "grid shrink-0 place-items-center rounded-full bg-[var(--color-primary-fill)] text-[0.78rem] font-semibold text-[var(--color-on-primary-fill)]",
         className ?? "size-7",
       ].join(" ")}
     >
