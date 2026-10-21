@@ -942,3 +942,34 @@ func TestDecodeFileOpOutput_BoundedReadMustStream(t *testing.T) {
 		t.Fatalf("a write response: %v", err)
 	}
 }
+
+// TestDecodeFileOpOutput_PrefixAloneIsNotAStream: a large response that opens
+// like a streamed frame but does not split as one (whitespace after the
+// payload, here) is refused, not parsed as legacy JSON.
+func TestDecodeFileOpOutput_PrefixAloneIsNotAStream(t *testing.T) {
+	req := FileOpRequest{Op: FileOpRead, MaxSize: 1 << 20}
+	out := append([]byte(`{"data_b64":"`), bytes.Repeat([]byte("A"), 512<<10)...)
+	out = append(out, `" ,"ok":true,"size":393216}`...)
+	if _, err := decodeFileOpOutput(req, out); !errors.Is(err, ErrFileOpOutputTooLarge) {
+		t.Fatalf("a malformed streamed frame was parsed: %v", err)
+	}
+}
+
+// TestFileOpSinkDiscardReleasesBuffer: once a backend returns, the sink drops
+// its buffer, and a copier that outlived the call (a cancelled Kubernetes
+// stream) can neither keep it alive nor grow a new one.
+func TestFileOpSinkDiscardReleasesBuffer(t *testing.T) {
+	s := newFileOpSink(FileOpRequest{Op: FileOpRead, MaxSize: 1 << 20})
+	if _, err := s.Write([]byte(`{"data_b64":"AAAA`)); err != nil || s.data == nil {
+		t.Fatalf("write before discard: %v", err)
+	}
+	s.discard()
+	if n, err := s.Write(bytes.Repeat([]byte("A"), 4096)); err != nil || n != 4096 {
+		t.Fatalf("a late write must still report success: %d %v", n, err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data != nil {
+		t.Fatalf("the sink kept %d bytes (cap %d) after discard", len(s.data), cap(s.data))
+	}
+}

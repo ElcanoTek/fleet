@@ -240,6 +240,18 @@ func (s *fileOpSink) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// discard drops the collected bytes and any later writes. Every backend
+// defers it: an exec copier may outlive the call (a cancelled Kubernetes
+// stream), and it must not keep a read's buffer alive after the read's
+// budget is released. Decoding copies out of the buffer, so the result never
+// aliases it.
+func (s *fileOpSink) discard() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.done = true
+	s.data = nil
+}
+
 // output returns the collected bytes, or ErrFileOpOutputTooLarge. Later
 // writes are dropped, so the returned slice is never mutated.
 func (s *fileOpSink) output(op FileOpKind) ([]byte, error) {
@@ -515,12 +527,15 @@ func splitStreamedRead(out []byte) (payload, rest []byte, ok bool) {
 
 // decodeFileOpOutput decodes the helper's output for req. A bounded read
 // answers in the streamed format, or with a small error raised before it
-// started streaming; a larger non-streamed response is not the helper's (a
+// started streaming; a larger response that does not split as a streamed
+// frame (a prefix alone is not enough) is not the helper's (a
 // replaced one could carry a whole file as a JSON string, copied again by
 // the decode), so it is refused before it is parsed.
 func decodeFileOpOutput(req FileOpRequest, out []byte) (FileOpResult, error) {
-	if fileOpOutputBound(req) > 0 && !bytes.HasPrefix(out, streamedReadPrefix) && len(out) > fileOpResponseOverhead {
-		return FileOpResult{}, fmt.Errorf("fileop %s: %w (a non-streamed read response of %d bytes)", req.Op, ErrFileOpOutputTooLarge, len(out))
+	if fileOpOutputBound(req) > 0 && len(out) > fileOpResponseOverhead {
+		if _, _, ok := splitStreamedRead(out); !ok {
+			return FileOpResult{}, fmt.Errorf("fileop %s: %w (a non-streamed read response of %d bytes)", req.Op, ErrFileOpOutputTooLarge, len(out))
+		}
 	}
 	return decodeFileOpResponse(out)
 }

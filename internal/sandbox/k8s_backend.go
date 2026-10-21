@@ -1147,6 +1147,7 @@ func (k *k8sImpl) executeFileOp(ctx context.Context, req FileOpRequest, anchor s
 	// Isolated mode from "/": see containerImpl.executeFileOp.
 	script := fmt.Sprintf("cd / && head -c %d | python3 -I %s", len(reqJSON), k8sFileOpsPath)
 	stdout := newFileOpSink(req)
+	defer stdout.discard()
 	stderr := &cappedBuffer{cap: 4096}
 	code, execErr := k.backend.client.runOneShotExec(cmdCtx, k.backend.cfg.Namespace, podName, sandboxContainerName,
 		[]string{"/bin/sh", "-c", script}, reqJSON, stdout, stderr)

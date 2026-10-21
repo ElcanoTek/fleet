@@ -190,6 +190,7 @@ func (h *hostImpl) executeFileOp(ctx context.Context, req FileOpRequest) (FileOp
 	cmd := exec.CommandContext(cmdCtx, "python3", "-I", "-c", string(fileOpsScript))
 	cmd.Stdin = bytes.NewReader(reqJSON)
 	stdout := newFileOpSink(req)
+	defer stdout.discard()
 	cmd.Stdout = stdout
 	if err := cmd.Run(); err != nil {
 		if cmdCtx.Err() != nil {

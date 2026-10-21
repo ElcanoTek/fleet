@@ -989,6 +989,7 @@ func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, an
 	cmd.Stdin = bytes.NewReader(reqJSON)
 	cmd.WaitDelay = BashWaitDelay
 	stdout := newFileOpSink(req)
+	defer stdout.discard()
 	stderr := &cappedBuffer{cap: 4096}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if err := cmd.Run(); err != nil {
