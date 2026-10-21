@@ -206,6 +206,11 @@ an unchecked call, and **Approve all (k)** counts the calls that will run.
   `email`, `template_email`, `mail_send_email`) is refused by the policy
   check, and an outbound email tool is never narrowable at run time whatever
   key matches it (`agentcore.IsOutboundEmailTool`, the same base suffixes).
+- **Never a synthetic-transport tool.** An inline `http_tools` entry
+  (`mcp__http_*`) or an a2a peer tool (`mcp__a2a_*`) is approved whole
+  whatever key matches it: those transports forward the call's arguments
+  only, so the endpoint would never receive `_meta["fleet/narrowed"]` and
+  could not check its other arguments against the staged list.
 - **Selection is per row of the describer card, not per change.** The
   designer's 2b and 2c untick single changes within a deal. Fleet narrows the
   values of one list argument, so a change can be left out only when the
