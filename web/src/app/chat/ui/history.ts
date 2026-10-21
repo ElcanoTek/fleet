@@ -1596,12 +1596,24 @@ function humanize(token: string): string {
 // and prepending a clean display name keeps the indicator readable —
 // without this we get "Pubmatic pm run standard report" which is
 // triple-redundant.
+//
+// These are the ONLY tool-name prefixes fleet strips: a prefix is removed
+// only for a known SSP, never inferred, because a bundle's own connector can
+// have an action that merely starts with a short word (spacelift's
+// `set_variable` is not "Variable"). Each list is the prefixes the SSP's
+// tools actually use, checked against elcano-config main (296f705c,
+// mcp/*_mcp.py): xandr's few unprefixed tools (create_…, get_…) keep their
+// names whole.
 const sspPrefixes: Array<{ match: string; tools: string[]; display: string }> = [
   { match: "mcp_pubmatic_", tools: ["pm_"], display: "PubMatic" },
   { match: "mcp_indexexchange_", tools: ["ix_"], display: "Index Exchange" },
   { match: "mcp_magnite_", tools: ["magnite_"], display: "Magnite" },
   { match: "mcp_xandr_", tools: ["xandr_"], display: "Xandr" },
-  { match: "mcp_medianet_", tools: ["mn_"], display: "Media.net" },
+  { match: "mcp_medianet_", tools: ["mn_", "medianet_"], display: "Media.net" },
+  { match: "mcp_openx_", tools: ["ox_"], display: "OpenX" },
+  { match: "mcp_triplelift_", tools: ["tl_"], display: "TripleLift" },
+  { match: "mcp_equativ_", tools: ["eq_"], display: "Equativ" },
+  { match: "mcp_nexxen_", tools: ["nx_"], display: "Nexxen" },
 ];
 
 /**

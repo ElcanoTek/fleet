@@ -29,9 +29,22 @@ describe("approvalToolLabel", () => {
     // fleet's SSP names, and the short prefix their tools repeat.
     ["mcp_indexexchange_ix_create_deal", "indexexchange", "Index Exchange", "Create deal"],
     ["mcp_magnite_magnite_update_deal", "magnite", "Magnite", "Update deal"],
-    // A connector's short prefix is dropped even outside fleet's SSP list.
-    ["mcp_openx_ox_create_deal", "openx", "Openx", "Create deal"],
-    ["mcp_triplelift_tl_update_deal", "triplelift", "Triplelift", "Update deal"],
+    // Every SSP's own prefix, as its tools on elcano-config use it.
+    ["mcp_openx_ox_create_deal", "openx", "OpenX", "Create deal"],
+    ["mcp_triplelift_tl_update_deal", "triplelift", "TripleLift", "Update deal"],
+    ["mcp_pubmatic_pm_update_deal", "pubmatic", "PubMatic", "Update deal"],
+    ["mcp_xandr_xandr_get_deal", "xandr", "Xandr", "Get deal"],
+    ["mcp_medianet_mn_create_deal", "medianet", "Media.net", "Create deal"],
+    ["mcp_medianet_medianet_list_deals", "medianet", "Media.net", "List deals"],
+    ["mcp_equativ_eq_create_deal", "equativ", "Equativ", "Create deal"],
+    ["mcp_nexxen_nx_create_deal", "nexxen", "Nexxen", "Create deal"],
+    // An SSP tool without its prefix keeps its name whole.
+    ["mcp_xandr_create_deal", "xandr", "Xandr", "Create deal"],
+    // Another connector's action is never trimmed: a short first word
+    // (set ⊂ spacelift) is part of the action (Codex review, #1828).
+    ["mcp_spacelift_set_variable", "spacelift", "Spacelift", "Set variable"],
+    ["mcp_spacelift_set_variable", undefined, "Spacelift", "Set variable"],
+    ["mcp_pages_pg_deploy", "pages", "Pages", "Pg deploy"],
     // An older row with no mcpServer: the longest connector the chat knows.
     ["mcp_deal_sheet_next_campaign_id", undefined, "Deal Sheet", "Next campaign id"],
     // Unknown connector, blank display name: the humanised id.
@@ -49,12 +62,14 @@ describe("approvalToolLabel", () => {
     ["mcp_magnite_mcp_magnite_update_deal", "magnite_mcp", "Magnite", "Update deal"],
     ["mcp_indexexchange_mcp_ix_create_deal", "indexexchange_mcp", "Index Exchange", "Create deal"],
     ["mcp_pubmatic_mcp_pm_update_deal", "pubmatic_mcp", "PubMatic", "Update deal"],
-    ["mcp_openx_mcp_ox_create_deal", "openx_mcp", "Openx", "Create deal"],
+    ["mcp_openx_mcp_ox_create_deal", "openx_mcp", "OpenX", "Create deal"],
     ["mcp_equativ_mcp_eq_create_deal", "equativ_mcp", "Equativ", "Create deal"],
     ["mcp_xandr_mcp_create_deal", "xandr_mcp", "Xandr", "Create deal"],
     // No mcpServer on the row and no catalog: the suffix stays with the connector.
     ["mcp_magnite_mcp_magnite_update_deal", undefined, "Magnite", "Update deal"],
-    ["mcp_triplelift_mcp_tl_update_deal", undefined, "Triplelift", "Update deal"],
+    ["mcp_triplelift_mcp_tl_update_deal", undefined, "TripleLift", "Update deal"],
+    ["mcp_nexxen_mcp_nx_update_deal", "nexxen_mcp", "Nexxen", "Update deal"],
+    ["mcp_medianet_mcp_mn_create_deal", "medianet_mcp", "Media.net", "Create deal"],
   ])("a _mcp server: %s (server %s) → %s “%s”", (tool, server, connector, action) => {
     expect(approvalToolLabel(tool, server)).toEqual({ connector, action });
   });

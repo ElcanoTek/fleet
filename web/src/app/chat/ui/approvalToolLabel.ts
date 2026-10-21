@@ -56,16 +56,6 @@ function canonicalAccount(account: string): string {
   return account.trim().replace(/[- ]/g, "_");
 }
 
-// isShortPrefixOf reports whether token is the short form SSP tools repeat
-// for their connector: 2-3 letters, the connector's first letter, the rest in
-// order (ix ⊂ indexexchange, pm ⊂ pubmatic, ox ⊂ openx, tl ⊂ triplelift).
-function isShortPrefixOf(token: string, server: string): boolean {
-  if (token.length < 2 || token.length > 3 || token[0] !== server[0]) return false;
-  let i = 0;
-  for (const ch of server) if (ch === token[i]) i++;
-  return i === token.length;
-}
-
 export type ApprovalToolLabel = {
   /** What the call does, humanised: "Execute plan", "Send email". */
   action: string;
@@ -125,15 +115,13 @@ export function approvalToolLabel(
   return srv ? { action, connector: connectorLabel(srv, names) } : { action };
 }
 
-// stripConnectorPrefix drops the connector name SSP tools repeat as a prefix
-// (mcp_indexexchange_ix_create_deal, mcp_magnite_mcp_magnite_get_deal),
-// matched against the server id without its `_mcp` suffix.
+// stripConnectorPrefix drops the prefix a known SSP's tools repeat
+// (mcp_indexexchange_ix_create_deal, mcp_magnite_mcp_magnite_get_deal): only
+// the prefixes fleet lists for that SSP (sspConnector, which also reads the
+// id without its `_mcp` suffix). Any other connector's action is kept whole:
+// a short word at its start is part of the action, not a prefix.
 function stripConnectorPrefix(rest: string, server: string): string {
-  const base = connectorBase(server);
-  const first = rest.split("_")[0];
-  const prefixes = [...(sspConnector(server)?.toolPrefixes ?? []), `${server}_`, `${base}_`];
-  if (first !== rest && isShortPrefixOf(first, base)) prefixes.push(`${first}_`);
-  for (const p of prefixes) {
+  for (const p of sspConnector(server)?.toolPrefixes ?? []) {
     if (rest.startsWith(p) && rest.length > p.length) return rest.slice(p.length);
   }
   return rest;
