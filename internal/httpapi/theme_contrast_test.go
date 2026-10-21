@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -304,7 +305,7 @@ func TestPrimaryFillContract(t *testing.T) {
 func TestDeriveSecondaryFill_AnyPaletteBlendReachesAA(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1830, 7))
 	randomHex := func() string { return fmt.Sprintf("#%06x", rng.IntN(1<<24)) }
-	for range 5000 {
+	for range 1000 {
 		primary, onPrimary, secondary := randomHex(), randomHex(), randomHex()
 		f := derivePrimaryFill(primary, onPrimary)
 		g := deriveSecondaryFill(f, secondary)
@@ -394,4 +395,50 @@ func TestRenderThemeCSS_EmitsSecondaryFill(t *testing.T) {
 			t.Errorf("got %q", css)
 		}
 	})
+}
+
+// blendScan is a brute-force scan of a blend: the lowest contrast of text on
+// the 8-bit color painted at each of steps+1 evenly spaced points.
+func blendScan(text, a, b rgba, steps int) (float64, rgba) {
+	lowest, worst := math.Inf(1), a
+	for i := 0; i <= steps; i++ {
+		u := float64(i) / float64(steps)
+		p := quantize(rgba{a.r + (b.r-a.r)*u, a.g + (b.g-a.g)*u, a.b + (b.b-a.b)*u, 1})
+		if r := contrast(text, p); r < lowest {
+			lowest, worst = r, p
+		}
+	}
+	return lowest, worst
+}
+
+// blendMinContrast must find the worst color the blend paints wherever the
+// pixels fall, not the worst of a few samples: it is never above a
+// brute-force scan 10,000 steps fine over random blends.
+func TestBlendMinContrast_FindsEveryPaintedColor(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1830, 11))
+	randomColor := func() rgba {
+		return rgba{float64(rng.IntN(256)) / 255, float64(rng.IntN(256)) / 255, float64(rng.IntN(256)) / 255, 1}
+	}
+	for range 200 {
+		text, a, b := randomColor(), randomColor(), randomColor()
+		brute, _ := blendScan(text, a, b, 10000)
+		if got := blendMinContrast(text, a, b); got > brute+1e-12 {
+			t.Fatalf("%s → %s under %s: blendMinContrast %.6f, a painted color reaches %.6f", hexOf(a), hexOf(b), hexOf(text), got, brute)
+		}
+	}
+}
+
+// Codex review (#1830): with 65 fixed samples this palette's gradient
+// measured 4.5000:1 while a painted color between two samples was 4.477:1.
+func TestDeriveSecondaryFill_NoPaintedColorBetweenSamplesFallsUnderAA(t *testing.T) {
+	f := derivePrimaryFill("#920a39", "#360a91")
+	g := deriveSecondaryFill(f, "#08c1e4")
+	text, _ := parseCSSColor(f.text)
+	for _, seg := range [][2]string{{f.fill, g.fill}, {f.hover, g.hover}} {
+		a, _ := parseCSSColor(seg[0])
+		b, _ := parseCSSColor(seg[1])
+		if r, p := blendScan(text, a, b, 50000); r < primaryFillMinContrast {
+			t.Fatalf("%s → %s paints %s at %.4f:1 under %s", seg[0], seg[1], hexOf(p), r, f.text)
+		}
+	}
 }

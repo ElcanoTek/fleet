@@ -11,8 +11,8 @@ import { contrastRatio, over, resolveColor, themesFrom, toHex, type RGB, type Th
  * secondary like the brand's --gradient-action-primary, but between the
  * measured stops /theme.css derives (internal/httpapi theme_contrast.go). The
  * label sits on every point of it, and with dark text an sRGB blend can dip
- * darker mid-way than either end, so this measures the whole blend, sampled
- * finer than the 2.1rem Send circle's pixels, with this file's own evaluator.
+ * darker mid-way than either end, so this measures every color the blend
+ * paints, with this file's own evaluator.
  */
 
 const APP_DIR = import.meta.dirname ?? __dirname;
@@ -20,7 +20,6 @@ const css = readFileSync(join(APP_DIR, "globals.css"), "utf8");
 const themes = themesFrom(css);
 
 const TEXT = 4.5;
-const SAMPLES = 64;
 const MEASURED_STOPS = new Set([
   "--color-primary-fill",
   "--color-primary-fill-hover",
@@ -28,13 +27,26 @@ const MEASURED_STOPS = new Set([
   "--color-secondary-fill-hover",
 ]);
 
-/** The lowest contrast of `text` on any point of a blend from a to b, each point rounded to 8 bits. */
+/**
+ * The lowest contrast of `text` on any 8-bit color a blend from a to b paints.
+ * Where the pixels fall depends on the element's size, so this does not sample
+ * fixed points: a channel's 8-bit value changes only where the blend crosses a
+ * half-step, so one point between each pair of consecutive crossings (and the
+ * two ends) covers every painted color.
+ */
 function blendMin(text: RGB, a: RGB, b: RGB): number {
-  let lowest = Infinity;
-  for (let i = 0; i <= SAMPLES; i++) {
-    const t = i / SAMPLES;
-    const p = [0, 1, 2].map((c) => Math.round((a[c] + (b[c] - a[c]) * t) * 255) / 255) as RGB;
-    lowest = Math.min(lowest, contrastRatio(text, p));
+  const at = (t: number) => [0, 1, 2].map((c) => Math.round((a[c] + (b[c] - a[c]) * t) * 255) / 255) as RGB;
+  const cuts = [0, 1];
+  for (let c = 0; c < 3; c++) {
+    const from = a[c] * 255;
+    const to = b[c] * 255;
+    const [lo, hi] = [Math.min(from, to), Math.max(from, to)];
+    for (let k = Math.floor(lo) + 0.5; k < hi; k++) if (k > lo) cuts.push((k - from) / (to - from));
+  }
+  cuts.sort((x, y) => x - y);
+  let lowest = Math.min(contrastRatio(text, at(0)), contrastRatio(text, at(1)));
+  for (let j = 0; j + 1 < cuts.length; j++) {
+    if (cuts[j + 1] > cuts[j]) lowest = Math.min(lowest, contrastRatio(text, at((cuts[j] + cuts[j + 1]) / 2)));
   }
   return lowest;
 }

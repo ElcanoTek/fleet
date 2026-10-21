@@ -128,8 +128,8 @@
     "hover": "#f01a1a",
     "text": "#000000",
     "secondary": "#008844",
-    "secondary_fill": "#a8d7bf",
-    "secondary_hover": "#c2e2d2"
+    "secondary_fill": "#abd8c1",
+    "secondary_hover": "#c4e4d4"
   },
   {
     "name": "a translucent secondary",

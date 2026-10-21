@@ -20,6 +20,7 @@ package httpapi
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -315,7 +316,8 @@ func hslToRGB(h, s, l float64) rgba {
 // Run button) runs from the primary to the secondary. Its label sits on every
 // point of it, so both stops are measured, and so is the blend between them:
 // with dark text a straight sRGB blend can dip darker mid-way than either end
-// (luminance is convex along the blend), so an AA pair of ends is not enough.
+// (luminance is convex along the blend), so an AA pair of ends is not enough:
+// blendMinContrast measures every color the blend paints.
 // The gradient starts at the measured primary fill and ends at
 // --color-secondary-fill: the secondary mixed toward the fill's extreme by the
 // smallest step at which every point of the blend clears AA under the label.
@@ -325,10 +327,6 @@ func hslToRGB(h, s, l float64) rgba {
 // fleetSecondaryDefault mirrors globals.css's --color-secondary (both themes).
 // TestSecondaryFill_DefaultsMatchGlobalsCSS keeps the two in step.
 const fleetSecondaryDefault = "#586f7c"
-
-// gradientSamples is how many steps of a blend are measured. The 2.1rem Send
-// circle is ~34px across, so 64 steps is finer than the pixels it paints.
-const gradientSamples = 64
 
 // secondaryFill is the measured end of the action gradient and its hover.
 type secondaryFill struct {
@@ -376,15 +374,36 @@ func deriveSecondaryFill(pf primaryFill, secondary string) secondaryFill {
 	return out
 }
 
-// blendMinContrast is the lowest contrast of text on any point of a CSS
-// linear-gradient from a to b (opaque stops blend in sRGB), each point
-// rounded to the 8-bit color the browser paints.
+// blendMinContrast is the lowest contrast of text on any color a CSS
+// linear-gradient from a to b paints (opaque stops blend in sRGB, and each
+// point is painted as its 8-bit color). Sampling fixed points is not enough:
+// where the pixels fall depends on the element's size, and the worst color
+// can sit between any two samples. So it measures every color the blend can
+// paint. A channel's 8-bit value changes only where the blend crosses a
+// half-step (k+0.5)/255, so between two consecutive crossings of any channel
+// the painted color is constant: one point inside each such interval, plus
+// the two ends, is the whole set (at most 766 colors).
 func blendMinContrast(text, a, b rgba) float64 {
-	lowest := math.Inf(1)
-	for i := 0; i <= gradientSamples; i++ {
-		t := float64(i) / gradientSamples
-		p := quantize(rgba{a.r + (b.r-a.r)*t, a.g + (b.g-a.g)*t, a.b + (b.b-a.b)*t, 1})
-		lowest = math.Min(lowest, contrast(text, p))
+	from := [3]float64{a.r * 255, a.g * 255, a.b * 255}
+	to := [3]float64{b.r * 255, b.g * 255, b.b * 255}
+	cuts := []float64{0, 1}
+	for i := range 3 {
+		lo, hi := math.Min(from[i], to[i]), math.Max(from[i], to[i])
+		for k := math.Floor(lo) + 0.5; k < hi; k++ {
+			if k > lo {
+				cuts = append(cuts, (k-from[i])/(to[i]-from[i]))
+			}
+		}
+	}
+	sort.Float64s(cuts)
+	at := func(t float64) rgba {
+		return quantize(rgba{a.r + (b.r-a.r)*t, a.g + (b.g-a.g)*t, a.b + (b.b-a.b)*t, 1})
+	}
+	lowest := math.Min(contrast(text, at(0)), contrast(text, at(1)))
+	for j := 0; j+1 < len(cuts); j++ {
+		if cuts[j+1] > cuts[j] {
+			lowest = math.Min(lowest, contrast(text, at((cuts[j]+cuts[j+1])/2)))
+		}
 	}
 	return lowest
 }
