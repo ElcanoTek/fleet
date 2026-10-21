@@ -134,6 +134,7 @@ import { memoryModalSubtitle } from "./memoryModalCopy";
 import { Composer } from "./Composer";
 import type { SkillInfo } from "./skillSlash";
 import { ChatTranscript } from "./ChatTranscript";
+import { ConnectorNamesContext, connectorNames } from "./approvalToolLabel";
 import { usePerConvComposerState } from "./usePerConvComposerState";
 import { useTurnStreamState } from "./useTurnStreamState";
 import {
@@ -767,6 +768,9 @@ export function ChatExperience({
   // MCPServerInfo shape is declared at module scope (and exported) so the
   // extracted Composer can type its prop against it.
   const [mcpServers, setMcpServers] = useState<MCPServerInfo[]>([]);
+  // The connectors' human names, so an approval card says "Index Exchange"
+  // rather than a raw tool id (approvalToolLabel.ts).
+  const connectorNameMap = useMemo(() => connectorNames(mcpServers), [mcpServers]);
   // The Tools picker's category headings, in order, from the same catalog
   // responses (empty until the first one answers; the picker falls back).
   const [mcpCategories, setMcpCategories] = useState<PickerCategory[]>([]);
@@ -6547,6 +6551,7 @@ export function ChatExperience({
           >
             <OutputShareContext.Provider value={outputShareMarkers}>
             <WithheldFilesContext.Provider value={withheldFiles}>
+            <ConnectorNamesContext.Provider value={connectorNameMap}>
             <ChatTranscript
               conversationRef={conversationRef}
               streamEndRef={streamEndRef}
@@ -6599,6 +6604,7 @@ export function ChatExperience({
               loadRankedModels={loadRankedModels}
               loadCatalogModels={loadCatalogModels}
             />
+            </ConnectorNamesContext.Provider>
             </WithheldFilesContext.Provider>
             </OutputShareContext.Provider>
 

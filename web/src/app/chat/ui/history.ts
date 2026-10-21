@@ -1556,6 +1556,12 @@ const sspPrefixes: Array<{ match: string; tools: string[]; display: string }> = 
   { match: "mcp_medianet_", tools: ["mn_"], display: "Media.net" },
 ];
 
+/** Fleet's known SSP connector: its display name and the short prefix its tools repeat. */
+export function sspConnector(server: string): { display: string; toolPrefixes: string[] } | undefined {
+  const hit = sspPrefixes.find((p) => p.match === `mcp_${server}_`);
+  return hit ? { display: hit.display, toolPrefixes: [...hit.tools] } : undefined;
+}
+
 /**
  * Human-readable, present-progressive label for the thinking indicator.
  * Distinct from `prettyToolName` (used in chips) because the indicator sits

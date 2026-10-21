@@ -12,7 +12,7 @@
 // byte-identical to the in-module originals.
 
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useId, useRef, useState } from "react";
 import {
   currentAdvancedModel,
   labelForModel,
@@ -27,6 +27,7 @@ import {
   approvalStatusFromOutcome,
   resultCardFromOutcome,
 } from "./history";
+import { applyAllText, approvalToolLabel, ConnectorNamesContext } from "./approvalToolLabel";
 import { useApprovalProgressPoll } from "./useApprovalProgressPoll";
 import { EmailSendResult, parseEmailSendPayload } from "./ToolChips";
 import {
@@ -111,7 +112,11 @@ export function ApprovalSeatBadge({ server, account, verb = "Sending as" }: {
   account?: string;
   verb?: string;
 }) {
+  const names = useContext(ConnectorNamesContext);
   if (!server || !account) return null;
+  // The connector by its human name when the chat knows it ("on Index
+  // Exchange"); the id, as code, otherwise.
+  const named = names.get(server);
   return (
     <div
       data-testid="approval-seat"
@@ -120,10 +125,17 @@ export function ApprovalSeatBadge({ server, account, verb = "Sending as" }: {
     >
       <span>
         {verb} <span className="font-mono">{account}</span> on{" "}
-        <span className="font-mono">{server}</span>
+        {named ? named : <span className="font-mono">{server}</span>}
       </span>
     </div>
   );
+}
+
+// ApplyAllText is the batch-approval checkbox's label: the tool in words
+// ("every Index Exchange “Execute plan” request"), never its raw id.
+function ApplyAllText({ approval }: { approval: Approval }) {
+  const names = useContext(ConnectorNamesContext);
+  return <>{applyAllText(approvalToolLabel(approval.tool, approval.mcpServer, names))}</>;
 }
 
 // isEmailApprovalTool gates the email-shaped card. It used to be the implicit
@@ -829,7 +841,7 @@ export function ApprovalCard({
                   onChange={(e) => setApplyAll(e.target.checked)}
                   className="size-3.5 accent-[var(--color-primary)]"
                 />
-                Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
+                <ApplyAllText approval={approval} />
               </label>
             )}
           </div>
@@ -1084,7 +1096,7 @@ function GenericActionCard({
                 onChange={(e) => onApplyAllChange(e.target.checked)}
                 className="size-3.5 accent-[var(--color-primary)]"
               />
-              Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
+              <ApplyAllText approval={approval} />
             </label>
           )}
         </div>
@@ -1167,7 +1179,7 @@ function GenericActionCard({
                 onChange={(e) => onApplyAllChange(e.target.checked)}
                 className="size-3.5 accent-[var(--color-primary)]"
               />
-              Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
+              <ApplyAllText approval={approval} />
             </label>
           )}
         </div>

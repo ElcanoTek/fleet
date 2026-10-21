@@ -6,7 +6,7 @@ import type { Approval } from "./history";
 // A bundle can list a critical tool in
 // agent_policy.critical_tool_no_session_approval so every call needs its own
 // decision. The server marks those cards no_session_approval; the card then
-// withholds "Apply my choice to all … calls in this chat" and always posts
+// withholds "Apply my choice to every … request in this chat" and always posts
 // scope "once". Every other card keeps the checkbox (#300).
 
 function renderCard(approval: Partial<Approval> & Pick<Approval, "tool">) {
@@ -31,7 +31,7 @@ describe("cards for a tool that needs a decision per call", () => {
       summary: { tool: "mcp_deals_create_deal", args: [{ key: "deal_name", value: "Q4" }] },
     });
     expect(screen.queryByTestId("approval-apply-all")).toBeNull();
-    expect(screen.queryByText(/Apply my choice to all/)).toBeNull();
+    expect(screen.queryByText(/Apply my choice to/)).toBeNull();
     // Approve and Cancel are unchanged.
     expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Approve & run" }));
