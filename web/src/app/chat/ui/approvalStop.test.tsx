@@ -41,7 +41,7 @@ describe("the running card's Stop", () => {
     const onResolved = vi.fn();
     render(<ApprovalCard approval={running()} conversationId="conv_1" onResolved={onResolved} />);
     const stop = screen.getByTestId("approval-stop");
-    expect(stop).toHaveAccessibleDescription("Stopping finishes the current item, then halts.");
+    expect(stop).toHaveAccessibleDescription("Asks the server to stop after its current item; the result says what ran.");
     fireEvent.click(stop);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(fetchMock.mock.calls[0][0]).toBe("/api/conversations/conv_1/approvals/ap_1/stop");
@@ -52,7 +52,7 @@ describe("the running card's Stop", () => {
 
   it("reads Stopping and offers no second Stop once stopping", () => {
     render(<ApprovalCard approval={running({ stopping: true })} conversationId="conv_1" onResolved={vi.fn()} />);
-    expect(screen.getByTestId("approval-stopping")).toHaveTextContent("Stopping: the current item finishes, then it halts.");
+    expect(screen.getByTestId("approval-stopping")).toHaveTextContent("Stop requested: the server was asked to stop after its current item. The result says what ran.");
     expect(screen.queryByTestId("approval-stop")).toBeNull();
   });
 

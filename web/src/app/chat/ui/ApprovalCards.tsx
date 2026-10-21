@@ -304,7 +304,7 @@ function ApprovalExecutingControls({
       {progress ? <ApprovalProgressBar progress={progress} /> : null}
       {stopping ? (
         <p data-testid="approval-stopping" role="status" className="text-[0.75rem] text-[var(--color-text-secondary)]">
-          Stopping: the current item finishes, then it halts.
+          Stop requested: the server was asked to stop after its current item. The result says what ran.
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
@@ -330,7 +330,7 @@ function ApprovalExecutingControls({
               {submitting === "cancel" ? "Stopping…" : "Stop"}
             </button>
             <span id={stopHintId} className="text-[0.72rem] text-[var(--color-card-text-muted)]">
-              Stopping finishes the current item, then halts.
+              Asks the server to stop after its current item; the result says what ran.
             </span>
           </>
         ) : null}
@@ -585,7 +585,7 @@ export function ApprovalCard({
   };
 
   // Stop a running call (docs/APPROVAL-STOP.md): the server asks the tool to
-  // stop after its current item; the card shows "Stopping" until it settles.
+  // stop after its current item; the card shows "Stop requested" until it settles.
   const stop = async () => {
     if (submitting || !executing || !conversationId) return;
     setSubmitting("cancel");

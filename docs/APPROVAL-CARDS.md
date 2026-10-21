@@ -280,8 +280,8 @@ bundle's staged calls, email sends and risky shell commands included.
 ## A running call can be stopped
 
 For tools a bundle lists in `agent_policy.critical_tool_stop`, a running
-approved call's card shows **Stop** ("Stopping finishes the current item, then
-halts"). Fleet records the stop on the row, sends the MCP
+approved call's card shows **Stop** ("Asks the server to stop after its
+current item; the result says what ran"). Fleet records the stop on the row, sends the MCP
 `notifications/cancelled` for the request and keeps waiting for the server's
 answer; a cooperating server finishes its current item and answers with what
 it did not run, and the settled card offers **Run the remaining N**. See

@@ -586,8 +586,10 @@ decided it on its own card.
 
 A deployment can also let you **stop** chosen actions while they run (a plan
 working through many deals, for example). Their running card then has a
-**Stop** button: the action finishes the record it is on and then halts, and
-the card reads **Stopping** until it does. The finished card says how far it
+**Stop** button: it asks the connector to stop after the record it is on,
+and the card reads **Stop requested** until the action ends. Whether it
+stopped there is up to the connector, so the finished card's result says what
+ran. The finished card says how far it
 got (for example "Stopped after 12 of 24") and offers **Run the remaining N**,
 which asks the assistant to run the records it never reached; that comes back
 to you as a new card to approve. If the connector does not support stopping,

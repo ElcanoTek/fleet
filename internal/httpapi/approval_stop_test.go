@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http/httptest"
 	"strings"
@@ -482,5 +483,32 @@ func TestExecuteClaimedApproval_StoppedBeforeSendSaysNothingRan(t *testing.T) {
 	defer st.mu.Unlock()
 	if !strings.Contains(st.result, "before this call was sent") || strings.Contains(st.result, "while this call ran") || child.calls != 0 {
 		t.Fatalf("result = %q, calls = %d; want the before-send line and no call", st.result, child.calls)
+	}
+}
+
+// A stopped, narrowed call at the minimum output limit: the stop line and the
+// (compact) narrowing line fit the trailer room together, so the whole result
+// stays within the configured limit with both lines whole.
+func TestApprovalTrailer_StopAndNarrowingWithinAMinimumLimit(t *testing.T) {
+	agentcore.SetMaxToolOutputBytes(agentcore.MinMaxToolOutputBytes)
+	t.Cleanup(func() { agentcore.SetMaxToolOutputBytes(-1) })
+	staged := make([]string, 0, 500)
+	approved := make([]string, 0, 250)
+	for i := range 500 {
+		v := fmt.Sprintf("deal-%03d", i)
+		staged = append(staged, v)
+		if i%2 == 0 {
+			approved = append(approved, v)
+		}
+	}
+	n := &approvalNarrowing{Arg: "deal_ids", Staged: staged, Approved: approved}
+	trailer := approvalTrailer(n, approvalStopNote)
+	if len(trailer) > agentcore.ApprovalTrailerRoom() || !strings.HasSuffix(trailer, approvalStopNote) || !strings.Contains(trailer, "250 were approved") {
+		t.Fatalf("trailer = %q (%d bytes), want the compact narrowing line and the stop line within %d", trailer, len(trailer), agentcore.ApprovalTrailerRoom())
+	}
+	row := stopRow()
+	got, _, _ := governApprovalResultWithTrailer(context.Background(), &row, strings.Repeat("x", 64<<10), false, trailer)
+	if !strings.HasSuffix(got, trailer) || len(got) > agentcore.MinMaxToolOutputBytes {
+		t.Fatalf("result is %d bytes (want <= %d) or lost its lines", len(got), agentcore.MinMaxToolOutputBytes)
 	}
 }

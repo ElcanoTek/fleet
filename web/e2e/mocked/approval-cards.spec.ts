@@ -665,7 +665,7 @@ test("a narrowable card leaves an unticked deal out and approves the rest in one
 
 // Stopping a running call (docs/APPROVAL-STOP.md): a running card of a tool in
 // agent_policy.critical_tool_stop shows Stop; pressing it posts to the stop
-// route and the card reads Stopping; the poll then finds the call settled as
+// route and the card reads Stop requested; the poll then finds the call settled as
 // stopped, and its result card offers "Run the remaining N".
 test("a running card stops after its current item and offers to run the rest", async ({ page }) => {
   const conv = "conv-stop";

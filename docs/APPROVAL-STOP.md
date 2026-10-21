@@ -129,12 +129,14 @@ Elcano bundle's deal-plan execute does this).
 ### The card
 
 - A running card of an opted-in tool shows **Stop** beside **Check result**,
-  with "Stopping finishes the current item, then halts." as its description.
+  with "Asks the server to stop after its current item; the result says what ran." as its description: a request, not a
+  guarantee (a server that ignores the cancellation runs on to its end, one
+  that hard-cancels may not finish its current item).
 - If the server refuses the stop because the call finished first, the card
   says so ("The action finished before it could be stopped; its outcome is
   being recorded.") and does not claim a stop; a settled card reads "stopped"
   only when the server recorded one.
-- After Stop it reads "Stopping: the current item finishes, then it halts."
+- After Stop it reads "Stop requested: the server was asked to stop after its current item. The result says what ran."
   (a status region) and offers no second Stop; the poll settles it.
 - A settled stopped call shows its result card (the bundle writes "Stopped
   after 12 of 24"). When every retry key names a record marked **Not run**,
