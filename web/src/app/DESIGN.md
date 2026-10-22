@@ -46,12 +46,12 @@ indicator is a `before:` bar on an element whose real fill is an 18% tint.
 
 Known, deliberate exceptions:
 
-- `lib/serverBranding.ts` — `DEFAULT_BACKGROUND_LIGHT`/`_DARK`, the two
-  literals `<meta name="theme-color">` falls back to when a bundle declares
-  no background. A meta tag cannot read a CSS variable, so a literal is
-  unavoidable *somewhere*; keeping both in one named place (instead of inline
-  in `layout.tsx`, where they used to be un-overridable by any bundle) means
-  there is exactly one thing to keep in sync with `--color-bg`.
+- `internal/webui/brand.go` (Go, outside this tree) —
+  `defaultBackgroundLight`/`Dark`, the two literals `<meta name="theme-color">`
+  and the PWA manifest fall back to when a bundle declares no background. A
+  meta tag cannot read a CSS variable, so a literal is unavoidable
+  *somewhere*; keeping both in one named place means there is exactly one
+  thing to keep in sync with `--color-bg`.
 - `chat/ui/ApprovalCards.tsx` — a local light→dark color-inversion map for
   sandboxed HTML previews; those literals describe *content* colors, not UI.
 
@@ -85,17 +85,21 @@ Known, deliberate exceptions:
   which `globals.css` imports and which is the ONLY place a family name is
   written — the token families above read `--font-brand` /
   `--font-code-brand` / `--font-code-ui-brand` from it. There is no font CDN
-  request and no `next/font` wrapper: the `url()`s resolve through the bundler,
-  so a moved or renamed file fails the build instead of 404-ing at runtime. The
-  trade-off of dropping `next/font/local` is that Next no longer emits a
-  `<link rel=preload>` per face; `font-display: swap` covers the gap and no
-  hand-written preload is added, because a hand-written one would point at a
-  hashed asset path and rot silently.
+  request and no font-loader wrapper: the `url()`s resolve through the bundler
+  (Vite), so a moved or renamed file fails the build instead of 404-ing at
+  runtime. No `<link rel=preload>` is emitted per face; `font-display: swap`
+  covers the gap and no hand-written preload is added, because a hand-written
+  one would point at a hashed asset path and rot silently.
   - Licences: Nebula Sans is SIL OFL 1.1, Hack is MIT (plus Bitstream Vera for
     its Vera-derived glyphs). Both permit redistribution under this repo's MIT
     licence — that is why they were chosen — and both REQUIRE the licence text
     to travel with the binaries, so `fonts/nebula-sans/OFL.txt` and
     `fonts/hack/LICENSE.md` must stay beside the `.woff2` files.
+  - The vendored Flag files (`fonts/fonts.css`, `public/icons/core-icons.svg`,
+    `public/logos/fleet-mark.svg`, listed in the repo-root `flag.lock`) are the
+    Flag design system — Copyright (c) 2026 ElcanoTek, Inc. — MIT; its licence
+    text travels with them as `src/app/FLAG-LICENSE`. The fonts keep their own
+    licences above.
   - These are the COMPLETE builds, not the narrower subsets both upstreams also
     publish. Do not substitute a subset: a missing glyph does not error, it
     silently falls back to a system font for that one character, so a name

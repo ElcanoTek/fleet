@@ -8,6 +8,7 @@
 #   web=<dir> [<dir> ...]    directories holding served HTML/CSS/JS (scanned for CDN use)
 #   npm=<dir> [<dir> ...]    directories holding a package.json ("." for the root)
 #   backend=go|<other>       anything but go must be explained in AGENTS.md
+#   dev_allow=<pkg> [...]    Tier A: extra devDependencies beyond browser-test tooling
 #
 # Checks:
 #   1. AGENTS.md carries the shared standard block, byte-identical (hash pinned below).
@@ -16,7 +17,7 @@
 #   4. npm trees: no server frameworks (next, express, ...); Tier A has no runtime deps.
 set -euo pipefail
 
-STACK_CHECK_VERSION=9
+STACK_CHECK_VERSION=11
 STANDARD_SHA=5b3a1c9dab098277570a37d58366b0802d4378370f9717d48743c386b194bdbb
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONF="$ROOT/stack.conf"
@@ -30,8 +31,11 @@ sha() {
 conf() { sed -n "s/^$1=//p" "$CONF" | sed 's/[[:space:]]*#.*$//' | tail -1; }
 
 [ -f "$CONF" ] || { echo "stack-check: missing stack.conf" >&2; exit 2; }
+command -v perl >/dev/null 2>&1 || { echo "stack-check: perl is required (core JSON::PP)" >&2; exit 2; }
 tier="$(conf tier)"; web="$(conf web)"; npm="$(conf npm)"; backend="$(conf backend)"
 case "$tier" in A|B) ;; *) err "stack.conf: tier must be A or B (got '$tier')";; esac
+# An empty scan scope would silently disable the no-CDN gate.
+[ -n "$(printf '%s' "$web" | tr -d '[:space:]')" ] || err "stack.conf: web= must list at least one served directory"
 
 # 1. The standard block.
 if [ ! -f "$ROOT/AGENTS.md" ]; then err "missing AGENTS.md"
@@ -61,9 +65,8 @@ fi
 # shellcheck disable=SC2016 # the perl program is single-quoted on purpose
 for d in $web; do
   [ -d "$ROOT/$d" ] || { err "stack.conf: web dir $d does not exist"; continue; }
-  while IFS= read -r hit; do
-    err "remote asset in served file: ${hit#"$ROOT"/}"
-  done < <(find "$ROOT/$d" \( -name node_modules -o -name dist -o -name test -o -name tests -o -name e2e -o -name testdata \) -prune -o -type f \
+  scan="$(mktemp)"
+  if ! (set -o pipefail; find "$ROOT/$d" \( -name node_modules -o -name dist -o -name test -o -name tests -o -name e2e -o -name testdata \) -prune -o -type f \
              ! -name '*.test.*' ! -name '*.spec.*' ! -name '*_test.go' \( -name '*.go' -o -name '*.html' -o -name '*.tmpl' -o -name '*.gohtml' -o -name '*.css' -o -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.jinja' -o -name '*.j2' \) -print0 \
            | xargs -0 -r perl -0777 -ne '
                my $f = $ARGV; my $remote = qr{["'"'"'(]?\s*(?:https?:)?//(?!(?:localhost|127\.0\.0\.1)(?::\d+)?(?:[/?#\s"'"'"')>]|$))[^\s"'"'"')>]+}i;
@@ -72,7 +75,13 @@ for d in $web; do
                  if ($t =~ /\brel\s*=\s*["'"'"']?[^"'"'"'>]*\b(?:stylesheet|preload|modulepreload|icon|apple-touch-icon|manifest)\b/i && $t =~ /\bhref\s*=\s*$remote/i) {
                    (my $one = $t) =~ s/\s+/ /g; print "$f: $one\n"; } }
                while (/(?:\@import\s*(?:url\()?|(?<![\w.\$])url\(|(?<![\w.\$])import\s*\(?|(?<![\w.\$])from)\s*$remote/gi) { (my $m = $&) =~ s/\s+/ /g; print "$f: $m\n"; }
-             ' || true)
+             ' > "$scan"); then
+    err "remote-asset scanner failed in $d (is perl installed?)"
+  fi
+  while IFS= read -r hit; do
+    err "remote asset in served file: ${hit#"$ROOT"/}"
+  done < "$scan"
+  rm -f "$scan"
 done
 
 # 4. npm trees. Every package.json must be declared in stack.conf, so adding
@@ -89,13 +98,22 @@ for d in $npm; do
   [ -f "$pj" ] || { err "stack.conf: no package.json in $d"; continue; }
   # Every field npm installs at runtime (optional and peer deps install by
   # default; bundled deps ship inside the package).
-  while IFS= read -r msg; do err "$d/package.json: $msg"; done < <(TIER="$tier" perl -MJSON::PP -0777 -ne '
+  while IFS= read -r msg; do err "$d/package.json: $msg"; done < <(TIER="$tier" DEV_ALLOW="$(conf dev_allow)" perl -MJSON::PP -0777 -ne '
     my $j = eval { JSON::PP->new->decode($_) } or do { print "is not valid JSON\n"; exit };
     my $servers = qr/^(?:next|express|koa|fastify|\@hapi\/hapi|\@remix-run\/.+|nuxt|\@sveltejs\/kit|astro|hono)$/;
     my @runtime = qw(dependencies optionalDependencies peerDependencies);
     for my $f (@runtime, "devDependencies") {
       next unless ref $j->{$f} eq "HASH";
       for my $n (sort keys %{$j->{$f}}) { print "depends on JavaScript server framework $n ($f); the server is Go\n" if $n =~ $servers; }
+    }
+    if ($ENV{TIER} eq "A" && ref $j->{devDependencies} eq "HASH") {
+      # Tier A ships no build step: dev deps are browser-test tooling only,
+      # plus any names stack.conf lists in dev_allow= (explained in AGENTS.md).
+      my %extra = map { $_ => 1 } split " ", ($ENV{DEV_ALLOW} // "");
+      for my $n (sort keys %{$j->{devDependencies}}) {
+        next if $n =~ /^(?:\@playwright\/test|playwright(?:-core)?|axe-core|\@axe-core\/[\w.-]+|\@types\/node)$/ || $extra{$n};
+        print "Tier A devDependencies are browser-test tooling only; $n is not (add it to stack.conf dev_allow= with a reason in AGENTS.md if it truly belongs)\n";
+      }
     }
     if ($ENV{TIER} eq "A") {
       for my $f (@runtime) { print "Tier A allows devDependencies only (browser tests), but $f is not empty\n" if ref $j->{$f} eq "HASH" && %{$j->{$f}}; }

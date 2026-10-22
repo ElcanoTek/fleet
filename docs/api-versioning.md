@@ -69,7 +69,7 @@ break them).
 On the single-box install the Go listeners bind loopback (chat
 `127.0.0.1:8080`, orchestrator `127.0.0.1:8000`) and Caddy is the only thing
 on `:443`. The fleet-managed Caddyfile (`scripts/lib/caddyfile.sh`, reference
-copy in `deploy/Caddyfile`) routes the public API past the Next.js web tier:
+copy in `deploy/Caddyfile`) routes the public API past the web tier (fleet's web listener, ADR-0091):
 
 | Public path | Upstream | Why it is exposed |
 |---|---|---|
@@ -78,13 +78,13 @@ copy in `deploy/Caddyfile`) routes the public API past the Next.js web tier:
 | `/.well-known/agent-card.json`, `/a2a`, `/a2a/*` | orchestrator | A2A discovery + JSON-RPC ([A2A.md](A2A.md)) |
 | `/triggers/*` | orchestrator | webhook + email task triggers ([EVENT-TRIGGERS.md](EVENT-TRIGGERS.md)) |
 | `/webhooks/*` | chat | GitHub/Slack-signed inbound webhooks ([WEBHOOKS.md](WEBHOOKS.md)) |
-| everything else | Next.js web tier | pages, `/_next/*`, Next's own `/api/*` proxy |
+| everything else | fleet's web listener (`127.0.0.1:3000`) | the web UI and its own `/api/*` routes |
 
 So `https://<domain>/v1/tasks` with `X-API-Key` is the supported way in;
 the **legacy bare paths are not routed publicly** (`https://<domain>/tasks`
 reaches the web app, not the orchestrator) — they are reachable only from the
 box, which is one more reason to migrate to `/v1`. Both backend routes strip
-the Next-proxy header-trust headers (`X-User-Email`, `X-User-Session-Epoch`,
+the web tier's header-trust headers (`X-User-Email`, `X-User-Session-Epoch`,
 `X-Orchestrator-Server-Token` / `X-Chat-Server-Token`), so `X-API-Key` and the
 webhook signatures are the only public authentication paths
 ([ADR-0053](adr/0053-public-api-through-the-tls-front.md)).

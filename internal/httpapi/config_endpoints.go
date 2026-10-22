@@ -108,7 +108,7 @@ type clientConfigBranding struct {
 	LogoURL string `json:"logo_url,omitempty"`
 }
 
-// brandLogoWebPath is the Next-proxied path the browser fetches the bundle mark
+// brandLogoWebPath is the web-tier-proxied path the browser fetches the bundle mark
 // from. It intentionally mirrors /api/theme: one public proxy per brand asset,
 // so the login shell can render both before a session exists.
 const brandLogoWebPath = "/api/brand/logo"

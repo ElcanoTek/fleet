@@ -69,7 +69,7 @@ regenerated recording and its still never drift apart — commit them together.
 
 ## The web demo GIFs
 
-The GIFs record the current Next.js app with deterministic, fictional API
+The GIFs record the current web app (the SPA behind the Go gateway) with deterministic, fictional API
 responses, just like the mocked browser suite. They demonstrate the interface;
 they do not certify live model, sandbox, or scheduler execution. The README
 labels them accordingly. The separate live e2e suite covers that integration.

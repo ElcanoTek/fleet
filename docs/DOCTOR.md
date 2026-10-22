@@ -37,7 +37,7 @@ Two halves of one feature, split by privilege:
    `OPENROUTER_API_KEY` presence (never the value), disk headroom on the data
    dir and the podman image store (warn ≥ 85 %, fail ≥ 95 %), subuid/subgid
    ranges for the *process* user, `podman info`, sandbox image presence,
-   sibling unit states (`fleet-web`, `postgresql`, `caddy`), whether the
+   sibling unit states (`postgresql`, `caddy`), a leftover `fleet-web.service` (the retired Next.js tier — a **fail**, since it holds the web UI's port; ADR-0091), whether the
    Caddyfile routes the API (a fleet-managed one that predates the `/v1`
    routes is a **fail**; an operator's own front that routes no `/v1` is a
    warn), whether the running process trusts Caddy for `X-Forwarded-For`
@@ -59,7 +59,7 @@ Division of labor across the three health verbs:
 |---|---|---|---|
 | `fleet status` | none | never | quick in-process checks (bundle, env, DBs, sandbox, unit) |
 | `fleet doctor` | root — `--dry-run` needs none, but **`--check` still does** (it probes the service user's rootless podman and reads 0600 env files) | **repairs** | everything status checks **plus** packages, podman prereqs, unit drift, env files — and fixes them (except a stale podman pause process: reported with the manual repair, never run) |
-| `fleet doctor --node` | root — **except `--node --check`**, the one read-only path needing none (it is what `fleet update --check` calls) | **repairs** | the node toolchain ONLY: install `nodejs<major>` + `-npm` per `web/.nvmrc` (or, when the distro has no such stream, the signed nodejs.org release into `/usr/local/bin/node-<major>` — [ADR-0078](adr/0078-track-the-latest-node-major.md)), stamp `FLEET_NODE_BIN`, assert the resolved interpreter **and that an npm belongs to it**, exit |
+| `fleet doctor --node` | root — **except `--node --check`**, the one read-only path needing none (it is what `fleet update --check` calls) | **repairs** | the node toolchain ONLY: install `nodejs<major>` + `-npm` per `web/.nvmrc` (or, when the distro has no such stream, the signed nodejs.org release into `/usr/local/bin/node-<major>` — [ADR-0078](adr/0078-track-the-latest-node-major.md)), assert the resolved interpreter **and that an npm belongs to it**, exit (node builds the web bundle; nothing runs on it — ADR-0091) |
 | `/admin/doctor` (UI) | admin session | never | doctor's *diagnosable-from-the-process* subset, with fix hints |
 
 ## Design decisions
@@ -107,7 +107,7 @@ Division of labor across the three health verbs:
   ride the same check, and are optional-if-absent: a box without them is
   skipped there (the backups check owns that verdict), not nagged twice.
   Reinstalling one of them does **not** queue the post-fix restart — that
-  restart bounces `fleet` (and try-restarts `fleet-web`), which is
+  restart bounces `fleet` (which also serves the web UI), which is
   user-visible chat downtime, and neither backup unit has any bearing on the
   running app: the oneshot is not running, and `daemon-reload` is all systemd
   needs to pick up a rewritten timer's schedule.
@@ -137,25 +137,12 @@ Division of labor across the three health verbs:
   the *last* run, so on a unit that was restarted after an incident it still
   names the old failure, and a check that nags about a resolved event forever
   gets ignored.
-- **What restart churn does *not* catch**, stated because it is the
-  neighbouring bug: a process that segfaults during a **manual** stop — the
-  `fleet-web` teardown crash in
-  [`WEB-TIER-SHUTDOWN.md`](WEB-TIER-SHUTDOWN.md) — is restarted by operator
-  action, so `NRestarts` stays 0. That fault is a configuration matter, which
-  the next check covers.
-- **`fleet-web stop policy` asserts a resolved directive, not a file.** It
-  reads what systemd resolved for `TimeoutStopFailureMode` and expects `kill`.
-  A config check earns its place among health checks here because this exact
-  directive sat in the unit body doing nothing for a full release: a
-  distro-global `/usr/lib/systemd/system/service.d/` drop-in overrides a unit
-  body (Fedora sets `abort` there), so the unit file said the right thing and
-  every file-comparing check passed. Only the resolved value distinguishes the
-  two. It is a **warn** here while the same assertion in `doctor.sh` is a
-  **fail** — deliberately: `doctor.sh` installs the drop-in and *then* checks,
-  so a wrong value there means a repair did not hold, whereas this endpoint
-  cannot repair anything and the consequence is hygiene rather than downtime
-  (`LimitCORE=0` keeps the memory image off disk either way). Don't harmonise
-  them without that changing.
+- **`retired web tier` fails on a leftover `fleet-web.service`.** The Next.js
+  tier was retired by [ADR-0091](adr/0091-go-serves-the-browser-tier.md): the
+  fleet binary serves the web UI on the port that unit held, so while it is
+  installed (and running) fleet's web listener cannot bind. This endpoint only
+  reports it; `sudo fleet doctor` retires it (stop, disable, remove the unit,
+  drop-in, start shim and `/opt/fleet/web`), as `fleet update` does on upgrade.
 
 - **Disk hygiene: reclaim what no timer can reach** (step 7). A sweep of
   five production boxes found the same waste on every one: 2–6 GiB of
@@ -210,7 +197,7 @@ Division of labor across the three health verbs:
   package steps degrade to advisories rather than guessing at apt equivalents.
 - Disk hygiene does not reclaim stale systemd coredumps, deploy backups in
   `/opt/fleet`, or conversation workspaces. Coredumps stopped accruing once
-  `fleet-web` got `LimitCORE=0`. The backups were one box's history, not a
+  the Next.js `fleet-web` tier got `LimitCORE=0`, and that tier is gone (ADR-0091). The backups were one box's history, not a
   recurring pattern. Workspaces are user data, and deleting them is never a
   cache sweep's call.
 - No scheduled/automatic doctor runs — an operator (or the admin UI) invokes

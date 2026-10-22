@@ -9,7 +9,7 @@ import (
 // The membership gate is the scoped-tier user-list check layered on top of
 // authMiddleware. A validly-authenticated request (right shared token +
 // X-User-Email) is admitted only when the email belongs to a provisioned
-// chat user; everyone else gets 403 {"error":"not_a_member"} so the Next.js
+// chat user; everyone else gets 403 {"error":"not_a_member"} so the web tier
 // layer can render the no-access page instead of a login redirect loop.
 //
 // Unlike the handler-logic tests (which override Server.isMember to allow

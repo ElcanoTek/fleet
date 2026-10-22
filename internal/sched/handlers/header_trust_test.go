@@ -13,8 +13,8 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-// The Next-proxy header-trust path (#157) is what lets a /chat-cookie user reach
-// the Operations Center without a second login: the Next layer forwards
+// The web-tier header-trust path (#157) is what lets a /chat-cookie user reach
+// the Operations Center without a second login: the web tier forwards
 // X-User-Email guarded by the shared X-Orchestrator-Server-Token. It must mirror
 // chat-server: token-first (fail-closed, no fall-through), then a non-empty
 // email, then the membership gate.

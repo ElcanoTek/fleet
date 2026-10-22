@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// The auth middleware is the trust boundary between Next.js and chat-server.
+// The auth middleware is the trust boundary between the web tier and chat-server.
 // It needs to (a) reject requests missing or forging the shared token,
 // (b) reject requests without X-User-Email, and (c) make the authenticated
 // user available on the request context for handlers.

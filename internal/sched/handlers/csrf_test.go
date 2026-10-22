@@ -138,8 +138,8 @@ func TestCSRFMiddlewareOrigin(t *testing.T) {
 		}
 	})
 
-	t.Run("Next-proxy shared-token request is exempt", func(t *testing.T) {
-		// The Next.js orchestrator proxy forwards the cookie user's identity as
+	t.Run("web-tier shared-token request is exempt", func(t *testing.T) {
+		// The web tier's orchestrator proxy forwards the cookie user's identity as
 		// X-User-Email + X-Orchestrator-Server-Token and does NOT forward the
 		// browser's Origin — it enforced same-origin itself before proxying.
 		// Without this exemption every cookie-path mutation (e.g. launching a

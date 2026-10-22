@@ -29,7 +29,7 @@
 #                              (exit 3 when the vendor copy is stale).
 set -euo pipefail
 
-FLAG_SYNC_VERSION=5
+FLAG_SYNC_VERSION=6
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCK="$ROOT/flag.lock"
 
@@ -172,6 +172,13 @@ cmd_add() {
       file) [ "$c" = "$dest" ] || [ "${c#"$dest"/}" != "$c" ] || echo "$a $b $c" >> "$files" ;;
     esac
   done < <(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$LOCK" || true)
+  # The lock names one commit for every entry, so existing entries must already
+  # match this checkout; otherwise the rewritten commit line would be a lie.
+  while read -r a b c; do
+    if [ ! -f "$fd/design-system/$b" ] || [ "$(sha "$fd/design-system/$b")" != "$a" ]; then
+      die "locked file $c differs from $(basename "$fd") $(flag_commit "$fd" | cut -c1-12) (design-system/$b); run scripts/flag-sync.sh sync against this checkout first"
+    fi
+  done < "$files"
   if [ -d "$fd/design-system/$src" ]; then
     echo "$dest" >> "$dirs"
     while IFS= read -r f; do

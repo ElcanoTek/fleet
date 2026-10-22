@@ -98,7 +98,7 @@ type Config struct {
 	SchedGlobalRateLimitPerMinute int // default 200; process-wide across all keys
 
 	// SharedToken is the chat-server shared secret (CHAT_SERVER_TOKEN), reused as
-	// the orchestrator's channel authenticator. The Next.js proxy — the SOLE
+	// the orchestrator's channel authenticator. The web tier — the SOLE
 	// client of this backend — verifies the user's session cookie, then forwards
 	// the resolved identity as X-User-Email guarded by this token in
 	// X-Orchestrator-Server-Token. This is what lets a /chat-cookie user reach the
@@ -2193,7 +2193,7 @@ func (h *Handlers) GetRecipientHistory(w http.ResponseWriter, r *http.Request) {
 // Admin-only, but reachable from the web UI: it is registered behind
 // AdminOrUserAuthMiddleware (which resolves the caller into a principal) and
 // gated HERE on PermissionAdmin (#458). The admin API key OR an admin-role user
-// (the role the Next proxy's header-trust/bearer path conveys) passes; a
+// (the role the web tier's header-trust/bearer path conveys) passes; a
 // non-admin member gets 403. This is the only gate that lets a web-authenticated
 // admin reach the report — the proxy can never send the admin X-API-Key that the
 // bare AdminAuthMiddleware demanded, so the report was previously unreachable

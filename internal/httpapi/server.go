@@ -27,7 +27,7 @@ import (
 )
 
 // Server wires the agent Manager + store + shared-secret auth into an
-// http.Handler that Next.js talks to.
+// http.Handler that the web tier (internal/webui) calls in-process.
 type Server struct {
 	// approvalRuns admits and counts claimed approvals still executing. An
 	// execution can outlive its POST (a call on a server with a declared
@@ -67,7 +67,7 @@ type Server struct {
 	// so a Server value stays copyable. A Prometheus surface is deferred to #176.
 	rateLimitHits *rateHitCounter
 	// shareRL throttles the public read-only share endpoint (#226), keyed by
-	// share TOKEN (not IP — the endpoint sits behind the Next proxy, so per-IP
+	// share TOKEN (not IP — the endpoint sits behind the web tier, so per-IP
 	// would see only the proxy's address). Always on, independent of the per-user
 	// rate-limit master switch, because /shared is the most exposed surface.
 	shareRL *ratelimit.Limiter

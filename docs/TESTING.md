@@ -55,7 +55,7 @@ test has to meet to be able to fail are in
 | CodeQL | `codeql` (called workflow) | `security-extended` taint analysis over go / python / javascript-typescript / actions; fails on an unwaived **High-band** finding | not wrapped (see [`CODEQL.md`](CODEQL.md)) |
 | Semgrep | `semgrep` (called workflow) | `p/github-actions` + `p/golang` + `p/javascript` + `p/python`; fails on **any** unsuppressed finding | `semgrep scan --config …` (see [`SCANNING.md`](SCANNING.md)) |
 | npm CVE audit | `web` | `npm audit --audit-level=low`, lockfile-only, over `web/` — fails on any severity | `cd web && npm audit --audit-level=low` |
-| Web lint/test/build | `web` | oxlint + `tsc --noEmit` + vitest + `next build` | `make ci-web` |
+| Web lint/test/build | `web` | oxlint + `tsc --noEmit` + vitest + `vite build` + a `fleet` binary that must embed that bundle | `make ci-web` |
 | Playwright (mocked) | `playwright` | Deterministic browser e2e, no backend | `make ci-e2e-mocked` |
 | Playwright (live) | `e2e-live` | Real stack + rootless-Podman sandbox, fake LLM | `npm run test:e2e:live` |
 | Playwright (canary) | `canary` (nightly) | Fleet default OpenRouter model, drift detection | `npm run test:e2e:canary` |
@@ -144,8 +144,12 @@ image); run them via the `npm` scripts documented below.
   pinned toolchain is downloaded on demand. 1.21 is the floor only because
   that is when `GOTOOLCHAIN` — and therefore the ability to fetch — landed.
 - **TypeScript 7 and oxlint, not TypeScript 6 and ESLint.** The web tier runs
-  TypeScript 7 — the native Go compiler — everywhere: `npm run typecheck`, the
-  `next build` type pass, and editors. Nothing keeps a TS 6 around.
+  TypeScript 7 — the native Go compiler — everywhere: `npm run typecheck` and
+  editors. Nothing keeps a TS 6 around. (The history below was written under
+  Next.js; since [ADR-0091](adr/0091-go-serves-the-browser-tier.md) the web
+  tier is a Vite SPA, oxlint's `nextjs` plugin and the
+  `no-html-link-for-pages` override are gone, and `vite build` does no type
+  checking at all.)
 
   That required replacing ESLint, and it is worth recording why, because
   "just upgrade TypeScript" does not work. On TS 7 `npm ci` succeeds,
@@ -505,13 +509,13 @@ make ci-go
 Runs from `web/`. The job is: `npm audit --audit-level=low` → `npm ci` →
 `npm run lint` (**oxlint**, not ESLint — see the TypeScript 7 section above,
 which explains why ESLint was replaced) → `npm run typecheck` (`tsc --noEmit`)
-→ `npx vitest run` (unit tests) → `npm run build` (`next build`).
+→ `npx vitest run` (unit tests) → `npm run build` (`vite build`, into
+`internal/webui/bundle/dist`) → `make bins` + `fleet version --web` (the
+binary must embed the bundle just built — ADR-0091).
 
 The audit runs **before** `npm ci`, deliberately: it is lockfile-only, so it
 costs seconds and fails before the expensive install. The explicit typecheck
-is not redundant with `next build` — the build
-type-checks too, but it runs last, so without this step a one-line type error
-surfaces minutes in.
+is the only type check: `vite build` strips types without checking them.
 
 ```sh
 cd web
@@ -531,17 +535,18 @@ make ci-web
 
 ## Web e2e (Playwright, mocked) — CI job `playwright`
 
-The mocked suite drives the **real** Next.js app but route-intercepts every Go
-backend, so it needs no chat-server, orchestrator, OpenRouter, or Podman — it is
-fully deterministic on a bare runner. It runs the `mocked` Playwright project
-(`web/e2e/mocked`) against a production build (`next build` then `next start` in
-`CHAT_MOCK_MODE=1`, so it validates the shipped bundle).
+The mocked suite drives the **real** browser tier — the Go gateway
+(`internal/webui`, run alone by `cmd/web-e2e-server`) serving the production
+bundle — but route-intercepts every backend call, so it needs no chat-server,
+orchestrator, OpenRouter, or Podman: it is fully deterministic on a bare
+runner. It runs the `mocked` Playwright project (`web/e2e/mocked`);
+`playwright.config.ts` builds the bundle and the harness first unless
+`E2E_SKIP_BUILD=1` (CI builds them in their own step).
 
 ```sh
 cd web
 npm ci
 npx playwright install --with-deps chromium   # CI does this in its own step
-npm run build
 npm run test:e2e:mocked                        # = playwright test --project=mocked
 ```
 

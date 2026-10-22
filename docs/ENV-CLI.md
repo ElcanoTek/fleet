@@ -8,20 +8,27 @@ secret to the terminal. It complements — never replaces — the guided writers
 `fleet mcp account set`), which remain the right tool for single credential
 writes because they take the value on stdin and quote it correctly.
 
-## The two files
+## The file
 
 | File | Resolution | Read by |
 |---|---|---|
 | server env | `--env-file`, else `FLEET_ENV_FILE`, else `/etc/fleet/fleet.env` when `/etc/fleet` exists, else `.env.local` | `deploy/fleet.service` (`EnvironmentFile=`) and `config.Load` — LLM keys, DSNs, MCP connector creds, tuning knobs ([OPERATORS.md](OPERATORS.md)) |
-| web env | `/etc/fleet/fleet-web.env` when `/etc/fleet` exists, else `web/.env.local` | `deploy/fleet-web.service` — the `AUTH_*` SSO keys, the shared token |
 
-The resolution is the same `serverEnvFile`/`webEnvFile` logic the
+Since [ADR-0091](adr/0091-go-serves-the-browser-tier.md) this is the only
+file: the web UI is served by the fleet process and reads its keys
+(`APP_SESSION_SECRET`, `AUTH_*`, `FLEET_OIDC_*`, `FLEET_PUBLIC_BASE_URL`)
+from it. `/etc/fleet/fleet-web.env` belonged to the retired Next.js tier;
+`fleet update` copied its keys over and nothing reads it any more (`fleet env`
+says so when it is still there). The `--web` flags are accepted for old
+scripts and target this file.
+
+The resolution is the same `serverEnvFile` logic the
 `fleet config set-*` writers use, so `fleet env` always targets the file those
 commands write and the unit actually reads.
 
 ## `fleet env [show]`
 
-Prints both files, one `# path` header each, keys sorted. A missing file is a
+Prints the env file under a `# path` header, keys sorted. A missing file is a
 note, not an error. Values are masked twice over:
 
 - a key whose NAME matches the credential heuristic
@@ -40,10 +47,10 @@ would load. Reading a root-owned 0600 file without root is an error naming the
 ## `fleet env edit`
 
 ```
-fleet env edit [--web] [--env-file <path>] [--editor <cmd>]
+fleet env edit [--env-file <path>] [--editor <cmd>]
 ```
 
-1. Resolves the server file (or the web file with `--web`), creating it 0600 —
+1. Resolves the server env file, creating it 0600 —
    parent dir 0700 — when missing, and fails up front with a
    `sudo fleet env edit` hint when the file isn't writable (better than an
    editor session whose save fails).
@@ -60,8 +67,7 @@ fleet env edit [--web] [--env-file <path>] [--editor <cmd>]
    duplicate keys (the later line wins), then prints the apply hints:
    `fleet validate-config` to preflight and `fleet restart` to apply for the
    server file (reloadable ceilings also apply live via `SIGUSR2` —
-   [CONFIG-RELOAD.md](CONFIG-RELOAD.md)); `systemctl restart fleet-web` for
-   the web file.
+   [CONFIG-RELOAD.md](CONFIG-RELOAD.md)).
 
 ## `fleet config set-env` / `unset-env` — one key, no editor
 
@@ -71,7 +77,7 @@ names, a knob — there is no need to open the file:
 ```sh
 printf '%s' "$TOKEN" | sudo fleet config set-env MANIFEST_CALLBACK_TOKEN
 sudo fleet config set-env FLEET_TRUSTED_PROXIES --value 127.0.0.1,::1
-sudo fleet config set-env NEXT_PUBLIC_APP_NAME --web       # the web-tier file; hidden prompt on a TTY
+sudo fleet config set-env FLEET_PUBLIC_BASE_URL --value https://fleet.example.com
 sudo fleet config unset-env OLD_KEY
 ```
 

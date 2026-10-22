@@ -124,7 +124,7 @@ func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) 
 	if h.verifyAdminKey(r) {
 		return taskCreator{hasAdminPermission: true}, true
 	}
-	// Next-proxy header-trust path (#157): POST /tasks (and /tasks/batch,
+	// web-tier header-trust path (#157): POST /tasks (and /tasks/batch,
 	// /tasks/estimate) sit outside the AdminOrUserAuthMiddleware group, so the
 	// cookie user's proxied identity (X-User-Email + shared token) must be
 	// honored here too — otherwise the web UI's elcano-cookie login path can

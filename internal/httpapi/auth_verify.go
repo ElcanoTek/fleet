@@ -1,8 +1,8 @@
-// Password verification endpoint for the Next.js /api/auth/login flow.
+// Password verification endpoint for the web tier's /api/auth/login flow.
 //
 // Auth model:
 //   - chat-server owns the user table (email + bcrypt hash).
-//   - Next.js's /api/auth/login receives email+password from the browser,
+//   - the web tier's /api/auth/login receives email+password from the browser,
 //     forwards to POST /auth/verify with the usual shared-secret headers.
 //   - On success it mints the existing HMAC session cookie.
 //
@@ -32,7 +32,7 @@ import (
 //     the process that also runs the scheduler.
 //
 // Keying by attempted email rather than source address is deliberate: the
-// only caller is the trusted Next.js layer, so a client address here would
+// only caller is the trusted web tier, so a client address here would
 // just be that proxy's.
 const (
 	verifyPerEmailPerMinute = 5

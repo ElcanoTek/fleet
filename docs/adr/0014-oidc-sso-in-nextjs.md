@@ -1,6 +1,6 @@
 # ADR-0014: OIDC / OAuth2 SSO lives in the Next.js layer, not the chat server
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR-0091](0091-go-serves-the-browser-tier.md) — the browser tier is Go now (`internal/webui/oidc.go`), the decision to keep SSO out of the chat server stands
 - **Date:** 2026-06-30
 - **Deciders:** fleet maintainers
 

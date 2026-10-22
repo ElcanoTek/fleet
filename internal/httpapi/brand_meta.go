@@ -13,13 +13,13 @@ package httpapi
 //     login-card.tsx, because that component structurally could not fetch them
 //     (#892).
 //   - The root layout's <title>, og:*, twitter:* and <meta name="theme-color">
-//     are resolved by Next in a server context with no user, and unfurl
+//     are resolved by the web tier in a server context with no user, and unfurl
 //     scrapers (Slack, iMessage, Discord) are anonymous by definition. So
 //     `share_title` / `share_description` were read by zero components and the
 //     tab title fell back to a build-time env var (#894, #895).
 //
 // Same trust class as /theme.css and /brand/logo: token-gated (only the trusted
-// Next layer holds the shared secret, so a browser still cannot reach
+// web tier holds the shared secret, so a browser still cannot reach
 // chat-server directly) but IDENTITY-less. That is sound rather than convenient
 // — every field here is public by construction. The app name is in the browser
 // tab, the login copy is printed on the pre-auth login page, the share strings
@@ -70,7 +70,7 @@ type brandMetaResponse struct {
 	ShareImageURL string `json:"share_image_url,omitempty"`
 }
 
-// brandShareImageWebPath is the Next-proxied path an unfurl scraper fetches the
+// brandShareImageWebPath is the web-tier-proxied path an unfurl scraper fetches the
 // bundle's share card from. Mirrors brandLogoWebPath: one public proxy per brand
 // asset.
 const brandShareImageWebPath = "/api/brand/share-image"

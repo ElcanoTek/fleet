@@ -52,41 +52,9 @@
     "jsx-a11y/control-has-associated-label": "error",
     "jsx-a11y/no-redundant-roles": "error",
     "jsx-a11y/no-noninteractive-tabindex": "error",
-    "nextjs/no-html-link-for-pages": "error",
     "react/immutability": "error",
     "eslint/no-control-regex": "error"
   },
-  "overrides": [
-    {
-      // nextjs/no-html-link-for-pages is scoped OUT of test files, and this is
-      // an argument about the rule's applicability, not about noise.
-      //
-      // The defect the rule exists to prevent is a RUNTIME one: a user clicks
-      // an <a href="/page"> and the browser performs a document navigation,
-      // discarding the client router's state. A test file has no router, no
-      // browser navigation and no user. The two findings that prompted this
-      // are inside a `vi.mock("./CrossViewNav")` factory in NavRail.test.tsx —
-      // a module stub that never reaches a real navigation.
-      //
-      // Rewriting the stub to satisfy the rule would make the test WORSE, not
-      // better. The real CrossViewNav renders next/link, which emits <a href>,
-      // and NavRail's own focus trap (NavRail.tsx:136) selects focusables with
-      // '..., [href], ...'. An href-less stub would silently change the
-      // focusable set the component under test sees, so the test would be
-      // exercising a DOM shape the app never produces.
-      //
-      // Worth knowing when reading this: oxlint's port of the rule does NOT
-      // resolve hrefs against the route tree the way upstream @next/next does
-      // — measured, it flags a nonexistent route, an /api route handler and a
-      // /files/*.pdf document alike. So in this codebase the rule is a
-      // syntactic check on root-relative <a href>, which is useful in app code
-      // and meaningless in a mock factory.
-      "files": ["**/*.test.ts", "**/*.test.tsx"],
-      "rules": {
-        "nextjs/no-html-link-for-pages": "off"
-      }
-    }
-  ],
   "ignorePatterns": [
     "node_modules/**",
     ".next/**",

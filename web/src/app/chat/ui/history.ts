@@ -1,7 +1,7 @@
 import { joinTextSegments } from "./textSegments";
 
 // Pure functions shared with chat-experience.tsx — extracted so they can be
-// unit-tested under vitest without pulling in React/Next.js.
+// unit-tested under vitest without pulling in React.
 //
 // Keep this file side-effect-free. If you're tempted to add a DOM ref, a
 // fetch, or a component, that belongs in chat-experience.tsx instead.

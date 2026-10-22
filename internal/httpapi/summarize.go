@@ -13,7 +13,7 @@ import (
 // summarizeRequest is the body of POST /conversations/{id}/summarize.
 //
 // Model is optional — the conversation's stored slug is used by
-// default. Callers (the Next.js layer + e2e harness) usually echo the
+// default. Callers (the web tier + e2e harness) usually echo the
 // chat's currently-selected slug so the summary inherits the chat's
 // quality profile.
 type summarizeRequest struct {

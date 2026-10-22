@@ -3,9 +3,16 @@
 Design note for the change that made an existing box cross a node major without
 the operator knowing the right command order in advance.
 
-Companion reading: [`WEB-TIER-SHUTDOWN.md`](WEB-TIER-SHUTDOWN.md) ("Choosing the
-interpreter" — why the major is declared once in `web/.nvmrc`, and why
-`ExecStart` is a shim) and [`DOCTOR.md`](DOCTOR.md).
+Companion reading: [`DOCTOR.md`](DOCTOR.md).
+
+> **Since [ADR-0091](adr/0091-go-serves-the-browser-tier.md), node is a
+> build-time dependency only.** The web UI is a Vite bundle compiled into the
+> fleet binary, so nothing runs on node: `fleet-web.service`, its start shim and
+> the `FLEET_NODE_BIN` stamp described below are gone (doctor no longer stamps
+> or checks it). What still holds is everything about choosing and installing
+> the interpreter the BUILD uses — `web/.nvmrc`, the versioned stream, the npm
+> pin, the update gate and the `--node` handoff. Read the history below with
+> that in mind.
 
 The last section, **"The npm interpreter pin"**, is a follow-up: the change
 below pinned `node` for the build and not `npm`, and the "Not verified" note it

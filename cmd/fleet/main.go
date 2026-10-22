@@ -862,7 +862,7 @@ func run() error {
 	// lookup, not the schema. Wired unconditionally: the chat store is open by
 	// the time these handlers exist, and a nil seam would silently stop checking.
 	h.SetChatSessionEpochProvider(chatStore.SessionEpoch)
-	// Read-only on the request path; rows are created by the Next.js mint via
+	// Read-only on the request path; rows are created by the web tier's mint via
 	// httpapi's /auth/external-session-epoch.
 	h.SetExternalSessionEpochProvider(func(ctx context.Context, issuer, subject, _ string) (string, error) {
 		return chatStore.LookupExternalSessionEpoch(ctx, issuer, subject)
@@ -2295,7 +2295,7 @@ func addrOr(addr, def string) string {
 // 127.0.0.1:8080) and the deployment contract: the deploy docs (Caddyfile,
 // fleet.service, DEPLOYMENT.md, grafana/README.md) all promise that the Go
 // backends bind loopback and are only reached through the on-box web tier /
-// reverse proxy (which forwards the public /v1 API here with the Next-proxy
+// reverse proxy (which forwards the public /v1 API here with the web-tier
 // header-trust headers stripped — ADR-0053). A bare ":8000" would bind every
 // interface and expose the orchestrator admin surface AND the header-trust
 // channel directly on hosts without a firewall. Multi-host topologies opt in

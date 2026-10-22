@@ -28,7 +28,7 @@ import (
 const defaultMaxUploadBytes int64 = 1 << 30 // 1 GiB
 
 // uploadedAttachment is the per-file metadata we return to the caller
-// (Next.js), which echoes it back in the next /chat request.
+// (the web tier), which echoes it back in the next /chat request.
 type uploadedAttachment struct {
 	Name string `json:"name"` // display name, sanitized
 	Path string `json:"path"` // server-relative path we trust later
@@ -83,9 +83,9 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 	}
 	// multipart has both per-part and total request caps; we set the
 	// request cap to (maxBytes * 2) to allow a couple of big files per
-	// request while still refusing truly abusive uploads. Kept aligned
-	// with Next.js's experimental.proxyClientMaxBodySize ("2gb"), which
-	// caps the same request one hop earlier.
+	// request while still refusing truly abusive uploads. This is the only
+	// cap: the web tier (internal/webui) streams the body through untouched
+	// (ADR-0091; the Next.js tier it replaced capped at 2 GB one hop earlier).
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes*2)
 
 	// 32 MiB in-memory threshold — anything larger spills to a temp file,

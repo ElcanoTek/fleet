@@ -42,7 +42,7 @@ func (h *Handlers) SetPersonaCatalog(p func() []string) {
 // write (issue #233). Same auth + rate limiter as CreateTask.
 func (h *Handlers) EstimateTask(w http.ResponseWriter, r *http.Request) {
 	// Authorization is the SHARED authorizeTaskCreator (batch.go) — admin key,
-	// Next-proxy header trust with its session-epoch gate, scoped key with
+	// web-tier header trust with its session-epoch gate, scoped key with
 	// create permission, user bearer token, Elcano cookie member — so the
 	// creation-shaped endpoints cannot drift. This handler used to enforce a
 	// hand-rolled copy that predated the header-trust path (#157), which made

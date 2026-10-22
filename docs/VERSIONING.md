@@ -152,8 +152,9 @@ box that is almost never an operator edit; it is a tracked file that a build
 step rewrote. The one that did it on every box was `web/next-env.d.ts`: Next
 regenerates it on both `next dev` and `next build`, with *different* contents,
 so the update's web build flipped it and the whole checkout read as modified.
-It is gitignored now and no longer tracked, so a checkout that has taken that
-change cleans itself on the next web build. `fleet doctor` names the dirty
+It was gitignored and untracked, and the file is gone with Next.js (the web
+build is Vite since ADR-0091; its output, `internal/webui/bundle/dist`, is
+gitignored too). `fleet doctor` names the dirty
 paths so the next such file is a diagnosis, not a guess.
 
 ## `scripts/version.sh`
