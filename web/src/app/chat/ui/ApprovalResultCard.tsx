@@ -45,7 +45,7 @@ const OUTCOME_TONE: Record<ApprovalResultOutcome, Tone> = {
   done: { border: "var(--color-success-border)", bg: "var(--color-card-success-bg)", tint: "var(--color-success-tint)", fg: "var(--color-success)", icon: "check" },
   partial: { border: "var(--color-border-strong)", bg: "var(--color-card-pending-bg)", tint: "transparent", fg: "var(--color-text-secondary)", icon: null },
   failed: { border: "var(--color-danger-border)", bg: "var(--color-card-danger-bg)", tint: "var(--color-danger-tint)", fg: "var(--color-danger)", icon: "close" },
-  mismatch: { border: "var(--color-warning-border)", bg: "var(--color-card-warning-bg)", tint: "var(--color-warning-tint)", fg: "var(--color-warning-icon)", icon: "warning" },
+  mismatch: { border: "var(--color-warning-border)", bg: "var(--color-card-warning-bg)", tint: "var(--color-warning-tint)", fg: "var(--color-warning-icon)", icon: "alert-triangle" },
   unclear: { border: "var(--color-warning-border)", bg: "var(--color-card-warning-bg)", tint: "var(--color-warning-tint)", fg: "var(--color-warning-icon)", icon: "clock" },
 };
 
@@ -65,8 +65,8 @@ export const RESULT_STATUS_LABEL: Record<ApprovalResultItemStatus, string> = {
 const STATUS_ICON: Record<ApprovalResultItemStatus, string | null> = {
   done: "check",
   failed: "close",
-  mismatch: "warning",
-  needs_check: "warning",
+  mismatch: "alert-triangle",
+  needs_check: "alert-triangle",
   unclear: "clock",
   skipped: "check",
   not_run: null,

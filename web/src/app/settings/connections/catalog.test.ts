@@ -65,7 +65,7 @@ const CATALOG: CatalogThirdParty[] = [
 
 describe("categoryIcon", () => {
   it("maps every curated slug to a sprite symbol and falls back to plug", () => {
-    expect(categoryIcon("development")).toBe("wrench");
+    expect(categoryIcon("development")).toBe("tools");
     expect(categoryIcon("databases")).toBe("database");
     expect(categoryIcon("finance")).toBe("dollar-sign");
     expect(categoryIcon("ad-tech")).toBe("plug");

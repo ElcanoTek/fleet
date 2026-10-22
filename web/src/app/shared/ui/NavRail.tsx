@@ -371,7 +371,7 @@ export function NavRail({
             dataTip={collapsed ? "Guides" : undefined}
           >
             <span className={navTileClass(activeView === "help")} aria-hidden="true">
-              <Icon name="book-open" className="size-[1rem]" />
+              <Icon name="book" className="size-[1rem]" />
             </span>
             <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>
               Guides

@@ -12,30 +12,43 @@ import (
 
 var spriteSymbolRe = regexp.MustCompile(`<symbol\s+id="([^"]+)"`)
 
-// spriteSymbolIDs reads the symbol ids the web's icon sprite defines. The sprite
-// is the single source of truth for which icon names a bundle may name — the
-// in-repo counterpart to this check is web/src/app/spriteCoverage.test.ts, which
-// covers fleet's own references and the built-in config/default bundle.
-//
-// Two files: Flag's sprite (vendored verbatim) and fleet-icons.svg, which holds
-// the few glyphs Flag does not carry yet (web/src/app/shared/ui/iconHref.ts
-// routes those ids there). A name in either renders.
+// spriteSymbolIDs returns the icon names a bundle may use: the symbol ids of
+// Flag's sprite (vendored verbatim, the only sprite fleet ships) plus the
+// aliases web/src/app/shared/ui/iconHref.ts maps onto them (names Flag declined
+// as duplicates, e.g. "book-open" → "book"). The in-repo counterpart to this
+// check is web/src/app/spriteCoverage.test.ts, which covers fleet's own
+// references and the built-in config/default bundle.
 func spriteSymbolIDs(t *testing.T) map[string]bool {
 	t.Helper()
 	ids := map[string]bool{}
-	for _, sprite := range []string{"../../web/public/icons/core-icons.svg", "../../web/public/icons/fleet-icons.svg"} {
-		svg, err := os.ReadFile(sprite)
-		if err != nil {
-			t.Fatalf("read icon sprite %s: %v", sprite, err)
-		}
-		for _, m := range spriteSymbolRe.FindAllStringSubmatch(string(svg), -1) {
-			ids[m[1]] = true
-		}
+	svg, err := os.ReadFile("../../web/public/icons/core-icons.svg")
+	if err != nil {
+		t.Fatalf("read icon sprite: %v", err)
+	}
+	for _, m := range spriteSymbolRe.FindAllStringSubmatch(string(svg), -1) {
+		ids[m[1]] = true
 	}
 	if len(ids) < 40 {
 		// A sprite that parsed to (almost) nothing would make the icon check
 		// below fail on every card instead of only the broken ones.
 		t.Fatalf("icon sprite parsed to %d symbols; expected the full set", len(ids))
+	}
+	src, err := os.ReadFile("../../web/src/app/shared/ui/iconHref.ts")
+	if err != nil {
+		t.Fatalf("read iconHref.ts: %v", err)
+	}
+	block := regexp.MustCompile(`(?s)ICON_ALIASES[^{]*\{(.*?)\}`).FindSubmatch(src)
+	if block == nil {
+		t.Fatal("iconHref.ts: no ICON_ALIASES map")
+	}
+	aliases := regexp.MustCompile(`"?([a-z][a-z0-9-]*)"?:\s*"([a-z][a-z0-9-]*)"`).FindAllSubmatch(block[1], -1)
+	if len(aliases) == 0 {
+		t.Fatal("iconHref.ts: ICON_ALIASES parsed to nothing")
+	}
+	for _, m := range aliases {
+		if ids[string(m[2])] {
+			ids[string(m[1])] = true
+		}
 	}
 	return ids
 }
@@ -183,7 +196,7 @@ func TestRealBundleSanity(t *testing.T) {
 								continue
 							}
 							if !ids[icon] {
-								t.Errorf("%s %q icon %q is not a symbol in the sprite — it renders as an empty box; add the glyph to Flag's sprite (until then web/public/icons/fleet-icons.svg)", group.kind, id, icon)
+								t.Errorf("%s %q icon %q is not a symbol in the sprite — it renders as an empty box; use a Flag sprite id, or ask Flag for the glyph", group.kind, id, icon)
 							}
 						}
 					}

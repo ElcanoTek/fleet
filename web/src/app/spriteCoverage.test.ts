@@ -1,4 +1,4 @@
-import { FLEET_SPRITE_IDS } from "./shared/ui/iconHref";
+import { ICON_ALIASES, iconHref } from "./shared/ui/iconHref";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -40,9 +40,6 @@ import { describe, expect, it } from "vitest";
 
 const APP_DIR = join(import.meta.dirname ?? __dirname);
 const SPRITE = join(APP_DIR, "..", "..", "public", "icons", "core-icons.svg");
-// fleet's own glyphs, the ones Flag's vendored sprite does not carry yet
-// (shared/ui/iconHref.ts routes FLEET_SPRITE_IDS there).
-const FLEET_SPRITE = join(APP_DIR, "..", "..", "public", "icons", "fleet-icons.svg");
 const DEFAULT_MANIFEST = join(APP_DIR, "..", "..", "..", "config", "default", "manifest.yaml");
 
 function idsIn(path: string): Set<string> {
@@ -50,11 +47,14 @@ function idsIn(path: string): Set<string> {
   return new Set(Array.from(svg.matchAll(/<symbol\s+id="([^"]+)"/g), (m) => m[1]));
 }
 
-/** Symbol ids the two sprites actually define, each where iconHref looks. */
+/** Symbol ids Flag's vendored sprite defines — the only sprite fleet ships. */
 function spriteIds(): Set<string> {
-  const core = idsIn(SPRITE);
-  const fleet = idsIn(FLEET_SPRITE);
-  return new Set([...[...core].filter((id) => !FLEET_SPRITE_IDS.has(id)), ...[...fleet].filter((id) => FLEET_SPRITE_IDS.has(id))]);
+  return idsIn(SPRITE);
+}
+
+/** Whether iconHref(name) lands on a symbol the sprite defines. */
+function resolves(ids: Set<string>, name: string): boolean {
+  return ids.has(iconHref(name).split("#")[1]);
 }
 
 /**
@@ -152,25 +152,32 @@ describe("core-icons sprite coverage", () => {
     // Called out separately from the sweep below because these are the ones a
     // bare install renders: a gap here is the first screen of a new deployment.
     const missing = defaultBundleRefs()
-      .filter((r) => !ids.has(r.name))
+      .filter((r) => !resolves(ids, r.name))
       .map((r) => r.where);
     expect(missing, `config/default cards name glyphs the sprite lacks: ${missing.join(", ")}`)
       .toEqual([]);
   });
 
-  it("fleet's own sprite holds exactly the ids iconHref routes to it, none Flag already has", () => {
-    const fleet = idsIn(FLEET_SPRITE);
-    expect([...fleet].sort()).toEqual([...FLEET_SPRITE_IDS].sort());
-    // Once Flag ships a glyph, it must leave fleet's sprite (and FLEET_SPRITE_IDS).
-    expect([...fleet].filter((id) => idsIn(SPRITE).has(id))).toEqual([]);
+  it("every alias lands on a Flag glyph, and none shadows one", () => {
+    // An alias exists only for a name Flag declined as a duplicate; if Flag
+    // ever ships that id itself, the alias must go so its own glyph wins.
+    for (const [from, to] of Object.entries(ICON_ALIASES)) {
+      expect(ids.has(to), `alias ${from} → ${to}: Flag has no ${to}`).toBe(true);
+      expect(ids.has(from), `Flag now ships ${from}; drop its alias`).toBe(false);
+    }
+  });
+
+  it("fleet's own source names Flag ids, not aliases (aliases are for bundle data)", () => {
+    const aliased = [...new Set(sourceRefs(files).filter((r) => r.name in ICON_ALIASES).map((r) => r.where))].sort();
+    expect(aliased).toEqual([]);
   });
 
   it("every referenced icon name is a symbol in the sprite", () => {
-    const missing = [...new Set(refs.filter((r) => !ids.has(r.name)).map((r) => r.where))].sort();
+    const missing = [...new Set(refs.filter((r) => !resolves(ids, r.name)).map((r) => r.where))].sort();
     expect(
       missing,
       `these render an empty icon box — add the glyph to ` +
-        `Flag's sprite upstream (or, until then, web/public/icons/fleet-icons.svg): ${missing.join(", ")}`,
+        `Flag's sprite upstream: ${missing.join(", ")}`,
     ).toEqual([]);
   });
 });

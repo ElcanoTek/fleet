@@ -72,8 +72,11 @@ Code highlighting is in-housed (`src/app/chat/ui/highlight/`, see the root
   Never edit them: `scripts/flag-sync.sh check` (part of `make stack-check`)
   fails on any change. Update with `scripts/flag-sync.sh sync ../flag` from a
   clean sibling Flag checkout, then commit the files and `flag.lock` together.
-  Icons Flag does not ship yet live in `public/icons/fleet-icons.svg`;
-  `src/app/shared/ui/iconHref.ts` picks the sprite per id.
+  Every icon comes from Flag's sprite — use Flag's ids (`book`,
+  `alert-triangle`, `tools`, …). `src/app/shared/ui/iconHref.ts` keeps a few
+  aliases (`book-open`, `warning`, `wrench`) only for names that arrive as
+  client-bundle data; `spriteCoverage.test.ts` rejects them in fleet's source.
+  A glyph Flag lacks is requested from Flag, not drawn here.
 
 ## Tests
 
