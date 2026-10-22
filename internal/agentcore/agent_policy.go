@@ -143,6 +143,15 @@ type AgentPolicy struct {
 	// card (see ResultCardProblems). Empty = every settled card renders as
 	// before.
 	CriticalToolResultCards []string
+	// CriticalToolNarrowableArgs maps a critical suffix to the ONE top-level
+	// list argument a person may narrow on its approval card
+	// (docs/APPROVAL-NARROWING.md, ADR-0089): on approve, the chat server may
+	// replace that argument with a non-empty subset of the staged values, in
+	// staged order, and nothing else. Keys match like CriticalToolSuffixes
+	// (longest suffix wins); a key must stage a card for an MCP call (see
+	// NarrowableArgProblems). Empty = every card approves its call whole, as
+	// before.
+	CriticalToolNarrowableArgs map[string]string
 	// InteractiveHiddenTools lists tool-name suffixes (matched like
 	// CriticalToolSuffixes) whose MCP tools interactive chat never sees or
 	// calls, while scheduled runs keep them (interactive_hidden.go,
@@ -238,6 +247,9 @@ var (
 	// activeResultCards is the set of critical suffixes whose results may
 	// carry an outcome card. Empty by default: no result is read for one.
 	activeResultCards = map[string]bool{}
+	// activeNarrowableArgs maps a critical suffix to the list argument a
+	// person may narrow on its card. Empty by default: nothing is narrowed.
+	activeNarrowableArgs = map[string]string{}
 	// activeInteractiveHidden is the normalized interactive_hidden_tools
 	// list. Empty by default: chat sees what scheduled runs see.
 	activeInteractiveHidden []string
@@ -389,6 +401,7 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 
 	activeResultCards = installResultCardSet(p.CriticalToolResultCards, seen)
 
+	activeNarrowableArgs = installNarrowableArgs(p.CriticalToolNarrowableArgs, p.CriticalToolModes, seen)
 	activeInteractiveHidden = installInteractiveHiddenList(p.InteractiveHiddenTools)
 }
 

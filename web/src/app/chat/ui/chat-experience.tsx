@@ -51,6 +51,7 @@ import {
   historyToMessages,
   hydrateResolvedApproval,
   parseApprovalCardData,
+  parseApprovalNarrowable,
   type Approval,
   type ApprovalStatus,
   type HistoryEntry,
@@ -2463,6 +2464,7 @@ export function ChatExperience({
           card?: unknown;
           group_id?: string;
           progress_updates?: boolean;
+          narrowable?: unknown;
         }>;
         resolved_approvals?: Array<{
           approval_id: string;
@@ -2482,6 +2484,7 @@ export function ChatExperience({
           group_id?: string;
           progress_updates?: boolean;
           progress?: unknown;
+          narrowed?: unknown;
         }>;
         pending_memory_proposals?: Array<{
           proposal_id: string;
@@ -2587,6 +2590,7 @@ export function ChatExperience({
             card: parseApprovalCardData(p.card),
             groupId: p.group_id || undefined,
             progressUpdates: p.progress_updates === true || undefined,
+            narrowable: parseApprovalNarrowable(p.narrowable),
           })),
         ];
         const memoryCards: MemoryProposal[] = pendingMemoryProposals.map(

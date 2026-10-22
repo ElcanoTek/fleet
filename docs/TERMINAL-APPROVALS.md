@@ -114,7 +114,9 @@ session/pattern decisions, and switching conversations to resolve saved cards.
 Edit fields match the existing web endpoint (name, prompt, cron). Authenticated SSE `tool.approval_required` events and GET pending cards expose
 `frozen_args` for every staged tool: `{complete: true, args: <ArgsJSON object>}`
 or `{complete: false}` when the snapshot is missing, unparseable, trailing,
-typed JSON null, not an object, or over the 1 MiB raw ArgsJSON bound.
+typed JSON null, not an object, over 4 MiB of raw ArgsJSON, or over 1 MiB as
+fleet re-encodes it (the bound is on what clients receive, however the model
+escaped its JSON).
 JSON number literals (integers above 2^53, exponents) are preserved. Display summaries stay
 truncated for cards; they are not the review record. Terminal review
 automatically prints those execution arguments as escaped JSON before any

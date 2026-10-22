@@ -74,6 +74,8 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		withApprovalCard(card, &a)
 		// The turn's approval group, for a tool in critical_tool_group_approval.
 		withApprovalGroup(card, &a)
+		// The argument frozen at staging that the person may narrow.
+		withApprovalNarrowable(card, &a)
 		approvals = append(approvals, card)
 	}
 	// Resolved approvals re-hydrate too, so the transcript keeps the shape

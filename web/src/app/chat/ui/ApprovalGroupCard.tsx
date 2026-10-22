@@ -14,6 +14,12 @@
 //   - One at a time: falls back to today's individual cards.
 //   - Cancel all: declines every call.
 //
+// A call whose tool declares a narrowable list argument
+// (docs/APPROVAL-NARROWING.md) shows its readable rows with their own
+// checkboxes: unticked rows are left out of that call (the request names the
+// ticked values under `narrow`), and a call with every row unticked is
+// declined.
+//
 // The countdown is the earliest deadline among the calls. Each call keeps its
 // own seat badge. Once decided, a call leaves the group and shows its own
 // outcome card (running, applied, declined …), so the executing and resolved
@@ -24,8 +30,10 @@ import {
   type Approval,
   type ApprovalOutcomePayload,
   approvalStatusFromOutcome,
+  parseApprovalNarrowed,
   resultCardFromOutcome,
 } from "./history";
+import { approvedValuesFor, selectableKeys, selectedCountText, type RowSelection } from "./approvalNarrowing";
 import {
   ApprovalCountdown,
   ApprovalSeatBadge,
@@ -109,15 +117,60 @@ export function ApprovalGroupCard({
   // while the card is open arrives checked too.
   const names = useContext(ConnectorNamesContext);
   const [unchecked, setUnchecked] = useState<ReadonlySet<string>>(() => new Set());
+  // Per call, the rows of a narrowable card the person unticked.
+  const [leftOut, setLeftOut] = useState<ReadonlyMap<string, ReadonlySet<string>>>(() => new Map());
   const [submitting, setSubmitting] = useState<"approve" | "cancel" | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const expiresAt = earliestExpiry(approvals);
   const countdown = useApprovalCountdown(expiresAt, "pending", false);
 
-  const checkedIds = approvals.filter((a) => !unchecked.has(a.id)).map((a) => a.id);
-  const uncheckedIds = approvals.filter((a) => unchecked.has(a.id)).map((a) => a.id);
+  // A narrowable call's approved values (null for a call approved whole).
+  const approvedOf = (a: Approval): string[] | null => {
+    if (!a.narrowable || selectableKeys(a).size === 0) return null;
+    return approvedValuesFor(a.narrowable, leftOut.get(a.id) ?? new Set());
+  };
+  // A checked call with every row unticked is declined, like an unchecked one.
+  const goes = (a: Approval) => !unchecked.has(a.id) && approvedOf(a)?.length !== 0;
+  const checkedIds = approvals.filter(goes).map((a) => a.id);
+  const uncheckedIds = approvals.filter((a) => !goes(a)).map((a) => a.id);
+  const narrow: Record<string, string[]> = {};
+  // The argument each narrowed card showed: the server refuses a narrowing of
+  // any other argument (a policy that changed after a restart).
+  const narrowArgs: Record<string, string> = {};
+  for (const a of approvals) {
+    const approved = approvedOf(a);
+    if (goes(a) && approved && a.narrowable && approved.length < a.narrowable.values.length) {
+      narrow[a.id] = approved;
+      narrowArgs[a.id] = a.narrowable.arg;
+    }
+  }
+  const selectionFor = (a: Approval): RowSelection | undefined => {
+    if (!a.narrowable) return undefined;
+    const keys = selectableKeys(a);
+    if (keys.size === 0) return undefined;
+    const out = leftOut.get(a.id) ?? new Set<string>();
+    return {
+      selectable: (key) => key !== undefined && keys.has(key),
+      isLeftOut: (key) => key !== undefined && out.has(key),
+      toggle: (key) =>
+        setLeftOut((prev) => {
+          const next = new Map(prev);
+          const set = new Set(next.get(a.id) ?? []);
+          if (set.has(key)) set.delete(key);
+          else set.add(key);
+          next.set(a.id, set);
+          return next;
+        }),
+      disabled: submitting !== null || unchecked.has(a.id),
+    };
+  };
 
-  const decide = async (approve: string[], decline: string[]) => {
+  const decide = async (
+    approve: string[],
+    decline: string[],
+    narrowed: Record<string, string[]> = {},
+    narrowedArgs: Record<string, string> = {},
+  ) => {
     if (submitting || !conversationId) return;
     setSubmitting(approve.length > 0 ? "approve" : "cancel");
     setSubmitError(null);
@@ -131,7 +184,11 @@ export function ApprovalGroupCard({
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approve, decline }),
+        body: JSON.stringify(
+          Object.keys(narrowed).length > 0
+            ? { approve, decline, narrow: narrowed, narrow_args: narrowedArgs }
+            : { approve, decline },
+        ),
       });
       if (!response.ok) {
         // Nothing was decided: the server refuses the whole decision before
@@ -160,9 +217,16 @@ export function ApprovalGroupCard({
         const next = approvalStatusFromOutcome(r.result);
         if (next === null) {
           anyExecuting = true;
-          onResolved({ ...approval, status: "pending", executing: true, resultText: r.result.result_text });
+          onResolved({ ...approval, status: "pending", executing: true, resultText: r.result.result_text, narrowed: parseApprovalNarrowed(r.result.narrowed) });
         } else {
-          onResolved({ ...approval, status: next, resultText: r.result.result_text, resultCard: resultCardFromOutcome(r.result), executing: false });
+          onResolved({
+            ...approval,
+            status: next,
+            resultText: r.result.result_text,
+            resultCard: resultCardFromOutcome(r.result),
+            executing: false,
+            narrowed: parseApprovalNarrowed(r.result.narrowed),
+          });
         }
       }
       if (data.resume === true) onResumeExpected?.(anyExecuting);
@@ -199,6 +263,8 @@ export function ApprovalGroupCard({
       <ul className="grid min-w-0 gap-2">
         {approvals.map((a) => {
           const checked = !unchecked.has(a.id);
+          const selection = selectionFor(a);
+          const approved = approvedOf(a);
           return (
             <li
               key={a.id}
@@ -227,9 +293,18 @@ export function ApprovalGroupCard({
                 <span className="min-w-0 break-words font-medium">{rowTitle(a, names)}</span>
               </label>
               <div className="mt-1 min-w-0 pl-5">
+                {selection && approved && a.narrowable ? (
+                  <p
+                    data-testid="approval-group-narrow-count"
+                    aria-live="polite"
+                    className="text-[0.72rem] font-medium text-[var(--color-text-secondary)]"
+                  >
+                    {selectedCountText(approved.length, a.narrowable.values.length)}
+                  </p>
+                ) : null}
                 {a.card ? (
                   <>
-                    <ApprovalReadableBody card={a.card} />
+                    <ApprovalReadableBody card={a.card} selection={selection} />
                     <ApprovalCardDetails>
                       <RawArgs approval={a} />
                     </ApprovalCardDetails>
@@ -253,7 +328,7 @@ export function ApprovalGroupCard({
             data-testid="approval-group-approve"
             className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
             disabled={disabled || checkedIds.length === 0}
-            onClick={() => void decide(checkedIds, uncheckedIds)}
+            onClick={() => void decide(checkedIds, uncheckedIds, narrow, narrowArgs)}
           >
             {submitting === "approve" ? "Running…" : `Approve all (${checkedIds.length})`}
           </button>

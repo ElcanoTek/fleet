@@ -25,8 +25,16 @@ import {
   approvalIsExecuting,
   approvalProgressText,
   approvalStatusFromOutcome,
+  parseApprovalNarrowed,
   resultCardFromOutcome,
 } from "./history";
+import {
+  leftOutOf,
+  narrowedApproveLabel,
+  narrowedSummary,
+  selectedCountText,
+  useNarrowing,
+} from "./approvalNarrowing";
 import { applyAllText, approvalToolLabel, ConnectorNamesContext, knownConnectorLabel, mcpToolServer } from "./approvalToolLabel";
 import { useApprovalProgressPoll } from "./useApprovalProgressPoll";
 import { EmailSendResult, parseEmailSendPayload } from "./ToolChips";
@@ -471,11 +479,19 @@ export function ApprovalCard({
   const resolve = async (
     approved: boolean,
     edits?: { name?: string; prompt?: string; cron?: string },
+    // A narrowed approval (docs/APPROVAL-NARROWING.md): the ticked values of
+    // the tool's narrowable list argument. Absent approves the call whole.
+    approvedValues?: string[],
   ) => {
     if (submitting || approval.status !== "pending" || !conversationId) return;
     if (executing && !approved) return;
     setSubmitting(approved ? "send" : "cancel");
     setSubmitError(null);
+    // The argument the card showed goes with the values: the server refuses a
+    // narrowing of any other argument (a policy that changed after a restart).
+    const narrowedArg = approval.narrowable?.arg;
+    const narrowing =
+      approved && !executing && approvedValues !== undefined && approvedValues.length > 0 && narrowedArg !== undefined;
     try {
       const approvalUrl = conversationApprovalApiUrl(conversationId, approval.id);
       if (!approvalUrl) {
@@ -491,8 +507,11 @@ export function ApprovalCard({
           approved,
           // A no-session tool never sends a wider scope, whatever state the
           // (hidden) checkbox is in: the server would refuse it with a 400.
-          scope: executing || approval.noSessionApproval ? "once" : applyAll ? "session" : "once",
+          // A narrowed approval covers this call only (the server refuses a
+          // wider scope with approved_values).
+          scope: executing || approval.noSessionApproval || narrowing ? "once" : applyAll ? "session" : "once",
           ...(!executing && edits && Object.keys(edits).length > 0 ? { edits } : {}),
+          ...(narrowing ? { approved_values: approvedValues, narrowed_arg: narrowedArg } : {}),
         }),
       });
       if (!response.ok) {
@@ -511,8 +530,10 @@ export function ApprovalCard({
         execution_unknown?: boolean;
         resume?: boolean;
         result_card?: unknown;
+        narrowed?: unknown;
       };
       const nextStatus = approvalStatusFromOutcome(data);
+      const narrowed = parseApprovalNarrowed(data.narrowed) ?? approval.narrowed;
       if (data.resume === true) onResumeExpected?.(nextStatus === null);
       if (nextStatus === null) {
         setHeldExecuting(true);
@@ -522,6 +543,7 @@ export function ApprovalCard({
           executing: true,
           resultText: data.result_text,
           decisionError: undefined,
+          narrowed,
         });
         return;
       }
@@ -533,6 +555,7 @@ export function ApprovalCard({
         resultCard: resultCardFromOutcome(data),
         executing: false,
         decisionError: undefined,
+        narrowed,
       });
     } catch (err) {
       // Network failure: nothing reached the server, same posture as a non-2xx.
@@ -603,7 +626,7 @@ export function ApprovalCard({
         approval={card}
         submitting={submitting}
         submitError={submitError}
-        onResolve={resolve}
+        onResolve={(approved, approvedValues) => void resolve(approved, undefined, approvedValues)}
         applyAll={applyAll}
         onApplyAllChange={setApplyAll}
         onAskAgain={onAskAgain}
@@ -922,7 +945,8 @@ function GenericActionCard({
   approval: Approval;
   submitting: "send" | "cancel" | null;
   submitError: string | null;
-  onResolve: (approved: boolean) => void;
+  // approvedValues narrows the approval (docs/APPROVAL-NARROWING.md).
+  onResolve: (approved: boolean, approvedValues?: string[]) => void;
   applyAll: boolean;
   onApplyAllChange: (v: boolean) => void;
   onAskAgain?: (approval: Approval) => void;
@@ -932,6 +956,15 @@ function GenericActionCard({
   const detailsId = useId();
   const executing = approvalIsExecuting(approval);
   const countdown = useApprovalCountdown(approval.expiresAt, approval.status, executing);
+  // A narrowable card (critical_tool_narrowable_args): rows the person may
+  // untick before approving. Inactive for every other card.
+  const narrowing = useNarrowing(approval, submitting !== null || countdown.expired);
+  const leftOut = leftOutOf(approval.narrowed);
+  const narrowedLine = approval.narrowed ? (
+    <p data-testid="approval-narrowed-summary" className="mt-0.5 min-w-0 text-[0.75rem] text-[var(--color-text-secondary)]">
+      {narrowedSummary(approval.narrowed)}
+    </p>
+  ) : null;
   const names = useContext(ConnectorNamesContext);
   const { action, server } = actionLabel(approval.tool, approval.mcpServer, approval.mcpAccount, names);
   const args = Array.isArray(approval.summary.args) ? approval.summary.args : [];
@@ -1018,7 +1051,8 @@ function GenericActionCard({
         result={approval.resultCard}
         recorded={recorded}
         approvedTitle={readable?.title}
-        approvedRecords={readable && readable.items.length > 0 ? <ApprovalCardItems items={readable.items} /> : null}
+        approvedNote={approval.narrowed ? narrowedSummary(approval.narrowed) : undefined}
+        approvedRecords={readable && readable.items.length > 0 ? <ApprovalCardItems items={readable.items} leftOut={leftOut} /> : null}
         toolDetails={
           <div className="mt-1 min-w-0">
             {toolHeader}
@@ -1064,7 +1098,16 @@ function GenericActionCard({
           {readable.subtitle ? (
             <p className="mt-0.5 min-w-0 break-words text-[0.8rem] text-[var(--color-text-secondary)]">{readable.subtitle}</p>
           ) : null}
-          <ReadablePendingRecords items={readable.items} />
+          {narrowing.active && narrowing.approved ? (
+            <p
+              data-testid="approval-narrow-count"
+              aria-live="polite"
+              className="mt-2 text-[0.72rem] font-medium text-[var(--color-text-secondary)]"
+            >
+              {selectedCountText(narrowing.approved.length, narrowing.total)}
+            </p>
+          ) : null}
+          <ReadablePendingRecords items={readable.items} selection={narrowing.selection} />
           {readable.footer ? (
             <p className="mt-2 min-w-0 break-words text-[0.72rem] text-[var(--color-card-text-muted)]">{readable.footer}</p>
           ) : null}
@@ -1072,11 +1115,25 @@ function GenericActionCard({
         <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-2 border-t border-[var(--color-border-subtle)] pt-3">
           <button
             type="button"
+            data-testid="approval-approve"
             className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-4 py-1.5 text-[0.8rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
             disabled={submitting !== null || countdown.expired}
-            onClick={() => onResolve(true)}
+            onClick={() => {
+              // Narrowed: name the ticked values. Nothing ticked is a decline.
+              if (narrowing.approved && narrowing.approved.length === 0) onResolve(false);
+              else if (narrowing.approved && narrowing.approved.length < narrowing.total) onResolve(true, narrowing.approved);
+              else onResolve(true);
+            }}
           >
-            {submitting === "send" ? "Running…" : applyAll ? "Approve + allow all" : "Approve"}
+            {submitting === "send"
+              ? "Running…"
+              : narrowing.approved && narrowing.approved.length === 0
+                ? "Decline"
+                : narrowing.approved
+                  ? narrowedApproveLabel(narrowing.approved.length, narrowing.total)
+                  : applyAll
+                    ? "Approve + allow all"
+                    : "Approve"}
           </button>
           <button
             type="button"
@@ -1093,10 +1150,17 @@ function GenericActionCard({
           {argsBlock}
         </DetailsPanel>
         <div className="mt-2 flex flex-col gap-2 empty:hidden">
+          {narrowing.approved && narrowing.approved.length < narrowing.total ? (
+            <p data-testid="approval-narrow-scope" className="text-[0.72rem] text-[var(--color-card-text-muted)]">
+              {narrowing.approved.length === 0
+                ? "Nothing is selected, so this declines the action."
+                : `Covers only the ${narrowing.approved.length} selected; ${narrowing.total - narrowing.approved.length} left out of the call.`}
+            </p>
+          ) : null}
           <ApprovalSeatBadge server={approval.mcpServer} account={approval.mcpAccount} verb="Runs as" />
           <ApprovalSubmitError message={submitError} />
           {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
-          {approval.noSessionApproval ? null : (
+          {approval.noSessionApproval || narrowing.active ? null : (
             <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-card-text-muted)]">
               <input
                 type="checkbox"
@@ -1126,14 +1190,17 @@ function GenericActionCard({
         <span aria-hidden>{recorded ? "📓" : "🛠️"}</span>
         <span data-testid="generic-action-title" className="min-w-0 break-words font-medium">{title}</span>
       </div>
+      {/* A narrowed approval says so on every settled or running card, with
+          or without a readable card (docs/APPROVAL-NARROWING.md). */}
+      {narrowedLine}
 
       {readable ? (
         <>
           {/* Pending: the records in plain words. Resolved: the one-line
               outcome above is the card; the records move into Details. */}
-          {approval.status === "pending" ? <ApprovalReadableBody card={readable} /> : null}
+          {approval.status === "pending" ? <ApprovalReadableBody card={readable} leftOut={leftOut} /> : null}
           <ApprovalCardDetails>
-            {approval.status !== "pending" ? <ApprovalCardItems items={readable.items} /> : null}
+            {approval.status !== "pending" ? <ApprovalCardItems items={readable.items} leftOut={leftOut} /> : null}
             {toolHeader}
             {argsBlock}
           </ApprovalCardDetails>

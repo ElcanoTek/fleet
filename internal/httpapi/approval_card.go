@@ -68,6 +68,13 @@ type ApprovalCard struct {
 
 // ApprovalCardItem is one record the call touches.
 type ApprovalCardItem struct {
+	// Key names the staged value of the tool's narrowable list argument this
+	// row stands for (agent_policy.critical_tool_narrowable_args,
+	// docs/APPROVAL-NARROWING.md): a row whose key is one of the staged
+	// values gets a checkbox, and unticking it leaves that value out of the
+	// approved call. Optional, unique within the card, at most 200
+	// characters; a key that names no staged value is shown, not selectable.
+	Key   string `json:"key,omitempty"`
 	Label string `json:"label"`
 	ID    string `json:"id,omitempty"`
 	Link  string `json:"link,omitempty"`
@@ -208,11 +215,21 @@ func validateApprovalCard(c *ApprovalCard) error {
 		return fmt.Errorf("%d items, over the %d-item limit", len(c.Items), approvalCardMaxItems)
 	}
 	rows := 0
+	keys := make(map[string]bool, len(c.Items))
 	for i := range c.Items {
 		it := &c.Items[i]
 		at := fmt.Sprintf("items[%d]", i)
 		if err := cardText(at+".label", it.Label, approvalCardMaxTitle, true); err != nil {
 			return err
+		}
+		if err := cardText(at+".key", it.Key, approvalCardMaxTitle, false); err != nil {
+			return err
+		}
+		if it.Key != "" {
+			if keys[it.Key] {
+				return fmt.Errorf("%s.key repeats an earlier item's key", at)
+			}
+			keys[it.Key] = true
 		}
 		if err := cardText(at+".id", it.ID, approvalCardMaxTitle, false); err != nil {
 			return err

@@ -1,0 +1,102 @@
+package store
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// NarrowingNote is fleet's labelled line for a narrowed approval
+// (docs/APPROVAL-NARROWING.md): what the person approved and which staged
+// values they left out, so the model neither reports the left-out ones as
+// done nor runs them unasked. The chat server appends it after the call's
+// result; RecoverStrandedApprovals appends it to an interrupted call's
+// breadcrumb, so the context survives a restart too.
+func NarrowingNote(arg string, staged, approved []string) string {
+	picked := make(map[string]bool, len(approved))
+	for _, v := range approved {
+		picked[v] = true
+	}
+	// Name the smaller side exactly by its 1-based positions in the staged
+	// list, which the call's recorded arguments hold. Positions only, never
+	// the values: the values are model-authored, so a line built from them
+	// could carry what output governance must scrub or block, and this line
+	// must reach the model whole (it is also replayed at restart recovery).
+	var approvedPos, leftPos []int
+	for i, v := range staged {
+		if picked[v] {
+			approvedPos = append(approvedPos, i+1)
+		} else {
+			leftPos = append(leftPos, i+1)
+		}
+	}
+	side, pos, other := "were approved", approvedPos, fmt.Sprintf("the other %d were left out", len(leftPos))
+	if len(leftPos) < len(approvedPos) {
+		side, pos, other = "were left out", leftPos, fmt.Sprintf("the other %d were approved", len(approvedPos))
+	}
+	// The decision only: whether the approved ones ran is the call's own
+	// outcome (it may have failed before it was sent, or a restart may have
+	// left it unknown), so the line never claims it.
+	return fmt.Sprintf("[fleet] The person narrowed this call: of the %d staged %s in its arguments, only positions %s %s; %s. The call's %s held only the approved ones; the result says whether they ran. Do not run the left-out ones unless the person asks. (Written by fleet, not the tool.)",
+		len(staged), arg, PositionRanges(pos), side, other, arg)
+}
+
+// PositionRanges writes ascending 1-based positions compactly: "1-3, 5, 8-10".
+// The narrowing note and the chat server's audit line share it.
+func PositionRanges(pos []int) string {
+	var parts []string
+	for i := 0; i < len(pos); {
+		j := i
+		for j+1 < len(pos) && pos[j+1] == pos[j]+1 {
+			j++
+		}
+		if j > i {
+			parts = append(parts, fmt.Sprintf("%d-%d", pos[i], pos[j]))
+		} else {
+			parts = append(parts, strconv.Itoa(pos[i]))
+		}
+		i = j + 1
+	}
+	return strings.Join(parts, ", ")
+}
+
+// ApprovalRecoveryOutcome is the outcome RecoverStrandedApprovals records
+// for an approved call a restart cut off: it may have committed remotely, so
+// it is uncertainty, never a failure or a retry.
+const ApprovalRecoveryOutcome = "Execution outcome unknown after server restart. Do not repeat this action automatically; verify the external result before taking further action."
+
+// ApprovalRecoveryText is the model-visible breadcrumb RecoverStrandedApprovals
+// appends for a stranded approval: the outcome line, then, for a narrowed
+// approval, its narrowing line (the recorded tool call holds the whole staged
+// list, so the breadcrumb says which values were approved and which were left
+// out). It is not cut here, because the narrowing line is never shortened:
+// the chat server accepts a narrowing only when its line fits
+// agentcore.ApprovalTrailerRoom, the room at the minimum output limit, and
+// the outcome line is shorter than the tool-text floor that room leaves, so
+// this text stays within every limit the deployment can be set to (pinned by
+// httpapi's TestApprovalRecoveryText_FitsTheMinimumOutputLimit).
+func ApprovalRecoveryText(narrowedJSON string) string {
+	text := ApprovalRecoveryOutcome
+	if note := narrowingNoteFor(narrowedJSON); note != "" {
+		text += "\n\n" + note
+	}
+	return text
+}
+
+// narrowingNoteFor is NarrowingNote for a stored narrowed_json record, or ""
+// when there is none or it does not read.
+func narrowingNoteFor(narrowedJSON string) string {
+	if narrowedJSON == "" {
+		return ""
+	}
+	var n struct {
+		Arg      string   `json:"arg"`
+		Staged   []string `json:"staged"`
+		Approved []string `json:"approved"`
+	}
+	if json.Unmarshal([]byte(narrowedJSON), &n) != nil || n.Arg == "" || len(n.Approved) == 0 {
+		return ""
+	}
+	return NarrowingNote(n.Arg, n.Staged, n.Approved)
+}

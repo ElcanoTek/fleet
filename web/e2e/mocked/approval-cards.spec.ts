@@ -593,3 +593,72 @@ test("a settled card reads its result card, and Retry failed sends a user turn",
   await expect(plain.getByTestId("approval-result-card")).toHaveCount(0);
   await expect(plain.getByTestId("approval-result")).toContainText('{"updated":1}');
 });
+
+// Approval narrowing (docs/APPROVAL-NARROWING.md): a pending readable card of
+// a tool in agent_policy.critical_tool_narrowable_args has a checkbox on every
+// row that names a staged value. Unticking one shows it Left out, the button
+// reads "Approve 2 of 3", and one click posts the ticked values; the settled
+// card says what was approved and keeps the left-out row marked.
+test("a narrowable card leaves an unticked deal out and approves the rest in one click", async ({ page }) => {
+  const conv = "conv-narrow";
+  await mockChatBoot(page, { conversations: [{ id: conv, title: "Floor change" }] });
+  await page.route(`**/api/conversations/${conv}`, (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation: { id: conv, title: "Floor change", persona: "default", model: "test-model", pinned: false },
+        history: [
+          { id: 1, role: "user", type: "text", content: { text: "raise the floors" } },
+          { id: 2, role: "assistant", type: "text", content: { text: "Here's the plan." } },
+        ],
+        pending_approvals: [
+          {
+            approval_id: "ap-narrow",
+            tool: "mcp_ix_execute_plan",
+            summary: { tool: "mcp_ix_execute_plan", args: [{ key: "deal_ids", value: '["k1","k2","k3"]' }] },
+            no_session_approval: true,
+            expires_at: Math.floor(Date.now() / 1000) + 3600,
+            narrowable: { arg: "deal_ids", values: ["k1", "k2", "k3"] },
+            card: {
+              title: "Update floor on 3 Index Exchange deals",
+              subtitle: "Floor $0.10 → $5.00 · uncheck any deal to leave it out",
+              items: [
+                { key: "k1", label: "Deal one", id: "IX1", changes: [{ label: "Floor", before: "$0.10", after: "$5.00" }] },
+                { key: "k2", label: "Deal two", id: "IX2", changes: [{ label: "Floor", before: "$0.10", after: "$5.00" }] },
+                { key: "k3", label: "Deal three", id: "IX3", changes: [{ label: "Floor", before: "$0.10", after: "$5.00" }] },
+              ],
+            },
+          },
+        ],
+        resolved_approvals: [],
+        pending_memory_proposals: [],
+      },
+    });
+  });
+  let posted: unknown = null;
+  await page.route(`**/api/conversations/${conv}/approvals/ap-narrow`, (r: Route) => {
+    posted = r.request().postDataJSON();
+    return r.fulfill({
+      json: {
+        status: "approved",
+        is_err: false,
+        result_text: '{"success":true}',
+        narrowed: { arg: "deal_ids", staged: ["k1", "k2", "k3"], approved: ["k1", "k3"] },
+      },
+    });
+  });
+  await page.goto("/chat");
+  const row = page.locator(`[data-conversation-id="${conv}"]`);
+  await row.waitFor({ timeout: 15_000 });
+  await row.click();
+
+  const pending = page.locator('[data-approval-id="ap-narrow"]');
+  await expect(pending.getByTestId("approval-narrow-count")).toHaveText("3 of 3 selected");
+  await pending.getByRole("checkbox", { name: "Include Deal two (IX2)" }).uncheck();
+  await expect(pending.getByTestId("approval-card-left-out")).toHaveText("Left out");
+  await expect(pending.getByTestId("approval-narrow-count")).toHaveText("2 of 3 selected");
+  await pending.getByRole("button", { name: "Approve 2 of 3" }).click();
+
+  await expect(pending.getByTestId("approval-narrowed-summary")).toHaveText("Approved 2 of 3 · 1 left out");
+  expect(posted).toEqual({ approved: true, scope: "once", approved_values: ["k1", "k3"], narrowed_arg: "deal_ids" });
+});

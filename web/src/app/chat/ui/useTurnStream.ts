@@ -12,6 +12,7 @@ import {
   clearRetryNotice,
   historyToMessages,
   parseApprovalCardData,
+  parseApprovalNarrowable,
   parseApprovalResultCardData,
   parsePythonStream,
   type Approval,
@@ -2612,6 +2613,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         card?: unknown;
         group_id?: string;
         progress_updates?: boolean;
+        narrowable?: unknown;
       };
       // send_email cards can land below an expanded preview iframe — queue
       // a scroll-into-view so the user sees the action card without
@@ -2637,6 +2639,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             card: parseApprovalCardData(p.card),
             groupId: p.group_id || undefined,
             progressUpdates: p.progress_updates === true || undefined,
+            narrowable: parseApprovalNarrowable(p.narrowable),
           },
         ],
       }));

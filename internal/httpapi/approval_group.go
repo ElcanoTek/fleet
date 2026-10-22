@@ -50,9 +50,31 @@ const approvalGroupWorkers = 8
 // approve and the ones to decline. A card of the group named in neither list
 // is left as it is (it may have been staged after the person looked).
 type approvalGroupRequest struct {
-	Approve []string `json:"approve"`
-	Decline []string `json:"decline"`
+	Approve approvalIDList `json:"approve"`
+	Decline approvalIDList `json:"decline"`
+	// Narrow maps an approved card's id to the values of its declared
+	// narrowable list argument the person approved (the single-card POST's
+	// approved_values, docs/APPROVAL-NARROWING.md). Every id must be in
+	// Approve; a card absent from it is approved whole.
+	Narrow approvalGroupNarrow `json:"narrow,omitempty"`
+	// NarrowArgs maps each narrowed card's id to the argument its card showed
+	// as narrowable (the single-card POST's narrowed_arg). Required for every
+	// id in Narrow, and only for those.
+	NarrowArgs approvalGroupNarrowArgs `json:"narrow_args,omitempty"`
 }
+
+// maxApprovalGroupNarrowedValues bounds the approved values one group
+// decision may name across all its narrowed cards: the rows of a 5000-row
+// card budget (approvalCardMaxRows).
+const maxApprovalGroupNarrowedValues = approvalCardMaxRows
+
+// maxApprovalGroupBody bounds the group decision's body so that every
+// decision the endpoint accepts fits: at most maxApprovalGroupNarrowedValues
+// values of at most maxNarrowableValueRunes characters each (at most 12 bytes
+// per character once JSON-escaped: a character outside the BMP written as a
+// surrogate pair of two six-byte escapes; plus quotes and comma: about
+// 11.5 MiB), plus at most maxApprovalGroupDecisions ids, keys and brackets.
+const maxApprovalGroupBody = 16 << 20
 
 // approvalGroupResult is one card's answer inside the group reply: the body
 // the single-card POST would have answered, or its error.
@@ -115,7 +137,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 	}
 
 	var req approvalGroupRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxApprovalGroupBody))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
@@ -126,6 +148,13 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 		return
 	}
 
+	// The count is checked before anything is sized by it: the body may hold
+	// millions of short repeated ids, and a request over the bound is refused
+	// whatever else it holds.
+	if len(req.Approve)+len(req.Decline) > maxApprovalGroupDecisions {
+		http.Error(w, fmt.Sprintf("too many approvals in one group decision (max %d)", maxApprovalGroupDecisions), http.StatusBadRequest)
+		return
+	}
 	type decision struct {
 		id      string
 		approve bool
@@ -142,7 +171,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 				return
 			}
 			if seen[id] {
-				http.Error(w, fmt.Sprintf("approval %q is named more than once", id), http.StatusBadRequest)
+				http.Error(w, fmt.Sprintf("approval %s is named more than once", quoteClientValue(id)), http.StatusBadRequest)
 				return
 			}
 			seen[id] = true
@@ -153,8 +182,8 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 		http.Error(w, "name at least one approval to approve or decline", http.StatusBadRequest)
 		return
 	}
-	if len(decisions) > maxApprovalGroupDecisions {
-		http.Error(w, fmt.Sprintf("too many approvals in one group decision (max %d)", maxApprovalGroupDecisions), http.StatusBadRequest)
+	if err := checkGroupNarrowing(req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -168,12 +197,22 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 			return
 		}
 		if a == nil || a.ConversationID != convID {
-			http.Error(w, fmt.Sprintf("approval %q not found in this conversation", d.id), http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("approval %s not found in this conversation", quoteClientValue(d.id)), http.StatusNotFound)
 			return
 		}
 		if a.GroupID != groupID {
-			http.Error(w, fmt.Sprintf("approval %q is not in this approval group", d.id), http.StatusConflict)
+			http.Error(w, fmt.Sprintf("approval %s is not in this approval group", quoteClientValue(d.id)), http.StatusConflict)
 			return
+		}
+		// A narrowing must be one the card can take, checked here as the
+		// single-card POST checks it, so a bad one refuses the whole
+		// decision instead of failing one card after others were claimed.
+		// A settled card answers its recorded state below, as before.
+		if values, ok := req.Narrow[d.id]; ok && a.Status == "pending" {
+			if _, err := narrowApproval(a, values, req.NarrowArgs[d.id]); err != nil {
+				http.Error(w, fmt.Sprintf("approval %s: %v", quoteClientValue(d.id), err), http.StatusBadRequest)
+				return
+			}
 		}
 	}
 
@@ -192,7 +231,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 				if d.approve {
 					res.Decision = "approve"
 				}
-				out := s.decideApproval(ctx, r.Context().Done(), user, convID, d.id, approvalRequest{Approved: d.approve, Scope: "once"})
+				out := s.decideApproval(ctx, r.Context().Done(), user, convID, d.id, approvalRequest{Approved: d.approve, Scope: "once", ApprovedValues: groupApprovedValues(req.Narrow, d.id), NarrowedArg: req.NarrowArgs[d.id]})
 				switch {
 				case out.suggest != nil:
 					// Unreachable: a suggestion card is handler-only and never
@@ -231,4 +270,36 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 		out["resume"] = true
 	}
 	writeJSON(w, out)
+}
+
+// checkGroupNarrowing checks a group decision's `narrow` map before any card
+// is loaded: every narrowed card is approved, none is narrowed to nothing,
+// and the values stay within maxApprovalGroupNarrowedValues.
+func checkGroupNarrowing(req approvalGroupRequest) error {
+	approving := make(map[string]bool, len(req.Approve))
+	for _, id := range req.Approve {
+		approving[id] = true
+	}
+	total := 0
+	for id, values := range req.Narrow {
+		if !approving[id] {
+			return fmt.Errorf("approval %s is narrowed but not approved", quoteClientValue(id))
+		}
+		if values == nil {
+			return fmt.Errorf("approval %s is narrowed to nothing; decline it instead", quoteClientValue(id))
+		}
+		if req.NarrowArgs[id] == "" {
+			return fmt.Errorf("approval %s is narrowed without narrow_args naming the argument its card showed", quoteClientValue(id))
+		}
+		total += len(values)
+	}
+	for id := range req.NarrowArgs {
+		if _, ok := req.Narrow[id]; !ok {
+			return fmt.Errorf("narrow_args names approval %s, which is not narrowed", quoteClientValue(id))
+		}
+	}
+	if total > maxApprovalGroupNarrowedValues {
+		return fmt.Errorf("too many narrowed values in one group decision (max %d); decide the cards one at a time", maxApprovalGroupNarrowedValues)
+	}
+	return nil
 }

@@ -1947,3 +1947,49 @@ agent_policy:
 		t.Fatalf("a well-formed describer must pass: %s", res.Detail)
 	}
 }
+
+// validate-config reports a critical_tool_narrowable_args entry that stages no
+// card for an MCP call or names no plain argument.
+func TestCheckAgentPolicy_NarrowableArgs(t *testing.T) {
+	load := func(body string) *clientconfig.Bundle {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		b, err := clientconfig.Load(dir)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		return b
+	}
+	for name, tc := range map[string]struct{ body, want string }{
+		"not critical": {`
+agent_policy:
+  critical_tools: [execute_plan]
+  critical_tool_narrowable_args:
+    execute_plans: {arg: deal_ids}
+`, `"execute_plans"`},
+		"no argument": {`
+agent_policy:
+  critical_tools: [execute_plan]
+  critical_tool_narrowable_args:
+    execute_plan: {}
+`, `"execute_plan"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if res := checkAgentPolicy(load(tc.body), nil); res.Status != statusFail || !strings.Contains(res.Detail, tc.want) {
+				t.Fatalf("want agent_policy fail naming %s, got %q: %s", tc.want, res.Status, res.Detail)
+			}
+		})
+	}
+	good := load(`
+agent_policy:
+  critical_tools: [execute_plan]
+  critical_tool_narrowable_args:
+    execute_plan: {arg: deal_ids}
+`)
+	if res := checkAgentPolicy(good, nil); res.Status == statusFail {
+		t.Fatalf("a valid entry must pass: %s", res.Detail)
+	}
+}

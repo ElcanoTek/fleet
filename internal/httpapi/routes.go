@@ -204,13 +204,32 @@ func bodyLimitMiddleware(next http.Handler) http.Handler {
 			// shape, same in-handler cap) — but ONLY the POST: the collection
 			// route's other methods and every /shared-files/{id} mutation are
 			// small JSON and keep the 1 MB cap.
+			// An approval decision (POST /conversations/{id}/approvals/{id}
+			// or /approval-groups/{groupId}) can name up to 500 (5000 for a
+			// group) narrowed values, so each has its own, larger cap sized
+			// for what it accepts (maxApprovalBody, maxApprovalGroupBody,
+			// docs/APPROVAL-NARROWING.md), applied by its handler.
 			if !strings.HasPrefix(r.URL.Path, "/attachments") &&
-				(r.Method != http.MethodPost || r.URL.Path != "/shared-files") {
+				(r.Method != http.MethodPost || r.URL.Path != "/shared-files") &&
+				(r.Method != http.MethodPost || !isApprovalDecisionPath(r.URL.Path)) {
 				r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isApprovalDecisionPath reports whether path is an approval decision:
+// /conversations/{id}/approvals/{approvalId} or
+// /conversations/{id}/approval-groups/{groupId}, exactly (not the stop
+// route below an approval, which carries no body).
+func isApprovalDecisionPath(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/conversations/")
+	if !ok {
+		return false
+	}
+	parts := strings.Split(rest, "/")
+	return len(parts) == 3 && parts[0] != "" && (parts[1] == "approvals" || parts[1] == "approval-groups") && parts[2] != ""
 }
 
 // recoverMiddleware converts a panic in a SYNCHRONOUS chat handler into a 500

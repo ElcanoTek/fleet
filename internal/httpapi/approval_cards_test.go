@@ -326,6 +326,12 @@ func TestFrozenApprovalArgsFailClosed(t *testing.T) {
 	if got := frozenApprovalArgs(huge); got["complete"] != false {
 		t.Fatal("oversize ArgsJSON must be complete:false")
 	}
+	// The bound is on the snapshot as fleet sends it: 200 KiB of "<" is
+	// 1.2 MiB once re-encoded (each one escaped as six bytes), so it is not
+	// sent whole.
+	if got := frozenApprovalArgs(`{"x":"` + strings.Repeat("<", 200<<10) + `"}`); got["complete"] != false {
+		t.Fatal("a snapshot over frozenArgsMaxBytes re-encoded must be complete:false")
+	}
 }
 
 func TestFrozenApprovalArgsPreservesJSONNumberLiterals(t *testing.T) {

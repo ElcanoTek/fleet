@@ -453,6 +453,16 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// A tool in critical_tool_group_approval: the card joins this turn's
 	// approval group, so the web can render the turn's cards as one.
 	a.joinApprovalGroup(approval)
+	// critical_tool_narrowable_args: freeze the argument this card narrows
+	// now, so the card, its reloads and the decision never read a policy
+	// that changed after it was shown (docs/APPROVAL-NARROWING.md).
+	if arg := narrowableArgAtStaging(toolName, rawInput); arg != "" {
+		if ok, err := a.store.SetApprovalNarrowableArg(a.ctx, a.userEmail, approval.ID, arg); err != nil || !ok {
+			log.Printf("approval narrowing: freeze the argument for %s: ok=%t err=%v", approval.ID, ok, err)
+		} else {
+			approval.NarrowableArg = arg
+		}
+	}
 	if cardJSON != "" {
 		if ok, err := a.store.SetApprovalCard(a.ctx, a.userEmail, approval.ID, cardJSON); err != nil || !ok {
 			log.Printf("approval card: store card for %s: ok=%t err=%v", approval.ID, ok, err)
@@ -817,10 +827,22 @@ type validationResult struct {
 	Warnings []string `json:"warnings"`
 }
 
-// frozenArgsMaxBytes bounds ArgsJSON before frozen_args is decoded. Oversized
-// raw input is complete:false so clients refuse informed consent; execution
-// still uses the stored row.
+// frozenArgsMaxBytes bounds frozen_args as fleet sends it: the decoded
+// arguments re-encoded (which is what rides the SSE event and the GET). A
+// larger snapshot is complete:false so clients refuse informed consent;
+// execution still uses the stored row. Bounding the re-encoded form, not the
+// raw ArgsJSON, keeps what clients receive within 1 MiB however the model
+// escaped its JSON, and keeps every list a card may narrow reviewable: the
+// largest (500 values of 200 characters outside the BMP) is about 1.2 MiB
+// when written with surrogate-pair escapes but about 400 KiB re-encoded.
 const frozenArgsMaxBytes = 1 << 20
+
+// approvalArgsMaxDecodeBytes bounds the raw ArgsJSON fleet decodes for a
+// card's review (frozenApprovalArgs) and its narrowing (stagedNarrowable):
+// room for the largest narrowable list in its worst supported encoding
+// (about 1.2 MiB) and the call's other arguments. Larger arguments are
+// neither reviewable in full nor narrowable; the card approves whole.
+const approvalArgsMaxDecodeBytes = 4 << 20
 
 var errTrailingJSON = errors.New("trailing JSON")
 
@@ -848,10 +870,11 @@ func decodeJSONNumbers(raw []byte, dest any) error {
 // staged tool. ArgsJSON is the source of truth (model-authored arguments the
 // handler will replay). Broker-resolved credentials are never copied in.
 // complete is false when the snapshot is missing, unparseable, trailing,
-// typed JSON null, not an object, or over frozenArgsMaxBytes — clients fail closed.
+// typed JSON null, not an object, over approvalArgsMaxDecodeBytes raw, or
+// over frozenArgsMaxBytes re-encoded — clients fail closed.
 func frozenApprovalArgs(rawInput string) map[string]any {
 	incomplete := map[string]any{"complete": false}
-	if len(rawInput) > frozenArgsMaxBytes {
+	if len(rawInput) > approvalArgsMaxDecodeBytes {
 		return incomplete
 	}
 	var args any
@@ -860,6 +883,9 @@ func frozenApprovalArgs(rawInput string) map[string]any {
 	}
 	obj, ok := args.(map[string]any)
 	if !ok || obj == nil {
+		return incomplete
+	}
+	if encoded, err := json.Marshal(obj); err != nil || len(encoded) > frozenArgsMaxBytes {
 		return incomplete
 	}
 	return map[string]any{"complete": true, "args": obj}
@@ -912,7 +938,7 @@ func approvalRequiredEvent(approval *store.Approval, rawInput, convID string) ma
 	ev["expires_at"] = approval.ExpiresAt
 	ev["mcp_server"] = approval.MCPServer
 	ev["mcp_account"] = approval.MCPAccount
-	return withApprovalGroup(withApprovalCard(ev, approval), approval)
+	return withApprovalNarrowable(withApprovalGroup(withApprovalCard(ev, approval), approval), approval)
 }
 
 // summarizeApprovalInput dispatches on tool name to build a display
@@ -1517,6 +1543,16 @@ type approvalRequest struct {
 	// approving, instead of blindly accepting or starting over. nil field =
 	// keep the staged value. Ignored for every other tool kind.
 	Edits *scheduleTaskEdits `json:"edits,omitempty"`
+	// ApprovedValues narrows the approval (docs/APPROVAL-NARROWING.md): the
+	// values of the tool's declared narrowable list argument the person
+	// approved, a non-empty subset of the staged ones. Absent (nil) approves
+	// the call whole. Only with approved=true and scope once; anything else is
+	// refused before a claim.
+	ApprovedValues approvedValuesField `json:"approved_values"`
+	// NarrowedArg is the argument the card showed as narrowable
+	// (`narrowable.arg`), required with ApprovedValues: the narrowing is
+	// refused unless it is still the argument the tool narrows.
+	NarrowedArg string `json:"narrowed_arg,omitempty"`
 }
 
 // prevalidateStagedTaskPrompt checks the prompt of a schedule_task or
@@ -1628,7 +1664,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	user := userFromCtx(r.Context())
 
 	var req approvalRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxApprovalBody)).Decode(&req); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -1713,6 +1749,14 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	if scope := strings.TrimSpace(req.Scope); scope != "" && scope != "once" && !agentcore.SessionApprovalAllowed(approval.ToolName) {
 		return approvalError(http.StatusBadRequest, "this action needs its own decision for each call, so it cannot be approved or denied for the rest of the chat; use scope once")
 	}
+	// A narrowed approval (agent_policy.critical_tool_narrowable_args): the
+	// person approved only some of the staged values of the declared list
+	// argument. Checked whole before anything is claimed; a bad request
+	// leaves the card pending (approval_narrowing.go).
+	narrowing, err := requestedNarrowing(approval, req)
+	if err != nil {
+		return approvalError(http.StatusBadRequest, err.Error())
+	}
 
 	// A click that lands after the default-deny deadline but before the sweep's
 	// next tick resolves the row as timed out RIGHT NOW instead of losing the
@@ -1791,8 +1835,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	// retry) both send the email and only collide on the status write
 	// afterwards. Losing the claim means someone else is running it —
 	// return their resolved state instead of re-firing.
-	claimed, err := s.store.ClaimApproval(ctx, user, approvalID, "approved",
-		approvalExecutingSentinel)
+	claimed, err := s.claimApproved(ctx, user, convID, approval, narrowing)
 	if err != nil {
 		return approvalError(http.StatusInternalServerError, err.Error())
 	}
@@ -1823,10 +1866,11 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 			// the action may have run, so the honest answer is "unknown",
 			// never success or failure, and never a re-run.
 			s.approvalPersistenceFailures.Store(approvalID, true)
-			reply <- map[string]any{
+			// The narrowing was recorded with the claim, so the card keeps it.
+			reply <- withApprovalNarrowed(map[string]any{
 				"status": "approved", "execution_unknown": true,
 				"result_text": approvalOutcomeUnrecordedText,
-			}
+			}, approval)
 		})
 		reply <- s.executeClaimedApproval(execCtx, user, convID, approvalID, approval, req)
 	}()
@@ -1840,11 +1884,14 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	case out := <-reply:
 		return approvalBody(out)
 	case <-early.C:
-		return approvalBody(s.resumeReplyFlag(execCtx, map[string]any{
+		running := map[string]any{
 			"status":      "approved",
 			"executing":   true,
 			"result_text": approvalExecutingSentinel,
-		}, approval))
+		}
+		// A narrowed approval says what was approved while it still runs, so
+		// the running card keeps its "Approved k of n" and left-out rows.
+		return approvalBody(s.resumeReplyFlag(execCtx, withApprovalNarrowed(running, approval), approval))
 	case <-done:
 		// The client is gone; nobody reads a reply. The execution carries on
 		// detached and records its outcome for the next "Check result".
@@ -1957,8 +2004,17 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 		resultText = fmt.Sprintf("%s failed: %v", actionVerb(approval.ToolName), toolErr)
 	}
 	isErr := toolErr != nil
+	// Fleet's own labelled lines after the tool's text (a result card is read
+	// from the start of the result): for a narrowed approval, exactly which
+	// staged values were approved and which were left out. They are governed
+	// with the result but never truncated: the tool's text is bounded to what
+	// the output limit leaves after them.
+	var narrowed *approvalNarrowing
+	if n, nerr := parseApprovalNarrowing(approval.NarrowedJSON); approval.NarrowedJSON != "" && nerr == nil {
+		narrowed = n
+	}
 	var governed string
-	resultText, isErr, governed = governApprovalResult(execCtx, approval, resultText, isErr)
+	resultText, isErr, governed = governApprovalResultWithTrailer(execCtx, approval, resultText, isErr, approvalTrailer(narrowed))
 	// A tool in critical_tool_result_cards: the outcome card its own result
 	// carries, stored on the still-executing row just before the outcome, so
 	// the settled card and its reply carry both. Only for a call that ran and
@@ -1970,10 +2026,10 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText, isErr); err != nil {
 		log.Printf("SetApprovalResult: %v", err)
 		s.approvalPersistenceFailures.Store(approvalID, true)
-		return map[string]any{
+		return withApprovalNarrowed(map[string]any{
 			"status": "approved", "execution_unknown": true,
 			"result_text": approvalOutcomeUnrecordedText,
-		}
+		}, approval)
 	}
 	// SetApprovalResult commits the history breadcrumb in the same transaction.
 	s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
@@ -1991,6 +2047,7 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	if resultCard != nil {
 		reply["result_card"] = resultCard
 	}
+	withApprovalNarrowed(reply, approval)
 	return s.resumeReplyFlag(execCtx, reply, approval)
 }
 
@@ -2057,6 +2114,17 @@ func (g *approvalRunGate) drain(ctx context.Context) bool {
 	case <-ctx.Done():
 		return false
 	}
+}
+
+// governApprovalResultWithTrailer is governApprovalResult for a result that
+// carries fleet's own labelled lines (trailer): they are governed too, and
+// never cut by the result's size bound (agentcore
+// GovernAndBoundModelVisibleToolTextWithTrailer).
+func governApprovalResultWithTrailer(ctx context.Context, approval *store.Approval, text string, isErr bool, trailer string) (bounded string, err bool, governed string) {
+	if trailer == "" {
+		return governApprovalResult(ctx, approval, text, isErr)
+	}
+	return agentcore.GovernAndBoundModelVisibleToolTextWithTrailer(ctx, approval.ToolName, resolutionCallID(approval), text, isErr, trailer)
 }
 
 // governApprovalResult applies the loop's post-execution boundary to an
@@ -2132,8 +2200,9 @@ func (s *Server) approvalClientState(a *store.Approval) map[string]any {
 	}
 	// The outcome card the call's own result carried, for a tool in
 	// critical_tool_result_cards whose success fleet recorded. Absent for
-	// every other row, so its payload is unchanged.
-	return s.withApprovalResultCard(out, a)
+	// every other row, so its payload is unchanged. So is what a narrowed
+	// approval approved (approval_narrowing.go).
+	return withApprovalNarrowed(s.withApprovalResultCard(out, a), a)
 }
 
 // writeResolvedApprovalState answers a request that lost the claim race
@@ -2375,9 +2444,12 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	if !strings.HasPrefix(approval.ToolName, "mcp_") {
 		return "", fmt.Errorf("unsupported tool for approval: %s", approval.ToolName)
 	}
-	var args map[string]any
-	if err := decodeJSONNumbers([]byte(approval.ArgsJSON), &args); err != nil {
-		return "", fmt.Errorf("parse args: %w", err)
+	// The staged arguments, with the narrowed argument replaced when the
+	// person approved only some of its values (approval_narrowing.go). A
+	// narrowing record that does not match the staged call refuses the run.
+	args, narrowing, err := approvalExecutionArgs(approval)
+	if err != nil {
+		return "", err
 	}
 	// Reopen the seat the card was staged under (#167 residual 2). The turn
 	// scope that staged it is long gone, so this is a fresh short-lived scope
@@ -2408,9 +2480,21 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	// agent loop's MCP calls do. The approval runs on a fresh per-approval
 	// scope, so no other call queues ahead of it; the outer deadline is the
 	// budget itself.
-	budget, _ := agentcore.ApprovedCallBudget(server, approval.ArgsJSON)
+	budgetArgs := approval.ArgsJSON
+	if narrowing != nil {
+		// Budget the call that runs: a narrowed deal_ids batch is smaller.
+		if b, merr := json.Marshal(args); merr == nil {
+			budgetArgs = string(b)
+		}
+	}
+	budget, _ := agentcore.ApprovedCallBudget(server, budgetArgs)
 	callCtx, cancel := context.WithTimeout(mcp.WithCallTimeout(ctx, budget), budget)
 	defer cancel()
+	if narrowing != nil {
+		// Tell the server which values were staged, so it can check its
+		// other arguments against what the person reviewed.
+		callCtx = mcp.WithRequestMeta(callCtx, narrowingRequestMeta(narrowing))
+	}
 	// A tool in critical_tool_progress asks its server for progress while it
 	// runs (approval_progress.go); the executing card shows it. Stopped when
 	// the call returns, before its outcome is recorded.

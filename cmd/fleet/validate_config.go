@@ -1169,6 +1169,14 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 		CriticalToolSuffixes:    p.CriticalToolSuffixes,
 		CriticalToolResultCards: p.CriticalToolResultCards,
 	})...)
+	// critical_tool_narrowable_args: the key must stage a card for an MCP
+	// call and the argument must be a plain top-level name; a typo would
+	// quietly leave the card all or nothing.
+	problems = append(problems, agentcore.NarrowableArgProblems(agentcore.AgentPolicy{
+		CriticalToolSuffixes:       p.CriticalToolSuffixes,
+		CriticalToolModes:          p.CriticalToolModes,
+		CriticalToolNarrowableArgs: p.NarrowableArgNames(),
+	})...)
 	// interactive_hidden_tools: a member the boot install drops (a blank one)
 	// fails the check.
 	problems = append(problems, agentcore.InteractiveHiddenToolProblems(agentcore.AgentPolicy{

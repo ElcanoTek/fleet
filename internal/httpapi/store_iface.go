@@ -201,6 +201,9 @@ type chatStore interface {
 	// SetApprovalCard attaches a describer's readable card to a still-pending
 	// approval (docs/APPROVAL-CARD-DESCRIBERS.md); false = no pending row.
 	SetApprovalCard(ctx context.Context, userEmail, approvalID, cardJSON string) (bool, error)
+	// SetApprovalNarrowableArg freezes, at staging, the argument a person may
+	// narrow on a still-pending card (docs/APPROVAL-NARROWING.md).
+	SetApprovalNarrowableArg(ctx context.Context, userEmail, approvalID, arg string) (bool, error)
 	// SetApprovalGroup records the approval group a still-pending card joined
 	// at staging (docs/GROUPED-APPROVALS.md); false when the row is no longer
 	// pending.
@@ -214,6 +217,10 @@ type chatStore interface {
 	SetApprovalResultCard(ctx context.Context, userEmail, approvalID, cardJSON string) (bool, error)
 	GetApproval(ctx context.Context, userEmail, approvalID string) (*store.Approval, error)
 	ClaimApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error)
+	// ClaimApprovalNarrowed approves a pending card the person narrowed,
+	// writing what they approved in the same claim
+	// (docs/APPROVAL-NARROWING.md).
+	ClaimApprovalNarrowed(ctx context.Context, userEmail, approvalID, resultText, narrowedJSON string) (bool, error)
 	// ClaimApprovalAndSetModel is the suggest_advanced_model resolution: the
 	// approved claim and the conversation's model pin in one transaction, so a
 	// failed pin leaves the approval pending (retryable) rather than resolved

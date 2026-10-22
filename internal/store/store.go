@@ -2093,6 +2093,18 @@ type Approval struct {
 	// once by SetApprovalResultCard. Empty when none. Read by GetApproval and
 	// ListResolvedApprovals.
 	ResultCardJSON string
+	// NarrowedJSON records a card the person approved narrowed (migration
+	// 079, docs/APPROVAL-NARROWING.md): canonical JSON {"arg", "staged",
+	// "approved"} written by ClaimApprovalNarrowed in the claim itself.
+	// ArgsJSON stays the staged call; execution replaces only Arg with
+	// Approved. Empty for every card approved whole. Read by GetApproval and
+	// ListResolvedApprovals.
+	NarrowedJSON string
+	// NarrowableArg is the argument a person may narrow on this card, frozen
+	// at staging by SetApprovalNarrowableArg (migration 079,
+	// docs/APPROVAL-NARROWING.md). Empty = the card approves its call whole.
+	// Read by GetApproval and ListPendingApprovals.
+	NarrowableArg string
 }
 
 // ListPendingApprovals returns every pending approval for a conversation,
@@ -2104,7 +2116,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, ''), COALESCE(group_id, '')
+		        is_err, COALESCE(card_json, ''), COALESCE(group_id, ''), COALESCE(narrowable_arg, '')
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status = 'pending'
 		 ORDER BY created_at ASC`,
@@ -2119,7 +2131,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID, &a.NarrowableArg); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2147,7 +2159,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
 		        is_err, COALESCE(card_json, ''), COALESCE(group_id, ''), COALESCE(progress_json, ''),
-		        COALESCE(result_card_json, '')
+		        COALESCE(result_card_json, ''), COALESCE(narrowed_json, '')
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status <> 'pending'
 		 ORDER BY created_at DESC
@@ -2163,7 +2175,8 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID, &a.ProgressJSON, &a.ResultCardJSON); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID, &a.ProgressJSON, &a.ResultCardJSON,
+			&a.NarrowedJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2182,7 +2195,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 // completed cards or their argument bodies. Filter before any display limit so
 // an older in-flight execution cannot be hidden by newer completed approvals.
 func (s *Store) ListExecutingApprovals(ctx context.Context, userEmail, convID, sentinel string) ([]Approval, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, tool_name, COALESCE(tool_call_id, ''), COALESCE(mcp_server, ''), COALESCE(mcp_account, ''), COALESCE(progress_json, '') FROM approvals
+	rows, err := s.db.QueryContext(ctx, `SELECT id, tool_name, COALESCE(tool_call_id, ''), COALESCE(mcp_server, ''), COALESCE(mcp_account, ''), COALESCE(progress_json, ''), COALESCE(narrowed_json, '') FROM approvals
 		WHERE conversation_id = $1 AND user_email = $2 AND status = 'approved'
 		AND is_err IS NULL AND result_text = $3 ORDER BY created_at`, convID, userEmail, sentinel)
 	if err != nil {
@@ -2192,7 +2205,7 @@ func (s *Store) ListExecutingApprovals(ctx context.Context, userEmail, convID, s
 	var out []Approval
 	for rows.Next() {
 		a := Approval{Status: "approved", ResultText: sentinel}
-		if err := rows.Scan(&a.ID, &a.ToolName, &a.ToolCallID, &a.MCPServer, &a.MCPAccount, &a.ProgressJSON); err != nil {
+		if err := rows.Scan(&a.ID, &a.ToolName, &a.ToolCallID, &a.MCPServer, &a.MCPAccount, &a.ProgressJSON, &a.NarrowedJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2207,7 +2220,7 @@ const ApprovalExecutingSentinel = "Approved — executing…"
 // may have committed remotely before the process died, so record uncertainty,
 // never failure or a retry: repeating it could duplicate a side effect.
 func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
-	const outcome = "Execution outcome unknown after server restart. Do not repeat this action automatically; verify the external result before taking further action."
+	const outcome = ApprovalRecoveryOutcome
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -2216,14 +2229,14 @@ func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
 	rows, err := tx.QueryContext(ctx, `UPDATE approvals SET result_text = $1
 		WHERE status = 'approved' AND is_err IS NULL AND result_text = $2
 		AND NOT EXISTS (SELECT 1 FROM turns WHERE turns.conversation_id = approvals.conversation_id AND turns.status = 'running')
-		RETURNING id, conversation_id, tool_name, COALESCE(tool_call_id, '')`, outcome, ApprovalExecutingSentinel)
+		RETURNING id, conversation_id, tool_name, COALESCE(tool_call_id, ''), COALESCE(narrowed_json, '')`, outcome, ApprovalExecutingSentinel)
 	if err != nil {
 		return 0, err
 	}
 	var recovered []Approval
 	for rows.Next() {
 		var a Approval
-		if err := rows.Scan(&a.ID, &a.ConversationID, &a.ToolName, &a.ToolCallID); err != nil {
+		if err := rows.Scan(&a.ID, &a.ConversationID, &a.ToolName, &a.ToolCallID, &a.NarrowedJSON); err != nil {
 			_ = rows.Close()
 			return 0, err
 		}
@@ -2241,7 +2254,8 @@ func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
 		if callID == "" {
 			callID = a.ID
 		}
-		payload, err := json.Marshal(map[string]any{"id": callID, "name": a.ToolName, "text": outcome, "is_err": true})
+		text := ApprovalRecoveryText(a.NarrowedJSON)
+		payload, err := json.Marshal(map[string]any{"id": callID, "name": a.ToolName, "text": text, "is_err": true})
 		if err != nil {
 			return 0, err
 		}
@@ -2304,6 +2318,20 @@ func (s *Store) SetApprovalCard(ctx context.Context, userEmail, approvalID, card
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE approvals SET card_json = $1 WHERE id = $2 AND user_email = $3 AND status = 'pending'`,
 		cardJSON, approvalID, userEmail)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// SetApprovalNarrowableArg freezes, at staging, the argument a person may
+// narrow on a still-pending approval the user owns (migration 079). It
+// reports whether a row was updated.
+func (s *Store) SetApprovalNarrowableArg(ctx context.Context, userEmail, approvalID, arg string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE approvals SET narrowable_arg = $1 WHERE id = $2 AND user_email = $3 AND status = 'pending'`,
+		arg, approvalID, userEmail)
 	if err != nil {
 		return false, err
 	}
@@ -2386,14 +2414,15 @@ func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
 		        is_err, COALESCE(card_json, ''), resume_state, COALESCE(group_id, ''), COALESCE(progress_json, ''),
-		        COALESCE(result_card_json, '')
+		        COALESCE(result_card_json, ''), COALESCE(narrowed_json, ''), COALESCE(narrowable_arg, '')
 		 FROM approvals WHERE id = $1 AND user_email = $2`,
 		approvalID, userEmail,
 	)
 	var a Approval
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState, &a.GroupID, &a.ProgressJSON, &a.ResultCardJSON); err != nil {
+		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState, &a.GroupID, &a.ProgressJSON, &a.ResultCardJSON,
+		&a.NarrowedJSON, &a.NarrowableArg); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -2511,6 +2540,31 @@ func (s *Store) ClaimApproval(ctx context.Context, userEmail, approvalID, newSta
 		 WHERE id = $4 AND user_email = $5 AND status = 'pending'
 		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $6)`,
 		newStatus, resultText, now, approvalID, userEmail, now,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ClaimApprovalNarrowed is ClaimApproval for a card the person approved
+// narrowed (docs/APPROVAL-NARROWING.md): the same claim predicate (pending,
+// not expired, the user's row), resolving the row as approved with
+// resultText (the executing sentinel) AND writing narrowedJSON in the same
+// UPDATE. So a narrowed approval can never be recorded without what was
+// narrowed, and execution can never read an approved row whose narrowing
+// was lost: either both land or the card stays pending.
+func (s *Store) ClaimApprovalNarrowed(ctx context.Context, userEmail, approvalID, resultText, narrowedJSON string) (bool, error) {
+	if narrowedJSON == "" {
+		return false, errors.New("ClaimApprovalNarrowed: empty narrowing record")
+	}
+	now := time.Now().Unix()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2, narrowed_json = $3
+		 WHERE id = $4 AND user_email = $5 AND status = 'pending'
+		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $6)`,
+		resultText, now, narrowedJSON, approvalID, userEmail, now,
 	)
 	if err != nil {
 		return false, err
