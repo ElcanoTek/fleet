@@ -500,7 +500,9 @@ refresh:
 
 Both models fetched all twelve reports in one parallel step, answered, and then
 re-checked the answer against the reports in their self-audit. Each row is one
-recurring series, except fixed Haiku: 4 runs, then 2 on the final build. "#1827" is elision as first shipped; "fixed" holds it back
+recurring series, except fixed Haiku (4 runs, then 2 on the final build) and
+fixed Gemini (a run that died on a provider error within a minute was run
+again). The last four models were measured off and fixed only. "#1827" is elision as first shipped; "fixed" holds it back
 during the audit and after a re-run ([What shipped](#what-shipped-1)).
 
 | Model | Elision | Runs succeeded | Cells correct | Cost / run | Pauses | Summaries | Re-fetches | Minutes |
@@ -511,6 +513,14 @@ during the audit and after a re-run ([What shipped](#what-shipped-1)).
 | Sonnet 5.5 | off | 3 of 3 | 72, 72, 72 | $2.95 | 5.3 | 6.3 | 16 | 5.1 |
 | Sonnet 5.5 | on, #1827 | 3 of 3 | 71, 72, 71 | **$7.61** | 23.3 | 20.0 | 83 | 14.6 |
 | Sonnet 5.5 | on, fixed | 3 of 3 | 72, 72, 72 | $2.39 | 3.7 | 4.3 | 12 | 3.9 |
+| Opus 5.5 | off | 2 of 2 | 72, 72 | $3.82 | 4.0 | 4.5 | 4 | 4.7 |
+| Opus 5.5 | on, fixed | 2 of 2 | 72, 72 | $4.82 | 4.0 | 4.5 | 12 | 4.9 |
+| DeepSeek v4.1 Flash | off | 2 of 2 | 72, 72 | $0.29 | 23.5 | 23.5 | 90 | 23.6 |
+| DeepSeek v4.1 Flash | on, fixed | 2 of 2 | 65, 72 | $0.19 | 12.5 | 12.0 | 42 | 14.8 |
+| Gemini 3.8 Flash | off | 2 of 2 | 59, 65 | $2.02 | 8.5 | 8.5 | 30 | 9.7 |
+| Gemini 3.8 Flash | on, fixed | 2 of 2 | 65, 68 | $1.99 | 2.5 | 2.0 | 4 | 10.4 |
+| GPT-6 Luna Pro | off | 2 of 2 | 72, 72 | $0.15 | 3.0 | 4.0 | 6 | 3.5 |
+| GPT-6 Luna Pro | on, fixed | 2 of 2 | 72, 72 | $0.10 | 2.0 | 2.5 | 0 | 3.3 |
 
 As first shipped, elision stubbed the twelve reports at the pause that followed
 the audit request, so the reports the audit was re-reading were 2 KB previews.
@@ -531,9 +541,19 @@ which keeps the recent half (and the reports) verbatim. Both models then passed.
 On this task elision helps only after the audit is accepted, which is where it
 fired in the fixed runs.
 
-The re-run stop did not fire here: the re-fetches came during the audit, when
-nothing had been elided. Its unit tests pin it
-(`TestElideBeforeSummary_StopsAfterARerun`). The bench cost about $46 in all.
+The four other models succeeded in every fixed run, as with elision off, with
+no fewer cells correct.
+- **Opus** cost more fixed than off, but its two off runs alone spanned
+  $2.14–5.50, depending on whether it re-fetched to audit.
+- **DeepSeek** re-fetched in loops in both modes: one off run took 34
+  minutes, with 40 pauses, 40 summaries and 160 re-fetches. That is the
+  model's own pattern, and its fixed runs were shorter on average.
+
+In the Haiku and Sonnet runs the re-run stop did not fire, because their
+re-fetches came during the audit, when nothing had been elided. In the
+four-model round the server log shows it fire twice (once in a DeepSeek run
+that re-fetched right after its first elision) and the audit hold 10 times.
+The bench cost about $73 in all.
 
 ### Deviations from the issue
 
