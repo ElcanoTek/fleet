@@ -119,3 +119,61 @@ func TestUserSkillProposalFlow(t *testing.T) {
 		t.Errorf("re-proposing should be invalid, got %v", err)
 	}
 }
+
+func TestUserSkillsWorkspaceSharing(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const author = "author@elcano.com"
+	const teammate = "teammate@elcano.com"
+
+	shared, err := s.CreateUserSkillWithVisibility(
+		ctx, author, "shared-opt-log", "shared optimization log workflow", "1. Load config.", UserSkillVisibilityWorkspace,
+	)
+	if err != nil {
+		t.Fatalf("create shared: %v", err)
+	}
+	t.Cleanup(func() { _ = s.DeleteUserSkill(context.Background(), author, shared.ID) })
+
+	if shared.Visibility != UserSkillVisibilityWorkspace {
+		t.Fatalf("visibility = %q, want workspace", shared.Visibility)
+	}
+	wsList, err := s.ListWorkspaceSharedUserSkills(ctx)
+	if err != nil {
+		t.Fatalf("list workspace shared: %v", err)
+	}
+	found := false
+	for _, sk := range wsList {
+		if sk.ID == shared.ID && sk.SharedBy == author {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("shared skill missing from ListWorkspaceSharedUserSkills: %+v", wsList)
+	}
+
+	// Teammate's ListActiveUserSkills includes the workspace-shared skill.
+	teammateActive, err := s.ListActiveUserSkills(ctx, teammate)
+	if err != nil {
+		t.Fatalf("teammate active: %v", err)
+	}
+	foundActive := false
+	for _, sk := range teammateActive {
+		if sk.Name == "shared-opt-log" {
+			foundActive = true
+		}
+	}
+	if !foundActive {
+		t.Fatalf("shared skill missing from teammate ListActiveUserSkills: %+v", teammateActive)
+	}
+
+	// Unsharing removes it from workspace-shared list.
+	unshared, err := s.UpdateUserSkillWithVisibility(
+		ctx, author, shared.ID, shared.Name, shared.Description, shared.Body, UserSkillStatusActive, UserSkillVisibilityPrivate,
+	)
+	if err != nil {
+		t.Fatalf("unshare: %v", err)
+	}
+	if unshared.Visibility != UserSkillVisibilityPrivate {
+		t.Fatalf("visibility after unshare = %q", unshared.Visibility)
+	}
+}

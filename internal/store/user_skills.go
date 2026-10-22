@@ -27,6 +27,9 @@ const (
 	UserSkillStatusActive   = "active"
 	UserSkillStatusDisabled = "disabled"
 	UserSkillStatusProposed = "proposed"
+
+	UserSkillVisibilityPrivate   = "private"
+	UserSkillVisibilityWorkspace = "workspace"
 )
 
 // userSkillNameShape mirrors the bundle skill-name contract
@@ -57,8 +60,21 @@ type UserSkill struct {
 	Description string `json:"description"`
 	Body        string `json:"body"`
 	Status      string `json:"status"`
+	Visibility  string `json:"visibility"`
+	SharedBy    string `json:"shared_by,omitempty"`
 	CreatedAt   int64  `json:"created_at"`
 	UpdatedAt   int64  `json:"updated_at"`
+}
+
+func normalizeUserSkillVisibility(visibility string) (string, error) {
+	v := strings.TrimSpace(visibility)
+	if v == "" {
+		return UserSkillVisibilityPrivate, nil
+	}
+	if v != UserSkillVisibilityPrivate && v != UserSkillVisibilityWorkspace {
+		return "", fmt.Errorf("%w: unknown visibility %q", ErrUserSkillInvalid, visibility)
+	}
+	return v, nil
 }
 
 func validateUserSkill(name, description, body string) error {
@@ -79,19 +95,28 @@ func validateUserSkill(name, description, body string) error {
 	return nil
 }
 
-// CreateUserSkill inserts a new active skill.
+// CreateUserSkill inserts a new active private skill.
 func (s *Store) CreateUserSkill(ctx context.Context, userEmail, name, description, body string) (*UserSkill, error) {
-	return s.createUserSkill(ctx, userEmail, name, description, body, UserSkillStatusActive)
+	return s.createUserSkill(ctx, userEmail, name, description, body, UserSkillStatusActive, UserSkillVisibilityPrivate)
+}
+
+// CreateUserSkillWithVisibility inserts a new active skill with explicit visibility ("private" | "workspace").
+func (s *Store) CreateUserSkillWithVisibility(ctx context.Context, userEmail, name, description, body, visibility string) (*UserSkill, error) {
+	vis, err := normalizeUserSkillVisibility(visibility)
+	if err != nil {
+		return nil, err
+	}
+	return s.createUserSkill(ctx, userEmail, name, description, body, UserSkillStatusActive, vis)
 }
 
 // CreateUserSkillProposal stages an agent-drafted skill for the owner's
 // review: it is stored but inert (never materialized, never invocable) until
 // approved in the builder.
 func (s *Store) CreateUserSkillProposal(ctx context.Context, userEmail, name, description, body string) (*UserSkill, error) {
-	return s.createUserSkill(ctx, userEmail, name, description, body, UserSkillStatusProposed)
+	return s.createUserSkill(ctx, userEmail, name, description, body, UserSkillStatusProposed, UserSkillVisibilityPrivate)
 }
 
-func (s *Store) createUserSkill(ctx context.Context, userEmail, name, description, body, status string) (*UserSkill, error) {
+func (s *Store) createUserSkill(ctx context.Context, userEmail, name, description, body, status, visibility string) (*UserSkill, error) {
 	email := normalizeEmail(userEmail)
 	name = strings.TrimSpace(name)
 	if err := validateUserSkill(name, description, body); err != nil {
@@ -101,12 +126,12 @@ func (s *Store) createUserSkill(ctx context.Context, userEmail, name, descriptio
 	sk := &UserSkill{
 		ID: uuid.NewString(), UserEmail: email, Name: name,
 		Description: strings.TrimSpace(description), Body: body,
-		Status: status, CreatedAt: now, UpdatedAt: now,
+		Status: status, Visibility: visibility, CreatedAt: now, UpdatedAt: now,
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO user_skills (id, user_email, name, description, body, status, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$7)`,
-		sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, now)
+		INSERT INTO user_skills (id, user_email, name, description, body, status, visibility, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)`,
+		sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, sk.Visibility, now)
 	if err != nil {
 		if pgUniqueViolation(err) {
 			return nil, fmt.Errorf("%w: you already have a skill named %q", ErrUserSkillInvalid, name)
@@ -116,8 +141,13 @@ func (s *Store) createUserSkill(ctx context.Context, userEmail, name, descriptio
 	return sk, nil
 }
 
-// UpdateUserSkill rewrites an owned skill's fields (full replace).
+// UpdateUserSkill rewrites an owned skill's fields (full replace), preserving its visibility.
 func (s *Store) UpdateUserSkill(ctx context.Context, userEmail, id, name, description, body, status string) (*UserSkill, error) {
+	return s.UpdateUserSkillWithVisibility(ctx, userEmail, id, name, description, body, status, "")
+}
+
+// UpdateUserSkillWithVisibility rewrites an owned skill's fields, updating visibility when non-empty.
+func (s *Store) UpdateUserSkillWithVisibility(ctx context.Context, userEmail, id, name, description, body, status, visibility string) (*UserSkill, error) {
 	name = strings.TrimSpace(name)
 	if err := validateUserSkill(name, description, body); err != nil {
 		return nil, err
@@ -128,10 +158,17 @@ func (s *Store) UpdateUserSkill(ctx context.Context, userEmail, id, name, descri
 	if status != UserSkillStatusActive && status != UserSkillStatusDisabled {
 		return nil, fmt.Errorf("%w: unknown status %q", ErrUserSkillInvalid, status)
 	}
+	vis := strings.TrimSpace(visibility)
+	if vis != "" && vis != UserSkillVisibilityPrivate && vis != UserSkillVisibilityWorkspace {
+		return nil, fmt.Errorf("%w: unknown visibility %q", ErrUserSkillInvalid, visibility)
+	}
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE user_skills SET name=$3, description=$4, body=$5, status=$6, updated_at=$7
+		UPDATE user_skills
+		SET name=$3, description=$4, body=$5, status=$6,
+		    visibility=COALESCE(NULLIF($7, ''), visibility),
+		    updated_at=$8
 		WHERE user_email=$1 AND id=$2`,
-		normalizeEmail(userEmail), id, name, strings.TrimSpace(description), body, status, time.Now().Unix())
+		normalizeEmail(userEmail), id, name, strings.TrimSpace(description), body, status, vis, time.Now().Unix())
 	if err != nil {
 		if pgUniqueViolation(err) {
 			return nil, fmt.Errorf("%w: you already have a skill named %q", ErrUserSkillInvalid, name)
@@ -147,11 +184,11 @@ func (s *Store) UpdateUserSkill(ctx context.Context, userEmail, id, name, descri
 // GetUserSkill fetches one owned skill.
 func (s *Store) GetUserSkill(ctx context.Context, userEmail, id string) (*UserSkill, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, user_email, name, description, body, status, created_at, updated_at
+		SELECT id, user_email, name, description, body, status, visibility, created_at, updated_at
 		FROM user_skills WHERE user_email=$1 AND id=$2`,
 		normalizeEmail(userEmail), id)
 	var sk UserSkill
-	err := row.Scan(&sk.ID, &sk.UserEmail, &sk.Name, &sk.Description, &sk.Body, &sk.Status, &sk.CreatedAt, &sk.UpdatedAt)
+	err := row.Scan(&sk.ID, &sk.UserEmail, &sk.Name, &sk.Description, &sk.Body, &sk.Status, &sk.Visibility, &sk.CreatedAt, &sk.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrUserSkillNotFound
 	}
@@ -164,7 +201,7 @@ func (s *Store) GetUserSkill(ctx context.Context, userEmail, id string) (*UserSk
 // ListUserSkills returns all of a user's skills, name order.
 func (s *Store) ListUserSkills(ctx context.Context, userEmail string) ([]UserSkill, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, user_email, name, description, body, status, created_at, updated_at
+		SELECT id, user_email, name, description, body, status, visibility, created_at, updated_at
 		FROM user_skills WHERE user_email=$1 ORDER BY name`,
 		normalizeEmail(userEmail))
 	if err != nil {
@@ -174,7 +211,7 @@ func (s *Store) ListUserSkills(ctx context.Context, userEmail string) ([]UserSki
 	out := []UserSkill{}
 	for rows.Next() {
 		var sk UserSkill
-		if err := rows.Scan(&sk.ID, &sk.UserEmail, &sk.Name, &sk.Description, &sk.Body, &sk.Status, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		if err := rows.Scan(&sk.ID, &sk.UserEmail, &sk.Name, &sk.Description, &sk.Body, &sk.Status, &sk.Visibility, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, sk)
@@ -182,16 +219,55 @@ func (s *Store) ListUserSkills(ctx context.Context, userEmail string) ([]UserSki
 	return out, rows.Err()
 }
 
-// ListActiveUserSkills returns only the user's ACTIVE skills (the set that
-// participates in runs), name order.
+// ListWorkspaceSharedUserSkills returns active workspace-shared skills across
+// all users in the deployment, deduplicated by name (most recently updated
+// wins), ordered by name.
+func (s *Store) ListWorkspaceSharedUserSkills(ctx context.Context) ([]UserSkill, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT ON (name) id, user_email, name, description, body, status, visibility, created_at, updated_at
+		FROM user_skills
+		WHERE status = $1 AND visibility = $2
+		ORDER BY name, updated_at DESC, id ASC`,
+		UserSkillStatusActive, UserSkillVisibilityWorkspace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UserSkill{}
+	for rows.Next() {
+		var sk UserSkill
+		if err := rows.Scan(&sk.ID, &sk.UserEmail, &sk.Name, &sk.Description, &sk.Body, &sk.Status, &sk.Visibility, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+			return nil, err
+		}
+		sk.SharedBy = sk.UserEmail
+		out = append(out, sk)
+	}
+	return out, rows.Err()
+}
+
+// ListActiveUserSkills returns the effective ACTIVE user skills that
+// participate in a user's runs (the user's own active skills plus any
+// workspace-shared active skills whose name does not collide with one of the
+// user's own skills), ordered by name.
 func (s *Store) ListActiveUserSkills(ctx context.Context, userEmail string) ([]UserSkill, error) {
 	all, err := s.ListUserSkills(ctx, userEmail)
 	if err != nil {
 		return nil, err
 	}
-	out := all[:0]
+	ownedNames := make(map[string]bool, len(all))
+	out := make([]UserSkill, 0, len(all))
 	for _, sk := range all {
+		ownedNames[sk.Name] = true
 		if sk.Status == UserSkillStatusActive {
+			out = append(out, sk)
+		}
+	}
+	shared, err := s.ListWorkspaceSharedUserSkills(ctx)
+	if err != nil {
+		return out, nil
+	}
+	for _, sk := range shared {
+		if !ownedNames[sk.Name] {
 			out = append(out, sk)
 		}
 	}

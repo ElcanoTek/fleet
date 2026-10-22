@@ -156,4 +156,42 @@ describe("SavePromptDialog", () => {
     expect(screen.getByText(/whole conversation/i)).toBeInTheDocument();
   });
 
+  it("can save a distilled conversation directly as a workspace-shared Agent Skill", async () => {
+    render(
+      <SavePromptDialog
+        conversationId="conv-5"
+        conversationTitle="t"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByDisplayValue(draft.name);
+
+    fireEvent.click(screen.getByRole("radio", { name: /Agent Skill/i }));
+    const skillInput = screen.getByLabelText("Skill slash-command name");
+    expect(skillInput).toHaveValue("failed-task-report");
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Share with this workspace" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save skill" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+        "/api/user-skills",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            name: "failed-task-report",
+            description: draft.description,
+            body: draft.content,
+            visibility: "workspace",
+          }),
+        }),
+      ),
+    );
+    expect(screen.getByTestId("save-prompt-saved")).toHaveTextContent(
+      "/failed-task-report",
+    );
+  });
+
 });

@@ -200,4 +200,58 @@ describe("SkillsPage failure states", () => {
     fireEvent.change(screen.getByLabelText("Search workspace skills"), { target: { value: "bundle" } });
     expect(screen.getByText("PDF-Extract")).toBeInTheDocument();
   });
+
+  it("badges workspace-shared teammate skills and supports 1-click sharing of your own skill", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === "/api/user-skills/u1" && init?.method === "PUT") {
+        return { ok: true, status: 200, json: async () => ({}) };
+      }
+      if (url.startsWith("/api/user-skills")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            skills: [
+              {
+                id: "u1",
+                name: "my-opt-log",
+                description: "Optimization log workflow",
+                body: "1. Run review.",
+                status: "active",
+                visibility: "private",
+              },
+            ],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          skills: [
+            {
+              name: "team-opt-log",
+              description: "Shared optimization workflow",
+              source: "workspace",
+              shared_by: "brendan.dahlgren@elcanotek.com",
+            },
+          ],
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<SkillsPage />);
+    expect(await screen.findByText("Shared: brendan.dahlgren@elcanotek.com")).toBeInTheDocument();
+    const myRow = await screen.findByTestId("skill-row-my-opt-log");
+    fireEvent.click(within(myRow).getByRole("button", { name: "Share with workspace" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/user-skills/u1",
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"visibility":"workspace"'),
+        }),
+      ),
+    );
+  });
 });

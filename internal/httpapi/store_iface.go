@@ -57,11 +57,14 @@ type chatStore interface {
 	SetConnectorPref(ctx context.Context, userEmail string, p store.ConnectorPref) error
 	DeleteConnectorPref(ctx context.Context, userEmail, kind, connectorID string) error
 	ListConnectorPrefs(ctx context.Context, userEmail string) (map[string]store.ConnectorPref, error)
-	// User-authored Agent Skills (docs/SKILLS.md phase 2).
+	// User-authored Agent Skills (docs/SKILLS.md phase 2/3).
 	CreateUserSkill(ctx context.Context, userEmail, name, description, body string) (*store.UserSkill, error)
+	CreateUserSkillWithVisibility(ctx context.Context, userEmail, name, description, body, visibility string) (*store.UserSkill, error)
 	CreateUserSkillProposal(ctx context.Context, userEmail, name, description, body string) (*store.UserSkill, error)
 	UpdateUserSkill(ctx context.Context, userEmail, id, name, description, body, status string) (*store.UserSkill, error)
+	UpdateUserSkillWithVisibility(ctx context.Context, userEmail, id, name, description, body, status, visibility string) (*store.UserSkill, error)
 	ListUserSkills(ctx context.Context, userEmail string) ([]store.UserSkill, error)
+	ListWorkspaceSharedUserSkills(ctx context.Context) ([]store.UserSkill, error)
 	DeleteUserSkill(ctx context.Context, userEmail, id string) error
 	// Read-only public sharing (#226): the owner issues/revokes a share token;
 	// GetConversationByShareToken serves the unauthenticated /shared/{token} read.

@@ -22,24 +22,62 @@ type skillsFakeStore struct {
 	nextID int
 }
 
-func (s *skillsFakeStore) ListUserSkills(_ context.Context, _ string) ([]store.UserSkill, error) {
-	return s.skills, nil
+func (s *skillsFakeStore) ListUserSkills(_ context.Context, email string) ([]store.UserSkill, error) {
+	if email == "" {
+		return s.skills, nil
+	}
+	var out []store.UserSkill
+	for _, sk := range s.skills {
+		if sk.UserEmail == "" || sk.UserEmail == email {
+			out = append(out, sk)
+		}
+	}
+	return out, nil
 }
 
-func (s *skillsFakeStore) CreateUserSkill(_ context.Context, email, name, description, body string) (*store.UserSkill, error) {
-	if name == "" {
+func (s *skillsFakeStore) ListWorkspaceSharedUserSkills(_ context.Context) ([]store.UserSkill, error) {
+	var out []store.UserSkill
+	for _, sk := range s.skills {
+		if sk.Status == store.UserSkillStatusActive && sk.Visibility == store.UserSkillVisibilityWorkspace {
+			cp := sk
+			cp.SharedBy = sk.UserEmail
+			out = append(out, cp)
+		}
+	}
+	return out, nil
+}
+
+func (s *skillsFakeStore) CreateUserSkill(ctx context.Context, email, name, description, body string) (*store.UserSkill, error) {
+	return s.CreateUserSkillWithVisibility(ctx, email, name, description, body, store.UserSkillVisibilityPrivate)
+}
+
+func (s *skillsFakeStore) CreateUserSkillWithVisibility(_ context.Context, email, name, description, body, visibility string) (*store.UserSkill, error) {
+	if name == "" || (visibility != store.UserSkillVisibilityPrivate && visibility != store.UserSkillVisibilityWorkspace) {
 		return nil, store.ErrUserSkillInvalid
 	}
 	s.nextID++
-	sk := store.UserSkill{ID: string(rune('a' + s.nextID)), UserEmail: email, Name: name, Description: description, Body: body, Status: store.UserSkillStatusActive}
+	sk := store.UserSkill{
+		ID: string(rune('a' + s.nextID)), UserEmail: email, Name: name, Description: description,
+		Body: body, Status: store.UserSkillStatusActive, Visibility: visibility,
+	}
 	s.skills = append(s.skills, sk)
 	return &sk, nil
 }
 
-func (s *skillsFakeStore) UpdateUserSkill(_ context.Context, _, id, name, description, body, status string) (*store.UserSkill, error) {
+func (s *skillsFakeStore) UpdateUserSkill(ctx context.Context, email, id, name, description, body, status string) (*store.UserSkill, error) {
+	return s.UpdateUserSkillWithVisibility(ctx, email, id, name, description, body, status, "")
+}
+
+func (s *skillsFakeStore) UpdateUserSkillWithVisibility(_ context.Context, _, id, name, description, body, status, visibility string) (*store.UserSkill, error) {
+	if visibility != "" && visibility != store.UserSkillVisibilityPrivate && visibility != store.UserSkillVisibilityWorkspace {
+		return nil, store.ErrUserSkillInvalid
+	}
 	for i := range s.skills {
 		if s.skills[i].ID == id {
 			s.skills[i].Name, s.skills[i].Description, s.skills[i].Body, s.skills[i].Status = name, description, body, status
+			if visibility != "" {
+				s.skills[i].Visibility = visibility
+			}
 			cp := s.skills[i]
 			return &cp, nil
 		}
@@ -167,5 +205,49 @@ func TestUserSkillsEndpoints(t *testing.T) {
 	}
 	if len(fs.skills) != 0 {
 		t.Errorf("delete left rows: %+v", fs.skills)
+	}
+}
+
+// Workspace-shared skills appear in GET /skills (source="workspace"),
+// GET /skills/{name}, materialize into teammates' workspaces, and can be
+// invoked via /<name> by teammates.
+func TestWorkspaceSharedUserSkills(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	fs := &skillsFakeStore{fakeChatStore: newFakeChatStore()}
+	s := &Server{store: fs}
+
+	w := userSkillsReq(t, s, s.userSkillsCollection, http.MethodPost, "/user-skills",
+		`{"name":"opt-workbench","description":"review campaign optimizations","body":"1. Open workbench.","visibility":"workspace"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create shared: %d %s", w.Code, w.Body.String())
+	}
+	var created store.UserSkill
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Visibility != store.UserSkillVisibilityWorkspace {
+		t.Fatalf("visibility = %q, want workspace", created.Visibility)
+	}
+
+	// GET /skills includes the workspace-shared skill.
+	w = userSkillsReq(t, s, s.listSkills, http.MethodGet, "/skills", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"source":"workspace"`) || !strings.Contains(w.Body.String(), `"opt-workbench"`) {
+		t.Fatalf("GET /skills missing shared skill: %d %s", w.Code, w.Body.String())
+	}
+
+	// GET /skills/opt-workbench returns its rendered SKILL.md content.
+	w = userSkillsReq(t, s, s.skillByName, http.MethodGet, "/skills/opt-workbench", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "1. Open workbench.") {
+		t.Fatalf("GET /skills/opt-workbench: %d %s", w.Code, w.Body.String())
+	}
+
+	// A teammate ("teammate@x.com") materializes and can invoke /opt-workbench.
+	entries := s.materializeUserSkills(context.Background(), "teammate@x.com", "conv-teammate-1")
+	if len(entries) != 1 || entries[0].Name != "opt-workbench" {
+		t.Fatalf("teammate materialize = %+v", entries)
+	}
+	invoked := s.applySkillInvocation(context.Background(), "teammate@x.com", "/opt-workbench ELC00166", "/opt-workbench ELC00166")
+	if !strings.Contains(invoked, "user-skills/opt-workbench/SKILL.md") {
+		t.Fatalf("teammate invocation did not match: %q", invoked)
 	}
 }
