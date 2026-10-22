@@ -369,6 +369,17 @@ fewer summarizer calls; making the elided content recallable added nothing.
   still needed; the Operations Center timeline shows it as **Older tool results
   trimmed**, and as a gap in the overview strip. A summary that follows is
   recorded exactly as before.
+- **Held back** (added 2026-10-22, after the recurring-task bench in
+  [Measured](#measured)). A run does not elide, and its compaction is the
+  summary, which keeps the recent half verbatim:
+  - while its self-audit is pending: asked for, and no `confirm_audit`
+    accepted yet. That is when a run re-reads the evidence for its answer, and
+    a stub of the report it is checking made the audit fail;
+  - for the rest of a run that re-ran a call whose result an elision had
+    stubbed: the same tool with the same arguments, in any key order, made
+    after that elision. The stub cost that run a call, so eliding more is not
+    saving it anything. A duplicate the run had made before the elision does
+    not count. The server log says when it happens.
 - **Knob.** `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY`, on by default; `0` or `false`
   turns it off and restores the summary-only behaviour. It takes
   `strconv.ParseBool` tokens and is registered with `fleet validate-config`.
@@ -391,8 +402,9 @@ On a local fleet instance, 2026-10-20, with `anthropic/claude-haiku-5.5` and a
 synthetic scheduled task: one `run_python` call per seed, each printing about
 17 KB of seeded random numbers, then a table of one number per seed. Each row
 is one run, so model variance is in it (the step counts differ by one or two).
-It is not the issue's "real recurring scheduled task": that measurement needs a
-production run after release.
+It is not the issue's "real recurring scheduled task"; for that shape see
+[the recurring-task bench](#on-a-recurring-task-with-a-self-audit-2026-10-22)
+below, still on a local instance.
 
 | Budget, seeds | Elision | Pauses | Summaries | Prompt tokens (cached) | Completion | Cost |
 |---|---|---|---|---|---|---|
@@ -462,11 +474,62 @@ could not free enough by eliding two results each time, summarized at all but
 one pause, and failed the audit the same way, with 13 seeds' values no longer
 in what it was sent.
 
+#### On a recurring task with a self-audit (2026-10-22)
+
+The synthetic seed task above could not show one failure, because there the
+model recorded each value as it went. This bench is shaped like a production
+refresh:
+- **The task.** A recurring scheduled task, made by the scheduler from a cron
+  recurrence on a local instance: a daily store KPI refresh at the default 80K
+  budget.
+- **The data.** A local stdio MCP connector serves twelve stores' daily
+  reports, about 25 KB of JSON each (totals, line items, inventory), the shape
+  of a page-data connector.
+- **The answer.** A table of revenue, orders, target, low-stock SKUs and the
+  largest discount per store. The data is generated deterministically, so all
+  72 cells are scored exactly.
+
+Both models fetched all twelve reports in one parallel step, answered, and then
+re-checked the answer against the reports in their self-audit. Each row is one
+recurring series. "#1827" is elision as first shipped; "fixed" holds it back
+during the audit and after a re-run ([What shipped](#what-shipped-1)).
+
+| Model | Elision | Runs succeeded | Cells correct | Cost / run | Pauses | Summaries | Re-fetches | Minutes |
+|---|---|---|---|---|---|---|---|---|
+| Haiku 5.5 | off | 3 of 4 | 71, 72, 63 | $0.56 | 2.2 | 4.0 | 9 | 4.0 |
+| Haiku 5.5 | on, #1827 | **0 of 5** | — | $0.29 | 1.8 | 1.4 | 4.8 | 2.6 |
+| Haiku 5.5 | on, fixed | 4 of 4 | 72, 65, 64, 72 | $0.60 | 2.5 | 4.0 | 12 | 4.3 |
+| Sonnet 5.5 | off | 3 of 3 | 72, 72, 72 | $2.95 | 5.3 | 6.3 | 16 | 5.1 |
+| Sonnet 5.5 | on, #1827 | 3 of 3 | 71, 72, 71 | **$7.61** | 23.3 | 20.0 | 83 | 14.6 |
+| Sonnet 5.5 | on, fixed | 3 of 3 | 72, 72, 72 | $2.39 | 3.7 | 4.3 | 12 | 3.9 |
+
+As first shipped, elision stubbed the twelve reports at the pause that followed
+the audit request, so the reports the audit was re-reading were 2 KB previews.
+- **Haiku** concluded that "the connector truncates its output" and aborted
+  every run.
+- **Sonnet** re-fetched the reports three or four at a time, once through
+  subagents. Each batch put the prompt over the budget again, and the next pause
+  stubbed it, often with a summary too, before the audit was done. That
+  repeated 15–40 times a run.
+
+With elision held back during the audit, every pause in it bought the summary,
+which keeps the recent half (and the reports) verbatim. Both models then passed.
+- **Haiku** cost what it did with elision off. Its low-stock misses, 5 of 12
+  in two runs, show up with elision off too.
+- **Sonnet** cost 19% less than with it off.
+
+On this task elision helps only after the audit is accepted, which is where it
+fired in the fixed runs.
+
+The re-run stop did not fire here: the re-fetches came during the audit, when
+nothing had been elided. Its unit tests pin it
+(`TestElideBeforeSummary_StopsAfterARerun`). The bench cost $44.97 in all.
+
 ### Deviations from the issue
 
-- The before/after numbers come from a synthetic task on a local instance
-  ([Measured](#measured)), not a production recurring task; those need a
-  production run after release.
+- The before/after numbers come from local instances, not a production
+  recurring task: a synthetic seed task, and a recurring store-KPI task with a
+  self-audit whose connector serves generated data ([Measured](#measured)).
 - The breadcrumb is `[context_elided]`, as asked, but the event is the existing
   `fleet.context_compacted` with `trigger: "elision"`, so the scheduler stream
   forwards it with no change.
