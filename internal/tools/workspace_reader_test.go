@@ -675,15 +675,16 @@ func TestWorkspaceFileHitFootprintFailsFast(t *testing.T) {
 		t.Fatalf("two windows of a cached 64 MiB file should fit: %v", err)
 	}
 	release()
-	// Three 8 MiB windows plus the pinned 64 MiB file exceed the budget.
-	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	start := time.Now()
+	// Three 8 MiB windows plus the pinned 64 MiB file exceed the budget. The
+	// call must fail on the budget without waiting for capacity that cannot
+	// appear. A waiting call can only be ended by its context, so give it one
+	// that has already ended: failing fast returns ErrWorkspaceFileBudget,
+	// waiting returns context.Canceled. (This used to time the call against a
+	// 1 s limit, which a loaded -race run could exceed while failing fast.)
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
 	if _, _, err := reader(cctx, refs(3), 64<<20); !errors.Is(err, ErrWorkspaceFileBudget) {
-		t.Fatalf("an impossible all-hit call: %v", err)
-	}
-	if time.Since(start) > time.Second {
-		t.Fatal("an impossible all-hit call waited instead of failing fast")
+		t.Fatalf("an impossible all-hit call waited for capacity instead of failing fast on the budget: %v", err)
 	}
 	if store.reserved != 0 {
 		t.Fatalf("reserved %d after the refused call", store.reserved)
