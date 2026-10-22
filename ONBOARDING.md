@@ -35,7 +35,7 @@ them so a local run agrees with the gate.
 | Tool | Version | Why |
 | --- | --- | --- |
 | **Go** | **1.21 or newer** — you do *not* need the exact patch release [`go.mod`](go.mod) pins | the backend; CI reads `go-version-file: go.mod`, so `go.mod` is the one declaration. The Makefile exports `GOTOOLCHAIN=auto`, so `make build` fetches the pinned toolchain itself — a distro Go that lags `go.mod` is fine, it just needs to be new enough (1.21+) to do the fetch |
-| **Node.js** | the major in [`web/.nvmrc`](web/.nvmrc) (currently **26**) + npm | the `web/` Next.js app. CI reads that same file via `node-version-file`, so there is one declaration and nothing to keep in sync by hand |
+| **Node.js** | the major in [`web/.nvmrc`](web/.nvmrc) (currently **26**) + npm | building the `web/` SPA that `make build` embeds in the binary (build-time only — nothing runs on node). CI reads that same file via `node-version-file`, so there is one declaration and nothing to keep in sync by hand |
 | **golangci-lint** | **v2.14.0** | the lint gate. `.golangci.yml` no longer pins `run.go` — golangci-lint defaults to the go.mod version — so only the binary version is pinned, in CI |
 | **Podman** (rootless) | recent | the execution sandbox; needed for the sandbox-backed tests / first chat turn. Most unit tests self-skip when podman is absent. |
 | **PostgreSQL** | a local cluster you can create DBs on | the chat/scheduler store suites |
@@ -182,8 +182,8 @@ npm run test:e2e:live           # E2E_LIVE=1 playwright test --project=live
 ```
 
 The boot script (`scripts/e2e-boot-server.sh`) builds the binaries, ensures the
-sandbox image, starts the fake LLM, boots fleet pointed at it, builds and
-`next start`s the web app, seeds the test users, and health-polls everything (no
+sandbox image, starts the fake LLM, builds the web bundle into the binary, boots
+fleet pointed at it (which serves the web UI on `WEB_PORT`), seeds the test users, and health-polls everything (no
 fixed sleeps). The `chat-sandbox` spec is the one to watch: the fake LLM drives a
 real `bash` + `run_python` loop in the **real Podman sandbox** and the real tool
 stdout streams back over SSE. See [`web/e2e/live/README.md`](web/e2e/live/README.md)
@@ -224,13 +224,19 @@ cd web
 npm ci
 npm run lint
 npm run test                          # vitest unit tests
-npm run build                         # Next production build
+npm run typecheck                     # tsc --noEmit (vite build does not type-check)
+npm run build                         # vite build → internal/webui/bundle/dist
 npx playwright test --project=mocked  # deterministic mocked e2e (no backend, no key)
 ```
 
-The **mocked** Playwright suite route-intercepts every backend call, so it runs
-on a bare runner with no database, podman, or API keys — it is the quick local
-check.
+The **mocked** Playwright suite drives the Go gateway alone
+(`cmd/web-e2e-server`, built by `playwright.config.ts`, so it needs Go too)
+and route-intercepts every backend call, so it runs on a bare runner with no
+database, podman, or API keys — it is the quick local check.
+
+For hot reload against a real server, `make dev` runs `fleet serve` with the
+Vite dev server behind it (open `http://127.0.0.1:3000`; the gate, CSP and
+`/api` are the real Go ones).
 
 ---
 

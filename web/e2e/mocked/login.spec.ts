@@ -17,8 +17,8 @@ test("unauthenticated /chat redirects to /login", async ({ page }) => {
 
 test("unauthenticated /orchestrator is gated by the shared middleware", async ({ page }) => {
   // The ONE middleware gates /orchestrator with the SAME session check as /chat
-  // (see middleware.test.ts: "gates /orchestrator/* with the SAME session
-  // check"). With no session cookie the production server redirects to /login;
+  // (see internal/webui gateway_test.go: it gates /orchestrator/* with the SAME session
+  // check). With no session cookie the production server redirects to /login;
   // either way the dashboard must never render for an unauthenticated visitor.
   await page.route("**/api/orchestrator/me", (r: Route) =>
     r.fulfill({ status: 401, json: { authenticated: false } }),

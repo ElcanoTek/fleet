@@ -11,7 +11,7 @@ import { TEST_SESSION_SECRET, TEST_AUTH_PRIVATE_KEY_PEM } from "../../playwright
 //   - elcano_auth:    the Ed25519 cookie the auth service mints for the
 //     "Use Elcano email" magic-link path (src/app/lib/auth.ts#verifyElcanoToken).
 //
-// Both are verified natively by the Next middleware, so minting them here drives
+// Both are verified natively by the Go gate (internal/webui), so minting them here drives
 // the REAL gate — no chat-server round-trip needed.
 
 function b64url(buf: Buffer): string {
