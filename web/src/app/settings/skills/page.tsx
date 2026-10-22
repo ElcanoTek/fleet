@@ -217,7 +217,7 @@ export default function SkillsPage() {
         name: sk.name,
         description: sk.description,
         body: sk.body,
-        status: sk.status === "proposed" ? "active" : sk.status,
+        status: nextVisibility === "workspace" ? "active" : sk.status === "proposed" ? "active" : sk.status,
         visibility: nextVisibility,
       }),
     })
@@ -507,7 +507,9 @@ export default function SkillsPage() {
                         : "Disabled"}
                   </ConnBadge>
                   {sk.visibility === "workspace" ? (
-                    <ConnBadge variant="neutral">Shared with workspace</ConnBadge>
+                    <ConnBadge variant="neutral">
+                      {sk.status === "active" ? "Shared with workspace" : "Shared (when enabled)"}
+                    </ConnBadge>
                   ) : null}
                   <span className="ml-auto inline-flex gap-[0.35rem]">
                     {sk.status === "proposed" ? (

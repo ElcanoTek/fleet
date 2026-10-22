@@ -1,12 +1,11 @@
 -- 081_user_skills_visibility.sql — self-service workspace sharing for user
--- skills (docs/SKILLS.md phase 3).
+-- skills (docs/SKILLS.md phase 2).
 --
 -- visibility: 'private' (default; only the author's runs see it) | 'workspace'
--- (when status = 'active', teammates in this deployment also see it in the
--- Workspace pack roster, "/" autocomplete, and turn/scheduled-run skill
--- materialization; bundle/plugin/built-in skills and a teammate's own skill of
--- the same name take precedence). Only the row's owner can edit, unshare, or
--- delete it.
+-- (when status = 'active', published to GET /skills under shared_skills and
+-- surfaced in Settings → Skills → Workspace pack so teammates can inspect and
+-- click "Add to my skills" to create an active private copy in their own
+-- user_skills roster). Only the row's owner can edit, unshare, or delete it.
 ALTER TABLE user_skills
     ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'private';
 
