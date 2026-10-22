@@ -109,7 +109,7 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 		maxBytes = defaultMaxUploadBytes
 	}
 	// Same request-cap shape as /attachments: a couple of big files per
-	// request, aligned with the Next.js proxy's 2 GB body cap.
+	// request, aligned with the web tier's 2 GB body cap.
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes*2)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		var mbe *http.MaxBytesError

@@ -30,7 +30,7 @@ import (
 // sharedReadsPerMinutePerToken bounds GET /shared/{token} per share token —
 // generous for real viewers of a popular link, a hard ceiling against scraping
 // or DDoS amplification of a single share. Keyed by token (not IP) because the
-// endpoint sits behind the Next proxy — but a bucket is only created AFTER the
+// endpoint sits behind the web tier — but a bucket is only created AFTER the
 // token resolves in the store (#571), mirroring the webhook path's
 // create-bucket-after-auth pattern, so an unauthenticated flood of random
 // tokens cannot grow the limiter map (memory DoS) and the map stays bounded by

@@ -1,10 +1,10 @@
 // Package httpapi holds the HTTP handlers for chat-server.
 //
-// Auth model: chat-server is NOT exposed to browsers directly. The Next.js
+// Auth model: chat-server is NOT exposed to browsers directly. The web tier
 // API routes verify the user's session cookie, then forward to chat-server
 // with two headers:
 //   - X-Chat-Server-Token: a shared secret proving the request came from the
-//     trusted Next.js layer (not from an attacker who found the port open).
+//     trusted web tier (not from an attacker who found the port open).
 //   - X-User-Email: the authenticated user's email, used for row-level
 //     scoping of every SQL query.
 //
@@ -23,11 +23,11 @@ import (
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
-// headerSessionEpoch carries the session-epoch claim the Next.js tier read out
+// headerSessionEpoch carries the session-epoch claim the web tier read out
 // of the session cookie it verified. membershipMiddleware compares it against
 // the account's live epoch, which is what makes a password change evict the
 // sessions minted before it: the session token itself is a stateless HMAC the
-// Next tier verifies locally, so this lookup is the only place a revocation
+// web tier verifies locally, so this lookup is the only place a revocation
 // decision can be made.
 //
 // It is trusted exactly as far as X-User-Email is, and no further: both arrive
@@ -38,7 +38,7 @@ import (
 // A request carrying NO claim is admitted. The Ed25519 elcano_auth cookie is
 // minted by the auth service, which chat cannot add a claim to, so those
 // sessions have no epoch and stay revocable only there; the chat-minted cookies
-// that this defends are refused by the Next tier outright when the claim is
+// that this defends are refused by the web tier outright when the claim is
 // missing (web/src/app/lib/auth.ts#verifySessionToken).
 const headerSessionEpoch = "X-User-Session-Epoch"
 
@@ -103,7 +103,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 // (the og:image anonymous unfurl scrapers fetch), /brand/meta (the app
 // name, login copy, and share strings the shell and unfurl scrapers need), and
 // /shared/ (whose authorization is the share token in the path). Only the
-// trusted Next.js layer holds the token, so the browser still cannot reach
+// trusted web tier holds the token, so the browser still cannot reach
 // chat-server directly; dropping the X-User-Email requirement is what lets the
 // un-authenticated login page request them.
 //
@@ -211,7 +211,7 @@ func (s *Server) membershipMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// writeNotAMember emits the distinct, machine-readable 403 the Next.js layer
+// writeNotAMember emits the distinct, machine-readable 403 the web tier
 // keys on to render the no-access page instead of bouncing back to login.
 func writeNotAMember(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
@@ -219,7 +219,7 @@ func writeNotAMember(w http.ResponseWriter) {
 	_, _ = w.Write([]byte(`{"error":"not_a_member"}`))
 }
 
-// headerSessionRevoked marks the response below for the Next.js proxy funnel.
+// headerSessionRevoked marks the response below for the web tier's proxy funnel.
 // The verdict has to be readable without touching the body, because that funnel
 // streams the body straight through to the browser (chatServerPassthrough, the
 // SSE routes) and consuming it there would break those callers.
@@ -241,7 +241,7 @@ type sessionEpochResponse struct {
 	SessionEpoch string `json:"session_epoch"`
 }
 
-// handleSessionEpoch serves GET /auth/session-epoch — the epoch the Next.js tier
+// handleSessionEpoch serves GET /auth/session-epoch — the epoch the web tier
 // stamps into a session cookie it is about to mint.
 //
 // It sits on authMiddleware alone, deliberately outside the membership gate:
@@ -249,7 +249,7 @@ type sessionEpochResponse struct {
 // provisioned must still get a well-formed answer rather than a 403 the login
 // flow would have to special-case. Unlike /auth/verify this is not reachable
 // from the login form, so it is not an enumeration surface: the only caller is
-// the shared-token-holding Next.js tier, which can already assert any identity
+// the shared-token-holding web tier, which can already assert any identity
 // it likes.
 func (s *Server) handleSessionEpoch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -330,7 +330,7 @@ type externalAccessRequest struct {
 }
 
 // handleExternalAccess receives only already signature-verified events from
-// the Next tier. It applies Chat membership non-destructively, then reconciles
+// the web tier. It applies Chat membership non-destructively, then reconciles
 // the independent Ops database. A failed Ops write returns 503; Auth retries
 // the same version and this handler retries Ops even when Chat is already at
 // that version.
@@ -478,7 +478,7 @@ func (s *Server) rejectViewerWrites(next http.Handler) http.Handler {
 // handleMembership is a no-op endpoint behind auth+membership. Reaching it
 // (200) means X-User-Email belongs to a provisioned user; a non-member is
 // rejected by membershipMiddleware with 403 {"error":"not_a_member"} before
-// this runs. The Next.js entry check hits it to decide whether to show the
+// this runs. The web tier's entry check hits it to decide whether to show the
 // app or the no-access page for elcano_auth sessions.
 func (s *Server) handleMembership(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

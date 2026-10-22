@@ -13,7 +13,7 @@
 // always starts empty and blank means "keep the stored key".
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/app/lib/navigation";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import {
   ActStatus,

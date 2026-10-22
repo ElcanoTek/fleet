@@ -10,10 +10,12 @@
 
 
 fleet runs as **one** `fleet` process on a **single host** (one well-sized
-server or VM). The browser only ever talks to the Next.js web app; the web app
-proxies, server-side over loopback, to the two Go backends the single process
-boots (chat on `127.0.0.1:8080`, orchestrator on `127.0.0.1:8000`). Caddy fronts the web
-app with TLS and routes the **public HTTP API** (`/v1/*`, `/api-info`, the A2A
+server or VM). The browser only ever talks to fleet's web listener
+(`127.0.0.1:3000`, `FLEET_WEB_ADDR`): the same process serves the embedded web
+UI and the `/api/*` routes, which call the two Go backends in-process (chat on
+`127.0.0.1:8080`, orchestrator on `127.0.0.1:8000` —
+[ADR-0091](adr/0091-go-serves-the-browser-tier.md)). Caddy fronts the web
+listener with TLS and routes the **public HTTP API** (`/v1/*`, `/api-info`, the A2A
 agent card, `/triggers/*`, `/webhooks/*`) straight to those backends; the
 listeners themselves stay loopback-only.
 
@@ -130,10 +132,10 @@ lowers the host's base footprint.
 
 ## Quick start (one host)
 
-The topology (Caddy → web app → loopback backends, plus the API routed past the web app):
+The topology (Caddy → fleet's web listener, plus the API routed straight to the backend listeners):
 
 ```
-browser ────TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet: chat :8080 + orchestrator :8000
+browser ────TLS──▶ Caddy ──▶ fleet web (:3000) ──in-process──▶ chat + orchestrator handlers
 API client ─TLS──▶ Caddy ──▶ /v1/*, /api-info, /.well-known/agent-card.json, /a2a, /triggers/* ──▶ orchestrator :8000
 webhooks ───TLS──▶ Caddy ──▶ /webhooks/* ──▶ chat :8080
 ```
@@ -160,8 +162,8 @@ and run it (`curl -fsSLo /tmp/fleet-install.sh … && sudo bash /tmp/fleet-insta
 so a failed download fails the step instead of piping nothing into `bash`.
 
 On a bare Fedora/RHEL box this is **four steps** — the bootstrap script installs
-the toolchain (Go, Node, podman, python3), provisions Postgres, builds + installs
-the binary, and installs + enables the systemd units:
+the toolchain (Go, Node for the web build, podman, python3), provisions Postgres,
+builds + installs the binary (the web UI is compiled into it), and installs + enables the systemd units:
 
 ```sh
 # 1. Git, and (for a PRIVATE config bundle) cache a read-only token so the box
@@ -189,7 +191,7 @@ sudo bash /opt/fleet/src/scripts/bootstrap.sh \
   --postgres=local --enable-service \
   --client-config https://github.com/ElcanoTek/example-config.git
 
-#    …or stand up the full browser-facing stack (Next.js web UI + Caddy TLS) in
+#    …or stand up the full browser-facing stack (web sign-in settings + Caddy TLS) in
 #    ONE command — swap --enable-service for --enable-web --domain <your-domain>:
 # sudo bash /opt/fleet/src/scripts/bootstrap.sh \
 #   --postgres=local --enable-web --domain fleet.example.com \
@@ -201,10 +203,7 @@ sudo "$EDITOR" /etc/fleet/fleet.env       # set OPENROUTER_API_KEY=… (+ MCP cr
 #    here: FLEET_PERSONA_DEFAULT=<name> for chat (e.g. victoria) and
 #    FLEET_PERSONA=personas/<name>.yaml for scheduled tasks — that one is the
 #    bundle-relative PATH to the file, not the persona name.
-sudo fleet restart
-#    With --enable-web, also (re)start the web unit: it BindsTo fleet.service, so
-#    it stays down until the backend is healthy (i.e. until the key is set).
-# sudo systemctl restart fleet-web
+sudo fleet restart                         # serves the web UI too (127.0.0.1:3000)
 ```
 
 > **The read-only token.** A private bundle repo needs read access at clone
@@ -232,7 +231,7 @@ each piece yourself):
    scripts/bootstrap.sh --postgres=local      # or --postgres=external
    ```
 
-   bootstrap installs the build/runtime/sandbox toolchain (Go, Node, podman,
+   bootstrap installs the build/sandbox toolchain (Go, Node — build-time only, podman,
    python3 — skipped on non-dnf hosts), then writes the two
    `FLEET_*_DATABASE_URL`s and `FLEET_CLIENT_CONFIG_DIR` into the env file for
    you; you then add `OPENROUTER_API_KEY`, the bundle's MCP connector
@@ -240,16 +239,15 @@ each piece yourself):
    See **Operating fleet** below for the full bootstrap → update → status
    lifecycle (`fleet bootstrap` wraps this).
 
-2. **Build** the binary, the sandbox image, and the web app:
+2. **Build** the binary (with the web UI embedded) and the sandbox image:
 
    ```
-   make build                              # → ./fleet
+   make build                              # → ./fleet (npm ci + vite build, then go build; needs node per web/.nvmrc)
    # The sandbox image is a per-client BUNDLE artifact (build-on-box by default):
    # the Containerfile lives in the bundle at <bundle>/sandbox/Containerfile and
    # each client ships its own flavor. Build the bundle's sandbox:
    FLEET_CLIENT_CONFIG_DIR=<bundle> scripts/build-sandbox-image.sh   # → the manifest's tag (podman)
    #   (defaults to config/default → localhost/fleet-sandbox:latest)
-   cd web && npm ci && npm run build       # Next production build
    ```
 
    Registry publish is **opt-in per client**: instead of building on the box, a
@@ -323,10 +321,10 @@ each piece yourself):
 
    > **One command for the web tier + TLS.** `bootstrap.sh --enable-web
    > [--domain <fqdn>]` automates everything in the rest of this section: it
-   > builds the Next app into `/opt/fleet/web`, writes the 0600
-   > `/etc/fleet/fleet-web.env` (generating `APP_SESSION_SECRET` and mirroring
-   > `CHAT_SERVER_TOKEN`/`ORCHESTRATOR_SERVER_TOKEN` from the backend env), enables
-   > `fleet-web`, and with `--domain` installs Caddy + opens 80/443 for automatic
+   > writes the web UI's sign-in settings into `/etc/fleet/fleet.env` (generating
+   > `APP_SESSION_SECRET` when absent, setting `FLEET_PUBLIC_BASE_URL` to the
+   > public origin, optionally `AUTH_SIGNING_PUBKEY`), restarts fleet — which
+   > serves the web UI itself on `127.0.0.1:3000` — and with `--domain` installs Caddy + opens 80/443 for automatic
    > TLS. It **refuses to overwrite an `/etc/caddy/Caddyfile` it did not write**
    > (another app's vhosts may live there — e.g. a legacy deploy); pass
    > `--force-caddy` to overwrite anyway, which keeps a timestamped backup at
@@ -338,7 +336,7 @@ each piece yourself):
    > is replaced, with a copy kept at the same backup path. A default with
    > drop-in sites is refused like any other foreign file. The manual steps below are the by-hand equivalent.
    >
-   > **Login model.** The web app authenticates three ways, all minting the same
+   > **Login model.** The web tier authenticates three ways, all minting the same
    > HMAC session cookie (signed with `APP_SESSION_SECRET`) so everything
    > downstream is identical: (1) a **self-contained email + password** path
    > (`POST /api/auth/login` → backend `/auth/verify` → bcrypt against the chat
@@ -381,7 +379,7 @@ each piece yourself):
    >   **both** backends refuse a request whose epoch no longer matches — chat and
    >   the Operations Center, which the one cookie authenticates. A reset
    >   therefore signs that account out of both views on their next request that
-   >   reaches a backend — a handful of Next-only endpoints (the session probe and
+   >   reaches a backend — a handful of web-tier-only endpoints (the session probe and
    >   the model catalogs) authorize on the cookie alone and keep answering until
    >   some other call trips the 401, which is when the browser's cookie is
    >   dropped; neither serves client data or spends budget — and
@@ -401,22 +399,21 @@ each piece yourself):
    > - **One account, permanently** — delete it. The user-list gate then 403s
    >   every request.
    > - **Everyone, break-glass** — rotate `APP_SESSION_SECRET` in
-   >   `/etc/fleet/fleet-web.env` and `systemctl restart fleet-web`. Every
+   >   `/etc/fleet/fleet.env` and `fleet restart`. Every
    >   outstanding cookie fails signature verification at once, so all users
    >   re-log-in. Nothing else reads the value, so rotation is safe at any time;
    >   reach for it when you can't enumerate the affected accounts.
    >
-   > **`fleet-web` BindsTo `fleet`.** It stays down until the backend is healthy
-   > (i.e. until `OPENROUTER_API_KEY` is set), so after a first `--enable-web`
-   > bootstrap: set the key, `fleet restart`, then `systemctl start fleet-web`.
+   > **The web UI is the fleet process.** It is up exactly when fleet is (which
+   > needs `OPENROUTER_API_KEY`), so after a first `--enable-web` bootstrap: set
+   > the key and `fleet restart`.
    >
    > **Login depends on the backend at request time, too.** Before minting a
    > cookie the web tier reads the account's session epoch from chat-server's
    > `GET /auth/session-epoch`, and refuses to sign anyone in when that read
    > fails — a cookie without the epoch would be rejected on the next request
-   > anyway. So a restarting backend, or a `fleet` binary older than that
-   > endpoint, is a login **outage** (`/login?e=server` for everyone), not a
-   > degraded login: upgrade the two units together and never pin them apart.
+   > anyway. The web tier and the backends are one binary now, so they cannot be
+   > pinned apart; a backend that is still starting answers `/login?e=server`.
    >
    > **The Operations Center now reads the chat database on every request.** The
    > two planes keep separate `users` tables (ADR-0005), so the scheduler
@@ -426,30 +423,23 @@ each piece yourself):
    > Operations Center is unavailable while the chat database is down, where
    > previously it was not. It is one indexed lookup by email per request.
 
-   Run the Next web app as its own supervised unit (`deploy/fleet-web.service` —
-   it runs the built app's `next start` on port 3000, invoking node directly
-   rather than through `npm run start`; see [`WEB-TIER-SHUTDOWN.md`](WEB-TIER-SHUTDOWN.md)
-   for why the wrapper was removed), wiring
-   `CHAT_SERVER_URL`/`ORCHESTRATOR_SERVER_URL` to the loopback backends and
-   `CHAT_SERVER_TOKEN` to the binary's `FLEET_SERVER_TOKEN` in its 0600
-   `/etc/fleet/fleet-web.env`:
-
-   ```
-   cd web && npm ci && npm run build        # build the Next app
-   install -d /opt/fleet/web && cp -a web/. /opt/fleet/web/
-   install -D -m 0644 deploy/fleet-web.service /etc/systemd/system/fleet-web.service
-   install -D -m 0600 <your-web-env-file> /etc/fleet/fleet-web.env
-   systemctl daemon-reload && systemctl enable --now fleet-web
-   ```
+   There is no separate web unit to install: `fleet serve` serves the web UI
+   on `FLEET_WEB_ADDR` (default `127.0.0.1:3000`; `off` disables it) from the
+   bundle `make build` embedded, reading its settings (`APP_SESSION_SECRET`,
+   `FLEET_PUBLIC_BASE_URL`, `AUTH_*`, `FLEET_OIDC_*`) from the same
+   `/etc/fleet/fleet.env`. `fleet version --web` prints the embedded bundle's
+   build id. A box upgraded from the old Next.js tier (`fleet-web.service`)
+   has it retired by `fleet update`, which also copies those keys over from
+   `/etc/fleet/fleet-web.env` ([ADR-0091](adr/0091-go-serves-the-browser-tier.md)).
 
 4. **TLS** — `deploy/Caddyfile` reverse-proxies the public domain to the web app
    (SSE-aware: `flush_interval -1`, long read timeout) **and routes the public
    HTTP API past it**: `/v1`, `/v1/*`, `/api-info`, `/.well-known/agent-card.json`,
    `/a2a`, `/a2a/*` and `/triggers/*` go to the orchestrator (`127.0.0.1:8000`),
    `/webhooks/*` (GitHub/Slack-signed chat webhooks) to the chat listener
-   (`127.0.0.1:8080`), everything else to Next (`127.0.0.1:3000`). Point it at
+   (`127.0.0.1:8080`), everything else to fleet's web listener (`127.0.0.1:3000`). Point it at
    your domain and `caddy run --config deploy/Caddyfile`. This is the
-   recommended path: the Next.js app is the only public entrypoint **for
+   recommended path: fleet's web listener is the only public entrypoint **for
    browsers**, Caddy (or Tailscale Serve, whose `tsnet` CA provides HTTPS with
    no public port) terminates TLS in front of everything, and the Go listeners
    stay loopback.
@@ -458,12 +448,12 @@ each piece yourself):
    ([ADR-0053](adr/0053-public-api-through-the-tls-front.md)):
    - The backend routes **delete** `X-User-Email`, `X-User-Session-Epoch` and
      the shared token headers (`X-Orchestrator-Server-Token`,
-     `X-Chat-Server-Token`) before forwarding. Those are the Next-proxy
+     `X-Chat-Server-Token`) before forwarding. Those are the web tier's
      impersonation channel; stripping them at the edge keeps it reachable from
      loopback only, so the public API authenticates with `X-API-Key` (or a
      webhook signature) and nothing else. Do not remove those lines.
    - The orchestrator's **legacy bare paths** (`/tasks`, `/keys`, …) are not
-     routed — they stay behind Next's `/api/*` proxy. External clients use `/v1`.
+     routed — they stay behind the web tier's `/api/*`. External clients use `/v1`.
 
    `scripts/bootstrap.sh --enable-web --domain` writes `/etc/caddy/Caddyfile`
    from the same layout (`scripts/lib/caddyfile.sh` renders it; a test keeps
@@ -482,8 +472,8 @@ each piece yourself):
    on the paths Caddy routes **straight to a backend**: `/v1/*`, `/api-info`,
    `/.well-known/agent-card.json`, `/a2a`, `/triggers/*` (orchestrator) and
    `/webhooks/*` (chat). It does **not** change browser traffic: the browser
-   reaches the backends through the Next.js tier, which calls them over
-   loopback without forwarding `X-Forwarded-For`, so every browser-originated
+   reaches the backends through the web tier, which calls them in-process
+   without forwarding `X-Forwarded-For`, so every browser-originated
    request is keyed — rate limits, the IP allow/deny filter — as `127.0.0.1`
    whatever this is set to.
 
@@ -546,8 +536,8 @@ each piece yourself):
      IP with the same code (`internal/httpmw`), so they always agree. The
      single-box install sets `127.0.0.1,::1` for its own Caddy front (above);
      for any other proxy you set it. It only helps requests that reach a
-     backend **from** that proxy: browser traffic arrives through the Next.js
-     tier on loopback without `X-Forwarded-For`, so on the single-box install
+     backend **from** that proxy: browser traffic arrives through the web
+     tier, in-process and without `X-Forwarded-For`, so on the single-box install
      the IP lists see every browser request as `127.0.0.1` (allowlist it, or
      the web UI is blocked) and cannot restrict browser users — they apply to
      the Caddy-routed API and webhook paths only.

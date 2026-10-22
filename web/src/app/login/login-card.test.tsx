@@ -1,14 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import LoginCard from "./login-card";
+import { setBootstrapForTest } from "@/app/lib/bootstrap";
 
-// next/navigation's redirect() throws a framework-internal signal; stand in a
-// throw we can assert on so the auto-start tests below see the target URL.
-vi.mock("next/navigation", () => ({
-  redirect: vi.fn((url: string) => {
-    throw new Error(`REDIRECT:${url}`);
-  }),
-}));
 
 // The "Use Elcano email" button is the only visible surface of the Elcano
 // magic-link path. White-labelled deploys leave AUTH_SIGNING_PUBKEY unset, and
@@ -158,130 +152,79 @@ describe("LoginCard — ?e= error rendering", () => {
   });
 });
 
-// page.tsx is the wiring: it must derive the Elcano prop from AUTH_SIGNING_PUBKEY
-// — the same gate the elcano-login backend route uses — so the UI and the
-// redirect handler can never disagree about whether the path is live. It is also
-// where the bundle's login copy is resolved (#892), since the card is a client
-// component and /client-config is member-gated.
-describe("LoginPage — server-side wiring", () => {
-  const originalFetch = globalThis.fetch;
-
-  beforeEach(() => {
-    process.env.CHAT_SERVER_URL = "http://127.0.0.1:8080";
-    process.env.CHAT_SERVER_TOKEN = "test-token";
-    vi.resetModules();
-  });
-
+// page.tsx is the wiring: what it renders comes from the server-rendered
+// bootstrap (internal/webui/spa.go) — the Elcano and SSO options derived from
+// the same env the auth routes use, the bundle's login copy (#892), and the
+// team-link flag (B24). The server-side halves — the silent SSO auto-start and
+// AUTH_SIGNING_PUBKEY → magicLinkLoginEnabled — are pinned in
+// internal/webui/spa_test.go.
+describe("LoginPage — bootstrap wiring", () => {
   afterEach(() => {
-    delete process.env.AUTH_SIGNING_PUBKEY;
-    for (const key of Object.keys(process.env))
-      if (key.startsWith("FLEET_OIDC_")) delete process.env[key];
-    globalThis.fetch = originalFetch;
+    setBootstrapForTest(null);
     cleanup();
-    vi.resetModules();
   });
 
-  function enableOidc(autoStart: boolean) {
-    process.env.FLEET_OIDC_ISSUER = "https://idp.example.com";
-    process.env.FLEET_OIDC_CLIENT_ID = "client-123";
-    process.env.FLEET_OIDC_CLIENT_SECRET = "secret-xyz";
-    process.env.FLEET_OIDC_AUTO_START = autoStart ? "1" : "";
-  }
-
-  it("auto-starts a silent SSO attempt on a plain visit when FLEET_OIDC_AUTO_START is set", async () => {
-    enableOidc(true);
-    stubMeta(null, false);
+  it("renders the card with both options when SSO is configured", async () => {
+    setBootstrapForTest({ login: { magicLinkLoginEnabled: false, oidcEnabled: true, oidcLabel: "Sign in with SSO", teamLink: false } });
     const { default: LoginPage } = await import("./page");
-    await expect(
-      LoginPage({ searchParams: Promise.resolve({}) }),
-    ).rejects.toThrow("REDIRECT:/api/auth/oidc/start?silent=1");
-  });
-
-  it("renders the card with both options after a silent attempt found no session, and for ?manual / ?e", async () => {
-    enableOidc(true);
-    stubMeta(null, false);
-    const { default: LoginPage } = await import("./page");
-    for (const query of [{ sso: "none" }, { manual: "1" }, { e: "invalid" }]) {
-      cleanup();
-      render(await LoginPage({ searchParams: Promise.resolve(query) }));
-      expect(
-        screen.getByRole("link", { name: "Sign in with SSO" }),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByRole("button", { name: "Sign in" }),
-      ).toBeInTheDocument();
-    }
-  });
-
-  it("never auto-starts when the flag is off, even with OIDC configured", async () => {
-    enableOidc(false);
-    stubMeta(null, false);
-    const { default: LoginPage } = await import("./page");
-    render(await LoginPage({ searchParams: Promise.resolve({}) }));
-    expect(
-      screen.getByRole("link", { name: "Sign in with SSO" }),
-    ).toBeInTheDocument();
+    render(<LoginPage />);
+    expect(screen.getByRole("link", { name: "Sign in with SSO" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
   });
 
-  function stubMeta(body: unknown, ok = true) {
-    globalThis.fetch = vi.fn(async () => ({
-      ok,
-      json: async () => body,
-    })) as unknown as typeof fetch;
-  }
-
-  it("passes magicLinkLoginEnabled=true when AUTH_SIGNING_PUBKEY is set", async () => {
-    process.env.AUTH_SIGNING_PUBKEY = "Zm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyMzI=";
-    stubMeta(null, false);
+  it("uses the operator's SSO button label", async () => {
+    setBootstrapForTest({ login: { magicLinkLoginEnabled: false, oidcEnabled: true, oidcLabel: "Sign in with Okta", teamLink: false } });
     const { default: LoginPage } = await import("./page");
-    render(await LoginPage());
-    expect(
-      screen.getByRole("link", { name: "Use Elcano email" }),
-    ).toBeInTheDocument();
+    render(<LoginPage />);
+    expect(screen.getByRole("link", { name: "Sign in with Okta" })).toBeInTheDocument();
   });
 
-  it("passes magicLinkLoginEnabled=false when AUTH_SIGNING_PUBKEY is unset", async () => {
-    delete process.env.AUTH_SIGNING_PUBKEY;
-    stubMeta(null, false);
+  it("shows the Elcano button only when the server says the path is configured", async () => {
+    setBootstrapForTest({ login: { magicLinkLoginEnabled: true, oidcEnabled: false, oidcLabel: "Sign in with SSO", teamLink: false } });
     const { default: LoginPage } = await import("./page");
-    render(await LoginPage());
+    render(<LoginPage />);
+    expect(screen.getByRole("link", { name: "Use Elcano email" })).toBeInTheDocument();
+    cleanup();
+    setBootstrapForTest({});
+    render(<LoginPage />);
     expect(screen.queryByRole("link", { name: "Use Elcano email" })).toBeNull();
   });
 
   it("renders the bundle's login copy end to end", async () => {
-    stubMeta({
-      app_name: "Reklaim",
-      login_title: "Reklaim what's yours.",
-      login_tagline: "Sign in and pick up where you left off.",
+    setBootstrapForTest({
+      branding: {
+        appName: "Reklaim",
+        loginTitle: "Reklaim what's yours.",
+        loginTagline: "Sign in and pick up where you left off.",
+        shareTitle: "",
+        shareDescription: "",
+      },
     });
     const { default: LoginPage } = await import("./page");
-    render(await LoginPage());
+    render(<LoginPage />);
     expect(screen.getByText("Reklaim what's yours.")).toBeInTheDocument();
-    expect(
-      screen.getByText("Sign in and pick up where you left off."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Sign in and pick up where you left off.")).toBeInTheDocument();
   });
 
-  // B24: the proxy sends a signed-out team-link visitor to /login?team_link=1.
-  it("shows the team-link copy for ?team_link=1 and the bundle copy otherwise", async () => {
-    stubMeta(null, false);
+  // B24: the server sends a signed-out team-link visitor to /login?team_link=1.
+  it("shows the team-link copy when the bootstrap says so and the bundle copy otherwise", async () => {
+    setBootstrapForTest({ login: { magicLinkLoginEnabled: false, oidcEnabled: false, oidcLabel: "Sign in with SSO", teamLink: true } });
     const { default: LoginPage } = await import("./page");
-    render(await LoginPage({ searchParams: Promise.resolve({ team_link: "1" }) }));
+    render(<LoginPage />);
     expect(screen.getByText("Sign in to open this chat")).toBeInTheDocument();
     cleanup();
-    render(await LoginPage({ searchParams: Promise.resolve({}) }));
+    setBootstrapForTest({});
+    render(<LoginPage />);
     expect(screen.queryByText("Sign in to open this chat")).toBeNull();
     expect(screen.getByText("Welcome aboard.")).toBeInTheDocument();
   });
 
-  // The login page is the one page a locked-out operator must be able to reach.
-  it("still renders when the backend is unreachable", async () => {
-    globalThis.fetch = vi.fn(async () => {
-      throw new Error("ECONNREFUSED");
-    }) as unknown as typeof fetch;
+  // The login page is the one page a locked-out operator must be able to
+  // reach: with no bootstrap at all it still renders fleet's defaults.
+  it("still renders with no bootstrap", async () => {
+    setBootstrapForTest(null);
     const { default: LoginPage } = await import("./page");
-    render(await LoginPage());
+    render(<LoginPage />);
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
     expect(screen.getByText("Welcome aboard.")).toBeInTheDocument();
   });

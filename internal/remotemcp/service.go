@@ -90,7 +90,7 @@ type Config struct {
 	// must be byte-stable across DCR, authorization, and token requests, so it is
 	// taken from config and NEVER reconstructed from request headers.
 	PublicBaseURL string
-	// CallbackPath is the browser-facing OAuth callback route (on the Next.js
+	// CallbackPath is the browser-facing OAuth callback route (on the web
 	// app), e.g. "/api/oauth/mcp/callback".
 	CallbackPath string
 	// ClientName is the human label registered via DCR / shown on consent.

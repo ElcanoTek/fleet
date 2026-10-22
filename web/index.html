@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" class="h-full antialiased">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!-- Stamps data-theme on <html> before first paint; see public/theme-init.js. -->
+    <script src="/theme-init.js"></script>
+    <!--fleet:head-->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/api/brand/logo" />
+    <link rel="shortcut icon" href="/api/brand/logo" />
+    <link rel="apple-touch-icon" href="/api/brand/logo" />
+    <!-- The bundle's brand palette, served at request time (a re-theme is a
+         bundle change plus a restart, never a web rebuild). Its
+         html:root[data-theme=…] rules out-specify globals.css. -->
+    <link rel="stylesheet" href="/api/theme" />
+  </head>
+  <body class="min-h-full flex flex-col">
+    <div id="root" class="contents"></div>
+    <!--fleet:bootstrap-->
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

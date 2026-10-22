@@ -251,9 +251,10 @@ task schema (a thin mirror of the scheduled-task create shape).
 ## Deploy
 
 fleet runs as **one** `fleet` process on a **single, vertically-scaled host**: the
-browser talks only to the Next.js web app, which proxies server-side over
-loopback to the two Go backends the process boots (chat + orchestrator); Caddy
-fronts it with TLS and routes the public `/v1` API (plus `/api-info`, the A2A
+same process serves the web UI — a React SPA compiled into the binary — and
+its `/api/*` routes, which call the chat and orchestrator backends in-process
+([ADR-0091](docs/adr/0091-go-serves-the-browser-tier.md)); Caddy fronts it
+with TLS and routes the public `/v1` API (plus `/api-info`, the A2A
 agent card, `/triggers/*` and `/webhooks/*`) straight to those backends. Single-host is by design — crash recovery uses single-owner
 DB leases and the worker cap is a per-process semaphore, so fleet scales by
 moving to a bigger box, not more replicas.
@@ -427,3 +428,12 @@ standards. Our thanks to the teams and communities behind them:
 ## License
 
 fleet is released under the [MIT License](LICENSE).
+
+The web UI vendors files from the **Flag design system** — Copyright (c) 2026
+ElcanoTek, Inc. — MIT, listed with their hashes in [`flag.lock`](flag.lock);
+the licence text ships beside them as
+[`web/src/app/FLAG-LICENSE`](web/src/app/FLAG-LICENSE). Its fonts keep their
+own licences (Nebula Sans: SIL OFL 1.1; Hack: MIT + Bitstream Vera), which
+travel with the font files under `web/src/app/fonts/`.
+
+Icons: some glyphs in Flag's core-icons.svg are drawn after Lucide (https://lucide.dev), ISC License — the full notice is retained at the top of the vendored sprite (`web/public/icons/core-icons.svg`).

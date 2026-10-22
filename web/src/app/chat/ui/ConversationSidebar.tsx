@@ -172,7 +172,7 @@ function RecentInfoButton() {
         onFocus={show}
         onBlur={hide}
       >
-        <Icon name="warning" className="size-[0.9rem]" />
+        <Icon name="alert-triangle" className="size-[0.9rem]" />
       </button>
       {pos && typeof document !== "undefined"
         ? createPortal(

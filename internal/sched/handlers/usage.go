@@ -69,7 +69,7 @@ func parseUsageTime(raw string) (time.Time, bool) {
 //
 // Admin-only, but reachable from the web UI: registered behind
 // AdminOrUserAuthMiddleware and gated HERE on PermissionAdmin, exactly like
-// GET /sla-report (#458) — the Next proxy can never send the admin X-API-Key,
+// GET /sla-report (#458) — the web tier can never send the admin X-API-Key,
 // so the bare admin-key middleware would make the panel unreachable for every
 // dashboard admin. The report is GLOBAL (all principals' spend), so exposing
 // it to a non-admin member would leak other users' activity — hence 403 for

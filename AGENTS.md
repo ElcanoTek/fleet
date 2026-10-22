@@ -8,6 +8,121 @@ Gemini CLI, …) working in the **fleet** repository. It follows the
 Humans, start with [`README.md`](README.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md);
 this file is the agent-facing distillation, not a replacement for them.
 
+<!-- BEGIN:elcano-frontend-standard v2 (shared verbatim by every Elcano repo; scripts/stack-check.sh pins its hash; change it everywhere or nowhere) -->
+## Elcano frontend standard (v2)
+
+Every Elcano web product follows one of two tiers. `stack.conf` at the repo
+root declares which, and `scripts/stack-check.sh` (run by CI) enforces it.
+
+**The server is Go and serves everything.** The browser talks to one origin:
+the Go binary serves the HTML, the static assets and the JSON API, and it owns
+sign-in (the `elcano_auth` cookie from the auth service), sessions, CSRF and
+security headers. There is no Node, Python or other JavaScript server in
+production. Static files ship inside the binary with `go:embed`; Caddy only
+terminates TLS and reverse-proxies to Go.
+
+**Tier A — server-rendered (the default).** Go `html/template` pages, plain
+CSS that reads Flag tokens, and small plain-JavaScript modules (no framework,
+no bundler, no transpiler, no npm runtime dependencies). npm may appear only
+as a dev dependency for browser tests (Playwright, axe). Pick Tier A unless the
+page is a long-lived, state-heavy application. Components use Flag's CSS
+component classes, which mirror the names and states of Flag's shadcn/ui
+components so both tiers look and behave alike.
+
+**Tier B — interactive app.** React + TypeScript built by Vite into a static
+bundle that the Go server embeds and serves (same origin, so no CORS). No
+server-side rendering, no Next.js, no runtime server code in TypeScript; data
+comes from the Go JSON API. Base UI components come from Flag's shadcn/ui
+registry (React + Radix + Tailwind, themed by Flag tokens; registry URL in
+Flag's README): `npx shadcn add` copies them into the app, where they live and
+are reviewed like our own code. Build a component by hand only when the
+registry lacks it, then upstream it to Flag. Keep other runtime npm
+dependencies few and justified in AGENTS.md. Use Tier B only when Tier A would
+mean re-implementing a client-side state framework by hand (streaming chat,
+multi-step builders).
+
+**Both tiers:**
+
+- Design comes from Flag (`ElcanoTek/flag`). Vendored Flag files are listed in
+  `flag.lock` with their hashes; `scripts/flag-sync.sh check` fails CI on any
+  hand edit. Update with `scripts/flag-sync.sh sync`, never by editing in place.
+  Product styling lives outside the vendored directories and reads tokens.
+- No third-party CDNs: every script, stylesheet and font is served by our own
+  binary. Fonts are Flag's Nebula Sans and Hack only.
+- A strict Content-Security-Policy (no `unsafe-inline` scripts, no remote
+  script hosts), `X-Content-Type-Options: nosniff`, and `frame-ancestors`.
+- Hashed or versioned asset URLs with long-lived caching; HTML is `no-cache`.
+- Accessibility is tested (Playwright + axe where a browser suite exists).
+- Exceptions (a non-Go backend, an extra runtime dependency) are written down
+  in this repo's AGENTS.md with the reason, not left implicit.
+<!-- END:elcano-frontend-standard -->
+
+## How fleet applies the standard (Tier B)
+
+`stack.conf` declares **Tier B**: the web UI (`web/`) is a React + TypeScript
+SPA that Vite builds into `internal/webui/bundle/dist`, and the `fleet` binary
+embeds it (`go:embed`) and serves it, together with every browser `/api/*`
+route, on `FLEET_WEB_ADDR` (default `127.0.0.1:3000`)
+([ADR-0091](docs/adr/0091-go-serves-the-browser-tier.md)). Tier B because the
+chat is a streaming, state-heavy app (SSE turns, approval cards, generative UI)
+that Tier A would mean re-implementing by hand.
+
+- **`internal/webui`** is the browser gateway: auth gate + public allowlists,
+  the HMAC `elcano_session` / Ed25519 `elcano_auth` cookies
+  (`internal/websession`, shared with the orchestrator), OIDC, CSRF, CSP and
+  the security headers, `X-App-Version`, theme/brand, SSE pass-through and
+  streamed uploads. It calls the chat and orchestrator handlers in-process.
+  It renders `index.html` per request (metadata + a JSON bootstrap), so the
+  CSP needs no inline script. A browser API route belongs here.
+- **`web/`** owns the client only — see [`web/AGENTS.md`](web/AGENTS.md) for
+  its commands, the in-house router (justified there and in ADR-0091: a
+  dozen routes do not earn a router dependency), and the justified runtime
+  dependencies.
+- **Runtime dependencies.** `dependencies` in `web/package.json` ship in the
+  browser bundle; everything else is a devDependency (Vite, TypeScript,
+  Vitest, Playwright, axe, type packages) and never reaches production.
+
+  | Runtime dependency | Why it is needed |
+  |---|---|
+  | `react`, `react-dom` | The UI framework and its browser renderer — the reason fleet is Tier B (streaming chat, approval cards, generative UI). |
+  | `react-markdown` | Renders assistant replies, run logs, shared transcripts and the `/help` guides (`AssistantContent.tsx`, `LogMarkdown.tsx`, `GuideMarkdown.tsx`, …) as React elements — no HTML strings, no `dangerouslySetInnerHTML`, and no Markdown parser of our own to maintain. |
+  | `remark-gfm` | GitHub-flavoured Markdown for `react-markdown`: tables, task lists, autolinks and strikethrough, which agents and the guides use and plain CommonMark renders as text. |
+  | `@tanstack/react-virtual` | Virtualises the chat transcript (`ChatTranscript.tsx`) so a conversation with thousands of messages renders only what is on screen. |
+
+  Adding another runtime dependency needs a row here with the reason
+  (`make stack-check` enforces it); prefer a small in-house module.
+- **New or replaced base UI components come from Flag's shadcn/ui registry**
+  (`npx shadcn add <registry-url>/r/<item>.json`; the URL is in Flag's
+  README). Existing components are not being migrated wholesale.
+- **Vendored Flag files** (fonts, the core icon sprite, the fleet mark, Flag's
+  MIT licence) are pinned in `flag.lock`. Update them with
+  `scripts/flag-sync.sh sync ../flag` (a clean sibling checkout of
+  `ElcanoTek/flag`; `scripts/flag-sync.sh status ../flag` previews), never by
+  hand. The PR gate is the offline `make stack-check` (CI job `stack-check`);
+  the weekly `.github/workflows/flag-drift.yml` reports when upstream Flag
+  has moved past the lock. `scripts/flag-sync.sh` and `scripts/stack-check.sh`
+  are vendored too: MIT-licensed copies of Flag's `tools/product/` scripts,
+  kept byte-identical (their SPDX header names the canonical copy) — replace
+  them from Flag, never edit them here.
+- **Caching.** Only content-hashed `/assets/*` (Vite output: JS, CSS, fonts)
+  are served `public, max-age=31536000, immutable`. HTML is `no-store`.
+  Every other non-HTML file is served at a stable URL that something outside
+  the bundle hard-codes, so it is `no-cache` (revalidated on every use, with an
+  ETag where the gateway computes one) — never long-cached:
+  `sw.js` (a service worker must keep its URL), `manifest.webmanifest`,
+  `theme-init.js` (named in `index.html`'s pre-paint script tag), the icon
+  sprite and logos under `icons/` and `logos/`, `app-icons/`, `icon.svg`,
+  `apple-icon.png` and `share.png` (named by the manifest, `<use href>`,
+  favicons and share metadata), the `backgrounds/` images (stable URLs a
+  client bundle's theme may name),
+  `/api/theme` (the bundle palette) and `/api/brand/*` (the bundle's images).
+  An error on an asset URL (404, 405) never carries the immutable header.
+  `TestCachingPolicy` (internal/webui) pins all of this.
+- **Builds always carry the bundle.** `go build` / `go test` work without it
+  (pages then answer 503), but `make build` runs `make web` first and ends with
+  `fleet version --web`, which fails on a binary without one — as do
+  `scripts/update.sh`, `bootstrap.sh`, `fleet-upgrade.sh` and the CI web job.
+
 ## What fleet is (one paragraph)
 
 fleet is a self-hosted, general-purpose agent platform. **One** Go process runs
@@ -26,13 +141,16 @@ code (or docs) that assumes podman is the only executor. See the README
 ## Build · test · lint (run before opening any PR)
 
 ```sh
-make build        # compile-check ./... AND emit ./fleet
+make build        # compile-check ./..., build the web bundle, emit ./fleet with it embedded
+make web          # the web bundle only (npm ci + vite build → internal/webui/bundle/dist)
+make dev          # fleet serve + the Vite dev server (hot reload) at http://127.0.0.1:3000
 make compile      # go build ./...   (release config — see the build tag below)
 make test         # scripts/go-test.sh (tagged; DSN-aware parallelism) — FOREGROUND
 make test-race    # the same, with -race   (use when touching concurrency)
 make test-cover   # the same, with -coverprofile/-covermode=atomic (writes coverage.out)
 make lint         # golangci-lint + ruff check/format (Python) + migration DDL lint
-                  #   + actionlint & shellcheck (workflows + shell) — must pass clean
+                  #   + actionlint & shellcheck (workflows + shell) + stack-check — must pass clean
+make stack-check  # the Elcano frontend standard: AGENTS block, flag.lock, no CDNs, Tier B rules
 make govulncheck  # call-graph-aware CVE scan of the dependency tree
 make fmt          # gofmt -w .
 make tidy         # go mod tidy
@@ -54,12 +172,12 @@ tree than CI does (`host.go` unvetted, untested). Use the Makefile targets.
 local `make lint` is not proof — read the output, and remember CI enforces both
 regardless.
 
-When you touch `web/` (the Next.js app):
+When you touch `web/` (the Vite SPA — details in [`web/AGENTS.md`](web/AGENTS.md)):
 
 ```sh
 make ci-web                                        # the Web CI job, verbatim — prefer this
 cd web && npm ci && npm run lint && npm run typecheck && npm run test && npm run build
-cd web && npx playwright test --project=mocked     # mocked e2e
+cd web && npx playwright test --project=mocked     # mocked e2e (builds the bundle + cmd/web-e2e-server)
 ```
 
 `web/` is the only npm tree (the second one, `scripts/rampart-service/`, was
@@ -126,9 +244,10 @@ the push run on `main` and the scheduled runs give a tree-wide verdict. See
 The top-level tree: `cmd/` (the
 one `fleet` binary — `fleet serve` runs the server, every other verb is the
 operator CLI (the `fleet-admin` shim was removed in ADR-0060); plus the
-`fleet-bench`, `fake-llm` and `sandbox-probe` harness binaries), `internal/` (`agentcore` the one run loop, `sandbox`,
-`mcp`, `creds`, `clientconfig`, `store`, `sched`, `httpapi`, …), `web/` (one
-Next.js app: `/chat`, `/orchestrator`, `/settings`, `/admin`), `deploy/` (the
+`fleet-bench`, `fake-llm`, `sandbox-probe` and `web-e2e-server` harness binaries), `internal/` (`agentcore` the one run loop, `sandbox`,
+`mcp`, `creds`, `clientconfig`, `store`, `sched`, `httpapi`, `webui` the
+browser gateway, `websession`, …), `web/` (the Vite + React SPA the binary
+embeds: `/chat`, `/orchestrator`, `/settings`, `/admin`, `/help`), `deploy/` (the
 systemd units + Caddyfile for the single-box install and the
 `deploy/helm/fleet` chart for the Kubernetes one), and `config/default/` (the
 generic client bundle baked in so fleet runs bare).
@@ -265,7 +384,9 @@ routine refresh once it is green, so drift stays small. Out of cycle, a bump is
 merged only when it earns it — a specific commit we need, or a CVE whose code
 path we actually reach (govulncheck or `npm audit` turns CI red) — and goes in
 its own PR. Dependabot security updates arrive whenever an advisory does.
-In-housed code is not tracked by Dependabot. On a CVE, check reachability first
+The web UI's runtime npm dependencies are few and each is justified in
+[`web/AGENTS.md`](web/AGENTS.md) (the frontend standard's rule); the router is
+in-house for the same reason. In-housed code is not tracked by Dependabot. On a CVE, check reachability first
 (`make govulncheck` is call-graph aware); delete the affected code if it is
 unused, adapt the upstream patch if it is used.
 

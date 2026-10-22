@@ -8,9 +8,10 @@ import (
 	"testing"
 )
 
-// Both SSE proxy routes in web/ REBUILD the response header set instead of
-// passing chat-server's through, so a header the Go side adds reaches the
-// browser only if web/src/app/lib/sseHeaders.ts lists it. Nothing about that
+// Both SSE stream routes of the browser tier (internal/webui/streams.go)
+// REBUILD the response header set instead of passing chat-server's through, so
+// a header the Go side adds reaches the browser only if ssePassthroughHeaders
+// lists it. Nothing about that
 // arrangement fails loudly when the list falls behind: the header is simply
 // absent, and the client takes its "absent" branch.
 //
@@ -19,10 +20,10 @@ import (
 // stream-liveness watchdog, but neither proxy forwarded it. The client read
 // absent as 0 — "keepalives are off, silence proves nothing" — which pins
 // streamDeadSilenceMs at +Infinity and disables the missed-keepalive branch of
-// checkStreamLiveness. Every Next-proxied deployment ran the watchdog in its
-// weakest mode, and it looked healthy the whole time.
+// checkStreamLiveness. Every deployment behind the (then Next.js) proxy ran the
+// watchdog in its weakest mode, and it looked healthy the whole time.
 //
-// So this test pins the Go header constants against the TypeScript list. A
+// So this test pins the producer's header constants against the gateway's list. A
 // header added on one side and not the other fails here instead of degrading
 // a client behaviour quietly months later.
 
@@ -37,7 +38,7 @@ var goSideHeaderConsts = map[string]string{
 func TestSSEPassthroughHeadersCoverEveryGoSideHeader(t *testing.T) {
 	root := repoRoot(t)
 
-	tsPath := filepath.Join("web", "src", "app", "lib", "sseHeaders.ts")
+	tsPath := filepath.Join("internal", "webui", "streams.go")
 	raw, err := os.ReadFile(filepath.Join(root, tsPath))
 	if err != nil {
 		t.Fatalf("read %s: %v", tsPath, err)
@@ -61,7 +62,7 @@ func TestSSEPassthroughHeadersCoverEveryGoSideHeader(t *testing.T) {
 		}
 		if !listed[header] {
 			t.Errorf("%s does not forward %q, which %s sets.\n"+
-				"The proxies rebuild their header set, so the browser will never see it.",
+				"The stream routes rebuild their header set, so the browser will never see it.",
 				tsPath, header, declaredIn)
 		}
 	}
@@ -70,50 +71,54 @@ func TestSSEPassthroughHeadersCoverEveryGoSideHeader(t *testing.T) {
 // The list is only load-bearing if both proxy routes actually use it. A route
 // that goes back to an inline header literal silently opts out of everything
 // above, so pin the call instead of trusting the comment.
-func TestBothSSEProxyRoutesUseTheSharedHeaderBuilder(t *testing.T) {
+func TestBothSSEStreamRoutesUseTheSharedHeaderBuilder(t *testing.T) {
 	root := repoRoot(t)
-
-	routes := []string{
-		filepath.Join("web", "src", "app", "api", "chat", "route.ts"),
-		filepath.Join("web", "src", "app", "api", "conversations", "[conversationId]", "stream", "route.ts"),
+	rel := filepath.Join("internal", "webui", "streams.go")
+	raw, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
 	}
-	inlineContentType := regexp.MustCompile(`"Content-Type":\s*"text/event-stream`)
-
-	for _, rel := range routes {
-		raw, err := os.ReadFile(filepath.Join(root, rel))
-		if err != nil {
-			t.Fatalf("read %s: %v", rel, err)
+	src := string(raw)
+	// Both chat stream routes (POST /api/chat and the reattach GET) re-emit
+	// through sseOut, the one builder; neither spells the headers inline.
+	for _, route := range []string{`"POST /api/chat"`, `"GET /api/conversations/{id}/stream"`} {
+		i := strings.Index(src, route)
+		if i < 0 {
+			t.Fatalf("%s no longer registers %s", rel, route)
 		}
-		src := string(raw)
-		if !strings.Contains(src, "sseProxyHeaders(upstream)") {
-			t.Errorf("%s does not build its response headers with sseProxyHeaders(upstream)", rel)
+		body := src[i:]
+		if next := strings.Index(body[len(route):], "mux.HandleFunc("); next >= 0 {
+			body = body[:len(route)+next]
 		}
-		if inlineContentType.MatchString(src) {
-			t.Errorf("%s still spells the SSE headers inline; that is the drift this helper exists to stop", rel)
+		if !strings.Contains(body, ", sseOut)") {
+			t.Errorf("%s: %s does not re-emit through sseOut", rel, route)
+		}
+		if strings.Contains(body, `"text/event-stream`) {
+			t.Errorf("%s: %s spells the SSE headers inline; that is the drift sseOut exists to stop", rel, route)
 		}
 	}
 }
 
-// passthroughHeaderList extracts the string entries of the passthroughHeaders
-// array literal. Deliberately narrow: it reads the declaration, not the file,
+// passthroughHeaderList extracts the string entries of the ssePassthroughHeaders
+// slice literal. Deliberately narrow: it reads the declaration, not the file,
 // so prose that merely mentions a header name cannot satisfy the check.
 func passthroughHeaderList(t *testing.T, src string) map[string]bool {
 	t.Helper()
 
-	const decl = "const passthroughHeaders = ["
+	const decl = "var ssePassthroughHeaders = []string{"
 	start := strings.Index(src, decl)
 	if start < 0 {
-		t.Fatalf("sseHeaders.ts no longer declares %q — this guard cannot read the list", decl)
+		t.Fatalf("streams.go no longer declares %q — this guard cannot read the list", decl)
 	}
 	rest := src[start+len(decl):]
-	end := strings.Index(rest, "]")
+	end := strings.Index(rest, "}")
 	if end < 0 {
-		t.Fatal("sseHeaders.ts: passthroughHeaders array is not closed")
+		t.Fatal("streams.go: ssePassthroughHeaders is not closed")
 	}
 
 	entries := regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(rest[:end], -1)
 	if len(entries) == 0 {
-		t.Fatal("sseHeaders.ts: passthroughHeaders is empty")
+		t.Fatal("streams.go: ssePassthroughHeaders is empty")
 	}
 	out := make(map[string]bool, len(entries))
 	for _, m := range entries {

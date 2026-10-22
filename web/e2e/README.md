@@ -1,14 +1,15 @@
 # Fleet web — Playwright e2e
 
-Browser-driven end-to-end tests for the unified Fleet frontend (the Next.js app
-that hosts both the `/chat` and `/orchestrator` views behind one middleware).
+Browser-driven end-to-end tests for the unified Fleet frontend: the React SPA
+(`web/`, built by Vite) served by fleet's Go browser tier (`internal/webui`),
+which hosts both the `/chat` and `/orchestrator` views behind one request gate.
 
 There are three lanes, each a separate Playwright project selected by env in
 `playwright.config.ts`:
 
 | Lane | Dir | What runs | Backends | LLM | CI |
 | --- | --- | --- | --- | --- | --- |
-| **mocked** (default) | `e2e/mocked/` | the real Next app | every `/api/*` call is route-intercepted by Playwright | — | ✅ PR gate (`playwright` job, every PR into `main`) |
+| **mocked** (default) | `e2e/mocked/` | the real browser tier (Go gateway + built SPA) | every `/api/*` call is route-intercepted by Playwright | — | ✅ PR gate (`playwright` job, every PR into `main`) |
 | **live** | `e2e/live/` | the *fully real* stack — Postgres, both Go listeners, SSE, scheduler/worker pool, rootless-Podman sandbox | **real** | faked by `cmd/fake-llm` over `OPENROUTER_BASE_URL` | ✅ PR gate (`e2e-live` job, every PR into `main`) |
 | **canary** | `e2e/canary/` | the same real stack | **real** | **real** Fleet default OpenRouter model | ❌ nightly/manual, secret-gated, never a PR gate |
 
@@ -33,30 +34,31 @@ and determinism measures).
 
 ## Mocked suite (the fast CI lane)
 
-Deterministic: it drives the *real* Next app but replaces every Go backend
-(chat-server `:18080`, orchestrator `:18000`, OpenRouter) with Playwright route
-interception. No database, no Podman, no API keys — reproducible on a bare
-runner.
+Deterministic: it drives the *real* browser tier — `cmd/web-e2e-server`, the
+Go gateway (`internal/webui`) booted alone with the production bundle
+embedded — but replaces every backend call with Playwright route interception.
+No database, no Podman, no API keys — reproducible on a bare runner.
 
 ```bash
 cd web
 
-# Fast local loop: drives `next dev`.
+# Builds the bundle and the harness, then runs the suite.
 npm run test:e2e:mocked
 
-# CI parity: builds the app and drives `next start` (the shipped bundle).
-E2E_PROD=1 npm run test:e2e:mocked
+# Reuse the last build (faster loop when only specs changed).
+E2E_SKIP_BUILD=1 npm run test:e2e:mocked
 ```
 
-In CI (`process.env.CI`) the config uses `next start`; locally it uses `next dev`
-unless `E2E_PROD=1` is set. The Next server boots with the throwaway test env
-(`CHAT_MOCK_MODE=1`, a test `APP_SESSION_SECRET`, and a throwaway
-`AUTH_SIGNING_PUBKEY` so the "Use Elcano email" path renders).
+There is one mode: local runs and CI both drive the shipped bundle behind the
+shipped gate. The gateway boots with throwaway test values (a test
+`APP_SESSION_SECRET`, and a freshly generated Ed25519 `AUTH_SIGNING_PUBKEY` so
+the "Use Elcano email" path renders). An `/api/*` call a spec does not
+intercept reaches the gateway and answers 502 (no backend).
 
 ### How the mocks work
 
 - **Auth** — `e2e/mocked/_session.ts` mints the two session cookies the
-  middleware accepts directly: the `elcano_session` HMAC cookie (password path)
+  request gate accepts directly: the `elcano_session` HMAC cookie (password path)
   and the `elcano_auth` Ed25519 cookie (magic-link path, signed with the test
   keypair whose public half is in `playwright.config.ts`). So specs start
   "already logged in" and exercise the *real* middleware gate without a backend.
@@ -76,6 +78,7 @@ unless `E2E_PROD=1` is set. The Next server boots with the throwaway test env
 | Spec | Asserts |
 | --- | --- |
 | `login.spec.ts` | unauthenticated `/chat` redirects to `/login`; `/orchestrator` is gated by the same middleware; the chat login card renders the password form and the "Use Elcano email" link; a verified password login lands on `/chat`; an invalid password stays on `/login`; the magic-link button bounces to the auth-service flow; a valid `elcano_auth` cookie authenticates the same as a password session; a signed-in non-member sees the Operations Center no-access card (no username/password bypass). |
+| `a11y.spec.ts` | axe (`@axe-core/playwright`, WCAG 2.x A + AA) finds no violations on `/login`, the empty `/chat` and `/help`, in both the light and the dark colour scheme. |
 | `chat.spec.ts` | authenticated `/chat` reaches the empty composer; a sent turn streams text deltas + a final assistant message; the streamed `tool.call`/`tool.result` render in the execution trail; config-driven empty-state cards render from a stubbed `/api/client-config`. |
 | `protocol-pills.spec.ts` | the neutral fallback pills render; the Summarize form templates its prompt and the mocked chat echoes it; the Draft form gates on its required field then sends the template. |
 | `orchestrator.spec.ts` | the dashboard loads stats + the task list; a task is created via `<McpServerPicker>` with an `mcp_selection` and no `target_node_name`; opening a task renders its log viewer. |

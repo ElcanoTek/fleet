@@ -1,3 +1,4 @@
+import { ICON_ALIASES, iconHref } from "./shared/ui/iconHref";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -41,10 +42,19 @@ const APP_DIR = join(import.meta.dirname ?? __dirname);
 const SPRITE = join(APP_DIR, "..", "..", "public", "icons", "core-icons.svg");
 const DEFAULT_MANIFEST = join(APP_DIR, "..", "..", "..", "config", "default", "manifest.yaml");
 
-/** Symbol ids the sprite actually defines. */
-function spriteIds(): Set<string> {
-  const svg = readFileSync(SPRITE, "utf8");
+function idsIn(path: string): Set<string> {
+  const svg = readFileSync(path, "utf8");
   return new Set(Array.from(svg.matchAll(/<symbol\s+id="([^"]+)"/g), (m) => m[1]));
+}
+
+/** Symbol ids Flag's vendored sprite defines — the only sprite fleet ships. */
+function spriteIds(): Set<string> {
+  return idsIn(SPRITE);
+}
+
+/** Whether iconHref(name) lands on a symbol the sprite defines. */
+function resolves(ids: Set<string>, name: string): boolean {
+  return ids.has(iconHref(name).split("#")[1]);
 }
 
 /**
@@ -142,18 +152,32 @@ describe("core-icons sprite coverage", () => {
     // Called out separately from the sweep below because these are the ones a
     // bare install renders: a gap here is the first screen of a new deployment.
     const missing = defaultBundleRefs()
-      .filter((r) => !ids.has(r.name))
+      .filter((r) => !resolves(ids, r.name))
       .map((r) => r.where);
     expect(missing, `config/default cards name glyphs the sprite lacks: ${missing.join(", ")}`)
       .toEqual([]);
   });
 
+  it("every alias lands on a Flag glyph, and none shadows one", () => {
+    // An alias exists only for a name Flag declined as a duplicate; if Flag
+    // ever ships that id itself, the alias must go so its own glyph wins.
+    for (const [from, to] of Object.entries(ICON_ALIASES)) {
+      expect(ids.has(to), `alias ${from} → ${to}: Flag has no ${to}`).toBe(true);
+      expect(ids.has(from), `Flag now ships ${from}; drop its alias`).toBe(false);
+    }
+  });
+
+  it("fleet's own source names Flag ids, not aliases (aliases are for bundle data)", () => {
+    const aliased = [...new Set(sourceRefs(files).filter((r) => r.name in ICON_ALIASES).map((r) => r.where))].sort();
+    expect(aliased).toEqual([]);
+  });
+
   it("every referenced icon name is a symbol in the sprite", () => {
-    const missing = [...new Set(refs.filter((r) => !ids.has(r.name)).map((r) => r.where))].sort();
+    const missing = [...new Set(refs.filter((r) => !resolves(ids, r.name)).map((r) => r.where))].sort();
     expect(
       missing,
       `these render an empty icon box — add the glyph to ` +
-        `web/public/icons/core-icons.svg: ${missing.join(", ")}`,
+        `Flag's sprite upstream: ${missing.join(", ")}`,
     ).toEqual([]);
   });
 });

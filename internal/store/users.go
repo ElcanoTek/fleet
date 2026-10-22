@@ -186,7 +186,7 @@ func (s *Store) GetUser(ctx context.Context, email string) (*User, error) {
 }
 
 // SessionEpoch returns the epoch a freshly minted session cookie for email must
-// carry. The mint paths live in the Next.js tier (password login, OIDC
+// carry. The mint paths live in the web tier (password login, OIDC
 // callback), which has no database of its own, so they read it from here.
 //
 // An email with no row reports the epoch of an empty hash — a real value no

@@ -75,7 +75,7 @@ func (s *Server) Routes() http.Handler {
 	// Per-user connector availability prefs (unified connector UX).
 	mux.Handle("/connector-prefs", auth(member(mutate(http.HandlerFunc(s.connectorPrefs)))))
 	// Per-user remote (hosted) MCP servers + OAuth (#443). The /oauth/mcp/callback
-	// completion is POSTed here by the browser-facing Next.js callback route.
+	// completion is POSTed here by the browser-facing web-tier callback route.
 	mux.Handle("/remote-mcp-servers", auth(member(mutate(http.HandlerFunc(s.remoteMCPServers)))))
 	mux.Handle("/remote-mcp-servers/", auth(member(mutate(http.HandlerFunc(s.remoteMCPServerByID)))))
 	mux.Handle("/oauth/mcp/callback", auth(member(mutate(http.HandlerFunc(s.remoteMCPOAuthCallback)))))
@@ -111,9 +111,9 @@ func (s *Server) Routes() http.Handler {
 	// brand_meta.go.
 	mux.Handle("/brand/meta", s.tokenOnlyMiddleware(http.HandlerFunc(s.brandMeta)))
 	// Public read-only conversation sharing (#226). Token-gated (shared secret —
-	// only the trusted Next proxy reaches it) but IDENTITY-less, like /theme.css:
+	// only the trusted web tier reaches it) but IDENTITY-less, like /theme.css:
 	// the share token in the path is the authorization, and the handler enforces
-	// its own per-token rate limit + expiry. The Next layer exposes /shared/{token}
+	// its own per-token rate limit + expiry. The web tier exposes /shared/{token}
 	// to logged-out viewers.
 	mux.Handle("/shared/", s.tokenOnlyMiddleware(http.HandlerFunc(s.handleSharedConversation)))
 	// Inbound webhook-triggered conversations (#268). Like /shared, this is
@@ -132,7 +132,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/me/team", auth(member(mutate(http.HandlerFunc(s.handleMyTeam)))))
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
 	// /auth/session-epoch is on auth alone for the same reason as /auth/verify:
-	// the Next.js mint paths call it before a session exists, and it must answer
+	// the web tier's mint paths call it before a session exists, and it must answer
 	// for a not-yet-provisioned email without leaking the user-list.
 	mux.Handle("/auth/session-epoch", auth(http.HandlerFunc(s.handleSessionEpoch)))
 	mux.Handle("/auth/external-session-epoch", auth(http.HandlerFunc(s.handleExternalSessionEpoch)))

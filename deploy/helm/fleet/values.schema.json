@@ -135,17 +135,8 @@
       }
     },
     "web": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": { "type": "boolean" },
-        "image": { "type": "string" },
-        "port": { "type": "integer" },
-        "runAsUser": { "type": "integer" },
-        "existingSecret": { "type": "string" },
-        "resources": { "type": "object" },
-        "env": { "type": "object" }
-      }
+      "description": "REMOVED (ADR-0091): the fleet image serves the web UI itself. Accepted only so templates/web.yaml can fail an old values file with the upgrade steps.",
+      "type": "object"
     },
     "service": {
       "type": "object",

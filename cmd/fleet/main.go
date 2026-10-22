@@ -130,6 +130,12 @@ func main() {
 	case invokeVersion:
 		// Build identity (release stamp + VCS revision; docs/VERSIONING.md). Boots nothing, so it
 		// works on a box where the DBs or sandbox are down.
+		if len(argv) > 1 && argv[1] == "--web" {
+			// The embedded web bundle's build id (ADR-0091): the check `make
+			// check-web-bundle`, scripts/update.sh and CI run on a built binary.
+			// Exit 1 when the binary carries no bundle.
+			os.Exit(printWebBundle(os.Stdout))
+		}
 		fmt.Println("fleet " + version.String())
 	case invokeMCPBroker:
 		// The out-of-process MCP credential broker over stdio (issue #167): it holds
@@ -856,7 +862,7 @@ func run() error {
 	// lookup, not the schema. Wired unconditionally: the chat store is open by
 	// the time these handlers exist, and a nil seam would silently stop checking.
 	h.SetChatSessionEpochProvider(chatStore.SessionEpoch)
-	// Read-only on the request path; rows are created by the Next.js mint via
+	// Read-only on the request path; rows are created by the web tier's mint via
 	// httpapi's /auth/external-session-epoch.
 	h.SetExternalSessionEpochProvider(func(ctx context.Context, issuer, subject, _ string) (string, error) {
 		return chatStore.LookupExternalSessionEpoch(ctx, issuer, subject)
@@ -1064,6 +1070,12 @@ func run() error {
 
 	chatServer := &http.Server{Addr: chatAddr, Handler: chatHandler, ReadHeaderTimeout: 30 * time.Second}
 	orchServer := &http.Server{Addr: orchAddr, Handler: orchHandlerWithProbes, ReadHeaderTimeout: 30 * time.Second}
+	// The browser tier (ADR-0091): the SPA and every /api/* route, calling the
+	// two backends in-process. nil when FLEET_WEB_ADDR=off.
+	webServer, err := buildWebServer(cfg, chatSrv.Routes(), orchHandler)
+	if err != nil {
+		return err
+	}
 
 	// Signal handling (#278) distinguishes deployment restart from dev Ctrl-C:
 	//   - SIGTERM → graceful: stop admitting, drain in-flight chat turns + tasks
@@ -1109,7 +1121,7 @@ func run() error {
 		pool.Run(ctx)
 	}()
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		// A panic in the serve loop triggers graceful shutdown (errCh) rather than
 		// crashing the process or hanging; handler panics are caught upstream.
@@ -1120,13 +1132,8 @@ func run() error {
 			errCh <- fmt.Errorf("chat-server: %w", err)
 		}
 	}()
-	go func() {
-		defer safe.Recover("cmd.orchestrator", func(any) { errCh <- fmt.Errorf("orchestrator: panicked") })
-		log.Printf("orchestrator listening on %s", orchAddr)
-		if err := orchServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("orchestrator: %w", err)
-		}
-	}()
+	serveInBackground("orchestrator", orchServer, errCh)
+	serveInBackground("web", webServer, errCh) // nil (skipped) when FLEET_WEB_ADDR=off
 	// Approval expiry sweep (#225): enforces the default-DENY-on-timeout contract
 	// for the web approval path. The per-turn SweepExpired only fires when a turn
 	// runs, so an idle conversation with a staged card would never auto-deny — this
@@ -1168,7 +1175,7 @@ func run() error {
 	// Block until a terminal signal / listener error decides graceful vs immediate,
 	// then drain. Extracted so run() stays within the cyclomatic budget.
 	graceful := awaitShutdown(sigCh, errCh, chatSrv, pool, agentLimiter)
-	performShutdown(graceful, grace, cancel, chatSrv, pool, poolDone, chatServer, orchServer)
+	performShutdown(graceful, grace, cancel, chatSrv, pool, poolDone, chatServer, orchServer, webServer)
 	// performShutdown cancelled ctx; let the deliverer record its last attempt
 	// and hand unsent rows back before the process exits.
 	awaitAccountEventsDelivery(accountEventsDone)
@@ -1206,7 +1213,7 @@ func awaitShutdown(sigCh <-chan os.Signal, errCh <-chan error, chatSrv *httpapi.
 // turns + scheduled tasks within the grace budget (force-cancelling stragglers),
 // then close the listeners. graceful=false is the fast path (cancel everything
 // now). cancel stops the claim loop / scheduler-fed pool.
-func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFunc, chatSrv *httpapi.Server, pool *runner.Pool, poolDone <-chan struct{}, chatServer, orchServer *http.Server) {
+func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFunc, chatSrv *httpapi.Server, pool *runner.Pool, poolDone <-chan struct{}, chatServer, orchServer, webServer *http.Server) {
 	// Tell systemd we are stopping so it waits out the drain up to TimeoutStopSec.
 	sdNotify("STOPPING=1")
 	// Stop admitting new chat turns + flip /healthz to 503 (load balancers stop
@@ -1257,7 +1264,11 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 	// drained or been cancelled, so Shutdown completes promptly. Each server gets
 	// the full grace budget and they close in parallel (not one off the other's
 	// remainder).
-	closeServers(grace, chatServer, orchServer)
+	servers := []*http.Server{chatServer, orchServer}
+	if webServer != nil {
+		servers = append(servers, webServer)
+	}
+	closeServers(grace, servers...)
 	log.Printf("fleet: shutdown complete")
 }
 
@@ -2270,7 +2281,7 @@ func addrOr(addr, def string) string {
 // 127.0.0.1:8080) and the deployment contract: the deploy docs (Caddyfile,
 // fleet.service, DEPLOYMENT.md, grafana/README.md) all promise that the Go
 // backends bind loopback and are only reached through the on-box web tier /
-// reverse proxy (which forwards the public /v1 API here with the Next-proxy
+// reverse proxy (which forwards the public /v1 API here with the web-tier
 // header-trust headers stripped — ADR-0053). A bare ":8000" would bind every
 // interface and expose the orchestrator admin surface AND the header-trust
 // channel directly on hosts without a firewall. Multi-host topologies opt in

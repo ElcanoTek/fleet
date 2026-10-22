@@ -12,8 +12,9 @@
 #   1. Postgres        — local instance or $E2E_DATABASE_DSN; fresh chat+sched DBs
 #   2. sandbox image   — built locally (or pulled; see CI) → $FLEET_SANDBOX_IMAGE
 #   3. fake-llm        — cmd/fake-llm on $FAKE_LLM_ADDR (OpenRouter wire fake)
-#   4. fleet           — cmd/fleet: chat :$CHAT_PORT, orchestrator :$ORCH_PORT
-#   5. web             — next build + next start on :$NEXT_PORT
+#   4. fleet           — cmd/fleet: chat :$CHAT_PORT, orchestrator :$ORCH_PORT,
+#                        and the browser tier (the embedded SPA + /api) on
+#                        :$WEB_PORT — the web bundle is built first and compiled in
 # Then it seeds the test users (chat + sched), prints the env Playwright needs,
 # and (in --serve mode) blocks until signalled, tearing everything down on exit.
 #
@@ -24,7 +25,7 @@
 #                                               # --serve blocks; use the env it prints.
 #
 # Playwright (playwright.config.ts, the "live" project) launches this script as
-# its webServer and waits on the Next URL. The script writes the resolved env to
+# its webServer and waits on the web listener's /login. The script writes the resolved env to
 # $E2E_ENV_FILE (default web/.e2e-live.env) so the Playwright config / specs can
 # source the ports + secrets.
 #
@@ -35,7 +36,7 @@
 # ── Key env (all have defaults; override to suit local/CI) ──
 #   CHAT_PORT            chat listener port            (default 18080)
 #   ORCH_PORT            orchestrator listener port    (default 18000)
-#   NEXT_PORT            web app port                  (default 3100)
+#   WEB_PORT             browser tier port (FLEET_WEB_ADDR) (default 3100)
 #   FAKE_LLM_ADDR        fake LLM listen addr          (default 127.0.0.1:18090)
 #   FLEET_SANDBOX_IMAGE  sandbox image ref             (default localhost/fleet-sandbox:latest)
 #   E2E_DATABASE_DSN     base Postgres DSN to a server with CREATEDB rights;
@@ -50,7 +51,7 @@
 #   APP_SESSION_SECRET   web HMAC session secret
 #   E2E_ENV_FILE         where to write resolved env (default web/.e2e-live.env)
 #   E2E_WORKSPACE_BASE   parent for a unique run workspace (default /tmp/fleet-e2e-<uid>)
-#   E2E_SKIP_WEB=1       boot only the backend (no next build/start)
+#   E2E_SKIP_WEB=1       boot only the backend (no web bundle build; FLEET_WEB_ADDR=off)
 #   E2E_REUSE_DB=1       do not drop/recreate the chat+sched DBs
 set -euo pipefail
 
@@ -62,7 +63,7 @@ source "$REPO_ROOT/scripts/e2e-sandbox-cleanup.sh"
 # ── config ──
 CHAT_PORT="${CHAT_PORT:-18080}"
 ORCH_PORT="${ORCH_PORT:-18000}"
-NEXT_PORT="${NEXT_PORT:-3100}"
+WEB_PORT="${WEB_PORT:-3100}"
 FAKE_LLM_ADDR="${FAKE_LLM_ADDR:-127.0.0.1:18090}"
 FLEET_SANDBOX_IMAGE="${FLEET_SANDBOX_IMAGE:-localhost/fleet-sandbox:latest}"
 E2E_TEST_EMAIL="${E2E_TEST_EMAIL:-e2e@example.com}"
@@ -266,6 +267,12 @@ go_build_retry() {
 }
 
 build_binaries() {
+  # The web bundle first: the fleet binary embeds it (internal/webui, ADR-0091).
+  if [[ "${E2E_SKIP_WEB:-0}" != "1" ]]; then
+    log "web: npm ci + vite build (embedded into the fleet binary below)"
+    ( cd "$REPO_ROOT/web" && { [[ -d node_modules ]] || npm ci >>"$LOG_DIR/web-build.log" 2>&1; } ) || die "npm ci failed (see $LOG_DIR/web-build.log)"
+    ( cd "$REPO_ROOT/web" && npm run build >>"$LOG_DIR/web-build.log" 2>&1 ) || die "web build failed (see $LOG_DIR/web-build.log)"
+  fi
   log "build: go build fleet + fake-llm"
   # One unified `fleet` binary (#461): `fleet serve` runs the server, `fleet <verb>`
   # is the operator CLI (user provisioning below). No separate admin binary needed.
@@ -377,6 +384,8 @@ start_fake_llm() {
 # ── 5. boot fleet (both listeners) ──
 start_fleet() {
   mkdir -p "$DATA_DIR" "$WORKSPACE_DIR"
+  local web_addr="127.0.0.1:$WEB_PORT"
+  [[ "${E2E_SKIP_WEB:-0}" == "1" ]] && web_addr="off"
   # LLM wiring: fake by default (deterministic, free); REAL OpenRouter in canary.
   local llm_key llm_base default_model
   local chat_model="${FLEET_DEFAULT_MODEL:-}"
@@ -398,6 +407,8 @@ start_fleet() {
   FLEET_CLIENT_CONFIG_DIR="$REPO_ROOT/config/default" \
   FLEET_SERVER_ADDR="127.0.0.1:$CHAT_PORT" \
   FLEET_ORCHESTRATOR_ADDR="127.0.0.1:$ORCH_PORT" \
+  FLEET_WEB_ADDR="$web_addr" \
+  APP_SESSION_SECRET="$APP_SESSION_SECRET" \
   FLEET_CHAT_DATABASE_URL="$CHAT_DSN" \
   FLEET_SCHED_DATABASE_URL="$SCHED_DSN" \
   DATABASE_URL="$SCHED_DSN" \
@@ -436,23 +447,10 @@ seed_users() {
     >>"$LOG_DIR/seed.log" 2>&1 || log "seed: sched user may already exist (continuing)"
 }
 
-# ── 6. web app: build + next start ──
+# ── 6. web: the fleet binary's own browser tier ──
 start_web() {
   [[ "${E2E_SKIP_WEB:-0}" == "1" ]] && { log "web: skipped (E2E_SKIP_WEB=1)"; return; }
-  log "web: npm ci + next build (this is the slow step)"
-  ( cd "$REPO_ROOT/web" && [[ -d node_modules ]] || npm ci >>"$LOG_DIR/web-build.log" 2>&1 ) || die "npm ci failed"
-  ( cd "$REPO_ROOT/web" && npm run build >>"$LOG_DIR/web-build.log" 2>&1 ) || die "next build failed (see $LOG_DIR/web-build.log)"
-  log "web: next start on :$NEXT_PORT"
-  ( cd "$REPO_ROOT/web" && \
-    CHAT_MOCK_MODE="" \
-    APP_SESSION_SECRET="$APP_SESSION_SECRET" \
-    AUTH_SIGNING_PUBKEY="$AUTH_SIGNING_PUBKEY" \
-    CHAT_SERVER_URL="http://127.0.0.1:$CHAT_PORT" \
-    CHAT_SERVER_TOKEN="$FLEET_SERVER_TOKEN" \
-    ORCHESTRATOR_SERVER_URL="http://127.0.0.1:$ORCH_PORT" \
-      npx next start -p "$NEXT_PORT" -H 127.0.0.1 >"$LOG_DIR/web.log" 2>&1 ) &
-  PIDS+=("$!")
-  wait_http "http://127.0.0.1:$NEXT_PORT/login" 90 "web (next start)"
+  wait_http "http://127.0.0.1:$WEB_PORT/login" 90 "web (fleet browser tier)"
 }
 
 # ── write the env Playwright + specs need ──
@@ -460,8 +458,8 @@ write_env() {
   cat >"$E2E_ENV_FILE" <<EOF
 # Generated by scripts/e2e-boot-server.sh — resolved live-stack endpoints.
 E2E_LIVE=1
-NEXT_PORT=$NEXT_PORT
-E2E_BASE_URL=http://127.0.0.1:$NEXT_PORT
+WEB_PORT=$WEB_PORT
+E2E_BASE_URL=http://127.0.0.1:$WEB_PORT
 CHAT_PORT=$CHAT_PORT
 ORCH_PORT=$ORCH_PORT
 FAKE_LLM_ADDR=$FAKE_LLM_ADDR

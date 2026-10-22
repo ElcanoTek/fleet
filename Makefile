@@ -1,4 +1,4 @@
-.PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-python lint-migrations lint-actions lint-catalog-links fmt tidy sync-guides clean help \
+.PHONY: all build compile bins web check-web-bundle dev stack-check fleet-bench install test test-race test-cover lint lint-go lint-python lint-migrations lint-actions lint-catalog-links fmt tidy sync-guides clean help \
 	version helm-package govulncheck ci-go ci-web ci-e2e-mocked ci-local
 
 # GOTOOLCHAIN=auto — the operator does NOT have to hand-install the pinned Go.
@@ -28,14 +28,18 @@ all: build
 
 help:
 	@echo "fleet — build/test/lint targets"
-	@echo "  make build       compile-check ./... AND emit ./fleet"
-	@echo "  make bins        emit ./fleet only (no full compile-check)"
+	@echo "  make build       compile-check ./... AND emit ./fleet with the web bundle embedded"
+	@echo "  make web         build the web SPA (web/ → internal/webui/bundle/dist)"
+	@echo "  make bins        emit ./fleet only (embeds whatever bundle make web last built)"
+	@echo "  make check-web-bundle  fail unless ./fleet embeds a web bundle"
+	@echo "  make dev         fleet (web on :3000) + the Vite dev server with hot reload"
 	@echo "  make install     build + install fleet to PREFIX/bin (default /usr/local)"
 	@echo "  make compile     go build ./...   (compile-check every package; no artifacts)"
 	@echo "  make test        run the Go test suite"
 	@echo "  make test-race   run the Go test suite with the race detector"
 	@echo "  make test-cover  run the Go test suite with coverage (writes coverage.out)"
-	@echo "  make lint        run golangci-lint + ruff (check & format) + the migration DDL linter"
+	@echo "  make lint        run golangci-lint + ruff (check & format) + the migration DDL linter + stack-check"
+	@echo "  make stack-check the Elcano frontend-standard gate (scripts/stack-check.sh)"
 	@echo "  make lint-go     golangci-lint only"
 	@echo "  make lint-python ruff check + ruff format --check (skips loudly if ruff is absent)"
 	@echo "  make lint-migrations  reject dangerous DDL in changed migration files (#256)"
@@ -60,7 +64,43 @@ help:
 # binaries, so the `-o` line is what actually leaves an artifact on disk —
 # without it scripts/update.sh would rebuild, report success, and restart the
 # UNCHANGED old binary.
-build: compile bins
+#
+# The web tier is part of the artifact (ADR-0091): `vite build` writes
+# internal/webui/bundle/dist, which the fleet binary embeds with go:embed. So
+# `build` builds the bundle first and then checks the binary really carries it
+# — a box that runs `fleet update` must never end up serving the 503 "built
+# without its web bundle" page. `compile` (go build ./...) needs no bundle.
+#
+# The order is load-bearing and is a real dependency chain, not a list, so
+# `make -j` cannot reorder it: web (writes dist) → compile + bins (embed it)
+# → check-web-bundle. A go build that ran while vite was still emptying and
+# rewriting dist would embed half a bundle (or none).
+build: web
+	$(MAKE) compile
+	$(MAKE) check-web-bundle
+
+# web builds the SPA into internal/webui/bundle/dist (npm ci for a lockfile-
+# exact tree, as the deployed build always did).
+web:
+	cd web && npm ci && npm run build
+
+# check-web-bundle fails unless ./fleet embeds a web bundle. It depends on
+# bins, so it always inspects a binary built after whatever ran before it.
+check-web-bundle: bins
+	./fleet version --web
+
+# dev runs the whole product with hot reload: the Vite dev server on :5173 and
+# `fleet serve` with FLEET_WEB_DEV_SERVER pointing at it, so pages, the gate,
+# CSP and /api are the real Go ones while modules hot-reload. Needs the usual
+# server env (FLEET_ENV_FILE / .env.local). Open http://127.0.0.1:3000.
+dev:
+	@(cd web && npm run dev) & vite=$$!; trap 'kill $$vite 2>/dev/null' EXIT INT TERM; \
+	  FLEET_WEB_DEV_SERVER=http://127.0.0.1:5173 go run ./cmd/fleet serve
+
+# stack-check is the Elcano frontend-standard gate (scripts/stack-check.sh,
+# vendored verbatim from the standard; stack.conf declares this repo's tier).
+stack-check:
+	scripts/stack-check.sh
 
 # The release version, derived from git by scripts/version.sh and stamped into
 # both binaries below via `-ldflags -X` (see internal/version). There is no
@@ -125,7 +165,8 @@ fleet-bench:
 # with PREFIX (or BINDIR) and DESTDIR for packaging.
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
-install: bins
+install: web
+	$(MAKE) check-web-bundle
 	install -d "$(DESTDIR)$(BINDIR)"
 	install -m 0755 ./fleet "$(DESTDIR)$(BINDIR)/fleet"
 	@echo "installed: $(DESTDIR)$(BINDIR)/fleet"
@@ -154,7 +195,7 @@ test-cover:
 	scripts/go-test.sh --coverprofile=coverage.out
 	@go tool cover -func=coverage.out | tail -1
 
-lint: lint-go lint-python lint-migrations lint-actions
+lint: lint-go lint-python lint-migrations lint-actions stack-check
 
 lint-go:
 	golangci-lint run
@@ -226,9 +267,9 @@ tidy:
 
 # The user guides (docs/USER-GUIDES.md) are one document with two readers: the
 # built-in fleet-guide skill hands them to the agent, and /help renders them in
-# the app. go:embed cannot reach outside its package and Turbopack refuses a
-# symlink out of the Next root, so the web tree keeps a verbatim copy — this
-# target refreshes it, and scripts/check_guides_sync_test.go fails on drift.
+# the app. The SPA bundles them at build time from web/src/app/help/guides, a
+# verbatim copy kept inside the web root — this target refreshes it, and
+# scripts/check_guides_sync_test.go fails on drift.
 sync-guides:
 	cp internal/clientconfig/builtin_skills/fleet-guide/chat.md \
 	   internal/clientconfig/builtin_skills/fleet-guide/operations-center.md \
@@ -277,7 +318,11 @@ GO_PINNED := go$(shell awk '/^go /{print $$2; exit}' go.mod)
 # anything else (environment, command line) is a choice — an air-gapped host
 # pinned to `local` — and is passed through untouched rather than turned into a
 # download.
-GOVULN_TOOLCHAIN := $(if $(filter file,$(origin GOTOOLCHAIN)),$(GO_PINNED),$(GOTOOLCHAIN))
+#
+# A recursive `$(MAKE) govulncheck` (ci-go) must be handed the parent's value:
+# the parent EXPORTS GOTOOLCHAIN, so in the sub-make its origin reads
+# "environment" and the scanner would be built with the lagging Go again.
+GOVULN_TOOLCHAIN ?= $(if $(filter file,$(origin GOTOOLCHAIN)),$(GO_PINNED),$(GOTOOLCHAIN))
 
 # Dependency-CVE scan — the CI 'go' job's govulncheck step. Tracks @latest
 # exactly as CI does, deliberately: both the scanner and its advisory database
@@ -297,23 +342,25 @@ ci-go: compile
 	$(MAKE) lint
 	$(MAKE) test
 	$(MAKE) test-race
-	$(MAKE) govulncheck
+	$(MAKE) govulncheck GOVULN_TOOLCHAIN=$(GOVULN_TOOLCHAIN)
 
 # The Web CI job, verbatim: npm audit → npm ci → lint → typecheck → vitest →
-# build. It once said "verbatim" while running only half of those steps, which
-# is the wrong half of a CI==local promise: the `npm audit` CVE gate and the
-# explicit `npm run typecheck` were missing, so a contributor could go green
-# locally and red on the PR. The typecheck matters most — `next build`
-# type-checks too, but it runs LAST, so dropping the explicit gate is what turns
-# a one-line type error into a multi-minute discovery. (web/ is the only npm
+# build → a binary that embeds the build. It once said "verbatim" while running
+# only half of those steps, which is the wrong half of a CI==local promise: the
+# `npm audit` CVE gate and the explicit `npm run typecheck` were missing, so a
+# contributor could go green locally and red on the PR. `vite build` does not
+# type-check at all, so the explicit gate is the only one. (web/ is the only npm
 # tree since ADR-0063 removed scripts/rampart-service.)
 ci-web:
 	cd web && npm audit --audit-level=low
 	cd web && npm ci && npm run lint && npm run typecheck && npx vitest run && npm run build
+	$(MAKE) check-web-bundle
 
 # The mocked Playwright CI job, run from web/. Assumes browsers are installed
 # (`cd web && npx playwright install --with-deps chromium`); CI installs them in
-# a dedicated step. Uses the npm script that pins --project=mocked.
+# a dedicated step. Uses the npm script that pins --project=mocked; the
+# Playwright config builds the bundle and cmd/web-e2e-server (the Go gateway
+# alone) and drives that.
 ci-e2e-mocked:
 	cd web && npm run test:e2e:mocked
 

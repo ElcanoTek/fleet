@@ -12,7 +12,7 @@ import (
 // The export endpoint owns its download filename, the same way conversation
 // export, dataset CSV, prompts, and adoption do (#896).
 //
-// It previously set no Content-Disposition at all: the Next proxy synthesized
+// It previously set no Content-Disposition at all: the web tier synthesized
 // `project-<uuid>.json` from the URL path, so the saved file was named after an
 // opaque id, and the proxy funnel that was supposed to forward the header
 // dropped it anyway. Moving the header here means one owner of the filename and

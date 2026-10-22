@@ -158,7 +158,7 @@ const nowMs = (): number => Date.now();
 // ── types ────────────────────────────────────────────────────────────────
 //
 // Core message types live in ./history.ts so they can be unit-tested under
-// vitest without pulling in React/Next.js. We re-use them here.
+// vitest without pulling in React. We re-use them here.
 
 export type ConversationSummary = {
   id: string;

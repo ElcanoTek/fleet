@@ -52,7 +52,7 @@ func (h *Handlers) AdminAuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// headerTrustUser resolves the Next-proxy header-trust path (#157). The Next.js
+// headerTrustUser resolves the web-tier header-trust path (#157). The web tier
 // layer is the SOLE client that sets these headers: it verifies the user's
 // session cookie, then forwards the identity as X-User-Email guarded by the
 // shared X-Orchestrator-Server-Token (the chat-server token; see
@@ -110,7 +110,7 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Next-proxy header-trust path (#157): see headerTrustUser.
+		// web-tier header-trust path (#157): see headerTrustUser.
 		if user, handled := h.headerTrustUser(w, r); handled {
 			if user == nil {
 				return // rejected fail-closed; response already written
@@ -311,11 +311,11 @@ func (h *Handlers) CSRFMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Skip for the Next-proxy header-trust path (#157). Like X-API-Key and
+		// Skip for the web-tier header-trust path (#157). Like X-API-Key and
 		// Bearer above, a custom header cannot be attached to a cross-site
 		// browser request (it would require a CORS preflight we never grant),
 		// so its presence proves a programmatic caller — and the only caller
-		// that sets it, the Next.js proxy, has already enforced the browser's
+		// that sets it, the web tier, has already enforced the browser's
 		// Origin itself (web/src/app/lib/csrf.ts) before forwarding, WITHOUT
 		// forwarding the Origin header. Presence is enough here: the auth
 		// middleware fail-closed rejects a wrong token value.

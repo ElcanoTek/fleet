@@ -1,14 +1,14 @@
-// Package httpapi exposes chat-server's HTTP surface to the Next.js proxy.
+// Package httpapi exposes chat-server's HTTP surface to the web tier.
 //
 // # Trust model
 //
 // chat-server never talks to browsers directly. Every request arrives from
-// the Next.js API layer carrying two headers:
+// the web tier (internal/webui) carrying two headers:
 //
 //   - X-Chat-Server-Token: a shared secret set in both .env.local files.
 //     Constant-time-compared in [Server.authMiddleware].
 //   - X-User-Email: the authenticated user's email, pulled from the signed
-//     session cookie by the Next.js layer before proxying. Used for
+//     session cookie by the web tier before proxying. Used for
 //     row-level scoping on every SQL query.
 //
 // The only unauthenticated endpoint is GET /healthz.

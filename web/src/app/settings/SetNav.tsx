@@ -12,8 +12,8 @@
 // row above the content (the design's narrow-viewport rules); the active
 // item's 2px left bar hides there.
 
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { Link } from "@/app/lib/Link";
+import { usePathname } from "@/app/lib/navigation";
 import { Icon } from "@/app/shared/ui/Icon";
 import { useIsAdmin } from "./useIsAdmin";
 

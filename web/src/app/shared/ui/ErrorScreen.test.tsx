@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import RouteError from "@/app/error";
+import { ErrorScreen as RouteError } from "@/app/shared/ui/ErrorScreen";
 import { ErrorScreen } from "./ErrorScreen";
 
 // The crash screen must always offer a way out (a Home Screen web app has no

@@ -1922,7 +1922,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 // approvalEarlyReplyAfter is how long an approval POST for a call on a server
 // with a declared approved-call budget waits for the outcome before it
 // answers "executing" and lets the call finish detached. It sits below every
-// proxy and client timeout in front of the API (the web's Next proxy and
+// proxy and client timeout in front of the API (the web tier and
 // browsers allow minutes), and below the 60 s budget a server gets without a
 // declaration. Var, not const: tests shorten it.
 var approvalEarlyReplyAfter = 50 * time.Second

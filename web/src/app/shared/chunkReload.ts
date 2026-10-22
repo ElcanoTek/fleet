@@ -5,8 +5,7 @@
 // that load can fail: the build it belongs to may be gone, or the network may
 // have dropped mid-request. React then throws into the nearest error boundary.
 // A reload fetches the current page and its current chunks, which is the fix,
-// so the boundaries in app/error.tsx and app/global-error.tsx do it for the
-// reader, ONCE. If the reload lands on the same failure the boundary shows its
+// so the error boundary in App.tsx does it for the reader, ONCE. If the reload lands on the same failure the boundary shows its
 // Reload button instead of reloading in a loop.
 
 // AUTO_RELOAD_WINDOW_MS is how recently an automatic reload counts as "this

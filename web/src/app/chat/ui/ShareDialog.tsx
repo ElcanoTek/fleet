@@ -805,7 +805,7 @@ export function ShareDialog({
               <>
                 <div className="flex items-start gap-2.5 rounded-[var(--radius-md)] border border-[color-mix(in_srgb,var(--color-warning-strong)_50%,transparent)] bg-[color-mix(in_srgb,var(--color-warning-strong)_12%,transparent)] px-3 py-2.5">
                   <Icon
-                    name="warning"
+                    name="alert-triangle"
                     className="mt-0.5 size-3.5 shrink-0 text-[var(--color-warning-soft)]"
                   />
                   <p className="m-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]">

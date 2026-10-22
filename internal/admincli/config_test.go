@@ -158,12 +158,9 @@ func TestSplitPositionalValueFlags(t *testing.T) {
 }
 
 func TestEnvFileResolvers(t *testing.T) {
-	// Explicit flag always wins for both resolvers.
+	// Explicit flag always wins.
 	if got := serverEnvFile("/x/custom.env"); got != "/x/custom.env" {
 		t.Errorf("serverEnvFile(flag) = %q", got)
-	}
-	if got := webEnvFile("/x/web.env"); got != "/x/web.env" {
-		t.Errorf("webEnvFile(flag) = %q", got)
 	}
 	// FLEET_ENV_FILE beats the /etc probe for the server file.
 	t.Setenv("FLEET_ENV_FILE", "/y/fleet.env")
@@ -266,12 +263,16 @@ func TestConfigSetEnvUpsertsOneLine(t *testing.T) {
 		t.Error("env file changed by a rejected call")
 	}
 
-	webPath := filepath.Join(dir, "fleet-web.env")
-	if code := configSetEnv([]string{"NEXT_PUBLIC_X", "--value", "y", "--web", "--env-file", webPath}); code != 0 {
+	// --web predates ADR-0091 (one env file since): still accepted, and it
+	// writes the same file as every other call.
+	if code := configSetEnv([]string{"WEB_X", "--value", "y", "--web", "--env-file", envPath}); code != 0 {
 		t.Fatalf("set-env --web exit = %d", code)
 	}
-	if got := readEnvFile(t, webPath); got != "NEXT_PUBLIC_X=y\n" {
-		t.Errorf("web file = %q", got)
+	if got := readEnvFile(t, envPath); !strings.Contains(got, "WEB_X=y\n") {
+		t.Errorf("--web did not write the server env file:\n%s", got)
+	}
+	if code := configUnsetEnv([]string{"WEB_X", "--web", "--env-file", envPath}); code != 0 {
+		t.Fatalf("unset-env --web exit = %d", code)
 	}
 
 	if code := configUnsetEnv([]string{"OPENX_API_KEY", "--env-file", envPath}); code != 0 {

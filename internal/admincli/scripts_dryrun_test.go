@@ -438,7 +438,7 @@ func TestUpdateDryRunSmoke(t *testing.T) {
 	// AFTER the new binaries were installed, leaving new code on disk while
 	// the old service kept running and the message implied nothing changed.
 	sandboxAt := strings.Index(out, "Rebuilding the sandbox image")
-	buildAt := strings.Index(out, "Building the fleet binary + web app")
+	buildAt := strings.Index(out, "Building the fleet binary (web bundle embedded)")
 	if sandboxAt < 0 || buildAt < 0 {
 		t.Fatalf("plan missing the sandbox (%d) or build (%d) step header\n--- output ---\n%s", sandboxAt, buildAt, out)
 	}
@@ -727,7 +727,7 @@ func TestUpdateAdoptsBackupUnits(t *testing.T) {
 	}
 	script := string(body)
 	for _, want := range []string{
-		`for unit in fleet.service fleet-web.service fleet-backup.service fleet-backup.timer fleet-maintenance.service fleet-maintenance.timer; do`,
+		`for unit in fleet.service fleet-backup.service fleet-backup.timer fleet-maintenance.service fleet-maintenance.timer; do`,
 		`case "$unit" in fleet-backup.*|fleet-maintenance.*) is_timer_unit=1 ;; esac`,
 		// The timer-unit adopt hint ends at daemon-reload — no restart clause.
 		`warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload"`,
@@ -960,11 +960,8 @@ func fakeSrcDir(t *testing.T, nvmrc string) string {
 }
 
 // hermeticNodeEnv points doctor.sh at a throwaway checkout AND a nonexistent
-// fleet-web.env, so a --node run depends on nothing but the node interpreters
-// actually installed. Without the second half these tests read this box's real
-// /etc/fleet/fleet-web.env: a stale stamp there (pointing at an interpreter that
-// has since been removed) fails them for a reason unrelated to the code, which
-// is exactly what happened while this suite was being written.
+// retired fleet-web.env, so a --node run depends on nothing but the node
+// interpreters actually installed and never reads this box's real files.
 func hermeticNodeEnv(t *testing.T, nvmrc string) []string {
 	t.Helper()
 	return []string{
@@ -1044,7 +1041,7 @@ func TestDoctorNodeOnlyIsScoped(t *testing.T) {
 	outOfScope := []string{"Rootless podman", "Sandbox smoke", "functional drift", "Package currency", "Source freshness"}
 
 	plan := runScriptDryRun(t, "doctor.sh", "--node", "--dry-run")
-	for _, want := range []string{"nodejs", "FLEET_NODE_BIN"} {
+	for _, want := range []string{"nodejs", "RESOLVED interpreter"} {
 		if !strings.Contains(plan, want) {
 			t.Errorf("--node plan must name %q\n--- output ---\n%s", want, plan)
 		}
@@ -1143,32 +1140,25 @@ func TestScriptHelpPrintsTheWholeHeaderAndNoShell(t *testing.T) {
 	}
 }
 
-// TestFleetUpgradeRestartsTheWebTier — deploy/fleet-web.service carries
-// BindsTo=fleet.service, so `systemctl restart fleet` STOPS the web tier and
-// systemd does not bring it back. update.sh has restarted it explicitly for
-// exactly this reason; fleet-upgrade.sh did not, and then printed
-// "fleet upgraded + healthy" with the web tier down.
-func TestFleetUpgradeRestartsTheWebTier(t *testing.T) {
+// TestFleetUpgradeRetiresTheWebTier — the fleet binary serves the web UI on
+// the port the retired Next.js unit (fleet-web) held (ADR-0091), so the
+// upgrade restart must retire that unit first or the new listener cannot bind
+// and fleet exits — which the readiness gate would then "fix" by rolling back.
+func TestFleetUpgradeRetiresTheWebTier(t *testing.T) {
 	out := runScriptDryRun(t, "fleet-upgrade.sh", "--dry-run")
-	if !strings.Contains(out, "restart fleet-web") {
-		t.Errorf("fleet-upgrade plan never restarts the BindsTo'd web tier\n--- output ---\n%s", out)
+	if !strings.Contains(out, "would retire the Next.js web tier") {
+		t.Errorf("fleet-upgrade plan never mentions retiring the old web tier\n--- output ---\n%s", out)
 	}
-	if !strings.Contains(out, "is-active") {
-		t.Errorf("the fleet-web restart must be backed by a resolved-state read, not the restart's exit code\n--- output ---\n%s", out)
-	}
-
-	// The plan text above is one literal info line; deleting the actual call
-	// would leave it green. There is no systemd here to exercise the real path,
-	// so pin the invocation statically instead — on BOTH paths, because a
-	// rollback restart stops the BindsTo'd web tier just as the upgrade one does.
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "fleet-upgrade.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	script := string(body)
-	if n := strings.Count(script, "\n    restart_web_tier"); n < 2 {
-		t.Errorf("restart_web_tier is invoked on %d path(s); expected both the readiness-gate and rollback paths", n)
+	retire := strings.Index(script, "\n  fleet_stop_web_tier ")
+	restart := strings.Index(script, "\n  if ! restart_service; then")
+	if retire < 0 || restart < 0 || retire > restart {
+		t.Errorf("fleet_stop_web_tier (at %d) must run before the upgrade restart (at %d)", retire, restart)
 	}
 	// And the banner must not claim health the run never measured.
 	if !strings.Contains(script, `HEALTH_VERIFIED="skipped"`) || !strings.Contains(script, "health NOT verified") {

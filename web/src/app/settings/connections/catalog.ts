@@ -140,7 +140,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 // on the directory's category chips and entry cards. An unknown slug (a
 // bundle can invent its own) falls back to the generic connector plug.
 const CATEGORY_ICONS: Record<string, string> = {
-  development: "wrench",
+  development: "tools",
   "cloud-infrastructure": "cloud",
   databases: "database",
   "data-analytics": "bar-chart",

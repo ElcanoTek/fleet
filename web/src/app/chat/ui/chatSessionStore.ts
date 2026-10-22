@@ -1,8 +1,8 @@
 // chatSessionStore — a tiny module-scoped singleton that lets the chat
 // experience survive a route unmount.
 //
-// /chat and /settings are separate Next.js App Router route segments under one
-// root layout, so navigating between them FULLY unmounts ChatExperience. All of
+// /chat and /settings are separate routes in the client route table (App.tsx)
+// under one root, so navigating between them FULLY unmounts ChatExperience. All of
 // its in-memory conversation state (the messagesByConv cache, the conversation
 // list, the active conversation id) would otherwise be discarded and rebuilt
 // from a fan of network round-trips on every return — which is exactly the

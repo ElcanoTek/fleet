@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures";
 
-// LIVE same-origin (CSRF) enforcement against the REAL Next middleware + API
+// LIVE same-origin (CSRF) enforcement against the REAL Go browser tier (internal/webui) + API
 // routes. A forged or absent Origin on a mutating route must be rejected even
 // with a valid session cookie; a matching Origin must pass the gate. This proves
 // the actual middleware behaviour end-to-end — the thing under test is the gate

@@ -12,7 +12,7 @@ package handlers
 //
 // Like GET /admin/usage, the CRUD endpoints register behind
 // AdminOrUserAuthMiddleware with the admin gate enforced in-handler on
-// PermissionAdmin (#458): the Next proxy can never send the admin X-API-Key,
+// PermissionAdmin (#458): the web tier can never send the admin X-API-Key,
 // and budgets are global spend policy, so a non-admin member gets 403.
 
 import (

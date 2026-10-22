@@ -9,10 +9,10 @@ import (
 	"testing"
 )
 
-// Session revocation. The web session cookie is a stateless HMAC the Next.js
+// Session revocation. The web session cookie is a stateless HMAC the web tier
 // tier verifies locally, so the users-table lookup membershipMiddleware already
 // performs is the only place a "this session is no longer valid" decision can be
-// made. The cookie carries the account's session epoch, the Next tier forwards
+// made. The cookie carries the account's session epoch, the web tier forwards
 // it as X-User-Session-Epoch, and a mismatch means the password has changed since
 // the cookie was minted.
 //
@@ -35,7 +35,7 @@ func getEpoch(t *testing.T, h http.Handler, path, user, epoch string) *httptest.
 	return w
 }
 
-// readEpoch drives GET /auth/session-epoch — the read both Next.js mint paths
+// readEpoch drives GET /auth/session-epoch — the read both web-tier mint paths
 // perform before stamping a cookie.
 func readEpoch(t *testing.T, h http.Handler, user string) string {
 	t.Helper()
@@ -80,7 +80,7 @@ func TestSessionEpoch_AdminPasswordResetEvictsOutstandingSessions(t *testing.T) 
 	if got := w.Body.String(); !strings.Contains(got, "session_revoked") {
 		t.Errorf("post-reset body = %q, want it to mark session_revoked", got)
 	}
-	// The header is what the Next.js proxy funnel keys on to drop the stale
+	// The header is what the web tier's proxy funnel keys on to drop the stale
 	// cookie; it must be readable without consuming the body.
 	if got := w.Header().Get("X-Session-Revoked"); got != "1" {
 		t.Errorf("X-Session-Revoked = %q, want \"1\"", got)

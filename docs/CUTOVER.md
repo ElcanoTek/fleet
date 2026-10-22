@@ -20,7 +20,7 @@ fleet's defaults were inherited from the legacy apps, so on a legacy box
 | --- | --- | --- | --- | --- |
 | Chat backend port | chat-server `127.0.0.1:8080` | — | `127.0.0.1:8080` | `FLEET_SERVER_ADDR` |
 | Orchestrator port | — | moc `127.0.0.1:8000` | `127.0.0.1:8000` | `FLEET_ORCHESTRATOR_ADDR` |
-| Web tier port | chat-web `:3000` | — | fleet-web `:3000` | `PORT` in `/etc/fleet/fleet-web.env` (+ matching `CHAT_SERVER_URL`/`ORCHESTRATOR_SERVER_URL`) |
+| Web tier port | chat-web `:3000` | — | fleet `127.0.0.1:3000` (the fleet process serves the web UI, ADR-0091) | `FLEET_WEB_ADDR` |
 | Postgres role + DB | role `chat`, db `chat` | role `moc`, db `moc` | role `chat`, db `chat` (+ role `sched`, db `sched`) | `--chat-db-name/--chat-db-user` etc. |
 | `/etc/caddy/Caddyfile` | written by the legacy bootstraps (when Caddy TLS was chosen) | same | written by `--enable-web --domain` | `--force-caddy` (with a timestamped backup) |
 
@@ -215,15 +215,13 @@ documented:
 
 - `/etc/fleet/fleet.env`: `FLEET_SERVER_ADDR=127.0.0.1:18080` and
   `FLEET_ORCHESTRATOR_ADDR=127.0.0.1:18000`.
-- `/etc/fleet/fleet-web.env`: `PORT=13000`, and point `CHAT_SERVER_URL` /
-  `ORCHESTRATOR_SERVER_URL` at the moved backends. Note that every
-  `bootstrap.sh --enable-web` re-run writes the default
-  `CHAT_SERVER_URL`/`ORCHESTRATOR_SERVER_URL`/`PORT` values back into this
-  file — re-apply these edits after one, or finish the cutover promptly.
+- Also in `fleet.env`: `FLEET_WEB_ADDR=127.0.0.1:13000` (the web UI is
+  served by the same process and calls the backends in-process, so nothing
+  else needs pointing).
 - Give fleet its own hostname in Caddy rather than fighting over the legacy
   one; **merge** the fleet vhost into the existing Caddyfile by hand instead
   of using `--force-caddy` (which replaces the file).
-- Restart: `sudo systemctl restart fleet fleet-web && sudo systemctl reload caddy`.
+- Restart: `sudo systemctl restart fleet && sudo systemctl reload caddy`.
 
 Never let both schedulers own the same recurring tasks: import into fleet
 only after the legacy scheduler is disabled, or keep the pilot to interactive

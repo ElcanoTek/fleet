@@ -1,84 +1,34 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render } from "@testing-library/react";
+import { setBootstrapForTest } from "@/app/lib/bootstrap";
 
-const getServerSessionMock = vi.fn();
-const chatServerFetchMock = vi.fn();
-const redirectMock = vi.fn((to: string) => {
-  throw new Error(`redirect:${to}`);
-});
+const pageClient = vi.fn((_: { initialEmail?: string | null }) => null);
+vi.mock("./page-client", () => ({ PageClient: (props: { initialEmail?: string | null }) => pageClient(props) }));
 
-vi.mock("@/app/lib/auth", () => ({
-  getServerSession: () => getServerSessionMock(),
-}));
-vi.mock("@/app/lib/chatServer", () => ({
-  chatServerFetch: (...args: unknown[]) => chatServerFetchMock(...args),
-}));
-vi.mock("next/navigation", () => ({
-  redirect: (to: string) => redirectMock(to),
-}));
-vi.mock("./page-client", () => ({ PageClient: () => null }));
+import ChatPage from "./page";
 
-import Home from "./page";
-
-// The membership gate turns a signed-in non-member into one clear /no-access
-// page. It must run for every identity Fleet did not mint itself: the shared
-// elcano_auth cookie AND a central-Auth (OIDC) session — Auth decides who may
-// reach Fleet, Fleet's user-list decides who is a member (#1522). Password
-// sessions are members by construction and skip the round-trip.
-describe("chat entry membership gate", () => {
-  beforeEach(() => {
-    getServerSessionMock.mockReset();
-    chatServerFetchMock.mockReset();
-    redirectMock.mockClear();
+// The membership entry gate (#1522) moved to the server with the rest of the
+// request-time work: internal/webui/spa_test.go pins that an elcano or OIDC
+// non-member is redirected to /no-access, a member and a password session are
+// served, and an unreachable backend never traps the user. What is left here is
+// the hand-off: the server-resolved session email reaches the chat shell so
+// cold boot skips its /api/session round trip.
+describe("chat page", () => {
+  afterEach(() => {
+    setBootstrapForTest(null);
+    pageClient.mockClear();
+    cleanup();
   });
 
-  it.each(["oidc", "elcano"])(
-    "sends a %s non-member to /no-access",
-    async (source) => {
-      getServerSessionMock.mockResolvedValue({
-        email: "x@omc.com",
-        exp: 0,
-        source,
-      });
-      chatServerFetchMock.mockResolvedValue(
-        new Response(null, { status: 403 }),
-      );
-      await expect(Home()).rejects.toThrow("redirect:/no-access");
-      expect(chatServerFetchMock).toHaveBeenCalledWith(
-        expect.objectContaining({ email: "x@omc.com" }),
-        "/auth/membership",
-      );
-    },
-  );
-
-  it.each(["oidc", "elcano"])("renders for a %s member", async (source) => {
-    getServerSessionMock.mockResolvedValue({
-      email: "x@omc.com",
-      exp: 0,
-      source,
-    });
-    chatServerFetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
-    await expect(Home()).resolves.toBeTruthy();
-    expect(redirectMock).not.toHaveBeenCalled();
+  it("hands the bootstrap's session email to the chat shell", () => {
+    setBootstrapForTest({ session: { email: "x@omc.com" } });
+    render(<ChatPage />);
+    expect(pageClient).toHaveBeenCalledWith({ initialEmail: "x@omc.com" });
   });
 
-  it("does not check membership for a password session", async () => {
-    getServerSessionMock.mockResolvedValue({
-      email: "x@omc.com",
-      exp: 0,
-      source: "password",
-    });
-    await expect(Home()).resolves.toBeTruthy();
-    expect(chatServerFetchMock).not.toHaveBeenCalled();
-  });
-
-  it("lets the app load when chat-server is unreachable (no trap on transient errors)", async () => {
-    getServerSessionMock.mockResolvedValue({
-      email: "x@omc.com",
-      exp: 0,
-      source: "oidc",
-    });
-    chatServerFetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
-    await expect(Home()).resolves.toBeTruthy();
-    expect(redirectMock).not.toHaveBeenCalled();
+  it("passes null when the request carried only a bearer (no cookie session)", () => {
+    setBootstrapForTest({ session: null });
+    render(<ChatPage />);
+    expect(pageClient).toHaveBeenCalledWith({ initialEmail: null });
   });
 });

@@ -14,6 +14,11 @@ itself carries no version — see docs/VERSIONING.md):
 
   kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "fleet.fullname" . }} -- fleet version
 
+Open the web UI (served by the fleet binary itself on its web port):
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "fleet.fullname" . }} 3000:3000
+  open http://localhost:3000   # sign-in needs APP_SESSION_SECRET in config.existingSecret
+
 Reach the chat API:
 
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "fleet.fullname" . }} 8080:8080

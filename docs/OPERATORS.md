@@ -112,7 +112,7 @@ FLEET_ENV_FILE=/etc/fleet/fleet.env            # so config.Load reads this same 
 
 `fleet config set-env KEY` upserts one variable as exactly one line (value from
 stdin or a hidden prompt; duplicates removed; `0600` and owner kept) — prefer
-it over hand-editing. `fleet env` prints this file (and the web-tier one) with
+it over hand-editing. `fleet env` prints this file (the only one — the web UI reads it too) with
 secret values masked, and `fleet env edit` opens it in an editor — `$EDITOR`, or an interactive
 nano/vim/helix pick — restoring the 0600 mode afterwards; see
 [ENV-CLI.md](ENV-CLI.md).
@@ -344,11 +344,10 @@ silently reusing the stale local copy. Services self-migrate on restart, so
 `update` runs no migrations; it finishes with `systemctl restart fleet` and a
 unit health check.
 
-`update` also refreshes the shipped host files that no unit owns:
-`/usr/local/bin/fleet-web-start.sh` (fleet-web's `ExecStart` shim) and
-`/etc/profile.d/fleet-motd.sh` (the login-banner hook). Both are shipped content
-with no operator-tunable parts, both are rewritten only when they differ from
-`deploy/`, and neither is fatal — a box that cannot write them keeps updating and
+`update` also refreshes the one shipped host file that no unit owns:
+`/etc/profile.d/fleet-motd.sh` (the login-banner hook). It is shipped content
+with no operator-tunable parts, rewritten only when it differs from
+`deploy/`, and never fatal — a box that cannot write them keeps updating and
 says so. The MOTD hook matters here because `bootstrap` used to be the only thing
 that installed it: a box provisioned before it existed never had one, and an edit
 to `deploy/fleet-motd.sh` reached no existing box. (`fleet doctor` repairs the
@@ -468,15 +467,17 @@ production-only bug. The pass covers, in order:
    `/run/fleet`, and a `podman info` probe **as the service user**. A stale
    pause process is reported with the exact repair (see below); doctor never
    runs `podman system migrate` itself.
-4. **Installed artifacts** — functional drift of `fleet.service` /
-   `fleet-web.service` / the `fleet-backup` and `fleet-maintenance` service +
-   timer pairs vs `deploy/`
-   (reinstall + `daemon-reload`), the `/etc/profile.d/fleet-motd.sh` login-banner
+4. **Installed artifacts** — functional drift of `fleet.service` / the
+   `fleet-backup` and `fleet-maintenance` service + timer pairs vs `deploy/`
+   (reinstall + `daemon-reload`), the retired Next.js tier (`fleet-web.service`,
+   its drop-in, start shim and `/opt/fleet/web` — stopped, disabled and removed
+   when still present, since fleet serves the web UI on its port; ADR-0091), the `/etc/profile.d/fleet-motd.sh` login-banner
    hook (installed from `deploy/` when missing or drifted; the banner itself is
    rendered live by `fleet motd`, so only the hook can go stale), and the
    `/usr/local/bin/fleet` symlink (a stale *copy* there shadows every update).
 5. **Configuration** — `/etc/fleet/fleet.env` exists, root-owned `0600`, with
-   `OPENROUTER_API_KEY` + both DB DSNs; `fleet-web.env` permissions; and the
+   `OPENROUTER_API_KEY` + both DB DSNs; `APP_SESSION_SECRET` for the web UI
+   (carried over from the retired `fleet-web.env`, else generated); and the
    fleet-managed `/etc/caddy/Caddyfile` matches the shipped layout
    (`scripts/lib/caddyfile.sh`: the `/v1` API, `/api-info`, the A2A agent
    card and `/triggers/*` to the orchestrator, `/webhooks/*` to chat, the
@@ -486,7 +487,7 @@ production-only bug. The pass covers, in order:
    caddy`); `--check` reports it; a Caddyfile fleet did not write is never
    touched (advisory only when it routes no `/v1`).
 6. **Services** — `postgresql` (when a local unit exists), `fleet`,
-   `fleet-web`, `caddy` active; then the `/healthz` + `/readyz` probes, and
+   `caddy` active; then the `/healthz` + `/readyz` probes, and
    `https://<domain>/api-info` fetched **through** Caddy (pinned to this box
    with `--resolve`) — the proof that the API is routed, not just that the
    process is up.
@@ -550,8 +551,7 @@ Things that bite:
   before migrating.
 - `/var/lib/fleet` is `0700`: change into it as `fleet` (inside the `sudo -u
   fleet` shell), not before `sudo`.
-- Stopping `fleet` also stops `fleet-web` (`BindsTo=`), and starting `fleet`
-  does not bring it back — start it too if it was running.
+- Stopping `fleet` also stops the web UI (the same process serves it).
 - Make sure fleet has really stopped (no `fleet` process left, including one
   under another supervisor) before migrating, and start it again even if the
   migrate fails.

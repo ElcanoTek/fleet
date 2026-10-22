@@ -1,21 +1,22 @@
 # deploy/Caddyfile — TLS reverse-proxy fronting fleet: the web origin AND the
 # public HTTP API.
 #
-# Topology (see web/src/app/lib/{chatServer,orchestratorServer}.ts):
+# Topology (ADR-0091 — the fleet binary serves the browser tier itself):
 #
-#   browser ──TLS──▶ Caddy ──▶ Next.js web app (127.0.0.1:3000)
-#                     │              │  server-side proxy (loopback):
-#                     │              ├─▶ chat-server        127.0.0.1:8080
-#                     │              └─▶ orchestrator        127.0.0.1:8000
+#   browser ──TLS──▶ Caddy ──▶ fleet web listener (127.0.0.1:3000, FLEET_WEB_ADDR)
+#                     │              │  in-process calls (no network hop):
+#                     │              ├─▶ chat handlers
+#                     │              └─▶ orchestrator handlers
 #                     │
 #                     ├─ /v1/*, /api-info, /.well-known/agent-card.json,
 #                     │  /a2a, /triggers/*  ──▶ orchestrator  127.0.0.1:8000
 #                     └─ /webhooks/*        ──▶ chat-server   127.0.0.1:8080
 #
-# The browser only ever talks to the Next app. The two Go backends bind loopback
-# (cfg.Addr defaults to 127.0.0.1:8080; orchestrator to 127.0.0.1:8000) and are
-# reached by Next's own /api/* route handlers — including the SSE streams, which
-# Next proxies through /api/.../stream. Caddy does NOT expose :8080 / :8000 to
+# The browser only ever talks to the web listener: the embedded SPA plus the
+# /api/* routes (internal/webui), which gate every request and call the backend
+# handlers in-process — including the SSE streams. The two Go backend listeners
+# bind loopback (cfg.Addr defaults to 127.0.0.1:8080; orchestrator to
+# 127.0.0.1:8000). Caddy does NOT expose :8080 / :8000 to
 # the internet; it exposes exactly the API paths below, which authenticate with
 # X-API-Key (or a webhook signature) and nothing else — see the header_up
 # deletions and ADR-0053. Every other Go route stays loopback-only.
@@ -27,15 +28,15 @@
 # fleet-managed Caddyfile that drifted from this layout; `fleet update` offers
 # to (or does so under --adopt-units).
 #
-# Run the web app behind this with:  cd web && npm run build && npm run start
-# (next start → 127.0.0.1:3000), wiring CHAT_SERVER_URL / ORCHESTRATOR_SERVER_URL
-# to the loopback backends and CHAT_SERVER_TOKEN to FLEET_SERVER_TOKEN.
+# The web listener is part of `fleet serve` (build with `make build`, which
+# embeds the web bundle); there is no separate web process to run.
 #
 # Replace fleet.example.com with your domain; Caddy auto-provisions the cert.
 # Behind this proxy the backends need FLEET_TRUSTED_PROXIES=127.0.0.1,::1 in
 # fleet.env to read the real client IP from X-Forwarded-For (rate limits, IP
 # lists) on the routes below that reach a backend directly; browser traffic
-# goes through Next, which does not forward the header, and stays 127.0.0.1.
+# goes through the web listener, which calls the backends in-process without
+# the header, and stays 127.0.0.1.
 # Bootstrap writes it with this file when the key is absent and the backends
 # are on loopback, and `fleet doctor` / `fleet update --adopt-units` add it to
 # an older box; a hand-installed copy of this file needs it set by hand.
@@ -43,7 +44,7 @@
 fleet.example.com {
 	encode zstd gzip
 
-	# Security headers for the Next-served pages, mirroring exactly what the
+	# Security headers for the web pages, mirroring exactly what the
 	# Go backends already set on their own responses (cmd/fleet/tls.go
 	# securityHeadersMiddleware) so the whole origin carries one policy.
 	# `header` replaces existing values, so proxied API responses that already
@@ -59,10 +60,10 @@ fleet.example.com {
 	# the ones fleet fixes as unversioned-forever: version discovery, the A2A
 	# agent card + JSON-RPC endpoint, and the inbound task triggers (webhook +
 	# email). Nothing else on the orchestrator is exposed — its legacy bare
-	# paths (/tasks, /keys, …) stay loopback-only behind Next's /api/* proxy.
+	# paths (/tasks, /keys, …) stay loopback-only behind the web tier's /api/*.
 	#
 	# The header_up deletions are load-bearing: the orchestrator trusts
-	# X-User-Email when X-Orchestrator-Server-Token matches (the Next-proxy
+	# X-User-Email when X-Orchestrator-Server-Token matches (the web tier's
 	# impersonation channel, #157). Stripping them here means that channel is
 	# reachable from loopback ONLY, so exposing the API adds exactly one
 	# public auth path — X-API-Key — and no header-trust surface (ADR-0053).
@@ -92,8 +93,9 @@ fleet.example.com {
 		}
 	}
 
-	# Everything else → the Next.js web app: pages, /_next/*, and its own
-	# /api/* route handlers (which proxy to the backends server-side).
+	# Everything else → the fleet web listener (FLEET_WEB_ADDR, ADR-0091): the
+	# SPA's pages and assets, and its /api/* routes (which call the backends
+	# in-process).
 	handle {
 		reverse_proxy 127.0.0.1:3000 {
 			# SSE: stream tokens straight through, no response buffering, and a

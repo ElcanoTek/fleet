@@ -40,7 +40,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if h.verifyAdminKey(r) {
 		isAuthed = true
 	} else if user, handled := h.headerTrustUser(w, r); handled {
-		// 1a. Next-proxy header-trust path (#157): /upload sits outside the
+		// 1a. web-tier header-trust path (#157): /upload sits outside the
 		// AdminOrUserAuthMiddleware group like POST /tasks, so the cookie
 		// user's proxied identity must be honored here too (an upload is only
 		// usable via a subsequent task create). Fail-closed: a rejected token

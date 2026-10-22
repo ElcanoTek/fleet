@@ -8,7 +8,7 @@ import NotificationsAdminPage from "./page";
 // secrets), untouched secret fields are omitted (keep), clear sends "",
 // revert DELETEs, and the test button reports the key-free result.
 
-vi.mock("next/navigation", () => ({
+vi.mock("@/app/lib/navigation", () => ({
   useRouter: () => ({ replace: vi.fn() }),
 }));
 

@@ -120,7 +120,7 @@ export async function mockChatBoot(page: Page, opts: ChatBootOptions = {}) {
     return r.fulfill({ json: {} });
   });
   // The same list read, with a query string. The glob above matches the bare
-  // path only, so `?archived=true` and `?scope=team` fell through to the Next
+  // path only, so `?archived=true` and `?scope=team` fell through to the gateway
   // proxy and 502'd against the absent Go backend — twice per page load for
   // the rail's team-shared counts alone. Registered AFTER the bare route
   // because Playwright checks the most recent registration first.
@@ -156,7 +156,7 @@ export async function mockChatBoot(page: Page, opts: ChatBootOptions = {}) {
   // empty history so opening a conversation — on boot or via the keyboard —
   // resolves cleanly instead of 502-ing against the absent Go backend.
   // Per-conversation side fetches the shell fires on load. Without mocks
-  // these fall through to the Next proxy and burn ~1s each before 502ing —
+  // these fall through to the gateway (no backend) and burn ~1s each before 502ing —
   // harmless locally, but under CI load the backlog makes menu/reveal
   // interactions flaky. Registered BEFORE the generic /conversations/* route
   // (later registrations win) — wait, Playwright checks the LAST registered

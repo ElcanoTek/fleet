@@ -79,10 +79,11 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   [ADR-0053](adr/0053-public-api-through-the-tls-front.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](MIGRATIONS.md)
-- **Web-tier shutdown** (why `fleet-web` dumped core on nearly every restart:
-  the npm wrapper's `uv_kill` segfault, Fedora's abort-on-timeout, the residual
-  upstream teardown crash, and `LimitCORE=0` — plus the drain theory that
-  measurement refuted): [`docs/WEB-TIER-SHUTDOWN.md`](WEB-TIER-SHUTDOWN.md)
+- **The browser tier** (the fleet binary serves the Vite SPA and every
+  `/api/*` route in-process — auth gate, CSRF, OIDC, CSP, SSE — and how the
+  Next.js `fleet-web` tier was retired on upgrade):
+  [ADR-0091](adr/0091-go-serves-the-browser-tier.md) +
+  [`web/AGENTS.md`](../web/AGENTS.md)
 - **Downloading a chat** (the three export formats and why the readable one is
   the default, the include-the-agent's-work scope, and the HTML renderer's
   escaping guarantees): [`docs/CHAT-EXPORT.md`](CHAT-EXPORT.md)
@@ -356,7 +357,6 @@ above fails otherwise.
 - [`USER-GUIDES.md`](USER-GUIDES.md) — The user guides: /help and the `fleet-guide` skill
 - [`VERIFIER-FINAL-RESPONSE.md`](VERIFIER-FINAL-RESPONSE.md) — The end-of-run verifier sees the run's final response
 - [`VERSIONING.md`](VERSIONING.md) — Versioning and releases
-- [`WEB-TIER-SHUTDOWN.md`](WEB-TIER-SHUTDOWN.md) — Web-tier shutdown — why `systemctl restart fleet-web` was dumping core
 - [`WEBHOOK-SIGNING.md`](WEBHOOK-SIGNING.md) — Webhook signing (verifying fleet's outbound webhooks)
 - [`WEBHOOKS.md`](WEBHOOKS.md) — Webhook-triggered conversations (#268)
 

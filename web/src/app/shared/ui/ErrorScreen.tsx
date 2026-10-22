@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { claimChunkAutoReload, isChunkLoadError } from "@/app/shared/chunkReload";
 
-// ErrorScreen is what app/error.tsx and app/global-error.tsx render when a page
+// ErrorScreen is what the app's error boundary (src/App.tsx) renders when a page
 // throws. Before it existed a crash showed Next's bare "Application error: a
 // client-side exception has occurred" text with no control at all, which in a
 // browser tab cost a reload, and in an iPhone Home Screen web app (no address

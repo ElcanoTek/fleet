@@ -17,8 +17,8 @@
 // independently 403s non-admins, and fetchUsers surfaces that below.
 
 import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { Link } from "@/app/lib/Link";
+import { useRouter } from "@/app/lib/navigation";
 
 import { fetchStats, formatAgo, formatUSD, type UserStat } from "../lib";
 import {

@@ -3,9 +3,9 @@ import { getTestAuthKey } from "./e2e/test-auth-key";
 
 // Playwright config for the unified Fleet frontend.
 //
-// The CI suite is MOCKED-ONLY and deterministic: it drives the real Next.js app
-// but every Go backend (chat-server :18080, orchestrator/moc :8000) is replaced
-// by Playwright route interception. No live OpenRouter, no Podman, no database —
+// The CI suite is MOCKED-ONLY and deterministic: it drives the real browser
+// tier (the Go gateway serving the built SPA) but every backend call is
+// replaced by Playwright route interception. No live OpenRouter, no Podman, no database —
 // so the suite is fully reproducible on a clean ubuntu-latest runner.
 //
 //   testDir: ./e2e/mocked   → the deterministic, CI-runnable suite.
@@ -16,9 +16,10 @@ import { getTestAuthKey } from "./e2e/test-auth-key";
 // testDir and never run in CI — see web/e2e/README.md for how to run them
 // locally against a live stack.
 
-const NEXT_PORT = Number(process.env.NEXT_PORT ?? 3100);
+// The browser tier's port (FLEET_WEB_ADDR) for both lanes.
+const WEB_PORT = Number(process.env.WEB_PORT ?? 3100);
 
-// Shared auth values used by the mocked specs + the Next server. These are
+// Shared auth values used by the mocked specs + the gateway. These are
 // throwaway test secrets — never real credentials.
 const TEST_EMAIL = "e2e@example.com";
 const TEST_PASSWORD = "e2e-test-password";
@@ -30,9 +31,9 @@ const TEST_SESSION_SECRET = "e2e-session-secret-0123456789abcdef";
 // literal is committed to the repo.
 //
 // The keypair is generated exactly ONCE per run and persisted to a throwaway
-// file outside the repo, so the Next server process and the spec-worker
+// file outside the repo, so the gateway process and the spec-worker
 // processes (which both re-load this config) read the SAME material:
-//   - the PUBLIC key is exported to the Next server via AUTH_SIGNING_PUBKEY
+//   - the PUBLIC key is exported to the gateway via AUTH_SIGNING_PUBKEY
 //     (standard base64 of the raw 32-byte key, matching auth-admin keygen and
 //     home/server.js's `Buffer.from(AUTH_SIGNING_PUBKEY, "base64")`), so the
 //     real verifier (verifyElcanoToken) trusts tokens signed by this keypair.
@@ -44,19 +45,21 @@ const testAuthKey = getTestAuthKey();
 const TEST_AUTH_PUBKEY = testAuthKey.pubkeyStdB64;
 const TEST_AUTH_PRIVATE_KEY_PEM = testAuthKey.privateKeyPem;
 
-// In CI we BUILD the app and run `next start` (production server) so the suite
-// validates the shipped build, not just the dev server. Locally we default to
-// `next dev` for fast iteration; set E2E_PROD=1 to mirror CI.
-const useProdServer = process.env.CI || process.env.E2E_PROD === "1";
-const serverCommand = useProdServer
-  ? `next start -p ${NEXT_PORT} -H 127.0.0.1`
-  : `next dev -p ${NEXT_PORT} -H 127.0.0.1`;
+// The mocked suite drives the REAL browser tier: the Go gateway
+// (internal/webui) serving the embedded production bundle, booted alone by
+// cmd/web-e2e-server with no backends behind it. The command builds the
+// bundle and the harness first (E2E_SKIP_BUILD=1 reuses both), so the suite
+// always validates what ships — there is no separate dev-server mode.
+const mockedServerCommand =
+  process.env.E2E_SKIP_BUILD === "1"
+    ? "../.e2e-bin/web-e2e-server"
+    : "npm run build && cd .. && go build -o .e2e-bin/web-e2e-server ./cmd/web-e2e-server && .e2e-bin/web-e2e-server";
 
 // E2E_LIVE selects the REAL-backend suite (e2e/live/*.spec.ts). In that mode the
 // whole stack — Postgres, both Go listeners, SSE, the scheduler + worker pool,
 // and the Podman sandbox — is booted for real by scripts/e2e-boot-server.sh;
 // only the LLM is stubbed by the wire-compatible fake (cmd/fake-llm), reached
-// via OPENROUTER_BASE_URL. The boot script owns the Next server too, so in
+// via OPENROUTER_BASE_URL. The boot script owns the web listener too (the fleet binary), so in
 // live/canary mode Playwright launches the boot script as its webServer.
 //
 // E2E_CANARY is the same real stack but with the FAKE swapped for a REAL cheap
@@ -67,26 +70,26 @@ const canaryMode = process.env.E2E_CANARY === "1";
 const liveMode = process.env.E2E_LIVE === "1" || canaryMode;
 
 // E2E_SCREENSHOTS=1 selects the docs-screenshot suite (e2e/screenshots/*): the
-// SAME mocked Next server as the default lane, but a separate project so the
+// SAME mocked gateway as the default lane, but a separate project so the
 // screenshot capture never runs on (or gates) the PR mocked suite. The
 // screenshot workflow (#487) invokes it with `--project=screenshots` on push to
 // main and commits the captured PNGs.
 const screenshotMode = process.env.E2E_SCREENSHOTS === "1";
 
-// The live suite boots the whole real stack (incl. the Next server) via
+// The live suite boots the whole real stack (the fleet binary serves the web tier) via
 // scripts/e2e-boot-server.sh, which is repo-root-relative; Playwright runs from
 // web/, so the command reaches up one directory.
 const liveWebServer = {
   command: "bash ../scripts/e2e-boot-server.sh",
-  url: `http://127.0.0.1:${NEXT_PORT}/login`,
+  url: `http://127.0.0.1:${WEB_PORT}/login`,
   // The boot includes a go build, an (optional) 1.3GB sandbox image build, a
-  // sandbox probe, and a full `next build` — generous timeout, never a sleep.
+  // sandbox probe, and the web bundle build — generous timeout, never a sleep.
   timeout: 900_000,
   reuseExistingServer: !process.env.CI,
   stdout: "pipe" as const,
   stderr: "pipe" as const,
   env: {
-    NEXT_PORT: String(NEXT_PORT),
+    WEB_PORT: String(WEB_PORT),
     // Forward the sandbox image + DB DSN the CI job resolves, when present.
     ...(process.env.FLEET_SANDBOX_IMAGE
       ? { FLEET_SANDBOX_IMAGE: process.env.FLEET_SANDBOX_IMAGE }
@@ -102,23 +105,19 @@ const liveWebServer = {
 };
 
 const mockedWebServer = {
-  // The Next server in CHAT_MOCK_MODE. The same mock-mode contract the live
-  // harness relies on stays wired; in the mocked suite the /api/* layer is
-  // additionally route-intercepted by Playwright itself, so the upstream URLs
-  // below are never actually reached.
-  command: serverCommand,
-  url: `http://127.0.0.1:${NEXT_PORT}`,
-  timeout: 120_000,
+  // The gateway alone (see mockedServerCommand). The /api/* layer is
+  // route-intercepted by Playwright; an unintercepted call answers 502.
+  command: mockedServerCommand,
+  url: `http://127.0.0.1:${WEB_PORT}/login`,
+  timeout: 300_000,
   reuseExistingServer: !process.env.CI,
   stdout: "pipe" as const,
   stderr: "pipe" as const,
   env: {
-    CHAT_MOCK_MODE: "1",
+    FLEET_WEB_ADDR: `127.0.0.1:${WEB_PORT}`,
     APP_SESSION_SECRET: TEST_SESSION_SECRET,
     AUTH_SIGNING_PUBKEY: TEST_AUTH_PUBKEY,
-    CHAT_SERVER_URL: "http://127.0.0.1:18080",
-    CHAT_SERVER_TOKEN: "e2e-shared-secret",
-    ORCHESTRATOR_SERVER_URL: "http://127.0.0.1:18000",
+    FLEET_SERVER_TOKEN: "e2e-shared-secret",
   },
 };
 
@@ -134,7 +133,7 @@ export default defineConfig({
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],
 
   use: {
-    baseURL: `http://127.0.0.1:${NEXT_PORT}`,
+    baseURL: `http://127.0.0.1:${WEB_PORT}`,
     trace: "retain-on-failure",
     video: "off",
   },
@@ -180,7 +179,7 @@ export default defineConfig({
         ],
 
   // Pick the webServer by mode: the live boot script when E2E_LIVE=1, else the
-  // mocked Next server.
+  // mocked gateway.
   webServer: liveMode ? [liveWebServer] : [mockedWebServer],
 });
 

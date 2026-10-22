@@ -239,7 +239,7 @@ func TestUpdateGatesNpmSeparatelyFromNode(t *testing.T) {
 		// The build reads the interpreter back from npm, not from the symlink
 		// we ourselves put on PATH.
 		`_build_node="$(fleet_npm_node_version "$_build_path" "$SRC_DIR/web" || true)"`,
-		`refusing to build the web tier with an npm pinned to an unsupported node`,
+		`refusing to build the web bundle with an npm pinned to an unsupported node`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("update.sh must contain %q", want)
@@ -261,9 +261,9 @@ func TestBootstrapAndDoctorPinNpmToo(t *testing.T) {
 		"bootstrap.sh": {
 			`if npm_cli="$(fleet_resolve_npm_cli "$node_bin")"; then`,
 			`elif [[ "${node_bin##*/}" =~ ^node-[0-9]+$ ]]; then`,
-			`build_node="$(fleet_npm_node_version "$build_path" "$web_src" || true)"`,
-			`ok "web app built on ${build_node}"`,
-			"skipping the web tier rather than building it with an npm pinned to an unsupported node.",
+			`build_node="$(fleet_npm_node_version "$build_path" "$REPO_ROOT/web" || true)"`,
+			`npm would build the web bundle on ${build_node}, below the ${NODE_MAJOR} declared in web/.nvmrc.`,
+			`if ( cd "$REPO_ROOT" && export PATH="$build_path" GOTOOLCHAIN=auto && make build ); then`,
 		},
 		"doctor.sh": {
 			`npm_cli="$(fleet_resolve_npm_cli "$node_bin" || true)"`,
@@ -289,7 +289,7 @@ func TestBootstrapAndDoctorPinNpmToo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(body), `ok "web app built on $(PATH="$build_path" node -v`) {
+	if strings.Contains(string(body), `$(PATH="$build_path" node -v`) {
 		t.Error("bootstrap.sh still reports the build interpreter from `node -v` under the build PATH")
 	}
 }

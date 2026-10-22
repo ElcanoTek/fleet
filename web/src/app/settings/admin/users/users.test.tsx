@@ -18,7 +18,7 @@ import {
 // living in the kebab popover + the reveal add-form. Ported behaviors from the
 // old UsersPanel tests, adapted to the popover UI.
 
-vi.mock("next/navigation", () => ({
+vi.mock("@/app/lib/navigation", () => ({
   useRouter: () => ({ replace: vi.fn() }),
 }));
 

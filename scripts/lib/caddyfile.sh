@@ -5,19 +5,20 @@
 # (the annotated reference), a printf in bootstrap.sh, and the operators' heads
 # — and they drifted: the printf only knew the web tier, so every documented
 # public API URL (/v1/…, /api-info, the A2A agent card, /triggers/…, /webhooks/…)
-# reached Next.js instead of the Go backend and 404'd there. One renderer here,
+# reached the web tier instead of the Go backend and 404'd there. One renderer here,
 # with deploy/Caddyfile kept byte-for-byte in lockstep by a test
 # (internal/admincli TestCaddyfileRendererMatchesDeployReference), means a
 # routing fix ships to every path at once and doctor/update can DETECT a box
 # whose installed Caddyfile predates it.
 #
 # Contract (see docs/DEPLOYMENT.md "TLS" + ADR-0053):
-#   * Everything defaults to the Next.js web tier (:3000) — the browser's only
-#     entrypoint, unchanged.
+#   * Everything defaults to the fleet web listener (:3000, FLEET_WEB_ADDR;
+#     the binary serves the browser tier itself since ADR-0091) — the
+#     browser's only entrypoint.
 #   * The public HTTP API — the orchestrator's versioned /v1 surface plus the
 #     unversioned-forever paths it fixes (/api-info, the A2A agent card, /a2a,
 #     the /triggers/… inbound task triggers) — goes to the orchestrator
-#     listener with the Next-proxy header-trust channel STRIPPED
+#     listener with the web tier's header-trust channel STRIPPED
 #     (X-Orchestrator-Server-Token / X-User-Email / X-User-Session-Epoch), so
 #     the impersonation path stays reachable from loopback only even though the
 #     API is now reachable from the internet. API-key (X-API-Key) auth is the
@@ -41,8 +42,8 @@
 CADDY_MARKER="# Managed by fleet (scripts/bootstrap.sh) — re-runs overwrite this file."
 
 # The upstream defaults mirror the Go process (config.Load defaults Addr to
-# 127.0.0.1:8080; orchestratorAddr() to 127.0.0.1:8000) and fleet-web.env's
-# PORT=3000. Callers pass the env-file values when they differ.
+# 127.0.0.1:8080; orchestratorAddr() to 127.0.0.1:8000; FLEET_WEB_ADDR to
+# 127.0.0.1:3000). Callers pass the env-file values when they differ.
 CADDY_DEFAULT_WEB_ADDR="127.0.0.1:3000"
 CADDY_DEFAULT_CHAT_ADDR="127.0.0.1:8080"
 CADDY_DEFAULT_ORCH_ADDR="127.0.0.1:8000"
@@ -232,6 +233,21 @@ caddyfile_routes_api() {
   grep -qE '(^|[[:space:]])/v1(/\*)?([[:space:]]|$)' "$f" && grep -qF "$orch" "$f"
 }
 
+# caddy_web_upstream FLEET_WEB_ADDR — the address Caddy dials for the web
+# listener, from the value fleet binds (ADR-0091): empty or "off"/"none"/
+# "disabled"/"0" yields "" (the renderer's 127.0.0.1:3000 default); a
+# wildcard bind (0.0.0.0:P, [::]:P, :P) is dialled on loopback; anything else
+# is used as-is. Without it a migrated non-default bind (fleet-web.env's
+# FLEET_WEB_HOST/PORT, now FLEET_WEB_ADDR) left Caddy proxying to :3000.
+caddy_web_upstream() {
+  local a="${1:-}"
+  case "${a,,}" in
+    ""|off|none|disabled|0) return 0 ;;
+    0.0.0.0:*|"[::]:"*|:*) printf '127.0.0.1:%s' "${a##*:}" ;;
+    *) printf '%s' "$a" ;;
+  esac
+}
+
 # render_fleet_caddyfile DOMAIN [ACME_EMAIL] [CHAT_ADDR] [ORCH_ADDR] [WEB_ADDR]
 # Print the complete fleet-managed Caddyfile (marker first) to stdout. Keep the
 # body in lockstep with deploy/Caddyfile — the test compares their functional
@@ -250,7 +266,7 @@ render_fleet_caddyfile() {
 ${domain} {
 	encode zstd gzip
 
-	# Security headers for the Next-served pages, mirroring exactly what the
+	# Security headers for the web pages, mirroring exactly what the
 	# Go backends already set on their own responses (cmd/fleet/tls.go
 	# securityHeadersMiddleware) so the whole origin carries one policy.
 	# \`header\` replaces existing values, so proxied API responses that already
@@ -266,10 +282,10 @@ ${domain} {
 	# the ones fleet fixes as unversioned-forever: version discovery, the A2A
 	# agent card + JSON-RPC endpoint, and the inbound task triggers (webhook +
 	# email). Nothing else on the orchestrator is exposed — its legacy bare
-	# paths (/tasks, /keys, …) stay loopback-only behind Next's /api/* proxy.
+	# paths (/tasks, /keys, …) stay loopback-only behind the web tier's /api/*.
 	#
 	# The header_up deletions are load-bearing: the orchestrator trusts
-	# X-User-Email when X-Orchestrator-Server-Token matches (the Next-proxy
+	# X-User-Email when X-Orchestrator-Server-Token matches (the web tier's
 	# impersonation channel, #157). Stripping them here means that channel is
 	# reachable from loopback ONLY, so exposing the API adds exactly one
 	# public auth path — X-API-Key — and no header-trust surface (ADR-0053).
@@ -299,8 +315,9 @@ ${domain} {
 		}
 	}
 
-	# Everything else → the Next.js web app: pages, /_next/*, and its own
-	# /api/* route handlers (which proxy to the backends server-side).
+	# Everything else → the fleet web listener (FLEET_WEB_ADDR, ADR-0091): the
+	# SPA's pages and assets, and its /api/* routes (which call the backends
+	# in-process).
 	handle {
 		reverse_proxy ${web} {
 			# SSE: stream tokens straight through, no response buffering, and a

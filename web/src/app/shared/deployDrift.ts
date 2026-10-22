@@ -7,7 +7,7 @@ import { currentBuildId } from "@/app/lib/buildId";
 // tab is running?
 //
 // Every response carries X-App-Version, and the bundle has its own build id
-// baked in via NEXT_PUBLIC_BUILD_ID (next.config.ts). This module probes
+// baked in via VITE_BUILD_ID (vite.config.ts). This module probes
 // /api/version and remembers whether the two differ. It is ONE store per tab:
 // UpdateNotice (mounted once from the root layout) starts the probe, and any
 // component can read the result with useUpdateAvailable().

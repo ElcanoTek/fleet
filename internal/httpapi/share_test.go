@@ -176,7 +176,7 @@ func TestSharedConversation_InvalidTokensCreateNoBuckets(t *testing.T) {
 }
 
 // TestSharedEndpoint_RequiresSharedSecret confirms the public /shared route is
-// still behind the token-only gate (only the trusted Next proxy reaches it):
+// still behind the token-only gate (only the trusted web tier reaches it):
 // a request with no shared secret is rejected before any token lookup.
 func TestSharedEndpoint_RequiresSharedSecret(t *testing.T) {
 	s := serverFixture(t)

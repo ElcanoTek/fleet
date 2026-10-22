@@ -58,7 +58,7 @@ func isLoopbackAddr(addr string) bool {
 // checkCaddyfile reports whether the TLS front routes the public HTTP API to
 // the Go backends. The failure it exists for: a Caddyfile that only knows the
 // web tier sends /v1/…, /api-info, the A2A agent card, /triggers/… and
-// /webhooks/… to Next.js, which 404s them — "the API isn't routing" while
+// /webhooks/… to the web tier, which 404s them — "the API isn't routing" while
 // every unit is green. It is a structural read (the shell renderer in
 // scripts/lib/caddyfile.sh is the source of truth and doctor.sh diffs against
 // it); here we only need the three facts an admin cannot see from the UI: is

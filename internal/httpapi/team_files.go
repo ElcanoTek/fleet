@@ -170,22 +170,18 @@ func (s *Server) handleConversationOutputs(w http.ResponseWriter, r *http.Reques
 	writeOutputsResponse(w, outs, truncated, conv.TeamVisible)
 }
 
-// activeContentTypes are the types a browser would execute as a document.
-// Served from our origin they are a stored-XSS primitive (an agent writes
-// report.html with a <script>, a teammate opens it with their session), so
-// they are always forced to download. Mirrors the web workspace proxy.
-var activeContentTypes = []string{
-	"text/html", "image/svg+xml", "application/xhtml+xml", "text/xml", "application/xml",
-}
-
+// isActiveContentType reports whether a browser would open ctype as a
+// document. Served from our origin those are a stored-XSS primitive (an agent
+// writes report.html with a <script>, a teammate opens it with their
+// session), so they are always forced to download. Every XML type counts:
+// browsers render any "/xml" or "+xml" document (RSS, Atom, XSLT …) as XML,
+// where an XHTML <script src> is same-origin. Mirrors the web gateway's
+// isActiveContent (internal/webui/files.go).
 func isActiveContentType(ctype string) bool {
-	ctype = strings.ToLower(ctype)
-	for _, t := range activeContentTypes {
-		if strings.HasPrefix(ctype, t) {
-			return true
-		}
-	}
-	return false
+	ct, _, _ := strings.Cut(ctype, ";")
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	return ct == "text/html" || ct == "text/xsl" ||
+		strings.HasSuffix(ct, "/xml") || strings.HasSuffix(ct, "+xml")
 }
 
 // handleTeamFile serves GET /conversations/{id}/team-files/<path> — a

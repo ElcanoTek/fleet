@@ -17,8 +17,8 @@ test("unauthenticated /chat redirects to /login", async ({ page }) => {
 
 test("unauthenticated /orchestrator is gated by the shared middleware", async ({ page }) => {
   // The ONE middleware gates /orchestrator with the SAME session check as /chat
-  // (see middleware.test.ts: "gates /orchestrator/* with the SAME session
-  // check"). With no session cookie the production server redirects to /login;
+  // (see internal/webui gateway_test.go: it gates /orchestrator/* with the SAME session
+  // check). With no session cookie the production server redirects to /login;
   // either way the dashboard must never render for an unauthenticated visitor.
   await page.route("**/api/orchestrator/me", (r: Route) =>
     r.fulfill({ status: 401, json: { authenticated: false } }),
@@ -35,6 +35,23 @@ test("the password form renders both sign-in options", async ({ page }) => {
   await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
   // AUTH_SIGNING_PUBKEY is set on the server, so the secondary Elcano path shows.
   await expect(page.getByRole("link", { name: /use elcano email/i })).toBeVisible();
+});
+
+test("the brand faces load from the bundle (no font 404s)", async ({ page }) => {
+  // Regression: Tailwind inlined fonts.css without rebasing its url()s, so every
+  // face 404ed and the app silently fell back to system fonts.
+  const missing: string[] = [];
+  page.on("response", (r) => {
+    if (/\.woff2?($|\?)/.test(r.url()) && r.status() >= 400) missing.push(`${r.status()} ${r.url()}`);
+  });
+  await page.goto("/login");
+  await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
+  const loaded = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return [...document.fonts].filter((f) => f.status === "loaded").map((f) => `${f.family} ${f.weight}`);
+  });
+  expect(missing).toEqual([]);
+  expect(loaded.some((f) => f.startsWith('"Nebula Sans"') || f.startsWith("Nebula Sans"))).toBe(true);
 });
 
 test.describe("the password form on a phone", () => {

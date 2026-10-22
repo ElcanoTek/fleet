@@ -19,12 +19,12 @@ this chart, and an empty-cluster-to-working-fleet guide — fork
 
 | Piece | Object | Notes |
 | --- | --- | --- |
-| Control plane | Deployment (1 replica, Recreate) | chat :8080 + orchestrator :8000; no replica knob — the scheduler is single-owner |
+| Control plane | Deployment (1 replica, Recreate) | chat :8080 + orchestrator :8000 + the web UI :3000; no replica knob — the scheduler is single-owner |
 | Sandbox RBAC | Role/RoleBinding | exactly the verbs the boot preflight checks: pods create/get/list/delete, pods/exec create, PVC + NetworkPolicy get |
 | Workspace | RWX PVC | mounted at the SAME path in the control plane and every sandbox pod |
 | Sealed egress | NetworkPolicy `fleet-sandbox-deny-all` | selects pods labeled `fleet.elcanotek.com/egress=none`; the preflight requires it to exist |
 | Postgres | optional StatefulSet | evaluation only — production points at a managed database |
-| Web / Ingress | optional | you build the web image from `web/` |
+| Ingress | optional | routes to the control plane's web port (3000): the web UI and its `/api`, served by the fleet binary |
 
 ## Minimum install
 
@@ -59,3 +59,22 @@ guide for the two Containerfiles.
   sandbox capacity, the control plane with bigger requests.
 - The chart is linted in CI but not exercised against a live cluster there;
   the kind walkthrough in the guide is the verified path.
+
+## Upgrading from a chart with a `web:` block
+
+The separate Next.js web Deployment is gone (ADR-0091,
+`docs/adr/0091-go-serves-the-browser-tier.md`): the fleet binary serves the web
+UI itself on port 3000, the chart's Service exposes it as `web`, and the
+Ingress routes there. On upgrade:
+
+1. Build the fleet image from a checkout with `make build` (it builds the web
+   bundle and embeds it; `fleet version --web` inside the image must print a
+   build id, not `missing`). There is no web image to build any more.
+2. Move the keys your web Secret carried into `config.existingSecret`:
+   `APP_SESSION_SECRET` (required for sign-in; keep the same value and existing
+   sessions survive the upgrade), and any `FLEET_OIDC_*` / `AUTH_*` keys.
+   `CHAT_SERVER_TOKEN`, `CHAT_SERVER_URL` and `ORCHESTRATOR_SERVER_URL` are no
+   longer read.
+3. Delete the `web:` block from your values. A values file that still sets
+   `web.enabled: true` fails `helm upgrade` with these steps.
+

@@ -18,7 +18,7 @@
 
 import { signOut } from "@/app/shared/signOut";
 import { useEffect, useState, type ReactNode } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname } from "@/app/lib/navigation";
 import { useClientConfig } from "@/app/lib/useClientConfig";
 import { NavRail, useRailCollapse } from "@/app/shared/ui/NavRail";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";

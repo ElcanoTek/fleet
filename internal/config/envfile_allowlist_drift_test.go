@@ -160,7 +160,7 @@ func stringLitArg(call *ast.CallExpr, idx int) (string, bool) {
 
 func TestEnvFileAllowlistCoversLoaderReads(t *testing.T) {
 	keys := map[string]bool{}
-	for _, dir := range []string{".", filepath.Join("..", "..", "cmd", "fleet")} {
+	for _, dir := range []string{".", filepath.Join("..", "..", "cmd", "fleet"), filepath.Join("..", "webui")} {
 		for k := range collectEnvReads(t, dir) {
 			keys[k] = true
 		}

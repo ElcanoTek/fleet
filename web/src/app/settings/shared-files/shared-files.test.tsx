@@ -10,7 +10,7 @@ import SharedFilesPage from "./page";
 // the capped and the unlimited form; an empty library shows the empty state
 // instead of a blank panel.
 
-vi.mock("next/navigation", () => ({
+vi.mock("@/app/lib/navigation", () => ({
   useRouter: () => ({ replace: vi.fn() }),
 }));
 

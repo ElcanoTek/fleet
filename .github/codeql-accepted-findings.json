@@ -81,6 +81,16 @@
       "rule": "go/command-injection",
       "file": "internal/sandbox/host.go",
       "reason": "hostImpl.runBash executing caller-supplied shell (`bash -c req.Command`) IS the component's contract: it is the unsandboxed TEST/DEV-ONLY executor, compiled solely behind the fleet_host_executor build tag (#159) — a release `go build ./...` contains the fail-closed stub in host_disabled.go and MockMode refuses to boot without the tag, so this sink cannot ship in a production binary (ADR-0002's enforcement). Every production tool call runs through the container or kubernetes backend instead. The same line already carries the equivalent gosec waiver ('shell execution is the purpose of this tool'). The finding surfaced on #1249 because the diff-informed PR run intersected the flow's path (sandbox.go/pool.go edits), not because a new source reached the sink."
+    },
+    {
+      "rule": "go/reflected-xss",
+      "file": "internal/webui/backend.go",
+      "reason": "proxyWriter.Write is the http.ResponseWriter the browser gateway (ADR-0091) hands to the in-process chat/orchestrator handlers; CodeQL attributes every handler write that echoes a request value to this wrapper because it cannot see the Content-Type those handlers set. The bytes are the same JSON/text the handlers served through the Next.js proxy before this change. Before any byte is written, WriteHeader runs secureContentType on the outgoing headers: X-Content-Type-Options: nosniff always; a missing Content-Type becomes text/plain (so net/http never sniffs a body into text/html); an active type a route forwards on purpose (HTML/SVG/XML: chat export, workspace files) gets Content-Security-Policy: sandbox on top of the page CSP (script-src 'self', no inline script) that decorate sets on every response. A reflected value can therefore never execute as script on this origin. Pinned by TestProxyWriterContentTypeGuarantees."
+    },
+    {
+      "rule": "go/reflected-xss",
+      "file": "internal/webui/brand.go",
+      "reason": "brandWriter.Write forwards the bundle's logo/share image from the in-process chat handler; CodeQL attributes the handler's writes to this wrapper. Its WriteHeader admits a body only when the upstream Content-Type is in a fixed image allowlist (logo: PNG/JPEG/WebP/SVG/ICO; share image: PNG/JPEG/WebP), re-sets that exact type, X-Content-Type-Options: nosniff and Content-Security-Policy: default-src 'none' ... sandbox; anything else (HTML, a non-2xx, no type) is discarded and answered with a 307 to fleet's own static asset, carrying no upstream bytes. Script in an SVG cannot run under the sandbox CSP, and no markup type is ever forwarded. Pinned by TestBrandAssetsAllowlistAndFallback."
     }
   ]
 }

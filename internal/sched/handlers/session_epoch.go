@@ -3,12 +3,12 @@
 
 package handlers
 
-// Session-epoch revocation for the Next-proxy header-trust path (#157). The
+// Session-epoch revocation for the web-tier header-trust path (#157). The
 // Operations Center and chat are reached with the SAME elcano_session cookie, so
 // a password reset that evicted the cookie from chat alone would leave the
 // attacker every /api/orchestrator/* route — datasets, task create/rerun, logs,
 // task workspace files, admin budgets — for the rest of the cookie's 14 days.
-// The Next tier forwards the cookie's epoch claim next to X-User-Email, and
+// The web tier forwards the cookie's epoch claim next to X-User-Email, and
 // headerTrustUser checks it here.
 //
 // The epoch lives in the CHAT store's users table. This plane cannot read that
@@ -23,9 +23,9 @@ import (
 	"net/http"
 )
 
-// headerSessionEpoch is the claim the Next.js tier read out of the session
+// headerSessionEpoch is the claim the web tier read out of the session
 // cookie it verified; headerSessionRevoked marks the verdict below for the
-// Next.js proxy funnel, which must read it without touching a body it streams
+// web tier funnel, which must read it without touching a body it streams
 // straight through. Both mirror internal/httpapi's spelling — the two backends
 // are separate packages, but the wire contract with the one proxy is shared.
 const (
@@ -64,7 +64,7 @@ func (h *Handlers) SetExternalSessionEpochProvider(fn ExternalSessionEpochProvid
 // A request with NO claim is admitted: the Ed25519 elcano_auth cookie is minted
 // by the auth service (revocable there) and a moc bearer is its own credential,
 // so neither carries an epoch. This mirrors the chat plane's rule exactly —
-// the chat-minted cookies this defends are refused by the Next tier outright
+// the chat-minted cookies this defends are refused by the web tier outright
 // when the claim is missing (web/src/app/lib/auth.ts#verifySessionToken).
 //
 // A lookup FAILURE is a 500, not a revocation: an unreachable or slow chat store

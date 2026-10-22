@@ -105,7 +105,9 @@ authorization boundary.
 - **The admin cleanup always hard-deletes** eligible conversations (the
   operator asked for space back); it does not honor
   `FLEET_CONVERSATION_SOFT_DELETE` tombstoning.
-- **Upload limit is boot-time env, not an Admin Features setting** — the
-  Next.js proxy body cap is baked at build/boot, so a live-applied DB
-  override could silently disagree with the proxy; the settings registry's
+- **Upload limit is boot-time env, not an Admin Features setting** — it was
+  first kept out of the live settings because the Next.js proxy's body cap was
+  baked at build/boot and a live-applied override could disagree with it; the
+  web tier is Go now and streams uploads untouched (ADR-0091), but the limit
+  stays boot-time so every enforcement point reads one value; the settings registry's
   live-apply rule excludes it (see `docs/ADMIN-SETTINGS.md`).

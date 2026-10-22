@@ -27,7 +27,7 @@
 // (ADR-0057).
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
+import { Link } from "@/app/lib/Link";
 
 import { btnClass, SETTINGS_INPUT } from "../ui/atoms";
 import { ConnPanel, ConnPanelHead, ConnPanelSub, SetSection } from "../ui/panels";

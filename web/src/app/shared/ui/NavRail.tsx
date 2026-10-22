@@ -28,7 +28,6 @@
 // surface content (conversation list, New task button) can adapt to the same
 // state without a second source of truth.
 
-import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { NavToChat, NavToHelp, NavToOrchestrator } from "./CrossViewNav";
 import { CloseButton } from "./CloseButton";
@@ -284,16 +283,11 @@ export function NavRail({
           ].join(" ")}
         >
           <div className={["flex min-w-0 items-center gap-2.5", collapsed ? "sm:flex-col" : ""].join(" ")}>
-            {/* unoptimized is load-bearing, not a perf opt-out. next/image skips
-                its optimizer only when the src path literally ends in ".svg"
-                (get-img-props.js: "Special case to make svg serve as-is"). A
-                bundle mark arrives as "/api/brand/logo" — no extension — so an
-                SVG bundle logo went through the optimizer, which rejects
-                image/svg+xml unless images.dangerouslyAllowSVG is set. It is
-                not, so the rail rendered a broken image on every page for any
-                bundle whose branding.logo was an SVG. Optimizing a 28px mark
-                buys nothing anyway. */}
-            <Image src={brandLogoSrc} alt={brandName} width={28} height={28} priority unoptimized />
+            {/* A plain <img>, never an optimizer: the bundle mark arrives as
+                "/api/brand/logo" (no extension) and may be an SVG. Under
+                next/image that combination rendered a broken image on every
+                page; NavRail.test.tsx keeps the src pointing at the route. */}
+            <img src={brandLogoSrc} alt={brandName} width={28} height={28} fetchPriority="high" decoding="async" style={{ color: "transparent" }} />
             <span className={["flex min-w-0 flex-col leading-[1.05]", collapsed ? "sm:hidden" : ""].join(" ")}>
               <span className="text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
                 {eyebrow}
@@ -377,7 +371,7 @@ export function NavRail({
             dataTip={collapsed ? "Guides" : undefined}
           >
             <span className={navTileClass(activeView === "help")} aria-hidden="true">
-              <Icon name="book-open" className="size-[1rem]" />
+              <Icon name="book" className="size-[1rem]" />
             </span>
             <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>
               Guides

@@ -143,7 +143,7 @@ func Run(ctx context.Context, opts Options) *Report {
 	for _, c := range checkRestartChurn(ctx, serviceName(opts.ServiceName)) {
 		add(c)
 	}
-	add(checkWebStopPolicy(ctx))
+	add(checkRetiredWebTier(ctx))
 	add(checkBackups(ctx))
 
 	for _, c := range r.Checks {
@@ -344,7 +344,7 @@ func checkSandboxImage(ctx context.Context, ref string, deep bool) Check {
 // checkUnits reports the sibling systemd units' state. The fleet unit itself is
 // included for completeness (under systemd it is trivially active while we're
 // answering, but a non-unit deployment shows "not installed" honestly);
-// fleet-web/postgresql/caddy are the tiers whose silent death users report as
+// postgresql/caddy are the tiers whose silent death users report as
 // "fleet is broken". Absent optional units are warns/skips, never fails.
 func checkUnits(ctx context.Context, service string) []Check {
 	units := []struct {
@@ -352,7 +352,6 @@ func checkUnits(ctx context.Context, service string) []Check {
 		optional bool
 	}{
 		{service + ".service", false},
-		{"fleet-web.service", true},
 		{"postgresql.service", true},
 		{"caddy.service", true},
 	}
@@ -473,12 +472,12 @@ func backupVerdict(installed, enabled, active bool, lastResult string) Check {
 // deliberately excluded: a oneshot's outcome is already covered by
 // checkBackups, and the other two are not ours to diagnose beyond is-active.
 func churnUnits(service string) []string {
-	return []string{service + ".service", "fleet-web.service"}
+	return []string{service + ".service"}
 }
 
 // checkRestartChurn reports units systemd has been RESTARTING BY ITSELF.
 //
-// This closes a real blind spot in checkUnits: both app units run
+// This closes a real blind spot in checkUnits: the app unit runs
 // Restart=always, so a unit that dies is active again ~5s later and is-active
 // reports "active" the whole time. A unit can therefore crash-loop
 // indefinitely while every existing check here stays green — the operator's
@@ -489,12 +488,6 @@ func churnUnits(service string) []string {
 // `systemctl restart` resets it to zero. So an ordinary deploy leaves no trace
 // and cannot produce a false alarm, while a unit failing on its own
 // accumulates a count that only a human intervention clears.
-//
-// Being precise about what this does NOT catch, since it is the neighbouring
-// bug: a process that segfaults during a manual stop (the fleet-web teardown
-// crash — see docs/WEB-TIER-SHUTDOWN.md) restarts by operator action, so
-// NRestarts stays 0. That fault is a configuration matter, which
-// checkWebStopPolicy asserts instead.
 func checkRestartChurn(ctx context.Context, service string) []Check {
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		return []Check{{Name: "restart churn", Status: StatusSkip, Detail: "systemctl not on PATH (no systemd)"}}
@@ -564,63 +557,33 @@ func restartChurnVerdict(short, nRestarts, result string) Check {
 	return c
 }
 
-// checkWebStopPolicy asserts the value systemd RESOLVED for fleet-web's
-// TimeoutStopFailureMode, mirroring the same assertion in scripts/doctor.sh.
-//
-// Why a config check earns a place among health checks: this exact directive
-// shipped in the unit body and did nothing for a full release, because a
-// distro-global /usr/lib/systemd/system/service.d/ drop-in overrides a unit
-// body (Fedora sets abort there). Nothing observed that — the unit file said
-// the right thing, so every file-comparing check passed. Only the resolved
-// value can tell the difference, and it is exactly the kind of silent drift a
-// doctor exists to surface.
-//
-// Read-only and unprivileged: `systemctl show` answers property queries over
-// D-Bus without privilege, the same way checkBackups reads Result.
-func checkWebStopPolicy(ctx context.Context) Check {
-	c := Check{Name: "fleet-web stop policy"}
+// checkRetiredWebTier reports a leftover fleet-web.service — the Next.js web
+// tier ADR-0091 retired. The fleet binary serves the web UI itself on the port
+// that unit held (127.0.0.1:3000), so while the old unit runs, fleet's web
+// listener cannot bind. `fleet update` retires it on upgrade and
+// scripts/doctor.sh repairs a box updated by hand; this check only reports.
+// Read-only and unprivileged (`systemctl cat` needs no privilege).
+func checkRetiredWebTier(ctx context.Context) Check {
 	if _, err := exec.LookPath("systemctl"); err != nil {
-		c.Status, c.Detail = StatusSkip, "systemctl not on PATH (no systemd)"
-		return c
+		return Check{Name: "retired web tier", Status: StatusSkip, Detail: "systemctl not on PATH (no systemd)"}
 	}
 	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := exec.CommandContext(sctx, "systemctl", "cat", "fleet-web.service").Run(); err != nil {
-		c.Status, c.Detail = StatusSkip, "fleet-web.service not installed (optional tier)"
-		return c
-	}
-	out, _ := exec.CommandContext(sctx, "systemctl", "show", "-p", "TimeoutStopFailureMode", "--value", "fleet-web.service").Output()
-	return webStopPolicyVerdict(strings.TrimSpace(string(out)))
+	err := exec.CommandContext(sctx, "systemctl", "cat", "fleet-web.service").Run()
+	return retiredWebTierVerdict(err == nil)
 }
 
-// webStopPolicyVerdict maps the resolved TimeoutStopFailureMode onto a verdict;
-// split out so it is testable without systemd.
-func webStopPolicyVerdict(resolved string) Check {
-	c := Check{Name: "fleet-web stop policy"}
-	switch resolved {
-	case "kill":
-		c.Status = StatusOK
-		c.Detail = "TimeoutStopFailureMode resolves to kill — an overrun stop is SIGKILLed"
-	case "":
-		// Pre-246 systemd has no such property. Nothing to assert, and no fix.
-		c.Status = StatusSkip
-		c.Detail = "this systemd does not expose TimeoutStopFailureMode"
-	default:
-		// Name the resolved value rather than its consequence: abort dumps a
-		// full memory image, terminate just re-sends SIGTERM and can leave a
-		// wedged process. Neither is what the unit ships.
-		// Warn, not fail — and deliberately a weaker verdict than the same
-		// assertion in scripts/doctor.sh, which fails. The difference is what
-		// each one can claim: doctor.sh INSTALLS the drop-in and then checks,
-		// so a wrong value there means a repair was attempted and did not
-		// hold. This check cannot repair anything, and the consequence is
-		// hygiene rather than downtime — an overrun stop dies the wrong way;
-		// LimitCORE=0 already keeps the memory image off disk either way. Do
-		// not "harmonise" these two into fail without that changing.
-		c.Status = StatusWarn
-		c.Detail = fmt.Sprintf("TimeoutStopFailureMode resolves to %q, not kill — the shipped drop-in is not winning", resolved)
-		c.Fix = "run on the box: sudo fleet doctor (installs deploy/fleet-web.service.d/10-timeout-kill.conf); inspect with: systemctl cat fleet-web"
+// retiredWebTierVerdict maps "is fleet-web.service still installed" onto a
+// verdict; split out so it is testable without systemd.
+func retiredWebTierVerdict(installed bool) Check {
+	c := Check{Name: "retired web tier"}
+	if !installed {
+		c.Status, c.Detail = StatusOK, "no fleet-web.service — the web UI is served by fleet itself (ADR-0091)"
+		return c
 	}
+	c.Status = StatusFail
+	c.Detail = "fleet-web.service (the retired Next.js web tier) is still installed — it holds the port fleet serves the web UI on"
+	c.Fix = "run on the box: sudo fleet doctor (stops, disables and removes it; fleet then serves the web UI on 127.0.0.1:3000)"
 	return c
 }
 

@@ -1,10 +1,12 @@
 @import "tailwindcss";
-/* The ONE font sheet: every @font-face in the app, and the only place a family
- * name is written. It sets --font-brand / --font-code-brand /
- * --font-code-ui-brand on :root; the families below read those and never name a
- * face themselves. Bundler-resolved url()s, so a moved file is a build error
- * rather than a silent 404 — and no request ever leaves for a font CDN. */
-@import "./fonts/fonts.css";
+/* The ONE font sheet (fonts/fonts.css: every @font-face in the app, and the
+ * only place a family name is written) is imported by src/main.tsx, NOT
+ * @imported here: Tailwind inlines an @import without rebasing its url()s, so
+ * the font files were left pointing at /assets/nebula-sans/… and 404ed. As its
+ * own module, Vite resolves and emits them. It sets --font-brand /
+ * --font-code-brand / --font-code-ui-brand on :root; the families below read
+ * those and never name a face themselves. vite.config.ts fails the build on
+ * any url() it could not resolve, and no request ever leaves for a font CDN. */
 
 :root {
   color-scheme: dark;

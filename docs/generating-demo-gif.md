@@ -69,7 +69,7 @@ regenerated recording and its still never drift apart — commit them together.
 
 ## The web demo GIFs
 
-The GIFs record the current Next.js app with deterministic, fictional API
+The GIFs record the current web app (the SPA behind the Go gateway) with deterministic, fictional API
 responses, just like the mocked browser suite. They demonstrate the interface;
 they do not certify live model, sandbox, or scheduler execution. The README
 labels them accordingly. The separate live e2e suite covers that integration.
@@ -85,7 +85,8 @@ the kickoff conversation and Operations Center, and asserts the expected
 content before saving each video. A missing tab or reply fails the recording.
 The capture lives in `web/e2e/screenshots/demos.spec.ts` and is opt-in, so normal
 screenshot jobs do not record videos. `DEMO_OUT_DIR` overrides the video directory.
-Use `E2E_PROD=1` after `make ci-web` to capture the production build.
+The harness always drives the production build (the Go gateway serving the
+embedded bundle); `E2E_SKIP_BUILD=1` reuses the last one.
 
 The converter uses ffmpeg and optionally gifsicle. Inspect the videos and the
 `chat-final.png` / `ops-final.png` captures before committing all three GIFs.

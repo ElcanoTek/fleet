@@ -24,7 +24,10 @@ import {
 // authenticated surfaces (the chat experience). Pre-auth surfaces (the login
 // card) must NOT depend on it — they use neutral hardcoded defaults instead.
 
-const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME?.trim() || "Fleet";
+// The neutral default shown until /api/client-config answers. (The Next.js
+// tier read a build-time NEXT_PUBLIC_APP_NAME here; the server-rendered
+// bootstrap now carries the deployment's real name to every page — ADR-0091.)
+const APP_NAME = "Fleet";
 
 export type ClientBranding = {
   app_name: string;

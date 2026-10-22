@@ -24,13 +24,13 @@ import (
 // `fleet env` — inspect + edit the deployment's env files without hand-typing
 // paths or leaking secrets to the terminal (patterned after gig's `gig env`).
 //
-//	fleet env [show]   print the server + web env files, secret values masked
-//	fleet env edit     open one of them in an editor ($EDITOR, or a picker)
+//	fleet env [show]   print the server env file, secret values masked
+//	fleet env edit     open it in an editor ($EDITOR, or a picker)
 //
 // This is a host-side operator convenience over the SAME files the credential
 // writers (`fleet config set-*`, `fleet mcp account set`) target: the server
-// env file (FLEET_ENV_FILE / /etc/fleet/fleet.env / .env.local) and the
-// web-tier env file (/etc/fleet/fleet-web.env / web/.env.local). It never
+// env file (FLEET_ENV_FILE / /etc/fleet/fleet.env / .env.local) — the only
+// one since ADR-0091 moved the web UI into the fleet binary. It never
 // prints a secret VALUE: show masks by the same name heuristic the diagnose
 // scrubber seeds from (redact.IsSecretEnvName) and strips DSN userinfo, and
 // edit hands the file to the operator's editor without echoing it.
@@ -63,12 +63,12 @@ func envUsage(w io.Writer) {
 	fmt.Fprint(w, `fleet env — inspect + edit the deployment env files (secrets never echoed)
 
 SUBCOMMANDS
-  fleet env [show] [--env-file P] [--web-env-file P]
-        print the server env file and the web-tier env file with every
+  fleet env [show] [--env-file P]
+        print the server env file with every
         secret-looking value masked (keys matching KEY/TOKEN/SECRET/
         PASSWORD/CREDENTIAL; DSN passwords are stripped from URLs)
-  fleet env edit [--web] [--env-file P] [--editor CMD]
-        open the server env file (--web: the web-tier file) in an editor:
+  fleet env edit [--env-file P] [--editor CMD]
+        open the server env file in an editor:
         --editor, else $VISUAL/$EDITOR, else an interactive pick of
         nano / vim / helix (offered via dnf install if missing; helix's
         binary is 'hx')
@@ -76,20 +76,20 @@ SUBCOMMANDS
 FILES
   server: --env-file, else FLEET_ENV_FILE, else /etc/fleet/fleet.env when
           /etc/fleet exists, else .env.local — the file fleet.service reads
-          and config.Load parses (LLM keys, DSNs, MCP creds, tuning knobs)
-  web:    /etc/fleet/fleet-web.env when /etc/fleet exists, else
-          web/.env.local — the fleet-web.service file (AUTH_* SSO keys)
+          and config.Load parses (LLM keys, DSNs, MCP creds, tuning knobs,
+          and the web UI's sign-in keys: APP_SESSION_SECRET, AUTH_*,
+          FLEET_OIDC_*). /etc/fleet/fleet-web.env belonged to the retired
+          Next.js tier (ADR-0091) and is no longer read.
 
 NOTES
   • the files are 0600; on a provisioned box editing needs root
     (sudo fleet env edit) and the mode is restored after the editor exits
   • server-file changes: preflight with fleet validate-config, apply with
     fleet restart (reloadable knobs also apply live via kill -USR2, #286)
-  • web-file changes: apply with systemctl restart fleet-web
 `)
 }
 
-// envShow prints both env files with secret values masked. Never prints a
+// envShow prints the env file with secret values masked. Never prints a
 // secret: values are masked by key name (redact.IsSecretEnvName — the same
 // heuristic that seeds the diagnose scrubber) and surviving values get DSN
 // userinfo stripped (redactDSN), so an embedded postgres://user:pass@ password
@@ -97,7 +97,8 @@ NOTES
 func envShow(argv []string) int {
 	fs := flag.NewFlagSet("env show", flag.ContinueOnError)
 	envFile := fs.String("env-file", "", "server env file (default FLEET_ENV_FILE, /etc/fleet/fleet.env when present, else .env.local)")
-	webFile := fs.String("web-env-file", "", "web-tier env file (default /etc/fleet/fleet-web.env when present, else web/.env.local)")
+	// Accepted (and ignored) for scripts written before ADR-0091.
+	_ = fs.String("web-env-file", "", "deprecated no-op: there is no web-tier env file since ADR-0091")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
@@ -105,9 +106,8 @@ func envShow(argv []string) int {
 	if err := printRedactedEnvFile(os.Stdout, serverEnvFile(*envFile)); err != nil {
 		code = errf(5, "%v", err)
 	}
-	fmt.Println()
-	if err := printRedactedEnvFile(os.Stdout, webEnvFile(*webFile)); err != nil {
-		code = errf(5, "%v", err)
+	if _, err := os.Stat(retiredWebEnvFile); err == nil {
+		fmt.Printf("\n# %s — retired with the Next.js web tier (ADR-0091); fleet no longer reads it. `fleet update` copied its sign-in keys into the server env file; delete it once sign-in works.\n", retiredWebEnvFile)
 	}
 	return code
 }
@@ -183,15 +183,13 @@ func redactURLPathQuery(value string) string {
 func envEdit(argv []string) int {
 	fs := flag.NewFlagSet("env edit", flag.ContinueOnError)
 	envFile := fs.String("env-file", "", "env file to edit (default: the server env file — FLEET_ENV_FILE, /etc/fleet/fleet.env when present, else .env.local)")
-	web := fs.Bool("web", false, "edit the web-tier env file instead (/etc/fleet/fleet-web.env when present, else web/.env.local)")
+	web := fs.Bool("web", false, "deprecated no-op: the web UI reads the server env file (ADR-0091)")
 	editor := fs.String("editor", "", "editor command (default $VISUAL, then $EDITOR, else an interactive pick)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
+	warnWebFlag(*web)
 	path := serverEnvFile(*envFile)
-	if *web {
-		path = webEnvFile(*envFile)
-	}
 
 	if err := ensureEditableEnvFile(path); err != nil {
 		return errf(5, "%v", err)
@@ -241,12 +239,7 @@ func envEdit(argv []string) int {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", warn)
 	}
 	fmt.Printf("saved %s\n", path)
-	if *web {
-		fmt.Println("apply with: systemctl restart fleet-web")
-	} else {
-		fmt.Println("preflight with: fleet validate-config")
-		fmt.Println("apply with: fleet restart   (systemctl restart fleet; reloadable knobs also apply live via kill -USR2 — docs/CONFIG-RELOAD.md)")
-	}
+	printEnvApplyHint()
 	return 0
 }
 

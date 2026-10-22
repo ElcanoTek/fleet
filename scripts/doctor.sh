@@ -23,8 +23,8 @@
 #   sudo fleet doctor --no-restart fix but never restart services
 #   sudo fleet doctor --node       repair ONLY the node toolchain (step 1's node
 #                                  blocks: install nodejs<major> + -npm per
-#                                  web/.nvmrc, stamp FLEET_NODE_BIN, assert the
-#                                  resolved value) and exit
+#                                  web/.nvmrc, assert the resolved
+#                                  interpreter) and exit
 #   fleet doctor --node --check    read-only node readiness probe; no root needed
 #   fleet doctor --dry-run         print the checklist this box would be walked through; touch nothing
 #
@@ -48,22 +48,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 SRC_DIR="${SRC_DIR:-$REPO_ROOT}"
-# These MUST match deploy/fleet.service + deploy/fleet-web.service and
-# scripts/bootstrap.sh (SERVICE_USER/SERVICE_HOME there).
+# These MUST match deploy/fleet.service and scripts/bootstrap.sh
+# (SERVICE_USER/SERVICE_HOME there).
 SERVICE_USER="${FLEET_SERVICE_USER:-fleet}"
 SERVICE_HOME="${FLEET_SERVICE_HOME:-/var/lib/fleet}"
-# shellcheck disable=SC2034  # unread here on purpose: this block documents the
-# service-account contract that deploy/fleet-web.service and bootstrap.sh must
-# match, and dropping the name would remove the anchor the comment above names.
-WEB_USER="fleet-web"
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 INSTALL_DIR="${FLEET_INSTALL_DIR:-/opt/fleet}"
 ENV_FILE="${FLEET_ENV_FILE:-/etc/fleet/fleet.env}"
-# Overridable so the script's own tests can point the stamp check at a scratch
-# file instead of this box's real one. Without that the node checks read machine
-# GLOBAL state, and a stale /etc/fleet/fleet-web.env makes them pass or fail for
-# reasons that have nothing to do with the code under test. It grants a caller
-# nothing: every path that writes it already requires root.
+# The retired Next.js tier's env file (ADR-0091). Only READ now: when fleet.env
+# lacks APP_SESSION_SECRET, step 5 carries the old tier's value over so existing
+# sessions survive. Overridable so the script's tests can point it at a scratch
+# file instead of this box's real one; it grants a caller nothing.
 WEB_ENV_FILE="${FLEET_WEB_ENV_FILE:-/etc/fleet/fleet-web.env}"
 # The scheduled-backup pair shipped in deploy/ and installed by
 # scripts/bootstrap.sh --enable-service. Fixed names (unlike the fleet unit,
@@ -92,6 +87,12 @@ MAINT_TIMER="fleet-maintenance.timer"
 # Idempotent safe.directory trust for the root-run git calls below.
 # shellcheck source=lib/git.sh
 . "$SCRIPT_DIR/lib/git.sh"
+# Retiring the Next.js web tier (ADR-0091); its ok/warn lines map onto
+# doctor's info/advise (defined below, before anything calls it).
+# shellcheck source=lib/web-tier.sh
+. "$SCRIPT_DIR/lib/web-tier.sh"
+ok()   { info "$@"; }
+warn() { advise "$@"; }
 NODE_FLOOR="$(fleet_node_major_want "$SRC_DIR" || true)"
 if [[ -z "$NODE_FLOOR" ]]; then
   # No silent default. A hardcoded fallback would point at whatever major was
@@ -133,8 +134,9 @@ deploy/, the 0600 env files, the fleet-managed /etc/caddy/Caddyfile's layout
 (the /v1 API + webhooks must reach the Go backends, not the web tier — rewritten
 + caddy reloaded when drifted) and FLEET_TRUSTED_PROXIES for that front (added
 as 127.0.0.1,::1 when absent and the backends are on loopback; an operator's
-value is left alone), service health (postgresql, fleet, fleet-web,
-caddy), the /healthz + /readyz probes and https://<domain>/api-info THROUGH
+value is left alone), APP_SESSION_SECRET for the web UI fleet serves, the
+retired Next.js fleet-web tier (retired when still installed), service health
+(postgresql, fleet, caddy), the /healthz + /readyz probes and https://<domain>/api-info THROUGH
 caddy, the scheduled-backup and host-maintenance
 timers, free disk on the data dir + image store, and a sandbox smoke (podman run
 as the fleet user). Reports when the source checkout is behind upstream but never
@@ -163,6 +165,7 @@ n_ok=0 n_fixed=0 n_warn=0 n_fail=0
 restart_needed=0
 podman_recheck=0
 stale_pause=0 # step 3 found a stale pause process; step 6 holds its restart
+web_tier_cutover=0 # step 4 stopped the retired web tier; step 6 removes or restores it
 
 pass()  { printf '  %s✓%s %s\n' "$c_green" "$c_reset" "$*"; n_ok=$((n_ok+1)); }
 fixed() { printf '  %s↻%s %s\n' "$c_cyan" "$c_reset" "$*"; n_fixed=$((n_fixed+1)); }
@@ -178,13 +181,13 @@ env_get() {
   grep -E "^${key}=" "$file" 2>/dev/null | tail -n1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true
 }
 
-# upsert_web_env KEY VALUE — set one key in /etc/fleet/fleet-web.env in place.
+# upsert_env_key FILE KEY VALUE — set one key in an env file in place.
 #
 # Rewrites every occurrence of the key (not just the first) and appends it if
 # absent, and NEVER truncates the file: it carries operator-added keys
 # (AUTH_SIGNING_PUBKEY, AUTH_LOGIN_URL, …) that a wholesale rewrite silently
 # dropped once already in bootstrap. mktemp next to the target + mv is a
-# same-filesystem atomic rename, so a crash mid-write cannot leave the web tier
+# same-filesystem atomic rename, so a crash mid-write cannot leave the service
 # with a half-written env file. Mode is forced to 0600: this file holds the
 # backend tokens, and the shipped posture is 0600 root-owned.
 #
@@ -200,10 +203,6 @@ env_get() {
 # Rewriting only the first left a stale later duplicate in charge, while the
 # next read (below, via env_get, which takes the last) would report the value
 # we just wrote — a check that passes forever while the box does the wrong thing.
-upsert_web_env() { upsert_env_key "$WEB_ENV_FILE" "$@"; }
-
-# upsert_env_key FILE KEY VALUE — upsert_web_env for any env file (the main
-# $ENV_FILE too); the same in-place, all-occurrences, 0600 rewrite.
 upsert_env_key() {
   local file="$1" key="$2" val="$3" tmp
   [[ -f "$file" ]] || return 1
@@ -263,7 +262,7 @@ stale_pause_hint() {
 if [[ "$DRY_RUN" == "1" && "$NODE_ONLY" == "1" ]]; then
   step "fleet doctor --node --dry-run (src=${SRC_DIR})"
   if [[ -n "$NODE_FLOOR" ]]; then
-    info "[dry-run] node >= ${NODE_FLOOR}: dnf install nodejs${NODE_FLOOR} nodejs${NODE_FLOOR}-npm (the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major; when the distro has no such stream, the signed upstream nodejs.org build into /usr/local/bin/node-${NODE_FLOOR}), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE} and assert the RESOLVED interpreter"
+    info "[dry-run] node >= ${NODE_FLOOR}: dnf install nodejs${NODE_FLOOR} nodejs${NODE_FLOOR}-npm (the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major; when the distro has no such stream, the signed upstream nodejs.org build into /usr/local/bin/node-${NODE_FLOOR}), and assert the RESOLVED interpreter (node builds the web bundle; nothing runs on it)"
   else
     # Naming "nodejs-npm" and calling it the versioned stream would be a lie in
     # exactly the case where nothing can be resolved.
@@ -274,25 +273,23 @@ if [[ "$DRY_RUN" == "1" && "$NODE_ONLY" == "1" ]]; then
 fi
 if [[ "$DRY_RUN" == "1" ]]; then
   step "fleet doctor --dry-run (src=${SRC_DIR}, service=${SERVICE_NAME}, install=${INSTALL_DIR})"
-  info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR:-<web/.nvmrc>} (dnf install nodejs${NODE_FLOOR} — the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major — else the signed upstream nodejs.org build), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE}; go/git/curl/jq/podman/psql/npm present (dnf install)"
+  info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR:-<web/.nvmrc>} (dnf install nodejs${NODE_FLOOR} — the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major — else the signed upstream nodejs.org build); go/git/curl/jq/podman/psql/npm present (dnf install)"
   info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs nodejs${NODE_FLOOR} caddy)"
   info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, the client bundle service-owned and outside the checkout (a bare install runs on the staged copy under ${SERVICE_HOME}/bundle), containers.conf (cgroupfs), /run/${SERVICE_USER}, podman info as ${SERVICE_USER} (a stale pause process is reported with what to do — doctor never runs podman system migrate, which deletes a live fleet's sandbox pool)"
-  info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
-  info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed; ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload) and FLEET_TRUSTED_PROXIES in ${ENV_FILE} (added as ${CADDY_TRUSTED_PROXIES} when absent behind that front and both backends are on loopback; an advisory otherwise; an operator's value is left alone); an operator-managed Caddyfile only gets an advisory when it routes no /v1; an advisory when sshd -T says passwordauthentication/permitrootlogin yes (never edits sshd)"
-  info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active, then the running server's record of MCP tool schema findings (fleet mcp schema-issues: invalid = withheld from the model, rewritten = older JSON Schema draft translated) is read and each finding advised"
+  info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), the retired Next.js tier (fleet-web.service, its drop-in, start shim and /opt/fleet/web — stopped, disabled and removed when present; ADR-0091), /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
+  info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; APP_SESSION_SECRET set (carried over from ${WEB_ENV_FILE}, else generated, when absent and the web UI is on); ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload) and FLEET_TRUSTED_PROXIES in ${ENV_FILE} (added as ${CADDY_TRUSTED_PROXIES} when absent behind that front and both backends are on loopback; an advisory otherwise; an operator's value is left alone); an operator-managed Caddyfile only gets an advisory when it routes no /v1; an advisory when sshd -T says passwordauthentication/permitrootlogin yes (never edits sshd)"
+  info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active, then the running server's record of MCP tool schema findings (fleet mcp schema-issues: invalid = withheld from the model, rewritten = older JSON Schema draft translated) is read and each finding advised"
   info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor; disk hygiene: root build caches (go build/module, npm, dnf — filled by fleet update as root, never reached by the maintenance timer) reclaimed above 3 GiB, the journal capped at 1G via journald.conf.d/60-fleet-journal-cap.conf (persistent + volatile) unless the operator set a limit in journald's merged config, and images left in root's podman store reported"
   info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
   info "[dry-run] 9/9 Source freshness + build identity: report commits behind upstream, the installed binary's stamped version vs what ${SRC_DIR} would build now (a release tag fetched after the last build), and the paths that make the checkout read '.dirty' (fix stays 'fleet update' — doctor never pulls or rebuilds)"
-  info "[dry-run] would restart ${SERVICE_NAME} + fleet-web after a toolchain/package upgrade or an app-unit reinstall above — a reinstalled fleet-backup unit does not bounce the app (unless --no-restart)"
+  info "[dry-run] would restart ${SERVICE_NAME} after a package upgrade, an app-unit reinstall, the web-tier retirement or a new APP_SESSION_SECRET above — a reinstalled fleet-backup unit does not bounce the app (unless --no-restart)"
   exit 0
 fi
 
 # `--node --check` is the one read-only path that must work unprivileged: it is
 # what `fleet update --check` calls, and that is documented as a dev-box probe
-# needing no root. It resolves an interpreter from PATH and reads
-# /etc/fleet/fleet-web.env through env_get, which returns empty (not an error)
-# when the 0600 file is unreadable — so a non-root run degrades to "cannot see
-# the stamp" rather than lying about it.
+# needing no root. It only resolves interpreters from PATH and the standard
+# install locations, none of which need privileges to read.
 if ! [[ "$NODE_ONLY" == "1" && "$CHECK_ONLY" == "1" ]]; then
   [[ $EUID -eq 0 ]] || die "run as root: sudo fleet doctor (or --dry-run to preview)"
 fi
@@ -332,7 +329,6 @@ if [[ -n "$node_bin" ]] && fleet_node_is_tarball_install "$node_bin" && [[ "$CHE
     node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
     if [[ -n "$node_bin" && "$("$node_bin" -v 2>/dev/null)" != "$_nb_before" ]]; then
       fixed "refreshed the upstream node at ${node_bin}: ${_nb_before} -> $("$node_bin" -v)"
-      restart_needed=1
     else
       pass "node $("$node_bin" -v) at ${node_bin} (>= $NODE_FLOOR, per web/.nvmrc; upstream build, newest v${NODE_FLOOR}.x)"
     fi
@@ -342,7 +338,7 @@ if [[ -n "$node_bin" ]] && fleet_node_is_tarball_install "$node_bin" && [[ "$CHE
 elif [[ -n "$node_bin" ]]; then
   pass "node $("$node_bin" -v) at ${node_bin} (>= $NODE_FLOOR, per web/.nvmrc)"
 elif [[ "$CHECK_ONLY" == "1" || "$HAVE_DNF" == "0" ]]; then
-  fail "no node >= $NODE_FLOOR (web/.nvmrc) — have $(node -v 2>/dev/null || echo none); the web tier needs it"
+  fail "no node >= $NODE_FLOOR (web/.nvmrc) — have $(node -v 2>/dev/null || echo none); building the web bundle (make build) needs it"
 else
   # Install the VERSIONED package. `dnf upgrade nodejs` cannot cross a major
   # stream — it keeps you on whatever `nodejs` resolves to, which is precisely
@@ -362,7 +358,6 @@ else
   node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
   if [[ -n "$node_bin" ]]; then
     fixed "installed node $("$node_bin" -v) at ${node_bin}"
-    restart_needed=1
   else
     # Fall back to the unversioned package before giving up: a distro that does
     # not carry a versioned stream may still ship a new enough default.
@@ -375,7 +370,6 @@ else
     node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
     if [[ -n "$node_bin" ]]; then
       fixed "installed node $("$node_bin" -v) at ${node_bin}"
-      restart_needed=1
     elif { command -v gpgv >/dev/null 2>&1 || "${DNF[@]}" install -y --quiet gnupg2 >/dev/null 2>&1; } \
         && fleet_node_tarball_install "$NODE_FLOOR" >/dev/null; then
       # The distro has no nodejs${NODE_FLOOR} stream yet (node 26 on F44): fetch
@@ -389,7 +383,6 @@ else
       node_bin="$(fleet_resolve_node_bin "$NODE_FLOOR" || true)"
       if [[ -n "$node_bin" ]]; then
         fixed "no nodejs${NODE_FLOOR} package in the distro repos — installed the signed upstream node $("$node_bin" -v) at ${node_bin}"
-        restart_needed=1
       else
         fail "installed the upstream node ${NODE_FLOOR} but no node >= ${NODE_FLOOR} resolves — inspect /usr/local/bin/node-${NODE_FLOOR}"
       fi
@@ -401,67 +394,10 @@ fi
 
 fi
 
-# Whatever node exists, the tier only USES the one FLEET_NODE_BIN names (the
-# shim falls back to PATH, i.e. Fedora's default stream, when it is unset). So
-# assert the effective value, not merely that a good node is installed
-# somewhere — the same resolved-value rule the stop-policy check follows below.
-if [[ -n "$node_bin" && -f "$WEB_ENV_FILE" && ! -r "$WEB_ENV_FILE" ]]; then
-  # The file is there but this process cannot read it — the unprivileged
-  # `--node --check` path (which `fleet update --check` calls). env_get returns
-  # empty for an unreadable file, which is indistinguishable from "unset", so
-  # without this branch a correctly-stamped box reports
-  # "FLEET_NODE_BIN is unset ... the tier would serve on the wrong major" and
-  # `fleet update --check` turns that into a non-zero exit. Reporting a fault
-  # you could not observe is the same error as reporting a success you could
-  # not observe.
-  advise "cannot read ${WEB_ENV_FILE} as uid ${EUID} (it is 0600 root-owned) — re-run with sudo to check the FLEET_NODE_BIN stamp"
-elif [[ -n "$node_bin" && -f "$WEB_ENV_FILE" ]]; then
-  # env_get, not grep -m1: it takes the LAST assignment (matching systemd's
-  # EnvironmentFile precedence) and strips surrounding quotes, so a hand-written
-  # FLEET_NODE_BIN="/usr/bin/node-24" is not reported as a broken config.
-  cur_node_bin="$(env_get FLEET_NODE_BIN "$WEB_ENV_FILE")"
-  cur_major=""
-  [[ -n "$cur_node_bin" && -x "$cur_node_bin" ]] && \
-    cur_major="$("$cur_node_bin" -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
-  # A stamp on the upstream-tarball node is stale once the resolver prefers
-  # something else (the distro's nodejs<major> RPM arrived and /usr/bin wins):
-  # doctor stops refreshing the tarball at that point, so leaving the tier on
-  # it would freeze it on an unpatched build. Move it to the resolved node.
-  stamp_superseded=0
-  if [[ -n "$cur_node_bin" && "$cur_node_bin" != "$node_bin" ]] \
-      && fleet_node_is_tarball_install "$cur_node_bin" \
-      && ! fleet_node_is_tarball_install "$node_bin"; then
-    stamp_superseded=1
-  fi
-  if [[ "${cur_major:-0}" -ge "$NODE_FLOOR" && "$stamp_superseded" == "0" ]]; then
-    pass "fleet-web runs ${cur_node_bin} ($("$cur_node_bin" -v))"
-  elif [[ "$CHECK_ONLY" == "1" && "$stamp_superseded" == "1" ]]; then
-    advise "fleet-web runs the upstream-tarball ${cur_node_bin}, but ${node_bin} now takes precedence and the tarball is no longer refreshed — \`sudo fleet doctor --node\` moves it"
-  elif [[ "$CHECK_ONLY" == "1" ]]; then
-    fail "fleet-web's FLEET_NODE_BIN is ${cur_node_bin:-unset} — not node >= $NODE_FLOOR; the tier would serve on the wrong major"
-  else
-    if ! upsert_web_env FLEET_NODE_BIN "$node_bin"; then
-      fail "could not set FLEET_NODE_BIN in ${WEB_ENV_FILE} — add: FLEET_NODE_BIN=${node_bin}"
-    else
-      # Read the value BACK through the same last-wins reader systemd's
-      # EnvironmentFile uses, rather than trusting upsert_web_env's exit code.
-      # The writer returning 0 only proves a file was written; it does not
-      # prove the tier now resolves to this interpreter. Same rule as the
-      # TimeoutStopFailureMode assertion below: claim what the system
-      # resolved, never the value you wrote.
-      _nb_readback="$(env_get FLEET_NODE_BIN "$WEB_ENV_FILE")"
-      _nb_major=""
-      [[ -n "$_nb_readback" && -x "$_nb_readback" ]] && \
-        _nb_major="$("$_nb_readback" -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
-      if [[ "$_nb_readback" == "$node_bin" && "${_nb_major:-0}" -ge "$NODE_FLOOR" ]]; then
-        fixed "pointed fleet-web at ${_nb_readback} ($("$_nb_readback" -v)) — read back from ${WEB_ENV_FILE}"
-        restart_needed=1
-      else
-        fail "wrote FLEET_NODE_BIN=${node_bin} but ${WEB_ENV_FILE} reads back ${_nb_readback:-<unset>} — inspect it by hand"
-      fi
-    fi
-  fi
-fi
+# No interpreter stamp to check here any more: node is a BUILD dependency only
+# since ADR-0091 (`make build` compiles the Vite web bundle into the fleet
+# binary; nothing runs on node at runtime). The retired fleet-web tier's
+# FLEET_NODE_BIN stamp in fleet-web.env is not read by anything.
 
 # The npm that BELONGS to node_bin, checked separately from the `command -v npm`
 # probe in the tool loop below. That probe only asks whether SOME npm exists, and
@@ -489,9 +425,8 @@ if [[ -n "$node_bin" ]]; then
     "${DNF[@]}" install -y --quiet "nodejs${NODE_FLOOR}-npm" >/dev/null 2>&1 || true
     hash -r
     npm_cli="$(fleet_resolve_npm_cli "$node_bin" || true)"
-    # No restart_needed=1: the unit runs `next start` under FLEET_NODE_BIN and
-    # never invokes npm, so this repair changes the next BUILD, not the running
-    # tier. Claiming a restart would apply it would be the wrong claim.
+    # No restart_needed=1: npm is a build dependency only, so this repair
+    # changes the next BUILD, not anything running.
     if [[ -n "$npm_cli" ]]; then
       fixed "installed the npm that belongs to ${node_bin} (${npm_cli})"
     else
@@ -569,16 +504,6 @@ if [[ "$NODE_ONLY" == "1" ]]; then
     printf '%s✗ doctor --node: node %s at %s, but no npm belongs to it (install nodejs%s-npm)%s\n' \
       "$c_red" "$("$_final_bin" -v)" "$_final_bin" "$NODE_FLOOR" "$c_reset"
     exit 1
-  fi
-  # A scoped run exits before the restart block a full pass would reach, so it
-  # has to say so itself. Swapping the interpreter under a RUNNING fleet-web
-  # changes nothing until the unit restarts, and this exit line is what
-  # update.sh and the docs send operators to — reporting "repaired" while the
-  # live tier still serves on the old major would be a fix that is not in
-  # effect. update.sh's own restart (step 5) covers the in-update path, so the
-  # advice is only for a standalone run.
-  if [[ "$restart_needed" == "1" && "$CHECK_ONLY" != "1" ]]; then
-    advise "fleet-web is still running the old interpreter — apply it: sudo systemctl restart fleet-web  (a full \`sudo fleet doctor\` restarts for you; \`sudo fleet update\` restarts at step 5)"
   fi
   printf '%s✓ doctor --node: node %s at %s (>= %s, per web/.nvmrc), %d fixed%s\n' \
     "$c_green" "$("$_final_bin" -v)" "$_final_bin" "$NODE_FLOOR" "$n_fixed" "$c_reset"
@@ -820,7 +745,7 @@ units_changed=0
 if ! command -v systemctl >/dev/null 2>&1; then
   advise "no systemd on this host — skipping unit checks"
 else
-  for unit in "${SERVICE_NAME}.service" fleet-web.service "$BACKUP_SERVICE" "$BACKUP_TIMER" "$MAINT_SERVICE" "$MAINT_TIMER"; do
+  for unit in "${SERVICE_NAME}.service" "$BACKUP_SERVICE" "$BACKUP_TIMER" "$MAINT_SERVICE" "$MAINT_TIMER"; do
     src="$SRC_DIR/deploy/$unit"
     # The generic service name is fleet; a renamed unit has no shipped file.
     [[ "$unit" == "${SERVICE_NAME}.service" && ! -f "$src" ]] && src="$SRC_DIR/deploy/fleet.service"
@@ -830,8 +755,8 @@ else
       continue
     fi
     if [[ ! -f "$dst" ]]; then
-      # Absent unit is informational: fleet-web is optional, and a box may run
-      # fleet under another supervisor. bootstrap --enable-service installs it.
+      # Absent unit is informational: a box may run fleet under another
+      # supervisor. bootstrap --enable-service installs it.
       # The backup pair is optional-if-absent too, and step 7 owns that verdict
       # (with the "you may back up at the volume layer" caveat), so saying it
       # here as well would double-count one gap as two advisories.
@@ -861,43 +786,24 @@ else
       units_changed=1
     fi
   done
-  # fleet-web's ExecStart shim. Shipped content with no operator-tunable parts,
-  # and the unit will not start without it, so it is installed/refreshed rather
-  # than merely reported. A stale copy is worse than a missing one: it would
-  # resolve the node interpreter by older rules than the release intends.
-  web_shim_src="$SRC_DIR/deploy/fleet-web-start.sh"
-  web_shim_dst="/usr/local/bin/fleet-web-start.sh"
-  if [[ -f "$web_shim_src" && -f /etc/systemd/system/fleet-web.service ]]; then
-    if [[ -x "$web_shim_dst" ]] && cmp -s "$web_shim_src" "$web_shim_dst"; then
-      pass "fleet-web-start.sh matches deploy/"
-    elif [[ "$CHECK_ONLY" == "1" ]]; then
-      fail "${web_shim_dst} missing or drifted — fleet-web's ExecStart points at it (diff: $web_shim_dst $web_shim_src)"
+  # The retired Next.js web tier (ADR-0091). The fleet binary serves the web UI
+  # itself on the port that unit held (127.0.0.1:3000), so a leftover
+  # fleet-web.service is not just dead weight: while it runs, fleet's web
+  # listener cannot bind and fleet exits. update.sh retires it on upgrade; this
+  # covers a box that was updated by hand. Only STOPPED here (reversibly, so
+  # step 6 can start fleet on the freed port); step 6's restart removes its
+  # unit, drop-in, start shim and Next build once fleet is active, or restarts
+  # it if fleet does not come up (#1838). Never /etc/fleet/fleet-web.env, which
+  # holds secrets. A run that will not restart fleet leaves it alone.
+  if fleet_web_tier_present; then
+    if [[ "$CHECK_ONLY" == "1" ]]; then
+      fail "the retired Next.js web tier (fleet-web.service) is still installed — fleet serves the web UI itself on its port now (ADR-0091); a doctor run without --check retires it"
+    elif [[ "$NO_RESTART" == "1" || "${stale_pause:-0}" == "1" ]]; then
+      advise "the retired Next.js web tier (fleet-web.service) is still installed — it is retired together with a ${SERVICE_NAME} restart, which this run will not do; re-run doctor without --no-restart once the restart is possible"
     else
-      install -D -m 0755 "$web_shim_src" "$web_shim_dst" \
-        && { fixed "installed ${web_shim_dst} from deploy/"; restart_needed=1; } \
-        || fail "could not install ${web_shim_dst}"
-    fi
-  fi
-  # fleet-web's companion drop-in (deploy/fleet-web.service.d/) restates
-  # TimeoutStopFailureMode=kill at the precedence level that beats Fedora's
-  # global service.d abort drop-in. What it buys: a stop that overruns its
-  # deadline is SIGKILLed rather than SIGABRTed. It is NOT what keeps the core
-  # dump away — the unit's LimitCORE=0 does that on its own, for every signal
-  # (systemd-coredump stores a dump only when the process's RLIMIT_CORE is
-  # sufficient). So a missing drop-in is a correctness/hygiene gap, not a
-  # return of the 130 MB-per-restart dump pile.
-  # A drop-in swap needs no app restart; daemon-reload suffices.
-  web_dropin_src="$SRC_DIR/deploy/fleet-web.service.d/10-timeout-kill.conf"
-  web_dropin_dst="/etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf"
-  if [[ -f "$web_dropin_src" && -f /etc/systemd/system/fleet-web.service ]]; then
-    if [[ -f "$web_dropin_dst" ]] && diff -q <(grep -vE '^[[:space:]]*(#|$)' "$web_dropin_src") <(grep -vE '^[[:space:]]*(#|$)' "$web_dropin_dst") >/dev/null 2>&1; then
-      pass "fleet-web.service.d/10-timeout-kill.conf matches deploy/"
-    elif [[ "$CHECK_ONLY" == "1" ]]; then
-      fail "fleet-web.service.d/10-timeout-kill.conf missing or drifted — review: diff $web_dropin_dst $web_dropin_src"
-    else
-      install -D -m 0644 "$web_dropin_src" "$web_dropin_dst"
-      fixed "fleet-web.service.d/10-timeout-kill.conf installed from deploy/"
-      units_changed=1
+      fleet_stop_web_tier || true
+      web_tier_cutover=1
+      restart_needed=1
     fi
   fi
   [[ "$units_changed" == "1" ]] && systemctl daemon-reload
@@ -906,8 +812,7 @@ else
   # installed binary, so what drifts is never the banner's CONTENT — it is this
   # /etc/profile.d shim, which until now only scripts/bootstrap.sh ever wrote. A
   # box provisioned before the hook existed has none, and an edit to
-  # deploy/fleet-motd.sh reached no existing box. Same treatment as the shim
-  # above: shipped content with no operator-tunable parts, so it is installed
+  # deploy/fleet-motd.sh reached no existing box. Shipped content with no operator-tunable parts, so it is installed
   # rather than merely reported. No restart and no daemon-reload — profile.d is
   # read at the next login.
   # The retired `fleet-admin` shim (ADR-0060). Deleting it from the repo does
@@ -948,36 +853,6 @@ else
     fi
   fi
 
-  # Now that any reload has happened, check what systemd ACTUALLY resolved —
-  # not what we wrote. Every earlier check here compares FILES, which is a
-  # proxy: the whole reason this drop-in exists is that a unit body can say
-  # `kill` while systemd resolves `abort` (a global /usr/lib service.d drop-in
-  # wins over a unit body, and that shipped undetected once already). File
-  # equality also cannot see a stale checkout that made the block above skip
-  # silently, a drop-in installed to the wrong directory, or a later-sorting
-  # drop-in in the same directory overriding ours. The resolved value can see
-  # all of them, so it is the thing worth asserting.
-  if [[ -f /etc/systemd/system/fleet-web.service ]]; then
-    effective_tsfm="$(systemctl show -p TimeoutStopFailureMode --value fleet-web.service 2>/dev/null || true)"
-    case "$effective_tsfm" in
-      kill)
-        pass "fleet-web TimeoutStopFailureMode resolves to kill (an overrun stop is SIGKILLed, not SIGABRTed)"
-        ;;
-      "")
-        # Pre-246 systemd has no such property; nothing to verify or fix.
-        advise "this systemd does not expose TimeoutStopFailureMode — an overrun fleet-web stop uses the distro default"
-        ;;
-      *)
-        # Name the resolved value rather than guessing its consequence: `abort`
-        # dumps core, `terminate` (systemd's own default) just re-sends SIGTERM
-        # and can leave a wedged process behind. Neither is what we ship.
-        fail "fleet-web TimeoutStopFailureMode resolves to '${effective_tsfm}', not kill — an overrun stop will not be SIGKILLed"
-        advise "  the shipped drop-in is not winning; inspect the full picture: systemctl cat fleet-web"
-        advise "  (a global /usr/lib/systemd/system/service.d/ drop-in, or a later-sorting file in"
-        advise "   /etc/systemd/system/fleet-web.service.d/, overrides the unit body)"
-        ;;
-    esac
-  fi
 fi
 
 if [[ -x "$INSTALL_DIR/fleet" ]]; then
@@ -1041,23 +916,45 @@ else
   fi
 fi
 
-if command -v systemctl >/dev/null 2>&1 && systemctl cat fleet-web.service >/dev/null 2>&1; then
-  if [[ ! -f "$WEB_ENV_FILE" ]]; then
-    fail "$WEB_ENV_FILE missing but fleet-web.service is installed — rerun: scripts/bootstrap.sh --enable-web"
-  elif [[ "$(stat -c '%a' "$WEB_ENV_FILE")" == "600" ]]; then
-    pass "$WEB_ENV_FILE exists, mode 0600"
-  elif [[ "$CHECK_ONLY" == "1" ]]; then
-    fail "$WEB_ENV_FILE is mode $(stat -c '%a' "$WEB_ENV_FILE") — want 0600 (it holds the session secret)"
-  else
-    chmod 0600 "$WEB_ENV_FILE"
-    fixed "$WEB_ENV_FILE tightened to 0600"
-  fi
+# The web UI's session secret (ADR-0091). fleet serves the browser tier itself
+# and signs the elcano_session cookie with APP_SESSION_SECRET; without it every
+# password and SSO sign-in fails (fleet logs a WARNING and points here). A box
+# upgraded from the Next.js tier normally had it carried over by update.sh; the
+# repair takes the old tier's value first (existing sessions stay valid), else
+# generates one. Skipped when the web listener is off (FLEET_WEB_ADDR=off).
+if [[ -f "$ENV_FILE" && -r "$ENV_FILE" ]]; then
+  case "$(env_get FLEET_WEB_ADDR | tr '[:upper:]' '[:lower:]')" in
+    off|none|disabled|0)
+      pass "web UI disabled (FLEET_WEB_ADDR=off) — no APP_SESSION_SECRET needed"
+      ;;
+    *)
+      if [[ -n "$(env_get APP_SESSION_SECRET)" ]]; then
+        pass "APP_SESSION_SECRET set (web sign-in can sign its session cookie)"
+      elif [[ "$CHECK_ONLY" == "1" ]]; then
+        fail "APP_SESSION_SECRET unset in $ENV_FILE — web sign-in is disabled; a doctor run without --check sets it"
+      else
+        _app_secret="$(env_get APP_SESSION_SECRET "$WEB_ENV_FILE")"
+        _app_from="carried over from ${WEB_ENV_FILE}"
+        if [[ -z "$_app_secret" ]]; then
+          _app_secret="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 48)"
+          _app_from="generated"
+        fi
+        if upsert_env_key "$ENV_FILE" APP_SESSION_SECRET "$_app_secret"; then
+          fixed "APP_SESSION_SECRET ${_app_from} into $ENV_FILE (web sign-in)"
+          restart_needed=1
+        else
+          fail "could not write APP_SESSION_SECRET to $ENV_FILE — set it by hand (48 random alphanumerics), then restart ${SERVICE_NAME}"
+        fi
+        unset _app_secret _app_from
+      fi
+      ;;
+  esac
 fi
 
 # ── the TLS front's routing (the fleet-managed Caddyfile) ────────────────────
 # A Caddyfile that only knows the web tier sends every documented API URL
-# (/v1/…, /api-info, the A2A agent card, /triggers/…, /webhooks/…) to Next.js,
-# which 404s them — "the API isn't routing" with every unit green. bootstrap
+# (/v1/…, /api-info, the A2A agent card, /triggers/…, /webhooks/…) to the web
+# tier, which 404s them — "the API isn't routing" with every unit green. bootstrap
 # renders the file from scripts/lib/caddyfile.sh; a box provisioned before the
 # API routes shipped keeps the old layout until something rewrites it. Same
 # drift rule as units (functional lines only), and the domain + ACME email are
@@ -1073,7 +970,8 @@ if [[ -f "$CADDYFILE" ]]; then
       fail "$CADDYFILE is fleet-managed but has no site block — rerun: sudo fleet bootstrap --enable-web --domain <fqdn>"
     else
       caddy_rendered="$(render_fleet_caddyfile "$caddy_domain" "$(caddyfile_acme_email "$CADDYFILE")" \
-        "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)")"
+        "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)" \
+        "$(caddy_web_upstream "$(env_get FLEET_WEB_ADDR)")")"
       if diff -q <(caddyfile_functional_body "$CADDYFILE") <(printf '%s\n' "$caddy_rendered" | caddyfile_functional_body) >/dev/null 2>&1; then
         pass "$CADDYFILE matches the shipped layout for ${caddy_domain} (/v1 API + webhooks routed to the Go backends)"
       elif [[ "$CHECK_ONLY" == "1" ]]; then
@@ -1099,8 +997,9 @@ if [[ -f "$CADDYFILE" ]]; then
     # /triggers/*, /webhooks/*) straight to the Go listeners, so the backends
     # need FLEET_TRUSTED_PROXIES naming it or every API caller looks like
     # Caddy's address (one shared rate-limit bucket; the IP allow/deny filter
-    # judging Caddy). Browser traffic goes through Next, which sends no
-    # X-Forwarded-For, so it keys on 127.0.0.1 either way. bootstrap writes
+    # judging Caddy). Browser traffic goes through the fleet web listener,
+    # which calls the backends in-process with no X-Forwarded-For, so it keys
+    # on 127.0.0.1 either way. bootstrap writes
     # 127.0.0.1,::1 with the Caddyfile; a box provisioned before it did gets it
     # added here when the key is ABSENT — but only while both upstreams are
     # loopback: Caddy dials a listener moved to an interface address from that
@@ -1164,12 +1063,12 @@ step "6/9  Services"
 if ! command -v systemctl >/dev/null 2>&1; then
   advise "no systemd — skipping service checks (verify your supervisor runs 'fleet serve')"
 else
-  # Optional tiers (postgresql, fleet-web, caddy) gate on `is-enabled`, which
+  # Optional tiers (postgresql, caddy) gate on `is-enabled`, which
   # is the operator-intent signal: a merely-INSTALLED unit proves only that
   # the rpm is present (e.g. the caddy package ships caddy.service on a box
   # fronted by something else), and an external-Postgres box legitimately
   # leaves postgresql disabled. Only the core fleet unit is unconditional.
-  for svc in postgresql.service "${SERVICE_NAME}.service" fleet-web.service caddy.service; do
+  for svc in postgresql.service "${SERVICE_NAME}.service" caddy.service; do
     if ! systemctl cat "$svc" >/dev/null 2>&1; then
       if [[ "$svc" == "${SERVICE_NAME}.service" ]]; then
         fail "$svc not installed — run: scripts/bootstrap.sh --enable-service"
@@ -1204,11 +1103,20 @@ else
     # Branch on the restart's own result: reporting "restarted" (and counting
     # a fix) when the restart failed let a box end "✓ repaired" while the OLD
     # process was still the one answering /healthz.
-    if systemctl restart "${SERVICE_NAME}.service" 2>/dev/null; then
-      systemctl try-restart fleet-web.service 2>/dev/null || advise "fleet-web.service did not restart — journalctl -u fleet-web -n 50"
+    # With the retired web tier stopped in step 4, fleet must also reach
+    # active (READY=1: every listener bound) before that tier is removed.
+    if systemctl restart "${SERVICE_NAME}.service" 2>/dev/null \
+       && { [[ "$web_tier_cutover" == "0" ]] || fleet_web_tier_wait_active "${SERVICE_NAME}.service"; }; then
       fixed "services restarted to pick up fixes"
+      if [[ "$web_tier_cutover" == "1" ]] && fleet_remove_web_tier "$SRC_DIR"; then
+        fixed "retired the Next.js web tier (fleet-web) — fleet serves the web UI on 127.0.0.1:3000"
+      fi
     else
       fail "${SERVICE_NAME}.service failed to restart after fixes — journalctl -u ${SERVICE_NAME} -n 50"
+      if [[ "$web_tier_cutover" == "1" ]]; then
+        fleet_restore_web_tier
+        fail "the retired Next.js web tier (fleet-web) was NOT removed (restarted if it had been running) — fix ${SERVICE_NAME}, then re-run doctor to retire it"
+      fi
     fi
   elif [[ "$restart_needed" == "1" && "$NO_RESTART" == "1" ]]; then
     advise "fixes applied that want a restart — run: sudo fleet restart"

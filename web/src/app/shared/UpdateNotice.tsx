@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname } from "@/app/lib/navigation";
 import { useEffect, useState } from "react";
 import { startDeployDriftProbe, useUpdateAvailable } from "./deployDrift";
 import { CloseButton } from "./ui/CloseButton";

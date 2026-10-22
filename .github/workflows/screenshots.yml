@@ -53,15 +53,12 @@ jobs:
       run:
         working-directory: web
     env:
-      # Same throwaway build-time secrets as the mocked e2e lane: the mocked app
-      # route-intercepts every backend, so nothing real is reached. At runtime
-      # playwright.config.ts regenerates a fresh Ed25519 keypair per run.
-      CHAT_MOCK_MODE: '1'
-      APP_SESSION_SECRET: e2e-session-secret-0123456789abcdef
-      AUTH_SIGNING_PUBKEY: P8Lyn/xy8bS2SWcnPkg2kKiGBctyJZdEMMzNEixh0As=
-      CHAT_SERVER_URL: http://127.0.0.1:18080
-      CHAT_SERVER_TOKEN: e2e-shared-secret
-      ORCHESTRATOR_SERVER_URL: http://127.0.0.1:18000
+      # Same harness as the mocked e2e lane: the Go gateway alone
+      # (cmd/web-e2e-server) with the built bundle, every backend call
+      # route-intercepted. playwright.config.ts sets the throwaway session
+      # secret and generates a fresh Ed25519 keypair per run. The bundle and the
+      # harness are built by the steps below.
+      E2E_SKIP_BUILD: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -91,20 +88,23 @@ jobs:
           echo "::error::playwright install failed three times — apt or the Playwright CDN is unreachable from this runner"
           exit 1
 
-      - name: Build
-        run: npm run build
-
-      - name: Capture GUI screenshots
-        # Non-gating: a capture hiccup should not turn main red, and simply leaves
-        # the previous committed screenshots in place.
-        run: npm run test:e2e:screenshots || echo "::warning::GUI screenshot capture failed; keeping the existing images"
-
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # Read from go.mod so the toolchain is declared once.
           go-version-file: go.mod
           check-latest: true
+
+      - name: Build the bundle and the gateway harness
+        run: |
+          set -euo pipefail
+          npm run build
+          (cd .. && go build -o .e2e-bin/web-e2e-server ./cmd/web-e2e-server)
+
+      - name: Capture GUI screenshots
+        # Non-gating: a capture hiccup should not turn main red, and simply leaves
+        # the previous committed screenshots in place.
+        run: npm run test:e2e:screenshots || echo "::warning::GUI screenshot capture failed; keeping the existing images"
 
       - name: Capture TUI screenshot
         # Renders the chat TUI frame + freezes it to a PNG. Non-gating, same as GUI.

@@ -9,7 +9,7 @@
 // always a command the operator runs on the box (`sudo fleet doctor`).
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/app/lib/navigation";
 
 import { useIsAdmin } from "../../useIsAdmin";
 import { AdminGateFallback } from "../../AdminGateFallback";
@@ -46,8 +46,8 @@ function formatGeneratedAt(iso: string): string {
 
 const STATUS_META: Record<DoctorStatus, { icon: string; className: string; label: string }> = {
   ok: { icon: "check", className: "text-[var(--color-success)]", label: "ok" },
-  warn: { icon: "warning", className: "text-[var(--color-warning)]", label: "warning" },
-  fail: { icon: "warning", className: "text-[var(--color-danger)]", label: "failing" },
+  warn: { icon: "alert-triangle", className: "text-[var(--color-warning)]", label: "warning" },
+  fail: { icon: "alert-triangle", className: "text-[var(--color-danger)]", label: "failing" },
   skip: { icon: "info", className: "text-[var(--color-text-muted)]", label: "skipped" },
 };
 
