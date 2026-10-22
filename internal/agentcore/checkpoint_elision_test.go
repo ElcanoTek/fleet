@@ -829,3 +829,262 @@ func TestRun_Elision_KeepsThePromptCachePrefix(t *testing.T) {
 		t.Fatalf("rewrites %d (pauses %d), stubs %d", rewrites, len(paused), len(stubs))
 	}
 }
+
+// heldEngine is a scheduled engine with elision on and the given run state.
+func heldEngine(t *testing.T, name string, orch *orchestrationState) *engine {
+	t.Helper()
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	e := newMockEngine(t, &namedMockModel{name: name})
+	e.envPrefix = CanonicalEnvPrefix
+	e.requireCompactionOptIn = true
+	e.bindRunUsage(orch)
+	return e
+}
+
+// While the self-audit is pending (asked for, no confirm_audit accepted yet)
+// the run does not elide, and the compaction is the summary: the audit
+// re-reads the evidence elision would stub. Before the audit is asked for,
+// and once it is accepted, elision works as before.
+func TestElideBeforeSummary_HeldWhileTheAuditIsPending(t *testing.T) {
+	orch := newOrchestrationState(NewLogSession(), 0)
+	e := heldEngine(t, "elide-audit", orch)
+	history := elisionHistory(10, 40_000)
+	if _, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000); !ok {
+		t.Fatal("fixture: no elision before the audit is asked for")
+	}
+
+	e = heldEngine(t, "elide-audit", orch)
+	orch.mu.Lock()
+	orch.selfAuditRequested = true
+	orch.mu.Unlock()
+	if _, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000); ok {
+		t.Fatal("elided while the self-audit was pending")
+	}
+
+	orch.mu.Lock()
+	orch.selfAuditConfirmedOnce = true
+	orch.mu.Unlock()
+	if _, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000); !ok {
+		t.Fatal("no elision once the audit was accepted")
+	}
+}
+
+// At the checkpoint, a pending audit sends the run straight to the summary:
+// one resend_budget compaction, no elision event or breadcrumb.
+func TestCheckContextPressure_PendingAuditSummarizesWithoutEliding(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	orch := newOrchestrationState(NewLogSession(), 0)
+	orch.selfAuditRequested = true
+	e := heldEngine(t, "elide-audit-pressure", orch)
+	recordContextMax("elide-audit-pressure", 10_000_000)
+	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
+		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
+	}
+	msgs := elisionHistory(14, 40_000)
+	e.logSession.LastStepPromptTokens = 100_000
+	obs := &payloadObserver{}
+	e.checkContextPressure(context.Background(), msgs, e.model, newStreamSink(obs), false)
+
+	compactions := payloadsOf(obs, evtContextCompacted)
+	if len(compactions) != 1 || compactions[0][evtFieldTrigger] != "resend_budget" {
+		t.Fatalf("want one resend_budget summary and no elision, got %v", compactions)
+	}
+	if crumbs := sessionLines(e.logSession, "[context_elided]"); len(crumbs) != 0 {
+		t.Fatalf("elision breadcrumbs: %v", crumbs)
+	}
+}
+
+// A run that re-runs a call whose result an elision stubbed never elides
+// again: the stub cost it a call. The re-run is matched by tool and
+// arguments, in any key order, among the calls made since the last check; a
+// duplicate the run made before the elision, and a new call to other
+// arguments, are not re-runs.
+func TestElideBeforeSummary_StopsAfterARerun(t *testing.T) {
+	e := heldEngine(t, "elide-rerun", nil)
+	history := elisionHistory(10, 40_000)
+	// A duplicate of the first call, made before any elision.
+	history = append(history[:2:2], append(elisionExchange("dup", `{"page":"page-a"}`, elisionText(10)), history[2:]...)...)
+	el, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000)
+	if !ok || !e.elidedCallKeys[callKey("fetch", `{"page":"page-a"}`)] {
+		t.Fatalf("fixture: elided=%t keys=%v, want page-a's call recorded", ok, e.elidedCallKeys)
+	}
+	e.pressureCheckedLen = len(el.messages) // what the check hands back
+
+	other := append(slices.Clone(el.messages), elisionExchange("next", `{"page":"page-z"}`, elisionText(40_000))...)
+	if e.noteReruns(other); e.elisionStopped {
+		t.Fatal("a call to other arguments, or the duplicate made before the elision, counted as a re-run")
+	}
+	rerun := append(slices.Clone(other), elisionExchange("again", `{ "page" : "page-a" }`, elisionText(40_000))...)
+	if e.noteReruns(rerun); !e.elisionStopped {
+		t.Fatal("the re-run of a stubbed call was not noticed")
+	}
+	if _, ok := e.elideBeforeSummary(rerun, 30_000, true, 30_000, 30_000); ok {
+		t.Fatal("elided after the run had re-run a stubbed call")
+	}
+	// It stays off, even for a history the re-run has left.
+	if _, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000); ok {
+		t.Fatal("elision came back after the run had re-run a stubbed call")
+	}
+}
+
+// Some providers reuse one call ID for every call. The elided identities are
+// still exactly the stubbed calls' (each result's own call), and a re-run
+// under the reused ID is still noticed.
+func TestElideBeforeSummary_RerunWithAReusedCallID(t *testing.T) {
+	e := heldEngine(t, "elide-reused-id", nil)
+	history := make([]fantasy.Message, 0, 21)
+	history = append(history, fantasy.NewUserMessage("refresh every page"))
+	for i := range 10 {
+		history = append(history, elisionExchange("call_0", fmt.Sprintf(`{"page":%d}`, i), elisionText(40_000))...)
+	}
+	el, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000)
+	if !ok {
+		t.Fatal("fixture: no elision")
+	}
+	for i := range 10 {
+		_, text := resultOf(t, el.messages[2+2*i].Content[0])
+		stubbed := strings.HasPrefix(text, "[tool output truncated]")
+		if recorded := e.elidedCallKeys[callKey("fetch", fmt.Sprintf(`{"page":%d}`, i))]; recorded != stubbed {
+			t.Fatalf("page %d: stubbed=%t but recorded=%t", i, stubbed, recorded)
+		}
+	}
+	e.pressureCheckedLen = len(el.messages)
+	if e.noteReruns(append(slices.Clone(el.messages), elisionExchange("call_0", `{"page":0}`, elisionText(40_000))...)); !e.elisionStopped {
+		t.Fatal("a re-run under a reused call ID was not noticed")
+	}
+}
+
+// With a reused call ID, each result is paired with its own call, the nearest
+// before it: a subagent's answer is kept, and a stub names the tool that made
+// the call, not the last tool to use that ID.
+func TestElideStaleToolResults_ReusedCallIDKeepsEachResultsTool(t *testing.T) {
+	history := make([]fantasy.Message, 0, 13)
+	history = append(history,
+		fantasy.NewUserMessage("refresh every page"),
+		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: "spawn_subagent", Input: `{"task":"a"}`}}},
+		fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "call_0", Output: elisionText(40_000)}}},
+		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: "read_page", Input: `{"page":1}`}}},
+		fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "call_0", Output: elisionText(40_000)}}},
+	)
+	for i := range 4 {
+		history = append(history, elisionExchange("call_0", fmt.Sprintf(`{"page":%d}`, 10+i), elisionText(40_000))...)
+	}
+	res := elideStaleToolResults(history, 1)
+	if _, text := resultOf(t, res.messages[2].Content[0]); strings.HasPrefix(text, "[tool output truncated]") {
+		t.Fatal("the subagent's answer was stubbed under a reused call ID")
+	}
+	_, text := resultOf(t, res.messages[4].Content[0])
+	if !strings.Contains(text, "read_page") || strings.Contains(text, "fetch") {
+		t.Fatalf("the read_page result's stub names the wrong tool: %.300q", text)
+	}
+	if !slices.Contains(res.stubbedKeys, callKey("read_page", `{"page":1}`)) || slices.Contains(res.stubbedKeys, callKey("spawn_subagent", `{"task":"a"}`)) {
+		t.Fatalf("stubbed keys %q", res.stubbedKeys)
+	}
+}
+
+// Calls sharing one ID within a parallel step: each result answers the call in
+// its own position, so a subagent's answer in the batch is still kept.
+func TestElideStaleToolResults_ParallelCallsSharingAnID(t *testing.T) {
+	history := make([]fantasy.Message, 0, 11)
+	history = append(history,
+		fantasy.NewUserMessage("refresh every page"),
+		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: "read_page", Input: `{"page":1}`},
+			fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: "spawn_subagent", Input: `{"task":"a"}`},
+		}},
+		fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+			fantasy.ToolResultPart{ToolCallID: "call_0", Output: elisionText(40_000)},
+			fantasy.ToolResultPart{ToolCallID: "call_0", Output: elisionText(40_000)},
+		}},
+	)
+	for i := range 4 {
+		history = append(history, elisionExchange("call_0", fmt.Sprintf(`{"page":%d}`, 10+i), elisionText(40_000))...)
+	}
+	res := elideStaleToolResults(history, 1)
+	if _, text := resultOf(t, res.messages[2].Content[0]); !strings.Contains(text, "read_page") {
+		t.Fatalf("the first result should be read_page's stub, got %.200q", text)
+	}
+	if _, text := resultOf(t, res.messages[2].Content[1]); strings.HasPrefix(text, "[tool output truncated]") {
+		t.Fatal("the subagent's answer in a batch sharing one call ID was stubbed")
+	}
+}
+
+// Through checkContextPressure: the first pause elides, the run re-runs a
+// stubbed call, and the next pause summarizes instead of eliding again.
+func TestCheckContextPressure_RerunStopsElision(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	e := heldEngine(t, "elide-rerun-pressure", nil)
+	recordContextMax("elide-rerun-pressure", 10_000_000)
+	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
+		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
+	}
+	e.logSession.LastStepPromptTokens = 100_000
+	obs := &payloadObserver{}
+	res := e.checkContextPressure(context.Background(), elisionHistory(14, 40_000), e.model, newStreamSink(obs), false)
+	if c := payloadsOf(obs, evtContextCompacted); len(c) != 1 || c[0][evtFieldTrigger] != "elision" {
+		t.Fatalf("fixture: want one elision, got %v", c)
+	}
+
+	more := func(history []fantasy.Message, first fantasy.Message, rest ...fantasy.Message) []fantasy.Message {
+		out := append(slices.Clone(history), first)
+		out = append(out, rest...)
+		for range 6 {
+			out = append(out, elisionExchange(fmt.Sprintf("new-%d", len(out)), fmt.Sprintf(`{"page":"new-%d"}`, len(out)), elisionText(40_000))...)
+		}
+		return out
+	}
+	// New calls only: the calls the first elision stubbed are not taken for
+	// re-runs of themselves, and the next pause elides again.
+	again := elisionExchange("again", `{"page":"page-a"}`, elisionText(40_000))
+	fresh := elisionExchange("fresh", `{"page":"fresh"}`, elisionText(40_000))
+	obs = &payloadObserver{}
+	res = e.checkContextPressure(context.Background(), more(res.messages, fresh[0], fresh[1]), e.model, newStreamSink(obs), false)
+	if c := payloadsOf(obs, evtContextCompacted); len(c) != 1 || c[0][evtFieldTrigger] != "elision" || e.elisionStopped {
+		t.Fatalf("with no re-run, want a second elision, got %v (stopped=%t)", c, e.elisionStopped)
+	}
+	obs = &payloadObserver{}
+	e.checkContextPressure(context.Background(), more(res.messages, again[0], again[1]), e.model, newStreamSink(obs), false)
+	if c := payloadsOf(obs, evtContextCompacted); len(c) != 1 || c[0][evtFieldTrigger] != "resend_budget" || !e.elisionStopped {
+		t.Fatalf("after a re-run, want one resend_budget summary and elision stopped, got %v (stopped=%t)", c, e.elisionStopped)
+	}
+}
+
+// The window compaction is held the same way while the audit is pending.
+func TestCheckContextPressure_PendingAuditHoldsTheWindowElision(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
+	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "1")
+	orch := newOrchestrationState(NewLogSession(), 0)
+	orch.selfAuditRequested = true
+	e := heldEngine(t, "elide-window-audit", orch)
+	recordContextMax("elide-window-audit", 200_000)
+	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
+		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
+	}
+	e.logSession.LastStepPromptTokens = 180_000
+	obs := &payloadObserver{}
+	e.checkContextPressure(context.Background(), elisionHistory(14, 40_000), e.model, newStreamSink(obs), false)
+	if c := payloadsOf(obs, evtContextCompacted); len(c) != 1 || c[0][evtFieldTrigger] != "window" {
+		t.Fatalf("want one window summary and no elision, got %v", c)
+	}
+}
+
+func TestCallKey(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		same bool
+	}{
+		{`{"store_id":"S01","date":"2026-10-21"}`, `{"date": "2026-10-21", "store_id": "S01"}`, true},
+		{`{"store_id":"S01"}`, `{"store_id":"S02"}`, false},
+		{`not json`, `not json`, true},
+		{`not json`, `not  json`, false},
+		{`{"id":9007199254740993}`, `{"id":9007199254740992}`, false},
+		{`{"a":1} trailing`, `{"a":1}`, false},
+	} {
+		if got := callKey("fetch", tc.a) == callKey("fetch", tc.b); got != tc.same {
+			t.Errorf("callKey(%q) == callKey(%q): %t, want %t", tc.a, tc.b, got, tc.same)
+		}
+	}
+	if callKey("fetch", `{}`) == callKey("read", `{}`) {
+		t.Error("two tools with the same input share a key")
+	}
+}

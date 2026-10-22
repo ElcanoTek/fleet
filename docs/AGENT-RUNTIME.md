@@ -636,8 +636,12 @@ changed, and every result keeps its call ID. Each elision emits
 `history_token_rate`, plus the firing trigger's own fields, and writes a
 `[context_elided]` session-log breadcrumb. Like a proactive compaction, it
 marks the floor for re-measurement and does not count toward the
-consecutive-compaction cap. `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY=0` turns it
-off. An interactive chat turn never elides; a subagent, including one a chat
+consecutive-compaction cap. It is held back, so the pause buys the summary,
+while the run's self-audit is pending (asked for, no `confirm_audit` accepted
+yet: the audit re-reads the evidence a stub would hide), and for the rest of a
+run that re-ran a call whose result it had stubbed.
+`FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY=0` turns it off. An interactive chat turn
+never elides; a subagent, including one a chat
 spawns, runs the scheduled loop and does. Details:
 [SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md#stale-tool-results-before-the-summary-1742).
 
