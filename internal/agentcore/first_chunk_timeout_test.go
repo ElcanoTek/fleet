@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -156,18 +157,16 @@ func TestWatchdogProviderErrorExpiresWithItsBackoff(t *testing.T) {
 // between and put "the model never started" on a card for a provider that was
 // throttling us (#1585).
 func TestWatchdogSnapshotsProviderErrorWhenItFires(t *testing.T) {
-	fired := make(chan struct{})
-	w := newFirstChunkWatchdog(10*time.Millisecond, func() { close(fired) })
-	defer w.stop()
+	w, clk, fired := manualWatchdog(t)
 
 	// A backoff that is still running when the watchdog fires.
 	w.noteProviderError(&fantasy.ProviderError{StatusCode: 429}, time.Second)
+	clk.advance(10 * time.Millisecond)
+	w.expire()
 	<-fired
 
 	// Let the record lapse, exactly as an unwinding stream would.
-	w.mu.Lock()
-	w.providerErr = &providerErrRecord{until: time.Now().Add(-time.Millisecond).UnixNano(), status: 429}
-	w.mu.Unlock()
+	clk.advance(2 * time.Second)
 	if w.providerErrorLive() {
 		t.Fatalf("the live record should have lapsed by now")
 	}
@@ -177,11 +176,74 @@ func TestWatchdogSnapshotsProviderErrorWhenItFires(t *testing.T) {
 	}
 
 	// A watchdog that fires with no provider error in play reports none.
-	quiet := newFirstChunkWatchdog(time.Millisecond, func() {})
-	defer quiet.stop()
-	time.Sleep(20 * time.Millisecond)
+	quiet, _, quietFired := manualWatchdog(t)
+	quiet.expire()
+	<-quietFired
 	if seen, status := quiet.providerErrorAtExpiry(); seen || status != 0 {
 		t.Fatalf("a silent model must not acquire a provider error: seen=%v status=%d", seen, status)
+	}
+}
+
+// watchdogClock is a manual clock for the watchdog: time moves only when the
+// test moves it, and every read is announced on reads so a test can wait for
+// the timer callback to have taken its deadline instant. The watchdog tests
+// used to race the real timer against the scheduler (time.Sleep, a 20 ms
+// deadline), and under load the timer could fire before the test had set up
+// the state it was meant to judge.
+type watchdogClock struct {
+	mu    sync.Mutex
+	t     time.Time
+	reads chan time.Time
+}
+
+func (c *watchdogClock) now() time.Time {
+	c.mu.Lock()
+	now := c.t
+	c.mu.Unlock()
+	select {
+	case c.reads <- now:
+	default:
+	}
+	return now
+}
+
+func (c *watchdogClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+// manualWatchdog is a watchdog on a manual clock whose real timer never fires
+// within the test: the test fires it by calling expire, the timer's own
+// callback, at the instant it chooses.
+func manualWatchdog(t *testing.T) (*firstChunkWatchdog, *watchdogClock, <-chan struct{}) {
+	t.Helper()
+	clk := &watchdogClock{t: time.Unix(1_700_000_000, 0), reads: make(chan time.Time, 64)}
+	fired := make(chan struct{})
+	w := newFirstChunkWatchdog(time.Hour, func() { close(fired) })
+	t.Cleanup(w.stop)
+	w.now = clk.now
+	return w, clk, fired
+}
+
+// expireBlockedAtTheLock fires the timer while the test holds the lock its
+// callback needs, and returns once the callback has read the clock — its
+// deadline instant — and is waiting for that lock: a timer goroutine
+// descheduled at the worst moment, made exact. The caller moves the clock,
+// then releases w.mu. The bound only turns a callback that never reads the
+// clock before locking (the bug the tests guard) into a failure, not a hang.
+func expireBlockedAtTheLock(t *testing.T, w *firstChunkWatchdog, clk *watchdogClock) {
+	t.Helper()
+	for len(clk.reads) > 0 {
+		<-clk.reads
+	}
+	w.mu.Lock()
+	go w.expire()
+	select {
+	case <-clk.reads:
+	case <-time.After(10 * time.Second):
+		w.mu.Unlock()
+		t.Fatal("the timer callback did not read its deadline before taking the lock")
 	}
 }
 
@@ -205,18 +267,17 @@ func watchdogLiveStatus(w *firstChunkWatchdog) int {
 // provider that was, at the deadline, still inside the backoff it bought
 // (#1585).
 func TestWatchdogJudgesTheRecordAtTheDeadlineNotAtTheLock(t *testing.T) {
-	fired := make(chan struct{})
-	w := newFirstChunkWatchdog(20*time.Millisecond, func() { close(fired) })
-	defer w.stop()
+	w, clk, fired := manualWatchdog(t)
 
-	// A backoff that is live when the deadline passes but lapses while the
-	// timer goroutine waits to be scheduled.
+	// A backoff that is live when the deadline passes...
 	w.noteProviderError(&fantasy.ProviderError{StatusCode: 429}, 40*time.Millisecond)
+	clk.advance(20 * time.Millisecond)
 
-	// Stand in for that delay: hold the lock the timer needs, well past the
-	// record's window.
-	w.mu.Lock()
-	time.Sleep(200 * time.Millisecond)
+	// ...and lapses while the timer goroutine waits for the lock: the
+	// callback reads the deadline, blocks, and the clock moves well past the
+	// record's window before it gets the lock.
+	expireBlockedAtTheLock(t, w, clk)
+	clk.advance(200 * time.Millisecond)
 	w.mu.Unlock()
 
 	<-fired
@@ -233,9 +294,8 @@ func TestWatchdogJudgesTheRecordAtTheDeadlineNotAtTheLock(t *testing.T) {
 // verdict's evidence: the snapshot was taken under the same lock that claimed
 // the decision.
 func TestWatchdogSnapshotIgnoresARetryThatLandsAfterItFires(t *testing.T) {
-	fired := make(chan struct{})
-	w := newFirstChunkWatchdog(10*time.Millisecond, func() { close(fired) })
-	defer w.stop()
+	w, _, fired := manualWatchdog(t)
+	w.expire()
 	<-fired
 
 	w.noteProviderError(&fantasy.ProviderError{StatusCode: 503}, time.Minute)
@@ -250,17 +310,17 @@ func TestWatchdogSnapshotIgnoresARetryThatLandsAfterItFires(t *testing.T) {
 // nothing at all: the provider's error lost, and a silent-model card with
 // status_code 0 in its place (#1585).
 func TestWatchdogProviderErrorSurvivesAnObserverSlowerThanItsBackoff(t *testing.T) {
-	fired := make(chan struct{})
-	w := newFirstChunkWatchdog(30*time.Millisecond, func() { close(fired) })
-	defer w.stop()
+	w, clk, fired := manualWatchdog(t)
 
 	// The provider answers with a 429 and announces a 5 ms backoff.
 	w.noteProviderErrorSeen(&fantasy.ProviderError{StatusCode: 429})
 	// An observer that blocks far past that: the watchdog fires while it runs.
-	time.Sleep(60 * time.Millisecond)
+	clk.advance(30 * time.Millisecond)
+	w.expire()
+	<-fired
+	clk.advance(30 * time.Millisecond)
 	w.closeProviderErrorWindow(5 * time.Millisecond)
 
-	<-fired
 	seen, status := w.providerErrorAtExpiry()
 	if !seen || status != 429 {
 		t.Fatalf("the error must survive an observer slower than its backoff: seen=%v status=%d", seen, status)
@@ -274,18 +334,16 @@ func TestWatchdogProviderErrorSurvivesAnObserverSlowerThanItsBackoff(t *testing.
 // deadline it postdates, and a model that was silent for the whole allowed
 // interval would be reported as rate-limited (#1585).
 func TestWatchdogIgnoresAProviderErrorPublishedAfterTheDeadline(t *testing.T) {
-	fired := make(chan struct{})
-	w := newFirstChunkWatchdog(20*time.Millisecond, func() { close(fired) })
-	defer w.stop()
+	w, clk, fired := manualWatchdog(t)
 
-	// Hold the lock so the timer fires, captures its deadline, and blocks.
-	w.mu.Lock()
-	time.Sleep(100 * time.Millisecond)
-	// A retry that begins only now — after that deadline — publishes its
-	// record and would win the mutex first.
+	// The timer fires, captures its deadline, and blocks at the lock.
+	expireBlockedAtTheLock(t, w, clk)
+	// A retry that begins only after that deadline publishes its record and
+	// wins the mutex first.
+	clk.advance(100 * time.Millisecond)
 	w.providerErr = &providerErrRecord{
-		from:   time.Now().UnixNano(),
-		until:  time.Now().Add(time.Minute).UnixNano(),
+		from:   clk.now().UnixNano(),
+		until:  clk.now().Add(time.Minute).UnixNano(),
 		status: 429,
 	}
 	w.mu.Unlock()

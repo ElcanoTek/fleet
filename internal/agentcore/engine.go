@@ -1627,10 +1627,15 @@ type firstChunkWatchdog struct {
 	// which puts "the model never started" on a card for a provider that was
 	// throttling us.
 	expiredProviderErr *providerErrRecord
+
+	// now is the watchdog's clock: time.Now, replaced only by tests that
+	// must place the deadline and the record's window exactly instead of
+	// racing a real timer against the scheduler.
+	now func() time.Time
 }
 
 func newFirstChunkWatchdog(timeout time.Duration, onExpire func()) *firstChunkWatchdog {
-	w := &firstChunkWatchdog{onExpire: onExpire}
+	w := &firstChunkWatchdog{onExpire: onExpire, now: time.Now}
 	w.timer = time.AfterFunc(timeout, w.expire)
 	return w
 }
@@ -1642,7 +1647,7 @@ func (w *firstChunkWatchdog) expire() {
 	// callback began, not when it won a contended mutex; judging the record
 	// against a later clock is how a provider error that was still live at
 	// the deadline gets reported as a silent model.
-	at := time.Now().UnixNano()
+	at := w.now().UnixNano()
 	w.mu.Lock()
 	if w.settled {
 		w.mu.Unlock()
@@ -1703,7 +1708,7 @@ func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderErro
 	if delay < 0 {
 		delay = 0
 	}
-	now := time.Now()
+	now := w.now()
 	w.publishProviderErr(&providerErrRecord{
 		from:   now.UnixNano(),
 		until:  now.Add(delay + providerErrorGrace).UnixNano(),
@@ -1721,7 +1726,7 @@ func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderErro
 // with the real deadline on the way out.
 func (w *firstChunkWatchdog) noteProviderErrorSeen(providerErr *fantasy.ProviderError) {
 	w.publishProviderErr(&providerErrRecord{
-		from:   time.Now().UnixNano(),
+		from:   w.now().UnixNano(),
 		until:  math.MaxInt64,
 		status: reportableProviderStatus(providerErr),
 	})
@@ -1736,7 +1741,7 @@ func (w *firstChunkWatchdog) closeProviderErrorWindow(delay time.Duration) {
 	if delay < 0 {
 		delay = 0
 	}
-	until := time.Now().Add(delay + providerErrorGrace).UnixNano()
+	until := w.now().Add(delay + providerErrorGrace).UnixNano()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.providerErr == nil {
@@ -1755,7 +1760,7 @@ func (w *firstChunkWatchdog) closeProviderErrorWindow(delay time.Duration) {
 // Only expire() consults it; everyone else wants the snapshot below, taken
 // when the verdict was formed.
 func (w *firstChunkWatchdog) providerErrorLive() bool {
-	now := time.Now().UnixNano()
+	now := w.now().UnixNano()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	rec := w.providerErr
