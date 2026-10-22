@@ -369,6 +369,32 @@ fewer summarizer calls; making the elided content recallable added nothing.
   still needed; the Operations Center timeline shows it as **Older tool results
   trimmed**, and as a gap in the overview strip. A summary that follows is
   recorded exactly as before.
+- **Held back** (added 2026-10-22, after the recurring-task bench in
+  [Measured](#measured)). A run does not elide, and its compaction is the
+  summary, which keeps the recent half verbatim:
+  - while its self-audit is pending: asked for, and no `confirm_audit`
+    accepted yet. That is when a run re-reads the evidence for its answer, and
+    a stub of the report it is checking made the audit fail;
+  - for the rest of a run that re-ran a call whose result an elision had
+    stubbed: the same tool with the same arguments, in any key order, made
+    after that elision. The stub cost that run a call, so eliding more is not
+    saving it anything.
+    - The run's new calls are told apart by position since its last context
+      check (each round's start), not by call ID, because some providers reuse
+      IDs. So a duplicate made before the elision does not count.
+    - A re-run in a round whose history the overflow recovery compacted can
+      be missed; the run then just goes on eliding.
+    - A read of something that changed in between also counts, for example a
+      file viewed again after an edit. That only turns elision off for the
+      run.
+
+  The server log says when either applies.
+- **Reused call IDs** (fixed 2026-10-22). Some providers reuse one call ID
+  across steps, or within one parallel step. Each result is paired with its
+  own call: the nearest earlier message with calls under that ID, and within
+  it the call in the result's own position. Before this, a lookup by ID took
+  the last call with that ID, so a stub could name the wrong tool or stub a
+  `spawn_subagent` answer.
 - **Knob.** `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY`, on by default; `0` or `false`
   turns it off and restores the summary-only behaviour. It takes
   `strconv.ParseBool` tokens and is registered with `fleet validate-config`.
@@ -391,8 +417,9 @@ On a local fleet instance, 2026-10-20, with `anthropic/claude-haiku-5.5` and a
 synthetic scheduled task: one `run_python` call per seed, each printing about
 17 KB of seeded random numbers, then a table of one number per seed. Each row
 is one run, so model variance is in it (the step counts differ by one or two).
-It is not the issue's "real recurring scheduled task": that measurement needs a
-production run after release.
+It is not the issue's "real recurring scheduled task"; for that shape see
+[the recurring-task bench](#on-a-recurring-task-with-a-self-audit-2026-10-22)
+below, still on a local instance.
 
 | Budget, seeds | Elision | Pauses | Summaries | Prompt tokens (cached) | Completion | Cost |
 |---|---|---|---|---|---|---|
@@ -462,11 +489,86 @@ could not free enough by eliding two results each time, summarized at all but
 one pause, and failed the audit the same way, with 13 seeds' values no longer
 in what it was sent.
 
+#### On a recurring task with a self-audit (2026-10-22)
+
+The synthetic seed task above could not show one failure, because there the
+model recorded each value as it went. This bench is shaped like a production
+refresh:
+- **The task.** A recurring scheduled task, made by the scheduler from a cron
+  recurrence on a local instance: a daily store KPI refresh at the default 80K
+  budget.
+- **The data.** A local stdio MCP connector serves twelve stores' daily
+  reports, about 25 KB of JSON each (totals, line items, inventory), the shape
+  of a page-data connector.
+- **The answer.** A table of revenue, orders, target, low-stock SKUs and the
+  largest discount per store. The data is generated deterministically, so all
+  72 cells are scored exactly.
+
+Haiku and Sonnet fetched all twelve reports in one parallel step, answered,
+and then re-checked the answer against the reports in their self-audit. Each row is one
+recurring series, except fixed Haiku (4 runs, then 2 on the final build) and
+fixed Gemini (a run that died on a provider error within a minute was run
+again). The last four models were measured off and fixed only. "#1827" is elision as first shipped; "fixed" holds it back
+during the audit and after a re-run ([What shipped](#what-shipped-1)).
+
+| Model | Elision | Runs succeeded | Cells correct | Cost / run | Pauses | Summaries | Re-fetches | Minutes |
+|---|---|---|---|---|---|---|---|---|
+| Haiku 5.5 | off | 3 of 4 | 71, 72, 63 | $0.56 | 2.2 | 4.0 | 9 | 4.0 |
+| Haiku 5.5 | on, #1827 | **0 of 5** | — | $0.29 | 1.8 | 1.4 | 4.8 | 2.6 |
+| Haiku 5.5 | on, fixed | 6 of 6 | 72, 65, 64, 72, 72, 71 | $0.57 | 2.5 | 3.7 | 12 | 4.0 |
+| Sonnet 5.5 | off | 3 of 3 | 72, 72, 72 | $2.95 | 5.3 | 6.3 | 16 | 5.1 |
+| Sonnet 5.5 | on, #1827 | 3 of 3 | 71, 72, 71 | **$7.61** | 23.3 | 20.0 | 83 | 14.6 |
+| Sonnet 5.5 | on, fixed | 3 of 3 | 72, 72, 72 | $2.39 | 3.7 | 4.3 | 12 | 3.9 |
+| Opus 5.5 | off | 2 of 2 | 72, 72 | $3.82 | 4.0 | 4.5 | 4 | 4.7 |
+| Opus 5.5 | on, fixed | 2 of 2 | 72, 72 | $4.82 | 4.0 | 4.5 | 12 | 4.9 |
+| DeepSeek v4.1 Flash | off | 2 of 2 | 72, 72 | $0.29 | 23.5 | 23.5 | 90 | 23.6 |
+| DeepSeek v4.1 Flash | on, fixed | 2 of 2 | 65, 72 | $0.19 | 12.5 | 12.0 | 42 | 14.8 |
+| Gemini 3.8 Flash | off | 2 of 2 | 59, 65 | $2.02 | 8.5 | 8.5 | 30 | 9.7 |
+| Gemini 3.8 Flash | on, fixed | 2 of 2 | 65, 68 | $1.99 | 2.5 | 2.0 | 4 | 10.4 |
+| GPT-6 Luna Pro | off | 2 of 2 | 72, 72 | $0.15 | 3.0 | 4.0 | 6 | 3.5 |
+| GPT-6 Luna Pro | on, fixed | 2 of 2 | 72, 72 | $0.10 | 2.0 | 2.5 | 0 | 3.3 |
+
+As first shipped, elision stubbed the twelve reports at the pause that followed
+the audit request, so the reports the audit was re-reading were 2 KB previews.
+- **Haiku** concluded that "the connector truncates its output" and aborted
+  every run.
+- **Sonnet** re-fetched the reports three or four at a time, once through
+  subagents. Each batch put the prompt over the budget again, and the next pause
+  stubbed it, often with a summary too, before the audit was done. That
+  repeated 15–40 times a run.
+
+With elision held back during the audit, every pause in it bought the summary,
+which keeps the recent half (and the reports) verbatim. Both models then passed.
+- **Haiku** cost about what it did with elision off ($0.57 a run against
+  $0.56). The cells it missed (7, 8 and 1 in three runs, almost all low-stock
+  lists) are the kind it also missed with elision off (63 of 72).
+- **Sonnet** cost 19% less than with it off.
+
+For Haiku and Sonnet, elision on this task helps only after the audit is
+accepted, which is where it fired in their fixed runs.
+
+The four other models succeeded in every fixed run, as with elision off.
+Their cells correct were the same or better, except one DeepSeek run (65 of 72
+against 72 in both of its off runs).
+- **Opus** cost more fixed than off, but its two off runs alone spanned
+  $2.14–5.50, depending on whether it re-fetched to audit.
+- **DeepSeek** re-fetched in loops in both modes: one off run took 34
+  minutes, with 40 pauses, 40 summaries and 160 re-fetches. That is the
+  model's own pattern. Its fixed runs were shorter on average, but only
+  because of that run: its other off run took 13 minutes, under the fixed
+  average.
+
+In the Haiku and Sonnet runs the re-run stop did not fire, because their
+re-fetches came during the audit, when nothing had been elided. In the
+four-model round the server log shows it fire twice (once in a DeepSeek run
+that re-fetched right after its first elision) and the audit hold 10 times.
+The bench cost about $73 in all.
+
 ### Deviations from the issue
 
-- The before/after numbers come from a synthetic task on a local instance
-  ([Measured](#measured)), not a production recurring task; those need a
-  production run after release.
+- The before/after numbers come from local instances, not a production
+  recurring task: a synthetic seed task, and a recurring store-KPI task with a
+  self-audit whose connector serves generated data ([Measured](#measured)).
 - The breadcrumb is `[context_elided]`, as asked, but the event is the existing
   `fleet.context_compacted` with `trigger: "elision"`, so the scheduler stream
   forwards it with no change.
@@ -486,6 +588,9 @@ in what it was sent.
 
 ### Not done
 
+- Holding elision back during a verifier or phone-a-friend repair round. Such a
+  round comes after the audit was accepted, so it is not held, though it may
+  re-read evidence too. Not measured.
 - A rate per result, a re-measured prefix, and a mirror of the in-round guard's
   trimming. The rate is one average over the history: when the old results that
   get elided cost the provider fewer tokens per character than the rest (prose
