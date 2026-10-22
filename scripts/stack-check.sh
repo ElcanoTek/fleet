@@ -25,7 +25,7 @@ set -f # stack.conf values are words, never globs
 unset CDPATH
 export LC_ALL=C
 
-STACK_CHECK_VERSION=25
+STACK_CHECK_VERSION=28
 STANDARD_SHA=5b3a1c9dab098277570a37d58366b0802d4378370f9717d48743c386b194bdbb
 ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 CONF="$ROOT/stack.conf"
@@ -98,7 +98,9 @@ fi
 # gitignored are skipped but anything committed — in dist/, test/, wherever —
 # is scanned. Without git, every file under the dir except node_modules/ and
 # dist/. Only Go's own test-only paths are skipped (*_test.go, testdata/): the
-# go tool never builds them into the binary. Binary assets (fonts, images,
+# go tool never builds them into the binary, and test fixtures (sanitizer
+# goldens, for one) must be free to hold remote URLs. Don't //go:embed a
+# directory that contains testdata/; embed the served subdirectory instead. Binary assets (fonts, images,
 # archives) are skipped by extension. A symlink or submodule in a web dir fails
 # the check: its target would be served unscanned.
 #
@@ -185,7 +187,8 @@ sub tags { my ($t, $html) = @_;
       $name =~ s/^[^:]*://;
       my %a; while ($as =~ /$nattr/g) { my ($n, $v) = (lc $1, $2 // ""); $v =~ s/^"(.*)"$/$1/s or $v =~ s/^\x27(.*)\x27$/$1/s; push @{$a{$n}}, $v; }
       my $bad = 0;
-      for my $n (qw(src poster background data-src lowsrc dynsrc)) { $bad ||= grep { remote_val($_, $html) } @{$a{$n} || []}; }
+      # xml:base rebases every relative reference beneath it onto its host.
+      for my $n (qw(src poster background data-src lowsrc dynsrc xml:base)) { $bad ||= grep { remote_val($_, $html) } @{$a{$n} || []}; }
       for my $n (qw(srcset data-srcset imagesrcset)) { $bad ||= grep { remote_srcset($_, $html) } @{$a{$n} || []}; }
       $bad ||= grep { remote_val($_, $html) } @{$a{data} || []} if $name eq "object";
       if ($refel{$name}) { for my $n (grep { /^(?:[^:]*:)?href$|^xlinkhref$/ } keys %a) { $bad ||= grep { remote_val($_, $html) } @{$a{$n}}; } }
@@ -211,17 +214,22 @@ sub patterns { my ($t, $pre) = @_;
   my $set = qr{(?:\|\||\?\?|&&|\+)?=(?![=>])};
   my $nu = qr{(?:\bnew$sp+(?:(?:window|globalThis|self)$sp\.$sp)?URL$sp\($sp)?};
   my @re = (
-    qr{(?:\.(?:src|poster)|(?<!\blocation)\.href|\[$sp$q(?:src|href|srcset|poster)$q$sp\])$sp$set$sp$nu$r},
+    # location.href / location["href"] is navigation, not an asset load.
+    qr{(?:\.(?:src|poster)|(?<!\blocation)\.href|\[$sp$q(?:src|srcset|poster)$q$sp\]|(?<!\blocation)\[$sp${q}href$q$sp\])$sp$set$sp$nu$r},
     qr{\.srcset$sp$set$sp$q(?:[^"`$Q]*,)?\s*$pre(?!$lb)$host+},
     qr{\bsetAttribute$sp\($sp$q(?:src|href|xlink:href|srcset|poster|data)$q$sp,$sp$nu$r}i,
     qr{\bsetAttributeNS$sp\(${sp}[^,()]*,$sp$q(?:xlink:)?(?:src|href)$q$sp,$sp$nu$r}i,
-    qr{(?<![\w\$.\-])$q?src$q?$sp:$sp$nu$r},
+    # Object-form props (React.createElement, JSX compiled output): src, poster,
+    # srcset/srcSet (whose first candidate is a URL).
+    qr{(?<![\w\$.\-])$q?(?:src|poster|srcset|srcSet)$q?$sp:$sp$nu$r},
     qr{\bnew(?=[\s/])$sp(?:(?:window|globalThis|self)$sp\.$sp)?(?:Shared)?Worker$sp\($sp$nu$r},
     qr{\bimportScripts$sp\($sp$nu$r},
     # Constructors and loaders that fetch media or code as soon as they run.
     qr{\bnew(?=[\s/])$sp(?:(?:window|globalThis|self)$sp\.$sp)?Audio$sp\($sp$nu$r},
     qr{\.addModule$sp\($sp$nu$r},
     qr{\@import$sp(?:url$sp\()?$sp$r}i,
+    # <?xml-stylesheet href="…"?> links a stylesheet like <link rel=stylesheet>.
+    qr{<\?xml-stylesheet\b[^>]*?\bhref$sp=$sp$r}i,
     qr{(?<![\w.\$])url\($sp$r}i,
     qr{\bimage-set$sp\((?:[^;{}()]|\([^()]*\))*?$q$sp$pre(?!$lb)$host+}i,
     qr{(?<![\w.\$])import$sp\(?$sp$nu$r},

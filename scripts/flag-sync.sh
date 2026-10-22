@@ -46,7 +46,7 @@ set -f # lock paths may contain glob characters ([ ] * ?); never expand them
 unset CDPATH GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
 export LC_ALL=C GIT_LITERAL_PATHSPECS=1
 
-FLAG_SYNC_VERSION=16
+FLAG_SYNC_VERSION=17
 ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 LOCK="$ROOT/flag.lock"
 
@@ -413,6 +413,13 @@ cmd_sync() {
       safe_path "$d/$rel"
       need_blob "$mode" "$PREFIX/$rel"
       in_plan "$plan" "$d/$rel" && continue
+      # A new upstream file must not land on a product file the old lock never
+      # claimed: that would replace its bytes without a trace.
+      # (A directory there is a directory flag turned into this file; need_plan_path vets it.)
+      if { [ -e "$ROOT/$d/$rel" ] && [ ! -d "$ROOT/$d/$rel" ]; } || [ -L "$ROOT/$d/$rel" ]; then
+        F="$d/$rel" awk '$1 == "file" && $4 == ENVIRON["F"] { found = 1 } END { exit !found }' "$ENTRIES" \
+          || die "flag added design-system/$PREFIX/$rel, but $d/$rel already exists and is not locked; move it out of $d first"
+      fi
       echo "$mode $oid $PREFIX/$rel $d/$rel" >> "$plan"
     done < "$list"
   done < "$dirs"
