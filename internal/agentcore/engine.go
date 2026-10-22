@@ -132,12 +132,14 @@ type engine struct {
 	resendFloorStale bool
 	resendFloorNoted bool
 	// elidedCallKeys holds the identity (callKey) of every call whose result
-	// an elision stubbed, and callsAtElision the ID of every call in the
-	// history when one was made; a later call with an elided identity is a
-	// re-run, and sets elisionStopped for the rest of the run (elisionHeld).
-	elidedCallKeys map[string]bool
-	callsAtElision map[string]bool
-	elisionStopped bool
+	// an elision stubbed. pressureCheckedLen is the length of the history the
+	// last context-pressure check handed back: the history only grows between
+	// checks, so the calls past it are the ones the run made since. One of
+	// those with an elided identity is a re-run, and sets elisionStopped for
+	// the rest of the run (noteReruns).
+	elidedCallKeys     map[string]bool
+	pressureCheckedLen int
+	elisionStopped     bool
 	// activeModel is the model the run loop is currently driving — the primary,
 	// or the fallback after a resilience swap. Compaction summaries follow it
 	// (a swapped run must not keep summarizing on a model that just failed or
@@ -646,6 +648,8 @@ type contextPressureResult struct {
 // pressure and resets it.
 func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Message, activeModel fantasy.LanguageModel, sink *streamSink, warned bool) contextPressureResult {
 	out := contextPressureResult{messages: messages, warned: warned}
+	e.noteReruns(messages)
+	defer func() { e.pressureCheckedLen = len(out.messages) }()
 	if activeModel == nil || e.logSession == nil {
 		return out
 	}

@@ -378,8 +378,15 @@ fewer summarizer calls; making the elided content recallable added nothing.
   - for the rest of a run that re-ran a call whose result an elision had
     stubbed: the same tool with the same arguments, in any key order, made
     after that elision. The stub cost that run a call, so eliding more is not
-    saving it anything. A duplicate the run had made before the elision does
-    not count. The server log says when it happens.
+    saving it anything.
+    - Calls made since the last pause are told apart by position, not by
+      call ID, because some providers reuse IDs. So a duplicate made before
+      the elision does not count.
+    - A read of something that changed in between also counts, for example a
+      file viewed again after an edit. That only turns elision off for the
+      run.
+
+  The server log says when either applies.
 - **Knob.** `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY`, on by default; `0` or `false`
   turns it off and restores the summary-only behaviour. It takes
   `strconv.ParseBool` tokens and is registered with `fleet validate-config`.
@@ -514,8 +521,9 @@ the audit request, so the reports the audit was re-reading were 2 KB previews.
 
 With elision held back during the audit, every pause in it bought the summary,
 which keeps the recent half (and the reports) verbatim. Both models then passed.
-- **Haiku** cost what it did with elision off. Its low-stock misses, 5 of 12
-  in two runs, show up with elision off too.
+- **Haiku** cost about what it did with elision off ($0.60 a run against
+  $0.56). The cells it missed (7 in one run and 8 in another, almost all
+  low-stock lists) are the kind it also missed with elision off (63 of 72).
 - **Sonnet** cost 19% less than with it off.
 
 On this task elision helps only after the audit is accepted, which is where it
@@ -523,7 +531,7 @@ fired in the fixed runs.
 
 The re-run stop did not fire here: the re-fetches came during the audit, when
 nothing had been elided. Its unit tests pin it
-(`TestElideBeforeSummary_StopsAfterARerun`). The bench cost $44.97 in all.
+(`TestElideBeforeSummary_StopsAfterARerun`). The bench cost about $45 in all.
 
 ### Deviations from the issue
 
@@ -549,6 +557,9 @@ nothing had been elided. Its unit tests pin it
 
 ### Not done
 
+- Holding elision back during a verifier or phone-a-friend repair round. Such a
+  round comes after the audit was accepted, so it is not held, though it may
+  re-read evidence too. Not measured.
 - A rate per result, a re-measured prefix, and a mirror of the in-round guard's
   trimming. The rate is one average over the history: when the old results that
   get elided cost the provider fewer tokens per character than the rest (prose
