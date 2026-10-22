@@ -82,7 +82,8 @@ Known, deliberate exceptions:
   (`--font-heading`/`--font-body`) and **Hack** (`--font-code`/`--font-code-ui`).
   Both are self-hosted from `src/app/fonts/`, declared in the single vendored
   sheet `src/app/fonts/fonts.css` (a copy of flag's `design-system/fonts/fonts.css`)
-  which `globals.css` imports and which is the ONLY place a family name is
+  which `src/main.tsx` imports (not `globals.css` — Tailwind would inline it
+  without rebasing its `url()`s) and which is the ONLY place a family name is
   written — the token families above read `--font-brand` /
   `--font-code-brand` / `--font-code-ui-brand` from it. There is no font CDN
   request and no font-loader wrapper: the `url()`s resolve through the bundler

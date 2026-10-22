@@ -3,6 +3,7 @@
 // app on top of it.
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import "./app/fonts/fonts.css";
 import "./app/globals.css";
 import { App } from "./App";
 

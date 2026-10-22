@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
  * UI/body/headings and Hack (MIT, plus Bitstream Vera for its Vera-derived
  * glyphs) for code, logs and tabular output. `src/app/fonts/fonts.css` — a
  * vendored copy of flag's `design-system/fonts/fonts.css` — is the ONLY place
- * in this app a font family is named; `globals.css` imports it and reads the
+ * in this app a font family is named; `src/main.tsx` imports it, `globals.css` reads the
  * three `--font-*-brand` variables it sets.
  *
  * Four things here are not self-enforcing, and each has already gone wrong

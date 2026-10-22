@@ -44,8 +44,35 @@ function writeBuildId(): Plugin {
   };
 }
 
+// checkCssUrls fails the build when an emitted stylesheet still holds a
+// relative url() — one Vite could not resolve to a bundled asset. That is how
+// the fonts once shipped pointing at /assets/nebula-sans/… (404): Tailwind
+// inlined an @import without rebasing its url()s. A moved or renamed file must
+// be a build error, not a silent 404 in production.
+function checkCssUrls(): Plugin {
+  return {
+    name: "fleet-check-css-urls",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      const bad: string[] = [];
+      for (const [name, out] of Object.entries(bundle)) {
+        if (out.type !== "asset" || !name.endsWith(".css")) continue;
+        const css = typeof out.source === "string" ? out.source : new TextDecoder().decode(out.source);
+        for (const m of css.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/g)) {
+          const u = m[1];
+          if (/^(data:|#|\/|https?:)/.test(u) || u.startsWith("%23")) continue;
+          // A sibling in the same output dir is a resolved, emitted asset.
+          const target = path.posix.join(path.posix.dirname(name), u);
+          if (!bundle[target]) bad.push(`${name}: url(${u})`);
+        }
+      }
+      if (bad.length) this.error(`unresolved url() in emitted CSS:\n  ${bad.join("\n  ")}`);
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), writeBuildId()],
+  plugins: [react(), writeBuildId(), checkCssUrls()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
