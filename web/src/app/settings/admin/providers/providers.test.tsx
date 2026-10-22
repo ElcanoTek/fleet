@@ -116,21 +116,25 @@ describe("ProvidersAdminPage", () => {
 
     const windowInput = screen.getByPlaceholderText("e.g. 200000");
     expect(windowInput).toHaveAttribute("id", "providerContextWindow");
-    for (const bad of ["200k", "0"]) {
-      fireEvent.change(windowInput, { target: { value: bad } });
+    // Each refusal replaces the previous message, so every step is observed.
+    const refuse = async (value: string, message: RegExp) => {
+      fireEvent.change(windowInput, { target: { value } });
       fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
-      expect(
-        await screen.findByText("Context window must be a positive whole number of tokens."),
-      ).toBeInTheDocument();
-    }
-    fireEvent.change(windowInput, { target: { value: "3000000000" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
-    expect(await screen.findByText(/Context window must be at most/)).toBeInTheDocument();
-    expect(posts()).toHaveLength(0);
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      expect(posts()).toHaveLength(0);
+    };
+    await refuse("0", /must be a positive whole number of tokens/);
+    await refuse("3000000000", /must be at most/);
+    await refuse("200k", /must be a positive whole number of tokens/);
 
-    // A small window is allowed but warned about: it usually cannot fit a turn.
+    // Small windows are allowed but warned about, in two tiers, and the
+    // warning is announced and tied to the field.
     fireEvent.change(windowInput, { target: { value: "4096" } });
     expect(screen.getByTestId("provider-small-window")).toHaveTextContent(/usually cannot fit/);
+    expect(screen.getByRole("status")).toBe(screen.getByTestId("provider-small-window"));
+    expect(windowInput).toHaveAttribute("aria-describedby", "providerContextWindowWarning");
+    fireEvent.change(windowInput, { target: { value: "40000" } });
+    expect(screen.getByTestId("provider-small-window")).toHaveTextContent(/little room is left/);
 
     fireEvent.change(windowInput, { target: { value: "200000" } });
     fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
@@ -177,15 +181,54 @@ describe("ProvidersAdminPage", () => {
     });
   });
 
-  it("opens the edit form instead of enabling a row with no context window", async () => {
+  it("opens the edit form on the field instead of enabling a row with no context window", async () => {
     const fetchMock = mockFetch([{ ...ROW, enabled: false, context_window_tokens: 0 }]);
     vi.stubGlobal("fetch", fetchMock);
     render(<ProvidersAdminPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Enable" }));
     expect(await screen.findByText(/Set anthropic-direct's context window/)).toBeInTheDocument();
-    expect(document.getElementById("providerContextWindow")).toHaveValue("");
+    const input = document.getElementById("providerContextWindow");
+    expect(input).toHaveValue("");
+    expect(document.activeElement).toBe(input);
     expect(screen.getByLabelText("Enabled")).toBeChecked();
     expect(fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "PUT")).toHaveLength(0);
+  });
+
+  it("will not save an enabled pre-081 row from Edit until it has a window", async () => {
+    const fetchMock = mockFetch([{ ...ROW, context_window_tokens: 0 }]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByTestId("provider-save"));
+    expect(await screen.findByText(/Anthropic needs its context window/)).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "PUT")).toHaveLength(0);
+  });
+
+  it("clears a new row's window on a type change and hides it for OpenRouter", async () => {
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "anthropic" } });
+    fireEvent.change(document.getElementById("providerContextWindow")!, { target: { value: "200000" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "ollama" } });
+    expect(document.getElementById("providerContextWindow")).toHaveValue("");
+    expect(screen.getByPlaceholderText("the server's num_ctx, e.g. 65536")).toBeInTheDocument();
+    fireEvent.change(document.getElementById("providerContextWindow")!, { target: { value: "65536" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "openrouter" } });
+    expect(document.getElementById("providerContextWindow")).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("my-provider"), { target: { value: "or-team" } });
+    fireEvent.change(screen.getByPlaceholderText("sk-…"), { target: { value: "sk-or-x" } });
+    fireEvent.change(screen.getByPlaceholderText(/claude-sonnet-4-5/), { target: { value: "x/y" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.find(([, init]) => init && (init as RequestInit).method === "POST");
+      expect(post).toBeTruthy();
+      expect(JSON.parse(String((post![1] as RequestInit).body))).toMatchObject({
+        type: "openrouter",
+        context_window_tokens: 0,
+      });
+    });
   });
 
   it("validates the draft before any mutation request", async () => {

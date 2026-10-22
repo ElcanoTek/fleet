@@ -253,6 +253,23 @@ func TestAdminLLMProviderContextWindow(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"context_window_tokens":65536`) {
 		t.Fatalf("enabling it with a window: status %d body %s, want 200 echoing 65536", w.Code, w.Body.String())
 	}
+	// A PUT that omits the field keeps the stored window (nil = keep, like
+	// api_key), so a client that predates it cannot reset it, enabled or not.
+	for _, enabled := range []bool{false, true} {
+		w = do(t, h, http.MethodPut, "/admin/llm-providers/"+later.ID, map[string]any{
+			"name": "later", "type": "ollama", "enabled": enabled,
+		}, "boss@x.com")
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"context_window_tokens":65536`) {
+			t.Fatalf("PUT without the field (enabled=%v): status %d body %s, want 200 keeping 65536", enabled, w.Code, w.Body.String())
+		}
+	}
+	// A negative value is the store's range error, not "requires".
+	w = do(t, h, http.MethodPut, "/admin/llm-providers/"+later.ID, map[string]any{
+		"name": "later", "type": "ollama", "enabled": true, "context_window_tokens": -5,
+	}, "boss@x.com")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "positive token count") {
+		t.Fatalf("negative window on an enabled row: status %d body %s, want the range error", w.Code, w.Body.String())
+	}
 	w = do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
 		"name": "or-team", "type": "openrouter", "enabled": true, "api_key": "sk-or-x", "models": []string{"x/y"},
 	}, "boss@x.com")

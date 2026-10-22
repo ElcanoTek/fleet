@@ -2126,6 +2126,8 @@ func toAgentcoreProviders(bundle *clientconfig.Bundle) []agentcore.ProviderConfi
 		if env := strings.TrimSpace(p.APIKeyEnv); env != "" {
 			key = os.Getenv(env)
 		}
+		warnUndeclaredContextWindow("bundle", strings.TrimSpace(p.Name), strings.TrimSpace(p.Type), p.ContextWindowTokens,
+			"declare context_window_tokens on its providers: entry")
 		out = append(out, agentcore.ProviderConfig{
 			Name:                strings.TrimSpace(p.Name),
 			Type:                agentcore.ProviderType(strings.TrimSpace(p.Type)),
@@ -2212,6 +2214,8 @@ func loadDBLLMProviders(ctx context.Context, chatStore *store.Store) ([]agentcor
 	}
 	out := make([]agentcore.ProviderConfig, 0, len(rows))
 	for _, r := range rows {
+		warnUndeclaredContextWindow("admin", r.Name, r.Type, r.ContextWindowTokens,
+			"set its context window under Settings → Admin → Model providers")
 		out = append(out, agentcore.ProviderConfig{
 			Name:                r.Name,
 			Type:                agentcore.ProviderType(r.Type),
@@ -2222,6 +2226,22 @@ func loadDBLLMProviders(ctx context.Context, chatStore *store.Store) ([]agentcor
 		})
 	}
 	return out, nil
+}
+
+// warnUndeclaredContextWindow logs, at boot and on every admin-provider
+// reload, an active non-OpenRouter provider with no declared context window.
+// It still loads: refusing it would fail boot on existing manifests and rows
+// saved before migration 081. But it runs on the resolver's conservative
+// fallback (32,000 tokens, 4,096 for Ollama), which is below what a turn
+// reserves with the default tool set, so its chat turns fail before sending
+// and the user only sees a generic "could not complete this turn".
+func warnUndeclaredContextWindow(source, name, typ string, window int, fix string) {
+	if window > 0 || agentcore.ProviderType(typ) == agentcore.ProviderTypeOpenRouter {
+		return
+	}
+	log.Printf("WARNING: %s provider %q (type %s) declares no context window, so it runs on the "+
+		"conservative fallback (32,000 tokens; 4,096 for Ollama), which is below what a turn reserves "+
+		"with the default tool set: its chat turns will fail before sending — %s", source, name, typ, fix)
 }
 
 // personaKey normalizes a persona reference to its bare basename — stripping any

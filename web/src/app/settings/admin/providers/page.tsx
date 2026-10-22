@@ -138,11 +138,26 @@ function draftFrom(p: LLMProvider): Draft {
 // The server stores the window in a Postgres INTEGER.
 const MAX_CONTEXT_WINDOW = 2147483647;
 
-// Below roughly this many tokens a turn usually cannot fit fleet's tool
-// schemas and reply allowance (about 34,400 with the default tool set), so
-// the form warns without refusing: the real reserve depends on the persona
-// and its tools.
+// A turn reserves fleet's tool schemas, system prompt and reply allowance
+// before any history: a little under 35,000 tokens with the default tool set
+// as of migration 081. Below that a turn usually cannot run at all; below the
+// second tier it runs with little room for the conversation. The form warns
+// without refusing, because the real reserve depends on the persona and its
+// tools.
 const SMALL_CONTEXT_WINDOW = 35000;
+const TIGHT_CONTEXT_WINDOW = 64000;
+
+function contextWindowWarning(raw: string): string | null {
+  const n = Number(raw.trim());
+  if (!(n > 0)) return null;
+  if (n < SMALL_CONTEXT_WINDOW) {
+    return `Below about ${SMALL_CONTEXT_WINDOW.toLocaleString()} tokens a turn usually cannot fit fleet's tools and reply; for Ollama, raise num_ctx on the server.`;
+  }
+  if (n < TIGHT_CONTEXT_WINDOW) {
+    return `Below about ${TIGHT_CONTEXT_WINDOW.toLocaleString()} tokens little room is left for the conversation itself once fleet's tools and reply are reserved.`;
+  }
+  return null;
+}
 
 // validateDraft mirrors the server's checks so most mistakes surface before a
 // round trip: slug name, http(s) base URL, key presence for keyed types, and a
@@ -167,7 +182,7 @@ function validateDraft(d: Draft, editingHasKey: boolean): string | null {
       return `Context window must be at most ${MAX_CONTEXT_WINDOW.toLocaleString()} tokens.`;
     }
     if (d.enabled && !w) {
-      return `${t.label} needs its context window (the model's limit, in tokens) before it can be enabled.`;
+      return `${t.label} needs its context window (in tokens: the smallest limit among the models it serves) before it can be enabled.`;
     }
   }
   return null;
@@ -273,6 +288,16 @@ function ProvidersAdmin() {
   // the second — the same inline two-click idiom as InlineConfirmButton,
   // instead of a native window.confirm dialog. Blur/Escape/Cancel disarm.
   const [catchAllArmed, setCatchAllArmed] = useState(false);
+  // Set when Enable opened the form for a row with no context window: the
+  // field it needs gets focus (and is scrolled to) once it renders.
+  const focusWindowRef = useRef(false);
+  useEffect(() => {
+    if (!focusWindowRef.current || !draft) return;
+    focusWindowRef.current = false;
+    const input = document.getElementById("providerContextWindow");
+    input?.focus();
+    input?.scrollIntoView?.({ block: "center" });
+  }, [draft]);
   // Per-row probe state: "running" while in flight, else the last result.
   const [probes, setProbes] = useState<Record<string, "running" | ProbeResult>>({});
 
@@ -363,8 +388,9 @@ function ProvidersAdmin() {
     // server; open its edit form on the missing field instead.
     if (!p.enabled && PROVIDER_TYPES[p.type]?.windowNeeded && p.context_window_tokens <= 0) {
       setDraft({ ...draftFrom(p), enabled: true });
+      focusWindowRef.current = true;
       setError(
-        `Set ${p.name}'s context window (the model's limit, in tokens), then save to enable it.`,
+        `Set ${p.name}'s context window (in tokens: the smallest limit among the models it serves), then save to enable it.`,
       );
       return;
     }
@@ -504,7 +530,16 @@ function ProvidersAdmin() {
                   <select
                     id="providerType"
                     value={draft.type}
-                    onChange={(e) => setDraft({ ...draft, type: e.target.value })}
+                    // A new row's window belongs to the type it was typed for
+                    // (Ollama's is the server's num_ctx), so a type change
+                    // clears it; an edit keeps the stored value.
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        type: e.target.value,
+                        context_window: draft.id ? draft.context_window : "",
+                      })
+                    }
                     // pr overrides the base px and needs `!` under Tailwind
                     // v4's fixed utility ordering.
                     className={`${SETTINGS_INPUT} appearance-none pr-8!`}
@@ -564,26 +599,31 @@ function ProvidersAdmin() {
               </ConnField>
             </div>
             {typeInfo?.windowNeeded ? (
-              <ConnField label="Context window (tokens — the model's real limit; needed to enable)">
-                <input
-                  id="providerContextWindow"
-                  inputMode="numeric"
-                  value={draft.context_window}
-                  onChange={(e) => setDraft({ ...draft, context_window: e.target.value })}
-                  placeholder={typeInfo.windowPlaceholder}
-                  className={SETTINGS_INPUT}
-                />
-                {Number(draft.context_window.trim()) > 0 &&
-                Number(draft.context_window.trim()) < SMALL_CONTEXT_WINDOW ? (
-                  <span
+              <>
+                <ConnField label="Context window (tokens: the smallest limit among the models this provider serves; needed to enable)">
+                  <input
+                    id="providerContextWindow"
+                    inputMode="numeric"
+                    value={draft.context_window}
+                    onChange={(e) => setDraft({ ...draft, context_window: e.target.value })}
+                    placeholder={typeInfo.windowPlaceholder}
+                    aria-describedby={
+                      contextWindowWarning(draft.context_window) ? "providerContextWindowWarning" : undefined
+                    }
+                    className={SETTINGS_INPUT}
+                  />
+                </ConnField>
+                {contextWindowWarning(draft.context_window) ? (
+                  <p
+                    id="providerContextWindowWarning"
+                    role="status"
                     data-testid="provider-small-window"
-                    className="text-[0.73rem] text-[var(--color-text-muted)]"
+                    className="-mt-1 mb-0 text-[0.73rem] text-[var(--color-text-muted)]"
                   >
-                    Below about {SMALL_CONTEXT_WINDOW.toLocaleString()} tokens a turn usually cannot fit
-                    fleet&apos;s tools and reply; for Ollama, raise num_ctx on the server.
-                  </span>
+                    {contextWindowWarning(draft.context_window)}
+                  </p>
                 ) : null}
-              </ConnField>
+              </>
             ) : null}
             <ConnField
               label={

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"os"
 	"strings"
 	"testing"
@@ -97,18 +99,61 @@ func TestLoadDBLLMProvidersCarriesTheContextWindow(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	t.Cleanup(func() { _ = chat.DeleteLLMProvider(context.Background(), row.ID) })
+	// A row saved before migration 081 (stored directly: the API would refuse
+	// it enabled) still loads, on the fallback, with a warning naming it.
+	legacy, err := chat.CreateLLMProvider(ctx, store.LLMProviderInput{
+		Name: name + "-legacy", Type: "ollama", Models: []string{"llama3.2"}, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create legacy: %v", err)
+	}
+	t.Cleanup(func() { _ = chat.DeleteLLMProvider(context.Background(), legacy.ID) })
 
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
 	got, err := loadDBLLMProviders(ctx, chat)
 	if err != nil {
 		t.Fatalf("loadDBLLMProviders: %v", err)
 	}
+	windows := map[string]int{}
 	for _, p := range got {
-		if p.Name == name {
-			if p.ContextWindowTokens != 65536 {
-				t.Fatalf("ContextWindowTokens = %d, want 65536", p.ContextWindowTokens)
-			}
-			return
-		}
+		windows[p.Name] = p.ContextWindowTokens
 	}
-	t.Fatalf("row %q missing from %+v", name, got)
+	if w, ok := windows[name]; !ok || w != 65536 {
+		t.Fatalf("declared row window = %d (present %v), want 65536", w, ok)
+	}
+	if w, ok := windows[name+"-legacy"]; !ok || w != 0 {
+		t.Fatalf("legacy row window = %d (present %v), want it loaded with 0", w, ok)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `admin provider "`+name+`-legacy" (type ollama) declares no context window`) ||
+		strings.Contains(out, `"`+name+`" (type`) {
+		t.Fatalf("log = %q, want one warning, for the legacy row only", out)
+	}
+}
+
+// TestToAgentcoreProvidersWarnsOnAnUndeclaredWindow: a bundle entry with no
+// context_window_tokens still loads (failing boot would break existing
+// manifests) but is named in a warning; OpenRouter and declared entries are
+// not.
+func TestToAgentcoreProvidersWarnsOnAnUndeclaredWindow(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	got := toAgentcoreProviders(&clientconfig.Bundle{Providers: []clientconfig.ProviderDef{
+		{Name: "openrouter", Type: "openrouter", APIKeyEnv: "OPENROUTER_API_KEY"},
+		{Name: "anthropic-direct", Type: "anthropic", APIKeyEnv: "ANTHROPIC_API_KEY"},
+		{Name: "local", Type: "ollama", ContextWindowTokens: 65536},
+	}})
+	if len(got) != 3 {
+		t.Fatalf("got %d providers, want all 3 loaded", len(got))
+	}
+	out := buf.String()
+	if !strings.Contains(out, `bundle provider "anthropic-direct" (type anthropic) declares no context window`) ||
+		strings.Contains(out, `"openrouter"`) || strings.Contains(out, `"local"`) {
+		t.Fatalf("log = %q, want one warning, for anthropic-direct only", out)
+	}
 }

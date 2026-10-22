@@ -25,7 +25,10 @@ import (
 )
 
 // llmProviderBody is the create/update payload. APIKey nil = leave unchanged
-// (or absent on create); "" = clear the stored key.
+// (or absent on create); "" = clear the stored key. ContextWindowTokens works
+// the same way: nil keeps the stored value (0 on create), so a client that
+// predates the field, such as a browser tab still running the pre-081 page,
+// cannot reset a declared window by omitting it.
 type llmProviderBody struct {
 	Name                string   `json:"name"`
 	Type                string   `json:"type"`
@@ -33,7 +36,7 @@ type llmProviderBody struct {
 	Models              []string `json:"models"`
 	Enabled             bool     `json:"enabled"`
 	APIKey              *string  `json:"api_key"`
-	ContextWindowTokens int      `json:"context_window_tokens"`
+	ContextWindowTokens *int     `json:"context_window_tokens"`
 }
 
 // handleAdminLLMProviders serves /admin/llm-providers: GET lists every row
@@ -56,7 +59,9 @@ func (s *Server) handleAdminLLMProviders(w http.ResponseWriter, r *http.Request)
 		in := store.LLMProviderInput{
 			Name: body.Name, Type: body.Type, BaseURL: body.BaseURL,
 			Models: body.Models, Enabled: body.Enabled, APIKey: body.APIKey,
-			ContextWindowTokens: body.ContextWindowTokens,
+		}
+		if body.ContextWindowTokens != nil {
+			in.ContextWindowTokens = *body.ContextWindowTokens
 		}
 		key := ""
 		if body.APIKey != nil {
@@ -99,26 +104,36 @@ func (s *Server) handleAdminLLMProviderItem(w http.ResponseWriter, r *http.Reque
 		in := store.LLMProviderInput{
 			Name: body.Name, Type: body.Type, BaseURL: body.BaseURL,
 			Models: body.Models, Enabled: body.Enabled, APIKey: body.APIKey,
-			ContextWindowTokens: body.ContextWindowTokens,
+		}
+		if body.ContextWindowTokens != nil {
+			in.ContextWindowTokens = *body.ContextWindowTokens
 		}
 		// Effective-key check: an update that leaves the key untouched (nil)
 		// counts the stored key; one that sets/clears it counts the new value.
+		// An omitted context window likewise keeps the stored one.
 		effectiveKey := ""
 		if body.APIKey != nil {
 			effectiveKey = *body.APIKey
-		} else {
+		}
+		if body.APIKey == nil || body.ContextWindowTokens == nil {
 			existing, err := s.store.ListLLMProviders(r.Context())
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			for _, p := range existing {
-				if p.ID == id && p.HasAPIKey {
+				if p.ID != id {
+					continue
+				}
+				if body.APIKey == nil && p.HasAPIKey {
 					// Placeholder — validateLLMProviderRow only checks presence,
 					// never the value, so the real key needn't be decrypted here.
 					effectiveKey = "stored"
-					break
 				}
+				if body.ContextWindowTokens == nil {
+					in.ContextWindowTokens = p.ContextWindowTokens
+				}
+				break
 			}
 		}
 		if err := validateLLMProviderRow(in, effectiveKey); err != nil {
@@ -215,7 +230,8 @@ func validateLLMProviderRow(in store.LLMProviderInput, effectiveKey string) erro
 	}, agentcore.DefaultProviderHeaders); err != nil {
 		return err
 	}
-	if typ != agentcore.ProviderTypeOpenRouter && in.ContextWindowTokens <= 0 {
+	// == 0, not <= 0: a negative value is the store's range error.
+	if typ != agentcore.ProviderTypeOpenRouter && in.ContextWindowTokens == 0 {
 		return fmt.Errorf("type %s requires context_window_tokens before the row can be enabled: set the endpoint's real context limit in tokens", typ)
 	}
 	return nil
