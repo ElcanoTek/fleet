@@ -116,11 +116,32 @@ func (s *Store) CreateUserSkillProposal(ctx context.Context, userEmail, name, de
 	return s.createUserSkill(ctx, userEmail, name, description, body, UserSkillStatusProposed, UserSkillVisibilityPrivate)
 }
 
+func (s *Store) checkWorkspaceShareCapacity(ctx context.Context, name, excludeID string) error {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT name)
+		FROM user_skills
+		WHERE status = $1 AND visibility = $2 AND name <> $3 AND id <> $4`,
+		UserSkillStatusActive, UserSkillVisibilityWorkspace, name, excludeID).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count >= MaxWorkspaceSharedSkills {
+		return fmt.Errorf("%w: workspace shared skill catalog is full (max %d skills)", ErrUserSkillInvalid, MaxWorkspaceSharedSkills)
+	}
+	return nil
+}
+
 func (s *Store) createUserSkill(ctx context.Context, userEmail, name, description, body, status, visibility string) (*UserSkill, error) {
 	email := normalizeEmail(userEmail)
 	name = strings.TrimSpace(name)
 	if err := validateUserSkill(name, description, body); err != nil {
 		return nil, err
+	}
+	if status == UserSkillStatusActive && visibility == UserSkillVisibilityWorkspace {
+		if err := s.checkWorkspaceShareCapacity(ctx, name, ""); err != nil {
+			return nil, err
+		}
 	}
 	now := time.Now().Unix()
 	sk := &UserSkill{
@@ -161,6 +182,19 @@ func (s *Store) UpdateUserSkillWithVisibility(ctx context.Context, userEmail, id
 	vis := strings.TrimSpace(visibility)
 	if vis != "" && vis != UserSkillVisibilityPrivate && vis != UserSkillVisibilityWorkspace {
 		return nil, fmt.Errorf("%w: unknown visibility %q", ErrUserSkillInvalid, visibility)
+	}
+	if status == UserSkillStatusActive {
+		effectiveVis := vis
+		if effectiveVis == "" {
+			if existing, gerr := s.GetUserSkill(ctx, userEmail, id); gerr == nil {
+				effectiveVis = existing.Visibility
+			}
+		}
+		if effectiveVis == UserSkillVisibilityWorkspace {
+			if err := s.checkWorkspaceShareCapacity(ctx, name, id); err != nil {
+				return nil, err
+			}
+		}
 	}
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE user_skills
@@ -225,15 +259,15 @@ const MaxWorkspaceSharedSkills = 100
 
 // ListWorkspaceSharedUserSkills returns active workspace-shared skills across
 // all users in the deployment, deduplicated by name (most recently updated
-// wins), ordered by name and bounded to MaxWorkspaceSharedSkills.
+// wins), ordered by name. Capacity is enforced at write time by
+// checkWorkspaceShareCapacity (MaxWorkspaceSharedSkills).
 func (s *Store) ListWorkspaceSharedUserSkills(ctx context.Context) ([]UserSkill, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT ON (name) id, user_email, name, description, body, status, visibility, created_at, updated_at
 		FROM user_skills
 		WHERE status = $1 AND visibility = $2
-		ORDER BY name, updated_at DESC, id ASC
-		LIMIT $3`,
-		UserSkillStatusActive, UserSkillVisibilityWorkspace, MaxWorkspaceSharedSkills)
+		ORDER BY name, updated_at DESC, id ASC`,
+		UserSkillStatusActive, UserSkillVisibilityWorkspace)
 	if err != nil {
 		return nil, err
 	}

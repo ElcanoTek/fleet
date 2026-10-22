@@ -309,8 +309,8 @@ export default function SkillsPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            name: s.name,
-            description: s.description,
+            name: d.name || s.name,
+            description: d.description || s.description,
             body,
             visibility: "private",
           }),
@@ -433,8 +433,9 @@ export default function SkillsPage() {
                 }
               />
               <span>
-                Share with this workspace — teammates can invoke <CodeChip>/{draft.name || "name"}</CodeChip>{" "}
-                and the agent can pick it up in their runs
+                Share with this workspace — publish to the Workspace pack so teammates can inspect{" "}
+                <CodeChip>/{draft.name || "name"}</CodeChip> and add it to their own skills in one
+                click
               </span>
             </label>
             {/* The design tightens .conn-form-actions' top margin inside
