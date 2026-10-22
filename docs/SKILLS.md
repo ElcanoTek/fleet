@@ -203,32 +203,46 @@ roster handle is `skills/<name>/SKILL.md`, `/name` invocation works, and
 plugin (first by plugin name) > built-in pack; `GET /skills` reports
 `source: "plugin"` plus `plugin: "<name>"` so the library can badge provenance.
 
-## User-authored skills (the builder — phase 2, shipped)
+## User-authored skills (the builder & self-service Workspace pack — phase 2, shipped)
 
 Settings → Skills gains a **"Your skills"** builder: create, edit,
-enable/disable, and delete personal skills (name + one-line description +
-markdown instructions). They are DB-owned (`user_skills`, migration 033),
-strictly per-user, and reach runs by **workspace materialization**: before a
-chat turn, the caller's ACTIVE skills are written into the conversation
-workspace (`user-skills/<name>/SKILL.md`, regenerated from the DB fields and
-cleaned up when a skill is renamed/disabled/deleted) and listed in a "Your
-user's skills" prompt roster section. `/name` invocation matches them after
-bundle/built-in names.
+enable/disable, share to the workspace, and delete personal skills (name +
+one-line description + markdown instructions), and Chat's **"Save as
+workflow…"** dialog can save a distilled conversation either to the Prompt
+Library or directly as a personal or workspace-shared Agent Skill. They are
+DB-owned (`user_skills`, migrations 033 and 081), private by default
+(`visibility = 'private'`), and reach runs by **workspace materialization**:
+before a chat turn, the caller's own ACTIVE skills are written into the
+conversation workspace (`user-skills/<name>/SKILL.md`, regenerated from the DB
+fields and cleaned up when a skill is renamed/disabled/deleted, including when
+the effective roster becomes empty) and listed in a "Your user's skills" prompt
+roster section. `/name` invocation matches them after bundle/built-in names.
 
-**Scheduled tasks load them too**: the runner resolves the task owner
-(`task.CreatedBy` → chat email, the same resolution the remote-MCP overlay
-uses) and inlines the owner's ACTIVE skills into the run's system prompt
-(full bodies, under a 24KB total budget with LOUD truncation — headless runs
-have no per-conversation workspace to materialize files into, and per-user
+**Self-service Workspace sharing with recipient opt-in (`visibility = 'workspace'`)**:
+when a user marks an active skill as shared with the workspace (`Share with
+workspace` on the row or in the builder/Save-as-workflow dialog, bounded by
+`MaxWorkspaceSharedSkills = 100` distinct shared skill names), it is published
+to `GET /skills` under `shared_skills` (`source: "workspace"`,
+`shared_by: "<email>"`) and surfaced in **Settings → Skills → Workspace pack**.
+Teammates' shared skills are **never** auto-injected into another user's prompt
+or workspace without consent: a teammate inspects the skill in the Workspace
+pack and clicks **Add to my skills** to create an active private copy in their
+own `user_skills` roster.
+
+**Scheduled tasks load the owner's active skills too**: the runner resolves the
+task owner (`task.CreatedBy` → chat email, the same resolution the remote-MCP
+overlay uses) and inlines the owner's ACTIVE skills into the run's system
+prompt (full bodies, under a 24KB total budget with LOUD truncation — headless
+runs have no per-conversation workspace to materialize files into, and per-user
 files in the shared workspace root would be readable by other users' runs).
 
 Remaining scope notes:
 
 - No bundled scripts on user skills (SKILL.md only); anything executable a
   user skill describes still runs under the ordinary sandbox + tool policy.
-- Graduation to the whole deployment stays an operator action: copy the
-  SKILL.md into the bundle's `skills/` dir (the read view makes the content
-  copyable).
+- Deployment-wide auto-enabled bundle skills (active for every user without
+  per-user opt-in) remain an operator action: copy the SKILL.md into the
+  bundle's `skills/` dir.
 
 ## Agent-drafted proposals (phase 3, shipped)
 

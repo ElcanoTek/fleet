@@ -22,24 +22,62 @@ type skillsFakeStore struct {
 	nextID int
 }
 
-func (s *skillsFakeStore) ListUserSkills(_ context.Context, _ string) ([]store.UserSkill, error) {
-	return s.skills, nil
+func (s *skillsFakeStore) ListUserSkills(_ context.Context, email string) ([]store.UserSkill, error) {
+	if email == "" {
+		return s.skills, nil
+	}
+	var out []store.UserSkill
+	for _, sk := range s.skills {
+		if sk.UserEmail == "" || sk.UserEmail == email {
+			out = append(out, sk)
+		}
+	}
+	return out, nil
 }
 
-func (s *skillsFakeStore) CreateUserSkill(_ context.Context, email, name, description, body string) (*store.UserSkill, error) {
-	if name == "" {
+func (s *skillsFakeStore) ListWorkspaceSharedUserSkills(_ context.Context) ([]store.UserSkill, error) {
+	var out []store.UserSkill
+	for _, sk := range s.skills {
+		if sk.Status == store.UserSkillStatusActive && sk.Visibility == store.UserSkillVisibilityWorkspace {
+			cp := sk
+			cp.SharedBy = sk.UserEmail
+			out = append(out, cp)
+		}
+	}
+	return out, nil
+}
+
+func (s *skillsFakeStore) CreateUserSkill(ctx context.Context, email, name, description, body string) (*store.UserSkill, error) {
+	return s.CreateUserSkillWithVisibility(ctx, email, name, description, body, store.UserSkillVisibilityPrivate)
+}
+
+func (s *skillsFakeStore) CreateUserSkillWithVisibility(_ context.Context, email, name, description, body, visibility string) (*store.UserSkill, error) {
+	if name == "" || (visibility != store.UserSkillVisibilityPrivate && visibility != store.UserSkillVisibilityWorkspace) {
 		return nil, store.ErrUserSkillInvalid
 	}
 	s.nextID++
-	sk := store.UserSkill{ID: string(rune('a' + s.nextID)), UserEmail: email, Name: name, Description: description, Body: body, Status: store.UserSkillStatusActive}
+	sk := store.UserSkill{
+		ID: string(rune('a' + s.nextID)), UserEmail: email, Name: name, Description: description,
+		Body: body, Status: store.UserSkillStatusActive, Visibility: visibility,
+	}
 	s.skills = append(s.skills, sk)
 	return &sk, nil
 }
 
-func (s *skillsFakeStore) UpdateUserSkill(_ context.Context, _, id, name, description, body, status string) (*store.UserSkill, error) {
+func (s *skillsFakeStore) UpdateUserSkill(ctx context.Context, email, id, name, description, body, status string) (*store.UserSkill, error) {
+	return s.UpdateUserSkillWithVisibility(ctx, email, id, name, description, body, status, "")
+}
+
+func (s *skillsFakeStore) UpdateUserSkillWithVisibility(_ context.Context, _, id, name, description, body, status, visibility string) (*store.UserSkill, error) {
+	if visibility != "" && visibility != store.UserSkillVisibilityPrivate && visibility != store.UserSkillVisibilityWorkspace {
+		return nil, store.ErrUserSkillInvalid
+	}
 	for i := range s.skills {
 		if s.skills[i].ID == id {
 			s.skills[i].Name, s.skills[i].Description, s.skills[i].Body, s.skills[i].Status = name, description, body, status
+			if visibility != "" {
+				s.skills[i].Visibility = visibility
+			}
 			cp := s.skills[i]
 			return &cp, nil
 		}
@@ -167,5 +205,66 @@ func TestUserSkillsEndpoints(t *testing.T) {
 	}
 	if len(fs.skills) != 0 {
 		t.Errorf("delete left rows: %+v", fs.skills)
+	}
+}
+
+// Workspace-shared skills appear in GET /skills under shared_skills
+// (source="workspace") and GET /skills/{name}, without auto-materializing into
+// teammates' prompts until the teammate opts in ("Add to my skills"). Also
+// verifies that materializeUserSkills cleans up stale skill directories when
+// the user's effective roster becomes empty.
+func TestWorkspaceSharedUserSkills(t *testing.T) {
+	wsRoot := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", wsRoot)
+	fs := &skillsFakeStore{fakeChatStore: newFakeChatStore()}
+	s := &Server{store: fs}
+
+	w := userSkillsReq(t, s, s.userSkillsCollection, http.MethodPost, "/user-skills",
+		`{"name":"opt-workbench","description":"review campaign optimizations","body":"1. Open workbench.","visibility":"workspace"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create shared: %d %s", w.Code, w.Body.String())
+	}
+	var created store.UserSkill
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Visibility != store.UserSkillVisibilityWorkspace {
+		t.Fatalf("visibility = %q, want workspace", created.Visibility)
+	}
+
+	// GET /skills includes the workspace-shared skill under shared_skills (separate from bundle skills).
+	w = userSkillsReq(t, s, s.listSkills, http.MethodGet, "/skills", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"shared_skills":[`) || !strings.Contains(w.Body.String(), `"opt-workbench"`) {
+		t.Fatalf("GET /skills missing shared_skills: %d %s", w.Code, w.Body.String())
+	}
+
+	// GET /skills/opt-workbench returns its rendered SKILL.md content and raw body for 1-click install.
+	w = userSkillsReq(t, s, s.skillByName, http.MethodGet, "/skills/opt-workbench", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "1. Open workbench.") || !strings.Contains(w.Body.String(), `"body":"1. Open workbench."`) {
+		t.Fatalf("GET /skills/opt-workbench: %d %s", w.Code, w.Body.String())
+	}
+
+	// A teammate ("teammate@x.com") does NOT auto-materialize the shared skill without opting in.
+	entries := s.materializeUserSkills(context.Background(), "teammate@x.com", "conv-teammate-1")
+	if len(entries) != 0 {
+		t.Fatalf("unconsented teammate materialize = %+v, want empty", entries)
+	}
+
+	// Author ("u@x.com") materializes their own skill, and deleting the last skill cleans up the stale directory.
+	authorEntries := s.materializeUserSkills(context.Background(), "u@x.com", "conv-author-1")
+	if len(authorEntries) != 1 || authorEntries[0].Name != "opt-workbench" {
+		t.Fatalf("author materialize = %+v", authorEntries)
+	}
+	w = userSkillsReq(t, s, s.userSkillByID, http.MethodDelete, "/user-skills/"+created.ID, "")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d", w.Code)
+	}
+	afterDelete := s.materializeUserSkills(context.Background(), "u@x.com", "conv-author-1")
+	if len(afterDelete) != 0 {
+		t.Fatalf("afterDelete = %+v, want empty", afterDelete)
+	}
+	stalePath := filepath.Join(wsRoot, "conv-author-1", "user-skills", "opt-workbench")
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Fatalf("stale skill directory %s was not removed after roster became empty: err=%v", stalePath, err)
 	}
 }

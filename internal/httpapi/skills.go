@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // Skills, phase 1 of first-class skills (#513): browse the bundle's skill
@@ -36,8 +37,9 @@ type skillEntry struct {
 	// from fleet's built-in pack ("bundle" | "plugin" | "builtin") so the
 	// library UI can badge provenance. Plugin names the source plugin when
 	// Source is "plugin" (docs/AGENT-PLUGINS.md).
-	Source string `json:"source"`
-	Plugin string `json:"plugin,omitempty"`
+	Source   string `json:"source"`
+	Plugin   string `json:"plugin,omitempty"`
+	SharedBy string `json:"shared_by,omitempty"`
 	// DeclaredAllowedTools is the skill's frontmatter `allowed-tools` (nil when
 	// absent), surfaced for REVIEW/observability — the library UI shows it so an
 	// operator can see a skill's declared tool contract. NOT an authorization
@@ -47,6 +49,7 @@ type skillEntry struct {
 
 type skillsResponse struct {
 	Skills []skillEntry `json:"skills"`
+	Shared []skillEntry `json:"shared_skills,omitempty"`
 }
 
 // bundleSkills returns the client bundle's well-formed skills (nil-safe on a
@@ -60,24 +63,43 @@ func (s *Server) bundleSkills() []clientconfig.Skill {
 	return s.clientConfig.Skills()
 }
 
-// listSkills serves GET /skills: the bundle's skill roster for the composer
-// "/" autocomplete. Member-gated like /personas — the roster is deployment
-// content, not per-user state.
+// listSkills serves GET /skills: the bundle's skill roster in `skills` (used
+// by composer "/" autocomplete) plus active workspace-shared teammate skills
+// in `shared_skills` (used by Settings → Skills → Workspace pack for 1-click
+// opt-in installation). Member-gated like /personas.
 func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	skills := s.bundleSkills()
+	bundleNames := make(map[string]bool, len(skills))
 	entries := make([]skillEntry, 0, len(skills))
 	for _, sk := range skills {
+		bundleNames[sk.Name] = true
 		origin := s.skillOrigin(sk.Name)
 		entries = append(entries, skillEntry{
 			Name: sk.Name, Description: sk.Description, Source: origin.Source, Plugin: origin.Plugin,
 			DeclaredAllowedTools: sk.DeclaredAllowedTools,
 		})
 	}
-	writeJSON(w, skillsResponse{Skills: entries})
+	var sharedEntries []skillEntry
+	if s.store != nil {
+		if shared, err := s.store.ListWorkspaceSharedUserSkills(r.Context()); err == nil {
+			for _, sk := range shared {
+				if bundleNames[sk.Name] {
+					continue
+				}
+				sharedEntries = append(sharedEntries, skillEntry{
+					Name:        sk.Name,
+					Description: sk.Description,
+					Source:      "workspace",
+					SharedBy:    sk.SharedBy,
+				})
+			}
+		}
+	}
+	writeJSON(w, skillsResponse{Skills: entries, Shared: sharedEntries})
 }
 
 // skillOrigin reports where a merged-roster skill came from — the bundle's
@@ -121,6 +143,25 @@ func (s *Server) skillByName(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, resp)
 		return
+	}
+	if s.store != nil {
+		if shared, err := s.store.ListWorkspaceSharedUserSkills(r.Context()); err == nil {
+			for _, sk := range shared {
+				if sk.Name != name {
+					continue
+				}
+				resp := map[string]any{
+					"name":        sk.Name,
+					"description": sk.Description,
+					"source":      "workspace",
+					"shared_by":   sk.SharedBy,
+					"body":        sk.Body,
+					"content":     store.RenderUserSkillMarkdown(&sk),
+				}
+				writeJSON(w, resp)
+				return
+			}
+		}
 	}
 	http.Error(w, "unknown skill", http.StatusNotFound)
 }
@@ -171,10 +212,10 @@ func matchSkillInvocation(message string, skills []clientconfig.Skill) (block, m
 func (s *Server) applySkillInvocation(ctx context.Context, user, userMessage, rawMessage string) string {
 	block, _ := matchSkillInvocation(rawMessage, s.bundleSkills())
 	if block == "" && s.store != nil {
-		// Bundle/built-in names win; otherwise try the caller's own skills
-		// (docs/SKILLS.md phase 2). Best-effort — a store error just means no
-		// invocation block.
-		if userSkills, err := s.store.ListUserSkills(ctx, user); err == nil {
+		// Bundle/built-in names win; otherwise try the caller's effective skills
+		// (their own active skills + workspace-shared active skills, docs/SKILLS.md).
+		// Best-effort — a store error just means no invocation block.
+		if userSkills, err := s.effectiveUserSkills(ctx, user); err == nil {
 			block = matchUserSkillInvocation(rawMessage, userSkills)
 		}
 	}

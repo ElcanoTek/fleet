@@ -381,7 +381,11 @@ A **persona** is a saved working style your deployment may ship, chosen from the
 composer. A **skill** is a packaged capability the assistant can pick up on its
 own when a task fits, or that you can invoke directly by typing `/` at the very
 start of a message and choosing from the list. The platform ships a small pack
-of general-purpose skills, and your deployment can add its own.
+of general-purpose skills, and your deployment can add its own. Under
+**Settings → Skills**, you can also create personal skills, publish a skill to
+the **Workspace pack** (**Share with workspace**), or click **Add to my skills**
+on a teammate-shared skill in the Workspace pack to enable it for your own chats
+and tasks.
 
 For Bento presentations, your deployment can supply a default branded starter.
 Ask for a different theme or a blank deck whenever you prefer; the starter's
@@ -849,7 +853,7 @@ you hover over it. Here is everything in it.
 | **Labels** | Add or remove labels. Labels double as filters in the rail. |
 | **Download chat** | Export the conversation in one of three formats: **Web page**, which opens in any browser, looks like the chat, and prints to PDF; **Text document**, for pasting into email, Word, or Docs; or **Raw data**, the complete record for developers. **Include the agent's work** adds the tool calls, results, and reasoning; it is off by default so a long chat downloads as the conversation, not its machinery. |
 | **Make recurring task…** | Ask the assistant to turn this conversation into a scheduled task. See [From chat to a task](#10-from-chat-to-a-task). |
-| **Save as workflow** | Turn the whole conversation into a reusable workflow template in the prompt library. See [From chat to a task](#10-from-chat-to-a-task). |
+| **Save as workflow** | Turn the whole conversation into a reusable workflow template in the prompt library or a personal **Agent Skill (`/skill-name`)**. See [From chat to a task](#10-from-chat-to-a-task). |
 | **Share…** | Opens the share dialog: sharing with your team first, then **Share outside your team** (a public link). See [Sharing with your team](#sharing-with-your-team). |
 | **Select** | Enter selection mode to pin, label, or delete several conversations at once. If the selection includes chats shared with your team, the delete confirmation says how many, and that the team loses them and their shared files; teammates who branched them keep their copies. |
 | **Archive** | Put it away without deleting it. Archived conversations never expire and can be unarchived from the **Archived** group. Archiving a chat shared with your team stops sharing it (it asks first, with the number of shared files); unarchived, it comes back as **Only you**. An archived chat can't be shared with your team; unarchive it first. |
@@ -1053,8 +1057,10 @@ reads the whole conversation — including what the assistant did and where it w
 wrong along the way — and writes it up as a workflow template: an objective, the
 inputs as bracketed placeholders, the steps with the tool each one used, the
 output, and notes. This run's names, dates, and targets are generalized; the
-method stays specific. You review the draft in the save form before it enters the
-library.
+method stays specific. In the save dialog, choose **Destination**: save it to the
+**Prompt Library** (private by default, or **Share with workspace**) or save it
+directly as an **Agent Skill (`/skill-name`)** (personal by default, or published
+to the **Workspace pack** so teammates can click **Add to my skills**).
 
 Save as workflow is a good fit for the afternoon you spent getting the assistant
 to profile a new dataset, compute a baseline, and draft a note, because next

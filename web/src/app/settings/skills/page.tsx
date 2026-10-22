@@ -37,8 +37,9 @@ import { ClampText } from "../ui/atoms";
 type SkillEntry = {
   name: string;
   description: string;
-  source: string; // "bundle" | "plugin" | "builtin"
+  source: string; // "bundle" | "plugin" | "builtin" | "workspace"
   plugin?: string; // the Agent Plugin name when source is "plugin"
+  shared_by?: string; // author email when source is "workspace"
   // The skill's declared `allowed-tools` (from SKILL.md frontmatter), surfaced
   // for review. fleet does NOT enforce it — a skill's real limits are the
   // sandbox, MCP allowlist, and approval gate — so it reads as a declared
@@ -46,19 +47,26 @@ type SkillEntry = {
   declared_allowed_tools?: string[];
 };
 
-type SkillDetail = SkillEntry & { content: string };
+type SkillDetail = SkillEntry & { content: string; body?: string };
 
-// A skill the user authored in the builder (docs/SKILLS.md phase 2): DB-owned,
-// materialized only into the author's own runs.
+// A skill the user authored in the builder (docs/SKILLS.md phase 2/3): DB-owned,
+// private by default or shared with the workspace.
 type UserSkill = {
   id: string;
   name: string;
   description: string;
   body: string;
   status: "active" | "disabled" | "proposed";
+  visibility?: "private" | "workspace";
 };
 
-const EMPTY_DRAFT = { id: "", name: "", description: "", body: "" };
+const EMPTY_DRAFT = {
+  id: "",
+  name: "",
+  description: "",
+  body: "",
+  visibility: "private" as "private" | "workspace",
+};
 
 // skillMd composes the SKILL.md a personal skill materializes as (the same
 // frontmatter + body shape /api/skills/{name} returns for pack skills), so
@@ -113,10 +121,10 @@ export default function SkillsPage() {
     fetch("/api/skills", { cache: "no-store" })
       .then(async (res) => {
         if (!res.ok) throw new Error(`Failed to load skills: ${res.status}`);
-        return (await res.json()) as { skills: SkillEntry[] };
+        return (await res.json()) as { skills: SkillEntry[]; shared_skills?: SkillEntry[] };
       })
       .then((data) => {
-        if (!stale) setSkills(data.skills ?? []);
+        if (!stale) setSkills([...(data.skills ?? []), ...(data.shared_skills ?? [])]);
       })
       .catch((e: unknown) => {
         if (!stale) setError(e instanceof Error ? e.message : "Failed to load skills.");
@@ -142,6 +150,19 @@ export default function SkillsPage() {
       stale = true;
     };
   }, []);
+
+  const reloadWorkspacePack = () =>
+    fetch("/api/skills", { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`Failed to load skills: ${res.status}`);
+        return (await res.json()) as { skills: SkillEntry[]; shared_skills?: SkillEntry[] };
+      })
+      .then((data) => {
+        setSkills([...(data.skills ?? []), ...(data.shared_skills ?? [])]);
+      })
+      .catch(() => {
+        // Keep current pack list on refresh error.
+      });
 
   const reloadMine = () =>
     fetch("/api/user-skills", { cache: "no-store" })
@@ -170,6 +191,7 @@ export default function SkillsPage() {
         name: draft.name.trim(),
         description: draft.description.trim(),
         body: draft.body,
+        visibility: draft.visibility,
         // An edit must not change the lifecycle state — resend the current one.
         ...(isNew ? {} : { status: mine?.find((m) => m.id === draft.id)?.status ?? "active" }),
       }),
@@ -177,9 +199,34 @@ export default function SkillsPage() {
       .then(async (res) => {
         if (!res.ok) throw new Error((await res.text()) || `Save failed: ${res.status}`);
         setDraft(null);
-        return reloadMine();
+        await reloadMine();
+        await reloadWorkspacePack();
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Save failed."))
+      .finally(() => setBusy(false));
+  };
+
+  const toggleShareMine = (sk: UserSkill) => {
+    setBusy(true);
+    setError(null);
+    const nextVisibility = sk.visibility === "workspace" ? "private" : "workspace";
+    fetch(`/api/user-skills/${encodeURIComponent(sk.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: sk.name,
+        description: sk.description,
+        body: sk.body,
+        status: nextVisibility === "workspace" ? "active" : sk.status === "proposed" ? "active" : sk.status,
+        visibility: nextVisibility,
+      }),
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error((await res.text()) || `Share update failed: ${res.status}`);
+        await reloadMine();
+        await reloadWorkspacePack();
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Share update failed."))
       .finally(() => setBusy(false));
   };
 
@@ -194,11 +241,13 @@ export default function SkillsPage() {
         description: sk.description,
         body: sk.body,
         status: sk.status === "active" ? "disabled" : "active",
+        visibility: sk.visibility ?? "private",
       }),
     })
       .then(async (res) => {
         if (!res.ok) throw new Error((await res.text()) || `Update failed: ${res.status}`);
-        return reloadMine();
+        await reloadMine();
+        await reloadWorkspacePack();
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Update failed."))
       .finally(() => setBusy(false));
@@ -217,11 +266,13 @@ export default function SkillsPage() {
         description: sk.description,
         body: sk.body,
         status: "active",
+        visibility: sk.visibility ?? "private",
       }),
     })
       .then(async (res) => {
         if (!res.ok) throw new Error((await res.text()) || "Approve failed.");
-        return reloadMine();
+        await reloadMine();
+        await reloadWorkspacePack();
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Approve failed."))
       .finally(() => setBusy(false));
@@ -237,9 +288,37 @@ export default function SkillsPage() {
         if (!res.ok && res.status !== 204) {
           throw new Error((await res.text()) || `Delete failed: ${res.status}`);
         }
-        return reloadMine();
+        await reloadMine();
+        await reloadWorkspacePack();
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Delete failed."))
+      .finally(() => setBusy(false));
+  };
+
+  const addSharedToMine = (s: SkillEntry) => {
+    setBusy(true);
+    setError(null);
+    fetch(`/api/skills/${encodeURIComponent(s.name)}`, { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error((await res.text()) || `Failed to load skill: ${res.status}`);
+        return (await res.json()) as SkillDetail;
+      })
+      .then(async (d) => {
+        const body = (d.body ?? d.content.replace(/^---[\s\S]*?---\s*/, "")).trim();
+        const res = await fetch("/api/user-skills", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: d.name || s.name,
+            description: d.description || s.description,
+            body,
+            visibility: "private",
+          }),
+        });
+        if (!res.ok) throw new Error((await res.text()) || `Failed to add skill: ${res.status}`);
+        await reloadMine();
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to add skill."))
       .finally(() => setBusy(false));
   };
 
@@ -310,9 +389,8 @@ export default function SkillsPage() {
           />
         </ConnPanelHead>
         <ConnPanelSub>
-          Skills you write here are yours alone — they load into your chats (invoke with{" "}
-          <CodeChip>/name</CodeChip>) and never affect other users. Ask your operator to copy a
-          proven one into the workspace bundle to share it.
+          Skills you write here load into your chats (invoke with <CodeChip>/name</CodeChip>). You
+          can keep a skill private or share it with everyone in this workspace in one click.
         </ConnPanelSub>
 
         {draft ? (
@@ -346,6 +424,20 @@ export default function SkillsPage() {
                 onChange={(e) => setDraft({ ...draft, body: e.target.value })}
               />
             </ConnField>
+            <label className="flex cursor-pointer items-center gap-2 text-[0.78rem] text-[var(--color-text-secondary)]">
+              <input
+                type="checkbox"
+                checked={draft.visibility === "workspace"}
+                onChange={(e) =>
+                  setDraft({ ...draft, visibility: e.target.checked ? "workspace" : "private" })
+                }
+              />
+              <span>
+                Share with this workspace — publish to the Workspace pack so teammates can inspect{" "}
+                <CodeChip>/{draft.name || "name"}</CodeChip> and add it to their own skills in one
+                click
+              </span>
+            </label>
             {/* The design tightens .conn-form-actions' top margin inside
                 .skill-create (the grid gap already provides the spacing). */}
             <div className="mt-[0.1rem] flex justify-end gap-2">
@@ -414,17 +506,41 @@ export default function SkillsPage() {
                         ? "Proposed by agent"
                         : "Disabled"}
                   </ConnBadge>
+                  {sk.visibility === "workspace" ? (
+                    <ConnBadge variant="neutral">
+                      {sk.status === "active" ? "Shared with workspace" : "Shared (when enabled)"}
+                    </ConnBadge>
+                  ) : null}
                   <span className="ml-auto inline-flex gap-[0.35rem]">
                     {sk.status === "proposed" ? (
+                      <>
+                        <button
+                          type="button"
+                          className={btnClass({ sm: true, reveal: true })}
+                          disabled={busy}
+                          onClick={() => approveMine(sk)}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          className={btnClass({ sm: true, reveal: true })}
+                          disabled={busy}
+                          onClick={() => toggleShareMine(sk)}
+                        >
+                          Approve & share
+                        </button>
+                      </>
+                    ) : (
                       <button
                         type="button"
                         className={btnClass({ sm: true, reveal: true })}
                         disabled={busy}
-                        onClick={() => approveMine(sk)}
+                        onClick={() => toggleShareMine(sk)}
                       >
-                        Approve
+                        {sk.visibility === "workspace" ? "Unshare" : "Share with workspace"}
                       </button>
-                    ) : null}
+                    )}
                     <button
                       type="button"
                       className={btnClass({ sm: true, reveal: true })}
@@ -435,6 +551,7 @@ export default function SkillsPage() {
                           name: sk.name,
                           description: sk.description,
                           body: sk.body,
+                          visibility: sk.visibility === "workspace" ? "workspace" : "private",
                         })
                       }
                     >
@@ -500,21 +617,39 @@ export default function SkillsPage() {
               <div key={s.name} data-testid={`skill-row-${s.name}`} className={SKILL_ROW}>
                 <div className={SKILL_HEAD}>
                   <CopyChip name={s.name} />
-                  <ConnBadge variant={s.source === "bundle" ? "success" : "neutral"}>
+                  <ConnBadge
+                    variant={
+                      s.source === "bundle" || s.source === "workspace" ? "success" : "neutral"
+                    }
+                  >
                     {s.source === "bundle"
                       ? "Workspace"
-                      : s.source === "plugin"
-                        ? `Plugin${s.plugin ? `: ${s.plugin}` : ""}`
-                        : "Built-in"}
+                      : s.source === "workspace"
+                        ? `Shared${s.shared_by ? `: ${s.shared_by}` : ""}`
+                        : s.source === "plugin"
+                          ? `Plugin${s.plugin ? `: ${s.plugin}` : ""}`
+                          : "Built-in"}
                   </ConnBadge>
-                  <button
-                    type="button"
-                    className={`ml-auto flex-none ${btnClass({ sm: true, reveal: true })}`}
-                    aria-expanded={openSkill === s.name}
-                    onClick={() => view(s.name)}
-                  >
-                    {openSkill === s.name ? "Hide" : "View"}
-                  </button>
+                  <span className="ml-auto inline-flex gap-[0.35rem]">
+                    {s.source === "workspace" && !mine?.some((m) => m.name === s.name) ? (
+                      <button
+                        type="button"
+                        className={btnClass({ sm: true, reveal: true })}
+                        disabled={busy}
+                        onClick={() => addSharedToMine(s)}
+                      >
+                        Add to my skills
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={`flex-none ${btnClass({ sm: true, reveal: true })}`}
+                      aria-expanded={openSkill === s.name}
+                      onClick={() => view(s.name)}
+                    >
+                      {openSkill === s.name ? "Hide" : "View"}
+                    </button>
+                  </span>
                 </div>
                 <ClampText text={s.description} className={SKILL_DESC} />
                 {s.declared_allowed_tools && s.declared_allowed_tools.length > 0 ? (
