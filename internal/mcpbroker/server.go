@@ -122,6 +122,10 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 
 	var mu sync.Mutex
 	inflight := make(map[uint64]context.CancelFunc)
+	// stops holds the stop signal of each in-flight stoppable call
+	// (request.Stoppable), closed by a methodStop frame and dropped when the
+	// call ends.
+	stops := &callStops{m: make(map[uint64]chan struct{})}
 	var wg sync.WaitGroup
 
 	// Unblock a parked Decode when ctx is cancelled by closing the conn.
@@ -174,8 +178,17 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			}
 			mu.Unlock()
 
+		case methodStop:
+			// The frame's ID names the in-flight call to stop cooperatively:
+			// its stop signal closes, its context does not.
+			stops.stop(req.ID)
+
 		case methodCall:
 			callCtx, cancel := context.WithCancel(ctx)
+			var stopCh <-chan struct{}
+			if req.Stoppable {
+				stopCh = stops.add(req.ID)
+			}
 			mu.Lock()
 			inflight[req.ID] = cancel
 			mu.Unlock()
@@ -192,6 +205,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 					mu.Lock()
 					delete(inflight, req.ID)
 					mu.Unlock()
+					stops.drop(req.ID)
 					cancel()
 				}()
 				// Args arrives nil when the peer's empty map crossed the wire
@@ -205,6 +219,10 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				// Re-attach the parent's fleet `_meta` entries (request.Meta);
 				// WithRequestMeta keeps only the fleet/ namespace.
 				runCtx = mcp.WithRequestMeta(runCtx, req.Meta)
+				// A stoppable call (request.Stoppable): a methodStop frame
+				// closes this signal, and the MCP transport then asks the
+				// server to stop (mcp.WithStop).
+				runCtx = mcp.WithStop(runCtx, stopCh)
 				// The parent listens for progress (request.Progress): forward
 				// the call's progress notifications as intermediate frames,
 				// throttled, and stop before the final frame so none follows it.
@@ -474,4 +492,39 @@ func recoverBackendPanic(location string, requestID uint64, write func(response)
 			Err: fmt.Sprintf("mcpbroker backend panic (incident %s)", event.IncidentID),
 		})
 	}
+}
+
+// callStops is the stop signal of each in-flight stoppable methodCall, by
+// request id (request.Stoppable): a methodStop frame closes one, and the call
+// drops it when it ends.
+type callStops struct {
+	mu sync.Mutex
+	m  map[uint64]chan struct{}
+}
+
+// add registers a stoppable call and returns its signal.
+func (c *callStops) add(id uint64) <-chan struct{} {
+	ch := make(chan struct{})
+	c.mu.Lock()
+	c.m[id] = ch
+	c.mu.Unlock()
+	return ch
+}
+
+// stop closes a call's signal once; an unknown id (finished, or never
+// stoppable) is ignored.
+func (c *callStops) stop(id uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ch, ok := c.m[id]; ok {
+		close(ch)
+		delete(c.m, id)
+	}
+}
+
+// drop forgets a call that ended.
+func (c *callStops) drop(id uint64) {
+	c.mu.Lock()
+	delete(c.m, id)
+	c.mu.Unlock()
 }

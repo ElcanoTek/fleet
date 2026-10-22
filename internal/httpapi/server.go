@@ -51,11 +51,15 @@ type Server struct {
 	// A failed durable outcome write must not masquerade as live execution on
 	// retry. Startup recovers the persisted sentinel after this process exits.
 	approvalPersistenceFailures sync.Map
-	cfg                         *config.Config
-	agent                       turnEngine
-	store                       chatStore
-	sharedToken                 string
-	rate                        *ratelimit.Limiter
+	// approvalStops holds the stop signal of each running call of a tool in
+	// critical_tool_stop, by approval id (approval_stop.go): armed at the
+	// claim, dropped when the call's outcome is recorded.
+	approvalStops approvalStopRegistry
+	cfg           *config.Config
+	agent         turnEngine
+	store         chatStore
+	sharedToken   string
+	rate          *ratelimit.Limiter
 	// concurrent caps simultaneous in-flight turns per user. nil disables it
 	// (rate limiting off, or FLEET_CHAT_RATE_LIMIT_CONCURRENT=0).
 	concurrent *ratelimit.ConcurrencyLimiter

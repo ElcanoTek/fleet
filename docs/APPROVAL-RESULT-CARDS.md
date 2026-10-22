@@ -303,7 +303,8 @@ instead, so a bundle should send it only after this release.
 
 ## Deferred (noted, not built)
 
-- **Stop mid-run**, per-deal **One at a time**, and progress counts on the
+- **Stop mid-run** shipped later: see [APPROVAL-STOP.md](APPROVAL-STOP.md).
+  Still deferred: per-deal **One at a time**, and progress counts on the
   card ("12 of 24 done, 1 failed" as a split bar). The progress line from
   APPROVAL-PROGRESS.md still shows while a call runs.
 - **Download results** (mockups 6 and 6b).

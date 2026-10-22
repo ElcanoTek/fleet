@@ -1993,3 +1993,22 @@ agent_policy:
 		t.Fatalf("a valid entry must pass: %s", res.Detail)
 	}
 }
+
+// validate-config reports a critical_tool_stop member that stages no card.
+func TestCheckAgentPolicy_ApprovalStop(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(`
+agent_policy:
+  critical_tools: [execute_plan]
+  critical_tool_stop: [execute_plans]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := clientconfig.Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if res := checkAgentPolicy(b, nil); res.Status != statusFail || !strings.Contains(res.Detail, `"execute_plans"`) {
+		t.Fatalf("want agent_policy fail naming execute_plans, got %q: %s", res.Status, res.Detail)
+	}
+}

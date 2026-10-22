@@ -1,0 +1,12 @@
+-- 080_approval_stop.sql — when the person pressed Stop on a running approved
+-- call (agent_policy.critical_tool_stop, docs/APPROVAL-STOP.md).
+--
+-- Unix seconds, written once by MarkApprovalStopRequested and only on the
+-- owner's row while its call is still executing (approved, the executing
+-- sentinel, no outcome). It is the durable audit record of the stop: the
+-- running card reads "Stopping" from it after a reload, and the settled card
+-- knows the call was stopped. NULL is every other row (no stop was asked for,
+-- a tool that did not opt in, and every row written before this column
+-- existed), which behaves exactly as before, so a nullable ADD with no
+-- backfill is the old behaviour.
+ALTER TABLE approvals ADD COLUMN stop_requested_at BIGINT;

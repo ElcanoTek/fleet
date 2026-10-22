@@ -2100,6 +2100,12 @@ type Approval struct {
 	// Approved. Empty for every card approved whole. Read by GetApproval and
 	// ListResolvedApprovals.
 	NarrowedJSON string
+	// StopRequestedAt is when the person pressed Stop on the running call
+	// (migration 080, docs/APPROVAL-STOP.md), unix seconds, written once by
+	// MarkApprovalStopRequested while the call executes. 0 when no stop was
+	// asked for. Read by GetApproval, ListResolvedApprovals and
+	// ListExecutingApprovals.
+	StopRequestedAt int64
 	// NarrowableArg is the argument a person may narrow on this card, frozen
 	// at staging by SetApprovalNarrowableArg (migration 079,
 	// docs/APPROVAL-NARROWING.md). Empty = the card approves its call whole.
@@ -2159,7 +2165,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
 		        is_err, COALESCE(card_json, ''), COALESCE(group_id, ''), COALESCE(progress_json, ''),
-		        COALESCE(result_card_json, ''), COALESCE(narrowed_json, '')
+		        COALESCE(result_card_json, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0)
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status <> 'pending'
 		 ORDER BY created_at DESC
@@ -2176,7 +2182,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
 			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID, &a.ProgressJSON, &a.ResultCardJSON,
-			&a.NarrowedJSON); err != nil {
+			&a.NarrowedJSON, &a.StopRequestedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2195,7 +2201,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 // completed cards or their argument bodies. Filter before any display limit so
 // an older in-flight execution cannot be hidden by newer completed approvals.
 func (s *Store) ListExecutingApprovals(ctx context.Context, userEmail, convID, sentinel string) ([]Approval, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, tool_name, COALESCE(tool_call_id, ''), COALESCE(mcp_server, ''), COALESCE(mcp_account, ''), COALESCE(progress_json, ''), COALESCE(narrowed_json, '') FROM approvals
+	rows, err := s.db.QueryContext(ctx, `SELECT id, tool_name, COALESCE(tool_call_id, ''), COALESCE(mcp_server, ''), COALESCE(mcp_account, ''), COALESCE(progress_json, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0) FROM approvals
 		WHERE conversation_id = $1 AND user_email = $2 AND status = 'approved'
 		AND is_err IS NULL AND result_text = $3 ORDER BY created_at`, convID, userEmail, sentinel)
 	if err != nil {
@@ -2205,7 +2211,7 @@ func (s *Store) ListExecutingApprovals(ctx context.Context, userEmail, convID, s
 	var out []Approval
 	for rows.Next() {
 		a := Approval{Status: "approved", ResultText: sentinel}
-		if err := rows.Scan(&a.ID, &a.ToolName, &a.ToolCallID, &a.MCPServer, &a.MCPAccount, &a.ProgressJSON, &a.NarrowedJSON); err != nil {
+		if err := rows.Scan(&a.ID, &a.ToolName, &a.ToolCallID, &a.MCPServer, &a.MCPAccount, &a.ProgressJSON, &a.NarrowedJSON, &a.StopRequestedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2229,14 +2235,14 @@ func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
 	rows, err := tx.QueryContext(ctx, `UPDATE approvals SET result_text = $1
 		WHERE status = 'approved' AND is_err IS NULL AND result_text = $2
 		AND NOT EXISTS (SELECT 1 FROM turns WHERE turns.conversation_id = approvals.conversation_id AND turns.status = 'running')
-		RETURNING id, conversation_id, tool_name, COALESCE(tool_call_id, ''), COALESCE(narrowed_json, '')`, outcome, ApprovalExecutingSentinel)
+		RETURNING id, conversation_id, tool_name, COALESCE(tool_call_id, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0)`, outcome, ApprovalExecutingSentinel)
 	if err != nil {
 		return 0, err
 	}
 	var recovered []Approval
 	for rows.Next() {
 		var a Approval
-		if err := rows.Scan(&a.ID, &a.ConversationID, &a.ToolName, &a.ToolCallID, &a.NarrowedJSON); err != nil {
+		if err := rows.Scan(&a.ID, &a.ConversationID, &a.ToolName, &a.ToolCallID, &a.NarrowedJSON, &a.StopRequestedAt); err != nil {
 			_ = rows.Close()
 			return 0, err
 		}
@@ -2254,7 +2260,7 @@ func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
 		if callID == "" {
 			callID = a.ID
 		}
-		text := ApprovalRecoveryText(a.NarrowedJSON)
+		text := ApprovalRecoveryText(a.NarrowedJSON, a.StopRequestedAt > 0)
 		payload, err := json.Marshal(map[string]any{"id": callID, "name": a.ToolName, "text": text, "is_err": true})
 		if err != nil {
 			return 0, err
@@ -2414,7 +2420,7 @@ func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
 		        is_err, COALESCE(card_json, ''), resume_state, COALESCE(group_id, ''), COALESCE(progress_json, ''),
-		        COALESCE(result_card_json, ''), COALESCE(narrowed_json, ''), COALESCE(narrowable_arg, '')
+		        COALESCE(result_card_json, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0), COALESCE(narrowable_arg, '')
 		 FROM approvals WHERE id = $1 AND user_email = $2`,
 		approvalID, userEmail,
 	)
@@ -2422,7 +2428,7 @@ func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
 		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState, &a.GroupID, &a.ProgressJSON, &a.ResultCardJSON,
-		&a.NarrowedJSON, &a.NarrowableArg); err != nil {
+		&a.NarrowedJSON, &a.StopRequestedAt, &a.NarrowableArg); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -2546,6 +2552,24 @@ func (s *Store) ClaimApproval(ctx context.Context, userEmail, approvalID, newSta
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// MarkApprovalStopRequested records that the person pressed Stop on a call
+// that is still executing (docs/APPROVAL-STOP.md): it sets stop_requested_at
+// once, on the owner's approved row whose outcome is not recorded yet (the
+// executing sentinel, no is_err). It reports whether this call set it; a
+// second press, a settled card or another user's row changes nothing.
+func (s *Store) MarkApprovalStopRequested(ctx context.Context, userEmail, approvalID string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE approvals SET stop_requested_at = $1
+		 WHERE id = $2 AND user_email = $3 AND status = 'approved'
+		   AND is_err IS NULL AND result_text = $4 AND stop_requested_at IS NULL`,
+		time.Now().Unix(), approvalID, userEmail, ApprovalExecutingSentinel)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // ClaimApprovalNarrowed is ClaimApproval for a card the person approved

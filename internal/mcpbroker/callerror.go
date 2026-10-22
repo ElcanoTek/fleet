@@ -61,6 +61,11 @@ func (e *HostedCallError) Unwrap() error { return e.Err }
 // runbook's "the real text is on this line" still hold for the masked
 // classes.
 func describeCallError(err error) string {
+	// Fleet's own fixed text: a stoppable call stopped before its transport
+	// sent it. Nothing ran, and saying so is what the approval records.
+	if errors.Is(err, mcp.ErrStoppedBeforeSend) {
+		return mcp.ErrStoppedBeforeSend.Error()
+	}
 	var hosted *HostedCallError
 	if !errors.As(err, &hosted) {
 		return errBrokerCallFailed

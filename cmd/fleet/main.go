@@ -419,6 +419,7 @@ func run() error {
 		CriticalToolProgress:          bundlePolicy.CriticalToolProgress,
 		CriticalToolResultCards:       bundlePolicy.CriticalToolResultCards,
 		CriticalToolNarrowableArgs:    bundlePolicy.NarrowableArgNames(),
+		CriticalToolStop:              bundlePolicy.CriticalToolStop,
 		InteractiveHiddenTools:        bundlePolicy.InteractiveHiddenTools,
 	})
 

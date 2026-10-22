@@ -915,6 +915,11 @@ func approvalClientFields(toolName, rawInput, convID string) map[string]any {
 		// Only present when true, so every other card's payload is unchanged.
 		out["progress_updates"] = true
 	}
+	if approvalStoppable(toolName) {
+		// critical_tool_stop: once approved and running, the card offers
+		// Stop (docs/APPROVAL-STOP.md). Only present when true.
+		out["stoppable"] = true
+	}
 	if resumesAfterApproval(toolName) {
 		// critical_tool_resume: once this card is settled fleet starts a turn
 		// on its own (docs/RESUME-AFTER-APPROVAL.md), so the client follows the
@@ -1835,7 +1840,20 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	// retry) both send the email and only collide on the status write
 	// afterwards. Losing the claim means someone else is running it —
 	// return their resolved state instead of re-firing.
+	// A tool in critical_tool_stop: its stop signal exists BEFORE the claim
+	// makes the row executing, so a Stop that lands at any point after that
+	// finds it (approval_stop.go). Dropped once the outcome is recorded, or
+	// right away when this request does not win the claim.
+	stoppable := approvalStoppable(approval.ToolName)
+	if stoppable {
+		s.armApprovalStop(approvalID)
+	}
 	claimed, err := s.claimApproved(ctx, user, convID, approval, narrowing)
+	if err != nil || !claimed {
+		if stoppable {
+			s.disarmApprovalStop(approvalID)
+		}
+	}
 	if err != nil {
 		return approvalError(http.StatusInternalServerError, err.Error())
 	}
@@ -1861,6 +1879,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	admitted = false // the goroutine leaves the gate
 	go func() {
 		defer s.approvalRuns.leave()
+		defer s.disarmApprovalStop(approvalID)
 		defer safe.Recover("httpapi.approval_execute", func(any) {
 			// A panic before the outcome write leaves the sentinel standing:
 			// the action may have run, so the honest answer is "unknown",
@@ -1890,8 +1909,9 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 			"result_text": approvalExecutingSentinel,
 		}
 		// A narrowed approval says what was approved while it still runs, so
-		// the running card keeps its "Approved k of n" and left-out rows.
-		return approvalBody(s.resumeReplyFlag(execCtx, withApprovalNarrowed(running, approval), approval))
+		// the running card keeps its "Approved k of n" and left-out rows;
+		// critical_tool_stop: the running card offers Stop.
+		return approvalBody(s.resumeReplyFlag(execCtx, withApprovalStop(withApprovalNarrowed(running, approval), approval), approval))
 	case <-done:
 		// The client is gone; nobody reads a reply. The execution carries on
 		// detached and records its outcome for the next "Check result".
@@ -1956,7 +1976,9 @@ func (s *Server) approvalEarlyReplyWait(approval *store.Approval) (time.Duration
 	if s.cfg != nil && s.cfg.MockMode {
 		return 0, false
 	}
-	if strings.HasPrefix(approval.ToolName, "mcp_") && approvalReportsProgress(approval.ToolName) {
+	if strings.HasPrefix(approval.ToolName, "mcp_") && (approvalReportsProgress(approval.ToolName) || approvalStoppable(approval.ToolName)) {
+		// A call that reports progress, or that the person may stop, shows
+		// its running card at once: that card is where both happen.
 		return min(approvalProgressEarlyReplyAfter, approvalEarlyReplyAfter), true
 	}
 	if s.approvalMayAnswerEarly(approval) {
@@ -1996,6 +2018,11 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	default:
 		text, toolErr = s.runStagedTool(execCtx, approval)
 	}
+	// The call has returned, so nothing listens to its stop signal any more:
+	// close the stop window now (approval_stop.go). A Stop accepted before
+	// this point is recorded AND in the stop line below; one after it is
+	// refused, so the row's stop mark and the history never disagree.
+	stopped := s.finalizeApprovalStop(approvalID)
 	resultText := text
 	if toolErr != nil {
 		// The approval stays approved so the user knows the action was
@@ -2013,8 +2040,18 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	if n, nerr := parseApprovalNarrowing(approval.NarrowedJSON); approval.NarrowedJSON != "" && nerr == nil {
 		narrowed = n
 	}
+	// The person pressed Stop: fleet's line says so, in the words that fit.
+	// A stop that landed before the call was sent ran nothing at all.
+	var trailers []string
+	if stopped {
+		if errors.Is(toolErr, mcp.ErrStoppedBeforeSend) {
+			trailers = append(trailers, approvalStoppedBeforeSendNote)
+		} else {
+			trailers = append(trailers, approvalStopNote)
+		}
+	}
 	var governed string
-	resultText, isErr, governed = governApprovalResultWithTrailer(execCtx, approval, resultText, isErr, approvalTrailer(narrowed))
+	resultText, isErr, governed = governApprovalResultWithTrailer(execCtx, approval, resultText, isErr, approvalTrailer(narrowed, trailers...))
 	// A tool in critical_tool_result_cards: the outcome card its own result
 	// carries, stored on the still-executing row just before the outcome, so
 	// the settled card and its reply carry both. Only for a call that ran and
@@ -2048,6 +2085,9 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 		reply["result_card"] = resultCard
 	}
 	withApprovalNarrowed(reply, approval)
+	if stopped {
+		reply["stoppable"], reply["stopped"] = true, true
+	}
 	return s.resumeReplyFlag(execCtx, reply, approval)
 }
 
@@ -2202,7 +2242,7 @@ func (s *Server) approvalClientState(a *store.Approval) map[string]any {
 	// critical_tool_result_cards whose success fleet recorded. Absent for
 	// every other row, so its payload is unchanged. So is what a narrowed
 	// approval approved (approval_narrowing.go).
-	return withApprovalNarrowed(s.withApprovalResultCard(out, a), a)
+	return withApprovalStop(withApprovalNarrowed(s.withApprovalResultCard(out, a), a), a)
 }
 
 // writeResolvedApprovalState answers a request that lost the claim race
@@ -2420,7 +2460,7 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 // runStagedTool executes the staged tool one-shot outside the agent
 // loop. Supports MCP tools (send_email) and the native bash tool (risky
 // shell commands gated by orchestration.checkBashSafety).
-func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (string, error) {
+func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (text string, err error) {
 	mgr := s.agent
 	if mgr == nil {
 		return "", errors.New("agent manager unavailable")
@@ -2443,6 +2483,22 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 	// export send_email).
 	if !strings.HasPrefix(approval.ToolName, "mcp_") {
 		return "", fmt.Errorf("unsupported tool for approval: %s", approval.ToolName)
+	}
+	// A tool in critical_tool_stop: a Stop accepted before the call was
+	// dispatched (while its scope opened, say) means nothing was sent and no
+	// cancellation either, whatever else failed first. Such a failure is
+	// reported as stopped before send, so fleet's line says nothing ran
+	// rather than that the server was asked to stop. This runs last, after
+	// the stop window has closed (finalize is idempotent), so no Stop can land
+	// between this check and the outcome.
+	sent := false
+	if approvalStoppable(approval.ToolName) {
+		defer func() {
+			if !s.finalizeApprovalStop(approval.ID) || sent || err == nil || errors.Is(err, errStoppedBeforeSend) {
+				return
+			}
+			err = fmt.Errorf("%w (preparing it had failed too: %w)", errStoppedBeforeSend, err)
+		}()
 	}
 	// The staged arguments, with the narrowed argument replaced when the
 	// person approved only some of its values (approval_narrowing.go). A
@@ -2467,6 +2523,14 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 		return "", err
 	}
 	defer release()
+	// Close the stop window the moment this returns, before the scope is
+	// torn down (deferred calls run last-in first-out): release may block up
+	// to approvalScopeCloseTimeout, and a Stop accepted then would be marked
+	// and written into the outcome although no transport was listening any
+	// more. executeClaimedApproval's own finalize reads the same answer.
+	if approvalStoppable(approval.ToolName) {
+		defer s.finalizeApprovalStop(approval.ID)
+	}
 
 	server, tool, err := resolveMCPTool(catalog, approval.ToolName)
 	if err != nil {
@@ -2495,6 +2559,16 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 		// other arguments against what the person reviewed.
 		callCtx = mcp.WithRequestMeta(callCtx, narrowingRequestMeta(narrowing))
 	}
+	// A tool in critical_tool_stop: the person may stop the call while it
+	// runs (approval_stop.go). A Stop pressed before it was sent runs nothing.
+	if approvalStoppable(approval.ToolName) {
+		if h := s.approvalStopFor(approval.ID); h != nil {
+			if h.stopped() {
+				return "", errStoppedBeforeSend
+			}
+			callCtx = mcp.WithStop(callCtx, h.ch)
+		}
+	}
 	// A tool in critical_tool_progress asks its server for progress while it
 	// runs (approval_progress.go); the executing card shows it. Stopped when
 	// the call returns, before its outcome is recorded.
@@ -2503,6 +2577,7 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 		callCtx, stopProgress = s.startApprovalProgress(callCtx, approval)
 		defer stopProgress()
 	}
+	sent = true
 	text, isError, err := broker.CallMCP(callCtx, server, tool, args)
 	if err != nil {
 		return "", err

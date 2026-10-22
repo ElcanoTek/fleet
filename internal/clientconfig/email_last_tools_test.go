@@ -196,3 +196,24 @@ agent_policy:
 		t.Fatal("an unknown key inside an entry must fail the load")
 	}
 }
+
+// agent_policy.critical_tool_stop parses and is copied.
+func TestAgentPolicyApprovalStop(t *testing.T) {
+	dir := writeManifest(t, `
+agent_policy:
+  critical_tools: [execute_plan]
+  critical_tool_stop: [execute_plan]
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	p := b.AgentPolicy()
+	if len(p.CriticalToolStop) != 1 || p.CriticalToolStop[0] != "execute_plan" {
+		t.Fatalf("CriticalToolStop = %v, want [execute_plan]", p.CriticalToolStop)
+	}
+	p.CriticalToolStop[0] = "mutated"
+	if again := b.AgentPolicy(); again.CriticalToolStop[0] != "execute_plan" {
+		t.Errorf("AgentPolicy() must return a copy; the bundle now says %v", again.CriticalToolStop)
+	}
+}

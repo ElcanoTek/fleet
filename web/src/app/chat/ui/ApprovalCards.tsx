@@ -24,6 +24,7 @@ import {
   type MemoryProposal,
   approvalIsExecuting,
   approvalProgressText,
+  type ApprovalOutcomePayload,
   approvalStatusFromOutcome,
   parseApprovalNarrowed,
   resultCardFromOutcome,
@@ -48,7 +49,7 @@ import {
   ReadablePendingRecords,
 } from "./ApprovalReadableCard";
 import { ApprovalResultCardView } from "./ApprovalResultCard";
-import { conversationApprovalApiUrl } from "@/app/lib/conversationApiUrl";
+import { conversationApiPath, conversationApprovalApiUrl } from "@/app/lib/conversationApiUrl";
 import { Segmented } from "@/app/shared/ui/Segmented";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 
@@ -306,24 +307,57 @@ function ApprovalExecutingControls({
   submitting,
   submitError,
   onCheck,
+  onStop,
+  stopping = false,
 }: {
   progress?: ApprovalProgress;
   submitting: "send" | "cancel" | null;
   submitError: string | null;
   onCheck: () => void;
+  // A tool in critical_tool_stop (docs/APPROVAL-STOP.md): Stop asks the
+  // server to stop the call after its current item, unless the call has
+  // already finished (the status says so, never that a stop was delivered).
+  // Absent = no Stop button.
+  onStop?: () => void;
+  stopping?: boolean;
 }) {
+  const stopHintId = useId();
   return (
     <div className="mt-3 flex flex-col gap-2" data-testid="approval-executing">
       {progress ? <ApprovalProgressBar progress={progress} /> : null}
-      <button
-        type="button"
-        data-testid="approval-check-result"
-        className="w-fit rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
-        disabled={submitting !== null}
-        onClick={onCheck}
-      >
-        {submitting === "send" ? "Checking…" : "Check result"}
-      </button>
+      {stopping ? (
+        <p data-testid="approval-stopping" role="status" className="text-[0.75rem] text-[var(--color-text-secondary)]">
+          Stop requested: unless the call had already finished, its server is asked to stop after its current item. The result says what ran.
+        </p>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          data-testid="approval-check-result"
+          className="w-fit rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
+          disabled={submitting !== null}
+          onClick={onCheck}
+        >
+          {submitting === "send" ? "Checking…" : "Check result"}
+        </button>
+        {onStop && !stopping ? (
+          <>
+            <button
+              type="button"
+              data-testid="approval-stop"
+              aria-describedby={stopHintId}
+              className="w-fit rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              disabled={submitting !== null}
+              onClick={onStop}
+            >
+              {submitting === "cancel" ? "Stopping…" : "Stop"}
+            </button>
+            <span id={stopHintId} className="text-[0.72rem] text-[var(--color-card-text-muted)]">
+              Asks the server to stop after its current item; the result says what ran.
+            </span>
+          </>
+        ) : null}
+      </div>
       <ApprovalSubmitError
         message={submitError}
         running="This action is still running. Check result to see the outcome without running it again."
@@ -471,7 +505,9 @@ export function ApprovalCard({
   // A running call of a tool in critical_tool_progress: poll the card for
   // its progress and outcome (docs/APPROVAL-PROGRESS.md). Called before the
   // per-kind early returns to satisfy the rules of hooks.
-  useApprovalProgressPoll(card, conversationId, executing && approval.progressUpdates === true, (next) => {
+  // A stoppable call polls too, so the card settles on its own after a Stop
+  // (docs/APPROVAL-STOP.md).
+  useApprovalProgressPoll(card, conversationId, executing && (approval.progressUpdates === true || approval.stoppable === true), (next) => {
     if (next.status !== "pending") setHeldExecuting(false);
     onResolved(next);
   });
@@ -531,6 +567,8 @@ export function ApprovalCard({
         resume?: boolean;
         result_card?: unknown;
         narrowed?: unknown;
+        stoppable?: boolean;
+        stopped?: boolean;
       };
       const nextStatus = approvalStatusFromOutcome(data);
       const narrowed = parseApprovalNarrowed(data.narrowed) ?? approval.narrowed;
@@ -544,6 +582,7 @@ export function ApprovalCard({
           resultText: data.result_text,
           decisionError: undefined,
           narrowed,
+          stoppable: data.stoppable === true || approval.stoppable,
         });
         return;
       }
@@ -556,12 +595,60 @@ export function ApprovalCard({
         executing: false,
         decisionError: undefined,
         narrowed,
+        stopped: data.stopped === true || undefined,
       });
     } catch (err) {
       // Network failure: nothing reached the server, same posture as a non-2xx.
       setSubmitError(
         `Couldn't reach the server (${err instanceof Error ? err.message : "request failed"}).`,
       );
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  // Stop a running call (docs/APPROVAL-STOP.md): the server asks the tool to
+  // stop after its current item; the card shows "Stop requested" until it settles.
+  const stop = async () => {
+    if (submitting || !executing || !conversationId) return;
+    setSubmitting("cancel");
+    setSubmitError(null);
+    try {
+      const url = conversationApiPath(conversationId, "approvals", approval.id, "stop");
+      if (!url) {
+        setSubmitError("This approval has an invalid id and can't be sent.");
+        return;
+      }
+      const response = await fetch(url, { method: "POST" });
+      if (!response.ok) {
+        setSubmitError(await describeSubmitFailure(response));
+        return;
+      }
+      const data = (await response.json()) as ApprovalOutcomePayload;
+      const nextStatus = approvalStatusFromOutcome(data);
+      if (nextStatus === null) {
+        if (data.stopping === true) {
+          onResolved({ ...approval, status: "pending", executing: true, stopping: true });
+        } else {
+          // The server refused the stop: the call finished first and its
+          // outcome is being recorded without one. The card keeps running
+          // until the poll (or Check result) shows that outcome.
+          setSubmitError("The action finished before it could be stopped; its outcome is being recorded.");
+        }
+        return;
+      }
+      setHeldExecuting(false);
+      onResolved({
+        ...approval,
+        status: nextStatus,
+        resultText: data.result_text,
+        resultCard: resultCardFromOutcome(data),
+        executing: false,
+        stopping: undefined,
+        stopped: data.stopped === true || undefined,
+      });
+    } catch (err) {
+      setSubmitError(`Couldn't reach the server (${err instanceof Error ? err.message : "request failed"}).`);
     } finally {
       setSubmitting(null);
     }
@@ -627,6 +714,7 @@ export function ApprovalCard({
         submitting={submitting}
         submitError={submitError}
         onResolve={(approved, approvedValues) => void resolve(approved, undefined, approvedValues)}
+        onStop={() => void stop()}
         applyAll={applyAll}
         onApplyAllChange={setApplyAll}
         onAskAgain={onAskAgain}
@@ -901,20 +989,23 @@ export function ApprovalCard({
 
 // readableTitle is a readable card's header line: the describer's plain-words
 // title while the card waits, and a one-line outcome once it has resolved —
-// "Applied", "Not applied", "Declined", "Timed out — not applied", "Outcome
-// not recorded". The tool's own result still renders below, as on every card.
+// "Applied", "Stop requested", "Not applied", "Declined", "Timed out — not
+// applied", "Outcome not recorded". The tool's own result still renders below,
+// as on every card.
 function readableTitle(
   approval: Approval,
   cardTitle: string,
   executing: boolean,
   recorded: boolean,
   timedOut: boolean,
+  stopped: boolean,
 ): string {
   if (executing) return `Running · ${cardTitle}`;
   switch (approval.status) {
     case "pending":
       return cardTitle;
     case "approved":
+      if (stopped) return `Stop requested · ${cardTitle}`;
       return recorded ? `${cardTitle} · ran without asking` : `Applied · ${cardTitle}`;
     case "rejected":
       return timedOut ? `Timed out — not applied · ${cardTitle}` : `Declined · ${cardTitle}`;
@@ -937,6 +1028,7 @@ function GenericActionCard({
   submitting,
   submitError,
   onResolve,
+  onStop,
   applyAll,
   onApplyAllChange,
   onAskAgain,
@@ -947,6 +1039,8 @@ function GenericActionCard({
   submitError: string | null;
   // approvedValues narrows the approval (docs/APPROVAL-NARROWING.md).
   onResolve: (approved: boolean, approvedValues?: string[]) => void;
+  // Stop a running call of a tool in critical_tool_stop (docs/APPROVAL-STOP.md).
+  onStop?: () => void;
   applyAll: boolean;
   onApplyAllChange: (v: boolean) => void;
   onAskAgain?: (approval: Approval) => void;
@@ -971,19 +1065,27 @@ function GenericActionCard({
   const rawArgs = approval.summary.raw ?? "";
   const recorded = approval.recorded === true;
   const timedOut = isTimedOutApproval(approval);
+  // A call the person stopped while it ran (critical_tool_stop,
+  // docs/APPROVAL-STOP.md) that settled without an error: only part of it may
+  // have run, so it never reads as applied or completed. Whether the server
+  // honoured the stop is the result's to say, so the card says a stop was
+  // requested, not that the call stopped.
+  const stopped = approval.stopped === true && approval.status === "approved" && !executing;
   // A bundle-declared describer's readable card (docs/APPROVAL-CARD-DESCRIBERS.md):
   // plain-words title, the records, before → after, flags. Absent = the
   // generic layout below, unchanged.
   const readable = approval.card;
 
   const title = readable
-    ? readableTitle(approval, readable.title, executing, recorded, timedOut)
+    ? readableTitle(approval, readable.title, executing, recorded, timedOut, stopped)
     : executing
       ? `${action} · running`
       : approval.status === "pending"
       ? `ACTION REQUIRED · Run "${action}"?`
       : approval.status === "approved"
-        ? recorded
+        ? stopped
+          ? `${action} · stop requested`
+          : recorded
           ? `${action} · ran without asking`
           : `${action} · completed ✓`
         : approval.status === "rejected"
@@ -999,6 +1101,8 @@ function GenericActionCard({
   const statusStyle: React.CSSProperties =
     executing
       ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
+      : stopped
+      ? { borderColor: "var(--color-warning-border)", color: "var(--color-text-primary)" }
       : approval.status === "approved"
       ? recorded
         ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
@@ -1193,6 +1297,11 @@ function GenericActionCard({
       {/* A narrowed approval says so on every settled or running card, with
           or without a readable card (docs/APPROVAL-NARROWING.md). */}
       {narrowedLine}
+      {stopped ? (
+        <p data-testid="approval-stopped" className="mt-0.5 min-w-0 text-[0.75rem] text-[var(--color-warning-text)]">
+          You pressed Stop while this ran, so it may have run only in part. The result says what ran.
+        </p>
+      ) : null}
 
       {readable ? (
         <>
@@ -1219,6 +1328,8 @@ function GenericActionCard({
             submitting={submitting}
             submitError={submitError}
             onCheck={() => onResolve(true)}
+            onStop={approval.stoppable ? onStop : undefined}
+            stopping={approval.stopping === true}
           />
         ) : (
         <div className="mt-3 flex flex-col gap-2">

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"os/exec"
 	"sort"
@@ -844,6 +845,11 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 		ctx = pctx
 		params["_meta"] = meta
 	}
+	// A caller that may stop the call (WithStop) says so, so the server knows
+	// this client keeps reading for the response after it cancels.
+	if StopSignal(ctx) != nil {
+		ctx = WithRequestMeta(ctx, map[string]any{CooperativeCancelMetaKey: true})
+	}
 	// Fleet's own `_meta` entries for this call (WithRequestMeta), e.g. that
 	// an approved call was narrowed. Only `fleet/` keys, so they never
 	// replace the progress token.
@@ -1187,6 +1193,12 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 		return nil, err
 	}
 
+	// A stoppable call stopped before it reaches the pipe is never sent
+	// (docs/APPROVAL-STOP.md): checked here, at the send boundary.
+	if stoppedBeforeSend(ctx) {
+		return nil, ErrStoppedBeforeSend
+	}
+
 	// Write request. Failures carry a distinct marker: a write error means
 	// the request never reached the server, so Server.callTool may safely
 	// retry it after a restart — unlike a read-side failure, where the
@@ -1209,6 +1221,10 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 	// buffered channel — so cancelling mid-read leaves at most one
 	// orphaned reader, and the broken flag guarantees no future Call
 	// races it on t.reader before the transport is restarted.
+	// A caller that may stop the call (WithStop): when the signal fires, send
+	// the spec's notifications/cancelled for this request, once, and keep
+	// reading for its response (docs/APPROVAL-STOP.md).
+	stop := StopSignal(ctx)
 	for {
 		resultChan := make(chan result, 1)
 		go func() {
@@ -1217,33 +1233,42 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 		}()
 
 		var line []byte
-		select {
-		case <-ctx.Done():
-			// The subprocess may still write the response for this
-			// request; the orphaned goroutine above may consume an
-			// arbitrary later line. Poison the transport so the next
-			// call restarts the subprocess instead of reading garbage.
-			t.broken = true
-			return nil, ctx.Err()
-		case res := <-resultChan:
-			if res.err != nil {
-				return nil, res.err
+		var res result
+		for got := false; !got; {
+			select {
+			case <-ctx.Done():
+				// The subprocess may still write the response for this
+				// request; the orphaned goroutine above may consume an
+				// arbitrary later line. Poison the transport so the next
+				// call restarts the subprocess instead of reading garbage.
+				t.broken = true
+				return nil, ctx.Err()
+			case <-stop:
+				stop = nil
+				if err := t.writeLocked(ctx, append(cancelledNotification(id), '\n')); err != nil {
+					log.Printf("MCP stdio: could not send the stop for request %d: %v", id, err)
+				}
+			case res = <-resultChan:
+				got = true
 			}
-			if res.discarded > 0 {
-				// The line overran the cap, so its JSON cannot be parsed —
-				// fail this call loudly rather than hand anyone a truncated
-				// response. The reader drained to the newline, so the stream
-				// is still framed and the transport stays usable: no broken
-				// flag, and the message must not match isTransportDeadError's
-				// markers (the subprocess is healthy — a restart would fix
-				// nothing). If the oversized line was an interleaved
-				// notification rather than this call's response, the real
-				// response is consumed by a later call's id match and
-				// discarded there — defined either way.
-				return nil, fmt.Errorf("MCP stdio: response line exceeded %d bytes (%d bytes discarded) and was dropped — narrow the query or page the tool's results", stdioResponseCaptureCap, res.discarded)
-			}
-			line = res.line
 		}
+		if res.err != nil {
+			return nil, res.err
+		}
+		if res.discarded > 0 {
+			// The line overran the cap, so its JSON cannot be parsed —
+			// fail this call loudly rather than hand anyone a truncated
+			// response. The reader drained to the newline, so the stream
+			// is still framed and the transport stays usable: no broken
+			// flag, and the message must not match isTransportDeadError's
+			// markers (the subprocess is healthy — a restart would fix
+			// nothing). If the oversized line was an interleaved
+			// notification rather than this call's response, the real
+			// response is consumed by a later call's id match and
+			// discarded there — defined either way.
+			return nil, fmt.Errorf("MCP stdio: response line exceeded %d bytes (%d bytes discarded) and was dropped — narrow the query or page the tool's results", stdioResponseCaptureCap, res.discarded)
+		}
+		line = res.line
 
 		var response stdioResponse
 		if err := json.Unmarshal(line, &response); err != nil {
@@ -1487,6 +1512,32 @@ func (t *HTTPTransport) Call(ctx context.Context, method string, params interfac
 		httpReq.Header.Set(key, value)
 	}
 
+	// A caller that may stop the call (WithStop): the cancellation is its own
+	// POST on the session, sent while this call is still waiting for its
+	// response, however the server answers (an SSE stream, or one JSON body
+	// that arrives only when the work is done). It is sent only once the
+	// whole tools/call request has been written, so it cannot overtake the
+	// call it cancels.
+	if stop := StopSignal(ctx); stop != nil {
+		wrote := make(chan struct{})
+		var wroteOnce sync.Once
+		httpReq = httpReq.WithContext(httptrace.WithClientTrace(httpReq.Context(), &httptrace.ClientTrace{
+			WroteRequest: func(info httptrace.WroteRequestInfo) {
+				if info.Err == nil {
+					wroteOnce.Do(func() { close(wrote) })
+				}
+			},
+		}))
+		done := make(chan struct{})
+		defer close(done)
+		go t.notifyStopHTTP(ctx, stop, wrote, done, id)
+	}
+
+	// A stoppable call stopped before it is sent is never sent
+	// (docs/APPROVAL-STOP.md): checked here, at the send boundary.
+	if stoppedBeforeSend(ctx) {
+		return nil, ErrStoppedBeforeSend
+	}
 	resp, err := t.client.Do(httpReq)
 	if err != nil {
 		return nil, err

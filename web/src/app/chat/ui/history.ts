@@ -670,6 +670,15 @@ export type Approval = {
   /** What the person approved, on a card they approved narrowed. */
   narrowed?: ApprovalNarrowed;
   /**
+   * True for a tool the bundle lists in agent_policy.critical_tool_stop: once
+   * approved and running, the card offers Stop (docs/APPROVAL-STOP.md).
+   */
+  stoppable?: boolean;
+  /** The person pressed Stop and the call is still finishing its current item. */
+  stopping?: boolean;
+  /** The settled call was stopped by the person part way. */
+  stopped?: boolean;
+  /**
    * Why a grouped decision could not decide this card (the group endpoint's
    * per-card error). The card stays pending; its own card shows this once the
    * group no longer holds it. Client-side only.
@@ -771,6 +780,10 @@ export type ApprovalOutcomePayload = {
   result_card?: unknown;
   /** What a narrowed approval approved (docs/APPROVAL-NARROWING.md). */
   narrowed?: unknown;
+  /** Stop fields (docs/APPROVAL-STOP.md). */
+  stoppable?: boolean;
+  stopping?: boolean;
+  stopped?: boolean;
 };
 
 /**
@@ -830,10 +843,16 @@ export function hydrateResolvedApproval(p: {
   progress_updates?: boolean;
   progress?: unknown;
   narrowed?: unknown;
+  stoppable?: boolean;
+  stopping?: boolean;
+  stopped?: boolean;
 }): Approval {
   const executing = p.executing === true;
   return {
     narrowed: parseApprovalNarrowed(p.narrowed),
+    stoppable: p.stoppable === true || undefined,
+    stopping: (executing && p.stopping === true) || undefined,
+    stopped: (!executing && p.stopped === true) || undefined,
     groupId: p.group_id || undefined,
     progressUpdates: p.progress_updates === true || undefined,
     progress: executing ? parseApprovalProgress(p.progress) : undefined,

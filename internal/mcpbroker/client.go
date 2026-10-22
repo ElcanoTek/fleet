@@ -92,11 +92,19 @@ func (c *Client) callMCP(ctx context.Context, scope, server, tool string, args m
 	req.Progress = mcp.ProgressSink(ctx) != nil
 	// And the call's fleet `_meta` entries (mcp.WithRequestMeta).
 	req.Meta = mcp.RequestMeta(ctx)
+	// And whether the caller may stop it: roundtrip forwards the stop signal
+	// as a methodStop frame once the call has been sent.
+	req.Stoppable = mcp.StopSignal(ctx) != nil
 	resp, err := c.roundtrip(ctx, req)
 	if err != nil {
 		return "", false, err
 	}
 	if resp.Err != "" {
+		// The child's transport refused a call already stopped: keep the
+		// sentinel, so the caller knows nothing was sent.
+		if resp.Err == mcp.ErrStoppedBeforeSend.Error() {
+			return resp.Text, resp.IsError, mcp.ErrStoppedBeforeSend
+		}
 		return resp.Text, resp.IsError, errors.New(resp.Err)
 	}
 	return resp.Text, resp.IsError, nil
@@ -462,6 +470,11 @@ func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
 
 	if sent, err := c.sendLive(ctx, req); !sent {
 		c.discard(req.ID)
+		if errors.Is(err, mcp.ErrStoppedBeforeSend) {
+			// A stoppable call stopped before its frame was written is never
+			// sent (docs/APPROVAL-STOP.md).
+			return response{}, mcp.ErrStoppedBeforeSend
+		}
 		if err == nil {
 			// Cancelled while queued for the write lock: nothing went out,
 			// so there is nothing for the child to cancel or retain.
@@ -470,44 +483,56 @@ func (c *Client) roundtrip(ctx context.Context, req request) (response, error) {
 		return response{}, fmt.Errorf("mcpbroker: send: %w", err)
 	}
 
-	select {
-	case resp := <-ch:
-		return resp, nil
-	case <-ctx.Done():
-		// Best-effort: ask the server to stop the in-flight call so it doesn't keep
-		// running an MCP request whose result nobody will read.
-		_ = c.send(request{ID: req.ID, Method: methodCancel})
-		switch req.Method {
-		case methodOpenScope:
-			// Keep this pending slot alive: cancellation can race the backend creating
-			// the scope. If a late response owns an ID, release it instead of losing
-			// the only handle and leaking its subprocesses until broker shutdown.
-			//nolint:gosec // cleanup must outlive the request context that triggered it.
-			go c.closeAbandonedScope(ch)
-		case methodCall:
-			// The child still holds req.Args until it answers: the call may
-			// be queued behind another on its MCP server, or unwinding. Keep
-			// the pending slot and tell the caller's argument hold (if any)
-			// that the arguments are still live, so a workspace-file window
-			// stays charged until the child's final response — or the
-			// connection's death — proves it let go (ADR-0088). The cancel
-			// frame above makes that prompt: a queued call gives up its wait,
-			// an in-flight one unwinds on its context.
-			letGo := mcp.RetainArguments(ctx)
-			go func() {
-				select {
-				case <-ch:
-				case <-c.done:
-				}
+	// A stoppable call (request.Stoppable): its stop signal becomes ONE
+	// methodStop frame, sent after the call itself, and the wait goes on for
+	// the call's answer.
+	var stop <-chan struct{}
+	if req.Stoppable {
+		stop = mcp.StopSignal(ctx)
+	}
+	for {
+		select {
+		case resp := <-ch:
+			return resp, nil
+		case <-stop:
+			stop = nil
+			_ = c.send(request{ID: req.ID, Method: methodStop})
+		case <-ctx.Done():
+			// Best-effort: ask the server to stop the in-flight call so it doesn't keep
+			// running an MCP request whose result nobody will read.
+			_ = c.send(request{ID: req.ID, Method: methodCancel})
+			switch req.Method {
+			case methodOpenScope:
+				// Keep this pending slot alive: cancellation can race the backend creating
+				// the scope. If a late response owns an ID, release it instead of losing
+				// the only handle and leaking its subprocesses until broker shutdown.
+				//nolint:gosec // cleanup must outlive the request context that triggered it.
+				go c.closeAbandonedScope(ch)
+			case methodCall:
+				// The child still holds req.Args until it answers: the call may
+				// be queued behind another on its MCP server, or unwinding. Keep
+				// the pending slot and tell the caller's argument hold (if any)
+				// that the arguments are still live, so a workspace-file window
+				// stays charged until the child's final response — or the
+				// connection's death — proves it let go (ADR-0088). The cancel
+				// frame above makes that prompt: a queued call gives up its wait,
+				// an in-flight one unwinds on its context.
+				letGo := mcp.RetainArguments(ctx)
+				go func() {
+					select {
+					case <-ch:
+					case <-c.done:
+					}
+					c.discard(req.ID)
+					letGo()
+				}()
+			default:
 				c.discard(req.ID)
-				letGo()
-			}()
-		default:
-			c.discard(req.ID)
+			}
+			return response{}, ctx.Err()
+		case <-c.done:
+			return response{}, c.closedErr()
 		}
-		return response{}, ctx.Err()
-	case <-c.done:
-		return response{}, c.closedErr()
 	}
 }
 
@@ -539,6 +564,12 @@ func (c *Client) closeAbandonedScope(ch <-chan response) {
 func (c *Client) sendLive(ctx context.Context, req request) (sent bool, err error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	// A stoppable call whose stop signal fired while it waited for the
+	// write lock is never sent: checked here, at the send boundary, so a
+	// Stop pressed while another frame held the lock is honoured too.
+	if req.Stoppable && mcp.StoppedBeforeSend(ctx) {
+		return false, mcp.ErrStoppedBeforeSend
+	}
 	// A fresh encoder per frame: json.Encoder keeps its first write error
 	// and returns it from every later Encode, so a refusal must not reach
 	// the shared one.

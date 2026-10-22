@@ -219,8 +219,9 @@ func narrowApproval(a *store.Approval, approved []string, shownArg string) (*app
 	// the call settles, which an operator may lower to the minimum while it
 	// runs. A long scattered selection cannot have both, so it is refused
 	// here, before anything is claimed, whatever the limit is now
-	// (agentcore.ApprovalTrailerRoom is the room at the minimum).
-	if len(narrowingNote(n)) > agentcore.ApprovalTrailerRoom() {
+	// (agentcore.ApprovalTrailerRoom is the room at the minimum). The room
+	// holds the longest stop line too, for a tool the person may stop.
+	if len(narrowingNote(n))+approvalStopTrailerReserve(a.ToolName) > agentcore.ApprovalTrailerRoom() {
 		return nil, fmt.Errorf("this selection is too scattered for fleet to record exactly in the call's result: select fewer separate ranges of %s, or approve or decline the action whole", arg)
 	}
 	return n, nil

@@ -152,6 +152,13 @@ type AgentPolicy struct {
 	// NarrowableArgProblems). Empty = every card approves its call whole, as
 	// before.
 	CriticalToolNarrowableArgs map[string]string
+	// CriticalToolStop lists critical suffixes whose RUNNING approved call the
+	// person may stop (docs/APPROVAL-STOP.md): the chat server sends the MCP
+	// notifications/cancelled for the request and keeps waiting for the
+	// server's answer. Matched by suffix exactly like CriticalToolSuffixes;
+	// members must stage a card for an MCP call (see ApprovalStopProblems).
+	// Empty = no running card offers Stop, as before.
+	CriticalToolStop []string
 	// InteractiveHiddenTools lists tool-name suffixes (matched like
 	// CriticalToolSuffixes) whose MCP tools interactive chat never sees or
 	// calls, while scheduled runs keep them (interactive_hidden.go,
@@ -250,6 +257,9 @@ var (
 	// activeNarrowableArgs maps a critical suffix to the list argument a
 	// person may narrow on its card. Empty by default: nothing is narrowed.
 	activeNarrowableArgs = map[string]string{}
+	// activeStop is the set of critical suffixes whose running approved calls
+	// offer Stop. Empty by default.
+	activeStop = map[string]bool{}
 	// activeInteractiveHidden is the normalized interactive_hidden_tools
 	// list. Empty by default: chat sees what scheduled runs see.
 	activeInteractiveHidden []string
@@ -402,6 +412,7 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	activeResultCards = installResultCardSet(p.CriticalToolResultCards, seen)
 
 	activeNarrowableArgs = installNarrowableArgs(p.CriticalToolNarrowableArgs, p.CriticalToolModes, seen)
+	activeStop = installStopSet(p.CriticalToolStop, p.CriticalToolModes, seen)
 	activeInteractiveHidden = installInteractiveHiddenList(p.InteractiveHiddenTools)
 }
 

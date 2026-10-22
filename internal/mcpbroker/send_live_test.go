@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // TestRoundtripNotSentWhenCancelledWhileQueuedToWrite: a call whose context
@@ -125,5 +127,57 @@ func TestRoundtripNotSentWhenCancelledWhileEncoding(t *testing.T) {
 			t.Fatal("a live call after a refused one was never written")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestRoundtripNotSentWhenStoppedWhileQueuedToWrite: a stoppable call whose
+// stop signal fires while another frame holds the write lock is never
+// written; it answers ErrStoppedBeforeSend, so the outcome says nothing ran.
+func TestRoundtripNotSentWhenStoppedWhileQueuedToWrite(t *testing.T) {
+	parent, child := net.Pipe()
+	defer child.Close()
+	c := NewClient(parent)
+	defer c.Close()
+	var (
+		mu   sync.Mutex
+		seen []byte
+	)
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := child.Read(buf)
+			mu.Lock()
+			seen = append(seen, buf[:n]...)
+			mu.Unlock()
+			if err != nil {
+				return // the pipe closed
+			}
+		}
+	}()
+
+	c.writeMu.Lock() // another frame is being written
+	stop := make(chan struct{})
+	ctx := mcp.WithStop(context.Background(), stop)
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.roundtrip(ctx, request{ID: c.nextID.Add(1), Method: methodCall, Server: "deals", Tool: "execute_plan", Stoppable: true})
+		done <- err
+	}()
+	time.Sleep(20 * time.Millisecond) // let it queue on the write lock
+	close(stop)
+	c.writeMu.Unlock()
+	select {
+	case err := <-done:
+		if !errors.Is(err, mcp.ErrStoppedBeforeSend) {
+			t.Fatalf("roundtrip = %v, want ErrStoppedBeforeSend", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("roundtrip did not return")
+	}
+	time.Sleep(20 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 0 {
+		t.Fatalf("a stopped call was written to the child: %q", seen)
 	}
 }

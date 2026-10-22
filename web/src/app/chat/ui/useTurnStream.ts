@@ -2614,6 +2614,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         group_id?: string;
         progress_updates?: boolean;
         narrowable?: unknown;
+        stoppable?: boolean;
       };
       // send_email cards can land below an expanded preview iframe — queue
       // a scroll-into-view so the user sees the action card without
@@ -2640,6 +2641,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             groupId: p.group_id || undefined,
             progressUpdates: p.progress_updates === true || undefined,
             narrowable: parseApprovalNarrowable(p.narrowable),
+            stoppable: p.stoppable === true || undefined,
           },
         ],
       }));

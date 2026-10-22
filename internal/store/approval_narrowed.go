@@ -61,6 +61,23 @@ func PositionRanges(pos []int) string {
 	return strings.Join(parts, ", ")
 }
 
+// ApprovalStopNote is fleet's line for a call the person stopped while it ran
+// (docs/APPROVAL-STOP.md). The chat server appends it after the call's
+// result. A recorded stop proves the stop signal closed while the call was
+// out, not that a cancellation went out: a transport whose answer was already
+// in hand when the signal closed returns it without sending one. So the line
+// says the server was asked only if the call had not finished, and leaves
+// what ran to the result.
+const ApprovalStopNote = "[fleet] The person pressed Stop while this call ran. Unless the call had already finished, its server was asked to stop after the item it was working on; the result above says what ran and what did not. Do not run the remaining items unless the person asks. (Written by fleet, not the tool.)"
+
+// ApprovalStopRecoveredNote is the stop line RecoverStrandedApprovals adds to
+// an interrupted call the person had pressed Stop on. Unlike ApprovalStopNote
+// it claims nothing about the call: a Stop accepted while the call was still
+// opening its MCP scope leaves the mark although no request (and no
+// cancellation) was ever sent, and after a restart fleet cannot tell which
+// happened.
+const ApprovalStopRecoveredNote = "[fleet] The person pressed Stop on this call before fleet restarted. Fleet cannot tell whether the call reached its server or whether the stop was sent: check what ran on the external system before doing anything else, and do not run the remaining items unless the person asks. (Written by fleet, not the tool.)"
+
 // ApprovalRecoveryOutcome is the outcome RecoverStrandedApprovals records
 // for an approved call a restart cut off: it may have committed remotely, so
 // it is uncertainty, never a failure or a retry.
@@ -70,16 +87,21 @@ const ApprovalRecoveryOutcome = "Execution outcome unknown after server restart.
 // appends for a stranded approval: the outcome line, then, for a narrowed
 // approval, its narrowing line (the recorded tool call holds the whole staged
 // list, so the breadcrumb says which values were approved and which were left
-// out). It is not cut here, because the narrowing line is never shortened:
-// the chat server accepts a narrowing only when its line fits
+// out), then, when the person had pressed Stop, ApprovalStopRecoveredNote in
+// neutral words (the call may never have been sent). It is not cut here,
+// because the narrowing line is never shortened: the chat server accepts a
+// narrowing only when its line plus the longest stop line fits
 // agentcore.ApprovalTrailerRoom, the room at the minimum output limit, and
 // the outcome line is shorter than the tool-text floor that room leaves, so
 // this text stays within every limit the deployment can be set to (pinned by
 // httpapi's TestApprovalRecoveryText_FitsTheMinimumOutputLimit).
-func ApprovalRecoveryText(narrowedJSON string) string {
+func ApprovalRecoveryText(narrowedJSON string, stopRequested bool) string {
 	text := ApprovalRecoveryOutcome
 	if note := narrowingNoteFor(narrowedJSON); note != "" {
 		text += "\n\n" + note
+	}
+	if stopRequested {
+		text += "\n\n" + ApprovalStopRecoveredNote
 	}
 	return text
 }

@@ -588,6 +588,19 @@ The countdown shows the earliest deadline among them. Once decided, each action
 shows its own outcome card (running, applied, declined), exactly as if you had
 decided it on its own card.
 
+A deployment can also let you **stop** chosen actions while they run (a plan
+working through many deals, for example). Their running card then has a
+**Stop** button: it asks the connector to stop after the record it is on,
+and the card reads **Stop requested** until the action ends. Whether it
+stopped there is up to the connector, so the finished card's result says what
+ran; a finished card with no outcome summary of its own is titled **Stop
+requested**, never **Applied**. Where the connector does summarise its
+outcome, the finished card says how far it
+got (for example "Stopped after 12 of 24") and offers **Run the remaining N**,
+which asks the assistant to run the records it never reached; that comes back
+to you as a new card to approve. If the connector does not support stopping,
+the action runs on to its end and the card says so in its result.
+
 A deployment can also let you **leave records out** of one action that covers
 several (a plan that updates many deals, for example). Its plain-words card
 then has a checkbox on each record, all ticked, and a count such as **3 of 3

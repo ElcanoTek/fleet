@@ -120,9 +120,24 @@ function statusTint(status: ApprovalResultItemStatus): string | undefined {
 // the button never runs anything itself.
 export function retryFailedPrompt(approval: Approval, keys: string[]): string {
   const n = keys.length;
+  if (remainingAfterStop(approval, keys)) {
+    // A call the person stopped part way (docs/APPROVAL-STOP.md): the keys
+    // are the items it never reached.
+    const list = keys.map((k) => JSON.stringify(k)).join(", ");
+    return `Run the remaining ${n} item${n === 1 ? "" : "s"} of the approved ${approval.tool} call (approval_id=${approval.id}) that were not run because I stopped it: ${list}. Run only ${n === 1 ? "this one" : "these"}, and stage the run for my approval.`;
+  }
   const what = `${n} failed item${n === 1 ? "" : "s"}`;
   const list = keys.map((k) => JSON.stringify(k)).join(", ");
   return `Retry the ${what} from the approved ${approval.tool} call (approval_id=${approval.id}): ${list}. Retry only ${n === 1 ? "this one" : "these"}, and stage the retry for my approval.`;
+}
+
+// remainingAfterStop reports whether a retry of `keys` is "the rest of a
+// stopped call": the person stopped the call (docs/APPROVAL-STOP.md) and every
+// key names a record its result card marks not run.
+export function remainingAfterStop(approval: Approval, keys: string[]): boolean {
+  if (approval.stopped !== true || !approval.resultCard || keys.length === 0) return false;
+  const status = new Map(approval.resultCard.items.map((it) => [it.key, it.status]));
+  return keys.every((k) => status.get(k) === "not_run");
 }
 
 // ResultStatusChip is a record's outcome on the shared status chip; the tone
@@ -396,7 +411,13 @@ export function ApprovalResultCardView({
                 setRetry(accepted === false ? "idle" : "sent");
               }}
             >
-              {retry === "sent" ? "Retry asked" : retry === "sending" ? "Asking…" : `Retry failed (${retryKeys.length})`}
+              {retry === "sent"
+                ? "Retry asked"
+                : retry === "sending"
+                  ? "Asking…"
+                  : remainingAfterStop(approval, retryKeys)
+                    ? `Run the remaining ${retryKeys.length}`
+                    : `Retry failed (${retryKeys.length})`}
             </button>
           ) : null}
           <DetailsToggle open={detailsOpen} onToggle={() => setDetailsOpen((v) => !v)} controls={detailsId} />

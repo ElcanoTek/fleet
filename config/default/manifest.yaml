@@ -459,6 +459,18 @@ remote_mcp_catalog: []
 #                               docs/APPROVAL-NARROWING.md. Example:
 #                                 critical_tool_narrowable_args:
 #                                   execute_plan: {arg: deal_ids}
+#   critical_tool_stop:         OPTIONAL critical suffixes (same suffix
+#                               matching as critical_tools) whose RUNNING
+#                               approved call offers Stop: fleet marks the
+#                               request _meta["fleet/cooperative_cancel"], sends
+#                               notifications/cancelled on Stop, and keeps
+#                               waiting for the server's answer (a cooperating
+#                               server finishes its current item first). Every
+#                               member must be in critical_tools (and not notify
+#                               mode). Opt a tool in only once its server
+#                               honours the mark. See docs/APPROVAL-STOP.md.
+#                               Example:
+#                                 critical_tool_stop: [execute_plan]
 #   interactive_hidden_tools:   OPTIONAL tool-name suffixes (same suffix
 #                               matching as critical_tools) whose MCP tools
 #                               interactive chat never sees or calls: not in
