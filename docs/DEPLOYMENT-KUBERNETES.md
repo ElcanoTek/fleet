@@ -89,23 +89,37 @@ podman push REGISTRY/fleet-sandbox:v1
 
 (Or let CI publish it — see `.github/workflows/publish-sandbox-image.yml`.)
 
-**Control-plane image** — the `fleet` binary plus your client bundle. A
-reproducible multi-stage Containerfile (build it from the repo root; the
-builder stage's Go minor is pinned to `go.mod` by
-`scripts/check_versions_test.go`, so a stale copy of this stage fails CI):
+**Control-plane image** — the `fleet` binary (which serves the web UI too, from
+an embedded bundle — ADR-0091) plus your client bundle. A reproducible
+multi-stage Containerfile (build it from the repo root; the builder stage's Go
+minor is pinned to `go.mod` by `scripts/check_versions_test.go`, so a stale
+copy of this stage fails CI):
 
 ```dockerfile
+# ── web bundle stage (node major per web/.nvmrc) ──
+FROM docker.io/library/node:26 AS web
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+# vite build writes ../internal/webui/bundle/dist
+RUN mkdir -p ../internal/webui/bundle && npm run build
+
 # ── build stage ──
 FROM docker.io/library/golang:1.27 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+# The web bundle the binary embeds (go:embed); without it pages answer 503.
+COPY --from=web /src/internal/webui/bundle/dist internal/webui/bundle/dist
 # The version stamp comes from the release tags via scripts/version.sh, so build
 # from a checkout WITH tags (`git clone` brings them; a `--depth`/`--no-tags`
 # clone or a source tarball stamps the honest `dev` sentinel instead). See
 # docs/VERSIONING.md.
 RUN CGO_ENABLED=0 go build -ldflags "-X github.com/ElcanoTek/fleet/internal/version.version=$(scripts/version.sh describe)" -o /out/fleet ./cmd/fleet
+# Refuse an image whose binary carries no web bundle.
+RUN /out/fleet version --web
 
 # ── runtime stage ──
 FROM registry.fedoraproject.org/fedora-minimal:latest
@@ -123,9 +137,10 @@ An out-of-repo client bundle can be baked into your image the same way, or
 mounted from a ConfigMap/volume at `FLEET_CLIENT_CONFIG_DIR` — either satisfies
 the engine/bundle split (ADR-0006).
 
-**Web image** (optional) — build `web/` with its own `next build` stage and set
-`web.image` in the chart; the chart wires `CHAT_SERVER_URL` /
-`ORCHESTRATOR_URL` at the fleet Service automatically.
+There is no separate web image any more: the chart exposes the fleet pod's web
+port (`FLEET_WEB_ADDR=0.0.0.0:3000`) and points the Ingress at it. Upgrading a
+release that set `web.enabled=true`: see the chart README's "Upgrading from a
+chart with a `web:` block" section.
 
 ## 15-minute path (kind)
 
@@ -218,24 +233,14 @@ podman backend guarantees (#796).
    chart — sandbox pods pin there and autoscale the pool, while the control
    plane stays on your general nodes. This is the horizontal scaling story:
    more runner capacity is a bigger pool, never a second fleet.
-9. **Client IPs behind the Ingress.** The chart sets no
-   `FLEET_TRUSTED_PROXIES`, and the chart's Ingress sends every path (`/`) to
-   one Service, so what the setting can achieve depends on that Service:
-   - **`web.enabled=true`** — the Ingress points at the web Service, and
-     the web tier calls chat and the orchestrator itself without forwarding
-     `X-Forwarded-For`. The control plane's peer is the web pod and there is
-     no header to read, so **no** value of `FLEET_TRUSTED_PROXIES` (ingress
-     controller or web pod) recovers the real caller: per-client rate limits
-     and `FLEET_IP_ALLOWLIST`/`DENYLIST` see every browser request as the
-     web pod's address.
-   - **`web.enabled=false`** — the Ingress points at the chat port, so the
-     peer is the ingress controller. Setting
-     `config.env.FLEET_TRUSTED_PROXIES` to the controller's addresses lets
-     the chat server's IP lists read the caller from the
-     `X-Forwarded-For` the controller sends (most controllers set one; check
-     yours appends rather than passes a client's header through unchecked). It takes single IPs, not CIDRs, so it suits a
-     controller with stable pod addresses. The orchestrator is not exposed
-     by this Ingress at all.
+9. **Client IPs behind the Ingress.** The chart's Ingress sends every path
+   (`/`) to the fleet pod's web port (ADR-0091). The web listener calls chat
+   and the orchestrator in-process without forwarding `X-Forwarded-For`, so
+   the backends see every browser request as loopback whatever
+   `FLEET_TRUSTED_PROXIES` says: per-client rate limits and
+   `FLEET_IP_ALLOWLIST`/`DENYLIST` cannot tell browsers apart (exactly as
+   behind the old separate web Deployment). Filter browser clients at the
+   ingress controller instead.
    - A route you add yourself straight to the orchestrator port (the public
      `/v1` API) is the same case: name the proxy that connects to it.
 10. **Run `fleet validate-config`** (`kubectl -n fleet exec deploy/fleet --

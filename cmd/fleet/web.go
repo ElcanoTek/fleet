@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -63,4 +65,16 @@ func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, 
 		// No WriteTimeout: SSE turns and large downloads stream for as long as
 		// they take, exactly as on the chat listener.
 	}, nil
+}
+
+// printWebBundle prints the embedded web bundle's build id and returns 0, or
+// says the binary has none and returns 1 (`fleet version --web`).
+func printWebBundle(w io.Writer) int {
+	id := webui.EmbeddedBuildID()
+	if id == "" {
+		_, _ = fmt.Fprintln(w, "web bundle: missing (build with `make build`, which runs `make web` first)")
+		return 1
+	}
+	_, _ = fmt.Fprintln(w, "web bundle: "+id)
+	return 0
 }

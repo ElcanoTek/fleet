@@ -1,16 +1,18 @@
 import { test, expect } from "./fixtures";
 
-// LIVE cache-busting contract against the REAL Next server (the mocked lane
+// LIVE cache-busting contract against the REAL Go browser tier (the mocked lane
 // can't cover this — it route-intercepts /api/version). What matters for "no
 // stale clients after a deploy":
 //   1. /api/version returns the build id in both body and the X-App-Version
 //      header (the client polls it on visibilitychange and reloads on drift).
 //   2. /api/version is uncacheable (a cached copy would defeat drift detection).
 //   3. HTML forces revalidation (no-store or no-cache) so a deploy can't leave a
-//      stale shell pointing at deleted /_next/static chunks.
+//      stale shell pointing at deleted /assets chunks.
+//   5. Content-hashed /assets are immutable (cacheable for a year), so the
+//      revalidated shell is the only thing a deploy invalidates.
 //   4. The build id is stable within a session (a consistent baseline to diff).
 
-test.describe("live cache-busting contract (real Next server)", () => {
+test.describe("live cache-busting contract (real Go server)", () => {
   test("/api/version returns a build id in both header and body", async ({ page, login }) => {
     await login();
     const res = await page.request.get("/api/version");
@@ -37,6 +39,16 @@ test.describe("live cache-busting contract (real Next server)", () => {
       cc.includes("no-store") || cc.includes("no-cache"),
       `/ Cache-Control must force revalidation, got: ${cc}`,
     ).toBe(true);
+  });
+
+  test("hashed assets are immutable", async ({ page, login }) => {
+    await login();
+    const html = await (await page.request.get("/chat")).text();
+    const asset = /\/assets\/[^"]+\.js/.exec(html)?.[0];
+    expect(asset, "the shell references a hashed /assets script").toBeTruthy();
+    const res = await page.request.get(asset!);
+    expect(res.status()).toBe(200);
+    expect(res.headers()["cache-control"]).toContain("immutable");
   });
 
   test("build id is stable within a session", async ({ page, login }) => {

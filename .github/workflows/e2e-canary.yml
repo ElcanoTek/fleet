@@ -151,7 +151,6 @@ jobs:
         env:
           CI: '1'
           E2E_CANARY: '1'
-          E2E_PROD: '1'
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CANARY_MODEL: ${{ inputs.model }}
           FLEET_SANDBOX_IMAGE: ${{ steps.sandbox.outputs.image }}

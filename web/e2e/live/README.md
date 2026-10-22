@@ -9,7 +9,7 @@ is genuine. The product owner dislikes mocked-only tests; this is the answer.
 | Go chat listener (`/chat`, SSE) | ✅ | real auth, real streaming |
 | Go orchestrator listener (`/tasks`, logs) | ✅ | real scheduler + worker pool |
 | Podman sandbox (`bash`, `run_python`) | ✅ | per-turn container, hardened rootless flags |
-| Next.js web app | ✅ | `next build` + `next start` |
+| Browser tier (SPA + `/api`, `internal/webui`) | ✅ | `vite build`, embedded in the fleet binary, served on `:$WEB_PORT` |
 | **LLM** | ❌ **STUBBED** | the wire-compatible fake `cmd/fake-llm`, reached via `OPENROUTER_BASE_URL` |
 
 Only the LLM is replaced — by a fake that speaks the OpenRouter chat-completions
@@ -31,7 +31,7 @@ npm run test:e2e:live:real
 
 The boot script (`scripts/e2e-boot-server.sh`) builds the binaries, ensures the
 sandbox image (builds it if absent), starts the fake LLM, boots fleet (both
-listeners) pointed at the fake, builds + `next start`s the web app, seeds the
+listeners) pointed at the fake, builds the web bundle into the binary (fleet serves it), seeds the
 test users, health-polls everything (no fixed sleeps), and installs a cleanup
 trap. It is also what `playwright.config.ts` launches as the live `webServer`.
 
@@ -54,7 +54,7 @@ trap. It is also what `playwright.config.ts` launches as the live `webServer`.
 | `FLEET_SANDBOX_IMAGE` | `localhost/fleet-sandbox:latest` | the sandbox image; CI pulls from GHCR, else builds locally. |
 | `E2E_DATABASE_DSN` | local pg @ 5432 | admin DSN with CREATEDB; the boot makes `fleet_e2e_chat` + `fleet_e2e_sched`. |
 | `E2E_WORKSPACE_BASE` | `$TMPDIR/fleet-e2e-<uid>` | sandbox workspace base; **must be world-traversable** (the container runs as uid 1000 and the workspace is bind-mounted at the same host path, so a path under a `0550` `$HOME` like `/root` breaks `run_python`'s chdir). |
-| `NEXT_PORT` / `CHAT_PORT` / `ORCH_PORT` / `FAKE_LLM_ADDR` | 3100 / 18080 / 18000 / 127.0.0.1:18090 | fixed ports for determinism. |
+| `WEB_PORT` / `CHAT_PORT` / `ORCH_PORT` / `FAKE_LLM_ADDR` | 3100 / 18080 / 18000 / 127.0.0.1:18090 | fixed ports for determinism. |
 | `E2E_TEST_EMAIL` / `E2E_TEST_PASSWORD` | `e2e@example.com` / `e2e-test-password` | seeded chat user. |
 | `E2E_SCHED_USERNAME` | `e2e` | seeded orchestrator (sched) admin user. |
 | `FLEET_SERVER_TOKEN` / `ADMIN_API_KEY` / `APP_SESSION_SECRET` / `AUTH_SIGNING_PUBKEY` | throwaway test values | shared secrets; never real. |
@@ -78,7 +78,7 @@ Failure artifacts contain the Playwright HTML report, not backend logs.
 ## Determinism measures
 
 - Fixed ports; no `reuseExistingServer` in CI.
-- Health-gated boot (poll `/healthz`, `/health`, the Next `/login`, the fake's
+- Health-gated boot (poll `/healthz`, `/health`, the web listener's `/login`, the fake's
   `/healthz`) — never a fixed sleep.
 - A `sandbox-probe` gate fails the boot early if the container can't run bash +
   python (normal + lockdown) before any spec runs.

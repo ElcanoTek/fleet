@@ -2,7 +2,7 @@ import { test, expect, creds } from "./fixtures";
 
 // LIVE auth journey against the real backend: the real password login mints a
 // real session cookie (validated against the real chat users table the boot
-// script seeded), and an unauthenticated page request is gated by the real Next
+// script seeded), and an unauthenticated page request is gated by the real Go
 // middleware. No mocks.
 
 test.describe("live auth", () => {

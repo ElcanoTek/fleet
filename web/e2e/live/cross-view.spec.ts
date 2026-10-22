@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures";
 
 // LIVE cross-view session: one real login (the elcano_session cookie) gates
-// BOTH the /chat and /orchestrator views off the single Next middleware. This
+// BOTH the /chat and /orchestrator views off the single request gate (internal/webui). This
 // navigates between them via the in-app links and asserts it never bounces back
 // to /login — proving the shared session against the real backend (the chat
 // shell loads its real boot data; the orchestrator probes its real /me).

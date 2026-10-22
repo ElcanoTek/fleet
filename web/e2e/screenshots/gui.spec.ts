@@ -6,7 +6,7 @@ import { mockChatBoot, fulfillSse } from "../mocked/_mocks";
 // GUI screenshot capture for the README / docs (#487). This is NOT a PR-gating
 // test — it lives in its own `screenshots` Playwright project (E2E_SCREENSHOTS=1,
 // see playwright.config.ts) so a capture hiccup never blocks the mocked PR lane.
-// It drives the SAME deterministic mocked Next app the mocked suite uses (every
+// It drives the SAME deterministic mocked browser tier the mocked suite uses (every
 // /api/* call is route-intercepted — no backend, no LLM), navigates the key
 // views, and writes a full-page PNG per view. The screenshot workflow runs this
 // on push to main and commits the PNGs to docs/screenshots/web/.
