@@ -62,11 +62,17 @@ spec:
               containerPort: 8080
             - name: orchestrator
               containerPort: 8000
+            # The browser tier: the web UI and its /api, served by the fleet
+            # binary itself (ADR-0091) — the Ingress points here.
+            - name: web
+              containerPort: 3000
           env:
             # Listeners bind all pod interfaces; the Service/Ingress is the
             # exposure boundary (the single-box default is loopback + Caddy).
             - name: FLEET_SERVER_ADDR
               value: "0.0.0.0:8080"
+            - name: FLEET_WEB_ADDR
+              value: "0.0.0.0:3000"
             - name: FLEET_ORCHESTRATOR_ADDR
               value: "0.0.0.0:8000"
             - name: FLEET_DATA_DIR

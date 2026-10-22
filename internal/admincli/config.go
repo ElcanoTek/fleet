@@ -53,18 +53,18 @@ func serverEnvFile(flagVal string) string {
 	return config.ResolveEnvFile(flagVal)
 }
 
-// webEnvFile resolves the WEB-TIER env file (where AUTH_* SSO keys live):
-// --env-file, else the systemd deployment's /etc/fleet/fleet-web.env when it
-// exists, else web/.env.local (the Next.js dev convention).
-func webEnvFile(flagVal string) string {
-	if v := strings.TrimSpace(flagVal); v != "" {
-		return v
+// retiredWebEnvFile is the env file of the retired Next.js web tier. Since
+// ADR-0091 the fleet binary serves the web UI and reads its keys (AUTH_*,
+// APP_SESSION_SECRET, FLEET_OIDC_*) from the server env file; `fleet update`
+// carried them over. Nothing reads this file any more.
+const retiredWebEnvFile = "/etc/fleet/fleet-web.env"
+
+// warnWebFlag explains a --web flag kept for scripts written before ADR-0091:
+// there is one env file now, so --web targets it like every other write.
+func warnWebFlag(web bool) {
+	if web {
+		fmt.Fprintln(os.Stderr, "note: --web is no longer needed — the web UI is served by fleet and reads the server env file (ADR-0091)")
 	}
-	// Directory probe, same reasoning as serverEnvFile.
-	if fi, err := os.Stat("/etc/fleet"); err == nil && fi.IsDir() {
-		return "/etc/fleet/fleet-web.env"
-	}
-	return "web/.env.local"
 }
 
 // promptLine reads one visible line from stdin with a stderr prompt — for
@@ -108,7 +108,7 @@ func configSetOpenRouterKey(argv []string) int {
 		return errf(5, "write %s: %v", path, err)
 	}
 	fmt.Printf("set OPENROUTER_API_KEY in %s\n", path)
-	printEnvApplyHint(false)
+	printEnvApplyHint()
 	return 0
 }
 
@@ -143,7 +143,7 @@ func configSetBrowserbaseKey(argv []string) int {
 		return errf(5, "write %s: %v", path, err)
 	}
 	fmt.Printf("set BROWSERBASE_API_KEY in %s\n", path)
-	printEnvApplyHint(false)
+	printEnvApplyHint()
 	fmt.Println("note: this key mints live-view links. Each user ALSO adds Browserbase")
 	fmt.Println("      in Settings -> Connections to drive the browser — use a key from")
 	fmt.Println("      the SAME Browserbase project, or minting fails for live sessions.")
@@ -176,14 +176,15 @@ func ParseAuthPubkey(raw string) (string, error) {
 }
 
 // configSetAuthPubkey upserts AUTH_SIGNING_PUBKEY (+ optional AUTH_LOGIN_URL /
-// AUTH_COOKIE_DOMAIN) into the web-tier env file, enabling Elcano-style SSO.
+// AUTH_COOKIE_DOMAIN) into the server env file — the web UI is served by the
+// fleet binary (ADR-0091) — enabling Elcano-style SSO.
 // The value comes from the positional arg, --from <file>, or an interactive
 // paste prompt; all three accept `auth pubkey`'s KEY=value output verbatim.
 // Only the PUBLIC key is ever handled here — the signing (private) key stays on
 // the auth host and fleet never needs it.
 func configSetAuthPubkey(argv []string) int {
 	fs := flag.NewFlagSet("config set-auth-pubkey", flag.ContinueOnError)
-	envFile := fs.String("env-file", "", "web env file (default /etc/fleet/fleet-web.env when present, else web/.env.local)")
+	envFile := fs.String("env-file", "", "env file (default: the server env file — FLEET_ENV_FILE, /etc/fleet/fleet.env when present, else .env.local)")
 	from := fs.String("from", "", "read the key from this file (e.g. scp'd `auth pubkey` output)")
 	loginURL := fs.String("login-url", "", "auth service base URL (AUTH_LOGIN_URL; optional — the web tier defaults it)")
 	cookieDomain := fs.String("cookie-domain", "", "shared cookie domain, e.g. elcanotek.com (AUTH_COOKIE_DOMAIN; needed for cross-subdomain logout)")
@@ -215,7 +216,7 @@ func configSetAuthPubkey(argv []string) int {
 		return errf(1, "invalid AUTH_SIGNING_PUBKEY: %v", err)
 	}
 
-	path := webEnvFile(*envFile)
+	path := serverEnvFile(*envFile)
 	if err := creds.SetEnvKey(path, "AUTH_SIGNING_PUBKEY", key); err != nil {
 		return errf(5, "write %s: %v", path, err)
 	}
@@ -230,7 +231,7 @@ func configSetAuthPubkey(argv []string) int {
 		}
 	}
 	fmt.Printf("set AUTH_SIGNING_PUBKEY in %s — Elcano SSO enabled\n", path)
-	fmt.Println("apply with: systemctl restart fleet-web")
+	printEnvApplyHint()
 	return 0
 }
 
@@ -244,14 +245,15 @@ var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // wins at load) took a deployment down; this path dedupes to exactly one line,
 // keeps the file 0600 and its owner unchanged (creds.SetEnvKey), and never
 // puts the value on argv: it is read from stdin (`--value -`, or a pipe) or a
-// hidden TTY prompt. --web targets the web-tier file instead.
+// hidden TTY prompt. (--web is accepted for older scripts; there is one env
+// file since ADR-0091.)
 func configSetEnv(argv []string) int {
 	fs := flag.NewFlagSet("config set-env", flag.ContinueOnError)
 	envFile := fs.String("env-file", "", "env file (default: the server env file — FLEET_ENV_FILE, /etc/fleet/fleet.env when present, else .env.local)")
-	web := fs.Bool("web", false, "write the web-tier env file instead (/etc/fleet/fleet-web.env when present, else web/.env.local)")
+	web := fs.Bool("web", false, "deprecated no-op: the web UI reads the server env file (ADR-0091)")
 	value := fs.String("value", "", `the value ("-" reads stdin; omit to prompt hidden, or pipe it in)`)
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: fleet config set-env <KEY> [--value -] [--web] [--env-file <path>]")
+		fmt.Fprintln(fs.Output(), "usage: fleet config set-env <KEY> [--value -] [--env-file <path>]")
 		fmt.Fprintln(fs.Output(), "  Upserts KEY=VALUE as exactly one line (duplicates removed), file kept 0600 with its owner unchanged.")
 		_, _ = io.WriteString(fs.Output(), "  The value never goes on argv: printf '%s' \"$V\" | fleet config set-env KEY   (or a hidden prompt on a TTY)\n")
 		fs.PrintDefaults()
@@ -262,7 +264,7 @@ func configSetEnv(argv []string) int {
 	}
 	key = strings.TrimSpace(key)
 	if key == "" {
-		return errf(1, "usage: fleet config set-env <KEY> [--value -] [--web] [--env-file <path>]")
+		return errf(1, "usage: fleet config set-env <KEY> [--value -] [--env-file <path>]")
 	}
 	if !envKeyPattern.MatchString(key) {
 		return errf(1, "invalid env key %q (want [A-Za-z_][A-Za-z0-9_]*)", key)
@@ -274,15 +276,13 @@ func configSetEnv(argv []string) int {
 	if strings.ContainsAny(val, "\r\n") {
 		return errf(1, "value contains a line break — an env file cannot hold it (use fleet config unset-env to remove a key)")
 	}
+	warnWebFlag(*web)
 	path := serverEnvFile(*envFile)
-	if *web {
-		path = webEnvFile(*envFile)
-	}
 	if err := creds.SetEnvKey(path, key, val); err != nil {
 		return errf(5, "write %s: %v", path, err)
 	}
 	fmt.Printf("set %s in %s (one line; file 0600, owner unchanged)\n", key, path)
-	printEnvApplyHint(*web)
+	printEnvApplyHint()
 	return 0
 }
 
@@ -290,19 +290,17 @@ func configSetEnv(argv []string) int {
 func configUnsetEnv(argv []string) int {
 	fs := flag.NewFlagSet("config unset-env", flag.ContinueOnError)
 	envFile := fs.String("env-file", "", "env file (default: the server env file)")
-	web := fs.Bool("web", false, "edit the web-tier env file instead")
+	web := fs.Bool("web", false, "deprecated no-op: the web UI reads the server env file (ADR-0091)")
 	key, flagArgs := splitPositionalValueFlags(argv)
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
 	}
 	key = strings.TrimSpace(key)
 	if key == "" || !envKeyPattern.MatchString(key) {
-		return errf(1, "usage: fleet config unset-env <KEY> [--web] [--env-file <path>]")
+		return errf(1, "usage: fleet config unset-env <KEY> [--env-file <path>]")
 	}
+	warnWebFlag(*web)
 	path := serverEnvFile(*envFile)
-	if *web {
-		path = webEnvFile(*envFile)
-	}
 	removed, err := creds.DeleteEnvKey(path, key)
 	if err != nil {
 		return errf(5, "write %s: %v", path, err)
@@ -312,18 +310,14 @@ func configUnsetEnv(argv []string) int {
 		return 0
 	}
 	fmt.Printf("removed %s from %s\n", key, path)
-	printEnvApplyHint(*web)
+	printEnvApplyHint()
 	return 0
 }
 
 // printEnvApplyHint is the one apply-instructions footer every env-file writer
 // prints (config set-*, set-env/unset-env, mcp account set/del): preflight,
 // then restart. One function so the writers cannot drift on what "apply" means.
-func printEnvApplyHint(web bool) {
-	if web {
-		fmt.Println("apply with: systemctl restart fleet-web")
-		return
-	}
+func printEnvApplyHint() {
 	fmt.Println("preflight with: fleet validate-config")
 	fmt.Println("apply with: fleet restart   (systemctl restart fleet; reloadable knobs also apply live via kill -USR2 — docs/CONFIG-RELOAD.md)")
 }

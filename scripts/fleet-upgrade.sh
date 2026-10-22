@@ -134,6 +134,15 @@ require_go_toolchain() {
 }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
 
+# The web UI is a Vite bundle compiled into the binary (ADR-0091), so `make
+# build` needs node + npm; the node library picks the interpreter web/.nvmrc
+# names instead of whatever PATH says. And the binary serves that UI on the port
+# the retired Next.js unit held, so that unit is retired before the restart.
+# shellcheck source=lib/node-version.sh
+. "$SCRIPT_DIR/lib/node-version.sh"
+# shellcheck source=lib/web-tier.sh
+. "$SCRIPT_DIR/lib/web-tier.sh"
+
 [[ -d "$SRC_DIR" ]] || die "fleet source dir not found: $SRC_DIR"
 
 # ── resolve the readiness URL from FLEET_SERVER_ADDR when not given ──────────
@@ -176,10 +185,19 @@ if [[ "$NO_BUILD" == "1" ]]; then
     die "--no-build but ${SRC_DIR}/fleet is missing — build first (make build)"
   fi
 elif [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet"
+  info "[dry-run] would run: (cd ${SRC_DIR} && make build) on the node web/.nvmrc names  → ${SRC_DIR}/fleet with the web UI embedded"
 else
   require_go_toolchain
-  ( cd "$SRC_DIR" && make build ) || die "make build failed — live binaries left in place"
+  node_want="$(fleet_node_major_want "$SRC_DIR" || true)"
+  [[ -n "$node_want" ]] || die "cannot read the node major from ${SRC_DIR}/web/.nvmrc — live binaries left in place"
+  node_bin="$(fleet_resolve_node_bin "$node_want")" \
+    || die "no node >= ${node_want} (web/.nvmrc) to build the web bundle with — run: sudo fleet doctor --node; live binaries left in place"
+  build_path="$(fleet_node_build_path "$node_bin")"
+  if ! ( cd "$SRC_DIR" && export PATH="$build_path" && make build ); then
+    fleet_node_build_path_cleanup "$build_path" "$node_bin"
+    die "make build failed — live binaries left in place"
+  fi
+  fleet_node_build_path_cleanup "$build_path" "$node_bin"
   [[ -x "$SRC_DIR/fleet" ]] \
     || die "make build did not emit ${SRC_DIR}/fleet"
   ok "built fleet"
@@ -256,50 +274,11 @@ restart_service() {
   systemctl restart "$SERVICE_NAME"
 }
 
-# restart_web_tier — bring fleet-web back after a backend restart, and assert it.
-#
-# deploy/fleet-web.service carries `BindsTo=fleet.service`, so `systemctl
-# restart fleet` STOPS the web tier and systemd does not start it again on its
-# own. scripts/update.sh has restarted it explicitly for exactly this reason
-# since #654; this script did not — it restarted the backend, gated on the
-# BACKEND's /readyz, and then printed "fleet upgraded + healthy" while the web
-# tier was down. The readiness gate never covered fleet-web and still does not,
-# so the claim has to come from the unit's own resolved state.
-#
-# WEB_TIER_UP records what was actually observed, so the final banner can say
-# what it verified instead of asserting a health it never measured. A missing
-# unit is not a failure: plenty of boxes run the backend alone.
 # What this run actually OBSERVED, so the banner can report that and nothing
-# more. Both start at "not established": the readiness gate and the web-tier
-# restart each have skip branches (no systemd, no curl) that reach the banner
-# without measuring anything, and the first version of this banner printed
-# "backend /readyz 2xx; no fleet-web unit on this box" on exactly those paths —
-# two specific measurements, neither taken, one line under a message saying the
-# gate had been skipped. That is the fault this script was being audited for.
+# more. It starts at "not established": the readiness gate has skip branches
+# (no systemd, no curl) that reach the banner without measuring anything, and
+# an earlier banner claimed measurements on exactly those paths.
 HEALTH_VERIFIED="skipped"
-WEB_TIER_UP="unknown"
-restart_web_tier() {
-  command -v systemctl >/dev/null 2>&1 || return 0   # leaves WEB_TIER_UP unknown
-  if ! systemctl cat fleet-web.service >/dev/null 2>&1; then
-    WEB_TIER_UP="absent"   # no web unit on this box — nothing to bring back
-    return 0
-  fi
-  if ! systemctl restart fleet-web 2>/dev/null; then
-    WEB_TIER_UP="no"
-    warn "could not restart fleet-web (BindsTo=${SERVICE_NAME}.service stopped it) — check: journalctl -u fleet-web -n 50"
-    return 0
-  fi
-  # Read the resolved state back rather than trusting the restart's exit code —
-  # a unit can accept the restart and then fail its ExecStart.
-  for _ in 1 2 3 4 5 6 7 8; do
-    if [[ "$(systemctl is-active fleet-web 2>/dev/null || true)" == "active" ]]; then
-      WEB_TIER_UP="yes"; ok "fleet-web is active again (systemctl is-active)"; return 0
-    fi
-    sleep 1
-  done
-  WEB_TIER_UP="no"
-  warn "fleet-web did not come back active within 8s — check: journalctl -u fleet-web -n 50"
-}
 
 # ── rollback helper: restore the backup binaries + restart ───────────────────
 rollback() {
@@ -321,7 +300,6 @@ rollback() {
   fi
   if restart_service; then
     ok "restarted ${SERVICE_NAME} on the previous binary"
-    restart_web_tier   # the rollback restart stopped the BindsTo'd web tier too
   else
     warn "rollback restart failed — journalctl -u ${SERVICE_NAME} -n 50"
   fi
@@ -334,10 +312,14 @@ info "TimeoutStopSec in the unit must exceed that grace so systemd waits out the
 if ! command -v systemctl >/dev/null 2>&1; then
   warn "systemctl not found — restart ${SERVICE_NAME} manually (no systemd on this box)."
 elif [[ "$DRY_RUN" == "1" ]]; then
+  info "[dry-run] would retire the Next.js web tier (fleet-web.service) first when it is still installed — fleet serves the web UI on its port (ADR-0091)"
   info "[dry-run] would run: systemctl restart ${SERVICE_NAME}  (SIGTERM → graceful drain → exit, then start new)"
 elif ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
   warn "${SERVICE_NAME}.service is not installed — start fleet manually or run scripts/bootstrap.sh --enable-service."
 else
+  # The new binary serves the web UI on 127.0.0.1:3000 — the port the retired
+  # Next.js unit (fleet-web) held — so that unit goes first (ADR-0091).
+  fleet_retire_web_tier "$SRC_DIR" || true
   if ! restart_service; then
     warn "systemctl restart ${SERVICE_NAME} failed"
     rollback
@@ -350,7 +332,6 @@ fi
 step "5/5  Gating on readiness (${HEALTH_URL}, up to ${HEALTH_TIMEOUT}s)"
 if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would poll ${HEALTH_URL} until 2xx (≤ ${HEALTH_TIMEOUT}s), else roll back."
-  info "[dry-run] would then restart fleet-web (BindsTo=${SERVICE_NAME}.service stops it) and assert systemctl is-active"
 elif ! command -v systemctl >/dev/null 2>&1; then
   info "no systemd — skipping the readiness gate (nothing was restarted by this script)."
 elif ! command -v curl >/dev/null 2>&1; then
@@ -373,7 +354,6 @@ else
   if [[ "$healthy" == "1" ]]; then
     ok "new process is ready (${HEALTH_URL} → 2xx)"
     HEALTH_VERIFIED="yes"
-    restart_web_tier
   else
     warn "new process did NOT pass ${HEALTH_URL} within ${HEALTH_TIMEOUT}s"
     rollback
@@ -384,7 +364,7 @@ fi
 say
 # Green is itself a claim, so it is earned rather than assumed.
 _banner_c="$c_green"
-if [[ "$DRY_RUN" != "1" ]] && { [[ "$HEALTH_VERIFIED" != "yes" ]] || [[ "$WEB_TIER_UP" == "no" ]]; }; then
+if [[ "$DRY_RUN" != "1" && "$HEALTH_VERIFIED" != "yes" ]]; then
   _banner_c="$c_yellow"
 fi
 printf '%s═══════════════════════════════════════════════%s\n' "$_banner_c" "$c_reset"
@@ -395,15 +375,9 @@ elif [[ "$HEALTH_VERIFIED" != "yes" ]]; then
   # nothing about this box's health was established — so claim nothing.
   printf '%s » fleet binaries installed — health NOT verified (the readiness gate was skipped above)%s\n' "$c_bold" "$c_reset"
 else
-  case "$WEB_TIER_UP" in
-    yes)    printf '%s ✓ fleet upgraded + healthy (backend /readyz 2xx, fleet-web active)%s\n' "$c_bold" "$c_reset" ;;
-    absent) printf '%s ✓ fleet upgraded + healthy (backend /readyz 2xx; no fleet-web unit on this box)%s\n' "$c_bold" "$c_reset" ;;
-    # Not "healthy": the backend passed its gate and the web tier did not come
-    # back. Saying otherwise is the exact fault this script's own readiness gate
-    # exists to prevent, one tier over.
-    no)     printf '%s ! fleet backend upgraded + healthy, but fleet-web is NOT active — see the warning above%s\n' "$c_bold" "$c_reset" ;;
-    *)      printf '%s ✓ fleet backend upgraded + healthy (backend /readyz 2xx; fleet-web not examined)%s\n' "$c_bold" "$c_reset" ;;
-  esac
+  # The web UI is served by this same process (ADR-0091), so the backend's
+  # /readyz covers the process that serves it.
+  printf '%s ✓ fleet upgraded + healthy (/readyz 2xx; the web UI is served by the same process)%s\n' "$c_bold" "$c_reset"
 fi
 printf '%s═══════════════════════════════════════════════%s\n' "$_banner_c" "$c_reset"
 say

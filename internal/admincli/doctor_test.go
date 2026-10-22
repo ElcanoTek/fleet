@@ -137,7 +137,7 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// timer fires nothing while its service's Result still says "success".
 		`systemctl is-active --quiet "$BACKUP_TIMER"`,
 		// Both timer pairs must ride the same unit-drift check as fleet.service.
-		`for unit in "${SERVICE_NAME}.service" fleet-web.service "$BACKUP_SERVICE" "$BACKUP_TIMER" "$MAINT_SERVICE" "$MAINT_TIMER"; do`,
+		`for unit in "${SERVICE_NAME}.service" "$BACKUP_SERVICE" "$BACKUP_TIMER" "$MAINT_SERVICE" "$MAINT_TIMER"; do`,
 		// …with the restart it can trigger scoped to the app units: reinstalling
 		// a backup unit must not bounce the chat service.
 		`*) restart_needed=1 ;;`,

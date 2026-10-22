@@ -404,7 +404,8 @@ fleet__node_tarball_install_in() {
       || { echo "node tarball: could not move ${name} into ${prefix}" >&2; return 1; }
     chmod -R go-w "$dest" 2>/dev/null || true
     # SELinux (Fedora's default): label the tree for its new path, so the
-    # fleet-web unit may exec it. A no-op where restorecon is absent.
+    # build (run as root by update/bootstrap) may exec it. A no-op where
+    # restorecon is absent.
     command -v restorecon >/dev/null 2>&1 && restorecon -R "$dest" >/dev/null 2>&1
   fi
 

@@ -1,5 +1,5 @@
 # Dependabot keeps fleet's three dependency surfaces patched: the Go module
-# at the repo root, the Next.js web app under /web, and the GitHub Actions
+# at the repo root, the Vite web app under /web, and the GitHub Actions
 # used by the CI workflows. Minor + patch bumps are grouped per ecosystem so
 # routine updates land as one PR instead of a flood; majors stay separate so
 # breaking changes get their own review.
@@ -132,11 +132,11 @@ updates:
           - minor
           - patch
 
-  # Next.js web app (web/package.json + web/package-lock.json).
+  # Vite + React web app (web/package.json + web/package-lock.json).
   #
   # There are deliberately NO `ignore` entries here any more. Both of the ones
   # that used to live in this block — eslint majors and typescript majors —
-  # existed for the same reason: eslint-config-next pinned eslint plugins to
+  # existed for the same reason: eslint-config-next (from the Next.js era) pinned eslint plugins to
   # peer `eslint <=9`, and typescript-eslint refused TypeScript 7. Replacing
   # eslint with oxlint (a Rust linter with its own parser, no TypeScript API
   # dependency) removed the cause, so both bumps are now ordinary updates

@@ -16,3 +16,6 @@ spec:
     - name: orchestrator
       port: 8000
       targetPort: orchestrator
+    - name: web
+      port: 3000
+      targetPort: web

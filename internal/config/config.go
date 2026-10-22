@@ -1156,8 +1156,8 @@ type Config struct {
 	A2APeers []A2APeerConfig
 
 	// ── TLS termination (chat server) ──
-	// The standard deployment fronts the Next.js app (the only public entrypoint
-	// for BROWSERS) with Caddy/Tailscale, which terminate TLS and also route the
+	// The standard deployment fronts the fleet web listener (the only public
+	// entrypoint for BROWSERS, ADR-0091) with Caddy/Tailscale, which terminate TLS and also route the
 	// public /v1 API + the fixed-path discovery/webhook routes to the loopback
 	// Go listeners with the header-trust headers stripped (ADR-0053,
 	// scripts/lib/caddyfile.sh); the Go chat/orchestrator servers themselves
@@ -2071,7 +2071,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("OPENROUTER_API_KEY is required (or set FLEET_MOCK_MODE=1 for tests)")
 	}
 	if c.SharedToken == "" {
-		return fmt.Errorf("FLEET_SERVER_TOKEN is required (shared secret between Next.js and chat-server)")
+		return fmt.Errorf("FLEET_SERVER_TOKEN is required (shared secret between the web tier and the backends)")
 	}
 	if c.ConversationTTL <= 0 {
 		return fmt.Errorf("CONVERSATION_TTL_DAYS must be positive")

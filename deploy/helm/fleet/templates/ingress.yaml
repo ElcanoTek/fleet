@@ -26,13 +26,9 @@ spec:
             pathType: Prefix
             backend:
               service:
-                {{- if .Values.web.enabled }}
-                name: {{ include "fleet.fullname" . }}-web
-                port:
-                  name: http
-                {{- else }}
+                # The browser tier (web UI + /api) on the control plane's own
+                # web port; the separate web Deployment was removed (ADR-0091).
                 name: {{ include "fleet.fullname" . }}
                 port:
-                  name: chat
-                {{- end }}
+                  name: web
 {{- end }}

@@ -35,7 +35,11 @@
 #   # optional:
 #   # FLEET_SERVER_ADDR=127.0.0.1:8080           # chat listener  (default 127.0.0.1:8080)
 #   # FLEET_ORCHESTRATOR_ADDR=127.0.0.1:8000     # orchestrator listener (default 127.0.0.1:8000)
-#   # FLEET_SERVER_TOKEN=...                      # shared chat token (web sets CHAT_SERVER_TOKEN to match)
+#   # FLEET_WEB_ADDR=127.0.0.1:3000              # web UI listener (default 127.0.0.1:3000; "off" disables; ADR-0091)
+#   # APP_SESSION_SECRET=...                      # SECRET — signs the web sign-in cookie (bootstrap --enable-web sets it)
+#   # FLEET_PUBLIC_BASE_URL=https://fleet.example.com  # canonical public origin (redirects, Secure cookies, OAuth callbacks)
+#   # AUTH_SIGNING_PUBKEY=...                     # optional Elcano SSO (fleet config set-auth-pubkey)
+#   # FLEET_SERVER_TOKEN=...                      # shared secret for the loopback header-trust channel
 #   # ADMIN_API_KEY=...                           # orchestrator admin API key (full access)
 #   # FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS=ops@example.com,lead@example.com
 #   #                                             # comma-separated emails provisioned/promoted as

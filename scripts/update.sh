@@ -11,10 +11,9 @@
 # publisher's pipeline's job, not this box's). When the tag cannot be resolved
 # at all, the presence and freshness gates both go blind and the step says so
 # loudly instead of reporting the image up to date. It then rebuilds the
-# fleet binary + the Next web app and deploys the web build into the fleet-web
-# unit's WorkingDirectory (a build left only in the checkout never reaches the
-# browser), then restarts the systemd units (fleet, then fleet-web when
-# installed). The sandbox gate runs BEFORE anything is installed on purpose:
+# fleet binary with the Vite web bundle embedded in it (ADR-0091: the binary
+# serves the browser tier itself), retires the old Next.js fleet-web unit when
+# one is still installed, then restarts the fleet systemd unit. The sandbox gate runs BEFORE anything is installed on purpose:
 # its fail-closed abort (missing image, failed build) must leave the box
 # coherent — old binaries on disk, old service running — rather than a
 # half-updated box where new code is installed but the update claims nothing
@@ -106,6 +105,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/git.sh
 . "$SCRIPT_DIR/lib/git.sh"
 
+# Retiring the Next.js web tier on an upgraded box (ADR-0091).
+# shellcheck source=lib/web-tier.sh
+. "$SCRIPT_DIR/lib/web-tier.sh"
+
 SRC_DIR="${SRC_DIR:-$REPO_ROOT}"
 # Client bundle dir: env/flag wins; else the dir bootstrap persisted under the
 # state dir (resolved after arg parsing, alongside the pin); else the in-repo
@@ -175,9 +178,8 @@ OFFER_TIMERS="${FLEET_UPDATE_OFFER_TIMERS:-1}"
 # dying. ON by default, and that is a deliberate asymmetry with --adopt-units:
 # adopting a unit OVERWRITES an operator's hand-edit, so it needs consent, while
 # this only adds a parallel-installable interpreter package and stamps
-# FLEET_NODE_BIN — a value this script already rewrites unconditionally further
-# down (the "pointed fleet-web at ..." block). Refusing to install the
-# interpreter it is about to point the tier at would be incoherent. Boxes whose
+# FLEET_NODE_BIN — the interpreter step 4 builds the web bundle with. Refusing
+# to install the interpreter the build is about to need would be incoherent. Boxes whose
 # node comes from nvm/nodesource/an image opt out with --no-node-repair.
 NODE_REPAIR="${FLEET_UPDATE_NODE_REPAIR:-1}"
 # Sandbox image freshness backstop: rebuild the on-box sandbox image when the
@@ -1028,7 +1030,7 @@ if [[ -f "$SRC_DIR/web/package.json" ]]; then
         || die "still no node >= ${node_major_want} with a matching npm after scripts/doctor.sh --node — inspect 'dnf list nodejs*' / 'dnf repolist'; ${_state}"
       ok "node toolchain repaired in place — no re-run needed"
     fi
-    ok "web tier will build+run on ${node_bin_resolved} ($("$node_bin_resolved" -v))"
+    ok "web bundle will build on ${node_bin_resolved} ($("$node_bin_resolved" -v))"
     # Named separately from the interpreter because it is a separate claim, and
     # the one that was silently false: the gate resolved node 24, the build ran
     # npm 22 (absolute shebang), and npm rejected the engine it was handed.
@@ -1165,23 +1167,23 @@ else
   fi
 fi
 
-# ── 4. build the fleet binary + the web app ───────────────────────────────
-step "4/5  Building the fleet binary + web app"
+# ── 4. build the fleet binary (the web app is compiled into it) ────────────
+step "4/5  Building the fleet binary (web bundle embedded)"
 # Reconcile the backend's OAuth callback origin from the public, non-secret web
-# build stamp bootstrap persisted. This repairs existing installations during a
-# normal update and keeps both tiers byte-identical without trusting request
-# headers. The encryption key is generated once when absent.
+# build stamp an older bootstrap persisted in the retired web tier's env file.
+# FLEET_PUBLIC_BASE_URL is also the browser tier's canonical origin now
+# (ADR-0091). The encryption key is generated once when absent.
 web_env_file="/etc/fleet/fleet-web.env"
-web_origin=""; web_app_name=""
+web_origin=""
 if [[ -r "$web_env_file" ]]; then
   web_origin="$(grep '^NEXT_PUBLIC_PUBLIC_ORIGIN=' "$web_env_file" | cut -d= -f2- || true)"
-  web_app_name="$(grep '^NEXT_PUBLIC_APP_NAME=' "$web_env_file" | cut -d= -f2- || true)"
 fi
 if [[ -n "$web_origin" ]]; then
   if [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would reconcile FLEET_PUBLIC_BASE_URL + MCP encryption key in ${backend_env_file}"
   else
-    upsert_env_file "$backend_env_file" FLEET_PUBLIC_BASE_URL "$web_origin"
+    grep -q '^FLEET_PUBLIC_BASE_URL=' "$backend_env_file" 2>/dev/null \
+      || upsert_env_file "$backend_env_file" FLEET_PUBLIC_BASE_URL "$web_origin"
     if ! grep -q '^FLEET_MCP_OAUTH_ENCRYPTION_KEY=' "$backend_env_file"; then
       upsert_env_file "$backend_env_file" FLEET_MCP_OAUTH_ENCRYPTION_KEY \
         "$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
@@ -1190,19 +1192,52 @@ if [[ -n "$web_origin" ]]; then
   fi
 fi
 if [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet"
+  info "[dry-run] would run: (cd ${SRC_DIR} && make build) on the node+npm the gate resolved above → ${SRC_DIR}/fleet with the web bundle embedded (checked: fleet version --web)"
   info "[dry-run] would install fleet → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
   info "[dry-run] would remove a leftover fleet-admin shim from the install dir and /usr/local/bin, if present"
   info "[dry-run] would refresh /etc/profile.d/fleet-motd.sh (login banner) if it differs from deploy/fleet-motd.sh"
-  info "[dry-run] would refresh /usr/local/bin/fleet-web-start.sh and set FLEET_NODE_BIN in /etc/fleet/fleet-web.env"
-  info "[dry-run] would run: (cd ${SRC_DIR}/web && npm ci && npm run build) with the NEXT_PUBLIC_* stamps from /etc/fleet/fleet-web.env, on the node+npm the gate resolved above"
-  info "[dry-run] would deploy the web build → the fleet-web unit's WorkingDirectory (else /opt/fleet/web)"
+  if [[ -f "$web_env_file" ]]; then
+    info "[dry-run] would copy the browser-tier keys (APP_SESSION_SECRET, AUTH_*, FLEET_OIDC_*, CATWALK_URL) absent from ${backend_env_file} out of ${web_env_file} (ADR-0091)"
+  fi
 else
   require_go_toolchain
 
-  ( cd "$SRC_DIR" && make build ) || die "make build failed — live binary left in place"
+  # `make build` builds the web bundle (npm ci + vite build) and embeds it in
+  # the binary (ADR-0091), so it runs with `node`, `npm` and `npx` pinned to
+  # the interpreter the gate resolved. The bare-`npm` build used whatever its
+  # own shebang named — on Fedora the DEFAULT stream, absolutely pathed — so the
+  # bundle was built on the old major while this script reported the new one.
+  # Resolved once so the shim directory it may create is removed rather than
+  # leaked on every update, including on the failure path. See
+  # scripts/lib/node-version.sh.
+  _build_path="$(fleet_node_build_path "$node_bin_resolved")"
+  # Ask npm which interpreter it is actually running under, rather than
+  # inferring it from the PATH we just built: the pin is a claim about a
+  # subprocess's shebang resolution, and only npm's own answer settles it.
+  _build_node="$(fleet_npm_node_version "$_build_path" "$SRC_DIR/web" || true)"
+  _build_major="$(fleet_node_version_major "${_build_node:-}" || true)"
+  if [[ -z "$_build_node" ]]; then
+    warn "could not read the node version npm runs under (\`npm version --json\` gave nothing) — building anyway, but the interpreter is UNVERIFIED"
+    _build_node="unverified"
+  elif [[ -n "$_build_major" ]] && (( _build_major < node_major_want )); then
+    fleet_node_build_path_cleanup "$_build_path" "$node_bin_resolved"
+    warn "npm would build the web bundle on ${_build_node}, below the ${node_major_want} declared in web/.nvmrc."
+    warn "  fix it:  sudo dnf install nodejs${node_major_want}-npm    (then re-run this update)"
+    die "refusing to build the web bundle with an npm pinned to an unsupported node — live binary left in place"
+  fi
+  if ! ( cd "$SRC_DIR" && export PATH="$_build_path" && make build ); then
+    fleet_node_build_path_cleanup "$_build_path" "$node_bin_resolved"
+    die "make build failed — live binary left in place"
+  fi
+  fleet_node_build_path_cleanup "$_build_path" "$node_bin_resolved"
   [[ -x "$SRC_DIR/fleet" ]] \
     || die "make build did not emit ${SRC_DIR}/fleet"
+  # make build already ran this check; repeat it on the artifact about to be
+  # installed, so a box can never be left serving the "built without its web
+  # bundle" page.
+  web_bundle="$("$SRC_DIR/fleet" version --web 2>/dev/null)" \
+    || die "the built binary carries no web bundle (${web_bundle:-fleet version --web failed}) — live binary left in place"
+  ok "web bundle built on ${_build_node} and embedded — ${web_bundle}"
   # Say what got built, in the words `fleet version` and the login banner use,
   # so an operator does not have to log in again to learn the stamp. A stamp
   # with no release in it gets one line of context: release.yml tags a push to
@@ -1273,8 +1308,7 @@ else
   # shim that invokes it is shipped content that only scripts/bootstrap.sh ever
   # installed. A box provisioned before the hook existed never got one, and an
   # edit to deploy/fleet-motd.sh reached no existing box: the one file in the
-  # deploy set with no refresh path. Same treatment as fleet-web-start.sh below
-  # — shipped content with no operator-tunable parts, refreshed unconditionally,
+  # deploy set with no refresh path. Shipped content with no operator-tunable parts, refreshed unconditionally,
   # and never fatal: a login banner must not be able to fail an update.
   #
   # cmp-gated so a re-run is silent rather than announcing a no-op every time.
@@ -1293,123 +1327,43 @@ else
     fi
   fi
 
-  if [[ -f "$SRC_DIR/web/package.json" ]]; then
-
-    # ExecStart points at this shim; a stale copy would send the tier to the
-    # wrong interpreter. Shipped content with no operator-tunable parts, so it
-    # is refreshed unconditionally rather than gated behind --adopt-units.
-    if [[ -f "$SRC_DIR/deploy/fleet-web-start.sh" ]]; then
-      if install -D -m 0755 "$SRC_DIR/deploy/fleet-web-start.sh" /usr/local/bin/fleet-web-start.sh 2>/dev/null; then
-        ok "refreshed /usr/local/bin/fleet-web-start.sh"
+  # The browser tier used to be a separate Next.js service (fleet-web) with its
+  # own env file. Its keys are read by the fleet binary now; carry over the ones
+  # fleet.env lacks so sign-in keeps working across the upgrade — the same
+  # APP_SESSION_SECRET keeps every existing session valid. Never overwrites a
+  # key fleet.env already sets. The unit itself is retired in step 5, right
+  # before fleet restarts onto its port.
+  if [[ -r "$web_env_file" ]]; then
+    migrated=0
+    while IFS= read -r line; do
+      key="${line%%=*}"
+      case "$key" in
+        APP_SESSION_SECRET|AUTH_SIGNING_PUBKEY|AUTH_SIGNING_PREVIOUS_PUBKEYS|AUTH_COOKIE_NAME|AUTH_COOKIE_DOMAIN|AUTH_LOGIN_URL|CATWALK_URL|FLEET_OIDC_*) ;;
+        *) continue ;;
+      esac
+      grep -q "^${key}=" "$backend_env_file" 2>/dev/null && continue
+      if upsert_env_file "$backend_env_file" "$key" "${line#*=}"; then
+        migrated=$((migrated + 1))
       else
-        warn "could not refresh /usr/local/bin/fleet-web-start.sh (need root?) — fleet-web may not start"
+        warn "could not copy ${key} into ${backend_env_file} — set it there by hand"
       fi
-    fi
-    # Point the tier at the resolved interpreter. Unset means the shim falls
-    # back to `node` on PATH — Fedora's default stream, i.e. possibly the old
-    # major — so this is the line that makes the upgrade actually take effect.
-    if [[ -f /etc/fleet/fleet-web.env ]]; then
-      # tail -n1 + quote strip: systemd's EnvironmentFile is last-wins, and a
-      # hand-written FLEET_NODE_BIN="/usr/bin/node-24" must not read as drift.
-      # Read the CURRENT value with the same last-wins + quote-strip rule
-      # systemd's EnvironmentFile uses, so a hand-written
-      # FLEET_NODE_BIN="/usr/bin/node-24" does not read as drift.
-      _read_nb() {
-        grep -E '^FLEET_NODE_BIN=' /etc/fleet/fleet-web.env 2>/dev/null \
-          | tail -n1 | cut -d= -f2- | sed -e 's/^["'"'"']//' -e 's/["'"'"']$//'
-      }
-      _cur_nb="$(_read_nb)"
-      if [[ "$_cur_nb" != "$node_bin_resolved" ]]; then
-        if ! upsert_env_file /etc/fleet/fleet-web.env FLEET_NODE_BIN "$node_bin_resolved"; then
-          warn "could not set FLEET_NODE_BIN in /etc/fleet/fleet-web.env"
-        # Read it BACK rather than trusting the writer's exit code. upsert
-        # returning 0 proves a file was written; it does not prove the tier now
-        # resolves to this interpreter (a later duplicate line wins under
-        # systemd's last-wins rule, and a value that is not executable resolves
-        # to nothing). doctor.sh asserts this the same way — and this is the
-        # very line doctor's comment points at, so leaving it on the writer's
-        # return code would have made the design note's "every new success claim
-        # is a read-back" untrue in the one place it named.
-        elif [[ "$(_read_nb)" == "$node_bin_resolved" && -x "$node_bin_resolved" ]]; then
-          ok "pointed fleet-web at ${node_bin_resolved} — read back from /etc/fleet/fleet-web.env"
-        else
-          warn "wrote FLEET_NODE_BIN=${node_bin_resolved} but /etc/fleet/fleet-web.env reads back $(_read_nb) — inspect it by hand"
-        fi
-      fi
-    fi
-
-    # Rebuild with the same NEXT_PUBLIC_* stamps bootstrap baked in (Next
-    # inlines them into the browser bundle at build time — a bare rebuild
-    # silently drops the public origin + app name). They are client-visible
-    # by definition, so grepping just those keys from the 0600 web env file
-    # leaks no secret — the file is still never sourced. The build id needs
-    # no stamp: next.config.ts derives it from the checkout's git SHA.
-    # PATH is set so `node`, `npm` and `npx` all resolve to the interpreter the
-    # gate picked. The bare-`npm` build used whatever its own shebang named — on
-    # Fedora the DEFAULT stream, absolutely pathed — so the tier was built on the
-    # old major while this script reported the new one, and npm printed
-    # EBADENGINE against web/package.json's `"node": ">=24"` in the middle of an
-    # otherwise green update. Resolved once so the shim directory it may create
-    # is removed rather than leaked on every update, including on the failure
-    # path. See scripts/lib/node-version.sh.
-    _build_path="$(fleet_node_build_path "$node_bin_resolved")"
-    # Ask npm which interpreter it is actually running under, rather than
-    # inferring it from the PATH we just built. The pin is a claim about a
-    # subprocess's shebang resolution; only npm's own answer settles it, and
-    # `node -v` under the same PATH — what this used to read — cannot: it is the
-    # symlink we made, so it reported success for the one component that was
-    # already correct while the broken one went unmeasured.
-    _build_node="$(fleet_npm_node_version "$_build_path" "$SRC_DIR/web" || true)"
-    _build_major="$(fleet_node_version_major "${_build_node:-}" || true)"
-    if [[ -z "$_build_node" ]]; then
-      warn "could not read the node version npm runs under (\`npm version --json\` gave nothing) — building anyway, but the interpreter is UNVERIFIED"
-      _build_node="unverified"
-    elif [[ -n "$_build_major" ]] && (( _build_major < node_major_want )); then
-      fleet_node_build_path_cleanup "$_build_path" "$node_bin_resolved"
-      warn "npm would build the web tier on ${_build_node}, below the ${node_major_want} declared in web/.nvmrc."
-      warn "  fix it:  sudo dnf install nodejs${node_major_want}-npm    (then re-run this update)"
-      die "refusing to build the web tier with an npm pinned to an unsupported node — binaries are installed, the web tier is untouched"
-    fi
-    if ! ( cd "$SRC_DIR/web" \
-        && export PATH="$_build_path" \
-        && export NEXT_PUBLIC_PUBLIC_ORIGIN="$web_origin" NEXT_PUBLIC_APP_NAME="$web_app_name" \
-        && npm ci && npm run build ); then
-      fleet_node_build_path_cleanup "$_build_path" "$node_bin_resolved"
-      die "web build failed"
-    fi
-    fleet_node_build_path_cleanup "$_build_path" "$node_bin_resolved"
-    # Name the interpreter the build ACTUALLY ran under, read back from npm
-    # itself, rather than the one the gate intended it to run under.
-    ok "web app built on ${_build_node} (origin=${web_origin:-<default>}, app=${web_app_name:-<default>})"
-
-    # Deploy the build to where fleet-web actually serves from (bootstrap's
-    # deploy_web_tier copies to the unit's WorkingDirectory, /opt/fleet/web by
-    # default). Without this copy + the restart in step 5, an update rebuilds
-    # the app in the checkout and the live site keeps serving the old bundle.
-    if systemctl cat fleet-web.service >/dev/null 2>&1; then
-      web_dst="$(systemctl show -p WorkingDirectory --value fleet-web.service 2>/dev/null)"
-      web_dst="${web_dst:-/opt/fleet/web}"
-      if [[ "$(cd "$web_dst" 2>/dev/null && pwd || echo "$web_dst")" == "$SRC_DIR/web" ]]; then
-        info "fleet-web runs from the source checkout (${web_dst}) — build is already in place."
-      elif install -d "$web_dst" 2>/dev/null && cp -a "$SRC_DIR/web/." "$web_dst/"; then
-        ok "deployed web app → ${web_dst}"
-        # The cp above re-roots ownership; hand .next (Next's runtime cache —
-        # the unit's only ReadWritePaths entry) back to the unit's User= so a
-        # non-root fleet-web keeps working after every update. No-op for the
-        # legacy root unit (User= empty).
-        web_user="$(systemctl show -p User --value fleet-web.service 2>/dev/null)"
-        if [[ -n "$web_user" && -d "$web_dst/.next" ]] && id -u "$web_user" >/dev/null 2>&1; then
-          chown -R "$web_user:" "$web_dst/.next" 2>/dev/null \
-            || warn "chown ${web_dst}/.next to ${web_user} failed — fleet-web may not write its cache"
-        fi
+    done < <(grep -E '^[A-Z_][A-Z0-9_]*=' "$web_env_file" || true)
+    # The old tier's bind address: FLEET_WEB_HOST (+ PORT) became FLEET_WEB_ADDR.
+    # Only a non-default bind needs carrying — fleet's default is the address the
+    # old unit used (127.0.0.1:3000) — and never over a value fleet.env sets.
+    _web_host="$(grep '^FLEET_WEB_HOST=' "$web_env_file" | tail -n1 | cut -d= -f2- || true)"
+    _web_port="$(grep '^PORT=' "$web_env_file" | tail -n1 | cut -d= -f2- || true)"
+    _web_host="${_web_host:-127.0.0.1}"; _web_port="${_web_port:-3000}"
+    if [[ "${_web_host}:${_web_port}" != "127.0.0.1:3000" ]] \
+       && ! grep -q '^FLEET_WEB_ADDR=' "$backend_env_file" 2>/dev/null; then
+      [[ "$_web_host" == *:* && "$_web_host" != \[* ]] && _web_host="[${_web_host}]"
+      if upsert_env_file "$backend_env_file" FLEET_WEB_ADDR "${_web_host}:${_web_port}"; then
+        migrated=$((migrated + 1))
       else
-        die "could not deploy the web build into ${web_dst} (need root?) — live web app left in place"
+        warn "could not set FLEET_WEB_ADDR=${_web_host}:${_web_port} in ${backend_env_file} — set it there by hand"
       fi
-    else
-      info "fleet-web.service not installed — leaving the build in ${SRC_DIR}/web."
     fi
-  else
-    warn "no web/package.json under ${SRC_DIR} — skipping web build."
+    (( migrated > 0 )) && ok "carried ${migrated} browser-tier key(s) from ${web_env_file} into ${backend_env_file}"
   fi
 fi
 
@@ -1431,7 +1385,7 @@ fi
 # explicit install offer after this loop instead).
 NEED_DAEMON_RELOAD=0
 if command -v systemctl >/dev/null 2>&1; then
-  for unit in fleet.service fleet-web.service fleet-backup.service fleet-backup.timer fleet-maintenance.service fleet-maintenance.timer; do
+  for unit in fleet.service fleet-backup.service fleet-backup.timer fleet-maintenance.service fleet-maintenance.timer; do
     installed="/etc/systemd/system/$unit"
     shipped="$SRC_DIR/deploy/$unit"
     [[ -f "$installed" && -f "$shipped" ]] || continue
@@ -1454,18 +1408,6 @@ if command -v systemctl >/dev/null 2>&1; then
 
     warn "$unit differs functionally from the shipped deploy/$unit — a unit fix in this release may not be live."
 
-    # The shipped fleet-web.service runs as a dedicated fleet-web user (#654);
-    # that user is created by `bootstrap --enable-web`, NOT by an update. On a
-    # box provisioned before #654 the user may not exist yet, so adopting the
-    # unit and restarting would fail with status=217/USER. Detect that so the
-    # adopt path (and the manual hint) create it first.
-    web_needs_user=0
-    web_dst=""
-    if [[ "$unit" == "fleet-web.service" ]] && grep -q '^User=fleet-web' "$shipped" 2>/dev/null && ! id -u fleet-web >/dev/null 2>&1; then
-      web_needs_user=1
-      web_dst="$(systemctl show -p WorkingDirectory --value fleet-web.service 2>/dev/null)"
-      web_dst="${web_dst:-/opt/fleet/web}"
-    fi
 
     # Decide whether to adopt: --adopt-units adopts unattended; otherwise an
     # interactive TTY (and not --yes, which means "don't ask me") gets a y/N
@@ -1473,51 +1415,26 @@ if command -v systemctl >/dev/null 2>&1; then
     do_adopt=0
     if [[ "$DRY_RUN" == "1" ]]; then
       info "[dry-run] would offer to adopt $shipped → $installed"
-      [[ "$web_needs_user" == "1" ]] && info "[dry-run] would first create the fleet-web user + chown ${web_dst}/.next"
       show_unit_diff "$funcdiff"
     elif [[ "$ADOPT_UNITS" == "1" ]]; then
       do_adopt=1
     elif [[ -t 0 && "$ASSUME_YES" != "1" ]]; then
       show_unit_diff "$funcdiff"
-      _extra=""; [[ "$web_needs_user" == "1" ]] && _extra=" + create the fleet-web user"
       _then="restart in step 5"
       case "$unit" in
         fleet-backup.timer|fleet-maintenance.timer)     _then="no restart — the reload re-arms the timer" ;;
         fleet-backup.service|fleet-maintenance.service) _then="no restart — the next timer fire uses the new definition" ;;
       esac
-      printf '%s?%s Adopt the shipped %s%s%s? %s(install%s, daemon-reload, %s) (y/N)%s ' \
-        "$c_cyan" "$c_reset" "$c_bold" "$unit" "$c_reset" "$c_dim" "$_extra" "$_then" "$c_reset"
+      printf '%s?%s Adopt the shipped %s%s%s? %s(install, daemon-reload, %s) (y/N)%s ' \
+        "$c_cyan" "$c_reset" "$c_bold" "$unit" "$c_reset" "$c_dim" "$_then" "$c_reset"
       read -r answer
       case "${answer,,}" in y|yes) do_adopt=1 ;; esac
     fi
 
     if [[ "$do_adopt" == "1" ]]; then
-      # Prerequisite first so the step-5 restart of an adopted fleet-web.service
-      # doesn't die 217/USER on a pre-#654 box.
-      if [[ "$web_needs_user" == "1" ]]; then
-        if useradd --system --home-dir /var/lib/fleet-web --shell /usr/sbin/nologin --no-create-home fleet-web 2>/dev/null; then
-          ok "created the fleet-web system user"
-        else
-          warn "could not create the fleet-web user (need root?) — the fleet-web restart may fail; create it manually"
-        fi
-        if [[ -d "$web_dst/.next" ]] && chown -R fleet-web: "$web_dst/.next" 2>/dev/null; then
-          ok "chowned ${web_dst}/.next to fleet-web"
-        fi
-      fi
       if install -m 0644 "$shipped" "$installed" 2>/dev/null; then
         ok "adopted $shipped → $installed"
         NEED_DAEMON_RELOAD=1
-        # fleet-web's drop-in is part of the shipped unit's shutdown behavior
-        # (it beats Fedora's global abort-on-timeout drop-in); adopt it with
-        # the unit. No restart implication beyond the unit adoption itself.
-        if [[ "$unit" == "fleet-web.service" && -f "$SRC_DIR/deploy/fleet-web.service.d/10-timeout-kill.conf" ]]; then
-          if install -D -m 0644 "$SRC_DIR/deploy/fleet-web.service.d/10-timeout-kill.conf" \
-            /etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf 2>/dev/null; then
-            ok "installed fleet-web.service.d/10-timeout-kill.conf"
-          else
-            warn "could not install the fleet-web drop-in (need root?) — Fedora's global abort drop-in still overrides TimeoutStopFailureMode"
-          fi
-        fi
       else
         die "could not install $shipped → $installed (need root? re-run with sudo, or adopt manually) — live unit left in place"
       fi
@@ -1533,68 +1450,8 @@ if command -v systemctl >/dev/null 2>&1; then
         warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload && systemctl restart ${unit%.service}"
       fi
       warn "  or re-run: fleet update --adopt-units   (adopts every drifted unit)"
-      if [[ "$web_needs_user" == "1" ]]; then
-        warn "  first (fleet-web runs as a non-root user now): useradd --system --home-dir /var/lib/fleet-web --shell /usr/sbin/nologin --no-create-home fleet-web && chown -R fleet-web:fleet-web ${web_dst}/.next"
-      fi
     fi
   done
-  # The fleet-web drop-in can be missing even when the unit itself matches
-  # (box adopted the unit before the drop-in shipped). Without it, Fedora's
-  # global abort-on-timeout drop-in overrides the unit's
-  # TimeoutStopFailureMode=kill. Same consent rule as units: adopt only under
-  # --adopt-units, else hint. A drop-in install needs no app restart.
-  dropin_shipped="$SRC_DIR/deploy/fleet-web.service.d/10-timeout-kill.conf"
-  dropin_installed="/etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf"
-  # Comment-only churn must not nag, same rule the unit loop above applies via
-  # unit_functional_body(): byte-identical → nothing to say; identical once
-  # comments are stripped → the directive is already in effect, so say nothing;
-  # only a real functional difference is worth a warning. Without this, editing
-  # the drop-in's header (11 of its 13 lines are comments) would claim Fedora's
-  # abort drop-in is overriding us on a box where it is not.
-  dropin_needs_work=0
-  if [[ -f /etc/systemd/system/fleet-web.service && -f "$dropin_shipped" ]] \
-     && ! cmp -s "$dropin_shipped" "$dropin_installed" 2>/dev/null; then
-    if [[ -f "$dropin_installed" ]] && [[ -z "$(diff \
-          <(unit_functional_body "$dropin_installed") \
-          <(unit_functional_body "$dropin_shipped") 2>/dev/null || true)" ]]; then
-      info "fleet-web.service.d/10-timeout-kill.conf differs from deploy/ only in comments/whitespace — no functional change, leaving as-is."
-    else
-      dropin_needs_work=1
-    fi
-  fi
-  if [[ "$dropin_needs_work" == "1" ]]; then
-    if [[ "$ADOPT_UNITS" == "1" ]]; then
-      if install -D -m 0644 "$dropin_shipped" "$dropin_installed" 2>/dev/null; then
-        ok "installed fleet-web.service.d/10-timeout-kill.conf"
-        NEED_DAEMON_RELOAD=1
-      else
-        warn "could not install the fleet-web drop-in (need root?)"
-      fi
-    else
-      warn "fleet-web.service.d/10-timeout-kill.conf missing or drifted — Fedora's global abort drop-in overrides the unit's TimeoutStopFailureMode=kill."
-      warn "  adopt:  install -D -m 0644 $dropin_shipped $dropin_installed && systemctl daemon-reload"
-      warn "  or re-run: fleet update --adopt-units"
-    fi
-  fi
-
-  # Assert the RESOLVED ExecStart. Everything above can succeed — shim
-  # refreshed, FLEET_NODE_BIN stamped, build done on the right node — while the
-  # live unit still points at the old /usr/bin/node ExecStart, because adopting
-  # a drifted unit needs --adopt-units or an interactive yes. Saying nothing
-  # there would report a node upgrade that the serving process never got.
-  if [[ -f /etc/systemd/system/fleet-web.service ]]; then
-    _live_exec="$(systemctl show -p ExecStart --value fleet-web.service 2>/dev/null || true)"
-    case "$_live_exec" in
-      *fleet-web-start.sh*) : ;;
-      "") : ;;   # unit unknown to systemd (never enabled) — not our claim to make
-      *)
-        warn "fleet-web's live ExecStart is not the shipped shim — the node work above is NOT in effect for the running tier."
-        warn "  live: ${_live_exec}"
-        warn "  adopt it: sudo fleet update --adopt-units   (or: sudo fleet doctor)"
-        ;;
-    esac
-  fi
-
   # ── Caddyfile drift (the fleet-managed TLS front) ──
   # bootstrap renders /etc/caddy/Caddyfile from scripts/lib/caddyfile.sh and
   # this script never rewrote it, so a routing fix in a new release (the /v1
@@ -1655,8 +1512,9 @@ if command -v systemctl >/dev/null 2>&1; then
     # /triggers/*, /webhooks/*) straight to the Go listeners, so the backends
     # need FLEET_TRUSTED_PROXIES naming it or every API caller looks like
     # Caddy's address (one shared rate-limit bucket; the IP allow/deny filter
-    # judging Caddy). Browser traffic goes through Next, which sends no
-    # X-Forwarded-For, so it keys on 127.0.0.1 either way. bootstrap writes
+    # judging Caddy). Browser traffic goes through the fleet web listener,
+    # which calls the backends in-process with no X-Forwarded-For, so it keys
+    # on 127.0.0.1 either way. bootstrap writes
     # 127.0.0.1,::1 with the Caddyfile; a box provisioned before it did has
     # none. Same consent rule as the Caddyfile above, and only when the key is
     # ABSENT — a value the operator set (even an empty one) is theirs — and
@@ -1760,11 +1618,17 @@ fi
 if ! command -v systemctl >/dev/null 2>&1; then
   warn "systemctl not found — restart ${SERVICE_NAME} manually (no systemd on this box)."
 elif [[ "$DRY_RUN" == "1" ]]; then
+  if [[ -f /etc/systemd/system/fleet-web.service ]] || systemctl cat fleet-web.service >/dev/null 2>&1; then
+    info "[dry-run] would retire the Next.js web tier (ADR-0091): stop + disable fleet-web, remove its unit, drop-in, start shim and /opt/fleet/web — fleet serves the web UI on 127.0.0.1:3000 itself"
+  fi
   info "[dry-run] would run: systemctl restart ${SERVICE_NAME}"
-  info "[dry-run] would run: systemctl restart fleet-web (when the unit is installed)"
 elif ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
   warn "${SERVICE_NAME}.service is not installed — start fleet manually or run scripts/bootstrap.sh --enable-service."
 else
+  # The web UI is served by the fleet binary now (ADR-0091), on the port the
+  # retired Next.js unit held (127.0.0.1:3000), so that unit must be gone
+  # before fleet restarts or the new listener cannot bind.
+  fleet_retire_web_tier "$SRC_DIR" || true
   systemctl restart "$SERVICE_NAME" || die "systemctl restart ${SERVICE_NAME} failed — journalctl -u ${SERVICE_NAME} -n 50"
   # Brief health check on the unit state.
   healthy=0
@@ -1780,17 +1644,6 @@ else
     die "${SERVICE_NAME} did not come back up — journalctl -u ${SERVICE_NAME} -n 50"
   fi
 
-  # Restart the web tier so it serves the freshly deployed build. Explicit
-  # rather than left to dependency propagation: fleet-web BindsTo fleet.service,
-  # so the restart above already STOPPED it — an explicit start-or-restart both
-  # brings it back and picks up the new .next output.
-  if systemctl cat fleet-web.service >/dev/null 2>&1; then
-    if systemctl restart fleet-web 2>/dev/null; then
-      ok "fleet-web restarted on the new build"
-    else
-      warn "could not restart fleet-web — check: journalctl -u fleet-web -n 50"
-    fi
-  fi
 fi
 
 say

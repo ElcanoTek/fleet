@@ -287,7 +287,7 @@ func mcpAccountSet(argv []string) int {
 	// The broker reads connector credentials once at boot (credential env
 	// changes deliberately require a restart — see clientconfig.applyBootEnvFile),
 	// so say how to apply, the way the config set-* siblings do.
-	printEnvApplyHint(false)
+	printEnvApplyHint()
 	return 0
 }
 
@@ -416,7 +416,7 @@ func mcpAccountDel(argv []string) int {
 		}
 	}
 	fmt.Printf("removed %d key(s) for server %q account %q from %s\n", removed, server, account, path)
-	printEnvApplyHint(false)
+	printEnvApplyHint()
 	return 0
 }
 

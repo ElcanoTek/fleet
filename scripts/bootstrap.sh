@@ -62,8 +62,8 @@
 #                              ref (recorded under the state dir) so `update`
 #                              advances only to it instead of tracking HEAD.
 #   --enable-service           systemctl enable --now the fleet unit at the end.
-#   --enable-web               build + deploy the Next.js web tier and enable
-#                              fleet-web (implies --enable-service). Email+password
+#   --enable-web               set up the web UI fleet serves on 127.0.0.1:3000
+#                              (implies --enable-service). Email+password
 #                              login against the bundle's chat users.
 #   --domain <fqdn>            with --enable-web: front it with Caddy + automatic
 #                              TLS for <fqdn> (installs Caddy, opens 80/443). The
@@ -167,7 +167,6 @@
 #                           a dump holds every conversation, task and user row)
 #   FLEET_BACKUP_RETENTION_DAYS  the timer's --prune cutoff: dumps older than this
 #                           many days are deleted after a successful run (default 30)
-#   FLEET_WEB_APP_NAME      web UI app name (--enable-web; default Fleet)
 #   FLEET_ACME_EMAIL        Let's Encrypt account email for Caddy (--domain; optional)
 set -euo pipefail
 
@@ -192,6 +191,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Name the box after its --domain (bootstrap only; update never renames).
 # shellcheck source=lib/hostname.sh
 . "$SCRIPT_DIR/lib/hostname.sh"
+# Retiring the Next.js web tier on a box provisioned before ADR-0091.
+# shellcheck source=lib/web-tier.sh
+. "$SCRIPT_DIR/lib/web-tier.sh"
 
 POSTGRES_MODE="local"
 DRY_RUN=0
@@ -309,7 +311,7 @@ if [[ -t 0 ]]; then
     case "${_ans,,}" in n|no) info "dev mode — env goes to .env.local; start with: fleet serve" ;; *) ENABLE_SERVICE=1 ;; esac
   fi
   if [[ "$ENABLE_SERVICE" == "1" && "$ENABLE_WEB" != "1" ]]; then
-    printf 'Deploy the web UI (Next.js chat + Operations Center)? [Y/n] '
+    printf 'Set up the web UI (chat + Operations Center)? [Y/n] '
     read -r _ans
     case "${_ans,,}" in n|no) ;; *) ENABLE_WEB=1 ;; esac
   fi
@@ -407,7 +409,7 @@ gen_pass() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24;
 # package's own untouched default, dropped by `dnf install caddy`: recognised
 # by the digest the package recorded (caddyfile_is_package_default) and
 # replaced, with a copy kept (#1657). Checked fail-fast here (before any
-# provisioning work) and again at write time inside deploy_web_tier.
+# provisioning work) and again at write time inside configure_web_tier.
 # CADDY_MARKER + caddyfile_is_foreign come from scripts/lib/caddyfile.sh
 # (sourced above); the marker text is stable so every box bootstrap ever
 # provisioned keeps being recognised as fleet-managed.
@@ -546,175 +548,87 @@ normalize_auth_pubkey() {
   printf '%s' "$v"
 }
 
-# deploy_web_tier — build + run the Next.js web tier, and (with --domain) front it
-# with Caddy TLS. Self-contained email+password login against the bundle's chat
-# users (fleet admin add / fleet chat user add ...); the external Elcano SSO turns
-# on when AUTH_SIGNING_PUBKEY is provided (--auth-pubkey, an interactive paste, or
-# carried over from a previous run's fleet-web.env).
-deploy_web_tier() {
-  local web_src="$REPO_ROOT/web" web_dst="/opt/fleet/web" web_env="/etc/fleet/fleet-web.env"
-  local origin app_name build_id
-  [[ -n "$WEB_DOMAIN" ]] && origin="https://$WEB_DOMAIN" || origin="http://localhost:3000"
-  app_name="${FLEET_WEB_APP_NAME:-Fleet}"
-  build_id="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo prod)"
-
-  [[ -d "$web_src" ]] || { warn "no web/ in the checkout — skipping web tier."; return; }
-  command -v npm >/dev/null 2>&1 || { warn "npm not found — skipping web tier (install nodejs)."; return; }
-
-  # ExecStart points at this shim (it resolves the node interpreter and execs
-  # next — see deploy/fleet-web-start.sh). Installed FIRST, before any of the
-  # early `return`s below: on a fresh box the unit is written unconditionally
-  # later in this script, so if the build fails and we bail before installing
-  # the shim, systemd is left with an ExecStart that does not exist — and with
-  # Restart=always/RestartSec=5s that is a permanent 203/EXEC restart loop.
-  # The old ExecStart (/usr/bin/node) could not fail this way because the path
-  # always existed. Shipped content, no operator-tunable parts, so overwriting
-  # is safe and unconditional.
-  if [[ -f "$REPO_ROOT/deploy/fleet-web-start.sh" ]]; then
-    install -D -m 0755 "$REPO_ROOT/deploy/fleet-web-start.sh" /usr/local/bin/fleet-web-start.sh \
-      && ok "installed /usr/local/bin/fleet-web-start.sh" \
-      || warn "could not install fleet-web-start.sh — fleet-web will not start without it"
-  fi
-
-  # Resolve the interpreter the unit will run BEFORE building, and fail loudly
-  # rather than building against one node and serving with another.
-  local node_bin node_ver npm_cli
-  if node_bin="$(fleet_resolve_node_bin "$NODE_MAJOR")"; then
-    node_ver="$("$node_bin" -v 2>/dev/null || echo unknown)"
-    ok "web tier will run ${node_bin} (${node_ver})"
-  else
-    warn "no node >= $NODE_MAJOR found (web/.nvmrc) — the web tier needs one."
-    warn "  install it: sudo dnf install nodejs$NODE_MAJOR   (then re-run, or: sudo fleet doctor)"
-    warn "  skipping the web tier rather than building it against an unsupported node."
-    return
+# build_fleet_binary — `make build` on the node web/.nvmrc names. The web UI is
+# a Vite bundle compiled INTO the fleet binary (ADR-0091), so the Go build now
+# needs node + npm too. Resolve the interpreter BEFORE building and fail loudly
+# rather than building on an unsupported node. Returns non-zero on any failure.
+build_fleet_binary() {
+  local node_bin npm_cli build_path build_node
+  if ! node_bin="$(fleet_resolve_node_bin "$NODE_MAJOR")"; then
+    warn "no node >= $NODE_MAJOR found (web/.nvmrc) — the build needs one for the web bundle."
+    warn "  install it: sudo dnf install nodejs$NODE_MAJOR   (then re-run, or: sudo fleet doctor --node)"
+    return 1
   fi
   # And the npm that belongs to it, separately: on Fedora npm is its own package
-  # and its shebang names its interpreter ABSOLUTELY, so a resolved node 24 says
-  # nothing about which node `npm ci` will run under. FLEET_DEPS asks for
-  # nodejs${NODE_MAJOR}-npm, so a miss here means that install did not take.
-  #
-  # A miss is fatal only for a VERSIONED interpreter — the parallel-stream case,
-  # where the bare `npm` provably belongs to another one and the missing package
-  # has a name. On a single-node layout the same miss just means npm ships in a
-  # shape the probe cannot read, and there the `node` pin below is enough; the
-  # read-back still reports what npm ran under either way.
+  # and its shebang names its interpreter ABSOLUTELY, so a resolved node says
+  # nothing about which node `npm ci` will run under. A miss is fatal only for a
+  # VERSIONED interpreter (the parallel-stream case, where the bare `npm`
+  # provably belongs to another one); on a single-node layout the `node` pin in
+  # the build PATH is enough and the read-back below reports what npm ran under.
   if npm_cli="$(fleet_resolve_npm_cli "$node_bin")"; then
-    ok "web tier will build with ${npm_cli} — pinned to ${node_bin}, not to PATH"
+    ok "web bundle will build with ${npm_cli} — pinned to ${node_bin} ($("$node_bin" -v 2>/dev/null))"
   elif [[ "${node_bin##*/}" =~ ^node-[0-9]+$ ]]; then
     warn "no npm belongs to ${node_bin} — the bare \`npm\` on this box is the default stream's and its shebang pins it there."
     warn "  install it: sudo dnf install nodejs${NODE_MAJOR}-npm   (then re-run, or: sudo fleet doctor --node)"
-    warn "  skipping the web tier rather than building it with an npm pinned to an unsupported node."
-    return
-  else
-    info "no npm-cli.js resolvable for ${node_bin} — the build will use \`npm\` from PATH under a pinned \`node\`"
+    return 1
   fi
+  # PATH is set so `node`, `npm` and `npx` all resolve to the interpreter picked
+  # above (a `node` symlink alone is not enough on Fedora — see
+  # scripts/lib/node-version.sh). Resolved once; its shim dir is cleaned up.
+  build_path="$(fleet_node_build_path "$node_bin")"
+  build_node="$(fleet_npm_node_version "$build_path" "$REPO_ROOT/web" || true)"
+  if [[ -n "$build_node" && "$(fleet_node_version_major "$build_node" || echo 0)" -lt "$NODE_MAJOR" ]]; then
+    fleet_node_build_path_cleanup "$build_path" "$node_bin"
+    warn "npm would build the web bundle on ${build_node}, below the ${NODE_MAJOR} declared in web/.nvmrc."
+    warn "  install it: sudo dnf install nodejs${NODE_MAJOR}-npm   (then re-run, or: sudo fleet doctor --node)"
+    return 1
+  fi
+  # GOTOOLCHAIN=auto: Fedora's `golang` lags go.mod's pinned version, so let
+  # the toolchain fetch the required Go rather than failing an opaque build.
+  # `make build` ends with `fleet version --web`, so success means the binary
+  # really carries the bundle.
+  if ( cd "$REPO_ROOT" && export PATH="$build_path" GOTOOLCHAIN=auto && make build ); then
+    fleet_node_build_path_cleanup "$build_path" "$node_bin"
+    return 0
+  fi
+  fleet_node_build_path_cleanup "$build_path" "$node_bin"
+  return 1
+}
 
-  # Shared secrets the web↔backend link needs; generate-if-absent then load them
-  # into the already-started backend.
-  step "Web tier: ensuring shared secrets in ${ENV_FILE} + reloading backend"
+# configure_web_tier — the browser UI's settings in fleet.env, and (with
+# --domain) a Caddy TLS front. The fleet binary serves the UI itself on
+# FLEET_WEB_ADDR (default 127.0.0.1:3000, ADR-0091); this only supplies what
+# sign-in needs: APP_SESSION_SECRET (generate-if-absent — rotating it logs
+# everyone out), the public origin, and optionally the Elcano SSO key
+# (AUTH_SIGNING_PUBKEY: --auth-pubkey, an interactive paste, or already set).
+# Email+password login works against the bundle's chat users without SSO.
+configure_web_tier() {
+  local origin old_env="/etc/fleet/fleet-web.env" k v
+  [[ -n "$WEB_DOMAIN" ]] && origin="https://$WEB_DOMAIN" || origin="http://localhost:3000"
+
+  step "Web tier: ensuring sign-in settings in ${ENV_FILE}"
+  # A box provisioned before ADR-0091 kept the browser keys in the retired
+  # tier's own env file; carry the ones fleet.env lacks (the same
+  # APP_SESSION_SECRET keeps existing sessions valid) before generating any.
+  if [[ -r "$old_env" ]]; then
+    for k in APP_SESSION_SECRET AUTH_SIGNING_PUBKEY AUTH_SIGNING_PREVIOUS_PUBKEYS AUTH_COOKIE_NAME AUTH_COOKIE_DOMAIN AUTH_LOGIN_URL CATWALK_URL; do
+      grep -q "^${k}=" "$ENV_FILE" 2>/dev/null && continue
+      v="$(grep "^${k}=" "$old_env" | tail -n1 | cut -d= -f2- || true)"
+      [[ -n "$v" ]] && upsert_env "$k" "$v"
+    done
+  fi
   ensure_env_secret FLEET_SERVER_TOKEN 32
   ensure_env_secret ADMIN_API_KEY 32
-  # Remote-MCP OAuth callbacks are registered by the backend, not Next.js. Keep
-  # its stable callback origin identical to the public origin compiled into the
-  # web tier; otherwise --domain deployments can accidentally retain localhost.
+  ensure_env_secret APP_SESSION_SECRET 48
+  # The canonical public origin: redirect targets, the Secure-cookie decision
+  # and the remote-MCP OAuth callbacks all derive from it. Read at runtime, so
+  # changing it later is an env edit + restart, no rebuild.
   upsert_env FLEET_PUBLIC_BASE_URL "$origin"
   ensure_env_b64_key FLEET_MCP_OAUTH_ENCRYPTION_KEY 32
-  systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1 || true
-
-  step "Web tier: building the Next.js app (origin=${origin}, node=${node_ver})"
-  # PATH is set so `node`, `npm` and `npx` all resolve to the interpreter we
-  # picked. A `node` symlink alone was not enough: npm's shebang is an ABSOLUTE
-  # `#!/usr/bin/node-<major>` on Fedora, so `npm ci` kept using the DEFAULT
-  # stream and the tier was built on 22 and served on 24 while this function
-  # printed that it would run 24 — exactly the claimed-but-not-done failure this
-  # code exists to remove. Resolved ONCE and reused, so the shim directory it
-  # may create is removed rather than leaked on every provision.
-  local build_path build_node
-  build_path="$(fleet_node_build_path "$node_bin")"
-  # Read the interpreter back from npm, not from `node -v` under the same PATH:
-  # that symlink is ours, so it could only ever confirm the half that already
-  # worked. Below the floor is a refusal, not a warning — building the tier on
-  # the old major is the bug, and npm says so itself with EBADENGINE.
-  build_node="$(fleet_npm_node_version "$build_path" "$web_src" || true)"
-  if [[ -z "$build_node" ]]; then
-    warn "could not read the node version npm runs under — building anyway, but the interpreter is UNVERIFIED"
-    build_node="unverified"
-  elif [[ "$(fleet_node_version_major "$build_node" || echo 0)" -lt "$NODE_MAJOR" ]]; then
-    fleet_node_build_path_cleanup "$build_path" "$node_bin"
-    warn "npm would build the web tier on ${build_node}, below the ${NODE_MAJOR} declared in web/.nvmrc."
-    warn "  install it: sudo dnf install nodejs${NODE_MAJOR}-npm   (then re-run, or: sudo fleet doctor --node)"
-    warn "  skipping the web tier rather than building it with an npm pinned to an unsupported node."
-    return
-  fi
-  if ( cd "$web_src" && PATH="$build_path" \
-        NEXT_PUBLIC_PUBLIC_ORIGIN="$origin" NEXT_PUBLIC_APP_NAME="$app_name" \
-        NEXT_PUBLIC_BUILD_ID="$build_id" sh -c 'npm ci && npm run build' ); then
-    ok "web app built on ${build_node}"
-    fleet_node_build_path_cleanup "$build_path" "$node_bin"
-  else
-    fleet_node_build_path_cleanup "$build_path" "$node_bin"
-    warn "web build failed — skipping the rest of the web tier."; return
-  fi
-
-  install -d "$web_dst" && cp -a "$web_src/." "$web_dst/" && ok "deployed web app → ${web_dst}"
-
-
-  # fleet-web.service runs as the dedicated unprivileged fleet-web user (it is
-  # the public-facing process). Create the user idempotently and hand it the
-  # one path next writes at runtime (.next/ — the runtime cache); everything
-  # else stays root-owned and read-only to the unit.
-  if ! id -u fleet-web >/dev/null 2>&1; then
-    if command -v useradd >/dev/null 2>&1; then
-      useradd --system --home-dir /var/lib/fleet-web --shell /usr/sbin/nologin \
-        --no-create-home fleet-web && ok "created system user fleet-web"
-    else
-      warn "useradd not found — create the fleet-web user manually (see deploy/fleet-web.service)."
-    fi
-  fi
-  if id -u fleet-web >/dev/null 2>&1 && [[ -d "$web_dst/.next" ]]; then
-    chown -R fleet-web:fleet-web "$web_dst/.next" || warn "chown ${web_dst}/.next to fleet-web failed"
-  fi
-
-  # Write the 0600 web env by UPSERTING each key — never truncate/rewrite the
-  # whole file: it may carry operator-added keys beyond the bootstrap set (e.g.
-  # AUTH_SIGNING_PUBKEY / AUTH_LOGIN_URL / AUTH_COOKIE_DOMAIN for the external
-  # SSO), and a wholesale rewrite silently dropped them on every re-run.
-  # Chat/orchestrator tokens mirror the backend env; APP_SESSION_SECRET is
-  # generate-if-absent (rotating it logs everyone out).
-  local chat_token app_secret
-  chat_token="$(grep '^FLEET_SERVER_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
-  if [[ -f "$web_env" ]] && grep -q '^APP_SESSION_SECRET=' "$web_env"; then
-    app_secret="$(grep '^APP_SESSION_SECRET=' "$web_env" | cut -d= -f2-)"
-  else
-    app_secret="$(gen_secret 48)"
-  fi
-  upsert_env_file "$web_env" CHAT_SERVER_URL           "http://127.0.0.1:8080"
-  upsert_env_file "$web_env" CHAT_SERVER_TOKEN         "$chat_token"
-  upsert_env_file "$web_env" ORCHESTRATOR_SERVER_URL   "http://127.0.0.1:8000"
-  # ORCHESTRATOR_SERVER_TOKEN must be the SAME shared secret as
-  # CHAT_SERVER_TOKEN (FLEET_SERVER_TOKEN): the orchestrator's header-trust
-  # path (AdminOrUserAuthMiddleware) verifies X-Orchestrator-Server-Token
-  # against Config.SharedToken, fail-closed. This line used to write
-  # ADMIN_API_KEY here, which the middleware never accepts on that header —
-  # every bootstrap re-run then 403'd the whole Operations Center for
-  # cookie-authenticated users until the env file was hand-repaired.
-  upsert_env_file "$web_env" ORCHESTRATOR_SERVER_TOKEN "$chat_token"
-  upsert_env_file "$web_env" APP_SESSION_SECRET        "$app_secret"
-  upsert_env_file "$web_env" PORT                      "3000"
-  upsert_env_file "$web_env" NODE_ENV                  "production"
-  # The interpreter resolved above, pinned explicitly. Without this the shim
-  # falls back to `node` on PATH, which on Fedora is the DEFAULT stream — i.e.
-  # possibly an older major than the one just installed.
-  upsert_env_file "$web_env" FLEET_NODE_BIN            "$node_bin"
-  upsert_env_file "$web_env" NEXT_PUBLIC_PUBLIC_ORIGIN "$origin"
-  upsert_env_file "$web_env" NEXT_PUBLIC_APP_NAME      "$app_name"
-  upsert_env_file "$web_env" NEXT_PUBLIC_BUILD_ID      "$build_id"
 
   # Elcano SSO (AUTH_SIGNING_PUBKEY): --auth-pubkey wins (value or @file); else
-  # an existing key is simply LEFT IN PLACE (the upsert-style writes above never
-  # truncate the file, so operator-added AUTH_* keys survive re-runs on their
-  # own — no carry-over machinery needed); else offer an interactive paste.
-  # Every path that WRITES validates via normalize_auth_pubkey — a bad key DIES
+  # an existing key is LEFT IN PLACE; else offer an interactive paste. Every
+  # path that WRITES validates via normalize_auth_pubkey — a bad key DIES
   # rather than deploying a web tier whose SSO fails on every login.
   local auth_raw="" auth_pubkey=""
   if [[ -n "$AUTH_PUBKEY_ARG" ]]; then
@@ -724,9 +638,9 @@ deploy_web_tier() {
     fi
     auth_pubkey="$(normalize_auth_pubkey "$auth_raw")" \
       || die "--auth-pubkey is not a valid AUTH_SIGNING_PUBKEY (want the standard-base64 32-byte Ed25519 key from \`auth pubkey\`)"
-    upsert_env_file "$web_env" AUTH_SIGNING_PUBKEY "$auth_pubkey"
+    upsert_env AUTH_SIGNING_PUBKEY "$auth_pubkey"
     ok "Elcano SSO key accepted (--auth-pubkey)"
-  elif grep -q '^AUTH_SIGNING_PUBKEY=' "$web_env" 2>/dev/null; then
+  elif grep -q '^AUTH_SIGNING_PUBKEY=' "$ENV_FILE" 2>/dev/null; then
     info "existing AUTH_SIGNING_PUBKEY left in place (Elcano SSO stays enabled)."
   elif [[ -t 0 ]]; then
     printf 'Optional Elcano SSO key — email+password login works without it (paste the `auth pubkey` line, or Enter to skip): '
@@ -734,37 +648,32 @@ deploy_web_tier() {
     if [[ -n "$auth_raw" ]]; then
       auth_pubkey="$(normalize_auth_pubkey "$auth_raw")" \
         || die "that is not a valid AUTH_SIGNING_PUBKEY (want the standard-base64 32-byte Ed25519 key from \`auth pubkey\`)"
-      upsert_env_file "$web_env" AUTH_SIGNING_PUBKEY "$auth_pubkey"
+      upsert_env AUTH_SIGNING_PUBKEY "$auth_pubkey"
       ok "Elcano SSO key accepted"
     else
       info "skipped — enable SSO later with: fleet config set-auth-pubkey"
     fi
   fi
-
-  if grep -q '^AUTH_SIGNING_PUBKEY=' "$web_env" 2>/dev/null; then
-    ok "wrote ${web_env} (0600; operator-added keys preserved; Elcano SSO enabled)"
+  if grep -q '^AUTH_SIGNING_PUBKEY=' "$ENV_FILE" 2>/dev/null; then
+    ok "web sign-in configured in ${ENV_FILE} (origin ${origin}; Elcano SSO enabled)"
   else
-    ok "wrote ${web_env} (0600; operator-added keys preserved; email+password login only)"
+    ok "web sign-in configured in ${ENV_FILE} (origin ${origin}; email+password login only)"
   fi
 
-  systemctl daemon-reload || true
-  if systemctl enable --now fleet-web >/dev/null 2>&1; then
-    ok "fleet-web enabled + started (Next.js on 127.0.0.1:3000)"
-  else
-    warn "could not enable/start fleet-web — check: journalctl -u fleet-web -n 50"
-  fi
+  # The retired Next.js unit held the port fleet now serves on; a re-run on a
+  # box provisioned before ADR-0091 retires it before the restart below.
+  fleet_retire_web_tier "$REPO_ROOT" || true
+  systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+  ok "fleet serves the web UI on 127.0.0.1:3000 (FLEET_WEB_ADDR)"
 
   if [[ -z "$WEB_DOMAIN" ]]; then
-    # The start script binds 127.0.0.1 unless FLEET_WEB_HOST overrides it, so
-    # "loopback-only" holds even on boxes without firewalld. EVERY custom proxy
-    # front — same host or not — needs the real public origin: it decides the
-    # web tier's redirect targets and Secure-cookie flag (web/src/app/lib/
-    # auth.ts), and Next inlines NEXT_PUBLIC_* at build time, so editing the
-    # env file alone changes nothing until web/ is rebuilt. Only a proxy on
-    # ANOTHER host additionally needs the wider bind.
+    # Loopback-only by default (FLEET_WEB_ADDR=127.0.0.1:3000), so this holds
+    # even on boxes without firewalld. EVERY custom proxy front — same host or
+    # not — needs the real public origin: it decides redirect targets and the
+    # Secure-cookie flag. Only a proxy on ANOTHER host needs the wider bind.
     info "no --domain → web is loopback-only on :3000; front it with your own TLS proxy for a public URL."
-    info "  any custom proxy (same host too): set NEXT_PUBLIC_PUBLIC_ORIGIN=https://<domain> in ${web_env}, then rebuild web/ + restart fleet-web (scripts/update.sh does both) — the origin is baked in at build time, so editing the env file alone is not enough."
-    info "  proxy on ANOTHER host: additionally set FLEET_WEB_HOST=0.0.0.0 in ${web_env} (the web tier binds 127.0.0.1 otherwise)."
+    info "  any custom proxy (same host too): set FLEET_PUBLIC_BASE_URL=https://<domain> in ${ENV_FILE}, then: systemctl restart ${SERVICE_NAME}"
+    info "  proxy on ANOTHER host: additionally set FLEET_WEB_ADDR=0.0.0.0:3000 in ${ENV_FILE} (fleet binds 127.0.0.1:3000 otherwise)."
     return
   fi
   step "Web tier: Caddy TLS reverse proxy for ${WEB_DOMAIN}"
@@ -797,7 +706,7 @@ deploy_web_tier() {
   # One renderer (scripts/lib/caddyfile.sh) writes the whole file: the web
   # tier as the default upstream, the public API (/v1/*, /api-info, the A2A
   # agent card, /triggers/*) to the orchestrator and /webhooks/* to the chat
-  # listener, with the Next-proxy header-trust channel stripped on both. The
+  # listener, with the web tier's header-trust channel stripped on both. The
   # upstream addresses follow the env file when an operator moved a listener.
   render_fleet_caddyfile "$WEB_DOMAIN" "${FLEET_ACME_EMAIL:-}" \
     "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)" \
@@ -809,8 +718,8 @@ deploy_web_tier() {
   # /webhooks/*) straight to the Go listeners, so the backends must trust it
   # for X-Forwarded-For or every API caller looks like Caddy's address (one
   # shared rate-limit bucket; the IP allow/deny filter judging Caddy). Browser
-  # traffic is NOT helped by this: Next proxies it over loopback without
-  # X-Forwarded-For, so it keys on 127.0.0.1 either way. 127.0.0.1,::1 is only
+  # traffic is NOT helped by this: the fleet web listener calls the backends
+  # in-process without X-Forwarded-For, so it keys on 127.0.0.1 either way. 127.0.0.1,::1 is only
   # right while both upstreams are loopback — a listener moved to an interface
   # address is dialled from that interface, so then nothing is written and the
   # operator names the address. Written only when the key is ABSENT: a value
@@ -1546,20 +1455,23 @@ INSTALL_DIR="${FLEET_INSTALL_DIR:-/opt/fleet}"
 if [[ "$ENABLE_SERVICE" == "1" ]]; then
   step "Building + installing the fleet binary, then enabling ${SERVICE_NAME}"
   if [[ "$DRY_RUN" == "1" ]]; then
-    info "[dry-run] would run: (cd ${REPO_ROOT} && make build)  → fleet"
+    info "[dry-run] would run: (cd ${REPO_ROOT} && make build) on node >= ${NODE_MAJOR}  → fleet with the web UI embedded"
     info "[dry-run] would install fleet → ${INSTALL_DIR}"
     info "[dry-run] would symlink /usr/local/bin/fleet → ${INSTALL_DIR} (operator PATH)"
     info "[dry-run] would install deploy/fleet-motd.sh → /etc/profile.d/fleet-motd.sh (login banner)"
-    info "[dry-run] would install deploy/fleet.service + deploy/fleet-web.service → /etc/systemd/system"
+    info "[dry-run] would install deploy/fleet.service → /etc/systemd/system"
+    if fleet_web_tier_present; then
+      info "[dry-run] would retire the Next.js web tier (ADR-0091): stop + disable fleet-web, remove its unit, drop-in, start shim and /opt/fleet/web"
+    fi
     info "[dry-run] would run: systemctl daemon-reload && systemctl enable --now ${SERVICE_NAME}"
   elif ! command -v systemctl >/dev/null 2>&1; then
     warn "systemctl not found — skipping --enable-service (no systemd on this box)."
   else
     # 1. Build the deployable artifacts from this checkout (needs Go on the box).
+    #    The web UI is compiled into the binary (ADR-0091), so this needs node
+    #    + npm as well as Go — build_fleet_binary pins the interpreter.
     if command -v go >/dev/null 2>&1 || command -v make >/dev/null 2>&1; then
-      # GOTOOLCHAIN=auto: Fedora's `golang` lags go.mod's pinned version, so let
-      # the toolchain fetch the required Go rather than failing an opaque build.
-      if ( cd "$REPO_ROOT" && GOTOOLCHAIN=auto make build ) && [[ -x "$REPO_ROOT/fleet" ]]; then
+      if build_fleet_binary && [[ -x "$REPO_ROOT/fleet" ]]; then
         install -D -m 0755 "$REPO_ROOT/fleet" "$INSTALL_DIR/fleet"
         ok "installed fleet → ${INSTALL_DIR}"
         # Put `fleet` on the operator's PATH (#461). deploy/fleet.service's
@@ -1578,65 +1490,32 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
             && info "installed /etc/profile.d/fleet-motd.sh (login banner)" || true
         fi
       else
-        die "make build failed or produced no artifacts — install Go and retry"
+        die "make build failed or produced no artifacts — install Go and node >= ${NODE_MAJOR} (web/.nvmrc), then retry"
       fi
     elif [[ -x "$INSTALL_DIR/fleet" ]]; then
       warn "no Go toolchain — using the existing ${INSTALL_DIR}/fleet (build + install manually to update it)."
     else
       die "no Go toolchain and no binary at ${INSTALL_DIR}/fleet — install Go (or pre-build) then re-run"
     fi
-    # 2. Install the unit files from this checkout if not already present.
-    for unit in fleet.service fleet-web.service; do
-      if [[ -f "$REPO_ROOT/deploy/$unit" ]] && ! systemctl cat "$unit" >/dev/null 2>&1; then
-        install -D -m 0644 "$REPO_ROOT/deploy/$unit" "/etc/systemd/system/$unit"
-        info "installed /etc/systemd/system/$unit"
-      fi
-    done
-    # fleet-web's drop-in (TimeoutStopFailureMode=kill at the precedence level
-    # that beats Fedora's global abort-on-timeout drop-in) is installed
-    # SEPARATELY from the unit, not nested in the "unit was absent" branch
-    # above. bootstrap is re-runnable by design, and a box provisioned before
-    # this file shipped already has fleet-web.service — so gating the drop-in
-    # on a fresh unit install meant the one case that needs it never got it.
-    # Unlike the unit, overwriting it is safe: it is a single directive with no
-    # operator-tunable content (unit drift stays doctor.sh / update.sh's job).
-    web_dropin="deploy/fleet-web.service.d/10-timeout-kill.conf"
-    if [[ -f "$REPO_ROOT/$web_dropin" ]] && systemctl cat fleet-web.service >/dev/null 2>&1; then
-      install -D -m 0644 "$REPO_ROOT/$web_dropin" \
-        /etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf
-      info "installed /etc/systemd/system/fleet-web.service.d/10-timeout-kill.conf"
+    # 2. Install the unit file from this checkout if not already present.
+    if [[ -f "$REPO_ROOT/deploy/fleet.service" ]] && ! systemctl cat fleet.service >/dev/null 2>&1; then
+      install -D -m 0644 "$REPO_ROOT/deploy/fleet.service" /etc/systemd/system/fleet.service
+      info "installed /etc/systemd/system/fleet.service"
     fi
-    # 3. daemon-reload + enable the backend unit. The web unit (fleet-web)
-    #    additionally needs the built Next app at /opt/fleet/web + its 0600
-    #    env file, so we install it but leave enabling it to the operator.
+    # The binary just installed serves the web UI on 127.0.0.1:3000 — the port
+    # the retired Next.js unit (fleet-web) held. On a re-run over a box
+    # provisioned before ADR-0091, retire that unit first or fleet cannot bind.
+    fleet_retire_web_tier "$REPO_ROOT" || true
+    # 3. daemon-reload + enable the backend unit (which serves the web UI too).
     systemctl daemon-reload || warn "systemctl daemon-reload failed"
-    # Assert the RESOLVED ExecStart, not the file we may or may not have just
-    # written. The loop above installs a unit only when one is ABSENT (unit
-    # drift is doctor.sh / update.sh's job, deliberately), so on an
-    # already-provisioned box every piece of the node work above can land — the
-    # shim, FLEET_NODE_BIN, the versioned interpreter — while fleet-web still
-    # runs the OLD ExecStart pointing straight at /usr/bin/node. Reporting
-    # "enabled + started" there would be the same lie this change set exists to
-    # remove: a thing configured, reported, and not in effect.
-    if systemctl cat fleet-web.service >/dev/null 2>&1; then
-      _live_exec="$(systemctl show -p ExecStart --value fleet-web.service 2>/dev/null || true)"
-      case "$_live_exec" in
-        *fleet-web-start.sh*) : ;;   # shipped ExecStart is live
-        *)
-          warn "fleet-web's live ExecStart is not the shipped shim — the node work above is NOT in effect for the running tier."
-          warn "  live: ${_live_exec:-<unknown>}"
-          warn "  adopt the shipped unit: sudo fleet doctor   (or: sudo fleet update --adopt-units)"
-          ;;
-      esac
-    fi
     if systemctl enable --now "${SERVICE_NAME}" >/dev/null 2>&1; then
       ok "${SERVICE_NAME} enabled + started (services self-migrate on start)"
     else
       warn "could not enable/start ${SERVICE_NAME} — check: journalctl -u ${SERVICE_NAME} -n 50"
     fi
     if [[ "$ENABLE_WEB" != "1" ]]; then
-      info "web tier: re-run with --enable-web [--domain <fqdn>] to build + serve it,"
-      info "          or by hand (cd web && npm ci && npm run build → /opt/fleet/web, fill fleet-web.env, enable fleet-web)."
+      info "web UI: fleet serves it on 127.0.0.1:3000; re-run with --enable-web [--domain <fqdn>] to set up sign-in"
+      info "        (APP_SESSION_SECRET, public origin, optional SSO) and a Caddy TLS front."
     fi
   fi
 fi
@@ -1733,7 +1612,7 @@ if [[ "$ENABLE_WEB" == "1" ]]; then
     step "Web tier (--enable-web): plan"
     info "[dry-run] would ensure FLEET_SERVER_TOKEN + ADMIN_API_KEY in ${ENV_FILE} (generate-if-absent) + reload backend."
     if [[ -n "$WEB_DOMAIN" ]]; then
-      info "[dry-run] would build web/ for https://${WEB_DOMAIN} → /opt/fleet/web, write fleet-web.env, enable fleet-web, install Caddy + open 80/443."
+      info "[dry-run] would set APP_SESSION_SECRET (if absent) + FLEET_PUBLIC_BASE_URL=https://${WEB_DOMAIN} in ${ENV_FILE}, restart ${SERVICE_NAME} (it serves the web UI), install Caddy + open 80/443."
       info "[dry-run] would write /etc/caddy/Caddyfile from scripts/lib/caddyfile.sh: https://${WEB_DOMAIN} → web tier (127.0.0.1:3000); /v1/*, /api-info, /.well-known/agent-card.json, /a2a, /triggers/* → orchestrator (127.0.0.1:8000); /webhooks/* → chat (127.0.0.1:8080); then reload caddy (an already-running caddy is reloaded, not just enabled)."
       if ! caddy_upstreams_loopback "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)"; then
         info "[dry-run] would NOT write FLEET_TRUSTED_PROXIES: Caddy proxies to a non-loopback backend (FLEET_SERVER_ADDR / FLEET_ORCHESTRATOR_ADDR), so set it to the address Caddy connects from"
@@ -1746,12 +1625,12 @@ if [[ "$ENABLE_WEB" == "1" ]]; then
         info "[dry-run] would replace the caddy package's stock /etc/caddy/Caddyfile (unmodified default, no drop-in sites) — a copy kept beside it"
       fi
     else
-      info "[dry-run] would build web/ for http://localhost:3000 → /opt/fleet/web, write fleet-web.env, enable fleet-web (loopback only; no --domain → no Caddy)."
+      info "[dry-run] would set APP_SESSION_SECRET (if absent) + FLEET_PUBLIC_BASE_URL=http://localhost:3000 in ${ENV_FILE}, restart ${SERVICE_NAME} (it serves the web UI; loopback only; no --domain → no Caddy)."
     fi
   elif ! command -v systemctl >/dev/null 2>&1; then
     warn "systemctl not found — skipping --enable-web (no systemd on this box)."
   else
-    deploy_web_tier
+    configure_web_tier
   fi
 fi
 
