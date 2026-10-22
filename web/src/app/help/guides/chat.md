@@ -351,7 +351,13 @@ models, there is nothing to switch to and the conversation keeps refusing —
 start a new lockdown chat and tell your admin the list needs a named model
 first. Admins can fix the provider
 configuration under **Settings → Admin → Model providers**, and set the default
-and stronger model under **Settings → Admin → Features → Model tiers**. A task you
+and stronger model under **Settings → Admin → Features → Model tiers**. A
+provider added there, other than OpenRouter, needs its **Context window** (in
+tokens, the smallest limit among the models it serves) before it can be
+enabled. One without it is marked **No context window**, and a turn on its
+models usually stops before any reply with "The selected model could not
+complete this turn": if that happens every time on one workspace model, ask
+your admin to set it. A task you
 schedule from chat does not keep the chat's model: unless you ask for a specific
 model, it runs on the workspace's task model, which is the stronger model by
 default.
