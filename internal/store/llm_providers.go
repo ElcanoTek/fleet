@@ -61,7 +61,7 @@ type LLMProvider struct {
 	Enabled   bool     `json:"enabled"`
 	HasAPIKey bool     `json:"has_api_key"`
 	// ContextWindowTokens is the endpoint's declared context limit (migration
-	// 081), the admin-row twin of a bundle entry's context_window_tokens. 0 =
+	// 082), the admin-row twin of a bundle entry's context_window_tokens. 0 =
 	// not declared, which leaves the resolver's conservative fallback.
 	ContextWindowTokens int   `json:"context_window_tokens"`
 	CreatedAt           int64 `json:"created_at"`

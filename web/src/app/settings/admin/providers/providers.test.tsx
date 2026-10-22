@@ -194,7 +194,7 @@ describe("ProvidersAdminPage", () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "PUT")).toHaveLength(0);
   });
 
-  it("will not save an enabled pre-081 row from Edit until it has a window", async () => {
+  it("will not save an enabled pre-082 row from Edit until it has a window", async () => {
     const fetchMock = mockFetch([{ ...ROW, context_window_tokens: 0 }]);
     vi.stubGlobal("fetch", fetchMock);
     render(<ProvidersAdminPage />);

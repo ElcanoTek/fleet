@@ -71,7 +71,7 @@ func TestToAgentcoreProviders(t *testing.T) {
 }
 
 // TestLoadDBLLMProvidersCarriesTheContextWindow: an admin row's declared
-// context window (migration 081) reaches the resolver's routing table, which
+// context window (migration 082) reaches the resolver's routing table, which
 // both the boot merge and the hot reload build through loadDBLLMProviders.
 // Without it every non-OpenRouter admin row ran on the resolver's fallback,
 // below a turn's fixed reserve.
@@ -99,7 +99,7 @@ func TestLoadDBLLMProvidersCarriesTheContextWindow(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	t.Cleanup(func() { _ = chat.DeleteLLMProvider(context.Background(), row.ID) })
-	// A row saved before migration 081 (stored directly: the API would refuse
+	// A row saved before migration 082 (stored directly: the API would refuse
 	// it enabled) still loads, on the fallback, with a warning naming it.
 	legacy, err := chat.CreateLLMProvider(ctx, store.LLMProviderInput{
 		Name: name + "-legacy", Type: "ollama", Models: []string{"llama3.2"}, Enabled: true,

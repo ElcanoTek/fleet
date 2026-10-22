@@ -15,7 +15,7 @@ configured from the client bundle's `providers:` block.
   list, enabled flag, and the API key sealed with the store's secretbox cipher
   (AES-256-GCM, `FLEET_MCP_OAUTH_ENCRYPTION_KEY`), AAD-bound to the row id.
   `internal/store/llm_providers.go`.
-- **Context window** (chat-DB migration 081): `context_window_tokens`, the
+- **Context window** (chat-DB migration 082): `context_window_tokens`, the
   admin-row twin of a bundle entry's field of the same name. It is one number
   per row, so it applies to every model the row serves: enter the smallest
   limit among them, and for Ollama the server's `num_ctx`, not the model card's
@@ -39,7 +39,7 @@ configured from the client bundle's `providers:` block.
     as no window, so raise a small Ollama `num_ctx` rather than declaring it.
   - OpenRouter rows ignore the field: OpenRouter's per-model catalog is
     authoritative.
-  - Rows saved before migration 081 read as 0 (not declared) and keep the
+  - Rows saved before migration 082 read as 0 (not declared) and keep the
     fallback until an admin edits them. The list flags them with a **No
     context window** badge, Enable opens the edit form with the field focused,
     and boot and every reload log a warning naming each enabled one.
@@ -139,7 +139,7 @@ configured from the client bundle's `providers:` block.
 ## What was deliberately deferred
 
 - **Context windows are not discovered.** Fleet does not ask an endpoint for
-  its limit; the admin declares it. Rows saved before migration 081 are not
+  its limit; the admin declares it. Rows saved before migration 082 are not
   backfilled or disabled, and a bundle entry without `context_window_tokens` is
   not refused (that would fail boot on existing manifests); both are named in a
   boot warning instead.

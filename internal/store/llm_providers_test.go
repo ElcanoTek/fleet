@@ -139,7 +139,7 @@ func TestLLMProviderValidation(t *testing.T) {
 	}
 }
 
-// The declared context window (migration 081) round-trips through create,
+// The declared context window (migration 082) round-trips through create,
 // update, the UI-facing list and the resolver-building read, and a value the
 // INTEGER column cannot hold is refused as a validation error.
 func TestLLMProviderContextWindow(t *testing.T) {

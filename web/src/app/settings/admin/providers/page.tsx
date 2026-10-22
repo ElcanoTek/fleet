@@ -140,7 +140,7 @@ const MAX_CONTEXT_WINDOW = 2147483647;
 
 // A turn reserves fleet's tool schemas, system prompt and reply allowance
 // before any history: a little under 35,000 tokens with the default tool set
-// as of migration 081. Below that a turn usually cannot run at all; below the
+// as of migration 082. Below that a turn usually cannot run at all; below the
 // second tier it runs with little room for the conversation. The form warns
 // without refusing, because the real reserve depends on the persona and its
 // tools.

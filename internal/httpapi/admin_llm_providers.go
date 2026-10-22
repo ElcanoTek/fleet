@@ -27,7 +27,7 @@ import (
 // llmProviderBody is the create/update payload. APIKey nil = leave unchanged
 // (or absent on create); "" = clear the stored key. ContextWindowTokens works
 // the same way: nil keeps the stored value (0 on create), so a client that
-// predates the field, such as a browser tab still running the pre-081 page,
+// predates the field, such as a browser tab still running the pre-082 page,
 // cannot reset a declared window by omitting it.
 type llmProviderBody struct {
 	Name                string   `json:"name"`

@@ -1,4 +1,4 @@
--- 081_llm_provider_context_window.sql — the context window of an admin-managed
+-- 082_llm_provider_context_window.sql — the context window of an admin-managed
 -- LLM provider, the admin-row twin of a bundle entry's context_window_tokens.
 --
 -- Native and OpenAI-compatible endpoints advertise no reliable context limit,

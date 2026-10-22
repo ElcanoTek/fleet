@@ -193,7 +193,7 @@ func TestLLMProviderModelsCatchAll(t *testing.T) {
 }
 
 // An enabled non-OpenRouter row must declare its context window (migration
-// 081): those endpoints advertise no limit, and the resolver's fallback for an
+// 082): those endpoints advertise no limit, and the resolver's fallback for an
 // undeclared one is below a turn's fixed reserve, so the row would fail every
 // turn before sending a request. A disabled row may be saved without one, a
 // negative value is a bad request, and OpenRouter rows never need one.

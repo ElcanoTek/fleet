@@ -2231,7 +2231,7 @@ func loadDBLLMProviders(ctx context.Context, chatStore *store.Store) ([]agentcor
 // warnUndeclaredContextWindow logs, at boot and on every admin-provider
 // reload, an active non-OpenRouter provider with no declared context window.
 // It still loads: refusing it would fail boot on existing manifests and rows
-// saved before migration 081. But it runs on the resolver's conservative
+// saved before migration 082. But it runs on the resolver's conservative
 // fallback (32,000 tokens, 4,096 for Ollama), which is below what a turn
 // reserves with the default tool set, so its chat turns fail before sending
 // and the user only sees a generic "could not complete this turn".
