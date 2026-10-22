@@ -28,7 +28,7 @@ func TestThemeIsAlwaysValidCSS(t *testing.T) {
 		_, _ = io.WriteString(w, `html:root[data-theme="dark"]{--color-bg:#000}`)
 	}
 	res := e.do(req("GET", "/api/theme", ""))
-	if res.StatusCode != 200 || res.Header.Get("Content-Type") != "text/css; charset=utf-8" || res.Header.Get("Cache-Control") != "public, max-age=300" || !strings.Contains(readBody(t, res), "--color-bg") {
+	if res.StatusCode != 200 || res.Header.Get("Content-Type") != "text/css; charset=utf-8" || res.Header.Get("Cache-Control") != "no-cache" || res.Header.Get("ETag") == "" || !strings.Contains(readBody(t, res), "--color-bg") {
 		t.Fatalf("%d %v", res.StatusCode, res.Header)
 	}
 	e.chat.respond = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }
@@ -49,7 +49,7 @@ func TestBrandAssetsAllowlistAndFallback(t *testing.T) {
 	}
 	serve("image/svg+xml; charset=utf-8", 200)
 	res := e.do(req("GET", "/api/brand/logo", ""))
-	if res.StatusCode != 200 || res.Header.Get("Content-Type") != "image/svg+xml" || res.Header.Get("Content-Security-Policy") != "default-src 'none'; style-src 'unsafe-inline'; sandbox" || readBody(t, res) != "IMG" || res.Header.Get("Cache-Control") != "public, max-age=300" {
+	if res.StatusCode != 200 || res.Header.Get("Content-Type") != "image/svg+xml" || res.Header.Get("Content-Security-Policy") != "default-src 'none'; style-src 'unsafe-inline'; sandbox" || readBody(t, res) != "IMG" || res.Header.Get("Cache-Control") != "no-cache" {
 		t.Fatalf("logo: %d %v", res.StatusCode, res.Header)
 	}
 	if res.Header.Get("X-Content-Type-Options") != "nosniff" {

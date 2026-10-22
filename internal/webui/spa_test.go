@@ -422,3 +422,46 @@ func TestBootstrapCarriesFullLoadRoutes(t *testing.T) {
 		}
 	}
 }
+
+// The caching contract (AGENTS.md "Caching"): only content-hashed /assets/*
+// are long-cached; every other non-HTML file revalidates (no-cache + ETag);
+// HTML is never stored; and no error answer on an asset URL ever carries the
+// immutable header, so a cache can never pin an error.
+func TestCachingPolicy(t *testing.T) {
+	e := newTestEnv(t)
+	const immutable = "public, max-age=31536000, immutable"
+	cc := func(m, p string, headers ...string) (int, string, string) {
+		res := e.do(req(m, p, "", headers...))
+		return res.StatusCode, res.Header.Get("Cache-Control"), res.Header.Get("ETag")
+	}
+	if st, c, _ := cc("GET", "/assets/index-abc123.js"); st != 200 || c != immutable {
+		t.Errorf("hashed asset: %d %q", st, c)
+	}
+	for _, p := range []string{"/sw.js", "/theme-init.js", "/icons/core-icons.svg"} {
+		st, c, etag := cc("GET", p)
+		if st == 404 {
+			continue // not in the test bundle
+		}
+		if c != "no-cache" || etag == "" {
+			t.Errorf("%s: %d %q etag %q, want no-cache + ETag", p, st, c, etag)
+		}
+	}
+	if st, c, etag := cc("GET", "/api/theme"); st != 200 || c != "no-cache" || etag == "" {
+		t.Errorf("/api/theme: %d %q %q", st, c, etag)
+	}
+	for _, p := range []string{"/login", "/chat", "/no-such-page"} {
+		if _, c, _ := cc("GET", p); strings.Contains(c, "max-age") || !strings.Contains(c, "no-store") {
+			t.Errorf("%s (HTML): Cache-Control %q", p, c)
+		}
+	}
+	// Errors on asset URLs: never immutable.
+	for _, c := range []struct{ m, p string }{
+		{"GET", "/assets/missing-999.js"},
+		{"POST", "/assets/index-abc123.js"},
+		{"DELETE", "/sw.js"},
+	} {
+		if st, got, _ := cc(c.m, c.p); st < 400 || strings.Contains(got, "immutable") {
+			t.Errorf("%s %s: %d %q — an error must not be immutable", c.m, c.p, st, got)
+		}
+	}
+}

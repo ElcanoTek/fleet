@@ -147,16 +147,18 @@ func (s *spa) serveStatic(w http.ResponseWriter, r *http.Request, g *Gateway) bo
 	if ct := mime.TypeByExtension(path.Ext(name)); ct != "" {
 		h.Set("Content-Type", ct)
 	}
+	// The method check comes first: an error response on an asset URL must
+	// never carry the immutable header (a cache would pin the error).
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return true
+	}
 	if strings.HasPrefix(name, "assets/") {
 		h.Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {
 		h.Set("Cache-Control", "no-cache")
 		h.Set("ETag", s.etag(name, data))
-	}
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		h.Set("Allow", "GET, HEAD")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return true
 	}
 	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(data))
 	return true

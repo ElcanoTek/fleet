@@ -4,6 +4,8 @@
 package webui
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -129,13 +131,22 @@ func (g *Gateway) registerBrand(mux *http.ServeMux) {
 	// render-blocking by every page (login included). It ALWAYS answers 200
 	// valid CSS — empty on any backend trouble — so it can never break first
 	// paint.
-	mux.HandleFunc("GET /api/theme", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/theme", func(w http.ResponseWriter, r *http.Request) {
 		css := []byte{}
 		if status, _, body, ok := g.callCaptureLimit(g.chat, call{method: http.MethodGet, target: "/theme.css", header: g.tokenOnlyHeaders()}, maxThemeCSSBytes); ok && status >= 200 && status < 300 {
 			css = body
 		}
+		// A stable URL whose content follows the bundle: revalidated on every
+		// use (no-cache + ETag), never cached blind — see AGENTS.md "Caching".
+		sum := sha256.Sum256(css)
+		etag := `"` + hex.EncodeToString(sum[:8]) + `"`
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-		w.Header().Set("Cache-Control", "public, max-age=300")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("ETag", etag)
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(css)
 	})
@@ -205,7 +216,9 @@ func (b *brandWriter) WriteHeader(code int) {
 	h.Set("Content-Type", ct)
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Content-Security-Policy", b.csp)
-	h.Set("Cache-Control", "public, max-age=300")
+	// Stable URL, bundle-driven content: revalidate on every use (AGENTS.md
+	// "Caching"); the upstream's own validators, if any, are not forwarded.
+	h.Set("Cache-Control", "no-cache")
 	b.w.WriteHeader(http.StatusOK)
 }
 
