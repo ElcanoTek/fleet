@@ -29,7 +29,7 @@
 #                              (exit 3 when the vendor copy is stale).
 set -euo pipefail
 
-FLAG_SYNC_VERSION=7
+FLAG_SYNC_VERSION=8
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCK="$ROOT/flag.lock"
 
@@ -173,17 +173,20 @@ cmd_sync() {
 }
 
 cmd_add() {
-  local fd src dest dirs files kind a b c f rel
+  local fd src dest dirs files stale kind a b c f rel
   if [ $# -eq 3 ]; then fd="$(flag_dir "$1")"; shift; else fd="$(flag_dir "")"; fi
   clean_flag "$fd"
   [ $# -eq 2 ] || die "usage: flag-sync.sh add [FLAG_DIR] <flag-path> <repo-path>"
   src="${1%/}"; dest="${2%/}"
-  dirs="$(mktemp)"; files="$(mktemp)"; trap 'rm -f "$dirs" "$files"' RETURN
+  dirs="$(mktemp)"; files="$(mktemp)"; stale="$(mktemp)"; trap 'rm -f "$dirs" "$files" "$stale"' RETURN
   touch "$LOCK"
+  # Entries at or under <repo-path> are being replaced: drop them from the
+  # lock, and remember their files so the old copies can be deleted (a
+  # replacement with fewer files must not leave unlocked leftovers behind).
   while read -r kind a b c; do
     case "$kind" in
-      dir) echo "$a" >> "$dirs" ;;
-      file) [ "$c" = "$dest" ] || [ "${c#"$dest"/}" != "$c" ] || echo "$a $b $c" >> "$files" ;;
+      dir) [ "$a" = "$dest" ] || [ "${a#"$dest"/}" != "$a" ] || echo "$a" >> "$dirs" ;;
+      file) if [ "$c" = "$dest" ] || [ "${c#"$dest"/}" != "$c" ]; then echo "$c" >> "$stale"; else echo "$a $b $c" >> "$files"; fi ;;
     esac
   done < <(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$LOCK" || true)
   # The lock names one commit for every entry, so everything already locked
@@ -193,6 +196,11 @@ cmd_add() {
     die "the vendored copy differs from $(flag_commit "$fd" | cut -c1-12) (see: scripts/flag-sync.sh status $fd); run scripts/flag-sync.sh sync against this checkout first"
   fi
   safe_path "$src"; safe_path "$dest"
+  [ -e "$fd/design-system/$src" ] || die "flag has no design-system/$src"
+  while IFS= read -r f; do
+    safe_path "$f"
+    rm -f "$ROOT/$f"
+  done < "$stale"
   if [ -d "$fd/design-system/$src" ]; then
     echo "$dest" >> "$dirs"
     while IFS= read -r f; do

@@ -435,3 +435,5 @@ the licence text ships beside them as
 [`web/src/app/FLAG-LICENSE`](web/src/app/FLAG-LICENSE). Its fonts keep their
 own licences (Nebula Sans: SIL OFL 1.1; Hack: MIT + Bitstream Vera), which
 travel with the font files under `web/src/app/fonts/`.
+
+Icons: some glyphs in Flag's core-icons.svg are drawn after Lucide (https://lucide.dev), ISC License — the full notice is retained at the top of the vendored sprite (`web/public/icons/core-icons.svg`).

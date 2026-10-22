@@ -101,6 +101,9 @@ Known, deliberate exceptions:
     Flag design system — Copyright (c) 2026 ElcanoTek, Inc. — MIT; its licence
     text travels with them as `src/app/FLAG-LICENSE`. The fonts keep their own
     licences above.
+  - Icons: some glyphs in Flag's core-icons.svg are drawn after Lucide
+    (https://lucide.dev), ISC License — the full notice is retained at the top
+    of the vendored sprite (`public/icons/core-icons.svg`).
   - These are the COMPLETE builds, not the narrower subsets both upstreams also
     publish. Do not substitute a subset: a missing glyph does not error, it
     silently falls back to a system font for that one character, so a name
