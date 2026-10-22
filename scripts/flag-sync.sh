@@ -46,7 +46,7 @@ set -f # lock paths may contain glob characters ([ ] * ?); never expand them
 unset CDPATH GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
 export LC_ALL=C GIT_LITERAL_PATHSPECS=1
 
-FLAG_SYNC_VERSION=17
+FLAG_SYNC_VERSION=19
 ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 LOCK="$ROOT/flag.lock"
 
@@ -381,7 +381,7 @@ cmd_status() {
 
 FILES=""
 cmd_sync() {
-  local dirs plan dels list kind a b c d mode oid rel
+  local dirs plan dels list kind a b c d mode oid rel f r
   need_lock
   open_flag "${1:-}"; clean_flag
   newtmp dirs; newtmp plan; newtmp dels; newtmp list; newtmp FILES
@@ -423,8 +423,17 @@ cmd_sync() {
       echo "$mode $oid $PREFIX/$rel $d/$rel" >> "$plan"
     done < "$list"
   done < "$dirs"
-  # Only files the old lock vendored are deleted; anything else in a locked
-  # dir is left for `check` to report, never silently removed.
+  # Only files the old lock vendored are deleted. Anything else in a locked
+  # dir is never touched: sync refuses before writing, so it cannot report
+  # success on a tree `check` would then reject as UNLOCKED.
+  while read -r d; do
+    [ -d "$ROOT/$d" ] || continue
+    while IFS= read -r -d '' f; do
+      r="${f#"$ROOT"/}"
+      F="$r" awk '$1 == "file" && $4 == ENVIRON["F"] { found = 1 } END { exit !found }' "$ENTRIES" \
+        || die "$r is inside vendored dir $d but not in flag.lock; move product files out of $d (or delete it) and re-run sync"
+    done < <(find "$ROOT/$d" -mindepth 1 ! -type d -print0)
+  done < "$dirs"
   while read -r kind a b c; do
     [ "$kind" = file ] || continue
     in_plan "$plan" "$c" || echo "$c" >> "$dels"
@@ -484,13 +493,18 @@ cmd_add() {
         while IFS= read -r -d '' c; do
           c="${c#"$ROOT"/}"
           { [ -f "$ROOT/$c" ] && [ ! -L "$ROOT/$c" ]; } || die "$c is a symlink or special file inside $dest; remove it first"
-          in_plan "$plan" "$c" || grep -qxF -- "$c" "$dels" || die "$c is already in $dest and is not from flag; move product files out of $dest (or delete it) before vendoring flag's $src there"
+          grep -qxF -- "$c" "$dels" || die "$c is already in $dest and is not from flag; move product files out of $dest (or delete it) before vendoring flag's $src there"
         done < <(find "$ROOT/$dest" -mindepth 1 ! -type d -print0)
       fi ;;
     *)
       # A locked dir mirrors exactly one Flag dir; a single file dropped inside
       # it would make the mirror ambiguous for every later status/sync.
       while read -r d; do case "$dest" in "$d"/*) die "$dest is inside locked dir $d; vendor it outside the mirrored dir (or add the whole dir)" ;; esac; done < "$dirs"
+      # An existing file at <repo-path> must be one this lock already vendored
+      # there; anything else is a product file and is never overwritten.
+      if { [ -e "$ROOT/$dest" ] || [ -L "$ROOT/$dest" ]; } && ! grep -qxF -- "$dest" "$dels"; then
+        die "$dest already exists and is not in flag.lock; move it or pick another destination"
+      fi
       need_blob "$E_MODE" "$src"; echo "$E_MODE $E_OID $src $dest" >> "$plan" ;;
   esac
   newtmp d

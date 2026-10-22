@@ -25,7 +25,7 @@ set -f # stack.conf values are words, never globs
 unset CDPATH
 export LC_ALL=C
 
-STACK_CHECK_VERSION=28
+STACK_CHECK_VERSION=29
 STANDARD_SHA=5b3a1c9dab098277570a37d58366b0802d4378370f9717d48743c386b194bdbb
 ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 CONF="$ROOT/stack.conf"
@@ -349,7 +349,7 @@ use strict; use warnings; use JSON::PP;
 local $/; my $txt = <STDIN>;
 my $j = eval { JSON::PP->new->decode($txt) };
 unless (ref $j eq "HASH") { print "is not a valid JSON object\n"; exit 0; }
-my $servers = qr/^(?:next|express|koa|fastify|\@hapi\/.+|\@remix-run\/.+|\@react-router\/(?:serve|node|express|architect|cloudflare)|nuxt|\@sveltejs\/kit|astro|hono|\@hono\/node-server|\@nestjs\/.+|\@adonisjs\/.+|\@feathersjs\/.+|\@loopback\/.+|\@redwoodjs\/.+|\@solidjs\/start|\@tanstack\/(?:react-)?start|\@builder\.io\/qwik-city|\@angular\/ssr|\@analogjs\/platform|\@marko\/run|sails|restify|polka|micro|h3|nitropack|nitro|vinxi|elysia|waku|gatsby)$/;
+my $servers = qr/^(?:next|express|koa|fastify|\@hapi\/.+|\@remix-run\/.+|\@react-router\/(?:serve|node|express|architect|cloudflare)|nuxt|\@sveltejs\/kit|astro|hono|\@hono\/node-server|\@nestjs\/.+|\@adonisjs\/.+|\@feathersjs\/.+|\@loopback\/.+|\@redwoodjs\/.+|\@solidjs\/start|\@tanstack\/(?:react-)?start|\@builder\.io\/qwik-city|\@angular\/ssr|\@analogjs\/platform|\@marko\/run|connect|sails|restify|polka|micro|h3|nitropack|nitro|vinxi|elysia|waku|gatsby)$/;
 # A documented JavaScript backend exception (backend=node|bun|deno) may use a
 # server framework; every other backend serves the app itself.
 my $backend = $ENV{BACKEND} // "go";
