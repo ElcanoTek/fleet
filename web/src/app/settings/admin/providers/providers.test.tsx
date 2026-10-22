@@ -27,6 +27,7 @@ const ROW: LLMProvider = {
   models: ["claude-opus-4-8"],
   enabled: true,
   has_api_key: true,
+  context_window_tokens: 200000,
   created_at: 1,
   updated_at: 1,
 };
@@ -55,15 +56,16 @@ describe("ProvidersAdminPage", () => {
       models: [],
       enabled: false,
       has_api_key: false,
+      context_window_tokens: 65536,
       created_at: 1,
       updated_at: 1,
     };
     vi.stubGlobal("fetch", mockFetch([ROW, disabledCatchAll]));
     render(<ProvidersAdminPage />);
     expect(await screen.findByText("anthropic-direct")).toBeInTheDocument();
-    expect(screen.getByText("Anthropic · 1 model")).toBeInTheDocument();
+    expect(screen.getByText("Anthropic · 1 model · 200,000-token context")).toBeInTheDocument();
     expect(
-      screen.getByText("Ollama (local) · catch-all (any model) · disabled"),
+      screen.getByText("Ollama (local) · catch-all (any model) · 65,536-token context · disabled"),
     ).toBeInTheDocument();
     // Keyless is only flagged for types that need a key (ollama doesn't).
     expect(screen.queryByText("No key")).toBeNull();
@@ -73,6 +75,69 @@ describe("ProvidersAdminPage", () => {
     vi.stubGlobal("fetch", mockFetch([{ ...ROW, has_api_key: false }]));
     render(<ProvidersAdminPage />);
     expect(await screen.findByText("No key")).toBeInTheDocument();
+  });
+
+  it("flags a row with no declared context window, but never an OpenRouter row", async () => {
+    const openrouter: LLMProvider = {
+      ...ROW,
+      id: "p5",
+      name: "openrouter",
+      type: "openrouter",
+      models: [],
+      context_window_tokens: 0,
+    };
+    vi.stubGlobal("fetch", mockFetch([{ ...ROW, context_window_tokens: 0 }, openrouter]));
+    render(<ProvidersAdminPage />);
+    expect(await screen.findByText("Anthropic · 1 model")).toBeInTheDocument();
+    expect(screen.getAllByText("No context window")).toHaveLength(1);
+  });
+
+  it("requires a context window before enabling a non-OpenRouter provider, then sends it", async () => {
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    // OpenRouter (the default type) takes its limits from its catalog: no field.
+    expect(screen.queryByPlaceholderText("e.g. 200000")).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("my-provider"), {
+      target: { value: "anthropic-direct" },
+    });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "anthropic" } });
+    fireEvent.change(screen.getByPlaceholderText("sk-…"), { target: { value: "sk-ant-x" } });
+    fireEvent.change(screen.getByPlaceholderText(/claude-sonnet-4-5/), {
+      target: { value: "claude-opus-4-8" },
+    });
+    const posts = () =>
+      fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "POST");
+    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+    expect(await screen.findByText(/Anthropic needs its context window/)).toBeInTheDocument();
+    expect(posts()).toHaveLength(0);
+
+    const windowInput = screen.getByPlaceholderText("e.g. 200000");
+    expect(windowInput).toHaveAttribute("id", "providerContextWindow");
+    fireEvent.change(windowInput, { target: { value: "200k" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+    expect(await screen.findByText("Context window must be a whole number of tokens.")).toBeInTheDocument();
+    expect(posts()).toHaveLength(0);
+
+    fireEvent.change(windowInput, { target: { value: "200000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    const body = JSON.parse(String((posts()[0][1] as RequestInit).body));
+    expect(body).toMatchObject({ name: "anthropic-direct", type: "anthropic", context_window_tokens: 200000 });
+  });
+
+  it("keeps the declared context window when a row is disabled or enabled", async () => {
+    const fetchMock = mockFetch([ROW]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Disable" }));
+    await waitFor(() => {
+      const put = fetchMock.mock.calls.find(([, init]) => init && (init as RequestInit).method === "PUT");
+      expect(put).toBeTruthy();
+      const body = JSON.parse(String((put![1] as RequestInit).body));
+      expect(body).toMatchObject({ enabled: false, context_window_tokens: 200000 });
+    });
   });
 
   it("validates the draft before any mutation request", async () => {
@@ -117,7 +182,12 @@ describe("ProvidersAdminPage", () => {
       expect(post).toBeTruthy();
       const body = JSON.parse(String((post![1] as RequestInit).body));
       // Key is write-only outbound; models are trimmed of blank lines.
-      expect(body).toMatchObject({ name: "openrouter-team", type: "openrouter", api_key: "sk-or-secret" });
+      expect(body).toMatchObject({
+        name: "openrouter-team",
+        type: "openrouter",
+        api_key: "sk-or-secret",
+        context_window_tokens: 0,
+      });
       expect(body.models).toEqual(["gpt-5.2", "gpt-5.2"]);
     });
   });

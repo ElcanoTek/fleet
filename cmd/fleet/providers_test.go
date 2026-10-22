@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // TestToAgentcoreProviders covers the #289 bundle→resolver translation: nil/empty
@@ -62,4 +66,44 @@ func TestToAgentcoreProviders(t *testing.T) {
 			t.Errorf("unset env => APIKey %q, want empty", got[0].APIKey)
 		}
 	})
+}
+
+// TestLoadDBLLMProvidersCarriesTheContextWindow: an admin row's declared
+// context window (migration 081) reaches the resolver's routing table, which
+// both the boot merge and the hot reload build through loadDBLLMProviders.
+// Without it every non-OpenRouter admin row ran on the resolver's fallback,
+// below a turn's fixed reserve.
+func TestLoadDBLLMProvidersCarriesTheContextWindow(t *testing.T) {
+	chatDsn := os.Getenv("FLEET_TEST_DATABASE_URL")
+	if chatDsn == "" {
+		t.Skip("FLEET_TEST_DATABASE_URL is required; skipping Postgres-backed test")
+	}
+	chat, err := store.Open(chatDsn, store.DefaultPoolConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = chat.Close() })
+	ctx := context.Background()
+	name := "ctxwin-" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
+	row, err := chat.CreateLLMProvider(ctx, store.LLMProviderInput{
+		Name: name, Type: "ollama", Models: []string{"qwen3-coder"}, Enabled: true, ContextWindowTokens: 65536,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _ = chat.DeleteLLMProvider(context.Background(), row.ID) })
+
+	got, err := loadDBLLMProviders(ctx, chat)
+	if err != nil {
+		t.Fatalf("loadDBLLMProviders: %v", err)
+	}
+	for _, p := range got {
+		if p.Name == name {
+			if p.ContextWindowTokens != 65536 {
+				t.Fatalf("ContextWindowTokens = %d, want 65536", p.ContextWindowTokens)
+			}
+			return
+		}
+	}
+	t.Fatalf("row %q missing from %+v", name, got)
 }

@@ -15,6 +15,21 @@ configured from the client bundle's `providers:` block.
   list, enabled flag, and the API key sealed with the store's secretbox cipher
   (AES-256-GCM, `FLEET_MCP_OAUTH_ENCRYPTION_KEY`), AAD-bound to the row id.
   `internal/store/llm_providers.go`.
+- **Context window** (chat-DB migration 081): `context_window_tokens`, the
+  admin-row twin of a bundle entry's field of the same name. Native and
+  OpenAI-compatible endpoints advertise no reliable limit, and the resolver's
+  fallback for an undeclared one (32,000 tokens, or 4,096 for Ollama) is below
+  what every turn reserves before any history: the system prompt, the tool
+  schemas, the completion allowance (16,384 tokens by default) and a provider
+  margin of at least 4,096, about 34,400 tokens with the default bundle. Until
+  this field existed, an admin row had no way to declare a limit, so every chat
+  turn on a non-OpenRouter admin row failed before a request was sent. The API
+  now refuses to enable a non-OpenRouter row without a positive value (a
+  disabled row may be saved without one), and the form asks for it. OpenRouter
+  rows ignore it: OpenRouter's per-model catalog is authoritative. Rows saved
+  before migration 081 read as 0 (not declared) and keep failing until an admin
+  edits them; the list flags them with a **No context window** badge, and
+  enabling one without a value is refused.
 - **API** (chat server): admin-gated CRUD at `/admin/llm-providers[/{id}]`
   (same `adminMiddleware` as the rest of `/admin/*`), plus a member-level
   `GET /llm-provider-models` that returns active providers' model slugs for

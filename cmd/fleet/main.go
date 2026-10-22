@@ -2213,11 +2213,12 @@ func loadDBLLMProviders(ctx context.Context, chatStore *store.Store) ([]agentcor
 	out := make([]agentcore.ProviderConfig, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, agentcore.ProviderConfig{
-			Name:    r.Name,
-			Type:    agentcore.ProviderType(r.Type),
-			APIKey:  r.APIKey,
-			BaseURL: r.BaseURL,
-			Models:  r.Models,
+			Name:                r.Name,
+			Type:                agentcore.ProviderType(r.Type),
+			APIKey:              r.APIKey,
+			BaseURL:             r.BaseURL,
+			Models:              r.Models,
+			ContextWindowTokens: r.ContextWindowTokens,
 		})
 	}
 	return out, nil

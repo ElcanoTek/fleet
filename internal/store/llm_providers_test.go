@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -135,6 +136,54 @@ func TestLLMProviderValidation(t *testing.T) {
 	}
 	if _, err := s.CreateLLMProvider(ctx, LLMProviderInput{Name: "dup", Type: "ollama", Enabled: true}); err == nil {
 		t.Fatalf("create dup 2: want already-exists error")
+	}
+}
+
+// The declared context window (migration 081) round-trips through create,
+// update, the UI-facing list and the resolver-building read, and a value the
+// INTEGER column cannot hold is refused as a validation error.
+func TestLLMProviderContextWindow(t *testing.T) {
+	s := newTestStoreWithCipher(t)
+	ctx := context.Background()
+
+	row, err := s.CreateLLMProvider(ctx, LLMProviderInput{
+		Name: "local", Type: "ollama", Models: []string{"qwen3-coder"}, Enabled: true, ContextWindowTokens: 65536,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if row.ContextWindowTokens != 65536 {
+		t.Fatalf("created window = %d, want 65536", row.ContextWindowTokens)
+	}
+	if _, err := s.UpdateLLMProvider(ctx, row.ID, LLMProviderInput{
+		Name: "local", Type: "ollama", Models: []string{"qwen3-coder"}, Enabled: true, ContextWindowTokens: 131072,
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	list, err := s.ListLLMProviders(ctx)
+	if err != nil || len(list) != 1 || list[0].ContextWindowTokens != 131072 {
+		t.Fatalf("list = %+v, %v; want one row with window 131072", list, err)
+	}
+	configs, err := s.LLMProviderConfigs(ctx)
+	if err != nil || len(configs) != 1 || configs[0].ContextWindowTokens != 131072 {
+		t.Fatalf("configs = %+v, %v; want the resolver read to carry 131072", configs, err)
+	}
+	one, err := s.GetLLMProviderConfig(ctx, row.ID)
+	if err != nil || one.ContextWindowTokens != 131072 {
+		t.Fatalf("get = %+v, %v; want 131072", one, err)
+	}
+
+	// A row saved without one reads back as 0 (not declared).
+	plain, err := s.CreateLLMProvider(ctx, LLMProviderInput{Name: "plain", Type: "openai", Enabled: false})
+	if err != nil || plain.ContextWindowTokens != 0 {
+		t.Fatalf("plain = %+v, %v; want window 0", plain, err)
+	}
+
+	for _, bad := range []int{-1, 1 << 31} {
+		_, err := s.CreateLLMProvider(ctx, LLMProviderInput{Name: "bad", Type: "ollama", ContextWindowTokens: bad})
+		if err == nil || !strings.Contains(err.Error(), "invalid provider") {
+			t.Errorf("window %d: err = %v, want an invalid-provider validation error", bad, err)
+		}
 	}
 }
 

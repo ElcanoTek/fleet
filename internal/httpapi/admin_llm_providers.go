@@ -16,6 +16,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -26,12 +27,13 @@ import (
 // llmProviderBody is the create/update payload. APIKey nil = leave unchanged
 // (or absent on create); "" = clear the stored key.
 type llmProviderBody struct {
-	Name    string   `json:"name"`
-	Type    string   `json:"type"`
-	BaseURL string   `json:"base_url"`
-	Models  []string `json:"models"`
-	Enabled bool     `json:"enabled"`
-	APIKey  *string  `json:"api_key"`
+	Name                string   `json:"name"`
+	Type                string   `json:"type"`
+	BaseURL             string   `json:"base_url"`
+	Models              []string `json:"models"`
+	Enabled             bool     `json:"enabled"`
+	APIKey              *string  `json:"api_key"`
+	ContextWindowTokens int      `json:"context_window_tokens"`
 }
 
 // handleAdminLLMProviders serves /admin/llm-providers: GET lists every row
@@ -54,6 +56,7 @@ func (s *Server) handleAdminLLMProviders(w http.ResponseWriter, r *http.Request)
 		in := store.LLMProviderInput{
 			Name: body.Name, Type: body.Type, BaseURL: body.BaseURL,
 			Models: body.Models, Enabled: body.Enabled, APIKey: body.APIKey,
+			ContextWindowTokens: body.ContextWindowTokens,
 		}
 		key := ""
 		if body.APIKey != nil {
@@ -96,6 +99,7 @@ func (s *Server) handleAdminLLMProviderItem(w http.ResponseWriter, r *http.Reque
 		in := store.LLMProviderInput{
 			Name: body.Name, Type: body.Type, BaseURL: body.BaseURL,
 			Models: body.Models, Enabled: body.Enabled, APIKey: body.APIKey,
+			ContextWindowTokens: body.ContextWindowTokens,
 		}
 		// Effective-key check: an update that leaves the key untouched (nil)
 		// counts the stored key; one that sets/clears it counts the new value.
@@ -188,13 +192,24 @@ func (s *Server) applyLLMProviderChange(w http.ResponseWriter, r *http.Request, 
 // types means an API key must be in effect. Uses a placeholder key value —
 // only presence is validated host-side; the provider itself validates the
 // value on first use.
+//
+// An enabled non-OpenRouter row must also declare its context window. Those
+// endpoints advertise no limit, and the resolver's fallback for an undeclared
+// one (32,000 tokens, 4,096 for Ollama) is below what every turn reserves
+// before any history, so the row would fail every turn without sending a
+// request. OpenRouter rows are exempt: its per-model catalog is authoritative
+// and the resolver ignores a declaration for them.
 func validateLLMProviderRow(in store.LLMProviderInput, effectiveKey string) error {
 	if !in.Enabled {
 		return nil // disabled rows are excluded from the routing table
 	}
+	typ := agentcore.ProviderType(strings.ToLower(strings.TrimSpace(in.Type)))
+	if typ != agentcore.ProviderTypeOpenRouter && in.ContextWindowTokens <= 0 {
+		return fmt.Errorf("context_window_tokens is required to enable a %s provider: set the endpoint's real context limit in tokens", typ)
+	}
 	return agentcore.ValidateProvider(agentcore.ProviderConfig{
 		Name:    strings.ToLower(strings.TrimSpace(in.Name)),
-		Type:    agentcore.ProviderType(strings.ToLower(strings.TrimSpace(in.Type))),
+		Type:    typ,
 		APIKey:  effectiveKey,
 		BaseURL: in.BaseURL,
 		Models:  in.Models,

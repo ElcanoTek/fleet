@@ -61,7 +61,7 @@ OPENAI_API_KEY=…
 | `api_key_env` | all but `ollama` | Env var holding the credential (value read host-side, never in the manifest). |
 | `base_url` | no | Endpoint override (e.g. the Ollama URL, or an OpenAI-compatible gateway). |
 | `models` | no | Slugs this provider serves. Empty = catch-all (matches any slug). |
-| `context_window_tokens` | no | Actual input-plus-output context limit for provider-local models. Set this to Ollama's `num_ctx` (and for custom OpenAI-compatible gateways). Omitted Ollama entries fail safe at 4096 tokens; other native entries use a conservative 32000-token fallback. OpenRouter ignores this field: observed provider limits and its public per-model catalog are more authoritative than a manifest-wide declaration. |
+| `context_window_tokens` | no | Actual input-plus-output context limit for provider-local models. Set this to Ollama's `num_ctx` (and for custom OpenAI-compatible gateways). Omitted Ollama entries fail safe at 4096 tokens; other native entries use a conservative 32000-token fallback. Both fallbacks are below what a turn reserves with the default tool set (about 34,400 tokens), so in practice every non-OpenRouter entry needs this. Admin-managed rows have the same field, required before a non-OpenRouter row can be enabled ([`LLM-PROVIDERS.md`](LLM-PROVIDERS.md)). OpenRouter ignores this field: observed provider limits and its public per-model catalog are more authoritative than a manifest-wide declaration. |
 
 ## How a model slug is routed
 
