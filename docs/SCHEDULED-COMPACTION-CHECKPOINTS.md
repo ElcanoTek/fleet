@@ -379,9 +379,11 @@ fewer summarizer calls; making the elided content recallable added nothing.
     stubbed: the same tool with the same arguments, in any key order, made
     after that elision. The stub cost that run a call, so eliding more is not
     saving it anything.
-    - Calls made since the last pause are told apart by position, not by
-      call ID, because some providers reuse IDs. So a duplicate made before
-      the elision does not count.
+    - The run's new calls are told apart by position since its last context
+      check (each round's start), not by call ID, because some providers reuse
+      IDs. So a duplicate made before the elision does not count.
+    - A re-run in a round whose history the overflow recovery compacted can
+      be missed; the run then just goes on eliding.
     - A read of something that changed in between also counts, for example a
       file viewed again after an edit. That only turns elision off for the
       run.
@@ -498,14 +500,14 @@ refresh:
 
 Both models fetched all twelve reports in one parallel step, answered, and then
 re-checked the answer against the reports in their self-audit. Each row is one
-recurring series. "#1827" is elision as first shipped; "fixed" holds it back
+recurring series, except fixed Haiku: 4 runs, then 2 on the final build. "#1827" is elision as first shipped; "fixed" holds it back
 during the audit and after a re-run ([What shipped](#what-shipped-1)).
 
 | Model | Elision | Runs succeeded | Cells correct | Cost / run | Pauses | Summaries | Re-fetches | Minutes |
 |---|---|---|---|---|---|---|---|---|
 | Haiku 5.5 | off | 3 of 4 | 71, 72, 63 | $0.56 | 2.2 | 4.0 | 9 | 4.0 |
 | Haiku 5.5 | on, #1827 | **0 of 5** | — | $0.29 | 1.8 | 1.4 | 4.8 | 2.6 |
-| Haiku 5.5 | on, fixed | 4 of 4 | 72, 65, 64, 72 | $0.60 | 2.5 | 4.0 | 12 | 4.3 |
+| Haiku 5.5 | on, fixed | 6 of 6 | 72, 65, 64, 72, 72, 71 | $0.57 | 2.5 | 3.7 | 12 | 4.0 |
 | Sonnet 5.5 | off | 3 of 3 | 72, 72, 72 | $2.95 | 5.3 | 6.3 | 16 | 5.1 |
 | Sonnet 5.5 | on, #1827 | 3 of 3 | 71, 72, 71 | **$7.61** | 23.3 | 20.0 | 83 | 14.6 |
 | Sonnet 5.5 | on, fixed | 3 of 3 | 72, 72, 72 | $2.39 | 3.7 | 4.3 | 12 | 3.9 |
@@ -521,7 +523,7 @@ the audit request, so the reports the audit was re-reading were 2 KB previews.
 
 With elision held back during the audit, every pause in it bought the summary,
 which keeps the recent half (and the reports) verbatim. Both models then passed.
-- **Haiku** cost about what it did with elision off ($0.60 a run against
+- **Haiku** cost about what it did with elision off ($0.57 a run against
   $0.56). The cells it missed (7 in one run and 8 in another, almost all
   low-stock lists) are the kind it also missed with elision off (63 of 72).
 - **Sonnet** cost 19% less than with it off.
@@ -531,7 +533,7 @@ fired in the fixed runs.
 
 The re-run stop did not fire here: the re-fetches came during the audit, when
 nothing had been elided. Its unit tests pin it
-(`TestElideBeforeSummary_StopsAfterARerun`). The bench cost about $45 in all.
+(`TestElideBeforeSummary_StopsAfterARerun`). The bench cost about $46 in all.
 
 ### Deviations from the issue
 

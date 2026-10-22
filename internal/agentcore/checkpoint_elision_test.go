@@ -954,6 +954,34 @@ func TestElideBeforeSummary_RerunWithAReusedCallID(t *testing.T) {
 	}
 }
 
+// With a reused call ID, each result is paired with its own call, the nearest
+// before it: a subagent's answer is kept, and a stub names the tool that made
+// the call, not the last tool to use that ID.
+func TestElideStaleToolResults_ReusedCallIDKeepsEachResultsTool(t *testing.T) {
+	history := make([]fantasy.Message, 0, 13)
+	history = append(history,
+		fantasy.NewUserMessage("refresh every page"),
+		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: "spawn_subagent", Input: `{"task":"a"}`}}},
+		fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "call_0", Output: elisionText(40_000)}}},
+		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: "read_page", Input: `{"page":1}`}}},
+		fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "call_0", Output: elisionText(40_000)}}},
+	)
+	for i := range 4 {
+		history = append(history, elisionExchange("call_0", fmt.Sprintf(`{"page":%d}`, 10+i), elisionText(40_000))...)
+	}
+	res := elideStaleToolResults(history, 1)
+	if _, text := resultOf(t, res.messages[2].Content[0]); strings.HasPrefix(text, "[tool output truncated]") {
+		t.Fatal("the subagent's answer was stubbed under a reused call ID")
+	}
+	_, text := resultOf(t, res.messages[4].Content[0])
+	if !strings.Contains(text, "read_page") || strings.Contains(text, "fetch") {
+		t.Fatalf("the read_page result's stub names the wrong tool: %.300q", text)
+	}
+	if !slices.Contains(res.stubbedKeys, callKey("read_page", `{"page":1}`)) || slices.Contains(res.stubbedKeys, callKey("spawn_subagent", `{"task":"a"}`)) {
+		t.Fatalf("stubbed keys %q", res.stubbedKeys)
+	}
+}
+
 // Through checkContextPressure: the first pause elides, the run re-runs a
 // stubbed call, and the next pause summarizes instead of eliding again.
 func TestCheckContextPressure_RerunStopsElision(t *testing.T) {

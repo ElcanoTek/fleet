@@ -133,10 +133,10 @@ type engine struct {
 	resendFloorNoted bool
 	// elidedCallKeys holds the identity (callKey) of every call whose result
 	// an elision stubbed. pressureCheckedLen is the length of the history the
-	// last context-pressure check handed back: the history only grows between
-	// checks, so the calls past it are the ones the run made since. One of
+	// last context-pressure check handed back: the calls past it are, almost
+	// always, the ones the run made since (noteReruns says when not). One of
 	// those with an elided identity is a re-run, and sets elisionStopped for
-	// the rest of the run (noteReruns).
+	// the rest of the run.
 	elidedCallKeys     map[string]bool
 	pressureCheckedLen int
 	elisionStopped     bool

@@ -61,7 +61,7 @@ var elisionKeptTools = map[string]bool{"spawn_subagent": true, toolNameTaskTrack
 // elisionResult is what elideStaleToolResults did.
 type elisionResult struct {
 	messages    []fantasy.Message // the history with the stubs, or the input when none
-	stubbed     []stubbedResult   // where each stub is, to find its call
+	stubbedKeys []string          // the identity (callKey) of each stubbed result's call
 	stubs       int               // tool results replaced
 	elidedBytes int               // output bytes removed
 	savedTokens int               // estimated tokens removed (estimateModelMessagesTokens' terms)
@@ -84,16 +84,19 @@ func elideStaleToolResults(messages []fantasy.Message, recentTokens int) elision
 	if keepFrom <= head {
 		return res
 	}
-	toolNames := toolNamesByCallID(messages)
 	var out []fantasy.Message
 	for mi := head; mi < keepFrom; mi++ {
 		var parts []fantasy.MessagePart
 		for pi, part := range messages[mi].Content {
 			p, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part)
-			if !ok || elisionKeptTools[toolNames[p.ToolCallID]] {
+			if !ok {
 				continue
 			}
-			stub, text, ok := elisionStub(p.Output, toolNames[p.ToolCallID])
+			call, found := callBefore(messages, mi, p.ToolCallID)
+			if elisionKeptTools[call.ToolName] {
+				continue
+			}
+			stub, text, ok := elisionStub(p.Output, call.ToolName)
 			if !ok {
 				continue
 			}
@@ -104,7 +107,9 @@ func elideStaleToolResults(messages []fantasy.Message, recentTokens int) elision
 			p.Output = replaceToolResultOutput(p.Output, stub)
 			parts[pi] = p
 			res.stubs++
-			res.stubbed = append(res.stubbed, stubbedResult{message: mi, callID: p.ToolCallID})
+			if found {
+				res.stubbedKeys = append(res.stubbedKeys, callKey(call.ToolName, call.Input))
+			}
 			res.elidedBytes += len(text) - len(stub)
 			res.savedTokens += before - estimateToolResultTokens(p.Output)
 		}
@@ -121,12 +126,19 @@ func elideStaleToolResults(messages []fantasy.Message, recentTokens int) elision
 	return res
 }
 
-// stubbedResult locates one result elideStaleToolResults stubbed: the index of
-// its tool message and its call ID. The call is the nearest one with that ID
-// before the message, not any call with that ID: some providers reuse IDs.
-type stubbedResult struct {
-	message int
-	callID  string
+// callBefore is the call a tool result in messages[mi] answers: the nearest
+// call with its ID before that message. Not just any call with that ID: some
+// providers reuse one ID for every call, so a map from ID to call would name
+// another call's tool, and could stub a result elisionKeptTools keeps.
+func callBefore(messages []fantasy.Message, mi int, id string) (fantasy.ToolCallPart, bool) {
+	for i := mi - 1; i >= 0; i-- {
+		for _, part := range messages[i].Content {
+			if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok && tc.ToolCallID == id {
+				return tc, true
+			}
+		}
+	}
+	return fantasy.ToolCallPart{}, false
 }
 
 // elisionRecovery is a stub's recovery action when the output was not saved
@@ -323,7 +335,7 @@ func (e *engine) elideBeforeSummary(messages []fantasy.Message, used int, measur
 	if res.stubs == 0 || float64(res.savedTokens)*rate < float64(budget)*elisionMinSavingFraction {
 		return elisionOutcome{}, false
 	}
-	e.noteElidedCalls(messages, res.stubbed)
+	e.noteElidedCalls(res.stubbedKeys)
 	e.consecutiveCompactions = 0
 	e.resendFloorStale = true
 	var after int
@@ -367,10 +379,14 @@ func (e *engine) elisionHeld() bool {
 
 // noteReruns sets elisionStopped once a call the run made since the last
 // context-pressure check repeats one whose result an elision stubbed: the
-// same tool with the same arguments (callKey). Run from the top of every
-// check, so no call goes unseen. The new calls are told apart by position,
-// past pressureCheckedLen, not by call ID: some providers reuse IDs. A
-// duplicate the run made before the elision is therefore not a re-run.
+// same tool with the same arguments (callKey). It runs at the top of every
+// check, before any rewrite. The new calls are told apart by position, past
+// pressureCheckedLen, not by call ID: some providers reuse IDs. So a
+// duplicate the run made before the elision is not a re-run. Positions hold
+// because the history only grows between checks, except when, inside a
+// round, the overflow recovery compacts it or a failed attempt's trailing
+// message is dropped. A re-run there can be missed, and the run then goes on
+// eliding, as it would without this stop.
 func (e *engine) noteReruns(messages []fantasy.Message) {
 	from := e.pressureCheckedLen
 	if e.elisionStopped || len(e.elidedCallKeys) == 0 || from > len(messages) {
@@ -388,23 +404,14 @@ func (e *engine) noteReruns(messages []fantasy.Message) {
 	}
 }
 
-// noteElidedCalls records the identity of each call whose result an elision
-// stubbed, for noteReruns: the nearest call with the stubbed result's ID
-// before its message.
-func (e *engine) noteElidedCalls(messages []fantasy.Message, stubbed []stubbedResult) {
+// noteElidedCalls records the identities of an elision's stubbed calls, for
+// noteReruns.
+func (e *engine) noteElidedCalls(keys []string) {
 	if e.elidedCallKeys == nil {
 		e.elidedCallKeys = map[string]bool{}
 	}
-	for _, s := range stubbed {
-	search:
-		for i := s.message - 1; i >= 0; i-- {
-			for _, part := range messages[i].Content {
-				if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok && tc.ToolCallID == s.callID {
-					e.elidedCallKeys[callKey(tc.ToolName, tc.Input)] = true
-					break search
-				}
-			}
-		}
+	for _, k := range keys {
+		e.elidedCallKeys[k] = true
 	}
 }
 
