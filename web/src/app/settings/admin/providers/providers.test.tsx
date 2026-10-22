@@ -98,7 +98,8 @@ describe("ProvidersAdminPage", () => {
     render(<ProvidersAdminPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
     // OpenRouter (the default type) takes its limits from its catalog: no field.
-    expect(screen.queryByPlaceholderText("e.g. 200000")).toBeNull();
+    expect(document.getElementById("providerContextWindow")).toBeNull();
+    expect(screen.queryByLabelText(/Context window/)).toBeNull();
     fireEvent.change(screen.getByPlaceholderText("my-provider"), {
       target: { value: "anthropic-direct" },
     });
@@ -115,10 +116,21 @@ describe("ProvidersAdminPage", () => {
 
     const windowInput = screen.getByPlaceholderText("e.g. 200000");
     expect(windowInput).toHaveAttribute("id", "providerContextWindow");
-    fireEvent.change(windowInput, { target: { value: "200k" } });
+    for (const bad of ["200k", "0"]) {
+      fireEvent.change(windowInput, { target: { value: bad } });
+      fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+      expect(
+        await screen.findByText("Context window must be a positive whole number of tokens."),
+      ).toBeInTheDocument();
+    }
+    fireEvent.change(windowInput, { target: { value: "3000000000" } });
     fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
-    expect(await screen.findByText("Context window must be a whole number of tokens.")).toBeInTheDocument();
+    expect(await screen.findByText(/Context window must be at most/)).toBeInTheDocument();
     expect(posts()).toHaveLength(0);
+
+    // A small window is allowed but warned about: it usually cannot fit a turn.
+    fireEvent.change(windowInput, { target: { value: "4096" } });
+    expect(screen.getByTestId("provider-small-window")).toHaveTextContent(/usually cannot fit/);
 
     fireEvent.change(windowInput, { target: { value: "200000" } });
     fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
@@ -127,17 +139,53 @@ describe("ProvidersAdminPage", () => {
     expect(body).toMatchObject({ name: "anthropic-direct", type: "anthropic", context_window_tokens: 200000 });
   });
 
-  it("keeps the declared context window when a row is disabled or enabled", async () => {
-    const fetchMock = mockFetch([ROW]);
+  it("keeps the declared context window through Disable, Enable and Edit", async () => {
+    const puts = (fetchMock: ReturnType<typeof mockFetch>) =>
+      fetchMock.mock.calls
+        .filter(([, init]) => init && (init as RequestInit).method === "PUT")
+        .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+
+    let fetchMock = mockFetch([ROW]);
     vi.stubGlobal("fetch", fetchMock);
     render(<ProvidersAdminPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Disable" }));
-    await waitFor(() => {
-      const put = fetchMock.mock.calls.find(([, init]) => init && (init as RequestInit).method === "PUT");
-      expect(put).toBeTruthy();
-      const body = JSON.parse(String((put![1] as RequestInit).body));
-      expect(body).toMatchObject({ enabled: false, context_window_tokens: 200000 });
+    await waitFor(() => expect(puts(fetchMock)).toHaveLength(1));
+    expect(puts(fetchMock)[0]).toMatchObject({ enabled: false, context_window_tokens: 200000 });
+    cleanup();
+
+    fetchMock = mockFetch([{ ...ROW, enabled: false }]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Enable" }));
+    await waitFor(() => expect(puts(fetchMock)).toHaveLength(1));
+    expect(puts(fetchMock)[0]).toMatchObject({ enabled: true, context_window_tokens: 200000 });
+    cleanup();
+
+    fetchMock = mockFetch([ROW]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(document.getElementById("providerContextWindow")).toHaveValue("200000");
+    fireEvent.change(screen.getByPlaceholderText(/claude-sonnet-4-5/), {
+      target: { value: "claude-opus-4-8\nclaude-sonnet-4-6" },
     });
+    fireEvent.click(screen.getByTestId("provider-save"));
+    await waitFor(() => expect(puts(fetchMock)).toHaveLength(1));
+    expect(puts(fetchMock)[0]).toMatchObject({
+      models: ["claude-opus-4-8", "claude-sonnet-4-6"],
+      context_window_tokens: 200000,
+    });
+  });
+
+  it("opens the edit form instead of enabling a row with no context window", async () => {
+    const fetchMock = mockFetch([{ ...ROW, enabled: false, context_window_tokens: 0 }]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Enable" }));
+    expect(await screen.findByText(/Set anthropic-direct's context window/)).toBeInTheDocument();
+    expect(document.getElementById("providerContextWindow")).toHaveValue("");
+    expect(screen.getByLabelText("Enabled")).toBeChecked();
+    expect(fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "PUT")).toHaveLength(0);
   });
 
   it("validates the draft before any mutation request", async () => {

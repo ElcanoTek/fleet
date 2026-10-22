@@ -84,6 +84,11 @@ func TestLoadDBLLMProvidersCarriesTheContextWindow(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = chat.Close() })
 	ctx := context.Background()
+	// loadDBLLMProviders decrypts every enabled row, and this store has no
+	// cipher: a keyed row left by another package's test would fail the read.
+	if err := chat.TruncateAllForTest(ctx); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
 	name := "ctxwin-" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
 	row, err := chat.CreateLLMProvider(ctx, store.LLMProviderInput{
 		Name: name, Type: "ollama", Models: []string{"qwen3-coder"}, Enabled: true, ContextWindowTokens: 65536,

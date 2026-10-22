@@ -195,25 +195,30 @@ func (s *Server) applyLLMProviderChange(w http.ResponseWriter, r *http.Request, 
 //
 // An enabled non-OpenRouter row must also declare its context window. Those
 // endpoints advertise no limit, and the resolver's fallback for an undeclared
-// one (32,000 tokens, 4,096 for Ollama) is below what every turn reserves
-// before any history, so the row would fail every turn without sending a
-// request. OpenRouter rows are exempt: its per-model catalog is authoritative
-// and the resolver ignores a declaration for them.
+// one (32,000 tokens, 4,096 for Ollama) is below what a turn reserves before
+// any history with the default tool set, so the row would fail its turns
+// without sending a request. OpenRouter rows are exempt: its per-model catalog
+// is authoritative and the resolver ignores a declaration for them. The check
+// runs after the constructor's, so an unknown type or a missing key is
+// reported first.
 func validateLLMProviderRow(in store.LLMProviderInput, effectiveKey string) error {
 	if !in.Enabled {
 		return nil // disabled rows are excluded from the routing table
 	}
 	typ := agentcore.ProviderType(strings.ToLower(strings.TrimSpace(in.Type)))
-	if typ != agentcore.ProviderTypeOpenRouter && in.ContextWindowTokens <= 0 {
-		return fmt.Errorf("type %s requires context_window_tokens before the row can be enabled: set the endpoint's real context limit in tokens", typ)
-	}
-	return agentcore.ValidateProvider(agentcore.ProviderConfig{
+	if err := agentcore.ValidateProvider(agentcore.ProviderConfig{
 		Name:    strings.ToLower(strings.TrimSpace(in.Name)),
 		Type:    typ,
 		APIKey:  effectiveKey,
 		BaseURL: in.BaseURL,
 		Models:  in.Models,
-	}, agentcore.DefaultProviderHeaders)
+	}, agentcore.DefaultProviderHeaders); err != nil {
+		return err
+	}
+	if typ != agentcore.ProviderTypeOpenRouter && in.ContextWindowTokens <= 0 {
+		return fmt.Errorf("type %s requires context_window_tokens before the row can be enabled: set the endpoint's real context limit in tokens", typ)
+	}
+	return nil
 }
 
 func httpErrorForLLMProvider(w http.ResponseWriter, err error) {

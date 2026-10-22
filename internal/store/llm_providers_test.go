@@ -164,6 +164,22 @@ func TestLLMProviderContextWindow(t *testing.T) {
 	if err != nil || len(list) != 1 || list[0].ContextWindowTokens != 131072 {
 		t.Fatalf("list = %+v, %v; want one row with window 131072", list, err)
 	}
+	// The update that also replaces the key is a separate statement.
+	key := "ollama-proxy-key"
+	if _, err := s.UpdateLLMProvider(ctx, row.ID, LLMProviderInput{
+		Name: "local", Type: "ollama", Models: []string{"qwen3-coder"}, Enabled: true,
+		APIKey: &key, ContextWindowTokens: 262144,
+	}); err != nil {
+		t.Fatalf("keyed update: %v", err)
+	}
+	if got, err := s.GetLLMProviderConfig(ctx, row.ID); err != nil || got.ContextWindowTokens != 262144 || got.APIKey != key {
+		t.Fatalf("after keyed update = %+v, %v; want window 262144 and the new key", got, err)
+	}
+	if _, err := s.UpdateLLMProvider(ctx, row.ID, LLMProviderInput{
+		Name: "local", Type: "ollama", Models: []string{"qwen3-coder"}, Enabled: true, ContextWindowTokens: 131072,
+	}); err != nil {
+		t.Fatalf("update back: %v", err)
+	}
 	configs, err := s.LLMProviderConfigs(ctx)
 	if err != nil || len(configs) != 1 || configs[0].ContextWindowTokens != 131072 {
 		t.Fatalf("configs = %+v, %v; want the resolver read to carry 131072", configs, err)
@@ -179,10 +195,16 @@ func TestLLMProviderContextWindow(t *testing.T) {
 		t.Fatalf("plain = %+v, %v; want window 0", plain, err)
 	}
 
-	for _, bad := range []int{-1, 1 << 31} {
-		_, err := s.CreateLLMProvider(ctx, LLMProviderInput{Name: "bad", Type: "ollama", ContextWindowTokens: bad})
-		if err == nil || !strings.Contains(err.Error(), "invalid provider") {
-			t.Errorf("window %d: err = %v, want an invalid-provider validation error", bad, err)
+	for _, tc := range []struct {
+		window int
+		want   string
+	}{
+		{-1, "0 (not declared) or a positive token count"},
+		{1 << 31, "at most 2147483647"},
+	} {
+		_, err := s.CreateLLMProvider(ctx, LLMProviderInput{Name: "bad", Type: "ollama", ContextWindowTokens: tc.window})
+		if err == nil || !strings.Contains(err.Error(), "invalid provider") || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("window %d: err = %v, want an invalid-provider error saying %q", tc.window, err, tc.want)
 		}
 	}
 }

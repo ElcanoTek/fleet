@@ -25,19 +25,21 @@ providers:
     type: anthropic
     api_key_env: ANTHROPIC_API_KEY
     models: ["claude-opus-4-8", "claude-sonnet-4-6"]
+    context_window_tokens: 200000
 
   # Route specific OpenAI slugs straight to the OpenAI API.
   - name: openai-direct
     type: openai
     api_key_env: OPENAI_API_KEY
     models: ["gpt-4o", "gpt-4o-mini"]
+    context_window_tokens: 128000
 
   # A self-hosted Ollama server (OpenAI-compatible endpoint; no key needed).
   - name: local
     type: ollama
     base_url: http://localhost:11434/v1
     models: ["llama3.2", "qwen2.5-coder"]
-    context_window_tokens: 32768 # match Ollama num_ctx for these models
+    context_window_tokens: 65536 # the server's num_ctx, raised to fit fleet's tools
 
 # Optional ordered availability chain. Each target must serve the same slug.
 fallback_providers: ["anthropic-direct", "openrouter"]
@@ -61,7 +63,7 @@ OPENAI_API_KEY=…
 | `api_key_env` | all but `ollama` | Env var holding the credential (value read host-side, never in the manifest). |
 | `base_url` | no | Endpoint override (e.g. the Ollama URL, or an OpenAI-compatible gateway). |
 | `models` | no | Slugs this provider serves. Empty = catch-all (matches any slug). |
-| `context_window_tokens` | no | Actual input-plus-output context limit for provider-local models. Set this to Ollama's `num_ctx` (and for custom OpenAI-compatible gateways). Omitted Ollama entries fail safe at 4096 tokens; other native entries use a conservative 32000-token fallback. Both fallbacks are below what a turn reserves with the default tool set (about 34,400 tokens), so in practice every non-OpenRouter entry needs this. Admin-managed rows have the same field, required before a non-OpenRouter row can be enabled ([`LLM-PROVIDERS.md`](LLM-PROVIDERS.md)). OpenRouter ignores this field: observed provider limits and its public per-model catalog are more authoritative than a manifest-wide declaration. |
+| `context_window_tokens` | no | Actual input-plus-output context limit for provider-local models. Set this to Ollama's `num_ctx` (and for custom OpenAI-compatible gateways). Omitted Ollama entries fail safe at 4096 tokens; other native entries use a conservative 32000-token fallback. Both fallbacks are below what a turn reserves with the default tool set (about 34,400 tokens), so in practice every non-OpenRouter entry needs this, and a declared window below that reserve fails the same way: raise Ollama's `num_ctx` rather than declaring a small one. Admin-managed rows have the same field, required before a non-OpenRouter row can be enabled ([`LLM-PROVIDERS.md`](LLM-PROVIDERS.md)). OpenRouter ignores this field: observed provider limits and its public per-model catalog are more authoritative than a manifest-wide declaration. |
 
 ## How a model slug is routed
 

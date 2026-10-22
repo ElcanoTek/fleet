@@ -208,6 +208,20 @@ func TestAdminLLMProviderContextWindow(t *testing.T) {
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "requires context_window_tokens") {
 		t.Fatalf("enabled anthropic create without a window: status %d body %s, want 400", w.Code, w.Body.String())
 	}
+	// The constructor's checks come first: an unknown type or a missing key is
+	// reported as such, not as a missing window.
+	w = do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
+		"name": "bogus", "type": "bogus", "enabled": true,
+	}, "boss@x.com")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "unknown provider type") {
+		t.Fatalf("enabled unknown type: status %d body %s, want 400 naming the type", w.Code, w.Body.String())
+	}
+	w = do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
+		"name": "nokey", "type": "openai", "enabled": true,
+	}, "boss@x.com")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "API key") {
+		t.Fatalf("enabled keyless openai without a window: status %d body %s, want 400 naming the key", w.Code, w.Body.String())
+	}
 	w = do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
 		"name": "negwindow", "type": "ollama", "enabled": false, "context_window_tokens": -1,
 	}, "boss@x.com")

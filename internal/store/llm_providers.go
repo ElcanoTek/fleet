@@ -100,8 +100,11 @@ func (in *LLMProviderInput) normalize() error {
 	}
 	// The column is a Postgres INTEGER; out-of-range values are refused here
 	// as a bad request rather than reaching SQL as a server error.
-	if in.ContextWindowTokens < 0 || in.ContextWindowTokens > math.MaxInt32 {
+	if in.ContextWindowTokens < 0 {
 		return fmt.Errorf("invalid provider %q: context_window_tokens must be 0 (not declared) or a positive token count", in.Name)
+	}
+	if in.ContextWindowTokens > math.MaxInt32 {
+		return fmt.Errorf("invalid provider %q: context_window_tokens must be at most %d", in.Name, math.MaxInt32)
 	}
 	if in.BaseURL != "" {
 		// http/https only (no file:, unix:, …), a host, and no embedded

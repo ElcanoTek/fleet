@@ -51,7 +51,7 @@ export type LLMProvider = {
 };
 
 // Central per-type presentation map (label + one-line hint + placeholders),
-// so the form can explain each choice inline. windowPlaceholder is null for
+// so the form can explain each choice inline. windowNeeded is false only for
 // OpenRouter, whose per-model catalog supplies the context limit; every other
 // type needs the admin to declare it before the row can be enabled (the
 // server enforces this too).
@@ -62,7 +62,8 @@ const PROVIDER_TYPES: Record<
     hint: string;
     urlPlaceholder: string;
     keyNeeded: boolean;
-    windowPlaceholder: string | null;
+    windowNeeded: boolean;
+    windowPlaceholder: string;
   }
 > = {
   openrouter: {
@@ -70,13 +71,15 @@ const PROVIDER_TYPES: Record<
     hint: "Routes across many upstream providers with one key.",
     urlPlaceholder: "(default: openrouter.ai)",
     keyNeeded: true,
-    windowPlaceholder: null,
+    windowNeeded: false,
+    windowPlaceholder: "",
   },
   anthropic: {
     label: "Anthropic",
     hint: "Direct Anthropic API access with your own key.",
     urlPlaceholder: "(default: api.anthropic.com)",
     keyNeeded: true,
+    windowNeeded: true,
     windowPlaceholder: "e.g. 200000",
   },
   openai: {
@@ -84,6 +87,7 @@ const PROVIDER_TYPES: Record<
     hint: "OpenAI itself, or any OpenAI-compatible endpoint via Base URL (vLLM, LM Studio, a gateway…).",
     urlPlaceholder: "https://api.example.com/v1",
     keyNeeded: true,
+    windowNeeded: true,
     windowPlaceholder: "e.g. 128000",
   },
   ollama: {
@@ -91,6 +95,7 @@ const PROVIDER_TYPES: Record<
     hint: "A local or remote Ollama server; no API key needed.",
     urlPlaceholder: "(default: http://localhost:11434/v1)",
     keyNeeded: false,
+    windowNeeded: true,
     windowPlaceholder: "the server's num_ctx, e.g. 65536",
   },
 };
@@ -130,6 +135,15 @@ function draftFrom(p: LLMProvider): Draft {
   };
 }
 
+// The server stores the window in a Postgres INTEGER.
+const MAX_CONTEXT_WINDOW = 2147483647;
+
+// Below roughly this many tokens a turn usually cannot fit fleet's tool
+// schemas and reply allowance (about 34,400 with the default tool set), so
+// the form warns without refusing: the real reserve depends on the persona
+// and its tools.
+const SMALL_CONTEXT_WINDOW = 35000;
+
 // validateDraft mirrors the server's checks so most mistakes surface before a
 // round trip: slug name, http(s) base URL, key presence for keyed types, and a
 // context window before a non-OpenRouter row can be enabled.
@@ -144,10 +158,13 @@ function validateDraft(d: Draft, editingHasKey: boolean): string | null {
   if (d.enabled && t?.keyNeeded && !d.api_key && !(d.id && editingHasKey)) {
     return `${t.label} needs an API key.`;
   }
-  if (t && t.windowPlaceholder !== null) {
+  if (t?.windowNeeded) {
     const w = d.context_window.trim();
-    if (w && !/^[1-9][0-9]*$/.test(w)) {
-      return "Context window must be a whole number of tokens.";
+    if (w && (!/^[0-9]+$/.test(w) || Number(w) <= 0)) {
+      return "Context window must be a positive whole number of tokens.";
+    }
+    if (Number(w) > MAX_CONTEXT_WINDOW) {
+      return `Context window must be at most ${MAX_CONTEXT_WINDOW.toLocaleString()} tokens.`;
     }
     if (d.enabled && !w) {
       return `${t.label} needs its context window (the model's limit, in tokens) before it can be enabled.`;
@@ -159,7 +176,7 @@ function validateDraft(d: Draft, editingHasKey: boolean): string | null {
 // contextWindowFor is the token count the form sends: the declared number, or
 // 0 (not declared) for OpenRouter, which takes the limit from its catalog.
 function contextWindowFor(d: Draft): number {
-  if (PROVIDER_TYPES[d.type]?.windowPlaceholder === null) return 0;
+  if (!PROVIDER_TYPES[d.type]?.windowNeeded) return 0;
   return Number.parseInt(d.context_window.trim(), 10) || 0;
 }
 
@@ -342,6 +359,15 @@ function ProvidersAdmin() {
   };
 
   const toggle = (p: LLMProvider) => {
+    // Enabling a row saved without a context window would be refused by the
+    // server; open its edit form on the missing field instead.
+    if (!p.enabled && PROVIDER_TYPES[p.type]?.windowNeeded && p.context_window_tokens <= 0) {
+      setDraft({ ...draftFrom(p), enabled: true });
+      setError(
+        `Set ${p.name}'s context window (the model's limit, in tokens), then save to enable it.`,
+      );
+      return;
+    }
     setError(null);
     setBusy(true);
     fetch(`/api/admin/llm-providers/${encodeURIComponent(p.id)}`, {
@@ -537,7 +563,7 @@ function ProvidersAdmin() {
                 />
               </ConnField>
             </div>
-            {typeInfo && typeInfo.windowPlaceholder !== null ? (
+            {typeInfo?.windowNeeded ? (
               <ConnField label="Context window (tokens — the model's real limit; needed to enable)">
                 <input
                   id="providerContextWindow"
@@ -547,6 +573,16 @@ function ProvidersAdmin() {
                   placeholder={typeInfo.windowPlaceholder}
                   className={SETTINGS_INPUT}
                 />
+                {Number(draft.context_window.trim()) > 0 &&
+                Number(draft.context_window.trim()) < SMALL_CONTEXT_WINDOW ? (
+                  <span
+                    data-testid="provider-small-window"
+                    className="text-[0.73rem] text-[var(--color-text-muted)]"
+                  >
+                    Below about {SMALL_CONTEXT_WINDOW.toLocaleString()} tokens a turn usually cannot fit
+                    fleet&apos;s tools and reply; for Ollama, raise num_ctx on the server.
+                  </span>
+                ) : null}
               </ConnField>
             ) : null}
             <ConnField
@@ -650,12 +686,13 @@ function ProvidersAdmin() {
                 p.models.length > 0
                   ? `${p.models.length} model${p.models.length === 1 ? "" : "s"}`
                   : "catch-all (any model)";
-              // Rows saved before the field existed have no declared window and
-              // fail every turn; flag them so the admin knows what to edit.
-              const windowUsed = PROVIDER_TYPES[p.type]?.windowPlaceholder !== null;
+              // A row with no declared window cannot be enabled (rows saved
+              // before the field existed may still be): flag it so the admin
+              // knows what to edit.
+              const windowUsed = PROVIDER_TYPES[p.type]?.windowNeeded === true;
               const windowPart =
                 windowUsed && p.context_window_tokens > 0
-                  ? ` · ${p.context_window_tokens.toLocaleString("en-US")}-token context`
+                  ? ` · ${p.context_window_tokens.toLocaleString()}-token context`
                   : "";
               return (
                 <ConnRow

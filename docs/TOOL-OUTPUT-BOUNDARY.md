@@ -108,10 +108,10 @@ Message accounting includes ordinary text, tool result text/errors/media,
 assistant tool-call inputs, file parts, and per-message/part framing. The active
 Fantasy model supplies the window, so a fallback swap is recalculated against
 the fallback rather than the original model. OpenRouter uses observed or
-catalog metadata. Native providers use the manifest's
-`context_window_tokens`; when omitted, Fleet fails safe at 4,096 for Ollama and
-32,000 for other native/OpenAI-compatible providers rather than assuming the
-OpenRouter 200K fallback.
+catalog metadata. Native providers use the declared `context_window_tokens`
+(the manifest entry's, or an admin-managed row's); when omitted, Fleet fails
+safe at 4,096 for Ollama and 32,000 for other native/OpenAI-compatible
+providers rather than assuming the OpenRouter 200K fallback.
 
 If messages exceed the target, Fleet reduces oldest tool results to 2 KiB
 envelopes, replaces old tool-call inputs with valid JSON recovery sentinels, and
