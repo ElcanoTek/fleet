@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
+import { iconHref } from "@/app/shared/ui/iconHref";
 import { FormFields } from "@/app/shared/ui/FormFields";
 import {
   formInitialValues,
@@ -18,7 +19,7 @@ import {
 function PillIcon({ name, className }: { name: string; className?: string }) {
   return (
     <svg className={className} aria-hidden="true">
-      <use href={`/icons/core-icons.svg#${name}`} />
+      <use href={iconHref(name)} />
     </svg>
   );
 }

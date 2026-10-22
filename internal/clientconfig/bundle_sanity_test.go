@@ -16,16 +16,21 @@ var spriteSymbolRe = regexp.MustCompile(`<symbol\s+id="([^"]+)"`)
 // is the single source of truth for which icon names a bundle may name — the
 // in-repo counterpart to this check is web/src/app/spriteCoverage.test.ts, which
 // covers fleet's own references and the built-in config/default bundle.
+//
+// Two files: Flag's sprite (vendored verbatim) and fleet-icons.svg, which holds
+// the few glyphs Flag does not carry yet (web/src/app/shared/ui/iconHref.ts
+// routes those ids there). A name in either renders.
 func spriteSymbolIDs(t *testing.T) map[string]bool {
 	t.Helper()
-	const sprite = "../../web/public/icons/core-icons.svg"
-	svg, err := os.ReadFile(sprite)
-	if err != nil {
-		t.Fatalf("read icon sprite %s: %v", sprite, err)
-	}
 	ids := map[string]bool{}
-	for _, m := range spriteSymbolRe.FindAllStringSubmatch(string(svg), -1) {
-		ids[m[1]] = true
+	for _, sprite := range []string{"../../web/public/icons/core-icons.svg", "../../web/public/icons/fleet-icons.svg"} {
+		svg, err := os.ReadFile(sprite)
+		if err != nil {
+			t.Fatalf("read icon sprite %s: %v", sprite, err)
+		}
+		for _, m := range spriteSymbolRe.FindAllStringSubmatch(string(svg), -1) {
+			ids[m[1]] = true
+		}
 	}
 	if len(ids) < 40 {
 		// A sprite that parsed to (almost) nothing would make the icon check
@@ -178,7 +183,7 @@ func TestRealBundleSanity(t *testing.T) {
 								continue
 							}
 							if !ids[icon] {
-								t.Errorf("%s %q icon %q is not a symbol in the sprite — it renders as an empty box; add the glyph to web/public/icons/core-icons.svg", group.kind, id, icon)
+								t.Errorf("%s %q icon %q is not a symbol in the sprite — it renders as an empty box; add the glyph to Flag's sprite (until then web/public/icons/fleet-icons.svg)", group.kind, id, icon)
 							}
 						}
 					}

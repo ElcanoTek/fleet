@@ -98,3 +98,6 @@ internal/acpingress/data/
 # would land the repo inside itself. Only the worktrees dir is ignored — the rest
 # of `.claude/` (skills, settings) stays tracked.
 .claude/worktrees/
+
+# The flag-drift workflow checks ElcanoTek/flag out here (.github/workflows/flag-drift.yml).
+/.flag/

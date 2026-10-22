@@ -1,3 +1,4 @@
+import { FLEET_SPRITE_IDS } from "./shared/ui/iconHref";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -39,12 +40,21 @@ import { describe, expect, it } from "vitest";
 
 const APP_DIR = join(import.meta.dirname ?? __dirname);
 const SPRITE = join(APP_DIR, "..", "..", "public", "icons", "core-icons.svg");
+// fleet's own glyphs, the ones Flag's vendored sprite does not carry yet
+// (shared/ui/iconHref.ts routes FLEET_SPRITE_IDS there).
+const FLEET_SPRITE = join(APP_DIR, "..", "..", "public", "icons", "fleet-icons.svg");
 const DEFAULT_MANIFEST = join(APP_DIR, "..", "..", "..", "config", "default", "manifest.yaml");
 
-/** Symbol ids the sprite actually defines. */
-function spriteIds(): Set<string> {
-  const svg = readFileSync(SPRITE, "utf8");
+function idsIn(path: string): Set<string> {
+  const svg = readFileSync(path, "utf8");
   return new Set(Array.from(svg.matchAll(/<symbol\s+id="([^"]+)"/g), (m) => m[1]));
+}
+
+/** Symbol ids the two sprites actually define, each where iconHref looks. */
+function spriteIds(): Set<string> {
+  const core = idsIn(SPRITE);
+  const fleet = idsIn(FLEET_SPRITE);
+  return new Set([...[...core].filter((id) => !FLEET_SPRITE_IDS.has(id)), ...[...fleet].filter((id) => FLEET_SPRITE_IDS.has(id))]);
 }
 
 /**
@@ -148,12 +158,19 @@ describe("core-icons sprite coverage", () => {
       .toEqual([]);
   });
 
+  it("fleet's own sprite holds exactly the ids iconHref routes to it, none Flag already has", () => {
+    const fleet = idsIn(FLEET_SPRITE);
+    expect([...fleet].sort()).toEqual([...FLEET_SPRITE_IDS].sort());
+    // Once Flag ships a glyph, it must leave fleet's sprite (and FLEET_SPRITE_IDS).
+    expect([...fleet].filter((id) => idsIn(SPRITE).has(id))).toEqual([]);
+  });
+
   it("every referenced icon name is a symbol in the sprite", () => {
     const missing = [...new Set(refs.filter((r) => !ids.has(r.name)).map((r) => r.where))].sort();
     expect(
       missing,
       `these render an empty icon box — add the glyph to ` +
-        `web/public/icons/core-icons.svg: ${missing.join(", ")}`,
+        `Flag's sprite upstream (or, until then, web/public/icons/fleet-icons.svg): ${missing.join(", ")}`,
     ).toEqual([]);
   });
 });

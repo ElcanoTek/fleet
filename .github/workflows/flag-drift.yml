@@ -1,0 +1,32 @@
+# Weekly: is our vendored copy of the Flag design system behind ElcanoTek/flag?
+# Shared verbatim by every Elcano repo (see AGENTS.md "Elcano frontend standard").
+# The PR gate is scripts/stack-check.sh (offline, hand-edit detection); this
+# job only reports upstream changes. Fix a red run with
+# `scripts/flag-sync.sh sync ../flag` in a PR, rendering the UI in both themes.
+name: Flag drift
+
+on:
+  schedule:
+    - cron: "17 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  flag-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out ElcanoTek/flag (main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ElcanoTek/flag
+          path: .flag
+          persist-credentials: false
+      - name: Compare flag.lock with flag main
+        run: |
+          set -o pipefail
+          scripts/flag-sync.sh status .flag 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"

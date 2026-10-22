@@ -1,10 +1,5 @@
 /* Flag brand faces — the ONE font sheet. Load this and nothing else.
  *
- * Vendored copy of design-system/fonts/fonts.css from ElcanoTek/flag. Keep it
- * byte-comparable to that source apart from this provenance note and the doc
- * links at the bottom of this comment, so a drift between the two repos is
- * visible in a plain diff. globals.css imports it; nothing else should.
- *
  * Elcano ships exactly two typefaces, everywhere, in every product:
  *
  *   Nebula Sans  — UI, body, headings          (--font-brand)
@@ -31,9 +26,7 @@
  * Both licences REQUIRE the licence text to travel with the binaries. Copy
  * ./nebula-sans/OFL.txt and ./hack/LICENSE.md wherever you copy the fonts.
  *
- * The policy (why exactly two faces, why complete builds) lives in flag's
- * design-system/FONTS.md. Fleet's own type scale and the tokens that read
- * these three variables are documented in src/app/DESIGN.md.
+ * See Flag's design-system/FONTS.md for the policy and design-system/TOKENS.md for the type scale.
  */
 
 /* ── Nebula Sans ─────────────────────────────────────────────────────────
@@ -96,7 +89,7 @@
  *
  * These are the FULL builds (1548 codepoints, incl. Greek and Cyrillic), not
  * the `-subset` files also present in the upstream package (386 codepoints,
- * no Greek or Cyrillic). See ../FONTS.md "Font files must be complete".
+ * no Greek or Cyrillic). See Flag's design-system/FONTS.md "Font files must be complete".
  */
 
 @font-face {
