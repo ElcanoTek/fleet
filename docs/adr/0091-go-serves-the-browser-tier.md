@@ -95,7 +95,10 @@ listener (`X-Chat-Server-Token` + `X-User-Email`) or the orchestrator
   fleet-upgrade.
   `fleet-web.env` and the `fleet-web` user are left for the operator to
   delete. `fleet doctor` performs the same retirement on a box updated by
-  hand and repairs a missing `APP_SESSION_SECRET`.
+  hand and repairs a missing `APP_SESSION_SECRET`. Every path keeps that
+  order — the old tier's files go only after fleet is up — and a bootstrap
+  re-run whose restart fails restores the old tier and exits non-zero instead
+  of carrying on (`fleet_cutover_web_tier`).
 - **Upgrade path, Kubernetes.** The chart has no `web` Deployment; the fleet
   pod exposes the web port and the Ingress points at it. A values file that
   still sets `web.enabled=true` fails to render with the steps to take

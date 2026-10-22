@@ -98,15 +98,18 @@ fleet_web_tier_present() {
   command -v systemctl >/dev/null 2>&1 && systemctl cat fleet-web.service >/dev/null 2>&1
 }
 
-# The retirement is split so a caller with a rollback path can undo it:
+# The retirement is split so it is never final before the new process is up:
 #   fleet_stop_web_tier      stop + disable the unit, keep every file
 #   fleet_restore_web_tier   re-enable + start it (only if this run stopped it)
 #   fleet_remove_web_tier    delete the unit, drop-in, shim and Next build
-#   fleet_retire_web_tier    stop + remove, for callers with nothing to roll
-#                            back to (doctor, a fresh bootstrap)
+#   fleet_cutover_web_tier   stop, restart fleet, and remove only once fleet
+#                            is active — else restore; bootstrap and doctor
 # update.sh and fleet-upgrade.sh stop the tier before fleet restarts onto its
 # port, and remove it only once the new process is healthy; a failed restart
 # (and fleet-upgrade's rollback to the old binary) brings the old UI back.
+# Nothing removes the tier before that point: there is deliberately no
+# stop-and-remove-in-one helper (#1838 — bootstrap used one after a restore and
+# deleted the tier it had just brought back).
 
 # FLEET_WEB_TIER_STOPPED is 1 once fleet_stop_web_tier stopped a running or
 # enabled unit in this process — what fleet_restore_web_tier undoes.
@@ -140,12 +143,6 @@ fleet_restore_web_tier() {
   else
     warn "could not restart fleet-web — run: sudo systemctl enable --now fleet-web"
   fi
-}
-
-# fleet_retire_web_tier [SRC_DIR] — stop, then remove (see above).
-fleet_retire_web_tier() {
-  fleet_stop_web_tier || return 1
-  fleet_remove_web_tier "${1:-}"
 }
 
 # fleet_remove_web_tier [SRC_DIR] — remove the (stopped) unit, its drop-in
@@ -183,4 +180,34 @@ fleet_remove_web_tier() {
     info "the fleet-web system user is no longer used; remove it with: userdel fleet-web"
   fi
   return 0
+}
+
+# fleet_web_tier_wait_active SERVICE — 0 once SERVICE is active, polling for
+# up to FLEET_WEB_TIER_READY_WAIT seconds (default 15). fleet.service is
+# Type=notify: "active" means READY=1, sent once every listener (the web UI's
+# included) is bound and the databases are migrated.
+fleet_web_tier_wait_active() {
+  local i
+  for ((i = 0; i < ${FLEET_WEB_TIER_READY_WAIT:-15}; i++)); do
+    systemctl is-active --quiet "$1" 2>/dev/null && return 0
+    sleep 1
+  done
+  systemctl is-active --quiet "$1" 2>/dev/null
+}
+
+# fleet_cutover_web_tier SERVICE SRC_DIR — move the web UI from the retired
+# tier to fleet in the one safe order: stop the old unit (it holds fleet's
+# port), restart SERVICE, and only once SERVICE is active remove the old
+# tier's files. If SERVICE does not come up, the old tier is restarted (when
+# this process stopped it) and 1 is returned; the caller must then stop with a
+# non-zero exit — never go on to report success or touch the tier again.
+fleet_cutover_web_tier() {
+  local svc="$1" src="${2:-}"
+  fleet_stop_web_tier || true
+  if systemctl restart "$svc" >/dev/null 2>&1 && fleet_web_tier_wait_active "$svc"; then
+    fleet_remove_web_tier "$src" || true
+    return 0
+  fi
+  fleet_restore_web_tier
+  return 1
 }

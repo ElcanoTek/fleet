@@ -1591,17 +1591,11 @@ else
   # before fleet restarts or the new listener cannot bind.
   # Stopped and disabled here, removed only once fleet is back up: if the new
   # binary fails to start, the old tier's files are still there to restore.
+  # update.sh has no rollback of the binary, so on a failure the old tier is
+  # NOT restarted (it would hold :3000 against the new fleet, which systemd
+  # keeps retrying); it stays stopped with its files intact, and the run stops.
   fleet_stop_web_tier || true
-  systemctl restart "$SERVICE_NAME" || die "systemctl restart ${SERVICE_NAME} failed — journalctl -u ${SERVICE_NAME} -n 50"
-  # Brief health check on the unit state.
-  healthy=0
-  for _ in 1 2 3 4 5 6 7 8; do
-    if [[ "$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)" == "active" ]]; then
-      healthy=1; break
-    fi
-    sleep 1
-  done
-  if [[ "$healthy" == "1" ]]; then
+  if systemctl restart "$SERVICE_NAME" && FLEET_WEB_TIER_READY_WAIT="${FLEET_WEB_TIER_READY_WAIT:-8}" fleet_web_tier_wait_active "$SERVICE_NAME"; then
     ok "${SERVICE_NAME} is active"
     fleet_remove_web_tier "$SRC_DIR" || true
   else

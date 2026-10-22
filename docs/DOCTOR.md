@@ -141,8 +141,10 @@ Division of labor across the three health verbs:
   tier was retired by [ADR-0091](adr/0091-go-serves-the-browser-tier.md): the
   fleet binary serves the web UI on the port that unit held, so while it is
   installed (and running) fleet's web listener cannot bind. This endpoint only
-  reports it; `sudo fleet doctor` retires it (stop, disable, remove the unit,
-  drop-in, start shim and `/opt/fleet/web`), as `fleet update` does on upgrade.
+  reports it; `sudo fleet doctor` retires it as `fleet update` does on upgrade:
+  stop and disable it, restart fleet, and only once fleet is active remove the
+  unit, drop-in, start shim and `/opt/fleet/web`. If fleet does not come up,
+  the old tier is restarted and the run fails. `--no-restart` leaves it alone.
 
 - **Disk hygiene: reclaim what no timer can reach** (step 7). A sweep of
   five production boxes found the same waste on every one: 2–6 GiB of

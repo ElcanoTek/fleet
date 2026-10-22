@@ -165,6 +165,7 @@ n_ok=0 n_fixed=0 n_warn=0 n_fail=0
 restart_needed=0
 podman_recheck=0
 stale_pause=0 # step 3 found a stale pause process; step 6 holds its restart
+web_tier_cutover=0 # step 4 stopped the retired web tier; step 6 removes or restores it
 
 pass()  { printf '  %s✓%s %s\n' "$c_green" "$c_reset" "$*"; n_ok=$((n_ok+1)); }
 fixed() { printf '  %s↻%s %s\n' "$c_cyan" "$c_reset" "$*"; n_fixed=$((n_fixed+1)); }
@@ -789,14 +790,19 @@ else
   # itself on the port that unit held (127.0.0.1:3000), so a leftover
   # fleet-web.service is not just dead weight: while it runs, fleet's web
   # listener cannot bind and fleet exits. update.sh retires it on upgrade; this
-  # covers a box that was updated by hand. fleet_retire_web_tier stops,
-  # disables and removes the unit, its drop-in, start shim and the deployed
-  # Next build (never /etc/fleet/fleet-web.env, which holds secrets).
+  # covers a box that was updated by hand. Only STOPPED here (reversibly, so
+  # step 6 can start fleet on the freed port); step 6's restart removes its
+  # unit, drop-in, start shim and Next build once fleet is active, or restarts
+  # it if fleet does not come up (#1838). Never /etc/fleet/fleet-web.env, which
+  # holds secrets. A run that will not restart fleet leaves it alone.
   if fleet_web_tier_present; then
     if [[ "$CHECK_ONLY" == "1" ]]; then
       fail "the retired Next.js web tier (fleet-web.service) is still installed — fleet serves the web UI itself on its port now (ADR-0091); a doctor run without --check retires it"
-    elif fleet_retire_web_tier "$SRC_DIR"; then
-      fixed "retired the Next.js web tier (fleet-web) — fleet serves the web UI on 127.0.0.1:3000"
+    elif [[ "$NO_RESTART" == "1" || "${stale_pause:-0}" == "1" ]]; then
+      advise "the retired Next.js web tier (fleet-web.service) is still installed — it is retired together with a ${SERVICE_NAME} restart, which this run will not do; re-run doctor without --no-restart once the restart is possible"
+    else
+      fleet_stop_web_tier || true
+      web_tier_cutover=1
       restart_needed=1
     fi
   fi
@@ -1097,10 +1103,20 @@ else
     # Branch on the restart's own result: reporting "restarted" (and counting
     # a fix) when the restart failed let a box end "✓ repaired" while the OLD
     # process was still the one answering /healthz.
-    if systemctl restart "${SERVICE_NAME}.service" 2>/dev/null; then
+    # With the retired web tier stopped in step 4, fleet must also reach
+    # active (READY=1: every listener bound) before that tier is removed.
+    if systemctl restart "${SERVICE_NAME}.service" 2>/dev/null \
+       && { [[ "$web_tier_cutover" == "0" ]] || fleet_web_tier_wait_active "${SERVICE_NAME}.service"; }; then
       fixed "services restarted to pick up fixes"
+      if [[ "$web_tier_cutover" == "1" ]] && fleet_remove_web_tier "$SRC_DIR"; then
+        fixed "retired the Next.js web tier (fleet-web) — fleet serves the web UI on 127.0.0.1:3000"
+      fi
     else
       fail "${SERVICE_NAME}.service failed to restart after fixes — journalctl -u ${SERVICE_NAME} -n 50"
+      if [[ "$web_tier_cutover" == "1" ]]; then
+        fleet_restore_web_tier
+        fail "the retired Next.js web tier (fleet-web) was NOT removed (restarted if it had been running) — fix ${SERVICE_NAME}, then re-run doctor to retire it"
+      fi
     fi
   elif [[ "$restart_needed" == "1" && "$NO_RESTART" == "1" ]]; then
     advise "fixes applied that want a restart — run: sudo fleet restart"

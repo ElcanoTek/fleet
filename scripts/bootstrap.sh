@@ -579,6 +579,18 @@ build_fleet_binary() {
   return 1
 }
 
+# cutover_web_tier_or_die — fleet_cutover_web_tier (scripts/lib/web-tier.sh)
+# for this box, ending the run on failure. By then the old Next.js tier is
+# restored (when it was running) and its files are intact; carrying on would
+# retire it again and report a success that leaves the browser UI down.
+cutover_web_tier_or_die() {
+  fleet_cutover_web_tier "$SERVICE_NAME" "$REPO_ROOT" && return 0
+  local kept="left installed"
+  systemctl is-active --quiet fleet-web.service 2>/dev/null && kept="restarted, so the browser UI keeps working"
+  die "${SERVICE_NAME} did not come up on the new binary — the old web tier (fleet-web) was ${kept}; nothing was removed.
+  Find the cause: journalctl -u ${SERVICE_NAME} -n 50 — then re-run this bootstrap, which retires the old tier once ${SERVICE_NAME} starts."
+}
+
 # configure_web_tier — the browser UI's settings in fleet.env, and (with
 # --domain) a Caddy TLS front. The fleet binary serves the UI itself on
 # FLEET_WEB_ADDR (default 127.0.0.1:3000, ADR-0091); this only supplies what
@@ -641,10 +653,16 @@ configure_web_tier() {
     ok "web sign-in configured in ${ENV_FILE} (origin ${origin}; email+password login only)"
   fi
 
-  # The retired Next.js unit held the port fleet now serves on; a re-run on a
-  # box provisioned before ADR-0091 retires it before the restart below.
-  fleet_retire_web_tier "$REPO_ROOT" || true
-  systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+  # Restart fleet so it reads the settings above. On a re-run over a box
+  # provisioned before ADR-0091 the retired Next.js unit may still hold fleet's
+  # port: the cutover stops it, restarts fleet and removes it only once fleet
+  # is up — a failure restores it and ends the run (#1838).
+  if fleet_web_tier_present; then
+    cutover_web_tier_or_die
+  elif systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+    systemctl restart "$SERVICE_NAME" >/dev/null 2>&1 && fleet_web_tier_wait_active "$SERVICE_NAME" \
+      || die "${SERVICE_NAME} did not come back up after the web sign-in settings changed — journalctl -u ${SERVICE_NAME} -n 50"
+  fi
   ok "fleet serves the web UI on 127.0.0.1:3000 (FLEET_WEB_ADDR)"
 
   if [[ -z "$WEB_DOMAIN" ]]; then
@@ -1498,15 +1516,11 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
     fi
     # The old web tier was stopped above: an already-running fleet is still
     # the OLD binary (enable --now does not restart it), which serves no UI —
-    # restart it onto the new one, then remove the old tier only if that
-    # worked; otherwise bring the old tier back.
-    if [[ "$FLEET_WEB_TIER_STOPPED" == "1" ]]; then
-      if systemctl restart "${SERVICE_NAME}" >/dev/null 2>&1 && systemctl is-active --quiet "${SERVICE_NAME}"; then
-        fleet_remove_web_tier "$REPO_ROOT" || true
-      else
-        warn "${SERVICE_NAME} did not restart on the new binary — restoring the old web tier"
-        fleet_restore_web_tier
-      fi
+    # restart it onto the new one and remove the old tier only once it is up.
+    # If it does not come up, the old tier is restored and bootstrap STOPS
+    # here: nothing later may retire it again or report success (#1838).
+    if fleet_web_tier_present; then
+      cutover_web_tier_or_die
     fi
     if [[ "$ENABLE_WEB" != "1" ]]; then
       info "web UI: fleet serves it on 127.0.0.1:3000; re-run with --enable-web [--domain <fqdn>] to set up sign-in"
