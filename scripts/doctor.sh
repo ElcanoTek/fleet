@@ -964,7 +964,8 @@ if [[ -f "$CADDYFILE" ]]; then
       fail "$CADDYFILE is fleet-managed but has no site block — rerun: sudo fleet bootstrap --enable-web --domain <fqdn>"
     else
       caddy_rendered="$(render_fleet_caddyfile "$caddy_domain" "$(caddyfile_acme_email "$CADDYFILE")" \
-        "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)")"
+        "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)" \
+        "$(caddy_web_upstream "$(env_get FLEET_WEB_ADDR)")")"
       if diff -q <(caddyfile_functional_body "$CADDYFILE") <(printf '%s\n' "$caddy_rendered" | caddyfile_functional_body) >/dev/null 2>&1; then
         pass "$CADDYFILE matches the shipped layout for ${caddy_domain} (/v1 API + webhooks routed to the Go backends)"
       elif [[ "$CHECK_ONLY" == "1" ]]; then

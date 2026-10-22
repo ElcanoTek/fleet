@@ -1155,10 +1155,10 @@ func TestFleetUpgradeRetiresTheWebTier(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(body)
-	retire := strings.Index(script, "\n  fleet_retire_web_tier ")
+	retire := strings.Index(script, "\n  fleet_stop_web_tier ")
 	restart := strings.Index(script, "\n  if ! restart_service; then")
 	if retire < 0 || restart < 0 || retire > restart {
-		t.Errorf("fleet_retire_web_tier (at %d) must run before the upgrade restart (at %d)", retire, restart)
+		t.Errorf("fleet_stop_web_tier (at %d) must run before the upgrade restart (at %d)", retire, restart)
 	}
 	// And the banner must not claim health the run never measured.
 	if !strings.Contains(script, `HEALTH_VERIFIED="skipped"`) || !strings.Contains(script, "health NOT verified") {

@@ -85,9 +85,14 @@ listener (`X-Chat-Server-Token` + `X-User-Email`) or the orchestrator
 - **Upgrade path, single box.** `fleet update` builds the new binary,
   copies the browser keys (`APP_SESSION_SECRET`, `AUTH_*`, `FLEET_OIDC_*`,
   `CATWALK_URL`, a non-default bind as `FLEET_WEB_ADDR`) from
-  `/etc/fleet/fleet-web.env` into `fleet.env` when absent, then stops,
-  disables and removes `fleet-web.service` (unit, drop-in, start shim and
-  `/opt/fleet/web`) before restarting fleet, which binds :3000 itself.
+  `/etc/fleet/fleet-web.env` into `fleet.env` when absent, then stops and
+  disables `fleet-web.service` before restarting fleet, which binds :3000
+  itself, and removes the old unit, drop-in, start shim and `/opt/fleet/web`
+  only once fleet is back up (`fleet-upgrade.sh` waits for its readiness
+  gate, and its rollback to the previous binary restarts the old tier). The
+  key list and the stop/remove/restore steps live in one place,
+  `scripts/lib/web-tier.sh`, shared by update, bootstrap, doctor and
+  fleet-upgrade.
   `fleet-web.env` and the `fleet-web` user are left for the operator to
   delete. `fleet doctor` performs the same retirement on a box updated by
   hand and repairs a missing `APP_SESSION_SECRET`.

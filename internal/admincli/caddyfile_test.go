@@ -593,3 +593,38 @@ func TestBootstrapDryRunNonLoopbackUpstreamWritesNothing(t *testing.T) {
 		t.Errorf("non-loopback upstream: plan must not write FLEET_TRUSTED_PROXIES\n--- output ---\n%s", out)
 	}
 }
+
+// TestCaddyfileFollowsTheWebListener — the browser upstream follows
+// FLEET_WEB_ADDR (ADR-0091): a migrated non-default bind used to leave Caddy
+// proxying to 127.0.0.1:3000 while fleet listened elsewhere. A wildcard bind
+// is dialled on loopback; "off" and empty fall back to the default.
+func TestCaddyfileFollowsTheWebListener(t *testing.T) {
+	for in, want := range map[string]string{
+		"":               "",
+		"off":            "",
+		"127.0.0.1:4100": "127.0.0.1:4100",
+		"0.0.0.0:4100":   "127.0.0.1:4100",
+		"[::]:4100":      "127.0.0.1:4100",
+		":4100":          "127.0.0.1:4100",
+		"10.0.0.5:3000":  "10.0.0.5:3000",
+	} {
+		if got := strings.TrimSpace(renderCaddyfile(t, "caddy_web_upstream", in)); got != want {
+			t.Errorf("caddy_web_upstream(%q) = %q, want %q", in, got, want)
+		}
+	}
+	out := renderCaddyfile(t, "render_fleet_caddyfile", "fleet.example.com", "", "", "", "127.0.0.1:4100")
+	if !strings.Contains(out, "reverse_proxy 127.0.0.1:4100") || strings.Contains(out, "127.0.0.1:3000") {
+		t.Fatalf("web upstream not followed:\n%s", out)
+	}
+	// Every place that renders the fleet-managed file passes it.
+	root := repoRootFromTest(t)
+	for _, s := range []string{"bootstrap.sh", "update.sh", "doctor.sh"} {
+		body, err := os.ReadFile(filepath.Join(root, "scripts", s))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), `"$(caddy_web_upstream "$(env_get FLEET_WEB_ADDR`) {
+			t.Errorf("%s renders the Caddyfile without FLEET_WEB_ADDR", s)
+		}
+	}
+}

@@ -1439,7 +1439,8 @@ if command -v systemctl >/dev/null 2>&1; then
       warn "$CADDYFILE is fleet-managed but has no site block — rerun: sudo fleet bootstrap --enable-web --domain <fqdn>"
     else
       caddy_rendered="$(render_fleet_caddyfile "$caddy_domain" "$(caddyfile_acme_email "$CADDYFILE")" \
-        "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" "$(env_get FLEET_ORCHESTRATOR_ADDR "$backend_env_file")")"
+        "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" "$(env_get FLEET_ORCHESTRATOR_ADDR "$backend_env_file")" \
+        "$(caddy_web_upstream "$(env_get FLEET_WEB_ADDR "$backend_env_file")")")"
       caddy_diff="$(diff -u --label "$CADDYFILE (installed)" --label "scripts/lib/caddyfile.sh (shipped)" \
         <(caddyfile_functional_body "$CADDYFILE") <(printf '%s\n' "$caddy_rendered" | caddyfile_functional_body) 2>/dev/null || true)"
       if [[ -n "$caddy_diff" ]]; then
@@ -1599,7 +1600,9 @@ else
   # The web UI is served by the fleet binary now (ADR-0091), on the port the
   # retired Next.js unit held (127.0.0.1:3000), so that unit must be gone
   # before fleet restarts or the new listener cannot bind.
-  fleet_retire_web_tier "$SRC_DIR" || true
+  # Stopped and disabled here, removed only once fleet is back up: if the new
+  # binary fails to start, the old tier's files are still there to restore.
+  fleet_stop_web_tier || true
   systemctl restart "$SERVICE_NAME" || die "systemctl restart ${SERVICE_NAME} failed — journalctl -u ${SERVICE_NAME} -n 50"
   # Brief health check on the unit state.
   healthy=0
@@ -1611,7 +1614,11 @@ else
   done
   if [[ "$healthy" == "1" ]]; then
     ok "${SERVICE_NAME} is active"
+    fleet_remove_web_tier "$SRC_DIR" || true
   else
+    if [[ "$FLEET_WEB_TIER_STOPPED" == "1" ]]; then
+      warn "the old web tier (fleet-web) was stopped but NOT removed; after rolling fleet back to the previous binary, restore it with: sudo systemctl enable --now fleet-web"
+    fi
     die "${SERVICE_NAME} did not come back up — journalctl -u ${SERVICE_NAME} -n 50"
   fi
 

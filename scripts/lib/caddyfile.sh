@@ -233,6 +233,21 @@ caddyfile_routes_api() {
   grep -qE '(^|[[:space:]])/v1(/\*)?([[:space:]]|$)' "$f" && grep -qF "$orch" "$f"
 }
 
+# caddy_web_upstream FLEET_WEB_ADDR — the address Caddy dials for the web
+# listener, from the value fleet binds (ADR-0091): empty or "off"/"none"/
+# "disabled"/"0" yields "" (the renderer's 127.0.0.1:3000 default); a
+# wildcard bind (0.0.0.0:P, [::]:P, :P) is dialled on loopback; anything else
+# is used as-is. Without it a migrated non-default bind (fleet-web.env's
+# FLEET_WEB_HOST/PORT, now FLEET_WEB_ADDR) left Caddy proxying to :3000.
+caddy_web_upstream() {
+  local a="${1:-}"
+  case "${a,,}" in
+    ""|off|none|disabled|0) return 0 ;;
+    0.0.0.0:*|"[::]:"*|:*) printf '127.0.0.1:%s' "${a##*:}" ;;
+    *) printf '%s' "$a" ;;
+  esac
+}
+
 # render_fleet_caddyfile DOMAIN [ACME_EMAIL] [CHAT_ADDR] [ORCH_ADDR] [WEB_ADDR]
 # Print the complete fleet-managed Caddyfile (marker first) to stdout. Keep the
 # body in lockstep with deploy/Caddyfile — the test compares their functional

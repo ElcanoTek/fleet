@@ -184,6 +184,11 @@ if [[ "$NO_BUILD" == "1" ]]; then
   if [[ "$DRY_RUN" != "1" && ! -x "$SRC_DIR/fleet" ]]; then
     die "--no-build but ${SRC_DIR}/fleet is missing — build first (make build)"
   fi
+  # A binary built without `make web` serves no UI (pages answer 503). Check
+  # it BEFORE the live binary is touched, the same check `make build` ends with.
+  if [[ "$DRY_RUN" != "1" ]] && ! "$SRC_DIR/fleet" version --web >/dev/null 2>&1; then
+    die "--no-build but ${SRC_DIR}/fleet carries no web bundle (fleet version --web) — rebuild with: make build; live binaries left in place"
+  fi
 elif [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would run: (cd ${SRC_DIR} && make build) on the node web/.nvmrc names  → ${SRC_DIR}/fleet with the web UI embedded"
 else
@@ -300,6 +305,9 @@ rollback() {
   fi
   if restart_service; then
     ok "restarted ${SERVICE_NAME} on the previous binary"
+    # The previous binary may predate ADR-0091 and serve no UI: bring back
+    # the web tier this run stopped.
+    fleet_restore_web_tier
   else
     warn "rollback restart failed — journalctl -u ${SERVICE_NAME} -n 50"
   fi
@@ -312,14 +320,16 @@ info "TimeoutStopSec in the unit must exceed that grace so systemd waits out the
 if ! command -v systemctl >/dev/null 2>&1; then
   warn "systemctl not found — restart ${SERVICE_NAME} manually (no systemd on this box)."
 elif [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would retire the Next.js web tier (fleet-web.service) first when it is still installed — fleet serves the web UI on its port (ADR-0091)"
+  info "[dry-run] would retire the Next.js web tier (fleet-web.service) first when it is still installed — fleet serves the web UI on its port (ADR-0091): stop + disable it before the restart, remove its files only after the readiness gate passes, and restart it on rollback"
   info "[dry-run] would run: systemctl restart ${SERVICE_NAME}  (SIGTERM → graceful drain → exit, then start new)"
 elif ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
   warn "${SERVICE_NAME}.service is not installed — start fleet manually or run scripts/bootstrap.sh --enable-service."
 else
   # The new binary serves the web UI on 127.0.0.1:3000 — the port the retired
-  # Next.js unit (fleet-web) held — so that unit goes first (ADR-0091).
-  fleet_retire_web_tier "$SRC_DIR" || true
+  # Next.js unit (fleet-web) held — so that unit stops first (ADR-0091). Only
+  # STOPPED here: its files are removed after the readiness gate passes, and a
+  # rollback to the previous binary restarts it (fleet_restore_web_tier).
+  fleet_stop_web_tier || true
   if ! restart_service; then
     warn "systemctl restart ${SERVICE_NAME} failed"
     rollback
@@ -354,6 +364,8 @@ else
   if [[ "$healthy" == "1" ]]; then
     ok "new process is ready (${HEALTH_URL} → 2xx)"
     HEALTH_VERIFIED="yes"
+    # Only now, with the new process ready, is removing the old tier safe.
+    fleet_remove_web_tier "$SRC_DIR" || true
   else
     warn "new process did NOT pass ${HEALTH_URL} within ${HEALTH_TIMEOUT}s"
     rollback

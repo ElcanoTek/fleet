@@ -707,6 +707,7 @@ configure_web_tier() {
   # upstream addresses follow the env file when an operator moved a listener.
   render_fleet_caddyfile "$WEB_DOMAIN" "${FLEET_ACME_EMAIL:-}" \
     "$(env_get FLEET_SERVER_ADDR)" "$(env_get FLEET_ORCHESTRATOR_ADDR)" \
+    "$(caddy_web_upstream "$(env_get FLEET_WEB_ADDR)")" \
     > /etc/caddy/Caddyfile
   if command -v caddy >/dev/null 2>&1 && ! caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
     warn "caddy validate rejected the rendered /etc/caddy/Caddyfile — check: caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile"
@@ -1501,14 +1502,27 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
     fi
     # The binary just installed serves the web UI on 127.0.0.1:3000 — the port
     # the retired Next.js unit (fleet-web) held. On a re-run over a box
-    # provisioned before ADR-0091, retire that unit first or fleet cannot bind.
-    fleet_retire_web_tier "$REPO_ROOT" || true
+    # provisioned before ADR-0091, stop that unit first or fleet cannot bind;
+    # its files go only once fleet is up on the new binary (below).
+    fleet_stop_web_tier || true
     # 3. daemon-reload + enable the backend unit (which serves the web UI too).
     systemctl daemon-reload || warn "systemctl daemon-reload failed"
     if systemctl enable --now "${SERVICE_NAME}" >/dev/null 2>&1; then
       ok "${SERVICE_NAME} enabled + started (services self-migrate on start)"
     else
       warn "could not enable/start ${SERVICE_NAME} — check: journalctl -u ${SERVICE_NAME} -n 50"
+    fi
+    # The old web tier was stopped above: an already-running fleet is still
+    # the OLD binary (enable --now does not restart it), which serves no UI —
+    # restart it onto the new one, then remove the old tier only if that
+    # worked; otherwise bring the old tier back.
+    if [[ "$FLEET_WEB_TIER_STOPPED" == "1" ]]; then
+      if systemctl restart "${SERVICE_NAME}" >/dev/null 2>&1 && systemctl is-active --quiet "${SERVICE_NAME}"; then
+        fleet_remove_web_tier "$REPO_ROOT" || true
+      else
+        warn "${SERVICE_NAME} did not restart on the new binary — restoring the old web tier"
+        fleet_restore_web_tier
+      fi
     fi
     if [[ "$ENABLE_WEB" != "1" ]]; then
       info "web UI: fleet serves it on 127.0.0.1:3000; re-run with --enable-web [--domain <fqdn>] to set up sign-in"
