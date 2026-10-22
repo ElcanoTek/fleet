@@ -131,6 +131,13 @@ type engine struct {
 	resendPrefix     int
 	resendFloorStale bool
 	resendFloorNoted bool
+	// elidedCallKeys holds the identity (callKey) of every call whose result
+	// an elision stubbed, and callsAtElision the ID of every call in the
+	// history when one was made; a later call with an elided identity is a
+	// re-run, and sets elisionStopped for the rest of the run (elisionHeld).
+	elidedCallKeys map[string]bool
+	callsAtElision map[string]bool
+	elisionStopped bool
 	// activeModel is the model the run loop is currently driving — the primary,
 	// or the fallback after a resilience swap. Compaction summaries follow it
 	// (a swapped run must not keep summarizing on a model that just failed or

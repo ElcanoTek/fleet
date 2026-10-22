@@ -829,3 +829,113 @@ func TestRun_Elision_KeepsThePromptCachePrefix(t *testing.T) {
 		t.Fatalf("rewrites %d (pauses %d), stubs %d", rewrites, len(paused), len(stubs))
 	}
 }
+
+// heldEngine is a scheduled engine with elision on and the given run state.
+func heldEngine(t *testing.T, name string, orch *orchestrationState) *engine {
+	t.Helper()
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	e := newMockEngine(t, &namedMockModel{name: name})
+	e.envPrefix = CanonicalEnvPrefix
+	e.requireCompactionOptIn = true
+	e.bindRunUsage(orch)
+	return e
+}
+
+// While the self-audit is pending (asked for, no confirm_audit accepted yet)
+// the run does not elide, and the compaction is the summary: the audit
+// re-reads the evidence elision would stub. Before the audit is asked for,
+// and once it is accepted, elision works as before.
+func TestElideBeforeSummary_HeldWhileTheAuditIsPending(t *testing.T) {
+	orch := newOrchestrationState(NewLogSession(), 0)
+	e := heldEngine(t, "elide-audit", orch)
+	history := elisionHistory(10, 40_000)
+	if _, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000); !ok {
+		t.Fatal("fixture: no elision before the audit is asked for")
+	}
+
+	e = heldEngine(t, "elide-audit", orch)
+	orch.mu.Lock()
+	orch.selfAuditRequested = true
+	orch.mu.Unlock()
+	if _, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000); ok {
+		t.Fatal("elided while the self-audit was pending")
+	}
+
+	orch.mu.Lock()
+	orch.selfAuditConfirmedOnce = true
+	orch.mu.Unlock()
+	if _, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000); !ok {
+		t.Fatal("no elision once the audit was accepted")
+	}
+}
+
+// At the checkpoint, a pending audit sends the run straight to the summary:
+// one resend_budget compaction, no elision event or breadcrumb.
+func TestCheckContextPressure_PendingAuditSummarizesWithoutEliding(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	orch := newOrchestrationState(NewLogSession(), 0)
+	orch.selfAuditRequested = true
+	e := heldEngine(t, "elide-audit-pressure", orch)
+	recordContextMax("elide-audit-pressure", 10_000_000)
+	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
+		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
+	}
+	msgs := elisionHistory(14, 40_000)
+	e.logSession.LastStepPromptTokens = 100_000
+	obs := &payloadObserver{}
+	e.checkContextPressure(context.Background(), msgs, e.model, newStreamSink(obs), false)
+
+	compactions := payloadsOf(obs, evtContextCompacted)
+	if len(compactions) != 1 || compactions[0][evtFieldTrigger] != "resend_budget" {
+		t.Fatalf("want one resend_budget summary and no elision, got %v", compactions)
+	}
+	if crumbs := sessionLines(e.logSession, "[context_elided]"); len(crumbs) != 0 {
+		t.Fatalf("elision breadcrumbs: %v", crumbs)
+	}
+}
+
+// A run that re-runs a call whose result an elision stubbed never elides
+// again: the stub cost it a call. The re-run is matched by tool and
+// arguments, in any key order, and a duplicate the run made before the
+// elision is not a re-run.
+func TestElideBeforeSummary_StopsAfterARerun(t *testing.T) {
+	e := heldEngine(t, "elide-rerun", nil)
+	history := elisionHistory(10, 40_000)
+	// A duplicate of the first call, made before any elision.
+	history = append(history[:2:2], append(elisionExchange("dup", `{"page":"page-a"}`, elisionText(10)), history[2:]...)...)
+	el, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000)
+	if !ok || !slices.Contains(el.stubbedIDs, "page-a") {
+		t.Fatalf("fixture: elided=%t stubbed=%v, want page-a stubbed", ok, el.stubbedIDs)
+	}
+	if e.elisionHeld(el.messages) {
+		t.Fatal("a duplicate made before the elision counted as a re-run")
+	}
+
+	rerun := append(slices.Clone(el.messages), elisionExchange("again", `{ "page" : "page-a" }`, elisionText(40_000))...)
+	if _, ok := e.elideBeforeSummary(rerun, 30_000, true, 30_000, 30_000); ok || !e.elisionStopped {
+		t.Fatalf("elided=%t stopped=%t after the run re-ran a stubbed call", ok, e.elisionStopped)
+	}
+	// It stays off, even for a history the re-run has left.
+	if _, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000); ok {
+		t.Fatal("elision came back after the run had re-run a stubbed call")
+	}
+}
+
+func TestCallKey(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		same bool
+	}{
+		{`{"store_id":"S01","date":"2026-10-21"}`, `{"date": "2026-10-21", "store_id": "S01"}`, true},
+		{`{"store_id":"S01"}`, `{"store_id":"S02"}`, false},
+		{`not json`, `not json`, true},
+		{`not json`, `not  json`, false},
+	} {
+		if got := callKey("fetch", tc.a) == callKey("fetch", tc.b); got != tc.same {
+			t.Errorf("callKey(%q) == callKey(%q): %t, want %t", tc.a, tc.b, got, tc.same)
+		}
+	}
+	if callKey("fetch", `{}`) == callKey("read", `{}`) {
+		t.Error("two tools with the same input share a key")
+	}
+}

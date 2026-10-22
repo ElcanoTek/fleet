@@ -466,6 +466,20 @@ func (o *orchestrationState) auditVerdict() (aborted bool, summary string, execu
 	return o.auditTerminalFailure, o.auditSummary, o.criticalExecutedCount
 }
 
+// selfAuditPending reports whether the run's self-audit has been asked for
+// (by the finish enforcement, or the audit bookkeeping) and no confirm_audit
+// has been accepted yet: the stretch in which the run re-reads its evidence.
+// The resend checkpoint does not elide then (engine.elisionHeld). Nil-safe:
+// false for an engine with no run state.
+func (o *orchestrationState) selfAuditPending() bool {
+	if o == nil {
+		return false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.selfAuditRequested && !o.selfAuditConfirmedOnce
+}
+
 // outstandingCriticalActions renders every declared critical action the run
 // still owes: typed commitments with their record binding, legacy headroom,
 // and audited calls that were blocked and never retried. It exists for the
