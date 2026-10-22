@@ -25,7 +25,7 @@ set -f # stack.conf values are words, never globs
 unset CDPATH
 export LC_ALL=C
 
-STACK_CHECK_VERSION=22
+STACK_CHECK_VERSION=25
 STANDARD_SHA=5b3a1c9dab098277570a37d58366b0802d4378370f9717d48743c386b194bdbb
 ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 CONF="$ROOT/stack.conf"
@@ -180,12 +180,15 @@ sub tags { my ($t, $html) = @_;
     my $p = pos($t);
     if ($t =~ /\G([a-zA-Z][^\s\/>]*)((?:$attr)*+)/gc) {
       my ($name, $as, $end) = (lc $1, $2, pos($t));
+      # XML documents may prefix any element or attribute (svg:script,
+      # x:href): compare local names.
+      $name =~ s/^[^:]*://;
       my %a; while ($as =~ /$nattr/g) { my ($n, $v) = (lc $1, $2 // ""); $v =~ s/^"(.*)"$/$1/s or $v =~ s/^\x27(.*)\x27$/$1/s; push @{$a{$n}}, $v; }
       my $bad = 0;
       for my $n (qw(src poster background data-src lowsrc dynsrc)) { $bad ||= grep { remote_val($_, $html) } @{$a{$n} || []}; }
       for my $n (qw(srcset data-srcset imagesrcset)) { $bad ||= grep { remote_srcset($_, $html) } @{$a{$n} || []}; }
       $bad ||= grep { remote_val($_, $html) } @{$a{data} || []} if $name eq "object";
-      if ($refel{$name}) { for my $n (qw(href xlink:href xlinkhref)) { $bad ||= grep { remote_val($_, $html) } @{$a{$n} || []}; } }
+      if ($refel{$name}) { for my $n (grep { /^(?:[^:]*:)?href$|^xlinkhref$/ } keys %a) { $bad ||= grep { remote_val($_, $html) } @{$a{$n}}; } }
       if ($name eq "link") {
         my @rel = map { lc } map { split " ", ents($_) } @{$a{rel} || []};
         if (grep { !$navrel{$_} } @rel) { $bad ||= grep { remote_val($_, $html) } @{$a{href} || []}; }
@@ -202,21 +205,26 @@ sub tags { my ($t, $html) = @_;
 sub patterns { my ($t, $pre) = @_;
   my $r = qr{["`$Q(]?$sp$pre(?!$lb)$host+};
   my $q = qr{["`$Q]};
+  # A URL object stringifies to its href, so new URL("https://…") (also as
+  # window./globalThis./self.URL) loads the same remote file as the bare string.
+  # Any assignment that can store the URL: = ||= ??= &&= += (not == or =>).
+  my $set = qr{(?:\|\||\?\?|&&|\+)?=(?![=>])};
+  my $nu = qr{(?:\bnew$sp+(?:(?:window|globalThis|self)$sp\.$sp)?URL$sp\($sp)?};
   my @re = (
-    qr{(?:\.(?:src|poster)|(?<!\blocation)\.href|\[$sp$q(?:src|href|srcset|poster)$q$sp\])$sp=(?!=)$sp$r},
-    qr{\.srcset$sp=(?!=)$sp$q(?:[^"`$Q]*,)?\s*$pre(?!$lb)$host+},
-    qr{\bsetAttribute$sp\($sp$q(?:src|href|xlink:href|srcset|poster|data)$q$sp,$sp$r}i,
-    qr{\bsetAttributeNS$sp\(${sp}[^,()]*,$sp$q(?:xlink:)?(?:src|href)$q$sp,$sp$r}i,
-    qr{(?<![\w\$.\-])$q?src$q?$sp:$sp$r},
-    qr{\bnew(?=[\s/])$sp(?:Shared)?Worker$sp\($sp(?:new$sp+URL$sp\($sp)?$r},
-    qr{\bimportScripts$sp\($sp$r},
+    qr{(?:\.(?:src|poster)|(?<!\blocation)\.href|\[$sp$q(?:src|href|srcset|poster)$q$sp\])$sp$set$sp$nu$r},
+    qr{\.srcset$sp$set$sp$q(?:[^"`$Q]*,)?\s*$pre(?!$lb)$host+},
+    qr{\bsetAttribute$sp\($sp$q(?:src|href|xlink:href|srcset|poster|data)$q$sp,$sp$nu$r}i,
+    qr{\bsetAttributeNS$sp\(${sp}[^,()]*,$sp$q(?:xlink:)?(?:src|href)$q$sp,$sp$nu$r}i,
+    qr{(?<![\w\$.\-])$q?src$q?$sp:$sp$nu$r},
+    qr{\bnew(?=[\s/])$sp(?:(?:window|globalThis|self)$sp\.$sp)?(?:Shared)?Worker$sp\($sp$nu$r},
+    qr{\bimportScripts$sp\($sp$nu$r},
     # Constructors and loaders that fetch media or code as soon as they run.
-    qr{\bnew(?=[\s/])${sp}Audio$sp\($sp$r},
-    qr{\.addModule$sp\($sp(?:new$sp+URL$sp\($sp)?$r},
+    qr{\bnew(?=[\s/])$sp(?:(?:window|globalThis|self)$sp\.$sp)?Audio$sp\($sp$nu$r},
+    qr{\.addModule$sp\($sp$nu$r},
     qr{\@import$sp(?:url$sp\()?$sp$r}i,
     qr{(?<![\w.\$])url\($sp$r}i,
     qr{\bimage-set$sp\((?:[^;{}()]|\([^()]*\))*?$q$sp$pre(?!$lb)$host+}i,
-    qr{(?<![\w.\$])import$sp\(?$sp(?:new$sp+URL$sp\($sp)?$r},
+    qr{(?<![\w.\$])import$sp\(?$sp$nu$r},
     qr{(?<![\w.\$])from$sp$r},
   );
   for my $re (@re) { while ($t =~ /$re/g) { hit($&); } }
@@ -241,6 +249,15 @@ for (@ARGV) {
 for d in "${web[@]+"${web[@]}"}"; do
   repo_dir "$d" || { err "stack.conf: web dir $d must be a path inside the repo"; continue; }
   if [ ! -d "$ROOT/$d" ] || [ -L "$ROOT/$d" ]; then err "stack.conf: web dir $d does not exist (or is a symlink)"; continue; fi
+  # A symlinked ancestor hides the files from git ls-files while a server
+  # still serves them: every component must be a real directory.
+  p="$ROOT"; anc=""
+  IFS=/ read -r -a segs <<< "$d"
+  for seg in "${segs[@]}"; do
+    [ -n "$seg" ] && [ "$seg" != . ] || continue
+    p="$p/$seg"; [ -L "$p" ] && { anc="${p#"$ROOT"/}"; break; }
+  done
+  if [ -n "$anc" ]; then err "stack.conf: web dir $d is under a symlink ($anc)"; continue; fi
   list="$(mktemp)"; scan="$(mktemp)"
   if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     lister=(git -C "$ROOT" -c core.quotePath=false --literal-pathspecs ls-files -z --cached --others --exclude-standard -- "$d")

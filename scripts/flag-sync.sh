@@ -46,7 +46,7 @@ set -f # lock paths may contain glob characters ([ ] * ?); never expand them
 unset CDPATH GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
 export LC_ALL=C GIT_LITERAL_PATHSPECS=1
 
-FLAG_SYNC_VERSION=13
+FLAG_SYNC_VERSION=16
 ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 LOCK="$ROOT/flag.lock"
 
@@ -110,6 +110,28 @@ repo_unsafe() {
 }
 
 need_repo_path() { local r; if r="$(repo_unsafe "$1" "$2")"; then die "refusing to touch $1: $r"; fi; }
+
+# need_plan_path REPO_PATH DELETES: like need_repo_path for a file apply will
+# install, except that an obstacle the deletes remove first is fine: a parent
+# that is a locked file being deleted (flag turned that file into a directory),
+# or a directory whose files are all being deleted (flag turned it into a file).
+need_plan_path() {
+  local r x f
+  r="$(repo_unsafe "$1" file)" || return 0
+  case "$r" in
+    *" is not a directory")
+      x="${r% is not a directory}"
+      grep -qxF -- "$x" "$2" && [ -f "$ROOT/$x" ] && [ ! -L "$ROOT/$x" ] && return 0 ;;
+    "not a regular file")
+      if [ -d "$ROOT/$1" ] && [ ! -L "$ROOT/$1" ]; then
+        while IFS= read -r -d '' f; do
+          { [ -f "$f" ] && [ ! -L "$f" ] && grep -qxF -- "${f#"$ROOT"/}" "$2"; } || die "refusing to touch $1: it is a directory holding ${f#"$ROOT"/}, which is not being replaced"
+        done < <(find "$ROOT/$1" -mindepth 1 ! -type d -print0)
+        return 0
+      fi ;;
+  esac
+  die "refusing to touch $1: $r"
+}
 
 # ENTRIES: the validated lock, one normalized "kind a b c" record per line.
 # Every command reads it with a plain redirect, so die always stops the script.
@@ -231,10 +253,11 @@ blob_sha() { git -C "$FD" cat-file blob "$1" | sha_in; }
 # --- writing the repo --------------------------------------------------------
 
 # apply PLAN DELETES: PLAN has "mode oid flag-path repo-path" lines. Every
-# target was vetted; stage all blobs first (hashing them), then install each
-# with an atomic rename, then delete. Appends "sha flag-path repo-path" to $FILES.
+# target was vetted; stage all blobs first (hashing them), then delete (so a
+# file flag turned into a directory, or the reverse, is out of the way), then
+# install each with an atomic rename. Appends "sha flag-path repo-path" to $FILES.
 apply() {
-  local stage i=0 mode oid b c h dst t
+  local stage i=0 mode oid b c d h dst t
   newtmpdir stage
   while read -r mode oid b c; do
     i=$((i + 1))
@@ -242,10 +265,21 @@ apply() {
     h="$(sha "$stage/$i")" || die "cannot hash design-system/$b"
     echo "$h $b $c" >> "$FILES"
   done < "$1"
+  while IFS= read -r c; do
+    need_repo_path "$c" file
+    rm -f -- "$ROOT/$c"
+    # Drop directories this emptied, so a path flag turned from a directory
+    # into a file can be installed (mkdir -p restores any that are still needed).
+    d="$(dirname -- "$c")"
+    while [ "$d" != . ] && rmdir -- "$ROOT/$d" 2>/dev/null; do d="$(dirname -- "$d")"; done
+  done < "$2"
   i=0
   while read -r mode oid b c; do
     i=$((i + 1))
     dst="$ROOT/$c"
+    # A directory flag turned into a file: its files were deleted above, and
+    # need_plan_path vetted that nothing else but empty directories remain.
+    if [ -d "$dst" ] && [ ! -L "$dst" ]; then find "$dst" -depth -type d -empty -delete; fi
     need_repo_path "$c" file
     mkdir -p -- "$(dirname -- "$dst")"
     need_repo_path "$c" file
@@ -254,10 +288,6 @@ apply() {
     if [ "$mode" = 100755 ]; then chmod 755 "$t"; else chmod 644 "$t"; fi
     mv -f -- "$t" "$dst"
   done < "$1"
-  while IFS= read -r c; do
-    need_repo_path "$c" file
-    rm -f -- "$ROOT/$c"
-  done < "$2"
 }
 
 # write_lock COMMIT DIRS_FILE FILES_FILE
@@ -360,10 +390,12 @@ cmd_sync() {
   while read -r kind a b c; do
     [ "$kind" = file ] || continue
     flag_entry "$b"
-    if [ -z "$E_MODE" ]; then
-      # A file in a locked dir that flag removed is dropped below; a single
+    if [ -z "$E_MODE" ] || [ "$E_MODE" = 040000 ]; then
+      # A file in a locked dir that flag removed (or replaced with a directory)
+      # is dropped here and the mirror below plans what is there now; a single
       # locked file flag removed is an error, not a silent drop.
       while read -r d; do case "$c" in "$d"/*) continue 2 ;; esac; done < "$dirs"
+      [ -z "$E_MODE" ] || die "flag replaced design-system/$b (locked as $c) with a directory; add the directory instead"
       die "flag no longer has design-system/$b (locked as $c); remove that line or pick its replacement"
     fi
     need_blob "$E_MODE" "$b"
@@ -390,8 +422,8 @@ cmd_sync() {
     [ "$kind" = file ] || continue
     in_plan "$plan" "$c" || echo "$c" >> "$dels"
   done < "$ENTRIES"
-  while read -r mode oid b c; do need_repo_path "$c" file; done < "$plan"
   while IFS= read -r c; do need_repo_path "$c" file; done < "$dels"
+  while read -r mode oid b c; do need_plan_path "$c" "$dels"; done < "$plan"
   apply "$plan" "$dels"
   write_lock "$COMMIT" "$dirs" "$FILES"
   echo "flag-sync: synced $(wc -l < "$FILES" | tr -d ' ') files from flag ${COMMIT:0:12}"
@@ -412,6 +444,9 @@ cmd_add() {
   # rewritten commit line would be a lie.
   status_scan > /dev/null
   [ "$STALE" -eq 0 ] || die "the vendored copy differs from ${COMMIT:0:12} (see: scripts/flag-sync.sh status $FD); run scripts/flag-sync.sh sync against this checkout first"
+  # ...and the repo copy must match the lock: rewriting the lock over a locally
+  # edited or missing vendored file would report success and leave check failing.
+  if [ -n "$(awk '$1 == "file" { print; exit }' "$ENTRIES")" ] && ! ( cmd_check > /dev/null ); then die "the vendored files do not match flag.lock (see: scripts/flag-sync.sh check); run scripts/flag-sync.sh sync first"; fi
   newtmp dirs; newtmp plan; newtmp dels; newtmp list; newtmp FILES
   # Entries at or under <repo-path> are being replaced: drop them from the
   # lock, and remember their files so the old copies can be deleted (a
@@ -434,7 +469,17 @@ cmd_add() {
         need_blob "$mode" "$src/$rel"
         echo "$mode $oid $src/$rel $dest/$rel" >> "$plan"
       done < "$list"
-      [ -s "$plan" ] || die "design-system/$src has no files" ;;
+      [ -s "$plan" ] || die "design-system/$src has no files"
+      # The new lock claims every file under <repo-path>: anything already there
+      # must be a locked file this add replaces, or the next check would find
+      # it UNLOCKED after the files were already written.
+      if [ -d "$ROOT/$dest" ]; then
+        while IFS= read -r -d '' c; do
+          c="${c#"$ROOT"/}"
+          { [ -f "$ROOT/$c" ] && [ ! -L "$ROOT/$c" ]; } || die "$c is a symlink or special file inside $dest; remove it first"
+          in_plan "$plan" "$c" || grep -qxF -- "$c" "$dels" || die "$c is already in $dest and is not from flag; move product files out of $dest (or delete it) before vendoring flag's $src there"
+        done < <(find "$ROOT/$dest" -mindepth 1 ! -type d -print0)
+      fi ;;
     *)
       # A locked dir mirrors exactly one Flag dir; a single file dropped inside
       # it would make the mirror ambiguous for every later status/sync.
@@ -443,8 +488,8 @@ cmd_add() {
   esac
   newtmp d
   while IFS= read -r c; do in_plan "$plan" "$c" || echo "$c" >> "$d"; done < "$dels"
-  while read -r mode oid b c; do need_repo_path "$c" file; done < "$plan"
   while IFS= read -r c; do need_repo_path "$c" file; done < "$d"
+  while read -r mode oid b c; do need_plan_path "$c" "$d"; done < "$plan"
   apply "$plan" "$d"
   write_lock "$COMMIT" "$dirs" "$FILES"
   echo "flag-sync: locked $src -> $dest"
