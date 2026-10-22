@@ -78,6 +78,19 @@ that Tier A would mean re-implementing by hand.
   its commands, the in-house router (justified there and in ADR-0091: a
   dozen routes do not earn a router dependency), and the justified runtime
   dependencies.
+- **Runtime dependencies.** `dependencies` in `web/package.json` ship in the
+  browser bundle; everything else is a devDependency (Vite, TypeScript,
+  Vitest, Playwright, axe, type packages) and never reaches production.
+
+  | Runtime dependency | Why it is needed |
+  |---|---|
+  | `react`, `react-dom` | The UI framework and its browser renderer — the reason fleet is Tier B (streaming chat, approval cards, generative UI). |
+  | `react-markdown` | Renders assistant replies, run logs, shared transcripts and the `/help` guides (`AssistantContent.tsx`, `LogMarkdown.tsx`, `GuideMarkdown.tsx`, …) as React elements — no HTML strings, no `dangerouslySetInnerHTML`, and no Markdown parser of our own to maintain. |
+  | `remark-gfm` | GitHub-flavoured Markdown for `react-markdown`: tables, task lists, autolinks and strikethrough, which agents and the guides use and plain CommonMark renders as text. |
+  | `@tanstack/react-virtual` | Virtualises the chat transcript (`ChatTranscript.tsx`) so a conversation with thousands of messages renders only what is on screen. |
+
+  Adding another runtime dependency needs a row here with the reason
+  (`make stack-check` enforces it); prefer a small in-house module.
 - **New or replaced base UI components come from Flag's shadcn/ui registry**
   (`npx shadcn add <registry-url>/r/<item>.json`; the URL is in Flag's
   README). Existing components are not being migrated wholesale.
@@ -87,7 +100,24 @@ that Tier A would mean re-implementing by hand.
   `ElcanoTek/flag`; `scripts/flag-sync.sh status ../flag` previews), never by
   hand. The PR gate is the offline `make stack-check` (CI job `stack-check`);
   the weekly `.github/workflows/flag-drift.yml` reports when upstream Flag
-  has moved past the lock.
+  has moved past the lock. `scripts/flag-sync.sh` and `scripts/stack-check.sh`
+  are vendored too: MIT-licensed copies of Flag's `tools/product/` scripts,
+  kept byte-identical (their SPDX header names the canonical copy) — replace
+  them from Flag, never edit them here.
+- **Caching.** Only content-hashed `/assets/*` (Vite output: JS, CSS, fonts)
+  are served `public, max-age=31536000, immutable`. HTML is `no-store`.
+  Every other non-HTML file is served at a stable URL that something outside
+  the bundle hard-codes, so it is `no-cache` (revalidated on every use, with an
+  ETag where the gateway computes one) — never long-cached:
+  `sw.js` (a service worker must keep its URL), `manifest.webmanifest`,
+  `theme-init.js` (named in `index.html`'s pre-paint script tag), the icon
+  sprite and logos under `icons/` and `logos/`, `app-icons/`, `icon.svg`,
+  `apple-icon.png` and `share.png` (named by the manifest, `<use href>`,
+  favicons and share metadata), the `backgrounds/` images (stable URLs a
+  client bundle's theme may name),
+  `/api/theme` (the bundle palette) and `/api/brand/*` (the bundle's images).
+  An error on an asset URL (404, 405) never carries the immutable header.
+  `TestCachingPolicy` (internal/webui) pins all of this.
 - **Builds always carry the bundle.** `go build` / `go test` work without it
   (pages then answer 503), but `make build` runs `make web` first and ends with
   `fleet version --web`, which fails on a binary without one — as do
