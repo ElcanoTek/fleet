@@ -151,19 +151,16 @@ func TestUserSkillsWorkspaceSharing(t *testing.T) {
 		t.Fatalf("shared skill missing from ListWorkspaceSharedUserSkills: %+v", wsList)
 	}
 
-	// Teammate's ListActiveUserSkills includes the workspace-shared skill.
+	// Teammate's ListActiveUserSkills does NOT auto-inject a teammate's shared
+	// skill before explicit recipient activation ("Add to my skills").
 	teammateActive, err := s.ListActiveUserSkills(ctx, teammate)
 	if err != nil {
 		t.Fatalf("teammate active: %v", err)
 	}
-	foundActive := false
 	for _, sk := range teammateActive {
 		if sk.Name == "shared-opt-log" {
-			foundActive = true
+			t.Fatalf("unconsented shared skill must not appear in teammate ListActiveUserSkills: %+v", teammateActive)
 		}
-	}
-	if !foundActive {
-		t.Fatalf("shared skill missing from teammate ListActiveUserSkills: %+v", teammateActive)
 	}
 
 	// Unsharing removes it from workspace-shared list.

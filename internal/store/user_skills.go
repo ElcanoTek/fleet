@@ -219,16 +219,21 @@ func (s *Store) ListUserSkills(ctx context.Context, userEmail string) ([]UserSki
 	return out, rows.Err()
 }
 
+// MaxWorkspaceSharedSkills caps the workspace-shared skill catalog returned by
+// ListWorkspaceSharedUserSkills so the shared roster stays bounded.
+const MaxWorkspaceSharedSkills = 100
+
 // ListWorkspaceSharedUserSkills returns active workspace-shared skills across
 // all users in the deployment, deduplicated by name (most recently updated
-// wins), ordered by name.
+// wins), ordered by name and bounded to MaxWorkspaceSharedSkills.
 func (s *Store) ListWorkspaceSharedUserSkills(ctx context.Context) ([]UserSkill, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT ON (name) id, user_email, name, description, body, status, visibility, created_at, updated_at
 		FROM user_skills
 		WHERE status = $1 AND visibility = $2
-		ORDER BY name, updated_at DESC, id ASC`,
-		UserSkillStatusActive, UserSkillVisibilityWorkspace)
+		ORDER BY name, updated_at DESC, id ASC
+		LIMIT $3`,
+		UserSkillStatusActive, UserSkillVisibilityWorkspace, MaxWorkspaceSharedSkills)
 	if err != nil {
 		return nil, err
 	}
@@ -245,29 +250,18 @@ func (s *Store) ListWorkspaceSharedUserSkills(ctx context.Context) ([]UserSkill,
 	return out, rows.Err()
 }
 
-// ListActiveUserSkills returns the effective ACTIVE user skills that
-// participate in a user's runs (the user's own active skills plus any
-// workspace-shared active skills whose name does not collide with one of the
-// user's own skills), ordered by name.
+// ListActiveUserSkills returns a user's ACTIVE skills (the subset that
+// participates in runs), ordered by name. Teammate-shared workspace skills are
+// published to the Workspace pack catalog for 1-click opt-in ("Add to my
+// skills") rather than auto-injected without recipient consent.
 func (s *Store) ListActiveUserSkills(ctx context.Context, userEmail string) ([]UserSkill, error) {
 	all, err := s.ListUserSkills(ctx, userEmail)
 	if err != nil {
 		return nil, err
 	}
-	ownedNames := make(map[string]bool, len(all))
 	out := make([]UserSkill, 0, len(all))
 	for _, sk := range all {
-		ownedNames[sk.Name] = true
 		if sk.Status == UserSkillStatusActive {
-			out = append(out, sk)
-		}
-	}
-	shared, err := s.ListWorkspaceSharedUserSkills(ctx)
-	if err != nil {
-		return out, nil
-	}
-	for _, sk := range shared {
-		if !ownedNames[sk.Name] {
 			out = append(out, sk)
 		}
 	}

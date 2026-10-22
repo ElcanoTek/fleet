@@ -138,37 +138,25 @@ func (s *Server) effectiveUserSkills(ctx context.Context, user string) ([]store.
 	for _, b := range s.bundleSkills() {
 		bundleNames[b.Name] = true
 	}
-	seen := make(map[string]bool, len(skills))
 	out := make([]store.UserSkill, 0, len(skills))
 	for _, sk := range skills {
-		seen[sk.Name] = true
 		if bundleNames[sk.Name] {
 			continue
 		}
 		out = append(out, sk)
 	}
-	if shared, serr := s.store.ListWorkspaceSharedUserSkills(ctx); serr == nil {
-		for _, sk := range shared {
-			if seen[sk.Name] || bundleNames[sk.Name] {
-				continue
-			}
-			seen[sk.Name] = true
-			out = append(out, sk)
-		}
-	}
 	return out, nil
 }
 
-// materializeUserSkills syncs the user's ACTIVE skills (including active
-// workspace-shared skills not shadowed by the bundle or the user's own skills)
-// into the conversation workspace and returns the prompt roster entries.
+// materializeUserSkills syncs the user's ACTIVE skills into the conversation
+// workspace and returns the prompt roster entries.
 // Best-effort by contract: a failure returns nil (the turn runs without user
 // skills) — skills are a capability, not a turn invariant. Stale dirs from
 // renamed/disabled/deleted skills are removed so the on-disk set always mirrors
-// the DB.
+// the DB, including when the effective roster becomes empty.
 func (s *Server) materializeUserSkills(ctx context.Context, user, conversationID string) []agent.UserSkillPromptEntry {
 	skills, err := s.effectiveUserSkills(ctx, user)
-	if err != nil || len(skills) == 0 {
+	if err != nil {
 		return nil
 	}
 	wsDir, err := tools.EnsureWorkspaceDir(conversationID)

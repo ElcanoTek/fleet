@@ -208,11 +208,14 @@ func TestUserSkillsEndpoints(t *testing.T) {
 	}
 }
 
-// Workspace-shared skills appear in GET /skills (source="workspace"),
-// GET /skills/{name}, materialize into teammates' workspaces, and can be
-// invoked via /<name> by teammates.
+// Workspace-shared skills appear in GET /skills under shared_skills
+// (source="workspace") and GET /skills/{name}, without auto-materializing into
+// teammates' prompts until the teammate opts in ("Add to my skills"). Also
+// verifies that materializeUserSkills cleans up stale skill directories when
+// the user's effective roster becomes empty.
 func TestWorkspaceSharedUserSkills(t *testing.T) {
-	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	wsRoot := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", wsRoot)
 	fs := &skillsFakeStore{fakeChatStore: newFakeChatStore()}
 	s := &Server{store: fs}
 
@@ -229,25 +232,39 @@ func TestWorkspaceSharedUserSkills(t *testing.T) {
 		t.Fatalf("visibility = %q, want workspace", created.Visibility)
 	}
 
-	// GET /skills includes the workspace-shared skill.
+	// GET /skills includes the workspace-shared skill under shared_skills (separate from bundle skills).
 	w = userSkillsReq(t, s, s.listSkills, http.MethodGet, "/skills", "")
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"source":"workspace"`) || !strings.Contains(w.Body.String(), `"opt-workbench"`) {
-		t.Fatalf("GET /skills missing shared skill: %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"shared_skills":[`) || !strings.Contains(w.Body.String(), `"opt-workbench"`) {
+		t.Fatalf("GET /skills missing shared_skills: %d %s", w.Code, w.Body.String())
 	}
 
-	// GET /skills/opt-workbench returns its rendered SKILL.md content.
+	// GET /skills/opt-workbench returns its rendered SKILL.md content and raw body for 1-click install.
 	w = userSkillsReq(t, s, s.skillByName, http.MethodGet, "/skills/opt-workbench", "")
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "1. Open workbench.") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "1. Open workbench.") || !strings.Contains(w.Body.String(), `"body":"1. Open workbench."`) {
 		t.Fatalf("GET /skills/opt-workbench: %d %s", w.Code, w.Body.String())
 	}
 
-	// A teammate ("teammate@x.com") materializes and can invoke /opt-workbench.
+	// A teammate ("teammate@x.com") does NOT auto-materialize the shared skill without opting in.
 	entries := s.materializeUserSkills(context.Background(), "teammate@x.com", "conv-teammate-1")
-	if len(entries) != 1 || entries[0].Name != "opt-workbench" {
-		t.Fatalf("teammate materialize = %+v", entries)
+	if len(entries) != 0 {
+		t.Fatalf("unconsented teammate materialize = %+v, want empty", entries)
 	}
-	invoked := s.applySkillInvocation(context.Background(), "teammate@x.com", "/opt-workbench ELC00166", "/opt-workbench ELC00166")
-	if !strings.Contains(invoked, "user-skills/opt-workbench/SKILL.md") {
-		t.Fatalf("teammate invocation did not match: %q", invoked)
+
+	// Author ("u@x.com") materializes their own skill, and deleting the last skill cleans up the stale directory.
+	authorEntries := s.materializeUserSkills(context.Background(), "u@x.com", "conv-author-1")
+	if len(authorEntries) != 1 || authorEntries[0].Name != "opt-workbench" {
+		t.Fatalf("author materialize = %+v", authorEntries)
+	}
+	w = userSkillsReq(t, s, s.userSkillByID, http.MethodDelete, "/user-skills/"+created.ID, "")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d", w.Code)
+	}
+	afterDelete := s.materializeUserSkills(context.Background(), "u@x.com", "conv-author-1")
+	if len(afterDelete) != 0 {
+		t.Fatalf("afterDelete = %+v, want empty", afterDelete)
+	}
+	stalePath := filepath.Join(wsRoot, "conv-author-1", "user-skills", "opt-workbench")
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Fatalf("stale skill directory %s was not removed after roster became empty: err=%v", stalePath, err)
 	}
 }

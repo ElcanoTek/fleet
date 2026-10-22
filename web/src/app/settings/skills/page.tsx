@@ -47,7 +47,7 @@ type SkillEntry = {
   declared_allowed_tools?: string[];
 };
 
-type SkillDetail = SkillEntry & { content: string };
+type SkillDetail = SkillEntry & { content: string; body?: string };
 
 // A skill the user authored in the builder (docs/SKILLS.md phase 2/3): DB-owned,
 // private by default or shared with the workspace.
@@ -121,10 +121,10 @@ export default function SkillsPage() {
     fetch("/api/skills", { cache: "no-store" })
       .then(async (res) => {
         if (!res.ok) throw new Error(`Failed to load skills: ${res.status}`);
-        return (await res.json()) as { skills: SkillEntry[] };
+        return (await res.json()) as { skills: SkillEntry[]; shared_skills?: SkillEntry[] };
       })
       .then((data) => {
-        if (!stale) setSkills(data.skills ?? []);
+        if (!stale) setSkills([...(data.skills ?? []), ...(data.shared_skills ?? [])]);
       })
       .catch((e: unknown) => {
         if (!stale) setError(e instanceof Error ? e.message : "Failed to load skills.");
@@ -155,10 +155,10 @@ export default function SkillsPage() {
     fetch("/api/skills", { cache: "no-store" })
       .then(async (res) => {
         if (!res.ok) throw new Error(`Failed to load skills: ${res.status}`);
-        return (await res.json()) as { skills: SkillEntry[] };
+        return (await res.json()) as { skills: SkillEntry[]; shared_skills?: SkillEntry[] };
       })
       .then((data) => {
-        setSkills(data.skills ?? []);
+        setSkills([...(data.skills ?? []), ...(data.shared_skills ?? [])]);
       })
       .catch(() => {
         // Keep current pack list on refresh error.
@@ -241,11 +241,13 @@ export default function SkillsPage() {
         description: sk.description,
         body: sk.body,
         status: sk.status === "active" ? "disabled" : "active",
+        visibility: sk.visibility ?? "private",
       }),
     })
       .then(async (res) => {
         if (!res.ok) throw new Error((await res.text()) || `Update failed: ${res.status}`);
-        return reloadMine();
+        await reloadMine();
+        await reloadWorkspacePack();
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Update failed."))
       .finally(() => setBusy(false));
@@ -264,11 +266,13 @@ export default function SkillsPage() {
         description: sk.description,
         body: sk.body,
         status: "active",
+        visibility: sk.visibility ?? "private",
       }),
     })
       .then(async (res) => {
         if (!res.ok) throw new Error((await res.text()) || "Approve failed.");
-        return reloadMine();
+        await reloadMine();
+        await reloadWorkspacePack();
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Approve failed."))
       .finally(() => setBusy(false));
@@ -284,9 +288,37 @@ export default function SkillsPage() {
         if (!res.ok && res.status !== 204) {
           throw new Error((await res.text()) || `Delete failed: ${res.status}`);
         }
-        return reloadMine();
+        await reloadMine();
+        await reloadWorkspacePack();
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Delete failed."))
+      .finally(() => setBusy(false));
+  };
+
+  const addSharedToMine = (s: SkillEntry) => {
+    setBusy(true);
+    setError(null);
+    fetch(`/api/skills/${encodeURIComponent(s.name)}`, { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error((await res.text()) || `Failed to load skill: ${res.status}`);
+        return (await res.json()) as SkillDetail;
+      })
+      .then(async (d) => {
+        const body = (d.body ?? d.content.replace(/^---[\s\S]*?---\s*/, "")).trim();
+        const res = await fetch("/api/user-skills", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: s.name,
+            description: s.description,
+            body,
+            visibility: "private",
+          }),
+        });
+        if (!res.ok) throw new Error((await res.text()) || `Failed to add skill: ${res.status}`);
+        await reloadMine();
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to add skill."))
       .finally(() => setBusy(false));
   };
 
@@ -595,14 +627,26 @@ export default function SkillsPage() {
                           ? `Plugin${s.plugin ? `: ${s.plugin}` : ""}`
                           : "Built-in"}
                   </ConnBadge>
-                  <button
-                    type="button"
-                    className={`ml-auto flex-none ${btnClass({ sm: true, reveal: true })}`}
-                    aria-expanded={openSkill === s.name}
-                    onClick={() => view(s.name)}
-                  >
-                    {openSkill === s.name ? "Hide" : "View"}
-                  </button>
+                  <span className="ml-auto inline-flex gap-[0.35rem]">
+                    {s.source === "workspace" && !mine?.some((m) => m.name === s.name) ? (
+                      <button
+                        type="button"
+                        className={btnClass({ sm: true, reveal: true })}
+                        disabled={busy}
+                        onClick={() => addSharedToMine(s)}
+                      >
+                        Add to my skills
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={`flex-none ${btnClass({ sm: true, reveal: true })}`}
+                      aria-expanded={openSkill === s.name}
+                      onClick={() => view(s.name)}
+                    >
+                      {openSkill === s.name ? "Hide" : "View"}
+                    </button>
+                  </span>
                 </div>
                 <ClampText text={s.description} className={SKILL_DESC} />
                 {s.declared_allowed_tools && s.declared_allowed_tools.length > 0 ? (

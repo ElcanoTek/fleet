@@ -201,10 +201,26 @@ describe("SkillsPage failure states", () => {
     expect(screen.getByText("PDF-Extract")).toBeInTheDocument();
   });
 
-  it("badges workspace-shared teammate skills and supports 1-click sharing of your own skill", async () => {
+  it("badges workspace-shared teammate skills and supports 1-click sharing and opt-in installation", async () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
       if (url === "/api/user-skills/u1" && init?.method === "PUT") {
         return { ok: true, status: 200, json: async () => ({}) };
+      }
+      if (url === "/api/user-skills" && init?.method === "POST") {
+        return { ok: true, status: 200, json: async () => ({ id: "u2" }) };
+      }
+      if (url === "/api/skills/team-opt-log") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            name: "team-opt-log",
+            description: "Shared optimization workflow",
+            source: "workspace",
+            body: "1. Open workbench.",
+            content: "---\nname: team-opt-log\ndescription: Shared optimization workflow\n---\n\n1. Open workbench.",
+          }),
+        };
       }
       if (url.startsWith("/api/user-skills")) {
         return {
@@ -228,7 +244,8 @@ describe("SkillsPage failure states", () => {
         ok: true,
         status: 200,
         json: async () => ({
-          skills: [
+          skills: [],
+          shared_skills: [
             {
               name: "team-opt-log",
               description: "Shared optimization workflow",
@@ -250,6 +267,17 @@ describe("SkillsPage failure states", () => {
         expect.objectContaining({
           method: "PUT",
           body: expect.stringContaining('"visibility":"workspace"'),
+        }),
+      ),
+    );
+    const sharedRow = await screen.findByTestId("skill-row-team-opt-log");
+    fireEvent.click(within(sharedRow).getByRole("button", { name: "Add to my skills" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/user-skills",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining('"name":"team-opt-log"'),
         }),
       ),
     );

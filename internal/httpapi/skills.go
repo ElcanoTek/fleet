@@ -49,6 +49,7 @@ type skillEntry struct {
 
 type skillsResponse struct {
 	Skills []skillEntry `json:"skills"`
+	Shared []skillEntry `json:"shared_skills,omitempty"`
 }
 
 // bundleSkills returns the client bundle's well-formed skills (nil-safe on a
@@ -62,10 +63,10 @@ func (s *Server) bundleSkills() []clientconfig.Skill {
 	return s.clientConfig.Skills()
 }
 
-// listSkills serves GET /skills: the bundle's skill roster (plus active
-// workspace-shared user skills not shadowed by the bundle) for the composer
-// "/" autocomplete and the Settings → Skills Workspace pack list. Member-gated
-// like /personas.
+// listSkills serves GET /skills: the bundle's skill roster in `skills` (used
+// by composer "/" autocomplete) plus active workspace-shared teammate skills
+// in `shared_skills` (used by Settings → Skills → Workspace pack for 1-click
+// opt-in installation). Member-gated like /personas.
 func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -82,13 +83,14 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 			DeclaredAllowedTools: sk.DeclaredAllowedTools,
 		})
 	}
+	var sharedEntries []skillEntry
 	if s.store != nil {
 		if shared, err := s.store.ListWorkspaceSharedUserSkills(r.Context()); err == nil {
 			for _, sk := range shared {
 				if bundleNames[sk.Name] {
 					continue
 				}
-				entries = append(entries, skillEntry{
+				sharedEntries = append(sharedEntries, skillEntry{
 					Name:        sk.Name,
 					Description: sk.Description,
 					Source:      "workspace",
@@ -97,7 +99,7 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, skillsResponse{Skills: entries})
+	writeJSON(w, skillsResponse{Skills: entries, Shared: sharedEntries})
 }
 
 // skillOrigin reports where a merged-roster skill came from — the bundle's
@@ -153,6 +155,7 @@ func (s *Server) skillByName(w http.ResponseWriter, r *http.Request) {
 					"description": sk.Description,
 					"source":      "workspace",
 					"shared_by":   sk.SharedBy,
+					"body":        sk.Body,
 					"content":     store.RenderUserSkillMarkdown(&sk),
 				}
 				writeJSON(w, resp)
