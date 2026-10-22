@@ -9,7 +9,7 @@ import FeaturesAdminPage from "./page";
 // vanish), a server-side rejection surfaces as a row error, the filter hides
 // empty groups, and the guardrail probe reports honestly.
 
-vi.mock("next/navigation", () => ({
+vi.mock("@/app/lib/navigation", () => ({
   useRouter: () => ({ replace: vi.fn() }),
 }));
 

@@ -1064,6 +1064,12 @@ func run() error {
 
 	chatServer := &http.Server{Addr: chatAddr, Handler: chatHandler, ReadHeaderTimeout: 30 * time.Second}
 	orchServer := &http.Server{Addr: orchAddr, Handler: orchHandlerWithProbes, ReadHeaderTimeout: 30 * time.Second}
+	// The browser tier (ADR-0091): the SPA and every /api/* route, calling the
+	// two backends in-process. nil when FLEET_WEB_ADDR=off.
+	webServer, err := buildWebServer(cfg, chatSrv.Routes(), orchHandler)
+	if err != nil {
+		return err
+	}
 
 	// Signal handling (#278) distinguishes deployment restart from dev Ctrl-C:
 	//   - SIGTERM → graceful: stop admitting, drain in-flight chat turns + tasks
@@ -1109,7 +1115,7 @@ func run() error {
 		pool.Run(ctx)
 	}()
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		// A panic in the serve loop triggers graceful shutdown (errCh) rather than
 		// crashing the process or hanging; handler panics are caught upstream.
@@ -1120,6 +1126,15 @@ func run() error {
 			errCh <- fmt.Errorf("chat-server: %w", err)
 		}
 	}()
+	if webServer != nil {
+		go func() {
+			defer safe.Recover("cmd.web", func(any) { errCh <- fmt.Errorf("web: panicked") })
+			log.Printf("web listening on %s", webServer.Addr)
+			if err := webServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("web: %w", err)
+			}
+		}()
+	}
 	go func() {
 		defer safe.Recover("cmd.orchestrator", func(any) { errCh <- fmt.Errorf("orchestrator: panicked") })
 		log.Printf("orchestrator listening on %s", orchAddr)
@@ -1168,7 +1183,7 @@ func run() error {
 	// Block until a terminal signal / listener error decides graceful vs immediate,
 	// then drain. Extracted so run() stays within the cyclomatic budget.
 	graceful := awaitShutdown(sigCh, errCh, chatSrv, pool, agentLimiter)
-	performShutdown(graceful, grace, cancel, chatSrv, pool, poolDone, chatServer, orchServer)
+	performShutdown(graceful, grace, cancel, chatSrv, pool, poolDone, chatServer, orchServer, webServer)
 	// performShutdown cancelled ctx; let the deliverer record its last attempt
 	// and hand unsent rows back before the process exits.
 	awaitAccountEventsDelivery(accountEventsDone)
@@ -1206,7 +1221,7 @@ func awaitShutdown(sigCh <-chan os.Signal, errCh <-chan error, chatSrv *httpapi.
 // turns + scheduled tasks within the grace budget (force-cancelling stragglers),
 // then close the listeners. graceful=false is the fast path (cancel everything
 // now). cancel stops the claim loop / scheduler-fed pool.
-func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFunc, chatSrv *httpapi.Server, pool *runner.Pool, poolDone <-chan struct{}, chatServer, orchServer *http.Server) {
+func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFunc, chatSrv *httpapi.Server, pool *runner.Pool, poolDone <-chan struct{}, chatServer, orchServer, webServer *http.Server) {
 	// Tell systemd we are stopping so it waits out the drain up to TimeoutStopSec.
 	sdNotify("STOPPING=1")
 	// Stop admitting new chat turns + flip /healthz to 503 (load balancers stop
@@ -1257,7 +1272,11 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 	// drained or been cancelled, so Shutdown completes promptly. Each server gets
 	// the full grace budget and they close in parallel (not one off the other's
 	// remainder).
-	closeServers(grace, chatServer, orchServer)
+	servers := []*http.Server{chatServer, orchServer}
+	if webServer != nil {
+		servers = append(servers, webServer)
+	}
+	closeServers(grace, servers...)
 	log.Printf("fleet: shutdown complete")
 }
 

@@ -12,7 +12,7 @@ import AdminOverviewPage from "./page";
 // per-chip tooltip. Regression guard for the report that the pills "show up
 // red which reads as broken".
 
-vi.mock("next/navigation", () => ({
+vi.mock("@/app/lib/navigation", () => ({
   useRouter: () => ({ replace: vi.fn() }),
 }));
 

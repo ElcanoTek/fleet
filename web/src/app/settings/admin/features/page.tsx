@@ -16,7 +16,7 @@
 // action (detector probe) — no mock-only rows.
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/app/lib/navigation";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { humanizeVarName } from "@/app/shared/lib/taskTemplates";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";

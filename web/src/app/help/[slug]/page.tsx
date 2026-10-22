@@ -1,36 +1,18 @@
-import { notFound } from "next/navigation";
+import { NotFound } from "@/app/shared/ui/NotFound";
 import { GUIDES, findGuide, readGuide } from "../guideContent";
 import { extractHeadings } from "../headings";
-import { guidePageTitle } from "../metadata";
 import { GuideMarkdown } from "../ui/GuideMarkdown";
 import { GuideNav } from "../ui/GuideNav";
 
-// One guide, rendered. The root layout is force-dynamic for white-labeling, so
-// this renders per request like every other page in the app — but the Markdown
-// itself is read from disk once per server process (guideContent.ts memoizes
-// it), so serving a guide is a render, never a file read.
-
-// Not for prerendering (see above) — this is the allowlist `dynamicParams`
-// checks a slug against, so /help/anything-else answers 404 (asserted in
-// guides.spec.ts) instead of reaching the page. findGuide() below is the
-// second of the two locks, and the reason no request-supplied string is ever
-// joined onto a path.
-export function generateStaticParams() {
-  return GUIDES.map((guide) => ({ slug: guide.slug }));
-}
-
-export const dynamicParams = false;
-
-export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
-  const { slug } = await params;
+// One guide, rendered. The Markdown is bundled (guideContent.ts), and only the
+// two slugs in GUIDES resolve — /help/anything-else is a 404 from the server
+// (asserted in guides.spec.ts) and NotFound here. No request-supplied string
+// is ever joined onto a path.
+// The page title ("<Guide> guide — <app>") is set by the app shell (App.tsx)
+// and rendered by the server for a full load.
+export default function GuidePage({ slug }: { slug: string }) {
   const guide = findGuide(slug);
-  return { title: await guidePageTitle(guide ? `${guide.title} guide` : "Guides") };
-}
-
-export default async function GuidePage({ params }: { params: Promise<{ slug: string }> }) {
-  const { slug } = await params;
-  const guide = findGuide(slug);
-  if (!guide) notFound();
+  if (!guide) return <NotFound />;
 
   const content = readGuide(guide);
   const headings = extractHeadings(content);

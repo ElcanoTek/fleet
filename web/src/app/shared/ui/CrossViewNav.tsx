@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { Link } from "@/app/lib/Link";
 
 // CrossViewNav holds the links that move between the app's surfaces —
 // /chat, /orchestrator and the user guides at /help. The one Next middleware

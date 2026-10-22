@@ -273,7 +273,7 @@ describe("filled primary buttons use the measured fill pair (WCAG AA)", () => {
 
   it("walks all of web/src (guards against a broken walk)", () => {
     expect(files.length).toBeGreaterThan(100);
-    expect(files.some((f) => rel(f) === "proxy.ts")).toBe(true);
+    expect(files.some((f) => rel(f) === "App.tsx")).toBe(true);
   });
 
   it("no foreground sits on the raw brand fill, and no filled button fades on hover", () => {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import AdminDoctorPage from "./page";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }) }));
+vi.mock("@/app/lib/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }) }));
 vi.mock("../../useIsAdmin", () => ({ useIsAdmin: () => "admin" }));
 
 const HEALTHY = {

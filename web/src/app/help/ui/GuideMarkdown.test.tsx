@@ -5,7 +5,7 @@ import { GuideNav } from "./GuideNav";
 
 afterEach(() => cleanup());
 
-vi.mock("next/navigation", () => ({ usePathname: () => "/help/chat" }));
+vi.mock("@/app/lib/navigation", () => ({ usePathname: () => "/help/chat" }));
 
 describe("GuideMarkdown", () => {
   it("anchors headings with the slug the guides' own links point at", () => {

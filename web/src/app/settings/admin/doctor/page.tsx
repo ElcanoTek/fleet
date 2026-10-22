@@ -9,7 +9,7 @@
 // always a command the operator runs on the box (`sudo fleet doctor`).
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/app/lib/navigation";
 
 import { useIsAdmin } from "../../useIsAdmin";
 import { AdminGateFallback } from "../../AdminGateFallback";

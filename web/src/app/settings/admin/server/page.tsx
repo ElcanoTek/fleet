@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/app/lib/navigation";
 
 import { useIsAdmin } from "../../useIsAdmin";
 import { AdminGateFallback } from "../../AdminGateFallback";

@@ -20,14 +20,12 @@ package handlers
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/base64"
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
 // elcanoSession is the verified identity extracted from an elcano_auth cookie.
@@ -37,64 +35,23 @@ type elcanoSession struct {
 	Exp    int64
 }
 
-type elcanoClaims struct {
-	Email  string `json:"email"`
-	Tenant string `json:"tenant"`
-	Exp    int64  `json:"exp"`
-}
-
 // ParseElcanoPubKey decodes a standard-base64 Ed25519 public key (the
-// AUTH_SIGNING_PUBKEY value, matching `auth-admin keygen` output). Returns nil
-// for an empty or malformed value so the cookie path fails closed — the "Use
-// Elcano email" button still renders, but every cookie is rejected.
+// AUTH_SIGNING_PUBKEY value). Returns nil for an empty or malformed value so
+// the cookie path fails closed. The one implementation lives in
+// internal/websession, shared with the browser tier (internal/webui).
 func ParseElcanoPubKey(b64 string) ed25519.PublicKey {
-	b64 = strings.TrimSpace(b64)
-	if b64 == "" {
-		return nil
-	}
-	raw, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil || len(raw) != ed25519.PublicKeySize {
-		return nil
-	}
-	return ed25519.PublicKey(raw)
+	return websession.ParseElcanoPubKey(b64)
 }
 
-// verifyElcanoToken verifies a base64url(payloadJSON).base64url(ed25519Sig)
-// token against pub. The signature covers the base64url-encoded body STRING
-// (not the raw JSON), mirroring auth/internal/token. Returns nil on any
+// verifyElcanoToken verifies an elcano_auth token against pub via
+// websession.VerifyElcanoToken (the shared verifier). Returns nil on any
 // failure (bad key, encoding, signature, expiry, or missing email).
 func verifyElcanoToken(pub ed25519.PublicKey, token string) *elcanoSession {
-	// ed25519.Verify panics on a wrong-sized key; guard so a misconfigured
-	// public key fails closed as "invalid" rather than crashing the server.
-	if len(pub) != ed25519.PublicKeySize || token == "" {
+	c := websession.VerifyElcanoToken(pub, token)
+	if c == nil {
 		return nil
 	}
-	dot := strings.IndexByte(token, '.')
-	if dot < 1 || dot == len(token)-1 {
-		return nil
-	}
-	body, sigPart := token[:dot], token[dot+1:]
-
-	sig, err := base64.RawURLEncoding.DecodeString(sigPart)
-	if err != nil {
-		return nil
-	}
-	if !ed25519.Verify(pub, []byte(body), sig) {
-		return nil
-	}
-
-	rawJSON, err := base64.RawURLEncoding.DecodeString(body)
-	if err != nil {
-		return nil
-	}
-	var c elcanoClaims
-	if err := json.Unmarshal(rawJSON, &c); err != nil {
-		return nil
-	}
-	if c.Email == "" || c.Exp <= time.Now().Unix() {
-		return nil
-	}
-	return &elcanoSession{Email: strings.ToLower(c.Email), Tenant: c.Tenant, Exp: c.Exp}
+	return &elcanoSession{Email: c.Email, Tenant: c.Tenant, Exp: c.Exp}
 }
 
 // elcanoSessionFromRequest reads and verifies the elcano_auth cookie. Returns

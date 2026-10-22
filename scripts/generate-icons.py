@@ -5,7 +5,7 @@ Usage:    python3 scripts/generate-icons.py
 Requires: pip install cairosvg pillow
 
 Master:   web/public/logos/fleet-mark.svg  (single flattened path, 512 viewBox)
-Outputs:  web/src/app/            icon.svg, apple-icon.png
+Outputs:  web/public/             icon.svg, apple-icon.png
           web/public/app-icons/   favicon-16/32, icon-192/512, maskable-icon-512
 
 Every output above IS committed, so this script only needs running when the
@@ -16,9 +16,9 @@ cairosvg.
 
 It used to also write web/src/app/favicon.ico, which was never committed and is
 not gitignored either — an output that existed only on whoever last ran this. The
-App Router serves icon.svg (crisp at any DPI) and apple-icon.png, with
-favicon-16/32.png under public/ for anything that wants a raster, so the .ico
-had no consumer. Dropped rather than left as drift.
+server serves icon.svg (crisp at any DPI) and apple-icon.png from the bundle
+root, with favicon-16/32.png under app-icons/ for anything that wants a raster,
+so the .ico had no consumer. Dropped rather than left as drift.
 """
 
 import io
@@ -29,7 +29,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 MASTER = ROOT / "web/public/logos/fleet-mark.svg"
-APP = ROOT / "web/src/app"
+APP = ROOT / "web/public"
 PUB = ROOT / "web/public/app-icons"
 PLUM = "#1A0B1E"  # matches manifest background_color / theme_color
 

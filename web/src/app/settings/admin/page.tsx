@@ -13,7 +13,7 @@
 // 403 non-admins, and those error paths render below.
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/app/lib/navigation";
 
 import { fetchStats, formatAgo, formatUSD, type UserStat } from "./lib";
 import { ConnBadge } from "../ui/atoms";

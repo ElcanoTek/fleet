@@ -6,8 +6,8 @@
 // 900px it leaves the sticky column and becomes a wrapping row above the
 // content, matching the settings surface's narrow-viewport behavior.
 
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { Link } from "@/app/lib/Link";
+import { usePathname } from "@/app/lib/navigation";
 import type { Guide } from "../guideContent";
 import type { Heading } from "../headings";
 

@@ -9,7 +9,7 @@
 // bounces them to /login first. This is the safety-net for a 401 /me after
 // that gate, plus the "Use Elcano email" handoff when magic-link is enabled.
 
-import Link from "next/link";
+import { Link } from "@/app/lib/Link";
 
 export type OrchestratorLoginProps = {
   magicLinkLoginEnabled: boolean;

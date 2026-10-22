@@ -10,7 +10,7 @@ import { UpdateNotice } from "./UpdateNotice";
 // deploy probe.
 
 const nav = vi.hoisted(() => ({ pathname: "/orchestrator" }));
-vi.mock("next/navigation", () => ({ usePathname: () => nav.pathname }));
+vi.mock("@/app/lib/navigation", () => ({ usePathname: () => nav.pathname }));
 
 function versionResponse(buildId: string) {
   return new Response(JSON.stringify({ buildId }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -24,7 +24,7 @@ describe("UpdateNotice", () => {
   beforeEach(() => {
     __resetDeployDriftForTests();
     nav.pathname = "/orchestrator";
-    vi.stubEnv("NEXT_PUBLIC_BUILD_ID", "client-build");
+    vi.stubEnv("VITE_BUILD_ID", "client-build");
     fetchMock = vi.fn(async () => versionResponse("server-build"));
     vi.stubGlobal("fetch", fetchMock);
     reload = vi.fn();

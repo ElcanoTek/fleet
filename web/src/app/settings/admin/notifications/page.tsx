@@ -10,7 +10,7 @@
 // "Use env config" reverts.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/app/lib/navigation";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { Icon } from "@/app/shared/ui/Icon";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";

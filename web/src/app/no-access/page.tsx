@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { Link } from "@/app/lib/Link";
 import { SignOutForm } from "./sign-out-form";
 // Shown when a user has a valid session minted elsewhere (the shared
 // elcano_auth cookie, or central Auth via OIDC) but their email isn't on

@@ -4,8 +4,7 @@
     "typescript",
     "react",
     "jsx-a11y",
-    "import",
-    "nextjs"
+    "import"
   ],
   "categories": {
     "correctness": "error",
@@ -23,7 +22,7 @@
   // --deny-warnings so a rule re-introduced at warn fails the build instead of
   // quietly re-opening the backlog.
   "rules": {
-    // Next injects React; the classic in-scope requirement does not apply.
+    // The automatic JSX runtime injects React; the classic in-scope requirement does not apply.
     "react/react-in-jsx-scope": "off",
     "react/exhaustive-deps": "error",
     "react/hooks": "error",

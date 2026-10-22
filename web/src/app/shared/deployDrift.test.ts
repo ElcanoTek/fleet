@@ -25,7 +25,7 @@ describe("deployDrift", () => {
 
   beforeEach(() => {
     __resetDeployDriftForTests();
-    vi.stubEnv("NEXT_PUBLIC_BUILD_ID", "client-build");
+    vi.stubEnv("VITE_BUILD_ID", "client-build");
     fetchMock = vi.fn(async () => versionResponse({ buildId: "client-build" }));
     vi.stubGlobal("fetch", fetchMock);
     setVisibility("visible");
@@ -61,7 +61,7 @@ describe("deployDrift", () => {
   });
 
   it("never probes a dev build", async () => {
-    vi.stubEnv("NEXT_PUBLIC_BUILD_ID", undefined);
+    vi.stubEnv("VITE_BUILD_ID", undefined);
     await probeDeploy();
     expect(fetchMock).not.toHaveBeenCalled();
   });

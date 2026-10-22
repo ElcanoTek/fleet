@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { useEffect, useState } from "react";
 import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
 
@@ -113,16 +112,16 @@ export default function LoginCard({
     <main className="flex min-h-screen bg-[var(--gradient-bg-home-signature)] px-6 py-10">
       <ThemeToggle className="fixed top-5 right-5 inline-flex size-10 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]" />
       <div className="m-auto w-full max-w-[25rem] rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--gradient-surface-card)] p-10 shadow-[var(--shadow-lg)]">
-        {/* unoptimized for the same reason as the rail's mark (NavRail.tsx): the
-            bundle mark is served at /api/brand/logo with no extension, and an
-            SVG through next/image's optimizer renders broken. */}
-        <Image
+        {/* A plain <img>: the bundle mark is served at /api/brand/logo with no
+            extension and may be an SVG, which no image optimizer should touch. */}
+        <img
           src="/api/brand/logo"
           alt=""
           width={36}
           height={36}
-          priority
-          unoptimized
+          fetchPriority="high"
+          decoding="async"
+          style={{ color: "transparent" }}
           className="mb-4 block h-9 w-auto max-w-[12rem]"
         />
         <div className="mb-5 text-[0.75rem] font-bold tracking-[0.14em] text-[var(--color-text-muted)] uppercase">

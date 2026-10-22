@@ -9,7 +9,7 @@ import ProvidersAdminPage, { type LLMProvider } from "./page";
 // the connection test renders its key-free result, and Remove requires the
 // inline two-click confirmation before the DELETE fires.
 
-vi.mock("next/navigation", () => ({
+vi.mock("@/app/lib/navigation", () => ({
   useRouter: () => ({ replace: vi.fn() }),
 }));
 

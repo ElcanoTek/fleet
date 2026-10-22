@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -193,5 +194,28 @@ func TestPerMillionTokens(t *testing.T) {
 		if got := perMillionTokens(in); got != want {
 			t.Errorf("perMillionTokens(%q) = %v, want %v", in, got, want)
 		}
+	}
+}
+
+// The web model picker (internal/webui) reads the raw per-token prices, the
+// canonical slug, created and the output modalities off the same catalog.
+func TestToModelInfo_PickerFields(t *testing.T) {
+	var e orModelEntry
+	raw := `{"id":"moonshotai/kimi","canonical_slug":"moonshotai/kimi-20260420","created":"1760000000","pricing":{"prompt":"0.000001","completion":" 0.000003 "},"architecture":{"output_modalities":["text"]}}`
+	if err := json.Unmarshal([]byte(raw), &e); err != nil {
+		t.Fatalf("a string created must not fail the entry: %v", err)
+	}
+	info := e.toModelInfo()
+	if !info.HasCompletionPrice || info.CompletionPerToken != 0.000003 || info.PromptPerToken != 0.000001 ||
+		info.CanonicalSlug != "moonshotai/kimi-20260420" || info.Created != 1760000000 || len(info.OutputModalities) != 1 {
+		t.Fatalf("%+v", info)
+	}
+	// Unparseable completion price: flagged, not zero-priced; canonical equal
+	// to id is dropped; a garbage created is zero.
+	e = orModelEntry{}
+	_ = json.Unmarshal([]byte(`{"id":"a/b","canonical_slug":"a/b","created":{"x":1},"pricing":{"completion":"n/a"}}`), &e)
+	info = e.toModelInfo()
+	if info.HasCompletionPrice || info.CanonicalSlug != "" || info.Created != 0 {
+		t.Fatalf("%+v", info)
 	}
 }

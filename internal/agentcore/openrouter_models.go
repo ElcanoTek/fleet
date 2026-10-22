@@ -43,6 +43,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -84,6 +85,11 @@ type orModelEntry struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	ContextLength int    `json:"context_length"`
+	// CanonicalSlug is the dated form ("moonshotai/kimi-k2.6-20260420") some
+	// listings use; Created is when OpenRouter first listed the model (unix
+	// seconds). Both feed the web model picker (internal/webui).
+	CanonicalSlug string     `json:"canonical_slug"`
+	Created       flexNumber `json:"created"`
 	Pricing       struct {
 		// Per-token price strings as OpenRouter returns them (e.g. "0.000003").
 		Prompt     string `json:"prompt"`
@@ -93,6 +99,8 @@ type orModelEntry struct {
 		// InputModalities lists the modalities the model accepts ("text",
 		// "image", ...); "image" implies vision support.
 		InputModalities []string `json:"input_modalities"`
+		// OutputModalities: a text-completion model emits ["text"] only.
+		OutputModalities []string `json:"output_modalities"`
 	} `json:"architecture"`
 	TopProvider struct {
 		// MaxCompletionTokens is non-nil for models that expose a distinct
@@ -115,6 +123,18 @@ type ModelInfo struct {
 	SupportsVision     bool
 	SupportsThinking   bool
 	Provider           string
+
+	// The raw per-token prices, for surfaces that show them unconverted (the
+	// web picker's cost indicator). HasCompletionPrice is false when the
+	// completion price is missing or unparseable — such an entry cannot be
+	// reasoned about for cost and the picker skips it.
+	PromptPerToken     float64
+	CompletionPerToken float64
+	HasCompletionPrice bool
+	// CanonicalSlug is set only when it differs from ID.
+	CanonicalSlug    string
+	Created          int64
+	OutputModalities []string
 }
 
 // orModelsResponse is the top-level envelope: {"data": [...]}.
@@ -222,7 +242,7 @@ func (c *modelsCache) LastFetchedAt() time.Time {
 // per-token price strings to per-million-token floats and deriving capability
 // booleans. An unparseable price degrades to 0 rather than failing the entry.
 func (e orModelEntry) toModelInfo() ModelInfo {
-	return ModelInfo{
+	info := ModelInfo{
 		ID:                 e.ID,
 		Name:               e.Name,
 		ContextLength:      e.ContextLength,
@@ -232,6 +252,54 @@ func (e orModelEntry) toModelInfo() ModelInfo {
 		SupportsThinking:   e.TopProvider.MaxCompletionTokens != nil,
 		Provider:           providerFromSlug(e.ID),
 	}
+	if v, ok := parsePerToken(e.Pricing.Completion); ok {
+		info.CompletionPerToken, info.HasCompletionPrice = v, true
+	}
+	if v, ok := parsePerToken(e.Pricing.Prompt); ok {
+		info.PromptPerToken = v
+	}
+	if e.CanonicalSlug != "" && e.CanonicalSlug != e.ID {
+		info.CanonicalSlug = e.CanonicalSlug
+	}
+	if c := float64(e.Created); c > 0 && !math.IsInf(c, 0) {
+		info.Created = int64(c)
+	}
+	info.OutputModalities = append([]string(nil), e.Architecture.OutputModalities...)
+	return info
+}
+
+// flexNumber decodes a JSON number, or a numeric string, and never fails the
+// enclosing document: a malformed optional field must not cost the whole
+// catalog (every other field here is a string the decoder already tolerates).
+type flexNumber float64
+
+func (f *flexNumber) UnmarshalJSON(b []byte) error {
+	var n float64
+	if err := json.Unmarshal(b, &n); err == nil {
+		*f = flexNumber(n)
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+			*f = flexNumber(v)
+		}
+	}
+	return nil
+}
+
+// parsePerToken parses one per-token price string. ok is false for an empty
+// or unparseable value (OpenRouter's "0" for a free tier is a real price).
+func parsePerToken(perToken string) (float64, bool) {
+	perToken = strings.TrimSpace(perToken)
+	if perToken == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(perToken, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, false
+	}
+	return v, true
 }
 
 // perMillionTokens converts a per-token price string (OpenRouter's wire format)

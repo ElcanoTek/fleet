@@ -1,33 +1,12 @@
-import { redirect } from "next/navigation";
-import { getServerSession } from "@/app/lib/auth";
-import { chatServerFetch } from "@/app/lib/chatServer";
+import { getBootstrap } from "@/app/lib/bootstrap";
 import { PageClient } from "./page-client";
 
-// Membership entry gate for identities minted elsewhere. Password sessions
-// are members by construction (they must exist in the user-list to have a
-// password). Sessions from the shared elcano_auth cookie and from central
-// Auth (OIDC) are not: Auth decides who may reach Fleet, Fleet's user-list
-// decides who is a member, and an account that passes the first but not the
-// second must see one clear no-access page — not a shell whose every API call
-// 403s and whose 401 handlers bounce it between /login and /chat (#1522).
-// chat-server's membershipMiddleware remains the real boundary.
-export default async function Home() {
-  const session = await getServerSession();
-  if (session?.source === "elcano" || session?.source === "oidc") {
-    let denied = false;
-    try {
-      const res = await chatServerFetch(session, "/auth/membership");
-      denied = res.status === 403;
-    } catch {
-      // chat-server unreachable — don't trap the user on no-access for a
-      // transient error; let the app load and surface failures normally.
-      denied = false;
-    }
-    if (denied) {
-      redirect("/no-access");
-    }
-  }
-  // Hand the already-resolved session email to the client so cold boot skips
-  // its serial /api/session round-trip (see ChatExperience.initialUserEmail).
-  return <PageClient initialEmail={session?.email ?? null} />;
+// /chat. The membership entry gate for identities minted elsewhere (#1522)
+// runs on the server before this page is served (internal/webui/spa.go): an
+// elcano_auth or central-Auth session whose email is not on the user list is
+// sent to /no-access. The already-resolved session email rides the bootstrap,
+// so cold boot skips its serial /api/session round trip
+// (ChatExperience.initialUserEmail).
+export default function ChatPage() {
+  return <PageClient initialEmail={getBootstrap().session?.email ?? null} />;
 }

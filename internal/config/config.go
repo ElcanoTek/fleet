@@ -404,6 +404,33 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_WEBHOOK_SECRET":        true,
 	"FLEET_PUBLIC_URL":            true,
 
+	// ── browser tier (internal/webui, ADR-0091) ──
+	// What the Next.js tier read from /etc/fleet/fleet-web.env, now read by the
+	// fleet binary itself. APP_SESSION_SECRET signs the session cookie; the
+	// AUTH_* keys configure the legacy Elcano magic-link cookie and the
+	// back-channel signing keys; FLEET_OIDC_* is central-Auth SSO.
+	// NEXT_PUBLIC_PUBLIC_ORIGIN is read only as a fallback for
+	// FLEET_PUBLIC_BASE_URL on a box whose env predates the move.
+	"FLEET_WEB_ADDR":                true,
+	"FLEET_WEB_DEV_SERVER":          true,
+	"APP_SESSION_SECRET":            true,
+	"AUTH_SIGNING_PUBKEY":           true,
+	"AUTH_SIGNING_PREVIOUS_PUBKEYS": true,
+	"AUTH_COOKIE_NAME":              true,
+	"AUTH_COOKIE_DOMAIN":            true,
+	"AUTH_LOGIN_URL":                true,
+	"FLEET_OIDC_ISSUER":             true,
+	"FLEET_OIDC_CLIENT_ID":          true,
+	"FLEET_OIDC_CLIENT_SECRET":      true,
+	"FLEET_OIDC_SCOPES":             true,
+	"FLEET_OIDC_ALLOWED_DOMAINS":    true,
+	"FLEET_OIDC_BUTTON_LABEL":       true,
+	"FLEET_OIDC_REDIRECT_URI":       true,
+	"FLEET_OIDC_AUTO_START":         true,
+	"CATWALK_URL":                   true,
+	"ORCHESTRATOR_SERVER_TOKEN":     true,
+	"NEXT_PUBLIC_PUBLIC_ORIGIN":     true,
+
 	// ── account-events feed (docs/ACCOUNT-EVENTS.md) ──
 	// Signed membership/role change events for an identity provider or audit
 	// sink. OFF unless the URL is set; the secret is then required and is held
