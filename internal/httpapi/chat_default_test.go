@@ -196,9 +196,13 @@ func (s *fakeChatStore) ListConnectorPrefs(_ context.Context, _ string) (map[str
 	return nil, nil
 }
 
-// User skills (docs/SKILLS.md phase 2): the fake has none — the turn path
+// User skills (docs/SKILLS.md phase 2/3): the fake has none — the turn path
 // lists them on every run.
 func (s *fakeChatStore) ListUserSkills(_ context.Context, _ string) ([]store.UserSkill, error) {
+	return nil, nil
+}
+
+func (s *fakeChatStore) ListWorkspaceSharedUserSkills(_ context.Context) ([]store.UserSkill, error) {
 	return nil, nil
 }
 

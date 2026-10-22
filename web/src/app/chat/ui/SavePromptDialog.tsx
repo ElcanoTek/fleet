@@ -42,6 +42,17 @@ type Props = {
 };
 
 type Phase = "loading" | "edit" | "saved";
+type SaveTargetKind = "prompt" | "skill";
+
+function toSkillSlug(raw: string): string {
+  const slug = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64)
+    .replace(/-+$/g, "");
+  return slug || "custom-workflow";
+}
 
 const FIELD =
   "w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]";
@@ -52,6 +63,8 @@ export function SavePromptDialog({
   onClose,
 }: Props) {
   const [phase, setPhase] = useState<Phase>("loading");
+  const [targetKind, setTargetKind] = useState<SaveTargetKind>("prompt");
+  const [skillName, setSkillName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<PromptLibraryWrite>({
@@ -97,6 +110,7 @@ export function SavePromptDialog({
           content: body.content ?? "",
           visibility: "private",
         });
+        setSkillName(toSkillSlug(body.name ?? ""));
         setPhase("edit");
       } catch (err) {
         if (cancelled || controller.signal.aborted) return;
@@ -118,10 +132,33 @@ export function SavePromptDialog({
     setSaving(true);
     setError(null);
     try {
-      await orchestratorApi.createPrompt(draft);
+      if (targetKind === "skill") {
+        const cleanSlug = toSkillSlug(skillName || draft.name);
+        const cleanDesc = (draft.description || draft.name)
+          .replace(/\s+/g, " ")
+          .trim();
+        const res = await fetch("/api/user-skills", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: cleanSlug,
+            description: cleanDesc,
+            body: draft.content,
+            visibility: draft.visibility ?? "private",
+          }),
+        });
+        if (!res.ok) {
+          throw new Error(
+            (await res.text()) || `Could not save skill (${res.status})`,
+          );
+        }
+        setSkillName(cleanSlug);
+      } else {
+        await orchestratorApi.createPrompt(draft);
+      }
       setPhase("saved");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save prompt");
+      setError(err instanceof Error ? err.message : "Could not save workflow");
     } finally {
       setSaving(false);
     }
@@ -185,10 +222,14 @@ export function SavePromptDialog({
                 <Icon name="check" className="size-5" />
               </span>
               <p className="m-0 text-sm text-[var(--color-text-primary)]">
-                Saved “{draft.name.trim() || "workflow"}” to your library.
+                {targetKind === "skill"
+                  ? `Saved skill “/${skillName || toSkillSlug(draft.name)}”${draft.visibility === "workspace" ? " (shared with workspace)" : ""}.`
+                  : `Saved “${draft.name.trim() || "workflow"}” to your library.`}
               </p>
               <p className="m-0 text-xs text-[var(--color-text-muted)]">
-                Find it under the book icon next to the message box.
+                {targetKind === "skill"
+                  ? `Invoke it in chat with /${skillName || toSkillSlug(draft.name)}, or manage it under Settings → Skills.`
+                  : "Find it under the book icon next to the message box."}
               </p>
             </div>
           ) : distillFailed ? (
@@ -216,13 +257,82 @@ export function SavePromptDialog({
                 marked in <code>[BRACKETS]</code>. Review and edit it before
                 saving; nothing is stored until you do.
               </p>
+              <div
+                role="radiogroup"
+                aria-label="Save destination"
+                className="grid grid-cols-1 gap-2 sm:grid-cols-2"
+              >
+                <label
+                  aria-label="Prompt Library workflow"
+                  className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-xs ${
+                    targetKind === "prompt"
+                      ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,var(--color-surface-2))]"
+                      : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="saveTargetKind"
+                    value="prompt"
+                    checked={targetKind === "prompt"}
+                    onChange={() => setTargetKind("prompt")}
+                    className="mt-0.5"
+                  />{" "}
+                  Prompt Library workflow — Pick from the book icon in Chat &amp;
+                  Operations Center
+                </label>
+                <label
+                  aria-label="Agent Skill"
+                  className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-xs ${
+                    targetKind === "skill"
+                      ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,var(--color-surface-2))]"
+                      : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="saveTargetKind"
+                    value="skill"
+                    checked={targetKind === "skill"}
+                    onChange={() => {
+                      setTargetKind("skill");
+                      if (!skillName) setSkillName(toSkillSlug(draft.name));
+                    }}
+                    className="mt-0.5"
+                  />{" "}
+                  Agent Skill (/{skillName || toSkillSlug(draft.name)}) —
+                  Auto-loaded by the agent when relevant or via /skill-name
+                </label>
+              </div>
+              {targetKind === "skill" ? (
+                <label className="grid gap-1 text-sm">
+                  Skill slash-command name{" "}
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    Lowercase kebab-case (a-z, 0-9, hyphens), invoked as{" "}
+                    <code>/{skillName || toSkillSlug(draft.name)}</code>
+                  </span>
+                  <input
+                    aria-label="Skill slash-command name"
+                    className={FIELD}
+                    maxLength={64}
+                    value={skillName}
+                    onChange={(e) => setSkillName(e.target.value)}
+                  />
+                </label>
+              ) : null}
               <label className="grid gap-1 text-sm">
                 Name
                 <input
                   className={FIELD}
                   maxLength={120}
                   value={draft.name}
-                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                  onChange={(e) => {
+                    const nextName = e.target.value;
+                    setDraft({ ...draft, name: nextName });
+                    if (targetKind === "prompt") {
+                      setSkillName(toSkillSlug(nextName));
+                    }
+                  }}
                 />
               </label>
               <label className="grid gap-1 text-sm">
@@ -292,12 +402,19 @@ export function SavePromptDialog({
                   disabled={
                     phase !== "edit" ||
                     saving ||
-                    !draft.name.trim() ||
+                    (targetKind === "skill"
+                      ? !toSkillSlug(skillName || draft.name) ||
+                        !(draft.description || draft.name).trim()
+                      : !draft.name.trim()) ||
                     !draft.content.trim()
                   }
                   onClick={() => void save()}
                 >
-                  {saving ? "Saving…" : "Save workflow"}
+                  {saving
+                    ? "Saving…"
+                    : targetKind === "skill"
+                      ? "Save skill"
+                      : "Save workflow"}
                 </button>
               )}
             </>
