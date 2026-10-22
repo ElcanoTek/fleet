@@ -389,6 +389,12 @@ fewer summarizer calls; making the elided content recallable added nothing.
       run.
 
   The server log says when either applies.
+- **Reused call IDs** (fixed 2026-10-22). Some providers reuse one call ID
+  across steps, or within one parallel step. Each result is paired with its
+  own call: the nearest earlier message with calls under that ID, and within
+  it the call in the result's own position. Before this, a lookup by ID took
+  the last call with that ID, so a stub could name the wrong tool or stub a
+  `spawn_subagent` answer.
 - **Knob.** `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY`, on by default; `0` or `false`
   turns it off and restores the summary-only behaviour. It takes
   `strconv.ParseBool` tokens and is registered with `fleet validate-config`.
@@ -498,8 +504,8 @@ refresh:
   largest discount per store. The data is generated deterministically, so all
   72 cells are scored exactly.
 
-Both models fetched all twelve reports in one parallel step, answered, and then
-re-checked the answer against the reports in their self-audit. Each row is one
+Haiku and Sonnet fetched all twelve reports in one parallel step, answered,
+and then re-checked the answer against the reports in their self-audit. Each row is one
 recurring series, except fixed Haiku (4 runs, then 2 on the final build) and
 fixed Gemini (a run that died on a provider error within a minute was run
 again). The last four models were measured off and fixed only. "#1827" is elision as first shipped; "fixed" holds it back
@@ -534,20 +540,23 @@ the audit request, so the reports the audit was re-reading were 2 KB previews.
 With elision held back during the audit, every pause in it bought the summary,
 which keeps the recent half (and the reports) verbatim. Both models then passed.
 - **Haiku** cost about what it did with elision off ($0.57 a run against
-  $0.56). The cells it missed (7 in one run and 8 in another, almost all
-  low-stock lists) are the kind it also missed with elision off (63 of 72).
+  $0.56). The cells it missed (7, 8 and 1 in three runs, almost all low-stock
+  lists) are the kind it also missed with elision off (63 of 72).
 - **Sonnet** cost 19% less than with it off.
 
-On this task elision helps only after the audit is accepted, which is where it
-fired in the fixed runs.
+For Haiku and Sonnet, elision on this task helps only after the audit is
+accepted, which is where it fired in their fixed runs.
 
-The four other models succeeded in every fixed run, as with elision off, with
-no fewer cells correct.
+The four other models succeeded in every fixed run, as with elision off.
+Their cells correct were the same or better, except one DeepSeek run (65 of 72
+against 72 in both of its off runs).
 - **Opus** cost more fixed than off, but its two off runs alone spanned
   $2.14–5.50, depending on whether it re-fetched to audit.
 - **DeepSeek** re-fetched in loops in both modes: one off run took 34
   minutes, with 40 pauses, 40 summaries and 160 re-fetches. That is the
-  model's own pattern, and its fixed runs were shorter on average.
+  model's own pattern. Its fixed runs were shorter on average, but only
+  because of that run: its other off run took 13 minutes, under the fixed
+  average.
 
 In the Haiku and Sonnet runs the re-run stop did not fire, because their
 re-fetches came during the audit, when nothing had been elided. In the

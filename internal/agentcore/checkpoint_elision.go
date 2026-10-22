@@ -92,7 +92,7 @@ func elideStaleToolResults(messages []fantasy.Message, recentTokens int) elision
 			if !ok {
 				continue
 			}
-			call, found := callBefore(messages, mi, p.ToolCallID)
+			call, found := callBefore(messages, mi, pi, p.ToolCallID)
 			if elisionKeptTools[call.ToolName] {
 				continue
 			}
@@ -126,17 +126,36 @@ func elideStaleToolResults(messages []fantasy.Message, recentTokens int) elision
 	return res
 }
 
-// callBefore is the call a tool result in messages[mi] answers: the nearest
-// call with its ID before that message. Not just any call with that ID: some
-// providers reuse one ID for every call, so a map from ID to call would name
-// another call's tool, and could stub a result elisionKeptTools keeps.
-func callBefore(messages []fantasy.Message, mi int, id string) (fantasy.ToolCallPart, bool) {
+// callBefore is the call the tool result at messages[mi].Content[pi] answers.
+// Not just any call with its ID: some providers reuse one ID across steps, or
+// even within one parallel step, so a map from ID to call would name another
+// call's tool, and could stub a result elisionKeptTools keeps. The call is in
+// the nearest message before mi that has calls with that ID; when that message
+// has several, the result takes the one in its own position among the results
+// with that ID since that message (the k-th result answers the k-th call).
+func callBefore(messages []fantasy.Message, mi, pi int, id string) (fantasy.ToolCallPart, bool) {
 	for i := mi - 1; i >= 0; i-- {
+		var calls []fantasy.ToolCallPart
 		for _, part := range messages[i].Content {
 			if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok && tc.ToolCallID == id {
-				return tc, true
+				calls = append(calls, tc)
 			}
 		}
+		if len(calls) == 0 {
+			continue
+		}
+		k := 0
+		for j := i + 1; j <= mi; j++ {
+			for q, part := range messages[j].Content {
+				if j == mi && q >= pi {
+					break
+				}
+				if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok && tr.ToolCallID == id {
+					k++
+				}
+			}
+		}
+		return calls[min(k, len(calls)-1)], true
 	}
 	return fantasy.ToolCallPart{}, false
 }

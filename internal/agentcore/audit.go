@@ -469,9 +469,10 @@ func (o *orchestrationState) auditVerdict() (aborted bool, summary string, execu
 // selfAuditPending reports whether the run's self-audit has been asked for
 // and no confirm_audit has been accepted yet: the stretch in which the run
 // re-reads its evidence. It opens with the finish enforcement's audit
-// request, or with a confirm_audit(success=true) that was refused; the
-// critical-action bookkeeping that also sets selfAuditRequested runs only
-// after an accepted audit.
+// request, or a confirm_audit(success=true) refused after its arguments
+// validated. The bookkeeping that also sets selfAuditRequested runs after an
+// accepted audit, except the duplicate-email guard, which can open it early;
+// that only holds elision back sooner (engine.elisionHeld).
 // The resend checkpoint does not elide then (engine.elisionHeld). Nil-safe:
 // false for an engine with no run state.
 func (o *orchestrationState) selfAuditPending() bool {

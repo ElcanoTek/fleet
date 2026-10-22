@@ -982,6 +982,33 @@ func TestElideStaleToolResults_ReusedCallIDKeepsEachResultsTool(t *testing.T) {
 	}
 }
 
+// Calls sharing one ID within a parallel step: each result answers the call in
+// its own position, so a subagent's answer in the batch is still kept.
+func TestElideStaleToolResults_ParallelCallsSharingAnID(t *testing.T) {
+	history := make([]fantasy.Message, 0, 11)
+	history = append(history,
+		fantasy.NewUserMessage("refresh every page"),
+		fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: "read_page", Input: `{"page":1}`},
+			fantasy.ToolCallPart{ToolCallID: "call_0", ToolName: "spawn_subagent", Input: `{"task":"a"}`},
+		}},
+		fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+			fantasy.ToolResultPart{ToolCallID: "call_0", Output: elisionText(40_000)},
+			fantasy.ToolResultPart{ToolCallID: "call_0", Output: elisionText(40_000)},
+		}},
+	)
+	for i := range 4 {
+		history = append(history, elisionExchange("call_0", fmt.Sprintf(`{"page":%d}`, 10+i), elisionText(40_000))...)
+	}
+	res := elideStaleToolResults(history, 1)
+	if _, text := resultOf(t, res.messages[2].Content[0]); !strings.Contains(text, "read_page") {
+		t.Fatalf("the first result should be read_page's stub, got %.200q", text)
+	}
+	if _, text := resultOf(t, res.messages[2].Content[1]); strings.HasPrefix(text, "[tool output truncated]") {
+		t.Fatal("the subagent's answer in a batch sharing one call ID was stubbed")
+	}
+}
+
 // Through checkContextPressure: the first pause elides, the run re-runs a
 // stubbed call, and the next pause summarizes instead of eliding again.
 func TestCheckContextPressure_RerunStopsElision(t *testing.T) {
