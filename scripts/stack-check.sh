@@ -17,7 +17,7 @@
 #   4. npm trees: no server frameworks (next, express, ...); Tier A has no runtime deps.
 set -euo pipefail
 
-STACK_CHECK_VERSION=12
+STACK_CHECK_VERSION=13
 STANDARD_SHA=5b3a1c9dab098277570a37d58366b0802d4378370f9717d48743c386b194bdbb
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONF="$ROOT/stack.conf"
@@ -70,12 +70,15 @@ fi
 # not. Perl reads each file whole, so tags split across lines and whitespace
 # around "=" are caught too. Go files are scanned as well, for markup built
 # in Go (only tag/import patterns match, not plain URLs in strings).
+# Only Go's own test-only paths are skipped (*_test.go, testdata/): the go
+# tool never builds them into the binary. Anything else under a web dir,
+# including folders named test/ or e2e/, may be served and is scanned.
 # shellcheck disable=SC2016 # the perl program is single-quoted on purpose
 for d in $web; do
   [ -d "$ROOT/$d" ] || { err "stack.conf: web dir $d does not exist"; continue; }
   scan="$(mktemp)"
-  if ! (set -o pipefail; find "$ROOT/$d" \( -name node_modules -o -name dist -o -name test -o -name tests -o -name e2e -o -name testdata \) -prune -o -type f \
-             ! -name '*.test.*' ! -name '*.spec.*' ! -name '*_test.go' \( -name '*.go' -o -name '*.html' -o -name '*.htm' -o -name '*.xhtml' -o -name '*.svg' -o -name '*.jsx' -o -name '*.cjs' -o -name '*.mts' -o -name '*.cts' -o -name '*.tmpl' -o -name '*.gohtml' -o -name '*.css' -o -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.jinja' -o -name '*.j2' \) -print0 \
+  if ! (set -o pipefail; find "$ROOT/$d" \( -name node_modules -o -name dist -o -name testdata \) -prune -o -type f \
+             ! -name '*_test.go' \( -name '*.go' -o -name '*.html' -o -name '*.htm' -o -name '*.xhtml' -o -name '*.svg' -o -name '*.jsx' -o -name '*.cjs' -o -name '*.mts' -o -name '*.cts' -o -name '*.tmpl' -o -name '*.gohtml' -o -name '*.css' -o -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.jinja' -o -name '*.j2' \) -print0 \
            | xargs -0 -r perl -0777 -ne '
                my $f = $ARGV; my $remote = qr{["'"'"'(]?\s*(?:https?:)?(?://|\\/\\/)(?!(?:localhost|127\.0\.0\.1)(?::\d+)?(?:[/?#\s"'"'"')>]|$))[^\s"'"'"')>]+}i;
                while (/<script\b[^>]*?\bsrc\s*=\s*$remote/gis) { (my $m = $&) =~ s/\s+/ /g; print "$f: $m\n"; }
