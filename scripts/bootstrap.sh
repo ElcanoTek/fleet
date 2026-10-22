@@ -427,34 +427,18 @@ fi
 
 # upsert_env_file FILE KEY VALUE — idempotently set KEY=VALUE in FILE, replacing
 # an existing KEY= line in place and preserving comments/unrelated lines (mirrors
-# internal/creds.SetEnvKey). No-ops under --dry-run. Values are written verbatim;
-# DSNs may contain '&'/'/' so we avoid sed substitution and rewrite via awk.
+# internal/creds.SetEnvKey). No-ops under --dry-run. The value is encoded by
+# lib/envfile.sh so systemd, fleet's own parser and env_get all read back the
+# exact bytes; a value no encoding can carry is refused, never written mangled.
 upsert_env_file() {
-  local file="$1" key="$2" value="$3"
   if [[ "$DRY_RUN" == "1" ]]; then
     # Never echo secret values in the plan — show the key only.
-    info "[dry-run] would set ${key}=… in ${file}"
+    info "[dry-run] would set ${2}=… in ${1}"
     return 0
   fi
-  [[ -f "$file" ]] || install -D -m 0600 /dev/null "$file"
-  local tmp
-  tmp="$(mktemp "${file}.XXXXXX")"
-  KEY="$key" VALUE="$value" awk '
-    BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; done = 0 }
-    {
-      line = $0
-      eq = index(line, "=")
-      if (!done && eq > 0 && substr(line, 1, eq - 1) == k) {
-        print k "=" v
-        done = 1
-        next
-      }
-      print line
-    }
-    END { if (!done) print k "=" v }
-  ' "$file" > "$tmp"
-  chmod 0600 "$tmp"
-  mv -f "$tmp" "$file"
+  fleet_upsert_env_file "$1" "$2" "$3" && return 0
+  warn "could not write ${2} to ${1}: the value has a line break, or a ' together with a \" or \\, which no env-file quoting carries — set it by hand"
+  return 1
 }
 
 # upsert_env KEY VALUE — upsert into the main credential env file ($ENV_FILE).

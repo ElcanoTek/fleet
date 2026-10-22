@@ -3,6 +3,7 @@ package creds
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -78,30 +79,15 @@ func TestReadEnvValues(t *testing.T) {
 	})
 }
 
-// #834: SetEnvKey must write values so the shared parser reads back the exact
-// bytes it was given. Before the encode step, literal quotes / edge whitespace
-// / inline-comment sequences silently mangled on the next read, and a newline
-// physically corrupted the file.
+// #834, #1838: SetEnvKey must write values so EVERY reader of the file reads
+// back the exact bytes it was given — fleet's parser (ReadEnvValues, identical
+// to config.loadEnvFile), systemd's EnvironmentFile= (what deploy/fleet.service
+// injects, modelled by systemdEnvValue) and the scripts' env_get. Before the
+// encode step, literal quotes / edge whitespace / inline-comment sequences
+// silently mangled on the next read; before #1838 a backslash or a ' inside a
+// quoted value read back differently under systemd.
 func TestSetEnvKeyRoundTrip(t *testing.T) {
-	cases := []struct {
-		name  string
-		value string
-	}{
-		{"plain api key", "plain-value-abc123"},
-		{"empty", ""},
-		{"literal surrounding double quotes", `"hi"`},
-		{"literal surrounding single quotes", `'hi'`},
-		{"interior quote", "it's a secret"},
-		{"leading and trailing spaces", "  padded  "},
-		{"inline comment sequence", "foo #bar"},
-		{"tab comment sequence", "foo\t#bar"},
-		{"hash without space", "abc#def"},
-		{"equals signs", "a=b=c"},
-		{"export lookalike", "export PATH=x"},
-		{"only a quote", `'`},
-		{"mixed quote edges", `'starts"`},
-	}
-	for _, tc := range cases {
+	for _, tc := range envRoundTripCases {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "fleet.env")
 			if err := SetEnvKey(path, "ROUNDTRIP_KEY", tc.value); err != nil {
@@ -112,10 +98,165 @@ func TestSetEnvKeyRoundTrip(t *testing.T) {
 				t.Fatalf("ReadEnvValues: %v", err)
 			}
 			if got := vals["ROUNDTRIP_KEY"]; got != tc.value {
-				t.Fatalf("round-trip = %q, want %q", got, tc.value)
+				t.Fatalf("fleet parser read %q, want %q", got, tc.value)
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			onDisk := strings.TrimSuffix(strings.TrimPrefix(string(raw), "ROUNDTRIP_KEY="), "\n")
+			if got := systemdEnvValue(onDisk); got != tc.value {
+				t.Fatalf("systemd reads %q from %q, want %q", got, onDisk, tc.value)
+			}
+			if got := envGetValue(onDisk); got != tc.value {
+				t.Fatalf("env_get reads %q from %q, want %q", got, onDisk, tc.value)
 			}
 		})
 	}
+}
+
+// envRoundTripCases — every value class a reader treats specially. Shared with
+// TestEnvEncodingMatchesShellWriter, which runs scripts/lib/envfile.sh.
+var envRoundTripCases = []struct {
+	name  string
+	value string
+}{
+	{"plain api key", "plain-value-abc123"},
+	{"empty", ""},
+	{"literal surrounding double quotes", `"hi"`},
+	{"literal surrounding single quotes", `'hi'`},
+	{"interior quote", "it's a secret"},
+	{"leading and trailing spaces", "  padded  "},
+	{"tabs at the edges", "\tpadded\t"},
+	{"inline comment sequence", "foo #bar"},
+	{"oidc secret with a comment marker", "abc # def"},
+	{"tab comment sequence", "foo\t#bar"},
+	{"leading hash", "#abc"},
+	{"hash without space", "abc#def"},
+	{"equals signs", "a=b=c"},
+	{"export lookalike", "export PATH=x"},
+	{"only a quote", `'`},
+	{"backslash", `a\b`},
+	{"trailing backslash", `abc\`},
+	{"backslash escape lookalike", `a\"b`},
+	{"dollar", "pa$$word"},
+	{"variable lookalike", "${HOME}/x"},
+	{"backtick", "a`id`b"},
+	{"interior spaces", "Sign in with Example"},
+	{"single quote and dollar", "it's $5"},
+	{"non-ascii", "pässwörd"},
+}
+
+// TestSetEnvKeyRefusesUnrepresentable — a ' together with a " or \ has no
+// quoting that systemd and fleet's parser both read back unchanged (systemd's
+// only way to carry it is backslash escapes, which fleet's parser keeps). The
+// write is refused and the file left as it was.
+func TestSetEnvKeyRefusesUnrepresentable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fleet.env")
+	if err := SetEnvKey(path, "GOOD", "keep-me"); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{`'starts"`, `it's "quoted"`, `it's a\b`} {
+		if err := SetEnvKey(path, "BAD", v); err == nil {
+			t.Fatalf("SetEnvKey(%q) succeeded, want refusal", v)
+		}
+	}
+	vals, err := ReadEnvValues(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vals["GOOD"] != "keep-me" || len(vals) != 1 {
+		t.Fatalf("file mutated by refused writes: %v", vals)
+	}
+}
+
+// systemdEnvValue models systemd's EnvironmentFile= value parsing
+// (src/basic/env-file.c, the PRE_VALUE/VALUE/quote states) for the text after
+// `KEY=`: single quotes are literal; double quotes unescape \" \\ \` \$ and
+// keep any other backslash; an unquoted value unescapes \x and drops trailing
+// whitespace; quoted and unquoted runs concatenate.
+func systemdEnvValue(raw string) string {
+	const (
+		pre = iota
+		val
+		valEsc
+		sq
+		dq
+		dqEsc
+	)
+	var out []byte
+	state, ws := pre, -1
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		switch state {
+		case pre:
+			switch c {
+			case '\'':
+				state = sq
+			case '"':
+				state = dq
+			case '\\':
+				state = valEsc
+			case ' ', '\t':
+			default:
+				state, ws = val, -1
+				out = append(out, c)
+			}
+		case val:
+			switch c {
+			case '\\':
+				state = valEsc
+			case ' ', '\t':
+				if ws < 0 {
+					ws = len(out)
+				}
+				out = append(out, c)
+			default:
+				ws = -1
+				out = append(out, c)
+			}
+		case valEsc:
+			state, ws = val, -1
+			out = append(out, c)
+		case sq:
+			if c == '\'' {
+				state = pre
+			} else {
+				out = append(out, c)
+			}
+		case dq:
+			switch c {
+			case '"':
+				state = pre
+			case '\\':
+				state = dqEsc
+			default:
+				out = append(out, c)
+			}
+		case dqEsc:
+			if !strings.ContainsRune("\"\\`$", rune(c)) {
+				out = append(out, '\\')
+			}
+			out = append(out, c)
+			state = dq
+		}
+	}
+	if state == val && ws >= 0 {
+		out = out[:ws]
+	}
+	return string(out)
+}
+
+// envGetValue models the scripts' env_get: one leading and one trailing quote
+// character stripped, nothing else.
+func envGetValue(raw string) string {
+	if raw != "" && (raw[0] == '"' || raw[0] == '\'') {
+		raw = raw[1:]
+	}
+	if raw != "" && (raw[len(raw)-1] == '"' || raw[len(raw)-1] == '\'') {
+		raw = raw[:len(raw)-1]
+	}
+	return raw
 }
 
 // A plain value must stay byte-verbatim on disk — no quote churn for the

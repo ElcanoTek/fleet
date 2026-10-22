@@ -264,25 +264,60 @@ func stripEnvInlineComment(value string) string {
 	return value
 }
 
-// encodeEnvValue returns the on-disk form of value such that splitEnvKeyValue
-// (and the server's identical parser) yields the original bytes.
+// encodeEnvValue returns the on-disk form of value such that every reader of
+// the file yields the original bytes: splitEnvKeyValue here and the server's
+// identical config.loadEnvFile, systemd's EnvironmentFile= (deploy/fleet.service
+// reads /etc/fleet/fleet.env — that is what the running service sees), and the
+// scripts' env_get. scripts/lib/envfile.sh's fleet_env_encode applies the same
+// rules to what bootstrap.sh and update.sh write.
 //
-// Most values (API keys: letters/digits/dashes) are written verbatim. A value
-// the parser would mangle — literal surrounding quotes, leading/trailing
-// whitespace, a ` #`/tab-`#` inline-comment sequence — is wrapped in a single
-// layer of single quotes: both parsers strip exactly one surrounding pair
-// without interpreting the interior, so the wrap round-trips ANY value that
-// fits on one line (interior quotes, `#`, spaces included). Line breaks are
-// unrepresentable in a line-oriented file and are refused rather than
-// written as file-corrupting physical breaks.
+// The readers disagree on everything but plain text and one layer of quotes:
+// systemd unescapes backslashes (unquoted and inside double quotes) and keeps an
+// unquoted ` #…`, while fleet's parser has no escapes and cuts an unquoted value
+// at ` #`. So:
+//   - a plain value (printable non-space edges; no quote, backslash, `$`,
+//     backtick, leading `#` or whitespace-`#`) is written verbatim;
+//   - otherwise, a value without `'` is wrapped in single quotes, which every
+//     reader takes literally;
+//   - otherwise, a value without `"` or `\` is wrapped in double quotes, where
+//     systemd has nothing to unescape;
+//   - anything else (a `'` together with a `"` or `\`), and any line break,
+//     has no form all readers agree on and is refused rather than written in a
+//     form the service would read differently (#834, #1838).
 func encodeEnvValue(value string) (string, error) {
 	if strings.ContainsAny(value, "\n\r") {
 		return "", fmt.Errorf("value contains a line break, which a KEY=VALUE env file cannot represent")
 	}
-	if _, parsed, ok := splitEnvKeyValue("K=" + value); ok && parsed == value {
+	switch {
+	case envValueVerbatim(value):
 		return value, nil
+	case !strings.Contains(value, "'"):
+		return "'" + value + "'", nil
+	case !strings.ContainsAny(value, `"\`):
+		return `"` + value + `"`, nil
 	}
-	return "'" + value + "'", nil
+	return "", fmt.Errorf("value contains a ' together with a \" or \\, which no env-file quoting reads back the same under systemd and fleet's own parser")
+}
+
+// envValueVerbatim reports whether value reads back unchanged, unquoted, under
+// every reader (see encodeEnvValue).
+func envValueVerbatim(value string) bool {
+	if value == "" {
+		return true
+	}
+	printable := func(c byte) bool { return c >= '!' && c <= '~' }
+	if !printable(value[0]) || !printable(value[len(value)-1]) || value[0] == '#' {
+		return false
+	}
+	if strings.ContainsAny(value, "'\"\\$`") {
+		return false
+	}
+	for i := 1; i < len(value); i++ {
+		if value[i] == '#' && strings.IndexByte(" \t\v\f", value[i-1]) >= 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // stripEnvQuotes removes a single layer of matching surrounding quotes.

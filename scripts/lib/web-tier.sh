@@ -9,7 +9,8 @@
 # bind. update.sh calls this right before its restart; doctor.sh offers it.
 #
 # Sourced, not executed. Callers provide ok/warn/info (and upsert_env_file
-# FILE KEY VALUE for fleet_migrate_web_env). Idempotent: on a box
+# FILE KEY VALUE for fleet_migrate_web_env — both scripts' copies delegate to
+# envfile.sh's fleet_upsert_env_file, which re-encodes every value). Idempotent: on a box
 # that never had the web tier, or already retired it, it does nothing and
 # returns 1 ("nothing to do").
 #
@@ -44,14 +45,14 @@ FLEET_WEB_ENV_CARRY_KEYS=(
   FLEET_OIDC_REDIRECT_URI FLEET_OIDC_AUTO_START
 )
 
-# fleet__web_env_get FILE KEY — the LAST assignment of KEY (systemd's
-# EnvironmentFile precedence), surrounding quotes stripped; empty when absent.
-fleet__web_env_get() {
-  local v
-  v="$(grep -E "^${2}=" "$1" 2>/dev/null | tail -n1 | cut -d= -f2-)" || true
-  v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"
-  printf '%s' "$v"
-}
+# The env-file codec: values are read the way systemd read them for the old
+# unit and written in the form every fleet.env reader agrees on (#1838).
+# shellcheck source=envfile.sh
+. "$(dirname "${BASH_SOURCE[0]}")/envfile.sh"
+
+# fleet__web_env_get FILE KEY — KEY's value as fleet-web.service saw it
+# (systemd EnvironmentFile= rules, last assignment wins); empty when absent.
+fleet__web_env_get() { fleet_env_get_systemd "$1" "$2"; }
 
 # fleet_migrate_web_env OLD_ENV NEW_ENV — carry the retired tier's settings
 # into the server env file. Never overwrites a key NEW_ENV already sets (the

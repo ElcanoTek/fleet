@@ -328,24 +328,13 @@ require_go_toolchain() {
   fi
 }
 # upsert_env_file FILE KEY VALUE — update one key without sourcing the secrets
-# file or disturbing operator-managed entries.
+# file or disturbing operator-managed entries. Encoded by lib/envfile.sh so
+# systemd, fleet's own parser and env_get all read back the exact bytes; a value
+# no encoding can carry is refused, never written mangled.
 upsert_env_file() {
-  local file="$1" key="$2" value="$3" tmp
-  [[ -f "$file" ]] || install -D -m 0600 /dev/null "$file"
-  tmp="$(mktemp "${file}.XXXXXX")"
-  KEY="$key" VALUE="$value" awk '
-    BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; done = 0 }
-    {
-      eq = index($0, "=")
-      if (!done && eq > 0 && substr($0, 1, eq - 1) == k) {
-        print k "=" v; done = 1; next
-      }
-      print
-    }
-    END { if (!done) print k "=" v }
-  ' "$file" > "$tmp"
-  chmod 0600 "$tmp"
-  mv -f "$tmp" "$file"
+  fleet_upsert_env_file "$1" "$2" "$3" && return 0
+  warn "could not write ${2} to ${1}: the value has a line break, or a ' together with a \" or \\, which no env-file quoting carries — set it by hand"
+  return 1
 }
 # env_get KEY [FILE] — read one key from an env file without sourcing it (the
 # file holds secrets; sourcing would execute arbitrary content on a tampered
