@@ -35,7 +35,8 @@ func main() {
 		log.Fatalf("web-e2e-server: no web bundle embedded — run `make web` (cd web && npm run build) before building this harness")
 	}
 	srv := &http.Server{Addr: addr, Handler: g, ReadHeaderTimeout: 30 * time.Second}
-	log.Printf("web-e2e-server: bundle %s on http://%s", g.BuildID(), addr)
+	//nolint:gosec // G706: addr is the harness's own config (a listen address), not request input; %q quotes it.
+	log.Printf("web-e2e-server: bundle %s listening on %q", g.BuildID(), addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}

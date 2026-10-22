@@ -73,7 +73,7 @@ func TestBrandAssetsAllowlistAndFallback(t *testing.T) {
 
 func TestManifestFromBranding(t *testing.T) {
 	e := newTestEnv(t)
-	e.chat.respond = func(w http.ResponseWriter, r *http.Request) {
+	e.chat.respond = func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"app_name":"Reklaim","background_dark":"#0A0908"}`)
 	}
 	res := e.do(req("GET", "/manifest.webmanifest", ""))
@@ -147,7 +147,7 @@ func TestModelCatalogAndRankings(t *testing.T) {
 		At     int64          `json:"cached_at"`
 	}
 	_ = json.NewDecoder(res.Body).Decode(&cat)
-	var ids []string
+	ids := make([]string, 0, len(cat.Models))
 	for _, m := range cat.Models {
 		ids = append(ids, m.Slug)
 	}
@@ -160,7 +160,7 @@ func TestModelCatalogAndRankings(t *testing.T) {
 		Models []rankedModel `json:"models"`
 	}
 	_ = json.NewDecoder(res.Body).Decode(&rk)
-	ids = nil
+	ids = make([]string, 0, len(rk.Models))
 	for _, m := range rk.Models {
 		ids = append(ids, m.Slug)
 	}
@@ -183,7 +183,7 @@ func TestModelCheck(t *testing.T) {
 	e := newTestEnv(t)
 	e.g.models.openrouter = fixedCatalog{entries: []agentcore.ModelInfo{{ID: "x/known", CanonicalSlug: "x/known-2026", CompletionPerToken: 0.000002, HasCompletionPrice: true}}}
 	route := `{"allowed":true,"provider_type":"openrouter"}`
-	e.chat.respond = func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, route) }
+	e.chat.respond = func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, route) }
 	check := func(q string) map[string]any {
 		var m map[string]any
 		_ = json.NewDecoder(e.do(signedIn(t, req("GET", "/api/model-check"+q, ""))).Body).Decode(&m)

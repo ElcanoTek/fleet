@@ -4,6 +4,7 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -25,6 +26,10 @@ import (
 
 // modelsPageURL is where the picker sends a user who wants to browse.
 const modelsPageURL = "https://openrouter.ai/models"
+
+// errValidateModel is shown to the browser verbatim, exactly as the Next.js
+// route worded it, so the picker's message did not change across ADR-0091.
+var errValidateModel = errors.New("Failed to validate model.") //nolint:revive,staticcheck // user-facing copy, not a wrapped error
 
 // majorLabs is the curated cross-lab picker: one row per lab, in this order.
 // Meta and Cohere are intentionally omitted.
@@ -275,7 +280,7 @@ func (g *Gateway) handleModelCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	var route map[string]any
 	if err := json.Unmarshal(body, &route); err != nil {
-		badGateway(w, errors.New("Failed to validate model."))
+		badGateway(w, errValidateModel)
 		return
 	}
 	if allowed, isBool := route["allowed"].(bool); isBool && !allowed {
@@ -338,7 +343,7 @@ func (m *modelCatalogs) loadCatwalk() ([]catwalkProvider, error) {
 	if m.catwalk != nil && time.Since(m.catwalkAt) < catwalkTTL {
 		return m.catwalk, nil
 	}
-	req, err := http.NewRequest(http.MethodGet, m.catwalkProvidersURL(), nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, m.catwalkProvidersURL(), nil)
 	if err != nil {
 		return nil, err
 	}

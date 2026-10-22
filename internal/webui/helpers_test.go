@@ -4,6 +4,7 @@
 package webui
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -133,10 +134,24 @@ func newTestEnv(t *testing.T, opts ...envOpt) *testEnv {
 	return e
 }
 
-func (e *testEnv) do(r *http.Request) *http.Response {
+// response is what the gateway wrote, captured by a recorder: an in-memory
+// body with nothing to close (which is also why it is not an *http.Response —
+// bodyclose would want every one of them closed).
+type response struct {
+	StatusCode int
+	Header     http.Header
+	Body       *bytes.Reader
+}
+
+// Cookies parses the Set-Cookie headers like http.Response.Cookies.
+func (r *response) Cookies() []*http.Cookie {
+	return (&http.Response{Header: r.Header}).Cookies()
+}
+
+func (e *testEnv) do(r *http.Request) *response {
 	rec := httptest.NewRecorder()
 	e.g.ServeHTTP(rec, r)
-	return rec.Result()
+	return &response{StatusCode: rec.Code, Header: rec.Header(), Body: bytes.NewReader(rec.Body.Bytes())}
 }
 
 func mintHMAC(t *testing.T, email string) string {
@@ -178,7 +193,7 @@ func signedIn(t *testing.T, r *http.Request) *http.Request {
 	return withCookie(r, websession.CookieName, mintHMAC(t, "alice@example.com"))
 }
 
-func readBody(t *testing.T, res *http.Response) string {
+func readBody(t *testing.T, res *response) string {
 	t.Helper()
 	b, err := io.ReadAll(res.Body)
 	if err != nil {
@@ -187,7 +202,7 @@ func readBody(t *testing.T, res *http.Response) string {
 	return string(b)
 }
 
-func setCookies(res *http.Response) string {
+func setCookies(res *response) string {
 	return strings.Join(res.Header.Values("Set-Cookie"), "\n")
 }
 

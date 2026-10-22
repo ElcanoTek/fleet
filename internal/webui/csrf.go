@@ -34,7 +34,7 @@ func (g *Gateway) verifyOrigin(w http.ResponseWriter, r *http.Request) bool {
 	if reason == "" {
 		return true
 	}
-	log.Printf("webui: csrf rejected: %s", reason) //nolint:gosec // G706: reason quotes only parsed URL hosts (url.Parse rejects CR/LF), never a raw header.
+	log.Printf("webui: csrf rejected: %s", reason)
 	writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 	return false
 }

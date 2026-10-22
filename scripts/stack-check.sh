@@ -17,7 +17,7 @@
 #   4. npm trees: no server frameworks (next, express, ...); Tier A has no runtime deps.
 set -euo pipefail
 
-STACK_CHECK_VERSION=11
+STACK_CHECK_VERSION=12
 STANDARD_SHA=5b3a1c9dab098277570a37d58366b0802d4378370f9717d48743c386b194bdbb
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONF="$ROOT/stack.conf"
@@ -50,6 +50,14 @@ else
   fi
 fi
 
+# dev_allow= names are exceptions to Tier A: each must be explained in AGENTS.md.
+for pkg in $(conf dev_allow); do
+  if ! awk '/^<!-- BEGIN:elcano-frontend-standard/{f=1} !f{print} /^<!-- END:elcano-frontend-standard/{f=0}' "$ROOT/AGENTS.md" 2>/dev/null \
+       | grep -qF -- "$pkg"; then
+    err "stack.conf: dev_allow=$pkg must be explained in AGENTS.md (name the package and why it is needed)"
+  fi
+done
+
 # 2. Vendored Flag files.
 if [ -f "$ROOT/flag.lock" ]; then
   "$ROOT/scripts/flag-sync.sh" check || fail=1
@@ -67,13 +75,14 @@ for d in $web; do
   [ -d "$ROOT/$d" ] || { err "stack.conf: web dir $d does not exist"; continue; }
   scan="$(mktemp)"
   if ! (set -o pipefail; find "$ROOT/$d" \( -name node_modules -o -name dist -o -name test -o -name tests -o -name e2e -o -name testdata \) -prune -o -type f \
-             ! -name '*.test.*' ! -name '*.spec.*' ! -name '*_test.go' \( -name '*.go' -o -name '*.html' -o -name '*.tmpl' -o -name '*.gohtml' -o -name '*.css' -o -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.jinja' -o -name '*.j2' \) -print0 \
+             ! -name '*.test.*' ! -name '*.spec.*' ! -name '*_test.go' \( -name '*.go' -o -name '*.html' -o -name '*.htm' -o -name '*.xhtml' -o -name '*.svg' -o -name '*.jsx' -o -name '*.cjs' -o -name '*.mts' -o -name '*.cts' -o -name '*.tmpl' -o -name '*.gohtml' -o -name '*.css' -o -name '*.js' -o -name '*.mjs' -o -name '*.ts' -o -name '*.tsx' -o -name '*.jinja' -o -name '*.j2' \) -print0 \
            | xargs -0 -r perl -0777 -ne '
-               my $f = $ARGV; my $remote = qr{["'"'"'(]?\s*(?:https?:)?//(?!(?:localhost|127\.0\.0\.1)(?::\d+)?(?:[/?#\s"'"'"')>]|$))[^\s"'"'"')>]+}i;
+               my $f = $ARGV; my $remote = qr{["'"'"'(]?\s*(?:https?:)?(?://|\\/\\/)(?!(?:localhost|127\.0\.0\.1)(?::\d+)?(?:[/?#\s"'"'"')>]|$))[^\s"'"'"')>]+}i;
                while (/<script\b[^>]*?\bsrc\s*=\s*$remote/gis) { (my $m = $&) =~ s/\s+/ /g; print "$f: $m\n"; }
                while (/(<link\b[^>]*>)/gis) { my $t = $1;
                  if ($t =~ /\brel\s*=\s*["'"'"']?[^"'"'"'>]*\b(?:stylesheet|preload|modulepreload|icon|apple-touch-icon|manifest)\b/i && $t =~ /\bhref\s*=\s*$remote/i) {
                    (my $one = $t) =~ s/\s+/ /g; print "$f: $one\n"; } }
+               while (/(?:\.src\s*=|\bsetAttribute\s*\(\s*["'"'"']src["'"'"']\s*,|\bnew\s+(?:Shared)?Worker\s*\(|\bimportScripts\s*\(|<base\b[^>]*?\bhref\s*=)\s*$remote/gi) { (my $m = $&) =~ s/\s+/ /g; print "$f: $m\n"; }
                while (/(?:\@import\s*(?:url\()?|(?<![\w.\$])url\(|(?<![\w.\$])import\s*\(?|(?<![\w.\$])from)\s*$remote/gi) { (my $m = $&) =~ s/\s+/ /g; print "$f: $m\n"; }
              ' > "$scan"); then
     err "remote-asset scanner failed in $d (is perl installed?)"

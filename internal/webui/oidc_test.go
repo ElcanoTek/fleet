@@ -124,13 +124,13 @@ func TestPKCE(t *testing.T) {
 	if got := pkceChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"); got != "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM" {
 		t.Fatalf("%q", got)
 	}
-	if randomURLSafe(32) == randomURLSafe(32) {
+	if a, b := randomURLSafe(32), randomURLSafe(32); a == b {
 		t.Fatal("random repeated")
 	}
 }
 
-// fakeIdP is a minimal OIDC provider.
-type fakeIdP struct {
+// fakeIDP is a minimal OIDC provider.
+type fakeIDP struct {
 	srv         *httptest.Server
 	discoveries atomic.Int32
 	issuer      string
@@ -141,8 +141,8 @@ type fakeIdP struct {
 	tokenStatus int
 }
 
-func newFakeIdP(t *testing.T) *fakeIdP {
-	f := &fakeIdP{tokenStatus: 200}
+func newFakeIDP(t *testing.T) *fakeIDP {
+	f := &fakeIDP{tokenStatus: 200}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
@@ -168,12 +168,12 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 	return f
 }
 
-func oidcEnv(t *testing.T, idp *fakeIdP) *testEnv {
+func oidcEnv(t *testing.T, idp *fakeIDP) *testEnv {
 	return newTestEnv(t, withOrigin(testOrigin), withOIDC(&OIDCConfig{Issuer: idp.srv.URL, ClientID: "client-123", ClientSecret: "secret-xyz", Scopes: "openid email", ButtonLabel: "SSO"}))
 }
 
 func TestOIDCStart(t *testing.T) {
-	idp := newFakeIdP(t)
+	idp := newFakeIDP(t)
 	e := oidcEnv(t, idp)
 	res := e.do(req("GET", "/api/auth/oidc/start?silent=1", ""))
 	if res.StatusCode != http.StatusSeeOther {
@@ -205,7 +205,7 @@ func TestOIDCStart(t *testing.T) {
 	if got := e2.do(req("GET", "/api/auth/oidc/start", "")).Header.Get("Location"); got != testOrigin+"/login?e=oidc_unavailable" {
 		t.Fatalf("%q", got)
 	}
-	idp2 := newFakeIdP(t)
+	idp2 := newFakeIDP(t)
 	idp2.issuer = "https://someone-else.example"
 	e3 := oidcEnv(t, idp2)
 	if got := e3.do(req("GET", "/api/auth/oidc/start", "")).Header.Get("Location"); got != testOrigin+"/login?e=oidc_error" {
@@ -227,10 +227,10 @@ func callbackReq(q string, state, nonce, verifier string) *http.Request {
 }
 
 func TestOIDCCallbackMintsACentralSession(t *testing.T) {
-	idp := newFakeIdP(t)
+	idp := newFakeIDP(t)
 	e := oidcEnv(t, idp)
 	idp.idClaims = map[string]any{"iss": idp.srv.URL, "aud": "client-123", "exp": float64(time.Now().Add(time.Hour).Unix()), "nonce": "n1", "email": "Dave@X.com", "sub": "acct-1"}
-	e.chat.respond = func(w http.ResponseWriter, r *http.Request) {
+	e.chat.respond = func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"session_epoch": "ext-1"})
 	}
 	res := e.do(callbackReq("code=c1&state=s1", "s1", "n1", "v1"))
@@ -260,7 +260,7 @@ func TestOIDCCallbackMintsACentralSession(t *testing.T) {
 }
 
 func TestOIDCCallbackUsesBasicAuthWhenAdvertised(t *testing.T) {
-	idp := newFakeIdP(t)
+	idp := newFakeIDP(t)
 	idp.authMethods = []string{"client_secret_basic"}
 	e := oidcEnv(t, idp)
 	idp.idClaims = map[string]any{"iss": idp.srv.URL, "aud": "client-123", "exp": float64(time.Now().Add(time.Hour).Unix()), "nonce": "n1", "email": "d@x.com", "sub": "s"}
@@ -272,7 +272,7 @@ func TestOIDCCallbackUsesBasicAuthWhenAdvertised(t *testing.T) {
 }
 
 func TestOIDCCallbackFailures(t *testing.T) {
-	idp := newFakeIdP(t)
+	idp := newFakeIDP(t)
 	e := oidcEnv(t, idp)
 	good := map[string]any{"iss": idp.srv.URL, "aud": "client-123", "exp": float64(time.Now().Add(time.Hour).Unix()), "nonce": "n1", "email": "d@x.com", "sub": "s"}
 	e.chat.respond = func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `{"session_epoch":"e"}`) }
@@ -311,7 +311,7 @@ func TestOIDCCallbackFailures(t *testing.T) {
 }
 
 func TestRedirectURIRules(t *testing.T) {
-	idp := newFakeIdP(t)
+	idp := newFakeIDP(t)
 	// Pinned wins.
 	e := newTestEnv(t, withOrigin(testOrigin), withOIDC(&OIDCConfig{Issuer: idp.srv.URL, ClientID: "c", ClientSecret: "s", RedirectURI: "https://pinned.example/cb"}))
 	if got := e.g.redirectURI(req("GET", "/", "")); got != "https://pinned.example/cb" {

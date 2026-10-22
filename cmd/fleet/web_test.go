@@ -9,10 +9,11 @@ import (
 )
 
 func TestWebAddr(t *testing.T) {
-	for v, want := range map[string]string{"": defaultWebAddr, " 0.0.0.0:3000 ": "0.0.0.0:3000"} {
-		t.Setenv("FLEET_WEB_ADDR", v)
-		if got, on := webAddr(); !on || got != want {
-			t.Errorf("%q → %q %v", v, got, on)
+	// The padded value checks that surrounding whitespace is trimmed.
+	for _, c := range []struct{ v, want string }{{"", defaultWebAddr}, {"\t0.0.0.0:3000\n", "0.0.0.0:3000"}} {
+		t.Setenv("FLEET_WEB_ADDR", c.v)
+		if got, on := webAddr(); !on || got != c.want {
+			t.Errorf("%q → %q %v", c.v, got, on)
 		}
 	}
 	for _, v := range []string{"off", "OFF", "none", "disabled", "0"} {

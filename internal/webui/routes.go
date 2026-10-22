@@ -4,7 +4,6 @@
 package webui
 
 import (
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -117,6 +116,7 @@ func (g *Gateway) handleChatRoute(rt chatRoute) http.HandlerFunc {
 		h := g.chatHeaders(identityOf(s))
 		c := call{method: r.Method, target: rt.target(r), header: h, detach: true}
 		switch rt.body {
+		case noBody:
 		case jsonBodyIfAny:
 			c.body, c.contentLength = jsonBody(r, h)
 		case jsonBodyAlways:
@@ -513,10 +513,4 @@ func (g *Gateway) registerOrchestrator(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/orchestrator/auth/elcano-login", func(w http.ResponseWriter, r *http.Request) {
 		g.elcanoLoginRedirect(w, r, "/orchestrator")
 	})
-}
-
-// readAllLimited reads at most n bytes of an upstream body the gateway itself
-// inspects (a JSON envelope), never a passthrough.
-func readAllLimited(rd io.Reader, n int64) ([]byte, error) {
-	return io.ReadAll(io.LimitReader(rd, n))
 }

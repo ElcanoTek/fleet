@@ -103,7 +103,7 @@ func TestGateAdmitsBearerOnly(t *testing.T) {
 	}
 }
 
-func cspOf(res *http.Response) string { return res.Header.Get("Content-Security-Policy") }
+func cspOf(res *response) string { return res.Header.Get("Content-Security-Policy") }
 
 func TestSharedViewIsPublicWithRestrictiveCSP(t *testing.T) {
 	e := newTestEnv(t)

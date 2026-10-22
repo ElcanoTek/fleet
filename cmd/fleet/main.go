@@ -1132,22 +1132,8 @@ func run() error {
 			errCh <- fmt.Errorf("chat-server: %w", err)
 		}
 	}()
-	if webServer != nil {
-		go func() {
-			defer safe.Recover("cmd.web", func(any) { errCh <- fmt.Errorf("web: panicked") })
-			log.Printf("web listening on %s", webServer.Addr)
-			if err := webServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				errCh <- fmt.Errorf("web: %w", err)
-			}
-		}()
-	}
-	go func() {
-		defer safe.Recover("cmd.orchestrator", func(any) { errCh <- fmt.Errorf("orchestrator: panicked") })
-		log.Printf("orchestrator listening on %s", orchAddr)
-		if err := orchServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("orchestrator: %w", err)
-		}
-	}()
+	serveInBackground("orchestrator", orchServer, errCh)
+	serveInBackground("web", webServer, errCh) // nil (skipped) when FLEET_WEB_ADDR=off
 	// Approval expiry sweep (#225): enforces the default-DENY-on-timeout contract
 	// for the web approval path. The per-turn SweepExpired only fires when a turn
 	// runs, so an idle conversation with a staged card would never auto-deny — this

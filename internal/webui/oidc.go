@@ -16,6 +16,7 @@ package webui
 // State + nonce + PKCE defend the redirect against CSRF and code interception.
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -68,7 +69,7 @@ func (o *oidcClient) discover(issuer string) (*discoveryDoc, error) {
 	}
 	o.mu.Unlock()
 
-	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(issuer, "/")+"/.well-known/openid-configuration", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, strings.TrimRight(issuer, "/")+"/.well-known/openid-configuration", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -374,7 +375,7 @@ func (g *Gateway) exchangeCode(cfg *OIDCConfig, doc *discoveryDoc, code, verifie
 	if !basic {
 		form.Set("client_secret", cfg.ClientSecret)
 	}
-	req, err := http.NewRequest(http.MethodPost, doc.TokenEndpoint, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, doc.TokenEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err
 	}

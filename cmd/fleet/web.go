@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/webui"
 )
 
@@ -65,6 +67,24 @@ func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, 
 		// No WriteTimeout: SSE turns and large downloads stream for as long as
 		// they take, exactly as on the chat listener.
 	}, nil
+}
+
+// serveInBackground runs one plain-HTTP listener (the orchestrator's, the
+// browser tier's) in the background; nil is a no-op. A listen failure or a
+// panic lands on errCh, which triggers the graceful shutdown. Extracted to
+// keep run() within the cyclomatic budget.
+func serveInBackground(name string, srv *http.Server, errCh chan<- error) {
+	if srv == nil {
+		return
+	}
+	go func() {
+		defer safe.Recover("cmd."+name, func(any) { errCh <- errors.New(name + ": panicked") })
+		//nolint:gosec // G706: name is a constant and Addr is operator config (a listen address), not request input; %q quotes it.
+		log.Printf("%s listening on %q", name, srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("%s: %w", name, err)
+		}
+	}()
 }
 
 // printWebBundle prints the embedded web bundle's build id and returns 0, or

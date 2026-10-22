@@ -5,6 +5,7 @@ package webui
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -59,10 +60,13 @@ func newSPA(fsys fs.FS, devURL string) (*spa, error) {
 		return s, nil
 	}
 	index, err := fs.ReadFile(fsys, "index.html")
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
 		// No bundle embedded (a `go build` that skipped `make web`): the API
 		// still works; pages answer a 503 that says how to build one.
 		return s, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	s.present = true
 	if err := s.setIndex(string(index)); err != nil {
@@ -436,7 +440,11 @@ func (d *devServer) owns(p string) bool {
 }
 
 func (d *devServer) index() (string, error) {
-	res, err := d.client.Get(d.base.ResolveReference(&url.URL{Path: "/index.html"}).String())
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, d.base.ResolveReference(&url.URL{Path: "/index.html"}).String(), nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := d.client.Do(req)
 	if err != nil {
 		return "", err
 	}

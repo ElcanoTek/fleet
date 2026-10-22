@@ -90,7 +90,7 @@ func registeredPatterns(g *Gateway) []string {
 	for _, rt := range readNextRoutesNoT() {
 		for _, m := range []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"} {
 			r := httptest.NewRequest(m, samplePath(rt.path), nil)
-			if _, pat := g.api.Handler(r); pat != "" && !(m == "HEAD" && strings.HasPrefix(pat, "GET ")) {
+			if _, pat := g.api.Handler(r); pat != "" && (m != "HEAD" || !strings.HasPrefix(pat, "GET ")) {
 				seen[pat] = true
 			}
 		}
@@ -435,7 +435,7 @@ func TestSSEStreamsAndFlushesFrameByFrame(t *testing.T) {
 func TestUploadStreamsUntruncated(t *testing.T) {
 	e := newTestEnv(t)
 	var n int64
-	e.chat.respond = func(w http.ResponseWriter, r *http.Request) {
+	e.chat.respond = func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}
 	// 25 MiB — past the 10 MB the Next tier truncated at by default.

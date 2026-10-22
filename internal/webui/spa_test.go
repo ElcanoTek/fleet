@@ -110,7 +110,7 @@ func TestIndexRenderedPerRequest(t *testing.T) {
 		t.Fatalf("%+v", b)
 	}
 	// The bootstrap is HTML-safe JSON: a branding value cannot close the script.
-	e.chat.respond = func(w http.ResponseWriter, r *http.Request) {
+	e.chat.respond = func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"app_name":"</script><script>alert(1)</script>"}`)
 	}
 	e.g.branding = newBrandingCache(e.g)

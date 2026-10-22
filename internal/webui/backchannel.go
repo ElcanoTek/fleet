@@ -22,6 +22,7 @@ package webui
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -80,7 +81,7 @@ func (j *jwksCache) get(issuer string) (jwksEntry, bool) {
 }
 
 func (j *jwksCache) fetch(issuer string) ([]string, bool) {
-	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(issuer, "/")+"/jwks.json", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, strings.TrimRight(issuer, "/")+"/jwks.json", nil)
 	if err != nil {
 		return nil, false
 	}

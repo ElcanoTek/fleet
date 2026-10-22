@@ -191,11 +191,11 @@ func (h *HMAC) Refresh(s *Session) (token string, maxAge int64, ok bool) {
 	return tok, int64(s.Exp) - now, true
 }
 
-type errString string
+type sentinelError string
 
-func (e errString) Error() string { return string(e) }
+func (e sentinelError) Error() string { return string(e) }
 
-const errNoSecret = errString("websession: APP_SESSION_SECRET is not configured")
+const errNoSecret = sentinelError("websession: APP_SESSION_SECRET is not configured")
 
 // Verify checks an elcano_session token and returns its session, or nil.
 //
