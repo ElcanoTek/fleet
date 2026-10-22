@@ -9,21 +9,22 @@ import (
 	"strings"
 )
 
-// activeContentTypes are document types a browser would execute when opened
-// from our origin. Agent-written files of these types are a stored-XSS
-// primitive (a prompt-injected agent writes report.html with a <script>, the
-// user opens it in a tab, and it runs with the session's cookies), so the file
-// routes force them to download.
-var activeContentTypes = []string{"text/html", "image/svg+xml", "application/xhtml+xml", "text/xml", "application/xml"}
-
+// isActiveContent reports whether a browser would open this type as a
+// document that can run script on our origin. Agent-written files of these
+// types are a stored-XSS primitive (a prompt-injected agent writes report.html
+// with a <script>, the user opens it in a tab, and it runs with the session's
+// cookies), so the file routes force them to download.
+//
+// Every XML type counts, not just the common ones: browsers render any
+// "…/xml" or "…+xml" document (RSS, Atom, XSLT, MathML …) as XML, and an
+// XHTML-namespaced <script src="/api/…/x.js"> inside it is same-origin, so the
+// page CSP's script-src 'self' would not stop it. mime.TypeByExtension on a
+// host with /etc/mime.types maps .rss, .atom, .xsl and friends to such types.
 func isActiveContent(contentType string) bool {
-	ct := strings.ToLower(contentType)
-	for _, t := range activeContentTypes {
-		if strings.HasPrefix(ct, t) {
-			return true
-		}
-	}
-	return false
+	ct, _, _ := strings.Cut(contentType, ";")
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	return ct == "text/html" || ct == "text/xsl" ||
+		strings.HasSuffix(ct, "/xml") || strings.HasSuffix(ct, "+xml")
 }
 
 func attachmentDisposition(filename string) string {

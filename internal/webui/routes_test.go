@@ -359,6 +359,16 @@ func TestFileRoutesHardenAgentWrittenContent(t *testing.T) {
 	if got := e.chat.last(t).URI; got != "/conversations/c1/workspace/a%2Fb.png" {
 		t.Fatalf("encoded slash: %q", got)
 	}
+	// Every XML type is a document too (an agent-written feed.rss with an
+	// XHTML <script src> would otherwise open inline, same-origin).
+	for _, ct := range []string{"application/rss+xml", "application/atom+xml", "application/xslt+xml", "text/xsl"} {
+		serve(ct)
+		res = e.do(signedIn(t, req("GET", "/api/conversations/c1/workspace/feed", "")))
+		if !strings.HasPrefix(res.Header.Get("Content-Disposition"), "attachment;") ||
+			!strings.Contains(strings.Join(res.Header.Values("Content-Security-Policy"), ","), "sandbox") {
+			t.Fatalf("workspace %s: %v", ct, res.Header)
+		}
+	}
 	serve("image/png")
 	res = e.do(signedIn(t, req("GET", "/api/conversations/c1/workspace/chart.png", "")))
 	if res.Header.Get("Content-Disposition") != "" || res.Header.Get("Content-Type") != "image/png" {
@@ -519,6 +529,9 @@ func TestProxyWriterContentTypeGuarantees(t *testing.T) {
 		{"forwarded HTML is sandboxed", out{headers: contentTypeOnly}, "text/html; charset=utf-8", "text/html; charset=utf-8", true},
 		{"forwarded SVG is sandboxed", out{headers: contentTypeOnly}, "image/svg+xml", "image/svg+xml", true},
 		{"a forced type wins", out{headers: contentTypeOnly, ctForce: "application/json"}, "text/html", "application/json", false},
+		{"any +xml document is sandboxed", out{headers: contentTypeOnly}, "application/rss+xml", "application/rss+xml", true},
+		{"XSLT is sandboxed", out{headers: contentTypeOnly}, "application/xslt+xml", "application/xslt+xml", true},
+		{"upper-case HTML is sandboxed", out{headers: contentTypeOnly}, "TEXT/HTML", "TEXT/HTML", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
@@ -550,5 +563,45 @@ func TestProxyWriterContentTypeGuarantees(t *testing.T) {
 	res := e.do(signedIn(t, req("GET", "/api/personas", "")))
 	if res.Header.Get("X-Content-Type-Options") != "nosniff" || !strings.Contains(strings.Join(res.Header.Values("Content-Security-Policy"), ","), "sandbox") {
 		t.Fatalf("%v", res.Header)
+	}
+}
+
+func TestIsActiveContent(t *testing.T) {
+	for ct, want := range map[string]bool{
+		"text/html":                true,
+		"Text/HTML; charset=utf-8": true,
+		" text/html":               true,
+		"image/svg+xml":            true,
+		"application/xhtml+xml":    true,
+		"text/xml":                 true,
+		"application/xml":          true,
+		"application/rss+xml":      true,
+		"application/atom+xml":     true,
+		"application/xslt+xml":     true,
+		"application/mathml+xml":   true,
+		"text/xsl":                 true,
+		"application/json":         false,
+		"text/plain":               false,
+		"image/png":                false,
+		"application/pdf":          false,
+		"text/javascript":          false,
+		"application/vnd.ms-excel": false,
+		"":                         false,
+	} {
+		if got := isActiveContent(ct); got != want {
+			t.Errorf("isActiveContent(%q) = %v, want %v", ct, got, want)
+		}
+	}
+}
+
+func TestProxyWriterKeepsOneContentType(t *testing.T) {
+	rec := httptest.NewRecorder()
+	o := out{headers: forwardedHeaders}
+	pw := &proxyWriter{w: rec, hdr: http.Header{}, o: &o, revoke: func() {}}
+	pw.Header().Add("Content-Type", "application/json")
+	pw.Header().Add("Content-Type", "text/html")
+	_, _ = io.WriteString(pw, "{}")
+	if v := rec.Header().Values("Content-Type"); len(v) != 1 || v[0] != "application/json" {
+		t.Fatalf("Content-Type values = %q, want exactly the first", v)
 	}
 }

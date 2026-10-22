@@ -238,6 +238,9 @@ func (p *proxyWriter) WriteHeader(code int) {
 	}
 	for _, name := range o.headers {
 		if v := p.hdr.Values(name); len(v) > 0 {
+			if http.CanonicalHeaderKey(name) == "Content-Type" {
+				v = v[:1] // see secureContentType
+			}
 			dst[http.CanonicalHeaderKey(name)] = append([]string(nil), v...)
 		}
 	}
@@ -271,6 +274,12 @@ func (p *proxyWriter) WriteHeader(code int) {
 //     even opened inline it cannot run script on this origin.
 func secureContentType(dst http.Header) {
 	dst.Set("X-Content-Type-Options", "nosniff")
+	// One Content-Type only: browsers resolve several by taking the last
+	// valid one, while this check (and fileOut's) reads the first.
+	// (WriteHeader already collapsed forwarded values; this covers the rest.)
+	if v := dst.Values("Content-Type"); len(v) > 1 {
+		dst.Set("Content-Type", v[0])
+	}
 	ct := strings.TrimSpace(dst.Get("Content-Type"))
 	if ct == "" {
 		dst.Set("Content-Type", "text/plain; charset=utf-8")
