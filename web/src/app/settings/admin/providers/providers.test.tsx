@@ -27,6 +27,7 @@ const ROW: LLMProvider = {
   models: ["claude-opus-4-8"],
   enabled: true,
   has_api_key: true,
+  context_window_tokens: 200000,
   created_at: 1,
   updated_at: 1,
 };
@@ -55,15 +56,16 @@ describe("ProvidersAdminPage", () => {
       models: [],
       enabled: false,
       has_api_key: false,
+      context_window_tokens: 65536,
       created_at: 1,
       updated_at: 1,
     };
     vi.stubGlobal("fetch", mockFetch([ROW, disabledCatchAll]));
     render(<ProvidersAdminPage />);
     expect(await screen.findByText("anthropic-direct")).toBeInTheDocument();
-    expect(screen.getByText("Anthropic · 1 model")).toBeInTheDocument();
+    expect(screen.getByText("Anthropic · 1 model · 200,000-token context")).toBeInTheDocument();
     expect(
-      screen.getByText("Ollama (local) · catch-all (any model) · disabled"),
+      screen.getByText("Ollama (local) · catch-all (any model) · 65,536-token context · disabled"),
     ).toBeInTheDocument();
     // Keyless is only flagged for types that need a key (ollama doesn't).
     expect(screen.queryByText("No key")).toBeNull();
@@ -73,6 +75,160 @@ describe("ProvidersAdminPage", () => {
     vi.stubGlobal("fetch", mockFetch([{ ...ROW, has_api_key: false }]));
     render(<ProvidersAdminPage />);
     expect(await screen.findByText("No key")).toBeInTheDocument();
+  });
+
+  it("flags a row with no declared context window, but never an OpenRouter row", async () => {
+    const openrouter: LLMProvider = {
+      ...ROW,
+      id: "p5",
+      name: "openrouter",
+      type: "openrouter",
+      models: [],
+      context_window_tokens: 0,
+    };
+    vi.stubGlobal("fetch", mockFetch([{ ...ROW, context_window_tokens: 0 }, openrouter]));
+    render(<ProvidersAdminPage />);
+    expect(await screen.findByText("Anthropic · 1 model")).toBeInTheDocument();
+    expect(screen.getAllByText("No context window")).toHaveLength(1);
+  });
+
+  it("requires a context window before enabling a non-OpenRouter provider, then sends it", async () => {
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    // OpenRouter (the default type) takes its limits from its catalog: no field.
+    expect(document.getElementById("providerContextWindow")).toBeNull();
+    expect(screen.queryByLabelText(/Context window/)).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("my-provider"), {
+      target: { value: "anthropic-direct" },
+    });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "anthropic" } });
+    fireEvent.change(screen.getByPlaceholderText("sk-…"), { target: { value: "sk-ant-x" } });
+    fireEvent.change(screen.getByPlaceholderText(/claude-sonnet-4-5/), {
+      target: { value: "claude-opus-4-8" },
+    });
+    const posts = () =>
+      fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "POST");
+    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+    expect(await screen.findByText(/Anthropic needs its context window/)).toBeInTheDocument();
+    expect(posts()).toHaveLength(0);
+
+    const windowInput = screen.getByPlaceholderText("e.g. 200000");
+    expect(windowInput).toHaveAttribute("id", "providerContextWindow");
+    // Each refusal replaces the previous message, so every step is observed.
+    const refuse = async (value: string, message: RegExp) => {
+      fireEvent.change(windowInput, { target: { value } });
+      fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      expect(posts()).toHaveLength(0);
+    };
+    await refuse("0", /must be a positive whole number of tokens/);
+    await refuse("3000000000", /must be at most/);
+    await refuse("200k", /must be a positive whole number of tokens/);
+
+    // Small windows are allowed but warned about, in two tiers, and the
+    // warning is announced and tied to the field.
+    fireEvent.change(windowInput, { target: { value: "4096" } });
+    expect(screen.getByTestId("provider-small-window")).toHaveTextContent(/usually cannot fit/);
+    expect(screen.getByRole("status")).toBe(screen.getByTestId("provider-small-window"));
+    expect(windowInput).toHaveAttribute("aria-describedby", "providerContextWindowWarning");
+    fireEvent.change(windowInput, { target: { value: "40000" } });
+    expect(screen.getByTestId("provider-small-window")).toHaveTextContent(/little room is left/);
+
+    fireEvent.change(windowInput, { target: { value: "200000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    const body = JSON.parse(String((posts()[0][1] as RequestInit).body));
+    expect(body).toMatchObject({ name: "anthropic-direct", type: "anthropic", context_window_tokens: 200000 });
+  });
+
+  it("keeps the declared context window through Disable, Enable and Edit", async () => {
+    const puts = (fetchMock: ReturnType<typeof mockFetch>) =>
+      fetchMock.mock.calls
+        .filter(([, init]) => init && (init as RequestInit).method === "PUT")
+        .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+
+    let fetchMock = mockFetch([ROW]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Disable" }));
+    await waitFor(() => expect(puts(fetchMock)).toHaveLength(1));
+    expect(puts(fetchMock)[0]).toMatchObject({ enabled: false, context_window_tokens: 200000 });
+    cleanup();
+
+    fetchMock = mockFetch([{ ...ROW, enabled: false }]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Enable" }));
+    await waitFor(() => expect(puts(fetchMock)).toHaveLength(1));
+    expect(puts(fetchMock)[0]).toMatchObject({ enabled: true, context_window_tokens: 200000 });
+    cleanup();
+
+    fetchMock = mockFetch([ROW]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(document.getElementById("providerContextWindow")).toHaveValue("200000");
+    fireEvent.change(screen.getByPlaceholderText(/claude-sonnet-4-5/), {
+      target: { value: "claude-opus-4-8\nclaude-sonnet-4-6" },
+    });
+    fireEvent.click(screen.getByTestId("provider-save"));
+    await waitFor(() => expect(puts(fetchMock)).toHaveLength(1));
+    expect(puts(fetchMock)[0]).toMatchObject({
+      models: ["claude-opus-4-8", "claude-sonnet-4-6"],
+      context_window_tokens: 200000,
+    });
+  });
+
+  it("opens the edit form on the field instead of enabling a row with no context window", async () => {
+    const fetchMock = mockFetch([{ ...ROW, enabled: false, context_window_tokens: 0 }]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Enable" }));
+    expect(await screen.findByText(/Set anthropic-direct's context window/)).toBeInTheDocument();
+    const input = document.getElementById("providerContextWindow");
+    expect(input).toHaveValue("");
+    expect(document.activeElement).toBe(input);
+    expect(screen.getByLabelText("Enabled")).toBeChecked();
+    expect(fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "PUT")).toHaveLength(0);
+  });
+
+  it("will not save an enabled pre-082 row from Edit until it has a window", async () => {
+    const fetchMock = mockFetch([{ ...ROW, context_window_tokens: 0 }]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByTestId("provider-save"));
+    expect(await screen.findByText(/Anthropic needs its context window/)).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "PUT")).toHaveLength(0);
+  });
+
+  it("clears a new row's window on a type change and hides it for OpenRouter", async () => {
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "anthropic" } });
+    fireEvent.change(document.getElementById("providerContextWindow")!, { target: { value: "200000" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "ollama" } });
+    expect(document.getElementById("providerContextWindow")).toHaveValue("");
+    expect(screen.getByPlaceholderText("the server's num_ctx, e.g. 65536")).toBeInTheDocument();
+    fireEvent.change(document.getElementById("providerContextWindow")!, { target: { value: "65536" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "openrouter" } });
+    expect(document.getElementById("providerContextWindow")).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("my-provider"), { target: { value: "or-team" } });
+    fireEvent.change(screen.getByPlaceholderText("sk-…"), { target: { value: "sk-or-x" } });
+    fireEvent.change(screen.getByPlaceholderText(/claude-sonnet-4-5/), { target: { value: "x/y" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.find(([, init]) => init && (init as RequestInit).method === "POST");
+      expect(post).toBeTruthy();
+      expect(JSON.parse(String((post![1] as RequestInit).body))).toMatchObject({
+        type: "openrouter",
+        context_window_tokens: 0,
+      });
+    });
   });
 
   it("validates the draft before any mutation request", async () => {
@@ -117,7 +273,12 @@ describe("ProvidersAdminPage", () => {
       expect(post).toBeTruthy();
       const body = JSON.parse(String((post![1] as RequestInit).body));
       // Key is write-only outbound; models are trimmed of blank lines.
-      expect(body).toMatchObject({ name: "openrouter-team", type: "openrouter", api_key: "sk-or-secret" });
+      expect(body).toMatchObject({
+        name: "openrouter-team",
+        type: "openrouter",
+        api_key: "sk-or-secret",
+        context_window_tokens: 0,
+      });
       expect(body.models).toEqual(["gpt-5.2", "gpt-5.2"]);
     });
   });

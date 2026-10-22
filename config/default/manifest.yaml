@@ -332,15 +332,21 @@ remote_mcp_catalog: []
 #     type: anthropic
 #     api_key_env: ANTHROPIC_API_KEY
 #     models: ["claude-opus-4-8", "claude-sonnet-4-6"]
+#     context_window_tokens: 200000
 #   - name: openai-direct
 #     type: openai
 #     api_key_env: OPENAI_API_KEY
 #     models: ["gpt-4o", "gpt-4o-mini"]
+#     context_window_tokens: 128000
 #   - name: local               # self-hosted Ollama (OpenAI-compatible; no key)
 #     type: ollama
 #     base_url: http://localhost:11434/v1
 #     models: ["llama3.2", "qwen2.5-coder"]
-#     context_window_tokens: 32768 # match the server's actual Ollama num_ctx
+#     context_window_tokens: 65536 # the server's num_ctx, raised to fit fleet's tools
+#
+# Declare context_window_tokens on every entry except OpenRouter: an undeclared
+# native limit falls back to 32,000 tokens (4,096 for Ollama), less than a turn
+# reserves with the default tools (a little under 35,000), so those turns fail.
 
 # Agent tool-behavior policy. Client-specific (e.g. ad-tech DSP deal tools); the
 # generic bundle ships NONE, so fleet stays on its base generic critical

@@ -44,39 +44,59 @@ export type LLMProvider = {
   models: string[];
   enabled: boolean;
   has_api_key: boolean;
+  // The endpoint's declared context limit; 0 = not declared.
+  context_window_tokens: number;
   created_at: number;
   updated_at: number;
 };
 
-// Central per-type presentation map (label + one-line hint + placeholder),
-// so the form can explain each choice inline.
+// Central per-type presentation map (label + one-line hint + placeholders),
+// so the form can explain each choice inline. windowNeeded is false only for
+// OpenRouter, whose per-model catalog supplies the context limit; every other
+// type needs the admin to declare it before the row can be enabled (the
+// server enforces this too).
 const PROVIDER_TYPES: Record<
   string,
-  { label: string; hint: string; urlPlaceholder: string; keyNeeded: boolean }
+  {
+    label: string;
+    hint: string;
+    urlPlaceholder: string;
+    keyNeeded: boolean;
+    windowNeeded: boolean;
+    windowPlaceholder: string;
+  }
 > = {
   openrouter: {
     label: "OpenRouter",
     hint: "Routes across many upstream providers with one key.",
     urlPlaceholder: "(default: openrouter.ai)",
     keyNeeded: true,
+    windowNeeded: false,
+    windowPlaceholder: "",
   },
   anthropic: {
     label: "Anthropic",
     hint: "Direct Anthropic API access with your own key.",
     urlPlaceholder: "(default: api.anthropic.com)",
     keyNeeded: true,
+    windowNeeded: true,
+    windowPlaceholder: "e.g. 200000",
   },
   openai: {
     label: "OpenAI / OpenAI-compatible",
     hint: "OpenAI itself, or any OpenAI-compatible endpoint via Base URL (vLLM, LM Studio, a gateway…).",
     urlPlaceholder: "https://api.example.com/v1",
     keyNeeded: true,
+    windowNeeded: true,
+    windowPlaceholder: "e.g. 128000",
   },
   ollama: {
     label: "Ollama (local)",
     hint: "A local or remote Ollama server; no API key needed.",
     urlPlaceholder: "(default: http://localhost:11434/v1)",
     keyNeeded: false,
+    windowNeeded: true,
+    windowPlaceholder: "the server's num_ctx, e.g. 65536",
   },
 };
 
@@ -87,6 +107,7 @@ type Draft = {
   base_url: string;
   api_key: string; // always starts empty; "" on edit = keep stored key
   models: string; // textarea, one slug per line
+  context_window: string; // digits; "" = not declared
   enabled: boolean;
 };
 
@@ -97,6 +118,7 @@ const EMPTY_DRAFT: Draft = {
   base_url: "",
   api_key: "",
   models: "",
+  context_window: "",
   enabled: true,
 };
 
@@ -108,12 +130,38 @@ function draftFrom(p: LLMProvider): Draft {
     base_url: p.base_url,
     api_key: "",
     models: p.models.join("\n"),
+    context_window: p.context_window_tokens > 0 ? String(p.context_window_tokens) : "",
     enabled: p.enabled,
   };
 }
 
+// The server stores the window in a Postgres INTEGER.
+const MAX_CONTEXT_WINDOW = 2147483647;
+
+// A turn reserves fleet's tool schemas, system prompt and reply allowance
+// before any history: a little under 35,000 tokens with the default tool set
+// as of migration 082. Below that a turn usually cannot run at all; below the
+// second tier it runs with little room for the conversation. The form warns
+// without refusing, because the real reserve depends on the persona and its
+// tools.
+const SMALL_CONTEXT_WINDOW = 35000;
+const TIGHT_CONTEXT_WINDOW = 64000;
+
+function contextWindowWarning(raw: string): string | null {
+  const n = Number(raw.trim());
+  if (!(n > 0)) return null;
+  if (n < SMALL_CONTEXT_WINDOW) {
+    return `Below about ${SMALL_CONTEXT_WINDOW.toLocaleString()} tokens a turn usually cannot fit fleet's tools and reply; for Ollama, raise num_ctx on the server.`;
+  }
+  if (n < TIGHT_CONTEXT_WINDOW) {
+    return `Below about ${TIGHT_CONTEXT_WINDOW.toLocaleString()} tokens little room is left for the conversation itself once fleet's tools and reply are reserved.`;
+  }
+  return null;
+}
+
 // validateDraft mirrors the server's checks so most mistakes surface before a
-// round trip: slug name, http(s) base URL, key presence for keyed types.
+// round trip: slug name, http(s) base URL, key presence for keyed types, and a
+// context window before a non-OpenRouter row can be enabled.
 function validateDraft(d: Draft, editingHasKey: boolean): string | null {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(d.name.trim().toLowerCase())) {
     return "Name must be a lowercase slug (letters, digits, . _ -), no slashes or spaces.";
@@ -125,7 +173,26 @@ function validateDraft(d: Draft, editingHasKey: boolean): string | null {
   if (d.enabled && t?.keyNeeded && !d.api_key && !(d.id && editingHasKey)) {
     return `${t.label} needs an API key.`;
   }
+  if (t?.windowNeeded) {
+    const w = d.context_window.trim();
+    if (w && (!/^[0-9]+$/.test(w) || Number(w) <= 0)) {
+      return "Context window must be a positive whole number of tokens.";
+    }
+    if (Number(w) > MAX_CONTEXT_WINDOW) {
+      return `Context window must be at most ${MAX_CONTEXT_WINDOW.toLocaleString()} tokens.`;
+    }
+    if (d.enabled && !w) {
+      return `${t.label} needs its context window (in tokens: the smallest limit among the models it serves) before it can be enabled.`;
+    }
+  }
   return null;
+}
+
+// contextWindowFor is the token count the form sends: the declared number, or
+// 0 (not declared) for OpenRouter, which takes the limit from its catalog.
+function contextWindowFor(d: Draft): number {
+  if (!PROVIDER_TYPES[d.type]?.windowNeeded) return 0;
+  return Number.parseInt(d.context_window.trim(), 10) || 0;
 }
 
 async function fetchProviders(): Promise<LLMProvider[] | null> {
@@ -221,6 +288,16 @@ function ProvidersAdmin() {
   // the second — the same inline two-click idiom as InlineConfirmButton,
   // instead of a native window.confirm dialog. Blur/Escape/Cancel disarm.
   const [catchAllArmed, setCatchAllArmed] = useState(false);
+  // Set when Enable opened the form for a row with no context window: the
+  // field it needs gets focus (and is scrolled to) once it renders.
+  const focusWindowRef = useRef(false);
+  useEffect(() => {
+    if (!focusWindowRef.current || !draft) return;
+    focusWindowRef.current = false;
+    const input = document.getElementById("providerContextWindow");
+    input?.focus();
+    input?.scrollIntoView?.({ block: "center" });
+  }, [draft]);
   // Per-row probe state: "running" while in flight, else the last result.
   const [probes, setProbes] = useState<Record<string, "running" | ProbeResult>>({});
 
@@ -280,6 +357,7 @@ function ProvidersAdmin() {
         .split("\n")
         .map((s) => s.trim())
         .filter(Boolean),
+      context_window_tokens: contextWindowFor(draft),
       enabled: draft.enabled,
     };
     // Write-only key semantics: omit the field entirely to keep the stored
@@ -306,6 +384,16 @@ function ProvidersAdmin() {
   };
 
   const toggle = (p: LLMProvider) => {
+    // Enabling a row saved without a context window would be refused by the
+    // server; open its edit form on the missing field instead.
+    if (!p.enabled && PROVIDER_TYPES[p.type]?.windowNeeded && p.context_window_tokens <= 0) {
+      setDraft({ ...draftFrom(p), enabled: true });
+      focusWindowRef.current = true;
+      setError(
+        `Set ${p.name}'s context window (in tokens: the smallest limit among the models it serves), then save to enable it.`,
+      );
+      return;
+    }
     setError(null);
     setBusy(true);
     fetch(`/api/admin/llm-providers/${encodeURIComponent(p.id)}`, {
@@ -316,6 +404,7 @@ function ProvidersAdmin() {
         type: p.type,
         base_url: p.base_url,
         models: p.models,
+        context_window_tokens: p.context_window_tokens,
         enabled: !p.enabled,
       }),
     })
@@ -441,7 +530,16 @@ function ProvidersAdmin() {
                   <select
                     id="providerType"
                     value={draft.type}
-                    onChange={(e) => setDraft({ ...draft, type: e.target.value })}
+                    // A new row's window belongs to the type it was typed for
+                    // (Ollama's is the server's num_ctx), so a type change
+                    // clears it; an edit keeps the stored value.
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        type: e.target.value,
+                        context_window: draft.id ? draft.context_window : "",
+                      })
+                    }
                     // pr overrides the base px and needs `!` under Tailwind
                     // v4's fixed utility ordering.
                     className={`${SETTINGS_INPUT} appearance-none pr-8!`}
@@ -500,6 +598,33 @@ function ProvidersAdmin() {
                 />
               </ConnField>
             </div>
+            {typeInfo?.windowNeeded ? (
+              <>
+                <ConnField label="Context window (tokens: the smallest limit among the models this provider serves; needed to enable)">
+                  <input
+                    id="providerContextWindow"
+                    inputMode="numeric"
+                    value={draft.context_window}
+                    onChange={(e) => setDraft({ ...draft, context_window: e.target.value })}
+                    placeholder={typeInfo.windowPlaceholder}
+                    aria-describedby={
+                      contextWindowWarning(draft.context_window) ? "providerContextWindowWarning" : undefined
+                    }
+                    className={SETTINGS_INPUT}
+                  />
+                </ConnField>
+                {contextWindowWarning(draft.context_window) ? (
+                  <p
+                    id="providerContextWindowWarning"
+                    role="status"
+                    data-testid="provider-small-window"
+                    className="-mt-1 mb-0 text-[0.73rem] text-[var(--color-text-muted)]"
+                  >
+                    {contextWindowWarning(draft.context_window)}
+                  </p>
+                ) : null}
+              </>
+            ) : null}
             <ConnField
               label={
                 <>
@@ -601,6 +726,14 @@ function ProvidersAdmin() {
                 p.models.length > 0
                   ? `${p.models.length} model${p.models.length === 1 ? "" : "s"}`
                   : "catch-all (any model)";
+              // A row with no declared window cannot be enabled (rows saved
+              // before the field existed may still be): flag it so the admin
+              // knows what to edit.
+              const windowUsed = PROVIDER_TYPES[p.type]?.windowNeeded === true;
+              const windowPart =
+                windowUsed && p.context_window_tokens > 0
+                  ? ` · ${p.context_window_tokens.toLocaleString()}-token context`
+                  : "";
               return (
                 <ConnRow
                   key={p.id}
@@ -612,9 +745,14 @@ function ProvidersAdmin() {
                           No key
                         </ConnBadge>
                       ) : null}
+                      {windowUsed && p.context_window_tokens <= 0 ? (
+                        <ConnBadge variant="warn" className="ml-2">
+                          No context window
+                        </ConnBadge>
+                      ) : null}
                     </>
                   }
-                  sub={`${typeLabel} · ${modelsPart}${p.enabled ? "" : " · disabled"}`}
+                  sub={`${typeLabel} · ${modelsPart}${windowPart}${p.enabled ? "" : " · disabled"}`}
                   actions={
                     <>
                       <button

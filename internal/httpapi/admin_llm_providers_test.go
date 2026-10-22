@@ -51,6 +51,7 @@ func TestAdminLLMProvidersCRUD(t *testing.T) {
 	body := map[string]any{
 		"name": "anthropic-direct", "type": "anthropic",
 		"models": []string{"claude-sonnet-4-5"}, "enabled": true, "api_key": "sk-ant-secret",
+		"context_window_tokens": 200000,
 	}
 	w = do(t, h, http.MethodPost, "/admin/llm-providers", body, "boss@x.com")
 	if w.Code != http.StatusOK {
@@ -72,15 +73,16 @@ func TestAdminLLMProvidersCRUD(t *testing.T) {
 
 	// A keyed type with no key in effect is refused before persisting.
 	w = do(t, h, http.MethodPost, "/admin/llm-providers",
-		map[string]any{"name": "broken", "type": "openai", "enabled": true}, "boss@x.com")
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("keyless openai create: status %d want 400 (body %s)", w.Code, w.Body.String())
+		map[string]any{"name": "broken", "type": "openai", "enabled": true, "context_window_tokens": 128000}, "boss@x.com")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "API key") {
+		t.Fatalf("keyless openai create: status %d want 400 naming the key (body %s)", w.Code, w.Body.String())
 	}
 
 	// Update with api_key omitted keeps the stored key (has_api_key stays true).
 	w = do(t, h, http.MethodPut, "/admin/llm-providers/"+created.ID, map[string]any{
 		"name": "anthropic-direct", "type": "anthropic",
 		"models": []string{"claude-sonnet-4-5", "claude-opus-4-8"}, "enabled": true,
+		"context_window_tokens": 200000,
 	}, "boss@x.com")
 	if w.Code != http.StatusOK {
 		t.Fatalf("update: status %d body %s", w.Code, w.Body.String())
@@ -160,6 +162,7 @@ func TestLLMProviderModelsCatchAll(t *testing.T) {
 
 	w := do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
 		"name": "gateway", "type": "openai", "enabled": true, "api_key": "sk-gw-secret",
+		"context_window_tokens": 128000,
 	}, "boss@x.com")
 	if w.Code != http.StatusOK {
 		t.Fatalf("catch-all create: status %d body %s", w.Code, w.Body.String())
@@ -186,6 +189,92 @@ func TestLLMProviderModelsCatchAll(t *testing.T) {
 	if len(models.Providers) != 1 || models.Providers[0].Name != "gateway" ||
 		models.Providers[0].Type != "openai" || !models.Providers[0].CatchAll {
 		t.Fatalf("providers = %+v, want gateway/openai/catch_all=true", models.Providers)
+	}
+}
+
+// An enabled non-OpenRouter row must declare its context window (migration
+// 082): those endpoints advertise no limit, and the resolver's fallback for an
+// undeclared one is below a turn's fixed reserve, so the row would fail every
+// turn before sending a request. A disabled row may be saved without one, a
+// negative value is a bad request, and OpenRouter rows never need one.
+func TestAdminLLMProviderContextWindow(t *testing.T) {
+	s, h := llmFixture(t)
+	swaps := 0
+	s.llmProvidersChanged = func(context.Context) error { swaps++; return nil }
+
+	w := do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
+		"name": "nowindow", "type": "anthropic", "enabled": true, "api_key": "sk-ant-x",
+	}, "boss@x.com")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "requires context_window_tokens") {
+		t.Fatalf("enabled anthropic create without a window: status %d body %s, want 400", w.Code, w.Body.String())
+	}
+	// The constructor's checks come first: an unknown type or a missing key is
+	// reported as such, not as a missing window.
+	w = do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
+		"name": "bogus", "type": "bogus", "enabled": true,
+	}, "boss@x.com")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "unknown provider type") {
+		t.Fatalf("enabled unknown type: status %d body %s, want 400 naming the type", w.Code, w.Body.String())
+	}
+	w = do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
+		"name": "nokey", "type": "openai", "enabled": true,
+	}, "boss@x.com")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "API key") {
+		t.Fatalf("enabled keyless openai without a window: status %d body %s, want 400 naming the key", w.Code, w.Body.String())
+	}
+	w = do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
+		"name": "negwindow", "type": "ollama", "enabled": false, "context_window_tokens": -1,
+	}, "boss@x.com")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("negative window: status %d body %s, want 400", w.Code, w.Body.String())
+	}
+	if swaps != 0 {
+		t.Fatalf("swap callback fired %d times after refused creates, want 0", swaps)
+	}
+	w = do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
+		"name": "later", "type": "ollama", "enabled": false,
+	}, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("disabled ollama without a window: status %d body %s, want 200", w.Code, w.Body.String())
+	}
+	var later store.LLMProvider
+	if err := json.Unmarshal(w.Body.Bytes(), &later); err != nil {
+		t.Fatalf("decode later: %v", err)
+	}
+	w = do(t, h, http.MethodPut, "/admin/llm-providers/"+later.ID, map[string]any{
+		"name": "later", "type": "ollama", "enabled": true,
+	}, "boss@x.com")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("enabling it still without a window: status %d body %s, want 400", w.Code, w.Body.String())
+	}
+	w = do(t, h, http.MethodPut, "/admin/llm-providers/"+later.ID, map[string]any{
+		"name": "later", "type": "ollama", "enabled": true, "context_window_tokens": 65536,
+	}, "boss@x.com")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"context_window_tokens":65536`) {
+		t.Fatalf("enabling it with a window: status %d body %s, want 200 echoing 65536", w.Code, w.Body.String())
+	}
+	// A PUT that omits the field keeps the stored window (nil = keep, like
+	// api_key), so a client that predates it cannot reset it, enabled or not.
+	for _, enabled := range []bool{false, true} {
+		w = do(t, h, http.MethodPut, "/admin/llm-providers/"+later.ID, map[string]any{
+			"name": "later", "type": "ollama", "enabled": enabled,
+		}, "boss@x.com")
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"context_window_tokens":65536`) {
+			t.Fatalf("PUT without the field (enabled=%v): status %d body %s, want 200 keeping 65536", enabled, w.Code, w.Body.String())
+		}
+	}
+	// A negative value is the store's range error, not "requires".
+	w = do(t, h, http.MethodPut, "/admin/llm-providers/"+later.ID, map[string]any{
+		"name": "later", "type": "ollama", "enabled": true, "context_window_tokens": -5,
+	}, "boss@x.com")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "positive token count") {
+		t.Fatalf("negative window on an enabled row: status %d body %s, want the range error", w.Code, w.Body.String())
+	}
+	w = do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
+		"name": "or-team", "type": "openrouter", "enabled": true, "api_key": "sk-or-x", "models": []string{"x/y"},
+	}, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("enabled openrouter without a window: status %d body %s, want 200", w.Code, w.Body.String())
 	}
 }
 

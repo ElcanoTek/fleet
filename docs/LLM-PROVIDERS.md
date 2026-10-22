@@ -15,6 +15,34 @@ configured from the client bundle's `providers:` block.
   list, enabled flag, and the API key sealed with the store's secretbox cipher
   (AES-256-GCM, `FLEET_MCP_OAUTH_ENCRYPTION_KEY`), AAD-bound to the row id.
   `internal/store/llm_providers.go`.
+- **Context window** (chat-DB migration 082): `context_window_tokens`, the
+  admin-row twin of a bundle entry's field of the same name. It is one number
+  per row, so it applies to every model the row serves: enter the smallest
+  limit among them, and for Ollama the server's `num_ctx`, not the model card's
+  maximum (Ollama truncates an oversized prompt instead of rejecting it, so an
+  inflated value silently drops history). Native and OpenAI-compatible
+  endpoints advertise no reliable limit, and the resolver's fallback for an
+  undeclared one (32,000 tokens, or 4,096 for Ollama) is below what a turn
+  reserves before any history: the system prompt, the tool schemas, the
+  completion allowance (16,384 tokens by default) and a provider margin of at
+  least 4,096. That came to a little under 35,000 tokens with the default
+  bundle when this shipped; the real figure depends on the persona and its
+  tools. Until this field existed, an admin row had no way to declare a limit,
+  so with the default tool set a chat turn on a non-OpenRouter admin row failed
+  before a request was sent.
+  - The API refuses to enable a non-OpenRouter row without a positive value. A
+    disabled row may be saved without one, and an update that omits the field
+    keeps the stored value, like `api_key`.
+  - The form asks for it and warns, without refusing, below about 35,000 tokens
+    (a turn usually cannot fit) and below about 64,000 (little room left for
+    the conversation). A declared window under the reserve fails the same way
+    as no window, so raise a small Ollama `num_ctx` rather than declaring it.
+  - OpenRouter rows ignore the field: OpenRouter's per-model catalog is
+    authoritative.
+  - Rows saved before migration 082 read as 0 (not declared) and keep the
+    fallback until an admin edits them. The list flags them with a **No
+    context window** badge, Enable opens the edit form with the field focused,
+    and boot and every reload log a warning naming each enabled one.
 - **API** (chat server): admin-gated CRUD at `/admin/llm-providers[/{id}]`
   (same `adminMiddleware` as the rest of `/admin/*`), plus a member-level
   `GET /llm-provider-models` that returns active providers' model slugs for
@@ -109,6 +137,12 @@ configured from the client bundle's `providers:` block.
   the SameSite=Lax session cookie.
 
 ## What was deliberately deferred
+
+- **Context windows are not discovered.** Fleet does not ask an endpoint for
+  its limit; the admin declares it. Rows saved before migration 082 are not
+  backfilled or disabled, and a bundle entry without `context_window_tokens` is
+  not refused (that would fail boot on existing manifests); both are named in a
+  boot warning instead.
 
 - ~~**Catch-all providers aren't enumerated in the picker**~~ — shipped
   2026-07-07: catch-all `anthropic`/`openai` rows are now expanded from the
