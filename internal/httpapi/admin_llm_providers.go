@@ -205,7 +205,7 @@ func validateLLMProviderRow(in store.LLMProviderInput, effectiveKey string) erro
 	}
 	typ := agentcore.ProviderType(strings.ToLower(strings.TrimSpace(in.Type)))
 	if typ != agentcore.ProviderTypeOpenRouter && in.ContextWindowTokens <= 0 {
-		return fmt.Errorf("context_window_tokens is required to enable a %s provider: set the endpoint's real context limit in tokens", typ)
+		return fmt.Errorf("type %s requires context_window_tokens before the row can be enabled: set the endpoint's real context limit in tokens", typ)
 	}
 	return agentcore.ValidateProvider(agentcore.ProviderConfig{
 		Name:    strings.ToLower(strings.TrimSpace(in.Name)),

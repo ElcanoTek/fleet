@@ -205,7 +205,7 @@ func TestAdminLLMProviderContextWindow(t *testing.T) {
 	w := do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
 		"name": "nowindow", "type": "anthropic", "enabled": true, "api_key": "sk-ant-x",
 	}, "boss@x.com")
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "context_window_tokens is required") {
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "requires context_window_tokens") {
 		t.Fatalf("enabled anthropic create without a window: status %d body %s, want 400", w.Code, w.Body.String())
 	}
 	w = do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
