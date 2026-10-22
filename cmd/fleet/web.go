@@ -44,11 +44,13 @@ func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, 
 	}
 	wc := webui.ConfigFromEnv()
 	// The in-process channel uses the server's own shared secret, which
-	// config.Validate guarantees is set.
+	// config.Validate guarantees is set — for BOTH backends, unconditionally:
+	// they verify the header-trust token against that same secret, so any
+	// other value (a leftover ORCHESTRATOR_SERVER_TOKEN from the retired Next
+	// tier's env, which an old bootstrap even set to ADMIN_API_KEY) would make
+	// every orchestrator call a 403.
 	wc.ChatToken = cfg.SharedToken
-	if wc.OrchestratorToken == "" {
-		wc.OrchestratorToken = cfg.SharedToken
-	}
+	wc.OrchestratorToken = cfg.SharedToken
 	if wc.SessionSecret == "" {
 		log.Printf("WARNING: APP_SESSION_SECRET is not set — password and SSO sign-in are disabled (the session cookie cannot be signed). Set it in the env file; `fleet doctor` repairs it.")
 	}
@@ -64,8 +66,15 @@ func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, 
 		Addr:              addr,
 		Handler:           g,
 		ReadHeaderTimeout: 30 * time.Second,
-		// No WriteTimeout: SSE turns and large downloads stream for as long as
-		// they take, exactly as on the chat listener.
+		// Idle keep-alive connections are closed after two minutes; an open
+		// SSE stream is never idle, so it is unaffected.
+		IdleTimeout: 120 * time.Second,
+		// Deliberately no ReadTimeout or WriteTimeout: uploads (bounded by
+		// FLEET_UPLOAD_MAX_BYTES in the backend handlers) and SSE turns / large
+		// downloads stream for as long as they take, exactly as on the chat
+		// listener. Every body the gateway itself parses is capped where it
+		// is read (login: 64 KiB; back-channel logout: maxBackchannelBody);
+		// every forwarded body is capped by the backend handler that reads it.
 	}, nil
 }
 

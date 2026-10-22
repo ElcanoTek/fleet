@@ -4,8 +4,10 @@
 package webui
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -239,5 +241,47 @@ func TestMCPOAuthCallback(t *testing.T) {
 	}
 	if got := e.do(signedIn(t, req("GET", "/api/oauth/mcp/callback?code=c&state=s", ""))).Header.Get("Location"); got != testOrigin+"/settings/connections?error=state%20expired" {
 		t.Fatalf("%q", got)
+	}
+}
+
+// The password form's body is capped (64 KiB) before it is parsed, in either
+// encoding, so an oversized login — multipart especially, which would
+// otherwise spill to temp files — is refused without reaching the backend.
+func TestLoginBodyIsCapped(t *testing.T) {
+	e := newTestEnv(t, withOrigin(testOrigin))
+	e.chat.respond = loginBackend(200, true, "epoch-1")
+	pad := strings.Repeat("x", 200<<10)
+
+	res := e.do(loginReq("email=bob%40x.com&password=hunter2&pad=" + pad))
+	if loc := res.Header.Get("Location"); res.StatusCode != http.StatusSeeOther || !strings.Contains(loc, "/login?e=") {
+		t.Fatalf("oversized urlencoded login: %d %q", res.StatusCode, loc)
+	}
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("email", "bob@x.com")
+	_ = mw.WriteField("password", "hunter2")
+	fw, _ := mw.CreateFormFile("blob", "big.bin")
+	_, _ = fw.Write([]byte(pad))
+	_ = mw.Close()
+	res = e.do(req("POST", "/api/auth/login", body.String(), "Origin", "https://fleet.example.com", "Content-Type", mw.FormDataContentType()))
+	if loc := res.Header.Get("Location"); res.StatusCode != http.StatusSeeOther || !strings.Contains(loc, "/login?e=") {
+		t.Fatalf("oversized multipart login: %d %q", res.StatusCode, loc)
+	}
+	for _, c := range e.chat.calls {
+		if c.Path == "/auth/verify" {
+			t.Fatalf("an oversized login reached /auth/verify")
+		}
+	}
+
+	// A normal multipart login still works.
+	body.Reset()
+	mw = multipart.NewWriter(&body)
+	_ = mw.WriteField("email", "bob@x.com")
+	_ = mw.WriteField("password", "hunter2")
+	_ = mw.Close()
+	res = e.do(req("POST", "/api/auth/login", body.String(), "Origin", "https://fleet.example.com", "Content-Type", mw.FormDataContentType()))
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != testOrigin+"/" {
+		t.Fatalf("multipart login: %d %q", res.StatusCode, res.Header.Get("Location"))
 	}
 }

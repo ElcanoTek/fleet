@@ -71,7 +71,16 @@ function checkCssUrls(): Plugin {
   };
 }
 
-export default defineConfig({
+// buildIdFor is the id baked into the client. Only a production build carries
+// the real one (matching build-id.txt, which the Go server stamps as
+// X-App-Version). Under the dev server (`make dev`) the gateway has no bundle
+// and stamps "dev", so the client must say "dev" too — otherwise every probe
+// sees a mismatch and the "updated" banner never goes away.
+export function buildIdFor(command: "build" | "serve"): string {
+  return command === "build" ? BUILD_ID : "dev";
+}
+
+export default defineConfig(({ command }) => ({
   plugins: [react(), writeBuildId(), checkCssUrls()],
   resolve: {
     alias: {
@@ -79,7 +88,7 @@ export default defineConfig({
     },
   },
   define: {
-    "import.meta.env.VITE_BUILD_ID": JSON.stringify(BUILD_ID),
+    "import.meta.env.VITE_BUILD_ID": JSON.stringify(buildIdFor(command)),
   },
   build: {
     outDir: OUT_DIR,
@@ -101,4 +110,4 @@ export default defineConfig({
     strictPort: true,
     hmr: { host: "127.0.0.1", port: 5173, clientPort: 5173 },
   },
-});
+}));

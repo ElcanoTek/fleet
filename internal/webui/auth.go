@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -24,6 +25,8 @@ const (
 	oidcVerifierCookie     = "fleet_oidc_verifier"
 	oidcTempCookieMaxAge   = 600
 	maxBackendEnvelopeSize = 1 << 20
+	// maxLoginBody caps the password form's body (either encoding).
+	maxLoginBody = 64 << 10
 	// maxBackendDocumentSize caps the two documents the gateway reads whole
 	// for its own use — a shared-conversation snapshot (embedded into the
 	// /shared page) and a scheduled run's task + log (digested by Discuss).
@@ -185,10 +188,20 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	back := func(code string) { seeOther(w, g.redirectURL(r, "/login?e="+code)) }
 
+	// An email and a password are a few hundred bytes. Cap the whole body
+	// before parsing so neither encoding can make the gateway buffer much —
+	// and, for multipart, so nothing ever spills to a temp file on disk.
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
+	var perr error
 	if isMultipart(r) {
-		_ = r.ParseMultipartForm(1 << 20)
+		perr = r.ParseMultipartForm(maxLoginBody)
 	} else {
-		_ = r.ParseForm()
+		perr = r.ParseForm()
+	}
+	var tooLarge *http.MaxBytesError
+	if errors.As(perr, &tooLarge) {
+		back("missing")
+		return
 	}
 	email := strings.ToLower(strings.TrimSpace(r.PostFormValue("email")))
 	password := r.PostFormValue("password")
