@@ -1333,38 +1333,9 @@ else
   # APP_SESSION_SECRET keeps every existing session valid. Never overwrites a
   # key fleet.env already sets. The unit itself is retired in step 5, right
   # before fleet restarts onto its port.
-  if [[ -r "$web_env_file" ]]; then
-    migrated=0
-    while IFS= read -r line; do
-      key="${line%%=*}"
-      case "$key" in
-        APP_SESSION_SECRET|AUTH_SIGNING_PUBKEY|AUTH_SIGNING_PREVIOUS_PUBKEYS|AUTH_COOKIE_NAME|AUTH_COOKIE_DOMAIN|AUTH_LOGIN_URL|CATWALK_URL|FLEET_OIDC_*) ;;
-        *) continue ;;
-      esac
-      grep -q "^${key}=" "$backend_env_file" 2>/dev/null && continue
-      if upsert_env_file "$backend_env_file" "$key" "${line#*=}"; then
-        migrated=$((migrated + 1))
-      else
-        warn "could not copy ${key} into ${backend_env_file} — set it there by hand"
-      fi
-    done < <(grep -E '^[A-Z_][A-Z0-9_]*=' "$web_env_file" || true)
-    # The old tier's bind address: FLEET_WEB_HOST (+ PORT) became FLEET_WEB_ADDR.
-    # Only a non-default bind needs carrying — fleet's default is the address the
-    # old unit used (127.0.0.1:3000) — and never over a value fleet.env sets.
-    _web_host="$(grep '^FLEET_WEB_HOST=' "$web_env_file" | tail -n1 | cut -d= -f2- || true)"
-    _web_port="$(grep '^PORT=' "$web_env_file" | tail -n1 | cut -d= -f2- || true)"
-    _web_host="${_web_host:-127.0.0.1}"; _web_port="${_web_port:-3000}"
-    if [[ "${_web_host}:${_web_port}" != "127.0.0.1:3000" ]] \
-       && ! grep -q '^FLEET_WEB_ADDR=' "$backend_env_file" 2>/dev/null; then
-      [[ "$_web_host" == *:* && "$_web_host" != \[* ]] && _web_host="[${_web_host}]"
-      if upsert_env_file "$backend_env_file" FLEET_WEB_ADDR "${_web_host}:${_web_port}"; then
-        migrated=$((migrated + 1))
-      else
-        warn "could not set FLEET_WEB_ADDR=${_web_host}:${_web_port} in ${backend_env_file} — set it there by hand"
-      fi
-    fi
-    (( migrated > 0 )) && ok "carried ${migrated} browser-tier key(s) from ${web_env_file} into ${backend_env_file}"
-  fi
+  # One key list for update and bootstrap: scripts/lib/web-tier.sh
+  # (FLEET_WEB_ENV_CARRY_KEYS, fleet_migrate_web_env).
+  fleet_migrate_web_env "$web_env_file" "$backend_env_file"
 fi
 
 # ── unit-file drift check + optional adoption ───────────────────────────────

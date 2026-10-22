@@ -603,20 +603,17 @@ build_fleet_binary() {
 # (AUTH_SIGNING_PUBKEY: --auth-pubkey, an interactive paste, or already set).
 # Email+password login works against the bundle's chat users without SSO.
 configure_web_tier() {
-  local origin old_env="/etc/fleet/fleet-web.env" k v
+  local origin old_env="${FLEET_WEB_ENV_FILE:-/etc/fleet/fleet-web.env}"
   [[ -n "$WEB_DOMAIN" ]] && origin="https://$WEB_DOMAIN" || origin="http://localhost:3000"
 
   step "Web tier: ensuring sign-in settings in ${ENV_FILE}"
   # A box provisioned before ADR-0091 kept the browser keys in the retired
   # tier's own env file; carry the ones fleet.env lacks (the same
   # APP_SESSION_SECRET keeps existing sessions valid) before generating any.
-  if [[ -r "$old_env" ]]; then
-    for k in APP_SESSION_SECRET AUTH_SIGNING_PUBKEY AUTH_SIGNING_PREVIOUS_PUBKEYS AUTH_COOKIE_NAME AUTH_COOKIE_DOMAIN AUTH_LOGIN_URL CATWALK_URL; do
-      grep -q "^${k}=" "$ENV_FILE" 2>/dev/null && continue
-      v="$(grep "^${k}=" "$old_env" | tail -n1 | cut -d= -f2- || true)"
-      [[ -n "$v" ]] && upsert_env "$k" "$v"
-    done
-  fi
+  # The same key list update.sh uses (scripts/lib/web-tier.sh), so the two
+  # paths cannot drift: session secret, SSO/cookie keys, OIDC, catwalk, plus
+  # the origin and a non-default bind under their new names.
+  fleet_migrate_web_env "$old_env" "$ENV_FILE"
   ensure_env_secret FLEET_SERVER_TOKEN 32
   ensure_env_secret ADMIN_API_KEY 32
   ensure_env_secret APP_SESSION_SECRET 48

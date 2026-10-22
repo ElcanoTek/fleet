@@ -70,15 +70,23 @@ help:
 # `build` builds the bundle first and then checks the binary really carries it
 # — a box that runs `fleet update` must never end up serving the 503 "built
 # without its web bundle" page. `compile` (go build ./...) needs no bundle.
-build: compile web bins check-web-bundle
+#
+# The order is load-bearing and is a real dependency chain, not a list, so
+# `make -j` cannot reorder it: web (writes dist) → compile + bins (embed it)
+# → check-web-bundle. A go build that ran while vite was still emptying and
+# rewriting dist would embed half a bundle (or none).
+build: web
+	$(MAKE) compile
+	$(MAKE) check-web-bundle
 
 # web builds the SPA into internal/webui/bundle/dist (npm ci for a lockfile-
 # exact tree, as the deployed build always did).
 web:
 	cd web && npm ci && npm run build
 
-# check-web-bundle fails unless ./fleet embeds a web bundle.
-check-web-bundle:
+# check-web-bundle fails unless ./fleet embeds a web bundle. It depends on
+# bins, so it always inspects a binary built after whatever ran before it.
+check-web-bundle: bins
 	./fleet version --web
 
 # dev runs the whole product with hot reload: the Vite dev server on :5173 and
@@ -157,7 +165,8 @@ fleet-bench:
 # with PREFIX (or BINDIR) and DESTDIR for packaging.
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
-install: web bins check-web-bundle
+install: web
+	$(MAKE) check-web-bundle
 	install -d "$(DESTDIR)$(BINDIR)"
 	install -m 0755 ./fleet "$(DESTDIR)$(BINDIR)/fleet"
 	@echo "installed: $(DESTDIR)$(BINDIR)/fleet"
@@ -309,7 +318,11 @@ GO_PINNED := go$(shell awk '/^go /{print $$2; exit}' go.mod)
 # anything else (environment, command line) is a choice — an air-gapped host
 # pinned to `local` — and is passed through untouched rather than turned into a
 # download.
-GOVULN_TOOLCHAIN := $(if $(filter file,$(origin GOTOOLCHAIN)),$(GO_PINNED),$(GOTOOLCHAIN))
+#
+# A recursive `$(MAKE) govulncheck` (ci-go) must be handed the parent's value:
+# the parent EXPORTS GOTOOLCHAIN, so in the sub-make its origin reads
+# "environment" and the scanner would be built with the lagging Go again.
+GOVULN_TOOLCHAIN ?= $(if $(filter file,$(origin GOTOOLCHAIN)),$(GO_PINNED),$(GOTOOLCHAIN))
 
 # Dependency-CVE scan — the CI 'go' job's govulncheck step. Tracks @latest
 # exactly as CI does, deliberately: both the scanner and its advisory database
@@ -329,7 +342,7 @@ ci-go: compile
 	$(MAKE) lint
 	$(MAKE) test
 	$(MAKE) test-race
-	$(MAKE) govulncheck
+	$(MAKE) govulncheck GOVULN_TOOLCHAIN=$(GOVULN_TOOLCHAIN)
 
 # The Web CI job, verbatim: npm audit → npm ci → lint → typecheck → vitest →
 # build → a binary that embeds the build. It once said "verbatim" while running
@@ -341,7 +354,7 @@ ci-go: compile
 ci-web:
 	cd web && npm audit --audit-level=low
 	cd web && npm ci && npm run lint && npm run typecheck && npx vitest run && npm run build
-	$(MAKE) bins check-web-bundle
+	$(MAKE) check-web-bundle
 
 # The mocked Playwright CI job, run from web/. Assumes browsers are installed
 # (`cd web && npx playwright install --with-deps chromium`); CI installs them in
