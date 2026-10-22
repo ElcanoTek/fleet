@@ -13,6 +13,7 @@
 // page load (window.location) is still the right tool for a sign-in/sign-out
 // round trip, and code that already does that keeps doing it.
 
+import { needsFullLoad } from "./fullLoad";
 import { useMemo, useSyncExternalStore } from "react";
 
 type Listener = () => void;
@@ -61,7 +62,11 @@ export function resolveAlias(pathname: string, search: string): string | null {
  */
 export function navigate(href: string, opts: { replace?: boolean } = {}) {
   const url = new URL(href, window.location.href);
-  if (url.origin !== window.location.origin || url.pathname.startsWith("/api/")) {
+  if (
+    url.origin !== window.location.origin ||
+    url.pathname.startsWith("/api/") ||
+    needsFullLoad(window.location.pathname, url.pathname)
+  ) {
     if (opts.replace) window.location.replace(url.toString());
     else window.location.assign(url.toString());
     return;

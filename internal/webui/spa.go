@@ -115,8 +115,13 @@ func (s *spa) serveStatic(w http.ResponseWriter, r *http.Request, g *Gateway) bo
 	if p == "/" || !s.present {
 		return false
 	}
-	name := strings.TrimPrefix(path.Clean(p), "/")
-	if hiddenFiles[name] || strings.HasPrefix(name, ".") {
+	// Rooted before cleaning, so no ".." can climb above the bundle root, and
+	// then checked with fs.ValidPath — the bundle is an fs.FS (go:embed), which
+	// cannot reach the host filesystem anyway, but a name it would reject is
+	// never looked up. r.URL.Path is already percent-decoded, so %2e%2e and
+	// %2f arrive here as "." and "/" and are handled the same way.
+	name := strings.TrimPrefix(path.Clean("/"+strings.Trim(p, "/")), "/")
+	if name == "" || !fs.ValidPath(name) || hiddenFiles[name] || strings.HasPrefix(name, ".") {
 		return false
 	}
 	f, err := s.fsys.Open(name)
@@ -192,7 +197,26 @@ type Bootstrap struct {
 	// Shared is the /shared/{token} snapshot, verbatim from chat-server.
 	Shared   json.RawMessage `json:"shared,omitempty"`
 	NotFound bool            `json:"notFound,omitempty"`
+	// FullLoadRoutes are the paths a client-side navigation must not take
+	// on its own: entering or leaving one is a full page load, so the decision
+	// servePage makes for it runs (see fullLoadRoutes).
+	FullLoadRoutes []string `json:"fullLoadRoutes"`
 }
+
+// fullLoadRoutes are the client routes whose page depends on a decision only
+// the server makes in servePage, so the SPA's router hands any navigation into
+// (or out of) them to the browser. An entry ending in "/" is a prefix.
+//
+//   - /login: the silent-SSO auto start and the team-link state.
+//   - /shared/: the snapshot is embedded into the page by the server.
+//   - /no-access: the outcome of /chat's membership gate. Leaving it (its
+//     "Try again" link to /chat) must re-run that gate, which a client-side
+//     hop would skip, rendering a shell whose every call 403s.
+//
+// The /chat gate itself is not listed: an in-app hop to /chat comes from a
+// session that already passed it, and a reload there would drop the chat
+// state the router keeps across /settings round trips.
+var fullLoadRoutes = []string{"/login", "/no-access", "/shared/"}
 
 type bootSession struct {
 	Email string `json:"email"`
@@ -216,7 +240,7 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 		return
 	}
 	p := r.URL.Path
-	boot := Bootstrap{BuildID: g.spa.buildID}
+	boot := Bootstrap{BuildID: g.spa.buildID, FullLoadRoutes: fullLoadRoutes}
 	status := http.StatusOK
 	title := ""
 
@@ -260,7 +284,7 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 		}
 		h := http.Header{}
 		h.Set("X-Chat-Server-Token", g.cfg.ChatToken)
-		st, _, body, ok := g.callCapture(g.chat, call{method: http.MethodGet, target: "/shared/" + encodeURIComponent(token), header: h})
+		st, _, body, ok := g.callCaptureLimit(g.chat, call{method: http.MethodGet, target: "/shared/" + encodeURIComponent(token), header: h}, maxBackendDocumentSize)
 		if !ok || st < 200 || st > 299 || !json.Valid(body) {
 			status, boot.NotFound = http.StatusNotFound, true
 			break

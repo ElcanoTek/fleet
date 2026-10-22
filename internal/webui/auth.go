@@ -24,6 +24,14 @@ const (
 	oidcVerifierCookie     = "fleet_oidc_verifier"
 	oidcTempCookieMaxAge   = 600
 	maxBackendEnvelopeSize = 1 << 20
+	// maxBackendDocumentSize caps the two documents the gateway reads whole
+	// for its own use — a shared-conversation snapshot (embedded into the
+	// /shared page) and a scheduled run's task + log (digested by Discuss).
+	// Those are user content and routinely exceed a JSON envelope; the Next
+	// tier read them uncapped. A truncated document would be invalid JSON and
+	// read as "not found", so the cap is set far above any real transcript and
+	// only bounds a runaway.
+	maxBackendDocumentSize = 256 << 20
 )
 
 // callCapture runs a backend call whose JSON answer the gateway itself

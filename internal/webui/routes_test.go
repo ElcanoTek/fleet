@@ -500,3 +500,55 @@ func TestStreamReattachForwardsLastEventIDAndQuery(t *testing.T) {
 		t.Fatalf("%q %v %d", got.URI, got.Header, res.StatusCode)
 	}
 }
+
+// Forwarded bodies can never be taken for a document: whatever the backend
+// handler writes (it echoes request values into JSON and text), the browser
+// gets nosniff, a declared Content-Type, and — for an active type a route
+// passes through on purpose — a sandboxing CSP.
+func TestProxyWriterContentTypeGuarantees(t *testing.T) {
+	const markup = `<html><script>alert(1)</script></html>`
+	for _, c := range []struct {
+		name    string
+		o       out
+		backend string // Content-Type the handler sets ("" = none)
+		wantCT  string
+		sandbox bool
+	}{
+		{"no content type is never sniffed into HTML", out{}, "", "text/plain; charset=utf-8", false},
+		{"json passes through", out{headers: contentTypeOnly}, "application/json", "application/json", false},
+		{"forwarded HTML is sandboxed", out{headers: contentTypeOnly}, "text/html; charset=utf-8", "text/html; charset=utf-8", true},
+		{"forwarded SVG is sandboxed", out{headers: contentTypeOnly}, "image/svg+xml", "image/svg+xml", true},
+		{"a forced type wins", out{headers: contentTypeOnly, ctForce: "application/json"}, "text/html", "application/json", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			o := c.o
+			pw := &proxyWriter{w: rec, hdr: http.Header{}, o: &o, revoke: func() {}}
+			if c.backend != "" {
+				pw.Header().Set("Content-Type", c.backend)
+			}
+			_, _ = io.WriteString(pw, markup)
+			h := rec.Header()
+			if h.Get("X-Content-Type-Options") != "nosniff" {
+				t.Errorf("no nosniff: %v", h)
+			}
+			if got := h.Get("Content-Type"); got != c.wantCT {
+				t.Errorf("Content-Type = %q, want %q", got, c.wantCT)
+			}
+			if got := strings.Contains(strings.Join(h.Values("Content-Security-Policy"), ","), "sandbox"); got != c.sandbox {
+				t.Errorf("sandbox CSP = %v, want %v (%v)", got, c.sandbox, h.Values("Content-Security-Policy"))
+			}
+		})
+	}
+	// Through the gateway: a route that forwards the backend's type keeps the
+	// page CSP and gains the sandbox for HTML.
+	e := newTestEnv(t)
+	e.chat.respond = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, markup)
+	}
+	res := e.do(signedIn(t, req("GET", "/api/personas", "")))
+	if res.Header.Get("X-Content-Type-Options") != "nosniff" || !strings.Contains(strings.Join(res.Header.Values("Content-Security-Policy"), ","), "sandbox") {
+		t.Fatalf("%v", res.Header)
+	}
+}

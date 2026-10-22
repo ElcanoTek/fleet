@@ -232,6 +232,7 @@ func (p *proxyWriter) WriteHeader(code int) {
 	ok := code >= 200 && code < 300
 	if !ok && o.plainErrors {
 		dst.Set("Content-Type", "text/plain;charset=UTF-8")
+		secureContentType(dst)
 		p.w.WriteHeader(code)
 		return
 	}
@@ -254,7 +255,30 @@ func (p *proxyWriter) WriteHeader(code int) {
 	if ok && o.status200 {
 		code = http.StatusOK
 	}
+	secureContentType(dst)
 	p.w.WriteHeader(code)
+}
+
+// secureContentType is the last word on what a forwarded body may be taken
+// for. The bytes come from the backend handlers, which echo request values
+// into JSON and text; the browser must never treat them as a document:
+//
+//   - nosniff, always (decorate sets it too; this keeps the guarantee local);
+//   - no Content-Type at all becomes text/plain — otherwise net/http would
+//     sniff one, and a body starting with "<html" would be served as HTML;
+//   - an active type (HTML, SVG, XML) that a route forwards on purpose — a
+//     chat export, a workspace file — additionally gets a sandboxing CSP, so
+//     even opened inline it cannot run script on this origin.
+func secureContentType(dst http.Header) {
+	dst.Set("X-Content-Type-Options", "nosniff")
+	ct := strings.TrimSpace(dst.Get("Content-Type"))
+	if ct == "" {
+		dst.Set("Content-Type", "text/plain; charset=utf-8")
+		return
+	}
+	if isActiveContent(ct) && !strings.Contains(strings.Join(dst.Values("Content-Security-Policy"), ","), "sandbox") {
+		dst.Add("Content-Security-Policy", "sandbox")
+	}
 }
 
 func (p *proxyWriter) Write(b []byte) (int, error) {

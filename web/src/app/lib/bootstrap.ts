@@ -32,6 +32,8 @@ export type Bootstrap = {
   };
   shared?: SharedSnapshot;
   notFound?: boolean;
+  /** Routes whose page the server decides (Go fullLoadRoutes); "/x/" is a prefix. */
+  fullLoadRoutes?: string[];
 };
 
 /** Mirrors the Go DefaultBranding (and clientconfig's defaults). */
@@ -51,6 +53,7 @@ export const DEFAULT_BOOTSTRAP: Bootstrap = {
     oidcLabel: "Sign in with SSO",
     teamLink: false,
   },
+  fullLoadRoutes: ["/login", "/no-access", "/shared/"],
 };
 
 let cached: Bootstrap | null = null;

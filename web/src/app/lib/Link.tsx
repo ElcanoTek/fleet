@@ -4,6 +4,7 @@
 // module so a test that stubs the router hooks still renders real anchors.
 
 import { type AnchorHTMLAttributes, type MouseEvent, forwardRef, useCallback } from "react";
+import { needsFullLoad } from "./fullLoad";
 import { navigate } from "./navigation";
 
 type LinkProps = Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
@@ -39,6 +40,9 @@ export const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       }
       const url = new URL(href, window.location.href);
       if (url.origin !== window.location.origin || url.pathname.startsWith("/api/")) return;
+      // A server-decided route (e.g. leaving /no-access for /chat re-runs the
+      // membership gate): let the browser do a real navigation.
+      if (needsFullLoad(window.location.pathname, url.pathname)) return;
       e.preventDefault();
       navigate(href, { replace });
     },

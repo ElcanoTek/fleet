@@ -52,6 +52,9 @@ func TestBrandAssetsAllowlistAndFallback(t *testing.T) {
 	if res.StatusCode != 200 || res.Header.Get("Content-Type") != "image/svg+xml" || res.Header.Get("Content-Security-Policy") != "default-src 'none'; style-src 'unsafe-inline'; sandbox" || readBody(t, res) != "IMG" || res.Header.Get("Cache-Control") != "public, max-age=300" {
 		t.Fatalf("logo: %d %v", res.StatusCode, res.Header)
 	}
+	if res.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("logo without nosniff: %v", res.Header)
+	}
 	// SVG is not an acceptable og:image.
 	res = e.do(req("GET", "/api/brand/share-image", ""))
 	if res.StatusCode != 307 || res.Header.Get("Location") != "http://fleet.example.com/share.png" {
@@ -62,7 +65,8 @@ func TestBrandAssetsAllowlistAndFallback(t *testing.T) {
 		t.Fatalf("share png: %d", res.StatusCode)
 	}
 	serve("text/html", 200)
-	if res := e.do(req("GET", "/api/brand/logo", "")); res.StatusCode != 307 || !strings.HasSuffix(res.Header.Get("Location"), "/logos/fleet-mark.svg") {
+	// A markup body is never passed through: the redirect carries none of it.
+	if res := e.do(req("GET", "/api/brand/logo", "")); res.StatusCode != 307 || !strings.HasSuffix(res.Header.Get("Location"), "/logos/fleet-mark.svg") || strings.Contains(readBody(t, res), "IMG") {
 		t.Fatalf("html logo: %d", res.StatusCode)
 	}
 	serve("image/png", 404)
@@ -287,5 +291,45 @@ func TestDigestBudget(t *testing.T) {
 	}
 	if !strings.Contains(formatDigest(discussTask{ID: "t"}, discussLog{}), "(empty transcript)") {
 		t.Fatal("empty transcript")
+	}
+}
+
+// A scheduled run's transcript routinely exceeds a JSON envelope; Discuss
+// reads it whole (a truncated body would be invalid JSON and a 502).
+func TestDiscussReadsLargeRuns(t *testing.T) {
+	e := newTestEnv(t)
+	big := strings.Repeat("x", 3<<20) // 3 MiB of output
+	e.orch.respond = func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/tasks/"):
+			_, _ = io.WriteString(w, `{"id":"t1","name":"Big","status":"done","result":"`+big+`"}`)
+		case strings.HasPrefix(r.URL.Path, "/logs/"):
+			_, _ = io.WriteString(w, `{"messages":[{"role":"assistant","content":"`+big+`"}]}`)
+		}
+	}
+	e.chat.respond = func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `{"id":"c-1"}`) }
+	res := e.do(signedIn(t, req("POST", "/api/orchestrator/tasks/t1/discuss", "", "Origin", "http://fleet.example.com")))
+	if body := readBody(t, res); res.StatusCode != 200 || !strings.Contains(body, "c-1") {
+		t.Fatalf("%d %s", res.StatusCode, body)
+	}
+}
+
+// A revoked session on the Discuss lookups clears the stale cookie, as the
+// proxy path does.
+func TestDiscussClearsRevokedSession(t *testing.T) {
+	for _, which := range []string{"/tasks/", "/logs/"} {
+		e := newTestEnv(t)
+		e.orch.respond = func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, which) {
+				w.Header().Set("X-Session-Revoked", "1")
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(w, `{}`)
+		}
+		res := e.do(signedIn(t, req("POST", "/api/orchestrator/tasks/t1/discuss", "", "Origin", "http://fleet.example.com")))
+		if res.StatusCode != http.StatusUnauthorized || !strings.Contains(setCookies(res), "elcano_session=;") {
+			t.Fatalf("%s: %d %q", which, res.StatusCode, setCookies(res))
+		}
 	}
 }

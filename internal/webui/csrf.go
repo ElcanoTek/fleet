@@ -34,9 +34,18 @@ func (g *Gateway) verifyOrigin(w http.ResponseWriter, r *http.Request) bool {
 	if reason == "" {
 		return true
 	}
-	log.Printf("webui: csrf rejected: %s", reason)
+	log.Printf("webui: csrf rejected: %s", logSafe(reason))
 	writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 	return false
+}
+
+// logSafe strips CR/LF from a value before it is interpolated into a log
+// line: the rejection reason quotes the request's Origin, so a header value
+// must not be able to forge a second log line. strings.ReplaceAll is the
+// spelling CodeQL's go/log-injection query models as a sanitizer (the same
+// helper the other packages carry).
+func logSafe(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
 }
 
 func (g *Gateway) originRejection(r *http.Request) string {

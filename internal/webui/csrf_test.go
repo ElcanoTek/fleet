@@ -104,3 +104,9 @@ func TestCSRFRejectionShapeAndOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestLogSafeStripsCRLF(t *testing.T) {
+	if got := logSafe("bad origin \"https://evil\r\nwebui: forged\""); strings.ContainsAny(got, "\r\n") {
+		t.Fatalf("CR/LF survived: %q", got)
+	}
+}

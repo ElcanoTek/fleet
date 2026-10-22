@@ -164,6 +164,24 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A page URL with a trailing slash (/chat/, /help/chat/, /shared/<t>/)
+	// redirects to the slash-less form, keeping the query — what Next did
+	// (308, trailingSlash: false). The target is rebuilt from the ESCAPED path
+	// with every leading slash collapsed to one, so it is always a same-origin
+	// path: "//evil.example/" becomes "/evil.example", and a backslash stays
+	// percent-encoded ("/%5Cevil"), never a scheme-relative URL.
+	if !strings.HasPrefix(path, "/api/") && path != "/" && strings.HasSuffix(path, "/") &&
+		(r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		target := "/" + strings.Trim(r.URL.EscapedPath(), "/")
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		g.decorate(w, path)
+		w.Header().Set("Location", target)
+		w.WriteHeader(http.StatusPermanentRedirect)
+		return
+	}
+
 	// Public read-only shared conversations: viewable by anyone with the link,
 	// logged in or not, and NOT bounced to /chat when signed in.
 	if strings.HasPrefix(path, "/shared/") {

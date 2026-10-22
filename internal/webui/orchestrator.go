@@ -199,11 +199,18 @@ func (g *Gateway) handleDiscuss(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	enc := p(r, "taskId")
-	taskStatus, _, taskBody, ok1 := g.callCapture(g.orch, call{method: http.MethodGet, target: "/tasks/" + enc, header: g.orchHeaders(auth)})
-	logStatus, _, logBody, ok2 := g.callCapture(g.orch, call{method: http.MethodGet, target: "/logs/" + enc, header: g.orchHeaders(auth)})
+	taskStatus, taskHdr, taskBody, ok1 := g.callCaptureLimit(g.orch, call{method: http.MethodGet, target: "/tasks/" + enc, header: g.orchHeaders(auth)}, maxBackendDocumentSize)
+	logStatus, logHdr, logBody, ok2 := g.callCaptureLimit(g.orch, call{method: http.MethodGet, target: "/logs/" + enc, header: g.orchHeaders(auth)}, maxBackendDocumentSize)
 	if !ok1 || !ok2 {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "orchestrator unreachable: no backend"})
 		return
+	}
+	// A revoked session on either lookup clears the stale cookie, exactly as
+	// the proxy path does — otherwise the client loops between /login and the
+	// shell on a cookie that will never be accepted again.
+	if (taskStatus == http.StatusUnauthorized && taskHdr.Get("X-Session-Revoked") == "1") ||
+		(logStatus == http.StatusUnauthorized && logHdr.Get("X-Session-Revoked") == "1") {
+		g.clearSessionCookie(w, r)
 	}
 	if taskStatus < 200 || taskStatus > 299 {
 		writeJSON(w, taskStatus, map[string]string{"error": "task not found"})

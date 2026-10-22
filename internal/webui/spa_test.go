@@ -71,6 +71,39 @@ func TestStaticAssetCaching(t *testing.T) {
 	}
 }
 
+// Static lookups are rooted and cleaned before they reach the bundle FS, so a
+// dot-dot path — literal, percent-encoded, or with an encoded slash — can
+// neither climb out of the bundle nor reach a hidden file (build-id.txt,
+// index.html) by a back door.
+func TestStaticPathTraversal(t *testing.T) {
+	e := newTestEnv(t)
+	for _, target := range []string{
+		"/../../etc/passwd",
+		"/assets/../../../etc/passwd",
+		"/%2e%2e/%2e%2e/etc/passwd",
+		"/assets/%2e%2e/%2e%2e/etc/passwd",
+		"/assets/..%2f..%2fetc%2fpasswd",
+		"/..%2fbuild-id.txt",
+		"/assets/..%2fbuild-id.txt",
+		"/x/%2e%2e/build-id.txt",
+		"//build-id.txt",
+		"/assets/..%5c..%5cbuild-id.txt",
+	} {
+		res := e.do(req("GET", target, ""))
+		body := readBody(t, res)
+		if cc := res.Header.Get("Cache-Control"); res.StatusCode == http.StatusOK && (cc == "no-cache" || strings.Contains(cc, "immutable")) {
+			t.Errorf("%s served a static file: %d %q", target, res.StatusCode, body)
+		}
+		if strings.Contains(body, testBuildID) && !strings.Contains(body, "<html") {
+			t.Errorf("%s leaked build-id.txt: %q", target, body)
+		}
+	}
+	// A dot-dot that stays inside the bundle still resolves to the real file.
+	if res := e.do(req("GET", "/assets/../sw.js", "")); res.StatusCode != http.StatusOK || res.Header.Get("Cache-Control") != "no-cache" {
+		t.Fatalf("in-bundle dot-dot: %d %v", res.StatusCode, res.Header)
+	}
+}
+
 func TestIndexRenderedPerRequest(t *testing.T) {
 	e := newTestEnv(t, withOrigin(testOrigin))
 	e.chat.respond = func(w http.ResponseWriter, r *http.Request) {
@@ -286,6 +319,15 @@ func TestSharedSnapshot(t *testing.T) {
 	if b := bootstrapOf(t, readBody(t, res)); res.StatusCode != 404 || !b.NotFound || b.Shared != nil {
 		t.Fatalf("revoked: %d", res.StatusCode)
 	}
+	// A long shared conversation is embedded whole, not truncated into a 404.
+	big := strings.Repeat("y", 3<<20)
+	e.chat.respond = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"title":"Long","messages":[{"role":"assistant","content":"`+big+`"}]}`)
+	}
+	res = e.do(req("GET", "/shared/long", ""))
+	if b := bootstrapOf(t, readBody(t, res)); res.StatusCode != 200 || len(b.Shared) < 3<<20 {
+		t.Fatalf("large snapshot: %d (%d bytes)", res.StatusCode, len(b.Shared))
+	}
 }
 
 func TestNoBundleAnswers503ForPagesOnly(t *testing.T) {
@@ -329,5 +371,54 @@ func TestEmbeddedBuildIDMatchesPresence(t *testing.T) {
 	}
 	if g.BundlePresent() != (id != "") {
 		t.Fatalf("present=%v id=%q", g.BundlePresent(), id)
+	}
+}
+
+// A trailing slash on a page redirects (308) to the slash-less form with the
+// query kept, as Next did — and the Location is always a same-origin path.
+func TestTrailingSlashRedirect(t *testing.T) {
+	e := newTestEnv(t)
+	for target, want := range map[string]string{
+		"/chat/":                  "/chat",
+		"/settings/":              "/settings",
+		"/help/chat/":             "/help/chat",
+		"/shared/tok%201/":        "/shared/tok%201",
+		"/chat/?c=abc&x=1":        "/chat?c=abc&x=1",
+		"//evil.example/":         "/evil.example",
+		"///evil.example//":       "/evil.example",
+		"/%5Cevil.example/":       "/%5Cevil.example",
+		"/settings//connections/": "/settings//connections",
+	} {
+		for _, m := range []string{"GET", "HEAD"} {
+			res := e.do(signedIn(t, req(m, target, "")))
+			loc := res.Header.Get("Location")
+			if res.StatusCode != http.StatusPermanentRedirect || loc != want {
+				t.Errorf("%s %s: %d %q, want 308 %q", m, target, res.StatusCode, loc, want)
+			}
+			if strings.HasPrefix(loc, "//") || strings.HasPrefix(loc, `/\`) || strings.Contains(loc, "://") {
+				t.Errorf("%s: %q is not a same-origin path", target, loc)
+			}
+		}
+	}
+	// Not for the API, and not for a mutating method.
+	if res := e.do(signedIn(t, req("GET", "/api/personas/", ""))); res.StatusCode == http.StatusPermanentRedirect {
+		t.Errorf("/api redirected")
+	}
+	if res := e.do(signedIn(t, req("POST", "/chat/", "", "Origin", "http://fleet.example.com"))); res.StatusCode == http.StatusPermanentRedirect {
+		t.Errorf("POST redirected")
+	}
+}
+
+// The SPA's router reads the server-decided routes from the bootstrap, so the
+// list cannot drift from servePage: every route here must be one servePage
+// treats specially, and the membership gate's outcome page is in it.
+func TestBootstrapCarriesFullLoadRoutes(t *testing.T) {
+	e := newTestEnv(t)
+	b := bootstrapOf(t, readBody(t, e.do(req("GET", "/login", ""))))
+	got := strings.Join(b.FullLoadRoutes, ",")
+	for _, want := range []string{"/login", "/no-access", "/shared/"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("bootstrap fullLoadRoutes %q lacks %s", got, want)
+		}
 	}
 }
