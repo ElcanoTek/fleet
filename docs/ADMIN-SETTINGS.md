@@ -106,8 +106,10 @@ knob. These deliberately did **not** move into the panel:
   exactly that sealed-secretbox, write-only treatment: Settings → Admin →
   **Notifications** ([NOTIFICATIONS.md](NOTIFICATIONS.md), `notify_settings`
   migration 036). It is a separate slice from this registry because it holds
-  secrets. VAPID keys (Web Push) stay env-only — deployment identity material
-  bound at boot.
+  secrets. The same row carries the daily owner digest's switch and UTC hour
+  (`owner_digest_enabled`, `owner_digest_hour_utc`, migration 083,
+  [OWNER-DIGEST.md](OWNER-DIGEST.md)), which have no env form. VAPID keys
+  (Web Push) stay env-only — deployment identity material bound at boot.
 - **The other hot-reloadable knobs** — `FLEET_MAX_ITERATIONS` and the
   temperatures ride the existing env-file reload
   ([CONFIG-RELOAD.md](CONFIG-RELOAD.md), SIGUSR2 / `POST /admin/reload-config`).

@@ -23,6 +23,11 @@ webhook channels at runtime:
   override, optional HMAC signing secret.
 - **Send test** per channel: one real delivery attempt of a synthetic event
   using the *saved* config, reporting a key-free ok/detail/latency result.
+- **Daily owner digest**: off by default; when on, one email a day at the
+  chosen UTC hour (13:00 by default) to each task owner listing their
+  scheduled tasks that need attention. It uses the SMTP host and From address
+  above but goes to the owner, not the recipient list, and the *Notify on*
+  filter does not apply to it. See [OWNER-DIGEST.md](OWNER-DIGEST.md).
 
 Saving applies **live** — the next task completion (and budget alert, and
 email reply-back) uses the new config, no restart. The saved config replaces
@@ -110,6 +115,8 @@ switch on `status` should handle the new `blocked` value.
 - The admin panel covers email + webhook. Web Push (VAPID keys) stays
   env-configured — the keys are deployment identity material bound at boot.
 - One deployment-wide config — no per-user or per-task notification routing
-  (a task's owner does get per-user push, which is its own system).
+  (a task's owner does get per-user push, which is its own system, and the
+  daily owner digest when an admin turns it on). The digest has no env var:
+  under the env config it is off.
 - The test button exercises the **saved** config, not unsaved form edits (the
   UI says so next to the result).

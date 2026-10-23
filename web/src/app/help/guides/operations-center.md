@@ -332,6 +332,16 @@ anything changes.
 
 ## 6. When a run goes wrong
 
+**The daily digest.** It is off by default, but when your administrator turns
+it on you get one email a day, at a set hour (in UTC), listing the scheduled
+tasks you created that need attention: a latest run that was blocked or
+failed in the last 24 hours, a schedule that stopped, or a run more than two
+hours overdue that has not started. Each line gives the reason and, where your
+deployment has a public address, a link to the task's record. A task whose
+latest run worked is left out, and on a day with nothing to report no email
+comes. It is a convenience, not a monitor: the board is still the thing that
+always knows.
+
 Work down this list. Most problems resolve at the first or second step.
 
 **1 · Read the report.** Well-built reports flag what they could not do rather
