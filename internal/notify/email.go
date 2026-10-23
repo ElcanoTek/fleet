@@ -15,16 +15,22 @@ import (
 func renderEmail(from string, to []string, ev Event) []byte {
 	subject := fmt.Sprintf("Fleet task %s: %s", ev.Status, ev.Name)
 
-	textBody := buildTextBody(ev)
-	htmlBody := buildHTMLBody(ev)
+	return renderMultipart(from, strings.Join(to, ", "), subject, buildTextBody(ev), buildHTMLBody(ev))
+}
 
+// renderMultipart assembles a multipart/alternative message (plain text +
+// HTML) under the given headers. Shared by the task-event email and the
+// direct per-recipient email (SendDirectEmail). The subject is
+// CR/LF-sanitized; the bodies are fleet-rendered and sit after the
+// header/body separator.
+func renderMultipart(from, toHeader, subject, textBody, htmlBody string) []byte {
 	// A fixed boundary is fine: it is generated per call (here, a constant) and
 	// the bodies are fleet-controlled, so it cannot appear inside a part.
 	const boundary = "fleet-notify-boundary-208"
 
 	var b strings.Builder
 	b.WriteString("From: " + from + "\r\n")
-	b.WriteString("To: " + strings.Join(to, ", ") + "\r\n")
+	b.WriteString("To: " + toHeader + "\r\n")
 	b.WriteString("Subject: " + sanitizeHeader(subject) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString("Content-Type: multipart/alternative; boundary=\"" + boundary + "\"\r\n")

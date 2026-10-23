@@ -4,7 +4,8 @@
 // internal/settings (workspace feature settings) and the LLM-provider slice.
 //
 // Precedence: the notify_settings DB row (when present) replaces the
-// FLEET_SMTP_*/FLEET_WEBHOOK_*/FLEET_NOTIFY_ON env config wholesale — a
+// FLEET_SMTP_*/FLEET_WEBHOOK_*/FLEET_NOTIFY_ON env config wholesale (and
+// carries the daily owner digest settings, which have no env form) — a
 // half-merged config (env SMTP + admin webhook) would be impossible to reason
 // about from the panel. Revert deletes the row and the env config serves
 // again. Timing knobs (timeout/retries) and the public URL base stay
@@ -157,6 +158,10 @@ func (s *Service) envView() View {
 			WebhookMethod:       s.env.WebhookMethod,
 			WebhookBodyTemplate: s.env.WebhookBodyTemplate,
 			HasWebhookSecret:    s.env.WebhookSecret != "",
+			// The owner digest has no env var: under the env config it is off,
+			// at the default hour, until an admin saves the panel.
+			OwnerDigestEnabled: false,
+			OwnerDigestHourUTC: store.DefaultOwnerDigestHourUTC,
 		},
 		EmailEnabled:   s.env.EmailConfigured(),
 		WebhookEnabled: s.env.WebhookConfigured(),
@@ -270,6 +275,8 @@ func (s *Service) rowConfig(row *store.NotifySettingsConfig) notify.Config {
 	cfg.WebhookMethod = row.WebhookMethod
 	cfg.WebhookBodyTemplate = row.WebhookBodyTemplate
 	cfg.WebhookSecret = row.WebhookSecret
+	cfg.OwnerDigestEnabled = row.OwnerDigestEnabled
+	cfg.OwnerDigestHourUTC = row.OwnerDigestHourUTC
 	if s.reserved != "" && cfg.WebhookSecret == s.reserved {
 		// Fail closed: no URL means the webhook channel does not fire, and the
 		// View reports it disabled. Signing unsigned instead would be a silent

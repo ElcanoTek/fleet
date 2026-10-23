@@ -52,10 +52,15 @@ func (f *fakeStore) UpsertNotifySettings(_ context.Context, in store.NotifySetti
 			SMTPUsername: in.SMTPUsername, SMTPFrom: in.SMTPFrom, EmailTo: in.EmailTo,
 			WebhookURL: in.WebhookURL, WebhookMethod: in.WebhookMethod,
 			WebhookBodyTemplate: in.WebhookBodyTemplate,
+			OwnerDigestEnabled:  in.OwnerDigestEnabled,
+			OwnerDigestHourUTC:  store.DefaultOwnerDigestHourUTC,
 			UpdatedAt:           42, UpdatedBy: updatedBy,
 		},
 		SMTPPassword:  cur.SMTPPassword,
 		WebhookSecret: cur.WebhookSecret,
+	}
+	if in.OwnerDigestHourUTC != nil {
+		next.OwnerDigestHourUTC = *in.OwnerDigestHourUTC
 	}
 	// Write-only secret convention: nil = keep, "" = clear, value = replace.
 	if in.SMTPPassword != nil {
@@ -312,5 +317,46 @@ func TestReservedSigningSecret(t *testing.T) {
 	}
 	if v, err := svc.View(ctx); err != nil || v.WebhookEnabled {
 		t.Fatalf("view = (%+v, %v), want the webhook reported disabled", v, err)
+	}
+}
+
+// TestOwnerDigestSettingsHotSwap: the digest settings ride the admin row into
+// the live notifier config (where the digest job reads them on every tick),
+// the env view shows them off at the default hour, and Revert switches the
+// digest off again because the env config has no digest.
+func TestOwnerDigestSettingsHotSwap(t *testing.T) {
+	st := &fakeStore{}
+	sw := &fakeSwapper{}
+	svc := NewService(st, envConfig(), sw)
+	ctx := context.Background()
+
+	v, err := svc.View(ctx)
+	if err != nil {
+		t.Fatalf("View: %v", err)
+	}
+	if v.Settings.OwnerDigestEnabled || v.Settings.OwnerDigestHourUTC != store.DefaultOwnerDigestHourUTC {
+		t.Errorf("env view digest = %v at %d, want off at the default hour", v.Settings.OwnerDigestEnabled, v.Settings.OwnerDigestHourUTC)
+	}
+
+	hour := 7
+	v, err = svc.Save(ctx, store.NotifySettingsInput{
+		SMTPHost: "smtp.example", SMTPFrom: "fleet@example", OwnerDigestEnabled: true, OwnerDigestHourUTC: &hour,
+	}, "admin@x.com")
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if !v.Settings.OwnerDigestEnabled || v.Settings.OwnerDigestHourUTC != 7 {
+		t.Errorf("saved view digest = %+v", v.Settings)
+	}
+	applied := sw.applied[len(sw.applied)-1]
+	if !applied.OwnerDigestEnabled || applied.OwnerDigestHourUTC != 7 || !applied.DirectEmailConfigured() {
+		t.Errorf("applied config digest = %v at %d (direct email %v)", applied.OwnerDigestEnabled, applied.OwnerDigestHourUTC, applied.DirectEmailConfigured())
+	}
+
+	if _, err := svc.Revert(ctx, "admin@x.com"); err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	if sw.applied[len(sw.applied)-1].OwnerDigestEnabled {
+		t.Error("revert must switch the digest off (the env config has none)")
 	}
 }

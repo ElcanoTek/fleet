@@ -136,3 +136,34 @@ func TestAdminNotifySettingsRoundTripWriteOnlySecrets(t *testing.T) {
 		t.Errorf("test result = %+v", res)
 	}
 }
+
+// TestAdminNotifySettingsOwnerDigestFields: the digest settings reach the
+// service from the PUT body (absent hour = the default), and an hour outside
+// 0-23 is a 400.
+func TestAdminNotifySettingsOwnerDigestFields(t *testing.T) {
+	h, svc := notifyFixture(t)
+
+	w := do(t, h, http.MethodPut, "/admin/notify-settings", map[string]any{
+		"smtp_host": "smtp.example.com", "smtp_from": "fleet@example.com",
+		"owner_digest_enabled": true, "owner_digest_hour_utc": 0,
+	}, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT: %d body %s", w.Code, w.Body.String())
+	}
+	if !svc.lastIn.OwnerDigestEnabled || svc.lastIn.OwnerDigestHourUTC == nil || *svc.lastIn.OwnerDigestHourUTC != 0 {
+		t.Fatalf("digest input = %v / %v, want on at hour 0", svc.lastIn.OwnerDigestEnabled, svc.lastIn.OwnerDigestHourUTC)
+	}
+
+	w = do(t, h, http.MethodPut, "/admin/notify-settings", map[string]any{"smtp_host": "smtp.example.com"}, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT without digest fields: %d", w.Code)
+	}
+	if svc.lastIn.OwnerDigestEnabled || svc.lastIn.OwnerDigestHourUTC == nil || *svc.lastIn.OwnerDigestHourUTC != store.DefaultOwnerDigestHourUTC {
+		t.Fatalf("absent digest fields = %v / %v, want off at the default hour", svc.lastIn.OwnerDigestEnabled, svc.lastIn.OwnerDigestHourUTC)
+	}
+
+	if w := do(t, h, http.MethodPut, "/admin/notify-settings",
+		map[string]any{"owner_digest_enabled": true, "owner_digest_hour_utc": 24}, "boss@x.com"); w.Code != http.StatusBadRequest {
+		t.Fatalf("hour 24: %d want 400", w.Code)
+	}
+}

@@ -24,6 +24,11 @@ const (
 	// deployment-wide, one row, ever.
 	notifySettingsID = "default"
 
+	// DefaultOwnerDigestHourUTC is the UTC hour the daily owner digest goes
+	// out at when the admin has not chosen one (migration 083's column
+	// default, and the env view's value).
+	DefaultOwnerDigestHourUTC = 13
+
 	//nolint:gosec // G101: AAD domain-separation labels, not credentials.
 	aadPurposeNotifySMTPPassword  = "fleet:notify-smtp-password:v1"
 	aadPurposeNotifyWebhookSecret = "fleet:notify-webhook-secret:v1"
@@ -56,8 +61,13 @@ type NotifySettings struct {
 	WebhookMethod       string `json:"webhook_method"`
 	WebhookBodyTemplate string `json:"webhook_body_template"`
 	HasWebhookSecret    bool   `json:"has_webhook_secret"`
-	UpdatedAt           int64  `json:"updated_at"`
-	UpdatedBy           string `json:"updated_by"`
+	// OwnerDigestEnabled / OwnerDigestHourUTC are the daily owner digest
+	// (migration 083, docs/OWNER-DIGEST.md): off by default; sent at or after
+	// this UTC hour, once a day.
+	OwnerDigestEnabled bool   `json:"owner_digest_enabled"`
+	OwnerDigestHourUTC int    `json:"owner_digest_hour_utc"`
+	UpdatedAt          int64  `json:"updated_at"`
+	UpdatedBy          string `json:"updated_by"`
 }
 
 // NotifySettingsConfig is NotifySettings plus the DECRYPTED secrets — host-side
@@ -83,6 +93,12 @@ type NotifySettingsInput struct {
 	WebhookMethod       string
 	WebhookBodyTemplate string
 	WebhookSecret       *string
+	// OwnerDigestEnabled turns the daily owner digest on. Like every other
+	// non-secret field it is written as given (a PUT replaces the row).
+	OwnerDigestEnabled bool
+	// OwnerDigestHourUTC is the digest's UTC hour, 0-23; nil =
+	// DefaultOwnerDigestHourUTC.
+	OwnerDigestHourUTC *int
 }
 
 // Normalize trims and shape-checks the non-secret fields. Deep validation
@@ -123,6 +139,13 @@ func (in *NotifySettingsInput) Normalize() error {
 	default:
 		return fmt.Errorf("%w: webhook_method %q (want POST, PUT, or PATCH)", ErrInvalidNotifySettings, in.WebhookMethod)
 	}
+	if in.OwnerDigestHourUTC == nil {
+		h := DefaultOwnerDigestHourUTC
+		in.OwnerDigestHourUTC = &h
+	}
+	if h := *in.OwnerDigestHourUTC; h < 0 || h > 23 {
+		return fmt.Errorf("%w: owner_digest_hour_utc %d (want an hour from 0 to 23, UTC)", ErrInvalidNotifySettings, h)
+	}
 	return nil
 }
 
@@ -146,13 +169,15 @@ func (s *Store) getNotifySettings(ctx context.Context, decrypt bool) (*NotifySet
 	row := s.db.QueryRowContext(ctx, `
 		SELECT notify_on, smtp_host, smtp_port, smtp_username, smtp_password_sealed,
 		       smtp_from, email_to, webhook_url, webhook_method, webhook_body_template,
-		       webhook_secret_sealed, updated_at, updated_by
+		       webhook_secret_sealed, owner_digest_enabled, owner_digest_hour_utc,
+		       updated_at, updated_by
 		FROM notify_settings WHERE id = $1`, notifySettingsID)
 	var c NotifySettingsConfig
 	var sealedPass, sealedSecret []byte
 	err := row.Scan(&c.NotifyOn, &c.SMTPHost, &c.SMTPPort, &c.SMTPUsername, &sealedPass,
 		&c.SMTPFrom, &c.EmailTo, &c.WebhookURL, &c.WebhookMethod, &c.WebhookBodyTemplate,
-		&sealedSecret, &c.UpdatedAt, &c.UpdatedBy)
+		&sealedSecret, &c.OwnerDigestEnabled, &c.OwnerDigestHourUTC,
+		&c.UpdatedAt, &c.UpdatedBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotifySettingsNotFound
 	}
@@ -200,8 +225,9 @@ func (s *Store) UpsertNotifySettings(ctx context.Context, in NotifySettingsInput
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO notify_settings (id, notify_on, smtp_host, smtp_port, smtp_username,
 			smtp_password_sealed, smtp_from, email_to, webhook_url, webhook_method,
-			webhook_body_template, webhook_secret_sealed, updated_at, updated_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+			webhook_body_template, webhook_secret_sealed, owner_digest_enabled,
+			owner_digest_hour_utc, updated_at, updated_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		ON CONFLICT (id) DO UPDATE SET
 			notify_on = EXCLUDED.notify_on, smtp_host = EXCLUDED.smtp_host,
 			smtp_port = EXCLUDED.smtp_port, smtp_username = EXCLUDED.smtp_username,
@@ -210,10 +236,13 @@ func (s *Store) UpsertNotifySettings(ctx context.Context, in NotifySettingsInput
 			webhook_url = EXCLUDED.webhook_url, webhook_method = EXCLUDED.webhook_method,
 			webhook_body_template = EXCLUDED.webhook_body_template,
 			webhook_secret_sealed = EXCLUDED.webhook_secret_sealed,
+			owner_digest_enabled = EXCLUDED.owner_digest_enabled,
+			owner_digest_hour_utc = EXCLUDED.owner_digest_hour_utc,
 			updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by`,
 		notifySettingsID, in.NotifyOn, in.SMTPHost, in.SMTPPort, in.SMTPUsername,
 		sealedPass, in.SMTPFrom, in.EmailTo, in.WebhookURL, in.WebhookMethod,
-		in.WebhookBodyTemplate, sealedSecret, time.Now().Unix(), updatedBy)
+		in.WebhookBodyTemplate, sealedSecret, in.OwnerDigestEnabled,
+		*in.OwnerDigestHourUTC, time.Now().Unix(), updatedBy)
 	if err != nil {
 		return nil, err
 	}
