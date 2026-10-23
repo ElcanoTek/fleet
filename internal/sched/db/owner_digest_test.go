@@ -95,7 +95,7 @@ func TestOwnerDigestCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OwnerDigestCandidates: %v", err)
 	}
-	var names []string
+	names := make([]string, 0, len(got))
 	for _, task := range got {
 		names = append(names, task.Title)
 	}

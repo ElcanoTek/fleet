@@ -123,7 +123,7 @@ func TestBuildGroupsPerOwner(t *testing.T) {
 	if len(digests) != 1 || digests[0].Owner != "alice@example.com" {
 		t.Fatalf("digests = %+v, want Alice's only", digests)
 	}
-	var kinds []Kind
+	kinds := make([]Kind, 0, len(digests[0].Items))
 	for _, it := range digests[0].Items {
 		kinds = append(kinds, it.Kind)
 		if it.LogURL != "" {
@@ -471,7 +471,5 @@ func TestTickNobodyToTell(t *testing.T) {
 	}
 }
 
-// TestNotifierSatisfiesMailer keeps the seam honest against the real type.
-func TestNotifierSatisfiesMailer(t *testing.T) {
-	var _ Mailer = (*notify.Notifier)(nil)
-}
+// The real notifier must satisfy the seam the digest sends through.
+var _ Mailer = (*notify.Notifier)(nil)
