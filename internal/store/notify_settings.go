@@ -92,9 +92,9 @@ func (in *NotifySettingsInput) Normalize() error {
 	in.NotifyOn = strings.TrimSpace(strings.ToLower(in.NotifyOn))
 	for _, part := range strings.Split(in.NotifyOn, ",") {
 		switch strings.TrimSpace(part) {
-		case "", "success", "failure", "progress", "always":
+		case "", "success", "failure", "blocked", "progress", "always":
 		default:
-			return fmt.Errorf("%w: notify_on value %q (want a CSV of success|failure|progress|always, or empty for all terminal statuses)", ErrInvalidNotifySettings, strings.TrimSpace(part))
+			return fmt.Errorf("%w: notify_on value %q (want a CSV of success|failure|blocked|progress|always, or empty for all terminal statuses)", ErrInvalidNotifySettings, strings.TrimSpace(part))
 		}
 	}
 	in.SMTPHost = strings.TrimSpace(in.SMTPHost)

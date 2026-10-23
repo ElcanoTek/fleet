@@ -978,3 +978,12 @@ func TestNewAndNewWithHTTPClient_WarnOnTheProcessLogger(t *testing.T) {
 		}
 	}
 }
+
+// TestEventTitle_Blocked: a blocked run pushes "⚠ Blocked: <name>" with its
+// duration; the recorded reason (a Message) never reaches the lock screen.
+func TestEventTitle_Blocked(t *testing.T) {
+	title, ok := eventTitle(notify.Event{Name: "refresh dash", Status: notify.StatusBlocked, DurationSeconds: 75, Message: "secret-ish reason"})
+	if !ok || title != "⚠ Blocked: refresh dash (1m15s)" {
+		t.Fatalf("eventTitle(blocked) = %q, %v", title, ok)
+	}
+}

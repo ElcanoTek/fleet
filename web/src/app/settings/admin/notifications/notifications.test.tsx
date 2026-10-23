@@ -234,6 +234,25 @@ describe("NotificationsAdminPage", () => {
     expect(sent).toEqual(["custom_status", "success"]);
   });
 
+  it("offers a blocked chip and says failure covers it", async () => {
+    const fetchMock = mockFetch(ENV_VIEW, (url, init) => {
+      if (init.method === "PUT") return { status: 200, body: ENV_VIEW };
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<NotificationsAdminPage />);
+    const blocked = await screen.findByRole("button", { name: "blocked" }, { timeout: 5000 });
+    expect(blocked).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText(/failure includes blocked/)).toBeInTheDocument();
+    fireEvent.click(blocked);
+    fireEvent.click(screen.getByTestId("notify-save"));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, i]) => i?.method === "PUT")).toBe(true),
+    );
+    const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT");
+    expect(JSON.parse(String(put?.[1]?.body)).notify_on).toBe("blocked");
+  });
+
   it("the test button reports the key-free result", async () => {
     const fetchMock = mockFetch(ENV_VIEW, (url, init) => {
       if (init.method === "POST" && url.includes("/test")) {

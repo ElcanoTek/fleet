@@ -561,3 +561,127 @@ func TestRenderWebhookBody_JSONHelperInCustomTemplate(t *testing.T) {
 		t.Errorf("rendered = %s, want %s", body, want)
 	}
 }
+
+// TestShouldFire_BlockedSemantics pins the On-list rules for the blocked
+// status (ADR-0092): empty = all; "failure" also fires for "blocked" (a
+// failure-only deployment must hear about a run that left its dashboard
+// stale); "blocked" can be listed on its own; "success" never covers it; and
+// "blocked" does not widen to real failures.
+func TestShouldFire_BlockedSemantics(t *testing.T) {
+	cases := []struct {
+		on     []string
+		status Status
+		want   bool
+	}{
+		{nil, StatusBlocked, true},
+		{[]string{"always"}, StatusBlocked, true},
+		{[]string{"failure"}, StatusBlocked, true},
+		{[]string{" Failure "}, StatusBlocked, true},
+		{[]string{"failure"}, StatusFailure, true},
+		{[]string{"failure"}, StatusSuccess, false},
+		{[]string{"blocked"}, StatusBlocked, true},
+		{[]string{"blocked"}, StatusFailure, false},
+		{[]string{"blocked"}, StatusSuccess, false},
+		{[]string{"success"}, StatusBlocked, false},
+		{[]string{"success", "progress"}, StatusBlocked, false},
+		{[]string{"progress"}, StatusProgress, true},
+	}
+	for _, tc := range cases {
+		if got := (Config{On: tc.on}).shouldFire(tc.status); got != tc.want {
+			t.Errorf("On=%q status=%s: shouldFire = %v, want %v", tc.on, tc.status, got, tc.want)
+		}
+	}
+}
+
+// TestNotify_FailureFilterDeliversBlocked drives the filter through a real
+// send: a webhook configured for failures receives the blocked event.
+func TestNotify_FailureFilterDeliversBlocked(t *testing.T) {
+	var bodies []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(b)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	n := New(Config{WebhookURL: srv.URL, On: []string{"failure"}})
+	ev := sampleEvent()
+	ev.Status = StatusBlocked
+	ev.Message = "outcome=source_unreachable: no report"
+	if err := n.Notify(context.Background(), ev); err != nil {
+		t.Fatalf("Notify(blocked): %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 1 || !strings.Contains(bodies[0], `"status":"blocked"`) {
+		t.Fatalf("webhook bodies = %q, want one blocked event", bodies)
+	}
+}
+
+// TestRenderEmail_Blocked: the subject and both body parts say blocked, lead
+// with "Blocked: <name>", and label the Message as the reason.
+func TestRenderEmail_Blocked(t *testing.T) {
+	ev := sampleEvent()
+	ev.Status = StatusBlocked
+	ev.Message = `outcome=source_unreachable: mailbox <empty>`
+	msg := string(renderEmail("fleet@example.com", []string{"a@example.com"}, ev))
+	for _, want := range []string{
+		"Subject: Fleet task blocked: nightly report",
+		"Blocked: nightly report\r\n" + blockedLead,
+		"Status: blocked",
+		"Reason: outcome=source_unreachable: mailbox <empty>",
+		"<h2>Blocked: nightly report</h2>",
+		"<b>Reason:</b> outcome=source_unreachable: mailbox &lt;empty&gt;",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("rendered blocked email missing %q\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "Message:") {
+		t.Error("a blocked email labels its message as the reason, not Message")
+	}
+	// A non-blocked event keeps the old shape.
+	plain := string(renderEmail("fleet@example.com", []string{"a@example.com"}, sampleEvent()))
+	if strings.Contains(plain, "Blocked:") || strings.Contains(plain, "Reason:") || !strings.Contains(plain, "<h2>Fleet task success</h2>") {
+		t.Errorf("success email changed shape:\n%s", plain)
+	}
+}
+
+// TestRenderWebhookBody_DefaultBlockedEvent: the default payload for a blocked
+// event is valid JSON with status "blocked" and the reason under "reason";
+// every other status renders no reason key (the change is additive).
+func TestRenderWebhookBody_DefaultBlockedEvent(t *testing.T) {
+	ev := sampleEvent()
+	ev.Status = StatusBlocked
+	ev.Message = `outcome=failed: "rows" mismatch \ 3`
+	body, err := RenderWebhookBody("", ev)
+	if err != nil {
+		t.Fatalf("RenderWebhookBody: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("blocked body is not valid JSON: %v\n%s", err, body)
+	}
+	if got["status"] != "blocked" || got["reason"] != ev.Message || got["name"] != "nightly report" {
+		t.Errorf("blocked body = %v", got)
+	}
+	for _, s := range []Status{StatusSuccess, StatusFailure, StatusProgress} {
+		other := sampleEvent()
+		other.Status = s
+		other.Message = "Schedule stopped: something"
+		b, err := RenderWebhookBody("", other)
+		if err != nil {
+			t.Fatalf("RenderWebhookBody(%s): %v", s, err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatalf("%s body invalid: %v", s, err)
+		}
+		if _, ok := m["reason"]; ok || len(m) != 6 {
+			t.Errorf("%s body keys = %v, want the six pre-existing keys only", s, m)
+		}
+	}
+}

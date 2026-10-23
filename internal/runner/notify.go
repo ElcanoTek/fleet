@@ -65,19 +65,21 @@ func (p *Pool) deliver(ctx context.Context, task *models.Task, ev notify.Event) 
 }
 
 // blockedStreakAlert is how many consecutive blocked occurrences of one
-// recurring lineage raise the blocked-streak alert (notifyBlockedSuccess).
+// recurring lineage make a blocked notification say so (notifyBlocked).
 const blockedStreakAlert = 3
 
-// notifyBlockedSuccess notifies for a success whose declared completion
-// clause recorded a blocked outcome (Task.RunOutcome "blocked"). An ordinary
-// blocked run is a success event whose message says "Blocked: <detail>". The
-// run that makes it EXACTLY blockedStreakAlert blocked occurrences in a row of
-// a recurring lineage is sent as a failure event instead — a dashboard that
-// has stopped updating is something its owner must hear about even when they
-// only subscribe to failures — once per streak. Nothing parks: the schedule
-// keeps running, and the next run that publishes ends the streak. The streak
-// lookup runs off-thread with the rest of the fan-out.
-func (p *Pool) notifyBlockedSuccess(task *models.Task, session *models.LogSession, dur time.Duration) {
+// notifyBlocked notifies for a success whose declared completion clause
+// recorded a blocked outcome (Task.RunOutcome "blocked") as a StatusBlocked
+// event (ADR-0092): its Message is the recorded reason (run_outcome_detail,
+// whitespace collapsed, length-capped). A deployment that notifies only on
+// failure hears it too — the notify On filter treats "failure" as covering
+// "blocked" — so the owner of a dashboard that stopped updating learns about
+// the first blocked run, not only the third. The run that makes it EXACTLY
+// blockedStreakAlert blocked occurrences in a row of a recurring lineage says
+// so in its message, once per streak. Nothing parks: the schedule keeps
+// running, and the next run that publishes ends the streak. The streak lookup
+// runs off-thread with the rest of the fan-out.
+func (p *Pool) notifyBlocked(task *models.Task, session *models.LogSession, dur time.Duration) {
 	if p.notifier == nil {
 		return
 	}
@@ -85,17 +87,16 @@ func (p *Pool) notifyBlockedSuccess(task *models.Task, session *models.LogSessio
 	if task.RunOutcomeDetail != nil {
 		detail = strings.Join(strings.Fields(*task.RunOutcomeDetail), " ")
 	}
-	ev := p.buildEvent(task, notify.StatusSuccess, session, dur)
+	ev := p.buildEvent(task, notify.StatusBlocked, session, dur)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), notifyFanoutBudget)
 		defer cancel()
-		message := "Blocked: " + detail
+		message := detail
 		if task.Recurrence != "" && p.store != nil {
 			streak, err := p.store.BlockedStreak(ctx, task.ID, blockedStreakAlert+1)
 			if err != nil {
 				log.Printf("runner: blocked-streak lookup for task %s failed: %v", task.ID, err)
 			} else if streak == blockedStreakAlert {
-				ev.Status = notify.StatusFailure
 				message = fmt.Sprintf("Blocked %d runs in a row — the schedule keeps running, but none of them published: %s", streak, detail)
 			}
 		}

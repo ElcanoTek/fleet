@@ -301,7 +301,11 @@ The semantics, the validation rules and the visible effects are documented in
 - The third consecutive blocked occurrence of a recurring lineage sends its
   notification as a failure event (`Blocked 3 runs in a row — …`). The
   streak lookup runs off the terminal path, it fires once per streak, and
-  nothing parks.
+  nothing parks. **Amended 2026-10-23
+  ([ADR-0092](adr/0092-blocked-is-a-notification-status.md)):** every blocked
+  run now notifies with status `blocked`, which a `failure` filter also
+  fires for; the third in a row keeps its `Blocked 3 runs in a row — …`
+  message but is no longer escalated to `failure`.
 
 **Deviation.** The brief's example had no `detail_argument`; fleet must not
 assume the recording tool has a `detail` argument (Pages semantics), so the

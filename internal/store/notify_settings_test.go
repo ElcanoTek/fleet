@@ -112,3 +112,19 @@ func TestNotifySettingsSecretsFailClosedWithoutCipher(t *testing.T) {
 		t.Fatalf("secret-free write should work without a cipher: %v", err)
 	}
 }
+
+// TestNotifySettingsNormalizeAcceptsBlocked: "blocked" is a notify_on value
+// the panel may save (ADR-0092); unknown values are still refused.
+func TestNotifySettingsNormalizeAcceptsBlocked(t *testing.T) {
+	in := NotifySettingsInput{NotifyOn: " Blocked,failure "}
+	if err := in.Normalize(); err != nil {
+		t.Fatalf("Normalize(blocked,failure): %v", err)
+	}
+	if in.NotifyOn != "blocked,failure" {
+		t.Errorf("notify_on = %q", in.NotifyOn)
+	}
+	bad := NotifySettingsInput{NotifyOn: "blocked,stalled"}
+	if err := bad.Normalize(); !errors.Is(err, ErrInvalidNotifySettings) || !strings.Contains(err.Error(), "success|failure|blocked|progress|always") {
+		t.Errorf("Normalize(stalled) = %v", err)
+	}
+}

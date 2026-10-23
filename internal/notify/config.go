@@ -14,8 +14,9 @@ import (
 // model context.
 type Config struct {
 	// On filters which terminal statuses fire a notification. Empty = all
-	// terminal statuses. Values are notify Status strings ("success"/"failure")
-	// or the special "always".
+	// terminal statuses. Values are notify Status strings
+	// ("success"/"failure"/"blocked"/"progress") or the special "always";
+	// "failure" also covers "blocked" (shouldFire).
 	On []string
 
 	// ── email (SMTP) ──

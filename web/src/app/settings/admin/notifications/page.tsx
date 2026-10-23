@@ -116,7 +116,11 @@ async function fetchView(): Promise<View | null> {
   return (await response.json()) as View;
 }
 
-const STATUS_OPTIONS = ["success", "failure", "progress"] as const;
+// "blocked" is a run that finished but recorded a blocked outcome (it did not
+// update what it maintains). The server treats "failure" as covering it, so a
+// failure-only config still hears about blocked runs; the chip lets an admin
+// ask for blocked runs without real failures.
+const STATUS_OPTIONS = ["success", "failure", "blocked", "progress"] as const;
 
 export default function NotificationsAdminPage() {
   // Client-side visibility gate only — every /api/admin call below is
@@ -347,7 +351,7 @@ function NotificationsAdmin() {
                     );
                   })}
                   <span className="ml-[0.2rem] text-[0.72rem] text-[var(--color-text-muted)]">
-                    none selected = all terminal statuses
+                    none selected = all terminal statuses; failure includes blocked
                   </span>
                 </div>
               </div>

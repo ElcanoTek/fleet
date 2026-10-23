@@ -172,6 +172,7 @@ none, in the most recently used fleet tab; see the click note below).
 | --- | --- | --- |
 | Task terminal: success | `FLEET_PUSH_ON_TASK_COMPLETE` | `✓ Task complete: <name> (<duration>)` |
 | Task terminal: failure (error, retry-exhausted dead-letter, interrupted) | `FLEET_PUSH_ON_TASK_COMPLETE` | `✗ Task failed: <name> (<duration>)` |
+| Task terminal: success with a recorded blocked outcome ([ADR-0092](adr/0092-blocked-is-a-notification-status.md)) | `FLEET_PUSH_ON_TASK_COMPLETE` | `⚠ Blocked: <name> (<duration>)` (the reason stays off the lock screen) |
 | Task paused for `ask` (#510) | `FLEET_PUSH_ON_TASK_COMPLETE` | `⏸ Waiting for your answer: <name>` |
 | A progress note from the agent's mid-run `notify` tool (#510) | `FLEET_PUSH_ON_TASK_COMPLETE` | `✎ Progress note: <name>` |
 | A user-scoped budget crossed its soft threshold (`internal/sched/budget`) | `FLEET_PUSH_ON_TASK_COMPLETE` | `⚠ Budget alert: user <email> (<window> window)` |

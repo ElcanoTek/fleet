@@ -121,7 +121,8 @@ func blockedSession(id uuid.UUID) *models.LogSession {
 // TestBlockedRunIsRecordedAndTheThirdInARowAlerts: a run whose declared
 // completion clause recorded a blocked outcome lands as success with run
 // outcome "blocked", its result flagged, and the third consecutive blocked
-// occurrence of a recurring lineage notifies as a failure — without parking.
+// occurrence of a recurring lineage notifies as blocked with a message that
+// names the streak — without parking.
 func TestBlockedRunIsRecordedAndTheThirdInARowAlerts(t *testing.T) {
 	store := newTestStore(t)
 	// Two earlier blocked occurrences of the lineage, then the current one.
@@ -170,14 +171,15 @@ func TestBlockedRunIsRecordedAndTheThirdInARowAlerts(t *testing.T) {
 		t.Fatal("a blocked streak must not park the schedule")
 	}
 	ev := notif.drain()[0]
-	if ev.Status != notify.StatusFailure || !strings.HasPrefix(ev.Message, "Blocked 3 runs in a row") || !strings.Contains(ev.Message, "source_unreachable") {
-		t.Fatalf("third blocked occurrence notified %+v, want a failure-class blocked-streak alert", ev)
+	if ev.Status != notify.StatusBlocked || !strings.HasPrefix(ev.Message, "Blocked 3 runs in a row") || !strings.Contains(ev.Message, "source_unreachable") {
+		t.Fatalf("third blocked occurrence notified %+v, want a blocked event naming the streak", ev)
 	}
 }
 
-// TestSingleBlockedRunNotifiesAsBlockedSuccess: a first blocked run is a
-// success event whose message says it was blocked.
-func TestSingleBlockedRunNotifiesAsBlockedSuccess(t *testing.T) {
+// TestSingleBlockedRunNotifiesAsBlocked: a success whose completion clause
+// recorded a blocked outcome notifies with status blocked (not success), and
+// its message is the recorded reason itself (ADR-0092).
+func TestSingleBlockedRunNotifiesAsBlocked(t *testing.T) {
 	store := newTestStore(t)
 	task := seedRecurringTask(t, store)
 	notif := &fakeNotifier{}
@@ -185,7 +187,36 @@ func TestSingleBlockedRunNotifiesAsBlockedSuccess(t *testing.T) {
 		return blockedSession(tk.ID), nil
 	}), notif, func() bool { return len(notif.drain()) == 1 })
 	ev := notif.drain()[0]
-	if ev.TaskID != task.ID.String() || ev.Status != notify.StatusSuccess || !strings.HasPrefix(ev.Message, "Blocked: outcome=source_unreachable") {
-		t.Fatalf("event = %+v, want a success that says Blocked", ev)
+	if ev.TaskID != task.ID.String() || ev.Status != notify.StatusBlocked {
+		t.Fatalf("event = %+v, want status blocked", ev)
+	}
+	if ev.Message != "outcome=source_unreachable: mailbox had no report for 2026-10-04" {
+		t.Fatalf("message = %q, want the recorded run_outcome_detail", ev.Message)
+	}
+}
+
+// TestBlockedMessageIsCollapsedAndCapped: the recorded reason is
+// whitespace-collapsed and length-capped before it reaches a notification.
+func TestBlockedMessageIsCollapsedAndCapped(t *testing.T) {
+	store := newTestStore(t)
+	seedRecurringTask(t, store)
+	notif := &fakeNotifier{}
+	long := "outcome=failed:\n  " + strings.Repeat("x", 2*maxScheduleStoppedMessage)
+	runPoolUntil(t, store, TaskRunnerFunc(func(_ context.Context, tk *models.Task) (*models.LogSession, error) {
+		s := blockedSession(tk.ID)
+		s.RunOutcomeDetail = long
+		return s, nil
+	}), notif, func() bool { return len(notif.drain()) == 1 })
+	ev := notif.drain()[0]
+	if ev.Status != notify.StatusBlocked {
+		t.Fatalf("status = %s, want blocked", ev.Status)
+	}
+	if strings.ContainsAny(ev.Message, "\n") || !strings.HasPrefix(ev.Message, "outcome=failed: xxx") {
+		t.Fatalf("message not collapsed: %q", ev.Message)
+	}
+	// The row's detail is already capped (maxRunOutcomeDetailRunes, plus its
+	// ellipsis); the notification never carries more than its own bound.
+	if n := len([]rune(ev.Message)); n > maxScheduleStoppedMessage || !strings.HasSuffix(ev.Message, "…") {
+		t.Fatalf("message is %d runes, want a truncated reason of at most %d", n, maxScheduleStoppedMessage)
 	}
 }
