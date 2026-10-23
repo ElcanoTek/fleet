@@ -115,6 +115,14 @@ const (
 	// ask-pause): a heads-up mid-run, not a completion. Fires under the same
 	// On-list filter as terminal statuses.
 	StatusProgress Status = "progress"
+	// StatusBlocked is a run that finished successfully but whose declared
+	// completion clause recorded a blocked outcome (run_outcome "blocked",
+	// docs/CONDITIONAL-TASK-COMPLETION.md): it did its job and decided not to
+	// publish, so whatever it maintains did not change. The task's own status
+	// stays "success"; only the notification says blocked. Message carries the
+	// recorded reason. An On list naming "failure" fires for it too (see
+	// shouldFire and ADR-0092).
+	StatusBlocked Status = "blocked"
 )
 
 // Kind names what raised an Event when Status alone does not say it. The
@@ -161,11 +169,13 @@ type Event struct {
 	// when no public base URL is configured.
 	LogURL string
 	// Message is an optional free-text line: for a StatusProgress event (#510)
-	// the notify/ask text, and for a failure that parked a recurring schedule
-	// "Schedule stopped: <reason>" (ADR-0070, ADR-0073). Empty for every other
-	// terminal event. Rendered into the email body; the default webhook
-	// template omits it (additive, no template churn) and a custom template may
-	// use {{.Message}}. Web Push never carries it (lock-screen privacy).
+	// the notify/ask text, for a StatusBlocked event the recorded reason
+	// (run_outcome_detail, whitespace-collapsed and length-capped), and for a
+	// failure that parked a recurring schedule "Schedule stopped: <reason>"
+	// (ADR-0070, ADR-0073). Empty for every other terminal event. Rendered
+	// into the email body; the default webhook template carries it only for a
+	// blocked event (as "reason", additive) and a custom template may use
+	// {{.Message}}. Web Push never carries it (lock-screen privacy).
 	Message string
 	// Audience is the task owner's email (#292): the per-USER routing key the
 	// browser Web Push backend fans out to, resolved by the runner from the
@@ -179,13 +189,20 @@ type Event struct {
 }
 
 // shouldFire reports whether this status is one the config asked to be notified
-// about. An empty On list means "all terminal statuses".
+// about. An empty On list means "all terminal statuses". "failure" also covers
+// StatusBlocked: a blocked run left the thing it maintains unchanged, which is
+// what a deployment that listens only for failures wants to hear about
+// (ADR-0092). "blocked" may be listed on its own as well.
 func (c Config) shouldFire(s Status) bool {
 	if len(c.On) == 0 {
 		return true
 	}
-	for _, want := range c.On {
-		if Status(strings.TrimSpace(want)) == s || strings.TrimSpace(want) == "always" {
+	for _, raw := range c.On {
+		want := Status(strings.ToLower(strings.TrimSpace(raw)))
+		switch {
+		case want == s, want == "always":
+			return true
+		case want == StatusFailure && s == StatusBlocked:
 			return true
 		}
 	}
@@ -372,31 +389,7 @@ func retry(ctx context.Context, cfg Config, fn func(context.Context) error) erro
 // SMTP password is read from the host config and handed to smtp.PlainAuth; it is
 // never placed in the message, the error, or any log line.
 func sendEmail(ctx context.Context, c Config, ev Event) error {
-	addr := net.JoinHostPort(c.SMTPHost, c.SMTPPort)
-	msg := renderEmail(c.SMTPFrom, c.EmailTo, ev)
-
-	var auth smtp.Auth
-	if c.SMTPUsername != "" {
-		auth = smtp.PlainAuth("", c.SMTPUsername, c.SMTPPassword, c.SMTPHost)
-	}
-
-	// net/smtp has no context-aware SendMail; run it on a goroutine and honor the
-	// per-attempt ctx so a hung dial still returns within cfg.Timeout. The
-	// detached SendMail finishes (or errors) on its own and is then GC'd.
-	done := make(chan error, 1)
-	go func() {
-		done <- smtp.SendMail(addr, auth, c.SMTPFrom, c.EmailTo, msg)
-	}()
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("smtp send to %s: %w", addr, ctx.Err())
-	case err := <-done:
-		if err != nil {
-			// smtp errors describe the dial/auth/server response, not the password.
-			return fmt.Errorf("smtp send to %s: %w", addr, err)
-		}
-		return nil
-	}
+	return sendRaw(ctx, c, c.EmailTo, renderEmail(c.SMTPFrom, c.EmailTo, ev))
 }
 
 // ReplyToEmailEvent sends a reply to an inbound-email trigger's original sender
@@ -423,8 +416,67 @@ func (n *Notifier) ReplyToEmailEvent(ctx context.Context, to, subject, body, inR
 	})
 }
 
+// ErrDirectEmailNotConfigured is SendDirectEmail's answer when SMTP is not
+// configured for sending (no host or no From address).
+var ErrDirectEmailNotConfigured = errors.New("email is not configured (an SMTP host and a From address are required)")
+
+// SendDirectEmail sends one multipart (plain text + HTML) email to a single
+// named recipient over the configured SMTP settings, with the same per-attempt
+// timeout and bounded retry as the task-event email. Unlike Notify it ignores
+// the deployment-wide EmailTo list and the On filter: the caller chose the
+// recipient and the content (the daily owner digest, internal/ownerdigest).
+// Returns ErrDirectEmailNotConfigured when there is no SMTP host or From
+// address. The SMTP password is never placed in the message, the error, or a
+// log line; the recipient address is not logged here either.
+func (n *Notifier) SendDirectEmail(ctx context.Context, to, subject, textBody, htmlBody string) error {
+	if n == nil {
+		return ErrDirectEmailNotConfigured
+	}
+	st := n.snapshot()
+	if !st.cfg.DirectEmailConfigured() {
+		return ErrDirectEmailNotConfigured
+	}
+	to = strings.TrimSpace(to)
+	if to == "" || strings.ContainsAny(to, "\r\n") {
+		return fmt.Errorf("direct email: invalid recipient")
+	}
+	msg := renderMultipart(st.cfg.SMTPFrom, to, subject, textBody, htmlBody)
+	return retry(ctx, st.cfg, func(ctx context.Context) error {
+		return sendRaw(ctx, st.cfg, []string{to}, msg)
+	})
+}
+
+// sendRaw delivers pre-rendered message bytes to the envelope recipients over
+// SMTP with STARTTLS (the net/smtp SendMail path, which negotiates STARTTLS
+// when the server advertises it). The SMTP password is read from the host
+// config and handed to smtp.PlainAuth; it is never placed in the message, the
+// error, or any log line.
+func sendRaw(ctx context.Context, c Config, to []string, msg []byte) error {
+	addr := net.JoinHostPort(c.SMTPHost, c.SMTPPort)
+	var auth smtp.Auth
+	if c.SMTPUsername != "" {
+		auth = smtp.PlainAuth("", c.SMTPUsername, c.SMTPPassword, c.SMTPHost)
+	}
+	// net/smtp has no context-aware SendMail; run it on a goroutine and honor the
+	// per-attempt ctx so a hung dial still returns within cfg.Timeout. The
+	// detached SendMail finishes (or errors) on its own and is then GC'd.
+	done := make(chan error, 1)
+	go func() {
+		done <- smtp.SendMail(addr, auth, c.SMTPFrom, to, msg)
+	}()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("smtp send to %s: %w", addr, ctx.Err())
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("smtp send to %s: %w", addr, err)
+		}
+		return nil
+	}
+}
+
 // sendReplyEmail sends one reply over SMTP to the single inbound sender. Mirrors
-// sendEmail's context-honoring goroutine pattern, but addresses the reply to the
+// sendRaw's context-honoring goroutine pattern, but addresses the reply to the
 // event's sender (not the configured EmailTo list).
 func sendReplyEmail(ctx context.Context, c Config, to, subject, body, inReplyTo string) error {
 	addr := net.JoinHostPort(c.SMTPHost, c.SMTPPort)
@@ -574,7 +626,11 @@ func jsonNumber(s string) string {
 // configured. Every free-text field goes through the json helper and the cost
 // through number, so the body is valid JSON for any prompt and for events
 // that carry no cost.
-const defaultWebhookTemplate = `{"task_id":{{json .TaskID}},"name":{{json .Name}},"status":{{json .Status}},"cost_usd":{{number .CostUSD}},"duration_seconds":{{.DurationSeconds}},"log_url":{{json .LogURL}}}`
+//
+// A blocked event (StatusBlocked) adds one key, "reason", carrying the recorded
+// reason (Event.Message). Every other event renders exactly the keys it always
+// had, so the change is additive for existing receivers.
+const defaultWebhookTemplate = `{"task_id":{{json .TaskID}},"name":{{json .Name}},"status":{{json .Status}},"cost_usd":{{number .CostUSD}},"duration_seconds":{{.DurationSeconds}},"log_url":{{json .LogURL}}{{if eq .Status "blocked"}},"reason":{{json .Message}}{{end}}}`
 
 // SignWebhook returns the canonical X-Fleet-Signature value for body under
 // secret, binding in timestamp (Unix seconds, as it appears in the

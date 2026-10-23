@@ -66,6 +66,8 @@ async function mockAdmin(page: Page) {
           webhook_method: "POST",
           webhook_body_template: "",
           has_webhook_secret: true,
+          owner_digest_enabled: false,
+          owner_digest_hour_utc: 13,
         },
         email_enabled: false,
         webhook_enabled: true,
@@ -145,4 +147,10 @@ test("the Notifications page renders channel status without secret material", as
   await expect(notifications).toContainText("Env config");
   await expect(page.getByTestId("notify-webhook-url")).toHaveValue("https://hooks.example.com/x");
   await expect(page.getByTestId("notify-webhook-secret")).toHaveValue("");
+  // The daily owner digest: off by default, with its UTC hour.
+  await expect(page.getByRole("switch", { name: "Send the daily owner digest" })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
+  await expect(page.getByTestId("notify-owner-digest-hour")).toHaveValue("13");
 });

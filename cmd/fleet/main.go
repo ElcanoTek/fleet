@@ -65,6 +65,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/observability"
 	"github.com/ElcanoTek/fleet/internal/otelsetup"
+	"github.com/ElcanoTek/fleet/internal/ownerdigest"
 	"github.com/ElcanoTek/fleet/internal/piiredact"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/runner"
@@ -1163,6 +1164,10 @@ func run() error {
 	// retention sweeps, attachment + temp-upload files, orphan workspaces,
 	// stale git worktrees). See startMaintenanceLoop.
 	startMaintenanceLoop(ctx, cfg, h, chatSrv, chatStore)
+	// The daily owner digest (docs/OWNER-DIGEST.md): off until an admin turns
+	// it on in Settings → Admin → Notifications; the loop reads that switch
+	// live from the shared notifier.
+	ownerdigest.New(schedStorage, chatStore, taskNotifier).Start(ctx)
 	accountEventsDone := startAccountEventsDelivery(ctx, cfg, chatStore)
 
 	// Listeners are bound; tell a systemd-aware supervisor we are ready (no-op

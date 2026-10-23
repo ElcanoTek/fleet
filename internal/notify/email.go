@@ -15,16 +15,22 @@ import (
 func renderEmail(from string, to []string, ev Event) []byte {
 	subject := fmt.Sprintf("Fleet task %s: %s", ev.Status, ev.Name)
 
-	textBody := buildTextBody(ev)
-	htmlBody := buildHTMLBody(ev)
+	return renderMultipart(from, strings.Join(to, ", "), subject, buildTextBody(ev), buildHTMLBody(ev))
+}
 
+// renderMultipart assembles a multipart/alternative message (plain text +
+// HTML) under the given headers. Shared by the task-event email and the
+// direct per-recipient email (SendDirectEmail). The subject is
+// CR/LF-sanitized; the bodies are fleet-rendered and sit after the
+// header/body separator.
+func renderMultipart(from, toHeader, subject, textBody, htmlBody string) []byte {
 	// A fixed boundary is fine: it is generated per call (here, a constant) and
 	// the bodies are fleet-controlled, so it cannot appear inside a part.
 	const boundary = "fleet-notify-boundary-208"
 
 	var b strings.Builder
 	b.WriteString("From: " + from + "\r\n")
-	b.WriteString("To: " + strings.Join(to, ", ") + "\r\n")
+	b.WriteString("To: " + toHeader + "\r\n")
 	b.WriteString("Subject: " + sanitizeHeader(subject) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString("Content-Type: multipart/alternative; boundary=\"" + boundary + "\"\r\n")
@@ -80,9 +86,26 @@ func replySubject(subject string) string {
 	return "Re: " + s
 }
 
+// blockedLead is the first line of a blocked event's email: the subject says
+// "blocked", and this says what that means before the run facts.
+const blockedLead = "The run finished, but its completion check recorded a blocked outcome: what it maintains was not updated."
+
+// messageLabel names the event's free-text line in the email: a blocked
+// event's Message is the recorded reason it was blocked; every other event's
+// is the ask/progress text or the schedule-stopped line.
+func messageLabel(ev Event) string {
+	if ev.Status == StatusBlocked {
+		return "Reason"
+	}
+	return "Message"
+}
+
 // buildTextBody renders the plain-text alternative.
 func buildTextBody(ev Event) string {
 	var b strings.Builder
+	if ev.Status == StatusBlocked {
+		fmt.Fprintf(&b, "Blocked: %s\r\n%s\r\n\r\n", ev.Name, blockedLead)
+	}
 	fmt.Fprintf(&b, "Task: %s\r\n", ev.Name)
 	fmt.Fprintf(&b, "ID: %s\r\n", ev.TaskID)
 	fmt.Fprintf(&b, "Status: %s\r\n", ev.Status)
@@ -90,8 +113,9 @@ func buildTextBody(ev Event) string {
 	fmt.Fprintf(&b, "Duration: %ds\r\n", ev.DurationSeconds)
 	if ev.Message != "" {
 		// The ask-pause (#510) / progress message — for a paused task this IS
-		// the agent's question, the reason the notification exists.
-		fmt.Fprintf(&b, "Message: %s\r\n", ev.Message)
+		// the agent's question, the reason the notification exists — or a
+		// blocked run's recorded reason.
+		fmt.Fprintf(&b, "%s: %s\r\n", messageLabel(ev), ev.Message)
 	}
 	if ev.LogURL != "" {
 		fmt.Fprintf(&b, "Log: %s\r\n", ev.LogURL)
@@ -112,11 +136,15 @@ func buildHTMLBody(ev Event) string {
 	// other prompt-derived value.
 	messageLine := ""
 	if ev.Message != "" {
-		messageLine = fmt.Sprintf("<p><b>Message:</b> %s</p>", htmlEscape(ev.Message))
+		messageLine = fmt.Sprintf("<p><b>%s:</b> %s</p>", messageLabel(ev), htmlEscape(ev.Message))
+	}
+	heading := "<h2>Fleet task " + htmlEscape(string(ev.Status)) + "</h2>"
+	if ev.Status == StatusBlocked {
+		heading = "<h2>Blocked: " + htmlEscape(ev.Name) + "</h2><p>" + htmlEscape(blockedLead) + "</p>"
 	}
 	return fmt.Sprintf(
 		"<html><body>"+
-			"<h2>Fleet task %s</h2>"+
+			"%s"+
 			"<table>"+
 			"<tr><td><b>Task</b></td><td>%s</td></tr>"+
 			"<tr><td><b>ID</b></td><td>%s</td></tr>"+
@@ -124,7 +152,7 @@ func buildHTMLBody(ev Event) string {
 			"<tr><td><b>Cost</b></td><td>$%s</td></tr>"+
 			"<tr><td><b>Duration</b></td><td>%ds</td></tr>"+
 			"</table>%s%s</body></html>",
-		htmlEscape(string(ev.Status)),
+		heading,
 		htmlEscape(ev.Name),
 		htmlEscape(ev.TaskID),
 		htmlEscape(string(ev.Status)),

@@ -14,8 +14,9 @@ import (
 // model context.
 type Config struct {
 	// On filters which terminal statuses fire a notification. Empty = all
-	// terminal statuses. Values are notify Status strings ("success"/"failure")
-	// or the special "always".
+	// terminal statuses. Values are notify Status strings
+	// ("success"/"failure"/"blocked"/"progress") or the special "always";
+	// "failure" also covers "blocked" (shouldFire).
 	On []string
 
 	// ── email (SMTP) ──
@@ -33,6 +34,17 @@ type Config struct {
 	WebhookMethod       string // default POST
 	WebhookBodyTemplate string
 	WebhookSecret       string // SECRET — HMAC signing key, never logged
+
+	// ── daily owner digest (admin-managed only; docs/OWNER-DIGEST.md) ──
+	// OwnerDigestEnabled turns on the once-a-day email to each task owner
+	// listing their scheduled tasks that did not work. It rides the SMTP
+	// settings above but is addressed to the owner, not EmailTo, so it needs
+	// only an SMTP host and From address (DirectEmailConfigured). No env var
+	// sets it: the env-derived config leaves it off.
+	OwnerDigestEnabled bool
+	// OwnerDigestHourUTC is the UTC hour (0-23) at or after which the day's
+	// digest is sent.
+	OwnerDigestHourUTC int
 
 	// ── shared ──
 	// PublicURLBase is the absolute base (scheme+host) used to build the
@@ -69,6 +81,11 @@ func (c Config) emailEnabled() bool {
 
 // webhookEnabled reports whether a webhook URL is configured.
 func (c Config) webhookEnabled() bool { return strings.TrimSpace(c.WebhookURL) != "" }
+
+// DirectEmailConfigured reports whether an email addressed to one named
+// recipient can be sent (SendDirectEmail, the owner digest): an SMTP host and
+// a From address, no EmailTo list needed — the same rule as reply-back.
+func (c Config) DirectEmailConfigured() bool { return c.replyEnabled() }
 
 // replyEnabled reports whether an email REPLY can be sent (#511 reply-back). A
 // reply goes to the inbound sender rather than the configured EmailTo list, so —

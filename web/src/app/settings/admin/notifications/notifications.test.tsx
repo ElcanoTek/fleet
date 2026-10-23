@@ -234,6 +234,74 @@ describe("NotificationsAdminPage", () => {
     expect(sent).toEqual(["custom_status", "success"]);
   });
 
+  it("offers a blocked chip and says failure covers it", async () => {
+    const fetchMock = mockFetch(ENV_VIEW, (url, init) => {
+      if (init.method === "PUT") return { status: 200, body: ENV_VIEW };
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<NotificationsAdminPage />);
+    const blocked = await screen.findByRole("button", { name: "blocked" }, { timeout: 5000 });
+    expect(blocked).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText(/failure includes blocked/)).toBeInTheDocument();
+    fireEvent.click(blocked);
+    fireEvent.click(screen.getByTestId("notify-save"));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, i]) => i?.method === "PUT")).toBe(true),
+    );
+    const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT");
+    expect(JSON.parse(String(put?.[1]?.body)).notify_on).toBe("blocked");
+  });
+
+  it("the daily owner digest defaults off at 13:00 UTC and saves its switch and hour", async () => {
+    const fetchMock = mockFetch(ENV_VIEW, (url, init) => {
+      if (init.method === "PUT") return { status: 200, body: ENV_VIEW };
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<NotificationsAdminPage />);
+    const sw = await screen.findByTestId("notify-owner-digest", undefined, { timeout: 5000 });
+    expect(sw).toHaveAttribute("role", "switch");
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByLabelText("Send the daily owner digest")).toBe(sw);
+    const hour = screen.getByTestId("notify-owner-digest-hour");
+    expect(hour).toHaveValue("13");
+    expect(screen.getByLabelText("Send at (UTC)")).toBe(hour);
+    // SMTP host + From are saved in this view, so no warning.
+    expect(screen.queryByText("Needs SMTP")).toBeNull();
+
+    fireEvent.click(sw);
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    fireEvent.change(hour, { target: { value: "6" } });
+    fireEvent.click(screen.getByTestId("notify-save"));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, i]) => i?.method === "PUT")).toBe(true),
+    );
+    const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT");
+    const body = JSON.parse(String(put?.[1]?.body));
+    expect(body.owner_digest_enabled).toBe(true);
+    expect(body.owner_digest_hour_utc).toBe(6);
+  });
+
+  it("renders a saved digest and warns when SMTP cannot send it", async () => {
+    const view: View = {
+      ...ENV_VIEW,
+      source: "admin",
+      settings: {
+        ...ENV_VIEW.settings,
+        smtp_from: "",
+        owner_digest_enabled: true,
+        owner_digest_hour_utc: 0,
+      },
+    };
+    vi.stubGlobal("fetch", mockFetch(view));
+    render(<NotificationsAdminPage />);
+    const sw = await screen.findByTestId("notify-owner-digest", undefined, { timeout: 5000 });
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("notify-owner-digest-hour")).toHaveValue("0");
+    expect(screen.getByText("Needs SMTP")).toBeInTheDocument();
+  });
+
   it("the test button reports the key-free result", async () => {
     const fetchMock = mockFetch(ENV_VIEW, (url, init) => {
       if (init.method === "POST" && url.includes("/test")) {

@@ -1065,12 +1065,11 @@ func (p *Pool) finishSuccess(task *models.Task, session *models.LogSession, outp
 	if landedTask != nil {
 		task = landedTask
 		// Terminal success: fire the outbound notification off-thread (#208).
-		// A blocked success (completion.blocked_when) says so, and the third
-		// blocked occurrence in a row of a recurring lineage is raised as a
-		// failure-class alert instead: the dashboard it maintains has stopped
-		// updating while every run reads green. Nothing parks.
+		// A blocked success (completion.blocked_when) notifies as blocked, with
+		// the recorded reason (ADR-0092): the thing it maintains did not
+		// change while the run reads green. Nothing parks.
 		if task.IsRunOutcome(models.RunOutcomeBlocked) {
-			p.notifyBlockedSuccess(task, session, time.Since(start))
+			p.notifyBlocked(task, session, time.Since(start))
 		} else {
 			p.notifyTerminal(task, notify.StatusSuccess, session, time.Since(start))
 		}

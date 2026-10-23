@@ -79,7 +79,7 @@
 #   # these set, no notifications fire and behavior is unchanged. Secrets
 #   # (FLEET_SMTP_PASSWORD, FLEET_WEBHOOK_SECRET) stay host-side; they are never
 #   # logged or shipped into the sandbox.
-#   # FLEET_NOTIFY_ON=success,failure            # which terminal statuses fire (empty = all)
+#   # FLEET_NOTIFY_ON=success,failure            # which statuses fire (empty = all; failure includes blocked)
 #   # FLEET_PUBLIC_URL=https://fleet.example.com # base for the per-task log link in notifications
 #   # Email (SMTP) — fires only when a host AND recipients are both set:
 #   # FLEET_SMTP_HOST=smtp.mailgun.org

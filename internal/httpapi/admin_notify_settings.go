@@ -53,6 +53,10 @@ type notifySettingsBody struct {
 	WebhookMethod       string  `json:"webhook_method"`
 	WebhookBodyTemplate string  `json:"webhook_body_template"`
 	WebhookSecret       *string `json:"webhook_secret"`
+	// The daily owner digest (docs/OWNER-DIGEST.md). Absent enabled = off;
+	// absent hour = the default (13 UTC).
+	OwnerDigestEnabled bool `json:"owner_digest_enabled"`
+	OwnerDigestHourUTC *int `json:"owner_digest_hour_utc"`
 }
 
 // handleAdminNotifySettings serves /admin/notify-settings: GET the effective
@@ -82,6 +86,7 @@ func (s *Server) handleAdminNotifySettings(w http.ResponseWriter, r *http.Reques
 			SMTPFrom: body.SMTPFrom, EmailTo: body.EmailTo,
 			WebhookURL: body.WebhookURL, WebhookMethod: body.WebhookMethod,
 			WebhookBodyTemplate: body.WebhookBodyTemplate, WebhookSecret: body.WebhookSecret,
+			OwnerDigestEnabled: body.OwnerDigestEnabled, OwnerDigestHourUTC: body.OwnerDigestHourUTC,
 		}
 		view, err := s.notifySettings.Save(r.Context(), in, userFromCtx(r.Context()))
 		if err != nil {

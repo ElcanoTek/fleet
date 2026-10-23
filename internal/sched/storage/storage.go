@@ -423,6 +423,14 @@ func (s *Storage) GetUsersByIDs(userIDs []uuid.UUID) (map[uuid.UUID]string, erro
 	return s.db.GetUsersByIDs(context.Background(), userIDs)
 }
 
+// OwnerDigestCandidates returns the rows the daily owner digest classifies
+// (db.OwnerDigestCandidates, docs/OWNER-DIGEST.md): per owner and job, the
+// latest terminal run since `since` when it is blocked, errored or
+// dead-lettered, plus cron occurrences still waiting past overdueBefore.
+func (s *Storage) OwnerDigestCandidates(ctx context.Context, since, overdueBefore time.Time, limit int) ([]*models.Task, error) {
+	return s.db.OwnerDigestCandidates(ctx, since, overdueBefore, limit)
+}
+
 // GetUsersByIDsWithContext gets users by a list of IDs with context.
 func (s *Storage) GetUsersByIDsWithContext(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]string, error) {
 	return s.db.GetUsersByIDs(ctx, userIDs)

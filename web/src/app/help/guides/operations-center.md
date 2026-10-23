@@ -220,7 +220,7 @@ Every status badge means one of eleven things. What each one means, and what to 
 | `LEASED` | An agent has claimed it and is starting it now. A brief, normal step between pending and running. |
 | `RUNNING` | Executing now. Open it to watch live if you are curious. |
 | `SUCCESS` | The run completed. Its result is in the logs, and in the recipients' inboxes if the task has any — a task with no recipients succeeds quietly, so a green badge is not by itself proof that anyone was emailed. |
-| `BLOCKED` | An amber badge on a run that completed but decided not to publish — for example a dashboard refresh whose source was unreachable. It appears only when the task's prompt declares which recordings mean blocked (an EXECUTION REQUIREMENTS `completion.blocked_when` clause); the task summary's **Blocked** row says why. The run itself is a success and the schedule keeps going, but the thing it maintains did not change: fix the cause if it keeps happening. Three blocked runs in a row of the same schedule send a failure notification. |
+| `BLOCKED` | An amber badge on a run that completed but decided not to publish — for example a dashboard refresh whose source was unreachable. It appears only when the task's prompt declares which recordings mean blocked (an EXECUTION REQUIREMENTS `completion.blocked_when` clause); the task summary's **Blocked** row says why. The run itself is a success and the schedule keeps going, but the thing it maintains did not change: fix the cause if it keeps happening. Where your deployment sends task notifications, a blocked run sends one marked **Blocked** with the reason, also to people who only get failure notifications; the third blocked run in a row of the same schedule says so. |
 | `ERROR` | A failure the scheduler could not route anywhere else — the uncommon one. Treat it like the row below: read it, fix the cause, rerun. A run that failed and is going to be retried does not sit here; it goes back to `PENDING` until its next attempt. |
 | `DEAD_LETTERED` | Failed and set aside for review — the badge most failures end on. It means one of two things, and the row says which: retries were exhausted, or the failure was deterministic and was quarantined on its first attempt without retrying. This occurrence is done: read the failure, fix the cause, and replay it if you want this run again; see [When a run goes wrong](#6-when-a-run-goes-wrong). A recurring schedule still continues on its own — the next occurrence is queued unless the schedule has reached its configured end (its run count or end date). Two exceptions resume only on replay: chains parked by two consecutive dead-letters, and rows dead-lettered before that continuation shipped. A parked occurrence's schedule reads **⏹ Schedule stopped**, with the reason in its task summary. A chain whose prompt has a malformed EXECUTION REQUIREMENTS line stops on its first dead-letter; a plain replay is refused, so an administrator replays it with a corrected prompt (`fleet sched dlq replay --prompt-file`), which keeps its task memory. Editing the finished task only starts a one-off run. |
 | `CANCELLED` | A person stopped it. The record notes who. Deliberate stops never retry or alert. |
@@ -331,6 +331,16 @@ feedback surface as suggested adjustments that an operator reviews before
 anything changes.
 
 ## 6. When a run goes wrong
+
+**The daily digest.** It is off by default, but when your administrator turns
+it on you get one email a day, at a set hour (in UTC), listing the scheduled
+tasks you created that need attention: a latest run that was blocked or
+failed in the last 24 hours, a schedule that stopped, or a run more than two
+hours overdue that has not started. Each line gives the reason and, where your
+deployment has a public address, a link to the task's record. A task whose
+latest run worked is left out, and on a day with nothing to report no email
+comes. It is a convenience, not a monitor: the board is still the thing that
+always knows.
 
 Work down this list. Most problems resolve at the first or second step.
 

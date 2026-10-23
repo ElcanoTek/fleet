@@ -162,8 +162,12 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   panel: DB override > env var > default, live apply, the registry admission
   rule, what stays env-only): [`docs/ADMIN-SETTINGS.md`](ADMIN-SETTINGS.md)
 - **Task notifications** (email/webhook channels, the admin Notifications
-  panel with sealed write-only secrets + test sends, env precedence):
-  [`docs/NOTIFICATIONS.md`](NOTIFICATIONS.md)
+  panel with sealed write-only secrets + test sends, env precedence, the
+  `blocked` status): [`docs/NOTIFICATIONS.md`](NOTIFICATIONS.md)
+- **The daily owner digest** (one email a day to each task owner listing
+  their blocked, failed, stopped and overdue scheduled tasks; the admin
+  switch and hour; the once-a-day claim):
+  [`docs/OWNER-DIGEST.md`](OWNER-DIGEST.md)
 - **Reclamation, disk backpressure & stuck-task backstops** (the one hourly
   maintenance loop, the daily `fleet-maintenance.timer`, the free-space floor
   that sheds scheduled work while chat keeps serving, and the terminal backstop
@@ -289,12 +293,13 @@ above fails otherwise.
 - [`MODEL-COST-INDICATORS.md`](MODEL-COST-INDICATORS.md) — Model cost indicators ($ … $$$$)
 - [`MODEL-DEFAULTS.md`](MODEL-DEFAULTS.md) — Claude Haiku 5.5 as the everyday default (2026-10-15), Gemini 4 Argon as the strong tier (2026-10-14); the earlier Luna Pro / Opus swaps (2026-09-21, 2026-09-22), and why; plus the self-correcting refusal a lockdown conversation returns for a model its allow-list forbids
 - [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md) — The node toolchain handoff (`fleet update` ⇄ `fleet doctor --node`)
-- [`NOTIFICATIONS.md`](NOTIFICATIONS.md) — Task notifications (email + webhook) & admin management
+- [`NOTIFICATIONS.md`](NOTIFICATIONS.md) — Task notifications (email + webhook) & admin management, including the `blocked` status
 - [`OPEN-REMOTE-MCP.md`](OPEN-REMOTE-MCP.md) — Open-access remote MCP connections
 - [`OPERATORS.md`](OPERATORS.md) — Operating fleet
 - [`OPS-CENTER-LOG-TIMELINE.md`](OPS-CENTER-LOG-TIMELINE.md) — Operations Center log timeline — one readable step per tool call
 - [`OPS-CONNECTOR-DEFAULTS.md`](OPS-CONNECTOR-DEFAULTS.md) — Operations connector defaults
 - [`OUT-OF-ROSTER-TOOL-CALLS.md`](OUT-OF-ROSTER-TOOL-CALLS.md) — Calls to tools not in the tool list: deferred tools rerouted through `tool_call`, gated tools explained, counted per model (#1744)
+- [`OWNER-DIGEST.md`](OWNER-DIGEST.md) — The daily owner digest: one email a day to each task owner listing their scheduled tasks that did not work
 - [`CHAT-ESCALATION.md`](CHAT-ESCALATION.md) — When chat offers the advanced model: the assistant's own suggestion, free end-of-turn struggle signals, the optional Jev frustration check, **Retry with**, and the per-user frustration counts on the admin Users page
 - [`TASK-MODEL-TIER.md`](TASK-MODEL-TIER.md) — The task model tier: Operations Center tasks default to the advanced model (admin-settable), while chat keeps the fast default
 - [`PINNED-MODELS.md`](PINNED-MODELS.md) — Pinned and relabelled picker models (`FLEET_PINNED_MODELS`): a display alias, not a secrecy boundary

@@ -140,8 +140,9 @@ func TestBrowserNotificationsSwitchNamesEveryPush(t *testing.T) {
 var pushDescribedAs = map[string][]string{
 	"✓ Task complete":           {"a task you created finishes"},
 	"✗ Task failed":             {"a task you created finishes"},
-	"⏸ Waiting for your answer": {"is waiting for your answer"}, // an ask pause
-	"✎ Progress note":           {"sends a progress note"},      // the agent's mid-run notify tool
+	"⚠ Blocked":                 {"a task you created finishes"}, // a run that finished but recorded a blocked outcome (ADR-0092)
+	"⏸ Waiting for your answer": {"is waiting for your answer"},  // an ask pause
+	"✎ Progress note":           {"sends a progress note"},       // the agent's mid-run notify tool
 	"⚠ Budget alert":            {"past your budget's soft limit"},
 	"⚠ Approval needed":         {"needs your approval"},
 	"✓ Done":                    {"an approved one finishes"},

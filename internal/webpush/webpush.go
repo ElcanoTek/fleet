@@ -655,6 +655,12 @@ func eventTitle(ev notify.Event) (title string, ok bool) {
 		return fmt.Sprintf("✓ Task complete: %s (%s)", ev.Name, formatDuration(ev.DurationSeconds)), true
 	case notify.StatusFailure:
 		return fmt.Sprintf("✗ Task failed: %s (%s)", ev.Name, formatDuration(ev.DurationSeconds)), true
+	case notify.StatusBlocked:
+		// The run finished but recorded a blocked outcome: what it maintains
+		// did not change. The recorded reason is a Message, so it stays off
+		// the lock screen like every other Message; the click opens the task,
+		// whose summary shows it.
+		return fmt.Sprintf("⚠ Blocked: %s (%s)", ev.Name, formatDuration(ev.DurationSeconds)), true
 	case notify.StatusProgress:
 		switch ev.Kind {
 		case notify.KindBudgetAlert:

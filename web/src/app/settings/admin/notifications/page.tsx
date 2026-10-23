@@ -7,7 +7,10 @@
 // new config. Secrets (SMTP password, webhook signing secret) are WRITE-ONLY:
 // stored encrypted, never shown again; leave the field blank to keep the
 // stored value. A saved admin config replaces the env config wholesale;
-// "Use env config" reverts.
+// "Use env config" reverts. The daily owner digest (one email a day to each
+// task owner listing their scheduled tasks that did not work) rides the same
+// SMTP settings and is saved with them; it has no env form, so it is off under
+// the env config.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "@/app/lib/navigation";
@@ -20,6 +23,7 @@ import {
   ConnBadge,
   InlineConfirmButton,
   SETTINGS_INPUT,
+  SetSwitch,
 } from "../../ui/atoms";
 import {
   ConnField,
@@ -44,6 +48,10 @@ type NotifySettings = {
   webhook_method: string;
   webhook_body_template: string;
   has_webhook_secret: boolean;
+  // The daily owner digest (docs/OWNER-DIGEST.md). Optional so an older
+  // server's view still renders (off, at the default hour).
+  owner_digest_enabled?: boolean;
+  owner_digest_hour_utc?: number;
   updated_at?: number;
   updated_by?: string;
 };
@@ -77,7 +85,13 @@ type Draft = {
   webhook_body_template: string;
   webhook_secret: string;
   clear_webhook_secret: boolean;
+  owner_digest_enabled: boolean;
+  owner_digest_hour_utc: number;
 };
+
+// The server's default digest hour (store.DefaultOwnerDigestHourUTC).
+const DEFAULT_DIGEST_HOUR_UTC = 13;
+const DIGEST_HOURS = Array.from({ length: 24 }, (_, h) => h);
 
 function draftFrom(view: View): Draft {
   const s = view.settings;
@@ -95,6 +109,8 @@ function draftFrom(view: View): Draft {
     webhook_body_template: s.webhook_body_template,
     webhook_secret: "",
     clear_webhook_secret: false,
+    owner_digest_enabled: s.owner_digest_enabled ?? false,
+    owner_digest_hour_utc: s.owner_digest_hour_utc ?? DEFAULT_DIGEST_HOUR_UTC,
   };
 }
 
@@ -116,7 +132,11 @@ async function fetchView(): Promise<View | null> {
   return (await response.json()) as View;
 }
 
-const STATUS_OPTIONS = ["success", "failure", "progress"] as const;
+// "blocked" is a run that finished but recorded a blocked outcome (it did not
+// update what it maintains). The server treats "failure" as covering it, so a
+// failure-only config still hears about blocked runs; the chip lets an admin
+// ask for blocked runs without real failures.
+const STATUS_OPTIONS = ["success", "failure", "blocked", "progress"] as const;
 
 export default function NotificationsAdminPage() {
   // Client-side visibility gate only — every /api/admin call below is
@@ -188,6 +208,8 @@ function NotificationsAdmin() {
         webhook_url: draft.webhook_url,
         webhook_method: draft.webhook_method,
         webhook_body_template: draft.webhook_body_template,
+        owner_digest_enabled: draft.owner_digest_enabled,
+        owner_digest_hour_utc: draft.owner_digest_hour_utc,
       };
       // Write-only secrets: include only when typed (replace) or explicitly
       // cleared; omitted = keep the stored value.
@@ -347,7 +369,7 @@ function NotificationsAdmin() {
                     );
                   })}
                   <span className="ml-[0.2rem] text-[0.72rem] text-[var(--color-text-muted)]">
-                    none selected = all terminal statuses
+                    none selected = all terminal statuses; failure includes blocked
                   </span>
                 </div>
               </div>
@@ -426,6 +448,19 @@ function NotificationsAdmin() {
                   </ConnField>
                 </div>
               </ChannelPanel>
+
+              <OwnerDigestPanel
+                enabled={draft.owner_digest_enabled}
+                hour={draft.owner_digest_hour_utc}
+                smtpReady={
+                  view.settings.smtp_host.trim() !== "" && view.settings.smtp_from.trim() !== ""
+                }
+                busy={busy}
+                onToggle={() =>
+                  setDraft({ ...draft, owner_digest_enabled: !draft.owner_digest_enabled })
+                }
+                onHour={(hour) => setDraft({ ...draft, owner_digest_hour_utc: hour })}
+              />
 
               <ChannelPanel
                 title="Webhook"
@@ -526,6 +561,76 @@ function NotificationsAdmin() {
         </ConnGroup>
       </div>
     </SetSection>
+  );
+}
+
+// OwnerDigestPanel: the daily owner digest switch and its UTC hour. The badge
+// reads the SAVED settings (like the channel badges): the digest needs an SMTP
+// host and a From address, but not the recipient list above, because each
+// email goes to the task's owner.
+function OwnerDigestPanel({
+  enabled,
+  hour,
+  smtpReady,
+  busy,
+  onToggle,
+  onHour,
+}: {
+  enabled: boolean;
+  hour: number;
+  smtpReady: boolean;
+  busy: boolean;
+  onToggle: () => void;
+  onHour: (hour: number) => void;
+}) {
+  return (
+    <ConnPanel>
+      <div className="flex min-h-[1.8rem] items-center gap-4">
+        <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)]">
+          Daily owner digest
+        </span>
+        <span className="ml-auto flex items-center gap-[0.55rem]">
+          {smtpReady ? null : (
+            <ConnBadge variant="warn" title="Save an SMTP host and From address above">
+              Needs SMTP
+            </ConnBadge>
+          )}
+          <SetSwitch
+            on={enabled}
+            onToggle={onToggle}
+            label="Send the daily owner digest"
+            disabled={busy}
+            testId="notify-owner-digest"
+          />
+        </span>
+      </div>
+      <p className="m-0 mt-[0.45rem] text-[0.76rem] leading-[1.55] text-[var(--color-text-muted)]">
+        Once a day, each task owner gets one email listing their scheduled tasks that did not work
+        in the last 24 hours: a latest run that was blocked or failed, a schedule that stopped, and
+        runs more than two hours overdue. Owners with nothing to report get nothing. Sent from the
+        SMTP settings above to each owner&apos;s account email, not to the recipients list.
+      </p>
+      <div className="mt-[0.9rem] grid grid-cols-[12rem] gap-[0.75rem_0.85rem] max-[640px]:grid-cols-1">
+        <ConnField label="Send at (UTC)">
+          <span className="select-wrap block">
+            <select
+              id="notifyOwnerDigestHour"
+              value={hour}
+              disabled={busy}
+              onChange={(e) => onHour(Number(e.target.value))}
+              data-testid="notify-owner-digest-hour"
+              className={`${SETTINGS_INPUT} appearance-none pr-8!`}
+            >
+              {DIGEST_HOURS.map((h) => (
+                <option key={h} value={h}>
+                  {`${String(h).padStart(2, "0")}:00 UTC`}
+                </option>
+              ))}
+            </select>
+          </span>
+        </ConnField>
+      </div>
+    </ConnPanel>
   );
 }
 

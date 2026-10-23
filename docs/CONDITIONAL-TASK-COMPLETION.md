@@ -412,13 +412,18 @@ recurrence behave exactly as for any success — but:
   also gains a *Blocked* row with the reason; `fleet sched task list` shows
   `success (blocked)`, and the task's `result` starts with `[blocked]`;
 - the session log gains a `[completion_blocked] …` breadcrumb;
-- the success notification's message says `Blocked: <detail>`. When a
-  recurring lineage reaches **three consecutive** blocked occurrences, that
-  run's notification is sent as a failure instead
-  (`Blocked 3 runs in a row — the schedule keeps running, …`), so an owner who
-  subscribes only to failures hears about a dashboard that stopped updating.
-  It fires once per streak, at the third run. Nothing parks: the next run that
-  publishes ends the streak.
+- the notification is sent with status **`blocked`** (not `success`), and its
+  message is the detail ([ADR-0092](adr/0092-blocked-is-a-notification-status.md),
+  [NOTIFICATIONS.md](NOTIFICATIONS.md#blocked-runs)). A notify filter that
+  names `failure` fires for it too, so an owner who subscribes only to
+  failures hears about the first blocked run. When a recurring lineage
+  reaches **three consecutive** blocked occurrences, that run's message says
+  so (`Blocked 3 runs in a row — the schedule keeps running, …`), once per
+  streak. Nothing parks: the next run that publishes ends the streak. (Until
+  2026-10 a blocked run notified as `success`, and only the third in a row as
+  `failure`.)
+- the owner's daily digest, when an admin has turned it on, lists the
+  lineage while its latest run is blocked ([OWNER-DIGEST.md](OWNER-DIGEST.md)).
 
 Fleet assigns no meaning to the tool, the argument or the values beyond that
 match; the producer owns which recordings mean blocked.
