@@ -73,7 +73,7 @@ func TestToAgentcoreProviders(t *testing.T) {
 		if len(got) != 2 || got[0].APIKey != "" {
 			t.Errorf("unset env => %+v, want an empty APIKey on provider[0]", got)
 		}
-		if out := buf.String(); !strings.Contains(out, `bundle provider "x": its api_key_env DEFINITELY_UNSET_KEY_XYZ is unset or empty`) ||
+		if out := buf.String(); !strings.Contains(out, `bundle provider "x": its api_key_env variable is unset or empty`) ||
 			strings.Contains(out, `"local"`) {
 			t.Errorf("log = %q, want one warning naming x's unset variable", out)
 		}

@@ -2134,8 +2134,10 @@ func toAgentcoreProviders(bundle *clientconfig.Bundle) []agentcore.ProviderConfi
 				// A keyed type then fails resolver construction; a type whose
 				// key is optional (ollama, openaicompat) would otherwise run
 				// keyless without a word, and a typo'd name would surface only
-				// as a 401 on the first turn. Names the variable, never a value.
-				log.Printf("WARNING: bundle provider %q: its api_key_env %s is unset or empty, so it has no API key", strings.TrimSpace(p.Name), env)
+				// as a 401 on the first turn. Names the provider only: nothing
+				// read through APIKeyEnv reaches a log line, so the variable's
+				// name (in the manifest entry) is not printed either.
+				log.Printf("WARNING: bundle provider %q: its api_key_env variable is unset or empty, so it has no API key", strings.TrimSpace(p.Name))
 			}
 		}
 		warnUndeclaredContextWindow("bundle", strings.TrimSpace(p.Name), strings.TrimSpace(p.Type), p.ContextWindowTokens,
