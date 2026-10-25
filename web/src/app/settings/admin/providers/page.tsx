@@ -128,7 +128,7 @@ const PROVIDER_TYPES: Record<
   },
   vercel: {
     label: "Vercel AI Gateway",
-    hint: "Many model providers through one Vercel key. Model ids are creator/model, like anthropic/claude-opus-4.8.",
+    hint: "Many model providers through one Vercel key. Model ids are creator/model, like OpenRouter's, so a model listed here moves off OpenRouter; leave the list empty to reach it only as name/creator/model.",
     urlLabel: "Base URL (optional)",
     urlPlaceholder: "(default: ai-gateway.vercel.sh/v1)",
     urlNeeded: false,
@@ -749,8 +749,8 @@ function ProvidersAdmin() {
         ) : providers.length === 0 && !draft ? (
           <ConnEmpty>
             No extra providers configured — the deployment is using its bundle/environment
-            provider (typically OpenRouter). Add one to bring your own Anthropic/OpenAI key or a
-            local endpoint.
+            provider (typically OpenRouter). Add one to bring your own Anthropic, OpenAI or Vercel
+            key, or an OpenAI-compatible endpoint.
           </ConnEmpty>
         ) : (
           <ConnRows>

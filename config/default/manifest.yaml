@@ -353,7 +353,7 @@ remote_mcp_catalog: []
 #   - name: gateway             # the Vercel AI Gateway (<creator>/<model> ids)
 #     type: vercel
 #     api_key_env: AI_GATEWAY_API_KEY
-#     models: ["anthropic/claude-opus-4.8"]
+#     models: ["anthropic/claude-opus-4.8"] # moves this slug off OpenRouter
 #     context_window_tokens: 200000
 #
 # Declare context_window_tokens on every entry except OpenRouter: an undeclared

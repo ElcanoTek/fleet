@@ -146,11 +146,15 @@ func callBothWays(t *testing.T, cfg ProviderConfig, model string) (generated, st
 
 // ambientOpenAIEnv is what a host can carry for its own OpenAI setup, all of
 // which the OpenAI Go SDK copies onto every request unless told otherwise.
+// OPENAI_BASE_URL is set per test, to a server that must never be called.
+// The Content-Type custom header shares its name with one the SDK sets
+// itself: stripping the custom headers must not strip the SDK's own.
 var ambientOpenAIEnv = map[string]string{
 	"OPENAI_API_KEY":        "sk-env-must-not-leak",
+	"OPENAI_ADMIN_KEY":      "sk-admin-env-must-not-leak",
 	"OPENAI_ORG_ID":         "org-env-must-not-leak",
 	"OPENAI_PROJECT_ID":     "proj-env-must-not-leak",
-	"OPENAI_CUSTOM_HEADERS": "X-Proxy-Auth: proxy-env-must-not-leak\nAuthorization: Bearer custom-env-must-not-leak",
+	"OPENAI_CUSTOM_HEADERS": "X-Proxy-Auth: proxy-env-must-not-leak\nAuthorization: Bearer custom-env-must-not-leak\nContent-Type: application/json",
 }
 
 func TestOpenAICompatAndVercelReachTheConfiguredEndpoint(t *testing.T) {
@@ -185,7 +189,17 @@ func TestOpenAICompatAndVercelReachTheConfiguredEndpoint(t *testing.T) {
 	for _, env := range []string{"the host's OPENAI_* env set", "no OPENAI_* env"} {
 		for _, tc := range cases {
 			t.Run(env+"/"+tc.name, func(t *testing.T) {
+				trapHits := 0
+				trap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					trapHits++
+					w.WriteHeader(http.StatusTeapot)
+				}))
+				t.Cleanup(trap.Close)
+				vars := map[string]string{"OPENAI_BASE_URL": trap.URL + "/v1"}
 				for k, v := range ambientOpenAIEnv {
+					vars[k] = v
+				}
+				for k, v := range vars {
 					t.Setenv(k, v)
 					if env == "no OPENAI_* env" {
 						_ = os.Unsetenv(k)
@@ -207,6 +221,9 @@ func TestOpenAICompatAndVercelReachTheConfiguredEndpoint(t *testing.T) {
 					if got := h.Get("Authorization"); got != tc.wantAuth {
 						t.Errorf("call %d: Authorization = %q, want %q", i, got, tc.wantAuth)
 					}
+					if got := h.Get("Content-Type"); got != "application/json" {
+						t.Errorf("call %d: Content-Type = %q, want the SDK's application/json", i, got)
+					}
 					for name, values := range h {
 						for _, v := range values {
 							if strings.Contains(v, "must-not-leak") {
@@ -214,6 +231,9 @@ func TestOpenAICompatAndVercelReachTheConfiguredEndpoint(t *testing.T) {
 							}
 						}
 					}
+				}
+				if trapHits != 0 {
+					t.Errorf("OPENAI_BASE_URL's server got %d request(s); the configured base_url must win", trapHits)
 				}
 			})
 		}

@@ -110,18 +110,19 @@ func (in *LLMProviderInput) normalize() error {
 		// http/https only (no file:, unix:, …), a host, and no embedded
 		// credentials. localhost/private hosts stay allowed — Ollama and
 		// self-hosted gateways are the point of base_url.
+		// Each error starts "invalid provider", which the API maps to 400.
 		u, err := url.Parse(in.BaseURL)
 		if err != nil {
-			return fmt.Errorf("invalid base_url: %w", err)
+			return fmt.Errorf("invalid provider %q: invalid base_url: %w", in.Name, err)
 		}
 		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("base_url must use http or https (got %q)", u.Scheme)
+			return fmt.Errorf("invalid provider %q: base_url must use http or https (got %q)", in.Name, u.Scheme)
 		}
 		if u.Host == "" {
-			return fmt.Errorf("base_url must include a host")
+			return fmt.Errorf("invalid provider %q: base_url must include a host", in.Name)
 		}
 		if u.User != nil {
-			return fmt.Errorf("base_url must not embed credentials")
+			return fmt.Errorf("invalid provider %q: base_url must not embed credentials", in.Name)
 		}
 	}
 	models := make([]string, 0, len(in.Models))

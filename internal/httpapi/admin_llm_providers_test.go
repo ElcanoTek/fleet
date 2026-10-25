@@ -78,21 +78,6 @@ func TestAdminLLMProvidersCRUD(t *testing.T) {
 		t.Fatalf("keyless openai create: status %d want 400 naming the key (body %s)", w.Code, w.Body.String())
 	}
 
-	// An openaicompat row has no default endpoint: without a base_url it is a
-	// 400 whether enabled (the constructor check) or disabled (the store's
-	// shape check), and nothing is persisted.
-	for _, enabled := range []bool{true, false} {
-		w = do(t, h, http.MethodPost, "/admin/llm-providers",
-			map[string]any{"name": "compat", "type": "openaicompat", "enabled": enabled}, "boss@x.com")
-		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "base_url") {
-			t.Fatalf("openaicompat create without base_url (enabled=%v): status %d body %s, want 400 naming base_url",
-				enabled, w.Code, w.Body.String())
-		}
-	}
-	if swaps != 1 {
-		t.Fatalf("swap callback fired %d times after the refused creates, want still 1", swaps)
-	}
-
 	// Update with api_key omitted keeps the stored key (has_api_key stays true).
 	w = do(t, h, http.MethodPut, "/admin/llm-providers/"+created.ID, map[string]any{
 		"name": "anthropic-direct", "type": "anthropic",
@@ -204,6 +189,45 @@ func TestLLMProviderModelsCatchAll(t *testing.T) {
 	if len(models.Providers) != 1 || models.Providers[0].Name != "gateway" ||
 		models.Providers[0].Type != "openai" || !models.Providers[0].CatchAll {
 		t.Fatalf("providers = %+v, want gateway/openai/catch_all=true", models.Providers)
+	}
+}
+
+// TestAdminLLMProviderBaseURL: an openaicompat row has no default endpoint,
+// so it needs a base_url, and a malformed base_url on any row is a bad
+// request rather than a server error. Nothing refused is persisted or swapped
+// in.
+func TestAdminLLMProviderBaseURL(t *testing.T) {
+	s, h := llmFixture(t)
+	swaps := 0
+	s.llmProvidersChanged = func(context.Context) error { swaps++; return nil }
+	var w *httptest.ResponseRecorder
+
+	// An openaicompat row has no default endpoint: without a base_url it is a
+	// 400 whether enabled (the constructor check) or disabled (the store's
+	// shape check), and nothing is persisted.
+	for _, enabled := range []bool{true, false} {
+		w = do(t, h, http.MethodPost, "/admin/llm-providers",
+			map[string]any{"name": "compat", "type": "openaicompat", "enabled": enabled}, "boss@x.com")
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "base_url") {
+			t.Fatalf("openaicompat create without base_url (enabled=%v): status %d body %s, want 400 naming base_url",
+				enabled, w.Code, w.Body.String())
+		}
+	}
+	// A malformed base_url is a bad request, not a server error, whether the
+	// row is enabled (store shape check after the constructor's) or not.
+	for _, base := range []string{"ftp://gpu-box/v1", "http://gpu-box:abc/v1", "http://user:pw@gpu-box:8000/v1", "http:///v1"} {
+		for _, enabled := range []bool{true, false} {
+			w = do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
+				"name": "compat", "type": "openaicompat", "base_url": base, "enabled": enabled,
+				"context_window_tokens": 131072,
+			}, "boss@x.com")
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "base_url") {
+				t.Fatalf("base_url %q (enabled=%v): status %d body %s, want 400 naming base_url", base, enabled, w.Code, w.Body.String())
+			}
+		}
+	}
+	if swaps != 0 {
+		t.Fatalf("swap callback fired %d times after refused creates, want 0", swaps)
 	}
 }
 

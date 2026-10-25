@@ -100,15 +100,19 @@ once the row is enabled.
 | `openai` | The OpenAI API | required | optional | A `base_url` points it at another server, but for anything other than OpenAI itself prefer `openaicompat`. |
 | `ollama` | An Ollama server | optional | optional, default `http://localhost:11434/v1` | The ids Ollama has pulled (`llama3.2`). |
 | `openaicompat` | Any OpenAI-compatible server | optional | **required** | Uses fantasy's OpenAI-compatible provider, which also reads the non-OpenAI fields such servers send, like `reasoning_content`. With no key, the request carries no `Authorization` header. |
-| `vercel` | The Vercel AI Gateway | required | optional, default `https://ai-gateway.vercel.sh/v1` | Model ids are `<creator>/<model>` (`anthropic/claude-opus-4.8`), the same shape as OpenRouter slugs. Fleet does not read the gateway's per-model context limits, so declare `context_window_tokens`. |
+| `vercel` | The Vercel AI Gateway | required | optional, default `https://ai-gateway.vercel.sh/v1` | Model ids are `<creator>/<model>` (`anthropic/claude-opus-4.8`), the same shape as OpenRouter slugs, so listing one takes it over from OpenRouter (see [Vercel and OpenRouter slugs](#vercel-and-openrouter-slugs)). Fleet does not read the gateway's per-model context limits, so declare `context_window_tokens`. |
 
 The OpenAI Go client under `openaicompat` and `vercel` copies the host's own
-OpenAI settings onto every request: `OPENAI_API_KEY` when it has no key,
-`OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`, and each header in
-`OPENAI_CUSTOM_HEADERS`. For these two types fleet removes all of them, so an
-endpoint an admin names never receives the host's OpenAI credentials. The
-`openrouter`, `openai` and `ollama` types still send the organization, project
-and custom headers, as before.
+OpenAI settings onto every request: `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY`
+when it has no key, `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`, and each header in
+`OPENAI_CUSTOM_HEADERS` (`OPENAI_BASE_URL` is always overridden by the entry's
+own endpoint). For these two types fleet removes all of them, so an endpoint an
+admin names never receives the host's OpenAI credentials. A custom header named
+`Content-Type`, `Accept` or `User-Agent` is the exception: the client sets those
+itself, so they are left in place. The `openrouter`, `openai` and `ollama`
+types still send the organization, project and custom headers, as before; an
+`ollama` entry without a key sends the placeholder key `ollama`, which keeps
+`OPENAI_API_KEY` off it.
 
 fantasy also ships `azure`, `bedrock`, `google` and `kronk` providers. They are
 not configurable yet; issue #1703 tracks them.
@@ -129,8 +133,24 @@ For each requested slug, in order:
 
 So in the example above: `gpt-4o` → `openai-direct`; `claude-opus-4-8` →
 `anthropic-direct`; `anthropic-direct/claude-opus-4-8` → `anthropic-direct`
-(explicit); `anthropic/claude-opus-4.8` → `openrouter` (catch-all); `llama3.2` →
-`local`.
+(explicit); `anthropic/claude-sonnet-4.6` → `openrouter` (catch-all);
+`anthropic/claude-opus-4.8` → `gateway` (its `models` list beats the
+catch-all); `qwen3-coder` → `gpu-box`; `llama3.2` → `local`.
+
+### Vercel and OpenRouter slugs
+
+A Vercel model id has the same shape as an OpenRouter slug, so a `vercel`
+entry's `models` list can claim a slug OpenRouter would otherwise serve. Listing
+`anthropic/claude-opus-4.8` on `gateway`, as the example does, moves every
+conversation, scheduled task and default that names that plain slug from
+OpenRouter to the gateway. Fleet does not read a cost from the gateway, so
+those turns accrue $0 unless a pricing override prices the slug, and
+`FLEET_MAX_COST_USD` stops bounding them. The model picker still shows the
+OpenRouter catalog's price and context for the slug.
+
+To add the gateway without moving existing work, leave its `models` list empty
+and place it after the OpenRouter catch-all: only explicit routes such as
+`gateway/anthropic/claude-opus-4.8` reach it then.
 
 ## Limits (see the ADR for detail)
 

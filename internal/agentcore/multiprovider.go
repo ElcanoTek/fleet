@@ -18,9 +18,10 @@ import (
 // as a singleton gateway. This adds native provider backends — Anthropic,
 // OpenAI, Ollama (via its OpenAI-compatible API), and since #1703 any
 // OpenAI-compatible endpoint and the Vercel AI Gateway — alongside OpenRouter,
-// selected by a client-bundle `providers:` block or admin-managed rows. The engine itself is already
-// provider-agnostic (it holds fantasy.LanguageModel interfaces); the coupling was
-// entirely in how those models were constructed (always the OpenRouter provider).
+// selected by a client-bundle `providers:` block or admin-managed rows. The
+// engine itself is already provider-agnostic (it holds fantasy.LanguageModel
+// interfaces); the coupling was entirely in how those models were constructed
+// (always the OpenRouter provider).
 // This layer resolves the RIGHT provider for a given model slug and builds the
 // model through it.
 //
@@ -52,15 +53,19 @@ const (
 	// endpoint, so base_url is required; the key is optional.
 	ProviderTypeOpenAICompat ProviderType = "openaicompat"
 	// ProviderTypeVercel calls the Vercel AI Gateway. Its model ids are
-	// "<creator>/<model>", the same shape as OpenRouter slugs.
+	// "<creator>/<model>", the same shape as OpenRouter slugs, so a vercel
+	// entry that LISTS one takes that slug over from an OpenRouter catch-all
+	// (a listed model beats a catch-all in selectProvider); an explicit
+	// "<name>/<creator>/<model>" route reaches it without that.
 	ProviderTypeVercel ProviderType = "vercel"
 )
 
 // ProviderTypeSpec is what every configuration surface needs to know about one
 // provider type: the bundle loader (clientconfig), the admin store, and the
-// resolver itself all check a row against the same spec, so a type is added in
-// one place. buildProvider still owns how a type is constructed, and the
-// web form repeats the list for its labels; tests pin both to this table.
+// resolver itself all check a row against the same spec, so its rules live in
+// one place. Adding a type still takes a buildProvider case and a probeTarget
+// case (TestEveryProviderTypeBuildsAndProbes fails without them) and an entry
+// in the web form's list, which a scripts/ test pins to this table.
 type ProviderTypeSpec struct {
 	Type ProviderType
 	// APIKeyRequired: an entry of this type cannot be built without a key.
@@ -117,14 +122,27 @@ const defaultOllamaBaseURL = "http://localhost:11434/v1"
 
 // providerOwnedOpenAIOptions undoes what the OpenAI Go SDK under fantasy's
 // openaicompat and vercel providers copies from fleet's own environment onto
-// every request: OPENAI_API_KEY as the bearer key when the provider has none,
-// OPENAI_ORG_ID and OPENAI_PROJECT_ID as the OpenAI-Organization and
-// OpenAI-Project headers, and every header OPENAI_CUSTOM_HEADERS lists. Those
-// describe the host's own OpenAI setup; on a request to an endpoint an admin
-// named they would hand that endpoint fleet's credentials. The SDK's switch to
-// skip its environment defaults is internal, so each one is overridden here,
-// as the last options applied. With a key, Authorization is set to it
-// explicitly; without one it is deleted, so the request carries no key at all.
+// every request: OPENAI_API_KEY or OPENAI_ADMIN_KEY as the bearer key when the
+// provider has none, OPENAI_ORG_ID and OPENAI_PROJECT_ID as the
+// OpenAI-Organization and OpenAI-Project headers, and every header
+// OPENAI_CUSTOM_HEADERS lists. (OPENAI_BASE_URL needs nothing: fantasy always
+// passes a base URL, which overrides it.) Those describe the host's own OpenAI
+// setup; on a request to an endpoint an admin named they would hand that
+// endpoint fleet's credentials. The SDK's switch to skip its environment
+// defaults is internal, so each one is overridden here, as the last options
+// applied. With a key, Authorization is set to it explicitly; without one it
+// is deleted, so the request carries no key at all. Either way the SDK then
+// skips its own key logic, which is what keeps both env keys off the request.
+// A custom header that shares its name with one the SDK sets itself
+// (Content-Type, Accept, User-Agent) is left alone: deleting it would strip
+// the SDK's own value too.
+// sdkOwnedHeaders are the headers providerOwnedOpenAIOptions never deletes by
+// name: the SDK sets them on every request (Authorization is handled
+// separately, from the provider's own key).
+var sdkOwnedHeaders = map[string]bool{
+	"authorization": true, "content-type": true, "accept": true, "user-agent": true,
+}
+
 func providerOwnedOpenAIOptions(apiKey string) []option.RequestOption {
 	opts := []option.RequestOption{
 		option.WithHeaderDel("OpenAI-Organization"),
@@ -132,7 +150,7 @@ func providerOwnedOpenAIOptions(apiKey string) []option.RequestOption {
 	}
 	for _, line := range strings.Split(os.Getenv("OPENAI_CUSTOM_HEADERS"), "\n") {
 		if name, _, ok := strings.Cut(line, ":"); ok {
-			if name = strings.TrimSpace(name); name != "" && !strings.EqualFold(name, "Authorization") {
+			if name = strings.TrimSpace(name); name != "" && !sdkOwnedHeaders[strings.ToLower(name)] {
 				opts = append(opts, option.WithHeaderDel(name))
 			}
 		}
@@ -238,9 +256,10 @@ func buildProvider(cfg ProviderConfig, headers ProviderHeaders) (fantasy.Provide
 		return openai.New(opts...)
 	case ProviderTypeOllama:
 		// Ollama speaks the OpenAI wire format; reach it via the OpenAI provider
-		// pointed at the Ollama endpoint. Local Ollama needs no API key, but the
-		// OpenAI SDK insists on a non-empty one, so a placeholder is used when none
-		// is configured (Ollama ignores it).
+		// pointed at the Ollama endpoint. Local Ollama needs no API key, but a
+		// placeholder is still sent when none is configured (Ollama ignores
+		// it): with no key of its own the OpenAI SDK would send the host's
+		// OPENAI_API_KEY to the Ollama endpoint instead. Do not drop it.
 		if base == "" {
 			base = defaultOllamaBaseURL
 		}

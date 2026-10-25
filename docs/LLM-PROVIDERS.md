@@ -18,7 +18,10 @@ only be configured from the client bundle's `providers:` block.
   id. `internal/store/llm_providers.go`. The store checks each row against the
   type table the bundle loader uses: it rejects an unknown type, and an
   `openaicompat` row without a base URL even while the row is disabled. The
-  API also refuses to enable a keyed type with no key in effect.
+  API also refuses to enable a keyed type with no key in effect. A `vercel`
+  row's models list uses OpenRouter-shaped slugs, so listing one moves that
+  slug off an OpenRouter catch-all, cost tracking included
+  ([details](PROVIDERS.md#vercel-and-openrouter-slugs)).
 - **Context window** (chat-DB migration 082): `context_window_tokens`, the
   admin-row twin of a bundle entry's field of the same name. It is one number
   per row, so it applies to every model the row serves: enter the smallest
