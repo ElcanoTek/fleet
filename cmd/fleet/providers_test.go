@@ -59,13 +59,22 @@ func TestToAgentcoreProviders(t *testing.T) {
 			t.Errorf("provider[1] ContextWindowTokens = %d, want 32768", got[1].ContextWindowTokens)
 		}
 	})
-	t.Run("unset api_key_env yields empty key", func(t *testing.T) {
+	t.Run("unset api_key_env yields empty key and a warning naming it", func(t *testing.T) {
+		var buf bytes.Buffer
+		prev := log.Writer()
+		log.SetOutput(&buf)
+		t.Cleanup(func() { log.SetOutput(prev) })
 		bundle := &clientconfig.Bundle{Providers: []clientconfig.ProviderDef{
-			{Name: "x", Type: "anthropic", APIKeyEnv: "DEFINITELY_UNSET_KEY_XYZ"},
+			{Name: "x", Type: "openaicompat", APIKeyEnv: "DEFINITELY_UNSET_KEY_XYZ", BaseURL: "http://gpu-box:8000/v1"},
+			{Name: "local", Type: "ollama"}, // no api_key_env: nothing to warn about
 		}}
 		got := toAgentcoreProviders(bundle)
-		if len(got) != 1 || got[0].APIKey != "" {
-			t.Errorf("unset env => APIKey %q, want empty", got[0].APIKey)
+		if len(got) != 2 || got[0].APIKey != "" {
+			t.Errorf("unset env => %+v, want an empty APIKey on provider[0]", got)
+		}
+		if out := buf.String(); !strings.Contains(out, `providers["x"]: api_key_env DEFINITELY_UNSET_KEY_XYZ is unset or empty`) ||
+			strings.Contains(out, `"local"`) {
+			t.Errorf("log = %q, want one warning naming x's unset variable", out)
 		}
 	})
 }

@@ -78,6 +78,21 @@ func TestAdminLLMProvidersCRUD(t *testing.T) {
 		t.Fatalf("keyless openai create: status %d want 400 naming the key (body %s)", w.Code, w.Body.String())
 	}
 
+	// An openaicompat row has no default endpoint: without a base_url it is a
+	// 400 whether enabled (the constructor check) or disabled (the store's
+	// shape check), and nothing is persisted.
+	for _, enabled := range []bool{true, false} {
+		w = do(t, h, http.MethodPost, "/admin/llm-providers",
+			map[string]any{"name": "compat", "type": "openaicompat", "enabled": enabled}, "boss@x.com")
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "base_url") {
+			t.Fatalf("openaicompat create without base_url (enabled=%v): status %d body %s, want 400 naming base_url",
+				enabled, w.Code, w.Body.String())
+		}
+	}
+	if swaps != 1 {
+		t.Fatalf("swap callback fired %d times after the refused creates, want still 1", swaps)
+	}
+
 	// Update with api_key omitted keeps the stored key (has_api_key stays true).
 	w = do(t, h, http.MethodPut, "/admin/llm-providers/"+created.ID, map[string]any{
 		"name": "anthropic-direct", "type": "anthropic",

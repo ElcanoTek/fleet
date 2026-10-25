@@ -2,18 +2,23 @@ package agentcore
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/anthropic"
 	"charm.land/fantasy/providers/openai"
+	"charm.land/fantasy/providers/openaicompat"
+	"charm.land/fantasy/providers/vercel"
+	"github.com/charmbracelet/openai-go/option"
 )
 
 // Multi-provider LLM support (#289). Fleet routed every model through OpenRouter
-// as a singleton gateway. This adds native provider backends — Anthropic, OpenAI,
-// and Ollama (via its OpenAI-compatible API) — alongside OpenRouter, selected by
-// a client-bundle `providers:` block. The engine itself is already
+// as a singleton gateway. This adds native provider backends — Anthropic,
+// OpenAI, Ollama (via its OpenAI-compatible API), and since #1703 any
+// OpenAI-compatible endpoint and the Vercel AI Gateway — alongside OpenRouter,
+// selected by a client-bundle `providers:` block or admin-managed rows. The engine itself is already
 // provider-agnostic (it holds fantasy.LanguageModel interfaces); the coupling was
 // entirely in how those models were constructed (always the OpenRouter provider).
 // This layer resolves the RIGHT provider for a given model slug and builds the
@@ -40,11 +45,103 @@ const (
 	// OpenAI-compatible endpoint — there is no dedicated fantasy Ollama provider,
 	// so it is the OpenAI provider pointed at the Ollama base URL.
 	ProviderTypeOllama ProviderType = "ollama"
+	// ProviderTypeOpenAICompat reaches any OpenAI-compatible endpoint (vLLM,
+	// LM Studio, llama.cpp server, a hosted gateway) through fantasy's
+	// openaicompat provider, which also reads the non-OpenAI extensions those
+	// servers send (reasoning_content and friends). There is no default
+	// endpoint, so base_url is required; the key is optional.
+	ProviderTypeOpenAICompat ProviderType = "openaicompat"
+	// ProviderTypeVercel calls the Vercel AI Gateway. Its model ids are
+	// "<creator>/<model>", the same shape as OpenRouter slugs.
+	ProviderTypeVercel ProviderType = "vercel"
 )
+
+// ProviderTypeSpec is what every configuration surface needs to know about one
+// provider type: the bundle loader (clientconfig), the admin store, and the
+// resolver itself all check a row against the same spec, so a type is added in
+// one place. buildProvider still owns how a type is constructed, and the
+// web form repeats the list for its labels; tests pin both to this table.
+type ProviderTypeSpec struct {
+	Type ProviderType
+	// APIKeyRequired: an entry of this type cannot be built without a key.
+	APIKeyRequired bool
+	// BaseURLRequired: the type has no default endpoint, so base_url must be
+	// set.
+	BaseURLRequired bool
+}
+
+// providerTypeSpecs is the supported set, in the order error messages and the
+// admin form list them.
+var providerTypeSpecs = []ProviderTypeSpec{
+	{Type: ProviderTypeOpenRouter, APIKeyRequired: true},
+	{Type: ProviderTypeAnthropic, APIKeyRequired: true},
+	{Type: ProviderTypeOpenAI, APIKeyRequired: true},
+	{Type: ProviderTypeOllama},
+	{Type: ProviderTypeOpenAICompat, BaseURLRequired: true},
+	{Type: ProviderTypeVercel, APIKeyRequired: true},
+}
+
+// LookupProviderType returns the spec for a provider type name (exact match;
+// callers normalize case and whitespace first).
+func LookupProviderType(name string) (ProviderTypeSpec, bool) {
+	for _, spec := range providerTypeSpecs {
+		if string(spec.Type) == name {
+			return spec, true
+		}
+	}
+	return ProviderTypeSpec{}, false
+}
+
+// ProviderTypes lists the supported provider types in table order.
+func ProviderTypes() []ProviderType {
+	out := make([]ProviderType, len(providerTypeSpecs))
+	for i, spec := range providerTypeSpecs {
+		out[i] = spec.Type
+	}
+	return out
+}
+
+// ProviderTypeChoices is the supported set as one "a|b|c" string, for the
+// "(want …)" part of an unknown-type error.
+func ProviderTypeChoices() string {
+	names := make([]string, len(providerTypeSpecs))
+	for i, spec := range providerTypeSpecs {
+		names[i] = string(spec.Type)
+	}
+	return strings.Join(names, "|")
+}
 
 // defaultOllamaBaseURL is the OpenAI-compatible endpoint a local Ollama server
 // exposes when a provider entry omits base_url.
 const defaultOllamaBaseURL = "http://localhost:11434/v1"
+
+// providerOwnedOpenAIOptions undoes what the OpenAI Go SDK under fantasy's
+// openaicompat and vercel providers copies from fleet's own environment onto
+// every request: OPENAI_API_KEY as the bearer key when the provider has none,
+// OPENAI_ORG_ID and OPENAI_PROJECT_ID as the OpenAI-Organization and
+// OpenAI-Project headers, and every header OPENAI_CUSTOM_HEADERS lists. Those
+// describe the host's own OpenAI setup; on a request to an endpoint an admin
+// named they would hand that endpoint fleet's credentials. The SDK's switch to
+// skip its environment defaults is internal, so each one is overridden here,
+// as the last options applied. With a key, Authorization is set to it
+// explicitly; without one it is deleted, so the request carries no key at all.
+func providerOwnedOpenAIOptions(apiKey string) []option.RequestOption {
+	opts := []option.RequestOption{
+		option.WithHeaderDel("OpenAI-Organization"),
+		option.WithHeaderDel("OpenAI-Project"),
+	}
+	for _, line := range strings.Split(os.Getenv("OPENAI_CUSTOM_HEADERS"), "\n") {
+		if name, _, ok := strings.Cut(line, ":"); ok {
+			if name = strings.TrimSpace(name); name != "" && !strings.EqualFold(name, "Authorization") {
+				opts = append(opts, option.WithHeaderDel(name))
+			}
+		}
+	}
+	if apiKey == "" {
+		return append(opts, option.WithHeaderDel("Authorization"))
+	}
+	return append(opts, option.WithHeader("Authorization", "Bearer "+apiKey))
+}
 
 // ProviderConfig is one resolved LLM provider. The API-key VALUE is resolved
 // host-side (from the env var the manifest names) BEFORE this struct is built and
@@ -109,29 +206,34 @@ func selectProvider(providers []ProviderConfig, slug string) (ProviderConfig, st
 // It performs no network I/O — it builds the client handle; model loading (which
 // may touch the network) happens later in Resolve. OpenRouter reuses
 // newOpenRouterProvider so the OPENROUTER_BASE_URL E2E seam keeps working.
+// The type's required fields are checked against its ProviderTypeSpec first, so
+// the bundle loader, the admin store and this constructor agree on them.
 func buildProvider(cfg ProviderConfig, headers ProviderHeaders) (fantasy.Provider, error) {
+	spec, ok := LookupProviderType(string(cfg.Type))
+	if !ok {
+		return nil, fmt.Errorf("unknown provider type %q (want %s)", cfg.Type, ProviderTypeChoices())
+	}
+	key := strings.TrimSpace(cfg.APIKey)
+	base := strings.TrimSpace(cfg.BaseURL)
+	if spec.APIKeyRequired && key == "" {
+		return nil, fmt.Errorf("%s provider requires an API key", cfg.Type)
+	}
+	if spec.BaseURLRequired && base == "" {
+		return nil, fmt.Errorf("%s provider requires a base_url", cfg.Type)
+	}
 	switch cfg.Type {
 	case ProviderTypeOpenRouter:
-		if strings.TrimSpace(cfg.APIKey) == "" {
-			return nil, fmt.Errorf("openrouter provider requires an API key")
-		}
 		return newOpenRouterProvider(cfg.APIKey, headers)
 	case ProviderTypeAnthropic:
-		if strings.TrimSpace(cfg.APIKey) == "" {
-			return nil, fmt.Errorf("anthropic provider requires an API key")
-		}
 		opts := []anthropic.Option{anthropic.WithAPIKey(cfg.APIKey)}
-		if b := strings.TrimSpace(cfg.BaseURL); b != "" {
-			opts = append(opts, anthropic.WithBaseURL(b))
+		if base != "" {
+			opts = append(opts, anthropic.WithBaseURL(base))
 		}
 		return anthropic.New(opts...)
 	case ProviderTypeOpenAI:
-		if strings.TrimSpace(cfg.APIKey) == "" {
-			return nil, fmt.Errorf("openai provider requires an API key")
-		}
 		opts := []openai.Option{openai.WithAPIKey(cfg.APIKey)}
-		if b := strings.TrimSpace(cfg.BaseURL); b != "" {
-			opts = append(opts, openai.WithBaseURL(b))
+		if base != "" {
+			opts = append(opts, openai.WithBaseURL(base))
 		}
 		return openai.New(opts...)
 	case ProviderTypeOllama:
@@ -139,16 +241,34 @@ func buildProvider(cfg ProviderConfig, headers ProviderHeaders) (fantasy.Provide
 		// pointed at the Ollama endpoint. Local Ollama needs no API key, but the
 		// OpenAI SDK insists on a non-empty one, so a placeholder is used when none
 		// is configured (Ollama ignores it).
-		base := strings.TrimSpace(cfg.BaseURL)
 		if base == "" {
 			base = defaultOllamaBaseURL
 		}
-		key := strings.TrimSpace(cfg.APIKey)
 		if key == "" {
 			key = "ollama"
 		}
 		return openai.New(openai.WithAPIKey(key), openai.WithBaseURL(base))
+	case ProviderTypeOpenAICompat:
+		opts := []openaicompat.Option{
+			openaicompat.WithBaseURL(base),
+			openaicompat.WithSDKOptions(providerOwnedOpenAIOptions(key)...),
+		}
+		if key != "" {
+			opts = append(opts, openaicompat.WithAPIKey(key))
+		}
+		return openaicompat.New(opts...)
+	case ProviderTypeVercel:
+		opts := []vercel.Option{
+			vercel.WithAPIKey(key),
+			vercel.WithSDKOptions(providerOwnedOpenAIOptions(key)...),
+		}
+		if base != "" {
+			opts = append(opts, vercel.WithBaseURL(base))
+		}
+		return vercel.New(opts...)
 	default:
-		return nil, fmt.Errorf("unknown provider type %q (want openrouter|anthropic|openai|ollama)", cfg.Type)
+		// A type in providerTypeSpecs with no case here; the build test fails
+		// on this before it can ship.
+		return nil, fmt.Errorf("provider type %q has no constructor", cfg.Type)
 	}
 }

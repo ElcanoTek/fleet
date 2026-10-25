@@ -137,3 +137,76 @@ func TestProbeProviderOpenRouterKeyEndpoint(t *testing.T) {
 		t.Fatalf("detail = %q, want key-accepted summary", res.Detail)
 	}
 }
+
+func TestProbeProviderOpenAICompatKeyIsOptional(t *testing.T) {
+	var auths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auths = append(auths, r.Header.Get("Authorization"))
+		_, _ = w.Write([]byte(`{"data":[{"id":"qwen3-coder"}]}`))
+	}))
+	defer srv.Close()
+
+	res := ProbeProvider(context.Background(), ProviderConfig{
+		Name: "vllm", Type: ProviderTypeOpenAICompat, BaseURL: srv.URL + "/v1", Models: []string{"qwen3-coder"},
+	})
+	if !res.OK || res.ServedModelCount != 1 || len(res.MissingModels) != 0 {
+		t.Fatalf("keyless res = %+v, want OK with 1 served", res)
+	}
+	res = ProbeProvider(context.Background(), ProviderConfig{
+		Name: "vllm", Type: ProviderTypeOpenAICompat, APIKey: "sk-compat", BaseURL: srv.URL + "/v1",
+	})
+	if !res.OK {
+		t.Fatalf("keyed res = %+v, want OK", res)
+	}
+	if len(auths) != 2 || auths[0] != "" || auths[1] != "Bearer sk-compat" {
+		t.Fatalf("Authorization headers = %q, want none for the keyless probe, then the key", auths)
+	}
+}
+
+func TestProbeProviderVercelSendsTheKey(t *testing.T) {
+	var path, auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, auth = r.URL.Path, r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"anthropic/claude-opus-4.8"}]}`))
+	}))
+	defer srv.Close()
+	res := ProbeProvider(context.Background(), ProviderConfig{
+		Name: "gateway", Type: ProviderTypeVercel, APIKey: "vck-x", BaseURL: srv.URL + "/v1",
+		Models: []string{"anthropic/claude-opus-4.8"},
+	})
+	if !res.OK || path != "/v1/models" || auth != "Bearer vck-x" || len(res.MissingModels) != 0 {
+		t.Fatalf("res=%+v path=%q auth set=%v — want OK via /v1/models with the key", res, path, auth != "")
+	}
+	if endpoint, _, _ := probeTarget(ProviderConfig{Type: ProviderTypeVercel, APIKey: "k"}); endpoint != "https://ai-gateway.vercel.sh/v1/models" {
+		t.Fatalf("default vercel probe endpoint = %q", endpoint)
+	}
+}
+
+// A row missing a field its type requires is reported without a network call.
+// For vercel this is what keeps a keyless row from testing as connected: the
+// gateway serves its public catalog to an empty Bearer token.
+func TestProbeProviderMissingRequiredFieldMakesNoCall(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		_, _ = w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	defer srv.Close()
+	for _, tc := range []struct {
+		cfg  ProviderConfig
+		want string
+	}{
+		{ProviderConfig{Name: "g", Type: ProviderTypeVercel, BaseURL: srv.URL}, "no API key is stored"},
+		{ProviderConfig{Name: "o", Type: ProviderTypeOpenAI, BaseURL: srv.URL}, "no API key is stored"},
+		{ProviderConfig{Name: "c", Type: ProviderTypeOpenAICompat}, "no base_url is set"},
+		{ProviderConfig{Name: "x", Type: ProviderType("bogus"), BaseURL: srv.URL}, "unknown provider type"},
+	} {
+		res := ProbeProvider(context.Background(), tc.cfg)
+		if res.OK || !strings.Contains(res.Detail, tc.want) {
+			t.Errorf("%s: res = %+v, want a failure mentioning %q", tc.cfg.Type, res, tc.want)
+		}
+	}
+	if hits != 0 {
+		t.Fatalf("the probe made %d network call(s) for rows it should have refused", hits)
+	}
+}

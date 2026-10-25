@@ -115,9 +115,22 @@ func TestLLMProviderValidation(t *testing.T) {
 		{Name: "badurl", Type: "openai", BaseURL: "file:///etc/passwd", Enabled: true},
 		{Name: "badurl2", Type: "openai", BaseURL: "not a url at all://", Enabled: true},
 		{Name: "badurl3", Type: "openai", BaseURL: "https://user:pw@host/v1", Enabled: true},
+		// openaicompat has no default endpoint: a row without one is rejected
+		// even while disabled.
+		{Name: "compat", Type: "openaicompat", Enabled: false},
 	} {
 		if _, err := s.CreateLLMProvider(ctx, tc); err == nil {
 			t.Errorf("create %+v: want validation error, got nil", tc)
+		}
+	}
+
+	// The types added with the shared type table (#1703) are accepted.
+	for _, in := range []LLMProviderInput{
+		{Name: "vllm", Type: "openaicompat", BaseURL: "http://gpu-box:8000/v1", Enabled: true},
+		{Name: "gateway", Type: "vercel", Enabled: false},
+	} {
+		if _, err := s.CreateLLMProvider(ctx, in); err != nil {
+			t.Errorf("create %+v: %v", in, err)
 		}
 	}
 

@@ -60,6 +60,7 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/itchyny/gojq"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
@@ -1202,10 +1203,11 @@ func (t WebhookTriggerDef) SignatureHeader() string {
 
 // ProviderDef is one LLM provider from the manifest's providers: block (#289).
 // It selects a backend for a set of model slugs, letting a deployment route
-// inference natively to Anthropic / OpenAI / a self-hosted Ollama endpoint
-// instead of exclusively through OpenRouter (for failover, data residency, or to
-// avoid the OpenRouter markup). A bundle with NO providers: block keeps the
-// historical single-OpenRouter behavior unchanged.
+// inference natively to Anthropic / OpenAI / a self-hosted Ollama endpoint /
+// any OpenAI-compatible endpoint / the Vercel AI Gateway instead of exclusively
+// through OpenRouter (for failover, data residency, or to avoid the OpenRouter
+// markup). A bundle with NO providers: block keeps the historical
+// single-OpenRouter behavior unchanged.
 //
 // SECURITY — the credential boundary mirrors the MCP catalog: APIKeyEnv names an
 // env var; its VALUE is read HOST-SIDE from the process env at boot (registered
@@ -1214,9 +1216,9 @@ func (t WebhookTriggerDef) SignatureHeader() string {
 // model context, or the logs.
 type ProviderDef struct {
 	Name                string   `yaml:"name"`                  // routing name; unique within the manifest
-	Type                string   `yaml:"type"`                  // openrouter | anthropic | openai | ollama
-	APIKeyEnv           string   `yaml:"api_key_env"`           // env var holding the credential (not needed for ollama)
-	BaseURL             string   `yaml:"base_url"`              // optional endpoint override
+	Type                string   `yaml:"type"`                  // openrouter | anthropic | openai | ollama | openaicompat | vercel
+	APIKeyEnv           string   `yaml:"api_key_env"`           // env var holding the credential (optional for ollama and openaicompat)
+	BaseURL             string   `yaml:"base_url"`              // endpoint override; required for openaicompat
 	Models              []string `yaml:"models"`                // slugs this provider serves; empty = catch-all
 	ContextWindowTokens int      `yaml:"context_window_tokens"` // provider-local context; OpenRouter uses authoritative per-model metadata
 }
@@ -2453,12 +2455,11 @@ func (b *Bundle) UncategorizedConnectors() []string {
 	return out
 }
 
-// providerTypes is the set of LLM provider backends the resolver can build (#289).
-var providerTypes = map[string]bool{"openrouter": true, "anthropic": true, "openai": true, "ollama": true}
-
 // validateProviders fails the load on a malformed providers[] entry (#289): a
-// blank/duplicate name, an unknown type, or a missing api_key_env for a backend
-// that requires one (every type except ollama, which is local). Like the rest of
+// blank/duplicate name, an unknown type, a missing api_key_env for a type that
+// requires a key, or a missing base_url for a type with no default endpoint
+// (openaicompat). The per-type rules come from agentcore's provider type table,
+// the same one the admin store and the resolver check. Like the rest of
 // validate this is fail-loud at startup — a typo'd provider type or a missing
 // credential env would otherwise only surface as a resolver error on the first
 // turn that routed to it. An empty providers block is valid (single-OpenRouter
@@ -2477,13 +2478,17 @@ func (b *Bundle) validateProviders() error {
 		seen[name] = true
 		typ := strings.TrimSpace(p.Type)
 		if typ == "" {
-			return fmt.Errorf("providers[%q]: type is required (openrouter|anthropic|openai|ollama)", name)
+			return fmt.Errorf("providers[%q]: type is required (%s)", name, agentcore.ProviderTypeChoices())
 		}
-		if !providerTypes[typ] {
-			return fmt.Errorf("providers[%q]: unknown type %q (want openrouter|anthropic|openai|ollama)", name, typ)
+		spec, ok := agentcore.LookupProviderType(typ)
+		if !ok {
+			return fmt.Errorf("providers[%q]: unknown type %q (want %s)", name, typ, agentcore.ProviderTypeChoices())
 		}
-		if typ != "ollama" && strings.TrimSpace(p.APIKeyEnv) == "" {
+		if spec.APIKeyRequired && strings.TrimSpace(p.APIKeyEnv) == "" {
 			return fmt.Errorf("providers[%q]: api_key_env is required for a %q provider", name, typ)
+		}
+		if spec.BaseURLRequired && strings.TrimSpace(p.BaseURL) == "" {
+			return fmt.Errorf("providers[%q]: type %q requires base_url", name, typ)
 		}
 		if p.ContextWindowTokens < 0 {
 			return fmt.Errorf("providers[%q]: context_window_tokens must be positive when set", name)

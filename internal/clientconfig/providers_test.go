@@ -24,6 +24,12 @@ func TestValidateProviders(t *testing.T) {
 		{"missing type", []ProviderDef{{Name: "x", APIKeyEnv: "K"}}, "type is required"},
 		{"unknown type", []ProviderDef{{Name: "x", Type: "bogus", APIKeyEnv: "K"}}, "unknown type"},
 		{"missing api_key_env for non-ollama", []ProviderDef{{Name: "x", Type: "anthropic"}}, "api_key_env is required"},
+		{"openaicompat needs no key", []ProviderDef{{Name: "vllm", Type: "openaicompat", BaseURL: "http://gpu-box:8000/v1"}}, ""},
+		{"openaicompat with a key", []ProviderDef{{Name: "vllm", Type: "openaicompat", APIKeyEnv: "VLLM_API_KEY", BaseURL: "http://gpu-box:8000/v1"}}, ""},
+		{"openaicompat without base_url", []ProviderDef{{Name: "vllm", Type: "openaicompat", APIKeyEnv: "VLLM_API_KEY"}}, "requires base_url"},
+		{"valid vercel", []ProviderDef{{Name: "gateway", Type: "vercel", APIKeyEnv: "AI_GATEWAY_API_KEY"}}, ""},
+		{"vercel without api_key_env", []ProviderDef{{Name: "gateway", Type: "vercel"}}, "api_key_env is required"},
+		{"unknown type lists every supported type", []ProviderDef{{Name: "x", Type: "bedrock", APIKeyEnv: "K"}}, "want openrouter|anthropic|openai|ollama|openaicompat|vercel"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

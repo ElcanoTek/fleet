@@ -95,6 +95,12 @@ func TestBuildProvider(t *testing.T) {
 		{"openai without key errors", ProviderConfig{Name: "o", Type: ProviderTypeOpenAI}, true},
 		{"ollama needs no key", ProviderConfig{Name: "l", Type: ProviderTypeOllama}, false},
 		{"ollama with base url", ProviderConfig{Name: "l", Type: ProviderTypeOllama, BaseURL: "http://host:11434/v1"}, false},
+		{"openaicompat needs no key", ProviderConfig{Name: "c", Type: ProviderTypeOpenAICompat, BaseURL: "http://203.0.113.10:8000/v1"}, false},
+		{"openaicompat with key", ProviderConfig{Name: "c", Type: ProviderTypeOpenAICompat, APIKey: "k", BaseURL: "http://203.0.113.10:8000/v1"}, false},
+		{"openaicompat without base url errors", ProviderConfig{Name: "c", Type: ProviderTypeOpenAICompat, APIKey: "k"}, true},
+		{"vercel with key", ProviderConfig{Name: "v", Type: ProviderTypeVercel, APIKey: "k"}, false},
+		{"vercel with base url", ProviderConfig{Name: "v", Type: ProviderTypeVercel, APIKey: "k", BaseURL: "http://203.0.113.10/v1"}, false},
+		{"vercel without key errors", ProviderConfig{Name: "v", Type: ProviderTypeVercel}, true},
 		{"unknown type errors", ProviderConfig{Name: "x", Type: ProviderType("bogus")}, true},
 	}
 	for _, tc := range cases {

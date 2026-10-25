@@ -245,6 +245,67 @@ describe("ProvidersAdminPage", () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "POST")).toHaveLength(0);
   });
 
+  it("labels the OpenAI-compatible and Vercel types and flags a keyless Vercel row", async () => {
+    const compat: LLMProvider = {
+      ...ROW,
+      id: "p3",
+      name: "vllm",
+      type: "openaicompat",
+      base_url: "http://gpu-box:8000/v1",
+      models: [],
+      has_api_key: false,
+    };
+    const gateway: LLMProvider = {
+      ...ROW,
+      id: "p4",
+      name: "gateway",
+      type: "vercel",
+      models: ["anthropic/claude-opus-4.8"],
+      has_api_key: false,
+    };
+    vi.stubGlobal("fetch", mockFetch([compat, gateway]));
+    render(<ProvidersAdminPage />);
+    expect(await screen.findByText("OpenAI-compatible · catch-all (any model)")).toBeInTheDocument();
+    expect(screen.getByText("Vercel AI Gateway · 1 model")).toBeInTheDocument();
+    // The key is optional for openaicompat, required for vercel: one badge.
+    expect(screen.getAllByText("No key")).toHaveLength(1);
+  });
+
+  it("asks for a Base URL before creating an OpenAI-compatible provider, then sends no key", async () => {
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    fireEvent.change(screen.getByPlaceholderText("my-provider"), {
+      target: { value: "vllm" },
+    });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "openaicompat" } });
+    expect(screen.getByLabelText("Base URL")).toBeInTheDocument();
+    expect(screen.getByLabelText("API key (optional)")).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(/claude-sonnet-4-5/), {
+      target: { value: "qwen3-coder" },
+    });
+    const posts = () =>
+      fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "POST");
+    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+    expect(await screen.findByText("OpenAI-compatible needs a Base URL.")).toBeInTheDocument();
+    expect(posts()).toHaveLength(0);
+
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "http://gpu-box:8000/v1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    const body = JSON.parse(String((posts()[0][1] as RequestInit).body));
+    expect(body).toMatchObject({
+      name: "vllm",
+      type: "openaicompat",
+      base_url: "http://gpu-box:8000/v1",
+      models: ["qwen3-coder"],
+      api_key: "",
+    });
+  });
+
   it("creates a provider, sending the key write-only", async () => {
     const fetchMock = mockFetch([]);
     vi.stubGlobal("fetch", fetchMock);

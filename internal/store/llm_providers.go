@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
 
@@ -36,15 +37,6 @@ const aadPurposeLLMKey = "fleet:llm-provider-api-key:v1"
 
 // ErrLLMProviderNotFound is returned when an id matches no row.
 var ErrLLMProviderNotFound = errors.New("llm provider not found")
-
-// llmProviderTypes mirrors agentcore's supported provider backends. Kept as a
-// plain string set (not an agentcore import) so the store stays a leaf package.
-var llmProviderTypes = map[string]bool{
-	"openrouter": true,
-	"anthropic":  true,
-	"openai":     true,
-	"ollama":     true,
-}
 
 // llmProviderNameRE — the name doubles as the "<name>/<model>" routing prefix,
 // so it must be a clean slug with no "/" or whitespace.
@@ -95,8 +87,16 @@ func (in *LLMProviderInput) normalize() error {
 	if !llmProviderNameRE.MatchString(in.Name) {
 		return fmt.Errorf("invalid provider name %q (lowercase slug, no slashes)", in.Name)
 	}
-	if !llmProviderTypes[in.Type] {
-		return fmt.Errorf("invalid provider type %q (want openrouter|anthropic|openai|ollama)", in.Type)
+	// The type table is agentcore's, the one the bundle loader and the
+	// resolver check too. Only the shape rules apply here: whether a key is in
+	// effect is checked for enabled rows by the API (httpapi
+	// validateLLMProviderRow), since a row can be saved disabled before its key.
+	spec, ok := agentcore.LookupProviderType(in.Type)
+	if !ok {
+		return fmt.Errorf("invalid provider type %q (want %s)", in.Type, agentcore.ProviderTypeChoices())
+	}
+	if spec.BaseURLRequired && in.BaseURL == "" {
+		return fmt.Errorf("invalid provider %q: type %s requires a base_url", in.Name, in.Type)
 	}
 	// The column is a Postgres INTEGER; out-of-range values are refused here
 	// as a bad request rather than reaching SQL as a server error.

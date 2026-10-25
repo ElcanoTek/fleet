@@ -2,8 +2,11 @@
 
 By default fleet routes every model through **OpenRouter**. A client bundle can
 instead declare a `providers:` block in `manifest.yaml` to route inference
-natively to **Anthropic**, **OpenAI**, a self-hosted **Ollama**, or any mix —
-for failover, data residency, or to avoid the OpenRouter markup.
+natively to **Anthropic**, **OpenAI**, a self-hosted **Ollama**, any other
+**OpenAI-compatible** server (vLLM, LM Studio, llama.cpp, a hosted gateway), the
+**Vercel AI Gateway**, or any mix — for failover, data residency, or to avoid
+the OpenRouter markup. Admins can add the same provider types from the web UI
+without a restart; see [`LLM-PROVIDERS.md`](LLM-PROVIDERS.md).
 
 **A bundle with no `providers:` block is unchanged** — a single catch-all
 OpenRouter provider built from `OPENROUTER_API_KEY`, exactly as before.
@@ -41,6 +44,19 @@ providers:
     models: ["llama3.2", "qwen2.5-coder"]
     context_window_tokens: 65536 # the server's num_ctx, raised to fit fleet's tools
 
+  # Any other OpenAI-compatible server. base_url is required; a key is optional.
+  - name: gpu-box
+    type: openaicompat
+    base_url: http://gpu-box:8000/v1
+    models: ["qwen3-coder"]
+    context_window_tokens: 131072 # the server's --max-model-len
+
+  # The Vercel AI Gateway. Model ids are <creator>/<model>.
+  - name: gateway
+    type: vercel
+    api_key_env: AI_GATEWAY_API_KEY
+    models: ["anthropic/claude-opus-4.8"]
+
 # Optional ordered availability chain. Each target must serve the same slug.
 fallback_providers: ["anthropic-direct", "openrouter"]
 ```
@@ -52,6 +68,7 @@ the manifest, like an MCP connector credential):
 OPENROUTER_API_KEY=…
 ANTHROPIC_API_KEY=…
 OPENAI_API_KEY=…
+AI_GATEWAY_API_KEY=…
 ```
 
 ### Fields
@@ -59,11 +76,41 @@ OPENAI_API_KEY=…
 | Field | Required | Notes |
 |-------|----------|-------|
 | `name` | yes | Routing name, unique within the manifest. Also the `<name>/` explicit-routing prefix. |
-| `type` | yes | `openrouter` \| `anthropic` \| `openai` \| `ollama`. |
-| `api_key_env` | all but `ollama` | Env var holding the credential (value read host-side, never in the manifest). |
-| `base_url` | no | Endpoint override (e.g. the Ollama URL, or an OpenAI-compatible gateway). |
+| `type` | yes | One of the [provider types](#provider-types) below. Any other value fails the bundle load with the list of supported types. |
+| `api_key_env` | per type | Env var holding the credential (value read host-side, never in the manifest). Required for every type except `ollama` and `openaicompat`. |
+| `base_url` | per type | Endpoint override (e.g. the Ollama URL). Required for `openaicompat`, which has no default endpoint. |
 | `models` | no | Slugs this provider serves. Empty = catch-all (matches any slug). |
 | `context_window_tokens` | no | Actual input-plus-output context limit for provider-local models. Set this to Ollama's `num_ctx` (and for custom OpenAI-compatible gateways). Omitted Ollama entries fail safe at 4096 tokens; other native entries use a conservative 32000-token fallback. Both fallbacks are below what a turn reserves with the default tool set (a little under 35,000 tokens when this was written), so in practice every non-OpenRouter entry needs this, and boot logs a warning for each one without it, and a declared window below that reserve fails the same way: raise Ollama's `num_ctx` rather than declaring a small one. Admin-managed rows have the same field, required before a non-OpenRouter row can be enabled ([`LLM-PROVIDERS.md`](LLM-PROVIDERS.md)). OpenRouter ignores this field: observed provider limits and its public per-model catalog are more authoritative than a manifest-wide declaration. |
+
+## Provider types
+
+Each type is one of the provider packages in
+[fantasy](https://github.com/charmbracelet/fantasy), the model library fleet
+runs on. The bundle loader, the admin API and the model resolver read the
+same table of types and their required fields (`providerTypeSpecs` in
+`internal/agentcore/multiprovider.go`). The one difference is timing: an admin
+row may be saved disabled before its key is entered, and the key is required
+once the row is enabled.
+
+| `type` | Reaches | `api_key_env` | `base_url` | Notes |
+|--------|---------|---------------|------------|-------|
+| `openrouter` | OpenRouter | required | not used | Accepts any slug, so it is the usual catch-all. Turns always go to OpenRouter; only the `OPENROUTER_BASE_URL` fake-LLM seam reroutes them, and a `base_url` on the entry is ignored. |
+| `anthropic` | The Anthropic API | required | optional | Native Anthropic model ids (`claude-opus-4-8`). |
+| `openai` | The OpenAI API | required | optional | A `base_url` points it at another server, but for anything other than OpenAI itself prefer `openaicompat`. |
+| `ollama` | An Ollama server | optional | optional, default `http://localhost:11434/v1` | The ids Ollama has pulled (`llama3.2`). |
+| `openaicompat` | Any OpenAI-compatible server | optional | **required** | Uses fantasy's OpenAI-compatible provider, which also reads the non-OpenAI fields such servers send, like `reasoning_content`. With no key, the request carries no `Authorization` header. |
+| `vercel` | The Vercel AI Gateway | required | optional, default `https://ai-gateway.vercel.sh/v1` | Model ids are `<creator>/<model>` (`anthropic/claude-opus-4.8`), the same shape as OpenRouter slugs. Fleet does not read the gateway's per-model context limits, so declare `context_window_tokens`. |
+
+The OpenAI Go client under `openaicompat` and `vercel` copies the host's own
+OpenAI settings onto every request: `OPENAI_API_KEY` when it has no key,
+`OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`, and each header in
+`OPENAI_CUSTOM_HEADERS`. For these two types fleet removes all of them, so an
+endpoint an admin names never receives the host's OpenAI credentials. The
+`openrouter`, `openai` and `ollama` types still send the organization, project
+and custom headers, as before.
+
+fantasy also ships `azure`, `bedrock`, `google` and `kronk` providers. They are
+not configurable yet; issue #1703 tracks them.
 
 ## How a model slug is routed
 
@@ -88,11 +135,15 @@ So in the example above: `gpt-4o` → `openai-direct`; `claude-opus-4-8` →
 
 - **OpenRouter-only features on native providers.** Upstream pinning, the
   1M-context Anthropic beta header, and extended thinking (#220) are OpenRouter
-  provider options; a natively-routed Anthropic/OpenAI request gets the base
-  request without them (a documented follow-on).
+  provider options; a request routed through any other type (Anthropic,
+  OpenAI, Ollama, OpenAI-compatible, Vercel) gets the base request without them
+  (a documented follow-on). Vercel model ids look like OpenRouter slugs, but
+  the OpenRouter options do not apply to them.
 - **Native-provider cost accrues as $0** at runtime unless a #297 manifest
   pricing override prices the slug (a native response carries no OpenRouter cost
-  metadata; the price table feeds only the pre-submission forecast). Because
+  metadata; the price table feeds only the pre-submission forecast). This
+  includes `openaicompat` and `vercel`: fleet does not read a cost from the
+  Vercel AI Gateway's responses. Because
   native runtime cost stays $0, **`FLEET_MAX_COST_USD` does not bound native
   runs** — only the token ceiling (`FLEET_MAX_TOTAL_TOKENS`) does. Add a pricing
   override to track native USD cost and re-enable the USD ceiling.
