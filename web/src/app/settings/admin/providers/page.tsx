@@ -145,6 +145,9 @@ type Draft = {
   type: string;
   base_url: string;
   api_key: string; // always starts empty; "" on edit = keep stored key
+  // Edit only, for a type whose key is optional: send "" to drop the stored
+  // key, the one way back to keyless (a blank field keeps it).
+  clear_key: boolean;
   models: string; // textarea, one slug per line
   context_window: string; // digits; "" = not declared
   enabled: boolean;
@@ -156,6 +159,7 @@ const EMPTY_DRAFT: Draft = {
   type: "openrouter",
   base_url: "",
   api_key: "",
+  clear_key: false,
   models: "",
   context_window: "",
   enabled: true,
@@ -168,6 +172,7 @@ function draftFrom(p: LLMProvider): Draft {
     type: p.type,
     base_url: p.base_url,
     api_key: "",
+    clear_key: false,
     models: p.models.join("\n"),
     context_window: p.context_window_tokens > 0 ? String(p.context_window_tokens) : "",
     enabled: p.enabled,
@@ -404,9 +409,9 @@ function ProvidersAdmin() {
       enabled: draft.enabled,
     };
     // Write-only key semantics: omit the field entirely to keep the stored
-    // key; send a value only when the admin typed one.
+    // key; send a value only when the admin typed one, and "" to clear it.
     if (draft.api_key !== "") body.api_key = draft.api_key;
-    else if (!draft.id) body.api_key = "";
+    else if (draft.clear_key || !draft.id) body.api_key = "";
     fetch(
       draft.id
         ? `/api/admin/llm-providers/${encodeURIComponent(draft.id)}`
@@ -623,16 +628,36 @@ function ProvidersAdmin() {
                   type="password"
                   autoComplete="new-password"
                   value={draft.api_key}
+                  disabled={draft.clear_key}
                   onChange={(e) => setDraft({ ...draft, api_key: e.target.value })}
                   placeholder={
                     draft.id && providers?.find((p) => p.id === draft.id)?.has_api_key
                       ? "•••••••• (unchanged)"
                       : "sk-…"
                   }
-                  className={SETTINGS_INPUT}
+                  className={`${SETTINGS_INPUT} disabled:opacity-60`}
                 />
               </ConnField>
             </div>
+            {draft.id &&
+            !typeInfo?.keyNeeded &&
+            providers?.find((p) => p.id === draft.id)?.has_api_key ? (
+              <label
+                className="-mt-1 flex cursor-pointer items-center gap-[0.45rem] text-[0.8rem] text-[var(--color-text-secondary)]"
+                htmlFor="providerClearKey"
+              >
+                <input
+                  id="providerClearKey"
+                  type="checkbox"
+                  checked={draft.clear_key}
+                  onChange={(e) =>
+                    setDraft({ ...draft, clear_key: e.target.checked, api_key: "" })
+                  }
+                  className="size-4 accent-[var(--color-primary)]"
+                />
+                Remove the stored key (this type works without one)
+              </label>
+            ) : null}
             {typeInfo?.windowNeeded ? (
               <>
                 <ConnField label="Context window (tokens: the smallest limit among the models this provider serves; needed to enable)">

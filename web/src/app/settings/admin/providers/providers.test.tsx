@@ -313,6 +313,46 @@ describe("ProvidersAdminPage", () => {
     });
   });
 
+  it("lets an optional-key row drop its stored key, and only such a row", async () => {
+    const compat: LLMProvider = {
+      ...ROW,
+      id: "p3",
+      name: "vllm",
+      type: "openaicompat",
+      base_url: "http://gpu-box:8000/v1",
+      models: ["qwen3-coder"],
+      has_api_key: true,
+      context_window_tokens: 131072,
+    };
+    const gateway: LLMProvider = { ...ROW, id: "p4", name: "gateway", type: "vercel", has_api_key: true };
+    const fetchMock = mockFetch([compat, gateway]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    const puts = () =>
+      fetchMock.mock.calls
+        .filter(([, init]) => init && (init as RequestInit).method === "PUT")
+        .map(([url, init]) => [url, JSON.parse(String((init as RequestInit).body))]);
+
+    // A keyed type (vercel) has no way to drop its key: it cannot run without one.
+    const edits = await screen.findAllByRole("button", { name: "Edit" });
+    fireEvent.click(edits[1]);
+    expect(document.getElementById("providerClearKey")).toBeNull();
+
+    // Saving an edit leaves the stored key alone unless asked…
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    fireEvent.click(screen.getByTestId("provider-save"));
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect(puts()[0][1]).not.toHaveProperty("api_key");
+
+    // …and the checkbox sends "" to clear it, with the key field locked.
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    fireEvent.click(screen.getByLabelText(/Remove the stored key/));
+    expect(document.getElementById("providerApiKey")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("provider-save"));
+    await waitFor(() => expect(puts()).toHaveLength(2));
+    expect(puts()[1]).toEqual(["/api/admin/llm-providers/p3", expect.objectContaining({ api_key: "" })]);
+  });
+
   it("creates a provider, sending the key write-only", async () => {
     const fetchMock = mockFetch([]);
     vi.stubGlobal("fetch", fetchMock);
