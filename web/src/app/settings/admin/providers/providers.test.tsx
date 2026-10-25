@@ -254,6 +254,7 @@ describe("ProvidersAdminPage", () => {
       base_url: "http://gpu-box:8000/v1",
       models: [],
       has_api_key: false,
+      context_window_tokens: 131072,
     };
     const gateway: LLMProvider = {
       ...ROW,
@@ -265,8 +266,10 @@ describe("ProvidersAdminPage", () => {
     };
     vi.stubGlobal("fetch", mockFetch([compat, gateway]));
     render(<ProvidersAdminPage />);
-    expect(await screen.findByText("OpenAI-compatible · catch-all (any model)")).toBeInTheDocument();
-    expect(screen.getByText("Vercel AI Gateway · 1 model")).toBeInTheDocument();
+    expect(
+      await screen.findByText("OpenAI-compatible · catch-all (any model) · 131,072-token context"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Vercel AI Gateway · 1 model · 200,000-token context")).toBeInTheDocument();
     // The key is optional for openaicompat, required for vercel: one badge.
     expect(screen.getAllByText("No key")).toHaveLength(1);
   });
@@ -294,6 +297,9 @@ describe("ProvidersAdminPage", () => {
     fireEvent.change(screen.getByLabelText("Base URL"), {
       target: { value: "http://gpu-box:8000/v1" },
     });
+    fireEvent.change(screen.getByPlaceholderText("the server's limit, e.g. 131072"), {
+      target: { value: "131072" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
     await waitFor(() => expect(posts()).toHaveLength(1));
     const body = JSON.parse(String((posts()[0][1] as RequestInit).body));
@@ -302,6 +308,7 @@ describe("ProvidersAdminPage", () => {
       type: "openaicompat",
       base_url: "http://gpu-box:8000/v1",
       models: ["qwen3-coder"],
+      context_window_tokens: 131072,
       api_key: "",
     });
   });

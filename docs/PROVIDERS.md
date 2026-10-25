@@ -56,6 +56,7 @@ providers:
     type: vercel
     api_key_env: AI_GATEWAY_API_KEY
     models: ["anthropic/claude-opus-4.8"]
+    context_window_tokens: 200000
 
 # Optional ordered availability chain. Each target must serve the same slug.
 fallback_providers: ["anthropic-direct", "openrouter"]

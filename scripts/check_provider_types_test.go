@@ -17,7 +17,9 @@ import (
 // one web file for its labels, because the web bundle cannot import Go. This
 // test keeps that copy honest: the same types in the same order, and the same
 // required fields, so the form neither offers a type the server rejects nor
-// lets through a row the server will refuse.
+// lets through a row the server will refuse. windowNeeded is pinned too: the
+// server requires a context window to enable every type except OpenRouter
+// (httpapi validateLLMProviderRow), whose resolver ignores a declared one.
 func TestProviderTypesAreInSync(t *testing.T) {
 	root := repoRoot(t)
 	web := readFile(t, root, "web/src/app/settings/admin/providers/page.tsx")
@@ -61,6 +63,7 @@ func TestProviderTypesAreInSync(t *testing.T) {
 		}{
 			{"keyNeeded", spec.APIKeyRequired},
 			{"urlNeeded", spec.BaseURLRequired},
+			{"windowNeeded", spec.Type != agentcore.ProviderTypeOpenRouter},
 		} {
 			got, ok := flag(e[2], f.name)
 			if !ok {
