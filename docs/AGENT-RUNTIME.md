@@ -639,7 +639,12 @@ marks the floor for re-measurement and does not count toward the
 consecutive-compaction cap. It is held back, so the pause buys the summary,
 while the run's self-audit is pending (asked for, no `confirm_audit` accepted
 yet: the audit re-reads the evidence a stub would hide), and for the rest of a
-run that re-ran a call whose result it had stubbed.
+run that re-ran a call whose result it had stubbed. Such a run also gets three
+times the resend budget from then on, since it needs more of its data at once
+than the budget holds: with the plain budget, each re-fetch had sent it over
+again, and the next summary dropped other results for it to fetch again. A
+`[context_budget_raised]` breadcrumb records the raise; the floor rule is still
+judged against the configured budget.
 `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY=0` turns it off. An interactive chat turn
 never elides; a subagent, including one a chat
 spawns, runs the scheduled loop and does. Details:

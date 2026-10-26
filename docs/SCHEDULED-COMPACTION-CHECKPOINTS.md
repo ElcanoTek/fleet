@@ -387,10 +387,33 @@ fewer summarizer calls; making the elided content recallable added nothing.
     - A re-run in a round whose history the overflow recovery compacted can
       be missed; the run then just goes on eliding.
     - A read of something that changed in between also counts, for example a
-      file viewed again after an edit. That only turns elision off for the
-      run.
+      file viewed again after an edit. That turns elision off and raises the
+      budget (next bullet) for that run, nothing more.
 
   The server log says when either applies.
+- **Budget raised after a re-run** (added 2026-10-26, after more Opus runs on
+  the recurring-task bench in [Measured](#measured)). Stopping elision did not
+  end such a run's pauses. Each re-fetch put the prompt over the budget again,
+  the next summary dropped other results, and the model fetched those again. So
+  from the re-run on, the run's resend budget is three times the configured one
+  (`engine.resendBudget`):
+  - **Why three.** The bench's twelve reports came to about 158K tokens
+    resent, so twice the 80K default would pause again just as the last one
+    arrived. The model's window would be no bound at all: today's are about 1M
+    tokens.
+  - **The floor rule.** Whether it applies is still judged against the
+    configured budget, so the raise never lowers the point a run pauses at.
+    Under the rule the run pauses at the floor plus three budgets.
+  - **When it takes effect.** The run learns of the re-run at its next pause.
+    That pause compacts nothing unless the prompt is already over the raised
+    budget.
+  - **What it records.** The session log gets `[context_budget_raised] tool=…
+    budget=… raised_budget=… — …`, which the Operations Center shows as
+    **Context budget raised**. Later `[context_checkpoint]` and
+    `[context_compacted]` lines name the raised budget, and later events carry
+    it as `resend_budget_tokens`.
+  - Runs with elision off, and runs that never re-fetch an elided result, are
+    unchanged.
 - **Reused call IDs** (fixed 2026-10-22). Some providers reuse one call ID
   across steps, or within one parallel step. Each result is paired with its
   own call: the nearest earlier message with calls under that ID, and within
