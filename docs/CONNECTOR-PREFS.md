@@ -57,6 +57,15 @@ endpoint refuses an unknown seat up front.
   `GET /conversations/{id}/mcp-servers` honor availability; the turn path
   drops disabled connectors and injects the user's default seat
   (`TurnInput.MCPAccountDefaults` → `MCPChoice.Account`).
+- **CLI chat** (`fleet chat`): a NEW conversation reads the same
+  `GET /mcp-servers` catalog and sends what a new web chat would
+  (`enabled && !always_on`) as `enabled_optional` on its opening `/chat`; the
+  server never adds defaults on its own, so without this a CLI conversation
+  had only always-on connectors. A repeatable `--connector NAME` replaces the
+  defaults (only available, non-always-on connectors; a blank name or an
+  unknown one is refused) and is rejected with `--conversation`: a resumed
+  conversation keeps its stored selection. An unreadable catalog stops the
+  turn rather than starting it without connectors. `fleet acp` is unchanged.
 - **Operations Center**: unchanged by design — the task modal's
   `McpServerPicker` (mode="task") continues to pin explicit
   `{server, account}` selections.

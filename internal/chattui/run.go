@@ -2,6 +2,7 @@ package chattui
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -30,6 +31,15 @@ func Run(argv []string) int {
 	noTUI := fs.Bool("no-tui", false, "force non-interactive mode (read the message from --message or stdin)")
 	approve := fs.String("approve", "", "non-interactive: approve this staged approval id (needs --conversation), print the outcome, exit")
 	deny := fs.String("deny", "", "non-interactive: deny this staged approval id (needs --conversation), exit")
+	fs.Func("connector", "optional connector for a NEW conversation (repeatable; replaces the defaults a new web chat starts with)",
+		func(v string) error {
+			// A blank name (an unset shell variable) must not quietly mean "the defaults".
+			if strings.TrimSpace(v) == "" {
+				return errors.New("needs a connector name")
+			}
+			f.Connectors = append(f.Connectors, v)
+			return nil
+		})
 	fs.SetOutput(os.Stderr)
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: fleet chat [--message <text>|--no-tui] [--conversation <id>] [--model <slug>] [--email …] [--server …]")
@@ -47,11 +57,19 @@ func Run(argv []string) int {
 		return 2
 	}
 
+	if len(f.Connectors) > 0 && strings.TrimSpace(*conv) != "" {
+		fmt.Fprintln(os.Stderr, "fleet chat: --connector chooses a NEW conversation's connectors; "+
+			"change an existing one's in its Tools picker")
+		return 2
+	}
+
 	cfg, err := Resolve(f, osEnv, osReadFile, osReadEnvValues)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fleet chat: "+err.Error())
 		return 1
 	}
+	// A new conversation opens with the connectors a new web chat would.
+	cfg.DefaultConnectors = true
 
 	// With no explicit --model, adopt the workspace default the server
 	// advertises on /client-config (the same slug a new web chat starts on).
