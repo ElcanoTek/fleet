@@ -208,6 +208,10 @@ func TestGeminiSignatureStepStripsOnlyForModelsThatAreNotGemini(t *testing.T) {
 		{openrouter.Name, "google/gemini-4-argon", true},
 		{"vercel", "google/gemini-4-argon", true},
 		{google.Name, "gemini-2.5-pro", true},
+		{google.Name, "models/gemini-2.5-flash", true},
+		// Gemma shares Google's namespace but has no thought signatures.
+		{openrouter.Name, "google/gemma-4-26b-a4b-it", false},
+		{google.Name, "gemma-3-27b-it", false},
 		{openrouter.Name, "deepseek/deepseek-v4.1-flash", false},
 		{openrouter.Name, "anthropic/claude-haiku-5.5", false},
 		{"anthropic", "claude-haiku-5-5", false},

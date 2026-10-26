@@ -907,12 +907,22 @@ func geminiSignatureOnly(part fantasy.MessagePart) (fantasy.ReasoningPart, bool)
 }
 
 // isGeminiModel reports whether model is Gemini, the one kind a Gemini
-// signature is for: a google/ model id, which fantasy's OpenRouter and Vercel
-// providers send a signature back for, or fantasy's own google provider. The
-// test must not miss a Gemini route: geminiSignatureStep would then take the
-// signatures fantasy keeps within a run from every step after the first.
+// signature is for: a google/gemini id, the form fantasy's OpenRouter and
+// Vercel providers send a signature back for (they do for any google/ id), or
+// a gemini model of fantasy's own google provider. Gemma shares the google/
+// namespace but has no thought signatures (see unpinnedOpenWeightsPrefixes),
+// so it is shown none. The test must not miss a Gemini route:
+// geminiSignatureStep would then take the signatures fantasy keeps within a
+// run from every step after the first.
 func isGeminiModel(model fantasy.LanguageModel) bool {
-	return model != nil && (strings.HasPrefix(model.Model(), "google/") || model.Provider() == google.Name)
+	if model == nil {
+		return false
+	}
+	id := model.Model()
+	if strings.HasPrefix(id, "google/") {
+		return strings.HasPrefix(id, "google/gemini")
+	}
+	return model.Provider() == google.Name && strings.HasPrefix(strings.TrimPrefix(id, "models/"), "gemini")
 }
 
 func isGeminiSignature(part fantasy.MessagePart) bool {
