@@ -1163,9 +1163,12 @@ func finalizeInputFor(mode Mode, finalText string, messages []fantasy.Message, r
 	outOfRoster *outOfRoster,
 ) FinalizeInput {
 	return FinalizeInput{
-		Mode:            mode,
-		FinalText:       finalText,
-		Messages:        messages,
+		Mode:      mode,
+		FinalText: finalText,
+		// Each recovery call asks with a user message of its own, which starts
+		// a new Gemini turn, and the hook may call a model other than the
+		// run's: no request here needs a Gemini signature.
+		Messages:        withoutGeminiSignatures(messages),
 		RoundToolEvents: roundToolEvents,
 		Tools:           fantasyTools,
 		Observer:        observer,

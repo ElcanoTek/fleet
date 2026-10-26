@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -307,7 +308,9 @@ func (e *engine) bindRunUsage(orch *orchestrationState) { e.runOrch = orch }
 // the engine's primary model slug — the model the interactive summarizer
 // calls (tc.Model) — which is what selects a per-model price override (#297).
 func (e *engine) compactionSummarizeInput(droppable []fantasy.Message) CompactionSummarizeInput {
-	in := CompactionSummarizeInput{Droppable: droppable, Model: e.currentModel()}
+	// The summary is asked for in a user message of its own, so no Gemini
+	// signature is needed, and the summarizer may be another model.
+	in := CompactionSummarizeInput{Droppable: withoutGeminiSignatures(droppable), Model: e.currentModel()}
 	orch := e.runOrch
 	if orch == nil {
 		return in
@@ -890,20 +893,63 @@ func messagesForReplay(messages []fantasy.Message) []fantasy.Message {
 // geminiSignatureOnly returns the Gemini thought signature a reasoning part
 // carries, as a reasoning part with the thought text dropped. Replay keeps it
 // because Gemini wants a tool call's signature back on later requests of the
-// same turn, and newer Gemini models reject a call without it (#1703), while
-// a context checkpoint and a stream-error resume re-send the turn's calls with
-// no user message after them. fantasy keeps the signature in the part's google
-// options, for the google provider type and for OpenRouter's google/ models
-// alike, and each sends it back from there. A fleet google entry never asks
-// for thought text, so its parts are signature-only already. Another provider
-// that meets one after a failover skips it (Anthropic, OpenAI), or renders its
-// empty text (OpenRouter's openai/ and xai/ routes, openaicompat).
+// same turn, and newer Gemini models reject a call without it, while a context
+// checkpoint and a stream-error resume re-send the turn's calls with no user
+// message after them. fantasy keeps the signature in the part's google
+// options, and its OpenRouter provider sends it back from there to google/
+// models. No other model is shown one (geminiSignatureStep).
 func geminiSignatureOnly(part fantasy.MessagePart) (fantasy.ReasoningPart, bool) {
 	md := google.GetReasoningMetadata(part.Options())
 	if md == nil || md.Signature == "" {
 		return fantasy.ReasoningPart{}, false
 	}
 	return fantasy.ReasoningPart{ProviderOptions: fantasy.ProviderOptions{google.Name: md}}, true
+}
+
+// sendsGeminiSignatures reports whether model hands a Gemini thought signature
+// back to Gemini: fantasy's OpenRouter provider does for google/ models, as an
+// encrypted reasoning detail.
+func sendsGeminiSignatures(model fantasy.LanguageModel) bool {
+	return model != nil && model.Provider() == openrouter.Name && strings.HasPrefix(model.Model(), "google/")
+}
+
+func isGeminiSignature(part fantasy.MessagePart) bool {
+	r, ok := fantasy.AsMessagePart[fantasy.ReasoningPart](part)
+	return ok && google.GetReasoningMetadata(r.Options()) != nil
+}
+
+func hasGeminiSignature(msg fantasy.Message) bool {
+	return msg.Role == fantasy.MessageRoleAssistant && slices.ContainsFunc(msg.Content, isGeminiSignature)
+}
+
+// withoutGeminiSignatures is messages without the signatures replay kept, for
+// a request that has no use for them. The other providers do not all skip such
+// a part: OpenRouter sends its other routes an empty reasoning detail of
+// unknown format and its openai/ and xai/ routes "<thoughts></thoughts>" text,
+// and openaicompat sends an empty reasoning_content.
+func withoutGeminiSignatures(messages []fantasy.Message) []fantasy.Message {
+	out := make([]fantasy.Message, 0, len(messages))
+	for _, msg := range messages {
+		if hasGeminiSignature(msg) {
+			msg.Content = slices.DeleteFunc(slices.Clone(msg.Content), isGeminiSignature)
+			if len(msg.Content) == 0 {
+				continue
+			}
+		}
+		out = append(out, msg)
+	}
+	return out
+}
+
+// geminiSignatureStep shows the replayed signatures only to a model that sends
+// them back to Gemini, so a fallback taken after a Gemini model failed gets the
+// replay it got before they were kept. Request-local, like the reducers after
+// it: the run's own history keeps them for a later Gemini step.
+func geminiSignatureStep(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+	if sendsGeminiSignatures(opts.Model) || !slices.ContainsFunc(opts.Messages, hasGeminiSignature) {
+		return ctx, fantasy.PrepareStepResult{}, nil
+	}
+	return ctx, fantasy.PrepareStepResult{Messages: withoutGeminiSignatures(opts.Messages)}, nil
 }
 
 // dropTrailingAssistant strips the final message when it is an assistant
@@ -1579,6 +1625,9 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// any provider sees them (a raw one 400s the whole request on
 			// Anthropic/Bedrock); before the reducers, which size the final slice.
 			toolCallInputSanitizeStep(),
+			// After the recovery checkpoint, so a resume keeps the signatures
+			// for a Gemini model even when this one is not.
+			geminiSignatureStep,
 			// Prompt-cache markers must be attached to the reduced message
 			// slice, and no provider call may observe the pre-reduction
 			// history. opts.Model makes fallback swaps use their own window.

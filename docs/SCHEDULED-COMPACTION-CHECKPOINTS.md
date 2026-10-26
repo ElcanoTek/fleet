@@ -34,9 +34,9 @@ dead-letters in one day. The transcripts showed why:
 2. **Resume branch in the run loop** (`internal/agentcore/run.go`): when a
    round stopped at the checkpoint, the loop carries the round's messages
    (`carryRoundMessages`, tool evidence kept, provider reasoning dropped but
-   for Gemini thought signatures, which Gemini wants back on the turn's tool
-   calls), adds
-   a `[context_checkpoint]` breadcrumb to the session log, emits
+   for Gemini thought signatures, which a Gemini model gets back with the
+   turn's tool calls and no other model is shown), adds a
+   `[context_checkpoint]` breadcrumb to the session log, emits
    `fleet.context_checkpoint` (`used_tokens`, `resend_budget_tokens`,
    `trigger=resend_budget`, `checkpoint`), and `continue`s **without** calling
    the completion policy, without enforcement messages and without consuming

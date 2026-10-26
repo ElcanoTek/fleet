@@ -98,8 +98,10 @@ func (e *engine) generateTerminalStructuredOutput(
 	// after ALL tool work committed. Apply the same aggregate context reduction
 	// as the inner-step budget guard (#793) so a long transcript cannot
 	// overflow the window exactly at the end (the ordinary rounds were
-	// budget-guarded; this call must not be the one unguarded request).
-	messages, err := boundTerminalPrompt(model, systemPrompt, messages, maxTokens)
+	// budget-guarded; this call must not be the one unguarded request). The
+	// terminal instruction below starts a new Gemini turn, which needs no
+	// Gemini signature, and the run may have left Gemini for a fallback.
+	messages, err := boundTerminalPrompt(model, systemPrompt, withoutGeminiSignatures(messages), maxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrStructuredOutputGeneration, err)
 	}
