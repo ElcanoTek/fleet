@@ -115,6 +115,17 @@ type engine struct {
 	// removed, so the recovery can tell live clients the history was
 	// summarized (see forcedCompactionStats).
 	lastForcedCompaction forcedCompactionStats
+	// compactions accumulates every head/summary/tail compaction applied during
+	// the run so interactive drivers can persist and replay the compacted
+	// boundary on subsequent turns instead of re-sending and re-summarizing the
+	// dropped middle on every turn.
+	compactions []CompactionRecord
+	// runLocalParts tracks the first-part pointer of every transient run-local
+	// message injected into the live message slice (user_prompt_submit hook
+	// output, per-run working-dir/date tail, post-compaction plan reannouncement,
+	// enforcement nudges) that is never projected into Result.Entries, so
+	// CompactionRecord offsets match the persistable message sequence.
+	runLocalParts map[*fantasy.MessagePart]bool
 	// resendFloor, resendPrefix, resendFloorStale and resendFloorNoted carry
 	// the checkpoint's floor rule (#1600, see effectiveResendBudget).
 	// resendFloor is the resent size measured at the latest floor point: the
@@ -404,16 +415,114 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 	}
 
 	e.logCompactionSummary(summary)
+	planText := planReannounceText(e.runOrch)
 	tail = dropPlanReannounceMessages(tail)
+	persistableTail := e.dropRunLocalMessages(tail)
+	firstKeptCallID := ""
+	if len(persistableTail) > 0 {
+		firstKeptCallID = firstToolCallID(persistableTail[0])
+	}
 	out := make([]fantasy.Message, 0, len(head)+2+len(tail))
 	out = append(out, head...)
 	out = append(out, summary)
-	out = appendPlanReannounce(out, e.runOrch)
+	if planText != "" {
+		planMsg := fantasy.NewUserMessage(planText)
+		e.markRunLocalMessages(planMsg)
+		out = append(out, planMsg)
+	}
 	out = append(out, tail...)
 	e.consecutiveCompactions++
 	e.lastForcedCompaction = forcedCompactionStats{removed: len(middle), summaryTokens: estimateMessageTokens(summary)}
+	e.compactions = append(e.compactions, CompactionRecord{
+		Head:                len(e.dropRunLocalMessages(head)),
+		Removed:             len(e.dropRunLocalMessages(middle)),
+		FirstKeptToolCallID: firstKeptCallID,
+		Summary:             messageText(summary),
+	})
 	// The next step re-measures the resend-checkpoint floor (#1600).
 	e.resendFloorStale = true
+	return out
+}
+
+// CompactionRecord describes one head/summary/tail compaction applied to a
+// run's message history (proactiveCompactKeeping or forceCompactMessageHistory).
+// Interactive drivers persist these on the turn's TurnSummaryContent so
+// replayHistory on subsequent turns reconstructs the exact post-compaction
+// prefix instead of re-sending (and re-summarizing) the dropped middle on every
+// turn.
+type CompactionRecord struct {
+	Head                int    `json:"head"`
+	Removed             int    `json:"removed"`
+	FirstKeptToolCallID string `json:"first_kept_tool_call_id,omitempty"`
+	Summary             string `json:"summary"`
+}
+
+func (e *engine) compactionsSnapshot() []CompactionRecord {
+	if e == nil || len(e.compactions) == 0 {
+		return nil
+	}
+	return append([]CompactionRecord(nil), e.compactions...)
+}
+
+func firstToolCallID(m fantasy.Message) string {
+	for _, part := range m.Content {
+		if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok && tc.ToolCallID != "" {
+			return tc.ToolCallID
+		}
+	}
+	return ""
+}
+
+// ApplyCompactionRecords replays persisted CompactionRecord transformations
+// against a reconstructed message history, producing the same head + summary +
+// kept-tail structure that proactiveCompactKeeping / forceCompactMessageHistory
+// built during the originating turn.
+func ApplyCompactionRecords(messages []fantasy.Message, compactions []CompactionRecord) []fantasy.Message {
+	out := messages
+	for _, c := range compactions {
+		out = applyCompactionRecord(out, c)
+	}
+	return out
+}
+
+func applyCompactionRecord(messages []fantasy.Message, c CompactionRecord) []fantasy.Message {
+	if c.Head < 0 || c.Removed <= 0 || strings.TrimSpace(c.Summary) == "" {
+		return messages
+	}
+	if len(messages) <= c.Head+1 {
+		return messages
+	}
+	cutIdx := c.Head + c.Removed
+	if c.FirstKeptToolCallID != "" {
+		if cutIdx >= len(messages) || firstToolCallID(messages[cutIdx]) != c.FirstKeptToolCallID {
+			for i := c.Head + 1; i < len(messages); i++ {
+				if firstToolCallID(messages[i]) == c.FirstKeptToolCallID {
+					cutIdx = i
+					break
+				}
+			}
+		}
+	}
+	if cutIdx >= len(messages) {
+		return messages
+	}
+	// Never split a tool exchange: mirror snapCutBackward / snapCutForward on
+	// messages[c.Head:] so the kept tail never starts with an orphaned tool
+	// result (#1106).
+	active := messages[c.Head:]
+	relCut := snapCutBackward(active, cutIdx-c.Head)
+	if relCut < 1 {
+		relCut = snapCutForward(active, cutIdx-c.Head)
+	}
+	if relCut < 1 || len(active)-relCut < 1 {
+		return messages
+	}
+	cutIdx = c.Head + relCut
+	keep := dropPlanReannounceMessages(messages[cutIdx:])
+	out := make([]fantasy.Message, 0, c.Head+1+len(keep))
+	out = append(out, messages[:c.Head]...)
+	out = append(out, fantasy.NewUserMessage(c.Summary))
+	out = append(out, keep...)
 	return out
 }
 
@@ -429,25 +538,25 @@ type forcedCompactionStats struct {
 // compaction can drop a stale copy before inserting a fresh one.
 const planReannouncePrefix = "[plan state after compaction"
 
-// appendPlanReannounce re-announces the task-tracker plan right after a
-// compaction summary (#990, borrowed from Prime Agent's post-compaction
-// kernel-state announcement). The plan is HOST-side state — it survives the
-// compaction that just rewrote the history — but the summarizer may not have
-// preserved it, and the finish gate (checkFinishEnforcement) still enforces
-// it; without this the model has to remember to call task_tracker view to
-// rediscover the plan it is being held to. No-op when no orchestration state
-// is bound (direct-engine tests) or the plan has no open items.
-func appendPlanReannounce(out []fantasy.Message, orch *orchestrationState) []fantasy.Message {
+// planReannounceText renders the post-compaction task-tracker plan-state
+// message (#990, borrowed from Prime Agent's post-compaction kernel-state
+// announcement). The plan is HOST-side state — it survives the compaction that
+// just rewrote the history — but the summarizer may not have preserved it, and
+// the finish gate (checkFinishEnforcement) still enforces it; without this the
+// model has to remember to call task_tracker view to rediscover the plan it is
+// being held to. Empty when no orchestration state is bound (direct-engine
+// tests) or the plan has no open items.
+func planReannounceText(orch *orchestrationState) string {
 	if orch == nil {
-		return out
+		return ""
 	}
 	rendered, ok := orch.planStateForReannounce()
 	if !ok {
-		return out
+		return ""
 	}
-	return append(out, fantasy.NewUserMessage(fmt.Sprintf(
+	return fmt.Sprintf(
 		"%s] Your task plan below is host-side state and survived the compaction above. Continue from it; update it with task_tracker as you make progress.\n\n%s",
-		planReannouncePrefix, rendered)))
+		planReannouncePrefix, rendered)
 }
 
 // dropPlanReannounceMessages filters out earlier plan re-announcements from a
@@ -461,10 +570,51 @@ func appendPlanReannounce(out []fantasy.Message, orch *orchestrationState) []fan
 func dropPlanReannounceMessages(messages []fantasy.Message) []fantasy.Message {
 	out := make([]fantasy.Message, 0, len(messages))
 	for _, m := range messages {
-		if m.Role == fantasy.MessageRoleUser {
-			if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](firstPart(m)); ok && strings.HasPrefix(tp.Text, planReannouncePrefix) {
-				continue
-			}
+		if isPlanReannounceMessage(m) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func isPlanReannounceMessage(m fantasy.Message) bool {
+	if m.Role != fantasy.MessageRoleUser {
+		return false
+	}
+	tp, ok := fantasy.AsMessagePart[fantasy.TextPart](firstPart(m))
+	return ok && strings.HasPrefix(tp.Text, planReannouncePrefix)
+}
+
+func (e *engine) markRunLocalMessages(msgs ...fantasy.Message) {
+	if e == nil || len(msgs) == 0 {
+		return
+	}
+	if e.runLocalParts == nil {
+		e.runLocalParts = make(map[*fantasy.MessagePart]bool, len(msgs))
+	}
+	for i := range msgs {
+		if len(msgs[i].Content) > 0 {
+			e.runLocalParts[&msgs[i].Content[0]] = true
+		}
+	}
+}
+
+func (e *engine) isRunLocalMessage(m fantasy.Message) bool {
+	if isPlanReannounceMessage(m) {
+		return true
+	}
+	if e == nil || len(e.runLocalParts) == 0 || len(m.Content) == 0 {
+		return false
+	}
+	return e.runLocalParts[&m.Content[0]]
+}
+
+func (e *engine) dropRunLocalMessages(messages []fantasy.Message) []fantasy.Message {
+	out := make([]fantasy.Message, 0, len(messages))
+	for _, m := range messages {
+		if e.isRunLocalMessage(m) {
+			continue
 		}
 		out = append(out, m)
 	}
@@ -545,11 +695,21 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 			compactionSummaryPrefix, len(droppable)))
 	}
 
+	planText := planReannounceText(e.runOrch)
 	keep = dropPlanReannounceMessages(keep)
+	persistableKeep := e.dropRunLocalMessages(keep)
+	firstKeptCallID := ""
+	if len(persistableKeep) > 0 {
+		firstKeptCallID = firstToolCallID(persistableKeep[0])
+	}
 	out := make([]fantasy.Message, 0, head+2+len(keep))
 	out = append(out, messages[:head]...)
 	out = append(out, summary)
-	out = appendPlanReannounce(out, e.runOrch)
+	if planText != "" {
+		planMsg := fantasy.NewUserMessage(planText)
+		e.markRunLocalMessages(planMsg)
+		out = append(out, planMsg)
+	}
 	out = append(out, keep...)
 
 	// Proactive compaction is a clean reduction, not a reactive resilience
@@ -558,6 +718,12 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 	e.consecutiveCompactions = 0
 	// The history just shrank: the next step's resent size is the new floor.
 	e.resendFloorStale = true
+	e.compactions = append(e.compactions, CompactionRecord{
+		Head:                len(e.dropRunLocalMessages(messages[:head])),
+		Removed:             len(e.dropRunLocalMessages(droppable)),
+		FirstKeptToolCallID: firstKeptCallID,
+		Summary:             messageText(summary),
+	})
 
 	return proactiveCompactResult{
 		messages:      out,

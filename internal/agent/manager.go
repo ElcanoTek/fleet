@@ -1948,14 +1948,15 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	tc.Overlay = overlay
 
 	res, runErr := RunInteractiveTurn(ctx, tc, turnSink{sink: sink})
+	effectiveModelSlug := defaultIfEmpty(strings.TrimSpace(res.ModelSlug), modelSlug)
 
 	if runErr != nil {
-		return m.failedTurnResult(ctx, runErr, res, userEntry, modelSlug, startedAt, sink, in.CommitTerminal)
+		return m.failedTurnResult(ctx, runErr, res, userEntry, effectiveModelSlug, startedAt, sink, in.CommitTerminal)
 	}
 	if res.Cancelled {
-		return m.cancelledTurnResult(res, userEntry, modelSlug, startedAt, ctx.Err(), sink, in.CommitTerminal)
+		return m.cancelledTurnResult(res, userEntry, effectiveModelSlug, startedAt, ctx.Err(), sink, in.CommitTerminal)
 	}
-	return m.completedTurnResult(res, userEntry, modelSlug, startedAt, sink, in.CommitTerminal)
+	return m.completedTurnResult(res, userEntry, effectiveModelSlug, startedAt, sink, in.CommitTerminal)
 }
 
 // cancelledTurnResult builds the partial TurnResult for a cancelled turn,
@@ -1992,6 +1993,8 @@ func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEnt
 		DurationMs:           int(time.Since(startedAt).Milliseconds()),
 		Cancelled:            true,
 		Model:                modelSlug,
+		SwappedToFallback:    res.SwappedToFallback,
+		Compactions:          res.Compactions,
 	}
 	newHistory = append(newHistory, mustEntry("assistant", "turn_summary", summary))
 	// Same terminal gate as the completed path (#798): partial work commits
@@ -2084,6 +2087,8 @@ func (m *Manager) completedTurnResult(res agentcore.Result, userEntry HistoryEnt
 		CacheCreationTokens:  usage.CacheCreationTokens,
 		DurationMs:           int(time.Since(startedAt).Milliseconds()),
 		Model:                modelSlug,
+		SwappedToFallback:    res.SwappedToFallback,
+		Compactions:          res.Compactions,
 	}
 	newHistory = append(newHistory, mustEntry("assistant", "turn_summary", summary))
 
@@ -2135,7 +2140,7 @@ func mapRunEntries(entries []agentcore.RunEntry) []HistoryEntry {
 		case "user_text":
 			// A steered mid-turn user message (#785): persisted in stream order
 			// like every other entry, exactly once (the sink dedupes by SteerID).
-			out = append(out, mustEntry("user", "text", TextContent{Text: e.Text}))
+			out = append(out, mustEntry("user", "text", TextContent{Text: e.Text, Steered: true}))
 		case "tool_call":
 			out = append(out, mustEntry("assistant", entryTypeToolCall, ToolCallContent{
 				ID: e.ToolCallID, Name: e.ToolName, Input: e.ToolInput,

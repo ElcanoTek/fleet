@@ -350,7 +350,7 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 	prepare := chainPrepareSteps(
 		agentcore.ToolCallInputSanitizeStep(),
 		agentcore.ModelContextBudgetStep(in.SystemPrompt, in.Tools, tc.MaxTokens),
-		agentcore.PromptCachingStep(tc.Model.Model()),
+		agentcore.PromptCachingStep(tc.Model.Model(), agentcore.WithCompactionSummaryBreakpoint(nil)),
 	)
 	// Stream under the run's own ceilings: the budget guard blocks the next
 	// paid completion once the cost/token ceiling is hit — without it this
@@ -450,7 +450,7 @@ func streamForceFinalSummary(ctx context.Context, tc TurnConfig, in agentcore.Fi
 		fantasy.WithPrepareStep(chainPrepareSteps(
 			agentcore.ToolCallInputSanitizeStep(),
 			agentcore.ModelContextBudgetStep(in.SystemPrompt, nil, tc.MaxTokens),
-			agentcore.PromptCachingStep(tc.Model.Model()),
+			agentcore.PromptCachingStep(tc.Model.Model(), agentcore.WithCompactionSummaryBreakpoint(nil)),
 		)),
 	)
 	maxTokens := int64(tc.MaxTokens)

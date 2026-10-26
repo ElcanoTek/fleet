@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"charm.land/fantasy"
@@ -88,6 +89,9 @@ type TextContent struct {
 	// else, so existing rows are unchanged. Replay ignores it: the model reads
 	// the entry's labelled text like any user message.
 	Kind string `json:"kind,omitempty"`
+	// Steered is true when this user-role text entry was injected mid-turn via
+	// SteerSource (#785) rather than committed as the turn-start prompt.
+	Steered bool `json:"steered,omitempty"`
 	// RuntimeToday is the UTC day ("YYYY-MM-DD") this user turn ran on. The
 	// model read that day's runtime_today note (agentcore.RuntimeDateMessage)
 	// directly after this message, and replay regenerates the same note in
@@ -218,6 +222,170 @@ type TurnSummaryContent struct {
 	// switch is the single biggest cause of "why did my cache just die"
 	// confusion.
 	Model string `json:"model,omitempty"`
+	// SwappedToFallback is true when the turn ended on a resilience fallback
+	// model rather than the originally resolved primary model.
+	SwappedToFallback bool `json:"swapped_to_fallback,omitempty"`
+	// Compactions records any head/summary/tail context-window compactions
+	// (proactive or reactive) that ran during this turn. replayHistory
+	// applies them at this turn_summary boundary so subsequent turns send
+	// the exact post-compaction prefix (preserving the prompt cache on the
+	// compaction summary instead of reverting to the uncompacted history and
+	// re-running the uncached summarizer on every turn).
+	Compactions []agentcore.CompactionRecord `json:"compactions,omitempty"`
+}
+
+type toolResultSelection struct {
+	chosen                map[string]ToolResultContent
+	chosenIdx             map[string]int
+	chosenOOO             map[string]bool
+	isOutOfBandResolution map[string]bool
+	firstSummaryIdx       map[string]int
+}
+
+// selectToolResults runs Pass 1 of replayHistory: it picks the authoritative
+// result for each tool-call id. A staged tool's outcome (send_email / risky
+// bash) is appended out-of-band when the user clicks Send, reusing the
+// original tool_call id — so a call can end up with TWO result rows: the
+// inline "APPROVAL_REQUIRED" placeholder the agent saw during the turn, and
+// the real outcome appended on approval. Worse, if the user clicks before the
+// turn that issued the call has been persisted, the resolution row lands
+// BEFORE its own tool_call in id order. A naive replay would then emit a
+// tool_result with no preceding tool_use (or two results for one call), which
+// every provider rejects. We mark a result "out of order" when its tool_call
+// hasn't been seen yet at that point in the stream; out-of-order results win
+// over inline ones, and among same-category results the later wins (covers the
+// common case where the resolution is appended after the placeholder). Pass 2
+// then emits exactly one result per call, paired with the call, regardless of
+// where the rows physically sit.
+func selectToolResults(effective []HistoryEntry) (toolResultSelection, error) {
+	sel := toolResultSelection{
+		chosen:                map[string]ToolResultContent{},
+		chosenIdx:             map[string]int{},
+		chosenOOO:             map[string]bool{},
+		isOutOfBandResolution: map[string]bool{},
+		firstSummaryIdx:       map[string]int{},
+	}
+	seenCall := map[string]bool{}
+	seenResult := map[string]bool{}
+	var pendingSummaryCalls []string
+	for i, e := range effective {
+		switch e.Type {
+		case "turn_summary":
+			for _, id := range pendingSummaryCalls {
+				sel.firstSummaryIdx[id] = i
+			}
+			pendingSummaryCalls = pendingSummaryCalls[:0]
+		case entryTypeToolCall:
+			var c ToolCallContent
+			if err := json.Unmarshal(e.Content, &c); err != nil {
+				return toolResultSelection{}, err
+			}
+			seenCall[c.ID] = true
+			pendingSummaryCalls = append(pendingSummaryCalls, c.ID)
+		case "tool_result":
+			var c ToolResultContent
+			if err := json.Unmarshal(e.Content, &c); err != nil {
+				return toolResultSelection{}, err
+			}
+			outOfOrder := !seenCall[c.ID]
+			alreadySawResult := seenResult[c.ID]
+			seenResult[c.ID] = true
+			// Keep the prior choice only when it's out-of-order and this one
+			// isn't; otherwise this result wins.
+			if prevOOO, exists := sel.chosenOOO[c.ID]; exists && prevOOO && !outOfOrder {
+				continue
+			}
+			sel.chosen[c.ID] = c
+			sel.chosenIdx[c.ID] = i
+			sel.chosenOOO[c.ID] = outOfOrder
+			sel.isOutOfBandResolution[c.ID] = outOfOrder || alreadySawResult
+		}
+	}
+	return sel, nil
+}
+
+func hasToolCallIDInMessages(messages []fantasy.Message, callID string) bool {
+	for _, m := range messages {
+		if m.Role != fantasy.MessageRoleAssistant {
+			continue
+		}
+		for _, part := range m.Content {
+			if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok && tc.ToolCallID == callID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func extractSingleToolExchange(messages []fantasy.Message, callID string) ([]fantasy.Message, bool) {
+	var callPart fantasy.ToolCallPart
+	var foundCall bool
+	var resultPart fantasy.ToolResultPart
+	var foundResult bool
+	for _, m := range messages {
+		for _, part := range m.Content {
+			if !foundCall && m.Role == fantasy.MessageRoleAssistant {
+				if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok && tc.ToolCallID == callID {
+					callPart = tc
+					foundCall = true
+				}
+			}
+			if !foundResult && m.Role == fantasy.MessageRoleTool {
+				if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok && tr.ToolCallID == callID {
+					resultPart = tr
+					foundResult = true
+				}
+			}
+		}
+	}
+	if !foundCall || !foundResult {
+		return nil, false
+	}
+	return []fantasy.Message{
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{callPart}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{resultPart}},
+	}, true
+}
+
+func applyTurnSummaryCompactions(out []fantasy.Message, summaryIdx, turnStartUserIdx, lastSummaryIdx int, compactions []agentcore.CompactionRecord, sel toolResultSelection, deferred map[int][][]fantasy.Message) []fantasy.Message {
+	compacted := agentcore.ApplyCompactionRecords(out, compactions)
+	callIDs := make([]string, 0, len(sel.chosenIdx))
+	for callID := range sel.chosenIdx {
+		callIDs = append(callIDs, callID)
+	}
+	slices.SortFunc(callIDs, func(a, b string) int {
+		if d := sel.chosenIdx[a] - sel.chosenIdx[b]; d != 0 {
+			return d
+		}
+		return strings.Compare(a, b)
+	})
+	for _, callID := range callIDs {
+		resIdx := sel.chosenIdx[callID]
+		res := sel.chosen[callID]
+		if !sel.isOutOfBandResolution[callID] || strings.HasPrefix(res.Text, "APPROVAL_REQUIRED:") {
+			continue
+		}
+		postCompactionResolution := resIdx > summaryIdx
+		midTurnResolution := turnStartUserIdx > lastSummaryIdx && resIdx > turnStartUserIdx
+		sameTurnOOOResolution := sel.chosenOOO[callID] && sel.firstSummaryIdx[callID] == summaryIdx
+		if !postCompactionResolution && !midTurnResolution && !sameTurnOOOResolution {
+			continue
+		}
+		if !hasToolCallIDInMessages(out, callID) || hasToolCallIDInMessages(compacted, callID) {
+			continue
+		}
+		pair, ok := extractSingleToolExchange(out, callID)
+		if !ok {
+			continue
+		}
+		if postCompactionResolution {
+			deferred[resIdx] = append(deferred[resIdx], pair)
+		} else {
+			compacted = append(compacted, pair...)
+		}
+	}
+	return compacted
 }
 
 // replayHistory converts stored HistoryEntry rows back into fantasy.Message
@@ -243,47 +411,12 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 	}
 	effective := entries[startIdx:]
 
-	// Pass 1: pick the authoritative result for each tool-call id. A staged
-	// tool's outcome (send_email / risky bash) is appended out-of-band when
-	// the user clicks Send, reusing the original tool_call id — so a call can
-	// end up with TWO result rows: the inline "APPROVAL_REQUIRED" placeholder
-	// the agent saw during the turn, and the real outcome appended on
-	// approval. Worse, if the user clicks before the turn that issued the
-	// call has been persisted, the resolution row lands BEFORE its own
-	// tool_call in id order. A naive replay would then emit a tool_result
-	// with no preceding tool_use (or two results for one call), which every
-	// provider rejects. We mark a result "out of order" when its tool_call
-	// hasn't been seen yet at that point in the stream; out-of-order results
-	// win over inline ones, and among same-category results the later wins
-	// (covers the common case where the resolution is appended after the
-	// placeholder). Pass 2 then emits exactly one result per call, paired
-	// with the call, regardless of where the rows physically sit.
-	chosenResult := map[string]ToolResultContent{}
-	chosenOutOfOrder := map[string]bool{}
-	seenCall := map[string]bool{}
-	for _, e := range effective {
-		switch e.Type {
-		case entryTypeToolCall:
-			var c ToolCallContent
-			if err := json.Unmarshal(e.Content, &c); err != nil {
-				return nil, err
-			}
-			seenCall[c.ID] = true
-		case "tool_result":
-			var c ToolResultContent
-			if err := json.Unmarshal(e.Content, &c); err != nil {
-				return nil, err
-			}
-			outOfOrder := !seenCall[c.ID]
-			// Keep the prior choice only when it's out-of-order and this one
-			// isn't; otherwise this result wins.
-			if prevOOO, exists := chosenOutOfOrder[c.ID]; exists && prevOOO && !outOfOrder {
-				continue
-			}
-			chosenResult[c.ID] = c
-			chosenOutOfOrder[c.ID] = outOfOrder
-		}
+	sel, err := selectToolResults(effective)
+	if err != nil {
+		return nil, err
 	}
+	chosenResult := sel.chosen
+	deferredExchanges := map[int][][]fantasy.Message{}
 
 	var out []fantasy.Message
 	var pendingAssistant []fantasy.MessagePart
@@ -327,7 +460,9 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 		pendingAssistant = nil
 	}
 
-	for _, e := range effective {
+	turnStartUserIdx := -1
+	lastSummaryIdx := -1
+	for i, e := range effective {
 		switch e.Type {
 		case "summary":
 			// Emit the summary as a single synthetic assistant message
@@ -359,6 +494,10 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 			switch e.Role {
 			case "user":
 				flushAssistant()
+				isSteer := c.Steered || (turnStartUserIdx > lastSummaryIdx && c.RuntimeToday == "")
+				if !isSteer {
+					turnStartUserIdx = i
+				}
 				parts := loadHistoryImageParts(c.Images, uploadsRoot)
 				// The model sees what it saw the first time: the user's text
 				// plus that turn's injected context (rows written before
@@ -372,10 +511,17 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 			case "assistant":
 				pendingAssistant = append(pendingAssistant, fantasy.TextPart{Text: c.Text})
 			}
-		case "reasoning", "turn_summary", EntryTypeSummaryBoundary, EntryTypeNotice:
+		case "turn_summary":
+			var c TurnSummaryContent
+			if err := json.Unmarshal(e.Content, &c); err == nil && len(c.Compactions) > 0 {
+				flushAssistant()
+				out = applyTurnSummaryCompactions(out, i, turnStartUserIdx, lastSummaryIdx, c.Compactions, sel, deferredExchanges)
+			}
+			lastSummaryIdx = i
+			continue
+		case "reasoning", EntryTypeSummaryBoundary, EntryTypeNotice:
 			// UI-facing only; never replayed to the model. Reasoning parts
-			// are rejected by providers outside their originating step,
-			// turn_summary is just our own cost/duration metadata, a
+			// are rejected by providers outside their originating step, a
 			// summary boundary only splits rendered messages, and a notice is
 			// written for the reader, not the model.
 			continue
@@ -398,8 +544,15 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 			// Close the current assistant step; flushAssistant emits the
 			// paired result (chosen in pass 1). The stored result row itself
 			// is not emitted here — doing so would double-emit results and
-			// break on out-of-order rows. See the pass-1 comment above.
+			// break on out-of-order rows. When a tool call was removed by an
+			// earlier turn's persisted compaction before this resolution row
+			// arrived, applyTurnSummaryCompactions deferred the call+result
+			// exchange to this index so it still appears at its chronological
+			// position in Role=assistant + Role=tool.
 			flushAssistant()
+			for _, pair := range deferredExchanges[i] {
+				out = append(out, pair...)
+			}
 		}
 	}
 	flushAssistant()

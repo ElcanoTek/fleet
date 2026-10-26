@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // TestReplayHistory_RoundTrip builds a plausible conversation history, replays
@@ -390,6 +391,158 @@ func TestTruncate(t *testing.T) {
 	}
 	if got := truncate("abcdefghij", 4); got != "abcd…[truncated]" {
 		t.Errorf("long: got %q", got)
+	}
+}
+
+func TestReplayHistory_AppliesPersistedTurnCompactions(t *testing.T) {
+	summaryMsg := "[context compaction — earlier messages summarized to fit context window]\n\nCondensed middle."
+	entries := []HistoryEntry{
+		mustEntry("user", "text", TextContent{Text: "turn 1 head", RuntimeToday: "2026-10-26"}),
+		mustEntry("assistant", "text", TextContent{Text: "turn 1 reply — should be compacted away"}),
+		mustEntry("user", "text", TextContent{Text: "turn 2 question — should be compacted away"}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "c2", Name: "bash", Input: `{"command":"pwd"}`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "c2", Name: "bash", Text: "/workspace"}),
+		mustEntry("assistant", "text", TextContent{Text: "turn 2 reply — kept in tail"}),
+		mustEntry("user", "text", TextContent{Text: "turn 3 question — triggers compaction"}),
+		mustEntry("assistant", "text", TextContent{Text: "turn 3 answer after compaction"}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{
+			Model:                "anthropic/claude-opus-4.7",
+			PromptTokensLastStep: 42_000,
+			Compactions: []agentcore.CompactionRecord{
+				{
+					Head:    2, // user + runtime_today note
+					Removed: 4, // turn 1 reply, turn 2 question, tool_call c2, tool_result c2
+					Summary: summaryMsg,
+				},
+			},
+		}),
+		mustEntry("user", "text", TextContent{Text: "turn 4 follow-up"}),
+	}
+
+	msgs, err := replayHistory(entries, "")
+	if err != nil {
+		t.Fatalf("replayHistory: %v", err)
+	}
+	assertWellFormedToolPairs(t, msgs)
+
+	payload, _ := json.Marshal(msgs)
+	if !contains(payload, "turn 1 head") {
+		t.Error("pinned head message should survive compaction replay")
+	}
+	if !contains(payload, "Condensed middle.") {
+		t.Error("persisted compaction summary should appear in replayed history")
+	}
+	if contains(payload, "turn 1 reply — should be compacted away") || contains(payload, "turn 2 question — should be compacted away") {
+		t.Error("messages in the compacted middle should not re-enter replayed history on turn 4")
+	}
+	if !contains(payload, "turn 2 reply — kept in tail") || !contains(payload, "turn 3 answer after compaction") || !contains(payload, "turn 4 follow-up") {
+		t.Error("kept tail and subsequent turns should remain in replayed history")
+	}
+}
+
+func TestReplayHistory_PreservesApprovalOutcomesAcrossCompaction(t *testing.T) {
+	// 1. Post-compaction approval resolution: a staged call in Turn 1 is
+	// compacted away at Turn 2's turn_summary, and later settled. The resolved
+	// exchange must survive at its chronological tail position in Role=assistant
+	// + Role=tool (never Role=user).
+	postCompactionApprovalEntries := []HistoryEntry{
+		mustEntry("user", "text", TextContent{Text: "turn 1 head", RuntimeToday: "2026-10-26"}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "call_compacted", Name: "send_email", Input: `{}`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_compacted", Name: "send_email", Text: "APPROVAL_REQUIRED: staged card", IsErr: true}),
+		mustEntry("assistant", "text", TextContent{Text: "Staged."}),
+		mustEntry("user", "text", TextContent{Text: "turn 2 kept"}),
+		mustEntry("assistant", "text", TextContent{Text: "turn 2 reply"}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{
+			Model: "anthropic/claude-opus-4.7",
+			Compactions: []agentcore.CompactionRecord{
+				{
+					Head:    2,
+					Removed: 3, // call_compacted + result + "Staged."
+					Summary: "[context compaction — earlier messages summarized to fit context window]\n\nSummary.",
+				},
+			},
+		}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_compacted", Name: "send_email", Text: `{"status":"sent"}`, IsErr: false}),
+	}
+	msgs, err := replayHistory(postCompactionApprovalEntries, "")
+	if err != nil {
+		t.Fatalf("replayHistory post-compaction approval: %v", err)
+	}
+	assertWellFormedToolPairs(t, msgs)
+	txt, isErr, ok := toolResultTextFor(t, msgs, "call_compacted")
+	if !ok || isErr || !contains([]byte(txt), `"status":"sent"`) {
+		t.Errorf("post-compaction approval result = (%q, isErr=%v, ok=%v); want sent outcome in Role=tool", txt, isErr, ok)
+	}
+	if msgs[len(msgs)-1].Role != fantasy.MessageRoleTool {
+		t.Errorf("tail message role = %q, want tool (never user)", msgs[len(msgs)-1].Role)
+	}
+
+	// 2. Out-of-order approval resolution on a turn that itself compacts the
+	// call: the resolution row lands before the tool_call, and the turn's
+	// turn_summary compacts the middle. The resolved exchange must still
+	// survive in Role=assistant + Role=tool.
+	oooCompactedEntries := []HistoryEntry{
+		mustEntry("user", "text", TextContent{Text: "turn 1 head", RuntimeToday: "2026-10-26"}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_ooo", Name: "send_email", Text: `{"status":"sent_ooo"}`, IsErr: false}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "call_ooo", Name: "send_email", Input: `{}`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_ooo", Name: "send_email", Text: "APPROVAL_REQUIRED: staged card", IsErr: true}),
+		mustEntry("assistant", "text", TextContent{Text: "Staged."}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "call_tail", Name: "bash", Input: `{"command":"true"}`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_tail", Name: "bash", Text: "ok", IsErr: false}),
+		mustEntry("assistant", "text", TextContent{Text: "Done."}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{
+			Model: "anthropic/claude-opus-4.7",
+			Compactions: []agentcore.CompactionRecord{
+				{
+					Head:    2,
+					Removed: 3, // call_ooo + result + "Staged."
+					Summary: "[context compaction — earlier messages summarized to fit context window]\n\nSummary.",
+				},
+			},
+		}),
+	}
+	msgsOOO, err := replayHistory(oooCompactedEntries, "")
+	if err != nil {
+		t.Fatalf("replayHistory out-of-order compacted: %v", err)
+	}
+	assertWellFormedToolPairs(t, msgsOOO)
+	txtOOO, isErrOOO, okOOO := toolResultTextFor(t, msgsOOO, "call_ooo")
+	if !okOOO || isErrOOO || !contains([]byte(txtOOO), `"status":"sent_ooo"`) {
+		t.Errorf("out-of-order compacted result = (%q, isErr=%v, ok=%v); want sent_ooo outcome preserved", txtOOO, isErrOOO, okOOO)
+	}
+
+	// 3. Mid-turn approval resolution for an earlier turn's call followed by a
+	// steering message in the same turn before compaction: the resolution row
+	// lands after the turn-start user entry and before the steered user entry.
+	midTurnSteerEntries := []HistoryEntry{
+		mustEntry("user", "text", TextContent{Text: "turn 1 head", RuntimeToday: "2026-10-26"}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "call_prior", Name: "send_email", Input: `{}`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_prior", Name: "send_email", Text: "APPROVAL_REQUIRED: staged card", IsErr: true}),
+		mustEntry("assistant", "text", TextContent{Text: "Staged."}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{Model: "anthropic/claude-opus-4.7"}),
+		mustEntry("user", "text", TextContent{Text: "turn 2 start", RuntimeToday: "2026-10-26"}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_prior", Name: "send_email", Text: `{"status":"sent_mid_turn"}`, IsErr: false}),
+		mustEntry("user", "text", TextContent{Text: "also check the logs", Steered: true}),
+		mustEntry("assistant", "text", TextContent{Text: "Checked and done."}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{
+			Model: "anthropic/claude-opus-4.7",
+			Compactions: []agentcore.CompactionRecord{
+				{
+					Head:    2,
+					Removed: 3, // call_prior + result + "Staged."
+					Summary: "[context compaction — earlier messages summarized to fit context window]\n\nSummary.",
+				},
+			},
+		}),
+	}
+	msgsMid, err := replayHistory(midTurnSteerEntries, "")
+	if err != nil {
+		t.Fatalf("replayHistory mid-turn approval before steer: %v", err)
+	}
+	assertWellFormedToolPairs(t, msgsMid)
+	txtMid, isErrMid, okMid := toolResultTextFor(t, msgsMid, "call_prior")
+	if !okMid || isErrMid || !contains([]byte(txtMid), `"status":"sent_mid_turn"`) {
+		t.Errorf("mid-turn approval before steer result = (%q, isErr=%v, ok=%v); want sent_mid_turn outcome preserved", txtMid, isErrMid, okMid)
 	}
 }
 
