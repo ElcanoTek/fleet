@@ -120,12 +120,6 @@ type engine struct {
 	// boundary on subsequent turns instead of re-sending and re-summarizing the
 	// dropped middle on every turn.
 	compactions []CompactionRecord
-	// seedLastStepInputTokens is the provider-measured input token count of the
-	// previous turn's final step (when supplied by an interactive driver via
-	// RunConfig.SeedLastStepInputTokens), consumed on the run's first
-	// pre-round context-pressure check before any step of this run has reported
-	// usage.
-	seedLastStepInputTokens int
 	// resendFloor, resendPrefix, resendFloorStale and resendFloorNoted carry
 	// the checkpoint's floor rule (#1600, see effectiveResendBudget).
 	// resendFloor is the resent size measured at the latest floor point: the
@@ -431,8 +425,8 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 	e.consecutiveCompactions++
 	e.lastForcedCompaction = forcedCompactionStats{removed: len(middle), summaryTokens: estimateMessageTokens(summary)}
 	e.compactions = append(e.compactions, CompactionRecord{
-		Head:                keepHead,
-		Removed:             len(middle),
+		Head:                len(dropPlanReannounceMessages(head)),
+		Removed:             len(dropPlanReannounceMessages(middle)),
 		FirstKeptToolCallID: firstKeptCallID,
 		Summary:             messageText(summary),
 	})
@@ -672,8 +666,8 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 	// The history just shrank: the next step's resent size is the new floor.
 	e.resendFloorStale = true
 	e.compactions = append(e.compactions, CompactionRecord{
-		Head:                head,
-		Removed:             len(droppable),
+		Head:                len(dropPlanReannounceMessages(messages[:head])),
+		Removed:             len(dropPlanReannounceMessages(droppable)),
 		FirstKeptToolCallID: firstKeptCallID,
 		Summary:             messageText(summary),
 	})
@@ -784,11 +778,6 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 	// tokens; an estimate counts the whole history in the estimator's. An
 	// elision sizes itself differently for each (elideBeforeSummary).
 	measured := used > 0
-	if used <= 0 && e.seedLastStepInputTokens > 0 {
-		used = max(e.seedLastStepInputTokens+unseenTokens(messages), e.estimateRequestTokens(messages))
-		e.seedLastStepInputTokens = 0
-		measured = true
-	}
 	if used <= 0 {
 		used = e.estimateRequestTokens(messages)
 	}

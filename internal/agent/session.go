@@ -230,53 +230,12 @@ type TurnSummaryContent struct {
 	Compactions []agentcore.CompactionRecord `json:"compactions,omitempty"`
 }
 
-// lastTurnStepInputTokens returns the most recent turn_summary's
-// PromptTokensLastStep after the latest user-initiated summary reset so the
-// next turn's pre-round context-pressure check starts from the provider's
-// real token count rather than a chars/4 estimate. Returns 0 when no prior
-// measurement applies (e.g. first turn, right after a manual summary, after a
-// model or fallback switch, or after a turn that was cancelled mid-compaction).
-func lastTurnStepInputTokens(entries []HistoryEntry, currentModel string) int {
-	startIdx := 0
-	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Type == "summary" {
-			startIdx = i
-			break
-		}
-	}
-	for i := len(entries) - 1; i >= startIdx; i-- {
-		if entries[i].Type != "turn_summary" {
-			continue
-		}
-		var c TurnSummaryContent
-		if err := json.Unmarshal(entries[i].Content, &c); err != nil {
-			return 0
-		}
-		if c.Cancelled && len(c.Compactions) > 0 {
-			return 0
-		}
-		if c.SwappedToFallback {
-			return 0
-		}
-		if c.Model != "" && currentModel != "" && c.Model != currentModel {
-			return 0
-		}
-		if c.PromptTokensLastStep > 0 {
-			return c.PromptTokensLastStep
-		}
-		return 0
-	}
-	return 0
-}
-
-// isApprovalTimeoutResult reports whether a tool_result text is the synthetic
-// outcome emitted when an approval card or display-only preview expires
-// without user action. Once the conversation has moved on to a subsequent user
-// turn, a late background expiry must not overwrite the historical turn's
-// inline "APPROVAL_REQUIRED" tool_result and invalidate the prompt cache prefix.
-func isApprovalTimeoutResult(text string) bool {
-	return strings.HasPrefix(text, "Approval timed out") ||
-		text == "Preview closed. It was display-only; nothing was sent."
+type toolResultSelection struct {
+	chosen                map[string]ToolResultContent
+	chosenIdx             map[string]int
+	chosenOOO             map[string]bool
+	isOutOfBandResolution map[string]bool
+	firstSummaryIdx       map[string]int
 }
 
 // selectToolResults runs Pass 1 of replayHistory: it picks the authoritative
@@ -294,64 +253,124 @@ func isApprovalTimeoutResult(text string) bool {
 // common case where the resolution is appended after the placeholder). Pass 2
 // then emits exactly one result per call, paired with the call, regardless of
 // where the rows physically sit.
-func selectToolResults(effective []HistoryEntry) (map[string]ToolResultContent, map[int]ToolResultContent, error) {
-	chosenResult := map[string]ToolResultContent{}
-	chosenOutOfOrder := map[string]bool{}
+func selectToolResults(effective []HistoryEntry) (toolResultSelection, error) {
+	sel := toolResultSelection{
+		chosen:                map[string]ToolResultContent{},
+		chosenIdx:             map[string]int{},
+		chosenOOO:             map[string]bool{},
+		isOutOfBandResolution: map[string]bool{},
+		firstSummaryIdx:       map[string]int{},
+	}
 	seenCall := map[string]bool{}
-	sealedByLaterTurn := map[string]bool{}
-	sealedByCompaction := map[string]bool{}
-	lateUpdates := map[int]ToolResultContent{}
+	seenResult := map[string]bool{}
+	var pendingSummaryCalls []string
 	for i, e := range effective {
 		switch e.Type {
-		case "text":
-			if e.Role == "user" {
-				for id := range chosenResult {
-					if seenCall[id] {
-						sealedByLaterTurn[id] = true
-					}
-				}
-			}
 		case "turn_summary":
-			var ts TurnSummaryContent
-			if err := json.Unmarshal(e.Content, &ts); err == nil && len(ts.Compactions) > 0 {
-				for id := range chosenResult {
-					if seenCall[id] {
-						sealedByCompaction[id] = true
-					}
-				}
+			for _, id := range pendingSummaryCalls {
+				sel.firstSummaryIdx[id] = i
 			}
+			pendingSummaryCalls = pendingSummaryCalls[:0]
 		case entryTypeToolCall:
 			var c ToolCallContent
 			if err := json.Unmarshal(e.Content, &c); err != nil {
-				return nil, nil, err
+				return toolResultSelection{}, err
 			}
 			seenCall[c.ID] = true
+			pendingSummaryCalls = append(pendingSummaryCalls, c.ID)
 		case "tool_result":
 			var c ToolResultContent
 			if err := json.Unmarshal(e.Content, &c); err != nil {
-				return nil, nil, err
-			}
-			// If a later user turn has already been sent and cached with this
-			// tool call's inline placeholder result (and a background timeout
-			// arrived later), or if an earlier persisted compaction has already
-			// sealed (and potentially summarized away) the originating turn,
-			// surface the outcome at its chronological tail position in Pass 2
-			// instead of mutating or losing it on the historical tool_call.
-			if sealedByCompaction[c.ID] || (sealedByLaterTurn[c.ID] && isApprovalTimeoutResult(c.Text)) {
-				lateUpdates[i] = c
-				continue
+				return toolResultSelection{}, err
 			}
 			outOfOrder := !seenCall[c.ID]
+			alreadySawResult := seenResult[c.ID]
+			seenResult[c.ID] = true
 			// Keep the prior choice only when it's out-of-order and this one
 			// isn't; otherwise this result wins.
-			if prevOOO, exists := chosenOutOfOrder[c.ID]; exists && prevOOO && !outOfOrder {
+			if prevOOO, exists := sel.chosenOOO[c.ID]; exists && prevOOO && !outOfOrder {
 				continue
 			}
-			chosenResult[c.ID] = c
-			chosenOutOfOrder[c.ID] = outOfOrder
+			sel.chosen[c.ID] = c
+			sel.chosenIdx[c.ID] = i
+			sel.chosenOOO[c.ID] = outOfOrder
+			sel.isOutOfBandResolution[c.ID] = outOfOrder || alreadySawResult
 		}
 	}
-	return chosenResult, lateUpdates, nil
+	return sel, nil
+}
+
+func hasToolCallIDInMessages(messages []fantasy.Message, callID string) bool {
+	for _, m := range messages {
+		if m.Role != fantasy.MessageRoleAssistant {
+			continue
+		}
+		for _, part := range m.Content {
+			if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok && tc.ToolCallID == callID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func extractSingleToolExchange(messages []fantasy.Message, callID string) ([]fantasy.Message, bool) {
+	var callPart fantasy.ToolCallPart
+	var foundCall bool
+	var resultPart fantasy.ToolResultPart
+	var foundResult bool
+	for _, m := range messages {
+		for _, part := range m.Content {
+			if !foundCall && m.Role == fantasy.MessageRoleAssistant {
+				if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok && tc.ToolCallID == callID {
+					callPart = tc
+					foundCall = true
+				}
+			}
+			if !foundResult && m.Role == fantasy.MessageRoleTool {
+				if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok && tr.ToolCallID == callID {
+					resultPart = tr
+					foundResult = true
+				}
+			}
+		}
+	}
+	if !foundCall || !foundResult {
+		return nil, false
+	}
+	return []fantasy.Message{
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{callPart}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{resultPart}},
+	}, true
+}
+
+func applyTurnSummaryCompactions(out []fantasy.Message, summaryIdx, lastUserIdx, lastSummaryIdx int, compactions []agentcore.CompactionRecord, sel toolResultSelection, deferred map[int][][]fantasy.Message) []fantasy.Message {
+	compacted := agentcore.ApplyCompactionRecords(out, compactions)
+	for callID, resIdx := range sel.chosenIdx {
+		res := sel.chosen[callID]
+		if !sel.isOutOfBandResolution[callID] || strings.HasPrefix(res.Text, "APPROVAL_REQUIRED:") {
+			continue
+		}
+		postCompactionResolution := resIdx > summaryIdx
+		midTurnResolution := lastUserIdx > lastSummaryIdx && resIdx > lastUserIdx
+		sameTurnOOOResolution := sel.chosenOOO[callID] && sel.firstSummaryIdx[callID] == summaryIdx
+		if !postCompactionResolution && !midTurnResolution && !sameTurnOOOResolution {
+			continue
+		}
+		if !hasToolCallIDInMessages(out, callID) || hasToolCallIDInMessages(compacted, callID) {
+			continue
+		}
+		pair, ok := extractSingleToolExchange(out, callID)
+		if !ok {
+			continue
+		}
+		if postCompactionResolution {
+			deferred[resIdx] = append(deferred[resIdx], pair)
+		} else {
+			compacted = append(compacted, pair...)
+		}
+	}
+	return compacted
 }
 
 // replayHistory converts stored HistoryEntry rows back into fantasy.Message
@@ -377,10 +396,12 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 	}
 	effective := entries[startIdx:]
 
-	chosenResult, lateTimeouts, err := selectToolResults(effective)
+	sel, err := selectToolResults(effective)
 	if err != nil {
 		return nil, err
 	}
+	chosenResult := sel.chosen
+	deferredExchanges := map[int][][]fantasy.Message{}
 
 	var out []fantasy.Message
 	var pendingAssistant []fantasy.MessagePart
@@ -424,6 +445,8 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 		pendingAssistant = nil
 	}
 
+	lastUserIdx := -1
+	lastSummaryIdx := -1
 	for i, e := range effective {
 		switch e.Type {
 		case "summary":
@@ -456,6 +479,7 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 			switch e.Role {
 			case "user":
 				flushAssistant()
+				lastUserIdx = i
 				parts := loadHistoryImageParts(c.Images, uploadsRoot)
 				// The model sees what it saw the first time: the user's text
 				// plus that turn's injected context (rows written before
@@ -473,8 +497,9 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 			var c TurnSummaryContent
 			if err := json.Unmarshal(e.Content, &c); err == nil && len(c.Compactions) > 0 {
 				flushAssistant()
-				out = agentcore.ApplyCompactionRecords(out, c.Compactions)
+				out = applyTurnSummaryCompactions(out, i, lastUserIdx, lastSummaryIdx, c.Compactions, sel, deferredExchanges)
 			}
+			lastSummaryIdx = i
 			continue
 		case "reasoning", EntryTypeSummaryBoundary, EntryTypeNotice:
 			// UI-facing only; never replayed to the model. Reasoning parts
@@ -501,17 +526,14 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 			// Close the current assistant step; flushAssistant emits the
 			// paired result (chosen in pass 1). The stored result row itself
 			// is not emitted here — doing so would double-emit results and
-			// break on out-of-order rows. When a late approval timeout arrived
-			// after a subsequent user turn had already sealed the original
-			// turn's prefix, surface the timeout here at its chronological tail
-			// position so the model knows the earlier approval expired without
-			// mutating the historical turn's cached tool_result.
+			// break on out-of-order rows. When a tool call was removed by an
+			// earlier turn's persisted compaction before this resolution row
+			// arrived, applyTurnSummaryCompactions deferred the call+result
+			// exchange to this index so it still appears at its chronological
+			// position in Role=assistant + Role=tool.
 			flushAssistant()
-			if lt, ok := lateTimeouts[i]; ok {
-				out = append(out, fantasy.NewUserMessage(fmt.Sprintf(
-					"[approval update — tool call %s (%s): %s]",
-					lt.ID, lt.Name, lt.Text,
-				)))
+			for _, pair := range deferredExchanges[i] {
+				out = append(out, pair...)
 			}
 		}
 	}

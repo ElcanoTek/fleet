@@ -138,14 +138,6 @@ type RunConfig struct {
 	// (scheduled, sub-agent child) leaves it false and gets the tail, which is
 	// cache-stable there because the whole run is one append-only transcript.
 	RuntimeDateInInput bool
-
-	// SeedLastStepInputTokens, when positive, is the provider-measured input
-	// token count of the previous turn's final step in the same conversation.
-	// Consumed on the run's first pre-round context-pressure check so a chat
-	// turn whose history already crossed (or with the new user message crosses)
-	// the compaction threshold compacts before Step 1 rather than relying on the
-	// uncalibrated chars/4 fallback and compacting mid-turn after Step 1.
-	SeedLastStepInputTokens int
 }
 
 // Deps are the run dependencies: the four seams plus the model handles, MCP
@@ -1044,21 +1036,20 @@ func runRemediationHints(cfg RunConfig) RemediationHints {
 func newRunEngine(cfg RunConfig, deps Deps, logSession *LogSession) *engine {
 	fallbackModels := runFallbackModels(deps)
 	eng := &engine{
-		model:                   deps.Model,
-		fallbackModels:          fallbackModels,
-		resilience:              loadResilienceConfigFor(cfg.EnvPrefix),
-		logSession:              logSession,
-		onRetry:                 newRetryLogger(logSession),
-		temperature:             cfg.Temperature,
-		envPrefix:               cfg.EnvPrefix,
-		compactionSummarizer:    deps.CompactionSummarizer,
-		usageReporter:           deps.UsageReporter,
-		steerSource:             deps.SteerSource,
-		maxIterations:           cfg.MaxIterations,
-		healthRegistry:          deps.HealthRegistry,
-		requireCompactionOptIn:  cfg.RequireCompactionOptIn,
-		thinkingConfig:          cfg.ThinkingConfig,
-		seedLastStepInputTokens: cfg.SeedLastStepInputTokens,
+		model:                  deps.Model,
+		fallbackModels:         fallbackModels,
+		resilience:             loadResilienceConfigFor(cfg.EnvPrefix),
+		logSession:             logSession,
+		onRetry:                newRetryLogger(logSession),
+		temperature:            cfg.Temperature,
+		envPrefix:              cfg.EnvPrefix,
+		compactionSummarizer:   deps.CompactionSummarizer,
+		usageReporter:          deps.UsageReporter,
+		steerSource:            deps.SteerSource,
+		maxIterations:          cfg.MaxIterations,
+		healthRegistry:         deps.HealthRegistry,
+		requireCompactionOptIn: cfg.RequireCompactionOptIn,
+		thinkingConfig:         cfg.ThinkingConfig,
 	}
 	if len(fallbackModels) > 0 {
 		eng.fallbackModel = fallbackModels[0]

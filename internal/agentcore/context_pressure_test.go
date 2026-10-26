@@ -543,16 +543,15 @@ func TestRun_ContextPressure_UnsplittableHistoryStillWarns(t *testing.T) {
 	}
 }
 
-func TestRun_SeedLastStepInputTokens_CompactsRound0AndRecordsReplayableCompaction(t *testing.T) {
-	slug := "ctx209-seeded-round0"
+func TestRun_CompactionRecordsReplayIdenticallyAndExcludePlanReannounce(t *testing.T) {
+	slug := "ctx209-replayable-compaction"
 	recordContextMax(slug, testContextWindow)
-	initialMsgs := fillerMessages(10, 20)
+	initialMsgs := fillerMessages(10, 38_000) // ~95K tokens -> triggers round-0 compaction
 	model := &capturingModel{slug: slug, inputByCall: []int{40_000}}
 	obs := &captureObserver{}
 	res, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:               CanonicalEnvPrefix,
-		RuntimeDateInInput:      true,
-		SeedLastStepInputTokens: 95_000, // previous turn's provider-reported last-step tokens
+		EnvPrefix:          CanonicalEnvPrefix,
+		RuntimeDateInInput: true,
 	}, Deps{
 		Input:    historyInput{system: "s", msgs: initialMsgs, label: "seed"},
 		Observer: obs,
@@ -564,7 +563,7 @@ func TestRun_SeedLastStepInputTokens_CompactsRound0AndRecordsReplayableCompactio
 		t.Fatalf("Run: %v", err)
 	}
 	if !hasEvent(obs.events, evtContextCompacted) {
-		t.Fatalf("expected round-0 compaction driven by SeedLastStepInputTokens, got %v", obs.events)
+		t.Fatalf("expected round-0 compaction, got %v", obs.events)
 	}
 	if len(res.Compactions) != 1 {
 		t.Fatalf("expected 1 recorded CompactionRecord on Result, got %d", len(res.Compactions))
@@ -578,6 +577,40 @@ func TestRun_SeedLastStepInputTokens_CompactsRound0AndRecordsReplayableCompactio
 	for i := range replayed {
 		if msgText(replayed[i]) != msgText(sentRound0[i]) {
 			t.Errorf("message[%d] mismatch after ApplyCompactionRecords:\n got: %q\nwant: %q", i, msgText(replayed[i]), msgText(sentRound0[i]))
+		}
+	}
+
+	// Verify that a run-local plan reannouncement injected after the first
+	// compaction does not shift the persisted offsets of a second compaction.
+	liveWithPlan := make([]fantasy.Message, 0, len(sentRound0)+5)
+	liveWithPlan = append(liveWithPlan, sentRound0[:2]...)
+	liveWithPlan = append(liveWithPlan, fantasy.NewUserMessage(planReannouncePrefix+"] Open plan item"))
+	liveWithPlan = append(liveWithPlan, sentRound0[2:]...)
+	liveWithPlan = append(liveWithPlan,
+		fantasy.NewUserMessage("extra 1"),
+		fantasy.NewUserMessage("extra 2"),
+		fantasy.NewUserMessage("extra 3"),
+		fantasy.NewUserMessage("extra 4"),
+	)
+	eng := &engine{logSession: NewLogSession()}
+	second := eng.proactiveCompactKeeping(context.Background(), liveWithPlan, liveWithPlan)
+	if !second.compacted || len(eng.compactions) != 1 {
+		t.Fatalf("expected second compaction to record 1 CompactionRecord, got compacted=%v len=%d", second.compacted, len(eng.compactions))
+	}
+	planFreeBeforeSecond := append(append([]fantasy.Message(nil), replayed...),
+		fantasy.NewUserMessage("extra 1"),
+		fantasy.NewUserMessage("extra 2"),
+		fantasy.NewUserMessage("extra 3"),
+		fantasy.NewUserMessage("extra 4"),
+	)
+	replayedAfterSecond := ApplyCompactionRecords(planFreeBeforeSecond, eng.compactions)
+	wantPlanFree := dropPlanReannounceMessages(second.messages)
+	if len(replayedAfterSecond) != len(wantPlanFree) {
+		t.Fatalf("second compaction replay len = %d, want %d", len(replayedAfterSecond), len(wantPlanFree))
+	}
+	for i := range replayedAfterSecond {
+		if msgText(replayedAfterSecond[i]) != msgText(wantPlanFree[i]) {
+			t.Errorf("second compaction message[%d] mismatch:\n got: %q\nwant: %q", i, msgText(replayedAfterSecond[i]), msgText(wantPlanFree[i]))
 		}
 	}
 }

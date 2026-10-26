@@ -41,11 +41,7 @@ type TurnConfig struct {
 	// (assembleTurnMessages); it becomes agentcore.RunConfig.RuntimeDateInInput.
 	// False for callers that build Messages themselves: Run appends the note.
 	RuntimeDateInMessages bool
-	// SeedLastStepInputTokens is the provider-measured input token count of
-	// the previous turn's final step in the same conversation, wired into
-	// agentcore.RunConfig.SeedLastStepInputTokens.
-	SeedLastStepInputTokens int
-	Label                   string
+	Label                 string
 	// ConversationID is operator-only panic attribution for the governed run.
 	// It is never added to the model prompt or tool arguments.
 	ConversationID string
@@ -234,22 +230,21 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 	ApplyMCPOverlayWithBase(&deps, tc.MCPClient, tc.MCPBroker, tc.MCPCatalog, tc.Overlay)
 
 	cfg := agentcore.RunConfig{
-		ConversationID:          tc.ConversationID,
-		EnvPrefix:               agentcore.CanonicalEnvPrefix,
-		Temperature:             tc.Temperature,
-		MaxCompletionTokens:     tc.MaxTokens,
-		MaxIterations:           tc.MaxIterations,
-		NativeTools:             nativeTools,
-		Allowlist:               tc.Allowlist,
-		OptionalServers:         tc.OptionalServers,
-		Selection:               tc.Selection,
-		PersonaName:             tc.Persona,
-		PersonaPolicy:           tc.PersonaPolicy,
-		HiddenToolSuffixes:      tc.HiddenToolSuffixes,
-		ProviderHeaders:         agentcore.DefaultProviderHeaders,
-		ThinkingConfig:          tc.ThinkingConfig,
-		RuntimeDateInInput:      tc.RuntimeDateInMessages,
-		SeedLastStepInputTokens: tc.SeedLastStepInputTokens,
+		ConversationID:      tc.ConversationID,
+		EnvPrefix:           agentcore.CanonicalEnvPrefix,
+		Temperature:         tc.Temperature,
+		MaxCompletionTokens: tc.MaxTokens,
+		MaxIterations:       tc.MaxIterations,
+		NativeTools:         nativeTools,
+		Allowlist:           tc.Allowlist,
+		OptionalServers:     tc.OptionalServers,
+		Selection:           tc.Selection,
+		PersonaName:         tc.Persona,
+		PersonaPolicy:       tc.PersonaPolicy,
+		HiddenToolSuffixes:  tc.HiddenToolSuffixes,
+		ProviderHeaders:     agentcore.DefaultProviderHeaders,
+		ThinkingConfig:      tc.ThinkingConfig,
+		RuntimeDateInInput:  tc.RuntimeDateInMessages,
 	}
 	return agentcore.Run(ctx, agentcore.ModeInteractive, cfg, deps)
 }

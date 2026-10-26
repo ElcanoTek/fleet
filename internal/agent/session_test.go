@@ -440,58 +440,11 @@ func TestReplayHistory_AppliesPersistedTurnCompactions(t *testing.T) {
 	}
 }
 
-func TestReplayHistory_LateApprovalTimeoutDoesNotMutateSealedTurnPrefix(t *testing.T) {
-	entries := []HistoryEntry{
-		mustEntry("user", "text", TextContent{Text: "turn 1: stage email"}),
-		mustEntry("assistant", "tool_call", ToolCallContent{ID: "call_stage", Name: "send_email", Input: `{}`}),
-		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_stage", Name: "send_email", Text: "APPROVAL_REQUIRED: staged card 1", IsErr: true}),
-		mustEntry("assistant", "text", TextContent{Text: "I staged the email for your approval."}),
-		mustEntry("assistant", "turn_summary", TurnSummaryContent{Model: "anthropic/claude-opus-4.7"}),
-		// User continues chatting on Turn 2 without clicking the approval card.
-		mustEntry("user", "text", TextContent{Text: "turn 2: actually let's check the numbers first"}),
-		mustEntry("assistant", "text", TextContent{Text: "Here are the numbers."}),
-		mustEntry("assistant", "turn_summary", TurnSummaryContent{Model: "anthropic/claude-opus-4.7"}),
-		// Later, the background sweeper expires the untouched card from Turn 1.
-		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_stage", Name: "send_email", Text: "Approval timed out — the action was not run.", IsErr: true}),
-	}
-
-	msgs, err := replayHistory(entries, "")
-	if err != nil {
-		t.Fatalf("replayHistory: %v", err)
-	}
-	assertWellFormedToolPairs(t, msgs)
-	txt, isErr, ok := toolResultTextFor(t, msgs, "call_stage")
-	if !ok || !isErr || !contains([]byte(txt), "APPROVAL_REQUIRED") {
-		t.Errorf("sealed turn tool_result = (%q, isErr=%v, ok=%v); want original APPROVAL_REQUIRED preserved so cached prefix is not mutated", txt, isErr, ok)
-	}
-	lastMsgPayload, _ := json.Marshal(msgs[len(msgs)-1])
-	if !contains(lastMsgPayload, "[approval update — tool call call_stage (send_email): Approval timed out") {
-		t.Errorf("expected late timeout to surface at tail of replay, got %s", string(lastMsgPayload))
-	}
-
-	// Contrast: when the timeout happens BEFORE any subsequent user turn, it
-	// SHOULD replace the inline placeholder so the immediate timeout-resume
-	// turn sees that the card timed out.
-	immediateTimeoutEntries := []HistoryEntry{
-		mustEntry("user", "text", TextContent{Text: "turn 1: stage email"}),
-		mustEntry("assistant", "tool_call", ToolCallContent{ID: "call_stage", Name: "send_email", Input: `{}`}),
-		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_stage", Name: "send_email", Text: "APPROVAL_REQUIRED: staged card 1", IsErr: true}),
-		mustEntry("assistant", "text", TextContent{Text: "I staged the email for your approval."}),
-		mustEntry("assistant", "turn_summary", TurnSummaryContent{Model: "anthropic/claude-opus-4.7"}),
-		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_stage", Name: "send_email", Text: "Approval timed out — the action was not run.", IsErr: true}),
-	}
-	msgs2, err := replayHistory(immediateTimeoutEntries, "")
-	if err != nil {
-		t.Fatalf("replayHistory immediate timeout: %v", err)
-	}
-	txt2, _, ok2 := toolResultTextFor(t, msgs2, "call_stage")
-	if !ok2 || !contains([]byte(txt2), "Approval timed out") {
-		t.Errorf("unsealed turn tool_result = %q; want timeout text applied", txt2)
-	}
-
-	// When an earlier turn's staged call was compacted away before the user
-	// approved/declined it, the late non-timeout resolution must also surface at
-	// the replay tail so it is not dropped with the compacted middle.
+func TestReplayHistory_PreservesApprovalOutcomesAcrossCompaction(t *testing.T) {
+	// 1. Post-compaction approval resolution: a staged call in Turn 1 is
+	// compacted away at Turn 2's turn_summary, and later settled. The resolved
+	// exchange must survive at its chronological tail position in Role=assistant
+	// + Role=tool (never Role=user).
 	postCompactionApprovalEntries := []HistoryEntry{
 		mustEntry("user", "text", TextContent{Text: "turn 1 head", RuntimeToday: "2026-10-26"}),
 		mustEntry("assistant", "tool_call", ToolCallContent{ID: "call_compacted", Name: "send_email", Input: `{}`}),
@@ -511,47 +464,51 @@ func TestReplayHistory_LateApprovalTimeoutDoesNotMutateSealedTurnPrefix(t *testi
 		}),
 		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_compacted", Name: "send_email", Text: `{"status":"sent"}`, IsErr: false}),
 	}
-	msgs3, err := replayHistory(postCompactionApprovalEntries, "")
+	msgs, err := replayHistory(postCompactionApprovalEntries, "")
 	if err != nil {
 		t.Fatalf("replayHistory post-compaction approval: %v", err)
 	}
-	tailPayload, _ := json.Marshal(msgs3[len(msgs3)-1])
-	if !contains(tailPayload, `[approval update — tool call call_compacted (send_email): {\"status\":\"sent\"}]`) {
-		t.Errorf("expected post-compaction approval outcome at tail, got %s", string(tailPayload))
+	assertWellFormedToolPairs(t, msgs)
+	txt, isErr, ok := toolResultTextFor(t, msgs, "call_compacted")
+	if !ok || isErr || !contains([]byte(txt), `"status":"sent"`) {
+		t.Errorf("post-compaction approval result = (%q, isErr=%v, ok=%v); want sent outcome in Role=tool", txt, isErr, ok)
 	}
-}
+	if msgs[len(msgs)-1].Role != fantasy.MessageRoleTool {
+		t.Errorf("tail message role = %q, want tool (never user)", msgs[len(msgs)-1].Role)
+	}
 
-func TestLastTurnStepInputTokens(t *testing.T) {
-	entries := []HistoryEntry{
-		mustEntry("user", "text", TextContent{Text: "hi"}),
+	// 2. Out-of-order approval resolution on a turn that itself compacts the
+	// call: the resolution row lands before the tool_call, and the turn's
+	// turn_summary compacts the middle. The resolved exchange must still
+	// survive in Role=assistant + Role=tool.
+	oooCompactedEntries := []HistoryEntry{
+		mustEntry("user", "text", TextContent{Text: "turn 1 head", RuntimeToday: "2026-10-26"}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_ooo", Name: "send_email", Text: `{"status":"sent_ooo"}`, IsErr: false}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "call_ooo", Name: "send_email", Input: `{}`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_ooo", Name: "send_email", Text: "APPROVAL_REQUIRED: staged card", IsErr: true}),
+		mustEntry("assistant", "text", TextContent{Text: "Staged."}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "call_tail", Name: "bash", Input: `{"command":"true"}`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_tail", Name: "bash", Text: "ok", IsErr: false}),
+		mustEntry("assistant", "text", TextContent{Text: "Done."}),
 		mustEntry("assistant", "turn_summary", TurnSummaryContent{
-			Model:                "anthropic/claude-opus-4.7",
-			PromptTokens:         300_000,
-			PromptTokensLastStep: 145_000,
+			Model: "anthropic/claude-opus-4.7",
+			Compactions: []agentcore.CompactionRecord{
+				{
+					Head:    2,
+					Removed: 3, // call_ooo + result + "Staged."
+					Summary: "[context compaction — earlier messages summarized to fit context window]\n\nSummary.",
+				},
+			},
 		}),
 	}
-	if got := lastTurnStepInputTokens(entries, "anthropic/claude-opus-4.7"); got != 145_000 {
-		t.Errorf("same model: got %d, want 145000", got)
+	msgsOOO, err := replayHistory(oooCompactedEntries, "")
+	if err != nil {
+		t.Fatalf("replayHistory out-of-order compacted: %v", err)
 	}
-	if got := lastTurnStepInputTokens(entries, "openai/gpt-5.4"); got != 0 {
-		t.Errorf("different model should reset seed: got %d, want 0", got)
-	}
-	withSummary := append(append([]HistoryEntry(nil), entries...),
-		mustEntry("assistant", "summary", SummaryContent{Text: "reset"}),
-	)
-	if got := lastTurnStepInputTokens(withSummary, "anthropic/claude-opus-4.7"); got != 0 {
-		t.Errorf("manual summary after turn_summary should reset seed: got %d, want 0", got)
-	}
-	fallbackEntries := []HistoryEntry{
-		mustEntry("user", "text", TextContent{Text: "hi"}),
-		mustEntry("assistant", "turn_summary", TurnSummaryContent{
-			Model:                "anthropic/claude-opus-4.7",
-			SwappedToFallback:    true,
-			PromptTokensLastStep: 145_000,
-		}),
-	}
-	if got := lastTurnStepInputTokens(fallbackEntries, "anthropic/claude-opus-4.7"); got != 0 {
-		t.Errorf("fallback-served turn should not seed primary model: got %d, want 0", got)
+	assertWellFormedToolPairs(t, msgsOOO)
+	txtOOO, isErrOOO, okOOO := toolResultTextFor(t, msgsOOO, "call_ooo")
+	if !okOOO || isErrOOO || !contains([]byte(txtOOO), `"status":"sent_ooo"`) {
+		t.Errorf("out-of-order compacted result = (%q, isErr=%v, ok=%v); want sent_ooo outcome preserved", txtOOO, isErrOOO, okOOO)
 	}
 }
 
