@@ -218,6 +218,120 @@ type TurnSummaryContent struct {
 	// switch is the single biggest cause of "why did my cache just die"
 	// confusion.
 	Model string `json:"model,omitempty"`
+	// Compactions records any head/summary/tail context-window compactions
+	// (proactive or reactive) that ran during this turn. replayHistory
+	// applies them at this turn_summary boundary so subsequent turns send
+	// the exact post-compaction prefix (preserving the prompt cache on the
+	// compaction summary instead of reverting to the uncompacted history and
+	// re-running the uncached summarizer on every turn).
+	Compactions []agentcore.CompactionRecord `json:"compactions,omitempty"`
+}
+
+// lastTurnStepInputTokens returns the most recent turn_summary's
+// PromptTokensLastStep after the latest user-initiated summary reset so the
+// next turn's pre-round context-pressure check starts from the provider's
+// real token count rather than a chars/4 estimate. Returns 0 when no prior
+// measurement applies (e.g. first turn, right after a manual summary, after a
+// model switch, or after a turn that was cancelled mid-compaction).
+func lastTurnStepInputTokens(entries []HistoryEntry, currentModel string) int {
+	startIdx := 0
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Type == "summary" {
+			startIdx = i
+			break
+		}
+	}
+	for i := len(entries) - 1; i >= startIdx; i-- {
+		if entries[i].Type != "turn_summary" {
+			continue
+		}
+		var c TurnSummaryContent
+		if err := json.Unmarshal(entries[i].Content, &c); err != nil {
+			return 0
+		}
+		if c.Cancelled && len(c.Compactions) > 0 {
+			return 0
+		}
+		if c.Model != "" && currentModel != "" && c.Model != currentModel {
+			return 0
+		}
+		if c.PromptTokensLastStep > 0 {
+			return c.PromptTokensLastStep
+		}
+		return 0
+	}
+	return 0
+}
+
+// isApprovalTimeoutResult reports whether a tool_result text is the synthetic
+// outcome emitted when an approval card or display-only preview expires
+// without user action. Once the conversation has moved on to a subsequent user
+// turn, a late background expiry must not overwrite the historical turn's
+// inline "APPROVAL_REQUIRED" tool_result and invalidate the prompt cache prefix.
+func isApprovalTimeoutResult(text string) bool {
+	return strings.HasPrefix(text, "Approval timed out") ||
+		text == "Preview closed. It was display-only; nothing was sent."
+}
+
+// selectToolResults runs Pass 1 of replayHistory: it picks the authoritative
+// result for each tool-call id. A staged tool's outcome (send_email / risky
+// bash) is appended out-of-band when the user clicks Send, reusing the
+// original tool_call id — so a call can end up with TWO result rows: the
+// inline "APPROVAL_REQUIRED" placeholder the agent saw during the turn, and
+// the real outcome appended on approval. Worse, if the user clicks before the
+// turn that issued the call has been persisted, the resolution row lands
+// BEFORE its own tool_call in id order. A naive replay would then emit a
+// tool_result with no preceding tool_use (or two results for one call), which
+// every provider rejects. We mark a result "out of order" when its tool_call
+// hasn't been seen yet at that point in the stream; out-of-order results win
+// over inline ones, and among same-category results the later wins (covers the
+// common case where the resolution is appended after the placeholder). Pass 2
+// then emits exactly one result per call, paired with the call, regardless of
+// where the rows physically sit.
+func selectToolResults(effective []HistoryEntry) (map[string]ToolResultContent, error) {
+	chosenResult := map[string]ToolResultContent{}
+	chosenOutOfOrder := map[string]bool{}
+	seenCall := map[string]bool{}
+	sealedByLaterTurn := map[string]bool{}
+	for _, e := range effective {
+		switch e.Type {
+		case "text":
+			if e.Role == "user" {
+				for id := range chosenResult {
+					if seenCall[id] {
+						sealedByLaterTurn[id] = true
+					}
+				}
+			}
+		case entryTypeToolCall:
+			var c ToolCallContent
+			if err := json.Unmarshal(e.Content, &c); err != nil {
+				return nil, err
+			}
+			seenCall[c.ID] = true
+		case "tool_result":
+			var c ToolResultContent
+			if err := json.Unmarshal(e.Content, &c); err != nil {
+				return nil, err
+			}
+			// If a later user turn has already been sent and cached with this
+			// tool call's inline placeholder result, do not let a late
+			// background approval-expiry timeout retroactively rewrite the
+			// historical turn's tool_result in the middle of the cached prefix.
+			if sealedByLaterTurn[c.ID] && isApprovalTimeoutResult(c.Text) {
+				continue
+			}
+			outOfOrder := !seenCall[c.ID]
+			// Keep the prior choice only when it's out-of-order and this one
+			// isn't; otherwise this result wins.
+			if prevOOO, exists := chosenOutOfOrder[c.ID]; exists && prevOOO && !outOfOrder {
+				continue
+			}
+			chosenResult[c.ID] = c
+			chosenOutOfOrder[c.ID] = outOfOrder
+		}
+	}
+	return chosenResult, nil
 }
 
 // replayHistory converts stored HistoryEntry rows back into fantasy.Message
@@ -243,46 +357,9 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 	}
 	effective := entries[startIdx:]
 
-	// Pass 1: pick the authoritative result for each tool-call id. A staged
-	// tool's outcome (send_email / risky bash) is appended out-of-band when
-	// the user clicks Send, reusing the original tool_call id — so a call can
-	// end up with TWO result rows: the inline "APPROVAL_REQUIRED" placeholder
-	// the agent saw during the turn, and the real outcome appended on
-	// approval. Worse, if the user clicks before the turn that issued the
-	// call has been persisted, the resolution row lands BEFORE its own
-	// tool_call in id order. A naive replay would then emit a tool_result
-	// with no preceding tool_use (or two results for one call), which every
-	// provider rejects. We mark a result "out of order" when its tool_call
-	// hasn't been seen yet at that point in the stream; out-of-order results
-	// win over inline ones, and among same-category results the later wins
-	// (covers the common case where the resolution is appended after the
-	// placeholder). Pass 2 then emits exactly one result per call, paired
-	// with the call, regardless of where the rows physically sit.
-	chosenResult := map[string]ToolResultContent{}
-	chosenOutOfOrder := map[string]bool{}
-	seenCall := map[string]bool{}
-	for _, e := range effective {
-		switch e.Type {
-		case entryTypeToolCall:
-			var c ToolCallContent
-			if err := json.Unmarshal(e.Content, &c); err != nil {
-				return nil, err
-			}
-			seenCall[c.ID] = true
-		case "tool_result":
-			var c ToolResultContent
-			if err := json.Unmarshal(e.Content, &c); err != nil {
-				return nil, err
-			}
-			outOfOrder := !seenCall[c.ID]
-			// Keep the prior choice only when it's out-of-order and this one
-			// isn't; otherwise this result wins.
-			if prevOOO, exists := chosenOutOfOrder[c.ID]; exists && prevOOO && !outOfOrder {
-				continue
-			}
-			chosenResult[c.ID] = c
-			chosenOutOfOrder[c.ID] = outOfOrder
-		}
+	chosenResult, err := selectToolResults(effective)
+	if err != nil {
+		return nil, err
 	}
 
 	var out []fantasy.Message
@@ -372,10 +449,16 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 			case "assistant":
 				pendingAssistant = append(pendingAssistant, fantasy.TextPart{Text: c.Text})
 			}
-		case "reasoning", "turn_summary", EntryTypeSummaryBoundary, EntryTypeNotice:
+		case "turn_summary":
+			var c TurnSummaryContent
+			if err := json.Unmarshal(e.Content, &c); err == nil && len(c.Compactions) > 0 {
+				flushAssistant()
+				out = agentcore.ApplyCompactionRecords(out, c.Compactions)
+			}
+			continue
+		case "reasoning", EntryTypeSummaryBoundary, EntryTypeNotice:
 			// UI-facing only; never replayed to the model. Reasoning parts
-			// are rejected by providers outside their originating step,
-			// turn_summary is just our own cost/duration metadata, a
+			// are rejected by providers outside their originating step, a
 			// summary boundary only splits rendered messages, and a notice is
 			// written for the reader, not the model.
 			continue

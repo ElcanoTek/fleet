@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // TestReplayHistory_RoundTrip builds a plausible conversation history, replays
@@ -390,6 +391,121 @@ func TestTruncate(t *testing.T) {
 	}
 	if got := truncate("abcdefghij", 4); got != "abcd…[truncated]" {
 		t.Errorf("long: got %q", got)
+	}
+}
+
+func TestReplayHistory_AppliesPersistedTurnCompactions(t *testing.T) {
+	summaryMsg := "[context compaction — earlier messages summarized to fit context window]\n\nCondensed middle."
+	entries := []HistoryEntry{
+		mustEntry("user", "text", TextContent{Text: "turn 1 head", RuntimeToday: "2026-10-26"}),
+		mustEntry("assistant", "text", TextContent{Text: "turn 1 reply — should be compacted away"}),
+		mustEntry("user", "text", TextContent{Text: "turn 2 question — should be compacted away"}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "c2", Name: "bash", Input: `{"command":"pwd"}`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "c2", Name: "bash", Text: "/workspace"}),
+		mustEntry("assistant", "text", TextContent{Text: "turn 2 reply — kept in tail"}),
+		mustEntry("user", "text", TextContent{Text: "turn 3 question — triggers compaction"}),
+		mustEntry("assistant", "text", TextContent{Text: "turn 3 answer after compaction"}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{
+			Model:                "anthropic/claude-opus-4.7",
+			PromptTokensLastStep: 42_000,
+			Compactions: []agentcore.CompactionRecord{
+				{
+					Head:    2, // user + runtime_today note
+					Removed: 4, // turn 1 reply, turn 2 question, tool_call c2, tool_result c2
+					Summary: summaryMsg,
+				},
+			},
+		}),
+		mustEntry("user", "text", TextContent{Text: "turn 4 follow-up"}),
+	}
+
+	msgs, err := replayHistory(entries, "")
+	if err != nil {
+		t.Fatalf("replayHistory: %v", err)
+	}
+	assertWellFormedToolPairs(t, msgs)
+
+	payload, _ := json.Marshal(msgs)
+	if !contains(payload, "turn 1 head") {
+		t.Error("pinned head message should survive compaction replay")
+	}
+	if !contains(payload, "Condensed middle.") {
+		t.Error("persisted compaction summary should appear in replayed history")
+	}
+	if contains(payload, "turn 1 reply — should be compacted away") || contains(payload, "turn 2 question — should be compacted away") {
+		t.Error("messages in the compacted middle should not re-enter replayed history on turn 4")
+	}
+	if !contains(payload, "turn 2 reply — kept in tail") || !contains(payload, "turn 3 answer after compaction") || !contains(payload, "turn 4 follow-up") {
+		t.Error("kept tail and subsequent turns should remain in replayed history")
+	}
+}
+
+func TestReplayHistory_LateApprovalTimeoutDoesNotMutateSealedTurnPrefix(t *testing.T) {
+	entries := []HistoryEntry{
+		mustEntry("user", "text", TextContent{Text: "turn 1: stage email"}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "call_stage", Name: "send_email", Input: `{}`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_stage", Name: "send_email", Text: "APPROVAL_REQUIRED: staged card 1", IsErr: true}),
+		mustEntry("assistant", "text", TextContent{Text: "I staged the email for your approval."}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{Model: "anthropic/claude-opus-4.7"}),
+		// User continues chatting on Turn 2 without clicking the approval card.
+		mustEntry("user", "text", TextContent{Text: "turn 2: actually let's check the numbers first"}),
+		mustEntry("assistant", "text", TextContent{Text: "Here are the numbers."}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{Model: "anthropic/claude-opus-4.7"}),
+		// Later, the background sweeper expires the untouched card from Turn 1.
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_stage", Name: "send_email", Text: "Approval timed out — the action was not run.", IsErr: true}),
+	}
+
+	msgs, err := replayHistory(entries, "")
+	if err != nil {
+		t.Fatalf("replayHistory: %v", err)
+	}
+	assertWellFormedToolPairs(t, msgs)
+	txt, isErr, ok := toolResultTextFor(t, msgs, "call_stage")
+	if !ok || !isErr || !contains([]byte(txt), "APPROVAL_REQUIRED") {
+		t.Errorf("sealed turn tool_result = (%q, isErr=%v, ok=%v); want original APPROVAL_REQUIRED preserved so cached prefix is not mutated", txt, isErr, ok)
+	}
+
+	// Contrast: when the timeout happens BEFORE any subsequent user turn, it
+	// SHOULD replace the inline placeholder so the immediate timeout-resume
+	// turn sees that the card timed out.
+	immediateTimeoutEntries := []HistoryEntry{
+		mustEntry("user", "text", TextContent{Text: "turn 1: stage email"}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "call_stage", Name: "send_email", Input: `{}`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_stage", Name: "send_email", Text: "APPROVAL_REQUIRED: staged card 1", IsErr: true}),
+		mustEntry("assistant", "text", TextContent{Text: "I staged the email for your approval."}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{Model: "anthropic/claude-opus-4.7"}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_stage", Name: "send_email", Text: "Approval timed out — the action was not run.", IsErr: true}),
+	}
+	msgs2, err := replayHistory(immediateTimeoutEntries, "")
+	if err != nil {
+		t.Fatalf("replayHistory immediate timeout: %v", err)
+	}
+	txt2, _, ok2 := toolResultTextFor(t, msgs2, "call_stage")
+	if !ok2 || !contains([]byte(txt2), "Approval timed out") {
+		t.Errorf("unsealed turn tool_result = %q; want timeout text applied", txt2)
+	}
+}
+
+func TestLastTurnStepInputTokens(t *testing.T) {
+	entries := []HistoryEntry{
+		mustEntry("user", "text", TextContent{Text: "hi"}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{
+			Model:                "anthropic/claude-opus-4.7",
+			PromptTokens:         300_000,
+			PromptTokensLastStep: 145_000,
+		}),
+	}
+	if got := lastTurnStepInputTokens(entries, "anthropic/claude-opus-4.7"); got != 145_000 {
+		t.Errorf("same model: got %d, want 145000", got)
+	}
+	if got := lastTurnStepInputTokens(entries, "openai/gpt-5.4"); got != 0 {
+		t.Errorf("different model should reset seed: got %d, want 0", got)
+	}
+	withSummary := append(append([]HistoryEntry(nil), entries...),
+		mustEntry("assistant", "summary", SummaryContent{Text: "reset"}),
+	)
+	if got := lastTurnStepInputTokens(withSummary, "anthropic/claude-opus-4.7"); got != 0 {
+		t.Errorf("manual summary after turn_summary should reset seed: got %d, want 0", got)
 	}
 }
 

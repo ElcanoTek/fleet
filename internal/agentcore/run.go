@@ -138,6 +138,14 @@ type RunConfig struct {
 	// (scheduled, sub-agent child) leaves it false and gets the tail, which is
 	// cache-stable there because the whole run is one append-only transcript.
 	RuntimeDateInInput bool
+
+	// SeedLastStepInputTokens, when positive, is the provider-measured input
+	// token count of the previous turn's final step in the same conversation.
+	// Consumed on the run's first pre-round context-pressure check so a chat
+	// turn whose history already crossed (or with the new user message crosses)
+	// the compaction threshold compacts before Step 1 rather than relying on the
+	// uncalibrated chars/4 fallback and compacting mid-turn after Step 1.
+	SeedLastStepInputTokens int
 }
 
 // Deps are the run dependencies: the four seams plus the model handles, MCP
@@ -291,6 +299,10 @@ type Result struct {
 	// Usage is the accumulated token + cost accounting for the whole run.
 	Usage RunUsage
 
+	// Compactions lists the head/summary/tail compactions applied to the message
+	// history during this run, in the order they occurred.
+	Compactions []CompactionRecord
+
 	// AuditAborted is true when the run's last confirm_audit declared
 	// success=false. The agent is deliberately ALLOWED to finish after that —
 	// an abort is a conclusion, not a crash — so without this field the run is
@@ -443,6 +455,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	}
 
 	eng := newRunEngine(cfg, deps, logSession)
+	defer func() {
+		result.Compactions = eng.compactionsSnapshot()
+	}()
 
 	// basePrompt is the driver's system prompt as authored (persona, protocols,
 	// skills, notes). The live-registry section is appended below, once the
@@ -1029,20 +1044,21 @@ func runRemediationHints(cfg RunConfig) RemediationHints {
 func newRunEngine(cfg RunConfig, deps Deps, logSession *LogSession) *engine {
 	fallbackModels := runFallbackModels(deps)
 	eng := &engine{
-		model:                  deps.Model,
-		fallbackModels:         fallbackModels,
-		resilience:             loadResilienceConfigFor(cfg.EnvPrefix),
-		logSession:             logSession,
-		onRetry:                newRetryLogger(logSession),
-		temperature:            cfg.Temperature,
-		envPrefix:              cfg.EnvPrefix,
-		compactionSummarizer:   deps.CompactionSummarizer,
-		usageReporter:          deps.UsageReporter,
-		steerSource:            deps.SteerSource,
-		maxIterations:          cfg.MaxIterations,
-		healthRegistry:         deps.HealthRegistry,
-		requireCompactionOptIn: cfg.RequireCompactionOptIn,
-		thinkingConfig:         cfg.ThinkingConfig,
+		model:                   deps.Model,
+		fallbackModels:          fallbackModels,
+		resilience:              loadResilienceConfigFor(cfg.EnvPrefix),
+		logSession:              logSession,
+		onRetry:                 newRetryLogger(logSession),
+		temperature:             cfg.Temperature,
+		envPrefix:               cfg.EnvPrefix,
+		compactionSummarizer:    deps.CompactionSummarizer,
+		usageReporter:           deps.UsageReporter,
+		steerSource:             deps.SteerSource,
+		maxIterations:           cfg.MaxIterations,
+		healthRegistry:          deps.HealthRegistry,
+		requireCompactionOptIn:  cfg.RequireCompactionOptIn,
+		thinkingConfig:          cfg.ThinkingConfig,
+		seedLastStepInputTokens: cfg.SeedLastStepInputTokens,
 	}
 	if len(fallbackModels) > 0 {
 		eng.fallbackModel = fallbackModels[0]

@@ -1896,24 +1896,25 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		Messages:     messages,
 		// assembleTurnMessages ended Messages with this turn's persisted
 		// runtime_today note; Run must not add a request-local one.
-		RuntimeDateInMessages: true,
-		Label:                 in.ConversationID,
-		ConversationID:        in.ConversationID,
-		Model:                 model,
-		FallbackModels:        providerFallbacks,
-		Temperature:           m.config.LiveTemperature(),
-		MaxTokens:             maxTokens,
-		MaxIterations:         m.config.LiveMaxIterations(),
-		NativeTools:           turnTools.Tools,
-		Sandbox:               sb,
-		MCPClient:             m.mcpClient,
-		MCPBroker:             turnBroker,
-		MCPCatalog:            turnCatalog,
-		Allowlist:             agentcore.MCPAllowlist(turnAllowlist),
-		OptionalServers:       agentcore.MCPOptionalSet(turnOptional),
-		Selection:             selection,
-		Persona:               persona,
-		PersonaPolicy:         m.personaPolicy(persona),
+		RuntimeDateInMessages:   true,
+		SeedLastStepInputTokens: lastTurnStepInputTokens(in.History, modelSlug),
+		Label:                   in.ConversationID,
+		ConversationID:          in.ConversationID,
+		Model:                   model,
+		FallbackModels:          providerFallbacks,
+		Temperature:             m.config.LiveTemperature(),
+		MaxTokens:               maxTokens,
+		MaxIterations:           m.config.LiveMaxIterations(),
+		NativeTools:             turnTools.Tools,
+		Sandbox:                 sb,
+		MCPClient:               m.mcpClient,
+		MCPBroker:               turnBroker,
+		MCPCatalog:              turnCatalog,
+		Allowlist:               agentcore.MCPAllowlist(turnAllowlist),
+		OptionalServers:         agentcore.MCPOptionalSet(turnOptional),
+		Selection:               selection,
+		Persona:                 persona,
+		PersonaPolicy:           m.personaPolicy(persona),
 		// agent_policy.interactive_hidden_tools: tools a chat turn neither
 		// offers nor calls (scheduled runs keep them).
 		HiddenToolSuffixes: hiddenTools,
@@ -1992,6 +1993,7 @@ func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEnt
 		DurationMs:           int(time.Since(startedAt).Milliseconds()),
 		Cancelled:            true,
 		Model:                modelSlug,
+		Compactions:          res.Compactions,
 	}
 	newHistory = append(newHistory, mustEntry("assistant", "turn_summary", summary))
 	// Same terminal gate as the completed path (#798): partial work commits
@@ -2084,6 +2086,7 @@ func (m *Manager) completedTurnResult(res agentcore.Result, userEntry HistoryEnt
 		CacheCreationTokens:  usage.CacheCreationTokens,
 		DurationMs:           int(time.Since(startedAt).Milliseconds()),
 		Model:                modelSlug,
+		Compactions:          res.Compactions,
 	}
 	newHistory = append(newHistory, mustEntry("assistant", "turn_summary", summary))
 

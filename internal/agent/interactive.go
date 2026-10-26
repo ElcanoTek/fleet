@@ -41,7 +41,11 @@ type TurnConfig struct {
 	// (assembleTurnMessages); it becomes agentcore.RunConfig.RuntimeDateInInput.
 	// False for callers that build Messages themselves: Run appends the note.
 	RuntimeDateInMessages bool
-	Label                 string
+	// SeedLastStepInputTokens is the provider-measured input token count of
+	// the previous turn's final step in the same conversation, wired into
+	// agentcore.RunConfig.SeedLastStepInputTokens.
+	SeedLastStepInputTokens int
+	Label                   string
 	// ConversationID is operator-only panic attribution for the governed run.
 	// It is never added to the model prompt or tool arguments.
 	ConversationID string
@@ -230,21 +234,22 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 	ApplyMCPOverlayWithBase(&deps, tc.MCPClient, tc.MCPBroker, tc.MCPCatalog, tc.Overlay)
 
 	cfg := agentcore.RunConfig{
-		ConversationID:      tc.ConversationID,
-		EnvPrefix:           agentcore.CanonicalEnvPrefix,
-		Temperature:         tc.Temperature,
-		MaxCompletionTokens: tc.MaxTokens,
-		MaxIterations:       tc.MaxIterations,
-		NativeTools:         nativeTools,
-		Allowlist:           tc.Allowlist,
-		OptionalServers:     tc.OptionalServers,
-		Selection:           tc.Selection,
-		PersonaName:         tc.Persona,
-		PersonaPolicy:       tc.PersonaPolicy,
-		HiddenToolSuffixes:  tc.HiddenToolSuffixes,
-		ProviderHeaders:     agentcore.DefaultProviderHeaders,
-		ThinkingConfig:      tc.ThinkingConfig,
-		RuntimeDateInInput:  tc.RuntimeDateInMessages,
+		ConversationID:          tc.ConversationID,
+		EnvPrefix:               agentcore.CanonicalEnvPrefix,
+		Temperature:             tc.Temperature,
+		MaxCompletionTokens:     tc.MaxTokens,
+		MaxIterations:           tc.MaxIterations,
+		NativeTools:             nativeTools,
+		Allowlist:               tc.Allowlist,
+		OptionalServers:         tc.OptionalServers,
+		Selection:               tc.Selection,
+		PersonaName:             tc.Persona,
+		PersonaPolicy:           tc.PersonaPolicy,
+		HiddenToolSuffixes:      tc.HiddenToolSuffixes,
+		ProviderHeaders:         agentcore.DefaultProviderHeaders,
+		ThinkingConfig:          tc.ThinkingConfig,
+		RuntimeDateInInput:      tc.RuntimeDateInMessages,
+		SeedLastStepInputTokens: tc.SeedLastStepInputTokens,
 	}
 	return agentcore.Run(ctx, agentcore.ModeInteractive, cfg, deps)
 }
@@ -350,7 +355,7 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 	prepare := chainPrepareSteps(
 		agentcore.ToolCallInputSanitizeStep(),
 		agentcore.ModelContextBudgetStep(in.SystemPrompt, in.Tools, tc.MaxTokens),
-		agentcore.PromptCachingStep(tc.Model.Model()),
+		agentcore.PromptCachingStep(tc.Model.Model(), agentcore.WithCompactionSummaryBreakpoint(nil)),
 	)
 	// Stream under the run's own ceilings: the budget guard blocks the next
 	// paid completion once the cost/token ceiling is hit — without it this
@@ -450,7 +455,7 @@ func streamForceFinalSummary(ctx context.Context, tc TurnConfig, in agentcore.Fi
 		fantasy.WithPrepareStep(chainPrepareSteps(
 			agentcore.ToolCallInputSanitizeStep(),
 			agentcore.ModelContextBudgetStep(in.SystemPrompt, nil, tc.MaxTokens),
-			agentcore.PromptCachingStep(tc.Model.Model()),
+			agentcore.PromptCachingStep(tc.Model.Model(), agentcore.WithCompactionSummaryBreakpoint(nil)),
 		)),
 	)
 	maxTokens := int64(tc.MaxTokens)

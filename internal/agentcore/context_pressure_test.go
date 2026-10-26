@@ -542,3 +542,42 @@ func TestRun_ContextPressure_UnsplittableHistoryStillWarns(t *testing.T) {
 		t.Errorf("a single message cannot be compacted, got %v", obs.events)
 	}
 }
+
+func TestRun_SeedLastStepInputTokens_CompactsRound0AndRecordsReplayableCompaction(t *testing.T) {
+	slug := "ctx209-seeded-round0"
+	recordContextMax(slug, testContextWindow)
+	initialMsgs := fillerMessages(10, 20)
+	model := &capturingModel{slug: slug, inputByCall: []int{40_000}}
+	obs := &captureObserver{}
+	res, err := Run(context.Background(), ModeInteractive, RunConfig{
+		EnvPrefix:               CanonicalEnvPrefix,
+		RuntimeDateInInput:      true,
+		SeedLastStepInputTokens: 95_000, // previous turn's provider-reported last-step tokens
+	}, Deps{
+		Input:    historyInput{system: "s", msgs: initialMsgs, label: "seed"},
+		Observer: obs,
+		Policy:   NewInteractivePolicy(0, 0, nil, nil),
+		Executor: &stubExecutor{},
+		Model:    model,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !hasEvent(obs.events, evtContextCompacted) {
+		t.Fatalf("expected round-0 compaction driven by SeedLastStepInputTokens, got %v", obs.events)
+	}
+	if len(res.Compactions) != 1 {
+		t.Fatalf("expected 1 recorded CompactionRecord on Result, got %d", len(res.Compactions))
+	}
+	// call.Prompt[0] is the system message; call.Prompt[1:] is the compacted messages slice.
+	sentRound0 := model.call(0)[1:]
+	replayed := ApplyCompactionRecords(initialMsgs, res.Compactions)
+	if len(replayed) != len(sentRound0) {
+		t.Fatalf("ApplyCompactionRecords len = %d, want %d (exact match with round-0 prompt)", len(replayed), len(sentRound0))
+	}
+	for i := range replayed {
+		if msgText(replayed[i]) != msgText(sentRound0[i]) {
+			t.Errorf("message[%d] mismatch after ApplyCompactionRecords:\n got: %q\nwant: %q", i, msgText(replayed[i]), msgText(sentRound0[i]))
+		}
+	}
+}
