@@ -464,6 +464,10 @@ func TestReplayHistory_LateApprovalTimeoutDoesNotMutateSealedTurnPrefix(t *testi
 	if !ok || !isErr || !contains([]byte(txt), "APPROVAL_REQUIRED") {
 		t.Errorf("sealed turn tool_result = (%q, isErr=%v, ok=%v); want original APPROVAL_REQUIRED preserved so cached prefix is not mutated", txt, isErr, ok)
 	}
+	lastMsgPayload, _ := json.Marshal(msgs[len(msgs)-1])
+	if !contains(lastMsgPayload, "[approval update — tool call call_stage (send_email): Approval timed out") {
+		t.Errorf("expected late timeout to surface at tail of replay, got %s", string(lastMsgPayload))
+	}
 
 	// Contrast: when the timeout happens BEFORE any subsequent user turn, it
 	// SHOULD replace the inline placeholder so the immediate timeout-resume
@@ -506,6 +510,17 @@ func TestLastTurnStepInputTokens(t *testing.T) {
 	)
 	if got := lastTurnStepInputTokens(withSummary, "anthropic/claude-opus-4.7"); got != 0 {
 		t.Errorf("manual summary after turn_summary should reset seed: got %d, want 0", got)
+	}
+	fallbackEntries := []HistoryEntry{
+		mustEntry("user", "text", TextContent{Text: "hi"}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{
+			Model:                "anthropic/claude-opus-4.7",
+			SwappedToFallback:    true,
+			PromptTokensLastStep: 145_000,
+		}),
+	}
+	if got := lastTurnStepInputTokens(fallbackEntries, "anthropic/claude-opus-4.7"); got != 0 {
+		t.Errorf("fallback-served turn should not seed primary model: got %d, want 0", got)
 	}
 }
 

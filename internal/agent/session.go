@@ -218,6 +218,9 @@ type TurnSummaryContent struct {
 	// switch is the single biggest cause of "why did my cache just die"
 	// confusion.
 	Model string `json:"model,omitempty"`
+	// SwappedToFallback is true when the turn ended on a resilience fallback
+	// model rather than the originally resolved primary model.
+	SwappedToFallback bool `json:"swapped_to_fallback,omitempty"`
 	// Compactions records any head/summary/tail context-window compactions
 	// (proactive or reactive) that ran during this turn. replayHistory
 	// applies them at this turn_summary boundary so subsequent turns send
@@ -232,7 +235,7 @@ type TurnSummaryContent struct {
 // next turn's pre-round context-pressure check starts from the provider's
 // real token count rather than a chars/4 estimate. Returns 0 when no prior
 // measurement applies (e.g. first turn, right after a manual summary, after a
-// model switch, or after a turn that was cancelled mid-compaction).
+// model or fallback switch, or after a turn that was cancelled mid-compaction).
 func lastTurnStepInputTokens(entries []HistoryEntry, currentModel string) int {
 	startIdx := 0
 	for i := len(entries) - 1; i >= 0; i-- {
@@ -250,6 +253,9 @@ func lastTurnStepInputTokens(entries []HistoryEntry, currentModel string) int {
 			return 0
 		}
 		if c.Cancelled && len(c.Compactions) > 0 {
+			return 0
+		}
+		if c.SwappedToFallback {
 			return 0
 		}
 		if c.Model != "" && currentModel != "" && c.Model != currentModel {
@@ -288,12 +294,13 @@ func isApprovalTimeoutResult(text string) bool {
 // common case where the resolution is appended after the placeholder). Pass 2
 // then emits exactly one result per call, paired with the call, regardless of
 // where the rows physically sit.
-func selectToolResults(effective []HistoryEntry) (map[string]ToolResultContent, error) {
+func selectToolResults(effective []HistoryEntry) (map[string]ToolResultContent, map[int]ToolResultContent, error) {
 	chosenResult := map[string]ToolResultContent{}
 	chosenOutOfOrder := map[string]bool{}
 	seenCall := map[string]bool{}
 	sealedByLaterTurn := map[string]bool{}
-	for _, e := range effective {
+	lateTimeouts := map[int]ToolResultContent{}
+	for i, e := range effective {
 		switch e.Type {
 		case "text":
 			if e.Role == "user" {
@@ -306,19 +313,21 @@ func selectToolResults(effective []HistoryEntry) (map[string]ToolResultContent, 
 		case entryTypeToolCall:
 			var c ToolCallContent
 			if err := json.Unmarshal(e.Content, &c); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			seenCall[c.ID] = true
 		case "tool_result":
 			var c ToolResultContent
 			if err := json.Unmarshal(e.Content, &c); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			// If a later user turn has already been sent and cached with this
 			// tool call's inline placeholder result, do not let a late
 			// background approval-expiry timeout retroactively rewrite the
-			// historical turn's tool_result in the middle of the cached prefix.
+			// historical turn's tool_result in the middle of the cached prefix;
+			// instead, surface it at its chronological tail position in Pass 2.
 			if sealedByLaterTurn[c.ID] && isApprovalTimeoutResult(c.Text) {
+				lateTimeouts[i] = c
 				continue
 			}
 			outOfOrder := !seenCall[c.ID]
@@ -331,7 +340,7 @@ func selectToolResults(effective []HistoryEntry) (map[string]ToolResultContent, 
 			chosenOutOfOrder[c.ID] = outOfOrder
 		}
 	}
-	return chosenResult, nil
+	return chosenResult, lateTimeouts, nil
 }
 
 // replayHistory converts stored HistoryEntry rows back into fantasy.Message
@@ -357,7 +366,7 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 	}
 	effective := entries[startIdx:]
 
-	chosenResult, err := selectToolResults(effective)
+	chosenResult, lateTimeouts, err := selectToolResults(effective)
 	if err != nil {
 		return nil, err
 	}
@@ -404,7 +413,7 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 		pendingAssistant = nil
 	}
 
-	for _, e := range effective {
+	for i, e := range effective {
 		switch e.Type {
 		case "summary":
 			// Emit the summary as a single synthetic assistant message
@@ -481,8 +490,18 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 			// Close the current assistant step; flushAssistant emits the
 			// paired result (chosen in pass 1). The stored result row itself
 			// is not emitted here — doing so would double-emit results and
-			// break on out-of-order rows. See the pass-1 comment above.
+			// break on out-of-order rows. When a late approval timeout arrived
+			// after a subsequent user turn had already sealed the original
+			// turn's prefix, surface the timeout here at its chronological tail
+			// position so the model knows the earlier approval expired without
+			// mutating the historical turn's cached tool_result.
 			flushAssistant()
+			if lt, ok := lateTimeouts[i]; ok {
+				out = append(out, fantasy.NewUserMessage(fmt.Sprintf(
+					"[approval update — tool call %s (%s): %s]",
+					lt.ID, lt.Name, lt.Text,
+				)))
+			}
 		}
 	}
 	flushAssistant()

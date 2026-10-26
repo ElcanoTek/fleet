@@ -1949,14 +1949,15 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	tc.Overlay = overlay
 
 	res, runErr := RunInteractiveTurn(ctx, tc, turnSink{sink: sink})
+	effectiveModelSlug := defaultIfEmpty(strings.TrimSpace(res.ModelSlug), modelSlug)
 
 	if runErr != nil {
-		return m.failedTurnResult(ctx, runErr, res, userEntry, modelSlug, startedAt, sink, in.CommitTerminal)
+		return m.failedTurnResult(ctx, runErr, res, userEntry, effectiveModelSlug, startedAt, sink, in.CommitTerminal)
 	}
 	if res.Cancelled {
-		return m.cancelledTurnResult(res, userEntry, modelSlug, startedAt, ctx.Err(), sink, in.CommitTerminal)
+		return m.cancelledTurnResult(res, userEntry, effectiveModelSlug, startedAt, ctx.Err(), sink, in.CommitTerminal)
 	}
-	return m.completedTurnResult(res, userEntry, modelSlug, startedAt, sink, in.CommitTerminal)
+	return m.completedTurnResult(res, userEntry, effectiveModelSlug, startedAt, sink, in.CommitTerminal)
 }
 
 // cancelledTurnResult builds the partial TurnResult for a cancelled turn,
@@ -1993,6 +1994,7 @@ func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEnt
 		DurationMs:           int(time.Since(startedAt).Milliseconds()),
 		Cancelled:            true,
 		Model:                modelSlug,
+		SwappedToFallback:    res.SwappedToFallback,
 		Compactions:          res.Compactions,
 	}
 	newHistory = append(newHistory, mustEntry("assistant", "turn_summary", summary))
@@ -2086,6 +2088,7 @@ func (m *Manager) completedTurnResult(res agentcore.Result, userEntry HistoryEnt
 		CacheCreationTokens:  usage.CacheCreationTokens,
 		DurationMs:           int(time.Since(startedAt).Milliseconds()),
 		Model:                modelSlug,
+		SwappedToFallback:    res.SwappedToFallback,
 		Compactions:          res.Compactions,
 	}
 	newHistory = append(newHistory, mustEntry("assistant", "turn_summary", summary))
