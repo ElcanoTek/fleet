@@ -721,7 +721,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			resent := lastStepPromptTokens(finalResult)
 			steps := outcome.completedSteps + len(finalResult.Steps)
 			if !eng.windowCheckpointActive() {
-				budget := contextResendBudgetTokens(cfg.EnvPrefix)
+				budget := eng.resendBudget()
 				eng.logSession.AddMessage(roleUser, fmt.Sprintf(
 					"[context_checkpoint] resent prompt %d tokens reached %s; the tool loop paused after %d step(s) so the history can be compacted before the next call (checkpoint %d)",
 					resent, eng.resendCheckpointReached(budget), steps, eng.resendCheckpoints), nil, nil)

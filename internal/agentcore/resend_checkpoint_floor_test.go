@@ -57,6 +57,9 @@ type sizedRun struct {
 	// summarizer, when set, is the run's compaction summarizer; nil keeps the
 	// engine's placeholder.
 	summarizer func(ctx context.Context, in CompactionSummarizeInput) fantasy.Message
+	// arg, when set, is the tick argument of call n; nil gives each call its
+	// own (n). A repeated argument is a re-run.
+	arg func(n int32) int32
 
 	mu    sync.Mutex
 	sizes []int // the resent size of each call, in call order
@@ -112,7 +115,11 @@ func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSessio
 		sr.sent = append(sr.sent, sent)
 		sr.mu.Unlock()
 		if int(n) <= sr.toolSteps {
-			return toolStep(fantasy.Usage{InputTokens: int64(size), OutputTokens: 10}, fmt.Sprintf("page-%d", n), n), nil
+			arg := n
+			if sr.arg != nil {
+				arg = sr.arg(n)
+			}
+			return toolStep(fantasy.Usage{InputTokens: int64(size), OutputTokens: 10}, fmt.Sprintf("page-%d", n), arg), nil
 		}
 		return streamTextThenFinish("every page refreshed"), nil
 	}

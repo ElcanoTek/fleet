@@ -1009,8 +1009,10 @@ func TestElideStaleToolResults_ParallelCallsSharingAnID(t *testing.T) {
 	}
 }
 
-// Through checkContextPressure: the first pause elides, the run re-runs a
-// stubbed call, and the next pause summarizes instead of eliding again.
+// Through checkContextPressure: the first pause elides, and the run re-runs a
+// stubbed call. From then on it no longer elides, and its resend budget is
+// three times larger: a pause under that compacts nothing, and one over it
+// summarizes.
 func TestCheckContextPressure_RerunStopsElision(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	e := heldEngine(t, "elide-rerun-pressure", nil)
@@ -1042,10 +1044,149 @@ func TestCheckContextPressure_RerunStopsElision(t *testing.T) {
 	if c := payloadsOf(obs, evtContextCompacted); len(c) != 1 || c[0][evtFieldTrigger] != "elision" || e.elisionStopped {
 		t.Fatalf("with no re-run, want a second elision, got %v (stopped=%t)", c, e.elisionStopped)
 	}
+	if crumbs := sessionLines(e.logSession, "[context_budget_raised]"); len(crumbs) != 0 {
+		t.Fatalf("budget raised with no re-run: %v", crumbs)
+	}
 	obs = &payloadObserver{}
-	e.checkContextPressure(context.Background(), more(res.messages, again[0], again[1]), e.model, newStreamSink(obs), false)
-	if c := payloadsOf(obs, evtContextCompacted); len(c) != 1 || c[0][evtFieldTrigger] != "resend_budget" || !e.elisionStopped {
-		t.Fatalf("after a re-run, want one resend_budget summary and elision stopped, got %v (stopped=%t)", c, e.elisionStopped)
+	rerun := more(res.messages, again[0], again[1])
+	res = e.checkContextPressure(context.Background(), rerun, e.model, newStreamSink(obs), false)
+	if c := payloadsOf(obs, evtContextCompacted); len(c) != 0 || !e.elisionStopped || len(res.messages) != len(rerun) {
+		t.Fatalf("after a re-run, 100K is under the raised budget: want no compaction and elision stopped, got %v (stopped=%t)", c, e.elisionStopped)
+	}
+	crumbs := sessionLines(e.logSession, "[context_budget_raised]")
+	if len(crumbs) != 1 || !strings.HasPrefix(crumbs[0], "[context_budget_raised] tool=fetch budget=80000 raised_budget=240000 — ") {
+		t.Fatalf("[context_budget_raised] breadcrumbs = %v", crumbs)
+	}
+
+	e.logSession.LastStepPromptTokens = 250_000
+	obs = &payloadObserver{}
+	e.checkContextPressure(context.Background(), res.messages, e.model, newStreamSink(obs), false)
+	c := payloadsOf(obs, evtContextCompacted)
+	if len(c) != 1 || c[0][evtFieldTrigger] != "resend_budget" || c[0][evtFieldResendBudget] != 240_000 {
+		t.Fatalf("over the raised budget, want one resend_budget summary against 240000, got %v", c)
+	}
+	summary := sessionLines(e.logSession, "[context_compacted]")
+	if len(summary) != 1 || !strings.Contains(summary[0], "budget=240000 ") ||
+		!strings.Contains(summary[0], "exceeded 3 × FLEET_CONTEXT_RESEND_BUDGET_TOKENS (raised after the run re-ran an elided call)") {
+		t.Fatalf("[context_compacted] breadcrumbs = %v", summary)
+	}
+	if crumbs := sessionLines(e.logSession, "[context_budget_raised]"); len(crumbs) != 1 {
+		t.Fatalf("the raise was recorded %d times, want once", len(crumbs))
+	}
+}
+
+// resendBudget is the configured budget until the run re-runs an elided call,
+// then three times it; a budget the operator turned off stays off. Whether
+// the floor rule applies is still judged against the configured budget, so a
+// raise never lowers the point a run pauses at.
+func TestResendBudget_RaisedAfterARerun(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	e := heldEngine(t, "raise-budget", nil)
+	recordContextMax("raise-budget", 10_000_000)
+	if got := e.resendBudget(); got != 80_000 {
+		t.Fatalf("resendBudget before a re-run = %d, want 80000", got)
+	}
+	if got := e.checkpointThreshold(e.model); got != 80_000 {
+		t.Fatalf("checkpoint before a re-run at %d, want 80000", got)
+	}
+	e.elisionStopped = true
+	if got := e.resendBudget(); got != 240_000 {
+		t.Fatalf("resendBudget after a re-run = %d, want 240000", got)
+	}
+	if got := e.checkpointThreshold(e.model); got != 240_000 {
+		t.Fatalf("checkpoint after a re-run at %d, want 240000", got)
+	}
+
+	// A prefix of 100K crowds the configured 80K budget but not 240K. Judged
+	// against the raised budget the threshold would fall from floor + 80K to
+	// a plain 240K; it is floor + 240K.
+	for _, stopped := range []bool{false, true} {
+		e.elisionStopped = stopped
+		e.resendPrefix, e.resendFloor = 100_000, 170_000
+		want := 250_000
+		if stopped {
+			want = 410_000
+		}
+		if got := e.effectiveResendBudget(e.resendBudget()); got != want {
+			t.Errorf("stopped=%t: effective budget %d, want %d", stopped, got, want)
+		}
+	}
+
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
+	if got := e.resendBudget(); got != 0 {
+		t.Fatalf("a budget turned off came back as %d after a re-run", got)
+	}
+}
+
+// A run without a resend budget (the window checkpoint) has nothing to raise:
+// the re-run stops elision, and no [context_budget_raised] breadcrumb claims
+// otherwise.
+func TestNoteReruns_NoBudgetNoRaise(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
+	e := heldEngine(t, "raise-no-budget", nil)
+	e.noteElidedCalls([]string{callKey("fetch", `{"page":"page-a"}`)})
+	e.noteReruns(elisionExchange("again", `{"page":"page-a"}`, elisionText(10)))
+	if !e.elisionStopped {
+		t.Fatal("the re-run was not noticed")
+	}
+	if crumbs := sessionLines(e.logSession, "[context_budget_raised]"); len(crumbs) != 0 {
+		t.Fatalf("raised a budget that is off: %v", crumbs)
+	}
+}
+
+// A whole scheduled run: the first pause elides, the model then fetches one of
+// the stubbed pages again, and the run takes no further pause until its
+// prompt reaches three times the budget, where it summarizes rather than
+// elides. Before the fix, a pause at every 80K summarized, and the model
+// re-fetched what each summary dropped.
+func TestRun_Elision_RerunRaisesTheBudget(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	const rerunAt = 10 // after the first pause, which elides page 1
+	sr := &sizedRun{prefix: 10_000, toolSteps: 36, resultChars: 40_000,
+		arg: func(n int32) int32 {
+			if n == rerunAt {
+				return 1
+			}
+			return n
+		}}
+	obs, session := sr.run(t, "elide-rerun-raise")
+
+	checkpoints := payloadsOf(obs, evtContextCheckpoint)
+	compactions := payloadsOf(obs, evtContextCompacted)
+	if len(compactions) < 2 || compactions[0][evtFieldTrigger] != "elision" {
+		t.Fatalf("want an elision first, then a summary: %v", compactions)
+	}
+	if paused := checkpointedSteps(obs); len(paused) == 0 || paused[0] >= rerunAt {
+		t.Fatalf("fixture: the first pause came after step %v, want it before the re-run at %d", paused, rerunAt)
+	}
+	raised := sessionLines(session, "[context_budget_raised]")
+	if len(raised) != 1 || !strings.HasPrefix(raised[0], "[context_budget_raised] tool=tick budget=80000 raised_budget=240000 ") {
+		t.Fatalf("[context_budget_raised] breadcrumbs = %v", raised)
+	}
+	// The pause that noticed the re-run was taken at the configured budget and
+	// compacted nothing; every later one waited for the raised budget.
+	if len(checkpoints) != len(compactions)+1 {
+		t.Fatalf("checkpoints %v, compactions %v: want exactly one pause that compacted nothing", checkpoints, compactions)
+	}
+	for i, p := range checkpoints[2:] {
+		if p[evtFieldResendBudget] != 240_000 || p[evtFieldUsedTokens].(int) < 240_000 {
+			t.Errorf("checkpoint %d after the raise: %v, want it at 240000 or more", i+3, p)
+		}
+	}
+	for i, p := range compactions[1:] {
+		if p[evtFieldTrigger] != "resend_budget" || p[evtFieldResendBudget] != 240_000 {
+			t.Errorf("compaction %d after the raise: %v, want a summary against 240000", i+2, p)
+		}
+	}
+	crumbs := sessionLines(session, "[context_checkpoint] ")
+	if last := crumbs[len(crumbs)-1]; !strings.Contains(last, "reached 3 × FLEET_CONTEXT_RESEND_BUDGET_TOKENS (raised after the run re-ran an elided call)") {
+		t.Errorf("the last [context_checkpoint] does not name the raised budget: %q", last)
+	}
+	// The run grew past twice the configured budget before it paused again.
+	if top := slices.Max(sr.sizes); top < 2*80_000 {
+		t.Errorf("the largest call resent %d, want the run to grow past 160000 after the raise (sizes=%v)", top, sr.sizes)
 	}
 }
 
