@@ -1232,9 +1232,9 @@ func TestCallKey(t *testing.T) {
 
 // On a window too small for three budgets, the raise stops 30% of the budget
 // short of the model's input limit, so a call can still reach the pause
-// before the in-round guard trims it; on a window too small for any raise the
-// run keeps its budget and records no raise. Under the floor rule the
-// threshold stays at the #1600 cap, never past the limit.
+// before the in-round guard trims it; on a window with too little room for a
+// raise of at least that much, the run keeps its budget and records no raise.
+// Under the floor rule the raised threshold stops the same margin short.
 func TestResendBudget_RaiseStopsShortOfTheWindow(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	e := heldEngine(t, "raise-200k", nil)
@@ -1249,8 +1249,28 @@ func TestResendBudget_RaiseStopsShortOfTheWindow(t *testing.T) {
 	if got, want := e.resendBudget(), limit-24_000; got != want {
 		t.Fatalf("raised budget on a 200K window = %d, want %d (the limit %d less 30%% of the budget)", got, want, limit)
 	}
-	if after := e.effectiveResendBudget(e.resendBudget()); after < before || after > limit {
-		t.Fatalf("floor rule: threshold %d before the raise, %d after; want it no lower, and at most the limit %d", before, after, limit)
+	// Under the floor rule the raised threshold stops the same margin short
+	// of the limit (floor + raised budget is past it)...
+	if after := e.effectiveResendBudget(e.resendBudget()); after != limit-24_000 || after < before {
+		t.Fatalf("floor rule: threshold %d before the raise, %d after; want %d", before, after, limit-24_000)
+	}
+	// ...but never below where the configured budget pauses: once the floor
+	// alone is near the limit, that is the limit, as without a raise.
+	e.resendFloor = 150_000
+	e.elisionStopped = false
+	before = e.effectiveResendBudget(e.resendBudget())
+	e.elisionStopped = true
+	if after := e.effectiveResendBudget(e.resendBudget()); before != limit || after != limit {
+		t.Fatalf("a 150K floor: threshold %d before the raise, %d after; want the limit %d both times", before, after, limit)
+	}
+
+	// On 128K the cap is 105216 − 24000 = 81216: too little room to be
+	// worth a raise.
+	mid := heldEngine(t, "raise-128k", nil)
+	recordContextMax("raise-128k", 128_000)
+	mid.elisionStopped = true
+	if got := mid.resendBudget(); got != 80_000 {
+		t.Fatalf("a 128K window leaves no room for a raise worth making, yet the budget is %d", got)
 	}
 
 	small := heldEngine(t, "raise-64k", nil)
@@ -1269,7 +1289,8 @@ func TestResendBudget_RaiseStopsShortOfTheWindow(t *testing.T) {
 }
 
 // The whole run on a 200K window: after the re-run it pauses at the capped
-// budget, and the in-round guard never has to trim a call.
+// budget, and the in-round guard never has to trim a call. The 10K-token task
+// message is a real one, so the guard counts it as the model does.
 func TestRun_Elision_RerunRaiseOnASmallWindow(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
@@ -1277,7 +1298,7 @@ func TestRun_Elision_RerunRaiseOnASmallWindow(t *testing.T) {
 	// The input limit is 200000 − 16384 (completion) − 10000 (provider
 	// reserve) = 173616; the raise stops 24000 short of it.
 	const raised = 149_616
-	sr := &sizedRun{prefix: 10_000, toolSteps: 40, resultChars: 40_000, window: 200_000,
+	sr := &sizedRun{headChars: 40_000, toolSteps: 40, resultChars: 40_000, window: 200_000,
 		arg: func(n int32) int32 {
 			if n == 10 {
 				return 1

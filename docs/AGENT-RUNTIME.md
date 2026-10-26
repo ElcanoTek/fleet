@@ -640,8 +640,9 @@ consecutive-compaction cap. It is held back, so the pause buys the summary,
 while the run's self-audit is pending (asked for, no `confirm_audit` accepted
 yet: the audit re-reads the evidence a stub would hide), and for the rest of a
 run that re-ran a call whose result it had stubbed. Such a run also gets three
-times the resend budget from then on, stopping 30% of the budget short of the
-model's input limit: the re-run is a sign it needs more of its data at once
+times the resend budget from then on, capped at 30% of the budget short of the
+model's input limit (no raise where that leaves less than 30% of the budget to
+add): the re-run is a sign it needs more of its data at once
 than the budget holds, and with the plain budget each re-fetch had sent it over
 again, and the next summary dropped other results for it to fetch again. A
 `[context_budget_raised]` breadcrumb records the raise; the floor rule is still

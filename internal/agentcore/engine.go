@@ -1421,12 +1421,12 @@ const (
 // by resendRaiseWindowMargin of the budget. Past the limit the in-round guard
 // trims or refuses a call before the checkpoint could see it, and at the limit
 // itself a call the guard has just trimmed can land under it; the margin
-// leaves room for a call to reach the pause first. On today's 1M-token windows
-// the margin never binds; on a 200K window the raise is to about 150K. Nor
-// does the raise go below the configured budget, so on a window too small for
-// any raise the run keeps the budget it had. The model's window alone would be
-// no bound on those 1M-token windows, which is why the raise is a multiple of
-// the budget.
+// leaves room for a call that grows by less than it to reach the pause first.
+// With the default budget, on a 200K window the raise is to about 150K, and on
+// a 1M window the cap does not bind. A raise of less than that same margin is
+// not made: on a window with no more room than that (128K, say) the run keeps
+// the budget it had. A 1M window alone would be no bound, which is why the
+// raise is a multiple of the budget.
 func (e *engine) resendBudget() int {
 	budget := contextResendBudgetTokens(e.envPrefix)
 	if !e.elisionStopped || budget <= 0 {
@@ -1434,9 +1434,19 @@ func (e *engine) resendBudget() int {
 	}
 	raised := budget * resendBudgetRerunFactor
 	if limit := e.resendWindowLimit(); limit > 0 {
-		raised = min(raised, max(budget, limit-int(float64(budget)*resendRaiseWindowMargin)))
+		raised = min(raised, raisedThresholdCap(budget, limit))
+	}
+	if raised < budget+int(float64(budget)*resendRaiseWindowMargin) {
+		return budget // no room on this window for a raise worth making
 	}
 	return raised
+}
+
+// raisedThresholdCap is the highest point a raised budget lets a run pause
+// at: the active model's input limit less resendRaiseWindowMargin of the
+// configured budget (resendBudget).
+func raisedThresholdCap(configured, limit int) int {
+	return limit - int(float64(configured)*resendRaiseWindowMargin)
 }
 
 // minResendCheckpointHistory is the fewest non-head messages a checkpoint
@@ -1501,17 +1511,30 @@ func stepAtResendBudget(steps []fantasy.StepResult, threshold, inputHistory int)
 // the in-round context guard would fail the run before the checkpoint it waits
 // for is reachable. Capped there, and never below the plain budget, so a
 // small-window run keeps the pre-#1600 threshold rather than an unreachable one.
-// The plain budget is the configured one: budget may be a raised one
-// (resendBudget), which is already capped at the same point.
+// The plain budget is the configured one; a raised budget is capped further
+// below the limit (raisedThresholdCap).
 func (e *engine) effectiveResendBudget(budget int) int {
 	if !e.resendFloorCrowdsBudget() {
 		return budget
 	}
-	threshold := e.resendFloor + budget
-	if limit := e.resendWindowLimit(); limit > 0 && threshold > limit {
-		threshold = max(contextResendBudgetTokens(e.envPrefix), limit)
+	configured := contextResendBudgetTokens(e.envPrefix)
+	limit := e.resendWindowLimit()
+	threshold := e.resendFloor + min(budget, configured)
+	if limit > 0 && threshold > limit {
+		threshold = max(configured, limit)
 	}
-	return threshold
+	if budget <= configured {
+		return threshold
+	}
+	// A raised budget (resendBudget) stops short of the limit by the same
+	// margin as the raise itself, but never below where the configured budget
+	// pauses: once the floor alone is near the limit, that is the limit, as
+	// before the raise.
+	raised := e.resendFloor + budget
+	if limit > 0 {
+		raised = min(raised, raisedThresholdCap(configured, limit))
+	}
+	return max(threshold, raised)
 }
 
 // resendWindowLimit is the largest resent size the checkpoint may wait for on

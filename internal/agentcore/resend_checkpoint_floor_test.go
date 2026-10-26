@@ -64,6 +64,10 @@ type sizedRun struct {
 	// fixture sends, so neither the window-pressure path nor the pre-call
 	// context reducer touches the history.
 	window int
+	// headChars sizes the task message (0 is 400 characters). prefix is a
+	// number only the model reports; a head the in-round guard should count
+	// too goes here instead.
+	headChars int
 
 	mu    sync.Mutex
 	sizes []int // the resent size of each call, in call order
@@ -130,7 +134,7 @@ func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSessio
 	res, err := Run(context.Background(), ModeScheduled,
 		RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
 		Deps{
-			Input:                historyInput{system: "s", msgs: fillerMessages(1, 400), label: "refresh"},
+			Input:                historyInput{system: "s", msgs: fillerMessages(1, cmp.Or(sr.headChars, 400)), label: "refresh"},
 			Observer:             obs,
 			Policy:               finishableScheduledPolicy(session),
 			Model:                model,
