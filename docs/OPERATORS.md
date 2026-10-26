@@ -755,6 +755,25 @@ fleet sched task import --replace-status < tasks.json   # restore surgery: the e
   state) is rejected at validation: those name lease/pause state no import can
   honor.
 
+## sched task set-owner — giving a task an owner
+
+A task's owner (`created_by`) decides whose hosted connections its runs can
+mount, who gets it in the owner digest, and who may edit it. To reassign one —
+for example a task an admin-key clone left ownerless before that clone kept the
+source's owner:
+
+```
+fleet sched task set-owner <task_id> <username>   # also: PUT /tasks/{task_id}/owner {"username": "..."}
+```
+
+The task, the not-yet-finished later occurrences of its recurrence chain and
+the chain's last occurrence (which a parked chain is replayed from) change
+owner. Occurrences spawned afterwards inherit it, and finished occurrences in
+between keep theirs. The API form also refuses an owner for whom the
+`mcp_selection` of any of those rows cannot resolve. The CLI writes the
+database directly, so it cannot run that check. See
+[`docs/TASK-OWNERSHIP.md`](TASK-OWNERSHIP.md).
+
 ## Where the sandbox build fits
 
 The execution sandbox is a **per-client bundle artifact**: each bundle ships its

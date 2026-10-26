@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -361,4 +363,37 @@ func TestApplyRerunOverridesAdvancedSection(t *testing.T) {
 			t.Error("expected an error for a malformed run_if")
 		}
 	})
+}
+
+// TestBuildRerunTaskCreateLineage: a copy carries the source's lineage unless
+// new_lineage asks for a job of its own, in which case the recipe carries
+// none and NewTask makes the copy its own lineage.
+func TestBuildRerunTaskCreateLineage(t *testing.T) {
+	src := &models.Task{ID: uuid.New(), Prompt: "refresh the dashboard", Recurrence: "0 9 * * *", Timezone: "UTC"}
+	src.LineageID = uuid.New()
+
+	for _, keep := range []bool{false, true} {
+		tc, err := buildRerunTaskCreate(src, keep, taskRerunOverrides{}, time.UTC)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.LineageID == nil || *tc.LineageID != src.LineageID {
+			t.Fatalf("keepRecurrence=%v: lineage = %v, want the source's %s", keep, tc.LineageID, src.LineageID)
+		}
+
+		var req taskRerunRequest
+		if err := json.Unmarshal([]byte(`{"overrides":{"new_lineage":true}}`), &req); err != nil {
+			t.Fatal(err)
+		}
+		tc, err = buildRerunTaskCreate(src, keep, req.Overrides, time.UTC)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.LineageID != nil {
+			t.Fatalf("keepRecurrence=%v: new_lineage recipe lineage = %v, want none", keep, tc.LineageID)
+		}
+		if task := models.NewTask(tc); task.LineageID != task.ID {
+			t.Fatalf("keepRecurrence=%v: new_lineage copy lineage = %s, want its own id %s", keep, task.LineageID, task.ID)
+		}
+	}
 }

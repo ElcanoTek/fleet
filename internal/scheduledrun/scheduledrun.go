@@ -92,6 +92,13 @@ type Options struct {
 	// an injected broker boundary. It takes precedence over RemoteMCP and lets
 	// production keep token minting and remote clients out of this process.
 	OpenRemoteMCPOverlay agent.RemoteMCPOverlayOpener
+	// HostedConnections lists a task owner's hosted (remote) connections — the
+	// same ConnectedServersForUser view the run's overlay mounts from — without
+	// minting a token or dialing anything. Only the create-time selection check
+	// (CheckTaskMCPSelection) calls it; a run never does. nil falls back to
+	// RemoteMCP's lister, and with neither that check cannot resolve a
+	// hosted-connection pin and lets it through for the run to decide.
+	HostedConnections func(ctx context.Context, email string) ([]agent.RemoteMCPConn, error)
 
 	// UserSkills returns the owner's ACTIVE builder skills for prompt
 	// inlining; SkillProposerFor binds propose_skill staging to the owner
@@ -182,6 +189,7 @@ type Runner struct {
 	remoteMCP            agent.RemoteMCPResolver
 	ownerEmail           func(ctx context.Context, userID uuid.UUID) (string, error)
 	openRemoteMCPOverlay agent.RemoteMCPOverlayOpener
+	hostedConnections    func(ctx context.Context, email string) ([]agent.RemoteMCPConn, error)
 
 	// userSkills + skillProposerFor extend the same owner-resolution to the
 	// skills arc (docs/SKILLS.md): userSkills returns the owner's ACTIVE
@@ -244,6 +252,7 @@ func New(opts Options) *Runner {
 		remoteMCP:            opts.RemoteMCP,
 		ownerEmail:           opts.OwnerEmail,
 		openRemoteMCPOverlay: opts.OpenRemoteMCPOverlay,
+		hostedConnections:    opts.HostedConnections,
 		userSkills:           opts.UserSkills,
 		skillProposerFor:     opts.SkillProposerFor,
 		sharedFilesPrompt:    opts.SharedFilesPrompt,
@@ -1315,6 +1324,13 @@ func unresolvedPins(pins map[string]string, overlay *agent.RemoteMCPOverlay) map
 			known[seat.Server] = true
 		}
 	}
+	return pinsNotKnown(pins, known)
+}
+
+// pinsNotKnown returns the pins whose bare name and registered seat name are
+// both missing from known — the one membership rule the run (overlay names)
+// and the create-time check (the owner's listed connections) share.
+func pinsNotKnown(pins map[string]string, known map[string]bool) map[string]string {
 	var out map[string]string
 	for name, acct := range pins {
 		if known[name] || known[agentcore.RegisteredMCPName(name, acct)] {
@@ -1326,6 +1342,86 @@ func unresolvedPins(pins map[string]string, overlay *agent.RemoteMCPOverlay) map
 		out[name] = acct
 	}
 	return out
+}
+
+// CheckTaskMCPSelection is the create-time form of the refusal a run of task
+// would hit while resolving its mcp_selection: a name that is neither a server
+// in the active bundle inventory nor one of the task owner's hosted
+// connections. The scheduler's create paths call it on the task they are about
+// to persist (CreatedBy already set to the owner the run will resolve), so a
+// selection no run could honor is refused with the run's own words instead of
+// dead-lettering every occurrence.
+//
+// It reuses the run's resolution rather than restating it — the same
+// splitTaskMCPSelection partition, the same guard order as
+// buildTaskRemoteOverlay, the same membership rule (pinsNotKnown) and the same
+// error text — with one difference: a run builds the owner's overlay (minting
+// tokens, dialing each server), and a create only lists the owner's
+// connections (HostedConnections). A seat that is connected but whose login
+// has since lapsed therefore passes here and is skipped with a notice at run
+// time, exactly as the run treats it.
+//
+// Only a definite refusal is returned. Where a run would proceed without an
+// error — the owner's email lookup fails, or the selection is moot because the
+// credential allowlist denies every server — this returns nil, and so does an
+// infrastructure error listing the connections (the run will report it).
+func (r *Runner) CheckTaskMCPSelection(ctx context.Context, task *models.Task) error {
+	if task == nil || len(task.MCPSelection) == 0 {
+		return nil
+	}
+	bundle, pins := r.splitTaskMCPSelection(task)
+	denyAll := taskCredentialAllowlist(task).DeniesAll()
+	// Bundle side: a remote-capable runner routes only inventory names here,
+	// so this refuses only on a runner without hosted connections, where the
+	// binder would refuse the unknown name. A deny-all run binds an empty
+	// selection and never consults the binder (bindTaskMCPRuntime).
+	if !denyAll {
+		inventory := r.taskMCPServerInventory()
+		for _, choice := range bundle {
+			if _, ok := inventory[choice.Server]; !ok {
+				return agentcore.UnknownMCPServerError(choice.Server)
+			}
+		}
+	}
+	if len(pins) == 0 {
+		return nil
+	}
+	// buildTaskRemoteOverlay's guards, in its order.
+	if (r.openRemoteMCPOverlay == nil && r.remoteMCP == nil) || r.ownerEmail == nil || task.CreatedBy == nil {
+		return unknownMCPSelectionError(pins)
+	}
+	if denyAll {
+		return nil
+	}
+	email, err := r.ownerEmail(ctx, *task.CreatedBy)
+	if err != nil {
+		log.Printf("mcp selection check: cannot resolve owner email: %v", err)
+		return nil
+	}
+	if email == "" {
+		return unknownMCPSelectionError(pins)
+	}
+	list := r.hostedConnections
+	if list == nil && r.remoteMCP != nil {
+		list = r.remoteMCP.ConnectedServersForUser
+	}
+	if list == nil {
+		return nil
+	}
+	conns, err := list(ctx, email)
+	if err != nil {
+		log.Printf("mcp selection check: cannot list the owner's hosted connections: %v", err)
+		return nil
+	}
+	known := make(map[string]bool, 2*len(conns))
+	for _, c := range conns {
+		known[c.Name] = true
+		known[agentcore.RegisteredMCPName(c.Name, c.Account)] = true
+	}
+	if unknown := pinsNotKnown(pins, known); len(unknown) > 0 {
+		return unknownMCPSelectionError(unknown)
+	}
+	return nil
 }
 
 func pinnedNames(pins map[string]string) []string {
