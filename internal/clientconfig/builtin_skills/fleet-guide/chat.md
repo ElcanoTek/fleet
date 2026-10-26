@@ -27,6 +27,12 @@ including later changes made by another client; `/model` sets a new explicit
 override.
 Model suggestions show the target frozen when the card was created. Older cards
 without a frozen target must be dismissed before requesting a new suggestion.
+A new terminal thread (including `/new`) starts with the same optional
+connectors a new web chat would: the ones you have on by default under
+Settings → Connections. `--connector NAME` (repeatable) replaces that set for
+the new thread, for example `--connector email --connector lens`; an unknown or
+unavailable name is refused before anything is sent. `--connector` does not
+change an existing thread: use the web Tools picker for that.
 
 If the server restarts during an approved action, its outcome is shown as unknown;
 verify the external result before trying another action.
