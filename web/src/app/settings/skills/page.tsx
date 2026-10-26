@@ -255,44 +255,27 @@ export default function SkillsPage() {
   };
 
   // approveMine flips an agent-proposed skill to active. If the proposal was
-  // staged as "<base>-proposed" over an existing skill named "<base>", approving
-  // merges the proposed revision into "<base>" and removes the staging row.
+  // staged as "<base>-proposed" over an existing skill named "<base>", the
+  // server atomically merges the proposed revision into "<base>" and removes
+  // the staging row in one transaction.
   const approveMine = (sk: UserSkill, shareWithWorkspace = false) => {
     setBusy(true);
     setError(null);
     const baseName = sk.name.endsWith("-proposed") ? sk.name.slice(0, -"-proposed".length) : "";
     const baseSkill = baseName ? mine?.find((m) => m.name === baseName && m.id !== sk.id) : undefined;
-    if (baseSkill) {
-      fetch(`/api/user-skills/${encodeURIComponent(baseSkill.id)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: baseSkill.name,
-          description: sk.description,
-          body: sk.body,
-          status: "active",
-          visibility: shareWithWorkspace ? "workspace" : (baseSkill.visibility ?? "private"),
-        }),
-      })
-        .then(async (res) => {
-          if (!res.ok) throw new Error((await res.text()) || "Approve failed.");
-          await fetch(`/api/user-skills/${encodeURIComponent(sk.id)}`, { method: "DELETE" });
-          await reloadMine();
-          await reloadWorkspacePack();
-        })
-        .catch((e: unknown) => setError(e instanceof Error ? e.message : "Approve failed."))
-        .finally(() => setBusy(false));
-      return;
-    }
+    const targetName = baseSkill ? baseSkill.name : sk.name.length > 64 && baseName ? baseName : sk.name;
+    const targetVisibility = shareWithWorkspace
+      ? "workspace"
+      : (baseSkill?.visibility ?? sk.visibility ?? "private");
     fetch(`/api/user-skills/${encodeURIComponent(sk.id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: sk.name,
+        name: targetName,
         description: sk.description,
         body: sk.body,
         status: "active",
-        visibility: shareWithWorkspace ? "workspace" : (sk.visibility ?? "private"),
+        visibility: targetVisibility,
       }),
     })
       .then(async (res) => {

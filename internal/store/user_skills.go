@@ -109,17 +109,10 @@ func (s *Store) CreateUserSkillWithVisibility(ctx context.Context, userEmail, na
 	return s.createUserSkill(ctx, userEmail, name, description, body, UserSkillStatusActive, vis)
 }
 
+const proposalRevisionSuffix = "-proposed"
+
 func proposalRevisionName(name string) string {
-	const suffix = "-proposed"
-	if strings.HasSuffix(name, suffix) {
-		return name
-	}
-	maxBase := 64 - len(suffix)
-	base := name
-	if len(base) > maxBase {
-		base = strings.TrimRight(base[:maxBase], "-")
-	}
-	return base + suffix
+	return name + proposalRevisionSuffix
 }
 
 // CreateUserSkillProposal stages an agent-drafted skill (or an agent-drafted
@@ -224,11 +217,12 @@ func (s *Store) UpdateUserSkill(ctx context.Context, userEmail, id, name, descri
 }
 
 // UpdateUserSkillWithVisibility rewrites an owned skill's fields, updating visibility when non-empty.
+// When approving a staged "<base>-proposed" revision of an existing owned skill,
+// it atomically updates the base skill and removes the staging row in one
+// transaction.
 func (s *Store) UpdateUserSkillWithVisibility(ctx context.Context, userEmail, id, name, description, body, status, visibility string) (*UserSkill, error) {
+	email := normalizeEmail(userEmail)
 	name = strings.TrimSpace(name)
-	if err := validateUserSkill(name, description, body); err != nil {
-		return nil, err
-	}
 	// Owners may set active/disabled (approving a proposal = setting it
 	// active); nothing can move a skill BACK to proposed — that state is
 	// created only by the agent's propose_skill path.
@@ -239,12 +233,63 @@ func (s *Store) UpdateUserSkillWithVisibility(ctx context.Context, userEmail, id
 	if vis != "" && vis != UserSkillVisibilityPrivate && vis != UserSkillVisibilityWorkspace {
 		return nil, fmt.Errorf("%w: unknown visibility %q", ErrUserSkillInvalid, visibility)
 	}
+	existing, gerr := s.GetUserSkill(ctx, email, id)
+	if gerr == nil && existing.Status == UserSkillStatusProposed && strings.HasSuffix(existing.Name, proposalRevisionSuffix) {
+		baseName := strings.TrimSuffix(existing.Name, proposalRevisionSuffix)
+		if name == existing.Name || name == baseName {
+			var targetID, targetVis string
+			err := s.db.QueryRowContext(ctx, `
+				SELECT id, visibility FROM user_skills
+				WHERE user_email=$1 AND name=$2 AND id<>$3`,
+				email, baseName, id).Scan(&targetID, &targetVis)
+			if err == nil && status == UserSkillStatusActive {
+				if err := validateUserSkill(baseName, description, body); err != nil {
+					return nil, err
+				}
+				effectiveVis := vis
+				if effectiveVis == "" {
+					effectiveVis = targetVis
+				}
+				if effectiveVis == UserSkillVisibilityWorkspace {
+					if err := s.checkWorkspaceShareCapacity(ctx, baseName, targetID); err != nil {
+						return nil, err
+					}
+				}
+				tx, err := s.db.BeginTx(ctx, nil)
+				if err != nil {
+					return nil, err
+				}
+				defer func() { _ = tx.Rollback() }()
+				now := time.Now().Unix()
+				if _, err := tx.ExecContext(ctx, `
+					UPDATE user_skills
+					SET description=$3, body=$4, status=$5, visibility=$6, updated_at=$7
+					WHERE user_email=$1 AND id=$2`,
+					email, targetID, strings.TrimSpace(description), body, status, effectiveVis, now); err != nil {
+					return nil, err
+				}
+				if _, err := tx.ExecContext(ctx, `
+					DELETE FROM user_skills WHERE user_email=$1 AND id=$2`,
+					email, id); err != nil {
+					return nil, err
+				}
+				if err := tx.Commit(); err != nil {
+					return nil, err
+				}
+				return s.GetUserSkill(ctx, email, targetID)
+			}
+			if errors.Is(err, sql.ErrNoRows) && name == existing.Name && len(existing.Name) > 64 {
+				name = baseName
+			}
+		}
+	}
+	if err := validateUserSkill(name, description, body); err != nil {
+		return nil, err
+	}
 	if status == UserSkillStatusActive {
 		effectiveVis := vis
-		if effectiveVis == "" {
-			if existing, gerr := s.GetUserSkill(ctx, userEmail, id); gerr == nil {
-				effectiveVis = existing.Visibility
-			}
+		if effectiveVis == "" && existing != nil {
+			effectiveVis = existing.Visibility
 		}
 		if effectiveVis == UserSkillVisibilityWorkspace {
 			if err := s.checkWorkspaceShareCapacity(ctx, name, id); err != nil {
@@ -258,7 +303,7 @@ func (s *Store) UpdateUserSkillWithVisibility(ctx context.Context, userEmail, id
 		    visibility=COALESCE(NULLIF($7, ''), visibility),
 		    updated_at=$8
 		WHERE user_email=$1 AND id=$2`,
-		normalizeEmail(userEmail), id, name, strings.TrimSpace(description), body, status, vis, time.Now().Unix())
+		email, id, name, strings.TrimSpace(description), body, status, vis, time.Now().Unix())
 	if err != nil {
 		if pgUniqueViolation(err) {
 			return nil, fmt.Errorf("%w: you already have a skill named %q", ErrUserSkillInvalid, name)
@@ -268,7 +313,7 @@ func (s *Store) UpdateUserSkillWithVisibility(ctx context.Context, userEmail, id
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, ErrUserSkillNotFound
 	}
-	return s.GetUserSkill(ctx, userEmail, id)
+	return s.GetUserSkill(ctx, email, id)
 }
 
 // GetUserSkill fetches one owned skill.

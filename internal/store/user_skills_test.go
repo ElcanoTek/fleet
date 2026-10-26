@@ -127,6 +127,41 @@ func TestUserSkillProposalFlow(t *testing.T) {
 	if active, _ := s.ListActiveUserSkills(ctx, me); len(active) != 1 || active[0].Name != "weekly-pacing" {
 		t.Errorf("original active skill must remain active while edit proposal is pending: %+v", active)
 	}
+	// Approving the staged "<name>-proposed" revision atomically updates the
+	// base skill and removes the staging row in one transaction.
+	merged, err := s.UpdateUserSkill(ctx, me, editedProp.ID, "weekly-pacing", editedProp.Description, editedProp.Body, UserSkillStatusActive)
+	if err != nil {
+		t.Fatalf("approve staged revision: %v", err)
+	}
+	if merged.ID != prop.ID || merged.Name != "weekly-pacing" || !strings.Contains(merged.Body, "3. Verify.") {
+		t.Errorf("merged revision = %+v, want updated base skill %s", merged, prop.ID)
+	}
+	if all, _ := s.ListUserSkills(ctx, me); len(all) != 1 {
+		t.Errorf("staging row was not removed on approval: %+v", all)
+	}
+	// Long skill names (56–64 chars) keep their full base name across staging
+	// and approval without truncation.
+	longName := strings.Repeat("a", 60)
+	longSkill, err := s.CreateUserSkill(ctx, me, longName, "sixty char skill", "v1 body")
+	if err != nil {
+		t.Fatalf("create 60-char skill: %v", err)
+	}
+	t.Cleanup(func() { _ = s.DeleteUserSkill(context.Background(), me, longSkill.ID) })
+	longProp, err := s.CreateUserSkillProposal(ctx, me, longName, "sixty char skill v2", "v2 body")
+	if err != nil {
+		t.Fatalf("propose edit to 60-char skill: %v", err)
+	}
+	t.Cleanup(func() { _ = s.DeleteUserSkill(context.Background(), me, longProp.ID) })
+	if longProp.Name != longName+"-proposed" {
+		t.Fatalf("longProp.Name = %q, want %q", longProp.Name, longName+"-proposed")
+	}
+	mergedLong, err := s.UpdateUserSkill(ctx, me, longProp.ID, longName, longProp.Description, longProp.Body, UserSkillStatusActive)
+	if err != nil {
+		t.Fatalf("approve 60-char revision: %v", err)
+	}
+	if mergedLong.ID != longSkill.ID || mergedLong.Name != longName || mergedLong.Body != "v2 body" {
+		t.Errorf("mergedLong = %+v, want updated 60-char skill", mergedLong)
+	}
 	// Nothing can move it BACK to proposed through UpdateUserSkill.
 	if _, err := s.UpdateUserSkill(ctx, me, prop.ID, prop.Name, prop.Description, prop.Body, UserSkillStatusProposed); !errors.Is(err, ErrUserSkillInvalid) {
 		t.Errorf("re-proposing should be invalid, got %v", err)
