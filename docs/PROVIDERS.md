@@ -5,8 +5,9 @@ instead declare a `providers:` block in `manifest.yaml` to route inference
 natively to **Anthropic**, **OpenAI**, a self-hosted **Ollama**, any other
 **OpenAI-compatible** server (vLLM, LM Studio, llama.cpp, a hosted gateway), the
 **Vercel AI Gateway**, an **Azure OpenAI** resource, or any mix — for failover,
-data residency, or to avoid the OpenRouter markup. Admins can add the same provider types from the web UI
-without a restart; see [`LLM-PROVIDERS.md`](LLM-PROVIDERS.md).
+data residency, or to avoid the OpenRouter markup. Admins can add the same
+provider types from the web UI without a restart; see
+[`LLM-PROVIDERS.md`](LLM-PROVIDERS.md).
 
 **A bundle with no `providers:` block is unchanged** — a single catch-all
 OpenRouter provider built from `OPENROUTER_API_KEY`, exactly as before.
@@ -110,7 +111,7 @@ once the row is enabled.
 | `ollama` | An Ollama server | optional | optional, default `http://localhost:11434/v1` | The ids Ollama has pulled (`llama3.2`). |
 | `openaicompat` | Any OpenAI-compatible server | optional | **required** | Uses fantasy's OpenAI-compatible provider, which also reads the non-OpenAI fields such servers send, like `reasoning_content`. With no key, the request carries no `Authorization` header. |
 | `vercel` | The Vercel AI Gateway | required | optional, default `https://ai-gateway.vercel.sh/v1` | Model ids are `<creator>/<model>` (`anthropic/claude-opus-4.8`), the same shape as OpenRouter slugs, so listing one takes it over from OpenRouter (see [Vercel and OpenRouter slugs](#vercel-and-openrouter-slugs)). Fleet does not read the gateway's per-model context limits, so declare `context_window_tokens`. |
-| `azure` | An Azure OpenAI resource | required | **required**: the resource's endpoint | Calls the resource's v1 API, with the key in the `Api-Key` header. An endpoint on an Azure host (`https://<resource>.openai.azure.com`, `.cognitiveservices.azure.com` or `.services.ai.azure.com`, with any path) becomes `https://<resource>.openai.azure.com/openai/v1`; any other URL, such as a proxy in front of the resource, is used as given. Model ids are the resource's deployment names. Keys only: Microsoft Entra ID sign-in is not supported. The connection test checks the endpoint and the key, not the deployment names. |
+| `azure` | An Azure OpenAI resource | required | **required**: the resource's endpoint | Calls the resource's v1 API, with the key in the `Api-Key` header. An endpoint on one of Azure's public-cloud hosts (`https://<resource>.openai.azure.com`, `.cognitiveservices.azure.com` or `.services.ai.azure.com`, with any path) becomes `https://<resource>.openai.azure.com/openai/v1`. Any other URL is used as given, so for a proxy in front of the resource, or an Azure cloud other than the public one, give the full API root, ending in `/openai/v1`. Model ids are the resource's deployment names. fantasy recognises a reasoning model (GPT-5, the o-series, gpt-oss) by its id alone, so name such a deployment after its model (`gpt-5-prod`, `o4-mini`): under another name it is sent `max_tokens` and a temperature, which Azure rejects for those models, so every turn on it fails. Keys only: Microsoft Entra ID sign-in is not supported. The connection test checks the endpoint and the key, not the deployment names, so it does not catch a misnamed reasoning deployment. |
 
 The OpenAI Go client under `openaicompat`, `vercel` and `azure` copies the
 host's own OpenAI settings onto every request: `OPENAI_API_KEY` or

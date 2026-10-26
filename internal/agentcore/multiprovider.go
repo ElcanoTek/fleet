@@ -64,7 +64,11 @@ const (
 	// version-free v1 API, the way fantasy's azure provider does, with the key
 	// in the Api-Key header. base_url is the resource's endpoint as the Azure
 	// portal shows it, and a model slug is one of the resource's deployment
-	// names. Keys only: Microsoft Entra ID sign-in is not supported.
+	// names. Keys only: Microsoft Entra ID sign-in is not supported. fantasy
+	// tells a reasoning model (GPT-5, o-series) by its id alone, and only then
+	// sends max_completion_tokens and no temperature, which those models
+	// require; so a reasoning deployment must carry its model in its name
+	// (gpt-5-prod, o4-mini), or Azure rejects every turn on it.
 	ProviderTypeAzure ProviderType = "azure"
 )
 
@@ -199,12 +203,12 @@ func azureBaseURL(base string) string {
 	return base
 }
 
-// azureOpenAIOptions build what fantasy's azure.New builds: its OpenAI
-// provider named "azure", pointed at azureBaseURL(base), with the key in the
-// Api-Key header and no Authorization header. azure.New takes no SDK options,
-// so it cannot be given the host-header removals every OpenAI-SDK-backed type
-// needs; here they come first, then the Api-Key, so a custom header of that
-// name cannot replace the provider's own key.
+// azureOpenAIOptions returns the options that build what fantasy's azure.New
+// builds: its OpenAI provider named "azure", pointed at azureBaseURL(base),
+// with the key in the Api-Key header and no Authorization header. azure.New
+// takes no SDK options, so it cannot be given the host-header removals every
+// OpenAI-SDK-backed type needs; here they come first, then the Api-Key, so a
+// custom header of that name cannot replace the provider's own key.
 func azureOpenAIOptions(apiKey, base string) []openai.Option {
 	sdk := append(hostOpenAIHeaderRemovals(),
 		option.WithHeaderDel("Authorization"),

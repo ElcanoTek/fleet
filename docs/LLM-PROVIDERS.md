@@ -3,8 +3,9 @@
 Admins can add, edit, disable, and remove LLM providers from the web admin
 page (Settings → Admin → Model providers) — an OpenRouter, Anthropic, OpenAI
 or Vercel AI Gateway API key, an Azure OpenAI resource, or any
-OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, a gateway). Multiple providers run simultaneously; edits apply on
-the next message with **no restart**. This builds on the #289 multi-provider
+OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, a gateway). Multiple
+providers run simultaneously; edits apply on the next message with **no
+restart**. This builds on the #289 multi-provider
 routing layer (`internal/agentcore/multiprovider.go`), which previously could
 only be configured from the client bundle's `providers:` block.
 
@@ -18,11 +19,13 @@ only be configured from the client bundle's `providers:` block.
   id. `internal/store/llm_providers.go`. The store checks each row against the
   type table the bundle loader uses: it rejects an unknown type, and an
   `openaicompat` or `azure` row without a base URL even while the row is
-  disabled. The
-  API also refuses to enable a keyed type with no key in effect. A `vercel`
+  disabled. The API also refuses to enable a keyed type with no key in effect. A `vercel`
   row's models list uses OpenRouter-shaped slugs, so listing one moves that
   slug off an OpenRouter catch-all, cost tracking included
-  ([details](PROVIDERS.md#vercel-and-openrouter-slugs)).
+  ([details](PROVIDERS.md#vercel-and-openrouter-slugs)). An `azure` row's
+  models are the resource's deployment names, and a GPT-5 or o-series
+  deployment must carry its model in its name, or every turn on it fails
+  ([details](PROVIDERS.md#provider-types)).
 - **Context window** (chat-DB migration 082): `context_window_tokens`, the
   admin-row twin of a bundle entry's field of the same name. It is one number
   per row, so it applies to every model the row serves: enter the smallest
@@ -115,12 +118,12 @@ only be configured from the client bundle's `providers:` block.
   OpenRouter's authenticated key-metadata endpoint, the Anthropic, OpenAI,
   Ollama, OpenAI-compatible, Vercel AI Gateway or Azure models list with the
   row's auth. A row missing a field its type requires (a key for a keyed type,
-  a base URL for `openaicompat` and `azure`) is reported without any call. For Vercel that matters:
-  the gateway serves its public catalog to an empty Bearer token, so probing a
-  keyless row would otherwise report "connected". Where the endpoint
-  enumerates the ids a row lists, the row's listed slugs are cross-checked — absences
-  report as a warning (gateways and Ollama tags legitimately under-enumerate),
-  never a failure. Azure's list names models, not the deployments a row
+  a base URL for `openaicompat` and `azure`) is reported without any call. For
+  Vercel that matters: the gateway serves its public catalog to an empty Bearer
+  token, so probing a keyless row would otherwise report "connected". Where
+  the endpoint enumerates the ids a row lists, the row's listed slugs are
+  cross-checked — absences report as a warning (gateways and Ollama tags
+  legitimately under-enumerate), never a failure. Azure's list names models, not the deployments a row
   lists, so an `azure` row reports "key accepted" without that check.
   Works on disabled rows so an admin can verify before enabling. The decrypted
   key travels only in the outbound auth header; the response is a key-free

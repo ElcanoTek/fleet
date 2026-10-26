@@ -139,7 +139,7 @@ const PROVIDER_TYPES: Record<
   },
   azure: {
     label: "Azure OpenAI",
-    hint: "An Azure OpenAI resource, with one of its keys. Use the endpoint the Azure portal shows as the Base URL, and list your deployment names as the models.",
+    hint: "An Azure OpenAI resource, with one of its keys. Use the endpoint the Azure portal shows as the Base URL, and list your deployment names as the models. Name a GPT-5 or o-series deployment after its model (e.g. gpt-5-prod), or its turns fail.",
     urlLabel: "Base URL",
     urlPlaceholder: "https://your-resource.openai.azure.com",
     urlNeeded: true,

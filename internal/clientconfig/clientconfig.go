@@ -1205,9 +1205,9 @@ func (t WebhookTriggerDef) SignatureHeader() string {
 // It selects a backend for a set of model slugs, letting a deployment route
 // inference natively to Anthropic / OpenAI / a self-hosted Ollama endpoint /
 // any OpenAI-compatible endpoint / the Vercel AI Gateway / Azure OpenAI
-// instead of exclusively through OpenRouter (for failover, data residency, or to avoid the OpenRouter
-// markup). A bundle with NO providers: block keeps the historical
-// single-OpenRouter behavior unchanged.
+// instead of exclusively through OpenRouter (for failover, data residency, or
+// to avoid the OpenRouter markup). A bundle with NO providers: block keeps the
+// historical single-OpenRouter behavior unchanged.
 //
 // SECURITY — the credential boundary mirrors the MCP catalog: APIKeyEnv names an
 // env var; its VALUE is read HOST-SIDE from the process env at boot (registered
@@ -2458,12 +2458,12 @@ func (b *Bundle) UncategorizedConnectors() []string {
 // validateProviders fails the load on a malformed providers[] entry (#289): a
 // blank/duplicate name, an unknown type, a missing api_key_env for a type that
 // requires a key, or a missing base_url for a type with no default endpoint
-// (openaicompat, azure). The per-type rules come from agentcore's provider type table,
-// the same one the admin store and the resolver check. Like the rest of
-// validate this is fail-loud at startup — a typo'd provider type or a missing
-// credential env would otherwise only surface as a resolver error on the first
-// turn that routed to it. An empty providers block is valid (single-OpenRouter
-// default).
+// (openaicompat, azure). The per-type rules come from agentcore's provider
+// type table, the same one the admin store and the resolver check. Like the
+// rest of validate this is fail-loud at startup — a typo'd provider type or a
+// missing credential env would otherwise only surface as a resolver error on
+// the first turn that routed to it. An empty providers block is valid
+// (single-OpenRouter default).
 func (b *Bundle) validateProviders() error {
 	seen := map[string]bool{}
 	for i := range b.Providers {

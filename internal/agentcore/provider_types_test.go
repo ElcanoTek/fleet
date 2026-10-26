@@ -259,17 +259,26 @@ func TestOpenAISDKTypesReachTheConfiguredEndpoint(t *testing.T) {
 }
 
 // recordingDoer answers every request with one canned chat completion and
-// records it, so a provider aimed at a real Azure host can run offline.
-type recordingDoer struct{ reqs []*http.Request }
+// records it and its body, so a provider aimed at a real Azure host can run
+// offline.
+type recordingDoer struct {
+	reqs   []*http.Request
+	bodies []map[string]any
+}
 
 func (d *recordingDoer) Do(r *http.Request) (*http.Response, error) {
 	d.reqs = append(d.reqs, r)
-	body := `{"id":"c","object":"chat.completion","created":1,"model":"m",` +
+	var body map[string]any
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	d.bodies = append(d.bodies, body)
+	reply := `{"id":"c","object":"chat.completion","created":1,"model":"m",` +
 		`"choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}]}`
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": {"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(body)),
+		Body:       io.NopCloser(strings.NewReader(reply)),
 		Request:    r,
 	}, nil
 }
@@ -329,6 +338,58 @@ func TestAzureMatchesFantasyAzure(t *testing.T) {
 			}
 			if got := ours.reqs[0].Header.Get("Api-Key"); got != "az-key" {
 				t.Errorf("Api-Key = %q, want the key", got)
+			}
+		})
+	}
+}
+
+// fantasy tells a reasoning model by its id alone, and on azure the id is a
+// deployment name the admin chose. Only a name that carries the model gets
+// the parameters reasoning models require (max_completion_tokens, no
+// temperature); Azure rejects max_tokens and a non-default temperature for
+// them. docs/PROVIDERS.md, the admin form and the chat guide state this naming
+// rule; if fantasy gains another way to mark a reasoning model, this fails and
+// they should change with it.
+func TestAzureReasoningDeploymentsAreToldByName(t *testing.T) {
+	for _, tc := range []struct {
+		deployment string
+		reasoning  bool
+	}{
+		{"gpt-5-prod", true},
+		{"o4-mini", true},
+		{"prod-o3", true},
+		{"gpt-4o-prod", false},
+		{"prod", false}, // a GPT-5 deployment named like this fails every turn
+	} {
+		t.Run(tc.deployment, func(t *testing.T) {
+			rec := &recordingDoer{}
+			p, err := openai.New(append(azureOpenAIOptions("az-key", "https://res.openai.azure.com"), openai.WithHTTPClient(rec))...)
+			if err != nil {
+				t.Fatalf("openai.New: %v", err)
+			}
+			lm, err := p.LanguageModel(context.Background(), tc.deployment)
+			if err != nil {
+				t.Fatalf("LanguageModel: %v", err)
+			}
+			maxOut, temp := int64(16384), 0.3
+			if _, err := lm.Generate(context.Background(), fantasy.Call{
+				Prompt:          fantasy.Prompt{fantasy.NewUserMessage("ping")},
+				MaxOutputTokens: &maxOut,
+				Temperature:     &temp,
+			}); err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+			body := rec.bodies[0]
+			_, maxTokens := body["max_tokens"]
+			_, maxCompletion := body["max_completion_tokens"]
+			_, temperature := body["temperature"]
+			if tc.reasoning && (maxTokens || temperature || !maxCompletion) {
+				t.Errorf("reasoning deployment %q sent max_tokens=%v temperature=%v max_completion_tokens=%v; want only max_completion_tokens",
+					tc.deployment, maxTokens, temperature, maxCompletion)
+			}
+			if !tc.reasoning && (!maxTokens || !temperature || maxCompletion) {
+				t.Errorf("deployment %q sent max_tokens=%v temperature=%v max_completion_tokens=%v; want max_tokens and temperature",
+					tc.deployment, maxTokens, temperature, maxCompletion)
 			}
 		})
 	}
