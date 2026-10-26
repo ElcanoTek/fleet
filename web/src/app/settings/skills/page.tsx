@@ -115,6 +115,7 @@ export default function SkillsPage() {
   // The builder form: id === "" is a new skill; otherwise an edit.
   const [draft, setDraft] = useState<typeof EMPTY_DRAFT | null>(null);
   const [busy, setBusy] = useState(false);
+  const editorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let stale = false;
@@ -183,17 +184,20 @@ export default function SkillsPage() {
     if (!draft) return;
     setBusy(true);
     setError(null);
-    const isNew = draft.id === "";
-    fetch(isNew ? "/api/user-skills" : `/api/user-skills/${encodeURIComponent(draft.id)}`, {
+    const trimmedName = draft.name.trim();
+    const existingByName = mine?.find((m) => m.name === trimmedName);
+    const targetId = draft.id || existingByName?.id || "";
+    const isNew = targetId === "";
+    fetch(isNew ? "/api/user-skills" : `/api/user-skills/${encodeURIComponent(targetId)}`, {
       method: isNew ? "POST" : "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: draft.name.trim(),
+        name: trimmedName,
         description: draft.description.trim(),
         body: draft.body,
         visibility: draft.visibility,
         // An edit must not change the lifecycle state — resend the current one.
-        ...(isNew ? {} : { status: mine?.find((m) => m.id === draft.id)?.status ?? "active" }),
+        ...(isNew ? {} : { status: mine?.find((m) => m.id === targetId)?.status ?? "active" }),
       }),
     })
       .then(async (res) => {
@@ -322,6 +326,38 @@ export default function SkillsPage() {
       .finally(() => setBusy(false));
   };
 
+  // cloneToDraft opens a Workspace pack skill (bundle, shared workspace, plugin,
+  // or built-in) in the "Your skills" editor so any user can customize it and
+  // optionally share their updated version with the workspace in one click.
+  const cloneToDraft = (s: SkillEntry) => {
+    setBusy(true);
+    setError(null);
+    fetch(`/api/skills/${encodeURIComponent(s.name)}`, { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error((await res.text()) || `Failed to load skill: ${res.status}`);
+        return (await res.json()) as SkillDetail;
+      })
+      .then((d) => {
+        const existing = mine?.find((m) => m.name === (d.name || s.name));
+        const body = (d.body ?? d.content.replace(/^---[\s\S]*?---\s*/, "")).trim();
+        setDraft({
+          id: existing?.id ?? "",
+          name: d.name || s.name,
+          description: d.description || s.description,
+          body,
+          visibility:
+            existing?.visibility === "workspace" || s.source === "bundle" || s.source === "workspace"
+              ? "workspace"
+              : "private",
+        });
+        setTimeout(() => {
+          editorRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+        }, 0);
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to load skill."))
+      .finally(() => setBusy(false));
+  };
+
   // loadDetail fetches one pack skill's SKILL.md into the open row. Split from
   // view() so the row's Retry can re-run the fetch without re-toggling.
   const loadDetail = (name: string) => {
@@ -396,7 +432,10 @@ export default function SkillsPage() {
         {draft ? (
           // .skill-create — the builder form doubles as the editor (draft.id
           // distinguishes); a bottom rule separates it from the rows below.
-          <div className="mb-3 grid gap-[0.75rem] border-b border-[var(--color-border-subtle)] pb-4">
+          <div
+            ref={editorRef}
+            className="mb-3 grid gap-[0.75rem] border-b border-[var(--color-border-subtle)] pb-4"
+          >
             <ConnField label="Name (lowercase-kebab, e.g. deal-check)">
               <input
                 id="skillName"
@@ -641,6 +680,14 @@ export default function SkillsPage() {
                         Add to my skills
                       </button>
                     ) : null}
+                    <button
+                      type="button"
+                      className={btnClass({ sm: true, reveal: true })}
+                      disabled={busy}
+                      onClick={() => cloneToDraft(s)}
+                    >
+                      Clone & edit
+                    </button>
                     <button
                       type="button"
                       className={`flex-none ${btnClass({ sm: true, reveal: true })}`}

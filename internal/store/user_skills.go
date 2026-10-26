@@ -109,11 +109,36 @@ func (s *Store) CreateUserSkillWithVisibility(ctx context.Context, userEmail, na
 	return s.createUserSkill(ctx, userEmail, name, description, body, UserSkillStatusActive, vis)
 }
 
-// CreateUserSkillProposal stages an agent-drafted skill for the owner's
-// review: it is stored but inert (never materialized, never invocable) until
-// approved in the builder.
+// CreateUserSkillProposal stages an agent-drafted skill (or an agent-drafted
+// edit to an existing skill of the same name) for the owner's review: it is
+// stored as proposed (never materialized, never invocable) until approved in
+// Settings → Skills, preserving any existing visibility setting on update.
 func (s *Store) CreateUserSkillProposal(ctx context.Context, userEmail, name, description, body string) (*UserSkill, error) {
-	return s.createUserSkill(ctx, userEmail, name, description, body, UserSkillStatusProposed, UserSkillVisibilityPrivate)
+	email := normalizeEmail(userEmail)
+	name = strings.TrimSpace(name)
+	if err := validateUserSkill(name, description, body); err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	sk := &UserSkill{
+		ID: uuid.NewString(), UserEmail: email, Name: name,
+		Description: strings.TrimSpace(description), Body: body,
+		Status: UserSkillStatusProposed, Visibility: UserSkillVisibilityPrivate, CreatedAt: now, UpdatedAt: now,
+	}
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO user_skills (id, user_email, name, description, body, status, visibility, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+		ON CONFLICT (user_email, name) DO UPDATE
+		SET description = EXCLUDED.description,
+		    body = EXCLUDED.body,
+		    status = $6,
+		    updated_at = EXCLUDED.updated_at
+		RETURNING id, visibility, created_at`,
+		sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, sk.Visibility, now).Scan(&sk.ID, &sk.Visibility, &sk.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return sk, nil
 }
 
 func (s *Store) checkWorkspaceShareCapacity(ctx context.Context, name, excludeID string) error {

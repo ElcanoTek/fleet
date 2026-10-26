@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -244,10 +245,10 @@ func TestWorkspaceSharedUserSkills(t *testing.T) {
 		t.Fatalf("GET /skills/opt-workbench: %d %s", w.Code, w.Body.String())
 	}
 
-	// A teammate ("teammate@x.com") does NOT auto-materialize the shared skill without opting in.
+	// A teammate ("teammate@x.com") can also use and read the active workspace-shared skill immediately.
 	entries := s.materializeUserSkills(context.Background(), "teammate@x.com", "conv-teammate-1")
-	if len(entries) != 0 {
-		t.Fatalf("unconsented teammate materialize = %+v, want empty", entries)
+	if len(entries) != 1 || entries[0].Name != "opt-workbench" {
+		t.Fatalf("teammate materialize = %+v, want [opt-workbench]", entries)
 	}
 
 	// Author ("u@x.com") materializes their own skill, and deleting the last skill cleans up the stale directory.
@@ -266,5 +267,47 @@ func TestWorkspaceSharedUserSkills(t *testing.T) {
 	stalePath := filepath.Join(wsRoot, "conv-author-1", "user-skills", "opt-workbench")
 	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
 		t.Fatalf("stale skill directory %s was not removed after roster became empty: err=%v", stalePath, err)
+	}
+}
+
+// A user who clones & edits a bundle skill (e.g. campaign-optimization-log)
+// overrides that bundle skill's SKILL.md for their runs (and inGET /skills +
+// GET /skills/{name} when shared with the workspace), while keeping bundled
+// reference files under skills/<name>/ available.
+func TestUserSkillOverridesBundleSkill(t *testing.T) {
+	wsRoot := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", wsRoot)
+	bundleDir := t.TempDir()
+	writeTestSkill(t, bundleDir, "campaign-optimization-log", "bundle baseline description")
+	fs := &skillsFakeStore{fakeChatStore: newFakeChatStore()}
+	s := &Server{
+		store:        fs,
+		clientConfig: &clientconfig.Bundle{SkillsDir: bundleDir},
+	}
+
+	w := userSkillsReq(t, s, s.userSkillsCollection, http.MethodPost, "/user-skills",
+		`{"name":"campaign-optimization-log","description":"updated trader optimization protocol","body":"1. Read Fast.io protocol.\n2. Open Workbench.","visibility":"workspace"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create override: %d %s", w.Code, w.Body.String())
+	}
+
+	entries := s.materializeUserSkills(context.Background(), "u@x.com", "conv-override-1")
+	if len(entries) != 1 || entries[0].Name != "campaign-optimization-log" || entries[0].Path != "user-skills/campaign-optimization-log/SKILL.md" {
+		t.Fatalf("override materialize = %+v", entries)
+	}
+
+	invoked := s.applySkillInvocation(context.Background(), "u@x.com", "msg", "/campaign-optimization-log review opts")
+	if !strings.Contains(invoked, "user-skills/campaign-optimization-log/SKILL.md") {
+		t.Fatalf("expected user-skill override path in invocation, got %q", invoked)
+	}
+
+	w = userSkillsReq(t, s, s.listSkills, http.MethodGet, "/skills", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"shared_by":"u@x.com"`) {
+		t.Fatalf("GET /skills missing workspace override metadata: %d %s", w.Code, w.Body.String())
+	}
+
+	w = userSkillsReq(t, s, s.skillByName, http.MethodGet, "/skills/campaign-optimization-log", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "1. Read Fast.io protocol.") {
+		t.Fatalf("GET /skills/campaign-optimization-log did not serve workspace override: %d %s", w.Code, w.Body.String())
 	}
 }

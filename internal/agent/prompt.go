@@ -576,13 +576,25 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 	// any bundled scripts/resources (Level 3) on demand, by path, when a task
 	// matches — the skills/ dir is mounted read-only in the sandbox and symlinked
 	// into the workspace, so `skills/<name>/...` paths resolve for bash/run_python.
+	userSkillNames := make(map[string]bool, len(userSkills))
+	for _, usk := range userSkills {
+		userSkillNames[usk.Name] = true
+	}
 	if skills, _ := clientconfig.ReadSkills(m.skillsDir); len(skills) > 0 {
-		sb.WriteString("## Skills\n")
-		sb.WriteString("Skills are packaged, on-demand capabilities. Only each skill's name and description are listed here; when a task matches one, read its `SKILL.md` for the full instructions — it may bundle scripts you run via `bash`/`run_python` and reference files you read on demand. Do NOT read a skill's files unless the task calls for it.\n\n")
+		var visibleSkills []clientconfig.Skill
 		for _, sk := range skills {
-			fmt.Fprintf(&sb, "- **%s** (`%s`): %s\n", sk.Name, sk.Path, sk.Description)
+			if !userSkillNames[sk.Name] {
+				visibleSkills = append(visibleSkills, sk)
+			}
 		}
-		sb.WriteString("\n")
+		if len(visibleSkills) > 0 {
+			sb.WriteString("## Skills\n")
+			sb.WriteString("Skills are packaged, on-demand capabilities. Only each skill's name and description are listed here; when a task matches one, read its `SKILL.md` for the full instructions — it may bundle scripts you run via `bash`/`run_python` and reference files you read on demand. Do NOT read a skill's files unless the task calls for it. When the user asks to edit, update, or customize a skill, read its `SKILL.md` and call `propose_skill` with the updated instructions so the user can approve and share it in Settings → Skills.\n\n")
+			for _, sk := range visibleSkills {
+				fmt.Fprintf(&sb, "- **%s** (`%s`): %s\n", sk.Name, sk.Path, sk.Description)
+			}
+			sb.WriteString("\n")
+		}
 	}
 
 	// 5c. the user's own skills (docs/SKILLS.md phase 2) — same progressive
@@ -590,7 +602,7 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 	// per-user) rather than the read-only bundle mount.
 	if len(userSkills) > 0 {
 		sb.WriteString("## Your user's skills\n")
-		sb.WriteString("Skills this user authored for their own runs. Same rules as Skills above: read the SKILL.md only when the task matches.\n\n")
+		sb.WriteString("Skills this user authored, customized, or received via workspace sharing (any supporting reference files or scripts under `skills/<name>/` remain available on disk). Same rules as Skills above: read the SKILL.md only when the task matches, and if the user asks to edit or improve one, read its `SKILL.md` and call `propose_skill` with the updated instructions.\n\n")
 		for _, sk := range userSkills {
 			fmt.Fprintf(&sb, "- **%s** (`%s`): %s\n", sk.Name, sk.Path, sk.Description)
 		}

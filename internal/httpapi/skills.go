@@ -73,31 +73,43 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	skills := s.bundleSkills()
+	sharedByName := map[string]store.UserSkill{}
+	var sharedList []store.UserSkill
+	if s.store != nil {
+		if shared, err := s.store.ListWorkspaceSharedUserSkills(r.Context()); err == nil {
+			sharedList = shared
+			for _, sk := range shared {
+				sharedByName[sk.Name] = sk
+			}
+		}
+	}
 	bundleNames := make(map[string]bool, len(skills))
 	entries := make([]skillEntry, 0, len(skills))
 	for _, sk := range skills {
 		bundleNames[sk.Name] = true
 		origin := s.skillOrigin(sk.Name)
-		entries = append(entries, skillEntry{
+		entry := skillEntry{
 			Name: sk.Name, Description: sk.Description, Source: origin.Source, Plugin: origin.Plugin,
 			DeclaredAllowedTools: sk.DeclaredAllowedTools,
-		})
+		}
+		if sharedSk, ok := sharedByName[sk.Name]; ok {
+			entry.Description = sharedSk.Description
+			entry.Source = "workspace"
+			entry.SharedBy = sharedSk.SharedBy
+		}
+		entries = append(entries, entry)
 	}
 	var sharedEntries []skillEntry
-	if s.store != nil {
-		if shared, err := s.store.ListWorkspaceSharedUserSkills(r.Context()); err == nil {
-			for _, sk := range shared {
-				if bundleNames[sk.Name] {
-					continue
-				}
-				sharedEntries = append(sharedEntries, skillEntry{
-					Name:        sk.Name,
-					Description: sk.Description,
-					Source:      "workspace",
-					SharedBy:    sk.SharedBy,
-				})
-			}
+	for _, sk := range sharedList {
+		if bundleNames[sk.Name] {
+			continue
 		}
+		sharedEntries = append(sharedEntries, skillEntry{
+			Name:        sk.Name,
+			Description: sk.Description,
+			Source:      "workspace",
+			SharedBy:    sk.SharedBy,
+		})
 	}
 	writeJSON(w, skillsResponse{Skills: entries, Shared: sharedEntries})
 }
@@ -121,6 +133,25 @@ func (s *Server) skillByName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/skills/"), "/")
+	if s.store != nil {
+		if shared, err := s.store.ListWorkspaceSharedUserSkills(r.Context()); err == nil {
+			for _, sk := range shared {
+				if sk.Name != name {
+					continue
+				}
+				resp := map[string]any{
+					"name":        sk.Name,
+					"description": sk.Description,
+					"source":      "workspace",
+					"shared_by":   sk.SharedBy,
+					"body":        sk.Body,
+					"content":     store.RenderUserSkillMarkdown(&sk),
+				}
+				writeJSON(w, resp)
+				return
+			}
+		}
+	}
 	for _, sk := range s.bundleSkills() {
 		if sk.Name != name {
 			continue
@@ -143,25 +174,6 @@ func (s *Server) skillByName(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, resp)
 		return
-	}
-	if s.store != nil {
-		if shared, err := s.store.ListWorkspaceSharedUserSkills(r.Context()); err == nil {
-			for _, sk := range shared {
-				if sk.Name != name {
-					continue
-				}
-				resp := map[string]any{
-					"name":        sk.Name,
-					"description": sk.Description,
-					"source":      "workspace",
-					"shared_by":   sk.SharedBy,
-					"body":        sk.Body,
-					"content":     store.RenderUserSkillMarkdown(&sk),
-				}
-				writeJSON(w, resp)
-				return
-			}
-		}
 	}
 	http.Error(w, "unknown skill", http.StatusNotFound)
 }
@@ -210,14 +222,18 @@ func matchSkillInvocation(message string, skills []clientconfig.Skill) (block, m
 // postChat stays a single statement, mirroring applyContextHandles /
 // applyConnectorRecommendations.
 func (s *Server) applySkillInvocation(ctx context.Context, user, userMessage, rawMessage string) string {
-	block, _ := matchSkillInvocation(rawMessage, s.bundleSkills())
-	if block == "" && s.store != nil {
-		// Bundle/built-in names win; otherwise try the caller's effective skills
-		// (their own active skills + workspace-shared active skills, docs/SKILLS.md).
-		// Best-effort — a store error just means no invocation block.
+	var block string
+	if s.store != nil {
+		// A user's active skill (including a customized override of a bundle
+		// skill) takes precedence over the static bundle copy; otherwise fall
+		// back to the bundle/built-in roster. Best-effort — a store error just
+		// falls back to the bundle roster.
 		if userSkills, err := s.effectiveUserSkills(ctx, user); err == nil {
 			block = matchUserSkillInvocation(rawMessage, userSkills)
 		}
+	}
+	if block == "" {
+		block, _ = matchSkillInvocation(rawMessage, s.bundleSkills())
 	}
 	return userMessage + block
 }

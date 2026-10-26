@@ -113,6 +113,23 @@ export function PromptLibrary({
     setError(null);
   };
 
+  const beginClone = () => {
+    if (!selected) return;
+    const clonedContent = selected.prompt_template || selected.content;
+    setSelectedID(null);
+    setDraft({
+      name:
+        selected.read_only || !selected.owned_by_caller
+          ? `${selected.name} (Custom)`
+          : `${selected.name} (Copy)`,
+      description: selected.description ?? "",
+      content: clonedContent,
+      visibility: selected.visibility === "workspace" ? "workspace" : "private",
+    });
+    setEditing(true);
+    setError(null);
+  };
+
   const save = async () => {
     setSaving(true);
     setError(null);
@@ -416,6 +433,15 @@ export function PromptLibrary({
                             </p>
                           </div>
                           <div className="flex gap-2">
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-small"
+                              onClick={beginClone}
+                            >
+                              {selected.read_only || !selected.owned_by_caller
+                                ? "Clone & edit"
+                                : "Duplicate"}
+                            </button>
                             {!selected.read_only && selected.owned_by_caller ? (
                               <button
                                 type="button"

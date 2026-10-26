@@ -5174,15 +5174,26 @@ export function ChatExperience({
       }
     };
 
-    // Bundle skill roster for the composer "/" autocomplete (#513).
+    // Bundle + workspace-shared skill roster for the composer "/" autocomplete (#513).
     // Best-effort: an older server without /skills just leaves the
     // autocomplete empty.
     const loadSkills = async () => {
       try {
         const sr = await fetch("/api/skills", { cache: "no-store" });
         if (sr.ok) {
-          const sd = (await sr.json()) as { skills?: SkillInfo[] };
-          if (!cancelled) setSkills(sd.skills ?? []);
+          const sd = (await sr.json()) as {
+            skills?: SkillInfo[];
+            shared_skills?: SkillInfo[];
+          };
+          const merged: SkillInfo[] = [];
+          const seen = new Set<string>();
+          for (const item of [...(sd.skills ?? []), ...(sd.shared_skills ?? [])]) {
+            if (!seen.has(item.name)) {
+              seen.add(item.name);
+              merged.push(item);
+            }
+          }
+          if (!cancelled) setSkills(merged);
         }
       } catch {
         // Optional nicety — plain "/text" messages still send fine.

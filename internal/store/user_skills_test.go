@@ -114,7 +114,16 @@ func TestUserSkillProposalFlow(t *testing.T) {
 	if active, _ := s.ListActiveUserSkills(ctx, me); len(active) != 1 {
 		t.Errorf("approved skill missing from active set: %+v", active)
 	}
-	// Nothing can move it BACK to proposed.
+	// Proposing an edit to an existing skill stages the updated body as proposed
+	// without failing on the per-user name uniqueness constraint.
+	editedProp, err := s.CreateUserSkillProposal(ctx, me, "weekly-pacing", "updated weekly pacing workflow", "1. Pull numbers.\n2. Format.\n3. Verify.")
+	if err != nil {
+		t.Fatalf("propose edit to existing skill: %v", err)
+	}
+	if editedProp.ID != prop.ID || editedProp.Status != UserSkillStatusProposed || !strings.Contains(editedProp.Body, "3. Verify.") {
+		t.Errorf("edited proposal = %+v", editedProp)
+	}
+	// Nothing can move it BACK to proposed through UpdateUserSkill.
 	if _, err := s.UpdateUserSkill(ctx, me, prop.ID, prop.Name, prop.Description, prop.Body, UserSkillStatusProposed); !errors.Is(err, ErrUserSkillInvalid) {
 		t.Errorf("re-proposing should be invalid, got %v", err)
 	}

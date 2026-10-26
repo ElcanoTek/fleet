@@ -281,5 +281,13 @@ describe("SkillsPage failure states", () => {
         }),
       ),
     );
+
+    // Clicking "Clone & edit" on a Workspace pack skill opens the editor pre-filled with its content and workspace sharing enabled.
+    fireEvent.click(within(sharedRow).getByRole("button", { name: "Clone & edit" }));
+    const nameInput = (await screen.findByLabelText(/Name \(lowercase-kebab/i)) as HTMLInputElement;
+    await waitFor(() => expect(nameInput.value).toBe("team-opt-log"));
+    expect((screen.getByLabelText(/Instructions \(markdown/i) as HTMLTextAreaElement).value).toBe(
+      "1. Open workbench.",
+    );
   });
 });
