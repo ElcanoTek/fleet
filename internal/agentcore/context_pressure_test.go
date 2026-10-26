@@ -580,11 +580,16 @@ func TestRun_CompactionRecordsReplayIdenticallyAndExcludePlanReannounce(t *testi
 		}
 	}
 
-	// Verify that a run-local plan reannouncement injected after the first
-	// compaction does not shift the persisted offsets of a second compaction.
-	liveWithPlan := make([]fantasy.Message, 0, len(sentRound0)+5)
+	// Verify that run-local transient messages (plan reannouncement +
+	// user_prompt_submit hook / enforcement nudge) do not shift the persisted
+	// offsets of a subsequent compaction.
+	hookMsg := fantasy.NewUserMessage("[hook:user_prompt_submit] transient context")
+	eng := &engine{logSession: NewLogSession()}
+	eng.markRunLocalMessages(hookMsg)
+	liveWithPlan := make([]fantasy.Message, 0, len(sentRound0)+6)
 	liveWithPlan = append(liveWithPlan, sentRound0[:2]...)
 	liveWithPlan = append(liveWithPlan, fantasy.NewUserMessage(planReannouncePrefix+"] Open plan item"))
+	liveWithPlan = append(liveWithPlan, hookMsg)
 	liveWithPlan = append(liveWithPlan, sentRound0[2:]...)
 	liveWithPlan = append(liveWithPlan,
 		fantasy.NewUserMessage("extra 1"),
@@ -592,7 +597,6 @@ func TestRun_CompactionRecordsReplayIdenticallyAndExcludePlanReannounce(t *testi
 		fantasy.NewUserMessage("extra 3"),
 		fantasy.NewUserMessage("extra 4"),
 	)
-	eng := &engine{logSession: NewLogSession()}
 	second := eng.proactiveCompactKeeping(context.Background(), liveWithPlan, liveWithPlan)
 	if !second.compacted || len(eng.compactions) != 1 {
 		t.Fatalf("expected second compaction to record 1 CompactionRecord, got compacted=%v len=%d", second.compacted, len(eng.compactions))
@@ -604,7 +608,7 @@ func TestRun_CompactionRecordsReplayIdenticallyAndExcludePlanReannounce(t *testi
 		fantasy.NewUserMessage("extra 4"),
 	)
 	replayedAfterSecond := ApplyCompactionRecords(planFreeBeforeSecond, eng.compactions)
-	wantPlanFree := dropPlanReannounceMessages(second.messages)
+	wantPlanFree := eng.dropRunLocalMessages(second.messages)
 	if len(replayedAfterSecond) != len(wantPlanFree) {
 		t.Fatalf("second compaction replay len = %d, want %d", len(replayedAfterSecond), len(wantPlanFree))
 	}

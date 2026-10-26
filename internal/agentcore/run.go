@@ -469,12 +469,14 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 
 	// Lifecycle hooks (#788): one per-run engine, nil (zero-overhead no-op) when
 	// the bundle declares none. Hooks execute inside the sandbox via deps.Executor.
+	seedLen := len(messages)
 	hooks := newHookEngine(mode, deps.Executor, deps.Observer, label)
 	messages, err = applyUserPromptSubmitHooks(ctx, hooks, messages)
 	if err != nil {
 		return Result{}, err
 	}
 	messages = appendRunTailMessages(ctx, cfg, messages)
+	eng.markRunLocalMessages(messages[seedLen:]...)
 
 	maxTokens := runMaxCompletionTokens(cfg)
 	eng.maxCompletionTokens = int(maxTokens)
@@ -848,10 +850,12 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// the authoritative final answer so they drop the superseded draft
 		// without discarding abort-path transcripts.
 		messages = append(messages, eng.roundCarry(finalResult)...)
+		beforeEnforceLen := len(messages)
 		messages, err = appendEnforcementMessages(messages, enforcementMsgs, deps.Observer, observerBoundary)
 		if err != nil {
 			return Result{}, err
 		}
+		eng.markRunLocalMessages(messages[beforeEnforceLen:]...)
 	}
 
 	// Round-cap exhaustion is a hard error, but the rounds it burned are paid

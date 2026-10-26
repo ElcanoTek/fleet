@@ -120,6 +120,12 @@ type engine struct {
 	// boundary on subsequent turns instead of re-sending and re-summarizing the
 	// dropped middle on every turn.
 	compactions []CompactionRecord
+	// runLocalParts tracks the first-part pointer of every transient run-local
+	// message injected into the live message slice (user_prompt_submit hook
+	// output, per-run working-dir/date tail, post-compaction plan reannouncement,
+	// enforcement nudges) that is never projected into Result.Entries, so
+	// CompactionRecord offsets match the persistable message sequence.
+	runLocalParts map[*fantasy.MessagePart]bool
 	// resendFloor, resendPrefix, resendFloorStale and resendFloorNoted carry
 	// the checkpoint's floor rule (#1600, see effectiveResendBudget).
 	// resendFloor is the resent size measured at the latest floor point: the
@@ -409,24 +415,27 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 	}
 
 	e.logCompactionSummary(summary)
-	firstKeptCallID := ""
-	if len(tail) > 0 {
-		firstKeptCallID = firstToolCallID(tail[0])
-	}
 	planText := planReannounceText(e.runOrch)
 	tail = dropPlanReannounceMessages(tail)
+	persistableTail := e.dropRunLocalMessages(tail)
+	firstKeptCallID := ""
+	if len(persistableTail) > 0 {
+		firstKeptCallID = firstToolCallID(persistableTail[0])
+	}
 	out := make([]fantasy.Message, 0, len(head)+2+len(tail))
 	out = append(out, head...)
 	out = append(out, summary)
 	if planText != "" {
-		out = append(out, fantasy.NewUserMessage(planText))
+		planMsg := fantasy.NewUserMessage(planText)
+		e.markRunLocalMessages(planMsg)
+		out = append(out, planMsg)
 	}
 	out = append(out, tail...)
 	e.consecutiveCompactions++
 	e.lastForcedCompaction = forcedCompactionStats{removed: len(middle), summaryTokens: estimateMessageTokens(summary)}
 	e.compactions = append(e.compactions, CompactionRecord{
-		Head:                len(dropPlanReannounceMessages(head)),
-		Removed:             len(dropPlanReannounceMessages(middle)),
+		Head:                len(e.dropRunLocalMessages(head)),
+		Removed:             len(e.dropRunLocalMessages(middle)),
 		FirstKeptToolCallID: firstKeptCallID,
 		Summary:             messageText(summary),
 	})
@@ -561,10 +570,51 @@ func planReannounceText(orch *orchestrationState) string {
 func dropPlanReannounceMessages(messages []fantasy.Message) []fantasy.Message {
 	out := make([]fantasy.Message, 0, len(messages))
 	for _, m := range messages {
-		if m.Role == fantasy.MessageRoleUser {
-			if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](firstPart(m)); ok && strings.HasPrefix(tp.Text, planReannouncePrefix) {
-				continue
-			}
+		if isPlanReannounceMessage(m) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func isPlanReannounceMessage(m fantasy.Message) bool {
+	if m.Role != fantasy.MessageRoleUser {
+		return false
+	}
+	tp, ok := fantasy.AsMessagePart[fantasy.TextPart](firstPart(m))
+	return ok && strings.HasPrefix(tp.Text, planReannouncePrefix)
+}
+
+func (e *engine) markRunLocalMessages(msgs ...fantasy.Message) {
+	if e == nil || len(msgs) == 0 {
+		return
+	}
+	if e.runLocalParts == nil {
+		e.runLocalParts = make(map[*fantasy.MessagePart]bool, len(msgs))
+	}
+	for i := range msgs {
+		if len(msgs[i].Content) > 0 {
+			e.runLocalParts[&msgs[i].Content[0]] = true
+		}
+	}
+}
+
+func (e *engine) isRunLocalMessage(m fantasy.Message) bool {
+	if isPlanReannounceMessage(m) {
+		return true
+	}
+	if e == nil || len(e.runLocalParts) == 0 || len(m.Content) == 0 {
+		return false
+	}
+	return e.runLocalParts[&m.Content[0]]
+}
+
+func (e *engine) dropRunLocalMessages(messages []fantasy.Message) []fantasy.Message {
+	out := make([]fantasy.Message, 0, len(messages))
+	for _, m := range messages {
+		if e.isRunLocalMessage(m) {
+			continue
 		}
 		out = append(out, m)
 	}
@@ -645,17 +695,20 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 			compactionSummaryPrefix, len(droppable)))
 	}
 
-	firstKeptCallID := ""
-	if len(keep) > 0 {
-		firstKeptCallID = firstToolCallID(keep[0])
-	}
 	planText := planReannounceText(e.runOrch)
 	keep = dropPlanReannounceMessages(keep)
+	persistableKeep := e.dropRunLocalMessages(keep)
+	firstKeptCallID := ""
+	if len(persistableKeep) > 0 {
+		firstKeptCallID = firstToolCallID(persistableKeep[0])
+	}
 	out := make([]fantasy.Message, 0, head+2+len(keep))
 	out = append(out, messages[:head]...)
 	out = append(out, summary)
 	if planText != "" {
-		out = append(out, fantasy.NewUserMessage(planText))
+		planMsg := fantasy.NewUserMessage(planText)
+		e.markRunLocalMessages(planMsg)
+		out = append(out, planMsg)
 	}
 	out = append(out, keep...)
 
@@ -666,8 +719,8 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 	// The history just shrank: the next step's resent size is the new floor.
 	e.resendFloorStale = true
 	e.compactions = append(e.compactions, CompactionRecord{
-		Head:                len(dropPlanReannounceMessages(messages[:head])),
-		Removed:             len(dropPlanReannounceMessages(droppable)),
+		Head:                len(e.dropRunLocalMessages(messages[:head])),
+		Removed:             len(e.dropRunLocalMessages(droppable)),
 		FirstKeptToolCallID: firstKeptCallID,
 		Summary:             messageText(summary),
 	})

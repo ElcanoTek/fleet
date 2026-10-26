@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"charm.land/fantasy"
@@ -346,7 +347,18 @@ func extractSingleToolExchange(messages []fantasy.Message, callID string) ([]fan
 
 func applyTurnSummaryCompactions(out []fantasy.Message, summaryIdx, lastUserIdx, lastSummaryIdx int, compactions []agentcore.CompactionRecord, sel toolResultSelection, deferred map[int][][]fantasy.Message) []fantasy.Message {
 	compacted := agentcore.ApplyCompactionRecords(out, compactions)
-	for callID, resIdx := range sel.chosenIdx {
+	callIDs := make([]string, 0, len(sel.chosenIdx))
+	for callID := range sel.chosenIdx {
+		callIDs = append(callIDs, callID)
+	}
+	slices.SortFunc(callIDs, func(a, b string) int {
+		if d := sel.chosenIdx[a] - sel.chosenIdx[b]; d != 0 {
+			return d
+		}
+		return strings.Compare(a, b)
+	})
+	for _, callID := range callIDs {
+		resIdx := sel.chosenIdx[callID]
 		res := sel.chosen[callID]
 		if !sel.isOutOfBandResolution[callID] || strings.HasPrefix(res.Text, "APPROVAL_REQUIRED:") {
 			continue
