@@ -352,7 +352,7 @@ describe("ProvidersAdminPage", () => {
     });
   });
 
-  it("asks a Google Gemini provider for its key and window, not a Base URL", async () => {
+  it("asks a Google Gemini provider for its key and window; its Base URL is optional", async () => {
     const fetchMock = mockFetch([]);
     vi.stubGlobal("fetch", fetchMock);
     render(<ProvidersAdminPage />);

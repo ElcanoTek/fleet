@@ -380,9 +380,10 @@ func buildProvider(cfg ProviderConfig, headers ProviderHeaders) (fantasy.Provide
 
 // googleOptions select the Gemini API backend with the entry's key and always
 // name a base URL. The explicit key and backend make the genai SDK ignore the
-// host's GOOGLE_API_KEY, GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI and
-// GOOGLE_CLOUD_PROJECT; the explicit base URL keeps GOOGLE_GEMINI_BASE_URL
-// out too (see defaultGeminiBaseURL).
+// host's GOOGLE_API_KEY, GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI,
+// GOOGLE_GENAI_USE_ENTERPRISE, GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION and
+// GOOGLE_CLOUD_REGION; the explicit base URL keeps GOOGLE_GEMINI_BASE_URL and
+// GOOGLE_VERTEX_BASE_URL out too (see defaultGeminiBaseURL).
 func googleOptions(apiKey, base string) []google.Option {
 	if base == "" {
 		base = defaultGeminiBaseURL

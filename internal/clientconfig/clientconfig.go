@@ -1234,8 +1234,8 @@ func (t WebhookTriggerDef) SignatureHeader() string {
 // inference natively to Anthropic / OpenAI / a self-hosted Ollama endpoint /
 // any OpenAI-compatible endpoint / the Vercel AI Gateway / Azure OpenAI / the
 // Gemini API instead of exclusively through OpenRouter (for failover, data
-// residency, or to avoid the OpenRouter markup). A bundle with NO providers: block keeps the
-// historical single-OpenRouter behavior unchanged.
+// residency, or to avoid the OpenRouter markup). A bundle with NO providers:
+// block keeps the historical single-OpenRouter behavior unchanged.
 //
 // SECURITY — the credential boundary mirrors the MCP catalog: APIKeyEnv names an
 // env var; its VALUE is read HOST-SIDE from the process env at boot (registered

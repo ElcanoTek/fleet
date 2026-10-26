@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -346,7 +347,7 @@ func cloneAnyMap(in map[string]any) map[string]any {
 // unwrap before local validation and persistence.
 func terminalProviderSchema(schema map[string]any) (map[string]any, bool) {
 	if rootType, ok := schema["type"].(string); ok && rootType == "object" {
-		return schema, false
+		return withStringRequired(schema), false
 	}
 	// Moving a schema beneath properties.value changes the document root seen by
 	// fragment-only JSON Pointer refs. Rebase refs that still belong to the root
@@ -363,6 +364,30 @@ func terminalProviderSchema(schema map[string]any) (map[string]any, bool) {
 		"required":             []string{"value"},
 		"additionalProperties": false,
 	}, true
+}
+
+// withStringRequired returns schema with its top-level required list as a
+// []string. JSON decoding yields []any, and fantasy's Gemini conversion keeps
+// a tool's required list only as []string, so an object-rooted output_schema
+// would otherwise reach a google model with no required fields (#1703). Every
+// other provider serializes the two alike. schema itself is not modified.
+func withStringRequired(schema map[string]any) map[string]any {
+	req, ok := schema["required"].([]any)
+	if !ok {
+		return schema
+	}
+	names := make([]string, 0, len(req))
+	for _, v := range req {
+		name, ok := v.(string)
+		if !ok {
+			return schema
+		}
+		names = append(names, name)
+	}
+	out := make(map[string]any, len(schema))
+	maps.Copy(out, schema)
+	out["required"] = names
+	return out
 }
 
 func cloneTerminalSchema(schema map[string]any) map[string]any {
