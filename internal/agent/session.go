@@ -89,6 +89,9 @@ type TextContent struct {
 	// else, so existing rows are unchanged. Replay ignores it: the model reads
 	// the entry's labelled text like any user message.
 	Kind string `json:"kind,omitempty"`
+	// Steered is true when this user-role text entry was injected mid-turn via
+	// SteerSource (#785) rather than committed as the turn-start prompt.
+	Steered bool `json:"steered,omitempty"`
 	// RuntimeToday is the UTC day ("YYYY-MM-DD") this user turn ran on. The
 	// model read that day's runtime_today note (agentcore.RuntimeDateMessage)
 	// directly after this message, and replay regenerates the same note in
@@ -345,7 +348,7 @@ func extractSingleToolExchange(messages []fantasy.Message, callID string) ([]fan
 	}, true
 }
 
-func applyTurnSummaryCompactions(out []fantasy.Message, summaryIdx, lastUserIdx, lastSummaryIdx int, compactions []agentcore.CompactionRecord, sel toolResultSelection, deferred map[int][][]fantasy.Message) []fantasy.Message {
+func applyTurnSummaryCompactions(out []fantasy.Message, summaryIdx, turnStartUserIdx, lastSummaryIdx int, compactions []agentcore.CompactionRecord, sel toolResultSelection, deferred map[int][][]fantasy.Message) []fantasy.Message {
 	compacted := agentcore.ApplyCompactionRecords(out, compactions)
 	callIDs := make([]string, 0, len(sel.chosenIdx))
 	for callID := range sel.chosenIdx {
@@ -364,7 +367,7 @@ func applyTurnSummaryCompactions(out []fantasy.Message, summaryIdx, lastUserIdx,
 			continue
 		}
 		postCompactionResolution := resIdx > summaryIdx
-		midTurnResolution := lastUserIdx > lastSummaryIdx && resIdx > lastUserIdx
+		midTurnResolution := turnStartUserIdx > lastSummaryIdx && resIdx > turnStartUserIdx
 		sameTurnOOOResolution := sel.chosenOOO[callID] && sel.firstSummaryIdx[callID] == summaryIdx
 		if !postCompactionResolution && !midTurnResolution && !sameTurnOOOResolution {
 			continue
@@ -457,7 +460,7 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 		pendingAssistant = nil
 	}
 
-	lastUserIdx := -1
+	turnStartUserIdx := -1
 	lastSummaryIdx := -1
 	for i, e := range effective {
 		switch e.Type {
@@ -491,7 +494,10 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 			switch e.Role {
 			case "user":
 				flushAssistant()
-				lastUserIdx = i
+				isSteer := c.Steered || (turnStartUserIdx > lastSummaryIdx && c.RuntimeToday == "")
+				if !isSteer {
+					turnStartUserIdx = i
+				}
 				parts := loadHistoryImageParts(c.Images, uploadsRoot)
 				// The model sees what it saw the first time: the user's text
 				// plus that turn's injected context (rows written before
@@ -509,7 +515,7 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 			var c TurnSummaryContent
 			if err := json.Unmarshal(e.Content, &c); err == nil && len(c.Compactions) > 0 {
 				flushAssistant()
-				out = applyTurnSummaryCompactions(out, i, lastUserIdx, lastSummaryIdx, c.Compactions, sel, deferredExchanges)
+				out = applyTurnSummaryCompactions(out, i, turnStartUserIdx, lastSummaryIdx, c.Compactions, sel, deferredExchanges)
 			}
 			lastSummaryIdx = i
 			continue

@@ -510,6 +510,40 @@ func TestReplayHistory_PreservesApprovalOutcomesAcrossCompaction(t *testing.T) {
 	if !okOOO || isErrOOO || !contains([]byte(txtOOO), `"status":"sent_ooo"`) {
 		t.Errorf("out-of-order compacted result = (%q, isErr=%v, ok=%v); want sent_ooo outcome preserved", txtOOO, isErrOOO, okOOO)
 	}
+
+	// 3. Mid-turn approval resolution for an earlier turn's call followed by a
+	// steering message in the same turn before compaction: the resolution row
+	// lands after the turn-start user entry and before the steered user entry.
+	midTurnSteerEntries := []HistoryEntry{
+		mustEntry("user", "text", TextContent{Text: "turn 1 head", RuntimeToday: "2026-10-26"}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "call_prior", Name: "send_email", Input: `{}`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_prior", Name: "send_email", Text: "APPROVAL_REQUIRED: staged card", IsErr: true}),
+		mustEntry("assistant", "text", TextContent{Text: "Staged."}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{Model: "anthropic/claude-opus-4.7"}),
+		mustEntry("user", "text", TextContent{Text: "turn 2 start", RuntimeToday: "2026-10-26"}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_prior", Name: "send_email", Text: `{"status":"sent_mid_turn"}`, IsErr: false}),
+		mustEntry("user", "text", TextContent{Text: "also check the logs", Steered: true}),
+		mustEntry("assistant", "text", TextContent{Text: "Checked and done."}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{
+			Model: "anthropic/claude-opus-4.7",
+			Compactions: []agentcore.CompactionRecord{
+				{
+					Head:    2,
+					Removed: 3, // call_prior + result + "Staged."
+					Summary: "[context compaction — earlier messages summarized to fit context window]\n\nSummary.",
+				},
+			},
+		}),
+	}
+	msgsMid, err := replayHistory(midTurnSteerEntries, "")
+	if err != nil {
+		t.Fatalf("replayHistory mid-turn approval before steer: %v", err)
+	}
+	assertWellFormedToolPairs(t, msgsMid)
+	txtMid, isErrMid, okMid := toolResultTextFor(t, msgsMid, "call_prior")
+	if !okMid || isErrMid || !contains([]byte(txtMid), `"status":"sent_mid_turn"`) {
+		t.Errorf("mid-turn approval before steer result = (%q, isErr=%v, ok=%v); want sent_mid_turn outcome preserved", txtMid, isErrMid, okMid)
+	}
 }
 
 // contains is a minimal substring check on []byte — avoids pulling in bytes

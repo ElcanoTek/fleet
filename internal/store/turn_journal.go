@@ -637,7 +637,7 @@ func buildRecoveredEntries(journal []TurnJournalRow, events []TurnEvent) ([]agen
 			}
 			seenSteer[p.InputID] = true
 			flushText()
-			appendJSON("user", "text", agent.TextContent{Text: p.Text})
+			appendJSON("user", "text", agent.TextContent{Text: p.Text, Steered: true})
 		case "reasoning.end":
 			var p struct {
 				Text string `json:"text"`

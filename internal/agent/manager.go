@@ -2140,7 +2140,7 @@ func mapRunEntries(entries []agentcore.RunEntry) []HistoryEntry {
 		case "user_text":
 			// A steered mid-turn user message (#785): persisted in stream order
 			// like every other entry, exactly once (the sink dedupes by SteerID).
-			out = append(out, mustEntry("user", "text", TextContent{Text: e.Text}))
+			out = append(out, mustEntry("user", "text", TextContent{Text: e.Text, Steered: true}))
 		case "tool_call":
 			out = append(out, mustEntry("assistant", entryTypeToolCall, ToolCallContent{
 				ID: e.ToolCallID, Name: e.ToolName, Input: e.ToolInput,
