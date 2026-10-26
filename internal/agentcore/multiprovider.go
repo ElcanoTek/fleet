@@ -3,11 +3,13 @@ package agentcore
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/anthropic"
+	"charm.land/fantasy/providers/azure"
 	"charm.land/fantasy/providers/openai"
 	"charm.land/fantasy/providers/openaicompat"
 	"charm.land/fantasy/providers/vercel"
@@ -17,11 +19,11 @@ import (
 // Multi-provider LLM support (#289). Fleet routed every model through OpenRouter
 // as a singleton gateway. This adds native provider backends — Anthropic,
 // OpenAI, Ollama (via its OpenAI-compatible API), and since #1703 any
-// OpenAI-compatible endpoint and the Vercel AI Gateway — alongside OpenRouter,
-// selected by a client-bundle `providers:` block or admin-managed rows. The
-// engine itself is already provider-agnostic (it holds fantasy.LanguageModel
-// interfaces); the coupling was entirely in how those models were constructed
-// (always the OpenRouter provider).
+// OpenAI-compatible endpoint, the Vercel AI Gateway and Azure OpenAI —
+// alongside OpenRouter, selected by a client-bundle `providers:` block or
+// admin-managed rows. The engine itself is already provider-agnostic (it holds
+// fantasy.LanguageModel interfaces); the coupling was entirely in how those
+// models were constructed (always the OpenRouter provider).
 // This layer resolves the RIGHT provider for a given model slug and builds the
 // model through it.
 //
@@ -58,6 +60,12 @@ const (
 	// (a listed model beats a catch-all in selectProvider); an explicit
 	// "<name>/<creator>/<model>" route reaches it without that.
 	ProviderTypeVercel ProviderType = "vercel"
+	// ProviderTypeAzure calls an Azure OpenAI resource through its
+	// version-free v1 API, the way fantasy's azure provider does, with the key
+	// in the Api-Key header. base_url is the resource's endpoint as the Azure
+	// portal shows it, and a model slug is one of the resource's deployment
+	// names. Keys only: Microsoft Entra ID sign-in is not supported.
+	ProviderTypeAzure ProviderType = "azure"
 )
 
 // ProviderTypeSpec is what every configuration surface needs to know about one
@@ -84,6 +92,7 @@ var providerTypeSpecs = []ProviderTypeSpec{
 	{Type: ProviderTypeOllama},
 	{Type: ProviderTypeOpenAICompat, BaseURLRequired: true},
 	{Type: ProviderTypeVercel, APIKeyRequired: true},
+	{Type: ProviderTypeAzure, APIKeyRequired: true, BaseURLRequired: true},
 }
 
 // LookupProviderType returns the spec for a provider type name (exact match;
@@ -133,17 +142,28 @@ const defaultOllamaBaseURL = "http://localhost:11434/v1"
 // applied. With a key, Authorization is set to it explicitly; without one it
 // is deleted, so the request carries no key at all. Either way the SDK then
 // skips its own key logic, which is what keeps both env keys off the request.
-// A custom header that shares its name with one the SDK sets itself
-// (Content-Type, Accept, User-Agent) is left alone: deleting it would strip
-// the SDK's own value too.
-// sdkOwnedHeaders are the headers providerOwnedOpenAIOptions never deletes by
+// Azure sends its key in another header, so azureOpenAIOptions shares the
+// header removals (hostOpenAIHeaderRemovals) but not this Authorization step.
+func providerOwnedOpenAIOptions(apiKey string) []option.RequestOption {
+	opts := hostOpenAIHeaderRemovals()
+	if apiKey == "" {
+		return append(opts, option.WithHeaderDel("Authorization"))
+	}
+	return append(opts, option.WithHeader("Authorization", "Bearer "+apiKey))
+}
+
+// sdkOwnedHeaders are the headers hostOpenAIHeaderRemovals never deletes by
 // name: the SDK sets them on every request (Authorization is handled
 // separately, from the provider's own key).
 var sdkOwnedHeaders = map[string]bool{
 	"authorization": true, "content-type": true, "accept": true, "user-agent": true,
 }
 
-func providerOwnedOpenAIOptions(apiKey string) []option.RequestOption {
+// hostOpenAIHeaderRemovals deletes the OpenAI-Organization and OpenAI-Project
+// headers and every header OPENAI_CUSTOM_HEADERS names. A custom header that
+// shares its name with one the SDK sets itself (Content-Type, Accept,
+// User-Agent) is left alone: deleting it would strip the SDK's own value too.
+func hostOpenAIHeaderRemovals() []option.RequestOption {
 	opts := []option.RequestOption{
 		option.WithHeaderDel("OpenAI-Organization"),
 		option.WithHeaderDel("OpenAI-Project"),
@@ -155,10 +175,46 @@ func providerOwnedOpenAIOptions(apiKey string) []option.RequestOption {
 			}
 		}
 	}
-	if apiKey == "" {
-		return append(opts, option.WithHeaderDel("Authorization"))
+	return opts
+}
+
+// azureEndpointPattern matches an Azure OpenAI resource endpoint on any of the
+// host names Azure gives one, capturing the resource name. It is fantasy's
+// own pattern (providers/azure, v0.45.3).
+var azureEndpointPattern = regexp.MustCompile(`^(?:https?://)?([a-zA-Z0-9-]+)\.(?:openai|cognitiveservices|services\.ai)\.azure\.com(?:/.*)?$`)
+
+// azureBaseURL is the API root an azure entry's base_url resolves to, the same
+// as fantasy's azure.WithBaseURL gives (its parser is unexported): an endpoint
+// on an Azure host, whatever its path, becomes that resource's v1 API root, and
+// any other URL is used as given, with https:// added when it has no scheme.
+// Turns and the connection test both resolve through it, so the test reaches
+// the endpoint turns use. TestAzureMatchesFantasyAzure pins the parity.
+func azureBaseURL(base string) string {
+	if m := azureEndpointPattern.FindStringSubmatch(base); m != nil {
+		return "https://" + m[1] + ".openai.azure.com/openai/v1"
 	}
-	return append(opts, option.WithHeader("Authorization", "Bearer "+apiKey))
+	if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+		return "https://" + base
+	}
+	return base
+}
+
+// azureOpenAIOptions build what fantasy's azure.New builds: its OpenAI
+// provider named "azure", pointed at azureBaseURL(base), with the key in the
+// Api-Key header and no Authorization header. azure.New takes no SDK options,
+// so it cannot be given the host-header removals every OpenAI-SDK-backed type
+// needs; here they come first, then the Api-Key, so a custom header of that
+// name cannot replace the provider's own key.
+func azureOpenAIOptions(apiKey, base string) []openai.Option {
+	sdk := append(hostOpenAIHeaderRemovals(),
+		option.WithHeaderDel("Authorization"),
+		option.WithHeader("Api-Key", apiKey),
+	)
+	return []openai.Option{
+		openai.WithName(azure.Name),
+		openai.WithBaseURL(azureBaseURL(base)),
+		openai.WithSDKOptions(sdk...),
+	}
 }
 
 // ProviderConfig is one resolved LLM provider. The API-key VALUE is resolved
@@ -285,6 +341,8 @@ func buildProvider(cfg ProviderConfig, headers ProviderHeaders) (fantasy.Provide
 			opts = append(opts, vercel.WithBaseURL(base))
 		}
 		return vercel.New(opts...)
+	case ProviderTypeAzure:
+		return openai.New(azureOpenAIOptions(key, base)...)
 	default:
 		// A type in providerTypeSpecs with no case here; the build test fails
 		// on this before it can ship.

@@ -7,20 +7,23 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/azure"
+	"charm.land/fantasy/providers/openai"
 )
 
 // The provider type table (#1703) is the one list of supported types. The
 // load-bearing assertions: every listed type can be built and probed (so a
 // type cannot be added to the table without a constructor), the required
-// fields are enforced from the table, and the two OpenAI-SDK-backed types added
-// with it send the configured key, and nothing from the host's own OPENAI_*
-// environment, to the configured endpoint, on both the Generate and the Stream
-// path.
+// fields are enforced from the table, and the OpenAI-SDK-backed types added
+// with it (openaicompat, vercel, azure) send the configured key, and nothing
+// from the host's own OPENAI_* environment, to the configured endpoint, on both
+// the Generate and the Stream path.
 
 func TestEveryProviderTypeBuildsAndProbes(t *testing.T) {
 	for _, typ := range ProviderTypes() {
@@ -38,7 +41,7 @@ func TestEveryProviderTypeBuildsAndProbes(t *testing.T) {
 
 func TestProviderTypeTable(t *testing.T) {
 	got := ProviderTypeChoices()
-	if got != "openrouter|anthropic|openai|ollama|openaicompat|vercel" {
+	if got != "openrouter|anthropic|openai|ollama|openaicompat|vercel|azure" {
 		t.Fatalf("ProviderTypeChoices() = %q", got)
 	}
 	for _, tc := range []struct {
@@ -51,6 +54,7 @@ func TestProviderTypeTable(t *testing.T) {
 		{ProviderTypeOllama, false, false},
 		{ProviderTypeOpenAICompat, false, true},
 		{ProviderTypeVercel, true, false},
+		{ProviderTypeAzure, true, true},
 	} {
 		spec, ok := LookupProviderType(string(tc.typ))
 		if !ok || spec.APIKeyRequired != tc.needsKey || spec.BaseURLRequired != tc.needsURL {
@@ -148,21 +152,24 @@ func callBothWays(t *testing.T, cfg ProviderConfig, model string) (generated, st
 // which the OpenAI Go SDK copies onto every request unless told otherwise.
 // OPENAI_BASE_URL is set per test, to a server that must never be called.
 // The Content-Type custom header shares its name with one the SDK sets
-// itself: stripping the custom headers must not strip the SDK's own.
+// itself: stripping the custom headers must not strip the SDK's own. The
+// Api-Key one shares its name with the header azure sends its key in: it must
+// neither reach the other types nor replace azure's own key.
 var ambientOpenAIEnv = map[string]string{
 	"OPENAI_API_KEY":        "sk-env-must-not-leak",
 	"OPENAI_ADMIN_KEY":      "sk-admin-env-must-not-leak",
 	"OPENAI_ORG_ID":         "org-env-must-not-leak",
 	"OPENAI_PROJECT_ID":     "proj-env-must-not-leak",
-	"OPENAI_CUSTOM_HEADERS": "X-Proxy-Auth: proxy-env-must-not-leak\nAuthorization: Bearer custom-env-must-not-leak\nContent-Type: application/json",
+	"OPENAI_CUSTOM_HEADERS": "X-Proxy-Auth: proxy-env-must-not-leak\nAuthorization: Bearer custom-env-must-not-leak\nApi-Key: apikey-env-must-not-leak\nContent-Type: application/json",
 }
 
-func TestOpenAICompatAndVercelReachTheConfiguredEndpoint(t *testing.T) {
+func TestOpenAISDKTypesReachTheConfiguredEndpoint(t *testing.T) {
 	cases := []struct {
-		name     string
-		cfg      func(base string) ProviderConfig
-		model    string
-		wantAuth string
+		name       string
+		cfg        func(base string) ProviderConfig
+		model      string
+		wantAuth   string // the Authorization header
+		wantAPIKey string // the Api-Key header (azure's)
 	}{
 		{
 			name: "openaicompat without a key sends none",
@@ -184,6 +191,14 @@ func TestOpenAICompatAndVercelReachTheConfiguredEndpoint(t *testing.T) {
 				return ProviderConfig{Name: "gateway", Type: ProviderTypeVercel, APIKey: "vck-gateway", BaseURL: base}
 			},
 			model: "anthropic/claude-opus-4.8", wantAuth: "Bearer vck-gateway",
+		},
+		{
+			// Not an Azure host, so the base_url is used as given (azureBaseURL).
+			name: "azure sends its key as Api-Key and no Authorization",
+			cfg: func(base string) ProviderConfig {
+				return ProviderConfig{Name: "az", Type: ProviderTypeAzure, APIKey: "az-key", BaseURL: base}
+			},
+			model: "gpt-5-deployment", wantAuth: "", wantAPIKey: "az-key",
 		},
 	}
 	for _, env := range []string{"the host's OPENAI_* env set", "no OPENAI_* env"} {
@@ -221,6 +236,9 @@ func TestOpenAICompatAndVercelReachTheConfiguredEndpoint(t *testing.T) {
 					if got := h.Get("Authorization"); got != tc.wantAuth {
 						t.Errorf("call %d: Authorization = %q, want %q", i, got, tc.wantAuth)
 					}
+					if got := h.Values("Api-Key"); strings.Join(got, ",") != tc.wantAPIKey {
+						t.Errorf("call %d: Api-Key = %q, want %q", i, got, tc.wantAPIKey)
+					}
 					if got := h.Get("Content-Type"); got != "application/json" {
 						t.Errorf("call %d: Content-Type = %q, want the SDK's application/json", i, got)
 					}
@@ -237,5 +255,81 @@ func TestOpenAICompatAndVercelReachTheConfiguredEndpoint(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// recordingDoer answers every request with one canned chat completion and
+// records it, so a provider aimed at a real Azure host can run offline.
+type recordingDoer struct{ reqs []*http.Request }
+
+func (d *recordingDoer) Do(r *http.Request) (*http.Response, error) {
+	d.reqs = append(d.reqs, r)
+	body := `{"id":"c","object":"chat.completion","created":1,"model":"m",` +
+		`"choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}]}`
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    r,
+	}, nil
+}
+
+func generateOnce(t *testing.T, p fantasy.Provider) {
+	t.Helper()
+	lm, err := p.LanguageModel(context.Background(), "my-deployment")
+	if err != nil {
+		t.Fatalf("LanguageModel: %v", err)
+	}
+	if _, err := lm.Generate(context.Background(), fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("ping")}}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+}
+
+// fleet builds azure from fantasy's openai provider instead of calling
+// azure.New, to add the host-header removals azure.New cannot take. With no
+// OPENAI_* env set there is nothing to remove, so the two must send the same
+// request: same URL and the same headers. A fantasy upgrade that changes how
+// azure parses its endpoint or sends its key fails here.
+func TestAzureMatchesFantasyAzure(t *testing.T) {
+	for k := range ambientOpenAIEnv {
+		t.Setenv(k, "")
+		_ = os.Unsetenv(k)
+	}
+	for _, tc := range []struct{ base, wantURL string }{
+		{"https://myres.openai.azure.com", "https://myres.openai.azure.com/openai/v1/chat/completions"},
+		{"https://myres.openai.azure.com/", "https://myres.openai.azure.com/openai/v1/chat/completions"},
+		// The full target URI the portal shows for a deployment.
+		{"https://myres.openai.azure.com/openai/deployments/gpt-5/chat/completions?api-version=2025-01-01-preview", "https://myres.openai.azure.com/openai/v1/chat/completions"},
+		{"https://myres.cognitiveservices.azure.com/", "https://myres.openai.azure.com/openai/v1/chat/completions"},
+		{"myres.services.ai.azure.com/api/projects/p1", "https://myres.openai.azure.com/openai/v1/chat/completions"},
+		// Not an Azure host (a proxy in front of one): used as given.
+		{"https://gateway.example.com/azure/v1", "https://gateway.example.com/azure/v1/chat/completions"},
+		{"gateway.example.com/v1", "https://gateway.example.com/v1/chat/completions"},
+	} {
+		t.Run(tc.base, func(t *testing.T) {
+			theirs, ours := &recordingDoer{}, &recordingDoer{}
+			p, err := azure.New(azure.WithBaseURL(tc.base), azure.WithAPIKey("az-key"), azure.WithHTTPClient(theirs))
+			if err != nil {
+				t.Fatalf("azure.New: %v", err)
+			}
+			generateOnce(t, p)
+			q, err := openai.New(append(azureOpenAIOptions("az-key", tc.base), openai.WithHTTPClient(ours))...)
+			if err != nil {
+				t.Fatalf("openai.New: %v", err)
+			}
+			generateOnce(t, q)
+			if len(theirs.reqs) != 1 || len(ours.reqs) != 1 {
+				t.Fatalf("requests: fantasy azure %d, fleet %d; want one each", len(theirs.reqs), len(ours.reqs))
+			}
+			if got := ours.reqs[0].URL.String(); got != tc.wantURL || got != theirs.reqs[0].URL.String() {
+				t.Errorf("fleet URL = %q, fantasy azure URL = %q, want both %q", got, theirs.reqs[0].URL, tc.wantURL)
+			}
+			if !reflect.DeepEqual(ours.reqs[0].Header, theirs.reqs[0].Header) {
+				t.Errorf("headers differ:\nfleet:          %v\nfantasy azure:  %v", ours.reqs[0].Header, theirs.reqs[0].Header)
+			}
+			if got := ours.reqs[0].Header.Get("Api-Key"); got != "az-key" {
+				t.Errorf("Api-Key = %q, want the key", got)
+			}
+		})
 	}
 }

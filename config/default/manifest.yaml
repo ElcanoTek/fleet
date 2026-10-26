@@ -310,10 +310,11 @@ remote_mcp_catalog: []
 # LLM provider routing (issue #289). By default fleet routes EVERY model through
 # OpenRouter (set OPENROUTER_API_KEY and you're done — no providers: block needed).
 # Declare providers: to route specific model slugs natively to Anthropic, OpenAI,
-# a self-hosted Ollama, any OpenAI-compatible server or the Vercel AI Gateway
-# instead — for failover, data residency, or to avoid the OpenRouter markup.
-# Types: openrouter | anthropic | openai | ollama | openaicompat | vercel. See
-# docs/PROVIDERS.md and docs/adr/0017-multi-provider-llm.md.
+# a self-hosted Ollama, any OpenAI-compatible server, the Vercel AI Gateway or
+# Azure OpenAI instead — for failover, data residency, or to avoid the
+# OpenRouter markup. Types: openrouter | anthropic | openai | ollama |
+# openaicompat | vercel | azure. See docs/PROVIDERS.md and
+# docs/adr/0017-multi-provider-llm.md.
 #
 # SECURITY — api_key_env names an env var; its VALUE is read HOST-SIDE at boot
 # (auto-allowlisted from the manifest like an MCP credential) and never enters the
@@ -355,6 +356,12 @@ remote_mcp_catalog: []
 #     api_key_env: AI_GATEWAY_API_KEY
 #     models: ["anthropic/claude-opus-4.8"] # moves this slug off OpenRouter
 #     context_window_tokens: 200000
+#   - name: azure-east          # an Azure OpenAI resource
+#     type: azure
+#     api_key_env: AZURE_OPENAI_API_KEY
+#     base_url: https://contoso.openai.azure.com # the endpoint the portal shows
+#     models: ["gpt-5-prod"]    # the resource's deployment names
+#     context_window_tokens: 400000
 #
 # Declare context_window_tokens on every entry except OpenRouter: an undeclared
 # native limit falls back to 32,000 tokens (4,096 for Ollama), less than a turn

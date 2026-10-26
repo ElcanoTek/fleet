@@ -192,25 +192,27 @@ func TestLLMProviderModelsCatchAll(t *testing.T) {
 	}
 }
 
-// TestAdminLLMProviderBaseURL: an openaicompat row has no default endpoint,
-// so it needs a base_url, and a malformed base_url on any row is a bad
-// request rather than a server error. Nothing refused is persisted or swapped
-// in.
+// TestAdminLLMProviderBaseURL: openaicompat and azure rows have no default
+// endpoint, so they need a base_url, and a malformed base_url on any row is a
+// bad request rather than a server error. Nothing refused is persisted or
+// swapped in.
 func TestAdminLLMProviderBaseURL(t *testing.T) {
 	s, h := llmFixture(t)
 	swaps := 0
 	s.llmProvidersChanged = func(context.Context) error { swaps++; return nil }
 	var w *httptest.ResponseRecorder
 
-	// An openaicompat row has no default endpoint: without a base_url it is a
-	// 400 whether enabled (the constructor check) or disabled (the store's
-	// shape check), and nothing is persisted.
-	for _, enabled := range []bool{true, false} {
-		w = do(t, h, http.MethodPost, "/admin/llm-providers",
-			map[string]any{"name": "compat", "type": "openaicompat", "enabled": enabled}, "boss@x.com")
-		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "base_url") {
-			t.Fatalf("openaicompat create without base_url (enabled=%v): status %d body %s, want 400 naming base_url",
-				enabled, w.Code, w.Body.String())
+	// Without a base_url such a row is a 400 whether enabled (the constructor
+	// check) or disabled (the store's shape check), and nothing is persisted.
+	// The key is set so the missing endpoint is what gets reported.
+	for _, typ := range []string{"openaicompat", "azure"} {
+		for _, enabled := range []bool{true, false} {
+			w = do(t, h, http.MethodPost, "/admin/llm-providers",
+				map[string]any{"name": "nourl", "type": typ, "api_key": "k", "enabled": enabled}, "boss@x.com")
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "base_url") {
+				t.Fatalf("%s create without base_url (enabled=%v): status %d body %s, want 400 naming base_url",
+					typ, enabled, w.Code, w.Body.String())
+			}
 		}
 	}
 	// A malformed base_url is a bad request, not a server error, whether the

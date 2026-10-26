@@ -137,6 +137,17 @@ const PROVIDER_TYPES: Record<
     windowNeeded: true,
     windowPlaceholder: "e.g. 200000",
   },
+  azure: {
+    label: "Azure OpenAI",
+    hint: "An Azure OpenAI resource, with one of its keys. Use the endpoint the Azure portal shows as the Base URL, and list your deployment names as the models.",
+    urlLabel: "Base URL",
+    urlPlaceholder: "https://your-resource.openai.azure.com",
+    urlNeeded: true,
+    keyLabel: "API key",
+    keyNeeded: true,
+    windowNeeded: true,
+    windowPlaceholder: "e.g. 128000",
+  },
 };
 
 type Draft = {

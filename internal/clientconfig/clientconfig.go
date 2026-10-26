@@ -1204,8 +1204,8 @@ func (t WebhookTriggerDef) SignatureHeader() string {
 // ProviderDef is one LLM provider from the manifest's providers: block (#289).
 // It selects a backend for a set of model slugs, letting a deployment route
 // inference natively to Anthropic / OpenAI / a self-hosted Ollama endpoint /
-// any OpenAI-compatible endpoint / the Vercel AI Gateway instead of exclusively
-// through OpenRouter (for failover, data residency, or to avoid the OpenRouter
+// any OpenAI-compatible endpoint / the Vercel AI Gateway / Azure OpenAI
+// instead of exclusively through OpenRouter (for failover, data residency, or to avoid the OpenRouter
 // markup). A bundle with NO providers: block keeps the historical
 // single-OpenRouter behavior unchanged.
 //
@@ -1216,9 +1216,9 @@ func (t WebhookTriggerDef) SignatureHeader() string {
 // model context, or the logs.
 type ProviderDef struct {
 	Name                string   `yaml:"name"`                  // routing name; unique within the manifest
-	Type                string   `yaml:"type"`                  // openrouter | anthropic | openai | ollama | openaicompat | vercel
+	Type                string   `yaml:"type"`                  // openrouter | anthropic | openai | ollama | openaicompat | vercel | azure
 	APIKeyEnv           string   `yaml:"api_key_env"`           // env var holding the credential (optional for ollama and openaicompat)
-	BaseURL             string   `yaml:"base_url"`              // endpoint override; required for openaicompat
+	BaseURL             string   `yaml:"base_url"`              // endpoint override; required for openaicompat and azure
 	Models              []string `yaml:"models"`                // slugs this provider serves; empty = catch-all
 	ContextWindowTokens int      `yaml:"context_window_tokens"` // provider-local context; OpenRouter uses authoritative per-model metadata
 }
@@ -2458,7 +2458,7 @@ func (b *Bundle) UncategorizedConnectors() []string {
 // validateProviders fails the load on a malformed providers[] entry (#289): a
 // blank/duplicate name, an unknown type, a missing api_key_env for a type that
 // requires a key, or a missing base_url for a type with no default endpoint
-// (openaicompat). The per-type rules come from agentcore's provider type table,
+// (openaicompat, azure). The per-type rules come from agentcore's provider type table,
 // the same one the admin store and the resolver check. Like the rest of
 // validate this is fail-loud at startup — a typo'd provider type or a missing
 // credential env would otherwise only surface as a resolver error on the first

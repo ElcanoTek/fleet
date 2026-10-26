@@ -182,6 +182,32 @@ func TestProbeProviderVercelSendsTheKey(t *testing.T) {
 	}
 }
 
+// Azure's /models names models, not the deployments a row lists, so the probe
+// reports the key accepted without comparing the two.
+func TestProbeProviderAzureSendsApiKey(t *testing.T) {
+	var path, auth, apiKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, auth, apiKey = r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("Api-Key")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"gpt-5"}]}`))
+	}))
+	defer srv.Close()
+	res := ProbeProvider(context.Background(), ProviderConfig{
+		Name: "az", Type: ProviderTypeAzure, APIKey: "az-key", BaseURL: srv.URL + "/openai/v1",
+		Models: []string{"my-deployment"},
+	})
+	if !res.OK || res.Detail != "connected — key accepted" || len(res.MissingModels) != 0 {
+		t.Fatalf("res = %+v, want OK, key accepted, no missing-model warning", res)
+	}
+	if path != "/openai/v1/models" || auth != "" || apiKey != "az-key" {
+		t.Fatalf("path=%q Authorization set=%v Api-Key set=%v — want /openai/v1/models with only Api-Key", path, auth != "", apiKey != "")
+	}
+	// The probe resolves the endpoint the way turns do (azureBaseURL).
+	endpoint, _, _ := probeTarget(ProviderConfig{Type: ProviderTypeAzure, APIKey: "k", BaseURL: "https://myres.cognitiveservices.azure.com/"})
+	if endpoint != "https://myres.openai.azure.com/openai/v1/models" {
+		t.Fatalf("azure probe endpoint = %q", endpoint)
+	}
+}
+
 // A row missing a field its type requires is reported without a network call.
 // For vercel this is what keeps a keyless row from testing as connected: the
 // gateway serves its public catalog to an empty Bearer token.
@@ -199,6 +225,8 @@ func TestProbeProviderMissingRequiredFieldMakesNoCall(t *testing.T) {
 		{ProviderConfig{Name: "g", Type: ProviderTypeVercel, BaseURL: srv.URL}, "no API key is stored"},
 		{ProviderConfig{Name: "o", Type: ProviderTypeOpenAI, BaseURL: srv.URL}, "no API key is stored"},
 		{ProviderConfig{Name: "c", Type: ProviderTypeOpenAICompat}, "no base_url is set"},
+		{ProviderConfig{Name: "az", Type: ProviderTypeAzure, BaseURL: srv.URL}, "no API key is stored"},
+		{ProviderConfig{Name: "az", Type: ProviderTypeAzure, APIKey: "k"}, "no base_url is set"},
 		{ProviderConfig{Name: "x", Type: ProviderType("bogus"), BaseURL: srv.URL}, "unknown provider type"},
 	} {
 		res := ProbeProvider(context.Background(), tc.cfg)

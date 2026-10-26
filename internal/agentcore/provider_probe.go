@@ -29,14 +29,18 @@ import (
 //   - vercel:     GET {base}/models with a Bearer key (base defaults to the AI
 //     Gateway). The catalog is public without a key, but the gateway rejects
 //     a wrong one with 401, so the probe does test the key.
+//   - azure:      GET {v1 root}/models with the Api-Key header, at the same
+//     API root turns use (azureBaseURL). That list names models, not the
+//     resource's deployments, which are what a row lists, so it is not
+//     compared against the row: the probe tests the endpoint and the key.
 //
 // For types whose probe returns a model catalog, the row's listed models are
 // checked against it: absences are reported as a WARNING (MissingModels), not
 // a failure — gateways and Ollama tags legitimately under-enumerate.
 //
-// SECURITY: the API key goes into the request Authorization header and
-// NOWHERE else — never into ProbeResult fields, errors, or logs. Response
-// bodies are size-capped and only parsed for model ids, never echoed.
+// SECURITY: the API key goes into the request's auth header and NOWHERE else
+// — never into ProbeResult fields, errors, or logs. Response bodies are
+// size-capped and only parsed for model ids, never echoed.
 
 // ProbeResult is the wire-shaped outcome of one connection test.
 type ProbeResult struct {
@@ -188,6 +192,8 @@ func probeTarget(cfg ProviderConfig) (endpoint string, header map[string]string,
 			base = vercel.DefaultURL
 		}
 		return base + "/models", map[string]string{"Authorization": "Bearer " + cfg.APIKey}, true
+	case ProviderTypeAzure:
+		return azureBaseURL(base) + "/models", map[string]string{"Api-Key": cfg.APIKey}, false
 	default:
 		return "", nil, false
 	}

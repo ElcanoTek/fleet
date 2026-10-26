@@ -359,8 +359,10 @@ first. Admins can fix the provider
 configuration under **Settings → Admin → Model providers**, and set the default
 and stronger model under **Settings → Admin → Features → Model tiers**. Besides
 OpenRouter, Anthropic, OpenAI and Ollama, that page can add any
-**OpenAI-compatible** server (it needs its Base URL; a key is optional) and the
-**Vercel AI Gateway** (it needs a key). A Vercel model listed there takes that
+**OpenAI-compatible** server (it needs its Base URL; a key is optional), the
+**Vercel AI Gateway** (it needs a key) and an **Azure OpenAI** resource (it
+needs a key, and the resource's endpoint as its Base URL; its models are the
+resource's deployment names). A Vercel model listed there takes that
 model over from OpenRouter, so it then runs through Vercel. A
 provider added there, other than OpenRouter, needs its **Context window** (in
 tokens, the smallest limit among the models it serves) before it can be

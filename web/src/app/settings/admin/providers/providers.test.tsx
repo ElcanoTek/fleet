@@ -313,6 +313,45 @@ describe("ProvidersAdminPage", () => {
     });
   });
 
+  it("asks an Azure provider for its endpoint, key and window, then sends all three", async () => {
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    fireEvent.change(screen.getByPlaceholderText("my-provider"), { target: { value: "azure-east" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "azure" } });
+    expect(screen.getByText(/list your deployment names as the models/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("https://your-resource.openai.azure.com")).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(/claude-sonnet-4-5/), { target: { value: "gpt-5-prod" } });
+    const posts = () =>
+      fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "POST");
+    const save = () => fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+
+    save();
+    expect(await screen.findByText("Azure OpenAI needs a Base URL.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://contoso.openai.azure.com" },
+    });
+    save();
+    expect(await screen.findByText("Azure OpenAI needs an API key.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "az-secret" } });
+    save();
+    expect(await screen.findByText(/Azure OpenAI needs its context window/)).toBeInTheDocument();
+    expect(posts()).toHaveLength(0);
+
+    fireEvent.change(screen.getByPlaceholderText("e.g. 128000"), { target: { value: "400000" } });
+    save();
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(JSON.parse(String((posts()[0][1] as RequestInit).body))).toMatchObject({
+      name: "azure-east",
+      type: "azure",
+      base_url: "https://contoso.openai.azure.com",
+      api_key: "az-secret",
+      models: ["gpt-5-prod"],
+      context_window_tokens: 400000,
+    });
+  });
+
   it("lets an optional-key row drop its stored key, and only such a row", async () => {
     const compat: LLMProvider = {
       ...ROW,
