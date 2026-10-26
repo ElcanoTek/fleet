@@ -417,13 +417,13 @@ func schedTaskSetDescription(argv []string) int {
 // so the command is testable without a live DB. *storage.Storage satisfies it.
 type taskOwnerStore interface {
 	GetUserByUsernameWithContext(ctx context.Context, username string) (*models.User, error)
-	SetTaskOwner(ctx context.Context, taskID, ownerID uuid.UUID) ([]uuid.UUID, error)
+	SetTaskOwner(ctx context.Context, taskID, ownerID uuid.UUID, check func(*models.Task) error) ([]uuid.UUID, error)
 }
 
 var _ taskOwnerStore = (*storage.Storage)(nil)
 
 // schedTaskSetOwner makes an existing user the owner (created_by) of a task
-// and of the unfinished later occurrences of its recurrence chain — the CLI
+// and of the rest of its recurrence chain that later runs continue from — the CLI
 // twin of PUT /tasks/{id}/owner (docs/TASK-OWNERSHIP.md). It writes the sched
 // DB directly, like every `sched task` verb, so it cannot run the API's
 // mcp_selection check (that needs the running server's bundle inventory).
@@ -469,7 +469,7 @@ func setTaskOwner(ctx context.Context, st taskOwnerStore, w io.Writer, taskID uu
 	if owner == nil {
 		return errf(2, "user %q not found", username)
 	}
-	updated, err := st.SetTaskOwner(ctx, taskID, owner.ID)
+	updated, err := st.SetTaskOwner(ctx, taskID, owner.ID, nil)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return errf(2, "task %s not found", taskID)

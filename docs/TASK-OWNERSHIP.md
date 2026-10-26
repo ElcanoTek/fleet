@@ -106,7 +106,7 @@ Where it runs, always against the owner the task will have:
 | `POST /tasks/import`, create | the importer |
 | `POST /tasks/import`, `conflict=replace` | the existing row's owner, which the replace keeps |
 | `PUT /tasks/{id}`, **only when the edit changes `mcp_selection`** | the task's owner |
-| `PUT /tasks/{id}/owner` | the **new** owner |
+| `PUT /tasks/{id}/owner` | the **new** owner, for **every row it rewrites** (section 4) |
 
 An edit that leaves the selection alone is not re-checked, so a prompt fix on a
 task whose connection lapsed since it was created is not refused.
@@ -127,6 +127,20 @@ One known false refusal: if the chat store's connector-preferences read fails,
 create during that outage is refused. It names the connection, and a retry
 succeeds once the store answers.
 
+The check covers server **names**. It does not check the **account seat** a
+selection pins on a bundle server. At dispatch the binder (`resolveMCPVariant`)
+refuses three kinds of seat:
+
+- an account on an HTTP server;
+- a named account whose `<VAR>_<ACCOUNT>` credentials are not set;
+- a seat that would inherit the default seat's routing identity.
+
+Deciding that needs the server's credential environment, which by invariant
+lives only in the credential-owning broker child. The parent is scrubbed after
+boot. A create-time seat check therefore needs a broker round trip, or a second
+copy of the binder's rules over a names-only seat list. Both are follow-ups, not
+part of this change. Such a task is still refused at dispatch, as before.
+
 Not checked, documented here rather than guessed:
 
 | Path | Why it is not checked |
@@ -143,7 +157,7 @@ created, the run still refuses the selection as before.
 ```
 PUT /tasks/{task_id}/owner
 {"username": "<username or email>"}
-→ 200 {"task": <Task>, "updated_task_ids": [<task_id>, <next occurrence id>, …]}
+→ 200 {"task": <Task>, "updated_task_ids": [<task_id>, …the chain rows it reached, in chain order]}
 ```
 
 The endpoint is admin only. The check is `PermissionAdmin` in the handler, so the
@@ -152,7 +166,7 @@ Other responses:
 
 | Status | Cause |
 |---|---|
-| 400 | Empty username, or the task's selection does not resolve for the new owner |
+| 400 | Empty username, or the selection of a row it would rewrite does not resolve for the new owner (the message names that row; nothing is written) |
 | 403 | The caller is not an admin |
 | 404 | `Task not found`, or `User not found` (unknown or disabled user) |
 
@@ -163,19 +177,32 @@ CLI twin: `fleet sched task set-owner <task_id> <username>`. Exit codes are
 2 for an unknown user or task and 5 for a storage failure. The CLI writes the
 database directly and skips the connector check (see above).
 
-`Storage.SetTaskOwner` sets `created_by` on the task and on every **unfinished**
-later occurrence of its recurrence chain. It finds them by following
-`previous_occurrence_id` forward. It does not use `lineage_id`, because copies
-share a lineage with their source, and reassigning one copied chain must not
-reassign another.
+`Storage.SetTaskOwner` sets `created_by` on these rows:
 
-- **Finished later occurrences** keep their owner. They are history.
+- the task itself;
+- every **unfinished** later occurrence of its recurrence chain;
+- the chain's **last** occurrence, even when it has finished.
+
+It finds them by following `previous_occurrence_id` forward. It does not use
+`lineage_id`, because copies share a lineage with their source, and reassigning
+one copied chain must not reassign another.
+
+- **The last occurrence** is included because a chain continues only from it:
+  its pending spawn, a reconciliation of a lost spawn, or a replay of a parked
+  dead-letter. The 2026-10-26 copies parked after two dead-letters, so their last
+  row must carry the new owner, or a replay would resume under the old one.
+- **Finished occurrences in between** keep their owner. They are history.
 - **Future occurrences** inherit the new owner, because a recurrence spawn copies
   `created_by` from the completing row.
-- **Concurrent spawns** are handled by locking the task row first. A spawn claims
-  its credit with an UPDATE on that row, so either the spawn commits first and
-  the walk sees the successor it made, or the spawn waits and copies the new
-  owner.
+- **The connector check** runs on every row in the set, each as it would read
+  afterwards (owner = the new owner), while the rows are locked. A next
+  occurrence edited to a different selection is checked on its own selection.
+  One refusal writes nothing.
+- **Concurrent spawns**: every row in the set is locked (`FOR UPDATE`), and the
+  set is then recomputed until it is stable. A spawn claims its credit with an
+  UPDATE on the completing row, so an uncommitted spawn waits and then copies the
+  new owner. A spawn that committed first shows up in the recomputed set as the
+  new last row.
 - **Cost**: `previous_occurrence_id` has no index, so each step of the walk scans
   `tasks`. A walk from the chain's live occurrence, the usual target, is one or
   two steps. No migration was added for this.
@@ -184,8 +211,10 @@ reassign another.
 
 ## Recovering the 2026-10-26 copies
 
-For each ownerless copy, give it its owner. Its next occurrence is reassigned
-with it, and any later ones inherit the owner:
+For each ownerless copy, give it its owner. Its last occurrence (the parked
+dead-letter, or the scheduled next run) is reassigned with it, and later
+occurrences inherit the owner. Then replay the parked occurrence to resume the
+schedule:
 
 ```
 fleet sched task set-owner <copy_id> <owner email>

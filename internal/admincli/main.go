@@ -262,7 +262,7 @@ Users, credentials, notes:
   fleet sched task set-description <task_id> <text>|-    (operator docs; - reads stdin, e.g. < TASK_README.md)
   fleet sched task set-limits <task_id> --memory-mb N --cpus N --pids N | --clear
                                                  (per-task sandbox cgroup override; --clear reverts to global defaults)
-  fleet sched task set-owner <task_id> <username>   (reassign a task + the unfinished later occurrences of its chain)
+  fleet sched task set-owner <task_id> <username>   (reassign a task + the rest of its chain later runs continue from)
   fleet sched task tag <task_id> --add <tag> ... --remove <tag> ...   (organize tasks by label)
   fleet sched task estimate --model <slug> --prompt <text> [--max-iter N] [--mcp-tools N] [--max-cost USD] [--system-prompt <text>] [--json]   (pre-submission cost forecast; no DB, no model call)
   fleet sched trigger create --task <task_id> --slug <slug> [--kind webhook|email] | list | rotate <trigger_id> | delete <trigger_id>   (event triggers; #177/#511)

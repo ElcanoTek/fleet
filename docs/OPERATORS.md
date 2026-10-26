@@ -766,11 +766,13 @@ source's owner:
 fleet sched task set-owner <task_id> <username>   # also: PUT /tasks/{task_id}/owner {"username": "..."}
 ```
 
-The task and the not-yet-finished later occurrences of its recurrence chain
-change owner; occurrences spawned afterwards inherit it; finished occurrences
-keep theirs. The API form also refuses an owner for whom the task's
-`mcp_selection` cannot resolve; the CLI, which writes the database directly,
-cannot run that check. See [`docs/TASK-OWNERSHIP.md`](TASK-OWNERSHIP.md).
+The task, the not-yet-finished later occurrences of its recurrence chain and
+the chain's last occurrence (which a parked chain is replayed from) change
+owner. Occurrences spawned afterwards inherit it, and finished occurrences in
+between keep theirs. The API form also refuses an owner for whom the
+`mcp_selection` of any of those rows cannot resolve. The CLI writes the
+database directly, so it cannot run that check. See
+[`docs/TASK-OWNERSHIP.md`](TASK-OWNERSHIP.md).
 
 ## Where the sandbox build fits
 

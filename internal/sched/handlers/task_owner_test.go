@@ -400,8 +400,30 @@ func TestSetTaskOwnerEndpoint(t *testing.T) {
 		t.Fatalf("owner who cannot resolve the selection = %d, want 400: %s", w.Code, w.Body.String())
 	}
 
+	// Every row the reassignment rewrites is checked, not only the target: a
+	// next occurrence edited to a connector the new owner lacks refuses it all.
+	edited := env.addRecurringSource(t, nil, nil, models.MCPSelection{{Server: "browserbase"}})
+	editedNext := &models.Task{
+		ID: uuid.New(), LineageID: edited.LineageID, PreviousOccurrenceID: &edited.ID,
+		Prompt: edited.Prompt, Status: models.TaskStatusScheduled, ScheduledFor: &future,
+		Recurrence: edited.Recurrence, Timezone: "UTC", Priority: models.PriorityNormal,
+		CreatedAt: time.Now().UTC(), MCPSelection: models.MCPSelection{{Server: "gamma"}},
+	}
+	if _, err := env.store.AddTask(editedNext); err != nil {
+		t.Fatalf("add edited next occurrence: %v", err)
+	}
+	w := env.do(t, http.MethodPut, "/tasks/"+edited.ID.String()+"/owner", apiKey("test-admin-key"), body(env.owner.Username))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), editedNext.ID.String()) || !strings.Contains(w.Body.String(), "[gamma]") {
+		t.Fatalf("chain with an unresolvable next occurrence = %d, want 400 naming it: %s", w.Code, w.Body.String())
+	}
+	for _, id := range []uuid.UUID{edited.ID, editedNext.ID} {
+		if got, err := env.store.GetTask(id); err != nil || got == nil || got.CreatedBy != nil {
+			t.Fatalf("a refused reassignment changed %s: %+v (%v)", id, got, err)
+		}
+	}
+
 	// An admin-role user may do it too; the username is matched case-insensitively.
-	w := env.do(t, http.MethodPut, path, bearer(adminToken), body("Owner@Example.com"))
+	w = env.do(t, http.MethodPut, path, bearer(adminToken), body("Owner@Example.com"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("set owner = %d, want 200: %s", w.Code, w.Body.String())
 	}

@@ -29,7 +29,7 @@ func (f *fakeOwnerStore) GetUserByUsernameWithContext(_ context.Context, usernam
 	return nil, sql.ErrNoRows
 }
 
-func (f *fakeOwnerStore) SetTaskOwner(_ context.Context, taskID, ownerID uuid.UUID) ([]uuid.UUID, error) {
+func (f *fakeOwnerStore) SetTaskOwner(_ context.Context, taskID, ownerID uuid.UUID, _ func(*models.Task) error) ([]uuid.UUID, error) {
 	if f.setErr != nil {
 		return nil, f.setErr
 	}

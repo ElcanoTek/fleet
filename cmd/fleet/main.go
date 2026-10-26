@@ -1734,8 +1734,9 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		r.Put("/tasks/{task_id}", h.UpdateTask)
 		r.Post("/tasks/{task_id}/tags", h.UpdateTaskTags)
 		// Admin reassignment of a task's owner (created_by), carried onto the
-		// unfinished later occurrences of its recurrence chain. Same placement
-		// rationale as /admin/budgets: PermissionAdmin is enforced in-handler.
+		// rest of its recurrence chain that later runs continue from. Same
+		// placement rationale as /admin/budgets: PermissionAdmin is enforced
+		// in-handler.
 		r.Put("/tasks/{task_id}/owner", h.SetTaskOwner)
 		// Rerun/clone mint a new task each, so they are metered like POST /tasks.
 		r.With(h.SchedRateLimitMiddleware).Post("/tasks/{task_id}/rerun", h.RerunTask)

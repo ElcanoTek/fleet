@@ -1437,13 +1437,16 @@ paths:
       description: >-
         Sets created_by — whose hosted connections the task's runs resolve,
         who receives its owner digest, and who may read and edit it as its
-        creator — on the task and on every unfinished later occurrence of its
-        recurrence chain (followed through previous_occurrence_id, not
-        lineage_id, so other jobs copied from the same source keep their
-        owner); occurrences spawned afterwards inherit it. Finished later
-        occurrences keep their owner. The task's mcp_selection must resolve
-        for the new owner (400 otherwise, with the message its run would fail
-        with). Admin-only, enforced in-handler on the admin permission (the
+        creator — on the task, on every unfinished later occurrence of its
+        recurrence chain, and on the chain's last occurrence (the chain
+        continues from it: a pending spawn or a replay of a parked
+        dead-letter). The chain is followed through previous_occurrence_id,
+        not lineage_id, so other jobs copied from the same source keep their
+        owner; occurrences spawned afterwards inherit the new owner, and
+        finished occurrences in between keep theirs. The mcp_selection of
+        every row it rewrites must resolve for the new owner (400 naming the
+        row otherwise, with the message its run would fail with; nothing is
+        written). Admin-only, enforced in-handler on the admin permission (the
         admin API key, a scoped key carrying admin, or an admin-role session).
         CLI twin: fleet sched task set-owner <task_id> <username>.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
@@ -1458,7 +1461,7 @@ paths:
                 username: { type: string, description: "An existing, enabled user's username (on a standard deployment, their email)." }
       responses:
         "200":
-          description: The task as it now reads, and every row the reassignment rewrote (the task first).
+          description: The task as it now reads, and every row the reassignment rewrote (the task first, then the chain rows in chain order).
           content:
             application/json:
               schema:

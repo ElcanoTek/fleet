@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
 
 // rerunCreator is the create pipeline's creator for a re-run or clone of
@@ -64,7 +65,7 @@ type taskOwnerRequest struct {
 
 // taskOwnerResponse is the PUT /tasks/{task_id}/owner result: the task as it
 // now reads, and every row the reassignment rewrote (the task first, then the
-// unfinished later occurrences of its recurrence chain).
+// rest of its recurrence chain that the reassignment reaches, in chain order).
 type taskOwnerResponse struct {
 	Task           *models.Task `json:"task"`
 	UpdatedTaskIDs []uuid.UUID  `json:"updated_task_ids"`
@@ -74,13 +75,15 @@ type taskOwnerResponse struct {
 // owns a task — its created_by, which decides whose hosted connections its runs
 // resolve, who receives its owner digest, and who may read and edit it as its
 // creator. The new owner also lands on the chain's unfinished later
-// occurrences and on every occurrence spawned afterwards (Storage.SetTaskOwner),
-// so a recurring job stays owned. Before this there was no way to give an
-// ownerless task (one an admin-key clone used to mint) an owner at all.
+// occurrences and its last occurrence, so every occurrence spawned afterwards
+// inherits it (Storage.SetTaskOwner) and a recurring job stays owned. Before
+// this there was no way to give an ownerless task (one an admin-key clone used
+// to mint) an owner at all.
 //
-// The task's mcp_selection must resolve for the new owner — the same check a
-// create runs — so a reassignment cannot leave a chain that dead-letters on
-// every run. 404 for an unknown task or an unknown (or disabled) user.
+// The mcp_selection of every row it rewrites must resolve for the new owner —
+// the same check a create runs — so a reassignment cannot leave a chain that
+// dead-letters on every run. 404 for an unknown task or an unknown (or
+// disabled) user.
 func (h *Handlers) SetTaskOwner(w http.ResponseWriter, r *http.Request) {
 	p := h.principalFromRequest(r)
 	if !p.hasPermission(models.PermissionAdmin) {
@@ -118,18 +121,21 @@ func (h *Handlers) SetTaskOwner(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "User not found")
 		return
 	}
-	if err := h.checkMCPSelectionForOwner(ctx, &owner.ID, task.MCPSelection, task.CredentialAllowlist); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	updated, err := h.storage.SetTaskOwner(ctx, taskID, owner.ID)
+	// Every row the reassignment rewrites is checked for the new owner, under
+	// the row locks the write takes — the chain's next occurrence may have been
+	// edited to a different selection than the task named here.
+	check := func(t *models.Task) error { return h.checkTaskMCPSelection(ctx, t) }
+	updated, err := h.storage.SetTaskOwner(ctx, taskID, owner.ID, check)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		var refusal *storage.TaskOwnerCheckError
+		switch {
+		case errors.As(err, &refusal):
+			writeError(w, http.StatusBadRequest, refusal.Error())
+		case errors.Is(err, sql.ErrNoRows):
 			writeError(w, http.StatusNotFound, "Task not found")
-			return
+		default:
+			writeError(w, http.StatusInternalServerError, "Failed to set task owner")
 		}
-		writeError(w, http.StatusInternalServerError, "Failed to set task owner")
 		return
 	}
 	//nolint:gosec // G706: taskID is a parsed uuid.UUID; the names pass logSafe.
