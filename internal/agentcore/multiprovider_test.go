@@ -104,6 +104,9 @@ func TestBuildProvider(t *testing.T) {
 		{"azure with key and endpoint", ProviderConfig{Name: "az", Type: ProviderTypeAzure, APIKey: "k", BaseURL: "https://res.openai.azure.com"}, false},
 		{"azure without endpoint errors", ProviderConfig{Name: "az", Type: ProviderTypeAzure, APIKey: "k"}, true},
 		{"azure without key errors", ProviderConfig{Name: "az", Type: ProviderTypeAzure, BaseURL: "https://res.openai.azure.com"}, true},
+		{"google with key", ProviderConfig{Name: "g", Type: ProviderTypeGoogle, APIKey: "k"}, false},
+		{"google with base url", ProviderConfig{Name: "g", Type: ProviderTypeGoogle, APIKey: "k", BaseURL: "http://203.0.113.10"}, false},
+		{"google without key errors", ProviderConfig{Name: "g", Type: ProviderTypeGoogle}, true},
 		{"unknown type errors", ProviderConfig{Name: "x", Type: ProviderType("bogus")}, true},
 	}
 	for _, tc := range cases {

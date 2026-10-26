@@ -149,6 +149,17 @@ const PROVIDER_TYPES: Record<
     windowNeeded: true,
     windowPlaceholder: "e.g. 128000",
   },
+  google: {
+    label: "Google Gemini",
+    hint: "The Gemini API, with a key from Google AI Studio. Model ids are Gemini's own, like gemini-2.5-pro. Don't name it google: that name would also take OpenRouter's google/… models.",
+    urlLabel: "Base URL (optional)",
+    urlPlaceholder: "(default: generativelanguage.googleapis.com)",
+    urlNeeded: false,
+    keyLabel: "API key",
+    keyNeeded: true,
+    windowNeeded: true,
+    windowPlaceholder: "e.g. 1048576",
+  },
 };
 
 type Draft = {

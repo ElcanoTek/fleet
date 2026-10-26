@@ -1,8 +1,8 @@
 # Admin-managed LLM providers
 
 Admins can add, edit, disable, and remove LLM providers from the web admin
-page (Settings → Admin → Model providers) — an OpenRouter, Anthropic, OpenAI
-or Vercel AI Gateway API key, an Azure OpenAI resource, or any
+page (Settings → Admin → Model providers) — an OpenRouter, Anthropic, OpenAI,
+Vercel AI Gateway or Gemini API key, an Azure OpenAI resource, or any
 OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, a gateway). Multiple
 providers run simultaneously; edits apply on the next message with **no
 restart**. This builds on the #289 multi-provider
@@ -13,15 +13,15 @@ only be configured from the client bundle's `providers:` block.
 
 - **Storage**: `llm_providers` (chat-DB migration 034) — name (the routing
   prefix), type (one of the [provider types](PROVIDERS.md#provider-types):
-  `openrouter|anthropic|openai|ollama|openaicompat|vercel|azure`), base URL, JSONB
+  `openrouter|anthropic|openai|ollama|openaicompat|vercel|azure|google`), base URL, JSONB
   models list, enabled flag, and the API key sealed with the store's secretbox
   cipher (AES-256-GCM, `FLEET_MCP_OAUTH_ENCRYPTION_KEY`), AAD-bound to the row
   id. `internal/store/llm_providers.go`. The store checks each row against the
   type table the bundle loader uses: it rejects an unknown type, and an
   `openaicompat` or `azure` row without a base URL even while the row is
-  disabled. The API also refuses to enable a keyed type with no key in effect. A `vercel`
-  row's models list uses OpenRouter-shaped slugs, so listing one moves that
-  slug off an OpenRouter catch-all, cost tracking included
+  disabled. The API also refuses to enable a keyed type with no key in effect.
+  A `vercel` row's models list uses OpenRouter-shaped slugs, so listing one
+  moves that slug off an OpenRouter catch-all, cost tracking included
   ([details](PROVIDERS.md#vercel-and-openrouter-slugs)). An `azure` row's
   models are the resource's deployment names, and a GPT-5, o-series or
   gpt-oss deployment must carry its model in its name, or every turn on it
@@ -111,14 +111,16 @@ only be configured from the client bundle's `providers:` block.
   OpenRouter catalog already covers the former; no public catalog can know a
   local Ollama's pulled models). `openaicompat` catch-alls are not expanded for
   the same reason as Ollama, nor `azure` ones (their models are deployment
-  names the admin chose), and `vercel` ones are not expanded yet: catwalk
-  lists the gateway's catalog, but wiring it into the picker is a follow-up.
+  names the admin chose), and `vercel` and `google` ones are not expanded yet:
+  catwalk lists the Vercel gateway's catalog, but wiring catalogs into the
+  picker for these types is a follow-up.
 - **Test connection**: each row has a Test button →
   `POST /admin/llm-providers/{id}/test` (admin-gated) → one host-side probe
   against the provider's real endpoint (`internal/agentcore/provider_probe.go`):
   OpenRouter's authenticated key-metadata endpoint, the Anthropic, OpenAI,
-  Ollama, OpenAI-compatible, Vercel AI Gateway or Azure models list with the
-  row's auth. A row missing a field its type requires (a key for a keyed type,
+  Ollama, OpenAI-compatible, Vercel AI Gateway, Azure or Gemini models list
+  with the row's auth. The Gemini API answers a wrong key with HTTP 400, which
+  the test reports as an authentication failure like a 401. A row missing a field its type requires (a key for a keyed type,
   a base URL for `openaicompat` and `azure`) is reported without any call. For
   Vercel that matters: the gateway serves its public catalog to an empty Bearer
   token, so probing a keyless row would otherwise report "connected". Where

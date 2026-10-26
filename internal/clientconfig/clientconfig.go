@@ -1232,9 +1232,9 @@ func (t WebhookTriggerDef) SignatureHeader() string {
 // ProviderDef is one LLM provider from the manifest's providers: block (#289).
 // It selects a backend for a set of model slugs, letting a deployment route
 // inference natively to Anthropic / OpenAI / a self-hosted Ollama endpoint /
-// any OpenAI-compatible endpoint / the Vercel AI Gateway / Azure OpenAI
-// instead of exclusively through OpenRouter (for failover, data residency, or
-// to avoid the OpenRouter markup). A bundle with NO providers: block keeps the
+// any OpenAI-compatible endpoint / the Vercel AI Gateway / Azure OpenAI / the
+// Gemini API instead of exclusively through OpenRouter (for failover, data
+// residency, or to avoid the OpenRouter markup). A bundle with NO providers: block keeps the
 // historical single-OpenRouter behavior unchanged.
 //
 // SECURITY — the credential boundary mirrors the MCP catalog: APIKeyEnv names an
@@ -1244,7 +1244,7 @@ func (t WebhookTriggerDef) SignatureHeader() string {
 // model context, or the logs.
 type ProviderDef struct {
 	Name                string   `yaml:"name"`                  // routing name; unique within the manifest
-	Type                string   `yaml:"type"`                  // openrouter | anthropic | openai | ollama | openaicompat | vercel | azure
+	Type                string   `yaml:"type"`                  // openrouter | anthropic | openai | ollama | openaicompat | vercel | azure | google
 	APIKeyEnv           string   `yaml:"api_key_env"`           // env var holding the credential (optional for ollama and openaicompat)
 	BaseURL             string   `yaml:"base_url"`              // endpoint override; required for openaicompat and azure
 	Models              []string `yaml:"models"`                // slugs this provider serves; empty = catch-all
