@@ -245,10 +245,10 @@ func TestWorkspaceSharedUserSkills(t *testing.T) {
 		t.Fatalf("GET /skills/opt-workbench: %d %s", w.Code, w.Body.String())
 	}
 
-	// A teammate ("teammate@x.com") can also use and read the active workspace-shared skill immediately.
+	// A teammate ("teammate@x.com") does NOT auto-materialize the shared skill without opting in.
 	entries := s.materializeUserSkills(context.Background(), "teammate@x.com", "conv-teammate-1")
-	if len(entries) != 1 || entries[0].Name != "opt-workbench" {
-		t.Fatalf("teammate materialize = %+v, want [opt-workbench]", entries)
+	if len(entries) != 0 {
+		t.Fatalf("unconsented teammate materialize = %+v, want empty", entries)
 	}
 
 	// Author ("u@x.com") materializes their own skill, and deleting the last skill cleans up the stale directory.

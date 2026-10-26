@@ -115,7 +115,6 @@ export function PromptLibrary({
 
   const beginClone = () => {
     if (!selected) return;
-    const clonedContent = selected.prompt_template || selected.content;
     setSelectedID(null);
     setDraft({
       name:
@@ -123,7 +122,7 @@ export function PromptLibrary({
           ? `${selected.name} (Custom)`
           : `${selected.name} (Copy)`,
       description: selected.description ?? "",
-      content: clonedContent,
+      content: selected.content,
       visibility: selected.visibility === "workspace" ? "workspace" : "private",
     });
     setEditing(true);

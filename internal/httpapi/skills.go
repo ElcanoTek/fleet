@@ -96,6 +96,8 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 			entry.Description = sharedSk.Description
 			entry.Source = "workspace"
 			entry.SharedBy = sharedSk.SharedBy
+			entry.Plugin = ""
+			entry.DeclaredAllowedTools = nil
 		}
 		entries = append(entries, entry)
 	}

@@ -184,20 +184,17 @@ export default function SkillsPage() {
     if (!draft) return;
     setBusy(true);
     setError(null);
-    const trimmedName = draft.name.trim();
-    const existingByName = mine?.find((m) => m.name === trimmedName);
-    const targetId = draft.id || existingByName?.id || "";
-    const isNew = targetId === "";
-    fetch(isNew ? "/api/user-skills" : `/api/user-skills/${encodeURIComponent(targetId)}`, {
+    const isNew = draft.id === "";
+    fetch(isNew ? "/api/user-skills" : `/api/user-skills/${encodeURIComponent(draft.id)}`, {
       method: isNew ? "POST" : "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: trimmedName,
+        name: draft.name.trim(),
         description: draft.description.trim(),
         body: draft.body,
         visibility: draft.visibility,
         // An edit must not change the lifecycle state — resend the current one.
-        ...(isNew ? {} : { status: mine?.find((m) => m.id === targetId)?.status ?? "active" }),
+        ...(isNew ? {} : { status: mine?.find((m) => m.id === draft.id)?.status ?? "active" }),
       }),
     })
       .then(async (res) => {
@@ -257,11 +254,36 @@ export default function SkillsPage() {
       .finally(() => setBusy(false));
   };
 
-  // approveMine flips an agent-proposed skill to active. Approval is the same
-  // PUT the editor uses, so the server-side validation path stays identical.
-  const approveMine = (sk: UserSkill) => {
+  // approveMine flips an agent-proposed skill to active. If the proposal was
+  // staged as "<base>-proposed" over an existing skill named "<base>", approving
+  // merges the proposed revision into "<base>" and removes the staging row.
+  const approveMine = (sk: UserSkill, shareWithWorkspace = false) => {
     setBusy(true);
     setError(null);
+    const baseName = sk.name.endsWith("-proposed") ? sk.name.slice(0, -"-proposed".length) : "";
+    const baseSkill = baseName ? mine?.find((m) => m.name === baseName && m.id !== sk.id) : undefined;
+    if (baseSkill) {
+      fetch(`/api/user-skills/${encodeURIComponent(baseSkill.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: baseSkill.name,
+          description: sk.description,
+          body: sk.body,
+          status: "active",
+          visibility: shareWithWorkspace ? "workspace" : (baseSkill.visibility ?? "private"),
+        }),
+      })
+        .then(async (res) => {
+          if (!res.ok) throw new Error((await res.text()) || "Approve failed.");
+          await fetch(`/api/user-skills/${encodeURIComponent(sk.id)}`, { method: "DELETE" });
+          await reloadMine();
+          await reloadWorkspacePack();
+        })
+        .catch((e: unknown) => setError(e instanceof Error ? e.message : "Approve failed."))
+        .finally(() => setBusy(false));
+      return;
+    }
     fetch(`/api/user-skills/${encodeURIComponent(sk.id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -270,7 +292,7 @@ export default function SkillsPage() {
         description: sk.description,
         body: sk.body,
         status: "active",
-        visibility: sk.visibility ?? "private",
+        visibility: shareWithWorkspace ? "workspace" : (sk.visibility ?? "private"),
       }),
     })
       .then(async (res) => {
@@ -345,8 +367,11 @@ export default function SkillsPage() {
           name: d.name || s.name,
           description: d.description || s.description,
           body,
-          visibility:
-            existing?.visibility === "workspace" || s.source === "bundle" || s.source === "workspace"
+          visibility: existing
+            ? existing.visibility === "workspace"
+              ? "workspace"
+              : "private"
+            : s.source === "bundle" || s.source === "workspace"
               ? "workspace"
               : "private",
         });
@@ -565,7 +590,7 @@ export default function SkillsPage() {
                           type="button"
                           className={btnClass({ sm: true, reveal: true })}
                           disabled={busy}
-                          onClick={() => toggleShareMine(sk)}
+                          onClick={() => approveMine(sk, true)}
                         >
                           Approve & share
                         </button>

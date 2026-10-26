@@ -109,10 +109,26 @@ func (s *Store) CreateUserSkillWithVisibility(ctx context.Context, userEmail, na
 	return s.createUserSkill(ctx, userEmail, name, description, body, UserSkillStatusActive, vis)
 }
 
+func proposalRevisionName(name string) string {
+	const suffix = "-proposed"
+	if strings.HasSuffix(name, suffix) {
+		return name
+	}
+	maxBase := 64 - len(suffix)
+	base := name
+	if len(base) > maxBase {
+		base = strings.TrimRight(base[:maxBase], "-")
+	}
+	return base + suffix
+}
+
 // CreateUserSkillProposal stages an agent-drafted skill (or an agent-drafted
 // edit to an existing skill of the same name) for the owner's review: it is
 // stored as proposed (never materialized, never invocable) until approved in
-// Settings → Skills, preserving any existing visibility setting on update.
+// Settings → Skills. When the user already has an ACTIVE or DISABLED skill with
+// that name, the proposal is staged under "<name>-proposed" so the active skill
+// remains intact while the edit awaits approval (and rejecting/deleting the
+// proposal leaves the active skill untouched).
 func (s *Store) CreateUserSkillProposal(ctx context.Context, userEmail, name, description, body string) (*UserSkill, error) {
 	email := normalizeEmail(userEmail)
 	name = strings.TrimSpace(name)
@@ -133,8 +149,23 @@ func (s *Store) CreateUserSkillProposal(ctx context.Context, userEmail, name, de
 		    body = EXCLUDED.body,
 		    status = $6,
 		    updated_at = EXCLUDED.updated_at
-		RETURNING id, visibility, created_at`,
-		sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, sk.Visibility, now).Scan(&sk.ID, &sk.Visibility, &sk.CreatedAt)
+		WHERE user_skills.status = $6
+		RETURNING id, name, visibility, created_at`,
+		sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, sk.Visibility, now).Scan(&sk.ID, &sk.Name, &sk.Visibility, &sk.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		sk.ID = uuid.NewString()
+		sk.Name = proposalRevisionName(name)
+		err = s.db.QueryRowContext(ctx, `
+			INSERT INTO user_skills (id, user_email, name, description, body, status, visibility, created_at, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+			ON CONFLICT (user_email, name) DO UPDATE
+			SET description = EXCLUDED.description,
+			    body = EXCLUDED.body,
+			    status = $6,
+			    updated_at = EXCLUDED.updated_at
+			RETURNING id, name, visibility, created_at`,
+			sk.ID, sk.UserEmail, sk.Name, sk.Description, sk.Body, sk.Status, sk.Visibility, now).Scan(&sk.ID, &sk.Name, &sk.Visibility, &sk.CreatedAt)
+	}
 	if err != nil {
 		return nil, err
 	}

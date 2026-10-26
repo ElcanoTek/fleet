@@ -63,12 +63,17 @@ func promptLibraryItemFromGit(gp clientconfig.Prompt) PromptLibraryItem {
 }
 
 func promptLibraryItemFromModel(p *models.PromptLibraryEntry, owner string, admin bool) PromptLibraryItem {
-	return PromptLibraryItem{
+	item := PromptLibraryItem{
 		ID: p.ID.String(), Name: p.Name, Description: p.Description,
 		Content: p.Content, Source: "workspace", Visibility: p.Visibility,
 		OwnedByCaller: p.OwnerUsername == owner || admin,
 		OwnerUsername: p.OwnerUsername, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
 	}
+	if fields, tmpl, issues := clientconfig.ParsePromptForm([]byte(p.Content)); len(issues) == 0 && len(fields) > 0 {
+		item.Fields = fields
+		item.PromptTemplate = tmpl
+	}
+	return item
 }
 
 func (p principal) promptIdentity() string {
