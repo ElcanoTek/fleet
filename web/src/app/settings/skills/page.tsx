@@ -115,6 +115,7 @@ export default function SkillsPage() {
   // The builder form: id === "" is a new skill; otherwise an edit.
   const [draft, setDraft] = useState<typeof EMPTY_DRAFT | null>(null);
   const [busy, setBusy] = useState(false);
+  const editorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let stale = false;
@@ -253,20 +254,28 @@ export default function SkillsPage() {
       .finally(() => setBusy(false));
   };
 
-  // approveMine flips an agent-proposed skill to active. Approval is the same
-  // PUT the editor uses, so the server-side validation path stays identical.
-  const approveMine = (sk: UserSkill) => {
+  // approveMine flips an agent-proposed skill to active. If the proposal was
+  // staged as "<base>-proposed" over an existing skill named "<base>", the
+  // server atomically merges the proposed revision into "<base>" and removes
+  // the staging row in one transaction.
+  const approveMine = (sk: UserSkill, shareWithWorkspace = false) => {
     setBusy(true);
     setError(null);
+    const baseName = sk.name.endsWith("-proposed") ? sk.name.slice(0, -"-proposed".length) : "";
+    const baseSkill = baseName ? mine?.find((m) => m.name === baseName && m.id !== sk.id) : undefined;
+    const targetName = baseSkill ? baseSkill.name : sk.name.length > 64 && baseName ? baseName : sk.name;
+    const targetVisibility = shareWithWorkspace
+      ? "workspace"
+      : (baseSkill?.visibility ?? sk.visibility ?? "private");
     fetch(`/api/user-skills/${encodeURIComponent(sk.id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: sk.name,
+        name: targetName,
         description: sk.description,
         body: sk.body,
         status: "active",
-        visibility: sk.visibility ?? "private",
+        visibility: targetVisibility,
       }),
     })
       .then(async (res) => {
@@ -319,6 +328,41 @@ export default function SkillsPage() {
         await reloadMine();
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to add skill."))
+      .finally(() => setBusy(false));
+  };
+
+  // cloneToDraft opens a Workspace pack skill (bundle, shared workspace, plugin,
+  // or built-in) in the "Your skills" editor so any user can customize it and
+  // optionally share their updated version with the workspace in one click.
+  const cloneToDraft = (s: SkillEntry) => {
+    setBusy(true);
+    setError(null);
+    fetch(`/api/skills/${encodeURIComponent(s.name)}`, { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error((await res.text()) || `Failed to load skill: ${res.status}`);
+        return (await res.json()) as SkillDetail;
+      })
+      .then((d) => {
+        const existing = mine?.find((m) => m.name === (d.name || s.name));
+        const body = (d.body ?? d.content.replace(/^---[\s\S]*?---\s*/, "")).trim();
+        setDraft({
+          id: existing?.id ?? "",
+          name: d.name || s.name,
+          description: d.description || s.description,
+          body,
+          visibility: existing
+            ? existing.visibility === "workspace"
+              ? "workspace"
+              : "private"
+            : s.source === "bundle" || s.source === "workspace"
+              ? "workspace"
+              : "private",
+        });
+        setTimeout(() => {
+          editorRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+        }, 0);
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to load skill."))
       .finally(() => setBusy(false));
   };
 
@@ -396,7 +440,10 @@ export default function SkillsPage() {
         {draft ? (
           // .skill-create — the builder form doubles as the editor (draft.id
           // distinguishes); a bottom rule separates it from the rows below.
-          <div className="mb-3 grid gap-[0.75rem] border-b border-[var(--color-border-subtle)] pb-4">
+          <div
+            ref={editorRef}
+            className="mb-3 grid gap-[0.75rem] border-b border-[var(--color-border-subtle)] pb-4"
+          >
             <ConnField label="Name (lowercase-kebab, e.g. deal-check)">
               <input
                 id="skillName"
@@ -526,7 +573,7 @@ export default function SkillsPage() {
                           type="button"
                           className={btnClass({ sm: true, reveal: true })}
                           disabled={busy}
-                          onClick={() => toggleShareMine(sk)}
+                          onClick={() => approveMine(sk, true)}
                         >
                           Approve & share
                         </button>
@@ -641,6 +688,14 @@ export default function SkillsPage() {
                         Add to my skills
                       </button>
                     ) : null}
+                    <button
+                      type="button"
+                      className={btnClass({ sm: true, reveal: true })}
+                      disabled={busy}
+                      onClick={() => cloneToDraft(s)}
+                    >
+                      Clone & edit
+                    </button>
                     <button
                       type="button"
                       className={`flex-none ${btnClass({ sm: true, reveal: true })}`}
