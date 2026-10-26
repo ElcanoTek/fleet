@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/anthropic"
+	"charm.land/fantasy/providers/google"
 
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -601,5 +603,46 @@ func TestRun_ScheduledLengthCutoffDoesNotTriggerPrematureSelfAudit(t *testing.T)
 	}
 	if sawPrematureAudit {
 		t.Fatal("Round 1 prompt prematurely requested self-audit while work remained")
+	}
+}
+
+// A Gemini thought signature rides on a reasoning part, and Gemini wants it
+// back with its tool call on later requests of the same turn (#1703). Replay
+// keeps that signature, with any thought text dropped, and still drops every
+// other reasoning part; a message left with nothing but a signature goes too.
+func TestReplayKeepsGeminiThoughtSignatures(t *testing.T) {
+	sig := &google.ReasoningMetadata{Signature: "sig-1", ToolID: "c1"}
+	out := messagesForReplay([]fantasy.Message{
+		fantasy.NewUserMessage("task"),
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ReasoningPart{Text: "thought text", ProviderOptions: fantasy.ProviderOptions{google.Name: sig}},
+			fantasy.ToolCallPart{ToolCallID: "c1", ToolName: "bash", Input: `{"command":"ls"}`},
+		}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "c1"}}},
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ReasoningPart{Text: "anthropic thinking", ProviderOptions: fantasy.ProviderOptions{
+				anthropic.Name: &anthropic.ReasoningOptionMetadata{Signature: "a-sig"},
+			}},
+			fantasy.TextPart{Text: "done"},
+		}},
+		// A signature whose call was never run: the call is dropped, so is the
+		// message.
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ReasoningPart{ProviderOptions: fantasy.ProviderOptions{google.Name: &google.ReasoningMetadata{Signature: "sig-2"}}},
+			fantasy.ToolCallPart{ToolCallID: "c2", ToolName: "bash", Input: `{}`},
+		}},
+	})
+	if len(out) != 4 {
+		t.Fatalf("replayed %d messages, want 4 (user, signed call, result, text): %+v", len(out), out)
+	}
+	first, ok := out[1].Content[0].(fantasy.ReasoningPart)
+	if !ok || len(out[1].Content) != 2 {
+		t.Fatalf("signed call message = %+v, want the signature then the call", out[1].Content)
+	}
+	if md := google.GetReasoningMetadata(first.Options()); first.Text != "" || md == nil || md.Signature != "sig-1" || md.ToolID != "c1" {
+		t.Errorf("kept reasoning part = %+v, want signature sig-1 for c1 and no text", first)
+	}
+	if len(out[3].Content) != 1 {
+		t.Errorf("anthropic reasoning survived replay: %+v", out[3].Content)
 	}
 }

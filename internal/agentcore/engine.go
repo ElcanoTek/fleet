@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/google"
 	"charm.land/fantasy/providers/openrouter"
 
 	"github.com/ElcanoTek/fleet/internal/observability"
@@ -805,7 +806,8 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 // so the enforcement loop can append it to the NEXT round's input. Reasoning
 // parts are dropped, the same rule as the interactive replay path (reasoning
 // is UI-only: several providers reject re-sent reasoning blocks and they only
-// burn prompt tokens).
+// burn prompt tokens), except for a Gemini thought signature
+// (geminiSignatureOnly).
 //
 // Without this carry, a blocked finish fed the next round ONLY the original
 // input plus the nudges: the model saw no record of the tool work it had just
@@ -833,7 +835,8 @@ func (e *engine) roundCarry(result *fantasy.AgentResult) []fantasy.Message {
 }
 
 // Replay keeps tool evidence while dropping provider-specific reasoning blocks
-// and any unexecuted ToolCallParts (e.g. a step terminated by FinishReasonLength
+// (all but a Gemini thought signature, geminiSignatureOnly) and any unexecuted
+// ToolCallParts (e.g. a step terminated by FinishReasonLength
 // before fantasy dispatched the call, which would otherwise leave an orphaned
 // tool_use in the next round's prompt that providers reject with HTTP 400).
 // Copy content slices so a later reducer cannot mutate the original transcript.
@@ -855,8 +858,13 @@ func messagesForReplay(messages []fantasy.Message) []fantasy.Message {
 	out := make([]fantasy.Message, 0, len(messages))
 	for _, msg := range messages {
 		parts := make([]fantasy.MessagePart, 0, len(msg.Content))
+		signatures := 0
 		for _, part := range msg.Content {
 			if _, isReasoning := part.(fantasy.ReasoningPart); isReasoning && msg.Role == fantasy.MessageRoleAssistant {
+				if sig, ok := geminiSignatureOnly(part); ok {
+					parts = append(parts, sig)
+					signatures++
+				}
 				continue
 			}
 			if msg.Role == fantasy.MessageRoleAssistant {
@@ -868,13 +876,34 @@ func messagesForReplay(messages []fantasy.Message) []fantasy.Message {
 			}
 			parts = append(parts, part)
 		}
-		if msg.Role == fantasy.MessageRoleAssistant && len(parts) == 0 {
+		// A signature belongs to the call or text after it: with neither left,
+		// the message is as empty as one with no parts.
+		if msg.Role == fantasy.MessageRoleAssistant && len(parts) == signatures {
 			continue
 		}
 		msg.Content = parts
 		out = append(out, msg)
 	}
 	return out
+}
+
+// geminiSignatureOnly returns the Gemini thought signature a reasoning part
+// carries, as a reasoning part with the thought text dropped. Replay keeps it
+// because Gemini wants a tool call's signature back on later requests of the
+// same turn, and newer Gemini models reject a call without it (#1703), while
+// a context checkpoint and a stream-error resume re-send the turn's calls with
+// no user message after them. fantasy keeps the signature in the part's google
+// options, for the google provider type and for OpenRouter's google/ models
+// alike, and each sends it back from there. A fleet google entry never asks
+// for thought text, so its parts are signature-only already. Another provider
+// that meets one after a failover skips it (Anthropic, OpenAI), or renders its
+// empty text (OpenRouter's openai/ and xai/ routes, openaicompat).
+func geminiSignatureOnly(part fantasy.MessagePart) (fantasy.ReasoningPart, bool) {
+	md := google.GetReasoningMetadata(part.Options())
+	if md == nil || md.Signature == "" {
+		return fantasy.ReasoningPart{}, false
+	}
+	return fantasy.ReasoningPart{ProviderOptions: fantasy.ProviderOptions{google.Name: md}}, true
 }
 
 // dropTrailingAssistant strips the final message when it is an assistant
