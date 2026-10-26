@@ -16,11 +16,17 @@ import (
 	"charm.land/fantasy/providers/openrouter"
 )
 
-// openRouterModel reports itself as an OpenRouter model: the provider that
-// sends a Gemini signature back, to its google/ models.
-type openRouterModel struct{ namedMockModel }
+// routeModel is a mock model on a named provider.
+type routeModel struct {
+	namedMockModel
+	provider string
+}
 
-func (m *openRouterModel) Provider() string { return openrouter.Name }
+func (m *routeModel) Provider() string { return m.provider }
+
+func openRouterModel(id string) *routeModel {
+	return &routeModel{namedMockModel: namedMockModel{name: id}, provider: openrouter.Name}
+}
 
 func signedCall(callID, sig string) fantasy.Message {
 	return fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
@@ -85,7 +91,8 @@ func TestReplayKeepsGeminiThoughtSignatures(t *testing.T) {
 // goes to a non-Gemini fallback, which is shown no signature (OpenRouter would
 // send it an empty reasoning detail), signs nothing, runs a call of its own
 // and fails too. The next fallback is Gemini again, and it gets the first
-// call's signature back in front of that call.
+// call's signature back in front of that call. (The middle model's call has no
+// signature to give back; whether Gemini accepts that is not what this checks.)
 func TestStreamRecoveryShowsGeminiSignaturesOnlyToGemini(t *testing.T) {
 	tool := fantasy.NewAgentTool("save_record", "save a record",
 		func(context.Context, panicTestInput, fantasy.ToolCall) (fantasy.ToolResponse, error) {
@@ -97,7 +104,7 @@ func TestStreamRecoveryShowsGeminiSignaturesOnlyToGemini(t *testing.T) {
 			ResponseBody: []byte(`{"error":{"code":503,"message":"Provider returned error"}}`),
 		}})
 	}
-	callThenFail := func(model *openRouterModel, call func(yield func(fantasy.StreamPart) bool), seen *[][]fantasy.Message) {
+	callThenFail := func(model *routeModel, call func(yield func(fantasy.StreamPart) bool), seen *[][]fantasy.Message) {
 		var n atomic.Int32
 		model.streamFunc = func(_ context.Context, c fantasy.Call) (fantasy.StreamResponse, error) {
 			*seen = append(*seen, c.Prompt)
@@ -108,7 +115,7 @@ func TestStreamRecoveryShowsGeminiSignaturesOnlyToGemini(t *testing.T) {
 		}
 	}
 
-	primary := &openRouterModel{namedMockModel{name: "google/gemini-primary"}}
+	primary := openRouterModel("google/gemini-primary")
 	var primarySaw [][]fantasy.Message
 	callThenFail(primary, func(yield func(fantasy.StreamPart) bool) {
 		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeReasoningStart, ID: "thinking"})
@@ -120,14 +127,14 @@ func TestStreamRecoveryShowsGeminiSignaturesOnlyToGemini(t *testing.T) {
 		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls, Usage: fantasy.Usage{InputTokens: 20, OutputTokens: 10}})
 	}, &primarySaw)
 
-	other := &openRouterModel{namedMockModel{name: "deepseek/deepseek-fallback"}}
+	other := openRouterModel("deepseek/deepseek-fallback")
 	var otherSaw [][]fantasy.Message
 	callThenFail(other, func(yield func(fantasy.StreamPart) bool) {
 		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "other-call", ToolCallName: "save_record", ToolCallInput: `{}`})
 		yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls, Usage: fantasy.Usage{InputTokens: 20, OutputTokens: 10}})
 	}, &otherSaw)
 
-	gemini := &openRouterModel{namedMockModel{name: "google/gemini-fallback"}}
+	gemini := openRouterModel("google/gemini-fallback")
 	var geminiSaw [][]fantasy.Message
 	gemini.streamFunc = func(_ context.Context, c fantasy.Call) (fantasy.StreamResponse, error) {
 		geminiSaw = append(geminiSaw, c.Prompt)
@@ -180,6 +187,46 @@ func TestStreamRecoveryShowsGeminiSignaturesOnlyToGemini(t *testing.T) {
 	}
 }
 
+// Within one run fantasy sends each step the reasoning parts of the steps
+// before it, so the step must not take a Gemini route's signatures away from
+// it, whichever provider serves Gemini; a model that is not Gemini gets none.
+func TestGeminiSignatureStepStripsOnlyForModelsThatAreNotGemini(t *testing.T) {
+	history := []fantasy.Message{
+		fantasy.NewUserMessage("save it"),
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ReasoningPart{Text: "thought text", ProviderOptions: fantasy.ProviderOptions{
+				google.Name: &google.ReasoningMetadata{Signature: "sig-1", ToolID: "c1"},
+			}},
+			fantasy.ToolCallPart{ToolCallID: "c1", ToolName: "save_record", Input: `{}`},
+		}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "c1"}}},
+	}
+	for _, tc := range []struct {
+		provider, model string
+		gemini          bool
+	}{
+		{openrouter.Name, "google/gemini-4-argon", true},
+		{"vercel", "google/gemini-4-argon", true},
+		{google.Name, "gemini-2.5-pro", true},
+		{openrouter.Name, "deepseek/deepseek-v4.1-flash", false},
+		{openrouter.Name, "anthropic/claude-haiku-5.5", false},
+		{"anthropic", "claude-haiku-5-5", false},
+	} {
+		model := &routeModel{namedMockModel: namedMockModel{name: tc.model}, provider: tc.provider}
+		_, res, err := geminiSignatureStep(context.Background(), fantasy.PrepareStepFunctionOptions{Model: model, Messages: history})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sent := history
+		if res.Messages != nil {
+			sent = res.Messages
+		}
+		if got := len(reasoningParts(sent)); (got == 1) != tc.gemini || len(sent) != 3 {
+			t.Errorf("%s %s: sent %d messages with %d reasoning parts; Gemini=%v", tc.provider, tc.model, len(sent), got, tc.gemini)
+		}
+	}
+}
+
 // The finalize hook, the compaction summary and the terminal structured
 // output each ask with a user message of their own, which starts a new Gemini
 // turn, and may call a model that is not Gemini: none of them is given a
@@ -196,7 +243,7 @@ func TestNewTurnRequestsGetNoGeminiSignatures(t *testing.T) {
 		t.Errorf("finalize input: %d messages, %d reasoning parts; want the 3 messages and no signature", len(in.Messages), len(got))
 	}
 
-	e := newMockEngine(t, &openRouterModel{namedMockModel{name: "google/gemini-x"}})
+	e := newMockEngine(t, openRouterModel("google/gemini-x"))
 	if got := reasoningParts(e.compactionSummarizeInput(carried).Droppable); len(got) != 0 {
 		t.Errorf("compaction summary input kept %d reasoning parts", len(got))
 	}

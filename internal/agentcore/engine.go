@@ -897,7 +897,7 @@ func messagesForReplay(messages []fantasy.Message) []fantasy.Message {
 // checkpoint and a stream-error resume re-send the turn's calls with no user
 // message after them. fantasy keeps the signature in the part's google
 // options, and its OpenRouter provider sends it back from there to google/
-// models. No other model is shown one (geminiSignatureStep).
+// models. A model that is not Gemini is shown none (geminiSignatureStep).
 func geminiSignatureOnly(part fantasy.MessagePart) (fantasy.ReasoningPart, bool) {
 	md := google.GetReasoningMetadata(part.Options())
 	if md == nil || md.Signature == "" {
@@ -906,11 +906,13 @@ func geminiSignatureOnly(part fantasy.MessagePart) (fantasy.ReasoningPart, bool)
 	return fantasy.ReasoningPart{ProviderOptions: fantasy.ProviderOptions{google.Name: md}}, true
 }
 
-// sendsGeminiSignatures reports whether model hands a Gemini thought signature
-// back to Gemini: fantasy's OpenRouter provider does for google/ models, as an
-// encrypted reasoning detail.
-func sendsGeminiSignatures(model fantasy.LanguageModel) bool {
-	return model != nil && model.Provider() == openrouter.Name && strings.HasPrefix(model.Model(), "google/")
+// isGeminiModel reports whether model is Gemini, the one kind a Gemini
+// signature is for: a google/ model id, which fantasy's OpenRouter and Vercel
+// providers send a signature back for, or fantasy's own google provider. The
+// test must not miss a Gemini route: geminiSignatureStep would then take the
+// signatures fantasy keeps within a run from every step after the first.
+func isGeminiModel(model fantasy.LanguageModel) bool {
+	return model != nil && (strings.HasPrefix(model.Model(), "google/") || model.Provider() == google.Name)
 }
 
 func isGeminiSignature(part fantasy.MessagePart) bool {
@@ -923,10 +925,9 @@ func hasGeminiSignature(msg fantasy.Message) bool {
 }
 
 // withoutGeminiSignatures is messages without the signatures replay kept, for
-// a request that has no use for them. The other providers do not all skip such
-// a part: OpenRouter sends its other routes an empty reasoning detail of
-// unknown format and its openai/ and xai/ routes "<thoughts></thoughts>" text,
-// and openaicompat sends an empty reasoning_content.
+// a request that has no use for them. Not every route skips such a part:
+// OpenRouter sends its other routes an empty reasoning detail of unknown
+// format, and its openai/ and xai/ routes "<thoughts></thoughts>" text.
 func withoutGeminiSignatures(messages []fantasy.Message) []fantasy.Message {
 	out := make([]fantasy.Message, 0, len(messages))
 	for _, msg := range messages {
@@ -941,12 +942,12 @@ func withoutGeminiSignatures(messages []fantasy.Message) []fantasy.Message {
 	return out
 }
 
-// geminiSignatureStep shows the replayed signatures only to a model that sends
-// them back to Gemini, so a fallback taken after a Gemini model failed gets the
+// geminiSignatureStep shows the replayed signatures only to a Gemini model, so
+// a fallback that is not Gemini, taken after a Gemini model failed, gets the
 // replay it got before they were kept. Request-local, like the reducers after
 // it: the run's own history keeps them for a later Gemini step.
 func geminiSignatureStep(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
-	if sendsGeminiSignatures(opts.Model) || !slices.ContainsFunc(opts.Messages, hasGeminiSignature) {
+	if isGeminiModel(opts.Model) || !slices.ContainsFunc(opts.Messages, hasGeminiSignature) {
 		return ctx, fantasy.PrepareStepResult{}, nil
 	}
 	return ctx, fantasy.PrepareStepResult{Messages: withoutGeminiSignatures(opts.Messages)}, nil
