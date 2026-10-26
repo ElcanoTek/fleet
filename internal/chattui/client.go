@@ -126,6 +126,9 @@ type turnRequest struct {
 	// user, so a first submission's resend is looked up across conversations.
 	InputIDScope string `json:"input_id_scope,omitempty"`
 	SubmissionID string `json:"submission_id,omitempty"`
+	// EnabledOptional seeds a NEW conversation's optional connectors, as the
+	// web chat's opening request does; the server ignores it on a resumed one.
+	EnabledOptional []string `json:"enabled_optional,omitempty"`
 }
 
 // QueuedError is POST /chat's queue acknowledgement: the conversation already
@@ -281,14 +284,22 @@ var noRest = func() <-chan struct{} {
 // it returns at the terminal frame and reads the rest in the background.
 // Otherwise it is StreamInput: it reads the stream to its end first.
 func (c *Client) streamTurn(ctx context.Context, message, convID, inputID string, onEvent func(Event), early bool) (string, <-chan struct{}, error) {
+	var connectors []string
+	if convID == "" && (c.cfg.DefaultConnectors || len(c.cfg.Connectors) > 0) {
+		var err error
+		if connectors, err = c.newConversationConnectors(ctx); err != nil {
+			return convID, noRest, err
+		}
+	}
 	body, err := json.Marshal(turnRequest{
-		Message:        message,
-		ConversationID: convID,
-		Model:          c.turnModel(convID),
-		Persona:        c.cfg.Persona,
-		InputID:        inputID,
-		SubmissionID:   inputID,
-		InputIDScope:   c.inputIDScope(inputID),
+		Message:         message,
+		ConversationID:  convID,
+		Model:           c.turnModel(convID),
+		Persona:         c.cfg.Persona,
+		InputID:         inputID,
+		SubmissionID:    inputID,
+		InputIDScope:    c.inputIDScope(inputID),
+		EnabledOptional: connectors,
 	})
 	if err != nil {
 		return convID, noRest, err
