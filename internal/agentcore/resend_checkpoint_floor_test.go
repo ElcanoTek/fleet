@@ -60,6 +60,10 @@ type sizedRun struct {
 	// arg, when set, is the tick argument of call n; nil gives each call its
 	// own (n). A repeated argument is a re-run.
 	arg func(n int32) int32
+	// window is the model's context window; 0 is one far above anything the
+	// fixture sends, so neither the window-pressure path nor the pre-call
+	// context reducer touches the history.
+	window int
 
 	mu    sync.Mutex
 	sizes []int // the resent size of each call, in call order
@@ -98,9 +102,7 @@ func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSessio
 			ticks.Add(1)
 			return fantasy.NewTextResponse(strings.Repeat("d", sr.resultChars)), nil
 		})
-	// A window far above anything the fixture sends, so neither the window-
-	// pressure path nor the pre-call context reducer touches the history.
-	recordContextMax(slug, 10_000_000)
+	recordContextMax(slug, cmp.Or(sr.window, 10_000_000))
 	model := &namedMockModel{name: slug}
 	var calls atomic.Int32
 	model.streamFunc = func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {

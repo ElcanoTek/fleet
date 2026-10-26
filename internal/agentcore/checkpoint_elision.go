@@ -424,20 +424,22 @@ func (e *engine) noteReruns(messages []fantasy.Message) {
 	}
 }
 
-// noteRerunStop records the re-run stop: a server log line, and, for a run
-// with a resend budget, a [context_budget_raised] session-log breadcrumb with
-// the budget it had and the one it has from now on.
+// noteRerunStop records the re-run stop: a server log line, and, when the
+// stop raised the run's resend budget (resendBudget), a
+// [context_budget_raised] session-log breadcrumb with the budget it had and
+// the one it has from now on. A run with no resend budget, or on a window
+// too small for any raise, keeps its budget and gets no breadcrumb.
 func (e *engine) noteRerunStop(tool string) {
-	budget := contextResendBudgetTokens(e.envPrefix)
-	if budget <= 0 {
+	budget, raised := contextResendBudgetTokens(e.envPrefix), e.resendBudget()
+	if raised <= budget {
 		log.Printf("context elision off for the rest of the run: %s was re-run after its result was elided", tool)
 		return
 	}
-	log.Printf("context elision off and the resend budget raised to %d for the rest of the run: %s was re-run after its result was elided", e.resendBudget(), tool)
+	log.Printf("context elision off and the resend budget raised to %d for the rest of the run: %s was re-run after its result was elided", raised, tool)
 	if e.logSession != nil {
 		e.logSession.AddMessage(roleUser, fmt.Sprintf(
-			"[context_budget_raised] tool=%s budget=%d raised_budget=%d — the run re-ran a call whose result an elision had replaced with a preview, so it needs more of its data at once than the budget holds: it stops eliding, and its resend budget is %d times larger for the rest of the run",
-			tool, budget, e.resendBudget(), resendBudgetRerunFactor), nil, nil)
+			"[context_budget_raised] tool=%s budget=%d raised_budget=%d — the run re-ran a call whose result an elision had replaced with a preview, a sign it needs more of its data at once than the budget holds: it stops eliding, and its resend budget is raised for the rest of the run",
+			tool, budget, raised), nil, nil)
 	}
 }
 

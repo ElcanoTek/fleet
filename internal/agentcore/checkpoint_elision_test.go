@@ -1067,7 +1067,7 @@ func TestCheckContextPressure_RerunStopsElision(t *testing.T) {
 	}
 	summary := sessionLines(e.logSession, "[context_compacted]")
 	if len(summary) != 1 || !strings.Contains(summary[0], "budget=240000 ") ||
-		!strings.Contains(summary[0], "exceeded 3 × FLEET_CONTEXT_RESEND_BUDGET_TOKENS (raised after the run re-ran an elided call)") {
+		!strings.Contains(summary[0], "exceeded the run's resend budget (240000, raised from FLEET_CONTEXT_RESEND_BUDGET_TOKENS after it re-ran an elided call)") {
 		t.Fatalf("[context_compacted] breadcrumbs = %v", summary)
 	}
 	if crumbs := sessionLines(e.logSession, "[context_budget_raised]"); len(crumbs) != 1 {
@@ -1181,7 +1181,7 @@ func TestRun_Elision_RerunRaisesTheBudget(t *testing.T) {
 		}
 	}
 	crumbs := sessionLines(session, "[context_checkpoint] ")
-	if last := crumbs[len(crumbs)-1]; !strings.Contains(last, "reached 3 × FLEET_CONTEXT_RESEND_BUDGET_TOKENS (raised after the run re-ran an elided call)") {
+	if last := crumbs[len(crumbs)-1]; !strings.Contains(last, "reached the run's resend budget (240000, raised from FLEET_CONTEXT_RESEND_BUDGET_TOKENS after it re-ran an elided call)") {
 		t.Errorf("the last [context_checkpoint] does not name the raised budget: %q", last)
 	}
 	// The run grew past twice the configured budget before it paused again.
@@ -1227,5 +1227,82 @@ func TestCallKey(t *testing.T) {
 	}
 	if callKey("fetch", `{}`) == callKey("read", `{}`) {
 		t.Error("two tools with the same input share a key")
+	}
+}
+
+// On a window too small for three budgets, the raise stops 30% of the budget
+// short of the model's input limit, so a call can still reach the pause
+// before the in-round guard trims it; on a window too small for any raise the
+// run keeps its budget and records no raise. Under the floor rule the
+// threshold stays at the #1600 cap, never past the limit.
+func TestResendBudget_RaiseStopsShortOfTheWindow(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	e := heldEngine(t, "raise-200k", nil)
+	recordContextMax("raise-200k", 200_000)
+	limit := e.resendWindowLimit()
+	if limit <= 80_000 || limit >= 240_000 {
+		t.Fatalf("fixture: a 200K window's limit is %d", limit)
+	}
+	e.resendPrefix, e.resendFloor = 50_000, 50_000 // crowds the configured 80K
+	before := e.effectiveResendBudget(e.resendBudget())
+	e.elisionStopped = true
+	if got, want := e.resendBudget(), limit-24_000; got != want {
+		t.Fatalf("raised budget on a 200K window = %d, want %d (the limit %d less 30%% of the budget)", got, want, limit)
+	}
+	if after := e.effectiveResendBudget(e.resendBudget()); after < before || after > limit {
+		t.Fatalf("floor rule: threshold %d before the raise, %d after; want it no lower, and at most the limit %d", before, after, limit)
+	}
+
+	small := heldEngine(t, "raise-64k", nil)
+	recordContextMax("raise-64k", 64_000)
+	small.noteElidedCalls([]string{callKey("fetch", `{"page":"page-a"}`)})
+	small.noteReruns(elisionExchange("again", `{"page":"page-a"}`, elisionText(10)))
+	if !small.elisionStopped {
+		t.Fatal("the re-run was not noticed")
+	}
+	if got := small.resendBudget(); got != 80_000 {
+		t.Fatalf("a 64K window has no room for a raise, yet the budget is %d", got)
+	}
+	if crumbs := sessionLines(small.logSession, "[context_budget_raised]"); len(crumbs) != 0 {
+		t.Fatalf("recorded a raise that did not happen: %v", crumbs)
+	}
+}
+
+// The whole run on a 200K window: after the re-run it pauses at the capped
+// budget, and the in-round guard never has to trim a call.
+func TestRun_Elision_RerunRaiseOnASmallWindow(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
+	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	// The input limit is 200000 − 16384 (completion) − 10000 (provider
+	// reserve) = 173616; the raise stops 24000 short of it.
+	const raised = 149_616
+	sr := &sizedRun{prefix: 10_000, toolSteps: 40, resultChars: 40_000, window: 200_000,
+		arg: func(n int32) int32 {
+			if n == 10 {
+				return 1
+			}
+			return n
+		}}
+	obs, session := sr.run(t, "elide-rerun-raise-200k")
+
+	crumbs := sessionLines(session, "[context_budget_raised]")
+	if len(crumbs) != 1 || !strings.HasPrefix(crumbs[0], fmt.Sprintf("[context_budget_raised] tool=tick budget=80000 raised_budget=%d ", raised)) {
+		t.Fatalf("[context_budget_raised] breadcrumbs = %v", crumbs)
+	}
+	checkpoints := payloadsOf(obs, evtContextCheckpoint)
+	if len(checkpoints) < 3 {
+		t.Fatalf("checkpoints %v: want pauses after the raise", checkpoints)
+	}
+	for i, p := range checkpoints[2:] {
+		if p[evtFieldResendBudget] != raised || p[evtFieldUsedTokens].(int) < raised {
+			t.Errorf("checkpoint %d after the raise: %v, want it at %d or more", i+3, p, raised)
+		}
+	}
+	if n := len(payloadsOf(obs, "fleet.tool_context_reduced")); n != 0 {
+		t.Errorf("the in-round guard trimmed %d calls; the pause should come first", n)
+	}
+	if top := slices.Max(sr.sizes); top > 173_616 {
+		t.Errorf("a call resent %d, past the model's input limit 173616", top)
 	}
 }

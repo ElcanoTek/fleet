@@ -399,19 +399,32 @@ fewer summarizer calls; making the elided content recallable added nothing.
   (`engine.resendBudget`):
   - **Why three.** The bench's twelve reports came to about 158K tokens
     resent, so twice the 80K default would pause again just as the last one
-    arrived. The model's window would be no bound at all: today's are about 1M
-    tokens.
+    arrived. The model's window is no bound on its own: the bench's models
+    all have windows of about 1M tokens.
+  - **The window cap.** The raise stops 30% of the configured budget short of
+    the active model's input limit (the limit #1600 caps the floor rule at),
+    so a call can reach the pause before the in-round guard has to trim it. On
+    a 200K window the raise is to about 150K; on a window too small for any
+    raise the run keeps its budget.
   - **The floor rule.** Whether it applies is still judged against the
     configured budget, so the raise never lowers the point a run pauses at.
-    Under the rule the run pauses at the floor plus three budgets.
-  - **When it takes effect.** The run learns of the re-run at its next pause.
-    That pause compacts nothing unless the prompt is already over the raised
-    budget.
-  - **What it records.** The session log gets `[context_budget_raised] tool=…
-    budget=… raised_budget=… — …`, which the Operations Center shows as
-    **Context budget raised**. Later `[context_checkpoint]` and
-    `[context_compacted]` lines name the raised budget, and later events carry
-    it as `resend_budget_tokens`.
+    Under the rule the run pauses at the floor plus the raised budget, capped
+    at the model's input limit as before.
+  - **When it takes effect.** The run learns of the re-run at the start of its
+    next round: a pause, or a finish the policy sent back. A pause that
+    learns of it compacts nothing unless the prompt is already over the raised
+    threshold; it still counts toward the 40-pause cap.
+  - **The trade-off.** One repeat of an elided call is enough, and not every
+    repeat means missing data: a file viewed again after an edit, the same
+    command run twice, a bulky status polled again. Such a run also gets the
+    raised budget, so for the rest of it each call may resend up to three
+    times as much before the next compaction, though it pauses less often.
+    Not measured.
+  - **What it records.** When the budget rose, the session log gets
+    `[context_budget_raised] tool=… budget=… raised_budget=… — …`, which the
+    Operations Center shows as **Context budget raised**. Later
+    `[context_checkpoint]` and `[context_compacted]` lines name the raised
+    budget, and later events carry it as `resend_budget_tokens`.
   - Runs with elision off, and runs that never re-fetch an elided result, are
     unchanged.
 - **Reused call IDs** (fixed 2026-10-22). Some providers reuse one call ID

@@ -124,7 +124,7 @@ describe("parseRuntimeEvent", () => {
 
   it("reads the raised-budget breadcrumb as its own event", () => {
     const ev = parseRuntimeEvent(
-      "[context_budget_raised] tool=mcp_store_metrics_get_store_daily_report budget=80000 raised_budget=240000 — the run re-ran a call whose result an elision had replaced with a preview, so it needs more of its data at once than the budget holds: it stops eliding, and its resend budget is 3 times larger for the rest of the run",
+      "[context_budget_raised] tool=mcp_store_metrics_get_store_daily_report budget=80000 raised_budget=240000 — the run re-ran a call whose result an elision had replaced with a preview, a sign it needs more of its data at once than the budget holds: it stops eliding, and its resend budget is raised for the rest of the run",
     );
     expect(ev).toMatchObject({ tag: "context_budget_raised", title: "Context budget raised", tone: "info" });
     expect(ev?.fields).toContainEqual(["raised_budget", "240000"]);

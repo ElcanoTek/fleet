@@ -594,6 +594,7 @@ const EVENT_FIELD_LABEL: Record<string, (v: string) => string> = {
   used: (v) => `${Number(v).toLocaleString()} tokens resent`,
   trigger: (v) => v.replace(/_/g, " "),
   effective_budget: (v) => `budget ${Number(v).toLocaleString()}`,
+  raised_budget: (v) => `budget raised to ${Number(v).toLocaleString()}`,
 };
 
 function eventFacts(event: RuntimeEvent): string {
