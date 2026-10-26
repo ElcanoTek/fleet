@@ -1373,6 +1373,85 @@ func (s *Storage) UpdateTaskTags(ctx context.Context, taskID uuid.UUID, add, rem
 	return task, nil
 }
 
+// SetTaskOwner makes ownerID the owner (created_by) of a task and of every
+// later occurrence of its recurrence chain that has not finished yet, and
+// returns the ids it rewrote (the task's own id first). It is the admin
+// reassignment behind PUT /tasks/{id}/owner and `fleet sched task set-owner`;
+// a missing task is sql.ErrNoRows.
+//
+// Why the chain and not only the row: a recurrence spawn builds the successor
+// from the completing row (scheduleNextRecurrence copies CreatedBy), so a new
+// owner on the task alone reaches every occurrence spawned after this commit,
+// but not a successor that already exists. The chain is followed forward
+// through previous_occurrence_id — the one-step pointer each spawn stamps —
+// rather than lineage_id, which re-runs and clones share with the job they
+// were copied from: reassigning one copied chain must not reassign another.
+// Finished occurrences after the task keep their owner; they are history.
+//
+// The task row is locked first. A spawn claims its credit with an UPDATE on
+// the same row before reading it FOR UPDATE, so either the spawn commits
+// first and the walk below (a new statement, so a new snapshot) sees and
+// rewrites the successor, or the spawn waits and copies the new owner.
+//
+// previous_occurrence_id carries no index, so each step of the walk scans the
+// table; a walk from the chain's live occurrence — the usual target — is one
+// or two steps.
+func (s *Storage) SetTaskOwner(ctx context.Context, taskID, ownerID uuid.UUID) ([]uuid.UUID, error) {
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var locked uuid.UUID
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM tasks WHERE id = $1 FOR UPDATE`, taskID).Scan(&locked); err != nil {
+		return nil, err
+	}
+	terminal := make([]string, 0, len(models.TerminalTaskStatuses))
+	for _, st := range models.TerminalTaskStatuses {
+		terminal = append(terminal, string(st))
+	}
+	rows, err := tx.QueryContext(ctx, `
+		WITH RECURSIVE chain(id) AS (
+			SELECT id::text FROM tasks WHERE id = $1
+			UNION
+			SELECT t.id::text FROM tasks t JOIN chain c ON t.previous_occurrence_id = c.id
+		)
+		UPDATE tasks SET created_by = $2
+		WHERE id::text IN (SELECT id FROM chain)
+		  AND (id = $1 OR NOT (status = ANY($3::text[])))
+		RETURNING id`, taskID, ownerID, terminal)
+	if err != nil {
+		return nil, err
+	}
+	var updated []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		updated = append(updated, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	// The task itself first; RETURNING order is unspecified.
+	for i, id := range updated {
+		if id == taskID {
+			updated[0], updated[i] = updated[i], updated[0]
+			break
+		}
+	}
+	return updated, nil
+}
+
 // ListTagCatalogue returns every distinct tag in use with its task count (#212),
 // scoped to the principal's visible rows (#1082).
 func (s *Storage) ListTagCatalogue(ctx context.Context, scope db.TagCatalogueScope) ([]db.TagCount, error) {

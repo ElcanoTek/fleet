@@ -3,6 +3,7 @@ package admincli
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -34,10 +35,10 @@ type taskExportEnvelope struct {
 	Tasks   []*models.Task `json:"tasks"`
 }
 
-// cmdSchedTask dispatches `fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits`.
+// cmdSchedTask dispatches `fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits|set-owner|tag|estimate|batch-create`.
 func cmdSchedTask(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits|tag|estimate|batch-create")
+		return errf(1, "usage: fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits|set-owner|tag|estimate|batch-create")
 	}
 	switch argv[0] {
 	case "list", "ls":
@@ -54,6 +55,8 @@ func cmdSchedTask(argv []string) int {
 		return schedTaskSetDescription(argv[1:])
 	case "set-limits":
 		return schedTaskSetLimits(argv[1:])
+	case "set-owner":
+		return schedTaskSetOwner(argv[1:])
 	case "tag":
 		return schedTaskTag(argv[1:])
 	case "estimate":
@@ -61,7 +64,7 @@ func cmdSchedTask(argv []string) int {
 	case "batch-create":
 		return schedTaskBatchCreate(argv[1:])
 	default:
-		return errf(1, "unknown sched task subcommand %q (want list|export|import|set-model|set-credentials|set-description|set-limits|tag|estimate|batch-create)", argv[0])
+		return errf(1, "unknown sched task subcommand %q (want list|export|import|set-model|set-credentials|set-description|set-limits|set-owner|tag|estimate|batch-create)", argv[0])
 	}
 }
 
@@ -407,6 +410,73 @@ func schedTaskSetDescription(argv []string) int {
 	} else {
 		fmt.Fprintf(os.Stderr, "set description on task %s (%d chars)\n", updated.ID, len([]rune(updated.Description)))
 	}
+	return 0
+}
+
+// taskOwnerStore is the storage subset `sched task set-owner` needs — narrow
+// so the command is testable without a live DB. *storage.Storage satisfies it.
+type taskOwnerStore interface {
+	GetUserByUsernameWithContext(ctx context.Context, username string) (*models.User, error)
+	SetTaskOwner(ctx context.Context, taskID, ownerID uuid.UUID) ([]uuid.UUID, error)
+}
+
+var _ taskOwnerStore = (*storage.Storage)(nil)
+
+// schedTaskSetOwner makes an existing user the owner (created_by) of a task
+// and of the unfinished later occurrences of its recurrence chain — the CLI
+// twin of PUT /tasks/{id}/owner (docs/TASK-OWNERSHIP.md). It writes the sched
+// DB directly, like every `sched task` verb, so it cannot run the API's
+// mcp_selection check (that needs the running server's bundle inventory).
+func schedTaskSetOwner(argv []string) int {
+	fs := flag.NewFlagSet("sched task set-owner", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "sched Postgres DSN")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	rest := fs.Args()
+	if len(rest) != 2 || strings.TrimSpace(rest[1]) == "" {
+		return errf(1, "usage: fleet sched task set-owner <task_id> <username>")
+	}
+	taskID, err := uuid.Parse(strings.TrimSpace(rest[0]))
+	if err != nil {
+		return errf(1, "invalid task id %q: %v", rest[0], err)
+	}
+
+	st, code := openSchedStorage(*dbURL)
+	if st == nil {
+		return code
+	}
+	defer st.Close()
+	return setTaskOwner(context.Background(), st, os.Stderr, taskID, strings.TrimSpace(rest[1]))
+}
+
+// setTaskOwner is schedTaskSetOwner past flag parsing: resolve the user (as
+// given, then lowercased — provisioned usernames are lowercased emails),
+// reassign, report on w. Exit codes follow the sched verbs: 2 not found, 5 a
+// storage failure.
+func setTaskOwner(ctx context.Context, st taskOwnerStore, w io.Writer, taskID uuid.UUID, username string) int {
+	var owner *models.User
+	for _, name := range []string{username, strings.ToLower(username)} {
+		user, err := st.GetUserByUsernameWithContext(ctx, name)
+		if err == nil && user != nil {
+			owner = user
+			break
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return errf(5, "look up user: %v", err)
+		}
+	}
+	if owner == nil {
+		return errf(2, "user %q not found", username)
+	}
+	updated, err := st.SetTaskOwner(ctx, taskID, owner.ID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errf(2, "task %s not found", taskID)
+		}
+		return errf(5, "set owner: %v", err)
+	}
+	fmt.Fprintf(w, "task %s is now owned by %s (%d row(s) of its chain updated)\n", taskID, owner.Username, len(updated))
 	return 0
 }
 

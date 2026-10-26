@@ -42,7 +42,8 @@ type taskCreator struct {
 	// creatorUsername is the resolved user's username (an email on a standard
 	// deployment) — the budget gate's user-scope principal id (#601 part 2),
 	// matching the usage report's group_by=user bucket key. Empty for admin-key
-	// and scoped-key submissions.
+	// and scoped-key submissions, except a key's re-run/clone, whose copy keeps
+	// the source's owner (rerunCreator).
 	creatorUsername string
 	// creatorKeyMaxPriority is the authorizing scoped key's task-urgency ceiling
 	// (#230), copied by value. nil = admin/user submission or an uncapped key.
@@ -283,6 +284,13 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		creator.attribute(t)
+		// The single-task path's mcp_selection check, per task like the
+		// priority ceiling above.
+		if err := h.checkTaskMCPSelection(r.Context(), t); err != nil {
+			failedList = append(failedList, models.BatchFailed{Index: i, Error: err.Error()})
+			validationFailed = true
+			continue
+		}
 		toInsert = append(toInsert, t)
 		createdList = append(createdList, models.BatchCreated{ID: t.ID, Index: i})
 	}

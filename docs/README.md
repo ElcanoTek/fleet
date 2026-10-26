@@ -110,6 +110,10 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   [ADR-0058](adr/0058-per-conversation-attachment-scoping.md)
 - **Task titles** (the operator-facing display label, and why it is NOT the
   unique import/export `name` column): [`docs/TASK-TITLES.md`](TASK-TITLES.md)
+- **Task ownership and copy lineage** (who owns a re-run or clone made with an
+  API key, `new_lineage`, the create-time check that refuses a connector the
+  owner cannot resolve, and `PUT /tasks/{id}/owner` /
+  `fleet sched task set-owner`): [`docs/TASK-OWNERSHIP.md`](TASK-OWNERSHIP.md)
 - **Sharing work inside a project** (team-shared chats and the read-only view
   teammates branch from, "team learnings" as the user-facing name for a
   project's shared memory, the vocabulary, and why a team-shared chat can only
@@ -335,6 +339,7 @@ above fails otherwise.
 - [`STALE-CLIENTS.md`](STALE-CLIENTS.md) — Stale clients after a deploy: the update notice and the error pages
 - [`STRUCTURED-OUTPUT.md`](STRUCTURED-OUTPUT.md) — Structured output contracts
 - [`SUBAGENTS.md`](SUBAGENTS.md) — Sub-agents: default-on, parent decides, typed children (#1043)
+- [`TASK-OWNERSHIP.md`](TASK-OWNERSHIP.md) — Task ownership, copy lineage and the create-time connector check
 - [`TASK-PROMPT-CAP.md`](TASK-PROMPT-CAP.md) — Task prompt size cap (250,000 bytes)
 - [`TASK-RECIPIENT-SUGGESTIONS.md`](TASK-RECIPIENT-SUGGESTIONS.md) — Remembered email recipients in the task form
 - [`TASK-SCHEDULE-UX.md`](TASK-SCHEDULE-UX.md) — Create Task schedule controls

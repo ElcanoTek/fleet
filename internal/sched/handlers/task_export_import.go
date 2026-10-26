@@ -315,6 +315,10 @@ func (h *Handlers) createTaskFromRecord(r *http.Request, rec models.TaskExportRe
 	if err := priorityCapError(creator.creatorKeyMaxPriority, task.Priority); err != nil {
 		return uuid.Nil, err
 	}
+	// The create path's mcp_selection check, against the importing owner.
+	if err := h.checkTaskMCPSelection(r.Context(), task); err != nil {
+		return uuid.Nil, err
+	}
 	if _, err := h.storage.AddTaskWithContext(r.Context(), task); err != nil {
 		return uuid.Nil, err
 	}
@@ -341,6 +345,10 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 	}
 	tc := models.ExportRecordToTaskCreate(rec)
 	if err := h.validateTaskCreate(&tc); err != nil {
+		return uuid.Nil, err
+	}
+	// A replace keeps the row's owner, so the selection must resolve for it.
+	if err := h.checkMCPSelectionForOwner(r.Context(), existing.CreatedBy, tc.MCPSelection, tc.CredentialAllowlist); err != nil {
 		return uuid.Nil, err
 	}
 	updated, err := h.storage.ReplaceTaskDefinition(r.Context(), existing.ID, tc)
