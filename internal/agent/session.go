@@ -299,7 +299,8 @@ func selectToolResults(effective []HistoryEntry) (map[string]ToolResultContent, 
 	chosenOutOfOrder := map[string]bool{}
 	seenCall := map[string]bool{}
 	sealedByLaterTurn := map[string]bool{}
-	lateTimeouts := map[int]ToolResultContent{}
+	sealedByCompaction := map[string]bool{}
+	lateUpdates := map[int]ToolResultContent{}
 	for i, e := range effective {
 		switch e.Type {
 		case "text":
@@ -307,6 +308,15 @@ func selectToolResults(effective []HistoryEntry) (map[string]ToolResultContent, 
 				for id := range chosenResult {
 					if seenCall[id] {
 						sealedByLaterTurn[id] = true
+					}
+				}
+			}
+		case "turn_summary":
+			var ts TurnSummaryContent
+			if err := json.Unmarshal(e.Content, &ts); err == nil && len(ts.Compactions) > 0 {
+				for id := range chosenResult {
+					if seenCall[id] {
+						sealedByCompaction[id] = true
 					}
 				}
 			}
@@ -322,12 +332,13 @@ func selectToolResults(effective []HistoryEntry) (map[string]ToolResultContent, 
 				return nil, nil, err
 			}
 			// If a later user turn has already been sent and cached with this
-			// tool call's inline placeholder result, do not let a late
-			// background approval-expiry timeout retroactively rewrite the
-			// historical turn's tool_result in the middle of the cached prefix;
-			// instead, surface it at its chronological tail position in Pass 2.
-			if sealedByLaterTurn[c.ID] && isApprovalTimeoutResult(c.Text) {
-				lateTimeouts[i] = c
+			// tool call's inline placeholder result (and a background timeout
+			// arrived later), or if an earlier persisted compaction has already
+			// sealed (and potentially summarized away) the originating turn,
+			// surface the outcome at its chronological tail position in Pass 2
+			// instead of mutating or losing it on the historical tool_call.
+			if sealedByCompaction[c.ID] || (sealedByLaterTurn[c.ID] && isApprovalTimeoutResult(c.Text)) {
+				lateUpdates[i] = c
 				continue
 			}
 			outOfOrder := !seenCall[c.ID]
@@ -340,7 +351,7 @@ func selectToolResults(effective []HistoryEntry) (map[string]ToolResultContent, 
 			chosenOutOfOrder[c.ID] = outOfOrder
 		}
 	}
-	return chosenResult, lateTimeouts, nil
+	return chosenResult, lateUpdates, nil
 }
 
 // replayHistory converts stored HistoryEntry rows back into fantasy.Message

@@ -488,6 +488,37 @@ func TestReplayHistory_LateApprovalTimeoutDoesNotMutateSealedTurnPrefix(t *testi
 	if !ok2 || !contains([]byte(txt2), "Approval timed out") {
 		t.Errorf("unsealed turn tool_result = %q; want timeout text applied", txt2)
 	}
+
+	// When an earlier turn's staged call was compacted away before the user
+	// approved/declined it, the late non-timeout resolution must also surface at
+	// the replay tail so it is not dropped with the compacted middle.
+	postCompactionApprovalEntries := []HistoryEntry{
+		mustEntry("user", "text", TextContent{Text: "turn 1 head", RuntimeToday: "2026-10-26"}),
+		mustEntry("assistant", "tool_call", ToolCallContent{ID: "call_compacted", Name: "send_email", Input: `{}`}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_compacted", Name: "send_email", Text: "APPROVAL_REQUIRED: staged card", IsErr: true}),
+		mustEntry("assistant", "text", TextContent{Text: "Staged."}),
+		mustEntry("user", "text", TextContent{Text: "turn 2 kept"}),
+		mustEntry("assistant", "text", TextContent{Text: "turn 2 reply"}),
+		mustEntry("assistant", "turn_summary", TurnSummaryContent{
+			Model: "anthropic/claude-opus-4.7",
+			Compactions: []agentcore.CompactionRecord{
+				{
+					Head:    2,
+					Removed: 3, // call_compacted + result + "Staged."
+					Summary: "[context compaction — earlier messages summarized to fit context window]\n\nSummary.",
+				},
+			},
+		}),
+		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_compacted", Name: "send_email", Text: `{"status":"sent"}`, IsErr: false}),
+	}
+	msgs3, err := replayHistory(postCompactionApprovalEntries, "")
+	if err != nil {
+		t.Fatalf("replayHistory post-compaction approval: %v", err)
+	}
+	tailPayload, _ := json.Marshal(msgs3[len(msgs3)-1])
+	if !contains(tailPayload, `[approval update — tool call call_compacted (send_email): {\"status\":\"sent\"}]`) {
+		t.Errorf("expected post-compaction approval outcome at tail, got %s", string(tailPayload))
+	}
 }
 
 func TestLastTurnStepInputTokens(t *testing.T) {

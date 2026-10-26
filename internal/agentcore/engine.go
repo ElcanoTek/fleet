@@ -435,7 +435,6 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 		Removed:             len(middle),
 		FirstKeptToolCallID: firstKeptCallID,
 		Summary:             messageText(summary),
-		PlanReannounce:      planText,
 	})
 	// The next step re-measures the resend-checkpoint floor (#1600).
 	e.resendFloorStale = true
@@ -453,7 +452,6 @@ type CompactionRecord struct {
 	Removed             int    `json:"removed"`
 	FirstKeptToolCallID string `json:"first_kept_tool_call_id,omitempty"`
 	Summary             string `json:"summary"`
-	PlanReannounce      string `json:"plan_reannounce,omitempty"`
 }
 
 func (e *engine) compactionsSnapshot() []CompactionRecord {
@@ -518,12 +516,9 @@ func applyCompactionRecord(messages []fantasy.Message, c CompactionRecord) []fan
 	}
 	cutIdx = c.Head + relCut
 	keep := dropPlanReannounceMessages(messages[cutIdx:])
-	out := make([]fantasy.Message, 0, c.Head+2+len(keep))
+	out := make([]fantasy.Message, 0, c.Head+1+len(keep))
 	out = append(out, messages[:c.Head]...)
 	out = append(out, fantasy.NewUserMessage(c.Summary))
-	if strings.TrimSpace(c.PlanReannounce) != "" {
-		out = append(out, fantasy.NewUserMessage(c.PlanReannounce))
-	}
 	out = append(out, keep...)
 	return out
 }
@@ -681,7 +676,6 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 		Removed:             len(droppable),
 		FirstKeptToolCallID: firstKeptCallID,
 		Summary:             messageText(summary),
-		PlanReannounce:      planText,
 	})
 
 	return proactiveCompactResult{
