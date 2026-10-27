@@ -930,6 +930,8 @@ export function ChatExperience({
     : pendingAutoApprove;
   const autoApproveSeqRef = useRef<Map<string, number>>(new Map());
   const autoApproveChainRef = useRef<Map<string, Promise<void>>>(new Map());
+  const autoApproveValueRef = useRef<Map<string, boolean>>(new Map());
+  const autoApproveInFlightRef = useRef<Map<string, number>>(new Map());
   const toggleAutoApprove = useCallback(() => {
     const next = !isAutoApprove;
     if (!activeConversationId || isPendingKey(activeConversationId)) {
@@ -939,6 +941,11 @@ export function ChatExperience({
     const convId = activeConversationId;
     const seq = (autoApproveSeqRef.current.get(convId) ?? 0) + 1;
     autoApproveSeqRef.current.set(convId, seq);
+    autoApproveValueRef.current.set(convId, next);
+    autoApproveInFlightRef.current.set(
+      convId,
+      (autoApproveInFlightRef.current.get(convId) ?? 0) + 1,
+    );
     const applyState = (val: boolean) => {
       setConversations((curr) =>
         curr.map((c) => (c.id === convId ? { ...c, auto_approve: val } : c)),
@@ -949,7 +956,13 @@ export function ChatExperience({
     };
     applyState(next);
     const url = conversationApiUrl(convId, "/auto-approve");
-    if (!url) return;
+    if (!url) {
+      autoApproveInFlightRef.current.set(
+        convId,
+        Math.max(0, (autoApproveInFlightRef.current.get(convId) ?? 1) - 1),
+      );
+      return;
+    }
     const prev = autoApproveChainRef.current.get(convId) ?? Promise.resolve();
     const run = prev.then(async () => {
       try {
@@ -959,10 +972,29 @@ export function ChatExperience({
           body: JSON.stringify({ auto_approve: next }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        let committed = next;
+        try {
+          const body = (await res.json()) as { auto_approve?: boolean };
+          if (typeof body?.auto_approve === "boolean") {
+            committed = body.auto_approve;
+          }
+        } catch {
+          // ignore empty/non-JSON body
+        }
+        if (autoApproveSeqRef.current.get(convId) === seq) {
+          autoApproveValueRef.current.set(convId, committed);
+          applyState(committed);
+        }
       } catch {
         if (autoApproveSeqRef.current.get(convId) === seq) {
+          autoApproveValueRef.current.set(convId, !next);
           applyState(!next);
         }
+      } finally {
+        autoApproveInFlightRef.current.set(
+          convId,
+          Math.max(0, (autoApproveInFlightRef.current.get(convId) ?? 1) - 1),
+        );
       }
     });
     autoApproveChainRef.current.set(convId, run);
@@ -2381,6 +2413,20 @@ export function ChatExperience({
   };
 
   const refreshConversations = async () => {
+    const seqAtStart = new Map(autoApproveSeqRef.current);
+    const reconcileAutoApprove = (list: ConversationSummary[]) =>
+      list.map((c) => {
+        const curSeq = autoApproveSeqRef.current.get(c.id) ?? 0;
+        const startSeq = seqAtStart.get(c.id) ?? 0;
+        const inFlight = (autoApproveInFlightRef.current.get(c.id) ?? 0) > 0;
+        if (
+          (inFlight || curSeq !== startSeq) &&
+          autoApproveValueRef.current.has(c.id)
+        ) {
+          return { ...c, auto_approve: autoApproveValueRef.current.get(c.id) };
+        }
+        return c;
+      });
     try {
       // Active and archived lists in parallel (#282). The archived fetch is
       // best-effort — a failure leaves the previous archived list in place
@@ -2393,13 +2439,15 @@ export function ChatExperience({
         const data = (await activeRes.json()) as {
           conversations: ConversationSummary[] | null;
         };
-        setConversations(data.conversations ?? []);
+        setConversations(reconcileAutoApprove(data.conversations ?? []));
       }
       if (archivedRes.ok) {
         const data = (await archivedRes.json()) as {
           conversations: ConversationSummary[] | null;
         };
-        setArchivedConversations(data.conversations ?? []);
+        setArchivedConversations(
+          reconcileAutoApprove(data.conversations ?? []),
+        );
       }
     } catch {
       // non-fatal

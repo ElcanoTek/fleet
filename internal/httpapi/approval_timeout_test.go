@@ -257,14 +257,21 @@ func TestStage_ConversationAutoApprove(t *testing.T) {
 		t.Fatalf("convAutoApprove bypassed schedule_task validation: id=%q err=%v", id, err)
 	}
 
-	// 3. Outbound email tools (mcp_sendgrid_send_email) are NOT bypassed by auto-approve.
+	// 3. Outbound email tools (mcp_sendgrid_send_email, mcp_sendgrid_send_template_email) are NOT bypassed by auto-approve.
 	id, err = a.Stage("mcp_sendgrid_send_email", "call_3", `{}`)
 	if err == nil || id == agentcore.PreApprovedSentinel {
 		t.Fatalf("convAutoApprove bypassed send_email validation: id=%q err=%v", id, err)
 	}
+	a.store = &stageStore{}
+	id, err = a.Stage("mcp_sendgrid_send_template_email", "call_3b", `{}`)
+	if err != nil {
+		t.Fatalf("Stage send_template_email: %v", err)
+	}
+	if id == agentcore.PreApprovedSentinel {
+		t.Fatalf("convAutoApprove bypassed send_template_email: id=%q", id)
+	}
 
 	// 4. Bundle-declared critical_tool_no_session_approval tools are NOT bypassed.
-	a.store = &stageStore{}
 	id, err = a.Stage("mcp_prod_drop_table", "call_4", `{}`)
 	if err != nil {
 		t.Fatalf("Stage no-session-approval tool: %v", err)

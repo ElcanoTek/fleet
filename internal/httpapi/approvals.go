@@ -376,9 +376,10 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// Per-conversation auto-approve: when the user toggles Auto-approve on for
 	// this chat, executable critical tools run without parking on an approval
 	// card. Handler-only tools (schedule_task, manage_tasks, preview_email,
-	// suggest_advanced_model), outbound email (send_email), and bundle-declared
-	// critical_tool_no_session_approval tools still stage an explicit card.
-	if a.isAutoApprove() && !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && agentcore.SessionApprovalAllowed(toolName) {
+	// suggest_advanced_model), outbound email (send_email, send_template_email),
+	// and bundle-declared critical_tool_no_session_approval tools still stage an
+	// explicit card.
+	if a.isAutoApprove() && !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName) && agentcore.SessionApprovalAllowed(toolName) {
 		a.sink.Emit("tool.auto_resolved", map[string]any{
 			"tool": toolName,
 			"mode": "approve",
