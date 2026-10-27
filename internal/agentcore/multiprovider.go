@@ -65,10 +65,13 @@ const (
 	// in the Api-Key header. base_url is the resource's endpoint as the Azure
 	// portal shows it, and a model slug is one of the resource's deployment
 	// names. Keys only: Microsoft Entra ID sign-in is not supported. fantasy
-	// tells a reasoning model (GPT-5, o-series) by its id alone, and only then
-	// sends max_completion_tokens and no temperature, which those models
-	// require; so a reasoning deployment must carry its model in its name
-	// (gpt-5-prod, o4-mini), or Azure rejects every turn on it.
+	// tells a reasoning model by its id alone, and only then sends
+	// max_completion_tokens and no temperature, which those models require: an
+	// id containing "gpt-5" in any case, or starting with o1, o3, o4 or oss or
+	// containing -o1, -o3, -o4 or -oss. So a GPT-5, o-series or gpt-oss
+	// deployment must carry its model in its name (gpt-5-prod, o4-mini), or
+	// Azure rejects every turn on it, and a newer reasoning family outside that
+	// match (GPT-6) is sent max_tokens and a temperature whatever its name.
 	ProviderTypeAzure ProviderType = "azure"
 )
 

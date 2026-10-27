@@ -23,9 +23,10 @@ only be configured from the client bundle's `providers:` block.
   row's models list uses OpenRouter-shaped slugs, so listing one moves that
   slug off an OpenRouter catch-all, cost tracking included
   ([details](PROVIDERS.md#vercel-and-openrouter-slugs)). An `azure` row's
-  models are the resource's deployment names, and a GPT-5 or o-series
-  deployment must carry its model in its name, or every turn on it fails
-  ([details](PROVIDERS.md#provider-types)).
+  models are the resource's deployment names, and a GPT-5, o-series or
+  gpt-oss deployment must carry its model in its name, or every turn on it
+  fails; a newer reasoning model such as GPT-6 is not recognized under any
+  name ([details](PROVIDERS.md#provider-types)).
 - **Context window** (chat-DB migration 082): `context_window_tokens`, the
   admin-row twin of a bundle entry's field of the same name. It is one number
   per row, so it applies to every model the row serves: enter the smallest
@@ -123,10 +124,13 @@ only be configured from the client bundle's `providers:` block.
   token, so probing a keyless row would otherwise report "connected". Where
   the endpoint enumerates the ids a row lists, the row's listed slugs are
   cross-checked — absences report as a warning (gateways and Ollama tags
-  legitimately under-enumerate), never a failure. Azure's list names models, not the deployments a row
-  lists, so an `azure` row reports "key accepted" without that check.
-  Works on disabled rows so an admin can verify before enabling. The decrypted
-  key travels only in the outbound auth header; the response is a key-free
+  legitimately under-enumerate), never a failure. Azure's list names models,
+  not the deployments a row lists, so an `azure` row reports "key accepted"
+  without that check. Works on disabled rows so an admin can verify before
+  enabling. The decrypted key travels only in the outbound auth header, and
+  the probe follows a redirect only within the endpoint's origin, as turns
+  do: a redirect to another host is reported as its HTTP status, so the key
+  never reaches a host the row does not name. The response is a key-free
   summary (`ok`, `detail`, `served_model_count`, `missing_models`,
   `latency_ms`).
 

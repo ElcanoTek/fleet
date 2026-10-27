@@ -3,6 +3,7 @@ package agentcore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,7 +41,9 @@ import (
 //
 // SECURITY: the API key goes into the request's auth header and NOWHERE else
 // — never into ProbeResult fields, errors, or logs. Response bodies are
-// size-capped and only parsed for model ids, never echoed.
+// size-capped and only parsed for model ids, never echoed. The call follows a
+// redirect only within the endpoint's origin (probeClient), so the key never
+// reaches a host the row does not name.
 
 // ProbeResult is the wire-shaped outcome of one connection test.
 type ProbeResult struct {
@@ -65,6 +68,21 @@ const probeTimeout = 8 * time.Second
 // any real models catalog, small enough that a misconfigured base_url pointing
 // at something huge can't balloon memory.
 const probeBodyCap = 4 << 20
+
+// probeClient follows a redirect only within the endpoint's origin (scheme
+// and host), as the provider SDKs do on turns. Go drops Authorization on a
+// redirect to another host but copies every other header, so a key sent as
+// Api-Key or x-api-key would otherwise reach whatever host the endpoint
+// redirects to. A redirect elsewhere comes back as the 3xx it is.
+var probeClient = &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if first := via[0].URL; !strings.EqualFold(req.URL.Scheme, first.Scheme) || !strings.EqualFold(req.URL.Host, first.Host) {
+		return http.ErrUseLastResponse
+	}
+	return nil
+}}
 
 // ProbeProvider tests cfg against its live endpoint. It never returns an
 // error — every failure mode is folded into a !OK result with a key-free
@@ -99,7 +117,7 @@ func ProbeProvider(ctx context.Context, cfg ProviderConfig) ProbeResult {
 	}
 
 	start := time.Now()
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := probeClient.Do(req)
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
 		// err can embed the URL but never the key (it travels in a header).
@@ -113,6 +131,11 @@ func ProbeProvider(ctx context.Context, cfg ProviderConfig) ProbeResult {
 		return ProbeResult{
 			Status: resp.StatusCode, LatencyMS: latency,
 			Detail: "authentication failed — the endpoint rejected the API key",
+		}
+	case resp.StatusCode >= 300 && resp.StatusCode <= 399 && resp.Header.Get("Location") != "":
+		return ProbeResult{
+			Status: resp.StatusCode, LatencyMS: latency,
+			Detail: fmt.Sprintf("endpoint redirected to another host (HTTP %d), which turns do not follow either (check base_url)", resp.StatusCode),
 		}
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
 		return ProbeResult{

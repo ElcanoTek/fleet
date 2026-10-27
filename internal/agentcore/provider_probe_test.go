@@ -208,6 +208,50 @@ func TestProbeProviderAzureSendsApiKey(t *testing.T) {
 	}
 }
 
+// A redirect to another host is reported, not followed: Go drops only
+// Authorization on such a redirect, so it would copy an Api-Key or x-api-key
+// header to that host, and turns refuse the redirect anyway. A redirect within
+// the endpoint's origin is followed.
+func TestProbeProviderFollowsRedirectsOnlyWithinTheOrigin(t *testing.T) {
+	elsewhere := 0
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		elsewhere++
+		_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
+	}))
+	defer other.Close()
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer redirecting.Close()
+	for _, cfg := range []ProviderConfig{
+		{Name: "az", Type: ProviderTypeAzure, APIKey: "az-key", BaseURL: redirecting.URL + "/openai/v1"},
+		{Name: "anthro", Type: ProviderTypeAnthropic, APIKey: "sk-ant-x", BaseURL: redirecting.URL},
+	} {
+		res := ProbeProvider(context.Background(), cfg)
+		if res.OK || res.Status != http.StatusFound || !strings.Contains(res.Detail, "redirected to another host") {
+			t.Errorf("%s: res = %+v, want the 302 reported", cfg.Type, res)
+		}
+	}
+	if elsewhere != 0 {
+		t.Fatalf("the probe followed a redirect to another host %d times", elsewhere)
+	}
+
+	var paths []string
+	moved := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path == "/old/models" {
+			http.Redirect(w, r, "/openai/v1/models", http.StatusMovedPermanently)
+			return
+		}
+		_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
+	}))
+	defer moved.Close()
+	res := ProbeProvider(context.Background(), ProviderConfig{Name: "az", Type: ProviderTypeAzure, APIKey: "az-key", BaseURL: moved.URL + "/old"})
+	if !res.OK || len(paths) != 2 || paths[1] != "/openai/v1/models" {
+		t.Fatalf("res = %+v, paths = %v; want the same-origin redirect followed", res, paths)
+	}
+}
+
 // A row missing a field its type requires is reported without a network call.
 // For vercel this is what keeps a keyless row from testing as connected: the
 // gateway serves its public catalog to an empty Bearer token.

@@ -361,7 +361,7 @@ remote_mcp_catalog: []
 #     api_key_env: AZURE_OPENAI_API_KEY
 #     base_url: https://contoso.openai.azure.com # the endpoint the portal shows
 #     models: ["gpt-5-prod"]    # the resource's deployment names
-#     context_window_tokens: 400000
+#     context_window_tokens: 272000
 #
 # Declare context_window_tokens on every entry except OpenRouter: an undeclared
 # native limit falls back to 32,000 tokens (4,096 for Ollama), less than a turn

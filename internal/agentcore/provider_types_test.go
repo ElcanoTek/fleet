@@ -283,13 +283,21 @@ func (d *recordingDoer) Do(r *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-func generateOnce(t *testing.T, p fantasy.Provider) {
+// generateOnce makes one call on deployment with a token limit and a
+// temperature, the two parameters fantasy sends differently to a reasoning
+// model.
+func generateOnce(t *testing.T, p fantasy.Provider, deployment string) {
 	t.Helper()
-	lm, err := p.LanguageModel(context.Background(), "my-deployment")
+	lm, err := p.LanguageModel(context.Background(), deployment)
 	if err != nil {
 		t.Fatalf("LanguageModel: %v", err)
 	}
-	if _, err := lm.Generate(context.Background(), fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("ping")}}); err != nil {
+	maxOut, temp := int64(16384), 0.3
+	if _, err := lm.Generate(context.Background(), fantasy.Call{
+		Prompt:          fantasy.Prompt{fantasy.NewUserMessage("ping")},
+		MaxOutputTokens: &maxOut,
+		Temperature:     &temp,
+	}); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 }
@@ -297,8 +305,9 @@ func generateOnce(t *testing.T, p fantasy.Provider) {
 // fleet builds azure from fantasy's openai provider instead of calling
 // azure.New, to add the host-header removals azure.New cannot take. With no
 // OPENAI_* env set there is nothing to remove, so the two must send the same
-// request: same URL and the same headers. A fantasy upgrade that changes how
-// azure parses its endpoint or sends its key fails here.
+// request: same URL, same headers and the same body, for a reasoning
+// deployment and another one. A fantasy upgrade that changes how azure parses
+// its endpoint, sends its key or shapes its requests fails here.
 func TestAzureMatchesFantasyAzure(t *testing.T) {
 	for k := range ambientOpenAIEnv {
 		t.Setenv(k, "")
@@ -315,31 +324,36 @@ func TestAzureMatchesFantasyAzure(t *testing.T) {
 		{"https://gateway.example.com/azure/v1", "https://gateway.example.com/azure/v1/chat/completions"},
 		{"gateway.example.com/v1", "https://gateway.example.com/v1/chat/completions"},
 	} {
-		t.Run(tc.base, func(t *testing.T) {
-			theirs, ours := &recordingDoer{}, &recordingDoer{}
-			p, err := azure.New(azure.WithBaseURL(tc.base), azure.WithAPIKey("az-key"), azure.WithHTTPClient(theirs))
-			if err != nil {
-				t.Fatalf("azure.New: %v", err)
-			}
-			generateOnce(t, p)
-			q, err := openai.New(append(azureOpenAIOptions("az-key", tc.base), openai.WithHTTPClient(ours))...)
-			if err != nil {
-				t.Fatalf("openai.New: %v", err)
-			}
-			generateOnce(t, q)
-			if len(theirs.reqs) != 1 || len(ours.reqs) != 1 {
-				t.Fatalf("requests: fantasy azure %d, fleet %d; want one each", len(theirs.reqs), len(ours.reqs))
-			}
-			if got := ours.reqs[0].URL.String(); got != tc.wantURL || got != theirs.reqs[0].URL.String() {
-				t.Errorf("fleet URL = %q, fantasy azure URL = %q, want both %q", got, theirs.reqs[0].URL, tc.wantURL)
-			}
-			if !reflect.DeepEqual(ours.reqs[0].Header, theirs.reqs[0].Header) {
-				t.Errorf("headers differ:\nfleet:          %v\nfantasy azure:  %v", ours.reqs[0].Header, theirs.reqs[0].Header)
-			}
-			if got := ours.reqs[0].Header.Get("Api-Key"); got != "az-key" {
-				t.Errorf("Api-Key = %q, want the key", got)
-			}
-		})
+		for _, deployment := range []string{"my-deployment", "gpt-5-prod"} {
+			t.Run(tc.base+"/"+deployment, func(t *testing.T) {
+				theirs, ours := &recordingDoer{}, &recordingDoer{}
+				p, err := azure.New(azure.WithBaseURL(tc.base), azure.WithAPIKey("az-key"), azure.WithHTTPClient(theirs))
+				if err != nil {
+					t.Fatalf("azure.New: %v", err)
+				}
+				generateOnce(t, p, deployment)
+				q, err := openai.New(append(azureOpenAIOptions("az-key", tc.base), openai.WithHTTPClient(ours))...)
+				if err != nil {
+					t.Fatalf("openai.New: %v", err)
+				}
+				generateOnce(t, q, deployment)
+				if len(theirs.reqs) != 1 || len(ours.reqs) != 1 {
+					t.Fatalf("requests: fantasy azure %d, fleet %d; want one each", len(theirs.reqs), len(ours.reqs))
+				}
+				if got := ours.reqs[0].URL.String(); got != tc.wantURL || got != theirs.reqs[0].URL.String() {
+					t.Errorf("fleet URL = %q, fantasy azure URL = %q, want both %q", got, theirs.reqs[0].URL, tc.wantURL)
+				}
+				if !reflect.DeepEqual(ours.reqs[0].Header, theirs.reqs[0].Header) {
+					t.Errorf("headers differ:\nfleet:          %v\nfantasy azure:  %v", ours.reqs[0].Header, theirs.reqs[0].Header)
+				}
+				if !reflect.DeepEqual(ours.bodies[0], theirs.bodies[0]) {
+					t.Errorf("bodies differ:\nfleet:          %v\nfantasy azure:  %v", ours.bodies[0], theirs.bodies[0])
+				}
+				if got := ours.reqs[0].Header.Get("Api-Key"); got != "az-key" {
+					t.Errorf("Api-Key = %q, want the key", got)
+				}
+			})
+		}
 	}
 }
 
@@ -348,18 +362,24 @@ func TestAzureMatchesFantasyAzure(t *testing.T) {
 // the parameters reasoning models require (max_completion_tokens, no
 // temperature); Azure rejects max_tokens and a non-default temperature for
 // them. docs/PROVIDERS.md, the admin form and the chat guide state this naming
-// rule; if fantasy gains another way to mark a reasoning model, this fails and
-// they should change with it.
+// rule, and PROVIDERS.md spells out the match and that GPT-6 is outside it; if
+// fantasy gains another way to mark a reasoning model, or widens the match,
+// this fails and they should change with it.
 func TestAzureReasoningDeploymentsAreToldByName(t *testing.T) {
 	for _, tc := range []struct {
 		deployment string
 		reasoning  bool
 	}{
 		{"gpt-5-prod", true},
+		{"GPT-5-prod", true}, // "gpt-5" matches in any case
 		{"o4-mini", true},
 		{"prod-o3", true},
+		{"gpt-oss-120b", true},
 		{"gpt-4o-prod", false},
-		{"prod", false}, // a GPT-5 deployment named like this fails every turn
+		{"prod", false},           // a GPT-5 deployment named like this fails every turn
+		{"gpt5-prod", false},      // the model's name without its hyphen
+		{"O4-mini", false},        // the o-series match is case-sensitive
+		{"gpt-6-luna-pro", false}, // a newer reasoning family: no name helps
 	} {
 		t.Run(tc.deployment, func(t *testing.T) {
 			rec := &recordingDoer{}
