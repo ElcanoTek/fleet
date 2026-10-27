@@ -660,6 +660,28 @@ The same build on two other models, where the raise never fired:
 
 This round cost about $67, including the three extra runs each way.
 
+On 2026-10-27, two runs each on three more models, on the branch head with the
+window cap (their windows are about 1M too, so it did not bind):
+- **DeepSeek v4.1 Flash**: the raise fired in both runs. Each trimmed the
+  reports at its first pause and fetched six of them again; after the raise
+  neither run summarized. They cost $0.03 and $0.02 in 4 and 2 minutes,
+  against $0.29 off and $0.19 with the holds only (23.5 and 12 summaries a
+  run). Both scored 63 of 72: they gave each store's number of low-stock SKUs
+  where the prompt asks for the SKUs, so the scorer missed nine rows. Every
+  count, the total of 24 and every other cell were right.
+- **GPT-6.1 Sol**, new to the bench, so with no runs with elision off:
+  elision trimmed seven reports at the one pause of each run, that freed
+  enough, and the model fetched nothing again, so the raise did not fire.
+  $0.66 and $0.65, 72 of 72.
+- **Gemini 3.8 Flash**: elision fired (four times in one run, once in the
+  other) with one summary each, but nothing was fetched again, so the raise
+  did not fire and the runs took the same path as with the holds only. $2.59
+  and $2.41, 72 and 70 cells, against $2.02 off and $1.99 with the holds only;
+  the code on that path is unchanged, so the gap is the model's run-to-run
+  spread.
+
+That round cost about $6.
+
 ### Deviations from the issue
 
 - The before/after numbers come from local instances, not a production
