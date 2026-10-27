@@ -498,7 +498,7 @@ fleet_probe_in_memory_counts() {
     (( rem_ep <= 0 )) && { printf '0|0|0\n'; return 0; }
     (( rem_ep < curl_max )) && curl_max="$rem_ep"
   fi
-  local curl_args=(-sSI --max-time "$curl_max")
+  local curl_args=(-sSI --noproxy '*' --max-time "$curl_max")
   if [[ "$addr" != http://* && "$addr" != https://* ]]; then
     local tls_mode="" cert_file="" tls_domain="" host_only="" port_only="8080"
     if [[ "$addr" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
@@ -588,13 +588,8 @@ fleet_active_work_summary() {
   else
     svc_start_epoch=0
   fi
-  local now_epoch svc_age_sec=-1
+  local now_epoch
   now_epoch="$(date +%s)"
-  if (( svc_start_epoch > 0 )); then
-    svc_age_sec=$(( now_epoch - svc_start_epoch ))
-    (( svc_age_sec < 0 )) && svc_age_sec=0
-    svc_age_sec=$(( svc_age_sec + 1 ))
-  fi
 
   # When systemd reports that fleet.service is installed and not active, no
   # in-process task, turn, or approval goroutine is running; any DB rows still
@@ -626,7 +621,7 @@ fleet_active_work_summary() {
                 id::text,
                 COALESCE(NULLIF(regexp_replace(regexp_replace(title, '[[:cntrl:]]+', ' ', 'g'), '[[:space:]]+', ' ', 'g'), ''), 'untitled'),
                 status,
-                GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at)))::bigint)
+                GREATEST(0, ${now_epoch} - EXTRACT(EPOCH FROM COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at))::bigint)
               ), '; ')
             FROM (
               SELECT id, title, status, started_at, lease_expires_at, created_at
@@ -634,8 +629,8 @@ fleet_active_work_summary() {
                WHERE status IN ('running', 'leased', 'assigned')
                  AND (
                    '${svc_state}' = 'unknown'
-                   OR (lease_expires_at IS NOT NULL AND lease_expires_at >= now())
-                   OR (${svc_age_sec} >= 0 AND COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at) >= now() - (${svc_age_sec} * interval '1 second'))
+                   OR (lease_expires_at IS NOT NULL AND lease_expires_at >= to_timestamp(${now_epoch}))
+                   OR (${svc_start_epoch} > 0 AND COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at) >= to_timestamp(${svc_start_epoch}))
                  )
                ORDER BY COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at) ASC
                LIMIT 5
@@ -660,13 +655,13 @@ fleet_active_work_summary() {
             SELECT string_agg(
               format('dataset %s (running, %ss)',
                 id::text,
-                GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(updated_at, created_at)))::bigint)
+                GREATEST(0, ${now_epoch} - EXTRACT(EPOCH FROM COALESCE(updated_at, created_at))::bigint)
               ), '; ')
             FROM (
               SELECT id, updated_at, created_at
                 FROM datasets
                WHERE status = 'running'
-                 AND (${svc_age_sec} < 0 OR COALESCE(updated_at, created_at) >= now() - (${svc_age_sec} * interval '1 second'))
+                 AND (${svc_start_epoch} <= 0 OR COALESCE(updated_at, created_at) >= to_timestamp(${svc_start_epoch}))
                ORDER BY COALESCE(updated_at, created_at) ASC
                LIMIT 5
             ) d

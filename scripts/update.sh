@@ -338,10 +338,16 @@ _update_env_file="${FLEET_ENV_FILE:-/etc/fleet/fleet.env}"
 # here, not silently disable the backstop (or arithmetic-error mid-update).
 [[ "$SANDBOX_MAX_AGE_DAYS" =~ ^[0-9]+$ ]] \
   || die "--sandbox-max-age / FLEET_SANDBOX_MAX_AGE_DAYS must be a non-negative integer day count (0 disables), got: ${SANDBOX_MAX_AGE_DAYS}"
-[[ "$WAIT_SECONDS" =~ ^[0-9]+$ ]] \
-  || die "--wait-timeout / FLEET_UPDATE_WAIT_SECONDS must be a non-negative integer second count, got: ${WAIT_SECONDS}"
 SANDBOX_MAX_AGE_DAYS=$(( 10#$SANDBOX_MAX_AGE_DAYS ))
-WAIT_SECONDS=$(( 10#$WAIT_SECONDS ))
+if [[ "$FORCE_UPDATE" != "1" ]]; then
+  [[ "$WAIT_SECONDS" =~ ^[0-9]+$ ]] \
+    || die "--wait-timeout / FLEET_UPDATE_WAIT_SECONDS must be a non-negative integer second count, got: ${WAIT_SECONDS}"
+  WAIT_SECONDS=$(( 10#$WAIT_SECONDS ))
+elif [[ "$WAIT_SECONDS" =~ ^[0-9]+$ ]]; then
+  WAIT_SECONDS=$(( 10#$WAIT_SECONDS ))
+else
+  WAIT_SECONDS=600
+fi
 
 # require_go_toolchain — fail the build step with an actionable message rather
 # than an opaque one.

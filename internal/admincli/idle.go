@@ -410,16 +410,11 @@ func ActiveWorkForService(ctx context.Context, unit, schedDSNVal, chatDSNVal str
 		return nil, nil
 	}
 
-	var svcAgeSec int64 = -1
-	if svcStartUnix > 0 {
-		svcAgeSec = max(int64(0), time.Now().Unix()-svcStartUnix) + 1
-	}
-
 	var items []string
 	var firstErr error
 
 	if strings.TrimSpace(schedDSNVal) != "" {
-		found, err := querySchedActiveWork(ctx, schedDSNVal, svcAgeSec, svcState == "unknown")
+		found, err := querySchedActiveWork(ctx, schedDSNVal, svcStartUnix, svcState == "unknown")
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -472,7 +467,7 @@ func ActiveWorkForService(ctx context.Context, unit, schedDSNVal, chatDSNVal str
 	return items, firstErr
 }
 
-func querySchedActiveWork(ctx context.Context, dsn string, svcAgeSec int64, failClosedUnknown bool) ([]string, error) {
+func querySchedActiveWork(ctx context.Context, dsn string, svcStartUnix int64, failClosedUnknown bool) ([]string, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err
@@ -481,6 +476,8 @@ func querySchedActiveWork(ctx context.Context, dsn string, svcAgeSec int64, fail
 
 	qctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+
+	nowUnix := time.Now().Unix()
 
 	var hasTasks bool
 	if err := db.QueryRowContext(qctx, "SELECT to_regclass('tasks') IS NOT NULL").Scan(&hasTasks); err != nil || !hasTasks {
@@ -491,16 +488,16 @@ func querySchedActiveWork(ctx context.Context, dsn string, svcAgeSec int64, fail
 		SELECT id::text,
 		       COALESCE(NULLIF(regexp_replace(regexp_replace(title, '[[:cntrl:]]+', ' ', 'g'), '[[:space:]]+', ' ', 'g'), ''), 'untitled'),
 		       status,
-		       GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at)))::bigint)
+		       GREATEST(0, $1 - EXTRACT(EPOCH FROM COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at))::bigint)
 		  FROM tasks
 		 WHERE status IN ('running', 'leased', 'assigned')
 		   AND (
-		     $2
-		     OR (lease_expires_at IS NOT NULL AND lease_expires_at >= now())
-		     OR ($1 >= 0 AND COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at) >= now() - ($1 * interval '1 second'))
+		     $3
+		     OR (lease_expires_at IS NOT NULL AND lease_expires_at >= to_timestamp($1))
+		     OR ($2 > 0 AND COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at) >= to_timestamp($2))
 		   )
 		 ORDER BY COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at) ASC
-		 LIMIT 5`, svcAgeSec, failClosedUnknown)
+		 LIMIT 5`, nowUnix, svcStartUnix, failClosedUnknown)
 	if err != nil {
 		return nil, err
 	}
@@ -530,12 +527,12 @@ func querySchedActiveWork(ctx context.Context, dsn string, svcAgeSec int64, fail
 	if hasDatasets {
 		drows, err := db.QueryContext(qctx, `
 			SELECT id::text,
-			       GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(updated_at, created_at)))::bigint)
+			       GREATEST(0, $1 - EXTRACT(EPOCH FROM COALESCE(updated_at, created_at))::bigint)
 			  FROM datasets
 			 WHERE status = 'running'
-			   AND ($1 < 0 OR COALESCE(updated_at, created_at) >= now() - ($1 * interval '1 second'))
+			   AND ($2 <= 0 OR COALESCE(updated_at, created_at) >= to_timestamp($2))
 			 ORDER BY COALESCE(updated_at, created_at) ASC
-			 LIMIT 5`, svcAgeSec)
+			 LIMIT 5`, nowUnix, svcStartUnix)
 		if err != nil {
 			return out, err
 		}

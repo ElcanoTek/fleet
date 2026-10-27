@@ -76,25 +76,25 @@ func systemctlVerb(verb string, argv []string) int {
 			waitTimeoutSet = true
 		}
 	})
-	if !waitTimeoutSet {
-		cfgTimeout, err := parseConfiguredWaitTimeout()
-		if err != nil {
-			return errf(2, "%v", err)
-		}
-		*waitTimeout = cfgTimeout
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	if (verb == "restart" || verb == "stop") && !*force && !truthy(envOrFile("FLEET_UPDATE_FORCE")) {
+		maxWait := time.Duration(0)
+		if *wait || truthy(envOrFile("FLEET_UPDATE_WAIT")) {
+			if !waitTimeoutSet {
+				cfgTimeout, err := parseConfiguredWaitTimeout()
+				if err != nil {
+					return errf(2, "%v", err)
+				}
+				*waitTimeout = cfgTimeout
+			}
+			maxWait = *waitTimeout
+		}
 		sDSN := idleSchedDSN("")
 		cDSN := idleChatDSN("")
 		defer ClearUpdateDrain()
-		maxWait := time.Duration(0)
-		if *wait || truthy(envOrFile("FLEET_UPDATE_WAIT")) {
-			maxWait = *waitTimeout
-		}
 		resolvedUnit := serviceName(*service)
 		if err := WaitIdleForService(ctx, resolvedUnit, sDSN, cDSN, maxWait, 2*time.Second, os.Stderr); err != nil {
 			unitName := resolvedUnit + ".service"
