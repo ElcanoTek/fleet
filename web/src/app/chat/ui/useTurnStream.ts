@@ -551,6 +551,7 @@ export interface TurnStreamDeps {
   setModelSearchQuery: Dispatch<SetStateAction<string>>;
   setPendingLockdown: Dispatch<SetStateAction<boolean>>;
   setPendingAutoApprove?: Dispatch<SetStateAction<boolean>>;
+  newChatDraftGenRef?: RefObject<number>;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
   setSpreadsheetNudgeDismissed: Dispatch<SetStateAction<boolean>>;
   // Component-owned refs the loop reads/mutates.
@@ -718,6 +719,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     setModelSearchQuery,
     setPendingLockdown,
     setPendingAutoApprove,
+    newChatDraftGenRef,
     setSidebarOpen,
     setSpreadsheetNudgeDismissed,
     activeConversationIdRef,
@@ -4361,6 +4363,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // Capture and consume the draft's pending Auto-approve choice before any
     // async attachment upload so a second draft opened while this upload is in
     // flight keeps its own Auto-approve toggle state.
+    const draftGenAtStart = newChatDraftGenRef?.current ?? 0;
     const submittedAutoApprove = !convId && Boolean(pendingAutoApprove);
     if (submittedAutoApprove) {
       setPendingAutoApprove?.(false);
@@ -4374,7 +4377,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       try {
         uploadedAttachments = await uploadPendingAttachments(composerKey);
       } catch (err) {
-        if (submittedAutoApprove && activeConversationIdRef.current === null) {
+        if (
+          submittedAutoApprove &&
+          activeConversationIdRef.current === null &&
+          (newChatDraftGenRef?.current ?? 0) === draftGenAtStart
+        ) {
           setPendingAutoApprove?.(true);
         }
         setAttachmentErrorForKey(

@@ -240,10 +240,14 @@ func (a *approvalStager) resolveTimeoutSeconds(toolName string) int {
 		return t
 	}
 	if stagesTaskChangeOnly(toolName) {
-		if a.convTimeoutSeconds != nil && *a.convTimeoutSeconds > stagedTaskApprovalTimeoutSeconds {
+		floor := stagedTaskApprovalTimeoutSeconds
+		if a.globalTimeoutSeconds > floor {
+			floor = a.globalTimeoutSeconds
+		}
+		if a.convTimeoutSeconds != nil && *a.convTimeoutSeconds > floor {
 			return *a.convTimeoutSeconds
 		}
-		return stagedTaskApprovalTimeoutSeconds
+		return floor
 	}
 	if a.convTimeoutSeconds != nil && *a.convTimeoutSeconds > 0 {
 		return *a.convTimeoutSeconds

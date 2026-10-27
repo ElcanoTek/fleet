@@ -848,6 +848,7 @@ export function ChatExperience({
   // pendingAutoApprove tracks the composer's Auto-approve toggle before a new
   // conversation has been created, and rides along on the first /api/chat POST.
   const [pendingAutoApprove, setPendingAutoApprove] = useState(false);
+  const newChatDraftGenRef = useRef(0);
 
   // The very first mount of a session races the client-config fetch: state
   // seeds from the compiled-in fallback before the workspace's tier pair is
@@ -4581,6 +4582,7 @@ export function ChatExperience({
     const lockdown =
       serverConfig.lockdownAvailable && (explicit || serverConfig.lockdownOnly);
     setPendingLockdown(lockdown);
+    newChatDraftGenRef.current += 1;
     setPendingAutoApprove(false);
     // Lockdown chats are pinned to the allow-list. Default both modes
     // to the live default tier — for lockdown that's also the first
@@ -4904,6 +4906,7 @@ export function ChatExperience({
     setModelSearchQuery,
     setPendingLockdown,
     setPendingAutoApprove,
+    newChatDraftGenRef,
     setSidebarOpen,
     setSpreadsheetNudgeDismissed,
     activeConversationIdRef,
