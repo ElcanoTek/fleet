@@ -381,7 +381,8 @@ only when it earns its keep (a protocol, a large or security-critical body of
 code we should not own). Dependabot opens one grouped version-update PR per
 ecosystem a month (7-day cooldown; majors separate); a human merges that
 routine refresh once it is green, so drift stays small. Out of cycle, a bump is
-merged only when it earns it — a specific commit we need, or a CVE whose code
+merged only when it earns it — a specific commit we need, a security scanner
+update (such as CodeQL), or a CVE whose code
 path we actually reach (govulncheck or `npm audit` turns CI red) — and goes in
 its own PR. Dependabot security updates arrive whenever an advisory does.
 The web UI's runtime npm dependencies are few and each is justified in
