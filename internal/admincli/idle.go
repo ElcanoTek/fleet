@@ -644,6 +644,8 @@ func WaitIdle(ctx context.Context, schedDSNVal, chatDSNVal string, maxWait, poll
 func WaitIdleForService(ctx context.Context, unit, schedDSNVal, chatDSNVal string, maxWait, pollInterval time.Duration, out io.Writer) error {
 	if pollInterval <= 0 {
 		pollInterval = 2 * time.Second
+	} else if pollInterval > time.Minute {
+		pollInterval = time.Minute
 	}
 	start := time.Now()
 	deadline := start.Add(max(maxWait, 0))

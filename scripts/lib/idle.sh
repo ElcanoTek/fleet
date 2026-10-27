@@ -109,7 +109,7 @@ fleet_split_dsn_password_vars() {
       fi
       break
     done
-    if [[ "$redacted" =~ (^|[[:space:]])password[[:space:]]*= ]]; then
+    if [[ "$redacted" =~ (^|[[:space:]])(password|sslpassword)[[:space:]]*= ]]; then
       return 0
     fi
     redacted="${redacted#"${redacted%%[![:space:]]*}"}"
@@ -147,7 +147,9 @@ fleet_split_dsn_password_vars() {
         fleet_uri_decode_var "$key_raw"
         key_dec="$REPLY_DECODED"
       fi
-      if [[ "$key_dec" == "password" ]]; then
+      if [[ "$key_dec" == "sslpassword" ]]; then
+        return 0
+      elif [[ "$key_dec" == "password" ]]; then
         fleet_uri_decode_var "${param#*=}"
         pass="$REPLY_DECODED"
       else
@@ -742,6 +744,7 @@ fleet_wait_for_idle() {
   local svc_unit="${4:-${SERVICE_NAME:-${FLEET_SERVICE_NAME:-fleet}}}"
   [[ "$max_wait" =~ ^[0-9]+$ ]] || max_wait=0
   [[ "$poll" =~ ^[0-9]+$ ]] && (( poll > 0 )) || poll=5
+  (( poll > 60 )) && poll=60
   local start deadline=0 now elapsed rem tsec sleep_sec summary=""
   start="$(date +%s)"
   (( max_wait > 0 )) && deadline=$(( start + max_wait ))

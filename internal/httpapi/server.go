@@ -441,7 +441,10 @@ func UpdateDrainActive() bool {
 		return false
 	}
 	info, err := os.Stat(p)
-	return err == nil && time.Since(info.ModTime()) <= 15*time.Minute
+	if err != nil {
+		return !os.IsNotExist(err)
+	}
+	return time.Since(info.ModTime()) <= 15*time.Minute
 }
 
 // broadcastShutdownFrame emits a transient `shutdown` SSE frame to every running
