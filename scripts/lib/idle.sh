@@ -626,18 +626,18 @@ fleet_active_work_summary() {
                 id::text,
                 COALESCE(NULLIF(regexp_replace(regexp_replace(title, '[[:cntrl:]]+', ' ', 'g'), '[[:space:]]+', ' ', 'g'), ''), 'untitled'),
                 status,
-                GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(started_at, created_at)))::bigint)
+                GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at)))::bigint)
               ), '; ')
             FROM (
-              SELECT id, title, status, started_at, created_at
+              SELECT id, title, status, started_at, lease_expires_at, created_at
                 FROM tasks
                WHERE status IN ('running', 'leased', 'assigned')
                  AND (
                    '${svc_state}' = 'unknown'
                    OR (lease_expires_at IS NOT NULL AND lease_expires_at >= now())
-                   OR (${svc_age_sec} >= 0 AND COALESCE(started_at, created_at) >= now() - (${svc_age_sec} * interval '1 second'))
+                   OR (${svc_age_sec} >= 0 AND COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at) >= now() - (${svc_age_sec} * interval '1 second'))
                  )
-               ORDER BY COALESCE(started_at, created_at) ASC
+               ORDER BY COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at) ASC
                LIMIT 5
             ) t
           ), '');")"; then
