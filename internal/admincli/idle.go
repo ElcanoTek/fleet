@@ -184,7 +184,11 @@ func ClearUpdateDrain() {
 		return
 	}
 	_ = withDrainLock(p, func() error {
-		if lst, err := os.Lstat(p); err != nil || lst.Mode()&os.ModeSymlink != 0 {
+		lst, err := os.Lstat(p)
+		if err != nil {
+			return err
+		}
+		if lst.Mode()&os.ModeSymlink != 0 {
 			return nil
 		}
 		//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
