@@ -954,19 +954,21 @@ export function ChatExperience({
   const autoApproveSeqRef = useRef<Map<string, number>>(new Map());
   const autoApproveChainRef = useRef<Map<string, Promise<void>>>(new Map());
   const autoApproveValueRef = useRef<Map<string, boolean>>(new Map());
+  const autoApproveDisplayedRef = useRef<Map<string, boolean>>(new Map());
   const autoApproveCommittedRef = useRef<Map<string, boolean>>(new Map());
   const autoApproveInFlightRef = useRef<Map<string, number>>(new Map());
   const toggleAutoApprove = useCallback(() => {
-    const next = !isAutoApprove;
     if (!activeConversationId || isPendingKey(activeConversationId)) {
       const key = activeConversationId ?? draftKeyRef.current;
-      setPendingAutoApproveForKey(key, next);
+      setPendingAutoApproveForKey(key, !isAutoApprove);
       return;
     }
     const convId = activeConversationId;
     if (!autoApproveCommittedRef.current.has(convId)) {
       autoApproveCommittedRef.current.set(convId, isAutoApprove);
     }
+    const desired = autoApproveValueRef.current.get(convId) ?? isAutoApprove;
+    const next = !desired;
     const seq = (autoApproveSeqRef.current.get(convId) ?? 0) + 1;
     autoApproveSeqRef.current.set(convId, seq);
     autoApproveValueRef.current.set(convId, next);
@@ -982,7 +984,15 @@ export function ChatExperience({
         curr.map((c) => (c.id === convId ? { ...c, auto_approve: val } : c)),
       );
     };
-    applyState(next);
+    if (next) {
+      autoApproveDisplayedRef.current.set(convId, true);
+      applyState(true);
+    } else {
+      // Keep showing Auto-approve as enabled until the disable POST commits on
+      // the server so the header never claims approval is required while a
+      // streaming turn still sees liveAutoApprove=true.
+      autoApproveDisplayedRef.current.set(convId, isAutoApprove);
+    }
     const url = conversationApiUrl(convId, "/auto-approve");
     if (!url) {
       autoApproveInFlightRef.current.set(
@@ -1011,12 +1021,14 @@ export function ChatExperience({
         }
         autoApproveCommittedRef.current.set(convId, committed);
         if (autoApproveSeqRef.current.get(convId) === seq) {
+          autoApproveDisplayedRef.current.set(convId, committed);
           autoApproveValueRef.current.set(convId, committed);
           applyState(committed);
         }
       } catch {
         if (autoApproveSeqRef.current.get(convId) === seq) {
           const fallback = autoApproveCommittedRef.current.get(convId) ?? false;
+          autoApproveDisplayedRef.current.set(convId, fallback);
           autoApproveValueRef.current.set(convId, fallback);
           applyState(fallback);
         }
@@ -2451,9 +2463,12 @@ export function ChatExperience({
         const inFlight = (autoApproveInFlightRef.current.get(c.id) ?? 0) > 0;
         if (
           (inFlight || curSeq !== startSeq) &&
-          autoApproveValueRef.current.has(c.id)
+          autoApproveDisplayedRef.current.has(c.id)
         ) {
-          return { ...c, auto_approve: autoApproveValueRef.current.get(c.id) };
+          return {
+            ...c,
+            auto_approve: autoApproveDisplayedRef.current.get(c.id),
+          };
         }
         autoApproveCommittedRef.current.set(c.id, c.auto_approve === true);
         return c;

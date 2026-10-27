@@ -319,7 +319,7 @@ for a shorter global timeout, was auto-denied, and the old prompt kept running.
 effect while pending. `resolveTimeoutSeconds` gives them a 24-hour floor
 (`stagedTaskApprovalTimeoutSeconds` = 86400, matching the 86400s global default
 for `FLEET_APPROVAL_TIMEOUT_SECONDS` even if an operator lowers the global
-default; per-conversation and bundle overrides allow up to 604800s / 7 days)
+default; per-conversation and global admin overrides allow up to 604800s / 7 days)
 unless the conversation's or global timeout is longer. A bundle's per-tool
 `critical_tool_timeouts` entry for the tool still wins. The promote-to-task
 card is a `schedule_task` card, so it gets the 24-hour floor too.
