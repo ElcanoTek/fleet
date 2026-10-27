@@ -266,11 +266,10 @@ fleet_set_drain() {
   local drain_file lock_file
   drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
   lock_file="${drain_file}.lock"
+  command -v flock >/dev/null 2>&1 || return 1
   mkdir -p "$(dirname "$drain_file")" 2>/dev/null || return 1
   (
-    if command -v flock >/dev/null 2>&1; then
-      flock -x -w 5 9 || exit 1
-    fi
+    flock -x -w 5 9 || exit 1
     local cur="" other_pid=""
     if ( set -o noclobber; printf 'draining %s\n' "$FLEET_DRAIN_OWNER_TOKEN" > "$drain_file" ) 2>/dev/null; then
       exit 0
@@ -303,10 +302,9 @@ fleet_clear_drain() {
   drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
   lock_file="${drain_file}.lock"
   [[ -f "$drain_file" ]] || return 0
+  command -v flock >/dev/null 2>&1 || return 0
   (
-    if command -v flock >/dev/null 2>&1; then
-      flock -x -w 5 9 || exit 0
-    fi
+    flock -x -w 5 9 || exit 0
     local cur=""
     if [[ -f "$drain_file" ]]; then
       cur="$(cat "$drain_file" 2>/dev/null || true)"

@@ -414,6 +414,7 @@ fi
 # check and step 2's bundle reconcile can read it.
 backend_env_file="${FLEET_ENV_FILE:-/etc/fleet/fleet.env}"
 trap 'fleet_clear_drain "${backend_env_file:-/etc/fleet/fleet.env}"' EXIT
+trap 'fleet_clear_drain "${backend_env_file:-/etc/fleet/fleet.env}"; exit 130' INT TERM
 
 # ── active-work gate (before pulling or building) ──────────────────────────
 # Refuse to start an update while a scheduled task, chat turn, or detached
