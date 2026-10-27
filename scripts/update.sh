@@ -213,9 +213,9 @@ NODE_REPAIR="${FLEET_UPDATE_NODE_REPAIR:-1}"
 # a cached rebuild against an unmoved base would produce the same image with
 # the same old creation date and the gate would spin forever doing nothing.
 SANDBOX_MAX_AGE_DAYS="${FLEET_SANDBOX_MAX_AGE_DAYS:-7}"
-WAIT_FOR_IDLE="${FLEET_UPDATE_WAIT:-0}"
-WAIT_SECONDS="${FLEET_UPDATE_WAIT_SECONDS:-600}"
-FORCE_UPDATE="${FLEET_UPDATE_FORCE:-0}"
+WAIT_FOR_IDLE="${FLEET_UPDATE_WAIT:-}"
+WAIT_SECONDS="${FLEET_UPDATE_WAIT_SECONDS:-}"
+FORCE_UPDATE="${FLEET_UPDATE_FORCE:-}"
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -323,6 +323,16 @@ node_probe() {
   fi
   return 0
 }
+
+# Fall back to the deployment env file for lifecycle wait knobs when neither
+# command-line flags nor exported environment variables supplied them.
+_update_env_file="${FLEET_ENV_FILE:-/etc/fleet/fleet.env}"
+[[ -n "$WAIT_FOR_IDLE" ]] || WAIT_FOR_IDLE="$(fleet_env_or_file FLEET_UPDATE_WAIT "$_update_env_file")"
+[[ -n "$WAIT_FOR_IDLE" ]] || WAIT_FOR_IDLE="0"
+[[ -n "$WAIT_SECONDS" ]] || WAIT_SECONDS="$(fleet_env_or_file FLEET_UPDATE_WAIT_SECONDS "$_update_env_file")"
+[[ -n "$WAIT_SECONDS" ]] || WAIT_SECONDS="600"
+[[ -n "$FORCE_UPDATE" ]] || FORCE_UPDATE="$(fleet_env_or_file FLEET_UPDATE_FORCE "$_update_env_file")"
+[[ -n "$FORCE_UPDATE" ]] || FORCE_UPDATE="0"
 
 # Validate up front: the value gates a multi-GB rebuild, so a typo must die
 # here, not silently disable the backstop (or arithmetic-error mid-update).

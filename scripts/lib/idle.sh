@@ -114,8 +114,12 @@ fleet_split_dsn_password() {
     fi
     local IFS='&'
     for param in $query; do
-      if [[ "$param" == password=* ]]; then
-        pass="$(fleet_uri_decode "${param#password=}")"
+      local key_raw="${param%%=*}" key_dec=""
+      if [[ "$param" == *"="* ]]; then
+        key_dec="$(fleet_uri_decode "$key_raw")"
+      fi
+      if [[ "$key_dec" == "password" ]]; then
+        pass="$(fleet_uri_decode "${param#*=}")"
       else
         kept+=("$param")
       fi
@@ -129,12 +133,15 @@ fleet_split_dsn_password() {
   printf '%s\n%s\n' "$pass" "$redacted"
 }
 
-# fleet_psql_query DSN SQL — runs a read-only psql query with a 3s connect
-# timeout and the password passed via PGPASSWORD rather than argv. Returns 0
-# with trimmed output on success, non-zero when psql is absent or the query
-# fails.
+# fleet_psql_query DSN SQL — runs a read-only psql query with connect, statement,
+# lock, and process timeouts bounded by FLEET_PSQL_TIMEOUT_SECONDS (default 5s)
+# and the password passed via PGPASSWORD rather than argv. Returns 0 with
+# trimmed output on success, non-zero when psql is absent or the query fails.
 fleet_psql_query() {
-  local dsn="$1" sql="$2" pw="" redacted=""
+  local dsn="$1" sql="$2" pw="" redacted="" tsec="${FLEET_PSQL_TIMEOUT_SECONDS:-5}"
+  [[ "$tsec" =~ ^[0-9]+$ ]] && (( tsec > 0 )) || tsec=5
+  (( tsec > 5 )) && tsec=5
+  local stmt_ms=$(( tsec * 1000 ))
   [[ -n "$dsn" ]] || return 1
   command -v psql >/dev/null 2>&1 || return 1
   {
@@ -142,7 +149,13 @@ fleet_psql_query() {
     IFS= read -r redacted
   } < <(fleet_split_dsn_password "$dsn")
   [[ -n "$redacted" ]] || return 1
-  PGCONNECT_TIMEOUT=3 PGPASSWORD="$pw" psql "$redacted" -X -q -t -A -c "$sql" 2>/dev/null
+  if command -v timeout >/dev/null 2>&1; then
+    PGCONNECT_TIMEOUT="$tsec" PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c statement_timeout=${stmt_ms} -c lock_timeout=${stmt_ms}" PGPASSWORD="$pw" \
+      timeout "$(( tsec + 1 ))" psql "$redacted" -X -q -t -A -c "$sql" 2>/dev/null
+  else
+    PGCONNECT_TIMEOUT="$tsec" PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c statement_timeout=${stmt_ms} -c lock_timeout=${stmt_ms}" PGPASSWORD="$pw" \
+      psql "$redacted" -X -q -t -A -c "$sql" 2>/dev/null
+  fi
 }
 
 # fleet_env_or_file KEY [ENV_FILE] — resolves KEY from the process environment
@@ -250,43 +263,58 @@ fleet_drain_file() {
 # scheduler task claims. Refuses if another live process already owns a fresh
 # drain sentinel.
 fleet_set_drain() {
-  local drain_file cur="" other_pid=""
+  local drain_file lock_file
   drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
+  lock_file="${drain_file}.lock"
   mkdir -p "$(dirname "$drain_file")" 2>/dev/null || return 1
-  if ( set -o noclobber; printf 'draining %s\n' "$FLEET_DRAIN_OWNER_TOKEN" > "$drain_file" ) 2>/dev/null; then
-    return 0
-  fi
-  cur="$(cat "$drain_file" 2>/dev/null || true)"
-  if [[ "$cur" == "draining ${FLEET_DRAIN_OWNER_TOKEN}" ]]; then
-    touch "$drain_file" 2>/dev/null || true
-    return 0
-  fi
-  if [[ -n "$(find "$drain_file" -mmin -15 2>/dev/null || true)" ]]; then
-    if [[ -z "${cur//[[:space:]]/}" ]]; then
-      return 1
+  (
+    if command -v flock >/dev/null 2>&1; then
+      flock -x -w 5 9 || exit 1
     fi
-    if [[ "$cur" =~ ^draining[[:space:]]+pid-([0-9]+)- ]]; then
-      other_pid="${BASH_REMATCH[1]}"
-      if [[ -n "$other_pid" && "$other_pid" != "$$" ]] && kill -0 "$other_pid" 2>/dev/null; then
-        return 1
+    local cur="" other_pid=""
+    if ( set -o noclobber; printf 'draining %s\n' "$FLEET_DRAIN_OWNER_TOKEN" > "$drain_file" ) 2>/dev/null; then
+      exit 0
+    fi
+    cur="$(cat "$drain_file" 2>/dev/null || true)"
+    if [[ "$cur" == "draining ${FLEET_DRAIN_OWNER_TOKEN}" ]]; then
+      touch "$drain_file" 2>/dev/null || true
+      exit 0
+    fi
+    if [[ -n "$(find "$drain_file" -mmin -15 2>/dev/null || true)" ]]; then
+      if [[ -z "${cur//[[:space:]]/}" ]]; then
+        exit 1
+      fi
+      if [[ "$cur" =~ ^draining[[:space:]]+pid-([0-9]+)- ]]; then
+        other_pid="${BASH_REMATCH[1]}"
+        if [[ -n "$other_pid" && "$other_pid" != "$$" ]] && kill -0 "$other_pid" 2>/dev/null; then
+          exit 1
+        fi
       fi
     fi
-  fi
-  rm -f "$drain_file" 2>/dev/null || true
-  ( set -o noclobber; printf 'draining %s\n' "$FLEET_DRAIN_OWNER_TOKEN" > "$drain_file" ) 2>/dev/null || return 1
+    rm -f "$drain_file" 2>/dev/null || true
+    ( set -o noclobber; printf 'draining %s\n' "$FLEET_DRAIN_OWNER_TOKEN" > "$drain_file" ) 2>/dev/null || exit 1
+  ) 9>"$lock_file"
 }
 
 # fleet_clear_drain [ENV_FILE] — removes the update drain sentinel file if owned
 # by this invocation (even when fleet_set_drain ran inside a $(...) subshell).
 fleet_clear_drain() {
-  local drain_file cur=""
+  local drain_file lock_file
   drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
-  if [[ -f "$drain_file" ]]; then
-    cur="$(cat "$drain_file" 2>/dev/null || true)"
-    if [[ "$cur" == "draining ${FLEET_DRAIN_OWNER_TOKEN}" ]]; then
-      rm -f "$drain_file" 2>/dev/null || true
+  lock_file="${drain_file}.lock"
+  [[ -f "$drain_file" ]] || return 0
+  (
+    if command -v flock >/dev/null 2>&1; then
+      flock -x -w 5 9 || exit 0
     fi
-  fi
+    local cur=""
+    if [[ -f "$drain_file" ]]; then
+      cur="$(cat "$drain_file" 2>/dev/null || true)"
+      if [[ "$cur" == "draining ${FLEET_DRAIN_OWNER_TOKEN}" ]]; then
+        rm -f "$drain_file" 2>/dev/null || true
+      fi
+    fi
+  ) 9>"$lock_file" 2>/dev/null || true
 }
 
 # fleet_service_runtime_state [SERVICE_NAME] — prints "<state>|<start_epoch>"
@@ -627,14 +655,21 @@ fleet_wait_for_idle() {
   local svc_unit="${4:-${SERVICE_NAME:-${FLEET_SERVICE_NAME:-fleet}}}"
   [[ "$max_wait" =~ ^[0-9]+$ ]] || max_wait=0
   [[ "$poll" =~ ^[0-9]+$ ]] && (( poll > 0 )) || poll=5
-  local start now elapsed summary=""
+  local start now elapsed rem tsec summary=""
   start="$(date +%s)"
   while true; do
     if ! fleet_set_drain "$env_file"; then
       printf 'failed to write update drain sentinel %s\n' "$(fleet_drain_file "$env_file")"
       return 1
     fi
-    if summary="$(fleet_active_work_summary "$env_file" "$svc_unit")"; then
+    tsec=5
+    if (( max_wait > 0 )); then
+      now="$(date +%s)"
+      rem=$(( max_wait - (now - start) ))
+      (( rem < 1 )) && rem=1
+      (( rem < tsec )) && tsec="$rem"
+    fi
+    if summary="$(FLEET_PSQL_TIMEOUT_SECONDS="$tsec" fleet_active_work_summary "$env_file" "$svc_unit")"; then
       if ! fleet_set_drain "$env_file"; then
         printf 'failed to write update drain sentinel %s\n' "$(fleet_drain_file "$env_file")"
         return 1

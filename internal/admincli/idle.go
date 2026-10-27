@@ -93,6 +93,21 @@ func createDrainFileAtomic(p string) error {
 	return nil
 }
 
+func withDrainLock(p string, fn func() error) error {
+	lockPath := p + ".lock"
+	//nolint:gosec // G304,G306: companion lock file for drain sentinel serialization.
+	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("open drain lock %s: %w", lockPath, err)
+	}
+	defer func() { _ = lf.Close() }()
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("lock drain sentinel %s: %w", lockPath, err)
+	}
+	defer func() { _ = syscall.Flock(int(lf.Fd()), syscall.LOCK_UN) }()
+	return fn()
+}
+
 // SetUpdateDrain writes or refreshes the update drain sentinel file so the
 // running Fleet server refuses new chat turns/approvals and pauses scheduler
 // task claims. If another live lifecycle process already owns a fresh sentinel,
@@ -106,29 +121,31 @@ func SetUpdateDrain() error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return fmt.Errorf("create drain sentinel dir: %w", err)
 	}
-	if err := createDrainFileAtomic(p); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("write drain sentinel %s: %w", p, err)
-	}
-	//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
-	data, rerr := os.ReadFile(p)
-	cur := string(data)
-	if rerr == nil && cur == drainOwnerToken {
-		now := time.Now()
-		_ = os.Chtimes(p, now, now)
-		return nil
-	}
-	if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) <= 15*time.Minute {
-		if strings.TrimSpace(cur) == "" || drainOwnerAlive(cur) {
-			return fmt.Errorf("another update or service drain is already in progress (%s)", strings.TrimSpace(cur))
+	return withDrainLock(p, func() error {
+		if err := createDrainFileAtomic(p); err == nil {
+			return nil
+		} else if !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("write drain sentinel %s: %w", p, err)
 		}
-	}
-	_ = os.Remove(p)
-	if err := createDrainFileAtomic(p); err != nil {
-		return fmt.Errorf("write drain sentinel %s: %w", p, err)
-	}
-	return nil
+		//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
+		data, rerr := os.ReadFile(p)
+		cur := string(data)
+		if rerr == nil && cur == drainOwnerToken {
+			now := time.Now()
+			_ = os.Chtimes(p, now, now)
+			return nil
+		}
+		if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) <= 15*time.Minute {
+			if strings.TrimSpace(cur) == "" || drainOwnerAlive(cur) {
+				return fmt.Errorf("another update or service drain is already in progress (%s)", strings.TrimSpace(cur))
+			}
+		}
+		_ = os.Remove(p)
+		if err := createDrainFileAtomic(p); err != nil {
+			return fmt.Errorf("write drain sentinel %s: %w", p, err)
+		}
+		return nil
+	})
 }
 
 // ClearUpdateDrain removes the update drain sentinel file if it is owned by
@@ -138,10 +155,13 @@ func ClearUpdateDrain() {
 	if p == "" {
 		return
 	}
-	//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
-	if data, err := os.ReadFile(p); err == nil && string(data) == drainOwnerToken {
-		_ = os.Remove(p)
-	}
+	_ = withDrainLock(p, func() error {
+		//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
+		if data, err := os.ReadFile(p); err == nil && string(data) == drainOwnerToken {
+			_ = os.Remove(p)
+		}
+		return nil
+	})
 }
 
 func parseServiceTimestamp(startTS string) int64 {
