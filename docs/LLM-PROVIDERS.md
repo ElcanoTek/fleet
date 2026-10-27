@@ -1,20 +1,27 @@
 # Admin-managed LLM providers
 
 Admins can add, edit, disable, and remove LLM providers from the web admin
-page (Settings → Admin → Model providers) — an OpenRouter, Anthropic, or
-OpenAI API key, or any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, a
-gateway). Multiple providers run simultaneously; edits apply on the next
-message with **no restart**. This builds on the #289 multi-provider routing
-layer (`internal/agentcore/multiprovider.go`), which previously could only be
-configured from the client bundle's `providers:` block.
+page (Settings → Admin → Model providers) — an OpenRouter, Anthropic, OpenAI
+or Vercel AI Gateway API key, or any OpenAI-compatible endpoint (Ollama, vLLM,
+LM Studio, a gateway). Multiple providers run simultaneously; edits apply on
+the next message with **no restart**. This builds on the #289 multi-provider
+routing layer (`internal/agentcore/multiprovider.go`), which previously could
+only be configured from the client bundle's `providers:` block.
 
 ## What shipped
 
 - **Storage**: `llm_providers` (chat-DB migration 034) — name (the routing
-  prefix), type (`openrouter|anthropic|openai|ollama`), base URL, JSONB models
-  list, enabled flag, and the API key sealed with the store's secretbox cipher
-  (AES-256-GCM, `FLEET_MCP_OAUTH_ENCRYPTION_KEY`), AAD-bound to the row id.
-  `internal/store/llm_providers.go`.
+  prefix), type (one of the [provider types](PROVIDERS.md#provider-types):
+  `openrouter|anthropic|openai|ollama|openaicompat|vercel`), base URL, JSONB
+  models list, enabled flag, and the API key sealed with the store's secretbox
+  cipher (AES-256-GCM, `FLEET_MCP_OAUTH_ENCRYPTION_KEY`), AAD-bound to the row
+  id. `internal/store/llm_providers.go`. The store checks each row against the
+  type table the bundle loader uses: it rejects an unknown type, and an
+  `openaicompat` row without a base URL even while the row is disabled. The
+  API also refuses to enable a keyed type with no key in effect. A `vercel`
+  row's models list uses OpenRouter-shaped slugs, so listing one moves that
+  slug off an OpenRouter catch-all, cost tracking included
+  ([details](PROVIDERS.md#vercel-and-openrouter-slugs)).
 - **Context window** (chat-DB migration 082): `context_window_tokens`, the
   admin-row twin of a bundle entry's field of the same name. It is one number
   per row, so it applies to every model the row serves: enter the smallest
@@ -97,14 +104,21 @@ configured from the client bundle's `providers:` block.
   unreachable catwalk just means no pre-listed rows — typed slugs still route,
   and `openrouter`/`ollama` catch-alls are deliberately not expanded (the
   OpenRouter catalog already covers the former; no public catalog can know a
-  local Ollama's pulled models).
+  local Ollama's pulled models). `openaicompat` catch-alls are not expanded for
+  the same reason as Ollama, and `vercel` ones are not expanded yet: catwalk
+  lists the gateway's catalog, but wiring it into the picker is a follow-up.
 - **Test connection**: each row has a Test button →
   `POST /admin/llm-providers/{id}/test` (admin-gated) → one host-side probe
   against the provider's real endpoint (`internal/agentcore/provider_probe.go`):
-  OpenRouter's authenticated key-metadata endpoint, Anthropic/OpenAI/Ollama's
-  models catalog with the row's auth. Where the endpoint enumerates models,
-  the row's listed slugs are cross-checked — absences report as a warning
-  (gateways and Ollama tags legitimately under-enumerate), never a failure.
+  OpenRouter's authenticated key-metadata endpoint, the Anthropic, OpenAI,
+  Ollama, OpenAI-compatible or Vercel AI Gateway models catalog with the row's
+  auth. A row missing a field its type requires (a key for a keyed type, a base
+  URL for `openaicompat`) is reported without any call. For Vercel that matters:
+  the gateway serves its public catalog to an empty Bearer token, so probing a
+  keyless row would otherwise report "connected". Where the endpoint
+  enumerates models, the row's listed slugs are cross-checked — absences
+  report as a warning (gateways and Ollama tags legitimately under-enumerate),
+  never a failure.
   Works on disabled rows so an admin can verify before enabling. The decrypted
   key travels only in the outbound auth header; the response is a key-free
   summary (`ok`, `detail`, `served_model_count`, `missing_models`,
@@ -120,8 +134,8 @@ configured from the client bundle's `providers:` block.
   construction, never in the sandbox, the model context, logs, or any HTTP
   response.
 - Storing a key requires the secretbox cipher: deployments without
-  `FLEET_MCP_OAUTH_ENCRYPTION_KEY` fail closed on keyed writes (Ollama rows,
-  which need no key, still work).
+  `FLEET_MCP_OAUTH_ENCRYPTION_KEY` fail closed on keyed writes (keyless Ollama
+  and OpenAI-compatible rows still work).
 - **Key scope + backups**: `FLEET_MCP_OAUTH_ENCRYPTION_KEY` now protects ALL
   at-rest secrets — MCP OAuth tokens AND provider API keys (ciphertexts are
   AAD-domain-separated, so one can never be opened as the other). Back the key

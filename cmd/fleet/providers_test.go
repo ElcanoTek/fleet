@@ -59,13 +59,23 @@ func TestToAgentcoreProviders(t *testing.T) {
 			t.Errorf("provider[1] ContextWindowTokens = %d, want 32768", got[1].ContextWindowTokens)
 		}
 	})
-	t.Run("unset api_key_env yields empty key", func(t *testing.T) {
+	t.Run("unset api_key_env yields empty key and a warning naming it", func(t *testing.T) {
+		var buf bytes.Buffer
+		prev := log.Writer()
+		log.SetOutput(&buf)
+		t.Cleanup(func() { log.SetOutput(prev) })
 		bundle := &clientconfig.Bundle{Providers: []clientconfig.ProviderDef{
-			{Name: "x", Type: "anthropic", APIKeyEnv: "DEFINITELY_UNSET_KEY_XYZ"},
+			// Windows declared, so the undeclared-window warning stays out of it.
+			{Name: "x", Type: "openaicompat", APIKeyEnv: "DEFINITELY_UNSET_KEY_XYZ", BaseURL: "http://gpu-box:8000/v1", ContextWindowTokens: 131072},
+			{Name: "local", Type: "ollama", ContextWindowTokens: 65536}, // no api_key_env: nothing to warn about
 		}}
 		got := toAgentcoreProviders(bundle)
-		if len(got) != 1 || got[0].APIKey != "" {
-			t.Errorf("unset env => APIKey %q, want empty", got[0].APIKey)
+		if len(got) != 2 || got[0].APIKey != "" {
+			t.Errorf("unset env => %+v, want an empty APIKey on provider[0]", got)
+		}
+		if out := buf.String(); !strings.Contains(out, `bundle provider "x": its api_key_env variable is unset or empty`) ||
+			strings.Contains(out, `"local"`) {
+			t.Errorf("log = %q, want one warning naming x's unset variable", out)
 		}
 	})
 }
@@ -139,6 +149,9 @@ func TestLoadDBLLMProvidersCarriesTheContextWindow(t *testing.T) {
 // manifests) but is named in a warning; OpenRouter and declared entries are
 // not.
 func TestToAgentcoreProvidersWarnsOnAnUndeclaredWindow(t *testing.T) {
+	// Keys set, so the empty-api_key_env warning stays out of it.
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 	var buf bytes.Buffer
 	prev := log.Writer()
 	log.SetOutput(&buf)

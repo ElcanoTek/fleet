@@ -357,7 +357,11 @@ models, there is nothing to switch to and the conversation keeps refusing —
 start a new lockdown chat and tell your admin the list needs a named model
 first. Admins can fix the provider
 configuration under **Settings → Admin → Model providers**, and set the default
-and stronger model under **Settings → Admin → Features → Model tiers**. A
+and stronger model under **Settings → Admin → Features → Model tiers**. Besides
+OpenRouter, Anthropic, OpenAI and Ollama, that page can add any
+**OpenAI-compatible** server (it needs its Base URL; a key is optional) and the
+**Vercel AI Gateway** (it needs a key). A Vercel model listed there takes that
+model over from OpenRouter, so it then runs through Vercel. A
 provider added there, other than OpenRouter, needs its **Context window** (in
 tokens, the smallest limit among the models it serves) before it can be
 enabled. One without it is marked **No context window**, and a turn on its

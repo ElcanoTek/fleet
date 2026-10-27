@@ -147,7 +147,9 @@ func evalRun(args []string) int {
 		return 1
 	}
 
-	if cfg.OpenRouterAPIKey == "" && !cfg.MockMode && len(toAgentcoreProviders(bundle)) == 0 {
+	// Translated once: the translation logs its provider warnings.
+	providers := toAgentcoreProviders(bundle)
+	if cfg.OpenRouterAPIKey == "" && !cfg.MockMode && len(providers) == 0 {
 		fmt.Fprintln(os.Stderr, "fleet eval run: no model credentials — set OPENROUTER_API_KEY (or a manifest providers: block)")
 		return 1
 	}
@@ -166,7 +168,7 @@ func evalRun(args []string) int {
 		SkillsDir:            bundle.SkillsDir,
 		SystemPromptsDir:     bundle.SystemPromptsDir,
 		ChatSystemPromptFile: "chat.md",
-		LLMProviders:         toAgentcoreProviders(bundle),
+		LLMProviders:         providers,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fleet eval run: build engine: %v\n", err)

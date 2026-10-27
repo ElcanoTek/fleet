@@ -1,9 +1,9 @@
 "use client";
 
 // Settings → Admin → Providers (fleet-unified settings pass): the admin
-// surface for admin-managed LLM providers. Add an OpenRouter/Anthropic/OpenAI
-// API key or point at any local OpenAI-compatible endpoint (Ollama, vLLM,
-// LM Studio…); rows overlay the client bundle's providers: table and take
+// surface for admin-managed LLM providers. Add an OpenRouter/Anthropic/OpenAI/
+// Vercel AI Gateway API key or point at any OpenAI-compatible endpoint (Ollama,
+// vLLM, LM Studio…); rows overlay the client bundle's providers: table and take
 // effect on the next turn, no restart. Multiple providers run simultaneously —
 // routing picks per model slug (an explicit "name/model" prefix, a provider's
 // models list, else the first catch-all).
@@ -50,17 +50,22 @@ export type LLMProvider = {
   updated_at: number;
 };
 
-// Central per-type presentation map (label + one-line hint + placeholders),
-// so the form can explain each choice inline. windowNeeded is false only for
-// OpenRouter, whose per-model catalog supplies the context limit; every other
-// type needs the admin to declare it before the row can be enabled (the
-// server enforces this too).
+// Central per-type presentation map (label + one-line hint + field labels),
+// so the form can explain each choice inline. The keys must match the server's
+// provider types (agentcore's provider type table); a scripts/ test pins them,
+// and keyNeeded/urlNeeded mirror that table's required fields. windowNeeded is
+// false only for OpenRouter, whose per-model catalog supplies the context
+// limit; every other type needs the admin to declare it before the row can be
+// enabled (the server enforces this too).
 const PROVIDER_TYPES: Record<
   string,
   {
     label: string;
     hint: string;
+    urlLabel: string;
     urlPlaceholder: string;
+    urlNeeded: boolean;
+    keyLabel: string;
     keyNeeded: boolean;
     windowNeeded: boolean;
     windowPlaceholder: string;
@@ -69,7 +74,10 @@ const PROVIDER_TYPES: Record<
   openrouter: {
     label: "OpenRouter",
     hint: "Routes across many upstream providers with one key.",
+    urlLabel: "Base URL (optional)",
     urlPlaceholder: "(default: openrouter.ai)",
+    urlNeeded: false,
+    keyLabel: "API key",
     keyNeeded: true,
     windowNeeded: false,
     windowPlaceholder: "",
@@ -77,15 +85,21 @@ const PROVIDER_TYPES: Record<
   anthropic: {
     label: "Anthropic",
     hint: "Direct Anthropic API access with your own key.",
+    urlLabel: "Base URL (optional)",
     urlPlaceholder: "(default: api.anthropic.com)",
+    urlNeeded: false,
+    keyLabel: "API key",
     keyNeeded: true,
     windowNeeded: true,
     windowPlaceholder: "e.g. 200000",
   },
   openai: {
-    label: "OpenAI / OpenAI-compatible",
-    hint: "OpenAI itself, or any OpenAI-compatible endpoint via Base URL (vLLM, LM Studio, a gateway…).",
-    urlPlaceholder: "https://api.example.com/v1",
+    label: "OpenAI",
+    hint: "Direct OpenAI API access with your own key. For another server that speaks the OpenAI API, choose OpenAI-compatible.",
+    urlLabel: "Base URL (optional)",
+    urlPlaceholder: "(default: api.openai.com/v1)",
+    urlNeeded: false,
+    keyLabel: "API key",
     keyNeeded: true,
     windowNeeded: true,
     windowPlaceholder: "e.g. 128000",
@@ -93,10 +107,35 @@ const PROVIDER_TYPES: Record<
   ollama: {
     label: "Ollama (local)",
     hint: "A local or remote Ollama server; no API key needed.",
+    urlLabel: "Base URL (optional)",
     urlPlaceholder: "(default: http://localhost:11434/v1)",
+    urlNeeded: false,
+    keyLabel: "API key (not needed)",
     keyNeeded: false,
     windowNeeded: true,
     windowPlaceholder: "the server's num_ctx, e.g. 65536",
+  },
+  openaicompat: {
+    label: "OpenAI-compatible",
+    hint: "Any server that speaks the OpenAI API: vLLM, LM Studio, llama.cpp, a hosted gateway. Needs its Base URL; the key is optional.",
+    urlLabel: "Base URL",
+    urlPlaceholder: "https://llm.example.com/v1",
+    urlNeeded: true,
+    keyLabel: "API key (optional)",
+    keyNeeded: false,
+    windowNeeded: true,
+    windowPlaceholder: "the server's limit, e.g. 131072",
+  },
+  vercel: {
+    label: "Vercel AI Gateway",
+    hint: "Many model providers through one Vercel key. Model ids are creator/model, like OpenRouter's, so a model listed here moves off OpenRouter; leave the list empty to reach it only as name/creator/model.",
+    urlLabel: "Base URL (optional)",
+    urlPlaceholder: "(default: ai-gateway.vercel.sh/v1)",
+    urlNeeded: false,
+    keyLabel: "API key",
+    keyNeeded: true,
+    windowNeeded: true,
+    windowPlaceholder: "e.g. 200000",
   },
 };
 
@@ -106,6 +145,9 @@ type Draft = {
   type: string;
   base_url: string;
   api_key: string; // always starts empty; "" on edit = keep stored key
+  // Edit only, for a type whose key is optional: send "" to drop the stored
+  // key, the one way back to keyless (a blank field keeps it).
+  clear_key: boolean;
   models: string; // textarea, one slug per line
   context_window: string; // digits; "" = not declared
   enabled: boolean;
@@ -117,6 +159,7 @@ const EMPTY_DRAFT: Draft = {
   type: "openrouter",
   base_url: "",
   api_key: "",
+  clear_key: false,
   models: "",
   context_window: "",
   enabled: true,
@@ -129,6 +172,7 @@ function draftFrom(p: LLMProvider): Draft {
     type: p.type,
     base_url: p.base_url,
     api_key: "",
+    clear_key: false,
     models: p.models.join("\n"),
     context_window: p.context_window_tokens > 0 ? String(p.context_window_tokens) : "",
     enabled: p.enabled,
@@ -160,8 +204,9 @@ function contextWindowWarning(raw: string): string | null {
 }
 
 // validateDraft mirrors the server's checks so most mistakes surface before a
-// round trip: slug name, http(s) base URL, key presence for keyed types, and a
-// context window before a non-OpenRouter row can be enabled.
+// round trip: slug name, http(s) base URL, base URL presence for types with no
+// default endpoint, key presence for keyed types, and a context window before a
+// non-OpenRouter row can be enabled.
 function validateDraft(d: Draft, editingHasKey: boolean): string | null {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(d.name.trim().toLowerCase())) {
     return "Name must be a lowercase slug (letters, digits, . _ -), no slashes or spaces.";
@@ -170,6 +215,9 @@ function validateDraft(d: Draft, editingHasKey: boolean): string | null {
     return "Base URL must start with http:// or https://.";
   }
   const t = PROVIDER_TYPES[d.type];
+  if (t?.urlNeeded && !d.base_url.trim()) {
+    return `${t.label} needs a Base URL.`;
+  }
   if (d.enabled && t?.keyNeeded && !d.api_key && !(d.id && editingHasKey)) {
     return `${t.label} needs an API key.`;
   }
@@ -361,9 +409,9 @@ function ProvidersAdmin() {
       enabled: draft.enabled,
     };
     // Write-only key semantics: omit the field entirely to keep the stored
-    // key; send a value only when the admin typed one.
+    // key; send a value only when the admin typed one, and "" to clear it.
     if (draft.api_key !== "") body.api_key = draft.api_key;
-    else if (!draft.id) body.api_key = "";
+    else if (draft.clear_key || !draft.id) body.api_key = "";
     fetch(
       draft.id
         ? `/api/admin/llm-providers/${encodeURIComponent(draft.id)}`
@@ -477,8 +525,8 @@ function ProvidersAdmin() {
           />
         </ConnPanelHead>
         <ClampInfo>
-          An OpenRouter, Anthropic, or OpenAI key, or any OpenAI-compatible endpoint (Ollama,
-          vLLM…). Several can run at once: a model picks its provider by explicit{" "}
+          An OpenRouter, Anthropic, OpenAI or Vercel AI Gateway key, or any OpenAI-compatible
+          endpoint (Ollama, vLLM…). Several can run at once: a model picks its provider by explicit{" "}
           <CodeChip>provider/model</CodeChip> prefix or by its models list; a provider with an
           empty models list is a catch-all serving any slug. Changes apply on the next message —
           no restart. Keys are stored encrypted and are never shown again.
@@ -559,13 +607,7 @@ function ProvidersAdmin() {
               </p>
             ) : null}
             <div className="grid grid-cols-2 gap-[0.75rem] max-[640px]:grid-cols-1">
-              <ConnField
-                label={
-                  draft.type === "openai"
-                    ? "Base URL (set for a non-OpenAI endpoint)"
-                    : "Base URL (optional)"
-                }
-              >
+              <ConnField label={typeInfo?.urlLabel ?? "Base URL (optional)"}>
                 <input
                   id="providerBaseUrl"
                   value={draft.base_url}
@@ -578,9 +620,7 @@ function ProvidersAdmin() {
                 label={
                   draft.id && providers?.find((p) => p.id === draft.id)?.has_api_key
                     ? "API key (stored — leave blank to keep it)"
-                    : typeInfo?.keyNeeded
-                      ? "API key"
-                      : "API key (not needed)"
+                    : (typeInfo?.keyLabel ?? "API key")
                 }
               >
                 <input
@@ -588,16 +628,36 @@ function ProvidersAdmin() {
                   type="password"
                   autoComplete="new-password"
                   value={draft.api_key}
+                  disabled={draft.clear_key}
                   onChange={(e) => setDraft({ ...draft, api_key: e.target.value })}
                   placeholder={
                     draft.id && providers?.find((p) => p.id === draft.id)?.has_api_key
                       ? "•••••••• (unchanged)"
                       : "sk-…"
                   }
-                  className={SETTINGS_INPUT}
+                  className={`${SETTINGS_INPUT} disabled:opacity-60`}
                 />
               </ConnField>
             </div>
+            {draft.id &&
+            !typeInfo?.keyNeeded &&
+            providers?.find((p) => p.id === draft.id)?.has_api_key ? (
+              <label
+                className="-mt-1 flex cursor-pointer items-center gap-[0.45rem] text-[0.8rem] text-[var(--color-text-secondary)]"
+                htmlFor="providerClearKey"
+              >
+                <input
+                  id="providerClearKey"
+                  type="checkbox"
+                  checked={draft.clear_key}
+                  onChange={(e) =>
+                    setDraft({ ...draft, clear_key: e.target.checked, api_key: "" })
+                  }
+                  className="size-4 accent-[var(--color-primary)]"
+                />
+                Remove the stored key (this type works without one)
+              </label>
+            ) : null}
             {typeInfo?.windowNeeded ? (
               <>
                 <ConnField label="Context window (tokens: the smallest limit among the models this provider serves; needed to enable)">
@@ -714,8 +774,8 @@ function ProvidersAdmin() {
         ) : providers.length === 0 && !draft ? (
           <ConnEmpty>
             No extra providers configured — the deployment is using its bundle/environment
-            provider (typically OpenRouter). Add one to bring your own Anthropic/OpenAI key or a
-            local endpoint.
+            provider (typically OpenRouter). Add one to bring your own Anthropic, OpenAI or Vercel
+            key, or an OpenAI-compatible endpoint.
           </ConnEmpty>
         ) : (
           <ConnRows>

@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"charm.land/fantasy/providers/vercel"
 )
 
 // Test-connection probe for admin-managed LLM providers. ProbeProvider makes
@@ -23,6 +25,10 @@ import (
 //   - openai:     GET {base}/models with a Bearer key (base defaults to the
 //     OpenAI API; a custom base_url probes the OpenAI-compatible endpoint).
 //   - ollama:     GET {base}/models — no key required.
+//   - openaicompat: GET {base}/models, with a Bearer key only when one is set.
+//   - vercel:     GET {base}/models with a Bearer key (base defaults to the AI
+//     Gateway). The catalog is public without a key, but the gateway rejects
+//     a wrong one with 401, so the probe does test the key.
 //
 // For types whose probe returns a model catalog, the row's listed models are
 // checked against it: absences are reported as a WARNING (MissingModels), not
@@ -60,9 +66,22 @@ const probeBodyCap = 4 << 20
 // error — every failure mode is folded into a !OK result with a key-free
 // Detail, because the caller's job is to display it, not branch on it.
 func ProbeProvider(ctx context.Context, cfg ProviderConfig) ProbeResult {
+	// A row missing a field its type requires is reported without a call. For a
+	// keyed type this is not just a shortcut: the AI Gateway serves its public
+	// catalog to an empty Bearer token, so probing a keyless vercel row would
+	// report "connected" for a provider that cannot run a single turn.
+	spec, known := LookupProviderType(string(cfg.Type))
+	switch {
+	case !known:
+		return ProbeResult{Detail: fmt.Sprintf("unknown provider type %q", cfg.Type)}
+	case spec.APIKeyRequired && strings.TrimSpace(cfg.APIKey) == "":
+		return ProbeResult{Detail: fmt.Sprintf("no API key is stored — type %s requires one", cfg.Type)}
+	case spec.BaseURLRequired && strings.TrimSpace(cfg.BaseURL) == "":
+		return ProbeResult{Detail: fmt.Sprintf("no base_url is set — type %s requires one", cfg.Type)}
+	}
 	endpoint, header, catalogued := probeTarget(cfg)
 	if endpoint == "" {
-		return ProbeResult{Detail: fmt.Sprintf("unknown provider type %q", cfg.Type)}
+		return ProbeResult{Detail: fmt.Sprintf("no connection test for provider type %q", cfg.Type)}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
@@ -158,6 +177,17 @@ func probeTarget(cfg ProviderConfig) (endpoint string, header map[string]string,
 			h["Authorization"] = "Bearer " + cfg.APIKey
 		}
 		return base + "/models", h, true
+	case ProviderTypeOpenAICompat:
+		h := map[string]string{}
+		if strings.TrimSpace(cfg.APIKey) != "" {
+			h["Authorization"] = "Bearer " + cfg.APIKey
+		}
+		return base + "/models", h, true
+	case ProviderTypeVercel:
+		if base == "" {
+			base = vercel.DefaultURL
+		}
+		return base + "/models", map[string]string{"Authorization": "Bearer " + cfg.APIKey}, true
 	default:
 		return "", nil, false
 	}

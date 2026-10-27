@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
 
@@ -36,15 +37,6 @@ const aadPurposeLLMKey = "fleet:llm-provider-api-key:v1"
 
 // ErrLLMProviderNotFound is returned when an id matches no row.
 var ErrLLMProviderNotFound = errors.New("llm provider not found")
-
-// llmProviderTypes mirrors agentcore's supported provider backends. Kept as a
-// plain string set (not an agentcore import) so the store stays a leaf package.
-var llmProviderTypes = map[string]bool{
-	"openrouter": true,
-	"anthropic":  true,
-	"openai":     true,
-	"ollama":     true,
-}
 
 // llmProviderNameRE — the name doubles as the "<name>/<model>" routing prefix,
 // so it must be a clean slug with no "/" or whitespace.
@@ -95,8 +87,16 @@ func (in *LLMProviderInput) normalize() error {
 	if !llmProviderNameRE.MatchString(in.Name) {
 		return fmt.Errorf("invalid provider name %q (lowercase slug, no slashes)", in.Name)
 	}
-	if !llmProviderTypes[in.Type] {
-		return fmt.Errorf("invalid provider type %q (want openrouter|anthropic|openai|ollama)", in.Type)
+	// The type table is agentcore's, the one the bundle loader and the
+	// resolver check too. Only the shape rules apply here: whether a key is in
+	// effect is checked for enabled rows by the API (httpapi
+	// validateLLMProviderRow), since a row can be saved disabled before its key.
+	spec, ok := agentcore.LookupProviderType(in.Type)
+	if !ok {
+		return fmt.Errorf("invalid provider type %q (want %s)", in.Type, agentcore.ProviderTypeChoices())
+	}
+	if spec.BaseURLRequired && in.BaseURL == "" {
+		return fmt.Errorf("invalid provider %q: type %s requires a base_url", in.Name, in.Type)
 	}
 	// The column is a Postgres INTEGER; out-of-range values are refused here
 	// as a bad request rather than reaching SQL as a server error.
@@ -110,18 +110,19 @@ func (in *LLMProviderInput) normalize() error {
 		// http/https only (no file:, unix:, …), a host, and no embedded
 		// credentials. localhost/private hosts stay allowed — Ollama and
 		// self-hosted gateways are the point of base_url.
+		// Each error starts "invalid provider", which the API maps to 400.
 		u, err := url.Parse(in.BaseURL)
 		if err != nil {
-			return fmt.Errorf("invalid base_url: %w", err)
+			return fmt.Errorf("invalid provider %q: invalid base_url: %w", in.Name, err)
 		}
 		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("base_url must use http or https (got %q)", u.Scheme)
+			return fmt.Errorf("invalid provider %q: base_url must use http or https (got %q)", in.Name, u.Scheme)
 		}
 		if u.Host == "" {
-			return fmt.Errorf("base_url must include a host")
+			return fmt.Errorf("invalid provider %q: base_url must include a host", in.Name)
 		}
 		if u.User != nil {
-			return fmt.Errorf("base_url must not embed credentials")
+			return fmt.Errorf("invalid provider %q: base_url must not embed credentials", in.Name)
 		}
 	}
 	models := make([]string, 0, len(in.Models))

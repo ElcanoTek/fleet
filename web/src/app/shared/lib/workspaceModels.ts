@@ -38,8 +38,9 @@ type CatwalkResponse = {
 // Fleet provider types whose catch-all rows we can expand from catwalk. The
 // fleet type vocabulary matches catwalk's first-party provider ids. Other
 // types stay unexpanded: "openrouter" is already covered by the OpenRouter
-// catalog fetch, and "ollama" serves whatever the local daemon has pulled —
-// no public catalog can know that.
+// catalog fetch, and "ollama" and "openaicompat" serve whatever that server
+// has loaded — no public catalog can know that. "vercel" is in catwalk but not
+// wired up here yet.
 const CATWALK_EXPANDABLE_TYPES = new Set(["anthropic", "openai"]);
 
 export type WorkspaceModelCatalog = { models: WorkspaceModel[]; routing: ModelRouting };

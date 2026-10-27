@@ -245,6 +245,114 @@ describe("ProvidersAdminPage", () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "POST")).toHaveLength(0);
   });
 
+  it("labels the OpenAI-compatible and Vercel types and flags a keyless Vercel row", async () => {
+    const compat: LLMProvider = {
+      ...ROW,
+      id: "p3",
+      name: "vllm",
+      type: "openaicompat",
+      base_url: "http://gpu-box:8000/v1",
+      models: [],
+      has_api_key: false,
+      context_window_tokens: 131072,
+    };
+    const gateway: LLMProvider = {
+      ...ROW,
+      id: "p4",
+      name: "gateway",
+      type: "vercel",
+      models: ["anthropic/claude-opus-4.8"],
+      has_api_key: false,
+    };
+    vi.stubGlobal("fetch", mockFetch([compat, gateway]));
+    render(<ProvidersAdminPage />);
+    expect(
+      await screen.findByText("OpenAI-compatible · catch-all (any model) · 131,072-token context"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Vercel AI Gateway · 1 model · 200,000-token context")).toBeInTheDocument();
+    // The key is optional for openaicompat, required for vercel: one badge.
+    expect(screen.getAllByText("No key")).toHaveLength(1);
+  });
+
+  it("asks for a Base URL before creating an OpenAI-compatible provider, then sends no key", async () => {
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    fireEvent.change(screen.getByPlaceholderText("my-provider"), {
+      target: { value: "vllm" },
+    });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "openaicompat" } });
+    expect(screen.getByLabelText("Base URL")).toBeInTheDocument();
+    expect(screen.getByLabelText("API key (optional)")).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(/claude-sonnet-4-5/), {
+      target: { value: "qwen3-coder" },
+    });
+    const posts = () =>
+      fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "POST");
+    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+    expect(await screen.findByText("OpenAI-compatible needs a Base URL.")).toBeInTheDocument();
+    expect(posts()).toHaveLength(0);
+
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "http://gpu-box:8000/v1" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("the server's limit, e.g. 131072"), {
+      target: { value: "131072" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    const body = JSON.parse(String((posts()[0][1] as RequestInit).body));
+    expect(body).toMatchObject({
+      name: "vllm",
+      type: "openaicompat",
+      base_url: "http://gpu-box:8000/v1",
+      models: ["qwen3-coder"],
+      context_window_tokens: 131072,
+      api_key: "",
+    });
+  });
+
+  it("lets an optional-key row drop its stored key, and only such a row", async () => {
+    const compat: LLMProvider = {
+      ...ROW,
+      id: "p3",
+      name: "vllm",
+      type: "openaicompat",
+      base_url: "http://gpu-box:8000/v1",
+      models: ["qwen3-coder"],
+      has_api_key: true,
+      context_window_tokens: 131072,
+    };
+    const gateway: LLMProvider = { ...ROW, id: "p4", name: "gateway", type: "vercel", has_api_key: true };
+    const fetchMock = mockFetch([compat, gateway]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    const puts = () =>
+      fetchMock.mock.calls
+        .filter(([, init]) => init && (init as RequestInit).method === "PUT")
+        .map(([url, init]) => [url, JSON.parse(String((init as RequestInit).body))]);
+
+    // A keyed type (vercel) has no way to drop its key: it cannot run without one.
+    const edits = await screen.findAllByRole("button", { name: "Edit" });
+    fireEvent.click(edits[1]);
+    expect(document.getElementById("providerClearKey")).toBeNull();
+
+    // Saving an edit leaves the stored key alone unless asked…
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    fireEvent.click(screen.getByTestId("provider-save"));
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect(puts()[0][1]).not.toHaveProperty("api_key");
+
+    // …and the checkbox sends "" to clear it, with the key field locked.
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    fireEvent.click(screen.getByLabelText(/Remove the stored key/));
+    expect(document.getElementById("providerApiKey")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("provider-save"));
+    await waitFor(() => expect(puts()).toHaveLength(2));
+    expect(puts()[1]).toEqual(["/api/admin/llm-providers/p3", expect.objectContaining({ api_key: "" })]);
+  });
+
   it("creates a provider, sending the key write-only", async () => {
     const fetchMock = mockFetch([]);
     vi.stubGlobal("fetch", fetchMock);

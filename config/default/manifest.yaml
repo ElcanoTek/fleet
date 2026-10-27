@@ -310,8 +310,10 @@ remote_mcp_catalog: []
 # LLM provider routing (issue #289). By default fleet routes EVERY model through
 # OpenRouter (set OPENROUTER_API_KEY and you're done — no providers: block needed).
 # Declare providers: to route specific model slugs natively to Anthropic, OpenAI,
-# or a self-hosted Ollama instead — for failover, data residency, or to avoid the
-# OpenRouter markup. See docs/PROVIDERS.md and docs/adr/0017-multi-provider-llm.md.
+# a self-hosted Ollama, any OpenAI-compatible server or the Vercel AI Gateway
+# instead — for failover, data residency, or to avoid the OpenRouter markup.
+# Types: openrouter | anthropic | openai | ollama | openaicompat | vercel. See
+# docs/PROVIDERS.md and docs/adr/0017-multi-provider-llm.md.
 #
 # SECURITY — api_key_env names an env var; its VALUE is read HOST-SIDE at boot
 # (auto-allowlisted from the manifest like an MCP credential) and never enters the
@@ -343,6 +345,16 @@ remote_mcp_catalog: []
 #     base_url: http://localhost:11434/v1
 #     models: ["llama3.2", "qwen2.5-coder"]
 #     context_window_tokens: 65536 # the server's num_ctx, raised to fit fleet's tools
+#   - name: gpu-box             # any OpenAI-compatible server (vLLM, LM Studio…)
+#     type: openaicompat
+#     base_url: http://gpu-box:8000/v1   # required; api_key_env is optional
+#     models: ["qwen3-coder"]
+#     context_window_tokens: 131072 # the server's --max-model-len
+#   - name: gateway             # the Vercel AI Gateway (<creator>/<model> ids)
+#     type: vercel
+#     api_key_env: AI_GATEWAY_API_KEY
+#     models: ["anthropic/claude-opus-4.8"] # moves this slug off OpenRouter
+#     context_window_tokens: 200000
 #
 # Declare context_window_tokens on every entry except OpenRouter: an undeclared
 # native limit falls back to 32,000 tokens (4,096 for Ollama), less than a turn
