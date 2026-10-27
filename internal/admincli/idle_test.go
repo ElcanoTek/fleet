@@ -3,6 +3,8 @@ package admincli
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -402,4 +404,53 @@ func TestActiveWorkAndWaitIdle_DB(t *testing.T) {
 		t.Fatalf("expected WaitIdle success to leave drain file set for caller: %v", statErr)
 	}
 	ClearUpdateDrain()
+}
+
+func TestProbeInMemoryCountsAcceptsDraining503(t *testing.T) {
+	sendHeaders := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if sendHeaders {
+			w.Header().Set("X-Fleet-Active-Turns", "2")
+			w.Header().Set("X-Fleet-Active-Approvals", "1")
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	t.Setenv("FLEET_SERVER_ADDR", srv.URL)
+	ctx := context.Background()
+
+	turns, approvals, hasApprovals, err := probeInMemoryActiveCounts(ctx, "active")
+	if err != nil {
+		t.Fatalf("probeInMemoryActiveCounts on draining 503 failed: %v", err)
+	}
+	if turns != 2 || approvals != 1 || !hasApprovals {
+		t.Fatalf("probeInMemoryActiveCounts = (%d, %d, %v), want (2, 1, true)", turns, approvals, hasApprovals)
+	}
+
+	if _, err := exec.LookPath("bash"); err == nil {
+		if _, err := exec.LookPath("curl"); err == nil {
+			root := repoRootFromTest(t)
+			idleLib := filepath.Join(root, "scripts", "lib", "idle.sh")
+			envFile := filepath.Join(t.TempDir(), "fleet.env")
+			if err := os.WriteFile(envFile, []byte("FLEET_SERVER_ADDR="+srv.URL+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("bash", "-c", `. "$1"; fleet_probe_in_memory_counts "$2"`, "_", idleLib, envFile)
+			cmd.Env = append(os.Environ(), "FLEET_ASSUME_SERVICE_ACTIVE=1", "FLEET_SERVER_ADDR="+srv.URL)
+			out, cerr := cmd.CombinedOutput()
+			if cerr != nil {
+				t.Fatalf("fleet_probe_in_memory_counts: %v\n%s", cerr, string(out))
+			}
+			if got := strings.TrimSpace(string(out)); got != "2|1|1|ok" {
+				t.Fatalf("fleet_probe_in_memory_counts = %q, want %q", got, "2|1|1|ok")
+			}
+		}
+	}
+
+	// An unrelated 503 without Fleet headers must still be reported as a probe error.
+	sendHeaders = false
+	if _, _, _, err := probeInMemoryActiveCounts(ctx, "active"); err == nil {
+		t.Fatal("expected probeInMemoryActiveCounts to reject 503 without Fleet headers")
+	}
 }

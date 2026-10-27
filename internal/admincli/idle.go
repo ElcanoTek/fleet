@@ -391,13 +391,19 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 		return 0, 0, false, err
 	}
 	_ = resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, 0, false, fmt.Errorf("healthz status %d", resp.StatusCode)
-	}
-	turns, _ = strconv.Atoi(strings.TrimSpace(resp.Header.Get("X-Fleet-Active-Turns")))
+	rawTurns := strings.TrimSpace(resp.Header.Get("X-Fleet-Active-Turns"))
+	turns, terr := strconv.Atoi(rawTurns)
+	hasTurnsHeader := rawTurns != "" && terr == nil && turns >= 0
 	rawApprovals := strings.TrimSpace(resp.Header.Get("X-Fleet-Active-Approvals"))
 	approvals, aerr := strconv.Atoi(rawApprovals)
-	hasApprovalsHeader = rawApprovals != "" && aerr == nil
+	hasApprovalsHeader = rawApprovals != "" && aerr == nil && approvals >= 0
+	// /healthz returns 503 with X-Fleet-Active-Turns and X-Fleet-Active-Approvals
+	// when the update drain sentinel is active; accept 503 only when both Fleet
+	// headers are present so an unrelated 503 proxy error still surfaces.
+	draining503 := resp.StatusCode == http.StatusServiceUnavailable && hasTurnsHeader && hasApprovalsHeader
+	if (resp.StatusCode < 200 || resp.StatusCode >= 300) && !draining503 {
+		return 0, 0, false, fmt.Errorf("healthz status %d", resp.StatusCode)
+	}
 	return turns, approvals, hasApprovalsHeader, nil
 }
 

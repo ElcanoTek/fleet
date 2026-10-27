@@ -226,3 +226,63 @@ func TestScheduledPolicy_LoopsUntilAuditClears(t *testing.T) {
 		t.Errorf("scheduled run should take >1 round when finish is blocked, got %d", res.Rounds)
 	}
 }
+
+// TestInteractivePolicy_RecoversFromFinishReasonLength verifies that when an
+// interactive turn hits max_output_tokens (FinishReasonLength), CanFinish
+// rejects round 0 with a continuation nudge so the model can finish the work
+// in smaller steps instead of ending the turn with a truncated tool call.
+func TestInteractivePolicy_RecoversFromFinishReasonLength(t *testing.T) {
+	round := int32(0)
+	model := &mockModel{
+		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+			if atomic.AddInt32(&round, 1) == 1 {
+				return func() (fantasy.StreamResponse, error) {
+					parts := []fantasy.StreamPart{
+						{Type: fantasy.StreamPartTypeTextStart, ID: "t1"},
+						{Type: fantasy.StreamPartTypeTextDelta, ID: "t1", Delta: "I will build the deck now..."},
+						{Type: fantasy.StreamPartTypeTextEnd, ID: "t1"},
+						{
+							Type:         fantasy.StreamPartTypeFinish,
+							FinishReason: fantasy.FinishReasonLength,
+							Usage:        fantasy.Usage{InputTokens: 100, OutputTokens: 16384, TotalTokens: 16484},
+						},
+					}
+					idx := 0
+					return func(yield func(fantasy.StreamPart) bool) {
+						for idx < len(parts) {
+							p := parts[idx]
+							idx++
+							if !yield(p) {
+								return
+							}
+						}
+					}, nil
+				}()
+			}
+			return streamStop()(nil, call)
+		},
+	}
+	policy := &roundCountingPolicy{inner: NewInteractivePolicy(0, 0, nil, nil)}
+	obs := &captureObserver{}
+	exec := &stubExecutor{}
+
+	res, err := Run(context.Background(), ModeInteractive, RunConfig{
+		EnvPrefix:   CanonicalEnvPrefix,
+		Temperature: 0.2,
+	}, Deps{
+		Input:    stubInput{system: "you are a test agent", user: "build the slide deck", label: "interactive-turn"},
+		Observer: obs,
+		Policy:   policy,
+		Executor: exec,
+		Model:    model,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if res.Rounds != 2 {
+		t.Errorf("interactive run after FinishReasonLength should take 2 rounds, got %d", res.Rounds)
+	}
+	if got := atomic.LoadInt32(&policy.finishes); got != 2 {
+		t.Errorf("CanFinish should be consulted twice, got %d", got)
+	}
+}

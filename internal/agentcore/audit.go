@@ -514,6 +514,33 @@ func (o *orchestrationState) taskTrackerPendingMessage() string {
 	return msg
 }
 
+// maxInteractiveLengthRecoveryRounds caps how many continuation rounds an
+// interactive turn may open when a round ends on FinishReasonLength
+// (max_output_tokens cutoff, e.g. mid-tool-call while writing a large script).
+const maxInteractiveLengthRecoveryRounds = 2
+
+func (o *orchestrationState) checkInteractiveFinishEnforcement(round int) (bool, []string) {
+	if o == nil {
+		return true, nil
+	}
+	if blocked, _ := o.checkCeilings(); blocked {
+		return true, nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	finishReason := o.lastRoundFinishReason
+	o.lastRoundFinishReason = ""
+
+	if finishReason == fantasy.FinishReasonLength && round < maxInteractiveLengthRecoveryRounds {
+		log.Println("Enforcement: Interactive round ended on FinishReasonLength (max_output_tokens). Rejecting finish.")
+		return false, []string{
+			"Your previous response hit the output token limit (finish_reason=length) and was cut off before completing, so any tool call in that response did not execute. Continue the remaining work in smaller steps (for example, write helper scripts or HTML/data files in smaller chunks rather than one large inline payload) before finishing.",
+		}
+	}
+	return true, nil
+}
+
 func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()

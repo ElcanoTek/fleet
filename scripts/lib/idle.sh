@@ -550,7 +550,7 @@ fleet_probe_in_memory_counts() {
     (( rem_ep <= 0 )) && { printf '0|0|0|err\n'; return 0; }
     (( rem_ep < curl_max )) && curl_max="$rem_ep"
   fi
-  local curl_args=(-fsSI --noproxy '*' --max-time "$curl_max")
+  local curl_args=(-sSI --noproxy '*' --max-time "$curl_max")
   if [[ "$addr" != http://* && "$addr" != https://* ]]; then
     local tls_mode="" cert_file="" tls_domain="" host_only="" port_only="8080"
     if [[ "$addr" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
@@ -601,10 +601,13 @@ fleet_probe_in_memory_counts() {
     printf '0|0|0|err\n'
     return 0
   fi
+  local status_code="" has_turns_hdr=0
+  status_code="$(printf '%s\n' "$hdrs" | awk 'toupper($1) ~ /^HTTP\// { code=$2 } END { print code }')"
   turns="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Turns:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
   approvals="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Approvals:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
   if [[ "$turns" =~ ^[0-9]+$ ]]; then
     turns=$(( 10#$turns ))
+    has_turns_hdr=1
   else
     turns=0
   fi
@@ -613,6 +616,13 @@ fleet_probe_in_memory_counts() {
     has_approvals_hdr=1
   else
     approvals=0
+  fi
+  # /healthz returns 503 with X-Fleet-Active-Turns and X-Fleet-Active-Approvals
+  # when the update drain sentinel is active; accept 503 only when both Fleet
+  # headers are present.
+  if [[ ! "$status_code" =~ ^2[0-9][0-9]$ ]] && ! { [[ "$status_code" == "503" ]] && (( has_turns_hdr == 1 && has_approvals_hdr == 1 )); }; then
+    printf '0|0|0|err\n'
+    return 0
   fi
   printf '%s|%s|%s|ok\n' "$turns" "$approvals" "$has_approvals_hdr"
 }

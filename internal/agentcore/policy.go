@@ -104,11 +104,13 @@ func (p *InteractivePolicy) RecordToolResult(toolName, rawInput, resultText stri
 	p.orch.recordToolResult(toolName, rawInput, resultText, succeeded)
 }
 
-// CanFinish always returns true at round 0 — this is the 1-round collapse that
-// makes the chat single pass a special case of the unified loop. (Any later
-// round would also finish, but interactive runs never reach one.)
-func (p *InteractivePolicy) CanFinish(_ int) (bool, []string) {
-	return true, nil
+// CanFinish returns true at round 0 unless the round was cut off by
+// max_output_tokens (FinishReasonLength), in which case it opens up to
+// maxInteractiveLengthRecoveryRounds continuation rounds so a truncated tool
+// call or response can be completed in smaller steps instead of silently
+// dropping the incomplete tool call and ending the turn prematurely.
+func (p *InteractivePolicy) CanFinish(round int) (bool, []string) {
+	return p.orch.checkInteractiveFinishEnforcement(round)
 }
 
 // Budget exposes this turn's current cost/token ceilings and accumulated spend

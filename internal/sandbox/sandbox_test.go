@@ -487,7 +487,7 @@ mods = [
     "pandas", "numpy", "scipy", "pyarrow",
     "matplotlib", "seaborn",
     "sklearn",
-    "openpyxl", "xlsxwriter", "pypdf", "reportlab",
+    "openpyxl", "xlsxwriter", "pypdf", "reportlab", "pptx", "docx",
     "PIL",
     "bs4", "lxml", "yaml", "requests", "tabulate",
 ]

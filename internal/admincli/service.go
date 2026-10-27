@@ -80,6 +80,12 @@ func systemctlVerb(verb string, argv []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	clearDrain := false
+	defer func() {
+		if clearDrain {
+			ClearUpdateDrain()
+		}
+	}()
 	if (verb == "restart" || verb == "stop") && !*force && !truthy(envOrFile("FLEET_UPDATE_FORCE")) {
 		maxWait := time.Duration(0)
 		if *wait || truthy(envOrFile("FLEET_UPDATE_WAIT")) {
@@ -94,7 +100,7 @@ func systemctlVerb(verb string, argv []string) int {
 		}
 		sDSN := idleSchedDSN("")
 		cDSN := idleChatDSN("")
-		defer ClearUpdateDrain()
+		clearDrain = true
 		resolvedUnit := serviceName(*service)
 		if err := WaitIdleForService(ctx, resolvedUnit, sDSN, cDSN, maxWait, 2*time.Second, os.Stderr); err != nil {
 			unitName := resolvedUnit + ".service"
@@ -119,6 +125,12 @@ func systemctlVerb(verb string, argv []string) int {
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			// When Ctrl-C / SIGTERM arrives after systemctl was invoked, systemd may
+			// continue stopping/restarting the unit asynchronously; retain the
+			// TTL-bounded drain sentinel so no new turns slip in before the stop lands.
+			clearDrain = false
+		}
 		var exitErr *exec.ExitError
 		if asExit(err, &exitErr) {
 			return exitErr.ExitCode()
