@@ -4358,6 +4358,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return true;
     }
 
+    // Capture and consume the draft's pending Auto-approve choice before any
+    // async attachment upload so a second draft opened while this upload is in
+    // flight keeps its own Auto-approve toggle state.
+    const submittedAutoApprove = !convId && Boolean(pendingAutoApprove);
+    if (submittedAutoApprove) {
+      setPendingAutoApprove?.(false);
+    }
+
     // Upload any pending attachments FIRST. If it fails, we bail out with
     // the text still in the composer so the user can retry without losing
     // their message. Empty list → no-op, fast path unchanged.
@@ -4366,6 +4374,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       try {
         uploadedAttachments = await uploadPendingAttachments(composerKey);
       } catch (err) {
+        if (submittedAutoApprove && activeConversationIdRef.current === null) {
+          setPendingAutoApprove?.(true);
+        }
         setAttachmentErrorForKey(
           composerKey,
           err instanceof Error ? err.message : "Upload failed.",
@@ -4479,9 +4490,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       if (pendingLockdown) {
         body.lockdown = true;
       }
-      if (pendingAutoApprove) {
+      if (submittedAutoApprove) {
         body.auto_approve = true;
-        setPendingAutoApprove?.(false);
       }
     }
 
