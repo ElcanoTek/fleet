@@ -18,7 +18,7 @@
 - While `fleet update`, `fleet restart`, or `fleet stop` is waiting for idle (or transitioning from the final idle check to `systemctl restart`/`stop`), it writes and refreshes the drain sentinel file (`<FLEET_ENV_FILE>.update.drain`, overrideable via `FLEET_UPDATE_DRAIN_FILE` or `FLEET_DRAIN_FILE`).
 - `httpapi.UpdateDrainActive()` and `(*httpapi.Server).IsDraining()` observe this sentinel (with a 15-minute staleness bound refreshed on every poll iteration during long `--wait-timeout` runs):
   - `POST /v1/chat`, webhook turn admission, queued turn handoff (`input_queue.go`), and approval execution/resumption return `503 server_draining` while draining.
-  - `diskAdmissionGate` in `cmd/fleet/main.go` returns ` ErrAdmissionPaused` to `runner.Pool` while `httpapi.UpdateDrainActive()` is true, pausing new scheduled-task claims without cancelling in-flight runs.
+  - `diskAdmissionGate` in `cmd/fleet/main.go` returns `(false, "update drain active")` to `runner.Pool` while `httpapi.UpdateDrainActive()` is true, pausing new scheduled-task claims without cancelling in-flight runs.
 - The drain sentinel is removed automatically on exit (`trap ... EXIT` / `defer ClearUpdateDrain()`) and immediately after `systemctl restart` or `systemctl stop` completes.
 
 ### 3. Operator CLI & status visibility

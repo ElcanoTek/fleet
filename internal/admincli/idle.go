@@ -74,9 +74,29 @@ func drainOwnerAlive(content string) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
+func verifyDrainDir(p string) error {
+	dir := filepath.Dir(p)
+	st, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("stat drain sentinel dir %s: %w", dir, err)
+	}
+	if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("drain sentinel dir %s is not a real directory", dir)
+	}
+	if os.Geteuid() == 0 {
+		if sys, ok := st.Sys().(*syscall.Stat_t); ok && sys.Uid != 0 {
+			return fmt.Errorf("drain sentinel dir %s must be owned by root when running as root", dir)
+		}
+		if st.Mode().Perm()&0o022 != 0 {
+			return fmt.Errorf("drain sentinel dir %s must not be group/world-writable when running as root", dir)
+		}
+	}
+	return nil
+}
+
 func createDrainFileAtomic(p string) error {
 	//nolint:gosec // G304,G306: non-secret drain sentinel inspected by the fleet service user.
-	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
 		return err
 	}
@@ -94,9 +114,12 @@ func createDrainFileAtomic(p string) error {
 }
 
 func withDrainLock(p string, fn func() error) error {
+	if err := verifyDrainDir(p); err != nil {
+		return err
+	}
 	lockPath := p + ".lock"
 	//nolint:gosec // G304,G306: companion lock file for drain sentinel serialization.
-	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return fmt.Errorf("open drain lock %s: %w", lockPath, err)
 	}
@@ -127,6 +150,9 @@ func SetUpdateDrain() error {
 		} else if !errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("write drain sentinel %s: %w", p, err)
 		}
+		if lst, err := os.Lstat(p); err == nil && lst.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("drain sentinel %s is a symlink", p)
+		}
 		//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
 		data, rerr := os.ReadFile(p)
 		cur := string(data)
@@ -137,7 +163,7 @@ func SetUpdateDrain() error {
 			}
 			return nil
 		}
-		if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) <= 15*time.Minute {
+		if st, err := os.Lstat(p); err == nil && time.Since(st.ModTime()) <= 15*time.Minute {
 			if strings.TrimSpace(cur) == "" || drainOwnerAlive(cur) {
 				return fmt.Errorf("another update or service drain is already in progress (%s)", strings.TrimSpace(cur))
 			}
@@ -158,6 +184,9 @@ func ClearUpdateDrain() {
 		return
 	}
 	_ = withDrainLock(p, func() error {
+		if lst, err := os.Lstat(p); err != nil || lst.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
 		//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
 		if data, err := os.ReadFile(p); err == nil && string(data) == drainOwnerToken {
 			_ = os.Remove(p)
@@ -191,7 +220,7 @@ func parseServiceTimestamp(startTS string) int64 {
 // ("inactive", 0) when the unit is installed and not active, ("no-unit", 0)
 // when systemd or the unit is not installed, or ("unknown", 0) when the
 // systemctl probe fails.
-func serviceRuntimeState(unit string) (string, int64) {
+func serviceRuntimeState(ctx context.Context, unit string) (string, int64) {
 	if truthy(os.Getenv("FLEET_ASSUME_SERVICE_ACTIVE")) {
 		return "active", 0
 	}
@@ -204,10 +233,10 @@ func serviceRuntimeState(unit string) (string, int64) {
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		return "no-unit", 0
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	//nolint:gosec // G204: fixed "systemctl" binary; unit is resolved via serviceName.
-	out, err := exec.CommandContext(ctx, "systemctl", "show", "--timestamp=unix", "-p", "LoadState", "-p", "ActiveState", "-p", "ExecMainStartTimestamp", unit).Output()
+	out, err := exec.CommandContext(sctx, "systemctl", "show", "--timestamp=unix", "-p", "LoadState", "-p", "ActiveState", "-p", "ExecMainStartTimestamp", unit).Output()
 	if err != nil {
 		return "unknown", 0
 	}
@@ -296,7 +325,7 @@ func localHealthTLSConfig() *tls.Config {
 	}
 }
 
-func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, approvals int) {
+func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, approvals int, hasApprovalsHeader bool) {
 	addr := strings.TrimSpace(envOrFile("FLEET_SERVER_ADDR"))
 	if addr == "" {
 		addr = strings.TrimSpace(envOrFile("CHAT_SERVER_ADDR"))
@@ -308,7 +337,7 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 		addr = "127.0.0.1:8080"
 	}
 	if addr == "" {
-		return 0, 0
+		return 0, 0, false
 	}
 	if strings.HasPrefix(addr, ":") {
 		addr = "127.0.0.1" + addr
@@ -332,7 +361,7 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
 	if err != nil {
-		return 0, 0
+		return 0, 0, false
 	}
 	tlsCfg := localHealthTLSConfig()
 	if tlsCfg.ServerName != "" {
@@ -345,12 +374,14 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, 0
+		return 0, 0, false
 	}
 	_ = resp.Body.Close()
 	turns, _ = strconv.Atoi(strings.TrimSpace(resp.Header.Get("X-Fleet-Active-Turns")))
-	approvals, _ = strconv.Atoi(strings.TrimSpace(resp.Header.Get("X-Fleet-Active-Approvals")))
-	return turns, approvals
+	rawApprovals := strings.TrimSpace(resp.Header.Get("X-Fleet-Active-Approvals"))
+	approvals, aerr := strconv.Atoi(rawApprovals)
+	hasApprovalsHeader = rawApprovals != "" && aerr == nil
+	return turns, approvals, hasApprovalsHeader
 }
 
 // ActiveWork inspects the sched and chat databases for in-flight work on the
@@ -368,7 +399,7 @@ func ActiveWork(ctx context.Context, schedDSNVal, chatDSNVal string) ([]string, 
 //   - chat.approvals with status = 'approved' AND is_err IS NULL AND
 //     result_text LIKE 'Approved%executing%' within 2h in the current service instance
 func ActiveWorkForService(ctx context.Context, unit, schedDSNVal, chatDSNVal string) ([]string, error) {
-	svcState, svcStartUnix := serviceRuntimeState(unit)
+	svcState, svcStartUnix := serviceRuntimeState(ctx, unit)
 	if svcState == "inactive" {
 		// When the service unit is installed and not active, any running/leased rows
 		// in Postgres are crash-stranded and will be recovered on boot.
@@ -391,9 +422,17 @@ func ActiveWorkForService(ctx context.Context, unit, schedDSNVal, chatDSNVal str
 		items = append(items, found...)
 	}
 
+	// Consult the running server's in-memory counters via /healthz so a live
+	// turn whose initial CreateTurn failed during a transient database hiccup is
+	// still protected even if it has no row in turns, and so a completed approval
+	// whose SetApprovalResult failed does not wedge the idle gate when the live
+	// daemon reports X-Fleet-Active-Approvals: 0.
+	memTurns, memApprovals, hasMemApprovals := probeInMemoryActiveCounts(ctx, svcState)
+	skipApprovalsQuery := hasMemApprovals && memApprovals == 0
+
 	var chatItems []string
 	if strings.TrimSpace(chatDSNVal) != "" {
-		found, err := queryChatActiveWork(ctx, chatDSNVal, svcStartUnix)
+		found, err := queryChatActiveWork(ctx, chatDSNVal, svcStartUnix, skipApprovalsQuery)
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -401,10 +440,6 @@ func ActiveWorkForService(ctx context.Context, unit, schedDSNVal, chatDSNVal str
 		items = append(items, found...)
 	}
 
-	// Also consult the running server's in-memory counters via /healthz so a live
-	// turn whose initial CreateTurn failed during a transient database hiccup is
-	// still protected even if it has no row in turns.
-	memTurns, memApprovals := probeInMemoryActiveCounts(ctx, svcState)
 	if memTurns > 0 {
 		hasTurnItem := false
 		for _, it := range chatItems {
@@ -519,7 +554,7 @@ func querySchedActiveWork(ctx context.Context, dsn string, svcAgeSec int64, fail
 	return out, nil
 }
 
-func queryChatActiveWork(ctx context.Context, dsn string, svcStartUnix int64) ([]string, error) {
+func queryChatActiveWork(ctx context.Context, dsn string, svcStartUnix int64, skipApprovalsQuery bool) ([]string, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err
@@ -564,6 +599,10 @@ func queryChatActiveWork(ctx context.Context, dsn string, svcStartUnix int64) ([
 			return nil, err
 		}
 		_ = rows.Close()
+	}
+
+	if skipApprovalsQuery {
+		return out, nil
 	}
 
 	var approvalsMode string

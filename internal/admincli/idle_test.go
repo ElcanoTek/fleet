@@ -262,15 +262,34 @@ exit 0
 		t.Errorf("--force must not report active-work blocker:\n%s", out)
 	}
 
-	// 4. fleet_wait_for_idle invoked inside a $(...) subshell leaves the drain
-	// file set on success, and fleet_clear_drain in the parent shell removes it.
+	// 4. fleet_wait_for_idle invoked inside a $(...) subshell (including leading-zero
+	// numeric values like 08) leaves the drain file set on success, and
+	// fleet_clear_drain in the parent shell removes it.
 	_ = os.Remove(stateFile)
 	root := repoRootFromTest(t)
 	idleLib := filepath.Join(root, "scripts", "lib", "idle.sh")
-	cmd := exec.Command("bash", "-c", `. "$1"; _summary="$(fleet_wait_for_idle "$2" 5 1)"; [[ -f "$2.update.drain" ]] || exit 2; fleet_clear_drain "$2"; [[ ! -f "$2.update.drain" ]]`, "_", idleLib, envFile)
+	cmd := exec.Command("bash", "-c", `. "$1"; _summary="$(fleet_wait_for_idle "$2" 08 01)"; [[ -f "$2.update.drain" ]] || exit 2; fleet_clear_drain "$2"; [[ ! -f "$2.update.drain" ]]`, "_", idleLib, envFile)
 	cmd.Env = append(append(os.Environ(), baseEnv...), "FLEET_TEST_BUSY_CALLS=1")
 	if waitOut, werr := cmd.CombinedOutput(); werr != nil {
 		t.Fatalf("fleet_wait_for_idle subshell + parent fleet_clear_drain failed: %v\n%s", werr, string(waitOut))
+	}
+
+	// 5. SetUpdateDrain refuses to follow a symlinked lock file.
+	symDir := t.TempDir()
+	symDrain := filepath.Join(symDir, "fleet.update.drain")
+	victimFile := filepath.Join(symDir, "victim.txt")
+	if err := os.WriteFile(victimFile, []byte("keep-me"), 0o600); err != nil {
+		t.Fatalf("write victim: %v", err)
+	}
+	if err := os.Symlink(victimFile, symDrain+".lock"); err != nil {
+		t.Fatalf("symlink lock: %v", err)
+	}
+	t.Setenv("FLEET_UPDATE_DRAIN_FILE", symDrain)
+	if err := SetUpdateDrain(); err == nil {
+		t.Fatal("expected SetUpdateDrain to refuse symlinked .lock file")
+	}
+	if got, err := os.ReadFile(victimFile); err != nil || string(got) != "keep-me" {
+		t.Fatalf("expected victim file to remain intact, got %q err=%v", string(got), err)
 	}
 }
 

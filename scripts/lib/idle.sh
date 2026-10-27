@@ -185,12 +185,17 @@ fleet_split_dsn_password() {
 # trimmed output on success, non-zero when psql is absent or the query fails.
 fleet_psql_query() {
   local dsn="$1" sql="$2" pw="" redacted="" tsec="${FLEET_PSQL_TIMEOUT_SECONDS:-5}"
-  [[ "$tsec" =~ ^[0-9]+$ ]] && (( tsec > 0 )) || tsec=5
+  if [[ "$tsec" =~ ^[0-9]+$ ]]; then
+    tsec=$(( 10#$tsec ))
+  else
+    tsec=5
+  fi
+  (( tsec > 0 )) || tsec=5
   (( tsec > 5 )) && tsec=5
-  if [[ "${FLEET_WAIT_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && (( FLEET_WAIT_DEADLINE_EPOCH > 0 )); then
+  if [[ "${FLEET_WAIT_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && (( 10#$FLEET_WAIT_DEADLINE_EPOCH > 0 )); then
     local now_ep rem_ep
     now_ep="$(date +%s)"
-    rem_ep=$(( FLEET_WAIT_DEADLINE_EPOCH - now_ep ))
+    rem_ep=$(( 10#$FLEET_WAIT_DEADLINE_EPOCH - now_ep ))
     (( rem_ep <= 0 )) && return 1
     (( rem_ep < tsec )) && tsec="$rem_ep"
   fi
@@ -311,18 +316,36 @@ fleet_drain_file() {
   fi
 }
 
+# fleet_verify_drain_dir DIR — ensures DIR is a real directory (not a symlink)
+# and, when running as root, is owned by root and not group/world-writable.
+fleet_verify_drain_dir() {
+  local drain_dir="$1" meta=""
+  [[ -d "$drain_dir" && ! -L "$drain_dir" ]] || return 1
+  if (( EUID == 0 )) && command -v stat >/dev/null 2>&1; then
+    meta="$(stat -c '%u:%a' "$drain_dir" 2>/dev/null || true)"
+    [[ "$meta" =~ ^0:[0-7]?[0-7][0145][0145]$ ]] || return 1
+  fi
+  return 0
+}
+
 # fleet_set_drain [ENV_FILE] — creates or refreshes the update drain sentinel
 # file so the running server refuses new chat turns/approvals and pauses
 # scheduler task claims. Refuses if another live process already owns a fresh
 # drain sentinel.
 fleet_set_drain() {
-  local drain_file lock_file
+  local drain_file lock_file drain_dir
   drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
   lock_file="${drain_file}.lock"
+  drain_dir="$(dirname "$drain_file")"
   command -v flock >/dev/null 2>&1 || return 1
-  mkdir -p "$(dirname "$drain_file")" 2>/dev/null || return 1
+  mkdir -p "$drain_dir" 2>/dev/null || return 1
+  fleet_verify_drain_dir "$drain_dir" || return 1
+  [[ ! -L "$drain_file" && ! -L "$lock_file" ]] || return 1
+  ( set -o noclobber; : > "$lock_file" ) 2>/dev/null || true
+  [[ -f "$lock_file" && ! -L "$lock_file" ]] || return 1
   (
     flock -x -w 5 9 || exit 1
+    [[ ! -L "$drain_file" ]] || exit 1
     local cur="" other_pid=""
     if ( set -o noclobber; printf 'draining %s\n' "$FLEET_DRAIN_OWNER_TOKEN" > "$drain_file" ) 2>/dev/null; then
       exit 0
@@ -345,27 +368,31 @@ fleet_set_drain() {
     fi
     rm -f "$drain_file" 2>/dev/null || true
     ( set -o noclobber; printf 'draining %s\n' "$FLEET_DRAIN_OWNER_TOKEN" > "$drain_file" ) 2>/dev/null || exit 1
-  ) 9>"$lock_file"
+  ) 9<"$lock_file"
 }
 
 # fleet_clear_drain [ENV_FILE] — removes the update drain sentinel file if owned
 # by this invocation (even when fleet_set_drain ran inside a $(...) subshell).
 fleet_clear_drain() {
-  local drain_file lock_file
+  local drain_file lock_file drain_dir
   drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
   lock_file="${drain_file}.lock"
-  [[ -f "$drain_file" ]] || return 0
+  drain_dir="$(dirname "$drain_file")"
+  [[ -f "$drain_file" && ! -L "$drain_file" && ! -L "$lock_file" ]] || return 0
+  fleet_verify_drain_dir "$drain_dir" || return 0
   command -v flock >/dev/null 2>&1 || return 0
+  ( set -o noclobber; : > "$lock_file" ) 2>/dev/null || true
+  [[ -f "$lock_file" && ! -L "$lock_file" ]] || return 0
   (
     flock -x -w 5 9 || exit 0
     local cur=""
-    if [[ -f "$drain_file" ]]; then
+    if [[ -f "$drain_file" && ! -L "$drain_file" ]]; then
       cur="$(cat "$drain_file" 2>/dev/null || true)"
       if [[ "$cur" == "draining ${FLEET_DRAIN_OWNER_TOKEN}" ]]; then
         rm -f "$drain_file" 2>/dev/null || true
       fi
     fi
-  ) 9>"$lock_file" 2>/dev/null || true
+  ) 9<"$lock_file" 2>/dev/null || true
 }
 
 # fleet_service_runtime_state [SERVICE_NAME] — prints "<state>|<start_epoch>"
@@ -384,10 +411,10 @@ fleet_service_runtime_state() {
     return 0
   fi
   local sys_tsec=3
-  if [[ "${FLEET_WAIT_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && (( FLEET_WAIT_DEADLINE_EPOCH > 0 )); then
+  if [[ "${FLEET_WAIT_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && (( 10#$FLEET_WAIT_DEADLINE_EPOCH > 0 )); then
     local now_ep rem_ep
     now_ep="$(date +%s)"
-    rem_ep=$(( FLEET_WAIT_DEADLINE_EPOCH - now_ep ))
+    rem_ep=$(( 10#$FLEET_WAIT_DEADLINE_EPOCH - now_ep ))
     if (( rem_ep <= 0 )); then
       printf 'unknown|0\n'
       return 0
@@ -445,12 +472,13 @@ fleet_sanitize_summary() {
   printf '%s' "$1" | LC_ALL=C tr -d '[:cntrl:]'
 }
 
-# fleet_probe_in_memory_counts ENV_FILE SVC_STATE — prints "<turns>|<approvals>"
-# from the running server's /healthz headers, or "0|0" when unreachable.
+# fleet_probe_in_memory_counts ENV_FILE SVC_STATE — prints
+# "<turns>|<approvals>|<has_approvals_hdr>" from the running server's /healthz
+# headers, or "0|0|0" when unreachable.
 fleet_probe_in_memory_counts() {
   local env_file="${1:-/etc/fleet/fleet.env}" svc_state="${2:-unknown}"
-  local addr="" hdrs="" turns=0 approvals=0
-  command -v curl >/dev/null 2>&1 || { printf '0|0\n'; return 0; }
+  local addr="" hdrs="" turns=0 approvals="" has_approvals_hdr=0
+  command -v curl >/dev/null 2>&1 || { printf '0|0|0\n'; return 0; }
   addr="$(fleet_env_or_file FLEET_SERVER_ADDR "$env_file")"
   [[ -n "$addr" ]] || addr="$(fleet_env_or_file CHAT_SERVER_ADDR "$env_file")"
   [[ -n "$addr" ]] || addr="$(fleet_env_or_file CUTLASS_SERVER_ADDR "$env_file")"
@@ -458,16 +486,16 @@ fleet_probe_in_memory_counts() {
     addr="127.0.0.1:8080"
   fi
   if [[ -z "$addr" ]]; then
-    printf '0|0\n'
+    printf '0|0|0\n'
     return 0
   fi
   [[ "$addr" == :* ]] && addr="127.0.0.1${addr}"
   local curl_max=2
-  if [[ "${FLEET_WAIT_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && (( FLEET_WAIT_DEADLINE_EPOCH > 0 )); then
+  if [[ "${FLEET_WAIT_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && (( 10#$FLEET_WAIT_DEADLINE_EPOCH > 0 )); then
     local now_ep rem_ep
     now_ep="$(date +%s)"
-    rem_ep=$(( FLEET_WAIT_DEADLINE_EPOCH - now_ep ))
-    (( rem_ep <= 0 )) && { printf '0|0\n'; return 0; }
+    rem_ep=$(( 10#$FLEET_WAIT_DEADLINE_EPOCH - now_ep ))
+    (( rem_ep <= 0 )) && { printf '0|0|0\n'; return 0; }
     (( rem_ep < curl_max )) && curl_max="$rem_ep"
   fi
   local curl_args=(-sSI --max-time "$curl_max")
@@ -518,9 +546,18 @@ fleet_probe_in_memory_counts() {
     turns="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Turns:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
     approvals="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Approvals:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
   fi
-  [[ "$turns" =~ ^[0-9]+$ ]] || turns=0
-  [[ "$approvals" =~ ^[0-9]+$ ]] || approvals=0
-  printf '%s|%s\n' "$turns" "$approvals"
+  if [[ "$turns" =~ ^[0-9]+$ ]]; then
+    turns=$(( 10#$turns ))
+  else
+    turns=0
+  fi
+  if [[ "$approvals" =~ ^[0-9]+$ ]]; then
+    approvals=$(( 10#$approvals ))
+    has_approvals_hdr=1
+  else
+    approvals=0
+  fi
+  printf '%s|%s|%s\n' "$turns" "$approvals" "$has_approvals_hdr"
 }
 
 # fleet_active_work_summary ENV_FILE [SERVICE_NAME] — inspects sched.tasks,
@@ -537,12 +574,20 @@ fleet_active_work_summary() {
   local has_chat_turn_item=0 has_approval_item=0
   local svc_info svc_state="unknown" svc_start_epoch=0
   approval_window="${FLEET_IDLE_APPROVAL_WINDOW_SECONDS:-7200}"
-  [[ "$approval_window" =~ ^[0-9]+$ ]] || approval_window=7200
+  if [[ "$approval_window" =~ ^[0-9]+$ ]]; then
+    approval_window=$(( 10#$approval_window ))
+  else
+    approval_window=7200
+  fi
 
   svc_info="$(fleet_service_runtime_state "$svc_unit")"
   svc_state="${svc_info%%|*}"
   svc_start_epoch="${svc_info#*|}"
-  [[ "$svc_start_epoch" =~ ^[0-9]+$ ]] || svc_start_epoch=0
+  if [[ "$svc_start_epoch" =~ ^[0-9]+$ ]]; then
+    svc_start_epoch=$(( 10#$svc_start_epoch ))
+  else
+    svc_start_epoch=0
+  fi
   local now_epoch svc_age_sec=-1
   now_epoch="$(date +%s)"
   if (( svc_start_epoch > 0 )); then
@@ -557,6 +602,16 @@ fleet_active_work_summary() {
   if [[ "$svc_state" == "inactive" ]]; then
     return 0
   fi
+
+  local mem_info mem_rest mem_turns=0 mem_approvals=0 has_mem_approvals=0
+  mem_info="$(fleet_probe_in_memory_counts "$env_file" "$svc_state")"
+  mem_turns="${mem_info%%|*}"
+  mem_rest="${mem_info#*|}"
+  mem_approvals="${mem_rest%%|*}"
+  has_mem_approvals="${mem_rest#*|}"
+  [[ "$mem_turns" =~ ^[0-9]+$ ]] && mem_turns=$(( 10#$mem_turns )) || mem_turns=0
+  [[ "$mem_approvals" =~ ^[0-9]+$ ]] && mem_approvals=$(( 10#$mem_approvals )) || mem_approvals=0
+  [[ "$has_mem_approvals" == "1" ]] || has_mem_approvals=0
 
   sched_dsn="$(fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$env_file")"
   chat_dsn="$(fleet_resolve_dsn FLEET_CHAT_DATABASE_URL "$env_file")"
@@ -665,60 +720,58 @@ fleet_active_work_summary() {
       items+=("chat turns active-work query failed while service is ${svc_state}")
     fi
 
-    if has_tbl="$(fleet_psql_query "$chat_dsn" "
-      SELECT CASE
-        WHEN to_regclass('approvals') IS NULL THEN 'none'
-        WHEN EXISTS (
-          SELECT 1
-            FROM pg_attribute
-           WHERE attrelid = to_regclass('approvals')
-             AND attname = 'is_err'
-             AND NOT attisdropped
-        ) THEN 'with_is_err'
-        ELSE 'without_is_err'
-      END;")"; then
-      if [[ "$has_tbl" == "with_is_err" || "$has_tbl" == "without_is_err" ]]; then
-        local is_err_clause=""
-        [[ "$has_tbl" == "with_is_err" ]] && is_err_clause="AND is_err IS NULL"
-        if out="$(fleet_psql_query "$chat_dsn" "
-          SELECT COALESCE((
-            SELECT string_agg(
-              format('approval execution %s (%s, %ss)',
-                id,
-                tool_name,
-                GREATEST(0, ${now_epoch} - COALESCE(resolved_at, created_at))
-              ), '; ')
-            FROM (
-              SELECT id, tool_name, resolved_at, created_at
-                FROM approvals
-               WHERE status = 'approved'
-                 ${is_err_clause}
-                 AND result_text LIKE 'Approved%executing%'
-                 AND COALESCE(resolved_at, created_at) >= GREATEST(${svc_start_epoch}, ${now_epoch} - ${approval_window})
-               ORDER BY COALESCE(resolved_at, created_at) ASC
-               LIMIT 5
-            ) a
-          ), '');")"; then
-          out="$(fleet_sanitize_summary "$out")"
-          out="${out#"${out%%[![:space:]]*}"}"
-          out="${out%"${out##*[![:space:]]}"}"
-          if [[ -n "$out" ]]; then
-            items+=("$out")
-            has_approval_item=1
+    if (( has_mem_approvals == 0 || mem_approvals > 0 )); then
+      if has_tbl="$(fleet_psql_query "$chat_dsn" "
+        SELECT CASE
+          WHEN to_regclass('approvals') IS NULL THEN 'none'
+          WHEN EXISTS (
+            SELECT 1
+              FROM pg_attribute
+             WHERE attrelid = to_regclass('approvals')
+               AND attname = 'is_err'
+               AND NOT attisdropped
+          ) THEN 'with_is_err'
+          ELSE 'without_is_err'
+        END;")"; then
+        if [[ "$has_tbl" == "with_is_err" || "$has_tbl" == "without_is_err" ]]; then
+          local is_err_clause=""
+          [[ "$has_tbl" == "with_is_err" ]] && is_err_clause="AND is_err IS NULL"
+          if out="$(fleet_psql_query "$chat_dsn" "
+            SELECT COALESCE((
+              SELECT string_agg(
+                format('approval execution %s (%s, %ss)',
+                  id,
+                  tool_name,
+                  GREATEST(0, ${now_epoch} - COALESCE(resolved_at, created_at))
+                ), '; ')
+              FROM (
+                SELECT id, tool_name, resolved_at, created_at
+                  FROM approvals
+                 WHERE status = 'approved'
+                   ${is_err_clause}
+                   AND result_text LIKE 'Approved%executing%'
+                   AND COALESCE(resolved_at, created_at) >= GREATEST(${svc_start_epoch}, ${now_epoch} - ${approval_window})
+                 ORDER BY COALESCE(resolved_at, created_at) ASC
+                 LIMIT 5
+              ) a
+            ), '');")"; then
+            out="$(fleet_sanitize_summary "$out")"
+            out="${out#"${out%%[![:space:]]*}"}"
+            out="${out%"${out##*[![:space:]]}"}"
+            if [[ -n "$out" ]]; then
+              items+=("$out")
+              has_approval_item=1
+            fi
+          elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+            items+=("chat approvals active-work query failed while service is ${svc_state}")
           fi
-        elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
-          items+=("chat approvals active-work query failed while service is ${svc_state}")
         fi
+      elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+        items+=("chat approvals active-work query failed while service is ${svc_state}")
       fi
-    elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
-      items+=("chat approvals active-work query failed while service is ${svc_state}")
     fi
   fi
 
-  local mem_info mem_turns=0 mem_approvals=0
-  mem_info="$(fleet_probe_in_memory_counts "$env_file" "$svc_state")"
-  mem_turns="${mem_info%%|*}"
-  mem_approvals="${mem_info#*|}"
   if (( mem_turns > 0 && has_chat_turn_item == 0 )); then
     items+=("${mem_turns} in-memory chat turn(s) active")
   fi
@@ -742,8 +795,17 @@ fleet_active_work_summary() {
 fleet_wait_for_idle() {
   local env_file="${1:-/etc/fleet/fleet.env}" max_wait="${2:-0}" poll="${3:-5}"
   local svc_unit="${4:-${SERVICE_NAME:-${FLEET_SERVICE_NAME:-fleet}}}"
-  [[ "$max_wait" =~ ^[0-9]+$ ]] || max_wait=0
-  [[ "$poll" =~ ^[0-9]+$ ]] && (( poll > 0 )) || poll=5
+  if [[ "$max_wait" =~ ^[0-9]+$ ]]; then
+    max_wait=$(( 10#$max_wait ))
+  else
+    max_wait=0
+  fi
+  if [[ "$poll" =~ ^[0-9]+$ ]]; then
+    poll=$(( 10#$poll ))
+  else
+    poll=5
+  fi
+  (( poll > 0 )) || poll=5
   (( poll > 60 )) && poll=60
   local start deadline=0 now elapsed rem tsec sleep_sec summary=""
   start="$(date +%s)"
