@@ -30,3 +30,4 @@
 ## Deviations and deferred work
 
 - **No cross-restart chat turn checkpointing:** In-flight LLM chat streams and container tool calls remain bound to the running `fleet.service` process; rather than serializing mid-turn container state across process restarts, updates block or drain until active turns complete.
+- **First upgrade from a pre-sentinel daemon:** Pre-restart admission quiescing via the `.update.drain` sentinel file and `/healthz` in-memory counters requires the currently running `fleet.service` binary to include this gate. During the one-time upgrade from an older release that predates the sentinel, `fleet update` enforces the Postgres active-work checks (`sched.tasks`, `chat.turns`, `chat.approvals`) before building, installing, and restarting (backed by the old daemon's SIGTERM graceful shutdown drain), and full pre-restart admission quiescing is active on all subsequent updates and restarts.

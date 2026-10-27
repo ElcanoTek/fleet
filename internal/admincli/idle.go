@@ -2,6 +2,7 @@ package admincli
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"fmt"
 	"io"
@@ -156,6 +157,15 @@ func sanitizeSummaryText(s string) string {
 	}, s)
 }
 
+func localHealthTLSMode() string {
+	for _, k := range []string{"FLEET_TLS_MODE", "CHAT_TLS_MODE", "CUTLASS_TLS_MODE"} {
+		if v := strings.ToLower(strings.TrimSpace(envOrFile(k))); v != "" {
+			return v
+		}
+	}
+	return "off"
+}
+
 func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, approvals int) {
 	addr := strings.TrimSpace(envOrFile("FLEET_SERVER_ADDR"))
 	if addr == "" {
@@ -175,7 +185,12 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 	}
 	url := addr
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		url = "http://" + url
+		tlsMode := localHealthTLSMode()
+		if tlsMode == "manual" || tlsMode == "auto" {
+			url = "https://" + url
+		} else {
+			url = "http://" + url
+		}
 	}
 	url = strings.TrimRight(url, "/") + "/healthz"
 
@@ -185,7 +200,13 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 	if err != nil {
 		return 0, 0
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{
+		Transport: &http.Transport{
+			//nolint:gosec // G402: local /healthz probe connects via loopback while manual/ACME certificates match the public hostname.
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true},
+		},
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, 0
 	}

@@ -508,6 +508,12 @@ func (s *Storage) ClaimNextPendingTask(ctx context.Context, leaseOwner string) (
 	return s.db.ClaimNextPendingTask(ctx, leaseOwner, LeaseDuration)
 }
 
+// ReleaseClaimedTask returns a freshly leased task back to pending when the
+// runner's admission gate trips immediately after ClaimNextPendingTask commits.
+func (s *Storage) ReleaseClaimedTask(ctx context.Context, taskID uuid.UUID, leaseOwner string) error {
+	return s.db.ReleaseClaimedTask(ctx, taskID, leaseOwner)
+}
+
 // PromoteStarvedTasks raises the effective priority of pending tasks that have
 // waited past the starvation window (#230). Returns the count promoted.
 func (s *Storage) PromoteStarvedTasks(ctx context.Context, windowMinutes int) (int64, error) {

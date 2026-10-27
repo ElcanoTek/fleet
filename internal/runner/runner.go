@@ -634,6 +634,16 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 			release()
 			return
 		}
+		if !p.admitClaims() {
+			rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			rerr := p.store.ReleaseClaimedTask(rctx, task.ID, token.String())
+			rcancel()
+			if rerr == nil {
+				release()
+				return
+			}
+			log.Printf("runner: could not release drained claim for task %s (%v); continuing execution under active lease", task.ID, rerr)
+		}
 
 		// Per-claim lease token: a goroutine whose lease was recovered must not
 		// clobber a fresh claim's state. It is both the active-map generation and

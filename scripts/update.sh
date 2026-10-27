@@ -79,7 +79,13 @@
 #                          FLEET_UPDATE_WAIT=1). Even without --wait, if a task
 #                          or turn starts while the build is running, update.sh
 #                          waits up to --wait-timeout before installing the new
-#                          binary and restarting the service
+#                          binary and restarting the service. (Pre-restart
+#                          admission quiescing via the drain sentinel requires
+#                          the running daemon to be on a release that includes
+#                          this gate; on the one-time upgrade from an older
+#                          daemon, Postgres active-work checks still guard
+#                          build/install/restart while full admission quiescing
+#                          takes effect once the updated daemon is running.)
 #   --wait-timeout <sec>   maximum seconds to wait for in-flight work to finish
 #                          (env FLEET_UPDATE_WAIT_SECONDS, default 600)
 #   --force                skip the active-work blocker and update/restart

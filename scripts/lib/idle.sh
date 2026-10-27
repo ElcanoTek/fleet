@@ -55,21 +55,42 @@ fleet_split_dsn_password() {
     printf '%s\n%s\n' "$pass" "$redacted"
     return 0
   fi
-  if [[ "$dsn" != *"@"* ]]; then
-    printf '\n%s\n' "$dsn"
-    return 0
-  fi
   proto="${dsn%%://*}"
   rest="${dsn#*://}"
-  userinfo="${rest%%@*}"
-  hostpart="${rest#*@}"
-  if [[ "$userinfo" != *":"* ]]; then
-    printf '\n%s\n' "$dsn"
-    return 0
+  if [[ "$rest" == *"@"* && "${rest%%@*}" != *"/"* && "${rest%%@*}" != *"?"* ]]; then
+    userinfo="${rest%%@*}"
+    hostpart="${rest#*@}"
+    if [[ "$userinfo" == *":"* ]]; then
+      user="${userinfo%%:*}"
+      pass="$(fleet_uri_decode "${userinfo#*:}")"
+      redacted="${proto}://${user}@${hostpart}"
+    else
+      redacted="$dsn"
+    fi
+  else
+    redacted="$dsn"
   fi
-  user="${userinfo%%:*}"
-  pass="$(fleet_uri_decode "${userinfo#*:}")"
-  printf '%s\n%s://%s@%s\n' "$pass" "$proto" "$user" "$hostpart"
+  if [[ "$redacted" == *"?"* ]]; then
+    local base="${redacted%%\?*}" query="${redacted#*\?}" frag="" param kept=()
+    if [[ "$query" == *"#"* ]]; then
+      frag="#${query#*#}"
+      query="${query%%#*}"
+    fi
+    local IFS='&'
+    for param in $query; do
+      if [[ "$param" == password=* ]]; then
+        [[ -n "$pass" ]] || pass="$(fleet_uri_decode "${param#password=}")"
+      else
+        kept+=("$param")
+      fi
+    done
+    if (( ${#kept[@]} > 0 )); then
+      redacted="${base}?${kept[*]}${frag}"
+    else
+      redacted="${base}${frag}"
+    fi
+  fi
+  printf '%s\n%s\n' "$pass" "$redacted"
 }
 
 # fleet_psql_query DSN SQL — runs a read-only psql query with a 3s connect
@@ -279,10 +300,21 @@ fleet_probe_in_memory_counts() {
   fi
   [[ "$addr" == :* ]] && addr="127.0.0.1${addr}"
   if [[ "$addr" != http://* && "$addr" != https://* ]]; then
-    addr="http://${addr}"
+    local tls_mode=""
+    tls_mode="$(fleet_env_or_file FLEET_TLS_MODE "$env_file")"
+    [[ -n "$tls_mode" ]] || tls_mode="$(fleet_env_or_file CHAT_TLS_MODE "$env_file")"
+    [[ -n "$tls_mode" ]] || tls_mode="$(fleet_env_or_file CUTLASS_TLS_MODE "$env_file")"
+    tls_mode="${tls_mode,,}"
+    tls_mode="${tls_mode#"${tls_mode%%[![:space:]]*}"}"
+    tls_mode="${tls_mode%"${tls_mode##*[![:space:]]}"}"
+    if [[ "$tls_mode" == "manual" || "$tls_mode" == "auto" ]]; then
+      addr="https://${addr}"
+    else
+      addr="http://${addr}"
+    fi
   fi
   addr="${addr%/}/healthz"
-  if hdrs="$(curl -sSI --max-time 2 "$addr" 2>/dev/null || true)"; then
+  if hdrs="$(curl -ksSI --max-time 2 "$addr" 2>/dev/null || true)"; then
     turns="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Turns:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
     approvals="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Approvals:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
   fi

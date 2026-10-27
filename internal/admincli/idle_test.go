@@ -50,6 +50,16 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 			wantRed:  "postgres://127.0.0.1:5432/chat",
 		},
 		{
+			dsn:      "postgresql://127.0.0.1:5432/sched?user=fleet&password=s3cr3t%21pw&sslmode=disable",
+			wantPass: "s3cr3t!pw",
+			wantRed:  "postgresql://127.0.0.1:5432/sched?user=fleet&sslmode=disable",
+		},
+		{
+			dsn:      "postgresql://127.0.0.1:5432/sched?password=secret",
+			wantPass: "secret",
+			wantRed:  "postgresql://127.0.0.1:5432/sched",
+		},
+		{
 			dsn:      "host=127.0.0.1 user=fleet password=s3cr3t!pw dbname=sched",
 			wantPass: "s3cr3t!pw",
 			wantRed:  "host=127.0.0.1 user=fleet dbname=sched",
