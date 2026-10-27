@@ -150,7 +150,7 @@ func (s *Store) GetTeamVisibleConversationMeta(ctx context.Context, callerEmail,
 		  AND c.deleted_at IS NULL
 		  AND c.archived_at IS NULL
 		  AND c.team_visible = TRUE
-		  AND (c.user_email = $2 OR ($3 <> '' AND c.team_shared_with = $3))`,
+		  AND (c.user_email = $2 OR ($3 <> '' AND c.team_shared_with = $3 AND c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $3)))`,
 		convID, callerEmail, team,
 	).Scan(&out.ID, &out.OwnerEmail, &out.Title, &out.Persona, &out.Model,
 		&out.TeamID, &out.ProjectID, &out.Lockdown, &out.UpdatedAt)
@@ -357,7 +357,7 @@ func (s *Store) ListProjectTeamConversations(ctx context.Context, callerEmail, p
 		  AND c.team_visible = TRUE
 		  AND c.project_id = $1
 		  AND c.user_email <> $2
-		  AND c.team_shared_with = $3
+		  AND c.team_shared_with = $3 AND c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $3)
 		ORDER BY c.updated_at DESC, c.id DESC`,
 		projectID, callerEmail, team,
 	)
@@ -392,7 +392,7 @@ func (s *Store) UnshareTeamVisibleChatsInTeam(ctx context.Context, ownerEmail, t
 		return 0, nil
 	}
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, updated_at = $1
+		UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
 		WHERE user_email = $2 AND team_visible = TRUE AND team_shared_with = $3`,
 		time.Now().Unix(), normalizeEmail(ownerEmail), teamID,
 	)

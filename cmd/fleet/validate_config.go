@@ -1189,6 +1189,11 @@ func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult 
 	problems = append(problems, agentcore.InteractiveHiddenToolProblems(agentcore.AgentPolicy{
 		InteractiveHiddenTools: p.InteractiveHiddenTools,
 	})...)
+	// unattended_disabled_tools: a member that is not a removable built-in
+	// would leave the tool in scheduled runs the bundle meant to strip.
+	problems = append(problems, agentcore.UnattendedDisabledToolProblems(agentcore.AgentPolicy{
+		UnattendedDisabledTools: p.UnattendedDisabledTools,
+	})...)
 	if len(problems) > 0 {
 		res.Status = statusFail
 		res.Detail = strings.Join(problems, "; ")

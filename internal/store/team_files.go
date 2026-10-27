@@ -46,7 +46,7 @@ const teamReadableClause = `c.id = $1
 		  AND c.deleted_at IS NULL
 		  AND c.archived_at IS NULL
 		  AND c.team_visible = TRUE
-		  AND (c.user_email = $2 OR ($3 <> '' AND c.team_shared_with = $3))`
+		  AND (c.user_email = $2 OR ($3 <> '' AND c.team_shared_with = $3 AND c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $3)))`
 
 // callerTeam resolves a caller's trimmed team id ("" for no team or no user).
 func (s *Store) callerTeam(ctx context.Context, email string) (string, error) {
@@ -653,9 +653,13 @@ func (s *Store) ResolveTeamLink(ctx context.Context, callerEmail, convID string)
 		owner, projectID, sharedWith string
 		live                         bool
 	)
+	// live also requires the stamped team ID to still be the id of the team
+	// that carries that label (migration 084): a stamp left behind by a
+	// team that no longer exists is not a share anyone can open.
 	err := s.db.QueryRowContext(ctx, `
 		SELECT c.user_email, COALESCE(c.project_id, ''), COALESCE(c.team_shared_with, ''),
-		       (c.deleted_at IS NULL AND c.archived_at IS NULL AND c.team_visible = TRUE)
+		       (c.deleted_at IS NULL AND c.archived_at IS NULL AND c.team_visible = TRUE
+		        AND COALESCE(c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = c.team_shared_with), FALSE))
 		FROM conversations c WHERE c.id = $1`, convID,
 	).Scan(&owner, &projectID, &sharedWith, &live)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -838,7 +842,7 @@ func pruneSourcesOpen(ctx context.Context, tx *sql.Tx, projectID, email, team st
 		WHERE c.id = ANY($1) AND c.project_id = $2 AND c.deleted_at IS NULL
 		  AND (c.user_email = $3
 		       OR (c.team_visible = TRUE AND c.archived_at IS NULL
-		           AND $4 <> '' AND c.team_shared_with = $4))`, keys, projectID, normalizeEmail(email), team)
+		           AND $4 <> '' AND c.team_shared_with = $4 AND c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $4)))`, keys, projectID, normalizeEmail(email), team)
 	if err != nil {
 		return err
 	}

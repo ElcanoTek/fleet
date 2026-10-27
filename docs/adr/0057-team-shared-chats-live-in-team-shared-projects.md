@@ -2,7 +2,9 @@
 
 - **Status:** Accepted; §4's "transcript only, no files" rule and the deferred
   file-sharing alternative are superseded by
-  [ADR-0079](0079-a-team-share-carries-the-chats-outputs.md)
+  [ADR-0079](0079-a-team-share-carries-the-chats-outputs.md); the stamped
+  audience is a team ID as well as a label since
+  [ADR-0093](0093-team-shares-name-their-audience-by-team-id.md)
 - **Date:** 2026-09-03
 - **Deciders:** fleet maintainers
 
