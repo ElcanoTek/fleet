@@ -68,6 +68,25 @@ func drainOwnerAlive(content string) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
+func createDrainFileAtomic(p string) error {
+	//nolint:gosec // G304,G306: non-secret drain sentinel inspected by the fleet service user.
+	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	_, werr := f.WriteString(drainOwnerToken)
+	cerr := f.Close()
+	if werr != nil {
+		_ = os.Remove(p)
+		return werr
+	}
+	if cerr != nil {
+		_ = os.Remove(p)
+		return cerr
+	}
+	return nil
+}
+
 // SetUpdateDrain writes or refreshes the update drain sentinel file so the
 // running Fleet server refuses new chat turns/approvals and pauses scheduler
 // task claims. If another live lifecycle process already owns a fresh sentinel,
@@ -77,22 +96,30 @@ func SetUpdateDrain() error {
 	if p == "" {
 		return fmt.Errorf("update drain file path is empty")
 	}
-	//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
-	if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) <= 15*time.Minute {
-		//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
-		if data, rerr := os.ReadFile(p); rerr == nil {
-			cur := string(data)
-			if cur != drainOwnerToken && drainOwnerAlive(cur) {
-				return fmt.Errorf("another update or service drain is already in progress (%s)", strings.TrimSpace(cur))
-			}
-		}
-	}
 	//nolint:gosec // G301,G306: non-secret drain sentinel inspected by the fleet service user.
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return fmt.Errorf("create drain sentinel dir: %w", err)
 	}
-	//nolint:gosec // G306: non-secret drain sentinel inspected by the fleet service user.
-	if err := os.WriteFile(p, []byte(drainOwnerToken), 0o644); err != nil {
+	if err := createDrainFileAtomic(p); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("write drain sentinel %s: %w", p, err)
+	}
+	//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
+	data, rerr := os.ReadFile(p)
+	cur := string(data)
+	if rerr == nil && cur == drainOwnerToken {
+		now := time.Now()
+		_ = os.Chtimes(p, now, now)
+		return nil
+	}
+	if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) <= 15*time.Minute {
+		if strings.TrimSpace(cur) == "" || drainOwnerAlive(cur) {
+			return fmt.Errorf("another update or service drain is already in progress (%s)", strings.TrimSpace(cur))
+		}
+	}
+	_ = os.Remove(p)
+	if err := createDrainFileAtomic(p); err != nil {
 		return fmt.Errorf("write drain sentinel %s: %w", p, err)
 	}
 	return nil
@@ -320,7 +347,7 @@ func ActiveWorkForService(ctx context.Context, unit, schedDSNVal, chatDSNVal str
 	var firstErr error
 
 	if strings.TrimSpace(schedDSNVal) != "" {
-		found, err := querySchedActiveWork(ctx, schedDSNVal, svcStartUnix)
+		found, err := querySchedActiveWork(ctx, schedDSNVal, svcStartUnix, svcState == "unknown")
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -369,7 +396,7 @@ func ActiveWorkForService(ctx context.Context, unit, schedDSNVal, chatDSNVal str
 	return items, firstErr
 }
 
-func querySchedActiveWork(ctx context.Context, dsn string, svcStartUnix int64) ([]string, error) {
+func querySchedActiveWork(ctx context.Context, dsn string, svcStartUnix int64, failClosedUnknown bool) ([]string, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err
@@ -392,11 +419,12 @@ func querySchedActiveWork(ctx context.Context, dsn string, svcStartUnix int64) (
 		  FROM tasks
 		 WHERE status IN ('running', 'leased', 'assigned')
 		   AND (
-		     (lease_expires_at IS NOT NULL AND lease_expires_at >= now())
-		     OR ($1 > 0 AND COALESCE(started_at, updated_at, created_at) >= to_timestamp($1))
+		     $2
+		     OR (lease_expires_at IS NOT NULL AND lease_expires_at >= now())
+		     OR ($1 > 0 AND COALESCE(started_at, created_at) >= to_timestamp($1))
 		   )
-		 ORDER BY COALESCE(started_at, updated_at, created_at) ASC
-		 LIMIT 5`, svcStartUnix)
+		 ORDER BY COALESCE(started_at, created_at) ASC
+		 LIMIT 5`, svcStartUnix, failClosedUnknown)
 	if err != nil {
 		return nil, err
 	}

@@ -91,6 +91,9 @@ func (r *Runner) Start(ctx context.Context, id uuid.UUID) error {
 	if err != nil {
 		return err
 	}
+	if r.isDraining() {
+		return ErrDraining
+	}
 	ok, err := r.store.UpdateDatasetStatus(ctx, id, []string{models.DatasetStatusIdle, models.DatasetStatusPaused}, models.DatasetStatusRunning)
 	if err != nil {
 		return err
@@ -103,6 +106,7 @@ func (r *Runner) Start(ctx context.Context, id uuid.UUID) error {
 		if revertStatus != models.DatasetStatusIdle && revertStatus != models.DatasetStatusPaused {
 			revertStatus = models.DatasetStatusPaused
 		}
+		reverted := false
 		for attempt := 0; attempt < 3; attempt++ {
 			if attempt > 0 {
 				time.Sleep(100 * time.Millisecond)
@@ -111,8 +115,26 @@ func (r *Runner) Start(ctx context.Context, id uuid.UUID) error {
 			_, rerr := r.store.UpdateDatasetStatus(rctx, id, []string{models.DatasetStatusRunning}, revertStatus)
 			rcancel()
 			if rerr == nil {
+				reverted = true
 				break
 			}
+		}
+		if !reverted {
+			safe.Go("datasets.rollback_drain", func() {
+				delay := 500 * time.Millisecond
+				for attempt := 0; attempt < 60; attempt++ {
+					time.Sleep(delay)
+					if delay < 5*time.Second {
+						delay *= 2
+					}
+					rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+					_, rerr := r.store.UpdateDatasetStatus(rctx, id, []string{models.DatasetStatusRunning}, revertStatus)
+					rcancel()
+					if rerr == nil {
+						return
+					}
+				}
+			})
 		}
 		return ErrDraining
 	}
