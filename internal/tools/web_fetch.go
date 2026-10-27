@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"regexp"
 	"strings"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/ElcanoTek/fleet/internal/netguard"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/tools/htmlmd"
 	"github.com/ElcanoTek/fleet/internal/truncate"
 )
@@ -34,6 +36,9 @@ const (
 	DefaultTimeout = 30 * time.Second
 )
 
+// WebFetchToolName is the canonical name of the built-in web_fetch tool.
+const WebFetchToolName = "web_fetch"
+
 var multipleNewlinesRe = regexp.MustCompile(`\n{3,}`)
 
 // webFetchTool fetches web pages and converts them to markdown.
@@ -48,6 +53,11 @@ var multipleNewlinesRe = regexp.MustCompile(`\n{3,}`)
 type webFetchTool struct {
 	client      *http.Client
 	rateLimiter *rateLimiter
+	// allowURL, when non-nil, is the egress policy this instance must honor
+	// (NewWebFetchToolForHosts): the first URL and every redirect hop are
+	// refused when it returns an error. nil = no policy beyond the SSRF guard
+	// (the interactive default).
+	allowURL func(u *neturl.URL) error
 }
 
 // WebFetchParams are the typed parameters for the web_fetch tool.
@@ -147,7 +157,46 @@ func FetchURLForContext(ctx context.Context, url string) (string, error) {
 	return content, nil
 }
 
+// NewWebFetchTool returns web_fetch with no host policy beyond the SSRF guard
+// (interactive chat, and scheduled runs whose sandbox egress is open).
 func NewWebFetchTool() fantasy.AgentTool {
+	return newWebFetchTool(nil)
+}
+
+// NewWebFetchToolForHosts is web_fetch held to an egress host allowlist (the
+// fleet-wide allowlisted network mode's list, same entry syntax: exact hosts
+// and "*."-prefixed wildcards). web_fetch runs HOST-side, outside the
+// sandbox's egress proxy, so without this a scheduled run in allowlisted mode
+// could fetch any public host through it. The request URL and every redirect
+// hop must match; an empty allowlist refuses everything. The SSRF guard still
+// applies underneath.
+func NewWebFetchToolForHosts(allowlist []string) fantasy.AgentTool {
+	return newWebFetchTool(egressURLPolicy(allowlist))
+}
+
+// egressURLPolicy is the egress proxy's rule restated for a URL: HTTPS only,
+// on port 443 (explicit or implied), to a host the allowlist admits
+// (sandbox.DomainAllowed). The proxy tunnels HTTPS CONNECT to port 443 and
+// nothing else, because the allowlist names domains, not services; without
+// the same scheme and port pin, an allowlisted host would be reachable over
+// plain HTTP or on any other port through the host-side fetch.
+func egressURLPolicy(allowlist []string) func(*neturl.URL) error {
+	list := append([]string(nil), allowlist...)
+	return func(u *neturl.URL) error {
+		if !strings.EqualFold(u.Scheme, "https") {
+			return fmt.Errorf("%s refused: this run's egress allowlist permits HTTPS only", u.Redacted())
+		}
+		if p := u.Port(); p != "" && p != "443" {
+			return fmt.Errorf("%s refused: this run's egress allowlist permits port 443 only", u.Redacted())
+		}
+		if !sandbox.DomainAllowed(u.Hostname(), list) {
+			return fmt.Errorf("%s refused: the host is not on this run's egress allowlist", u.Hostname())
+		}
+		return nil
+	}
+}
+
+func newWebFetchTool(allowURL func(*neturl.URL) error) fantasy.AgentTool {
 	dialer := newSSRFGuardedDialer()
 
 	t := &webFetchTool{
@@ -161,8 +210,12 @@ func NewWebFetchTool() fantasy.AgentTool {
 			},
 		},
 		rateLimiter: newRateLimiter(1 * time.Second),
+		allowURL:    allowURL,
 	}
-	return fantasy.NewAgentTool("web_fetch",
+	if allowURL != nil {
+		t.client.CheckRedirect = t.checkRedirect
+	}
+	return fantasy.NewAgentTool(WebFetchToolName,
 		"Fetch content from a URL and convert it to markdown format. Useful for reading web pages, documentation, articles, and API responses.",
 		func(ctx context.Context, params WebFetchParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			result, err := t.run(ctx, params.URL)
@@ -171,6 +224,21 @@ func NewWebFetchTool() fantasy.AgentTool {
 			}
 			return fantasy.NewTextResponse(result), nil
 		})
+}
+
+// checkRedirect holds every redirect hop to the instance's host policy, so a
+// listed host cannot bounce the fetch to an unlisted one. Ten hops is
+// net/http's own default limit.
+func (t *webFetchTool) checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if t.allowURL != nil {
+		if err := t.allowURL(req.URL); err != nil {
+			return fmt.Errorf("redirect: %w", err)
+		}
+	}
+	return nil
 }
 
 // webFetchResult is the structured JSON response returned by the web_fetch tool.
@@ -187,6 +255,15 @@ type webFetchResult struct {
 func (t *webFetchTool) run(ctx context.Context, url string) (string, error) {
 	if url == "" {
 		return "", errors.New("url is required")
+	}
+	if t.allowURL != nil {
+		u, perr := neturl.Parse(url)
+		if perr != nil || u.Hostname() == "" {
+			return "", errors.New("url is not a valid absolute URL")
+		}
+		if err := t.allowURL(u); err != nil {
+			return "", fmt.Errorf("fetch %w", err)
+		}
 	}
 
 	start := time.Now()

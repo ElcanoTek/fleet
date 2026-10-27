@@ -249,7 +249,9 @@ make here are sent to whatever it points at. If that is central Auth and it is
 set up to adopt them, central Auth shows your changes too, and the most recent
 change on either side wins. With team sync on in central Auth, moving someone
 between teams there moves them here too, with the same effect as moving them
-yourself: what they shared with their old team stops being shared.
+yourself: what they shared with their old team stops being shared. Renaming a
+team keeps everything shared with it shared with the renamed team; a new team
+that later takes the old name starts with nothing shared.
 
 ### The header
 

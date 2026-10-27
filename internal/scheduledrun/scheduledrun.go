@@ -395,6 +395,47 @@ func (r *Runner) maybeAppendCreateTaskTool(base []fantasy.AgentTool, task *model
 	return out
 }
 
+// applyUnattendedBuiltinPolicy narrows a scheduled run's native built-ins to
+// what an unattended run may do on the model's word (ADR-0094):
+//
+//   - web_fetch fetches HOST-side, outside the sandbox, so it follows the
+//     sandbox's egress posture instead of bypassing it. A run whose sandbox is
+//     sealed (the default: the task did not set allow_network, or fleet-wide
+//     lockdown is on) gets no web_fetch — before this, a sealed run that read
+//     an outside email could still send data to, or take instructions from,
+//     any URL through it. A networked run in allowlisted mode gets a web_fetch
+//     held to the same allowlist as the sandbox's egress proxy. A networked
+//     run in open mode keeps it unchanged (its bash can already reach the
+//     internet). allow_network is therefore the explicit opt-in for web_fetch
+//     in scheduled runs.
+//   - Any built-in in the bundle's agent_policy.unattended_disabled_tools is
+//     removed outright, whatever the task's own grants (create_task's
+//     allow_task_creation included).
+//
+// Interactive chat never comes through here, so attended behavior is
+// unchanged.
+func applyUnattendedBuiltinPolicy(in []fantasy.AgentTool, task *models.Task, egressMode string, egressAllowlist []string) []fantasy.AgentTool {
+	networked := task.AllowNetwork && egressMode != sandbox.NetworkModeLockdown
+	out := make([]fantasy.AgentTool, 0, len(in))
+	for _, t := range in {
+		name := t.Info().Name
+		if agentcore.UnattendedToolDisabled(name) {
+			log.Printf("scheduled task %s: %s removed by agent_policy.unattended_disabled_tools", task.ID, name)
+			continue
+		}
+		if name == tools.WebFetchToolName {
+			if !networked {
+				continue
+			}
+			if egressMode == sandbox.NetworkModeAllowlisted {
+				t = tools.NewWebFetchToolForHosts(egressAllowlist)
+			}
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 // SystemPromptForPersona returns the assembled scheduled system prompt for a
 // persona override, using the SAME composition the runner applies at dispatch:
 // the global base prompt for an empty/unknown persona, or the default prompt
@@ -831,6 +872,12 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// create_task (#277) is appended ONLY for a task that opted in. See
 	// maybeAppendCreateTaskTool for the gate rationale.
 	nativeTools := r.maybeAppendCreateTaskTool(scheduledTools, task)
+
+	// Unattended built-in policy (ADR-0094, docs/UNATTENDED-BUILTINS.md):
+	// web_fetch follows the run's sandbox egress posture, and the bundle may
+	// strip create_task / web_fetch / download_url from every scheduled run.
+	egressMode, egressAllowlist := r.mgr.SandboxPool().EgressDefault()
+	nativeTools = applyUnattendedBuiltinPolicy(nativeTools, task, egressMode, egressAllowlist)
 
 	// #191 git-metadata tools (suggest_branch_name / suggest_commit_message /
 	// suggest_pr_description) are wired into the SCHEDULED native set only:

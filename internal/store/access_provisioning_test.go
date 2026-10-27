@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -75,5 +77,67 @@ func TestApplyExternalAccessIsOrderedAndNonDestructive(t *testing.T) {
 	}
 	if got, err := s.Get(ctx, email, conversation.ID); err != nil || got == nil || got.Title != "Retained work" {
 		t.Fatalf("retained conversation = (%+v, %v)", got, err)
+	}
+}
+
+// The FIRST events for a new identity are serialized like every later one.
+//
+// Red/green: the version check reads the stored state row FOR UPDATE, but
+// before the identity's first event commits there is no row to lock, so a
+// grant (v1) and a revoke (v2) arriving together both read "no row" and
+// whichever committed last won. When the revoke committed first, the older
+// grant overwrote it and the account stayed enabled. The advisory lock on
+// (issuer, subject) and the upsert's version guard make the newer version win
+// whatever the commit order.
+func TestApplyExternalAccessSerializesFirstEvents(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const rounds = 25
+	for i := 0; i < rounds; i++ {
+		subject := fmt.Sprintf("account-%d", i)
+		email := fmt.Sprintf("race-%d@example.com", i)
+		grant := ExternalAccessState{
+			Issuer: "https://auth.example.com", Subject: subject, Email: email,
+			Version: 1, Allowed: true, EventID: "grant-1", ChatRole: RoleMember,
+			OpsRole: "none", IssuedAt: 1_000,
+		}
+		revoke := grant
+		revoke.Version, revoke.Allowed, revoke.EventID = 2, false, "revoke-2"
+
+		start := make(chan struct{})
+		errs := make(chan error, 2)
+		var wg sync.WaitGroup
+		// Revoke is released a hair first, so the unfixed race (revoke commits,
+		// then the stale grant overwrites it) is the likely interleaving.
+		for _, ev := range []ExternalAccessState{revoke, grant} {
+			wg.Add(1)
+			go func(ev ExternalAccessState) {
+				defer wg.Done()
+				<-start
+				_, _, err := s.ApplyExternalAccess(ctx, ev)
+				errs <- err
+			}(ev)
+		}
+		close(start)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: ApplyExternalAccess: %v", i, err)
+			}
+		}
+
+		stored, ok, err := s.ExternalAccessState(ctx, grant.Issuer, subject)
+		if err != nil || !ok {
+			t.Fatalf("round %d: stored state = (%v, %v)", i, ok, err)
+		}
+		if stored.Version != 2 || stored.Allowed {
+			t.Fatalf("round %d: stored state = v%d allowed=%v, want the revoke (v2, not allowed)", i, stored.Version, stored.Allowed)
+		}
+		var enabled bool
+		err = s.db.QueryRowContext(ctx, `SELECT enabled FROM users WHERE email = $1`, email).Scan(&enabled)
+		if err == nil && enabled {
+			t.Fatalf("round %d: a revoked identity's account is enabled", i)
+		}
 	}
 }

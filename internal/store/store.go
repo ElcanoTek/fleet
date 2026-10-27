@@ -420,7 +420,7 @@ func (s *Store) truncateAllForTestOnce(ctx context.Context, queue bool) error {
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		`TRUNCATE TABLE conversations, memories, memory_entities, users, external_auth_epochs, external_logout_events, external_access_state, account_events, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, owner_digest_days, turn_metrics, projects, user_connector_prefs, user_skills, shared_files RESTART IDENTITY CASCADE`); err != nil {
+		`TRUNCATE TABLE conversations, memories, memory_entities, users, external_auth_epochs, external_logout_events, external_access_state, account_events, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, owner_digest_days, turn_metrics, projects, user_connector_prefs, user_skills, shared_files, teams RESTART IDENTITY CASCADE`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1112,7 +1112,7 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3,
-			team_visible = FALSE, team_shared_with = NULL
+			team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL
 		 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
 		archivedAt, pinned, now, convID, userEmail,
 	)
@@ -1666,7 +1666,7 @@ func (s *Store) ListTeamConversations(ctx context.Context, callerEmail string) (
 		WHERE c.deleted_at IS NULL
 		  AND c.archived_at IS NULL
 		  AND c.team_visible = TRUE
-		  AND c.team_shared_with = $1
+		  AND c.team_shared_with = $1 AND c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $1)
 		ORDER BY c.pinned DESC, c.updated_at DESC, c.id DESC`,
 		caller.TeamID,
 	)
@@ -1737,7 +1737,7 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 	now := time.Now().Unix()
 	if !visible {
 		res, err := s.db.ExecContext(ctx,
-			`UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, updated_at = $1
+			`UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
 			 WHERE id = $2 AND user_email = $3 AND deleted_at IS NULL`,
 			now, convID, ownerEmail)
 		if err != nil {
@@ -1780,9 +1780,38 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 	if strings.TrimSpace(homeTeam.String) != team {
 		return false, ErrNoTeamShareHome
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations c SET
-			team_visible = TRUE, team_shared_with = $1, updated_at = $2
+	// The share names its audience by the team's ID as well as its label
+	// (migration 084, ADR-0093): the read gates require both, so a rename
+	// (which relabels the teams row and the stamp together) keeps the share
+	// with its team, and a later team that merely reuses an old name gets a
+	// different id and reads nothing. The teams row is created on first
+	// share.
+	//
+	// The stamp runs under the team name's transaction advisory lock
+	// (lockTeamNamesTx), the same lock RenameTeam takes for both of its
+	// names. A row lock is not enough: the FIRST share for a team INSERTs
+	// its teams row, and until that commits a concurrent rename's SELECT
+	// ... FOR UPDATE cannot see it, so the rename would finish without
+	// relabelling and the share would commit under the old name. With the
+	// lock, a rename either commits before this statement starts (and the
+	// project check below then refuses the old name) or waits for this
+	// share to commit and then carries it.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	if err := lockTeamNamesTx(ctx, tx, team); err != nil {
+		return false, err
+	}
+	res, err := tx.ExecContext(ctx,
+		`WITH t AS (
+			INSERT INTO teams (name, created_at) VALUES ($1, $2)
+			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+			RETURNING id)
+		 UPDATE conversations c SET
+			team_visible = TRUE, team_shared_with = $1,
+			team_shared_with_id = (SELECT id FROM t), updated_at = $2
 		 WHERE c.id = $3 AND c.user_email = $4 AND c.deleted_at IS NULL
 		   AND c.archived_at IS NULL
 		   AND EXISTS (SELECT 1 FROM projects p WHERE p.id = c.project_id AND p.team_id = $1)`,
@@ -1790,7 +1819,14 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 	if err != nil {
 		return false, err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, _ := res.RowsAffected()
+	if n > 0 && teamShareBeforeCommitHook != nil {
+		teamShareBeforeCommitHook()
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	if n == 0 {
 		// Lost a race with a write that moved, archived or deleted the chat,
 		// or unshared the project. Re-read which, so the sentence is right.
 		var archivedNow bool

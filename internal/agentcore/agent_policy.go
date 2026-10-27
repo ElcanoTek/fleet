@@ -165,6 +165,12 @@ type AgentPolicy struct {
 	// docs/INTERACTIVE-HIDDEN-TOOLS.md). Empty = every run sees the same
 	// tools, as before.
 	InteractiveHiddenTools []string
+	// UnattendedDisabledTools names fleet built-ins (create_task, web_fetch,
+	// download_url) removed from every unattended scheduled run regardless of
+	// the task's own grants (unattended_disabled.go, ADR-0094). Interactive
+	// chat is unchanged. Empty = scheduled runs keep the built-ins their task
+	// and network posture allow, as before.
+	UnattendedDisabledTools []string
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -414,6 +420,7 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	activeNarrowableArgs = installNarrowableArgs(p.CriticalToolNarrowableArgs, p.CriticalToolModes, seen)
 	activeStop = installStopSet(p.CriticalToolStop, p.CriticalToolModes, seen)
 	activeInteractiveHidden = installInteractiveHiddenList(p.InteractiveHiddenTools)
+	activeUnattendedDisabled = installUnattendedDisabledSet(p.UnattendedDisabledTools)
 }
 
 // suffixMatches reports whether a tool (or a suffix standing for one) is
