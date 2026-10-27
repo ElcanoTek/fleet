@@ -2558,10 +2558,13 @@ func registerRuntimeMetrics(activeTurns, activeTasks func() int, sandboxPool *sa
 // Returns nil when the guard is disabled so the claim path keeps its original
 // zero-overhead shape on a box that has opted out.
 func diskAdmissionGate(guard *diskguard.Guard) func() (bool, string) {
-	if !guard.Enabled() {
-		return nil
-	}
 	return func() (bool, string) {
+		if httpapi.UpdateDrainActive() {
+			return false, "update drain active"
+		}
+		if !guard.Enabled() {
+			return true, ""
+		}
 		st := guard.Status()
 		if !st.Shedding {
 			return true, ""

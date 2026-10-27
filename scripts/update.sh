@@ -397,6 +397,7 @@ fi
 # key-by-key via env_get. Resolved before step 1 so both the pre-update idle
 # check and step 2's bundle reconcile can read it.
 backend_env_file="${FLEET_ENV_FILE:-/etc/fleet/fleet.env}"
+trap 'fleet_clear_drain "${backend_env_file:-/etc/fleet/fleet.env}"' EXIT
 
 # ── active-work gate (before pulling or building) ──────────────────────────
 # Refuse to start an update while a scheduled task, chat turn, or detached
@@ -424,6 +425,10 @@ else
   if ! _active_summary="$(fleet_wait_for_idle "$backend_env_file" "$_pre_wait" "${FLEET_UPDATE_POLL_SECONDS:-5}")"; then
     die "refusing to update while work is in flight (${_active_summary}) — wait for it to finish, pass --wait (FLEET_UPDATE_WAIT=1), or pass --force (FLEET_UPDATE_FORCE=1)"
   fi
+  # Release the pre-check drain fence while git fetch and make build run; step 4
+  # re-establishes the drain fence before installing the new binary and holds it
+  # until systemctl restart completes in step 5.
+  fleet_clear_drain "$backend_env_file"
 fi
 
 # ── 1. pull the fleet checkout ────────────────────────────────────────────
@@ -1669,9 +1674,11 @@ else
   fi
   fleet_stop_web_tier || true
   if systemctl restart "$SERVICE_NAME" && FLEET_WEB_TIER_READY_WAIT="${FLEET_WEB_TIER_READY_WAIT:-8}" fleet_web_tier_wait_active "$SERVICE_NAME"; then
+    fleet_clear_drain "$backend_env_file"
     ok "${SERVICE_NAME} is active"
     fleet_remove_web_tier "$SRC_DIR" || true
   else
+    fleet_clear_drain "$backend_env_file"
     if [[ "$FLEET_WEB_TIER_STOPPED" == "1" ]]; then
       warn "the old web tier (fleet-web) was stopped but NOT removed; after rolling fleet back to the previous binary, restore it with: sudo systemctl enable --now fleet-web"
     fi

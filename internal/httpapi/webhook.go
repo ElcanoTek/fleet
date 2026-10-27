@@ -58,7 +58,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Draining (#278): once graceful shutdown begins, admit no new turns.
-	if s.shuttingDown.Load() {
+	if s.IsDraining() {
 		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
 		return
 	}

@@ -5,9 +5,29 @@
 # and detached approval executions) without sourcing the 0600 env file and
 # without placing database passwords on psql's command line.
 
-# fleet_split_dsn_password DSN — prints the password on line 1 and the DSN
-# with `:password@` stripped to `@` on line 2. When the DSN has no userinfo
-# password, line 1 is empty and line 2 is the original DSN.
+# fleet_uri_decode STR — decodes RFC 3986 percent-encoded bytes (%XX) in STR.
+fleet_uri_decode() {
+  local s="$1" out="" i=0 len=${#1} c hex
+  while (( i < len )); do
+    c="${s:i:1}"
+    if [[ "$c" == "%" && $(( i + 2 )) -lt $len ]]; then
+      hex="${s:i+1:2}"
+      if [[ "$hex" =~ ^[0-9A-Fa-f]{2}$ ]]; then
+        printf -v c "\\x$hex"
+        out+="$c"
+        i=$(( i + 3 ))
+        continue
+      fi
+    fi
+    out+="$c"
+    i=$(( i + 1 ))
+  done
+  printf '%s' "$out"
+}
+
+# fleet_split_dsn_password DSN — prints the percent-decoded password on line 1
+# and the DSN with `:password@` stripped to `@` on line 2. When the DSN has no
+# userinfo password, line 1 is empty and line 2 is the original DSN.
 fleet_split_dsn_password() {
   local dsn="$1" proto rest userinfo hostpart user pass
   if [[ "$dsn" != *"://"* || "$dsn" != *"@"* ]]; then
@@ -23,7 +43,7 @@ fleet_split_dsn_password() {
     return 0
   fi
   user="${userinfo%%:*}"
-  pass="${userinfo#*:}"
+  pass="$(fleet_uri_decode "${userinfo#*:}")"
   printf '%s\n%s://%s@%s\n' "$pass" "$proto" "$user" "$hostpart"
 }
 
@@ -42,71 +62,162 @@ fleet_psql_query() {
   PGCONNECT_TIMEOUT=3 PGPASSWORD="$pw" psql "$redacted" -X -q -t -A -c "$sql" 2>/dev/null
 }
 
-# fleet_resolve_dsn PRIMARY_KEY ENV_FILE — resolves PRIMARY_KEY (falling back
-# to DATABASE_URL) from the process environment first, then ENV_FILE via
-# env_get (when defined) or grep.
+# fleet_resolve_dsn PRIMARY_KEY ENV_FILE — resolves PRIMARY_KEY from the
+# process environment first and then ENV_FILE before falling back to
+# DATABASE_URL from the process environment or ENV_FILE.
 fleet_resolve_dsn() {
   local key="$1" env_file="${2:-/etc/fleet/fleet.env}" val=""
   val="${!key:-}"
+  if [[ -z "$val" && -r "$env_file" ]]; then
+    if declare -F env_get >/dev/null 2>&1; then
+      val="$(env_get "$key" "$env_file")"
+    else
+      val="$(grep -E "^${key}=" "$env_file" 2>/dev/null | tail -n1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true)"
+    fi
+  fi
   if [[ -z "$val" && -n "${DATABASE_URL:-}" ]]; then
     val="$DATABASE_URL"
   fi
   if [[ -z "$val" && -r "$env_file" ]]; then
     if declare -F env_get >/dev/null 2>&1; then
-      val="$(env_get "$key" "$env_file")"
-      [[ -n "$val" ]] || val="$(env_get DATABASE_URL "$env_file")"
+      val="$(env_get DATABASE_URL "$env_file")"
     else
-      val="$(grep -E "^${key}=" "$env_file" 2>/dev/null | tail -n1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true)"
-      [[ -n "$val" ]] || val="$(grep -E "^DATABASE_URL=" "$env_file" 2>/dev/null | tail -n1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true)"
+      val="$(grep -E "^DATABASE_URL=" "$env_file" 2>/dev/null | tail -n1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true)"
     fi
   fi
   printf '%s' "$val"
+}
+
+# fleet_drain_file [ENV_FILE] — returns the drain sentinel file path inspected
+# by the running fleet server and scheduler pool.
+fleet_drain_file() {
+  local env_file="${1:-/etc/fleet/fleet.env}"
+  if [[ -n "${FLEET_UPDATE_DRAIN_FILE:-}" ]]; then
+    printf '%s' "$FLEET_UPDATE_DRAIN_FILE"
+    return 0
+  fi
+  printf '%s.update.drain' "$env_file"
+}
+
+# fleet_set_drain [ENV_FILE] — creates the update drain sentinel file so the
+# running server refuses new chat turns/approvals and pauses scheduler task claims.
+fleet_set_drain() {
+  local drain_file
+  drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
+  mkdir -p "$(dirname "$drain_file")" 2>/dev/null || true
+  printf 'draining\n' > "$drain_file" 2>/dev/null || true
+}
+
+# fleet_clear_drain [ENV_FILE] — removes the update drain sentinel file.
+fleet_clear_drain() {
+  local drain_file
+  drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
+  rm -f "$drain_file" 2>/dev/null || true
+}
+
+# fleet_service_runtime_state [SERVICE_NAME] — prints "<state>|<start_epoch>"
+# where <state> is "active", "inactive" (unit installed and not active), or
+# "unknown" (no systemd or unit not installed).
+fleet_service_runtime_state() {
+  local unit="${1:-${SERVICE_NAME:-${FLEET_SERVICE_NAME:-fleet}}}"
+  [[ "$unit" == *.service ]] || unit="${unit}.service"
+  if [[ "${FLEET_ASSUME_SERVICE_ACTIVE:-}" == "1" ]]; then
+    printf 'active|0\n'
+    return 0
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    printf 'unknown|0\n'
+    return 0
+  fi
+  if ! systemctl cat "$unit" >/dev/null 2>&1; then
+    printf 'unknown|0\n'
+    return 0
+  fi
+  local active_state start_ts start_epoch=0
+  active_state="$(systemctl show -p ActiveState --value "$unit" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ "$active_state" == "active" ]]; then
+    start_ts="$(systemctl show -p ExecMainStartTimestamp --value "$unit" 2>/dev/null || true)"
+    if [[ -n "$start_ts" && "$start_ts" != "n/a" ]]; then
+      start_epoch="$(date -d "$start_ts" +%s 2>/dev/null || echo 0)"
+      [[ "$start_epoch" =~ ^[0-9]+$ ]] || start_epoch=0
+    fi
+    printf 'active|%s\n' "$start_epoch"
+    return 0
+  fi
+  if [[ -n "$active_state" ]]; then
+    printf 'inactive|0\n'
+    return 0
+  fi
+  printf 'unknown|0\n'
+}
+
+# fleet_sanitize_summary STR — strips ASCII control characters so untrusted
+# task titles or identifiers cannot inject terminal escape sequences.
+fleet_sanitize_summary() {
+  printf '%s' "$1" | LC_ALL=C tr -d '[:cntrl:]'
 }
 
 # fleet_active_work_summary ENV_FILE — inspects sched.tasks, chat.turns, and
 # chat.approvals for in-flight work.
 #
 # Prints a semicolon-separated description and returns 1 when work is active;
-# prints nothing and returns 0 when idle (or when Postgres/tables are not yet
-# reachable, so a stopped or unprovisioned box is never wedged).
+# prints nothing and returns 0 when idle (or when the service is not running so
+# crash-stranded rows can be recovered on start).
 fleet_active_work_summary() {
   local env_file="${1:-/etc/fleet/fleet.env}"
-  local sched_dsn chat_dsn turn_window approval_window out items=()
-  turn_window="${FLEET_IDLE_TURN_WINDOW_SECONDS:-900}"
+  local sched_dsn chat_dsn approval_window out items=()
+  local svc_info svc_state="unknown" svc_start_epoch=0
   approval_window="${FLEET_IDLE_APPROVAL_WINDOW_SECONDS:-7200}"
-  [[ "$turn_window" =~ ^[0-9]+$ ]] || turn_window=900
   [[ "$approval_window" =~ ^[0-9]+$ ]] || approval_window=7200
+
+  svc_info="$(fleet_service_runtime_state "${SERVICE_NAME:-${FLEET_SERVICE_NAME:-fleet}}")"
+  svc_state="${svc_info%%|*}"
+  svc_start_epoch="${svc_info#*|}"
+  [[ "$svc_start_epoch" =~ ^[0-9]+$ ]] || svc_start_epoch=0
+
+  # When systemd reports that fleet.service is installed and not active, no
+  # in-process task, turn, or approval goroutine is running; any DB rows still
+  # marked running/leased are crash-stranded and will be recovered on boot.
+  if [[ "$svc_state" == "inactive" ]]; then
+    return 0
+  fi
 
   sched_dsn="$(fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$env_file")"
   chat_dsn="$(fleet_resolve_dsn FLEET_CHAT_DATABASE_URL "$env_file")"
 
   if [[ -n "$sched_dsn" ]]; then
-    out="$(fleet_psql_query "$sched_dsn" "
+    if out="$(fleet_psql_query "$sched_dsn" "
       SELECT CASE WHEN to_regclass('public.tasks') IS NULL THEN ''
              ELSE COALESCE((
                SELECT string_agg(
                  format('scheduled task %s (%s, %s, %ss)',
                    id::text,
-                   COALESCE(NULLIF(regexp_replace(title, '[[:space:]]+', ' ', 'g'), ''), 'untitled'),
+                   COALESCE(NULLIF(regexp_replace(regexp_replace(title, '[[:cntrl:]]+', ' ', 'g'), '[[:space:]]+', ' ', 'g'), ''), 'untitled'),
                    status,
-                   GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(started_at, updated_at, created_at)))::bigint)
+                   GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(started_at, created_at)))::bigint)
                  ), '; ')
                FROM (
-                 SELECT id, title, status, started_at, updated_at, created_at
+                 SELECT id, title, status, started_at, created_at
                    FROM tasks
                   WHERE status IN ('running', 'leased', 'assigned')
-                  ORDER BY COALESCE(started_at, updated_at, created_at) ASC
+                    AND lease_expires_at IS NOT NULL
+                    AND lease_expires_at >= now()
+                  ORDER BY COALESCE(started_at, created_at) ASC
                   LIMIT 5
                ) t
              ), '')
-             END;" || true)"
-    out="${out#"${out%%[![:space:]]*}"}"
-    out="${out%"${out##*[![:space:]]}"}"
-    [[ -n "$out" ]] && items+=("$out")
+             END;")"; then
+      out="$(fleet_sanitize_summary "$out")"
+      out="${out#"${out%%[![:space:]]*}"}"
+      out="${out%"${out##*[![:space:]]}"}"
+      [[ -n "$out" ]] && items+=("$out")
+    elif [[ "$svc_state" == "active" ]]; then
+      items+=("sched database active-work query failed while service is active")
+    fi
   fi
 
   if [[ -n "$chat_dsn" ]]; then
-    out="$(fleet_psql_query "$chat_dsn" "
+    if out="$(fleet_psql_query "$chat_dsn" "
       SELECT CASE WHEN to_regclass('public.turns') IS NULL THEN ''
              ELSE COALESCE((
                SELECT string_agg(
@@ -120,17 +231,21 @@ fleet_active_work_summary() {
                    FROM turns
                   WHERE status = 'running'
                     AND finished_at IS NULL
-                    AND started_at > EXTRACT(EPOCH FROM now())::bigint - ${turn_window}
+                    AND started_at >= ${svc_start_epoch}
                   ORDER BY started_at ASC
                   LIMIT 5
                ) t
              ), '')
-             END;" || true)"
-    out="${out#"${out%%[![:space:]]*}"}"
-    out="${out%"${out##*[![:space:]]}"}"
-    [[ -n "$out" ]] && items+=("$out")
+             END;")"; then
+      out="$(fleet_sanitize_summary "$out")"
+      out="${out#"${out%%[![:space:]]*}"}"
+      out="${out%"${out##*[![:space:]]}"}"
+      [[ -n "$out" ]] && items+=("$out")
+    elif [[ "$svc_state" == "active" ]]; then
+      items+=("chat turns active-work query failed while service is active")
+    fi
 
-    out="$(fleet_psql_query "$chat_dsn" "
+    if out="$(fleet_psql_query "$chat_dsn" "
       SELECT CASE WHEN to_regclass('public.approvals') IS NULL THEN ''
              ELSE COALESCE((
                SELECT string_agg(
@@ -145,15 +260,19 @@ fleet_active_work_summary() {
                   WHERE status = 'approved'
                     AND is_err IS NULL
                     AND result_text LIKE 'Approved%executing%'
-                    AND COALESCE(resolved_at, created_at) > EXTRACT(EPOCH FROM now())::bigint - ${approval_window}
+                    AND COALESCE(resolved_at, created_at) >= GREATEST(${svc_start_epoch}, EXTRACT(EPOCH FROM now())::bigint - ${approval_window})
                   ORDER BY COALESCE(resolved_at, created_at) ASC
                   LIMIT 5
                ) a
              ), '')
-             END;" || true)"
-    out="${out#"${out%%[![:space:]]*}"}"
-    out="${out%"${out##*[![:space:]]}"}"
-    [[ -n "$out" ]] && items+=("$out")
+             END;")"; then
+      out="$(fleet_sanitize_summary "$out")"
+      out="${out#"${out%%[![:space:]]*}"}"
+      out="${out%"${out##*[![:space:]]}"}"
+      [[ -n "$out" ]] && items+=("$out")
+    elif [[ "$svc_state" == "active" ]]; then
+      items+=("chat approvals active-work query failed while service is active")
+    fi
   fi
 
   if (( ${#items[@]} == 0 )); then
@@ -164,14 +283,16 @@ fleet_active_work_summary() {
   return 1
 }
 
-# fleet_wait_for_idle ENV_FILE MAX_WAIT_SECONDS POLL_SECONDS — polls
-# fleet_active_work_summary until the deployment is idle (returns 0) or
-# MAX_WAIT_SECONDS elapses (prints the remaining active work on stdout and
-# returns 1).
+# fleet_wait_for_idle ENV_FILE MAX_WAIT_SECONDS POLL_SECONDS — sets the update
+# drain sentinel file so new work admission stops, then polls
+# fleet_active_work_summary until the deployment is idle (returns 0 with the
+# drain file still set) or MAX_WAIT_SECONDS elapses (clears the drain file,
+# prints the remaining active work on stdout, and returns 1).
 fleet_wait_for_idle() {
-  local env_file="$1" max_wait="${2:-0}" poll="${3:-5}"
+  local env_file="${1:-/etc/fleet/fleet.env}" max_wait="${2:-0}" poll="${3:-5}"
   [[ "$max_wait" =~ ^[0-9]+$ ]] || max_wait=0
   [[ "$poll" =~ ^[0-9]+$ ]] && (( poll > 0 )) || poll=5
+  fleet_set_drain "$env_file"
   local start now elapsed summary=""
   start="$(date +%s)"
   while true; do
@@ -181,6 +302,7 @@ fleet_wait_for_idle() {
     now="$(date +%s)"
     elapsed=$(( now - start ))
     if (( max_wait <= 0 || elapsed >= max_wait )); then
+      fleet_clear_drain "$env_file"
       printf '%s\n' "$summary"
       return 1
     fi

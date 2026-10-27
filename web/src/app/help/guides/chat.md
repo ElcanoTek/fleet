@@ -34,7 +34,7 @@ the new thread, for example `--connector email --connector lens`; an unknown or
 unavailable name is refused before anything is sent. `--connector` does not
 change an existing thread: use the web Tools picker for that.
 
-If the server restarts during an approved action, its outcome is shown as unknown;
+Routine server updates, restarts, and stops (`fleet update`, `fleet restart`, `fleet stop`) refuse by default while a chat turn, approved action, or scheduled task is in flight, and quiesce new work admission while draining when `--wait` is used (`--wait-timeout` sets the limit, 10 minutes by default; `--force` bypasses the check). If the server restarts during an approved action, its outcome is shown as unknown;
 verify the external result before trying another action.
 
 The terminal shows staged actions and a pending count. `/approvals` displays

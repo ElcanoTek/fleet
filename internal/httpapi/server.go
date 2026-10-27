@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -404,10 +405,36 @@ func (s *Server) BeginShutdown() {
 	s.broadcastShutdownFrame()
 }
 
-// IsDraining reports whether graceful shutdown has begun (#215/#278). The
-// readiness probe consults this so a draining instance reports not_ready/503 —
-// matching /healthz — and load balancers stop routing new traffic to it.
-func (s *Server) IsDraining() bool { return s.shuttingDown.Load() }
+// IsDraining reports whether graceful shutdown or an external update drain has
+// begun (#215/#278). The readiness probe consults this so a draining instance
+// reports not_ready/503 — matching /healthz — and load balancers stop routing
+// new traffic to it.
+func (s *Server) IsDraining() bool { return s.shuttingDown.Load() || UpdateDrainActive() }
+
+// UpdateDrainFile returns the path of the external update drain sentinel file
+// ($FLEET_DRAIN_FILE, else <dir($FLEET_ENV_FILE)>/fleet.update.drain, else
+// /etc/fleet/fleet.update.drain).
+func UpdateDrainFile() string {
+	if p := strings.TrimSpace(os.Getenv("FLEET_DRAIN_FILE")); p != "" {
+		return p
+	}
+	if envFile := strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")); envFile != "" {
+		return filepath.Join(filepath.Dir(envFile), "fleet.update.drain")
+	}
+	return "/etc/fleet/fleet.update.drain"
+}
+
+// UpdateDrainActive reports whether an operator verb (fleet update / restart /
+// stop) has placed this deployment into pre-restart drain mode within the last
+// 15 minutes.
+func UpdateDrainActive() bool {
+	p := UpdateDrainFile()
+	if p == "" {
+		return false
+	}
+	info, err := os.Stat(p)
+	return err == nil && time.Since(info.ModTime()) <= 15*time.Minute
+}
 
 // broadcastShutdownFrame emits a transient `shutdown` SSE frame to every running
 // turn's live subscribers. Buffers are collected under inflightMu, then notified
@@ -1041,7 +1068,7 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	// balancer / readiness probe stops routing new traffic to this instance while
 	// it drains in-flight work. Checked first — a draining box is unready
 	// regardless of provider health.
-	if s.shuttingDown.Load() {
+	if s.IsDraining() {
 		writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{"status": "shutting_down"})
 		return
 	}

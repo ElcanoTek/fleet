@@ -429,7 +429,7 @@ func (s *Server) stopGateForRow(convID string, acceptedSeq int64) (gen uint64, s
 // stopGateForRow / registerTurnGated, and each launched turn tail-calls back
 // here on completion.
 func (s *Server) maybeDrainQueue(convID string) {
-	if s.shuttingDown.Load() {
+	if s.IsDraining() {
 		return // rows stay durable; boot recovery re-queues, never auto-runs
 	}
 	if s.stopSweepPending(convID) {

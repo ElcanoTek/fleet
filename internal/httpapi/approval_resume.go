@@ -120,7 +120,7 @@ func (s *Server) scheduleApprovalResume(convID string, after time.Duration, atte
 
 // decideApprovalResume runs the claim and acts on what it decided.
 func (s *Server) decideApprovalResume(convID string, attempt int) {
-	if s.shuttingDown.Load() {
+	if s.IsDraining() {
 		// No new turns while draining. The cards stay armed; the next boot
 		// drops them with a note (DropApprovalResumesAtBoot), never runs them.
 		return

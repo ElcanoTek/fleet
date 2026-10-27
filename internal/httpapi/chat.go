@@ -317,7 +317,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// Draining (#278): once graceful shutdown begins, admit no new turns — the
 	// client should retry against a healthy instance. In-flight turns keep going.
-	if s.shuttingDown.Load() {
+	if s.IsDraining() {
 		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
 		return
 	}

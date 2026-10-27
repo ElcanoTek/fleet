@@ -2117,7 +2117,7 @@ type approvalRunGate struct {
 func (g *approvalRunGate) enter() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.draining {
+	if g.draining || UpdateDrainActive() {
 		return false
 	}
 	g.active++

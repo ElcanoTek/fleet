@@ -35,6 +35,11 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 			wantRed:  "postgres://fleet_sched@127.0.0.1:5432/sched?sslmode=disable",
 		},
 		{
+			dsn:      "postgres://fleet_sched:s3cr3t%40%3A%25!pw@127.0.0.1:5432/sched?sslmode=disable",
+			wantPass: "s3cr3t@:%!pw",
+			wantRed:  "postgres://fleet_sched@127.0.0.1:5432/sched?sslmode=disable",
+		},
+		{
 			dsn:      "postgres://fleet_chat@127.0.0.1:5432/chat?sslmode=disable",
 			wantPass: "",
 			wantRed:  "postgres://fleet_chat@127.0.0.1:5432/chat?sslmode=disable",
@@ -60,6 +65,22 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 			t.Errorf("dsn=%q: got pass=%q redacted=%q, want pass=%q redacted=%q",
 				tc.dsn, lines[0], lines[1], tc.wantPass, tc.wantRed)
 		}
+	}
+
+	// Verify fleet_resolve_dsn prefers FLEET_SCHED_DATABASE_URL in the env file
+	// over a generic DATABASE_URL in the calling shell's environment.
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, []byte("FLEET_SCHED_DATABASE_URL=postgres://specific@127.0.0.1:5432/sched\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", `. "$1"; fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$2"`, "_", lib, envFile)
+	cmd.Env = append(os.Environ(), "DATABASE_URL=postgres://generic@127.0.0.1:5432/generic", "FLEET_SCHED_DATABASE_URL=")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("fleet_resolve_dsn: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "postgres://specific@127.0.0.1:5432/sched" {
+		t.Errorf("fleet_resolve_dsn got %q, want specific DSN from env file", got)
 	}
 }
 
@@ -99,6 +120,7 @@ exit 0
 	baseEnv := []string{
 		"PATH=" + binDir + ":" + os.Getenv("PATH"),
 		"FLEET_ENV_FILE=" + envFile,
+		"FLEET_ASSUME_SERVICE_ACTIVE=1",
 	}
 
 	// 1. Dry-run reports the blocker and marks the plan blocked.
@@ -116,7 +138,7 @@ exit 0
 		}
 	}
 
-	// 2. Real run without --wait or --force refuses before step 1.
+	// 2. Real run without --wait or --force refuses before step 1 and cleans up the drain file.
 	_ = os.Remove(stateFile)
 	out, err = runScript(t, baseEnv, "update.sh", "--no-pull")
 	if err == nil {
@@ -127,6 +149,9 @@ exit 0
 	}
 	if strings.Contains(out, "1/5  Updating the fleet checkout") {
 		t.Errorf("update must refuse before step 1:\n%s", out)
+	}
+	if _, statErr := os.Stat(envFile + ".update.drain"); !os.IsNotExist(statErr) {
+		t.Errorf("drain file must be removed when update is refused, got statErr=%v", statErr)
 	}
 
 	// 3. Dry-run with --force skips the blocker.
@@ -142,7 +167,7 @@ exit 0
 		t.Errorf("--force must not report active-work blocker:\n%s", out)
 	}
 
-	// 4. fleet_wait_for_idle polls until work clears.
+	// 4. fleet_wait_for_idle polls until work clears and leaves the drain file set for the caller.
 	_ = os.Remove(stateFile)
 	root := repoRootFromTest(t)
 	idleLib := filepath.Join(root, "scripts", "lib", "idle.sh")
@@ -151,6 +176,10 @@ exit 0
 	if waitOut, werr := cmd.CombinedOutput(); werr != nil {
 		t.Fatalf("fleet_wait_for_idle should succeed once work clears: %v\n%s", werr, string(waitOut))
 	}
+	if _, statErr := os.Stat(envFile + ".update.drain"); statErr != nil {
+		t.Errorf("expected fleet_wait_for_idle to leave drain file set on success: %v", statErr)
+	}
+	_ = os.Remove(envFile + ".update.drain")
 }
 
 func TestActiveWorkAndWaitIdle_DB(t *testing.T) {
@@ -163,7 +192,7 @@ func TestActiveWorkAndWaitIdle_DB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("conn: %v", err)
 	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(1)"); err != nil {
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(6)"); err != nil {
 		_ = conn.Close()
 		t.Fatalf("lock: %v", err)
 	}
@@ -174,11 +203,16 @@ func TestActiveWorkAndWaitIdle_DB(t *testing.T) {
 	}
 	clean()
 	t.Cleanup(func() {
+		ClearUpdateDrain()
 		clean()
-		_, _ = conn.ExecContext(ctx, "SELECT pg_advisory_unlock(1)")
+		_, _ = conn.ExecContext(ctx, "SELECT pg_advisory_unlock(6)")
 		_ = conn.Close()
 		database.Close()
 	})
+
+	drainFile := filepath.Join(t.TempDir(), "fleet.update.drain")
+	t.Setenv("FLEET_UPDATE_DRAIN_FILE", drainFile)
+	t.Setenv("FLEET_ASSUME_SERVICE_ACTIVE", "1")
 
 	dsn, err := schedDSN("")
 	if err != nil || dsn == "" {
@@ -192,13 +226,36 @@ func TestActiveWorkAndWaitIdle_DB(t *testing.T) {
 
 	st := storage.New()
 	st.SetDatabase(database)
+
+	// 1. A crash-stranded task with an expired lease must NOT block ActiveWork.
+	expiredID := uuid.New()
+	expiredLease := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Microsecond)
+	expiredTask := &models.Task{
+		ID:             expiredID,
+		Title:          "Expired Lease Task",
+		Prompt:         "stranded",
+		Status:         models.TaskStatusRunning,
+		CreatedAt:      time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Microsecond),
+		LeaseExpiresAt: &expiredLease,
+	}
+	if _, err := st.AddTaskWithContext(ctx, expiredTask); err != nil {
+		t.Fatalf("AddTask expired: %v", err)
+	}
+	items, err = ActiveWork(ctx, dsn, "")
+	if err != nil || len(items) != 0 {
+		t.Fatalf("expected expired lease task to be ignored, got items=%v err=%v", items, err)
+	}
+
+	// 2. A task with a live lease blocks ActiveWork and WaitIdle(0).
 	taskID := uuid.New()
+	liveLease := time.Now().UTC().Add(5 * time.Minute).Truncate(time.Microsecond)
 	runningTask := &models.Task{
-		ID:        taskID,
-		Title:     "Northwind Digest",
-		Prompt:    "run digest",
-		Status:    models.TaskStatusRunning,
-		CreatedAt: time.Now().UTC().Truncate(time.Microsecond),
+		ID:             taskID,
+		Title:          "Northwind Digest",
+		Prompt:         "run digest",
+		Status:         models.TaskStatusRunning,
+		CreatedAt:      time.Now().UTC().Truncate(time.Microsecond),
+		LeaseExpiresAt: &liveLease,
 	}
 	if _, err := st.AddTaskWithContext(ctx, runningTask); err != nil {
 		t.Fatalf("AddTask: %v", err)
@@ -212,6 +269,9 @@ func TestActiveWorkAndWaitIdle_DB(t *testing.T) {
 	if err := WaitIdle(ctx, dsn, "", 0, 10*time.Millisecond, nil); err == nil || !strings.Contains(err.Error(), "Northwind Digest") {
 		t.Fatalf("expected WaitIdle(0) to fail with Northwind Digest, got %v", err)
 	}
+	if _, statErr := os.Stat(drainFile); !os.IsNotExist(statErr) {
+		t.Fatalf("expected WaitIdle timeout to clear drain file, got statErr=%v", statErr)
+	}
 
 	go func() {
 		time.Sleep(30 * time.Millisecond)
@@ -221,4 +281,8 @@ func TestActiveWorkAndWaitIdle_DB(t *testing.T) {
 	if err := WaitIdle(ctx, dsn, "", 2*time.Second, 10*time.Millisecond, &waitLog); err != nil {
 		t.Fatalf("expected WaitIdle to succeed after task completed: %v", err)
 	}
+	if _, statErr := os.Stat(drainFile); statErr != nil {
+		t.Fatalf("expected WaitIdle success to leave drain file set for caller: %v", statErr)
+	}
+	ClearUpdateDrain()
 }

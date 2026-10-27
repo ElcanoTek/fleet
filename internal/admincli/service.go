@@ -65,6 +65,7 @@ func systemctlVerb(verb string, argv []string) int {
 		sDSN, _ := schedDSN("")
 		cDSN, _ := chatDSN("")
 		if sDSN != "" || cDSN != "" {
+			defer ClearUpdateDrain()
 			maxWait := time.Duration(0)
 			if *wait || truthy(os.Getenv("FLEET_UPDATE_WAIT")) {
 				maxWait = *waitTimeout
