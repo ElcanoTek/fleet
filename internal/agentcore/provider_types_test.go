@@ -414,3 +414,51 @@ func TestAzureReasoningDeploymentsAreToldByName(t *testing.T) {
 		})
 	}
 }
+
+// Turns refuse a redirect to another host, as the connection test does
+// (probeClient). The OpenAI SDK sends every request, redirect hops included,
+// through a transport that rejects any origin but the configured one, so the
+// Api-Key, which Go would copy to another host, never leaves the entry's
+// endpoint. docs/LLM-PROVIDERS.md and the probe's redirect message rely on
+// this; an SDK upgrade that drops the guard fails here.
+func TestAzureTurnsDoNotFollowRedirectsToAnotherHost(t *testing.T) {
+	var mu sync.Mutex
+	elsewhere := 0
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		elsewhere++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"c","object":"chat.completion","created":1,"model":"m",`+
+			`"choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}]}`)
+	}))
+	defer other.Close()
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer redirecting.Close()
+	p, err := buildProvider(ProviderConfig{Name: "az", Type: ProviderTypeAzure, APIKey: "az-key", BaseURL: redirecting.URL + "/openai/v1"}, DefaultProviderHeaders)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	lm, err := p.LanguageModel(context.Background(), "gpt-5-prod")
+	if err != nil {
+		t.Fatalf("LanguageModel: %v", err)
+	}
+	call := fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("ping")}}
+	if _, err := lm.Generate(context.Background(), call); err == nil {
+		t.Error("Generate succeeded through a redirect to another host")
+	}
+	if stream, err := lm.Stream(context.Background(), call); err == nil {
+		for part := range stream {
+			if part.Type == fantasy.StreamPartTypeTextDelta {
+				t.Error("Stream got text through a redirect to another host")
+			}
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if elsewhere != 0 {
+		t.Fatalf("a turn followed a redirect to another host %d times", elsewhere)
+	}
+}
