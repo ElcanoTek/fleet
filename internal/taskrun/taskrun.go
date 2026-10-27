@@ -116,16 +116,7 @@ func run(argv []string, progName string) error {
 	cfg.MCPServers = bundle.MCPServerConfigs()
 	cfg.HTTPTools = bundle.HTTPToolConfigs()
 	cfg.A2APeers = bundle.A2APeerConfigs()
-	if strings.TrimSpace(cfg.SandboxImage) == "" {
-		if ref := bundle.Sandbox().ResolvedImageRef(); ref != "" {
-			cfg.SandboxImage = ref
-		}
-	}
-	// Honor the bundle's sandbox.runtime (#217) with the same precedence the fleet
-	// boot path uses — env FLEET_SANDBOX_RUNTIME wins, else the manifest — so a
-	// kata/libkrun bundle gets the fail-closed KVM preflight under cutlass too.
-	// buildSandboxPool (via agent.New below) runs PreflightRuntime on this value.
-	cfg.SandboxRuntime = sandbox.ResolveRuntime(cfg.SandboxRuntime, bundle.Sandbox().Runtime)
+	applyBundleSandbox(cfg, bundle.Sandbox())
 
 	// Install the bundle's agent tool-behavior policy before any turn runs.
 	agentcore.ConfigureAgentPolicy(taskRunAgentPolicy(bundle.AgentPolicy()))
@@ -227,6 +218,27 @@ func run(argv []string, progName string) error {
 		return fmt.Errorf("run task: %w", runErr)
 	}
 	return nil
+}
+
+// applyBundleSandbox fills the sandbox settings the bundle manifest supplies,
+// with the same precedence as the server boot path (cmd/fleet):
+//
+//   - the image: env FLEET_SANDBOX_IMAGE wins, else the manifest's;
+//   - the OCI runtime (#217): env FLEET_SANDBOX_RUNTIME wins, else the
+//     manifest's, so a kata/libkrun bundle gets the fail-closed KVM preflight
+//     here too (buildSandboxPool, via agent.New, runs PreflightRuntime);
+//   - the egress allowlist (#211) for FLEET_DEFAULT_NETWORK_MODE=allowlisted:
+//     the manifest's network_allowlist, exactly as the server sets it. Without
+//     it an allowlisted one-shot run got an empty list, and the egress proxy
+//     and web_fetch (ADR-0094) refused every host.
+func applyBundleSandbox(cfg *config.Config, sb clientconfig.Sandbox) {
+	if strings.TrimSpace(cfg.SandboxImage) == "" {
+		if ref := sb.ResolvedImageRef(); ref != "" {
+			cfg.SandboxImage = ref
+		}
+	}
+	cfg.SandboxRuntime = sandbox.ResolveRuntime(cfg.SandboxRuntime, sb.Runtime)
+	cfg.SandboxNetworkAllowlist = append([]string(nil), sb.NetworkAllowlist...)
 }
 
 // taskRunAgentPolicy translates the bundle's agent policy for a one-shot run.

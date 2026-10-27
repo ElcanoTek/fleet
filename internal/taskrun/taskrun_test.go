@@ -11,6 +11,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/fakellm"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -264,5 +265,17 @@ func TestTaskRunAgentPolicyCarriesUnattendedDisabledTools(t *testing.T) {
 	agentcore.ConfigureAgentPolicy(p)
 	if !agentcore.UnattendedToolDisabled("web_fetch") {
 		t.Error("the installed policy must remove web_fetch")
+	}
+}
+
+// A one-shot run in allowlisted network mode draws its egress allowlist from
+// the bundle manifest, as the server does; it used to get an empty list, so
+// the proxy and web_fetch refused every host.
+func TestApplyBundleSandboxCarriesNetworkAllowlist(t *testing.T) {
+	cfg := &config.Config{}
+	applyBundleSandbox(cfg, clientconfig.Sandbox{NetworkAllowlist: []string{"api.example.com", "*.example.org"}})
+	if len(cfg.SandboxNetworkAllowlist) != 2 || cfg.SandboxNetworkAllowlist[0] != "api.example.com" ||
+		cfg.SandboxNetworkAllowlist[1] != "*.example.org" {
+		t.Fatalf("SandboxNetworkAllowlist = %v, want the manifest's list", cfg.SandboxNetworkAllowlist)
 	}
 }
