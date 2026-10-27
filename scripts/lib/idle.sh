@@ -141,6 +141,13 @@ fleet_psql_query() {
   local dsn="$1" sql="$2" pw="" redacted="" tsec="${FLEET_PSQL_TIMEOUT_SECONDS:-5}"
   [[ "$tsec" =~ ^[0-9]+$ ]] && (( tsec > 0 )) || tsec=5
   (( tsec > 5 )) && tsec=5
+  if [[ "${FLEET_WAIT_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && (( FLEET_WAIT_DEADLINE_EPOCH > 0 )); then
+    local now_ep rem_ep
+    now_ep="$(date +%s)"
+    rem_ep=$(( FLEET_WAIT_DEADLINE_EPOCH - now_ep ))
+    (( rem_ep <= 0 )) && return 1
+    (( rem_ep < tsec )) && tsec="$rem_ep"
+  fi
   local stmt_ms=$(( tsec * 1000 ))
   [[ -n "$dsn" ]] || return 1
   command -v psql >/dev/null 2>&1 || return 1
@@ -276,7 +283,7 @@ fleet_set_drain() {
     fi
     cur="$(cat "$drain_file" 2>/dev/null || true)"
     if [[ "$cur" == "draining ${FLEET_DRAIN_OWNER_TOKEN}" ]]; then
-      touch "$drain_file" 2>/dev/null || true
+      touch "$drain_file" 2>/dev/null || exit 1
       exit 0
     fi
     if [[ -n "$(find "$drain_file" -mmin -15 2>/dev/null || true)" ]]; then
@@ -391,7 +398,15 @@ fleet_probe_in_memory_counts() {
     return 0
   fi
   [[ "$addr" == :* ]] && addr="127.0.0.1${addr}"
-  local curl_args=(-sSI --max-time 2)
+  local curl_max=2
+  if [[ "${FLEET_WAIT_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && (( FLEET_WAIT_DEADLINE_EPOCH > 0 )); then
+    local now_ep rem_ep
+    now_ep="$(date +%s)"
+    rem_ep=$(( FLEET_WAIT_DEADLINE_EPOCH - now_ep ))
+    (( rem_ep <= 0 )) && { printf '0|0\n'; return 0; }
+    (( rem_ep < curl_max )) && curl_max="$rem_ep"
+  fi
+  local curl_args=(-sSI --max-time "$curl_max")
   if [[ "$addr" != http://* && "$addr" != https://* ]]; then
     local tls_mode="" cert_file="" tls_domain="" host_only="" port_only="8080"
     if [[ "$addr" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
@@ -464,6 +479,13 @@ fleet_active_work_summary() {
   svc_state="${svc_info%%|*}"
   svc_start_epoch="${svc_info#*|}"
   [[ "$svc_start_epoch" =~ ^[0-9]+$ ]] || svc_start_epoch=0
+  local now_epoch svc_age_sec=-1
+  now_epoch="$(date +%s)"
+  if (( svc_start_epoch > 0 )); then
+    svc_age_sec=$(( now_epoch - svc_start_epoch ))
+    (( svc_age_sec < 0 )) && svc_age_sec=0
+    svc_age_sec=$(( svc_age_sec + 1 ))
+  fi
 
   # When systemd reports that fleet.service is installed and not active, no
   # in-process task, turn, or approval goroutine is running; any DB rows still
@@ -494,7 +516,7 @@ fleet_active_work_summary() {
                  AND (
                    '${svc_state}' = 'unknown'
                    OR (lease_expires_at IS NOT NULL AND lease_expires_at >= now())
-                   OR (${svc_start_epoch} > 0 AND COALESCE(started_at, created_at) >= to_timestamp(${svc_start_epoch}))
+                   OR (${svc_age_sec} >= 0 AND COALESCE(started_at, created_at) >= now() - (${svc_age_sec} * interval '1 second'))
                  )
                ORDER BY COALESCE(started_at, created_at) ASC
                LIMIT 5
@@ -525,7 +547,7 @@ fleet_active_work_summary() {
               SELECT id, updated_at, created_at
                 FROM datasets
                WHERE status = 'running'
-                 AND (${svc_start_epoch} <= 0 OR COALESCE(updated_at, created_at) >= to_timestamp(${svc_start_epoch}))
+                 AND (${svc_age_sec} < 0 OR COALESCE(updated_at, created_at) >= now() - (${svc_age_sec} * interval '1 second'))
                ORDER BY COALESCE(updated_at, created_at) ASC
                LIMIT 5
             ) d
@@ -552,7 +574,7 @@ fleet_active_work_summary() {
               format('chat turn %s (conv %s, %ss)',
                 turn_id,
                 conversation_id,
-                GREATEST(0, EXTRACT(EPOCH FROM now())::bigint - started_at)
+                GREATEST(0, ${now_epoch} - started_at)
               ), '; ')
             FROM (
               SELECT turn_id, conversation_id, started_at
@@ -580,30 +602,35 @@ fleet_active_work_summary() {
     fi
 
     if has_tbl="$(fleet_psql_query "$chat_dsn" "
-      SELECT to_regclass('approvals') IS NOT NULL
-         AND EXISTS (
-           SELECT 1
-             FROM pg_attribute
-            WHERE attrelid = to_regclass('approvals')
-              AND attname = 'is_err'
-              AND NOT attisdropped
-         );")"; then
-      if [[ "$has_tbl" == "t" ]]; then
+      SELECT CASE
+        WHEN to_regclass('approvals') IS NULL THEN 'none'
+        WHEN EXISTS (
+          SELECT 1
+            FROM pg_attribute
+           WHERE attrelid = to_regclass('approvals')
+             AND attname = 'is_err'
+             AND NOT attisdropped
+        ) THEN 'with_is_err'
+        ELSE 'without_is_err'
+      END;")"; then
+      if [[ "$has_tbl" == "with_is_err" || "$has_tbl" == "without_is_err" ]]; then
+        local is_err_clause=""
+        [[ "$has_tbl" == "with_is_err" ]] && is_err_clause="AND is_err IS NULL"
         if out="$(fleet_psql_query "$chat_dsn" "
           SELECT COALESCE((
             SELECT string_agg(
               format('approval execution %s (%s, %ss)',
                 id,
                 tool_name,
-                GREATEST(0, EXTRACT(EPOCH FROM now())::bigint - COALESCE(resolved_at, created_at))
+                GREATEST(0, ${now_epoch} - COALESCE(resolved_at, created_at))
               ), '; ')
             FROM (
               SELECT id, tool_name, resolved_at, created_at
                 FROM approvals
                WHERE status = 'approved'
-                 AND is_err IS NULL
+                 ${is_err_clause}
                  AND result_text LIKE 'Approved%executing%'
-                 AND COALESCE(resolved_at, created_at) >= GREATEST(${svc_start_epoch}, EXTRACT(EPOCH FROM now())::bigint - ${approval_window})
+                 AND COALESCE(resolved_at, created_at) >= GREATEST(${svc_start_epoch}, ${now_epoch} - ${approval_window})
                ORDER BY COALESCE(resolved_at, created_at) ASC
                LIMIT 5
             ) a
@@ -653,21 +680,22 @@ fleet_wait_for_idle() {
   local svc_unit="${4:-${SERVICE_NAME:-${FLEET_SERVICE_NAME:-fleet}}}"
   [[ "$max_wait" =~ ^[0-9]+$ ]] || max_wait=0
   [[ "$poll" =~ ^[0-9]+$ ]] && (( poll > 0 )) || poll=5
-  local start now elapsed rem tsec summary=""
+  local start deadline=0 now elapsed rem tsec sleep_sec summary=""
   start="$(date +%s)"
+  (( max_wait > 0 )) && deadline=$(( start + max_wait ))
   while true; do
     if ! fleet_set_drain "$env_file"; then
       printf 'failed to write update drain sentinel %s\n' "$(fleet_drain_file "$env_file")"
       return 1
     fi
     tsec=5
-    if (( max_wait > 0 )); then
+    if (( deadline > 0 )); then
       now="$(date +%s)"
-      rem=$(( max_wait - (now - start) ))
+      rem=$(( deadline - now ))
       (( rem < 1 )) && rem=1
       (( rem < tsec )) && tsec="$rem"
     fi
-    if summary="$(FLEET_PSQL_TIMEOUT_SECONDS="$tsec" fleet_active_work_summary "$env_file" "$svc_unit")"; then
+    if summary="$(FLEET_PSQL_TIMEOUT_SECONDS="$tsec" FLEET_WAIT_DEADLINE_EPOCH="$deadline" fleet_active_work_summary "$env_file" "$svc_unit")"; then
       if ! fleet_set_drain "$env_file"; then
         printf 'failed to write update drain sentinel %s\n' "$(fleet_drain_file "$env_file")"
         return 1
@@ -684,6 +712,11 @@ fleet_wait_for_idle() {
     if declare -F info >/dev/null 2>&1; then
       info "waiting for active work to finish (${elapsed}s/${max_wait}s): ${summary}" >&2
     fi
-    sleep "$poll"
+    sleep_sec="$poll"
+    if (( deadline > 0 )); then
+      rem=$(( deadline - now ))
+      (( rem < sleep_sec )) && sleep_sec="$rem"
+    fi
+    (( sleep_sec > 0 )) && sleep "$sleep_sec"
   done
 }

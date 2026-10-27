@@ -132,7 +132,9 @@ func SetUpdateDrain() error {
 		cur := string(data)
 		if rerr == nil && cur == drainOwnerToken {
 			now := time.Now()
-			_ = os.Chtimes(p, now, now)
+			if err := os.Chtimes(p, now, now); err != nil {
+				return fmt.Errorf("refresh drain sentinel %s: %w", p, err)
+			}
 			return nil
 		}
 		if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) <= 15*time.Minute {
@@ -373,11 +375,16 @@ func ActiveWorkForService(ctx context.Context, unit, schedDSNVal, chatDSNVal str
 		return nil, nil
 	}
 
+	var svcAgeSec int64 = -1
+	if svcStartUnix > 0 {
+		svcAgeSec = max(int64(0), time.Now().Unix()-svcStartUnix) + 1
+	}
+
 	var items []string
 	var firstErr error
 
 	if strings.TrimSpace(schedDSNVal) != "" {
-		found, err := querySchedActiveWork(ctx, schedDSNVal, svcStartUnix, svcState == "unknown")
+		found, err := querySchedActiveWork(ctx, schedDSNVal, svcAgeSec, svcState == "unknown")
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -426,7 +433,7 @@ func ActiveWorkForService(ctx context.Context, unit, schedDSNVal, chatDSNVal str
 	return items, firstErr
 }
 
-func querySchedActiveWork(ctx context.Context, dsn string, svcStartUnix int64, failClosedUnknown bool) ([]string, error) {
+func querySchedActiveWork(ctx context.Context, dsn string, svcAgeSec int64, failClosedUnknown bool) ([]string, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err
@@ -451,10 +458,10 @@ func querySchedActiveWork(ctx context.Context, dsn string, svcStartUnix int64, f
 		   AND (
 		     $2
 		     OR (lease_expires_at IS NOT NULL AND lease_expires_at >= now())
-		     OR ($1 > 0 AND COALESCE(started_at, created_at) >= to_timestamp($1))
+		     OR ($1 >= 0 AND COALESCE(started_at, created_at) >= now() - ($1 * interval '1 second'))
 		   )
 		 ORDER BY COALESCE(started_at, created_at) ASC
-		 LIMIT 5`, svcStartUnix, failClosedUnknown)
+		 LIMIT 5`, svcAgeSec, failClosedUnknown)
 	if err != nil {
 		return nil, err
 	}
@@ -487,9 +494,9 @@ func querySchedActiveWork(ctx context.Context, dsn string, svcStartUnix int64, f
 			       GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(updated_at, created_at)))::bigint)
 			  FROM datasets
 			 WHERE status = 'running'
-			   AND ($1 <= 0 OR COALESCE(updated_at, created_at) >= to_timestamp($1))
+			   AND ($1 < 0 OR COALESCE(updated_at, created_at) >= now() - ($1 * interval '1 second'))
 			 ORDER BY COALESCE(updated_at, created_at) ASC
-			 LIMIT 5`, svcStartUnix)
+			 LIMIT 5`, svcAgeSec)
 		if err != nil {
 			return out, err
 		}
@@ -559,21 +566,24 @@ func queryChatActiveWork(ctx context.Context, dsn string, svcStartUnix int64) ([
 		_ = rows.Close()
 	}
 
-	var hasApprovalsIsErr bool
+	var approvalsMode string
 	if err := db.QueryRowContext(qctx, `
-		SELECT to_regclass('approvals') IS NOT NULL
-		   AND EXISTS (
-		     SELECT 1
-		       FROM pg_attribute
-		      WHERE attrelid = to_regclass('approvals')
-		        AND attname = 'is_err'
-		        AND NOT attisdropped
-		   )`).Scan(&hasApprovalsIsErr); err != nil {
+		SELECT CASE
+		  WHEN to_regclass('approvals') IS NULL THEN 'none'
+		  WHEN EXISTS (
+		    SELECT 1
+		      FROM pg_attribute
+		     WHERE attrelid = to_regclass('approvals')
+		       AND attname = 'is_err'
+		       AND NOT attisdropped
+		  ) THEN 'with_is_err'
+		  ELSE 'without_is_err'
+		END`).Scan(&approvalsMode); err != nil {
 		return out, err
 	}
-	if hasApprovalsIsErr {
+	if approvalsMode != "none" {
 		approvalCutoff := max(svcStartUnix, nowUnix-int64(defaultIdleApprovalWindow/time.Second))
-		rows, err := db.QueryContext(qctx, `
+		approvalSQL := `
 			SELECT id,
 			       tool_name,
 			       GREATEST(0, $1 - COALESCE(resolved_at, created_at))
@@ -583,7 +593,20 @@ func queryChatActiveWork(ctx context.Context, dsn string, svcStartUnix int64) ([
 			   AND result_text LIKE 'Approved%executing%'
 			   AND COALESCE(resolved_at, created_at) >= $2
 			 ORDER BY COALESCE(resolved_at, created_at) ASC
-			 LIMIT 5`, nowUnix, approvalCutoff)
+			 LIMIT 5`
+		if approvalsMode == "without_is_err" {
+			approvalSQL = `
+				SELECT id,
+				       tool_name,
+				       GREATEST(0, $1 - COALESCE(resolved_at, created_at))
+				  FROM approvals
+				 WHERE status = 'approved'
+				   AND result_text LIKE 'Approved%executing%'
+				   AND COALESCE(resolved_at, created_at) >= $2
+				 ORDER BY COALESCE(resolved_at, created_at) ASC
+				 LIMIT 5`
+		}
+		rows, err := db.QueryContext(qctx, approvalSQL, nowUnix, approvalCutoff)
 		if err != nil {
 			return out, err
 		}
@@ -628,7 +651,15 @@ func WaitIdleForService(ctx context.Context, unit, schedDSNVal, chatDSNVal strin
 		if err := SetUpdateDrain(); err != nil {
 			return &ActiveWorkError{Items: []string{err.Error()}}
 		}
-		items, err := ActiveWorkForService(ctx, unit, schedDSNVal, chatDSNVal)
+		probeCtx := ctx
+		var probeCancel context.CancelFunc
+		if maxWait > 0 {
+			probeCtx, probeCancel = context.WithDeadline(ctx, deadline)
+		}
+		items, err := ActiveWorkForService(probeCtx, unit, schedDSNVal, chatDSNVal)
+		if probeCancel != nil {
+			probeCancel()
+		}
 		if err != nil {
 			items = append(items, fmt.Sprintf("active-work query failed: %v", err))
 		}
@@ -647,7 +678,11 @@ func WaitIdleForService(ctx context.Context, unit, schedDSNVal, chatDSNVal strin
 			total := int(maxWait.Seconds())
 			fmt.Fprintf(out, "waiting for active work to finish (%ds/%ds): %s\n", elapsed, total, strings.Join(items, "; "))
 		}
-		timer := time.NewTimer(pollInterval)
+		waitDur := pollInterval
+		if rem := time.Until(deadline); rem < waitDur {
+			waitDur = max(rem, time.Millisecond)
+		}
+		timer := time.NewTimer(waitDur)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
