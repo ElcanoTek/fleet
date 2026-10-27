@@ -1785,9 +1785,26 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 	// (which relabels the teams row and the stamp together) keeps the share
 	// with its team, and a later team that merely reuses an old name gets a
 	// different id and reads nothing. The teams row is created on first
-	// share; the upsert's no-op DO UPDATE returns the existing id and holds
-	// its row lock to commit, so a concurrent RenameTeam takes turns with it.
-	res, err := s.db.ExecContext(ctx,
+	// share.
+	//
+	// The stamp runs under the team name's transaction advisory lock
+	// (lockTeamNamesTx), the same lock RenameTeam takes for both of its
+	// names. A row lock is not enough: the FIRST share for a team INSERTs
+	// its teams row, and until that commits a concurrent rename's SELECT
+	// ... FOR UPDATE cannot see it, so the rename would finish without
+	// relabelling and the share would commit under the old name. With the
+	// lock, a rename either commits before this statement starts (and the
+	// project check below then refuses the old name) or waits for this
+	// share to commit and then carries it.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	if err := lockTeamNamesTx(ctx, tx, team); err != nil {
+		return false, err
+	}
+	res, err := tx.ExecContext(ctx,
 		`WITH t AS (
 			INSERT INTO teams (name, created_at) VALUES ($1, $2)
 			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
@@ -1802,7 +1819,14 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 	if err != nil {
 		return false, err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, _ := res.RowsAffected()
+	if n > 0 && teamShareBeforeCommitHook != nil {
+		teamShareBeforeCommitHook()
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	if n == 0 {
 		// Lost a race with a write that moved, archived or deleted the chat,
 		// or unshared the project. Re-read which, so the sentence is right.
 		var archivedNow bool

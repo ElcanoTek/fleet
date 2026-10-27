@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 // teamShareReadable reports whether caller can reach convID through every
@@ -228,5 +229,81 @@ func TestMigration084StampsIDsAndUnsharesRenameOrphans(t *testing.T) {
 	}
 	if quantRows != 0 {
 		t.Error("the orphan's stale label must not be registered as a team")
+	}
+}
+
+// A FIRST share for a team racing a rename of that team must end with the
+// share carried by the rename, never left under the old name.
+//
+// Red/green (Codex P1 on #1853): the first share INSERTs the team's teams
+// row; until that commits, the rename's SELECT ... FOR UPDATE cannot see it,
+// so the rename finished without relabelling and the share committed as
+// "quant" with quant's id — invisible to the renamed team, and a label a
+// later team reusing the name could match. The test holds the share open
+// after its stamp (teamShareBeforeCommitHook), starts the rename, gives it
+// time to finish if nothing stops it, then lets the share commit. With the
+// name-scoped advisory lock the rename waits for the share and relabels it;
+// without it the rename completes inside the window and the share is
+// stranded under "quant".
+func TestFirstShareRacingRenameIsCarriedByTheRename(t *testing.T) {
+	f := newTeamFixture(t)
+	c, err := f.s.CreateConversation(f.ctx, "bob@x.com", "Quant secret", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetConversationProject(f.ctx, "bob@x.com", c.ID, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	stamped := make(chan struct{})
+	release := make(chan struct{})
+	teamShareBeforeCommitHook = func() {
+		close(stamped)
+		<-release
+	}
+	t.Cleanup(func() { teamShareBeforeCommitHook = nil })
+
+	shareErr := make(chan error, 1)
+	go func() {
+		_, err := f.s.SetConversationTeamVisible(f.ctx, "bob@x.com", c.ID, true)
+		shareErr <- err
+	}()
+	<-stamped
+	teamShareBeforeCommitHook = nil // the rename's own writes must not pause
+
+	renameErr := make(chan error, 1)
+	go func() {
+		_, _, err := f.s.RenameTeam(f.ctx, "quant", "research")
+		renameErr <- err
+	}()
+	select {
+	case err := <-renameErr: // finished while the share was still open
+		renameErr <- err
+	case <-time.After(1500 * time.Millisecond): // waiting on the share, as it should
+	}
+	close(release)
+	if err := <-shareErr; err != nil {
+		t.Fatalf("share: %v", err)
+	}
+	if err := <-renameErr; err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	var label string
+	if err := f.s.db.QueryRowContext(f.ctx,
+		`SELECT COALESCE(team_shared_with, '') FROM conversations WHERE id = $1`, c.ID).Scan(&label); err != nil {
+		t.Fatal(err)
+	}
+	if label != "research" {
+		t.Errorf("share label after the race = %q, want research (carried by the rename)", label)
+	}
+	if !teamShareReadable(t, f, "alice@x.com", c.ID) {
+		t.Error("the renamed team must read a share that raced the rename")
+	}
+	if _, err := f.s.SetOwnTeam(f.ctx, "carol@x.com", "quant", false); err != nil {
+		t.Fatalf("SetOwnTeam(quant): %v", err)
+	}
+	if teamShareReadable(t, f, "carol@x.com", c.ID) {
+		t.Error("a team reusing the old name must not read the share")
 	}
 }

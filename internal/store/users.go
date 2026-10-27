@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -504,6 +505,40 @@ func unshareOnTeamChangeTx(ctx context.Context, tx *sql.Tx, email, newTeam strin
 	return unfileChatsInInaccessibleProjectsTx(ctx, tx, email, newTeam)
 }
 
+// teamShareBeforeCommitHook, when set (tests only), runs inside a share's
+// transaction after the stamp and before the commit, so a test can hold a
+// first share open and race a rename against it deterministically.
+var teamShareBeforeCommitHook func()
+
+// lockTeamNamesTx takes the transaction-scoped advisory lock of each team
+// name, in sorted order so two transactions locking overlapping names can
+// never deadlock. Every write that creates, relabels or retires a teams row
+// takes it for the names involved: the share stamp (its team), RenameTeam
+// (from and to) and retireUnheldTeamNameTx (the joined name). Row locks
+// cannot order these, because a first share's teams row is an uncommitted
+// INSERT that the others cannot see. The two-key form keeps this lock space
+// apart from SetOwnTeam's single-key create lock.
+func lockTeamNamesTx(ctx context.Context, tx *sql.Tx, names ...string) error {
+	uniq := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		uniq = append(uniq, n)
+	}
+	sort.Strings(uniq)
+	for _, n := range uniq {
+		if _, err := tx.ExecContext(ctx,
+			`SELECT pg_advisory_xact_lock(hashtext('fleet_teams'), hashtext($1))`, n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // renameTeamSharesTx carries a team's chat shares across RenameTeam, in the
 // rename's transaction (migration 084, ADR-0093). A share names its audience
 // by team ID AND label, so the rename must move both or the share is left
@@ -573,6 +608,9 @@ func retireUnheldTeamNameTx(ctx context.Context, tx *sql.Tx, name string, now in
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil
+	}
+	if err := lockTeamNamesTx(ctx, tx, name); err != nil {
+		return err
 	}
 	var id int64
 	err := tx.QueryRowContext(ctx, `
@@ -963,6 +1001,12 @@ func (s *Store) RenameTeam(ctx context.Context, from, to string) (usersUpdated, 
 		}
 	}()
 	now := time.Now().Unix()
+	// Both names' locks first (sorted inside, so a concurrent rename the
+	// other way round cannot deadlock): a first share for `from` must either
+	// commit before this rename reads the teams rows, or wait for it.
+	if err = lockTeamNamesTx(ctx, tx, from, to); err != nil {
+		return 0, 0, err
+	}
 	// Renaming onto a name nobody holds must not merge into a dead team's
 	// leftover teams row (and its shares) — retire it first, while `to` is
 	// still unheld.
