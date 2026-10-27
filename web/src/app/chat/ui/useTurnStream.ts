@@ -4814,6 +4814,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // uncertain too, unless the server definitively said it holds nothing:
     // the card holds instead of inviting a retry that could duplicate it.
     if (!accepted.value && !absent && recoveryOwns(resolveTarget())) uncertain = true;
+    if (
+      submittedAutoApprove &&
+      !accepted.value &&
+      !uncertain &&
+      resolveTarget() === initialTarget &&
+      (activeConversationIdRef.current === initialTarget ||
+        activeConversationIdRef.current === null) &&
+      (newChatDraftGenRef?.current ?? 0) === draftGenAtStart
+    ) {
+      setPendingAutoApprove?.(true);
+    }
     // A direct send the server queued instead (it knew a turn was running).
     if (accepted.queued && fromCard && opts?.onUnsent) {
       watchQueuedCardSend(resolveTarget(), value, submissionId, opts.onUnsent, opts.stillHeld);

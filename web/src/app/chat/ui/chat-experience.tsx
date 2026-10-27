@@ -932,6 +932,7 @@ export function ChatExperience({
   const autoApproveSeqRef = useRef<Map<string, number>>(new Map());
   const autoApproveChainRef = useRef<Map<string, Promise<void>>>(new Map());
   const autoApproveValueRef = useRef<Map<string, boolean>>(new Map());
+  const autoApproveCommittedRef = useRef<Map<string, boolean>>(new Map());
   const autoApproveInFlightRef = useRef<Map<string, number>>(new Map());
   const toggleAutoApprove = useCallback(() => {
     const next = !isAutoApprove;
@@ -940,6 +941,9 @@ export function ChatExperience({
       return;
     }
     const convId = activeConversationId;
+    if (!autoApproveCommittedRef.current.has(convId)) {
+      autoApproveCommittedRef.current.set(convId, isAutoApprove);
+    }
     const seq = (autoApproveSeqRef.current.get(convId) ?? 0) + 1;
     autoApproveSeqRef.current.set(convId, seq);
     autoApproveValueRef.current.set(convId, next);
@@ -982,14 +986,16 @@ export function ChatExperience({
         } catch {
           // ignore empty/non-JSON body
         }
+        autoApproveCommittedRef.current.set(convId, committed);
         if (autoApproveSeqRef.current.get(convId) === seq) {
           autoApproveValueRef.current.set(convId, committed);
           applyState(committed);
         }
       } catch {
         if (autoApproveSeqRef.current.get(convId) === seq) {
-          autoApproveValueRef.current.set(convId, !next);
-          applyState(!next);
+          const fallback = autoApproveCommittedRef.current.get(convId) ?? false;
+          autoApproveValueRef.current.set(convId, fallback);
+          applyState(fallback);
         }
       } finally {
         autoApproveInFlightRef.current.set(
@@ -2426,6 +2432,7 @@ export function ChatExperience({
         ) {
           return { ...c, auto_approve: autoApproveValueRef.current.get(c.id) };
         }
+        autoApproveCommittedRef.current.set(c.id, c.auto_approve === true);
         return c;
       });
     try {

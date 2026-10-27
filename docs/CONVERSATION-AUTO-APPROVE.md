@@ -17,13 +17,16 @@ high-consequence gates.
 
 ## What shipped
 
-1. **24-hour default approval timeout (7-day ceiling)**
+1. **24-hour default approval timeout (7-day per-conversation ceiling)**
    - `FLEET_APPROVAL_TIMEOUT_SECONDS` (and `defaultApprovalTimeoutSeconds` in
      `internal/httpapi/approvals.go`) now defaults to `86400` seconds (24 hours)
      instead of `3600` seconds.
-   - The validation ceiling (`maxApprovalTimeoutSeconds`) across config,
-     per-conversation `approval_timeout_seconds`, and bundle
-     `critical_tool_timeouts` is now `604800` seconds (7 days).
+   - The per-conversation override ceiling (`maxApprovalTimeoutSeconds` on
+     `POST /conversations/{id}/approval-timeout` and
+     `UpdateConversationApprovalTimeout` in `internal/store`) is now `604800`
+     seconds (7 days). Operator-managed `FLEET_APPROVAL_TIMEOUT_SECONDS` and
+     bundle `critical_tool_timeouts` retain their existing positive-integer
+     semantics so operators can configure shorter or longer values when needed.
    - Task-staging cards (`schedule_task`, `manage_tasks`) retain a 24-hour floor
      (`stagedTaskApprovalTimeoutSeconds = 86400`) and also inherit any longer
      global or per-conversation timeout override.
@@ -33,10 +36,10 @@ high-consequence gates.
      migration `internal/store/migrations/045_conversation_auto_approve.sql`).
    - Returned on `Conversation` payloads (`GET /conversations`,
      `GET /conversations/{id}`, and the `conversation` SSE frame).
-   - Can be seeded on `POST /conversations` or the initial `POST /chat` request
-     (`auto_approve: true`), and toggled at any time by the conversation owner
-     via `POST /conversations/{id}/auto-approve` (forwarded by the web gateway
-     at `POST /api/conversations/{id}/auto-approve`).
+   - Can be seeded on the initial `POST /chat` request (`auto_approve: true`)
+     when creating a conversation on first turn, and toggled at any time by the
+     conversation owner via `POST /conversations/{id}/auto-approve` (forwarded
+     by the web gateway at `POST /api/conversations/{id}/auto-approve`).
 
 3. **Safety boundary in `approvalStager.Stage`**
    - When `auto_approve` is active for a conversation, `Stage` re-reads the
