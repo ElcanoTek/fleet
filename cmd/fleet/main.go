@@ -2187,6 +2187,7 @@ func toAgentcoreProviders(bundle *clientconfig.Bundle) []agentcore.ProviderConfi
 			APIKey:              key,
 			BaseURL:             strings.TrimSpace(p.BaseURL),
 			Models:              p.Models,
+			Region:              strings.TrimSpace(p.Region),
 			ContextWindowTokens: p.ContextWindowTokens,
 			FallbackProviders:   append([]string(nil), bundle.FallbackProviders...),
 		})
@@ -2275,6 +2276,7 @@ func loadDBLLMProviders(ctx context.Context, chatStore *store.Store) ([]agentcor
 			APIKey:              r.APIKey,
 			BaseURL:             r.BaseURL,
 			Models:              r.Models,
+			Region:              r.Region,
 			ContextWindowTokens: r.ContextWindowTokens,
 		})
 	}

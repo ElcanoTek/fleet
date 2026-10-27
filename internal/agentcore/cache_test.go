@@ -39,6 +39,12 @@ func TestSupportsExplicitBreakpoints(t *testing.T) {
 		{"claude-opus-4.6", true},
 		{"Claude-Sonnet-4.6", true}, // case-insensitive, same as the "/" forms
 		{"gemini-3-flash-preview", true},
+		// Bedrock's Claude ids (bedrock type): the model's own and an
+		// inference profile's, which carry a geographic prefix.
+		{"anthropic.claude-sonnet-4-5-20250929-v1:0", true},
+		{"us.anthropic.claude-sonnet-4-5-20250929-v1:0", true},
+		{"global.anthropic.claude-haiku-4-5-20251001-v1:0", true},
+		{"amazon.nova-pro-v1:0", false},
 		// Bare slugs of implicit-cache families stay unmarked.
 		{"gpt-5.4", false},
 		{"kimi-k2.5", false},

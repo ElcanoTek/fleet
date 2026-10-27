@@ -225,6 +225,61 @@ func TestLLMProviderContextWindow(t *testing.T) {
 	}
 }
 
+// A bedrock row's Region (migration 092) round-trips through create, both
+// update statements and every read. A region that is not a Region name, one
+// on another type, and a bedrock base_url with a path are refused as
+// validation errors, disabled or not.
+func TestLLMProviderRegion(t *testing.T) {
+	s := newTestStoreWithCipher(t)
+	ctx := context.Background()
+
+	in := LLMProviderInput{Name: "aws", Type: "bedrock", Models: []string{"anthropic.claude-haiku-4-5-20251001-v1:0"},
+		Enabled: true, ContextWindowTokens: 200000, Region: " eu-west-1 "}
+	row, err := s.CreateLLMProvider(ctx, in)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if row.Region != "eu-west-1" {
+		t.Fatalf("created region = %q, want eu-west-1, trimmed", row.Region)
+	}
+	in.Region = "us-west-2"
+	if _, err := s.UpdateLLMProvider(ctx, row.ID, in); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if list, err := s.ListLLMProviders(ctx); err != nil || len(list) != 1 || list[0].Region != "us-west-2" {
+		t.Fatalf("list = %+v, %v; want region us-west-2", list, err)
+	}
+	key := "bedrock-api-key"
+	in.Region, in.APIKey = "ap-northeast-1", &key
+	if _, err := s.UpdateLLMProvider(ctx, row.ID, in); err != nil {
+		t.Fatalf("keyed update: %v", err)
+	}
+	if got, err := s.GetLLMProviderConfig(ctx, row.ID); err != nil || got.Region != "ap-northeast-1" || got.APIKey != key {
+		t.Fatalf("get = %+v, %v; want region ap-northeast-1 and the key", got, err)
+	}
+	if configs, err := s.LLMProviderConfigs(ctx); err != nil || len(configs) != 1 || configs[0].Region != "ap-northeast-1" {
+		t.Fatalf("configs = %+v, %v; want region ap-northeast-1", configs, err)
+	}
+	// A row saved without one reads back as "" (us-east-1 for bedrock).
+	if plain, err := s.CreateLLMProvider(ctx, LLMProviderInput{Name: "plain", Type: "bedrock"}); err != nil || plain.Region != "" {
+		t.Fatalf("plain = %+v, %v; want region empty", plain, err)
+	}
+
+	for _, tc := range []struct {
+		in   LLMProviderInput
+		want string
+	}{
+		{LLMProviderInput{Name: "bad", Type: "bedrock", Region: "example.com/x"}, "not an AWS Region name"},
+		{LLMProviderInput{Name: "bad", Type: "openai", Region: "us-east-1"}, "applies only to a bedrock provider"},
+		{LLMProviderInput{Name: "bad", Type: "bedrock", BaseURL: "https://gateway.example/bedrock"}, "no path"},
+	} {
+		_, err := s.CreateLLMProvider(ctx, tc.in)
+		if err == nil || !strings.Contains(err.Error(), "invalid provider") || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%+v: err = %v, want an invalid-provider error saying %q", tc.in, err, tc.want)
+		}
+	}
+}
+
 // A keyed create without a cipher configured must fail closed, never store
 // plaintext.
 func TestLLMProviderKeyRequiresCipher(t *testing.T) {

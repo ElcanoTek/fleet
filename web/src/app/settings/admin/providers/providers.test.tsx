@@ -28,6 +28,7 @@ const ROW: LLMProvider = {
   enabled: true,
   has_api_key: true,
   context_window_tokens: 200000,
+  region: "",
   created_at: 1,
   updated_at: 1,
 };
@@ -57,6 +58,7 @@ describe("ProvidersAdminPage", () => {
       enabled: false,
       has_api_key: false,
       context_window_tokens: 65536,
+      region: "",
       created_at: 1,
       updated_at: 1,
     };
@@ -384,6 +386,95 @@ describe("ProvidersAdminPage", () => {
       models: ["gemini-2.5-pro"],
       context_window_tokens: 1048576,
     });
+  });
+
+  it("asks an Amazon Bedrock provider for a Region name and an origin-only Base URL, then sends the Region", async () => {
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    fireEvent.change(screen.getByPlaceholderText("my-provider"), { target: { value: "aws" } });
+    const regionLabel = "Region (the AWS Region the key was made in)";
+    expect(screen.queryByLabelText(regionLabel)).toBeNull();
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "bedrock" } });
+    expect(screen.getByText(/Claude models on Amazon Bedrock/)).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(/claude-sonnet-4-5/), {
+      target: { value: "us.anthropic.claude-sonnet-4-5-20250929-v1:0" },
+    });
+    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "bedrock-secret" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g. 200000"), { target: { value: "200000" } });
+    const posts = () =>
+      fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "POST");
+    const save = () => fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+
+    fireEvent.change(screen.getByLabelText(regionLabel), { target: { value: "eu-west-1.example.com" } });
+    save();
+    expect(await screen.findByText("Region must be an AWS Region name, such as us-east-1.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(regionLabel), { target: { value: " eu-west-1 " } });
+    for (const base of ["https://gateway.example.com/bedrock", "https://gateway.example.com?", "https://u:p@gateway.example.com"]) {
+      fireEvent.change(screen.getByLabelText("Base URL (optional)"), { target: { value: base } });
+      save();
+      expect(await screen.findByText(/A Bedrock Base URL is an endpoint's origin with no path/)).toBeInTheDocument();
+    }
+    expect(posts()).toHaveLength(0);
+
+    fireEvent.change(screen.getByLabelText("Base URL (optional)"), { target: { value: "" } });
+    save();
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(JSON.parse(String((posts()[0][1] as RequestInit).body))).toMatchObject({
+      name: "aws",
+      type: "bedrock",
+      base_url: "",
+      api_key: "bedrock-secret",
+      region: "eu-west-1",
+      models: ["us.anthropic.claude-sonnet-4-5-20250929-v1:0"],
+      context_window_tokens: 200000,
+    });
+  });
+
+  it("sends no region for a type without one, even after one was typed for Bedrock", async () => {
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    fireEvent.change(screen.getByPlaceholderText("my-provider"), { target: { value: "gemini" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "bedrock" } });
+    fireEvent.change(screen.getByLabelText("Region (the AWS Region the key was made in)"), {
+      target: { value: "eu-west-1" },
+    });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "google" } });
+    expect(screen.queryByLabelText("Region (the AWS Region the key was made in)")).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText(/claude-sonnet-4-5/), { target: { value: "gemini-2.5-pro" } });
+    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "gemini-secret" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g. 1048576"), { target: { value: "1048576" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+    const posts = () =>
+      fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "POST");
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(JSON.parse(String((posts()[0][1] as RequestInit).body))).toMatchObject({ type: "google", region: "" });
+  });
+
+  it("shows a Bedrock row's Region, us-east-1 when it names none, and none behind a Base URL", async () => {
+    const bedrock: LLMProvider = { ...ROW, id: "b1", name: "aws", type: "bedrock", region: "eu-west-1" };
+    const bedrockDefault: LLMProvider = { ...ROW, id: "b2", name: "aws-default", type: "bedrock", models: [] };
+    const bedrockProxy: LLMProvider = {
+      ...ROW,
+      id: "b3",
+      name: "aws-proxy",
+      type: "bedrock",
+      base_url: "https://bedrock-proxy.example.com",
+      region: "eu-west-1",
+      enabled: false,
+    };
+    vi.stubGlobal("fetch", mockFetch([bedrock, bedrockDefault, bedrockProxy]));
+    render(<ProvidersAdminPage />);
+    expect(
+      await screen.findByText("Amazon Bedrock · eu-west-1 · 1 model · 200,000-token context"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Amazon Bedrock · us-east-1 · catch-all (any model) · 200,000-token context"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Amazon Bedrock · 1 model · 200,000-token context · disabled")).toBeInTheDocument();
   });
 
   it("lets an optional-key row drop its stored key, and only such a row", async () => {

@@ -38,6 +38,11 @@ import (
 //   - google:     GET {base}/v1beta/models with the x-goog-api-key header (base
 //     defaults to the Gemini API). Gemini answers a wrong key with 400 and
 //     reason API_KEY_INVALID, which is reported as an authentication failure.
+//   - bedrock:    GET {runtime}/async-invoke?maxResults=1 with a Bearer key, at
+//     the Bedrock Runtime endpoint turns use (bedrockRuntimeURL). That is
+//     ListAsyncInvokes: a read, and a Runtime action, which Bedrock API keys
+//     are for (bedrock:List*, in the policy a long-term key gets by default).
+//     It lists no models, so it tests the endpoint and the key.
 //
 // For types whose probe returns a model catalog, the row's listed models are
 // checked against it: absences are reported as a WARNING (MissingModels), not
@@ -109,6 +114,11 @@ func ProbeProvider(ctx context.Context, cfg ProviderConfig) ProbeResult {
 	case spec.BaseURLRequired && strings.TrimSpace(cfg.BaseURL) == "":
 		return ProbeResult{Detail: fmt.Sprintf("no base_url is set — type %s requires one", cfg.Type)}
 	}
+	// A region is part of the endpoint's host name: one that is not a Region
+	// name must not pick the host the key is sent to.
+	if err := CheckProviderFields(spec, cfg.BaseURL, cfg.Region); err != nil {
+		return ProbeResult{Detail: err.Error()}
+	}
 	endpoint, header, catalogued := probeTarget(cfg)
 	if endpoint == "" {
 		return ProbeResult{Detail: fmt.Sprintf("no connection test for provider type %q", cfg.Type)}
@@ -135,6 +145,18 @@ func ProbeProvider(ctx context.Context, cfg ProviderConfig) ProbeResult {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, probeBodyCap))
 
 	switch {
+	case cfg.Type == ProviderTypeBedrock && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
+		resp.StatusCode >= 400 && resp.StatusCode <= 499 && bytes.Contains(body, []byte("scoped to a valid region"))):
+		// Bedrock answers a malformed key with 403, and a key without the
+		// permission this test needs with 403 AccessDeniedException. AWS
+		// documents no status for an expired key, and for a key from another
+		// Region only its message ("Credential should be scoped to a valid
+		// region"), which is matched whatever 4xx carries it. So the detail
+		// names all three causes.
+		return ProbeResult{
+			Status: resp.StatusCode, LatencyMS: latency,
+			Detail: "authentication failed — Bedrock refused the key: check that it is current, that region is the one it was made in, and that it allows bedrock:ListAsyncInvokes, which this test calls",
+		}
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden,
 		resp.StatusCode == http.StatusBadRequest && bytes.Contains(body, []byte("API_KEY_INVALID")):
 		return ProbeResult{
@@ -232,6 +254,9 @@ func probeTarget(cfg ProviderConfig) (endpoint string, header map[string]string,
 		}
 		// pageSize: the default page (50) can end before a listed model.
 		return base + "/v1beta/models?pageSize=1000", map[string]string{"x-goog-api-key": cfg.APIKey}, true
+	case ProviderTypeBedrock:
+		return bedrockRuntimeURL(base, strings.TrimSpace(cfg.Region)) + "/async-invoke?maxResults=1",
+			map[string]string{"Authorization": "Bearer " + cfg.APIKey}, false
 	default:
 		return "", nil, false
 	}

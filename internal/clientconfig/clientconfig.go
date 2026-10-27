@@ -1244,9 +1244,10 @@ func (t WebhookTriggerDef) SignatureHeader() string {
 // model context, or the logs.
 type ProviderDef struct {
 	Name                string   `yaml:"name"`                  // routing name; unique within the manifest
-	Type                string   `yaml:"type"`                  // openrouter | anthropic | openai | ollama | openaicompat | vercel | azure | google
+	Type                string   `yaml:"type"`                  // openrouter | anthropic | openai | ollama | openaicompat | vercel | azure | google | bedrock
 	APIKeyEnv           string   `yaml:"api_key_env"`           // env var holding the credential (optional for ollama and openaicompat)
 	BaseURL             string   `yaml:"base_url"`              // endpoint override; required for openaicompat and azure
+	Region              string   `yaml:"region"`                // AWS Region of a bedrock entry (default us-east-1); no other type takes one
 	Models              []string `yaml:"models"`                // slugs this provider serves; empty = catch-all
 	ContextWindowTokens int      `yaml:"context_window_tokens"` // provider-local context; OpenRouter uses authoritative per-model metadata
 }
@@ -2583,8 +2584,9 @@ func (b *Bundle) UncategorizedConnectors() []string {
 
 // validateProviders fails the load on a malformed providers[] entry (#289): a
 // blank/duplicate name, an unknown type, a missing api_key_env for a type that
-// requires a key, or a missing base_url for a type with no default endpoint
-// (openaicompat, azure). The per-type rules come from agentcore's provider
+// requires a key, a missing base_url for a type with no default endpoint
+// (openaicompat, azure), or a region or base_url its type does not accept
+// (agentcore.CheckProviderFields). The per-type rules come from agentcore's provider
 // type table, the same one the admin store and the resolver check. Like the
 // rest of validate this is fail-loud at startup — a typo'd provider type or a
 // missing credential env would otherwise only surface as a resolver error on
@@ -2615,6 +2617,9 @@ func (b *Bundle) validateProviders() error {
 		}
 		if spec.BaseURLRequired && strings.TrimSpace(p.BaseURL) == "" {
 			return fmt.Errorf("providers[%q]: type %q requires base_url", name, typ)
+		}
+		if err := agentcore.CheckProviderFields(spec, p.BaseURL, p.Region); err != nil {
+			return fmt.Errorf("providers[%q]: %w", name, err)
 		}
 		if p.ContextWindowTokens < 0 {
 			return fmt.Errorf("providers[%q]: context_window_tokens must be positive when set", name)

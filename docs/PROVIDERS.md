@@ -4,8 +4,8 @@ By default fleet routes every model through **OpenRouter**. A client bundle can
 instead declare a `providers:` block in `manifest.yaml` to route inference
 natively to **Anthropic**, **OpenAI**, a self-hosted **Ollama**, any other
 **OpenAI-compatible** server (vLLM, LM Studio, llama.cpp, a hosted gateway), the
-**Vercel AI Gateway**, an **Azure OpenAI** resource, Google's **Gemini API**, or
-any mix — for failover, data residency, or to avoid the OpenRouter markup.
+**Vercel AI Gateway**, an **Azure OpenAI** resource, Google's **Gemini API**,
+Claude models on **Amazon Bedrock**, or any mix — for failover, data residency, or to avoid the OpenRouter markup.
 Admins can add the same provider types from the web UI without a restart; see
 [`LLM-PROVIDERS.md`](LLM-PROVIDERS.md).
 
@@ -74,6 +74,14 @@ providers:
     models: ["gemini-3.8-flash"]
     context_window_tokens: 1048576
 
+  # Claude models on Amazon Bedrock, with a Bedrock API key.
+  - name: bedrock
+    type: bedrock
+    api_key_env: BEDROCK_API_KEY
+    region: us-west-2 # the Region the key was made in
+    models: ["us.anthropic.claude-sonnet-4-5-20250929-v1:0"]
+    context_window_tokens: 200000
+
 # Optional ordered availability chain. Each target must serve the same slug.
 fallback_providers: ["anthropic-direct", "openrouter"]
 ```
@@ -88,6 +96,7 @@ OPENAI_API_KEY=…
 AI_GATEWAY_API_KEY=…
 AZURE_OPENAI_API_KEY=…
 GEMINI_API_KEY=…
+BEDROCK_API_KEY=…
 ```
 
 ### Fields
@@ -97,7 +106,8 @@ GEMINI_API_KEY=…
 | `name` | yes | Routing name, unique within the manifest. Also the `<name>/` explicit-routing prefix. |
 | `type` | yes | One of the [provider types](#provider-types) below. Any other value fails the bundle load with the list of supported types. |
 | `api_key_env` | per type | Env var holding the credential (value read host-side, never in the manifest). Required for every type except `ollama` and `openaicompat`. |
-| `base_url` | per type | Endpoint override (e.g. the Ollama URL). Required for `openaicompat` and `azure`, which have no default endpoint. |
+| `base_url` | per type | Endpoint override (e.g. the Ollama URL). Required for `openaicompat` and `azure`, which have no default endpoint. For `bedrock` it is an origin only, with no path. |
+| `region` | `bedrock` only | The AWS Region a `bedrock` entry calls, which must be the one its key was made in (`us-west-2`); `us-east-1` by default. It picks the endpoint `bedrock-runtime.<region>.amazonaws.com`, so it must be a Region name, and every other type refuses one. With a `base_url` set it is not used. |
 | `models` | no | Slugs this provider serves. Empty = catch-all (matches any slug). |
 | `context_window_tokens` | no | Actual input-plus-output context limit for provider-local models. Set this to Ollama's `num_ctx` (and for custom OpenAI-compatible gateways). Omitted Ollama entries fail safe at 4096 tokens; other native entries use a conservative 32000-token fallback. Both fallbacks are below what a turn reserves with the default tool set (a little under 35,000 tokens when this was written), so in practice every non-OpenRouter entry needs this, and boot logs a warning for each one without it, and a declared window below that reserve fails the same way: raise Ollama's `num_ctx` rather than declaring a small one. Admin-managed rows have the same field, required before a non-OpenRouter row can be enabled ([`LLM-PROVIDERS.md`](LLM-PROVIDERS.md)). OpenRouter ignores this field: observed provider limits and its public per-model catalog are more authoritative than a manifest-wide declaration. |
 
@@ -121,6 +131,7 @@ once the row is enabled.
 | `vercel` | The Vercel AI Gateway | required | optional, default `https://ai-gateway.vercel.sh/v1` | Model ids are `<creator>/<model>` (`anthropic/claude-opus-4.8`), the same shape as OpenRouter slugs, so listing one takes it over from OpenRouter (see [Vercel and OpenRouter slugs](#vercel-and-openrouter-slugs)). Fleet does not read the gateway's per-model context limits, so declare `context_window_tokens`. |
 | `azure` | An Azure OpenAI resource | required | **required**: the resource's endpoint | Calls the resource's v1 API, with the key in the `Api-Key` header. An endpoint on one of Azure's public-cloud hosts (`https://<resource>.openai.azure.com`, `.cognitiveservices.azure.com` or `.services.ai.azure.com`, with any path) becomes `https://<resource>.openai.azure.com/openai/v1`. Any other URL is used as given, so for a proxy in front of the resource, or an Azure cloud other than the public one, give the full API root, ending in `/openai/v1`. That includes an Azure host written another way than the portal shows it (capital letters, an explicit `:443`, a `privatelink` name): it is used as given and answers 404, which the connection test shows. Model ids are the resource's deployment names. fantasy recognises a reasoning model by its id alone: an id that contains `gpt-5` in any case, or that starts with `o1`, `o3`, `o4` or `oss` or contains `-o1`, `-o3`, `-o4` or `-oss`. So name a GPT-5, o-series or gpt-oss deployment after its model, in lower case (`gpt-5-prod`, `o4-mini`): under another name it is sent `max_tokens` and a temperature, which Azure rejects for those models, so every turn on it fails. A newer reasoning model outside that match, such as GPT-6, is sent the same parameters whatever its deployment is called, so it may not run on an `azure` entry at all yet. Keys only: Microsoft Entra ID sign-in is not supported. The connection test checks the endpoint and the key, not the deployment names, so it does not catch a misnamed reasoning deployment. |
 | `google` | The Gemini API (Google AI Studio) | required | optional, default `https://generativelanguage.googleapis.com` | A Gemini API key from Google AI Studio, sent as `x-goog-api-key`. Model ids are Gemini's own (`gemini-3.8-flash`). A `base_url` is the API's root, without `/v1beta`. Vertex AI is not supported: fantasy's Vertex path drops a stored key and signs in with Google credentials found on the host. A model id containing `claude` or `anthropic`, which fantasy would send to Anthropic on Vertex, is refused; when the entry is in a `fallback_providers` chain, the providers after it take such a slug instead. Do not name the entry `google`: a provider name is an explicit route, so it would also take every OpenRouter `google/…` slug. When fleet re-sends a turn (after a context checkpoint, or to resume after a stream error) it keeps Gemini's thought signatures, which newer Gemini models require on a turn's tool calls. See the limits below for tool schemas. |
+| `bedrock` | Claude models on Amazon Bedrock | required: a Bedrock API key | optional, default `https://bedrock-runtime.<region>.amazonaws.com` | Calls Bedrock's InvokeModel API in the Anthropic API's request shape, which is what fantasy's `bedrock` provider does, so it reaches Claude models only. Bedrock's other models (Amazon Nova, Llama, Mistral…) are not supported. Model ids are Bedrock's: list an inference profile's id (`us.anthropic.claude-sonnet-4-5-20250929-v1:0`, or the `eu.`, `apac.` or `global.` one), since AWS offers newer Claude models on demand only through one. A model's own id (`anthropic.claude-…`) works only where AWS lists In-Region support for it. A geographic or global profile can serve a request from another Region, so it does not keep data in the entry's Region. The key is a Bedrock API key, long-term or short-term, sent as a Bearer token. A key works only in the AWS Region it was made in, so set `region` to that Region; a short-term key also expires within 12 hours, after which turns fail until the entry gets a new one. A `base_url` replaces the Region's endpoint: for a proxy or a VPC endpoint in front of Bedrock Runtime, or a Region whose endpoints are not under `amazonaws.com` (China, the European Sovereign Cloud). It must be an origin with no path, query or credentials: the client converts a request to Bedrock's `/model/<id>/invoke` only when its path is exactly `/v1/messages`, so behind a path prefix it would go out unconverted. AWS credentials found on the host (access keys, profiles, SSO, instance roles) are never used. Fleet marks prompt-cache breakpoints on every id containing `anthropic.claude-`, as it does for the `anthropic` type; an ARN (an application inference profile, provisioned throughput) gets none. AWS lists the Claude models Bedrock caches prompts for and does not say what it does with the markers on another; `FLEET_DISABLE_PROMPT_CACHE=true` turns them off, for every model. Turns follow a redirect only within the endpoint's origin. A Bedrock error in fleet's logs names the request as `POST …/v1/messages`, the Anthropic API's path, though it went to `/model/<id>/invoke` or `/model/<id>/invoke-with-response-stream`. |
 
 The OpenAI Go client under `openaicompat`, `vercel` and `azure` copies the
 host's own OpenAI settings onto every request: `OPENAI_API_KEY` or
@@ -146,8 +157,16 @@ applies to it. One trace is left: with both `GOOGLE_API_KEY` and
 `GEMINI_API_KEY` set, the client still logs that it is using
 `GOOGLE_API_KEY` each time it loads a model, though the entry uses its own.
 
-fantasy also ships `bedrock` and `kronk` providers. They are not configurable
-yet; issue #1703 tracks them.
+The Bedrock client sends the host's `AWS_BEARER_TOKEN_BEDROCK` in place of the
+key it is given. A `bedrock` entry sets its own key on every request after the
+client has, so that variable never replaces it and never reaches the entry's
+endpoint. Given a key, the client loads no other AWS configuration
+(`AWS_ACCESS_KEY_ID`, `AWS_PROFILE`, `AWS_REGION`, `~/.aws`), and it skips the
+Anthropic client's own settings (`ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`,
+`ANTHROPIC_CUSTOM_HEADERS` and the rest).
+
+fantasy also ships a `kronk` provider. It is not configurable yet; issue #1703
+tracks it.
 
 ## How a model slug is routed
 
@@ -171,7 +190,8 @@ So in the example above: `gpt-4o` → `openai-direct`; `claude-opus-4-8` →
 (explicit); `anthropic/claude-sonnet-4.6` → `openrouter` (catch-all);
 `anthropic/claude-opus-4.8` → `gateway` (its `models` list beats the
 catch-all); `qwen3-coder` → `gpu-box`; `gpt-5-prod` → `azure-east`;
-`gemini-3.8-flash` → `gemini`; `llama3.2` → `local`.
+`gemini-3.8-flash` → `gemini`; `us.anthropic.claude-sonnet-4-5-20250929-v1:0` →
+`bedrock`; `llama3.2` → `local`.
 
 ### Vercel and OpenRouter slugs
 
@@ -193,14 +213,15 @@ and place it after the OpenRouter catch-all: only explicit routes such as
 - **OpenRouter-only features on native providers.** Upstream pinning, the
   1M-context Anthropic beta header, and extended thinking (#220) are OpenRouter
   provider options; a request routed through any other type (Anthropic, OpenAI,
-  Ollama, OpenAI-compatible, Vercel, Azure, Google) gets the base request
+  Ollama, OpenAI-compatible, Vercel, Azure, Google, Bedrock) gets the base request
   without them (a documented follow-on). Vercel model ids look like OpenRouter
   slugs, but the OpenRouter options do not apply to them.
 - **Native-provider cost accrues as $0** at runtime unless a #297 manifest
   pricing override prices the slug (a native response carries no OpenRouter cost
   metadata; the price table feeds only the pre-submission forecast). This
-  includes `openaicompat`, `vercel`, `azure` and `google`: fleet does not read
-  a cost from the Vercel AI Gateway's, Azure's or Gemini's responses. Because
+  includes `openaicompat`, `vercel`, `azure`, `google` and `bedrock`: fleet does
+  not read a cost from the Vercel AI Gateway's, Azure's, Gemini's or Bedrock's
+  responses. Because
   native runtime cost stays $0, **`FLEET_MAX_COST_USD` does not bound native
   runs** — only the token ceiling (`FLEET_MAX_TOTAL_TOKENS`) does. Add a pricing
   override to track native USD cost and re-enable the USD ceiling.

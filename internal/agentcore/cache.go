@@ -60,6 +60,15 @@ var explicitBreakpointPrefixes = []string{
 	"gemini-",
 }
 
+// bedrockClaudeMarker is in every Bedrock id for a Claude model: the model's
+// own (anthropic.claude-…) and an inference profile's (us.anthropic.claude-…,
+// global.anthropic.claude-…). Those ids have no "<lab>/" prefix to match, and
+// fantasy's bedrock provider is its anthropic provider, which reads the same
+// anthropic.Name markers. No OpenRouter slug contains it. A Bedrock ARN (an
+// application inference profile, provisioned throughput) names no model and
+// gets no markers.
+const bedrockClaudeMarker = "anthropic.claude-"
+
 // supportsExplicitBreakpoints reports whether the model slug routes to a
 // provider that uses explicit per-message cache_control. Everything else falls
 // back to the upstream's implicit caching and receives no markers.
@@ -75,7 +84,7 @@ func supportsExplicitBreakpoints(model string) bool {
 			return true
 		}
 	}
-	return false
+	return strings.Contains(m, bedrockClaudeMarker)
 }
 
 // stablePrefixOnly reports whether the model's family must carry breakpoints on

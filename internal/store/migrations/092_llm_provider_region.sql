@@ -1,0 +1,12 @@
+-- 092_llm_provider_region.sql — the AWS Region of an admin-managed bedrock
+-- provider, the admin-row twin of a bundle entry's region.
+--
+-- A Bedrock API key works only in the Region it was made in, and the Region
+-- picks the endpoint a bedrock row calls (bedrock-runtime.<region>.amazonaws.com).
+-- Only the bedrock type takes one; the store and the API refuse it on every
+-- other type, and refuse anything that is not a Region name, since it becomes
+-- part of a host name.
+--
+-- '' = not set, which is every row written before this column: none of them is
+-- a bedrock row, and a bedrock row without one calls us-east-1.
+ALTER TABLE llm_providers ADD COLUMN region TEXT NOT NULL DEFAULT '';

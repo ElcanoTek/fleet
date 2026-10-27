@@ -2,7 +2,7 @@
 
 Admins can add, edit, disable, and remove LLM providers from the web admin
 page (Settings → Admin → Model providers) — an OpenRouter, Anthropic, OpenAI,
-Vercel AI Gateway or Gemini API key, an Azure OpenAI resource, or any
+Vercel AI Gateway, Gemini API or Amazon Bedrock key, an Azure OpenAI resource, or any
 OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, a gateway). Multiple
 providers run simultaneously; edits apply on the next message with **no
 restart**. This builds on the #289 multi-provider
@@ -13,7 +13,7 @@ only be configured from the client bundle's `providers:` block.
 
 - **Storage**: `llm_providers` (chat-DB migration 034) — name (the routing
   prefix), type (one of the [provider types](PROVIDERS.md#provider-types):
-  `openrouter|anthropic|openai|ollama|openaicompat|vercel|azure|google`), base
+  `openrouter|anthropic|openai|ollama|openaicompat|vercel|azure|google|bedrock`), base
   URL, JSONB models list, enabled flag, and the API key sealed with the store's
   secretbox cipher (AES-256-GCM, `FLEET_MCP_OAUTH_ENCRYPTION_KEY`), AAD-bound to
   the row id. `internal/store/llm_providers.go`. The store checks each row
@@ -26,7 +26,8 @@ only be configured from the client bundle's `providers:` block.
   are the resource's deployment names, and a GPT-5, o-series or gpt-oss
   deployment must carry its model in its name, or every turn on it fails; a
   newer reasoning model such as GPT-6 is not recognized under any name
-  ([details](PROVIDERS.md#provider-types)).
+  ([details](PROVIDERS.md#provider-types)). A `bedrock` row serves Claude
+  models only, by their Bedrock ids.
 - **Context window** (chat-DB migration 082): `context_window_tokens`, the
   admin-row twin of a bundle entry's field of the same name. It is one number
   per row, so it applies to every model the row serves: enter the smallest
@@ -55,6 +56,17 @@ only be configured from the client bundle's `providers:` block.
     fallback until an admin edits them. The list flags them with a **No
     context window** badge, Enable opens the edit form with the field focused,
     and boot and every reload log a warning naming each enabled one.
+- **Region** (chat-DB migration 092): `region`, a `bedrock` row's AWS Region,
+  the admin-row twin of a bundle entry's field of the same name. A Bedrock API
+  key works only in the Region it was made in, and the Region picks the
+  endpoint the row calls (`bedrock-runtime.<region>.amazonaws.com`, unless the
+  row sets a base URL); empty means `us-east-1`. The store refuses a region on
+  any other type, and one that is not a Region name, since it becomes part of a
+  host name, even on a disabled row. It also refuses a `bedrock` base URL with
+  a path, a query or credentials. An update that omits the field keeps the
+  stored value, unless it changes the row to a type that takes no region. The
+  form shows the field for Amazon Bedrock only, and the row's line shows the
+  Region, unless a base URL replaces it.
 - **API** (chat server): admin-gated CRUD at `/admin/llm-providers[/{id}]`
   (same `adminMiddleware` as the rest of `/admin/*`), plus a member-level
   `GET /llm-provider-models` that returns active providers' model slugs for
@@ -111,7 +123,8 @@ only be configured from the client bundle's `providers:` block.
   OpenRouter catalog already covers the former; no public catalog can know a
   local Ollama's pulled models). `openaicompat` catch-alls are not expanded for
   the same reason as Ollama, nor `azure` ones (their models are deployment
-  names the admin chose), and `vercel` and `google` ones are not expanded yet:
+  names the admin chose) or `bedrock` ones (the models the AWS account has
+  enabled in its Region), and `vercel` and `google` ones are not expanded yet:
   catwalk lists the Vercel gateway's catalog, but wiring catalogs into the
   picker for these types is a follow-up.
 - **Test connection**: each row has a Test button →
@@ -119,8 +132,17 @@ only be configured from the client bundle's `providers:` block.
   against the provider's real endpoint (`internal/agentcore/provider_probe.go`):
   OpenRouter's authenticated key-metadata endpoint, the Anthropic, OpenAI,
   Ollama, OpenAI-compatible, Vercel AI Gateway, Azure or Gemini models list with
-  the row's auth. The Gemini API answers a wrong key with HTTP 400, which the
-  test reports as an authentication failure like a 401. A row missing a field
+  the row's auth, or for Bedrock, ListAsyncInvokes
+  (`GET /async-invoke?maxResults=1`) at the Bedrock Runtime endpoint the row's
+  turns use. That is a read and a Bedrock Runtime action, which is what
+  Bedrock API keys are for, and the policy a long-term key gets by default
+  allows it. The Gemini API answers a wrong key with HTTP 400, which the
+  test reports as an authentication failure like a 401. Bedrock answered a
+  malformed key with 403 when this shipped, and answers a key without the
+  permission with 403 AccessDeniedException. AWS documents no status for an
+  expired key, and for a key from another Region only its message ("Credential
+  should be scoped to a valid region"), which the test matches in any 4xx. So
+  a Bedrock refusal names all three causes. A row missing a field
   its type requires (a key for a keyed type, a base URL for `openaicompat` and
   `azure`) is reported without any call. For Vercel that matters: the gateway
   serves its public catalog to an empty Bearer token, so probing a keyless row
@@ -128,7 +150,8 @@ only be configured from the client bundle's `providers:` block.
   row lists, the row's listed slugs are cross-checked — absences report as a
   warning (gateways and Ollama tags legitimately under-enumerate), never a
   failure. Azure's list names models, not the deployments a row lists, so an
-  `azure` row reports "key accepted" without that check. Works on disabled rows
+  `azure` row reports "key accepted" without that check, and so does a
+  `bedrock` row, whose probe lists no models. Works on disabled rows
   so an admin can verify before enabling. The decrypted key travels only in the
   outbound auth header, and the probe follows a redirect only within the
   endpoint's origin, as turns do: a redirect to another host is reported as its

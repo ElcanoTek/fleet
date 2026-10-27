@@ -131,9 +131,11 @@ the contract is enforced by review + the no-volatile-tokens rule above.
 `cache_control: {type: "ephemeral"}` breakpoints, but **only for slugs that route
 to a provider honoring explicit breakpoints** — OpenRouter-form `anthropic/` and
 `google/`, plus the provider-local `claude-`/`gemini-` forms a native provider
-(#289) reports (see `explicitBreakpointPrefixes`); a leading `~` floating-alias
-sigil is stripped first. Everything else relies on the upstream's implicit
-caching and gets no markers. Placement (Anthropic allows 4 breakpoints per
+(#289) reports (see `explicitBreakpointPrefixes`), and any slug containing
+`anthropic.claude-`, which every Bedrock Claude id does, inference profiles
+included (`bedrockClaudeMarker`; a Bedrock ARN does not match); a leading `~`
+floating-alias sigil is stripped first. Everything else relies on the
+upstream's implicit caching and gets no markers. Placement (Anthropic allows 4 breakpoints per
 request):
 
 1. The **last system message** — anchors the stable system-prompt + tool prefix.
