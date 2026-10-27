@@ -67,15 +67,8 @@ func (s *Store) ExternalAccessState(ctx context.Context, issuer, subject string)
 	return state, err == nil, err
 }
 
-// ApplyExternalAccess applies a newer Auth version atomically to Fleet's Chat
-// membership and its durable desired-state row. The Ops plane is reconciled by
-// the HTTP layer after commit and retried idempotently if it fails.
-//
-// A grant that carries a Team sets users.team_id through the same unsharing
-// an admin team change does (unshareOnTeamChangeTx), in this transaction: the
-// person leaves their old team's shares exactly as if an admin had moved them.
-// A revoke never changes the team, and a grant without a Team leaves it alone.
-func (s *Store) ApplyExternalAccess(ctx context.Context, next ExternalAccessState) (ExternalAccessState, bool, error) {
+// normalizeExternalAccessState trims an incoming state and checks its bounds.
+func normalizeExternalAccessState(next ExternalAccessState) (ExternalAccessState, error) {
 	next.Issuer, next.Subject, next.Email = strings.TrimSpace(next.Issuer), strings.TrimSpace(next.Subject), normalizeEmail(next.Email)
 	next.EventID, next.ChatRole, next.OpsRole = strings.TrimSpace(next.EventID), strings.TrimSpace(next.ChatRole), strings.TrimSpace(next.OpsRole)
 	if next.Team != nil {
@@ -86,13 +79,44 @@ func (s *Store) ApplyExternalAccess(ctx context.Context, next ExternalAccessStat
 		next.Email == "" || len(next.Email) > 254 || next.EventID == "" || len(next.EventID) > 255 ||
 		next.Version <= 0 || next.IssuedAt <= 0 || !ValidRole(next.ChatRole) || !validOpsRole(next.OpsRole) ||
 		(next.Team != nil && !ValidExternalTeam(*next.Team)) {
-		return ExternalAccessState{}, false, errors.New("invalid external access state")
+		return ExternalAccessState{}, errors.New("invalid external access state")
+	}
+	return next, nil
+}
+
+// ApplyExternalAccess applies a newer Auth version atomically to Fleet's Chat
+// membership and its durable desired-state row. The Ops plane is reconciled by
+// the HTTP layer after commit and retried idempotently if it fails.
+//
+// A grant that carries a Team sets users.team_id through the same unsharing
+// an admin team change does (unshareOnTeamChangeTx), in this transaction: the
+// person leaves their old team's shares exactly as if an admin had moved them.
+// A revoke never changes the team, and a grant without a Team leaves it alone.
+func (s *Store) ApplyExternalAccess(ctx context.Context, next ExternalAccessState) (ExternalAccessState, bool, error) {
+	next, err := normalizeExternalAccessState(next)
+	if err != nil {
+		return ExternalAccessState{}, false, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ExternalAccessState{}, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Serialize every event for this identity, the FIRST one included. The
+	// FOR UPDATE below locks the stored state row, but before an identity's
+	// first event commits there is no row to lock: two concurrent first
+	// events (say a grant at version 1 and the revoke at version 2) both read
+	// "no row", both pass the version check, and whichever committed last
+	// won — a revoke could commit first and the older grant after it,
+	// leaving a revoked account enabled. A transaction-scoped advisory lock
+	// on (issuer, subject) exists whether or not the row does, so the second
+	// event waits, then reads the first one's committed row and is judged
+	// against its version like any later event. The two-key form keeps this
+	// lock space apart from the single-key locks used elsewhere.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('external_access_state'), hashtext($1 || chr(10) || $2))`,
+		next.Issuer, next.Subject); err != nil {
+		return ExternalAccessState{}, false, err
+	}
 	var current ExternalAccessState
 	err = scanExternalAccessState(tx.QueryRowContext(ctx, `SELECT `+externalAccessStateColumns+`
 		FROM external_access_state WHERE issuer = $1 AND subject = $2 FOR UPDATE`, next.Issuer, next.Subject), &current)
@@ -108,6 +132,12 @@ func (s *Store) ApplyExternalAccess(ctx context.Context, next ExternalAccessStat
 	}
 	now := time.Now().Unix()
 	if next.Allowed {
+		// A grant that moves the account's team takes the team-name locks
+		// before the UPDATE below locks the users row (lock order: team
+		// names, then user rows — see lockUserTeamChangeTx).
+		if err := lockExternalTeamChangeTx(ctx, tx, next); err != nil {
+			return ExternalAccessState{}, false, err
+		}
 		res, err := tx.ExecContext(ctx, `UPDATE users SET enabled = TRUE, role = $2, updated_at = $3 WHERE email = $1`, next.Email, next.ChatRole, now)
 		if err != nil {
 			return ExternalAccessState{}, false, err
@@ -119,6 +149,11 @@ func (s *Store) ApplyExternalAccess(ctx context.Context, next ExternalAccessStat
 			var team any
 			if next.Team != nil && *next.Team != "" {
 				team = *next.Team
+				// A new account joining a team name nobody holds forms that
+				// team afresh; see retireUnheldTeamNameTx.
+				if err := retireUnheldTeamNameTx(ctx, tx, *next.Team, now); err != nil {
+					return ExternalAccessState{}, false, err
+				}
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO users(email, password_hash, role, team_id, enabled, created_at, updated_at)
 				VALUES($1, $2, $3, $4, TRUE, $5, $5)`, next.Email, "!central-auth-only!", next.ChatRole, team, now); err != nil {
@@ -148,22 +183,66 @@ func (s *Store) ApplyExternalAccess(ctx context.Context, next ExternalAccessStat
 			return ExternalAccessState{}, false, err
 		}
 	}
+	stored, err := upsertExternalAccessStateTx(ctx, tx, next, now)
+	if err != nil {
+		return ExternalAccessState{}, false, err
+	}
+	if !stored {
+		// A newer state is already stored: this event is rolled back whole,
+		// its users-table changes with it.
+		_ = tx.Rollback()
+		return s.newerStoredExternalAccessState(ctx, next.Issuer, next.Subject)
+	}
+	return next, true, tx.Commit()
+}
+
+// newerStoredExternalAccessState is ApplyExternalAccess's answer when its
+// upsert found a newer stored state: that state, unchanged.
+func (s *Store) newerStoredExternalAccessState(ctx context.Context, issuer, subject string) (ExternalAccessState, bool, error) {
+	current, ok, err := s.ExternalAccessState(ctx, issuer, subject)
+	if err != nil {
+		return ExternalAccessState{}, false, err
+	}
+	if !ok {
+		return ExternalAccessState{}, false, errors.New("external access state was not stored")
+	}
+	return current, false, nil
+}
+
+// upsertExternalAccessStateTx records next as the identity's desired state,
+// reporting false when a stored state of the same or a newer version already
+// exists. The version check lives in the upsert itself (WHERE stored.version <
+// incoming): the advisory lock in ApplyExternalAccess is what orders events,
+// and this keeps the stored row monotonic even for a future path that writes
+// it without the lock.
+func upsertExternalAccessStateTx(ctx context.Context, tx *sql.Tx, next ExternalAccessState, now int64) (bool, error) {
 	var storedTeam any
 	if next.Team != nil {
 		storedTeam = *next.Team
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO external_access_state(
+	res, err := tx.ExecContext(ctx, `INSERT INTO external_access_state(
 		issuer, subject, email, version, allowed, event_id, chat_role, ops_role, team, issued_at, received_at
 	) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 	ON CONFLICT(issuer, subject) DO UPDATE SET email=EXCLUDED.email, version=EXCLUDED.version,
 		allowed=EXCLUDED.allowed, event_id=EXCLUDED.event_id, chat_role=EXCLUDED.chat_role,
-		ops_role=EXCLUDED.ops_role, team=EXCLUDED.team, issued_at=EXCLUDED.issued_at, received_at=EXCLUDED.received_at`,
+		ops_role=EXCLUDED.ops_role, team=EXCLUDED.team, issued_at=EXCLUDED.issued_at, received_at=EXCLUDED.received_at
+	WHERE external_access_state.version < EXCLUDED.version`,
 		next.Issuer, next.Subject, next.Email, next.Version, next.Allowed, next.EventID,
 		next.ChatRole, next.OpsRole, storedTeam, next.IssuedAt, now)
 	if err != nil {
-		return ExternalAccessState{}, false, err
+		return false, err
 	}
-	return next, true, tx.Commit()
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// lockExternalTeamChangeTx is lockUserTeamChangeTx for a grant that carries
+// a team; a grant without one changes no team and locks nothing.
+func lockExternalTeamChangeTx(ctx context.Context, tx *sql.Tx, next ExternalAccessState) error {
+	if next.Team == nil {
+		return nil
+	}
+	return lockUserTeamChangeTx(ctx, tx, next.Email, *next.Team)
 }
 
 // applyExternalTeamTx moves email to team ("" = no team) on the provider's

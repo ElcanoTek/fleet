@@ -72,6 +72,10 @@ type taskYAML struct {
 	// AllowDelegation mirrors the task column (#1043): omitted defaults to TRUE
 	// (sub-agents are opt-out), matching what a task created through the API gets.
 	AllowDelegation *bool `yaml:"allow_delegation"`
+	// AllowNetwork mirrors the task column: omitted is FALSE, so the run's
+	// sandbox is sealed and web_fetch is not registered (ADR-0094), exactly
+	// as for a task created through the API.
+	AllowNetwork bool `yaml:"allow_network"`
 }
 
 type mcpChoiceYAML struct {
@@ -112,29 +116,10 @@ func run(argv []string, progName string) error {
 	cfg.MCPServers = bundle.MCPServerConfigs()
 	cfg.HTTPTools = bundle.HTTPToolConfigs()
 	cfg.A2APeers = bundle.A2APeerConfigs()
-	if strings.TrimSpace(cfg.SandboxImage) == "" {
-		if ref := bundle.Sandbox().ResolvedImageRef(); ref != "" {
-			cfg.SandboxImage = ref
-		}
-	}
-	// Honor the bundle's sandbox.runtime (#217) with the same precedence the fleet
-	// boot path uses — env FLEET_SANDBOX_RUNTIME wins, else the manifest — so a
-	// kata/libkrun bundle gets the fail-closed KVM preflight under cutlass too.
-	// buildSandboxPool (via agent.New below) runs PreflightRuntime on this value.
-	cfg.SandboxRuntime = sandbox.ResolveRuntime(cfg.SandboxRuntime, bundle.Sandbox().Runtime)
+	applyBundleSandbox(cfg, bundle.Sandbox())
 
 	// Install the bundle's agent tool-behavior policy before any turn runs.
-	bp := bundle.AgentPolicy()
-	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
-		ParallelSafeTools:            bp.ParallelSafeTools,
-		CriticalToolSuffixes:         bp.CriticalToolSuffixes,
-		CriticalToolSubstitutes:      bp.CriticalToolSubstitutes,
-		CriticalToolAliases:          bp.CriticalToolAliases,
-		EmailLastToolSuffixes:        bp.EmailLastTools,
-		SettleableCreateToolSuffixes: bp.SettleableCreateTools,
-		BatchSecondsPerDeal:          bp.BatchSecondsPerDeal,
-		ApprovedCallTimeoutSeconds:   bp.ApprovedCallTimeoutSeconds,
-	})
+	agentcore.ConfigureAgentPolicy(taskRunAgentPolicy(bundle.AgentPolicy()))
 
 	// Install the bundle's custom model-pricing overrides (#297) before any turn
 	// runs. The generic bundle ships none, so cost accounting stays on the
@@ -235,6 +220,46 @@ func run(argv []string, progName string) error {
 	return nil
 }
 
+// applyBundleSandbox fills the sandbox settings the bundle manifest supplies,
+// with the same precedence as the server boot path (cmd/fleet):
+//
+//   - the image: env FLEET_SANDBOX_IMAGE wins, else the manifest's;
+//   - the OCI runtime (#217): env FLEET_SANDBOX_RUNTIME wins, else the
+//     manifest's, so a kata/libkrun bundle gets the fail-closed KVM preflight
+//     here too (buildSandboxPool, via agent.New, runs PreflightRuntime);
+//   - the egress allowlist (#211) for FLEET_DEFAULT_NETWORK_MODE=allowlisted:
+//     the manifest's network_allowlist, exactly as the server sets it. Without
+//     it an allowlisted one-shot run got an empty list, and the egress proxy
+//     and web_fetch (ADR-0094) refused every host.
+func applyBundleSandbox(cfg *config.Config, sb clientconfig.Sandbox) {
+	if strings.TrimSpace(cfg.SandboxImage) == "" {
+		if ref := sb.ResolvedImageRef(); ref != "" {
+			cfg.SandboxImage = ref
+		}
+	}
+	cfg.SandboxRuntime = sandbox.ResolveRuntime(cfg.SandboxRuntime, sb.Runtime)
+	cfg.SandboxNetworkAllowlist = append([]string(nil), sb.NetworkAllowlist...)
+}
+
+// taskRunAgentPolicy translates the bundle's agent policy for a one-shot run.
+// It carries every field that governs a SCHEDULED run — the critical-tool
+// audit set and the unattended built-in removals included — so `fleet task
+// run` is never looser than the scheduler for the same bundle. (Chat-only
+// fields such as approval-card options have no effect here.)
+func taskRunAgentPolicy(bp clientconfig.AgentPolicy) agentcore.AgentPolicy {
+	return agentcore.AgentPolicy{
+		ParallelSafeTools:            bp.ParallelSafeTools,
+		CriticalToolSuffixes:         bp.CriticalToolSuffixes,
+		CriticalToolSubstitutes:      bp.CriticalToolSubstitutes,
+		CriticalToolAliases:          bp.CriticalToolAliases,
+		EmailLastToolSuffixes:        bp.EmailLastTools,
+		SettleableCreateToolSuffixes: bp.SettleableCreateTools,
+		BatchSecondsPerDeal:          bp.BatchSecondsPerDeal,
+		ApprovedCallTimeoutSeconds:   bp.ApprovedCallTimeoutSeconds,
+		UnattendedDisabledTools:      bp.UnattendedDisabledTools,
+	}
+}
+
 // loadTaskYAML parses the task file into a models.Task ready for the runner.
 func loadTaskYAML(path string) (*models.Task, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // G304: operator-supplied task file path — reading it is the whole point of the CLI.
@@ -256,6 +281,7 @@ func loadTaskYAML(path string) (*models.Task, error) {
 		// Same default a task created through the API gets (#1043): delegation
 		// is opt-out, so an omitted key means true.
 		AllowDelegation: y.AllowDelegation == nil || *y.AllowDelegation,
+		AllowNetwork:    y.AllowNetwork,
 	}
 	if s := strings.TrimSpace(y.Model); s != "" {
 		task.Model = &s

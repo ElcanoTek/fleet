@@ -416,6 +416,11 @@ func proxyAuthToken(header string) (string, bool) {
 	return user, true
 }
 
+// DomainAllowed is domainAllowed for host-side fetchers that must honor the
+// same allowlist as the proxy (web_fetch in an allowlisted scheduled run), so
+// the two never disagree about what a list entry admits.
+func DomainAllowed(host string, allowlist []string) bool { return domainAllowed(host, allowlist) }
+
 // domainAllowed reports whether host matches any allowlist entry. Entries are
 // exact ("api.github.com") or "*."-prefixed wildcards ("*.github.com", which
 // matches the apex github.com AND any subdomain). Matching is case-insensitive

@@ -197,6 +197,21 @@ chat" — team membership is not probeable from here. The team link is the one
 read that answers a non-reader with something other than 404, and it says
 only what routing needs (below).
 
+### Audience identity
+
+A share names its audience by **team ID**, not only by the team's name
+([ADR-0093](adr/0093-team-shares-name-their-audience-by-team-id.md), migration
+084). Sharing stamps both the label (`team_shared_with`) and the id of that
+team's row in `teams` (`team_shared_with_id`); every read gate requires both to
+match the caller's team. Renaming a team relabels its row in the same
+transaction, so its shares follow it; renaming onto an existing team merges
+the two and re-points the shares. Before anyone joins a name that no user and
+no project holds, a leftover row under that name is retired (its shares
+unshared), so a new team formed under an old name starts with nothing shared.
+Shares that a rename made before this change left pointing at the old name
+were unshared by the migration (which team they meant cannot be told from the
+data); their owners share them again.
+
 ## Files in a team share
 
 ADR-0079 records the decision; this is how it works.
