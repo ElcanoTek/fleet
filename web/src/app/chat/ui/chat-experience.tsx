@@ -928,40 +928,44 @@ export function ChatExperience({
   const isAutoApprove = activeConversation
     ? activeConversation.auto_approve === true
     : pendingAutoApprove;
+  const autoApproveSeqRef = useRef<Map<string, number>>(new Map());
+  const autoApproveChainRef = useRef<Map<string, Promise<void>>>(new Map());
   const toggleAutoApprove = useCallback(() => {
     const next = !isAutoApprove;
     if (!activeConversationId || isPendingKey(activeConversationId)) {
       setPendingAutoApprove(next);
       return;
     }
-    setConversations((curr) =>
-      curr.map((c) =>
-        c.id === activeConversationId ? { ...c, auto_approve: next } : c,
-      ),
-    );
-    setArchivedConversations((curr) =>
-      curr.map((c) =>
-        c.id === activeConversationId ? { ...c, auto_approve: next } : c,
-      ),
-    );
-    const url = conversationApiUrl(activeConversationId, "/auto-approve");
-    if (!url) return;
-    void fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ auto_approve: next }),
-    }).catch(() => {
+    const convId = activeConversationId;
+    const seq = (autoApproveSeqRef.current.get(convId) ?? 0) + 1;
+    autoApproveSeqRef.current.set(convId, seq);
+    const applyState = (val: boolean) => {
       setConversations((curr) =>
-        curr.map((c) =>
-          c.id === activeConversationId ? { ...c, auto_approve: !next } : c,
-        ),
+        curr.map((c) => (c.id === convId ? { ...c, auto_approve: val } : c)),
       );
       setArchivedConversations((curr) =>
-        curr.map((c) =>
-          c.id === activeConversationId ? { ...c, auto_approve: !next } : c,
-        ),
+        curr.map((c) => (c.id === convId ? { ...c, auto_approve: val } : c)),
       );
+    };
+    applyState(next);
+    const url = conversationApiUrl(convId, "/auto-approve");
+    if (!url) return;
+    const prev = autoApproveChainRef.current.get(convId) ?? Promise.resolve();
+    const run = prev.then(async () => {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ auto_approve: next }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } catch {
+        if (autoApproveSeqRef.current.get(convId) === seq) {
+          applyState(!next);
+        }
+      }
     });
+    autoApproveChainRef.current.set(convId, run);
   }, [isAutoApprove, activeConversationId]);
   const [isLoadingMcpServers, setIsLoadingMcpServers] = useState(false);
   const [memories, setMemories] = useState<UserMemory[]>([]);

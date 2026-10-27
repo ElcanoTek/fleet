@@ -273,7 +273,20 @@ func TestStage_ConversationAutoApprove(t *testing.T) {
 		t.Errorf("no-session-approval tool returned PreApprovedSentinel, want staged card")
 	}
 
-	// 5. Turning liveAutoApprove off mid-turn stops pre-approving subsequent calls.
+	// 5. Session deny policy takes precedence over conversation auto-approve.
+	reg := NewSessionApprovalRegistry()
+	reg.Register("c1", "mcp_pages_create_workspace", SessionApprovalPolicy{Mode: "deny"})
+	a.sessionRegistry = reg
+	id, err = a.Stage("mcp_pages_create_workspace", "call_deny", `{"title":"Deck"}`)
+	if err != nil {
+		t.Fatalf("Stage with session deny: %v", err)
+	}
+	if id != agentcore.PreDeniedSentinel {
+		t.Errorf("Stage with session deny returned %q, want PreDeniedSentinel", id)
+	}
+	a.sessionRegistry = nil
+
+	// 6. Turning liveAutoApprove off mid-turn stops pre-approving subsequent calls.
 	liveFlag = false
 	id, err = a.Stage("mcp_pages_create_workspace", "call_5", `{"title":"Deck 2"}`)
 	if err != nil {

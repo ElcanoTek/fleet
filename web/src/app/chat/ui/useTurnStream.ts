@@ -2213,7 +2213,6 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // conversation row by the backend; clear the local flag so a
     // subsequent "+ New chat" doesn't accidentally re-flag.
     setPendingLockdown(false);
-    setPendingAutoApprove?.(false);
     // The user is looking at the slot that just got a real id — follow it, or
     // their view empties out onto a key nothing writes to any more. They may
     // instead have navigated away (submit → "+ New chat" race), and that is
@@ -4482,6 +4481,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
       if (pendingAutoApprove) {
         body.auto_approve = true;
+        setPendingAutoApprove?.(false);
       }
     }
 

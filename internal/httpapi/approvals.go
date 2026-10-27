@@ -350,24 +350,12 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		})
 		return agentcore.PreApprovedSentinel, nil
 	}
-	// Per-conversation auto-approve: when the user toggles Auto-approve on for
-	// this chat, executable critical tools run without parking on an approval
-	// card. Handler-only tools (schedule_task, manage_tasks, preview_email,
-	// suggest_advanced_model), outbound email (send_email), and bundle-declared
-	// critical_tool_no_session_approval tools still stage an explicit card.
-	if a.isAutoApprove() && !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && agentcore.SessionApprovalAllowed(toolName) {
-		a.sink.Emit("tool.auto_resolved", map[string]any{
-			"tool": toolName,
-			"mode": "approve",
-			"via":  "conversation_auto_approve",
-		})
-		return agentcore.PreApprovedSentinel, nil
-	}
 	// Session pre-approval (#300): if the user previously chose "approve/deny all
 	// <tool>" for this conversation, short-circuit the card by returning a
 	// sentinel the orchestration gate interprets — pre-approved → run the tool
-	// normally; pre-denied → block it. This runs before staging so a pre-approved
-	// tool never creates an approval row or emits a card.
+	// normally; pre-denied → block it. This runs before staging AND before
+	// conversation-wide auto-approve so an explicit session deny policy takes
+	// precedence over auto-approve.
 	//
 	// A tool the bundle lists in critical_tool_no_session_approval never takes
 	// a session policy, even one registered before that rule existed or by a
@@ -384,6 +372,19 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 			}
 			return agentcore.PreApprovedSentinel, nil
 		}
+	}
+	// Per-conversation auto-approve: when the user toggles Auto-approve on for
+	// this chat, executable critical tools run without parking on an approval
+	// card. Handler-only tools (schedule_task, manage_tasks, preview_email,
+	// suggest_advanced_model), outbound email (send_email), and bundle-declared
+	// critical_tool_no_session_approval tools still stage an explicit card.
+	if a.isAutoApprove() && !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && agentcore.SessionApprovalAllowed(toolName) {
+		a.sink.Emit("tool.auto_resolved", map[string]any{
+			"tool": toolName,
+			"mode": "approve",
+			"via":  "conversation_auto_approve",
+		})
+		return agentcore.PreApprovedSentinel, nil
 	}
 	// For email tools that accept content_file, inline the file bytes
 	// now. run_python writes to workspace/<convID>/, but the Go server

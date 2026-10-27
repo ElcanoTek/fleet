@@ -1644,7 +1644,7 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 		liveAutoApprove: func(c context.Context) bool {
 			latest, err := s.store.Get(c, user, conv.ID)
 			if err != nil || latest == nil {
-				return conv.AutoApprove
+				return false
 			}
 			return latest.AutoApprove
 		},
