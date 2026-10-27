@@ -359,6 +359,7 @@ above fails otherwise.
 - [`TOOL-TIMING.md`](TOOL-TIMING.md) — Per-call tool timing: `duration_ms` on `tool.result` and in the tool-call audit ledger
 - [`TURN-JOURNAL.md`](TURN-JOURNAL.md) — Durable turn journal & commit-gated terminal success (#798)
 - [`TURN-OUTCOME.md`](TURN-OUTCOME.md) — Turn outcome — a server-side answer the client reads instead of inferring (#1593)
+- [`UNATTENDED-BUILTINS.md`](UNATTENDED-BUILTINS.md) — Built-in tools in unattended runs: `web_fetch` follows the sandbox's egress, `agent_policy.unattended_disabled_tools` (ADR-0094)
 - [`UNIFIED-ADMIN-PERMISSION-UI.md`](UNIFIED-ADMIN-PERMISSION-UI.md) — Unified admin permission in the Users UI
 - [`CENTRAL-AUTH-PROVISIONING.md`](CENTRAL-AUTH-PROVISIONING.md) — Signed Auth membership and Fleet role provisioning
 - [`UPLOADS-AND-STORAGE.md`](UPLOADS-AND-STORAGE.md) — Uploads & storage management

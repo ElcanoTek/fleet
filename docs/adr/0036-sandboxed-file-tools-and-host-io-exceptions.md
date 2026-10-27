@@ -1,6 +1,8 @@
 # ADR-0036: Sandboxed file tools, and the host-side I/O exception classes
 
-Status: accepted (enforces and narrows ADR-0002's blanket wording)
+Status: accepted (enforces and narrows ADR-0002's blanket wording); the host
+network / brokered fetch class is narrowed for scheduled runs by
+[ADR-0094](0094-unattended-runs-host-fetch-follows-the-sandbox.md)
 
 ## Context
 

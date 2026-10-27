@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -470,6 +471,12 @@ func (s *Store) SetOwnTeam(ctx context.Context, email, teamID string, allowExist
 // move failed and is still in their old team, with their shares silently gone
 // and no record of it.
 func unshareOnTeamChangeTx(ctx context.Context, tx *sql.Tx, email, newTeam string) error {
+	// Team-name locks BEFORE the user row lock (lockUserTeamChangeTx): the
+	// order RenameTeam uses too, so a move and a rename touching the same
+	// names queue instead of deadlocking.
+	if err := lockUserTeamChangeTx(ctx, tx, email, newTeam); err != nil {
+		return err
+	}
 	var cur sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT team_id FROM users WHERE email = $1 FOR UPDATE`, email).Scan(&cur); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -479,12 +486,17 @@ func unshareOnTeamChangeTx(ctx context.Context, tx *sql.Tx, email, newTeam strin
 	}
 	old := strings.TrimSpace(cur.String)
 	newTeam = strings.TrimSpace(newTeam)
+	// Joining a name nobody holds forms a NEW team: a leftover teams row under
+	// that name (and every share stamped with it) must not be inherited.
+	if err := retireUnheldTeamNameTx(ctx, tx, newTeam, time.Now().Unix()); err != nil {
+		return err
+	}
 	if strings.EqualFold(old, newTeam) {
 		return nil // nothing is changing, so nothing is revoked
 	}
 	if old != "" {
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, updated_at = $1
+			UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
 			WHERE user_email = $2 AND team_visible = TRUE AND team_shared_with = $3`,
 			time.Now().Unix(), email, old); err != nil {
 			return err
@@ -497,6 +509,153 @@ func unshareOnTeamChangeTx(ctx context.Context, tx *sql.Tx, email, newTeam strin
 	// listed by no surface in the rail at all. Leaving used to unshare and stop
 	// there, so a leaver's own project chats disappeared on them.
 	return unfileChatsInInaccessibleProjectsTx(ctx, tx, email, newTeam)
+}
+
+// teamShareBeforeCommitHook, when set (tests only), runs inside a share's
+// transaction after the stamp and before the commit, so a test can hold a
+// first share open and race a rename against it deterministically.
+var teamShareBeforeCommitHook func()
+
+// lockTeamNamesTx takes the transaction-scoped advisory lock of each team
+// name, in sorted order so two transactions locking overlapping names can
+// never deadlock. Every write that creates, relabels or retires a teams row
+// takes it for the names involved: the share stamp (its team), RenameTeam
+// (from and to) and retireUnheldTeamNameTx (the joined name). Row locks
+// cannot order these, because a first share's teams row is an uncommitted
+// INSERT that the others cannot see. The two-key form keeps this lock space
+// apart from SetOwnTeam's single-key create lock.
+func lockTeamNamesTx(ctx context.Context, tx *sql.Tx, names ...string) error {
+	uniq := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		uniq = append(uniq, n)
+	}
+	sort.Strings(uniq)
+	for _, n := range uniq {
+		if _, err := tx.ExecContext(ctx,
+			`SELECT pg_advisory_xact_lock(hashtext('fleet_teams'), hashtext($1))`, n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// lockUserTeamChangeTx takes the team-name locks a change of email's team
+// involves — the team they are in now and newTeam — before anything locks
+// their users row. Lock order is "team names, then user rows" everywhere:
+// RenameTeam takes both names' locks and then updates every member's row, so
+// a move that locked the member's row first and then waited for a name lock
+// the rename held would deadlock against it. The current team is read
+// without a row lock (it is only used to choose which names to lock); if it
+// changes between this read and the caller's row lock, the caller still
+// proceeds correctly on the row it locks, the worst case being Postgres's
+// deadlock detector aborting one of the two transactions.
+func lockUserTeamChangeTx(ctx context.Context, tx *sql.Tx, email, newTeam string) error {
+	var cur sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT team_id FROM users WHERE email = $1`, email).Scan(&cur); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	return lockTeamNamesTx(ctx, tx, cur.String, newTeam)
+}
+
+// renameTeamSharesTx carries a team's chat shares across RenameTeam, in the
+// rename's transaction (migration 084, ADR-0093). A share names its audience
+// by team ID AND label, so the rename must move both or the share is left
+// pointing at a name the team no longer has — which is how renaming a team
+// used to hand its shares to whoever next formed a team under the old name.
+//
+//   - Plain rename (no teams row for `to` yet): relabel the teams row; the id,
+//     and so every share stamped with it, stays with the team.
+//   - Merge (`to` already has a teams row): re-point the shares to the
+//     surviving team's id and delete the old row. RenameTeam documents
+//     renaming onto an existing team as a merge — the two memberships become
+//     one — so the merged team's members are the audience, as they are for
+//     its projects.
+//
+// Either way the label on each share follows, so the owner-side bookkeeping
+// that matches by label (unshare on leave, the leave-impact count) and the
+// read gates' label check keep agreeing with the id.
+func renameTeamSharesTx(ctx context.Context, tx *sql.Tx, from, to string, now int64) error {
+	var fromID sql.NullInt64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM teams WHERE name = $1 FOR UPDATE`, from).Scan(&fromID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	var toID sql.NullInt64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM teams WHERE name = $1 FOR UPDATE`, to).Scan(&toID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	switch {
+	case fromID.Valid && toID.Valid:
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE conversations SET team_shared_with_id = $2, team_shared_with = $3, updated_at = $4
+			 WHERE team_shared_with_id = $1`, fromID.Int64, toID.Int64, to, now); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM teams WHERE id = $1`, fromID.Int64); err != nil {
+			return err
+		}
+	case fromID.Valid:
+		if _, err := tx.ExecContext(ctx, `UPDATE teams SET name = $2 WHERE id = $1`, fromID.Int64, to); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE conversations SET team_shared_with = $2, updated_at = $3
+			 WHERE team_shared_with_id = $1`, fromID.Int64, to, now); err != nil {
+			return err
+		}
+	}
+	// A stamp still carrying the old label with no matching id cannot be a
+	// live share (every share since migration 084 carries the id); clear it
+	// rather than leave a label that a future team named `from` could match.
+	_, err := tx.ExecContext(ctx,
+		`UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
+		 WHERE team_shared_with = $1`, from, now)
+	return err
+}
+
+// retireUnheldTeamNameTx runs before a person joins team `name` (self-serve
+// create, admin move, identity-provider sync). When nobody holds the name —
+// no user and no project carries it — any teams row still registered under it
+// belongs to a team that no longer exists (its members left or their accounts
+// went away). That row is retired: chats still stamped with its id are
+// unshared and the row is deleted, so the team now being formed gets a NEW id
+// and inherits none of the old team's shares (ADR-0093). A name somebody
+// holds is a join of a live team and is left alone.
+func retireUnheldTeamNameTx(ctx context.Context, tx *sql.Tx, name string, now int64) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	if err := lockTeamNamesTx(ctx, tx, name); err != nil {
+		return err
+	}
+	var id int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT t.id FROM teams t
+		 WHERE t.name = $1
+		   AND NOT EXISTS (SELECT 1 FROM users u WHERE u.team_id = $1)
+		   AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.team_id = $1)
+		 FOR UPDATE`, name).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
+		 WHERE team_shared_with_id = $1`, id, now); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM teams WHERE id = $1`, id)
+	return err
 }
 
 // SetUserRoleTeam applies a partial role/team update (PATCH /admin/users/{email},
@@ -774,7 +933,7 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	// deleted account's OWN chats went with it in the statement above, so no
 	// row is left pointing at a project whose owner is gone.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET project_id = NULL, team_visible = FALSE, team_shared_with = NULL, updated_at = $2
+		`UPDATE conversations SET project_id = NULL, team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
 		 WHERE project_id IN (SELECT id FROM projects WHERE owner_email = $1)`, email, time.Now().Unix()); err != nil {
 		return fmt.Errorf("detach project conversations: %w", err)
 	}
@@ -866,6 +1025,18 @@ func (s *Store) RenameTeam(ctx context.Context, from, to string) (usersUpdated, 
 		}
 	}()
 	now := time.Now().Unix()
+	// Both names' locks first (sorted inside, so a concurrent rename the
+	// other way round cannot deadlock): a first share for `from` must either
+	// commit before this rename reads the teams rows, or wait for it.
+	if err = lockTeamNamesTx(ctx, tx, from, to); err != nil {
+		return 0, 0, err
+	}
+	// Renaming onto a name nobody holds must not merge into a dead team's
+	// leftover teams row (and its shares) — retire it first, while `to` is
+	// still unheld.
+	if err = retireUnheldTeamNameTx(ctx, tx, to, now); err != nil {
+		return 0, 0, err
+	}
 	res, err := tx.ExecContext(ctx,
 		`UPDATE users SET team_id = $2, updated_at = $3 WHERE team_id = $1`, from, to, now)
 	if err != nil {
@@ -880,6 +1051,9 @@ func (s *Store) RenameTeam(ctx context.Context, from, to string) (usersUpdated, 
 	projectsUpdated, _ = res.RowsAffected()
 	if usersUpdated == 0 && projectsUpdated == 0 {
 		err = errInput(fmt.Sprintf("no team named %q", from))
+		return 0, 0, err
+	}
+	if err = renameTeamSharesTx(ctx, tx, from, to, now); err != nil {
 		return 0, 0, err
 	}
 	err = tx.Commit()

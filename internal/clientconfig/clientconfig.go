@@ -495,6 +495,17 @@ type AgentPolicy struct {
 	//	agent_policy:
 	//	  interactive_hidden_tools: [ox_create_deal, ix_merge_deal_domains]
 	InteractiveHiddenTools []string `yaml:"interactive_hidden_tools"`
+	// UnattendedDisabledTools is an OPTIONAL list of fleet built-in names
+	// (create_task, web_fetch, download_url) removed from every unattended
+	// scheduled run, whatever the task's own grants say. Interactive chat is
+	// unchanged. Use it for a deployment whose scheduled runs read outside
+	// input (an inbox, vendor reports) and must not spawn follow-up tasks or
+	// fetch arbitrary URLs on that input's word. See
+	// docs/UNATTENDED-BUILTINS.md.
+	//
+	//	agent_policy:
+	//	  unattended_disabled_tools: [create_task, web_fetch]
+	UnattendedDisabledTools []string `yaml:"unattended_disabled_tools"`
 	// BatchSecondsPerDeal is DERIVED, never read from agent_policy: Bundle.AgentPolicy
 	// collects each mcp_servers[].batch_seconds_per_deal into it, keyed by
 	// server name, so the per-record batch budget reaches agentcore on the same
@@ -2997,6 +3008,7 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		CriticalToolResultCards:       append([]string(nil), b.AgentPolicyConfig.CriticalToolResultCards...),
 		CriticalToolStop:              append([]string(nil), b.AgentPolicyConfig.CriticalToolStop...),
 		InteractiveHiddenTools:        append([]string(nil), b.AgentPolicyConfig.InteractiveHiddenTools...),
+		UnattendedDisabledTools:       append([]string(nil), b.AgentPolicyConfig.UnattendedDisabledTools...),
 	}
 	// An http_tool flagged `critical: true` opts into the SAME critical-tool audit
 	// gate as the manifest's critical_tools suffixes. The tool is registered as

@@ -20,6 +20,12 @@ fallback_model: anthropic/claude-sonnet-4-6
 # Optional: cap the agent's iteration budget for this run.
 max_iterations: 15
 
+# Optional: give the run's sandbox outbound network (default false = sealed),
+# the same setting as "Allow network egress" on a scheduled task. It also
+# decides whether the run gets `web_fetch` (docs/UNATTENDED-BUILTINS.md); the
+# fleet-wide network mode still applies.
+# allow_network: true
+
 # Optional: pre-declare MCP servers (and per-server credential accounts) the task
 # may use. A named account binds <VAR>_<ACCOUNT> credentials host-side onto a
 # dedicated per-run MCP subprocess; omit `account` to use the default seat.

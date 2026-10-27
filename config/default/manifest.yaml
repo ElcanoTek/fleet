@@ -501,6 +501,12 @@ remote_mcp_catalog: []
 #                               chat and scheduled runs see the same tools.
 #                               See docs/INTERACTIVE-HIDDEN-TOOLS.md. Example:
 #                                 interactive_hidden_tools: [ox_create_deal]
+#   unattended_disabled_tools:  OPTIONAL fleet built-in names (create_task,
+#                               web_fetch, download_url) removed from every
+#                               scheduled run, whatever the task's own grants.
+#                               Chat is unchanged. Any other name is refused.
+#                               See docs/UNATTENDED-BUILTINS.md. Example:
+#                                 unattended_disabled_tools: [create_task, web_fetch]
 #   critical_tool_timeouts:     OPTIONAL per-tool approval default-deny window
 #                               (#225), keyed by the same bare tool-name suffix
 #                               as critical_tools, in seconds. Highest-priority

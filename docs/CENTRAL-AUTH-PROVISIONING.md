@@ -51,7 +51,13 @@ action, version, and bounded string settings before forwarding the event over
 Fleet's shared-token loopback channel.
 
 The Chat store atomically records the last accepted version per issuer and
-subject. The same or an older version is ignored. The Operations Center uses a
+subject. The same or an older version is ignored. Events for one identity are
+serialized by a transaction-scoped lock on (issuer, subject), taken before the
+stored version is read, so this holds for the identity's FIRST events too:
+before the first one commits there is no stored row to lock, and two
+concurrent first events could otherwise both pass the check and commit in the
+wrong order (a revoke overwritten by the older grant). The stored-row upsert
+also refuses to lower the version. The Operations Center uses a
 separate database, so the handler re-reads durable desired state after each Ops
 write and reconciles a concurrently committed newer version before it
 acknowledges the request. A retry of the same version still reconciles Ops if a
