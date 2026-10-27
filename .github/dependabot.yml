@@ -36,7 +36,8 @@ version: 2
 #
 # Cadence: `interval: monthly` for version updates, matching the dependency
 # policy in AGENTS.md ("Dependencies and in-housed code"): a version bump is
-# merged when it earns it (a commit we need, a CVE whose code path we reach),
+# merged when it earns it (a commit we need, a security scanner update such as
+# CodeQL, or a CVE whose code path we reach),
 # and once a month as a routine grouped refresh so drift never piles up into a
 # big-bang upgrade. It used to be `daily`, which opened a PR for every release
 # of anything we import, including releases that touch none of our code (chi
