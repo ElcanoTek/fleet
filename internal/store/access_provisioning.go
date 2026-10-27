@@ -132,6 +132,12 @@ func (s *Store) ApplyExternalAccess(ctx context.Context, next ExternalAccessStat
 	}
 	now := time.Now().Unix()
 	if next.Allowed {
+		// A grant that moves the account's team takes the team-name locks
+		// before the UPDATE below locks the users row (lock order: team
+		// names, then user rows — see lockUserTeamChangeTx).
+		if err := lockExternalTeamChangeTx(ctx, tx, next); err != nil {
+			return ExternalAccessState{}, false, err
+		}
 		res, err := tx.ExecContext(ctx, `UPDATE users SET enabled = TRUE, role = $2, updated_at = $3 WHERE email = $1`, next.Email, next.ChatRole, now)
 		if err != nil {
 			return ExternalAccessState{}, false, err
@@ -228,6 +234,15 @@ func upsertExternalAccessStateTx(ctx context.Context, tx *sql.Tx, next ExternalA
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// lockExternalTeamChangeTx is lockUserTeamChangeTx for a grant that carries
+// a team; a grant without one changes no team and locks nothing.
+func lockExternalTeamChangeTx(ctx context.Context, tx *sql.Tx, next ExternalAccessState) error {
+	if next.Team == nil {
+		return nil
+	}
+	return lockUserTeamChangeTx(ctx, tx, next.Email, *next.Team)
 }
 
 // applyExternalTeamTx moves email to team ("" = no team) on the provider's

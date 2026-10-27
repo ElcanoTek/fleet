@@ -37,7 +37,15 @@ outputs — the original team had been given.
    still registered under it belongs to a team that no longer exists: its
    remaining shares are unshared and the row is deleted, so the new team gets
    a new id and inherits nothing.
-5. Migration 084 backfills ids for every share whose label is still its
+5. Writes that create, relabel or retire a `teams` row take a transaction
+   advisory lock per team name (sorted, so overlapping sets cannot
+   deadlock): the share stamp for its team, `RenameTeam` for both names, the
+   retire path for the joined name, and every team change of a user for the
+   user's current and new team — always BEFORE any users row is locked
+   ("team names, then user rows"), the order `RenameTeam` uses. A row lock
+   cannot order a first share against a rename, because the first share's
+   `teams` row is an uncommitted insert nobody else can see.
+6. Migration 084 backfills ids for every share whose label is still its
    owner's current team, and unshares the rest: those are exactly the stamps a
    rename left behind, and which team they meant cannot be told from the data.
 

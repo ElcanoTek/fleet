@@ -53,11 +53,11 @@ var multipleNewlinesRe = regexp.MustCompile(`\n{3,}`)
 type webFetchTool struct {
 	client      *http.Client
 	rateLimiter *rateLimiter
-	// allowHost, when non-nil, is the egress host policy this instance must
-	// honor (NewWebFetchToolForHosts): the first URL and every redirect hop
-	// are refused unless it returns true. nil = no host policy beyond the
-	// SSRF guard (the interactive default).
-	allowHost func(host string) bool
+	// allowURL, when non-nil, is the egress policy this instance must honor
+	// (NewWebFetchToolForHosts): the first URL and every redirect hop are
+	// refused when it returns an error. nil = no policy beyond the SSRF guard
+	// (the interactive default).
+	allowURL func(u *neturl.URL) error
 }
 
 // WebFetchParams are the typed parameters for the web_fetch tool.
@@ -171,11 +171,32 @@ func NewWebFetchTool() fantasy.AgentTool {
 // hop must match; an empty allowlist refuses everything. The SSRF guard still
 // applies underneath.
 func NewWebFetchToolForHosts(allowlist []string) fantasy.AgentTool {
-	list := append([]string(nil), allowlist...)
-	return newWebFetchTool(func(host string) bool { return sandbox.DomainAllowed(host, list) })
+	return newWebFetchTool(egressURLPolicy(allowlist))
 }
 
-func newWebFetchTool(allowHost func(string) bool) fantasy.AgentTool {
+// egressURLPolicy is the egress proxy's rule restated for a URL: HTTPS only,
+// on port 443 (explicit or implied), to a host the allowlist admits
+// (sandbox.DomainAllowed). The proxy tunnels HTTPS CONNECT to port 443 and
+// nothing else, because the allowlist names domains, not services; without
+// the same scheme and port pin, an allowlisted host would be reachable over
+// plain HTTP or on any other port through the host-side fetch.
+func egressURLPolicy(allowlist []string) func(*neturl.URL) error {
+	list := append([]string(nil), allowlist...)
+	return func(u *neturl.URL) error {
+		if !strings.EqualFold(u.Scheme, "https") {
+			return fmt.Errorf("%s refused: this run's egress allowlist permits HTTPS only", u.Redacted())
+		}
+		if p := u.Port(); p != "" && p != "443" {
+			return fmt.Errorf("%s refused: this run's egress allowlist permits port 443 only", u.Redacted())
+		}
+		if !sandbox.DomainAllowed(u.Hostname(), list) {
+			return fmt.Errorf("%s refused: the host is not on this run's egress allowlist", u.Hostname())
+		}
+		return nil
+	}
+}
+
+func newWebFetchTool(allowURL func(*neturl.URL) error) fantasy.AgentTool {
 	dialer := newSSRFGuardedDialer()
 
 	t := &webFetchTool{
@@ -189,9 +210,9 @@ func newWebFetchTool(allowHost func(string) bool) fantasy.AgentTool {
 			},
 		},
 		rateLimiter: newRateLimiter(1 * time.Second),
-		allowHost:   allowHost,
+		allowURL:    allowURL,
 	}
-	if allowHost != nil {
+	if allowURL != nil {
 		t.client.CheckRedirect = t.checkRedirect
 	}
 	return fantasy.NewAgentTool(WebFetchToolName,
@@ -212,8 +233,10 @@ func (t *webFetchTool) checkRedirect(req *http.Request, via []*http.Request) err
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
 	}
-	if t.allowHost != nil && !t.allowHost(req.URL.Hostname()) {
-		return fmt.Errorf("redirect to %s refused: the host is not on this run's egress allowlist", req.URL.Hostname())
+	if t.allowURL != nil {
+		if err := t.allowURL(req.URL); err != nil {
+			return fmt.Errorf("redirect: %w", err)
+		}
 	}
 	return nil
 }
@@ -233,13 +256,13 @@ func (t *webFetchTool) run(ctx context.Context, url string) (string, error) {
 	if url == "" {
 		return "", errors.New("url is required")
 	}
-	if t.allowHost != nil {
+	if t.allowURL != nil {
 		u, perr := neturl.Parse(url)
 		if perr != nil || u.Hostname() == "" {
 			return "", errors.New("url is not a valid absolute URL")
 		}
-		if !t.allowHost(u.Hostname()) {
-			return "", fmt.Errorf("fetch of %s refused: the host is not on this run's egress allowlist", u.Hostname())
+		if err := t.allowURL(u); err != nil {
+			return "", fmt.Errorf("fetch %w", err)
 		}
 	}
 

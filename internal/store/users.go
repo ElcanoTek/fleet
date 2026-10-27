@@ -471,6 +471,12 @@ func (s *Store) SetOwnTeam(ctx context.Context, email, teamID string, allowExist
 // move failed and is still in their old team, with their shares silently gone
 // and no record of it.
 func unshareOnTeamChangeTx(ctx context.Context, tx *sql.Tx, email, newTeam string) error {
+	// Team-name locks BEFORE the user row lock (lockUserTeamChangeTx): the
+	// order RenameTeam uses too, so a move and a rename touching the same
+	// names queue instead of deadlocking.
+	if err := lockUserTeamChangeTx(ctx, tx, email, newTeam); err != nil {
+		return err
+	}
 	var cur sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT team_id FROM users WHERE email = $1 FOR UPDATE`, email).Scan(&cur); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -537,6 +543,24 @@ func lockTeamNamesTx(ctx context.Context, tx *sql.Tx, names ...string) error {
 		}
 	}
 	return nil
+}
+
+// lockUserTeamChangeTx takes the team-name locks a change of email's team
+// involves — the team they are in now and newTeam — before anything locks
+// their users row. Lock order is "team names, then user rows" everywhere:
+// RenameTeam takes both names' locks and then updates every member's row, so
+// a move that locked the member's row first and then waited for a name lock
+// the rename held would deadlock against it. The current team is read
+// without a row lock (it is only used to choose which names to lock); if it
+// changes between this read and the caller's row lock, the caller still
+// proceeds correctly on the row it locks, the worst case being Postgres's
+// deadlock detector aborting one of the two transactions.
+func lockUserTeamChangeTx(ctx context.Context, tx *sql.Tx, email, newTeam string) error {
+	var cur sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT team_id FROM users WHERE email = $1`, email).Scan(&cur); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	return lockTeamNamesTx(ctx, tx, cur.String, newTeam)
 }
 
 // renameTeamSharesTx carries a team's chat shares across RenameTeam, in the

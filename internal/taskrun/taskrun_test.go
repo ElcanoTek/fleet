@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/fakellm"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -45,6 +47,9 @@ mcp_selection:
 	}
 	if task.MaxIterations == nil || *task.MaxIterations != 7 {
 		t.Errorf("max_iterations = %v", task.MaxIterations)
+	}
+	if task.AllowNetwork {
+		t.Error("allow_network omitted must leave the sandbox sealed")
 	}
 	if len(task.MCPSelection) != 2 || task.MCPSelection[0].Server != "sendgrid" ||
 		task.MCPSelection[0].Account != "client_a" || task.MCPSelection[1].Server != "fast_io" {
@@ -228,5 +233,36 @@ func TestOneShotRegistersFileToolConfinement(t *testing.T) {
 	}
 	if fi, err := os.Stat(target); err != nil || !fi.IsDir() {
 		t.Fatalf("protocols symlink target %q not a dir: %v", target, err)
+	}
+}
+
+// allow_network threads into the task, so a local run can opt into egress
+// (and with it web_fetch, ADR-0094) the way a scheduled task does.
+func TestLoadTaskYAMLAllowNetwork(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task.yaml")
+	if err := os.WriteFile(path, []byte("prompt: p\nallow_network: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	task, err := loadTaskYAML(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.AllowNetwork {
+		t.Error("allow_network: true must reach models.Task.AllowNetwork")
+	}
+}
+
+// The one-shot boot path installs the bundle's unattended built-in removals,
+// so `fleet task run` honors agent_policy.unattended_disabled_tools exactly as
+// the server's scheduled runs do.
+func TestTaskRunAgentPolicyCarriesUnattendedDisabledTools(t *testing.T) {
+	p := taskRunAgentPolicy(clientconfig.AgentPolicy{UnattendedDisabledTools: []string{"create_task", "web_fetch"}})
+	if len(p.UnattendedDisabledTools) != 2 || p.UnattendedDisabledTools[0] != "create_task" || p.UnattendedDisabledTools[1] != "web_fetch" {
+		t.Fatalf("UnattendedDisabledTools = %v, want [create_task web_fetch]", p.UnattendedDisabledTools)
+	}
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	agentcore.ConfigureAgentPolicy(p)
+	if !agentcore.UnattendedToolDisabled("web_fetch") {
+		t.Error("the installed policy must remove web_fetch")
 	}
 }

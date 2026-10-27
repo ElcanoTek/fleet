@@ -72,6 +72,10 @@ type taskYAML struct {
 	// AllowDelegation mirrors the task column (#1043): omitted defaults to TRUE
 	// (sub-agents are opt-out), matching what a task created through the API gets.
 	AllowDelegation *bool `yaml:"allow_delegation"`
+	// AllowNetwork mirrors the task column: omitted is FALSE, so the run's
+	// sandbox is sealed and web_fetch is not registered (ADR-0094), exactly
+	// as for a task created through the API.
+	AllowNetwork bool `yaml:"allow_network"`
 }
 
 type mcpChoiceYAML struct {
@@ -124,17 +128,7 @@ func run(argv []string, progName string) error {
 	cfg.SandboxRuntime = sandbox.ResolveRuntime(cfg.SandboxRuntime, bundle.Sandbox().Runtime)
 
 	// Install the bundle's agent tool-behavior policy before any turn runs.
-	bp := bundle.AgentPolicy()
-	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
-		ParallelSafeTools:            bp.ParallelSafeTools,
-		CriticalToolSuffixes:         bp.CriticalToolSuffixes,
-		CriticalToolSubstitutes:      bp.CriticalToolSubstitutes,
-		CriticalToolAliases:          bp.CriticalToolAliases,
-		EmailLastToolSuffixes:        bp.EmailLastTools,
-		SettleableCreateToolSuffixes: bp.SettleableCreateTools,
-		BatchSecondsPerDeal:          bp.BatchSecondsPerDeal,
-		ApprovedCallTimeoutSeconds:   bp.ApprovedCallTimeoutSeconds,
-	})
+	agentcore.ConfigureAgentPolicy(taskRunAgentPolicy(bundle.AgentPolicy()))
 
 	// Install the bundle's custom model-pricing overrides (#297) before any turn
 	// runs. The generic bundle ships none, so cost accounting stays on the
@@ -235,6 +229,25 @@ func run(argv []string, progName string) error {
 	return nil
 }
 
+// taskRunAgentPolicy translates the bundle's agent policy for a one-shot run.
+// It carries every field that governs a SCHEDULED run — the critical-tool
+// audit set and the unattended built-in removals included — so `fleet task
+// run` is never looser than the scheduler for the same bundle. (Chat-only
+// fields such as approval-card options have no effect here.)
+func taskRunAgentPolicy(bp clientconfig.AgentPolicy) agentcore.AgentPolicy {
+	return agentcore.AgentPolicy{
+		ParallelSafeTools:            bp.ParallelSafeTools,
+		CriticalToolSuffixes:         bp.CriticalToolSuffixes,
+		CriticalToolSubstitutes:      bp.CriticalToolSubstitutes,
+		CriticalToolAliases:          bp.CriticalToolAliases,
+		EmailLastToolSuffixes:        bp.EmailLastTools,
+		SettleableCreateToolSuffixes: bp.SettleableCreateTools,
+		BatchSecondsPerDeal:          bp.BatchSecondsPerDeal,
+		ApprovedCallTimeoutSeconds:   bp.ApprovedCallTimeoutSeconds,
+		UnattendedDisabledTools:      bp.UnattendedDisabledTools,
+	}
+}
+
 // loadTaskYAML parses the task file into a models.Task ready for the runner.
 func loadTaskYAML(path string) (*models.Task, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // G304: operator-supplied task file path — reading it is the whole point of the CLI.
@@ -256,6 +269,7 @@ func loadTaskYAML(path string) (*models.Task, error) {
 		// Same default a task created through the API gets (#1043): delegation
 		// is opt-out, so an omitted key means true.
 		AllowDelegation: y.AllowDelegation == nil || *y.AllowDelegation,
+		AllowNetwork:    y.AllowNetwork,
 	}
 	if s := strings.TrimSpace(y.Model); s != "" {
 		task.Model = &s

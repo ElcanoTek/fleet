@@ -307,3 +307,66 @@ func TestFirstShareRacingRenameIsCarriedByTheRename(t *testing.T) {
 		t.Error("a team reusing the old name must not read the share")
 	}
 }
+
+// An admin moving a member into a team while that member's team is being
+// renamed onto the same name must queue, not deadlock.
+//
+// Red/green (Codex P2 on #1853): the move locked the member's users row and
+// then waited for the destination name's advisory lock; RenameTeam held both
+// names' locks and then waited for that users row. The test makes the
+// interleaving deterministic: a separate transaction holds bob's row, the
+// move queues on it first, the rename second, and then the row is released —
+// so the move gets the row first and asks for the name lock the rename holds.
+// With "team-name locks before user rows" both complete.
+func TestTeamMoveRacingRenameDoesNotDeadlock(t *testing.T) {
+	f := newTeamFixture(t)
+	waiting := func() int {
+		var n int
+		if err := f.s.db.QueryRowContext(f.ctx,
+			`SELECT count(*) FROM pg_locks WHERE NOT granted`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	waitFor := func(n int) {
+		deadline := time.Now().Add(5 * time.Second)
+		for waiting() < n {
+			if time.Now().After(deadline) {
+				t.Fatalf("expected %d blocked lock waiters", n)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	holder, err := f.s.db.BeginTx(f.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback() }()
+	if _, err := holder.ExecContext(f.ctx, `SELECT 1 FROM users WHERE email = 'bob@x.com' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+
+	research := "research"
+	moveErr := make(chan error, 1)
+	go func() {
+		_, err := f.s.SetUserRoleTeam(f.ctx, "bob@x.com", nil, &research)
+		moveErr <- err
+	}()
+	waitFor(1)
+	renameErr := make(chan error, 1)
+	go func() {
+		_, _, err := f.s.RenameTeam(f.ctx, "quant", "research")
+		renameErr <- err
+	}()
+	waitFor(2)
+	if err := holder.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-moveErr; err != nil {
+		t.Errorf("move: %v", err)
+	}
+	if err := <-renameErr; err != nil {
+		t.Errorf("rename: %v", err)
+	}
+}

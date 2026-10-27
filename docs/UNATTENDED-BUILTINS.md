@@ -15,7 +15,7 @@ how a deployment narrows it. Decision record:
   |---|---|---|
   | off (default) | any | absent |
   | on | `lockdown` | absent |
-  | on | `allowlisted` | present, limited to the allowlist (first request and every redirect) |
+  | on | `allowlisted` | present, limited like the egress proxy: HTTPS on port 443 to an allowlisted host (first request and every redirect) |
   | on | open / unset | present, unchanged |
 
 - **A bundle can remove built-ins from every scheduled run:**
@@ -29,6 +29,11 @@ how a deployment narrows it. Decision record:
   outside that set is ignored with a boot log line and fails
   `fleet validate-config`. The list wins over the task's own grants
   (`allow_task_creation`, `allow_network`).
+
+- **`fleet task run` follows the same rules.** Its task YAML takes
+  `allow_network` (default false), and it installs the bundle's
+  `unattended_disabled_tools` like the server does
+  (`docs/examples/local-task.yaml`).
 
 - **Interactive chat is unchanged**: a person sees every turn, and chat's
   approval cards are the gate there.
