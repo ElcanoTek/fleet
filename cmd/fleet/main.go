@@ -931,6 +931,9 @@ func run() error {
 		// chat email for the elcano-auth tier). A nil opener leaves the feature off.
 		OpenRemoteMCPOverlay: openRemoteMCPOverlay,
 		OwnerEmail:           ownerEmailResolver(schedStorage),
+		// The owner's hosted connections as a list (no token, no dial), for
+		// the create-time mcp_selection check wired below.
+		HostedConnections: hostedConnectionsLister(remoteMCPSvc),
 		// The owner's builder skills + propose_skill staging (docs/SKILLS.md):
 		// scheduled runs inline the owner's ACTIVE skills into the prompt and
 		// stage agent-drafted proposals against the same chat-store rows the
@@ -958,6 +961,10 @@ func run() error {
 	// that assembles the prompt at dispatch, so POST /tasks/estimate counts the
 	// exact system prompt a real run would send. Read-only; never dispatches.
 	h.SetSystemPromptProvider(taskRunner.SystemPromptForPersona)
+	// Refuse at create/clone/rerun/import time a task whose mcp_selection its
+	// runs would refuse (a server neither in the bundle nor among the owner's
+	// hosted connections), through the runner's own resolution.
+	h.SetMCPSelectionCheck(taskRunner.CheckTaskMCPSelection)
 	h.SetModelCatalogResolver(mgr.CatalogModelSlug)
 	// Wire the persona catalog (#720) so the task-create paths can reject an
 	// unknown persona with a 400 listing the valid names, instead of silently
@@ -1726,6 +1733,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		r.Get("/tasks/{task_id}/artifacts", h.GetTaskArtifacts)
 		r.Put("/tasks/{task_id}", h.UpdateTask)
 		r.Post("/tasks/{task_id}/tags", h.UpdateTaskTags)
+		// Admin reassignment of a task's owner (created_by), carried onto the
+		// rest of its recurrence chain that later runs continue from. Same
+		// placement rationale as /admin/budgets: PermissionAdmin is enforced
+		// in-handler.
+		r.Put("/tasks/{task_id}/owner", h.SetTaskOwner)
 		// Rerun/clone mint a new task each, so they are metered like POST /tasks.
 		r.With(h.SchedRateLimitMiddleware).Post("/tasks/{task_id}/rerun", h.RerunTask)
 		r.With(h.SchedRateLimitMiddleware).Post("/tasks/{task_id}/clone", h.CloneTask)
@@ -3323,6 +3335,18 @@ func mcpCatalogEntries(mgr *agent.Manager) []handlers.MCPServerCatalogEntry {
 		})
 	}
 	return out
+}
+
+// hostedConnectionsLister is the scheduled runner's read-only view of a task
+// owner's hosted connections (scheduledrun.Options.HostedConnections): the
+// service's ConnectedServersForUser, which lists rows and mints nothing. nil
+// when the feature is off — a typed-nil service's method value would
+// nil-deref on the first call.
+func hostedConnectionsLister(svc *remotemcp.Service) func(context.Context, string) ([]agent.RemoteMCPConn, error) {
+	if svc == nil {
+		return nil
+	}
+	return svc.ConnectedServersForUser
 }
 
 // wireRemoteMCPCatalog injects the per-user remote-MCP catalog provider (#466)

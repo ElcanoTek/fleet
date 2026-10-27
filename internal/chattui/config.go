@@ -44,6 +44,14 @@ type Config struct {
 	// FLEET_PUBLIC_URL, from the env or the server env file), used to build
 	// deep links such as an approval card's conversation. "" when unset.
 	PublicURL string
+
+	// DefaultConnectors makes a NEW conversation open with the optional
+	// connectors a new web chat starts with (GET /mcp-servers). `fleet chat`
+	// sets it; without it the server binds none (it never adds defaults).
+	DefaultConnectors bool
+	// Connectors are explicit --connector names for a new conversation; they
+	// replace the defaults. Lower-cased, de-duplicated.
+	Connectors []string
 }
 
 // Flags are the command-line overrides; empty fields fall back to env.
@@ -59,6 +67,8 @@ type Flags struct {
 	// explicitly (--server / $FLEET_CHAT_URL), since an ambient public URL
 	// may belong to a different deployment.
 	PublicURL string
+	// Connectors are repeated --connector names for a new conversation.
+	Connectors []string
 }
 
 // getenv is the environment accessor (injectable for tests).
@@ -97,8 +107,9 @@ var defaultEnvFilePaths = []string{".env.local", "/etc/fleet/fleet.env"}
 // NEVER includes the token value in any error.
 func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, error) {
 	cfg := Config{
-		Model:   strings.TrimSpace(f.Model),
-		Persona: strings.TrimSpace(f.Persona),
+		Model:      strings.TrimSpace(f.Model),
+		Persona:    strings.TrimSpace(f.Persona),
+		Connectors: normalizeConnectors(f.Connectors),
 	}
 
 	// Token from explicit sources first: a --token-file (so it can live 0600

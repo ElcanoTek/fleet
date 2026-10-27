@@ -27,6 +27,12 @@ including later changes made by another client; `/model` sets a new explicit
 override.
 Model suggestions show the target frozen when the card was created. Older cards
 without a frozen target must be dismissed before requesting a new suggestion.
+A new terminal thread (including `/new`) starts with the same optional
+connectors a new web chat would: the ones you have on by default under
+Settings → Connections. `--connector NAME` (repeatable) replaces that set for
+the new thread, for example `--connector email --connector lens`; an unknown or
+unavailable name is refused before anything is sent. `--connector` does not
+change an existing thread: use the web Tools picker for that.
 
 If the server restarts during an approved action, its outcome is shown as unknown;
 verify the external result before trying another action.
@@ -387,9 +393,12 @@ own when a task fits, or that you can invoke directly by typing `/` at the very
 start of a message and choosing from the list. The platform ships a small pack
 of general-purpose skills, and your deployment can add its own. Under
 **Settings → Skills**, you can also create personal skills, publish a skill to
-the **Workspace pack** (**Share with workspace**), or click **Add to my skills**
+the **Workspace pack** (**Share with workspace**), click **Add to my skills**
 on a teammate-shared skill in the Workspace pack to enable it for your own chats
-and tasks.
+and tasks, or click **Clone & edit** on any Workspace pack skill to load its
+instructions into the editor and customize it (you can also ask the assistant in
+chat to propose a skill or edit an existing one, then click **Approve** or
+**Approve & share** in **Settings → Skills**).
 
 For Bento presentations, your deployment can supply a default branded starter.
 Ask for a different theme or a blank deck whenever you prefer; the starter's
@@ -1012,8 +1021,9 @@ instead, if you would rather fill it in by hand.
 teammates find it"), and the prompt text. If you already have text in the
 composer, it is carried into the form. **Share with this workspace** decides
 Private or Workspace; leave it unticked until the prompt has been reviewed and is
-the team's agreed version. Your own entries offer **Edit** and **Delete** when
-selected.
+the team's agreed version. Your own entries offer **Edit**, **Duplicate**, and
+**Delete** when selected; deployment and teammate-shared entries offer **Clone &
+edit** so you can customize a copy of your own.
 
 One convention worth adopting from the start. **One team version per report**:
 once a prompt is shared, the private drafts that led to it should go, and the

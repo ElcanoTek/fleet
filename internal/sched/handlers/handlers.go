@@ -229,6 +229,15 @@ type Handlers struct {
 	// such a task still runs on the global default rather than failing.
 	personaCatalog func() []string
 
+	// mcpSelectionCheck refuses a task whose mcp_selection names a server that
+	// is neither in the active bundle inventory nor among the task owner's
+	// hosted connections — the refusal its run would otherwise dead-letter on.
+	// Wired by cmd/fleet via SetMCPSelectionCheck from the scheduled runner
+	// (scheduledrun.Runner.CheckTaskMCPSelection), so the create paths reuse the
+	// run's resolution instead of a copy of it. nil (tests / embedders without
+	// a runner) → no check. See mcp_selection_check.go.
+	mcpSelectionCheck func(ctx context.Context, task *models.Task) error
+
 	// datasetRunner starts/pauses dataset runs (#514) — injected via
 	// SetDatasetRunner so handlers stay decoupled from the agent graph.
 	datasetRunner DatasetRunController
@@ -672,6 +681,13 @@ func (h *Handlers) createTaskGovernedFrom(ctx context.Context, creator taskCreat
 		if lineage.sourceLineage != uuid.Nil {
 			task.LineageID = lineage.sourceLineage
 		}
+	}
+
+	// A selection the run would refuse is refused now, against the owner the
+	// run will resolve hosted connections for (task.CreatedBy, just stamped),
+	// instead of dead-lettering every occurrence at dispatch.
+	if err := h.checkTaskMCPSelection(ctx, task); err != nil {
+		return nil, &createRefusalError{status: http.StatusBadRequest, detail: err.Error()}
 	}
 
 	// Per-key priority ceiling (#230): a scoped key capped at max_priority may not
@@ -1991,6 +2007,19 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "run_if: task is already pending dispatch, so its gate can no longer be evaluated for this run; change the gate while the task is scheduled, or cancel and recreate it")
 		return
 	}
+	// A changed mcp_selection gets the create path's check, against the task's
+	// owner (an edit keeps it). An unchanged one is not re-checked: an edit of
+	// some other field must not be refused because a connection lapsed since.
+	if tc.MCPSelection != nil && !reflect.DeepEqual(tc.MCPSelection, task.MCPSelection) {
+		allowlist := task.CredentialAllowlist
+		if tc.CredentialAllowlist != nil {
+			allowlist = tc.CredentialAllowlist
+		}
+		if err := h.checkMCPSelectionForOwner(r.Context(), task.CreatedBy, tc.MCPSelection, allowlist); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 
 	// If recurrence is changed, refresh the next scheduled run unless the user
 	// explicitly chose a different schedule time in this edit.
@@ -2327,6 +2356,14 @@ type taskRerunOverrides struct {
 	RunIf                   json.RawMessage `json:"run_if,omitempty"`
 	CarryContext            *bool           `json:"carry_context,omitempty"`
 	InstructionSelfImprove  *bool           `json:"instruction_self_improve,omitempty"`
+	// NewLineage starts the copy as a job of its own: a fresh lineage_id, and
+	// with it its own per-job workspace directory (ADR-0069) and its own owner
+	// digest entry. Omitted / false joins the source's lineage as before —
+	// "Resubmit with changes" relies on that, so the rerun works in the
+	// directory the failed run left. Use it when the copy is a different job
+	// (another dashboard, another client): copies that share a lineage share
+	// one working directory.
+	NewLineage bool `json:"new_lineage,omitempty"`
 }
 
 // rawJSONPresent reports whether an omitempty json.RawMessage field was present
@@ -2398,13 +2435,24 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 		return
 	}
 
+	// Who owns the copy: the calling user, or — for the admin key and scoped
+	// keys, which have no user — the source's owner (rerunCreator).
+	creator, cerr := h.rerunCreator(r.Context(), p, source)
+	if cerr != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to resolve the source task's owner")
+		return
+	}
+	lineage := &rerunLineage{sourceID: source.ID, sourceRunIf: source.RunIf, sourceLineage: source.WorkspaceLineage()}
+	if req.Overrides.NewLineage {
+		lineage.sourceLineage = uuid.Nil // NewTask's fresh lineage stands
+	}
+
 	// The copy is a create like any other, so it goes through the ONE governed
 	// pipeline (run_if privilege boundary, budget gate, priority ceiling,
-	// attribution) rather than a validate-and-insert of its own — the overrides
-	// expose run_if and priority, so a private path here was a weaker route
-	// around every gate POST /tasks enforces.
-	newTask, err := h.createTaskGovernedFrom(r.Context(), creatorFromPrincipal(p), tc,
-		&rerunLineage{sourceID: source.ID, sourceRunIf: source.RunIf, sourceLineage: source.WorkspaceLineage()})
+	// attribution, mcp_selection check) rather than a validate-and-insert of
+	// its own — the overrides expose run_if and priority, so a private path
+	// here was a weaker route around every gate POST /tasks enforces.
+	newTask, err := h.createTaskGovernedFrom(r.Context(), creator, tc, lineage)
 	if err != nil {
 		var refusal *createRefusalError
 		if errors.As(err, &refusal) {
@@ -2473,6 +2521,10 @@ func buildRerunTaskCreate(source *models.Task, keepRecurrence bool, o taskRerunO
 			tc.RecurrenceUntil = nil
 			tc.RecurrenceRemaining = nil
 		}
+	}
+	if o.NewLineage {
+		// TaskToCreate carried the source's lineage; a new job starts its own.
+		tc.LineageID = nil
 	}
 	if err := applyRerunOverrides(&tc, o); err != nil {
 		return tc, err

@@ -119,6 +119,12 @@ type PromptField struct {
 	Min         *float64 `json:"min,omitempty"`
 }
 
+// ParsePromptForm reads the optional form definition out of a YAML prompt.
+// It returns (nil, "", nil) for a content string that declares no form.
+func ParsePromptForm(raw []byte) (fields []PromptField, template string, issues []string) {
+	return parsePromptForm(raw)
+}
+
 // parsePromptForm reads the optional form definition out of a YAML prompt.
 // It returns (nil, "", nil) for a file that declares no form — including one
 // whose YAML does not parse and shows no sign of a form, which is served as

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/google"
 	"charm.land/fantasy/providers/openrouter"
 
 	"github.com/ElcanoTek/fleet/internal/observability"
@@ -115,6 +117,17 @@ type engine struct {
 	// removed, so the recovery can tell live clients the history was
 	// summarized (see forcedCompactionStats).
 	lastForcedCompaction forcedCompactionStats
+	// compactions accumulates every head/summary/tail compaction applied during
+	// the run so interactive drivers can persist and replay the compacted
+	// boundary on subsequent turns instead of re-sending and re-summarizing the
+	// dropped middle on every turn.
+	compactions []CompactionRecord
+	// runLocalParts tracks the first-part pointer of every transient run-local
+	// message injected into the live message slice (user_prompt_submit hook
+	// output, per-run working-dir/date tail, post-compaction plan reannouncement,
+	// enforcement nudges) that is never projected into Result.Entries, so
+	// CompactionRecord offsets match the persistable message sequence.
+	runLocalParts map[*fantasy.MessagePart]bool
 	// resendFloor, resendPrefix, resendFloorStale and resendFloorNoted carry
 	// the checkpoint's floor rule (#1600, see effectiveResendBudget).
 	// resendFloor is the resent size measured at the latest floor point: the
@@ -306,7 +319,9 @@ func (e *engine) bindRunUsage(orch *orchestrationState) { e.runOrch = orch }
 // the engine's primary model slug — the model the interactive summarizer
 // calls (tc.Model) — which is what selects a per-model price override (#297).
 func (e *engine) compactionSummarizeInput(droppable []fantasy.Message) CompactionSummarizeInput {
-	in := CompactionSummarizeInput{Droppable: droppable, Model: e.currentModel()}
+	// The summary is asked for in a user message of its own, so no Gemini
+	// signature is needed, and the summarizer may be another model.
+	in := CompactionSummarizeInput{Droppable: withoutGeminiSignatures(droppable), Model: e.currentModel()}
 	orch := e.runOrch
 	if orch == nil {
 		return in
@@ -404,16 +419,114 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 	}
 
 	e.logCompactionSummary(summary)
+	planText := planReannounceText(e.runOrch)
 	tail = dropPlanReannounceMessages(tail)
+	persistableTail := e.dropRunLocalMessages(tail)
+	firstKeptCallID := ""
+	if len(persistableTail) > 0 {
+		firstKeptCallID = firstToolCallID(persistableTail[0])
+	}
 	out := make([]fantasy.Message, 0, len(head)+2+len(tail))
 	out = append(out, head...)
 	out = append(out, summary)
-	out = appendPlanReannounce(out, e.runOrch)
+	if planText != "" {
+		planMsg := fantasy.NewUserMessage(planText)
+		e.markRunLocalMessages(planMsg)
+		out = append(out, planMsg)
+	}
 	out = append(out, tail...)
 	e.consecutiveCompactions++
 	e.lastForcedCompaction = forcedCompactionStats{removed: len(middle), summaryTokens: estimateMessageTokens(summary)}
+	e.compactions = append(e.compactions, CompactionRecord{
+		Head:                len(e.dropRunLocalMessages(head)),
+		Removed:             len(e.dropRunLocalMessages(middle)),
+		FirstKeptToolCallID: firstKeptCallID,
+		Summary:             messageText(summary),
+	})
 	// The next step re-measures the resend-checkpoint floor (#1600).
 	e.resendFloorStale = true
+	return out
+}
+
+// CompactionRecord describes one head/summary/tail compaction applied to a
+// run's message history (proactiveCompactKeeping or forceCompactMessageHistory).
+// Interactive drivers persist these on the turn's TurnSummaryContent so
+// replayHistory on subsequent turns reconstructs the exact post-compaction
+// prefix instead of re-sending (and re-summarizing) the dropped middle on every
+// turn.
+type CompactionRecord struct {
+	Head                int    `json:"head"`
+	Removed             int    `json:"removed"`
+	FirstKeptToolCallID string `json:"first_kept_tool_call_id,omitempty"`
+	Summary             string `json:"summary"`
+}
+
+func (e *engine) compactionsSnapshot() []CompactionRecord {
+	if e == nil || len(e.compactions) == 0 {
+		return nil
+	}
+	return append([]CompactionRecord(nil), e.compactions...)
+}
+
+func firstToolCallID(m fantasy.Message) string {
+	for _, part := range m.Content {
+		if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok && tc.ToolCallID != "" {
+			return tc.ToolCallID
+		}
+	}
+	return ""
+}
+
+// ApplyCompactionRecords replays persisted CompactionRecord transformations
+// against a reconstructed message history, producing the same head + summary +
+// kept-tail structure that proactiveCompactKeeping / forceCompactMessageHistory
+// built during the originating turn.
+func ApplyCompactionRecords(messages []fantasy.Message, compactions []CompactionRecord) []fantasy.Message {
+	out := messages
+	for _, c := range compactions {
+		out = applyCompactionRecord(out, c)
+	}
+	return out
+}
+
+func applyCompactionRecord(messages []fantasy.Message, c CompactionRecord) []fantasy.Message {
+	if c.Head < 0 || c.Removed <= 0 || strings.TrimSpace(c.Summary) == "" {
+		return messages
+	}
+	if len(messages) <= c.Head+1 {
+		return messages
+	}
+	cutIdx := c.Head + c.Removed
+	if c.FirstKeptToolCallID != "" {
+		if cutIdx >= len(messages) || firstToolCallID(messages[cutIdx]) != c.FirstKeptToolCallID {
+			for i := c.Head + 1; i < len(messages); i++ {
+				if firstToolCallID(messages[i]) == c.FirstKeptToolCallID {
+					cutIdx = i
+					break
+				}
+			}
+		}
+	}
+	if cutIdx >= len(messages) {
+		return messages
+	}
+	// Never split a tool exchange: mirror snapCutBackward / snapCutForward on
+	// messages[c.Head:] so the kept tail never starts with an orphaned tool
+	// result (#1106).
+	active := messages[c.Head:]
+	relCut := snapCutBackward(active, cutIdx-c.Head)
+	if relCut < 1 {
+		relCut = snapCutForward(active, cutIdx-c.Head)
+	}
+	if relCut < 1 || len(active)-relCut < 1 {
+		return messages
+	}
+	cutIdx = c.Head + relCut
+	keep := dropPlanReannounceMessages(messages[cutIdx:])
+	out := make([]fantasy.Message, 0, c.Head+1+len(keep))
+	out = append(out, messages[:c.Head]...)
+	out = append(out, fantasy.NewUserMessage(c.Summary))
+	out = append(out, keep...)
 	return out
 }
 
@@ -429,25 +542,25 @@ type forcedCompactionStats struct {
 // compaction can drop a stale copy before inserting a fresh one.
 const planReannouncePrefix = "[plan state after compaction"
 
-// appendPlanReannounce re-announces the task-tracker plan right after a
-// compaction summary (#990, borrowed from Prime Agent's post-compaction
-// kernel-state announcement). The plan is HOST-side state — it survives the
-// compaction that just rewrote the history — but the summarizer may not have
-// preserved it, and the finish gate (checkFinishEnforcement) still enforces
-// it; without this the model has to remember to call task_tracker view to
-// rediscover the plan it is being held to. No-op when no orchestration state
-// is bound (direct-engine tests) or the plan has no open items.
-func appendPlanReannounce(out []fantasy.Message, orch *orchestrationState) []fantasy.Message {
+// planReannounceText renders the post-compaction task-tracker plan-state
+// message (#990, borrowed from Prime Agent's post-compaction kernel-state
+// announcement). The plan is HOST-side state — it survives the compaction that
+// just rewrote the history — but the summarizer may not have preserved it, and
+// the finish gate (checkFinishEnforcement) still enforces it; without this the
+// model has to remember to call task_tracker view to rediscover the plan it is
+// being held to. Empty when no orchestration state is bound (direct-engine
+// tests) or the plan has no open items.
+func planReannounceText(orch *orchestrationState) string {
 	if orch == nil {
-		return out
+		return ""
 	}
 	rendered, ok := orch.planStateForReannounce()
 	if !ok {
-		return out
+		return ""
 	}
-	return append(out, fantasy.NewUserMessage(fmt.Sprintf(
+	return fmt.Sprintf(
 		"%s] Your task plan below is host-side state and survived the compaction above. Continue from it; update it with task_tracker as you make progress.\n\n%s",
-		planReannouncePrefix, rendered)))
+		planReannouncePrefix, rendered)
 }
 
 // dropPlanReannounceMessages filters out earlier plan re-announcements from a
@@ -461,10 +574,51 @@ func appendPlanReannounce(out []fantasy.Message, orch *orchestrationState) []fan
 func dropPlanReannounceMessages(messages []fantasy.Message) []fantasy.Message {
 	out := make([]fantasy.Message, 0, len(messages))
 	for _, m := range messages {
-		if m.Role == fantasy.MessageRoleUser {
-			if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](firstPart(m)); ok && strings.HasPrefix(tp.Text, planReannouncePrefix) {
-				continue
-			}
+		if isPlanReannounceMessage(m) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func isPlanReannounceMessage(m fantasy.Message) bool {
+	if m.Role != fantasy.MessageRoleUser {
+		return false
+	}
+	tp, ok := fantasy.AsMessagePart[fantasy.TextPart](firstPart(m))
+	return ok && strings.HasPrefix(tp.Text, planReannouncePrefix)
+}
+
+func (e *engine) markRunLocalMessages(msgs ...fantasy.Message) {
+	if e == nil || len(msgs) == 0 {
+		return
+	}
+	if e.runLocalParts == nil {
+		e.runLocalParts = make(map[*fantasy.MessagePart]bool, len(msgs))
+	}
+	for i := range msgs {
+		if len(msgs[i].Content) > 0 {
+			e.runLocalParts[&msgs[i].Content[0]] = true
+		}
+	}
+}
+
+func (e *engine) isRunLocalMessage(m fantasy.Message) bool {
+	if isPlanReannounceMessage(m) {
+		return true
+	}
+	if e == nil || len(e.runLocalParts) == 0 || len(m.Content) == 0 {
+		return false
+	}
+	return e.runLocalParts[&m.Content[0]]
+}
+
+func (e *engine) dropRunLocalMessages(messages []fantasy.Message) []fantasy.Message {
+	out := make([]fantasy.Message, 0, len(messages))
+	for _, m := range messages {
+		if e.isRunLocalMessage(m) {
+			continue
 		}
 		out = append(out, m)
 	}
@@ -545,11 +699,21 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 			compactionSummaryPrefix, len(droppable)))
 	}
 
+	planText := planReannounceText(e.runOrch)
 	keep = dropPlanReannounceMessages(keep)
+	persistableKeep := e.dropRunLocalMessages(keep)
+	firstKeptCallID := ""
+	if len(persistableKeep) > 0 {
+		firstKeptCallID = firstToolCallID(persistableKeep[0])
+	}
 	out := make([]fantasy.Message, 0, head+2+len(keep))
 	out = append(out, messages[:head]...)
 	out = append(out, summary)
-	out = appendPlanReannounce(out, e.runOrch)
+	if planText != "" {
+		planMsg := fantasy.NewUserMessage(planText)
+		e.markRunLocalMessages(planMsg)
+		out = append(out, planMsg)
+	}
 	out = append(out, keep...)
 
 	// Proactive compaction is a clean reduction, not a reactive resilience
@@ -558,6 +722,12 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 	e.consecutiveCompactions = 0
 	// The history just shrank: the next step's resent size is the new floor.
 	e.resendFloorStale = true
+	e.compactions = append(e.compactions, CompactionRecord{
+		Head:                len(e.dropRunLocalMessages(messages[:head])),
+		Removed:             len(e.dropRunLocalMessages(droppable)),
+		FirstKeptToolCallID: firstKeptCallID,
+		Summary:             messageText(summary),
+	})
 
 	return proactiveCompactResult{
 		messages:      out,
@@ -805,7 +975,8 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 // so the enforcement loop can append it to the NEXT round's input. Reasoning
 // parts are dropped, the same rule as the interactive replay path (reasoning
 // is UI-only: several providers reject re-sent reasoning blocks and they only
-// burn prompt tokens).
+// burn prompt tokens), except for a Gemini thought signature
+// (geminiSignatureOnly).
 //
 // Without this carry, a blocked finish fed the next round ONLY the original
 // input plus the nudges: the model saw no record of the tool work it had just
@@ -833,7 +1004,8 @@ func (e *engine) roundCarry(result *fantasy.AgentResult) []fantasy.Message {
 }
 
 // Replay keeps tool evidence while dropping provider-specific reasoning blocks
-// and any unexecuted ToolCallParts (e.g. a step terminated by FinishReasonLength
+// (all but a Gemini thought signature, geminiSignatureOnly) and any unexecuted
+// ToolCallParts (e.g. a step terminated by FinishReasonLength
 // before fantasy dispatched the call, which would otherwise leave an orphaned
 // tool_use in the next round's prompt that providers reject with HTTP 400).
 // Copy content slices so a later reducer cannot mutate the original transcript.
@@ -855,8 +1027,13 @@ func messagesForReplay(messages []fantasy.Message) []fantasy.Message {
 	out := make([]fantasy.Message, 0, len(messages))
 	for _, msg := range messages {
 		parts := make([]fantasy.MessagePart, 0, len(msg.Content))
+		signatures := 0
 		for _, part := range msg.Content {
 			if _, isReasoning := part.(fantasy.ReasoningPart); isReasoning && msg.Role == fantasy.MessageRoleAssistant {
+				if sig, ok := geminiSignatureOnly(part); ok {
+					parts = append(parts, sig)
+					signatures++
+				}
 				continue
 			}
 			if msg.Role == fantasy.MessageRoleAssistant {
@@ -868,13 +1045,88 @@ func messagesForReplay(messages []fantasy.Message) []fantasy.Message {
 			}
 			parts = append(parts, part)
 		}
-		if msg.Role == fantasy.MessageRoleAssistant && len(parts) == 0 {
+		// A signature belongs to the call or text after it: with neither left,
+		// the message is as empty as one with no parts.
+		if msg.Role == fantasy.MessageRoleAssistant && len(parts) == signatures {
 			continue
 		}
 		msg.Content = parts
 		out = append(out, msg)
 	}
 	return out
+}
+
+// geminiSignatureOnly returns the Gemini thought signature a reasoning part
+// carries, as a reasoning part with the thought text dropped. Replay keeps it
+// because Gemini wants a tool call's signature back on later requests of the
+// same turn, and newer Gemini models reject a call without it, while a context
+// checkpoint and a stream-error resume re-send the turn's calls with no user
+// message after them. fantasy keeps the signature in the part's google
+// options, and its OpenRouter provider sends it back from there to google/
+// models. A model that is not Gemini is shown none (geminiSignatureStep).
+func geminiSignatureOnly(part fantasy.MessagePart) (fantasy.ReasoningPart, bool) {
+	md := google.GetReasoningMetadata(part.Options())
+	if md == nil || md.Signature == "" {
+		return fantasy.ReasoningPart{}, false
+	}
+	return fantasy.ReasoningPart{ProviderOptions: fantasy.ProviderOptions{google.Name: md}}, true
+}
+
+// isGeminiModel reports whether model is Gemini, the one kind a Gemini
+// signature is for: a google/gemini id, the form fantasy's OpenRouter and
+// Vercel providers send a signature back for (they do for any google/ id), or
+// a gemini model of fantasy's own google provider. Gemma shares the google/
+// namespace but has no thought signatures (see unpinnedOpenWeightsPrefixes),
+// so it is shown none. The test must not miss a Gemini route:
+// geminiSignatureStep would then take the signatures fantasy keeps within a
+// run from every step after the first.
+func isGeminiModel(model fantasy.LanguageModel) bool {
+	if model == nil {
+		return false
+	}
+	id := model.Model()
+	if strings.HasPrefix(id, "google/") {
+		return strings.HasPrefix(id, "google/gemini")
+	}
+	return model.Provider() == google.Name && strings.HasPrefix(strings.TrimPrefix(id, "models/"), "gemini")
+}
+
+func isGeminiSignature(part fantasy.MessagePart) bool {
+	r, ok := fantasy.AsMessagePart[fantasy.ReasoningPart](part)
+	return ok && google.GetReasoningMetadata(r.Options()) != nil
+}
+
+func hasGeminiSignature(msg fantasy.Message) bool {
+	return msg.Role == fantasy.MessageRoleAssistant && slices.ContainsFunc(msg.Content, isGeminiSignature)
+}
+
+// withoutGeminiSignatures is messages without the signatures replay kept, for
+// a request that has no use for them. Not every route skips such a part:
+// OpenRouter sends its other routes an empty reasoning detail of unknown
+// format, and its openai/ and xai/ routes "<thoughts></thoughts>" text.
+func withoutGeminiSignatures(messages []fantasy.Message) []fantasy.Message {
+	out := make([]fantasy.Message, 0, len(messages))
+	for _, msg := range messages {
+		if hasGeminiSignature(msg) {
+			msg.Content = slices.DeleteFunc(slices.Clone(msg.Content), isGeminiSignature)
+			if len(msg.Content) == 0 {
+				continue
+			}
+		}
+		out = append(out, msg)
+	}
+	return out
+}
+
+// geminiSignatureStep shows the replayed signatures only to a Gemini model, so
+// a fallback that is not Gemini, taken after a Gemini model failed, gets the
+// replay it got before they were kept. Request-local, like the reducers after
+// it: the run's own history keeps them for a later Gemini step.
+func geminiSignatureStep(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+	if isGeminiModel(opts.Model) || !slices.ContainsFunc(opts.Messages, hasGeminiSignature) {
+		return ctx, fantasy.PrepareStepResult{}, nil
+	}
+	return ctx, fantasy.PrepareStepResult{Messages: withoutGeminiSignatures(opts.Messages)}, nil
 }
 
 // dropTrailingAssistant strips the final message when it is an assistant
@@ -1550,6 +1802,9 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// any provider sees them (a raw one 400s the whole request on
 			// Anthropic/Bedrock); before the reducers, which size the final slice.
 			toolCallInputSanitizeStep(),
+			// After the recovery checkpoint, so a resume keeps the signatures
+			// for a Gemini model even when this one is not.
+			geminiSignatureStep,
 			// Prompt-cache markers must be attached to the reduced message
 			// slice, and no provider call may observe the pre-reduction
 			// history. opts.Model makes fallback swaps use their own window.

@@ -310,6 +310,12 @@ has already finished works differently, and the form says so: saving
 original row stays exactly as it ran. This is deliberate: the ledger records what
 actually happened, and changes create new entries.
 
+Creating a task, resubmitting a copy, or changing a task's connections is
+refused, with the reason, when the task would name a connection that the
+deployment does not provide and its owner has not connected (for a new task or
+a resubmitted copy, the owner is you): a task like that could not run, so it is
+stopped at the form rather than failing on every run.
+
 ### Answer a paused task
 
 When a task pauses to ask a question, the question is waiting in its record, and

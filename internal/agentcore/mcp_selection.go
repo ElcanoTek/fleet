@@ -289,6 +289,22 @@ func NewMCPConnectFailure(server string, err error) MCPConnectFailure {
 	}
 }
 
+// UnknownMCPServerError is the binder's refusal for a selection entry naming a
+// server that is not in the active catalog. A server absent from the active
+// catalog is EITHER misspelled OR known-to-the-manifest but gated off because
+// its default-seat credentials are unset (a server provisioned only as a named
+// account — its <VAR>_<ACCOUNT> set but the bare <VAR> empty — is excluded by
+// the enable gate). Surface both so the operator knows to check the
+// default-seat env, not just the spelling. Exported so the scheduler's
+// create-time selection check refuses with the exact words a run would.
+func UnknownMCPServerError(server string) error {
+	return fmt.Errorf(
+		"mcp selection references server %q which is not in the active catalog — "+
+			"it is either misspelled or configured-but-gated-off (its default-seat "+
+			"credentials are unset; every connector needs its bare default-seat env "+
+			"set before a named account can be selected)", server)
+}
+
 // BindMCPSelectionReport is BindMCPSelection that also reports every
 // best-effort server it skipped because registration failed. Under a ctx
 // marked mcp.WithConnectRetry (scheduled runs), an HTTP server's registration
@@ -316,17 +332,7 @@ func BindMCPSelectionReport(ctx context.Context, client *mcp.Client, selection M
 	for _, choice := range selection {
 		base, ok := bases[choice.Server]
 		if !ok {
-			// A server absent from the active catalog is EITHER misspelled OR
-			// known-to-the-manifest but gated off because its default-seat
-			// credentials are unset (a server provisioned only as a named account
-			// — its <VAR>_<ACCOUNT> set but the bare <VAR> empty — is excluded by
-			// the enable gate). Surface both so the operator knows to check the
-			// default-seat env, not just the spelling.
-			return nil, nil, fmt.Errorf(
-				"mcp selection references server %q which is not in the active catalog — "+
-					"it is either misspelled or configured-but-gated-off (its default-seat "+
-					"credentials are unset; every connector needs its bare default-seat env "+
-					"set before a named account can be selected)", choice.Server)
+			return nil, nil, UnknownMCPServerError(choice.Server)
 		}
 
 		name, variantEnv, err := resolveMCPVariant(choice.Server, base, choice.Account)

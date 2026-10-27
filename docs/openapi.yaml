@@ -1324,6 +1324,18 @@ paths:
         schema: { type: string }
     post:
       summary: Re-run a task once now (a new task copied from this one, optional overrides).
+      description: >-
+        The copy belongs to the calling user. A caller with no user behind it
+        (the admin API key or a scoped API key) gives the copy the source's
+        owner (created_by) instead — and, for the admin key, the source's
+        authorizing key — so the copy resolves the same hosted connections and
+        reaches the same owner digest as the task it was copied from. By
+        default the copy joins the source's lineage (its per-job workspace
+        directory and owner-digest entry); overrides.new_lineage starts a job
+        of its own. The copy's effective mcp_selection must resolve: a server
+        that is neither in the active bundle catalog nor among the copy
+        owner's hosted connections is a 400 carrying the message its run
+        would have dead-lettered with.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       requestBody:
         required: false
@@ -1371,6 +1383,9 @@ paths:
                         timeout_seconds: { type: integer }
                     carry_context: { type: boolean }
                     instruction_self_improve: { type: boolean }
+                    new_lineage:
+                      type: boolean
+                      description: "true gives the copy a lineage of its own (its own per-job workspace directory and owner-digest entry) — use it when the copy is a different job. Omitted / false joins the source's lineage, which Resubmit with changes relies on."
       responses:
         "201":
           description: Created
@@ -1387,6 +1402,11 @@ paths:
         schema: { type: string }
     post:
       summary: Clone a task (a new task copied from this one, preserving recurrence; optional overrides).
+      description: >-
+        Same ownership, lineage and mcp_selection rules as POST
+        /tasks/{task_id}/rerun: an admin-key or scoped-key clone keeps the
+        source's owner, overrides.new_lineage starts a job of its own, and an
+        unresolvable mcp_selection is a 400.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       requestBody:
         required: false
@@ -1397,7 +1417,7 @@ paths:
               properties:
                 overrides:
                   type: object
-                  description: "Accepts the same override fields as POST /tasks/{task_id}/rerun, including files and file_names."
+                  description: "Accepts the same override fields as POST /tasks/{task_id}/rerun, including files, file_names and new_lineage."
       responses:
         "201":
           description: Created
@@ -1406,6 +1426,56 @@ paths:
               schema: { $ref: "#/components/schemas/Task" }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /tasks/{task_id}/owner:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      summary: Set the user who owns a task (admin).
+      description: >-
+        Sets created_by — whose hosted connections the task's runs resolve,
+        who receives its owner digest, and who may read and edit it as its
+        creator — on the task, on every unfinished later occurrence of its
+        recurrence chain, and on the chain's last occurrence (the chain
+        continues from it: a pending spawn or a replay of a parked
+        dead-letter). The chain is followed through previous_occurrence_id,
+        not lineage_id, so other jobs copied from the same source keep their
+        owner; occurrences spawned afterwards inherit the new owner, and
+        finished occurrences in between keep theirs. The mcp_selection of
+        every row it rewrites must resolve for the new owner (400 naming the
+        row otherwise, with the message its run would fail with; nothing is
+        written). Admin-only, enforced in-handler on the admin permission (the
+        admin API key, a scoped key carrying admin, or an admin-role session).
+        CLI twin: fleet sched task set-owner <task_id> <username>.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username: { type: string, description: "An existing, enabled user's username (on a standard deployment, their email)." }
+      responses:
+        "200":
+          description: The task as it now reads, and every row the reassignment rewrote (the task first, then the chain rows in chain order).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [task, updated_task_ids]
+                properties:
+                  task: { $ref: "#/components/schemas/Task" }
+                  updated_task_ids:
+                    type: array
+                    items: { type: string, format: uuid }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
   /tasks/{task_id}/stream:
     parameters:
       - name: task_id

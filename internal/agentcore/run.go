@@ -291,6 +291,10 @@ type Result struct {
 	// Usage is the accumulated token + cost accounting for the whole run.
 	Usage RunUsage
 
+	// Compactions lists the head/summary/tail compactions applied to the message
+	// history during this run, in the order they occurred.
+	Compactions []CompactionRecord
+
 	// AuditAborted is true when the run's last confirm_audit declared
 	// success=false. The agent is deliberately ALLOWED to finish after that —
 	// an abort is a conclusion, not a crash — so without this field the run is
@@ -443,6 +447,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	}
 
 	eng := newRunEngine(cfg, deps, logSession)
+	defer func() {
+		result.Compactions = eng.compactionsSnapshot()
+	}()
 
 	// basePrompt is the driver's system prompt as authored (persona, protocols,
 	// skills, notes). The live-registry section is appended below, once the
@@ -462,12 +469,14 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 
 	// Lifecycle hooks (#788): one per-run engine, nil (zero-overhead no-op) when
 	// the bundle declares none. Hooks execute inside the sandbox via deps.Executor.
+	seedLen := len(messages)
 	hooks := newHookEngine(mode, deps.Executor, deps.Observer, label)
 	messages, err = applyUserPromptSubmitHooks(ctx, hooks, messages)
 	if err != nil {
 		return Result{}, err
 	}
 	messages = appendRunTailMessages(ctx, cfg, messages)
+	eng.markRunLocalMessages(messages[seedLen:]...)
 
 	maxTokens := runMaxCompletionTokens(cfg)
 	eng.maxCompletionTokens = int(maxTokens)
@@ -841,10 +850,12 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// the authoritative final answer so they drop the superseded draft
 		// without discarding abort-path transcripts.
 		messages = append(messages, eng.roundCarry(finalResult)...)
+		beforeEnforceLen := len(messages)
 		messages, err = appendEnforcementMessages(messages, enforcementMsgs, deps.Observer, observerBoundary)
 		if err != nil {
 			return Result{}, err
 		}
+		eng.markRunLocalMessages(messages[beforeEnforceLen:]...)
 	}
 
 	// Round-cap exhaustion is a hard error, but the rounds it burned are paid
@@ -1163,9 +1174,12 @@ func finalizeInputFor(mode Mode, finalText string, messages []fantasy.Message, r
 	outOfRoster *outOfRoster,
 ) FinalizeInput {
 	return FinalizeInput{
-		Mode:            mode,
-		FinalText:       finalText,
-		Messages:        messages,
+		Mode:      mode,
+		FinalText: finalText,
+		// Each recovery call asks with a user message of its own, which starts
+		// a new Gemini turn, and the hook may call a model other than the
+		// run's: no request here needs a Gemini signature.
+		Messages:        withoutGeminiSignatures(messages),
 		RoundToolEvents: roundToolEvents,
 		Tools:           fantasyTools,
 		Observer:        observer,

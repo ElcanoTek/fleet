@@ -68,6 +68,33 @@ describe("PromptLibrary", () => {
       visibility: "private",
     }));
   });
+
+  it("clones and edits a read-only Git prompt into a workspace prompt", async () => {
+    vi.mocked(orchestratorApi.createPrompt).mockResolvedValue({
+      ...gitPrompt,
+      id: "cloned-id",
+      name: "Daily scan (Custom)",
+      source: "workspace",
+      visibility: "workspace",
+      read_only: false,
+      owned_by_caller: true,
+    });
+    render(<PromptLibrary currentText="" onInsert={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open prompt library" }));
+    await screen.findAllByText("Daily scan");
+    fireEvent.click(screen.getByRole("button", { name: "Clone & edit" }));
+    expect(screen.getByLabelText("Name")).toHaveValue("Daily scan (Custom)");
+    expect(screen.getByLabelText("Prompt")).toHaveValue(gitPrompt.content);
+    fireEvent.click(screen.getByRole("button", { name: "Save prompt" }));
+    await waitFor(() =>
+      expect(orchestratorApi.createPrompt).toHaveBeenCalledWith({
+        name: "Daily scan (Custom)",
+        description: "Check system health",
+        content: gitPrompt.content,
+        visibility: "workspace",
+      }),
+    );
+  });
 });
 
 // A Git prompt that declares a form (docs/PROMPT-LIBRARY.md, "Form prompts"),

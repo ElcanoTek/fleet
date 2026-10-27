@@ -26,7 +26,7 @@
 //	fleet chat user add|update|role|del|list
 //	fleet sched user add|update|set-role|rename|del|list
 //	fleet sched apikey create|list|revoke|rotate|delete
-//	fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits|tag|estimate|batch-create
+//	fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits|set-owner|tag|estimate|batch-create
 //	fleet sched trigger create|list|delete|rotate
 //	fleet sched dlq list|replay
 //	fleet sched budget list|create|delete
@@ -262,6 +262,7 @@ Users, credentials, notes:
   fleet sched task set-description <task_id> <text>|-    (operator docs; - reads stdin, e.g. < TASK_README.md)
   fleet sched task set-limits <task_id> --memory-mb N --cpus N --pids N | --clear
                                                  (per-task sandbox cgroup override; --clear reverts to global defaults)
+  fleet sched task set-owner <task_id> <username>   (reassign a task + the rest of its chain later runs continue from)
   fleet sched task tag <task_id> --add <tag> ... --remove <tag> ...   (organize tasks by label)
   fleet sched task estimate --model <slug> --prompt <text> [--max-iter N] [--mcp-tools N] [--max-cost USD] [--system-prompt <text>] [--json]   (pre-submission cost forecast; no DB, no model call)
   fleet sched trigger create --task <task_id> --slug <slug> [--kind webhook|email] | list | rotate <trigger_id> | delete <trigger_id>   (event triggers; #177/#511)

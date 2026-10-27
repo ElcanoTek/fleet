@@ -1373,6 +1373,164 @@ func (s *Storage) UpdateTaskTags(ctx context.Context, taskID uuid.UUID, add, rem
 	return task, nil
 }
 
+// TaskOwnerCheckError is SetTaskOwner's refusal: the caller's check rejected
+// one of the rows the reassignment would have rewritten, and nothing was
+// written.
+type TaskOwnerCheckError struct {
+	TaskID uuid.UUID
+	Err    error
+}
+
+func (e *TaskOwnerCheckError) Error() string {
+	return fmt.Sprintf("task %s: %v", e.TaskID, e.Err)
+}
+
+func (e *TaskOwnerCheckError) Unwrap() error { return e.Err }
+
+// setTaskOwnerMaxPasses bounds SetTaskOwner's lock-and-recompute loop. Each
+// extra pass means a spawn committed between the chain read and the row
+// locks; two in a row on one chain is already unusual.
+const setTaskOwnerMaxPasses = 5
+
+// SetTaskOwner makes ownerID the owner (created_by) of a task and of the rows
+// its recurrence chain continues from, and returns the ids it rewrote (the
+// task's own id first). It is the admin reassignment behind
+// PUT /tasks/{id}/owner and `fleet sched task set-owner`; a missing task is
+// sql.ErrNoRows.
+//
+// Which rows: the task itself, every unfinished later occurrence, and the
+// chain's last occurrence even when it has finished. A recurrence spawn builds
+// the successor from the completing row (scheduleNextRecurrence copies
+// CreatedBy), and the chain continues only from its last row — a pending
+// spawn, a reconciliation of a lost one, or a replay of a parked dead-letter —
+// so that row must carry the new owner for every later occurrence to inherit
+// it. Finished occurrences in between keep their owner; they are history. The
+// chain is followed forward through previous_occurrence_id — the one-step
+// pointer each spawn stamps — rather than lineage_id, which re-runs and clones
+// share with the job they were copied from: reassigning one copied chain must
+// not reassign another.
+//
+// check, when non-nil, sees each of those rows as it would read after the
+// reassignment (CreatedBy = ownerID) while the row is locked, so no edit can
+// change it in between; one refusal aborts the whole reassignment with a
+// *TaskOwnerCheckError and writes nothing.
+//
+// Concurrency: every row in the set is locked (FOR UPDATE) before the write,
+// and the set is recomputed after locking until it is stable. A spawn claims
+// its credit with an UPDATE on the completing row, so a spawn that has not
+// committed waits for this transaction and then copies the new owner, and one
+// that committed first shows up in the recomputed set as the new last row.
+//
+// previous_occurrence_id carries no index, so each step of the walk scans the
+// table; a walk from the chain's live occurrence — the usual target — is one
+// or two steps.
+func (s *Storage) SetTaskOwner(ctx context.Context, taskID, ownerID uuid.UUID, check func(*models.Task) error) ([]uuid.UUID, error) {
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	locked := map[uuid.UUID]*models.Task{}
+	target, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	locked[taskID] = target
+
+	var rows []uuid.UUID
+	for pass := 0; ; pass++ {
+		if pass == setTaskOwnerMaxPasses {
+			return nil, fmt.Errorf("task %s: its recurrence chain kept changing while it was being reassigned; retry", taskID)
+		}
+		rows, err = taskOwnerChainRows(ctx, tx, taskID)
+		if err != nil {
+			return nil, err
+		}
+		fresh := false
+		for _, id := range rows {
+			if _, ok := locked[id]; ok {
+				continue
+			}
+			t, lerr := s.db.GetTaskForUpdate(ctx, tx, id)
+			if lerr != nil {
+				return nil, lerr
+			}
+			locked[id] = t
+			fresh = true
+		}
+		if !fresh {
+			break
+		}
+	}
+
+	if check != nil {
+		for _, id := range rows {
+			view := *locked[id]
+			owner := ownerID
+			view.CreatedBy = &owner
+			if cerr := check(&view); cerr != nil {
+				return nil, &TaskOwnerCheckError{TaskID: id, Err: cerr}
+			}
+		}
+	}
+	ids := make([]string, len(rows))
+	for i, id := range rows {
+		ids[i] = id.String()
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET created_by = $2 WHERE id = ANY($1::uuid[])`, ids, ownerID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// taskOwnerChainRows returns the rows SetTaskOwner rewrites for taskID — the
+// task, its unfinished later occurrences, and its chain's last occurrence —
+// with the task first. Read inside the caller's transaction; each call is a
+// new statement, so under READ COMMITTED it sees spawns committed since the
+// previous call.
+func taskOwnerChainRows(ctx context.Context, tx *sql.Tx, taskID uuid.UUID) ([]uuid.UUID, error) {
+	terminal := make([]string, 0, len(models.TerminalTaskStatuses))
+	for _, st := range models.TerminalTaskStatuses {
+		terminal = append(terminal, string(st))
+	}
+	// A linked list, so UNION ALL plus a depth guard (a corrupt pointer cycle
+	// must not recurse forever) rather than UNION's de-duplication.
+	rows, err := tx.QueryContext(ctx, `
+		WITH RECURSIVE chain(id, depth) AS (
+			SELECT id::text, 0 FROM tasks WHERE id = $1
+			UNION ALL
+			SELECT t.id::text, c.depth + 1
+			FROM tasks t JOIN chain c ON t.previous_occurrence_id = c.id
+			WHERE c.depth < 100000
+		)
+		SELECT t.id FROM tasks t JOIN chain c ON t.id::text = c.id
+		WHERE c.depth = 0
+		   OR NOT (t.status = ANY($2::text[]))
+		   OR c.depth = (SELECT max(depth) FROM chain)
+		ORDER BY c.depth`, taskID, terminal)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []uuid.UUID
+	seen := map[uuid.UUID]bool{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out, rows.Err()
+}
+
 // ListTagCatalogue returns every distinct tag in use with its task count (#212),
 // scoped to the principal's visible rows (#1082).
 func (s *Storage) ListTagCatalogue(ctx context.Context, scope db.TagCatalogueScope) ([]db.TagCount, error) {

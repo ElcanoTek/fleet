@@ -126,26 +126,14 @@ func (s *Server) userSkillError(w http.ResponseWriter, err error) {
 	}
 }
 
-// effectiveUserSkills combines the caller's own user skills with any active
-// workspace-shared user skills from teammates, excluding names shadowed by the
-// bundle/plugin/built-in roster or by one of the caller's own skills.
+// effectiveUserSkills returns the caller's own user skills for materialization
+// and explicit "/<name>" invocation. Teammates' workspace-shared skills stay
+// opt-in (via "Add to my skills" or "Clone & edit" in Settings → Skills) before
+// entering the caller's prompt roster, while an active skill owned by the
+// caller with the same name as a bundle/plugin/built-in skill customizes
+// (overrides) that skill's SKILL.md for the caller's runs.
 func (s *Server) effectiveUserSkills(ctx context.Context, user string) ([]store.UserSkill, error) {
-	skills, err := s.store.ListUserSkills(ctx, user)
-	if err != nil {
-		return nil, err
-	}
-	bundleNames := map[string]bool{}
-	for _, b := range s.bundleSkills() {
-		bundleNames[b.Name] = true
-	}
-	out := make([]store.UserSkill, 0, len(skills))
-	for _, sk := range skills {
-		if bundleNames[sk.Name] {
-			continue
-		}
-		out = append(out, sk)
-	}
-	return out, nil
+	return s.store.ListUserSkills(ctx, user)
 }
 
 // materializeUserSkills syncs the user's ACTIVE skills into the conversation
@@ -223,7 +211,7 @@ func matchUserSkillInvocation(message string, skills []store.UserSkill) string {
 			continue
 		}
 		return "\n\n[Skill invoked: " + sk.Name + "]\nThe user explicitly invoked their own skill \"" + sk.Name +
-			"\". Read `" + userSkillsRoot + "/" + sk.Name + "/SKILL.md` now and follow its instructions for this request."
+			"\". Read `" + userSkillsRoot + "/" + sk.Name + "/SKILL.md` now and follow its instructions for this request (any supporting reference files or scripts under `skills/" + sk.Name + "/` remain available on disk)."
 	}
 	return ""
 }
