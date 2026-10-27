@@ -423,6 +423,36 @@ fleet_active_work_summary() {
     elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
       items+=("sched database active-work query failed while service is ${svc_state}")
     fi
+
+    if has_tbl="$(fleet_psql_query "$sched_dsn" "SELECT to_regclass('public.datasets') IS NOT NULL;")"; then
+      if [[ "$has_tbl" == "t" ]]; then
+        if out="$(fleet_psql_query "$sched_dsn" "
+          SELECT COALESCE((
+            SELECT string_agg(
+              format('dataset %s (running, %ss)',
+                id::text,
+                GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(updated_at, created_at)))::bigint)
+              ), '; ')
+            FROM (
+              SELECT id, updated_at, created_at
+                FROM datasets
+               WHERE status = 'running'
+                 AND (${svc_start_epoch} <= 0 OR COALESCE(updated_at, created_at) >= to_timestamp(${svc_start_epoch}))
+               ORDER BY COALESCE(updated_at, created_at) ASC
+               LIMIT 5
+            ) d
+          ), '');")"; then
+          out="$(fleet_sanitize_summary "$out")"
+          out="${out#"${out%%[![:space:]]*}"}"
+          out="${out%"${out##*[![:space:]]}"}"
+          [[ -n "$out" ]] && items+=("$out")
+        elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+          items+=("sched datasets active-work query failed while service is ${svc_state}")
+        fi
+      fi
+    elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+      items+=("sched datasets active-work query failed while service is ${svc_state}")
+    fi
   fi
 
   if [[ -n "$chat_dsn" ]]; then

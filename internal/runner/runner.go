@@ -635,14 +635,23 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 			return
 		}
 		if !p.admitClaims() {
-			rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
-			rerr := p.store.ReleaseClaimedTask(rctx, task.ID, token.String())
-			rcancel()
-			if rerr == nil {
-				release()
-				return
+			var rerr error
+			for attempt := 0; attempt < 3; attempt++ {
+				if attempt > 0 {
+					time.Sleep(100 * time.Millisecond)
+				}
+				rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+				rerr = p.store.ReleaseClaimedTask(rctx, task.ID, token.String())
+				rcancel()
+				if rerr == nil {
+					break
+				}
 			}
-			log.Printf("runner: could not release drained claim for task %s (%v); continuing execution under active lease", task.ID, rerr)
+			if rerr != nil {
+				log.Printf("runner: could not release drained claim for task %s (%v); lease recovery will reclaim on restart", task.ID, rerr)
+			}
+			release()
+			return
 		}
 
 		// Per-claim lease token: a goroutine whose lease was recovered must not

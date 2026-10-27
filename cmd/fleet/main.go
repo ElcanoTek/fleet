@@ -1882,6 +1882,7 @@ func setupDatasetRunner(schedStorage *storage.Storage, mgr *agent.Manager, h *ha
 		log.Printf("dataset boot sweep: %v", err)
 	}
 	datasetRunner := datasets.New(schedStorage, mgr)
+	datasetRunner.SetDrainCheck(httpapi.UpdateDrainActive)
 	h.SetDatasetRunner(datasetRunner)
 	return datasetRunner
 }

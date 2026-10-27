@@ -267,7 +267,7 @@ func TestActiveWorkAndWaitIdle_DB(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 	clean := func() {
-		for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
+		for _, q := range []string{"DELETE FROM dataset_rows", "DELETE FROM datasets", "DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
 			_, _ = database.Conn().ExecContext(ctx, q)
 		}
 	}

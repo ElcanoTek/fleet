@@ -385,7 +385,43 @@ func querySchedActiveWork(ctx context.Context, dsn string, svcStartUnix int64) (
 		}
 		out = append(out, fmt.Sprintf("scheduled task %s (%q, %s, %ds)", sanitizeSummaryText(id), title, sanitizeSummaryText(status), ageSec))
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+
+	var hasDatasets bool
+	if err := db.QueryRowContext(qctx, "SELECT to_regclass('public.datasets') IS NOT NULL").Scan(&hasDatasets); err != nil {
+		return out, err
+	}
+	if hasDatasets {
+		drows, err := db.QueryContext(qctx, `
+			SELECT id::text,
+			       GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(updated_at, created_at)))::bigint)
+			  FROM datasets
+			 WHERE status = 'running'
+			   AND ($1 <= 0 OR COALESCE(updated_at, created_at) >= to_timestamp($1))
+			 ORDER BY COALESCE(updated_at, created_at) ASC
+			 LIMIT 5`, svcStartUnix)
+		if err != nil {
+			return out, err
+		}
+		for drows.Next() {
+			var id string
+			var ageSec int64
+			if err := drows.Scan(&id, &ageSec); err != nil {
+				_ = drows.Close()
+				return out, err
+			}
+			out = append(out, fmt.Sprintf("dataset %s (running, %ds)", sanitizeSummaryText(id), ageSec))
+		}
+		if err := drows.Err(); err != nil {
+			_ = drows.Close()
+			return out, err
+		}
+		_ = drows.Close()
+	}
+
+	return out, nil
 }
 
 func queryChatActiveWork(ctx context.Context, dsn string, svcStartUnix int64) ([]string, error) {

@@ -2114,13 +2114,21 @@ type approvalRunGate struct {
 }
 
 // enter admits one execution, or refuses it once a drain has begun.
+// Increment active before checking the filesystem drain sentinel so any updater
+// that sets the sentinel after enter() succeeds is guaranteed to observe
+// active > 0 on its subsequent /healthz probe.
 func (g *approvalRunGate) enter() bool {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.draining || UpdateDrainActive() {
+	if g.draining {
+		g.mu.Unlock()
 		return false
 	}
 	g.active++
+	g.mu.Unlock()
+	if UpdateDrainActive() {
+		g.leave()
+		return false
+	}
 	return true
 }
 
