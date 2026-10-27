@@ -107,6 +107,13 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 		}
 	}
 
+	// Verify encoded newlines (%0A) in URI passwords are preserved in-process via
+	// fleet_split_dsn_password_vars and never leak into the redacted DSN.
+	nlCmd := exec.Command("bash", "-c", `. "$1"; fleet_split_dsn_password_vars "postgresql://u:abc%0Adef@127.0.0.1:5432/sched"; [[ "$REPLY_PASS" == $'abc\ndef' && "$REPLY_REDACTED" == "postgresql://u@127.0.0.1:5432/sched" ]]`, "_", lib)
+	if nlOut, nlErr := nlCmd.CombinedOutput(); nlErr != nil {
+		t.Fatalf("fleet_split_dsn_password_vars multiline password failed: %v\n%s", nlErr, string(nlOut))
+	}
+
 	// Verify fleet_resolve_dsn prefers FLEET_SCHED_DATABASE_URL in the env file
 	// over a generic DATABASE_URL in the calling shell's environment.
 	envFile := filepath.Join(t.TempDir(), "fleet.env")

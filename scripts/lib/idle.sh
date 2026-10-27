@@ -5,8 +5,9 @@
 # and detached approval executions) without sourcing the 0600 env file and
 # without placing database passwords on psql's command line.
 
-# fleet_uri_decode STR — decodes RFC 3986 percent-encoded bytes (%XX) in STR.
-fleet_uri_decode() {
+# fleet_uri_decode_var STR — decodes RFC 3986 percent-encoded bytes (%XX) in STR
+# into REPLY_DECODED without command-substitution newline stripping.
+fleet_uri_decode_var() {
   local LC_ALL=C s="$1" out="" i=0 len c hex
   len=${#s}
   while (( i < len )); do
@@ -23,12 +24,19 @@ fleet_uri_decode() {
     out+="$c"
     i=$(( i + 1 ))
   done
-  printf '%s' "$out"
+  REPLY_DECODED="$out"
 }
 
-# fleet_unescape_conninfo_val STR — unescapes libpq backslash-escaped bytes in
-# a keyword=value conninfo token.
-fleet_unescape_conninfo_val() {
+# fleet_uri_decode STR — decodes RFC 3986 percent-encoded bytes (%XX) in STR.
+fleet_uri_decode() {
+  local REPLY_DECODED=""
+  fleet_uri_decode_var "$1"
+  printf '%s' "$REPLY_DECODED"
+}
+
+# fleet_unescape_conninfo_val_var STR — unescapes libpq backslash-escaped bytes
+# in a keyword=value conninfo token into REPLY_UNESCAPED.
+fleet_unescape_conninfo_val_var() {
   local LC_ALL=C s="$1" out="" i=0 len
   len=${#s}
   while (( i < len )); do
@@ -40,15 +48,25 @@ fleet_unescape_conninfo_val() {
       i=$(( i + 1 ))
     fi
   done
-  printf '%s' "$out"
+  REPLY_UNESCAPED="$out"
 }
 
-# fleet_split_dsn_password DSN — prints the extracted password on line 1 and the
-# DSN with its password stripped on line 2 (supporting both postgres:// URIs and
-# libpq keyword=value conninfo strings). When the DSN has no password, line 1 is
-# empty and line 2 is the original DSN.
-fleet_split_dsn_password() {
-  local dsn="$1" proto rest userinfo hostpart user pass="" redacted
+# fleet_unescape_conninfo_val STR — unescapes libpq backslash-escaped bytes in
+# a keyword=value conninfo token.
+fleet_unescape_conninfo_val() {
+  local REPLY_UNESCAPED=""
+  fleet_unescape_conninfo_val_var "$1"
+  printf '%s' "$REPLY_UNESCAPED"
+}
+
+# fleet_split_dsn_password_vars DSN — extracts the password into REPLY_PASS and
+# the DSN with its password stripped into REPLY_REDACTED (supporting both
+# postgres:// URIs and libpq keyword=value conninfo strings) in-process so
+# embedded or trailing newlines in passwords never corrupt the redacted DSN.
+fleet_split_dsn_password_vars() {
+  local dsn="$1" proto rest userinfo hostpart user pass="" redacted REPLY_DECODED="" REPLY_UNESCAPED=""
+  REPLY_PASS=""
+  REPLY_REDACTED=""
   if [[ "$dsn" != *"://"* ]]; then
     redacted="$dsn"
     local first_match=1 m1 m3 m5
@@ -56,7 +74,10 @@ fleet_split_dsn_password() {
       if [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\'(([^\'\\]|\\.)*)\'[[:space:]]*(.*)$ ]]; then
         m1="${BASH_REMATCH[1]}"; m3="${BASH_REMATCH[3]}"; m5="${BASH_REMATCH[5]}"
         if [[ ! "$m5" =~ (^|[[:space:]])password= ]]; then
-          (( first_match )) && pass="$(fleet_unescape_conninfo_val "$m3")"
+          if (( first_match )); then
+            fleet_unescape_conninfo_val_var "$m3"
+            pass="$REPLY_UNESCAPED"
+          fi
           first_match=0
           redacted="${m1}${m5}"
           continue
@@ -65,7 +86,10 @@ fleet_split_dsn_password() {
       if [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\"(([^\"\\]|\\.)*)\"[[:space:]]*(.*)$ ]]; then
         m1="${BASH_REMATCH[1]}"; m3="${BASH_REMATCH[3]}"; m5="${BASH_REMATCH[5]}"
         if [[ ! "$m5" =~ (^|[[:space:]])password= ]]; then
-          (( first_match )) && pass="$(fleet_unescape_conninfo_val "$m3")"
+          if (( first_match )); then
+            fleet_unescape_conninfo_val_var "$m3"
+            pass="$REPLY_UNESCAPED"
+          fi
           first_match=0
           redacted="${m1}${m5}"
           continue
@@ -74,7 +98,10 @@ fleet_split_dsn_password() {
       if [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=(([^[:space:]\'\"\\]|\\.)+)[[:space:]]*(.*)$ ]]; then
         m1="${BASH_REMATCH[1]}"; m3="${BASH_REMATCH[3]}"; m5="${BASH_REMATCH[5]}"
         if [[ ! "$m5" =~ (^|[[:space:]])password= ]]; then
-          (( first_match )) && pass="$(fleet_unescape_conninfo_val "$m3")"
+          if (( first_match )); then
+            fleet_unescape_conninfo_val_var "$m3"
+            pass="$REPLY_UNESCAPED"
+          fi
           first_match=0
           redacted="${m1}${m5}"
           continue
@@ -83,12 +110,12 @@ fleet_split_dsn_password() {
       break
     done
     if [[ "$redacted" =~ (^|[[:space:]])password[[:space:]]*= ]]; then
-      printf '\n\n'
       return 0
     fi
     redacted="${redacted#"${redacted%%[![:space:]]*}"}"
     redacted="${redacted%"${redacted##*[![:space:]]}"}"
-    printf '%s\n%s\n' "$pass" "$redacted"
+    REPLY_PASS="$pass"
+    REPLY_REDACTED="$redacted"
     return 0
   fi
   proto="${dsn%%://*}"
@@ -98,7 +125,8 @@ fleet_split_dsn_password() {
     hostpart="${rest#*@}"
     if [[ "$userinfo" == *":"* ]]; then
       user="${userinfo%%:*}"
-      pass="$(fleet_uri_decode "${userinfo#*:}")"
+      fleet_uri_decode_var "${userinfo#*:}"
+      pass="$REPLY_DECODED"
       redacted="${proto}://${user}@${hostpart}"
     else
       redacted="$dsn"
@@ -116,10 +144,12 @@ fleet_split_dsn_password() {
     for param in $query; do
       local key_raw="${param%%=*}" key_dec=""
       if [[ "$param" == *"="* ]]; then
-        key_dec="$(fleet_uri_decode "$key_raw")"
+        fleet_uri_decode_var "$key_raw"
+        key_dec="$REPLY_DECODED"
       fi
       if [[ "$key_dec" == "password" ]]; then
-        pass="$(fleet_uri_decode "${param#*=}")"
+        fleet_uri_decode_var "${param#*=}"
+        pass="$REPLY_DECODED"
       else
         kept+=("$param")
       fi
@@ -130,7 +160,21 @@ fleet_split_dsn_password() {
       redacted="${base}${frag}"
     fi
   fi
-  printf '%s\n%s\n' "$pass" "$redacted"
+  REPLY_PASS="$pass"
+  REPLY_REDACTED="$redacted"
+}
+
+# fleet_split_dsn_password DSN — prints the extracted password on line 1 and the
+# DSN with its password stripped on line 2 (or two empty lines if the password
+# contains a literal newline that cannot be represented in two lines).
+fleet_split_dsn_password() {
+  local REPLY_PASS="" REPLY_REDACTED=""
+  fleet_split_dsn_password_vars "$1"
+  if [[ "$REPLY_PASS" == *$'\n'* || "$REPLY_REDACTED" == *$'\n'* ]]; then
+    printf '\n\n'
+    return 0
+  fi
+  printf '%s\n%s\n' "$REPLY_PASS" "$REPLY_REDACTED"
 }
 
 # fleet_psql_query DSN SQL — runs a read-only psql query with connect, statement,
@@ -151,10 +195,10 @@ fleet_psql_query() {
   local stmt_ms=$(( tsec * 1000 ))
   [[ -n "$dsn" ]] || return 1
   command -v psql >/dev/null 2>&1 || return 1
-  {
-    IFS= read -r pw
-    IFS= read -r redacted
-  } < <(fleet_split_dsn_password "$dsn")
+  local REPLY_PASS="" REPLY_REDACTED=""
+  fleet_split_dsn_password_vars "$dsn"
+  pw="$REPLY_PASS"
+  redacted="$REPLY_REDACTED"
   [[ -n "$redacted" ]] || return 1
   if command -v timeout >/dev/null 2>&1; then
     PGCONNECT_TIMEOUT="$tsec" PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c statement_timeout=${stmt_ms} -c lock_timeout=${stmt_ms}" PGPASSWORD="$pw" \
@@ -337,10 +381,28 @@ fleet_service_runtime_state() {
     printf 'no-unit|0\n'
     return 0
   fi
+  local sys_tsec=3
+  if [[ "${FLEET_WAIT_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && (( FLEET_WAIT_DEADLINE_EPOCH > 0 )); then
+    local now_ep rem_ep
+    now_ep="$(date +%s)"
+    rem_ep=$(( FLEET_WAIT_DEADLINE_EPOCH - now_ep ))
+    if (( rem_ep <= 0 )); then
+      printf 'unknown|0\n'
+      return 0
+    fi
+    (( rem_ep < sys_tsec )) && sys_tsec="$rem_ep"
+  fi
   local show_out load_state="" active_state="" start_ts="" start_epoch=0 line
-  if ! show_out="$(systemctl show --timestamp=unix -p LoadState -p ActiveState -p ExecMainStartTimestamp "$unit" 2>/dev/null)"; then
-    printf 'unknown|0\n'
-    return 0
+  if command -v timeout >/dev/null 2>&1; then
+    if ! show_out="$(timeout "$sys_tsec" systemctl show --timestamp=unix -p LoadState -p ActiveState -p ExecMainStartTimestamp "$unit" 2>/dev/null)"; then
+      printf 'unknown|0\n'
+      return 0
+    fi
+  else
+    if ! show_out="$(systemctl show --timestamp=unix -p LoadState -p ActiveState -p ExecMainStartTimestamp "$unit" 2>/dev/null)"; then
+      printf 'unknown|0\n'
+      return 0
+    fi
   fi
   while IFS= read -r line; do
     case "$line" in
