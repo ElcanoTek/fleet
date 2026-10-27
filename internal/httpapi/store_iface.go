@@ -50,6 +50,7 @@ type chatStore interface {
 	SetConversationProjectIf(ctx context.Context, userEmail, convID, projectID, expected string) error
 	SetModel(ctx context.Context, userEmail, convID, model string) error
 	SetApprovalTimeout(ctx context.Context, userEmail, convID string, seconds *int) error
+	SetAutoApprove(ctx context.Context, userEmail, convID string, enabled bool) error
 	SetThinkingConfig(ctx context.Context, userEmail, convID string, cfg *store.ThinkingConfig) error
 	SetOptionalMCPServers(ctx context.Context, userEmail, convID string, servers []string) error
 	SetConversationMCPAccounts(ctx context.Context, userEmail, convID string, accounts map[string]string) error

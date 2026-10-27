@@ -297,6 +297,7 @@ The toolbar beneath the message box is a row of icons. Left to right:
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
 | Context ring | Appears once the conversation has content and fills as it grows. Click it to compact. See [Long conversations](#long-conversations). |
+| Auto-approve | The lightning bolt on the right. When on for this conversation, executable connector actions and shell commands run without stopping on an approval card (can be toggled mid-turn). Outbound email, scheduled-task changes, and actions the deployment requires a decision on every time still show their card. |
 | Send on Enter | The toggle on the right. On, `Enter` sends and `Shift Enter` adds a line. Off, `Enter` adds a line and `⌘Enter` or `Ctrl Enter` sends. The same setting lives in **Settings**. |
 | Send | At the far right. While the assistant is working it becomes **Stop**. |
 
@@ -542,8 +543,8 @@ Three rules for every card. **Read what is about to happen**, not just the
 button: the card exists to tell you. **Cancel is free**: the assistant continues
 without doing the thing, and you can ask it to try a different way. **Cards
 expire**: a card left unanswered times out to no, and the transcript records that
-it did. By default an action card waits an hour; a **Schedule a task** or
-**Change a task** card, which changes nothing until you approve it, waits a day.
+it did. By default an action card waits a day (24 hours), and a conversation or
+workspace can extend that up to 7 days.
 
 After you approve, the card shows what actually happened: it ran, it failed, it
 is still running, or — for an older card whose run finished before outcomes were
@@ -659,7 +660,12 @@ Some cards carry a checkbox that widens your decision to every later call of the
 same kind in this conversation, turning the button into **Approve + allow all**.
 Leave it unticked unless you know exactly what the rest of the conversation will
 do. A deployment can turn the checkbox off for actions that need your decision
-every time; their cards have no checkbox, and each call shows its own card. Cards are not for exploring what an action would change; ask the assistant to
+every time; their cards have no checkbox, and each call shows its own card. You
+can also turn on **Auto-approve** for the current conversation using the
+lightning-bolt button in the composer toolbar (even while a reply is streaming)
+so executable connector actions and shell commands run without stopping on a
+card, while outbound email, scheduled-task cards, and actions that require a
+decision every time still ask. Cards are not for exploring what an action would change; ask the assistant to
 describe the change first, then approve the card once you agree with it.
 
 Which tools are gated and which merely report is set per deployment, not by the

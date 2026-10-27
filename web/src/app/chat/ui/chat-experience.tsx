@@ -194,6 +194,9 @@ export type ConversationSummary = {
   // project"). In the rail a project conversation lives only under its
   // project, not in Pinned/Chats.
   project_id?: string;
+  // auto_approve opts this conversation into pre-approving executable critical
+  // tools without parking on an inline approval card.
+  auto_approve?: boolean;
 };
 
 export type ServerConfig = {
@@ -842,6 +845,9 @@ export function ChatExperience({
   // and cleared once the conversation is actually created. The flag
   // rides along on the first /api/chat POST as `lockdown: true`.
   const [pendingLockdown, setPendingLockdown] = useState(false);
+  // pendingAutoApprove tracks the composer's Auto-approve toggle before a new
+  // conversation has been created, and rides along on the first /api/chat POST.
+  const [pendingAutoApprove, setPendingAutoApprove] = useState(false);
 
   // The very first mount of a session races the client-config fetch: state
   // seeds from the compiled-in fallback before the workspace's tier pair is
@@ -919,6 +925,44 @@ export function ChatExperience({
     activeConversation?.lockdown === true ||
     (isPendingKey(activeConversationId) &&
       (pendingLockdown || serverConfig.lockdownOnly));
+  const isAutoApprove = activeConversation
+    ? activeConversation.auto_approve === true
+    : pendingAutoApprove;
+  const toggleAutoApprove = useCallback(() => {
+    const next = !isAutoApprove;
+    if (!activeConversationId || isPendingKey(activeConversationId)) {
+      setPendingAutoApprove(next);
+      return;
+    }
+    setConversations((curr) =>
+      curr.map((c) =>
+        c.id === activeConversationId ? { ...c, auto_approve: next } : c,
+      ),
+    );
+    setArchivedConversations((curr) =>
+      curr.map((c) =>
+        c.id === activeConversationId ? { ...c, auto_approve: next } : c,
+      ),
+    );
+    const url = conversationApiUrl(activeConversationId, "/auto-approve");
+    if (!url) return;
+    void fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auto_approve: next }),
+    }).catch(() => {
+      setConversations((curr) =>
+        curr.map((c) =>
+          c.id === activeConversationId ? { ...c, auto_approve: !next } : c,
+        ),
+      );
+      setArchivedConversations((curr) =>
+        curr.map((c) =>
+          c.id === activeConversationId ? { ...c, auto_approve: !next } : c,
+        ),
+      );
+    });
+  }, [isAutoApprove, activeConversationId]);
   const [isLoadingMcpServers, setIsLoadingMcpServers] = useState(false);
   const [memories, setMemories] = useState<UserMemory[]>([]);
   const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
@@ -4485,6 +4529,7 @@ export function ChatExperience({
     const lockdown =
       serverConfig.lockdownAvailable && (explicit || serverConfig.lockdownOnly);
     setPendingLockdown(lockdown);
+    setPendingAutoApprove(false);
     // Lockdown chats are pinned to the allow-list. Default both modes
     // to the live default tier — for lockdown that's also the first
     // allowed slug, and for normal chat it's the workspace default.
@@ -4806,6 +4851,7 @@ export function ChatExperience({
     setModelPickerOpen,
     setModelSearchQuery,
     setPendingLockdown,
+    setPendingAutoApprove,
     setSidebarOpen,
     setSpreadsheetNudgeDismissed,
     activeConversationIdRef,
@@ -4815,6 +4861,7 @@ export function ChatExperience({
     selectedPersona,
     mcpServers,
     pendingLockdown,
+    pendingAutoApprove,
     userEmail,
     modelError,
     markConvStreaming,
@@ -6710,6 +6757,8 @@ export function ChatExperience({
                 promptRef={promptRef}
                 submitPrompt={submitPrompt}
                 sealed={isLockdown}
+                isAutoApprove={isAutoApprove}
+                toggleAutoApprove={toggleAutoApprove}
                 isStreaming={isStreaming}
                 isUploadingAttachments={isUploadingAttachments}
                 isDraggingOver={isDraggingOver}

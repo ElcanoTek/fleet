@@ -55,7 +55,7 @@ func testDefaults() map[string]string {
 		"guardrail_mode":                    "off",
 		"tool_disclosure_threshold":         "128",
 		"max_tool_output_bytes":             "65536",
-		"approval_timeout_seconds":          "3600",
+		"approval_timeout_seconds":          "86400",
 		"max_cost_usd":                      "50",
 		"max_total_tokens":                  "10000000",
 		"phone_a_friend_enabled":            "false",

@@ -475,11 +475,33 @@ func (s *Server) handleApprovalTimeoutSet(w http.ResponseWriter, r *http.Request
 	if req.ApprovalTimeoutSeconds != nil {
 		v := *req.ApprovalTimeoutSeconds
 		if v <= 0 || v > maxApprovalTimeoutSeconds {
-			http.Error(w, "approval_timeout_seconds must be between 1 and 86400, or null to clear", http.StatusBadRequest)
+			http.Error(w, "approval_timeout_seconds must be between 1 and 604800, or null to clear", http.StatusBadRequest)
 			return
 		}
 	}
 	if err := s.store.SetApprovalTimeout(r.Context(), user, id, req.ApprovalTimeoutSeconds); err != nil {
+		writeConversationMutationError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAutoApproveGet serves GET /conversations/{id}/auto-approve.
+func (s *Server) handleAutoApproveGet(w http.ResponseWriter, _ *http.Request, _, _ string, conv *store.Conversation) {
+	writeJSON(w, map[string]any{
+		"auto_approve": conv.AutoApprove,
+	})
+}
+
+// handleAutoApproveSet serves POST /conversations/{id}/auto-approve.
+func (s *Server) handleAutoApproveSet(w http.ResponseWriter, r *http.Request, user, id string) {
+	var req struct {
+		AutoApprove bool `json:"auto_approve"`
+	}
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+	if err := s.store.SetAutoApprove(r.Context(), user, id, req.AutoApprove); err != nil {
 		writeConversationMutationError(w, err)
 		return
 	}

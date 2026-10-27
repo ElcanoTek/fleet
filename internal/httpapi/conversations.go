@@ -513,6 +513,8 @@ var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler
 	{sub: "model", method: http.MethodPost}:             (*Server).handleConversationModel,
 	{sub: "approval-timeout", method: http.MethodGet}:   withOwnedConversation("not found", (*Server).handleApprovalTimeoutGet),
 	{sub: "approval-timeout", method: http.MethodPost}:  (*Server).handleApprovalTimeoutSet,
+	{sub: "auto-approve", method: http.MethodGet}:       withOwnedConversation("not found", (*Server).handleAutoApproveGet),
+	{sub: "auto-approve", method: http.MethodPost}:      (*Server).handleAutoApproveSet,
 	{sub: "thinking_config", method: http.MethodGet}:    withOwnedConversation("not found", (*Server).handleThinkingConfigGet),
 	{sub: "thinking_config", method: http.MethodPut}:    (*Server).handleThinkingConfigPut,
 	{sub: "thinking_config", method: http.MethodDelete}: (*Server).handleThinkingConfigDelete,

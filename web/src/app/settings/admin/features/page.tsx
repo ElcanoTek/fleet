@@ -130,7 +130,7 @@ const META: Record<string, SettingMeta> = {
     label: "Approval timeout",
     description:
       "How long a pending approval card (send email, risky bash, scheduled-task changes, bundle-declared critical tools) waits for a human before it is auto-denied. The card shows a live countdown; a card that times out is safely denied and the agent is told the action was not taken. Set it once for the workspace — a per-conversation override and per-tool bundle windows still win when set. Email previews never expire (there is nothing to deny).",
-    unitHint: "seconds — 60 to 86400 (24h); default 3600 (1h)",
+    unitHint: "seconds — 60 to 604800 (7d); default 86400 (24h)",
   },
   phone_a_friend_enabled: {
     label: "Phone-a-friend review",

@@ -138,7 +138,7 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 // promote card is a schedule_task card, which resolveTimeoutSeconds gives the
 // day-long staged-task window instead, so this applies only if the stager is
 // ever used for another tool.
-const promoteApprovalTimeoutSeconds = 3600
+const promoteApprovalTimeoutSeconds = 86400
 
 // transcriptFromHistory renders the user/assistant TEXT turns of a conversation
 // into a plain "User:/Assistant:" transcript for the synthesizer, dropping

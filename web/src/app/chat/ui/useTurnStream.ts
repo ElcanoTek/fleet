@@ -550,6 +550,7 @@ export interface TurnStreamDeps {
   setModelPickerOpen: Dispatch<SetStateAction<boolean>>;
   setModelSearchQuery: Dispatch<SetStateAction<string>>;
   setPendingLockdown: Dispatch<SetStateAction<boolean>>;
+  setPendingAutoApprove?: Dispatch<SetStateAction<boolean>>;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
   setSpreadsheetNudgeDismissed: Dispatch<SetStateAction<boolean>>;
   // Component-owned refs the loop reads/mutates.
@@ -561,6 +562,7 @@ export interface TurnStreamDeps {
   selectedPersona: string;
   mcpServers: MCPServerInfo[];
   pendingLockdown: boolean;
+  pendingAutoApprove?: boolean;
   userEmail: string;
   modelError: { message: string; modelsUrl: string } | null;
   // Turn-stream transport state (useTurnStreamState).
@@ -715,6 +717,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     setModelPickerOpen,
     setModelSearchQuery,
     setPendingLockdown,
+    setPendingAutoApprove,
     setSidebarOpen,
     setSpreadsheetNudgeDismissed,
     activeConversationIdRef,
@@ -724,6 +727,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     selectedPersona,
     mcpServers,
     pendingLockdown,
+    pendingAutoApprove,
     userEmail,
     modelError,
     markConvStreaming,
@@ -2209,6 +2213,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // conversation row by the backend; clear the local flag so a
     // subsequent "+ New chat" doesn't accidentally re-flag.
     setPendingLockdown(false);
+    setPendingAutoApprove?.(false);
     // The user is looking at the slot that just got a real id — follow it, or
     // their view empties out onto a key nothing writes to any more. They may
     // instead have navigated away (submit → "+ New chat" race), and that is
@@ -2258,6 +2263,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         title: string;
         persona: string;
         model?: string;
+        auto_approve?: boolean;
       };
       // oldTarget is the per-submission pending key this turn was
       // launched with (e.g. "__pending__:1"). It's distinct from the
@@ -2304,6 +2310,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           model: typeof p.model === "string" ? p.model : "",
           pinned: false,
           updated_at: Math.floor(Date.now() / 1000),
+          auto_approve: p.auto_approve === true,
         };
         return [optimistic, ...curr];
       });
@@ -4472,6 +4479,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
       if (pendingLockdown) {
         body.lockdown = true;
+      }
+      if (pendingAutoApprove) {
+        body.auto_approve = true;
       }
     }
 

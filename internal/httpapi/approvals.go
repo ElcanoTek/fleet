@@ -84,6 +84,11 @@ type approvalStager struct {
 	// convTimeoutSeconds is this conversation's per-chat override (nil = none).
 	// It sits above the global default and below per-tool manifest overrides.
 	convTimeoutSeconds *int
+	// convAutoApprove is this conversation's initial per-chat auto-approve setting
+	// (conversations.auto_approve). When liveAutoApprove is non-nil, Stage reads
+	// the live toggle so toggling Auto-approve mid-turn takes effect immediately.
+	convAutoApprove bool
+	liveAutoApprove func(context.Context) bool
 	// autoApproveInTest auto-approves executable critical tools; handler-only
 	// cards still require explicit decisions. A CI/test escape hatch,
 	// off by default; see config.Config.AutoApproveInTest.
@@ -194,30 +199,27 @@ func isNotifyRecordResult(resultText string) bool {
 }
 
 // maxApprovalTimeoutSeconds bounds a per-conversation approval-timeout override
-// to a sane ceiling (24h). The POST /conversations/{id}/approval-timeout handler
+// to a sane ceiling (7d). The POST /conversations/{id}/approval-timeout handler
 // rejects anything larger so a typo can't leave a card effectively un-expiring.
-const maxApprovalTimeoutSeconds = 86400
+const maxApprovalTimeoutSeconds = 604800
 
 // defaultApprovalTimeoutSeconds is the hardcoded fallback at the bottom of the
 // resolution chain — used when neither a per-tool, per-conversation, nor a
 // positive global value applies. Treating a non-positive global as "use this
 // default" (rather than "deny instantly") is the safe reading of a
-// mis-set/empty FLEET_APPROVAL_TIMEOUT_SECONDS (#225). An hour, not the
-// original 300s: the card lands whenever the agent reaches it — often minutes
-// into a run the user stopped watching — so five minutes mostly denied the
-// final, wanted action (the observation behind notify mode, #1153). Matches
-// the promote card's deliberate 1h window and the config env default.
-const defaultApprovalTimeoutSeconds = 3600
+// mis-set/empty FLEET_APPROVAL_TIMEOUT_SECONDS (#225). 24 hours (86400s), not
+// the original 300s/3600s: the card lands whenever the agent reaches it — often
+// minutes into a run while the user is multitasking across several chats — so
+// short timeouts mostly denied the final, wanted action. Matches the promote
+// card's window and the config env default.
+const defaultApprovalTimeoutSeconds = 86400
 
 // stagedTaskApprovalTimeoutSeconds is the default-deny window for a card that
-// only STAGES a task change (schedule_task, manage_tasks): a day, the same
-// ceiling a per-conversation override may reach. Such a card has no side
-// effect while it is pending — nothing touches the task store until it is
-// approved — so default-deny protects nothing, while denying it silently drops
-// a change the user asked for. On production a manage_tasks card that would
-// have replaced a refresh task's prompt sat for the global hour, was
-// auto-denied unnoticed, and the old prompt kept running.
-const stagedTaskApprovalTimeoutSeconds = maxApprovalTimeoutSeconds
+// only STAGES a task change (schedule_task, manage_tasks): a day. Such a card
+// has no side effect while it is pending — nothing touches the task store until
+// it is approved — so default-deny protects nothing, while denying it silently
+// drops a change the user asked for.
+const stagedTaskApprovalTimeoutSeconds = 86400
 
 // stagesTaskChangeOnly reports whether toolName's card only stages a task
 // change: the two task tools, whose tool bodies never run (handler-only).
@@ -320,6 +322,13 @@ func (a *approvalStager) RecordAction(toolName, toolCallID, rawInput, undoHint s
 	return nil
 }
 
+func (a *approvalStager) isAutoApprove() bool {
+	if a.liveAutoApprove != nil {
+		return a.liveAutoApprove(a.ctx)
+	}
+	return a.convAutoApprove
+}
+
 func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, error) {
 	// A task prompt the create/edit seam will refuse is refused BEFORE a card
 	// exists (#1601): the model learns the error now, and nobody is asked to
@@ -338,6 +347,19 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 			"tool": toolName,
 			"mode": "approve",
 			"via":  "auto_approve_in_test",
+		})
+		return agentcore.PreApprovedSentinel, nil
+	}
+	// Per-conversation auto-approve: when the user toggles Auto-approve on for
+	// this chat, executable critical tools run without parking on an approval
+	// card. Handler-only tools (schedule_task, manage_tasks, preview_email,
+	// suggest_advanced_model), outbound email (send_email), and bundle-declared
+	// critical_tool_no_session_approval tools still stage an explicit card.
+	if a.isAutoApprove() && !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && agentcore.SessionApprovalAllowed(toolName) {
+		a.sink.Emit("tool.auto_resolved", map[string]any{
+			"tool": toolName,
+			"mode": "approve",
+			"via":  "conversation_auto_approve",
 		})
 		return agentcore.PreApprovedSentinel, nil
 	}
