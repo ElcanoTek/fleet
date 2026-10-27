@@ -550,8 +550,9 @@ export interface TurnStreamDeps {
   setModelPickerOpen: Dispatch<SetStateAction<boolean>>;
   setModelSearchQuery: Dispatch<SetStateAction<string>>;
   setPendingLockdown: Dispatch<SetStateAction<boolean>>;
-  setPendingAutoApprove?: Dispatch<SetStateAction<boolean>>;
-  newChatDraftGenRef?: RefObject<number>;
+  draftKeyRef?: RefObject<string>;
+  pendingAutoApproveRef?: RefObject<Map<string, boolean>>;
+  setPendingAutoApproveForKey?: (key: string, val: boolean) => void;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
   setSpreadsheetNudgeDismissed: Dispatch<SetStateAction<boolean>>;
   // Component-owned refs the loop reads/mutates.
@@ -563,7 +564,6 @@ export interface TurnStreamDeps {
   selectedPersona: string;
   mcpServers: MCPServerInfo[];
   pendingLockdown: boolean;
-  pendingAutoApprove?: boolean;
   userEmail: string;
   modelError: { message: string; modelsUrl: string } | null;
   // Turn-stream transport state (useTurnStreamState).
@@ -718,8 +718,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     setModelPickerOpen,
     setModelSearchQuery,
     setPendingLockdown,
-    setPendingAutoApprove,
-    newChatDraftGenRef,
+    draftKeyRef,
+    pendingAutoApproveRef,
+    setPendingAutoApproveForKey,
     setSidebarOpen,
     setSpreadsheetNudgeDismissed,
     activeConversationIdRef,
@@ -729,7 +730,6 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     selectedPersona,
     mcpServers,
     pendingLockdown,
-    pendingAutoApprove,
     userEmail,
     modelError,
     markConvStreaming,
@@ -2215,6 +2215,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // conversation row by the backend; clear the local flag so a
     // subsequent "+ New chat" doesn't accidentally re-flag.
     setPendingLockdown(false);
+    setPendingAutoApproveForKey?.(oldKey, false);
     // The user is looking at the slot that just got a real id — follow it, or
     // their view empties out onto a key nothing writes to any more. They may
     // instead have navigated away (submit → "+ New chat" race), and that is
@@ -4360,14 +4361,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return true;
     }
 
-    // Capture and consume the draft's pending Auto-approve choice before any
-    // async attachment upload so a second draft opened while this upload is in
-    // flight keeps its own Auto-approve toggle state.
-    const draftGenAtStart = newChatDraftGenRef?.current ?? 0;
-    const submittedAutoApprove = !convId && Boolean(pendingAutoApprove);
-    if (submittedAutoApprove) {
-      setPendingAutoApprove?.(false);
-    }
+    // Remember which draft / pending slot originated this submission so its
+    // Auto-approve toggle stays visible and mutable while attachments upload
+    // without leaking into another draft opened in the meantime.
+    const originPendingKey = convId ?? draftKeyRef?.current ?? "__draft_0__";
 
     // Upload any pending attachments FIRST. If it fails, we bail out with
     // the text still in the composer so the user can retry without losing
@@ -4377,13 +4374,6 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       try {
         uploadedAttachments = await uploadPendingAttachments(composerKey);
       } catch (err) {
-        if (
-          submittedAutoApprove &&
-          activeConversationIdRef.current === null &&
-          (newChatDraftGenRef?.current ?? 0) === draftGenAtStart
-        ) {
-          setPendingAutoApprove?.(true);
-        }
         setAttachmentErrorForKey(
           composerKey,
           err instanceof Error ? err.message : "Upload failed.",
@@ -4436,7 +4426,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // turn is still pre-promotion can't collide with this controller.
     // The conversation event will rename the per-submission key → the
     // real conv id when it lands.
+    const isUnpromoted = !convId || isPendingKey(convId);
     const initialTarget = convId ?? nextPendingKey();
+    const submittedAutoApprove =
+      isUnpromoted &&
+      pendingAutoApproveRef?.current.get(originPendingKey) === true;
+    if (isUnpromoted && submittedAutoApprove) {
+      setPendingAutoApproveForKey?.(initialTarget, true);
+      if (originPendingKey !== initialTarget) {
+        setPendingAutoApproveForKey?.(originPendingKey, false);
+      }
+    }
     // This submission's identity (#1592). The server stamps it on the turn it
     // starts for us — where /inflight echoes it back — and stores it in the
     // queue row's own submission_id column if it queues us behind a turn we
@@ -4478,7 +4478,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (uploadedAttachments.length > 0) {
       body.attachments = uploadedAttachments;
     }
-    if (convId) {
+    if (convId && !isPendingKey(convId)) {
       body.conversation_id = convId;
     } else {
       body.title = value.length > 80 ? value.slice(0, 80) + "…" : value;
@@ -4819,11 +4819,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       !accepted.value &&
       !uncertain &&
       resolveTarget() === initialTarget &&
-      (activeConversationIdRef.current === initialTarget ||
-        activeConversationIdRef.current === null) &&
-      (newChatDraftGenRef?.current ?? 0) === draftGenAtStart
+      activeConversationIdRef.current === null &&
+      draftKeyRef?.current === originPendingKey
     ) {
-      setPendingAutoApprove?.(true);
+      setPendingAutoApproveForKey?.(originPendingKey, true);
     }
     // A direct send the server queued instead (it knew a turn was running).
     if (accepted.queued && fromCard && opts?.onUnsent) {

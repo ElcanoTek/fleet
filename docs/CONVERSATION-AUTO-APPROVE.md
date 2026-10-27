@@ -33,7 +33,7 @@ high-consequence gates.
 
 2. **Per-conversation `auto_approve` persistence and API**
    - Stored on `conversations.auto_approve` (`BOOLEAN NOT NULL DEFAULT FALSE`,
-     migration `internal/store/migrations/045_conversation_auto_approve.sql`).
+     migration `internal/store/migrations/085_conversation_auto_approve.sql`).
    - Returned on `Conversation` payloads (`GET /conversations`,
      `GET /conversations/{id}`, and the `conversation` SSE frame).
    - Can be seeded on the initial `POST /chat` request (`auto_approve: true`)

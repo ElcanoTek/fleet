@@ -845,9 +845,24 @@ export function ChatExperience({
   // and cleared once the conversation is actually created. The flag
   // rides along on the first /api/chat POST as `lockdown: true`.
   const [pendingLockdown, setPendingLockdown] = useState(false);
-  // pendingAutoApprove tracks the composer's Auto-approve toggle before a new
-  // conversation has been created, and rides along on the first /api/chat POST.
-  const [pendingAutoApprove, setPendingAutoApprove] = useState(false);
+  // pendingAutoApproveByKey tracks the composer's Auto-approve toggle per
+  // unpromoted draft / pending submission key, and rides along on the first
+  // /api/chat POST.
+  const [draftKey, setDraftKey] = useState("__draft_0__");
+  const draftKeyRef = useRef("__draft_0__");
+  const [pendingAutoApproveByKey, setPendingAutoApproveByKey] = useState<
+    Record<string, boolean>
+  >({});
+  const pendingAutoApproveRef = useRef<Map<string, boolean>>(new Map());
+  const setPendingAutoApproveForKey = useCallback(
+    (key: string, val: boolean) => {
+      pendingAutoApproveRef.current.set(key, val);
+      setPendingAutoApproveByKey((prev) =>
+        prev[key] === val ? prev : { ...prev, [key]: val },
+      );
+    },
+    [],
+  );
   const newChatDraftGenRef = useRef(0);
 
   // The very first mount of a session races the client-config fetch: state
@@ -926,9 +941,16 @@ export function ChatExperience({
     activeConversation?.lockdown === true ||
     (isPendingKey(activeConversationId) &&
       (pendingLockdown || serverConfig.lockdownOnly));
+  const activePendingKey =
+    activeConversationId === null
+      ? draftKey
+      : isPendingKey(activeConversationId)
+        ? activeConversationId
+        : null;
   const isAutoApprove = activeConversation
     ? activeConversation.auto_approve === true
-    : pendingAutoApprove;
+    : activePendingKey !== null &&
+      pendingAutoApproveByKey[activePendingKey] === true;
   const autoApproveSeqRef = useRef<Map<string, number>>(new Map());
   const autoApproveChainRef = useRef<Map<string, Promise<void>>>(new Map());
   const autoApproveValueRef = useRef<Map<string, boolean>>(new Map());
@@ -937,7 +959,8 @@ export function ChatExperience({
   const toggleAutoApprove = useCallback(() => {
     const next = !isAutoApprove;
     if (!activeConversationId || isPendingKey(activeConversationId)) {
-      setPendingAutoApprove(next);
+      const key = activeConversationId ?? draftKeyRef.current;
+      setPendingAutoApproveForKey(key, next);
       return;
     }
     const convId = activeConversationId;
@@ -1005,7 +1028,7 @@ export function ChatExperience({
       }
     });
     autoApproveChainRef.current.set(convId, run);
-  }, [isAutoApprove, activeConversationId]);
+  }, [isAutoApprove, activeConversationId, setPendingAutoApproveForKey]);
   const [isLoadingMcpServers, setIsLoadingMcpServers] = useState(false);
   const [memories, setMemories] = useState<UserMemory[]>([]);
   const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
@@ -4590,7 +4613,10 @@ export function ChatExperience({
       serverConfig.lockdownAvailable && (explicit || serverConfig.lockdownOnly);
     setPendingLockdown(lockdown);
     newChatDraftGenRef.current += 1;
-    setPendingAutoApprove(false);
+    const nextDraft = `__draft_${newChatDraftGenRef.current}__`;
+    draftKeyRef.current = nextDraft;
+    setDraftKey(nextDraft);
+    setPendingAutoApproveForKey(nextDraft, false);
     // Lockdown chats are pinned to the allow-list. Default both modes
     // to the live default tier — for lockdown that's also the first
     // allowed slug, and for normal chat it's the workspace default.
@@ -4912,8 +4938,9 @@ export function ChatExperience({
     setModelPickerOpen,
     setModelSearchQuery,
     setPendingLockdown,
-    setPendingAutoApprove,
-    newChatDraftGenRef,
+    draftKeyRef,
+    pendingAutoApproveRef,
+    setPendingAutoApproveForKey,
     setSidebarOpen,
     setSpreadsheetNudgeDismissed,
     activeConversationIdRef,
@@ -4923,7 +4950,6 @@ export function ChatExperience({
     selectedPersona,
     mcpServers,
     pendingLockdown,
-    pendingAutoApprove,
     userEmail,
     modelError,
     markConvStreaming,
