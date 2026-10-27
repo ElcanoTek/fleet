@@ -58,6 +58,9 @@ type chatRequest struct {
 	// only when no ConversationID is provided (lockdown is set once
 	// at conversation creation and immutable thereafter).
 	Lockdown bool `json:"lockdown,omitempty"`
+	// AutoApprove seeds or updates the per-conversation auto-approve toggle
+	// when provided on a chat turn.
+	AutoApprove *bool `json:"auto_approve,omitempty"`
 	// InputID is the caller's idempotency key (#785): a re-POST of the same
 	// (conversation, input_id) while queued returns the existing item instead
 	// of duplicating the input. Empty = server-generated.
@@ -224,6 +227,26 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 	return true
 }
 
+func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, autoApprove *bool) bool {
+	// Sending a message to an archived conversation un-archives it (#282) —
+	// mirrors how replying to an archived email brings it back to the inbox.
+	if conv.ArchivedAt != nil {
+		if err := s.store.SetArchived(r.Context(), user, conv.ID, false); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return false
+		}
+		conv.ArchivedAt = nil
+	}
+	if autoApprove != nil && *autoApprove != conv.AutoApprove {
+		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, *autoApprove); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return false
+		}
+		conv.AutoApprove = *autoApprove
+	}
+	return true
+}
+
 // lockdownModelRefusalCode is the machine-readable marker on the body of a
 // refused lockdown model override. A client keys its self-correction off this
 // rather than off the prose, which is free to change.
@@ -384,17 +407,8 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		if reqModel == conv.Model {
 			reqModel = ""
 		}
-		if !s.applyTurnModelOverride(w, r, user, conv, reqModel) {
+		if !s.applyTurnModelOverride(w, r, user, conv, reqModel) || !s.applyTurnConversationFlags(w, r, user, conv, req.AutoApprove) {
 			return
-		}
-		// Sending a message to an archived conversation un-archives it (#282) —
-		// mirrors how replying to an archived email brings it back to the inbox.
-		if conv.ArchivedAt != nil {
-			if err := s.store.SetArchived(r.Context(), user, conv.ID, false); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			conv.ArchivedAt = nil
 		}
 	} else {
 		// A first submission's resend (same input_id, still no conversation id
@@ -436,7 +450,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		// Seed the optional MCP server opt-in list (and seat overrides, #988)
 		// from the chat request so pre-chat Tools picker selections take
 		// effect on this first turn.
-		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts) {
+		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove) {
 			return
 		}
 	}
@@ -1151,10 +1165,11 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// user bubble from it so the chat doesn't appear as just a stranded
 	// "Thinking…" indicator with no question above it.
 	buf.Emit("conversation", map[string]any{
-		"id":      conv.ID,
-		"title":   conv.Title,
-		"persona": conv.Persona,
-		"model":   conv.Model,
+		"id":           conv.ID,
+		"title":        conv.Title,
+		"persona":      conv.Persona,
+		"model":        conv.Model,
+		"auto_approve": conv.AutoApprove,
 	})
 	turnStarted := map[string]any{
 		"turn_id": turnID,
@@ -1282,7 +1297,7 @@ func withInputKind(frame map[string]any, key, kind string) map[string]any {
 // toggleable) so a bad frontend can't persist garbage (mirrors POST
 // /conversations/{id}/mcp-servers); a seat the user does not hold is a 400
 // rather than a silent drop. Returns false after writing an error response.
-func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, enabledOptional []string, mcpAccounts map[string]string) bool {
+func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, enabledOptional []string, mcpAccounts map[string]string, autoApprove *bool) bool {
 	if len(enabledOptional) > 0 {
 		valid := s.optionalServerWhitelist(r.Context(), user)
 		seen := make(map[string]bool, len(enabledOptional))
@@ -1317,6 +1332,13 @@ func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, use
 			}
 			conv.MCPAccounts = accounts
 		}
+	}
+	if autoApprove != nil && *autoApprove {
+		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, true); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return false
+		}
+		conv.AutoApprove = true
 	}
 	return true
 }
@@ -1655,12 +1677,20 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 		// construction so an edit governs the next staged card, no restart.
 		globalTimeoutSeconds: s.cfg.LiveApprovalTimeoutSeconds(),
 		convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
-		autoApproveInTest:    s.cfg.AutoApproveInTest,
-		push:                 s.push,
-		bg:                   &s.background,
-		taskConnectors:       s.chatTaskConnectorsFor(user, conv.ID),
-		groupID:              buf.turnID,
-		modelAllowed:         s.cfg.LockdownAllows,
-		lockdownOnly:         s.cfg.LockdownOnly,
+		convAutoApprove:      conv.AutoApprove,
+		liveAutoApprove: func(c context.Context) bool {
+			latest, err := s.store.Get(c, user, conv.ID)
+			if err != nil || latest == nil {
+				return false
+			}
+			return latest.AutoApprove
+		},
+		autoApproveInTest: s.cfg.AutoApproveInTest,
+		push:              s.push,
+		bg:                &s.background,
+		taskConnectors:    s.chatTaskConnectorsFor(user, conv.ID),
+		groupID:           buf.turnID,
+		modelAllowed:      s.cfg.LockdownAllows,
+		lockdownOnly:      s.cfg.LockdownOnly,
 	}
 }

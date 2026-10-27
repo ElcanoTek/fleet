@@ -550,6 +550,9 @@ export interface TurnStreamDeps {
   setModelPickerOpen: Dispatch<SetStateAction<boolean>>;
   setModelSearchQuery: Dispatch<SetStateAction<string>>;
   setPendingLockdown: Dispatch<SetStateAction<boolean>>;
+  draftKeyRef?: RefObject<string>;
+  pendingAutoApproveRef?: RefObject<Map<string, boolean>>;
+  setPendingAutoApproveForKey?: (key: string, val: boolean) => void;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
   setSpreadsheetNudgeDismissed: Dispatch<SetStateAction<boolean>>;
   // Component-owned refs the loop reads/mutates.
@@ -715,6 +718,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     setModelPickerOpen,
     setModelSearchQuery,
     setPendingLockdown,
+    draftKeyRef,
+    pendingAutoApproveRef,
+    setPendingAutoApproveForKey,
     setSidebarOpen,
     setSpreadsheetNudgeDismissed,
     activeConversationIdRef,
@@ -2209,6 +2215,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // conversation row by the backend; clear the local flag so a
     // subsequent "+ New chat" doesn't accidentally re-flag.
     setPendingLockdown(false);
+    setPendingAutoApproveForKey?.(oldKey, false);
     // The user is looking at the slot that just got a real id — follow it, or
     // their view empties out onto a key nothing writes to any more. They may
     // instead have navigated away (submit → "+ New chat" race), and that is
@@ -2258,6 +2265,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         title: string;
         persona: string;
         model?: string;
+        auto_approve?: boolean;
       };
       // oldTarget is the per-submission pending key this turn was
       // launched with (e.g. "__pending__:1"). It's distinct from the
@@ -2304,6 +2312,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           model: typeof p.model === "string" ? p.model : "",
           pinned: false,
           updated_at: Math.floor(Date.now() / 1000),
+          auto_approve: p.auto_approve === true,
         };
         return [optimistic, ...curr];
       });
@@ -4352,6 +4361,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return true;
     }
 
+    // Remember which draft / pending slot originated this submission so its
+    // Auto-approve toggle stays visible and mutable while attachments upload
+    // without leaking into another draft opened in the meantime.
+    const originPendingKey = convId ?? draftKeyRef?.current ?? "__draft_0__";
+
     // Upload any pending attachments FIRST. If it fails, we bail out with
     // the text still in the composer so the user can retry without losing
     // their message. Empty list → no-op, fast path unchanged.
@@ -4412,7 +4426,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // turn is still pre-promotion can't collide with this controller.
     // The conversation event will rename the per-submission key → the
     // real conv id when it lands.
+    const isUnpromoted = !convId || isPendingKey(convId);
     const initialTarget = convId ?? nextPendingKey();
+    const submittedAutoApprove =
+      isUnpromoted &&
+      pendingAutoApproveRef?.current.get(originPendingKey) === true;
+    if (isUnpromoted && submittedAutoApprove) {
+      setPendingAutoApproveForKey?.(initialTarget, true);
+      if (originPendingKey !== initialTarget) {
+        setPendingAutoApproveForKey?.(originPendingKey, false);
+      }
+    }
     // This submission's identity (#1592). The server stamps it on the turn it
     // starts for us — where /inflight echoes it back — and stores it in the
     // queue row's own submission_id column if it queues us behind a turn we
@@ -4454,7 +4478,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (uploadedAttachments.length > 0) {
       body.attachments = uploadedAttachments;
     }
-    if (convId) {
+    if (convId && !isPendingKey(convId)) {
       body.conversation_id = convId;
     } else {
       body.title = value.length > 80 ? value.slice(0, 80) + "…" : value;
@@ -4472,6 +4496,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
       if (pendingLockdown) {
         body.lockdown = true;
+      }
+      if (submittedAutoApprove) {
+        body.auto_approve = true;
       }
     }
 
@@ -4787,6 +4814,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // uncertain too, unless the server definitively said it holds nothing:
     // the card holds instead of inviting a retry that could duplicate it.
     if (!accepted.value && !absent && recoveryOwns(resolveTarget())) uncertain = true;
+    if (
+      submittedAutoApprove &&
+      !accepted.value &&
+      !uncertain &&
+      resolveTarget() === initialTarget &&
+      activeConversationIdRef.current === null &&
+      draftKeyRef?.current === originPendingKey
+    ) {
+      setPendingAutoApproveForKey?.(originPendingKey, true);
+    }
     // A direct send the server queued instead (it knew a turn was running).
     if (accepted.queued && fromCard && opts?.onUnsent) {
       watchQueuedCardSend(resolveTarget(), value, submissionId, opts.onUnsent, opts.stillHeld);

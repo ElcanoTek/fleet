@@ -218,3 +218,88 @@ func TestSweepExpiredApprovals_StopsOnCancelledContext(t *testing.T) {
 		t.Errorf("claimed %v, want none (no claim attempted under a done context)", fake.claimedIDs)
 	}
 }
+
+func TestStage_ConversationAutoApprove(t *testing.T) {
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
+		CriticalToolNoSessionApproval: []string{"mcp_prod_drop_table"},
+	})
+
+	sink := &recordingSink{}
+	liveFlag := true
+	a := &approvalStager{
+		ctx:             context.Background(),
+		conversationID:  "c1",
+		userEmail:       "alice@example.com",
+		sink:            sink,
+		convAutoApprove: false,
+		liveAutoApprove: func(context.Context) bool { return liveFlag },
+	}
+
+	// 1. Executable critical tool is pre-approved without touching the store.
+	got, err := a.Stage("mcp_pages_create_workspace", "call_1", `{"title":"Deck"}`)
+	if err != nil {
+		t.Fatalf("Stage executable tool: %v", err)
+	}
+	if got != agentcore.PreApprovedSentinel {
+		t.Errorf("Stage returned %q, want PreApprovedSentinel", got)
+	}
+	if len(sink.events) != 1 || sink.events[0] != "tool.auto_resolved" {
+		t.Errorf("events = %v, want [tool.auto_resolved]", sink.events)
+	}
+
+	// 2. Handler-only tools (schedule_task) are NOT bypassed by auto-approve.
+	a.taskConnectors = func(context.Context) (chatTaskConnectors, error) {
+		return chatTaskConnectors{}, errors.New("connector lookup unavailable")
+	}
+	id, err := a.Stage("schedule_task", "call_2", `{"prompt":"test"}`)
+	if err == nil || id == agentcore.PreApprovedSentinel {
+		t.Fatalf("convAutoApprove bypassed schedule_task validation: id=%q err=%v", id, err)
+	}
+
+	// 3. Outbound email tools (mcp_sendgrid_send_email, mcp_sendgrid_send_template_email) are NOT bypassed by auto-approve.
+	id, err = a.Stage("mcp_sendgrid_send_email", "call_3", `{}`)
+	if err == nil || id == agentcore.PreApprovedSentinel {
+		t.Fatalf("convAutoApprove bypassed send_email validation: id=%q err=%v", id, err)
+	}
+	a.store = &stageStore{}
+	id, err = a.Stage("mcp_sendgrid_send_template_email", "call_3b", `{}`)
+	if err != nil {
+		t.Fatalf("Stage send_template_email: %v", err)
+	}
+	if id == agentcore.PreApprovedSentinel {
+		t.Fatalf("convAutoApprove bypassed send_template_email: id=%q", id)
+	}
+
+	// 4. Bundle-declared critical_tool_no_session_approval tools are NOT bypassed.
+	id, err = a.Stage("mcp_prod_drop_table", "call_4", `{}`)
+	if err != nil {
+		t.Fatalf("Stage no-session-approval tool: %v", err)
+	}
+	if id == agentcore.PreApprovedSentinel {
+		t.Errorf("no-session-approval tool returned PreApprovedSentinel, want staged card")
+	}
+
+	// 5. Session deny policy takes precedence over conversation auto-approve.
+	reg := NewSessionApprovalRegistry()
+	reg.Register("c1", "mcp_pages_create_workspace", SessionApprovalPolicy{Mode: "deny"})
+	a.sessionRegistry = reg
+	id, err = a.Stage("mcp_pages_create_workspace", "call_deny", `{"title":"Deck"}`)
+	if err != nil {
+		t.Fatalf("Stage with session deny: %v", err)
+	}
+	if id != agentcore.PreDeniedSentinel {
+		t.Errorf("Stage with session deny returned %q, want PreDeniedSentinel", id)
+	}
+	a.sessionRegistry = nil
+
+	// 6. Turning liveAutoApprove off mid-turn stops pre-approving subsequent calls.
+	liveFlag = false
+	id, err = a.Stage("mcp_pages_create_workspace", "call_5", `{"title":"Deck 2"}`)
+	if err != nil {
+		t.Fatalf("Stage after toggle off: %v", err)
+	}
+	if id == agentcore.PreApprovedSentinel {
+		t.Errorf("Stage after toggle off returned PreApprovedSentinel, want staged card")
+	}
+}

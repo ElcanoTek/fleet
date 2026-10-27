@@ -250,6 +250,7 @@ above fails otherwise.
 - [`CONNECTOR-ONBOARDING.md`](CONNECTOR-ONBOARDING.md) — Connector-directory onboarding — guided setup, API keys, BYO OAuth clients
 - [`CONNECTOR-PREFS.md`](CONNECTOR-PREFS.md) — Unified connector enablement — availability, selection, binding
 - [`CONTEXT-HANDLES.md`](CONTEXT-HANDLES.md) — Composer context handles (#517)
+- [`CONVERSATION-AUTO-APPROVE.md`](CONVERSATION-AUTO-APPROVE.md) — Per-conversation auto-approve and 24-hour default approval timeout
 - [`CRITICAL-TOOL-ALIASES.md`](CRITICAL-TOOL-ALIASES.md) — Critical tool aliases: one audited action under two tool names (ADR-0071)
 - [`CUTOVER.md`](CUTOVER.md) — v1 → fleet cutover runbook (a box already running the legacy chat + moc stack)
 - [`DATASETS.md`](DATASETS.md) — Dataset / table agent

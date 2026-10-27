@@ -311,18 +311,18 @@ The semantics, the validation rules and the visible effects are documented in
 assume the recording tool has a `detail` argument (Pages semantics), so the
 explanation is opt-in by name. Without it the detail is `<argument>=<value>`.
 
-## D. Task-staging approval cards wait a day
+## D. Task-staging approval cards wait at least a day
 
-A `manage_tasks` card that would have replaced a task's prompt sat for the
-global hour (`FLEET_APPROVAL_TIMEOUT_SECONDS`, default 3600), was
-auto-denied, and the old prompt kept running. `schedule_task` and
-`manage_tasks` cards only stage a change and have no side effect while
-pending. `resolveTimeoutSeconds` now gives them
-`stagedTaskApprovalTimeoutSeconds` (86400, the existing per-conversation
-ceiling) unless the conversation's override is longer. A bundle's per-tool
+A `manage_tasks` card that would have replaced a task's prompt previously sat
+for a shorter global timeout, was auto-denied, and the old prompt kept running.
+`schedule_task` and `manage_tasks` cards only stage a change and have no side
+effect while pending. `resolveTimeoutSeconds` gives them a 24-hour floor
+(`stagedTaskApprovalTimeoutSeconds` = 86400, matching the 86400s global default
+for `FLEET_APPROVAL_TIMEOUT_SECONDS` even if an operator lowers the global
+default; per-conversation and global admin overrides allow up to 604800s / 7 days)
+unless the conversation's or global timeout is longer. A bundle's per-tool
 `critical_tool_timeouts` entry for the tool still wins. The promote-to-task
-card is a `schedule_task` card, so it waits a day too. Every other card,
-`suggest_advanced_model` and `preview_email` included, is unchanged.
+card is a `schedule_task` card, so it gets the 24-hour floor too.
 
 ## E. A declared serialization key
 

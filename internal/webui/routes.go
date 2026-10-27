@@ -293,6 +293,7 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 			return conv(r) + "/approvals/" + p(r, "approvalId") + "/stop"
 		}, noBody, textJSON},
 		{"POST /api/conversations/{id}/archive", func(r *http.Request) string { return conv(r) + "/archive" }, jsonBodyIfAny, textOK},
+		{"POST /api/conversations/{id}/auto-approve", func(r *http.Request) string { return conv(r) + "/auto-approve" }, jsonBodyIfAny, textJSON},
 		{"POST /api/conversations/{id}/branch", func(r *http.Request) string { return conv(r) + "/branch" }, jsonBodyIfAny, textJSON},
 		{"POST /api/conversations/{id}/cancel", func(r *http.Request) string { return conv(r) + "/cancel" }, noBody, textOK},
 		{"GET /api/conversations/{id}/inflight", func(r *http.Request) string { return conv(r) + "/inflight" }, noBody, textJSON},

@@ -153,6 +153,12 @@ type Conversation struct {
 	// (#225). nil = use the global default; a positive value sets a per-chat
 	// override. Set via POST /conversations/{id}/approval-timeout.
 	ApprovalTimeoutSeconds *int `json:"approval_timeout_seconds,omitempty"`
+	// AutoApprove opts this conversation into pre-approving executable critical
+	// tools without parking on an inline approval card. Handler-only tools
+	// (schedule_task, manage_tasks, preview_email, suggest_advanced_model),
+	// outbound email (send_email), and bundle-declared critical_tool_no_session_approval
+	// tools still stage cards. Set via POST /conversations/{id}/auto-approve.
+	AutoApprove bool `json:"auto_approve,omitempty"`
 	// ShareToken is the opt-in public read-only share token (#226). Empty = not
 	// shared; non-empty = anyone with /shared/{ShareToken} can view a read-only
 	// snapshot. Surfaced to the owner's own GET /conversations so the sidebar can
@@ -1163,6 +1169,24 @@ func (s *Store) SetApprovalTimeout(ctx context.Context, userEmail, convID string
 	return nil
 }
 
+// SetAutoApprove sets the per-conversation auto-approve toggle. Scoped by
+// user_email so a caller can only touch their own conversations. A soft-deleted
+// conversation is not mutable (deleted_at IS NULL, #596).
+func (s *Store) SetAutoApprove(ctx context.Context, userEmail, convID string, enabled bool) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET auto_approve = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
+		enabled, time.Now().Unix(), convID, userEmail,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrConversationNotFound
+	}
+	return nil
+}
+
 // SharedConversation is the read-only public snapshot returned for a valid
 // share token (#226). It deliberately omits id and user_email: an observer with
 // the link learns the content but neither the internal ID nor who authored it.
@@ -1541,7 +1565,7 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 // conversationColumns is the SELECT list (in scan order) every conversation query
 // shares, so Get, ListFiltered and ListTeamConversations stay in lockstep with
 // scanConversation. (Bare column names, so a `c.`-aliased query can use it too.)
-const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts, team_visible`
+const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts, team_visible, auto_approve`
 
 // teamConversationColumns is conversationColumns with everything a teammate
 // has no business reading blanked out. Column count and scan order stay
@@ -1562,7 +1586,7 @@ const conversationColumns = `id, user_email, title, persona, model, pinned, lock
 //   - optional_mcp_servers_enabled — the owner's per-chat connector loadout.
 //   - parent_conversation_id — reveals that a shared chat was branched from a
 //     private one, and hands over that private chat's id.
-const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, FALSE AS optional_mcp_servers_enabled, NULL::text[] AS labels, approval_timeout_seconds, '' AS share_token, '' AS parent_conversation_id, COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), NULL::jsonb AS mcp_accounts, team_visible`
+const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, FALSE AS optional_mcp_servers_enabled, NULL::text[] AS labels, approval_timeout_seconds, '' AS share_token, '' AS parent_conversation_id, COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), NULL::jsonb AS mcp_accounts, team_visible, FALSE AS auto_approve`
 
 // pgTypeMap is the pgx type map used to decode Postgres array literals reaching
 // this package over database/sql. It is read-only after init and safe for
@@ -1612,7 +1636,7 @@ func scanConversation(sc rowScanner) (Conversation, error) {
 	var approvalTimeout sql.NullInt64
 	var thinkingRaw []byte
 	var accountsRaw []byte
-	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw, &c.TeamVisible); err != nil {
+	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw, &c.TeamVisible, &c.AutoApprove); err != nil {
 		return Conversation{}, err
 	}
 	c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)

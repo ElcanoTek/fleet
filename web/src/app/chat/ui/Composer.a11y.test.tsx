@@ -476,3 +476,25 @@ describe("Composer — tools popover search and grouping", () => {
     expect(screen.queryByRole("link", { name: /Manage connections in Settings/ })).not.toBeInTheDocument();
   });
 });
+
+describe("Composer — per-chat Auto-approve toggle", () => {
+  it("renders the Auto-approve toggle with aria-pressed and remains clickable while streaming", () => {
+    const toggleAutoApprove = vi.fn();
+    render(
+      <Host
+        overrides={{
+          isAutoApprove: true,
+          toggleAutoApprove,
+          isStreaming: true,
+        }}
+      />,
+    );
+    const btn = screen.getByRole("button", {
+      name: /Auto-approve tools in this chat is on/,
+    });
+    expect(btn).toHaveAttribute("aria-pressed", "true");
+    expect(btn).not.toBeDisabled();
+    fireEvent.click(btn);
+    expect(toggleAutoApprove).toHaveBeenCalledTimes(1);
+  });
+});

@@ -304,13 +304,13 @@ The wait window resolves highest-priority-first:
 2. **Per-conversation** — `POST /conversations/{id}/approval-timeout` with
    `{"approval_timeout_seconds": N}` (or `null` to clear).
 3. **Admin override** — the `approval_timeout_seconds` row in Settings → Admin →
-   Features (60–86400s, applies live to the next staged card;
+   Features (60–604800s, applies live to the next staged card;
    [ADMIN-SETTINGS.md](ADMIN-SETTINGS.md)).
-4. **Global** — `FLEET_APPROVAL_TIMEOUT_SECONDS` (default **3600**). A
-   non-positive value is treated as "use the 3600s default", never as "deny
-   instantly". The default was 300s until the cards rework: the card lands
-   whenever the agent reaches it — often minutes into a run the user started
-   and then reasonably stopped watching — so five minutes mostly denied the
+4. **Global** — `FLEET_APPROVAL_TIMEOUT_SECONDS` (default **86400**). A
+   non-positive value is treated as "use the 86400s default", never as "deny
+   instantly". The default was 300s/3600s earlier: the card lands
+   whenever the agent reaches it — often minutes into a run while the user is
+   multitasking across several chats — so short timeouts mostly denied the
    final, wanted action of a long run (the same observation that motivated
    notify mode).
 
