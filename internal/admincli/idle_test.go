@@ -49,6 +49,16 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 			wantPass: "",
 			wantRed:  "postgres://127.0.0.1:5432/chat",
 		},
+		{
+			dsn:      "host=127.0.0.1 user=fleet password=s3cr3t!pw dbname=sched",
+			wantPass: "s3cr3t!pw",
+			wantRed:  "host=127.0.0.1 user=fleet dbname=sched",
+		},
+		{
+			dsn:      "host=127.0.0.1 user=fleet password='s3cr3t pw' dbname=sched",
+			wantPass: "s3cr3t pw",
+			wantRed:  "host=127.0.0.1 user=fleet dbname=sched",
+		},
 	}
 
 	for _, tc := range cases {
@@ -83,9 +93,9 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 		t.Errorf("fleet_resolve_dsn got %q, want specific DSN from env file", got)
 	}
 
-	// Verify DB_HOST/DB_USER/DB_PASSWORD fallback in fleet_resolve_dsn.
+	// Verify DB_HOST/DB_USER/DB_PASSWORD fallback in fleet_resolve_dsn (including UTF-8 bytes).
 	dbPartsEnv := filepath.Join(t.TempDir(), "parts.env")
-	if err := os.WriteFile(dbPartsEnv, []byte("DB_HOST=db.internal\nDB_PASSWORD=p@ss:1\n"), 0o600); err != nil {
+	if err := os.WriteFile(dbPartsEnv, []byte("DB_HOST=db.internal\nDB_PASSWORD=päss:1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cmd = exec.Command("bash", "-c", `. "$1"; fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$2"`, "_", lib, dbPartsEnv)
@@ -94,7 +104,7 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fleet_resolve_dsn DB_* parts: %v\n%s", err, string(out))
 	}
-	if got := strings.TrimSpace(string(out)); got != "postgres://fleet:p%40ss%3A1@db.internal:5432/sched?sslmode=disable" {
+	if got := strings.TrimSpace(string(out)); got != "postgres://fleet:p%C3%A4ss%3A1@db.internal:5432/sched?sslmode=disable" {
 		t.Errorf("fleet_resolve_dsn DB_* parts got %q", got)
 	}
 

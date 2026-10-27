@@ -7,7 +7,8 @@
 
 # fleet_uri_decode STR — decodes RFC 3986 percent-encoded bytes (%XX) in STR.
 fleet_uri_decode() {
-  local s="$1" out="" i=0 len=${#1} c hex
+  local LC_ALL=C s="$1" out="" i=0 len c hex
+  len=${#s}
   while (( i < len )); do
     c="${s:i:1}"
     if [[ "$c" == "%" && $(( i + 2 )) -lt $len ]]; then
@@ -25,12 +26,36 @@ fleet_uri_decode() {
   printf '%s' "$out"
 }
 
-# fleet_split_dsn_password DSN — prints the percent-decoded password on line 1
-# and the DSN with `:password@` stripped to `@` on line 2. When the DSN has no
-# userinfo password, line 1 is empty and line 2 is the original DSN.
+# fleet_split_dsn_password DSN — prints the extracted password on line 1 and the
+# DSN with its password stripped on line 2 (supporting both postgres:// URIs and
+# libpq keyword=value conninfo strings). When the DSN has no password, line 1 is
+# empty and line 2 is the original DSN.
 fleet_split_dsn_password() {
-  local dsn="$1" proto rest userinfo hostpart user pass
-  if [[ "$dsn" != *"://"* || "$dsn" != *"@"* ]]; then
+  local dsn="$1" proto rest userinfo hostpart user pass="" redacted
+  if [[ "$dsn" != *"://"* ]]; then
+    redacted="$dsn"
+    while [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\'(([^\'\\]|\\.)*)\'[[:space:]]*(.*)$ ]]; do
+      pass="${BASH_REMATCH[3]}"
+      pass="${pass//\\\'/\'}"
+      pass="${pass//\\\\/\\}"
+      redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
+    done
+    while [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\"(([^\"\\]|\\.)*)\"[[:space:]]*(.*)$ ]]; do
+      pass="${BASH_REMATCH[3]}"
+      pass="${pass//\\\"/\"}"
+      pass="${pass//\\\\/\\}"
+      redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
+    done
+    while [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=([^[:space:]]+)[[:space:]]*(.*)$ ]]; do
+      pass="${BASH_REMATCH[3]}"
+      redacted="${BASH_REMATCH[1]}${BASH_REMATCH[4]}"
+    done
+    redacted="${redacted#"${redacted%%[![:space:]]*}"}"
+    redacted="${redacted%"${redacted##*[![:space:]]}"}"
+    printf '%s\n%s\n' "$pass" "$redacted"
+    return 0
+  fi
+  if [[ "$dsn" != *"@"* ]]; then
     printf '\n%s\n' "$dsn"
     return 0
   fi
@@ -81,7 +106,8 @@ fleet_env_or_file() {
 # in URL userinfo so DB_USER / DB_PASSWORD values can be embedded safely into a
 # postgres:// URI that fleet_split_dsn_password later splits.
 fleet_uri_encode_userinfo() {
-  local s="$1" out="" i=0 len=${#1} c hex
+  local LC_ALL=C s="$1" out="" i=0 len c hex
+  len=${#s}
   while (( i < len )); do
     c="${s:i:1}"
     if [[ "$c" =~ ^[A-Za-z0-9._~-]$ ]]; then
@@ -177,8 +203,9 @@ fleet_clear_drain() {
 }
 
 # fleet_service_runtime_state [SERVICE_NAME] — prints "<state>|<start_epoch>"
-# where <state> is "active", "inactive" (unit installed and not active), or
-# "unknown" (no systemd or unit not installed).
+# where <state> is "active", "inactive" (unit installed and not active),
+# "no-unit" (no systemd or unit not installed), or "unknown" (systemctl probe
+# failed).
 fleet_service_runtime_state() {
   local unit="${1:-${SERVICE_NAME:-${FLEET_SERVICE_NAME:-fleet}}}"
   [[ "$unit" == *.service ]] || unit="${unit}.service"
@@ -187,17 +214,28 @@ fleet_service_runtime_state() {
     return 0
   fi
   if ! command -v systemctl >/dev/null 2>&1; then
+    printf 'no-unit|0\n'
+    return 0
+  fi
+  local show_out load_state="" active_state="" start_ts="" start_epoch=0 line
+  if ! show_out="$(systemctl show --timestamp=unix -p LoadState -p ActiveState -p ExecMainStartTimestamp "$unit" 2>/dev/null)"; then
     printf 'unknown|0\n'
     return 0
   fi
-  if ! systemctl cat "$unit" >/dev/null 2>&1; then
-    printf 'unknown|0\n'
+  while IFS= read -r line; do
+    case "$line" in
+      LoadState=*) load_state="${line#LoadState=}" ;;
+      ActiveState=*) active_state="${line#ActiveState=}" ;;
+      ExecMainStartTimestamp=*) start_ts="${line#ExecMainStartTimestamp=}" ;;
+    esac
+  done <<< "$show_out"
+  load_state="$(printf '%s' "$load_state" | tr -d '[:space:]')"
+  active_state="$(printf '%s' "$active_state" | tr -d '[:space:]')"
+  if [[ "$load_state" == "not-found" ]]; then
+    printf 'no-unit|0\n'
     return 0
   fi
-  local active_state start_ts start_epoch=0
-  active_state="$(systemctl show -p ActiveState --value "$unit" 2>/dev/null | tr -d '[:space:]' || true)"
   if [[ "$active_state" == "active" || "$active_state" == "activating" || "$active_state" == "reloading" ]]; then
-    start_ts="$(systemctl show --timestamp=unix -p ExecMainStartTimestamp --value "$unit" 2>/dev/null || true)"
     start_ts="${start_ts#"${start_ts%%[![:space:]]*}"}"
     start_ts="${start_ts%"${start_ts##*[![:space:]]}"}"
     if [[ "$start_ts" == @* ]]; then
@@ -232,7 +270,7 @@ fleet_probe_in_memory_counts() {
   addr="$(fleet_env_or_file FLEET_SERVER_ADDR "$env_file")"
   [[ -n "$addr" ]] || addr="$(fleet_env_or_file CHAT_SERVER_ADDR "$env_file")"
   [[ -n "$addr" ]] || addr="$(fleet_env_or_file CUTLASS_SERVER_ADDR "$env_file")"
-  if [[ -z "$addr" && "$svc_state" == "active" && "${FLEET_ASSUME_SERVICE_ACTIVE:-}" != "1" ]]; then
+  if [[ -z "$addr" && ( "$svc_state" == "active" || "$svc_state" == "unknown" ) && "${FLEET_ASSUME_SERVICE_ACTIVE:-}" != "1" ]]; then
     addr="127.0.0.1:8080"
   fi
   if [[ -z "$addr" ]]; then
@@ -312,12 +350,12 @@ fleet_active_work_summary() {
           out="${out#"${out%%[![:space:]]*}"}"
           out="${out%"${out##*[![:space:]]}"}"
           [[ -n "$out" ]] && items+=("$out")
-        elif [[ "$svc_state" == "active" ]]; then
-          items+=("sched database active-work query failed while service is active")
+        elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+          items+=("sched database active-work query failed while service is ${svc_state}")
         fi
       fi
-    elif [[ "$svc_state" == "active" ]]; then
-      items+=("sched database active-work query failed while service is active")
+    elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+      items+=("sched database active-work query failed while service is ${svc_state}")
     fi
   fi
 
@@ -349,12 +387,12 @@ fleet_active_work_summary() {
             items+=("$out")
             has_chat_turn_item=1
           fi
-        elif [[ "$svc_state" == "active" ]]; then
-          items+=("chat turns active-work query failed while service is active")
+        elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+          items+=("chat turns active-work query failed while service is ${svc_state}")
         fi
       fi
-    elif [[ "$svc_state" == "active" ]]; then
-      items+=("chat turns active-work query failed while service is active")
+    elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+      items+=("chat turns active-work query failed while service is ${svc_state}")
     fi
 
     if has_tbl="$(fleet_psql_query "$chat_dsn" "
@@ -393,12 +431,12 @@ fleet_active_work_summary() {
             items+=("$out")
             has_approval_item=1
           fi
-        elif [[ "$svc_state" == "active" ]]; then
-          items+=("chat approvals active-work query failed while service is active")
+        elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+          items+=("chat approvals active-work query failed while service is ${svc_state}")
         fi
       fi
-    elif [[ "$svc_state" == "active" ]]; then
-      items+=("chat approvals active-work query failed while service is active")
+    elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+      items+=("chat approvals active-work query failed while service is ${svc_state}")
     fi
   fi
 

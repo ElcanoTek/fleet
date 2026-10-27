@@ -98,10 +98,11 @@ func parseServiceTimestamp(startTS string) int64 {
 	return 0
 }
 
-// serviceRuntimeState inspects systemd for the unit's current ActiveState and
-// ExecMainStartTimestamp. It returns ("active", startUnix), ("inactive", 0) when
-// the unit is installed and not active, or ("unknown", 0) when systemd or the
-// unit is absent.
+// serviceRuntimeState inspects systemd for the unit's current LoadState,
+// ActiveState, and ExecMainStartTimestamp. It returns ("active", startUnix),
+// ("inactive", 0) when the unit is installed and not active, ("no-unit", 0)
+// when systemd or the unit is not installed, or ("unknown", 0) when the
+// systemctl probe fails.
 func serviceRuntimeState(unit string) (string, int64) {
 	if truthy(os.Getenv("FLEET_ASSUME_SERVICE_ACTIVE")) {
 		return "active", 0
@@ -113,26 +114,28 @@ func serviceRuntimeState(unit string) (string, int64) {
 		unit += ".service"
 	}
 	if _, err := exec.LookPath("systemctl"); err != nil {
-		return "unknown", 0
-	}
-	if !systemctlUnitInstalled(unit) {
-		return "unknown", 0
+		return "no-unit", 0
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	//nolint:gosec // G204: fixed "systemctl" binary; unit is resolved via serviceName.
-	out, err := exec.CommandContext(ctx, "systemctl", "show", "--timestamp=unix", "-p", "ActiveState", "-p", "ExecMainStartTimestamp", unit).Output()
+	out, err := exec.CommandContext(ctx, "systemctl", "show", "--timestamp=unix", "-p", "LoadState", "-p", "ActiveState", "-p", "ExecMainStartTimestamp", unit).Output()
 	if err != nil {
 		return "unknown", 0
 	}
-	var activeState, startTS string
+	var loadState, activeState, startTS string
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
-		if v, ok := strings.CutPrefix(line, "ActiveState="); ok {
+		if v, ok := strings.CutPrefix(line, "LoadState="); ok {
+			loadState = strings.TrimSpace(v)
+		} else if v, ok := strings.CutPrefix(line, "ActiveState="); ok {
 			activeState = strings.TrimSpace(v)
 		} else if v, ok := strings.CutPrefix(line, "ExecMainStartTimestamp="); ok {
 			startTS = strings.TrimSpace(v)
 		}
+	}
+	if loadState == "not-found" {
+		return "no-unit", 0
 	}
 	switch activeState {
 	case "active", "activating", "reloading":
@@ -161,7 +164,7 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 	if addr == "" {
 		addr = strings.TrimSpace(envOrFile("CUTLASS_SERVER_ADDR"))
 	}
-	if addr == "" && svcState == "active" && !truthy(os.Getenv("FLEET_ASSUME_SERVICE_ACTIVE")) {
+	if addr == "" && (svcState == "active" || svcState == "unknown") && !truthy(os.Getenv("FLEET_ASSUME_SERVICE_ACTIVE")) {
 		addr = "127.0.0.1:8080"
 	}
 	if addr == "" {
@@ -426,7 +429,6 @@ func WaitIdleForService(ctx context.Context, unit, schedDSNVal, chatDSNVal strin
 	if pollInterval <= 0 {
 		pollInterval = 2 * time.Second
 	}
-	svcState, _ := serviceRuntimeState(unit)
 	start := time.Now()
 	deadline := start.Add(max(maxWait, 0))
 	for {
@@ -434,8 +436,8 @@ func WaitIdleForService(ctx context.Context, unit, schedDSNVal, chatDSNVal strin
 			return &ActiveWorkError{Items: []string{err.Error()}}
 		}
 		items, err := ActiveWorkForService(ctx, unit, schedDSNVal, chatDSNVal)
-		if err != nil && svcState == "active" {
-			items = append(items, fmt.Sprintf("active-work query failed while service is active: %v", err))
+		if err != nil {
+			items = append(items, fmt.Sprintf("active-work query failed: %v", err))
 		}
 		if len(items) == 0 {
 			if err := SetUpdateDrain(); err != nil {

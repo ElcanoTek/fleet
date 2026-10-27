@@ -707,18 +707,21 @@ const (
 var directReleasePause = 100 * time.Millisecond // a var so tests can shorten it
 
 // bindQueuedInputIf stamps the real turn ID on a drained queue row when
-// queueRowID is non-empty. Returns false only when the row is no longer
-// running (cancelled by a concurrent Stop).
-func (s *Server) bindQueuedInputIf(queueRowID, turnID string) bool {
-	if queueRowID == "" {
+// queued is non-nil. Returns false only when the row is no longer running
+// (cancelled by a concurrent Stop).
+func (s *Server) bindQueuedInputIf(queued *queuedLaunch, turnID string) bool {
+	if queued == nil || queued.rowID == "" {
 		return true
 	}
 	bctx, bcancel := context.WithTimeout(context.Background(), 5*time.Second)
-	bound, err := s.store.BindInputTurn(bctx, queueRowID, turnID)
+	bound, err := s.store.BindInputTurn(bctx, queued.rowID, turnID)
 	bcancel()
 	if err != nil {
-		log.Printf("bind input turn (input=%s turn=%s): %v", queueRowID, turnID, err)
+		log.Printf("bind input turn (input=%s turn=%s): %v", queued.rowID, turnID, err)
 		return true
+	}
+	if bound {
+		queued.claimTurnID = turnID
 	}
 	return bound
 }
@@ -1018,7 +1021,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		fail(http.StatusInternalServerError, errors.New("the message could not be recorded against its turn; send it again"))
 		return true
 	}
-	if !s.bindQueuedInputIf(queueRowID, turnID) {
+	if !s.bindQueuedInputIf(queued, turnID) {
 		// The row is no longer running: a Stop cancelled it durably
 		// after the drain claimed it. Its turn must not run.
 		turnCancel()
