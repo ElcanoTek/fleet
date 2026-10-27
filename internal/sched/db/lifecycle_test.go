@@ -430,6 +430,17 @@ func TestLifecycleDBWriterMatrix(t *testing.T) {
 		}
 	})
 
+	t.Run("db.ReleaseClaimedTask", func(t *testing.T) {
+		reset()
+		rows := seedAll(lifecycleSeedOpts{withLease: true})
+		for _, s := range models.AllTaskStatuses {
+			if err := d.ReleaseClaimedTask(ctx, rows[s].id, rows[s].owner.String()); err != nil {
+				t.Fatalf("release %s: %v", s, err)
+			}
+		}
+		assertAll(models.TaskWriterReleaseClaimed, models.TaskStatusPending, rows)
+	})
+
 	t.Run("db.UpdateTasksStatusBatch scheduled→pending", func(t *testing.T) {
 		reset()
 		due := time.Now().UTC().Add(-time.Minute)

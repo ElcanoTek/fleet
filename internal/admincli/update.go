@@ -55,6 +55,25 @@ func cmdUpdate(argv []string) int {
 	defer stop()
 	//nolint:gosec // G204: fixed "bash" binary; args are the repo-local script path + operator-supplied flags passed as separate argv (no shell string interpolation).
 	cmd := exec.CommandContext(ctx, "bash", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err == nil {
+			return nil
+		}
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+	cmd.WaitDelay = 5 * time.Second
+	ownerID := strings.TrimSpace(strings.TrimPrefix(drainOwnerToken, "draining "))
+	cmd.Env = append(os.Environ(), "FLEET_DRAIN_OWNER_TOKEN="+ownerID)
+	defer ClearUpdateDrain()
+	defer func() {
+		if cmd.Process != nil && cmd.Process.Pid > 0 {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+	}()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin

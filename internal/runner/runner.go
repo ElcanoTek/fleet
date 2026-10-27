@@ -600,16 +600,21 @@ func (p *Pool) admitClaims() bool {
 // this poll is a no-op and the extra work stays pending. The drain-loop keeps
 // claiming while slots free up, so a single tick can launch up to the sub-cap.
 func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
-	// Backpressure gate (disk headroom today) — checked BEFORE the limiter so a
-	// shedding box does not even take a slot. Work already in flight is left
-	// alone: shedding stops the queue from draining, it never kills a run.
-	if !p.admitClaims() {
-		return
-	}
+	// Backpressure gate (disk headroom + update drain) — checked BEFORE every
+	// slot acquisition and claim in the loop so a drain sentinel or disk floor
+	// that trips mid-tick holds back subsequent claims immediately. Work already
+	// in flight is left alone.
 	for {
+		if !p.admitClaims() {
+			return
+		}
 		release, ok := p.limiter.TryAcquireScheduled() // acquire BEFORE claiming (non-blocking)
 		if !ok {
 			return // at the scheduler sub-cap or the box is full: leave the rest pending
+		}
+		if !p.admitClaims() {
+			release()
+			return
 		}
 
 		// Persist a fresh owner for every claim, including reclaims by this same
@@ -626,6 +631,25 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 		}
 		if task == nil {
 			// Nothing to claim: release the slot and stop this tick.
+			release()
+			return
+		}
+		if !p.admitClaims() {
+			var rerr error
+			for attempt := 0; attempt < 3; attempt++ {
+				if attempt > 0 {
+					time.Sleep(100 * time.Millisecond)
+				}
+				rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+				rerr = p.store.ReleaseClaimedTask(rctx, task.ID, token.String())
+				rcancel()
+				if rerr == nil {
+					break
+				}
+			}
+			if rerr != nil {
+				log.Printf("runner: could not release drained claim for task %s (%v); lease recovery will reclaim on restart", task.ID, rerr)
+			}
 			release()
 			return
 		}

@@ -121,8 +121,14 @@ func (s *Server) scheduleApprovalResume(convID string, after time.Duration, atte
 // decideApprovalResume runs the claim and acts on what it decided.
 func (s *Server) decideApprovalResume(convID string, attempt int) {
 	if s.shuttingDown.Load() {
-		// No new turns while draining. The cards stay armed; the next boot
+		// No new turns while shutting down. The cards stay armed; the next boot
 		// drops them with a note (DropApprovalResumesAtBoot), never runs them.
+		return
+	}
+	if UpdateDrainActive() {
+		// External update/lifecycle drain may be cancelled or time out without
+		// restarting the process; re-arm without consuming retry attempts.
+		s.scheduleApprovalResume(convID, approvalResumeRetryDelay, attempt)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

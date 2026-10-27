@@ -382,6 +382,7 @@ func captureHealth(ctx context.Context, chatURL, schedURL, bundleDir, service st
 	checkEnv(r)
 	checkDB(r, "chat database", chatURL, chatDSN)
 	checkDB(r, "sched database", schedURL, schedDSN)
+	checkActiveWork(r, serviceName(service), schedURL, chatURL, true)
 	if skipSandbox {
 		r.skip("sandbox image", "skipped (--no-sandbox)")
 	} else {

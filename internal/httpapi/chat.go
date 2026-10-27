@@ -340,7 +340,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// Draining (#278): once graceful shutdown begins, admit no new turns — the
 	// client should retry against a healthy instance. In-flight turns keep going.
-	if s.shuttingDown.Load() {
+	if s.IsDraining() {
 		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
 		return
 	}
@@ -720,6 +720,56 @@ const (
 
 var directReleasePause = 100 * time.Millisecond // a var so tests can shorten it
 
+// bindQueuedInputIf stamps the real turn ID on a drained queue row when
+// queued is non-nil. Returns false only when the row is no longer running
+// (cancelled by a concurrent Stop).
+func (s *Server) bindQueuedInputIf(queued *queuedLaunch, turnID string) bool {
+	if queued == nil || queued.rowID == "" {
+		return true
+	}
+	bctx, bcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	bound, err := s.store.BindInputTurn(bctx, queued.rowID, turnID)
+	bcancel()
+	if err != nil {
+		log.Printf("bind input turn (input=%s turn=%s): %v", queued.rowID, turnID, err)
+		return true
+	}
+	if bound {
+		queued.claimTurnID = turnID
+	}
+	return bound
+}
+
+// attachTurnPersister attaches the turn_events persister.
+func (s *Server) attachTurnPersister(buf *turnBuffer, user, convID string) {
+	persistCtx, persistCancelAttach := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := buf.attachPersister(persistCtx, s.store); err != nil {
+		log.Printf("attachPersister (user=%s conv=%s): %v", user, convID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
+	}
+	persistCancelAttach()
+}
+
+// admitActiveTurnOrAbort increments activeTurns and activeTurnCount and then
+// re-checks IsDraining() so no turn can launch after the /healthz in-memory
+// counter was observed as zero while draining.
+func (s *Server) admitActiveTurnOrAbort(convID string, buf *turnBuffer, turnToken uint64, turnCancel context.CancelFunc, fail func(int, error)) bool {
+	s.activeTurns.Add(1)
+	s.activeTurnCount.Add(1)
+	if !s.IsDraining() {
+		return true
+	}
+	s.activeTurnCount.Add(-1)
+	s.activeTurns.Done()
+	turnCancel()
+	if buf != nil {
+		buf.Emit("turn.cancelled", map[string]any{"reason": "server_draining"})
+	}
+	s.finishTurn(convID, turnToken)
+	s.maybeDrainQueue(convID)
+	fail(http.StatusServiceUnavailable, errors.New("server is shutting down"))
+	return false
+}
+
 // bindDirectInputIf binds id when there is a direct claim; with none it
 // reports bound (nothing to bind).
 func (s *Server) bindDirectInputIf(id, turnID string) (bound, stopped bool) {
@@ -938,6 +988,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Explicit cancellation (the Stop button) routes through
 	// POST /conversations/{id}/cancel, which fires the cancel func we
 	// register here.
+	if s.IsDraining() {
+		fail(http.StatusServiceUnavailable, errors.New("server is shutting down"))
+		return true
+	}
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	steer := newSteerMailbox(s.store, user, conv.ID, "", nil)
 	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, gate, strings.TrimSpace(req.SubmissionID))
@@ -1000,43 +1054,31 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		fail(http.StatusInternalServerError, errors.New("the message could not be recorded against its turn; send it again"))
 		return true
 	}
-	if queueRowID != "" {
-		// Stamp the REAL turn id on the drained row (the claim used a
-		// placeholder): the settle/recovery predicates check THIS turn's
-		// durable #798 record, and a stale placeholder would re-queue —
-		// double-run — an already-committed input after a crash.
-		bctx, bcancel := context.WithTimeout(context.Background(), 5*time.Second)
-		bound, err := s.store.BindInputTurn(bctx, queueRowID, turnID)
-		bcancel()
-		if err != nil {
-			log.Printf("bind input turn (input=%s turn=%s): %v", queueRowID, turnID, err)
-		} else if !bound {
-			// The row is no longer running: a Stop cancelled it durably
-			// after the drain claimed it. Its turn must not run.
-			turnCancel()
-			s.finishTurn(conv.ID, turnToken)
-			if releaseSlot != nil {
-				releaseSlot()
-			}
-			// No turn goroutine will run the completion-tail drain, and a
-			// row queued behind this registered turn deferred to it.
-			s.maybeDrainQueue(conv.ID)
-			return true
+	if !s.bindQueuedInputIf(queued, turnID) {
+		// The row is no longer running: a Stop cancelled it durably
+		// after the drain claimed it. Its turn must not run.
+		turnCancel()
+		s.finishTurn(conv.ID, turnToken)
+		if releaseSlot != nil {
+			releaseSlot()
 		}
+		// No turn goroutine will run the completion-tail drain, and a
+		// row queued behind this registered turn deferred to it.
+		s.maybeDrainQueue(conv.ID)
+		return true
+	}
+
+	// Track the goroutine on activeTurns BEFORE attaching the persister or
+	// emitting metadata events so graceful shutdown (DrainTurns) and external
+	// update drains never seal a half-initialized turn as completed.
+	if !s.admitActiveTurnOrAbort(conv.ID, buf, turnToken, turnCancel, fail) {
+		return true
 	}
 
 	// Wire incremental persistence so a crash mid-turn leaves a
 	// recoverable ledger in turn_events. Non-fatal — if the DB is
 	// flaky, live streaming still works; crash recovery just won't.
-	// Rooted in Background, not the request: the turn is designed to outlive
-	// the POST (that is what the ledger is FOR), so a client that drops the
-	// socket in the window between registerTurn and CreateTurn must not
-	// leave the whole turn running with no ledger to replay on reconnect.
-	persistCtx, persistCancelAttach := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := buf.attachPersister(persistCtx, s.store); err != nil {
-		log.Printf("attachPersister (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
-	}
-	persistCancelAttach()
+	s.attachTurnPersister(buf, user, conv.ID)
 
 	// Attachment metadata (if any) is re-validated server-side, then split
 	// by kind. Images flow into the model as multimodal vision input via
@@ -1172,11 +1214,6 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// this HTTP response disconnects. turnCtx is intentionally NOT
 	// derived from r.Context(): the turn must outlive the HTTP request.
 	//
-	// Track the goroutine on activeTurns BEFORE launching it so graceful
-	// shutdown (DrainTurns) can block on it and Wait never races ahead of Add
-	// (#278). The counter mirrors the WaitGroup for the SIGUSR1 status log.
-	s.activeTurns.Add(1)
-	s.activeTurnCount.Add(1)
 	// releaseSlot must run exactly once, and BEFORE the tail drain — the
 	// completing turn's own slot is what the next drained turn needs, and a
 	// deferred-only release would deterministically starve the queue at cap.

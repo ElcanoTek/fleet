@@ -3,6 +3,7 @@ package admincli
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -48,12 +49,65 @@ func cmdStart(argv []string) int   { return systemctlVerb("start", argv) }
 func cmdRestart(argv []string) int { return systemctlVerb("restart", argv) }
 func cmdStop(argv []string) int    { return systemctlVerb("stop", argv) }
 
+func parseConfiguredWaitTimeout() (time.Duration, error) {
+	raw := envOrFile("FLEET_UPDATE_WAIT_SECONDS")
+	if raw == "" {
+		return 10 * time.Minute, nil
+	}
+	secs, err := strconv.Atoi(raw)
+	if err != nil || secs < 0 {
+		return 0, fmt.Errorf("invalid FLEET_UPDATE_WAIT_SECONDS=%q (must be a non-negative integer)", raw)
+	}
+	return time.Duration(secs) * time.Second, nil
+}
+
 func systemctlVerb(verb string, argv []string) int {
 	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 	service := fs.String("service", "", "systemd unit name (default: $FLEET_SERVICE_NAME or \"fleet\")")
+	force := fs.Bool("force", false, "restart/stop even when scheduled tasks or chat turns are running (env FLEET_UPDATE_FORCE=1)")
+	wait := fs.Bool("wait", false, "wait for running tasks or chat turns to finish before restarting/stopping (env FLEET_UPDATE_WAIT=1)")
+	waitTimeout := fs.Duration("wait-timeout", 10*time.Minute, "maximum time to wait when --wait is set (env FLEET_UPDATE_WAIT_SECONDS)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
+	waitTimeoutSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "wait-timeout" {
+			waitTimeoutSet = true
+		}
+	})
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	clearDrain := false
+	defer func() {
+		if clearDrain {
+			ClearUpdateDrain()
+		}
+	}()
+	if (verb == "restart" || verb == "stop") && !*force && !truthy(envOrFile("FLEET_UPDATE_FORCE")) {
+		maxWait := time.Duration(0)
+		if *wait || truthy(envOrFile("FLEET_UPDATE_WAIT")) {
+			if !waitTimeoutSet {
+				cfgTimeout, err := parseConfiguredWaitTimeout()
+				if err != nil {
+					return errf(2, "%v", err)
+				}
+				*waitTimeout = cfgTimeout
+			}
+			maxWait = *waitTimeout
+		}
+		sDSN := idleSchedDSN("")
+		cDSN := idleChatDSN("")
+		clearDrain = true
+		resolvedUnit := serviceName(*service)
+		if err := WaitIdleForService(ctx, resolvedUnit, sDSN, cDSN, maxWait, 2*time.Second, os.Stderr); err != nil {
+			unitName := resolvedUnit + ".service"
+			return errf(6, "refusing to %s %s while work is in flight (%v) — wait for it to finish, pass --wait, or pass --force", verb, unitName, err)
+		}
+	}
+
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		return errf(5, "systemctl not on PATH (no systemd)")
 	}
@@ -65,14 +119,18 @@ func systemctlVerb(verb string, argv []string) int {
 	// Signal-cancelled (not time-bounded): a restart can take a moment; Ctrl-C / SIGTERM
 	// tears it down cleanly. restart/stop manage a system unit and may need root/sudo —
 	// systemctl's own permission error propagates via the child exit code.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	//nolint:gosec // G204: fixed "systemctl" binary; unit is the operator-supplied unit name.
 	cmd := exec.CommandContext(ctx, "systemctl", verb, unit)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			// When Ctrl-C / SIGTERM arrives after systemctl was invoked, systemd may
+			// continue stopping/restarting the unit asynchronously; retain the
+			// TTL-bounded drain sentinel so no new turns slip in before the stop lands.
+			clearDrain = false
+		}
 		var exitErr *exec.ExitError
 		if asExit(err, &exitErr) {
 			return exitErr.ExitCode()

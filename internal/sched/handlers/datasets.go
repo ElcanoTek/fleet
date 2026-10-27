@@ -364,6 +364,10 @@ func (h *Handlers) RunDataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.datasetRunner.Start(r.Context(), d.ID); err != nil {
+		if errors.Is(err, datasets.ErrDraining) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}

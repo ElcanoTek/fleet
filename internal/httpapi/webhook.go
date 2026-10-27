@@ -58,7 +58,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Draining (#278): once graceful shutdown begins, admit no new turns.
-	if s.shuttingDown.Load() {
+	if s.IsDraining() {
 		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
 		return
 	}
@@ -167,10 +167,22 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		metrics.RecordWebhookTrigger(trig.Slug, "throttled")
 		return
 	}
+	s.activeTurns.Add(1)
+	s.activeTurnCount.Add(1)
+	releaseTurn := func() {
+		s.activeTurnCount.Add(-1)
+		s.activeTurns.Done()
+		releaseSlot()
+	}
+	if s.IsDraining() {
+		releaseTurn()
+		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
+		return
+	}
 
 	conv, err := s.store.CreateConversation(r.Context(), user, agent.HeuristicTitle(prompt), persona, model, lockdown)
 	if err != nil {
-		releaseSlot()
+		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -178,14 +190,14 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 
 	history, err := s.store.LoadHistory(r.Context(), conv.ID)
 	if err != nil {
-		releaseSlot()
+		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	memories, err := s.store.ListMemories(r.Context(), user)
 	if err != nil {
-		releaseSlot()
+		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -200,7 +212,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		// Unreachable in practice — the conversation was created just above,
 		// so no turn can be running on it. Fail closed rather than panic.
 		turnCancel()
-		releaseSlot()
+		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "conflict")
 		writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "conversation is busy"})
 		return
@@ -229,14 +241,8 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// trigger prompt itself, exactly as the chat path does (ADR-0058).
 	injected := appendWorkspaceInventoryBlock("", tools.WorkspaceDirForConversation(conv.ID))
 
-	s.activeTurns.Add(1)
-	s.activeTurnCount.Add(1)
 	go func() {
-		defer func() {
-			s.activeTurnCount.Add(-1)
-			s.activeTurns.Done()
-		}()
-		defer releaseSlot()
+		defer releaseTurn()
 		// No signed-in sender: the trigger owner is the conversation's user
 		// for scoping, but nobody at a keyboard sent this turn, so the
 		// bundle's ${FLEET_USER_EMAIL} keys are dropped (ADR-0087).

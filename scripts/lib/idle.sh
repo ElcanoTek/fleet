@@ -1,0 +1,916 @@
+#!/usr/bin/env bash
+# scripts/lib/idle.sh — active-work inspection and drain helpers for fleet update.
+#
+# Checks the running deployment's Postgres databases (sched tasks, chat turns,
+# and detached approval executions) without sourcing the 0600 env file and
+# without placing database passwords on psql's command line.
+
+# fleet_uri_decode_var STR — decodes RFC 3986 percent-encoded bytes (%XX) in STR
+# into REPLY_DECODED without command-substitution newline stripping.
+fleet_uri_decode_var() {
+  local LC_ALL=C s="$1" out="" i=0 len c hex
+  len=${#s}
+  while (( i < len )); do
+    c="${s:i:1}"
+    if [[ "$c" == "%" && $(( i + 2 )) -lt $len ]]; then
+      hex="${s:i+1:2}"
+      if [[ "$hex" =~ ^[0-9A-Fa-f]{2}$ ]]; then
+        printf -v c "\\x$hex"
+        out+="$c"
+        i=$(( i + 3 ))
+        continue
+      fi
+    fi
+    out+="$c"
+    i=$(( i + 1 ))
+  done
+  REPLY_DECODED="$out"
+}
+
+# fleet_uri_decode STR — decodes RFC 3986 percent-encoded bytes (%XX) in STR.
+fleet_uri_decode() {
+  local REPLY_DECODED=""
+  fleet_uri_decode_var "$1"
+  printf '%s' "$REPLY_DECODED"
+}
+
+# fleet_unescape_conninfo_val_var STR — unescapes libpq backslash-escaped bytes
+# in a keyword=value conninfo token into REPLY_UNESCAPED.
+fleet_unescape_conninfo_val_var() {
+  local LC_ALL=C s="$1" out="" i=0 len
+  len=${#s}
+  while (( i < len )); do
+    if [[ "${s:i:1}" == "\\" && $(( i + 1 )) -lt $len ]]; then
+      out+="${s:i+1:1}"
+      i=$(( i + 2 ))
+    else
+      out+="${s:i:1}"
+      i=$(( i + 1 ))
+    fi
+  done
+  REPLY_UNESCAPED="$out"
+}
+
+# fleet_unescape_conninfo_val STR — unescapes libpq backslash-escaped bytes in
+# a keyword=value conninfo token.
+fleet_unescape_conninfo_val() {
+  local REPLY_UNESCAPED=""
+  fleet_unescape_conninfo_val_var "$1"
+  printf '%s' "$REPLY_UNESCAPED"
+}
+
+# fleet_split_dsn_password_vars DSN — extracts the password into REPLY_PASS and
+# the DSN with its password stripped into REPLY_REDACTED (supporting both
+# postgres:// URIs and libpq keyword=value conninfo strings) in-process so
+# embedded or trailing newlines in passwords never corrupt the redacted DSN.
+fleet_split_dsn_password_vars() {
+  local dsn="$1" proto rest userinfo hostpart user pass="" redacted REPLY_DECODED=""
+  REPLY_PASS=""
+  REPLY_REDACTED=""
+  if [[ "$dsn" != *"://"* ]]; then
+    local LC_ALL=C i=0 n=${#dsn} tok_start key val ch quote kept_tokens=()
+    while (( i < n )); do
+      while (( i < n )) && [[ "${dsn:i:1}" =~ [[:space:]] ]]; do
+        i=$(( i + 1 ))
+      done
+      (( i < n )) || break
+      tok_start=$i
+      key=""
+      while (( i < n )); do
+        ch="${dsn:i:1}"
+        if [[ "$ch" == "=" || "$ch" =~ [[:space:]] ]]; then
+          break
+        fi
+        key+="$ch"
+        i=$(( i + 1 ))
+      done
+      while (( i < n )) && [[ "${dsn:i:1}" =~ [[:space:]] ]]; do
+        i=$(( i + 1 ))
+      done
+      if (( i >= n )) || [[ "${dsn:i:1}" != "=" || -z "$key" ]]; then
+        return 0
+      fi
+      i=$(( i + 1 ))
+      while (( i < n )) && [[ "${dsn:i:1}" =~ [[:space:]] ]]; do
+        i=$(( i + 1 ))
+      done
+      val=""
+      if (( i < n )) && [[ "${dsn:i:1}" == "'" || "${dsn:i:1}" == '"' ]]; then
+        quote="${dsn:i:1}"
+        i=$(( i + 1 ))
+        local closed=0
+        while (( i < n )); do
+          ch="${dsn:i:1}"
+          if [[ "$ch" == "\\" ]]; then
+            (( i + 1 < n )) || return 0
+            val+="${dsn:i+1:1}"
+            i=$(( i + 2 ))
+          elif [[ "$ch" == "$quote" ]]; then
+            i=$(( i + 1 ))
+            closed=1
+            break
+          else
+            val+="$ch"
+            i=$(( i + 1 ))
+          fi
+        done
+        (( closed == 1 )) || return 0
+      else
+        while (( i < n )); do
+          ch="${dsn:i:1}"
+          if [[ "$ch" =~ [[:space:]] ]]; then
+            break
+          elif [[ "$ch" == "\\" ]]; then
+            (( i + 1 < n )) || return 0
+            val+="${dsn:i+1:1}"
+            i=$(( i + 2 ))
+          else
+            val+="$ch"
+            i=$(( i + 1 ))
+          fi
+        done
+      fi
+      if [[ "$key" == "sslpassword" ]]; then
+        return 0
+      elif [[ "$key" == "password" ]]; then
+        pass="$val"
+      else
+        kept_tokens+=("${dsn:tok_start:i-tok_start}")
+      fi
+    done
+    local IFS=' '
+    REPLY_PASS="$pass"
+    REPLY_REDACTED="${kept_tokens[*]}"
+    return 0
+  fi
+  proto="${dsn%%://*}"
+  rest="${dsn#*://}"
+  if [[ "$rest" == *"@"* && "${rest%%@*}" != *"/"* && "${rest%%@*}" != *"?"* ]]; then
+    userinfo="${rest%%@*}"
+    hostpart="${rest#*@}"
+    if [[ "$userinfo" == *":"* ]]; then
+      user="${userinfo%%:*}"
+      fleet_uri_decode_var "${userinfo#*:}"
+      pass="$REPLY_DECODED"
+      redacted="${proto}://${user}@${hostpart}"
+    else
+      redacted="$dsn"
+    fi
+  else
+    redacted="$dsn"
+  fi
+  if [[ "$redacted" == *"?"* ]]; then
+    local base="${redacted%%\?*}" query="${redacted#*\?}" frag="" param kept=()
+    if [[ "$query" == *"#"* ]]; then
+      frag="#${query#*#}"
+      query="${query%%#*}"
+    fi
+    local IFS='&'
+    for param in $query; do
+      local key_raw="${param%%=*}" key_dec=""
+      if [[ "$param" == *"="* ]]; then
+        fleet_uri_decode_var "$key_raw"
+        key_dec="$REPLY_DECODED"
+      fi
+      if [[ "$key_dec" == "sslpassword" ]]; then
+        return 0
+      elif [[ "$key_dec" == "password" ]]; then
+        fleet_uri_decode_var "${param#*=}"
+        pass="$REPLY_DECODED"
+      else
+        kept+=("$param")
+      fi
+    done
+    if (( ${#kept[@]} > 0 )); then
+      redacted="${base}?${kept[*]}${frag}"
+    else
+      redacted="${base}${frag}"
+    fi
+  fi
+  REPLY_PASS="$pass"
+  REPLY_REDACTED="$redacted"
+}
+
+# fleet_split_dsn_password DSN — prints the extracted password on line 1 and the
+# DSN with its password stripped on line 2 (or two empty lines if the password
+# contains a literal newline that cannot be represented in two lines).
+fleet_split_dsn_password() {
+  local REPLY_PASS="" REPLY_REDACTED=""
+  fleet_split_dsn_password_vars "$1"
+  if [[ "$REPLY_PASS" == *$'\n'* || "$REPLY_REDACTED" == *$'\n'* ]]; then
+    printf '\n\n'
+    return 0
+  fi
+  printf '%s\n%s\n' "$REPLY_PASS" "$REPLY_REDACTED"
+}
+
+# fleet_psql_query DSN SQL — runs a read-only psql query with connect, statement,
+# lock, and process timeouts bounded by FLEET_PSQL_TIMEOUT_SECONDS (default 5s)
+# and the password passed via PGPASSWORD rather than argv. Returns 0 with
+# trimmed output on success, non-zero when psql is absent or the query fails.
+fleet_psql_query() {
+  local dsn="$1" sql="$2" pw="" redacted="" tsec="${FLEET_PSQL_TIMEOUT_SECONDS:-5}"
+  if [[ "$tsec" =~ ^[0-9]+$ ]]; then
+    tsec=$(( 10#$tsec ))
+  else
+    tsec=5
+  fi
+  (( tsec > 0 )) || tsec=5
+  (( tsec > 5 )) && tsec=5
+  if [[ "${FLEET_WAIT_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && (( 10#$FLEET_WAIT_DEADLINE_EPOCH > 0 )); then
+    local now_ep rem_ep
+    now_ep="$(date +%s)"
+    rem_ep=$(( 10#$FLEET_WAIT_DEADLINE_EPOCH - now_ep ))
+    (( rem_ep <= 0 )) && return 1
+    (( rem_ep < tsec )) && tsec="$rem_ep"
+  fi
+  local stmt_ms=$(( tsec * 1000 ))
+  [[ -n "$dsn" ]] || return 1
+  command -v psql >/dev/null 2>&1 || return 1
+  local REPLY_PASS="" REPLY_REDACTED=""
+  fleet_split_dsn_password_vars "$dsn"
+  pw="$REPLY_PASS"
+  redacted="$REPLY_REDACTED"
+  [[ -n "$redacted" ]] || return 1
+  if command -v timeout >/dev/null 2>&1; then
+    PGCONNECT_TIMEOUT="$tsec" PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c statement_timeout=${stmt_ms} -c lock_timeout=${stmt_ms}" PGPASSWORD="$pw" \
+      timeout "$(( tsec + 1 ))" psql "$redacted" -X -q -t -A -c "$sql" 2>/dev/null
+  else
+    PGCONNECT_TIMEOUT="$tsec" PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c statement_timeout=${stmt_ms} -c lock_timeout=${stmt_ms}" PGPASSWORD="$pw" \
+      psql "$redacted" -X -q -t -A -c "$sql" 2>/dev/null
+  fi
+}
+
+# fleet_env_or_file KEY [ENV_FILE] — resolves KEY from the process environment
+# first, falling back to ENV_FILE without sourcing it. Matches
+# internal/creds.splitEnvKeyValue (tolerates an 'export ' prefix, strips
+# unquoted inline '#comments', and strips one layer of matching quotes).
+fleet_env_or_file() {
+  local key="$1" env_file="${2:-/etc/fleet/fleet.env}" val="" line t k v
+  val="${!key:-}"
+  if [[ -z "$val" && -r "$env_file" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line%$'\r'}"
+      t="${line#"${line%%[![:space:]]*}"}"
+      t="${t%"${t##*[![:space:]]}"}"
+      [[ -z "$t" || "$t" == \#* ]] && continue
+      [[ "$t" == "export "* ]] && t="${t#export }"
+      [[ "$t" == *"="* ]] || continue
+      k="${t%%=*}"
+      k="${k#"${k%%[![:space:]]*}"}"
+      k="${k%"${k##*[![:space:]]}"}"
+      [[ "$k" == "$key" ]] || continue
+      v="${t#*=}"
+      v="${v#"${v%%[![:space:]]*}"}"
+      v="${v%"${v##*[![:space:]]}"}"
+      if [[ "$v" != \"* && "$v" != \'* ]]; then
+        if [[ "$v" == *" #"* ]]; then
+          v="${v%% \#*}"
+          v="${v%"${v##*[![:space:]]}"}"
+        elif [[ "$v" == *$'\t#'* ]]; then
+          v="${v%%$'\t#'*}"
+          v="${v%"${v##*[![:space:]]}"}"
+        fi
+      fi
+      if (( ${#v} >= 2 )); then
+        if [[ ( "${v:0:1}" == '"' && "${v: -1}" == '"' ) || ( "${v:0:1}" == "'" && "${v: -1}" == "'" ) ]]; then
+          v="${v:1:${#v}-2}"
+        fi
+      fi
+      val="$v"
+    done < "$env_file"
+  fi
+  printf '%s' "$val"
+}
+
+# fleet_uri_encode_userinfo STR — percent-encodes characters that are reserved
+# in URL userinfo so DB_USER / DB_PASSWORD values can be embedded safely into a
+# postgres:// URI that fleet_split_dsn_password later splits.
+fleet_uri_encode_userinfo() {
+  local LC_ALL=C s="$1" out="" i=0 len c hex
+  len=${#s}
+  while (( i < len )); do
+    c="${s:i:1}"
+    if [[ "$c" =~ ^[A-Za-z0-9._~-]$ ]]; then
+      out+="$c"
+    else
+      printf -v hex '%%%02X' "'$c"
+      out+="$hex"
+    fi
+    i=$(( i + 1 ))
+  done
+  printf '%s' "$out"
+}
+
+# fleet_resolve_dsn PRIMARY_KEY ENV_FILE — resolves PRIMARY_KEY from the
+# process environment first and then ENV_FILE, checking SCHED_DATABASE_URL for
+# the scheduler store, before falling back to DATABASE_URL and finally the
+# DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME/DB_SSLMODE parts.
+fleet_resolve_dsn() {
+  local key="$1" env_file="${2:-/etc/fleet/fleet.env}" val=""
+  val="$(fleet_env_or_file "$key" "$env_file")"
+  if [[ -z "$val" && "$key" == "FLEET_SCHED_DATABASE_URL" ]]; then
+    val="$(fleet_env_or_file SCHED_DATABASE_URL "$env_file")"
+  fi
+  if [[ -z "$val" ]]; then
+    val="$(fleet_env_or_file DATABASE_URL "$env_file")"
+  fi
+  if [[ -z "$val" ]]; then
+    local host port user pass name ssl def_user="chat" def_name="chat" auth
+    if [[ "$key" == "FLEET_SCHED_DATABASE_URL" ]]; then
+      def_user="fleet"
+      def_name="sched"
+    fi
+    host="$(fleet_env_or_file DB_HOST "$env_file")"
+    port="$(fleet_env_or_file DB_PORT "$env_file")"
+    user="$(fleet_env_or_file DB_USER "$env_file")"
+    pass="$(fleet_env_or_file DB_PASSWORD "$env_file")"
+    name="$(fleet_env_or_file DB_NAME "$env_file")"
+    ssl="$(fleet_env_or_file DB_SSLMODE "$env_file")"
+    [[ -n "$host" ]] || host="localhost"
+    [[ -n "$port" ]] || port="5432"
+    [[ -n "$user" ]] || user="$def_user"
+    [[ -n "$name" ]] || name="$def_name"
+    [[ -n "$ssl" ]] || ssl="disable"
+    auth="$(fleet_uri_encode_userinfo "$user")"
+    if [[ -n "$pass" ]]; then
+      auth="${auth}:$(fleet_uri_encode_userinfo "$pass")"
+    fi
+    val="postgres://${auth}@${host}:${port}/${name}?sslmode=${ssl}"
+  fi
+  printf '%s' "$val"
+}
+
+FLEET_DRAIN_OWNER_TOKEN="${FLEET_DRAIN_OWNER_TOKEN:-pid-$$-${RANDOM:-0}}"
+
+# fleet_drain_file [ENV_FILE] — returns the drain sentinel file path inspected
+# by the running fleet server and scheduler pool. Relative override paths are
+# anchored under /etc/fleet so the daemon, operator CLI, and update.sh agree on
+# one path regardless of working directory.
+fleet_drain_file() {
+  local env_file="${1:-/etc/fleet/fleet.env}" p=""
+  p="$(fleet_env_or_file FLEET_UPDATE_DRAIN_FILE "$env_file")"
+  if [[ -z "$p" ]]; then
+    p="$(fleet_env_or_file FLEET_DRAIN_FILE "$env_file")"
+  fi
+  if [[ -n "$p" ]]; then
+    if [[ "$p" == /* ]]; then
+      printf '%s' "$p"
+    else
+      printf '/etc/fleet/%s' "$p"
+    fi
+    return 0
+  fi
+  if [[ "$env_file" == /* ]]; then
+    printf '%s.update.drain' "$env_file"
+  else
+    printf '/etc/fleet/fleet.env.update.drain'
+  fi
+}
+
+# fleet_verify_drain_dir DIR — ensures DIR is a real directory (not a symlink)
+# and, when running as root, is owned by root and not group/world-writable.
+fleet_verify_drain_dir() {
+  local drain_dir="$1" meta=""
+  [[ -d "$drain_dir" && ! -L "$drain_dir" ]] || return 1
+  if (( EUID == 0 )) && command -v stat >/dev/null 2>&1; then
+    meta="$(stat -c '%u:%a' "$drain_dir" 2>/dev/null || true)"
+    [[ "$meta" =~ ^0:[0-7]?[0-7][0145][0145]$ ]] || return 1
+  fi
+  return 0
+}
+
+# fleet_set_drain [ENV_FILE] — creates or refreshes the update drain sentinel
+# file so the running server refuses new chat turns/approvals and pauses
+# scheduler task claims. Refuses if another live process already owns a fresh
+# drain sentinel.
+fleet_set_drain() {
+  local drain_file lock_file drain_dir
+  drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
+  lock_file="${drain_file}.lock"
+  drain_dir="$(dirname "$drain_file")"
+  command -v flock >/dev/null 2>&1 || return 1
+  mkdir -p "$drain_dir" 2>/dev/null || return 1
+  fleet_verify_drain_dir "$drain_dir" || return 1
+  [[ ! -L "$drain_file" && ! -L "$lock_file" ]] || return 1
+  ( set -o noclobber; : > "$lock_file" ) 2>/dev/null || true
+  [[ -f "$lock_file" && ! -L "$lock_file" ]] || return 1
+  (
+    flock -x -w 5 9 || exit 1
+    [[ ! -L "$drain_file" ]] || exit 1
+    local cur="" other_pid=""
+    if ( set -o noclobber; printf 'draining %s\n' "$FLEET_DRAIN_OWNER_TOKEN" > "$drain_file" ) 2>/dev/null; then
+      exit 0
+    fi
+    cur="$(cat "$drain_file" 2>/dev/null || true)"
+    if [[ "$cur" == "draining ${FLEET_DRAIN_OWNER_TOKEN}" ]]; then
+      touch "$drain_file" 2>/dev/null || exit 1
+      exit 0
+    fi
+    if [[ -n "$(find "$drain_file" -mmin -15 2>/dev/null || true)" ]]; then
+      if [[ -z "${cur//[[:space:]]/}" ]]; then
+        exit 1
+      fi
+      if [[ "$cur" =~ ^draining[[:space:]]+pid-([0-9]+)- ]]; then
+        other_pid="${BASH_REMATCH[1]}"
+        if [[ -n "$other_pid" && "$other_pid" != "$$" ]] && kill -0 "$other_pid" 2>/dev/null; then
+          exit 1
+        fi
+      fi
+    fi
+    rm -f "$drain_file" 2>/dev/null || true
+    ( set -o noclobber; printf 'draining %s\n' "$FLEET_DRAIN_OWNER_TOKEN" > "$drain_file" ) 2>/dev/null || exit 1
+  ) 9<"$lock_file"
+}
+
+# fleet_clear_drain [ENV_FILE] — removes the update drain sentinel file if owned
+# by this invocation (even when fleet_set_drain ran inside a $(...) subshell).
+fleet_clear_drain() {
+  local drain_file lock_file drain_dir
+  drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
+  lock_file="${drain_file}.lock"
+  drain_dir="$(dirname "$drain_file")"
+  [[ -f "$drain_file" && ! -L "$drain_file" && ! -L "$lock_file" ]] || return 0
+  fleet_verify_drain_dir "$drain_dir" || return 0
+  command -v flock >/dev/null 2>&1 || return 0
+  ( set -o noclobber; : > "$lock_file" ) 2>/dev/null || true
+  [[ -f "$lock_file" && ! -L "$lock_file" ]] || return 0
+  (
+    flock -x -w 5 9 || exit 0
+    local cur=""
+    if [[ -f "$drain_file" && ! -L "$drain_file" ]]; then
+      cur="$(cat "$drain_file" 2>/dev/null || true)"
+      if [[ "$cur" == "draining ${FLEET_DRAIN_OWNER_TOKEN}" ]]; then
+        rm -f "$drain_file" 2>/dev/null || true
+      fi
+    fi
+  ) 9<"$lock_file" 2>/dev/null || true
+}
+
+# fleet_service_runtime_state [SERVICE_NAME] — prints "<state>|<start_epoch>"
+# where <state> is "active", "inactive" (unit installed and not active),
+# "no-unit" (no systemd or unit not installed), or "unknown" (systemctl probe
+# failed).
+fleet_service_runtime_state() {
+  local unit="${1:-${SERVICE_NAME:-${FLEET_SERVICE_NAME:-fleet}}}"
+  [[ "$unit" == *.service ]] || unit="${unit}.service"
+  if [[ "${FLEET_ASSUME_SERVICE_ACTIVE:-}" == "1" ]]; then
+    printf 'active|0\n'
+    return 0
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    printf 'no-unit|0\n'
+    return 0
+  fi
+  local sys_tsec=3
+  if [[ "${FLEET_WAIT_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && (( 10#$FLEET_WAIT_DEADLINE_EPOCH > 0 )); then
+    local now_ep rem_ep
+    now_ep="$(date +%s)"
+    rem_ep=$(( 10#$FLEET_WAIT_DEADLINE_EPOCH - now_ep ))
+    if (( rem_ep <= 0 )); then
+      printf 'unknown|0\n'
+      return 0
+    fi
+    (( rem_ep < sys_tsec )) && sys_tsec="$rem_ep"
+  fi
+  local show_out load_state="" active_state="" start_ts="" start_epoch=0 line
+  if command -v timeout >/dev/null 2>&1; then
+    if ! show_out="$(timeout "$sys_tsec" systemctl show --timestamp=unix -p LoadState -p ActiveState -p ExecMainStartTimestamp "$unit" 2>/dev/null)"; then
+      printf 'unknown|0\n'
+      return 0
+    fi
+  else
+    if ! show_out="$(systemctl show --timestamp=unix -p LoadState -p ActiveState -p ExecMainStartTimestamp "$unit" 2>/dev/null)"; then
+      printf 'unknown|0\n'
+      return 0
+    fi
+  fi
+  while IFS= read -r line; do
+    case "$line" in
+      LoadState=*) load_state="${line#LoadState=}" ;;
+      ActiveState=*) active_state="${line#ActiveState=}" ;;
+      ExecMainStartTimestamp=*) start_ts="${line#ExecMainStartTimestamp=}" ;;
+    esac
+  done <<< "$show_out"
+  load_state="$(printf '%s' "$load_state" | tr -d '[:space:]')"
+  active_state="$(printf '%s' "$active_state" | tr -d '[:space:]')"
+  if [[ "$load_state" == "not-found" ]]; then
+    printf 'no-unit|0\n'
+    return 0
+  fi
+  if [[ "$active_state" == "active" || "$active_state" == "activating" || "$active_state" == "reloading" ]]; then
+    start_ts="${start_ts#"${start_ts%%[![:space:]]*}"}"
+    start_ts="${start_ts%"${start_ts##*[![:space:]]}"}"
+    if [[ "$start_ts" == @* ]]; then
+      start_epoch="${start_ts#@}"
+      start_epoch="${start_epoch%%.*}"
+    elif [[ -n "$start_ts" && "$start_ts" != "n/a" ]]; then
+      start_epoch="$(date -d "$start_ts" +%s 2>/dev/null || echo 0)"
+    fi
+    [[ "$start_epoch" =~ ^[0-9]+$ ]] || start_epoch=0
+    printf 'active|%s\n' "$start_epoch"
+    return 0
+  fi
+  if [[ -n "$active_state" ]]; then
+    printf 'inactive|0\n'
+    return 0
+  fi
+  printf 'unknown|0\n'
+}
+
+# fleet_sanitize_summary STR — strips ASCII control characters so untrusted
+# task titles or identifiers cannot inject terminal escape sequences.
+fleet_sanitize_summary() {
+  printf '%s' "$1" | LC_ALL=C tr -d '[:cntrl:]'
+}
+
+# fleet_probe_in_memory_counts ENV_FILE SVC_STATE — prints
+# "<turns>|<approvals>|<has_approvals_hdr>|<status>" from the running server's
+# /healthz headers, where <status> is "ok" or "err".
+fleet_probe_in_memory_counts() {
+  local env_file="${1:-/etc/fleet/fleet.env}" svc_state="${2:-unknown}"
+  local addr="" hdrs="" turns=0 approvals="" has_approvals_hdr=0
+  addr="$(fleet_env_or_file FLEET_SERVER_ADDR "$env_file")"
+  [[ -n "$addr" ]] || addr="$(fleet_env_or_file CHAT_SERVER_ADDR "$env_file")"
+  [[ -n "$addr" ]] || addr="$(fleet_env_or_file CUTLASS_SERVER_ADDR "$env_file")"
+  if [[ -z "$addr" && ( "$svc_state" == "active" || "$svc_state" == "unknown" ) && "${FLEET_ASSUME_SERVICE_ACTIVE:-}" != "1" ]]; then
+    addr="127.0.0.1:8080"
+  fi
+  if [[ -z "$addr" ]]; then
+    printf '0|0|0|ok\n'
+    return 0
+  fi
+  command -v curl >/dev/null 2>&1 || { printf '0|0|0|err\n'; return 0; }
+  [[ "$addr" == :* ]] && addr="127.0.0.1${addr}"
+  local curl_max=2
+  if [[ "${FLEET_WAIT_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && (( 10#$FLEET_WAIT_DEADLINE_EPOCH > 0 )); then
+    local now_ep rem_ep
+    now_ep="$(date +%s)"
+    rem_ep=$(( 10#$FLEET_WAIT_DEADLINE_EPOCH - now_ep ))
+    (( rem_ep <= 0 )) && { printf '0|0|0|err\n'; return 0; }
+    (( rem_ep < curl_max )) && curl_max="$rem_ep"
+  fi
+  local curl_args=(-sSI --noproxy '*' --max-time "$curl_max")
+  if [[ "$addr" != http://* && "$addr" != https://* ]]; then
+    local tls_mode="" cert_file="" tls_domain="" host_only="" port_only="8080"
+    if [[ "$addr" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
+      host_only="[${BASH_REMATCH[1]}]"
+      port_only="${BASH_REMATCH[2]}"
+    elif [[ "$addr" =~ ^\[([^]]+)\]$ ]]; then
+      host_only="[${BASH_REMATCH[1]}]"
+    elif [[ "$addr" == *:* ]]; then
+      host_only="${addr%:*}"
+      port_only="${addr##*:}"
+    else
+      host_only="$addr"
+    fi
+    case "$host_only" in
+      ""|"0.0.0.0") host_only="127.0.0.1" ;;
+      "[::]"|"::") host_only="[::1]" ;;
+    esac
+    addr="${host_only}:${port_only}"
+    tls_mode="$(fleet_env_or_file FLEET_TLS_MODE "$env_file")"
+    [[ -n "$tls_mode" ]] || tls_mode="$(fleet_env_or_file CHAT_TLS_MODE "$env_file")"
+    [[ -n "$tls_mode" ]] || tls_mode="$(fleet_env_or_file CUTLASS_TLS_MODE "$env_file")"
+    tls_mode="${tls_mode,,}"
+    tls_mode="${tls_mode#"${tls_mode%%[![:space:]]*}"}"
+    tls_mode="${tls_mode%"${tls_mode##*[![:space:]]}"}"
+    if [[ "$tls_mode" == "manual" || "$tls_mode" == "auto" ]]; then
+      cert_file="$(fleet_env_or_file FLEET_TLS_CERT_FILE "$env_file")"
+      [[ -n "$cert_file" ]] || cert_file="$(fleet_env_or_file CHAT_TLS_CERT_FILE "$env_file")"
+      [[ -n "$cert_file" ]] || cert_file="$(fleet_env_or_file CUTLASS_TLS_CERT_FILE "$env_file")"
+      if [[ -n "$cert_file" ]]; then
+        [[ -r "$cert_file" ]] || { printf '0|0|0|err\n'; return 0; }
+        curl_args+=(--cacert "$cert_file")
+      fi
+      tls_domain="$(fleet_env_or_file FLEET_TLS_DOMAIN "$env_file")"
+      [[ -n "$tls_domain" ]] || tls_domain="$(fleet_env_or_file CHAT_TLS_DOMAIN "$env_file")"
+      [[ -n "$tls_domain" ]] || tls_domain="$(fleet_env_or_file CUTLASS_TLS_DOMAIN "$env_file")"
+      if [[ -n "$tls_domain" ]]; then
+        curl_args+=(--connect-to "${tls_domain}:${port_only}:${host_only}:${port_only}")
+        addr="https://${tls_domain}:${port_only}"
+      else
+        addr="https://${addr}"
+      fi
+    else
+      addr="http://${addr}"
+    fi
+  fi
+  addr="${addr%/}/healthz"
+  if ! hdrs="$(curl "${curl_args[@]}" "$addr" 2>/dev/null)"; then
+    printf '0|0|0|err\n'
+    return 0
+  fi
+  local status_code="" has_turns_hdr=0
+  status_code="$(printf '%s\n' "$hdrs" | awk 'toupper($1) ~ /^HTTP\// { code=$2 } END { print code }')"
+  turns="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Turns:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
+  approvals="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Approvals:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
+  if [[ "$turns" =~ ^[0-9]+$ ]]; then
+    turns=$(( 10#$turns ))
+    has_turns_hdr=1
+  else
+    turns=0
+  fi
+  if [[ "$approvals" =~ ^[0-9]+$ ]]; then
+    approvals=$(( 10#$approvals ))
+    has_approvals_hdr=1
+  else
+    approvals=0
+  fi
+  # /healthz returns 503 with X-Fleet-Active-Turns and X-Fleet-Active-Approvals
+  # when the update drain sentinel is active; accept 503 only when both Fleet
+  # headers are present.
+  if [[ ! "$status_code" =~ ^2[0-9][0-9]$ ]] && ! { [[ "$status_code" == "503" ]] && (( has_turns_hdr == 1 && has_approvals_hdr == 1 )); }; then
+    printf '0|0|0|err\n'
+    return 0
+  fi
+  printf '%s|%s|%s|ok\n' "$turns" "$approvals" "$has_approvals_hdr"
+}
+
+# fleet_active_work_summary ENV_FILE [SERVICE_NAME] — inspects sched.tasks,
+# chat.turns, chat.approvals, and the running server's /healthz headers for
+# in-flight work.
+#
+# Prints a semicolon-separated description and returns 1 when work is active;
+# prints nothing and returns 0 when idle (or when the service is not running so
+# crash-stranded rows can be recovered on start).
+fleet_active_work_summary() {
+  local env_file="${1:-/etc/fleet/fleet.env}"
+  local svc_unit="${2:-${SERVICE_NAME:-${FLEET_SERVICE_NAME:-fleet}}}"
+  local sched_dsn chat_dsn approval_window out has_tbl items=()
+  local has_chat_turn_item=0 has_approval_item=0
+  local svc_info svc_state="unknown" svc_start_epoch=0
+  approval_window="${FLEET_IDLE_APPROVAL_WINDOW_SECONDS:-7200}"
+  if [[ "$approval_window" =~ ^[0-9]+$ ]]; then
+    approval_window=$(( 10#$approval_window ))
+  else
+    approval_window=7200
+  fi
+
+  svc_info="$(fleet_service_runtime_state "$svc_unit")"
+  svc_state="${svc_info%%|*}"
+  svc_start_epoch="${svc_info#*|}"
+  if [[ "$svc_start_epoch" =~ ^[0-9]+$ ]]; then
+    svc_start_epoch=$(( 10#$svc_start_epoch ))
+  else
+    svc_start_epoch=0
+  fi
+  local now_epoch
+  now_epoch="$(date +%s)"
+
+  # When systemd reports that fleet.service is installed and not active, no
+  # in-process task, turn, or approval goroutine is running; any DB rows still
+  # marked running/leased are crash-stranded and will be recovered on boot.
+  if [[ "$svc_state" == "inactive" ]]; then
+    return 0
+  fi
+
+  local mem_info mem_rest mem_turns=0 mem_approvals=0 has_mem_approvals=0 mem_status="ok"
+  mem_info="$(fleet_probe_in_memory_counts "$env_file" "$svc_state")"
+  mem_turns="${mem_info%%|*}"
+  mem_rest="${mem_info#*|}"
+  mem_approvals="${mem_rest%%|*}"
+  mem_rest="${mem_rest#*|}"
+  has_mem_approvals="${mem_rest%%|*}"
+  mem_status="${mem_rest#*|}"
+  [[ "$mem_turns" =~ ^[0-9]+$ ]] && mem_turns=$(( 10#$mem_turns )) || mem_turns=0
+  [[ "$mem_approvals" =~ ^[0-9]+$ ]] && mem_approvals=$(( 10#$mem_approvals )) || mem_approvals=0
+  [[ "$has_mem_approvals" == "1" ]] || has_mem_approvals=0
+  if [[ "$mem_status" == "err" && ( "$svc_state" == "active" || "$svc_state" == "unknown" ) ]]; then
+    items+=("in-memory healthz active-work probe failed while service is ${svc_state}")
+  fi
+
+  sched_dsn="$(fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$env_file")"
+  chat_dsn="$(fleet_resolve_dsn FLEET_CHAT_DATABASE_URL "$env_file")"
+
+  if [[ -n "$sched_dsn" ]]; then
+    if has_tbl="$(fleet_psql_query "$sched_dsn" "SELECT to_regclass('tasks') IS NOT NULL;")"; then
+      if [[ "$has_tbl" == "t" ]]; then
+        if out="$(fleet_psql_query "$sched_dsn" "
+          SELECT COALESCE((
+            SELECT string_agg(
+              format('scheduled task %s (%s, %s, %ss)',
+                id::text,
+                COALESCE(NULLIF(regexp_replace(regexp_replace(title, '[[:cntrl:]]+', ' ', 'g'), '[[:space:]]+', ' ', 'g'), ''), 'untitled'),
+                status,
+                GREATEST(0, ${now_epoch} - EXTRACT(EPOCH FROM COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at))::bigint)
+              ), '; ')
+            FROM (
+              SELECT id, title, status, started_at, lease_expires_at, created_at
+                FROM tasks
+               WHERE status IN ('running', 'leased', 'assigned')
+                 AND (
+                   '${svc_state}' = 'unknown'
+                   OR (lease_expires_at IS NOT NULL AND lease_expires_at >= to_timestamp(${now_epoch}))
+                   OR (${svc_start_epoch} > 0 AND COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at) >= to_timestamp(${svc_start_epoch}))
+                 )
+               ORDER BY COALESCE(started_at, lease_expires_at - interval '5 minutes', created_at) ASC
+               LIMIT 5
+            ) t
+          ), '');")"; then
+          out="$(fleet_sanitize_summary "$out")"
+          out="${out#"${out%%[![:space:]]*}"}"
+          out="${out%"${out##*[![:space:]]}"}"
+          [[ -n "$out" ]] && items+=("$out")
+        elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+          items+=("sched database active-work query failed while service is ${svc_state}")
+        fi
+      fi
+    elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+      items+=("sched database active-work query failed while service is ${svc_state}")
+    fi
+
+    if has_tbl="$(fleet_psql_query "$sched_dsn" "SELECT to_regclass('datasets') IS NOT NULL;")"; then
+      if [[ "$has_tbl" == "t" ]]; then
+        if out="$(fleet_psql_query "$sched_dsn" "
+          SELECT COALESCE((
+            SELECT string_agg(
+              format('dataset %s (running, %ss)',
+                id::text,
+                GREATEST(0, ${now_epoch} - EXTRACT(EPOCH FROM COALESCE(updated_at, created_at))::bigint)
+              ), '; ')
+            FROM (
+              SELECT id, updated_at, created_at
+                FROM datasets
+               WHERE status = 'running'
+                 AND (${svc_start_epoch} <= 0 OR COALESCE(updated_at, created_at) >= to_timestamp(${svc_start_epoch}))
+               ORDER BY COALESCE(updated_at, created_at) ASC
+               LIMIT 5
+            ) d
+          ), '');")"; then
+          out="$(fleet_sanitize_summary "$out")"
+          out="${out#"${out%%[![:space:]]*}"}"
+          out="${out%"${out##*[![:space:]]}"}"
+          [[ -n "$out" ]] && items+=("$out")
+        elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+          items+=("sched datasets active-work query failed while service is ${svc_state}")
+        fi
+      fi
+    elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+      items+=("sched datasets active-work query failed while service is ${svc_state}")
+    fi
+  fi
+
+  if [[ -n "$chat_dsn" ]]; then
+    if has_tbl="$(fleet_psql_query "$chat_dsn" "SELECT to_regclass('turns') IS NOT NULL;")"; then
+      if [[ "$has_tbl" == "t" ]]; then
+        if out="$(fleet_psql_query "$chat_dsn" "
+          SELECT COALESCE((
+            SELECT string_agg(
+              format('chat turn %s (conv %s, %ss)',
+                turn_id,
+                conversation_id,
+                GREATEST(0, ${now_epoch} - started_at)
+              ), '; ')
+            FROM (
+              SELECT turn_id, conversation_id, started_at
+                FROM turns
+               WHERE status = 'running'
+                 AND finished_at IS NULL
+                 AND started_at >= ${svc_start_epoch}
+               ORDER BY started_at ASC
+               LIMIT 5
+            ) t
+          ), '');")"; then
+          out="$(fleet_sanitize_summary "$out")"
+          out="${out#"${out%%[![:space:]]*}"}"
+          out="${out%"${out##*[![:space:]]}"}"
+          if [[ -n "$out" ]]; then
+            items+=("$out")
+            has_chat_turn_item=1
+          fi
+        elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+          items+=("chat turns active-work query failed while service is ${svc_state}")
+        fi
+      fi
+    elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+      items+=("chat turns active-work query failed while service is ${svc_state}")
+    fi
+
+    if (( has_mem_approvals == 0 || mem_approvals > 0 )); then
+      if has_tbl="$(fleet_psql_query "$chat_dsn" "
+        SELECT CASE
+          WHEN to_regclass('approvals') IS NULL THEN 'none'
+          WHEN EXISTS (
+            SELECT 1
+              FROM pg_attribute
+             WHERE attrelid = to_regclass('approvals')
+               AND attname = 'is_err'
+               AND NOT attisdropped
+          ) THEN 'with_is_err'
+          ELSE 'without_is_err'
+        END;")"; then
+        if [[ "$has_tbl" == "with_is_err" || "$has_tbl" == "without_is_err" ]]; then
+          local is_err_clause=""
+          [[ "$has_tbl" == "with_is_err" ]] && is_err_clause="AND is_err IS NULL"
+          if out="$(fleet_psql_query "$chat_dsn" "
+            SELECT COALESCE((
+              SELECT string_agg(
+                format('approval execution %s (%s, %ss)',
+                  id,
+                  tool_name,
+                  GREATEST(0, ${now_epoch} - COALESCE(resolved_at, created_at))
+                ), '; ')
+              FROM (
+                SELECT id, tool_name, resolved_at, created_at
+                  FROM approvals
+                 WHERE status = 'approved'
+                   ${is_err_clause}
+                   AND result_text LIKE 'Approved%executing%'
+                   AND COALESCE(resolved_at, created_at) >= GREATEST(${svc_start_epoch}, ${now_epoch} - ${approval_window})
+                 ORDER BY COALESCE(resolved_at, created_at) ASC
+                 LIMIT 5
+              ) a
+            ), '');")"; then
+            out="$(fleet_sanitize_summary "$out")"
+            out="${out#"${out%%[![:space:]]*}"}"
+            out="${out%"${out##*[![:space:]]}"}"
+            if [[ -n "$out" ]]; then
+              items+=("$out")
+              has_approval_item=1
+            fi
+          elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+            items+=("chat approvals active-work query failed while service is ${svc_state}")
+          fi
+        fi
+      elif [[ "$svc_state" == "active" || "$svc_state" == "unknown" ]]; then
+        items+=("chat approvals active-work query failed while service is ${svc_state}")
+      fi
+    fi
+  fi
+
+  if (( mem_turns > 0 && has_chat_turn_item == 0 )); then
+    items+=("${mem_turns} in-memory chat turn(s) active")
+  fi
+  if (( mem_approvals > 0 && has_approval_item == 0 )); then
+    items+=("${mem_approvals} in-memory approval execution(s) active")
+  fi
+
+  if (( ${#items[@]} == 0 )); then
+    return 0
+  fi
+  local IFS="; "
+  printf '%s\n' "${items[*]}"
+  return 1
+}
+
+# fleet_wait_for_idle ENV_FILE MAX_WAIT_SECONDS POLL_SECONDS [SERVICE_NAME] —
+# sets and refreshes the update drain sentinel file so new work admission stops,
+# then polls fleet_active_work_summary until the deployment is idle (returns 0
+# with the drain file still set) or MAX_WAIT_SECONDS elapses (clears the drain
+# file, prints the remaining active work on stdout, and returns 1).
+fleet_wait_for_idle() {
+  local env_file="${1:-/etc/fleet/fleet.env}" max_wait="${2:-0}" poll="${3:-5}"
+  local svc_unit="${4:-${SERVICE_NAME:-${FLEET_SERVICE_NAME:-fleet}}}"
+  if [[ "$max_wait" =~ ^[0-9]+$ ]]; then
+    max_wait=$(( 10#$max_wait ))
+  else
+    max_wait=0
+  fi
+  if [[ "$poll" =~ ^[0-9]+$ ]]; then
+    poll=$(( 10#$poll ))
+  else
+    poll=5
+  fi
+  (( poll > 0 )) || poll=5
+  (( poll > 60 )) && poll=60
+  local start deadline=0 now elapsed rem tsec sleep_sec summary=""
+  start="$(date +%s)"
+  (( max_wait > 0 )) && deadline=$(( start + max_wait ))
+  while true; do
+    if ! fleet_set_drain "$env_file"; then
+      printf 'failed to write update drain sentinel %s\n' "$(fleet_drain_file "$env_file")"
+      return 1
+    fi
+    tsec=5
+    if (( deadline > 0 )); then
+      now="$(date +%s)"
+      rem=$(( deadline - now ))
+      (( rem < 1 )) && rem=1
+      (( rem < tsec )) && tsec="$rem"
+    fi
+    if summary="$(FLEET_PSQL_TIMEOUT_SECONDS="$tsec" FLEET_WAIT_DEADLINE_EPOCH="$deadline" fleet_active_work_summary "$env_file" "$svc_unit")"; then
+      if ! fleet_set_drain "$env_file"; then
+        printf 'failed to write update drain sentinel %s\n' "$(fleet_drain_file "$env_file")"
+        return 1
+      fi
+      return 0
+    fi
+    now="$(date +%s)"
+    elapsed=$(( now - start ))
+    if (( max_wait <= 0 || elapsed >= max_wait )); then
+      fleet_clear_drain "$env_file"
+      printf '%s\n' "$summary"
+      return 1
+    fi
+    if declare -F info >/dev/null 2>&1; then
+      info "waiting for active work to finish (${elapsed}s/${max_wait}s): ${summary}" >&2
+    fi
+    sleep_sec="$poll"
+    if (( deadline > 0 )); then
+      rem=$(( deadline - now ))
+      (( rem < sleep_sec )) && sleep_sec="$rem"
+    fi
+    (( sleep_sec > 0 )) && sleep "$sleep_sec"
+  done
+}

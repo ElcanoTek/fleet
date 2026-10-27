@@ -116,6 +116,10 @@ const (
 	// TaskWriterClaim — db.ClaimNextPendingTask (internal/sched/db/claim.go):
 	// the ONLY pending→active edge; every resume/recovery re-passes it.
 	TaskWriterClaim = "db.ClaimNextPendingTask"
+	// TaskWriterReleaseClaimed — db.ReleaseClaimedTask
+	// (internal/sched/db/claim.go): releases a freshly claimed task back to
+	// pending without consuming an attempt when admission pauses before launch.
+	TaskWriterReleaseClaimed = "db.ReleaseClaimedTask"
 	// TaskWriterWorkerReport — storage.UpdateTaskStatusAtomicWithContext
 	// (internal/sched/storage/storage.go): the runner's lease-guarded status
 	// reports (start, renewal rides, terminal success/error). Since #1269 the
@@ -249,6 +253,7 @@ var TaskLifecycle = []TaskTransition{
 
 	// ── Claim ───────────────────────────────────────────────────────────
 	{TaskStatusPending, TaskStatusLeased, TaskWriterClaim, "FOR UPDATE SKIP LOCKED + serialization gate (#709); the only pending→active edge"},
+	{TaskStatusLeased, TaskStatusPending, TaskWriterReleaseClaimed, "admission drain paused after claim: releases lease back to pending without incrementing attempts"},
 
 	// ── Runner status reports (lease-guarded; from-side = the lease-holding
 	//    statuses; refuses success/error/cancelled) ──────────────────────

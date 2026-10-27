@@ -39,7 +39,7 @@ const runPythonDescription = "Executes Python code in a per-turn IPython kernel 
 	"  Data:      pandas, numpy, scipy, pyarrow\n" +
 	"  Plotting:  matplotlib, seaborn\n" +
 	"  ML:        scikit-learn\n" +
-	"  Documents: openpyxl, xlsxwriter (Excel), pypdf, reportlab (PDF)\n" +
+	"  Documents: openpyxl, xlsxwriter (Excel), pypdf, reportlab (PDF), python-pptx (PowerPoint), python-docx (Word)\n" +
 	"  Images:    pillow (PIL)\n" +
 	"  Parsing:   beautifulsoup4, lxml, pyyaml, requests, tabulate\n\n" +
 	"KERNEL LIFETIME — depends on the server's FLEET_PYTHON_REPL_MODE. In the DEFAULT 'per-turn' mode the IPython " +

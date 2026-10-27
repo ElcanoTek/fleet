@@ -363,6 +363,7 @@ above fails otherwise.
 - [`UNATTENDED-BUILTINS.md`](UNATTENDED-BUILTINS.md) — Built-in tools in unattended runs: `web_fetch` follows the sandbox's egress, `agent_policy.unattended_disabled_tools` (ADR-0094)
 - [`UNIFIED-ADMIN-PERMISSION-UI.md`](UNIFIED-ADMIN-PERMISSION-UI.md) — Unified admin permission in the Users UI
 - [`CENTRAL-AUTH-PROVISIONING.md`](CENTRAL-AUTH-PROVISIONING.md) — Signed Auth membership and Fleet role provisioning
+- [`UPDATE-IDLE-GATE.md`](UPDATE-IDLE-GATE.md) — Update and service lifecycle idle gate
 - [`UPLOADS-AND-STORAGE.md`](UPLOADS-AND-STORAGE.md) — Uploads & storage management
 - [`UPSTREAM-ROUTING-FLOOR.md`](UPSTREAM-ROUTING-FLOOR.md) — Upstream routing: precision floor + served-upstream attribution
 - [`USAGE-ANALYTICS.md`](USAGE-ANALYTICS.md) — Usage analytics & budgets (#601)

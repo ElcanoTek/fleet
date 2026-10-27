@@ -167,6 +167,23 @@ func (db *Database) ClaimNextPendingTask(ctx context.Context, leaseOwner string,
 	return task, nil
 }
 
+// ReleaseClaimedTask returns a freshly leased task back to pending when the
+// runner's admission gate trips immediately after ClaimNextPendingTask commits
+// (for example, an update drain sentinel appearing mid-claim), fenced on
+// status='leased' and the caller's lease_owner token.
+func (db *Database) ReleaseClaimedTask(ctx context.Context, taskID uuid.UUID, leaseOwner string) error {
+	_, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks
+		   SET status = $1,
+		       lease_owner = NULL,
+		       lease_expires_at = NULL
+		 WHERE id = $2
+		   AND status = $3
+		   AND lease_owner = $4`,
+		string(models.TaskStatusPending), taskID, string(models.TaskStatusLeased), leaseOwner)
+	return err
+}
+
 // PromoteStarvedTasks is the anti-starvation sweep (#230): any pending task that
 // has waited longer than windowMinutes and is still LESS urgent than the
 // starvation floor has its effective_priority raised TO that floor (never its

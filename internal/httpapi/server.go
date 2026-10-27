@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -404,10 +405,47 @@ func (s *Server) BeginShutdown() {
 	s.broadcastShutdownFrame()
 }
 
-// IsDraining reports whether graceful shutdown has begun (#215/#278). The
-// readiness probe consults this so a draining instance reports not_ready/503 —
-// matching /healthz — and load balancers stop routing new traffic to it.
-func (s *Server) IsDraining() bool { return s.shuttingDown.Load() }
+// IsDraining reports whether graceful shutdown or an external update drain has
+// begun (#215/#278). The readiness probe consults this so a draining instance
+// reports not_ready/503 — matching /healthz — and load balancers stop routing
+// new traffic to it.
+func (s *Server) IsDraining() bool { return s.shuttingDown.Load() || UpdateDrainActive() }
+
+// UpdateDrainFile returns the canonical path of the external update drain
+// sentinel file ($FLEET_UPDATE_DRAIN_FILE, else $FLEET_DRAIN_FILE, else
+// <$FLEET_ENV_FILE>.update.drain when $FLEET_ENV_FILE is absolute, else
+// /etc/fleet/fleet.env.update.drain). Relative override paths are resolved
+// under /etc/fleet so the daemon (whose WorkingDirectory is /var/lib/fleet),
+// operator CLIs, and update.sh always inspect the same file regardless of CWD.
+func UpdateDrainFile() string {
+	for _, key := range []string{"FLEET_UPDATE_DRAIN_FILE", "FLEET_DRAIN_FILE"} {
+		if p := strings.TrimSpace(os.Getenv(key)); p != "" {
+			if filepath.IsAbs(p) {
+				return filepath.Clean(p)
+			}
+			return filepath.Join("/etc/fleet", p)
+		}
+	}
+	if envFile := strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")); envFile != "" && filepath.IsAbs(envFile) {
+		return filepath.Clean(envFile) + ".update.drain"
+	}
+	return filepath.Join("/etc/fleet", "fleet.env.update.drain")
+}
+
+// UpdateDrainActive reports whether an operator verb (fleet update / restart /
+// stop) has placed this deployment into pre-restart drain mode within the last
+// 15 minutes.
+func UpdateDrainActive() bool {
+	p := UpdateDrainFile()
+	if p == "" {
+		return false
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		return !os.IsNotExist(err)
+	}
+	return time.Since(info.ModTime()) <= 15*time.Minute
+}
 
 // broadcastShutdownFrame emits a transient `shutdown` SSE frame to every running
 // turn's live subscribers. Buffers are collected under inflightMu, then notified
@@ -1037,11 +1075,13 @@ func (s *Server) getInflight(convID string) (inflightEntry, bool) {
 }
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("X-Fleet-Active-Turns", strconv.Itoa(s.ActiveTurns()))
+	w.Header().Set("X-Fleet-Active-Approvals", strconv.Itoa(s.approvalRuns.activeCount()))
 	// Draining (#278): report 503 the moment graceful shutdown begins so a load
 	// balancer / readiness probe stops routing new traffic to this instance while
 	// it drains in-flight work. Checked first — a draining box is unready
 	// regardless of provider health.
-	if s.shuttingDown.Load() {
+	if s.IsDraining() {
 		writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{"status": "shutting_down"})
 		return
 	}

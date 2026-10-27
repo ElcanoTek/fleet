@@ -3,10 +3,12 @@ package datasets
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -16,6 +18,9 @@ import (
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 	"github.com/ElcanoTek/fleet/internal/truncate"
 )
+
+// ErrDraining is returned by Start when the server is draining for an update or restart.
+var ErrDraining = errors.New("server is draining for an update or restart")
 
 // TurnRunner is the slice of *agent.Manager one row run needs — the SAME
 // governed interactive entrypoint chat turns and eval replays use.
@@ -41,8 +46,9 @@ type Store interface {
 // active run per dataset; state transitions are DB-guarded so a second Start
 // can't double-run.
 type Runner struct {
-	store Store
-	turns TurnRunner
+	store      Store
+	turns      TurnRunner
+	drainCheck func() bool
 
 	mu      sync.Mutex
 	cancels map[uuid.UUID]context.CancelFunc
@@ -54,6 +60,22 @@ func New(store Store, turns TurnRunner) *Runner {
 	return &Runner{store: store, turns: turns, cancels: map[uuid.UUID]context.CancelFunc{}}
 }
 
+// SetDrainCheck installs an optional predicate that returns true when the
+// server is draining for an update or restart, preventing new dataset runs from
+// starting during the drain window.
+func (r *Runner) SetDrainCheck(fn func() bool) {
+	r.mu.Lock()
+	r.drainCheck = fn
+	r.mu.Unlock()
+}
+
+func (r *Runner) isDraining() bool {
+	r.mu.Lock()
+	fn := r.drainCheck
+	r.mu.Unlock()
+	return fn != nil && fn()
+}
+
 // maxRowAttempts bounds re-claims of a crashing row (a row is re-claimable
 // only after an explicit reset, but attempts also guards a pathological
 // reset-loop from an automation).
@@ -62,9 +84,15 @@ const maxRowAttempts = 10
 // Start claims the dataset and launches the run. Idempotent-ish: a dataset
 // already running returns an error the handler maps to 409.
 func (r *Runner) Start(ctx context.Context, id uuid.UUID) error {
+	if r.isDraining() {
+		return ErrDraining
+	}
 	d, err := r.store.GetDataset(ctx, id)
 	if err != nil {
 		return err
+	}
+	if r.isDraining() {
+		return ErrDraining
 	}
 	ok, err := r.store.UpdateDatasetStatus(ctx, id, []string{models.DatasetStatusIdle, models.DatasetStatusPaused}, models.DatasetStatusRunning)
 	if err != nil {
@@ -72,6 +100,43 @@ func (r *Runner) Start(ctx context.Context, id uuid.UUID) error {
 	}
 	if !ok {
 		return fmt.Errorf("dataset %s is already running", id)
+	}
+	if r.isDraining() {
+		revertStatus := d.Status
+		if revertStatus != models.DatasetStatusIdle && revertStatus != models.DatasetStatusPaused {
+			revertStatus = models.DatasetStatusPaused
+		}
+		reverted := false
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				time.Sleep(100 * time.Millisecond)
+			}
+			rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, rerr := r.store.UpdateDatasetStatus(rctx, id, []string{models.DatasetStatusRunning}, revertStatus)
+			rcancel()
+			if rerr == nil {
+				reverted = true
+				break
+			}
+		}
+		if !reverted {
+			safe.Go("datasets.rollback_drain", func() {
+				delay := 500 * time.Millisecond
+				for attempt := 0; attempt < 60; attempt++ {
+					time.Sleep(delay)
+					if delay < 5*time.Second {
+						delay *= 2
+					}
+					rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+					_, rerr := r.store.UpdateDatasetStatus(rctx, id, []string{models.DatasetStatusRunning}, revertStatus)
+					rcancel()
+					if rerr == nil {
+						return
+					}
+				}
+			})
+		}
+		return ErrDraining
 	}
 
 	// The run outlives the HTTP request: detach from the request context but
