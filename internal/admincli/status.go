@@ -52,7 +52,7 @@ func cmdStatus(argv []string) int {
 	// 3. both databases reachable + active work summary.
 	checkDB(r, "chat database", *chatURL, chatDSN)
 	checkDB(r, "sched database", *schedURL, schedDSN)
-	checkActiveWork(r, serviceName(*service), *schedURL, *chatURL)
+	checkActiveWork(r, serviceName(*service), *schedURL, *chatURL, false)
 
 	// 4. sandbox image present + runnable.
 	if *skipSandbox {
@@ -162,16 +162,20 @@ func checkDB(r *report, label, flagURL string, resolve func(string) (string, err
 // checkActiveWork reports whether any scheduled task, chat turn, or detached
 // approval execution is currently in flight. Advisory only (never increments
 // r.failed) so a healthy box running a job still exits 0 on `fleet status`
-// while surfacing what would block `fleet update` / `fleet restart`.
-func checkActiveWork(r *report, unit, schedFlag, chatFlag string) {
-	sDSN, _ := schedDSN(schedFlag)
-	cDSN, _ := chatDSN(chatFlag)
-	if sDSN == "" && cDSN == "" {
-		return
-	}
+// while surfacing what would block `fleet update` / `fleet restart`. When
+// redactTitles is true (used by `fleet diagnose`), user-authored scheduled task
+// titles are omitted from the summary.
+func checkActiveWork(r *report, unit, schedFlag, chatFlag string, redactTitles bool) {
+	sDSN := idleSchedDSN(schedFlag)
+	cDSN := idleChatDSN(chatFlag)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	items, err := ActiveWorkForService(ctx, unit, sDSN, cDSN)
+	if redactTitles {
+		for i, it := range items {
+			items[i] = redactScheduledTaskTitle(it)
+		}
+	}
 	if len(items) > 0 {
 		r.warnLine("active work", strings.Join(items, "; "))
 		return
@@ -180,6 +184,25 @@ func checkActiveWork(r *report, unit, schedFlag, chatFlag string) {
 		return
 	}
 	r.pass("active work", "idle (no running tasks, chat turns, or approval executions)")
+}
+
+func redactScheduledTaskTitle(item string) string {
+	if !strings.HasPrefix(item, "scheduled task ") {
+		return item
+	}
+	openParen := strings.Index(item, " (")
+	if openParen < 0 {
+		return item
+	}
+	lastComma := strings.LastIndex(item, ", ")
+	if lastComma <= openParen {
+		return item
+	}
+	prevComma := strings.LastIndex(item[:lastComma], ", ")
+	if prevComma <= openParen {
+		return item
+	}
+	return item[:openParen+2] + item[prevComma+2:]
 }
 
 // checkSandbox resolves the image ref the running process would consume

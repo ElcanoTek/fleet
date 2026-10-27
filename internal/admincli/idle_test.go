@@ -69,6 +69,11 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 			wantPass: "s3cr3t pw",
 			wantRed:  "host=127.0.0.1 user=fleet dbname=sched",
 		},
+		{
+			dsn:      `host=127.0.0.1 user=fleet password=foo\ bar dbname=sched`,
+			wantPass: "foo bar",
+			wantRed:  "host=127.0.0.1 user=fleet dbname=sched",
+		},
 	}
 
 	for _, tc := range cases {
@@ -142,6 +147,9 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 	// Verify fractional systemd Unix timestamp parsing.
 	if got := parseServiceTimestamp("@1793108488.662800"); got != 1793108488 {
 		t.Errorf("parseServiceTimestamp(@1793108488.662800) = %d, want 1793108488", got)
+	}
+	if got := redactScheduledTaskTitle(`scheduled task 11111111-2222-3333-4444-555555555555 ("Customer ACME, Inc.", running, 14s)`); got != "scheduled task 11111111-2222-3333-4444-555555555555 (running, 14s)" {
+		t.Errorf("redactScheduledTaskTitle = %q", got)
 	}
 }
 

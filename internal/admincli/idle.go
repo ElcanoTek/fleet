@@ -3,7 +3,9 @@ package admincli
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -166,6 +168,49 @@ func localHealthTLSMode() string {
 	return "off"
 }
 
+func localHealthTLSConfig() *tls.Config {
+	rootCAs, err := x509.SystemCertPool()
+	if err != nil || rootCAs == nil {
+		rootCAs = x509.NewCertPool()
+	}
+	var serverName string
+	for _, k := range []string{"FLEET_TLS_DOMAIN", "CHAT_TLS_DOMAIN", "CUTLASS_TLS_DOMAIN"} {
+		if v := strings.TrimSpace(envOrFile(k)); v != "" {
+			serverName = v
+			break
+		}
+	}
+	for _, k := range []string{"FLEET_TLS_CERT_FILE", "CHAT_TLS_CERT_FILE", "CUTLASS_TLS_CERT_FILE"} {
+		certFile := strings.TrimSpace(envOrFile(k))
+		if certFile == "" {
+			continue
+		}
+		//nolint:gosec // G304: operator-configured TLS certificate path from fleet.env.
+		pemBytes, err := os.ReadFile(certFile)
+		if err != nil {
+			break
+		}
+		_ = rootCAs.AppendCertsFromPEM(pemBytes)
+		if serverName == "" {
+			if block, _ := pem.Decode(pemBytes); block != nil {
+				if cert, err := x509.ParseCertificate(block.Bytes); err == nil {
+					if len(cert.DNSNames) > 0 {
+						serverName = cert.DNSNames[0]
+					} else if cert.Subject.CommonName != "" {
+						serverName = cert.Subject.CommonName
+					}
+				}
+			}
+		}
+		break
+	}
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    rootCAs,
+		ServerName: serverName,
+	}
+}
+
 func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, approvals int) {
 	addr := strings.TrimSpace(envOrFile("FLEET_SERVER_ADDR"))
 	if addr == "" {
@@ -200,10 +245,13 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 	if err != nil {
 		return 0, 0
 	}
+	tlsCfg := localHealthTLSConfig()
+	if tlsCfg.ServerName != "" {
+		req.Host = tlsCfg.ServerName
+	}
 	client := &http.Client{
 		Transport: &http.Transport{
-			//nolint:gosec // G402: local /healthz probe connects via loopback while manual/ACME certificates match the public hostname.
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true},
+			TLSClientConfig: tlsCfg,
 		},
 	}
 	resp, err := client.Do(req)

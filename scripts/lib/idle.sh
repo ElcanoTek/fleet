@@ -26,6 +26,23 @@ fleet_uri_decode() {
   printf '%s' "$out"
 }
 
+# fleet_unescape_conninfo_val STR — unescapes libpq backslash-escaped bytes in
+# a keyword=value conninfo token.
+fleet_unescape_conninfo_val() {
+  local LC_ALL=C s="$1" out="" i=0 len
+  len=${#s}
+  while (( i < len )); do
+    if [[ "${s:i:1}" == "\\" && $(( i + 1 )) -lt $len ]]; then
+      out+="${s:i+1:1}"
+      i=$(( i + 2 ))
+    else
+      out+="${s:i:1}"
+      i=$(( i + 1 ))
+    fi
+  done
+  printf '%s' "$out"
+}
+
 # fleet_split_dsn_password DSN — prints the extracted password on line 1 and the
 # DSN with its password stripped on line 2 (supporting both postgres:// URIs and
 # libpq keyword=value conninfo strings). When the DSN has no password, line 1 is
@@ -35,21 +52,21 @@ fleet_split_dsn_password() {
   if [[ "$dsn" != *"://"* ]]; then
     redacted="$dsn"
     while [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\'(([^\'\\]|\\.)*)\'[[:space:]]*(.*)$ ]]; do
-      pass="${BASH_REMATCH[3]}"
-      pass="${pass//\\\'/\'}"
-      pass="${pass//\\\\/\\}"
+      pass="$(fleet_unescape_conninfo_val "${BASH_REMATCH[3]}")"
       redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
     done
     while [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\"(([^\"\\]|\\.)*)\"[[:space:]]*(.*)$ ]]; do
-      pass="${BASH_REMATCH[3]}"
-      pass="${pass//\\\"/\"}"
-      pass="${pass//\\\\/\\}"
+      pass="$(fleet_unescape_conninfo_val "${BASH_REMATCH[3]}")"
       redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
     done
-    while [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=([^[:space:]]+)[[:space:]]*(.*)$ ]]; do
-      pass="${BASH_REMATCH[3]}"
-      redacted="${BASH_REMATCH[1]}${BASH_REMATCH[4]}"
+    while [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=(([^[:space:]\'\"\\]|\\.)+)[[:space:]]*(.*)$ ]]; do
+      pass="$(fleet_unescape_conninfo_val "${BASH_REMATCH[3]}")"
+      redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
     done
+    if [[ "$redacted" =~ (^|[[:space:]])password[[:space:]]*= ]]; then
+      printf '\n\n'
+      return 0
+    fi
     redacted="${redacted#"${redacted%%[![:space:]]*}"}"
     redacted="${redacted%"${redacted##*[![:space:]]}"}"
     printf '%s\n%s\n' "$pass" "$redacted"
@@ -105,6 +122,7 @@ fleet_psql_query() {
     IFS= read -r pw
     IFS= read -r redacted
   } < <(fleet_split_dsn_password "$dsn")
+  [[ -n "$redacted" ]] || return 1
   PGCONNECT_TIMEOUT=3 PGPASSWORD="$pw" psql "$redacted" -X -q -t -A -c "$sql" 2>/dev/null
 }
 
@@ -299,8 +317,9 @@ fleet_probe_in_memory_counts() {
     return 0
   fi
   [[ "$addr" == :* ]] && addr="127.0.0.1${addr}"
+  local curl_args=(-sSI --max-time 2)
   if [[ "$addr" != http://* && "$addr" != https://* ]]; then
-    local tls_mode=""
+    local tls_mode="" cert_file="" tls_domain="" host_only="" port_only="8080"
     tls_mode="$(fleet_env_or_file FLEET_TLS_MODE "$env_file")"
     [[ -n "$tls_mode" ]] || tls_mode="$(fleet_env_or_file CHAT_TLS_MODE "$env_file")"
     [[ -n "$tls_mode" ]] || tls_mode="$(fleet_env_or_file CUTLASS_TLS_MODE "$env_file")"
@@ -308,13 +327,28 @@ fleet_probe_in_memory_counts() {
     tls_mode="${tls_mode#"${tls_mode%%[![:space:]]*}"}"
     tls_mode="${tls_mode%"${tls_mode##*[![:space:]]}"}"
     if [[ "$tls_mode" == "manual" || "$tls_mode" == "auto" ]]; then
-      addr="https://${addr}"
+      cert_file="$(fleet_env_or_file FLEET_TLS_CERT_FILE "$env_file")"
+      [[ -n "$cert_file" ]] || cert_file="$(fleet_env_or_file CHAT_TLS_CERT_FILE "$env_file")"
+      [[ -n "$cert_file" ]] || cert_file="$(fleet_env_or_file CUTLASS_TLS_CERT_FILE "$env_file")"
+      [[ -r "$cert_file" ]] && curl_args+=(--cacert "$cert_file")
+      tls_domain="$(fleet_env_or_file FLEET_TLS_DOMAIN "$env_file")"
+      [[ -n "$tls_domain" ]] || tls_domain="$(fleet_env_or_file CHAT_TLS_DOMAIN "$env_file")"
+      [[ -n "$tls_domain" ]] || tls_domain="$(fleet_env_or_file CUTLASS_TLS_DOMAIN "$env_file")"
+      if [[ -n "$tls_domain" ]]; then
+        host_only="${addr%%:*}"
+        [[ "$addr" == *:* ]] && port_only="${addr##*:}"
+        [[ -z "$host_only" || "$host_only" == "0.0.0.0" ]] && host_only="127.0.0.1"
+        curl_args+=(--resolve "${tls_domain}:${port_only}:${host_only}")
+        addr="https://${tls_domain}:${port_only}"
+      else
+        addr="https://${addr}"
+      fi
     else
       addr="http://${addr}"
     fi
   fi
   addr="${addr%/}/healthz"
-  if hdrs="$(curl -ksSI --max-time 2 "$addr" 2>/dev/null || true)"; then
+  if hdrs="$(curl "${curl_args[@]}" "$addr" 2>/dev/null || true)"; then
     turns="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Turns:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
     approvals="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Approvals:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
   fi

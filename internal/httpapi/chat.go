@@ -726,15 +726,31 @@ func (s *Server) bindQueuedInputIf(queued *queuedLaunch, turnID string) bool {
 	return bound
 }
 
-// attachTurnPersister attaches the turn_events persister and reports whether
-// the server entered drain mode before the turn goroutine launched.
-func (s *Server) attachTurnPersister(buf *turnBuffer, user, convID string) (draining bool) {
+// attachTurnPersister attaches the turn_events persister.
+func (s *Server) attachTurnPersister(buf *turnBuffer, user, convID string) {
 	persistCtx, persistCancelAttach := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := buf.attachPersister(persistCtx, s.store); err != nil {
 		log.Printf("attachPersister (user=%s conv=%s): %v", user, convID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 	}
 	persistCancelAttach()
-	return s.IsDraining()
+}
+
+// admitActiveTurnOrAbort increments activeTurns and activeTurnCount and then
+// re-checks IsDraining() so no turn can launch after the /healthz in-memory
+// counter was observed as zero while draining.
+func (s *Server) admitActiveTurnOrAbort(convID string, turnToken uint64, turnCancel context.CancelFunc, fail func(int, error)) bool {
+	s.activeTurns.Add(1)
+	s.activeTurnCount.Add(1)
+	if !s.IsDraining() {
+		return true
+	}
+	s.activeTurnCount.Add(-1)
+	s.activeTurns.Done()
+	turnCancel()
+	s.finishTurn(convID, turnToken)
+	s.maybeDrainQueue(convID)
+	fail(http.StatusServiceUnavailable, errors.New("server is shutting down"))
+	return false
 }
 
 // bindDirectInputIf binds id when there is a direct claim; with none it
@@ -1038,13 +1054,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Wire incremental persistence so a crash mid-turn leaves a
 	// recoverable ledger in turn_events. Non-fatal — if the DB is
 	// flaky, live streaming still works; crash recovery just won't.
-	if s.attachTurnPersister(buf, user, conv.ID) {
-		turnCancel()
-		s.finishTurn(conv.ID, turnToken)
-		s.maybeDrainQueue(conv.ID)
-		fail(http.StatusServiceUnavailable, errors.New("server is shutting down"))
-		return true
-	}
+	s.attachTurnPersister(buf, user, conv.ID)
 
 	// Attachment metadata (if any) is re-validated server-side, then split
 	// by kind. Images flow into the model as multimodal vision input via
@@ -1182,8 +1192,9 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Track the goroutine on activeTurns BEFORE launching it so graceful
 	// shutdown (DrainTurns) can block on it and Wait never races ahead of Add
 	// (#278). The counter mirrors the WaitGroup for the SIGUSR1 status log.
-	s.activeTurns.Add(1)
-	s.activeTurnCount.Add(1)
+	if !s.admitActiveTurnOrAbort(conv.ID, turnToken, turnCancel, fail) {
+		return true
+	}
 	// releaseSlot must run exactly once, and BEFORE the tail drain — the
 	// completing turn's own slot is what the next drained turn needs, and a
 	// deferred-only release would deterministically starve the queue at cap.

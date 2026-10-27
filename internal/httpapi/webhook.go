@@ -243,6 +243,15 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 
 	s.activeTurns.Add(1)
 	s.activeTurnCount.Add(1)
+	if s.IsDraining() {
+		s.activeTurnCount.Add(-1)
+		s.activeTurns.Done()
+		turnCancel()
+		s.finishTurn(conv.ID, turnToken)
+		releaseSlot()
+		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	go func() {
 		defer func() {
 			s.activeTurnCount.Add(-1)
