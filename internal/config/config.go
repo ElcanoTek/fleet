@@ -253,6 +253,9 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_SSE_BUFFER_MAX_BYTES_PER_TURN":   true,
 	"FLEET_SSE_HEARTBEAT_INTERVAL":          true,
 	"FLEET_WEBHOOK_RATE_LIMIT_PER_MINUTE":   true,
+	"FLEET_UPDATE_WAIT_SECONDS":             true,
+	"FLEET_UPDATE_DRAIN_FILE":               true,
+	"FLEET_DRAIN_FILE":                      true,
 
 	// ── process log file sink (#298) — opt-in rotating file, default OFF ──
 	"FLEET_LOG_FILE":         true,

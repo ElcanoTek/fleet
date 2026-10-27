@@ -82,6 +82,26 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 	if got := strings.TrimSpace(string(out)); got != "postgres://specific@127.0.0.1:5432/sched" {
 		t.Errorf("fleet_resolve_dsn got %q, want specific DSN from env file", got)
 	}
+
+	// Verify DB_HOST/DB_USER/DB_PASSWORD fallback in fleet_resolve_dsn.
+	dbPartsEnv := filepath.Join(t.TempDir(), "parts.env")
+	if err := os.WriteFile(dbPartsEnv, []byte("DB_HOST=db.internal\nDB_PASSWORD=p@ss:1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("bash", "-c", `. "$1"; fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$2"`, "_", lib, dbPartsEnv)
+	cmd.Env = append(os.Environ(), "DATABASE_URL=", "FLEET_SCHED_DATABASE_URL=", "SCHED_DATABASE_URL=", "DB_HOST=", "DB_PASSWORD=")
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("fleet_resolve_dsn DB_* parts: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "postgres://fleet:p%40ss%3A1@db.internal:5432/sched?sslmode=disable" {
+		t.Errorf("fleet_resolve_dsn DB_* parts got %q", got)
+	}
+
+	// Verify fractional systemd Unix timestamp parsing.
+	if got := parseServiceTimestamp("@1793108488.662800"); got != 1793108488 {
+		t.Errorf("parseServiceTimestamp(@1793108488.662800) = %d, want 1793108488", got)
+	}
 }
 
 func TestUpdateBlocksOnActiveWorkUnlessWaitOrForce(t *testing.T) {
@@ -98,13 +118,17 @@ func TestUpdateBlocksOnActiveWorkUnlessWaitOrForce(t *testing.T) {
 	// Fake psql: records call count in stateFile. When FLEET_TEST_BUSY_CALLS is
 	// set, returns an active scheduled task for the first N calls, then empty.
 	script := `#!/usr/bin/env bash
-count=0
-[[ -f "` + stateFile + `" ]] && count="$(cat "` + stateFile + `")"
-count=$(( count + 1 ))
-printf '%s\n' "$count" > "` + stateFile + `"
-busy_Limit="${FLEET_TEST_BUSY_CALLS:-999}"
-if (( count <= busy_Limit )); then
-  if [[ "$*" == *"FROM tasks"* ]]; then
+if [[ "$*" == *"to_regclass('public.tasks') IS NOT NULL"* ]]; then
+  printf 't\n'
+  exit 0
+fi
+if [[ "$*" == *"FROM tasks"* ]]; then
+  count=0
+  [[ -f "` + stateFile + `" ]] && count="$(cat "` + stateFile + `")"
+  count=$(( count + 1 ))
+  printf '%s\n' "$count" > "` + stateFile + `"
+  busy_Limit="${FLEET_TEST_BUSY_CALLS:-999}"
+  if (( count <= busy_Limit )); then
     printf 'scheduled task 11111111-2222-3333-4444-555555555555 (Hourly Sync, running, 14s)\n'
   fi
 fi

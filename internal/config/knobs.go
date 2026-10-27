@@ -431,6 +431,10 @@ var envKnobs = []envKnob{
 	{key: "FLEET_PUSH_ON_APPROVAL_REQUEST", kind: kindStrconvBool,
 		scope: scopeExternal, readBy: "internal/webpush"},
 
+	// ── operator lifecycle CLI (internal/admincli) ──
+	{key: "FLEET_UPDATE_WAIT_SECONDS", kind: kindInt, min: bound(0),
+		scope: scopeExternal, readBy: "internal/admincli (restart/stop --wait-timeout default)"},
+
 	// ── documented-lenient (#1273) ── the ONE knob whose leniency is
 	// deliberate. Registered so validate-config preflights the syntax as an
 	// advisory; boot does not refuse.

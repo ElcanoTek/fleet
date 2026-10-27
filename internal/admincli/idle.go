@@ -11,14 +11,18 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
-
-	"github.com/ElcanoTek/fleet/internal/httpapi"
 )
 
 const (
 	defaultIdleApprovalWindow = 2 * time.Hour
+)
+
+var (
+	drainOwnerToken = fmt.Sprintf("draining pid-%d-%d\n", os.Getpid(), time.Now().UnixNano())
+	drainOwned      atomic.Bool
 )
 
 // ActiveWorkError is returned by WaitIdle when scheduled tasks, chat turns, or
@@ -31,27 +35,50 @@ func (e *ActiveWorkError) Error() string {
 	return strings.Join(e.Items, "; ")
 }
 
+// drainFilePath resolves the update drain sentinel path from the process
+// environment or the deployment env file, matching httpapi.UpdateDrainFile and
+// scripts/lib/idle.sh.
+func drainFilePath() string {
+	if p := strings.TrimSpace(envOrFile("FLEET_UPDATE_DRAIN_FILE")); p != "" {
+		return p
+	}
+	if p := strings.TrimSpace(envOrFile("FLEET_DRAIN_FILE")); p != "" {
+		return p
+	}
+	return serverEnvFile("") + ".update.drain"
+}
+
 // SetUpdateDrain writes or refreshes the update drain sentinel file so the
 // running Fleet server refuses new chat turns/approvals and pauses scheduler
 // task claims.
 func SetUpdateDrain() {
-	p := httpapi.UpdateDrainFile()
+	p := drainFilePath()
 	if p == "" {
 		return
 	}
 	//nolint:gosec // G301,G306: non-secret drain sentinel inspected by the fleet service user.
 	_ = os.MkdirAll(filepath.Dir(p), 0o755)
 	//nolint:gosec // G306: non-secret drain sentinel inspected by the fleet service user.
-	_ = os.WriteFile(p, []byte("draining\n"), 0o644)
+	if err := os.WriteFile(p, []byte(drainOwnerToken), 0o644); err == nil {
+		drainOwned.Store(true)
+	}
 }
 
-// ClearUpdateDrain removes the update drain sentinel file.
+// ClearUpdateDrain removes the update drain sentinel file if it is owned by
+// this process invocation.
 func ClearUpdateDrain() {
-	p := httpapi.UpdateDrainFile()
+	if !drainOwned.Load() {
+		return
+	}
+	p := drainFilePath()
 	if p == "" {
 		return
 	}
-	_ = os.Remove(p)
+	//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
+	if data, err := os.ReadFile(p); err == nil && string(data) == drainOwnerToken {
+		_ = os.Remove(p)
+	}
+	drainOwned.Store(false)
 }
 
 func parseServiceTimestamp(startTS string) int64 {
@@ -60,7 +87,11 @@ func parseServiceTimestamp(startTS string) int64 {
 		return 0
 	}
 	if epochStr, ok := strings.CutPrefix(startTS, "@"); ok {
-		if secs, err := strconv.ParseInt(strings.TrimSpace(epochStr), 10, 64); err == nil && secs > 0 {
+		epochStr = strings.TrimSpace(epochStr)
+		if dot := strings.IndexByte(epochStr, '.'); dot >= 0 {
+			epochStr = epochStr[:dot]
+		}
+		if secs, err := strconv.ParseInt(epochStr, 10, 64); err == nil && secs > 0 {
 			return secs
 		}
 	}
@@ -130,8 +161,11 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 	if addr == "" {
 		addr = strings.TrimSpace(envOrFile("CHAT_SERVER_ADDR"))
 	}
+	if addr == "" {
+		addr = strings.TrimSpace(envOrFile("CUTLASS_SERVER_ADDR"))
+	}
 	if addr == "" && svcState == "active" && !truthy(os.Getenv("FLEET_ASSUME_SERVICE_ACTIVE")) {
-		addr = "127.0.0.1:8088"
+		addr = "127.0.0.1:8080"
 	}
 	if addr == "" {
 		return 0, 0

@@ -194,6 +194,11 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// Same detached-turn machinery as postChat, minus the SSE attach: the turn
 	// runs fire-and-forget in a goroutine and the conversation surfaces in the
 	// notify_user's list the next time they open Fleet.
+	if s.IsDraining() {
+		releaseSlot()
+		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	buf, turnID, turnToken, ok := s.registerTurn(conv.ID, turnCancel)
 	if !ok {
@@ -214,6 +219,13 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		log.Printf("attachPersister (webhook user=%s conv=%s): %v", user, conv.ID, err)
 	}
 	persistCancel()
+	if s.IsDraining() {
+		turnCancel()
+		s.finishTurn(conv.ID, turnToken)
+		releaseSlot()
+		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
+		return
+	}
 
 	buf.Emit("conversation", map[string]any{
 		"id":      conv.ID,
